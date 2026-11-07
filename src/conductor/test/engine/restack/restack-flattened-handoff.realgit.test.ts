@@ -8,7 +8,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { parseChildId } from '../../../src/engine/child-context.js';
-import { buildFlattenedHandoff } from '../../../src/engine/restack/restack-resolver.js';
+import { readConflictRecord } from '../../../src/engine/restack/restack-conflict-record.js';
+import { buildFlattenedHandoff, haltRecordedRestackConflict } from '../../../src/engine/restack/restack-resolver.js';
 import { parseCommitSha, type ChildRange, type CommitSha } from '../../../src/engine/restack/restack-types.js';
 
 const execFile = promisify(execFileCallback);
@@ -174,5 +175,41 @@ describe('buildFlattenedHandoff (real local Git)', () => {
     expect(handoff.todo).toEqual([]);
     expect(handoff.candidates).toEqual([]);
     expect((await git(['rev-parse', `${handoff.tip}^{tree}`])).stdout.trim()).toBe((await git(['rev-parse', `${halt}^{tree}`])).stdout.trim());
+  });
+
+  it('keeps upstream-equivalent and halt-record-only commits out of a merge-bearing conflict record', async () => {
+    const { repo, git } = await repository();
+    await writeFile(join(repo, 'base.txt'), 'base\n');
+    const base = await commit(git, 'base');
+    await git(['checkout', '-qb', 'child']);
+    await writeFile(join(repo, 'equivalent.txt'), 'same patch\n');
+    const equivalent = await commit(git, 'upstream equivalent');
+    await git(['checkout', '-qb', 'side', base]);
+    await writeFile(join(repo, 'side.txt'), 'side\n');
+    await commit(git, 'side');
+    await git(['checkout', '-q', 'child']);
+    await git(['merge', '--no-ff', '-m', 'M', 'side']);
+    await mkdir(join(repo, '.docs', 'halted'), { recursive: true });
+    await writeFile(join(repo, '.docs', 'halted', 'demo.md'), 'halt\n');
+    const halt = await commit(git, 'halt record');
+    await git(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'equivalent.txt'), 'same patch\n');
+    const upstreamEquivalent = await commit(git, 'already upstream');
+    await writeFile(join(repo, 'upstream.txt'), 'upstream\n');
+    const newParent = await commit(git, 'upstream');
+
+    const childRange = range(base, halt);
+    await haltRecordedRestackConflict({
+      worktree: repo, slug: 'demo',
+      journal: { journal: { opId: 'operation' } } as never,
+      range: childRange, replayParent: newParent,
+      comparisonCommits: [upstreamEquivalent], haltRecordSlug: 'demo', candidateSubjects: [],
+      commit: halt, paths: [], detail: 'operator required', git: makeGitRunner(repo),
+      writeHalt: async () => undefined,
+    });
+    const record = await readConflictRecord(repo, 'demo', { git: makeGitRunner(repo) });
+    if (record.kind !== 'record') throw new Error('expected conflict record');
+    expect(record.record.candidateSubjects).not.toContain('upstream equivalent');
+    expect(record.record.candidateSubjects).not.toContain('halt record');
   });
 });

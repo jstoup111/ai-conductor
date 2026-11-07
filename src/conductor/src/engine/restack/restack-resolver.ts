@@ -44,6 +44,10 @@ interface HaltRecordedRestackConflictOptions {
   readonly journal: StoredRestackJournal;
   readonly range: ChildRange;
   readonly replayParent: CommitSha;
+  /** Journaled candidates already present on the target parent. */
+  readonly comparisonCommits?: readonly CommitSha[];
+  /** The feature halt-record path excluded from candidate selection. */
+  readonly haltRecordSlug?: string;
   readonly candidateSubjects: readonly string[];
   readonly commit: CommitSha;
   readonly paths: readonly string[];
@@ -69,7 +73,10 @@ export async function haltRecordedRestackConflict(options: HaltRecordedRestackCo
   try {
     let candidateSubjects = options.candidateSubjects;
     if (await rangeHasMerge(options.git, range)) {
-      const handoff = await buildFlattenedHandoff(range, options.replayParent, options.git);
+      const handoff = await buildFlattenedHandoff(range, options.replayParent, options.git, {
+        comparisonCommits: options.comparisonCommits,
+        haltRecordSlug: options.haltRecordSlug,
+      });
       candidateSubjects = await replayCandidateSubjects(options.git, handoff.candidates);
       flattenedTip = handoff.tip;
     }
@@ -165,10 +172,11 @@ async function readRewrites(path: string): Promise<Map<CommitSha, CommitSha>> {
 function translateFlattenedRewrites(
   rewrites: ReadonlyMap<CommitSha, CommitSha>,
   flattenedMergesByCommit: ReadonlyMap<CommitSha, CommitSha>,
+  flattenedOrdinaryCommitsByCommit: ReadonlyMap<CommitSha, CommitSha>,
 ): Map<CommitSha, CommitSha> {
   const translated = new Map<CommitSha, CommitSha>();
   for (const [original, replacement] of rewrites) {
-    translated.set(flattenedMergesByCommit.get(original) ?? original, replacement);
+    translated.set(flattenedMergesByCommit.get(original) ?? flattenedOrdinaryCommitsByCommit.get(original) ?? original, replacement);
   }
   return translated;
 }
@@ -273,7 +281,7 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
             reason: `restack resolver finished child ${options.range.child} without a readable settled tip`,
           },
           tip: undefined,
-          rewrites: translateFlattenedRewrites(rewrites, handoff?.flattenedMergesByCommit ?? new Map()),
+          rewrites: translateFlattenedRewrites(rewrites, handoff?.flattenedMergesByCommit ?? new Map(), handoff?.flattenedOrdinaryCommitsByCommit ?? new Map()),
           candidates,
           ...(handoff === undefined ? {} : { audit: handoff.audit }),
         };
@@ -289,7 +297,7 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
             reason: `restack resolver finished child ${options.range.child} without candidate subjects: ${missingSubjects.join(', ')}`,
           },
           tip: undefined,
-          rewrites: translateFlattenedRewrites(rewrites, handoff?.flattenedMergesByCommit ?? new Map()),
+          rewrites: translateFlattenedRewrites(rewrites, handoff?.flattenedMergesByCommit ?? new Map(), handoff?.flattenedOrdinaryCommitsByCommit ?? new Map()),
           candidates,
           ...(handoff === undefined ? {} : { audit: handoff.audit }),
         };
@@ -308,7 +316,7 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
         tip = carried.tip;
         await mapOmittedHaltRecordCommits(options.range, options.haltRecordSlug, options.newParent, tip, rewrites, runGit);
       }
-      rewrites = translateFlattenedRewrites(rewrites, handoff?.flattenedMergesByCommit ?? new Map());
+      rewrites = translateFlattenedRewrites(rewrites, handoff?.flattenedMergesByCommit ?? new Map(), handoff?.flattenedOrdinaryCommitsByCommit ?? new Map());
       return { outcome, tip, rewrites, candidates, ...(handoff === undefined ? {} : { audit: handoff.audit }) };
     };
     const started = await tempGit(['rebase', '-i', '--onto', options.newParent, options.range.oldParent], { env: environment });
@@ -345,7 +353,7 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
     return {
       outcome,
       tip: undefined,
-      rewrites: translateFlattenedRewrites(await readRewrites(rewritePath), handoff?.flattenedMergesByCommit ?? new Map()),
+      rewrites: translateFlattenedRewrites(await readRewrites(rewritePath), handoff?.flattenedMergesByCommit ?? new Map(), handoff?.flattenedOrdinaryCommitsByCommit ?? new Map()),
       candidates,
       ...(handoff === undefined ? {} : { audit: handoff.audit }),
     };

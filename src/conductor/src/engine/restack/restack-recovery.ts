@@ -805,6 +805,7 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
         await haltRecordedRestackConflict({
           worktree: options.worktree, slug: options.slug, journal, range,
           replayParent: resumed.newParent,
+          comparisonCommits: journal.journal.comparisonCommits, haltRecordSlug: options.slug,
           candidateSubjects: resumed.candidateSubjects, commit: resumed.commit, paths: resumed.paths,
           detail, events: options.events, git, writeHalt: haltRestackConflict,
         });
@@ -838,6 +839,7 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
         if (parsedCandidates.some((candidate) => !candidate)) return { kind: 'unavailable', detail: 'cannot parse stale recovered restack candidate' };
         await haltRecordedRestackConflict({
           worktree: options.worktree, slug: options.slug, journal, range, replayParent: resumed.newParent,
+          comparisonCommits: journal.journal.comparisonCommits, haltRecordSlug: options.slug,
           candidateSubjects: await replayCandidateSubjects(git, parsedCandidates as CommitSha[]),
           commit: retired.record.commit, paths: retired.record.paths,
           detail: `restack-resolution-stale\n${resumed.field}`,

@@ -1,6 +1,6 @@
 // Covers: task:2, task:14
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -107,7 +107,9 @@ async function mergeFixture(kind: 'q-carried' | 'ancestry-only' | 'flattened'): 
   repo: string;
   range: ChildRange;
   newParent: CommitSha;
+  ordinaryBeforeMerge: CommitSha;
   merge: CommitSha;
+  ordinaryAfterMerge: CommitSha;
   sideSubject: string;
 }> {
   const repo = await mkdtemp(join(tmpdir(), 'restack-resolver-merge-'));
@@ -126,7 +128,7 @@ async function mergeFixture(kind: 'q-carried' | 'ancestry-only' | 'flattened'): 
   const base = await commit('base');
   await git(['checkout', '-qb', 'child']);
   await writeFile(join(repo, 'child.txt'), 'C\n');
-  await commit('C');
+  const ordinaryBeforeMerge = await commit('C');
   await git(['checkout', '-qb', 'side', base]);
   await writeFile(join(repo, 'side.txt'), 'side work\n');
   const sideSubject = 'S';
@@ -150,10 +152,10 @@ async function mergeFixture(kind: 'q-carried' | 'ancestry-only' | 'flattened'): 
   }
   const merge = sha((await git(['rev-parse', 'HEAD'])).stdout);
   await writeFile(join(repo, 'shared.txt'), 'later child edit\n');
-  const tip = await commit('T');
+  const ordinaryAfterMerge = await commit('T');
   const child = parseChildId(2);
   if (!child) throw new Error('child must parse');
-  return { repo, range: { child, oldParent: base, oldTip: tip, kind: 'active' }, newParent, merge, sideSubject };
+  return { repo, range: { child, oldParent: base, oldTip: ordinaryAfterMerge, kind: 'active' }, newParent, ordinaryBeforeMerge, merge, ordinaryAfterMerge, sideSubject };
 }
 
 afterEach(async () => {
@@ -204,6 +206,33 @@ describe('resolveRestackConflict (real local Git)', () => {
     expect(result.rewrites.get(subject.merge)).toBeDefined();
     expect(result.audit).toMatchObject({ flattenedMerges: [subject.merge] });
     expect(candidateSubjects).not.toContain(subject.sideSubject);
+  });
+
+  it('maps missing-hook fallback rewrites from synthetic C, M, T commits to their original commits', async () => {
+    const subject = await mergeFixture('flattened');
+    const noHooks = join(subject.repo, 'no-post-rewrite-hooks');
+    await mkdir(noHooks);
+    const result = await resolveRestackConflict({
+      worktree: subject.repo, range: subject.range, newParent: subject.newParent, stamp, cap: 1,
+      resolver: async (context) => {
+        await writeFile(join(context.projectRoot, 'shared.txt'), 'settled child edit\n');
+        const git = makeGitRunner(context.projectRoot);
+        await git(['add', 'shared.txt'], { env: context.environment });
+        await git(['rebase', '--continue'], { env: context.environment });
+        return { resolved: true };
+      },
+      temporaryGit: (worktree) => async (args, options) => makeGitRunner(worktree)(args, {
+        ...options,
+        env: { ...options?.env, GIT_CONFIG_VALUE_0: noHooks },
+      }),
+    });
+
+    expect(result.outcome.kind).toBe('changed');
+    expect([...result.rewrites.keys()].sort()).toEqual([
+      subject.ordinaryBeforeMerge,
+      subject.merge,
+      subject.ordinaryAfterMerge,
+    ].sort());
   });
 
   it('preserves the no-merge resolver path and reports no merge audit', async () => {

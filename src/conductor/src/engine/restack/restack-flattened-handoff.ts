@@ -8,6 +8,8 @@ export interface FlattenedHandoff {
   readonly tip: CommitSha;
   readonly candidates: readonly CommitSha[];
   readonly flattenedMergesByCommit: ReadonlyMap<CommitSha, CommitSha>;
+  /** Synthetic ordinary hand-off commits mapped to their source commits. */
+  readonly flattenedOrdinaryCommitsByCommit: ReadonlyMap<CommitSha, CommitSha>;
   readonly audit: {
     readonly flattenedMerges: readonly CommitSha[];
     readonly ancestryOnlyMerges: readonly CommitSha[];
@@ -96,6 +98,7 @@ export async function buildFlattenedHandoff(range: ChildRange, newParent: Commit
   const todo: CommitSha[] = [];
   const candidates: CommitSha[] = [];
   const flattenedMergesByCommit = new Map<CommitSha, CommitSha>();
+  const flattenedOrdinaryCommitsByCommit = new Map<CommitSha, CommitSha>();
   const flattenedMerges: CommitSha[] = [];
   const ancestryOnlyMerges: CommitSha[] = [];
   let sideLineageCountTotal = 0;
@@ -105,6 +108,7 @@ export async function buildFlattenedHandoff(range: ChildRange, newParent: Commit
     const parents = await commitParents(git, commit);
     if (parents.length < 2) {
       accumulator = await writeLinearCommit(git, await commitTree(git, commit), accumulator, commit);
+      flattenedOrdinaryCommitsByCommit.set(accumulator, commit);
       if (ordinaryCandidates.has(commit)) { todo.push(commit); candidates.push(commit); }
       continue;
     }
@@ -115,7 +119,9 @@ export async function buildFlattenedHandoff(range: ChildRange, newParent: Commit
       ancestryOnlyMerges.push(commit);
       continue;
     }
-    if (merge.kind === 'q-carried') accumulator = await writeLinearCommit(git, requiredSha(merge.autoTree ?? '', `automatic tree for ${commit}`), accumulator, commit);
+    if (merge.kind === 'q-carried') {
+      accumulator = await writeLinearCommit(git, requiredSha(merge.autoTree ?? '', `automatic tree for ${commit}`), accumulator, commit);
+    }
     else flattenedMerges.push(commit);
     const flattenedParent = accumulator;
     const flattened = await writeLinearCommit(git, requiredSha(merge.mergeTree, `merge tree for ${commit}`), accumulator, commit, `${await commitMessage(git, commit)}\nFlattened-merge: ${commit}\n`);
@@ -123,7 +129,7 @@ export async function buildFlattenedHandoff(range: ChildRange, newParent: Commit
     flattenedMergesByCommit.set(flattened, commit);
     if (!(await flattenedMergeIsCarried(git, flattenedParent, newParent, flattened))) { todo.push(flattened); candidates.push(flattened); }
   }
-  return { todo, tip: accumulator, candidates, flattenedMergesByCommit, audit: { flattenedMerges, ancestryOnlyMerges, sideLineageCount: sideLineageCountTotal } };
+  return { todo, tip: accumulator, candidates, flattenedMergesByCommit, flattenedOrdinaryCommitsByCommit, audit: { flattenedMerges, ancestryOnlyMerges, sideLineageCount: sideLineageCountTotal } };
 }
 
 export async function replayCandidateSubjects(git: GitRunner, candidates: readonly CommitSha[]): Promise<string[]> {

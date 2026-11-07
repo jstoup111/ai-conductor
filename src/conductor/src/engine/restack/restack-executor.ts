@@ -527,6 +527,7 @@ async function haltUnresolvedConflict(
   else {
     await haltRecordedRestackConflict({
       worktree, slug, journal, range, replayParent: newParent,
+      comparisonCommits: journal.journal.comparisonCommits, haltRecordSlug: slug,
       candidateSubjects: await replayCandidateSubjects(git, candidates),
       commit: conflict.commit, paths: conflict.paths, detail, events, git, writeHalt: haltRestackConflict,
     });
@@ -765,6 +766,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
             await options.events?.emit(emitRestackRefused({ reason: 'restack-resolution-stale', child: range.child, detail: recorded.field }));
             await haltRecordedRestackConflict({
               worktree: options.worktree, slug: options.slug, journal, range, replayParent: parent,
+              comparisonCommits: journal.journal.comparisonCommits, haltRecordSlug: options.slug,
               candidateSubjects: await replayCandidateSubjects(git, await commitsInRange(git, `${range.oldParent}..${range.oldTip}`, `child ${range.child} range`)),
               commit: retired.record.commit, paths: retired.record.paths,
               detail: `restack-resolution-stale\n${recorded.field}`,
