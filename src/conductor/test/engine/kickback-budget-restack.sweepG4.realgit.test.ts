@@ -19,6 +19,7 @@ import {
   readRawHaltClass,
 } from '../../src/engine/daemon-rekick.js';
 import { HALT_MARKER } from '../../src/engine/halt-marker.js';
+import { readHaltRecordRef } from '../../src/engine/halt-record-ref.js';
 import { supersedeHaltRecord } from '../../src/engine/halt-record.js';
 import { dispatchKickbackBudgetCommand } from '../../src/engine/kickback-budget-cli.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
@@ -191,7 +192,9 @@ async function expectRepaired(subject: Subject) {
   expect(await subject.git(['rev-parse', 'refs/conductor/demo/closed/c1'])).toBe(subject.operatorCommit);
   expect(await subject.git(['show', 'feat/daemon-demo:repair.txt'])).toBe('repair child');
   await expect(access(join(subject.repo, HALT_MARKER))).rejects.toThrow();
-  expect(await readFile(join(subject.repo, '.docs', 'halted', 'demo.md'), 'utf8')).toMatch(/^Status: resolved$/m);
+  await expect(readHaltRecordRef(subject.repo, 'demo')).resolves.toMatchObject({
+    kind: 'record', source: 'ref', text: expect.stringMatching(/^Status: resolved$/m),
+  });
   expect((await restackEntry(subject))?.resumeAuthorization?.consumed).toBe(true);
 }
 

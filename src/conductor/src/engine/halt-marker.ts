@@ -174,7 +174,7 @@ async function writeHaltRecord(
   try {
     const result = await recordHalt(projectRoot, input, recordRemote);
     if (result.kind === 'written') {
-      await events?.emit({ type: 'halt_record_written', path, slug: input.slug, haltClass }).catch(() => {});
+      await events?.emit({ type: 'halt_record_written', path: result.path ?? path, slug: input.slug, haltClass }).catch(() => {});
     } else if (result.kind === 'failed') {
       await events?.emit({ type: 'halt_record_write_failed', path, reason: result.reason }).catch(() => {});
     } else if (result.kind === 'pushFailed') {

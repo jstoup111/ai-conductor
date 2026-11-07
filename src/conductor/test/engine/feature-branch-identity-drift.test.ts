@@ -62,8 +62,8 @@ describe('feature branch identity drift', () => {
       .map(({ path }) => path)
       .sort();
     expect(parseFeatureRefImporters).toEqual([
+      join('engine', 'durable-child-state.ts'),
       join('engine', 'engineer', 'intake', 'overlap-sources.ts'),
-      join('engine', 'slice-topology.ts'),
     ]);
   });
 

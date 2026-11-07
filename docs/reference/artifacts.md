@@ -51,7 +51,7 @@ Twenty-two entries. Alphabetized; the four with no code reference are marked.
 | `complexity/` | `<slug>.md`, with an [undated-stem fallback](#the-undated-stem-fallback) | `complexity` step, composer loop | `parseComplexityTier` reads a `Tier: <S\|M\|L>` line; an optional `Stacked-Delivery: approved` line records operator sign-off for [stacked delivery](configuration.md#stacked_prs). Missing tier ⇒ the daemon defaults to `M`; other paths differ — see [where the tier comes from](steps.md#where-the-tier-comes-from). The land gate enforces tier agreement |
 | `conflicts/` | `YYYY-MM-DD-<slug>.md` | `conflict-check` skill | `conflict_check` completion glob |
 | `decisions/` | New ADRs: `adr-YYYY-MM-DD-lowercase-hyphenated-slug.md` with a real calendar date. Existing legacy `adr-<topic>.md` and `NNN-<topic>.md` files remain valid; also `architecture-review-*.md`, `technical-assessment-*.md` | `architecture-review`, `assess`, `bootstrap`, `prd`, `simplify`, `debugging`, `finish` | `architecture_review` and `assess` completion globs; the land gate requires every newly added ADR to use the canonical date-prefixed name, while legacy ADRs already on the default branch are exempt. The land gate and daemon discovery both scan every `adr-*.md` and reject one whose first declared status is not `APPROVED` or `SUPERSEDED` |
-| `halted/` | `<slug>.md` | the halt-marker writer | An operator-readable halt record on the feature branch. It records status, slug, halt class, halting step, phase, branch, HEAD SHA, UTC halt time, the full HALT body, and whether the record may be ahead of the remote. It is written and committed for an operator-actionable (`needs-human`, `plan-gap`, or `protected-artifact`) halt off the default branch, then pushed best-effort with `--force-with-lease`; `mechanical` halts produce no record. Clearing the halt changes the record's status to resolved while retaining its original details. |
+| `halted/` | `<slug>.md` | the halt-marker writer | An operator-readable halt record on the feature branch. It records status, slug, halt class, halting step, phase, branch, HEAD SHA, UTC halt time, the full HALT body, and whether the record may be ahead of the remote. It is written and committed for an operator-actionable (`needs-human`, `plan-gap`, or `protected-artifact`) halt off the default branch, then pushed best-effort with `--force-with-lease`; `mechanical` halts produce no record. A feature with durable stacked child state does not commit this file; its record lives at the local ref `refs/conductor/<slug>/halt-record` (see [worktree and branch names](#worktree-and-branch-names)). Clearing the halt changes the record's status to resolved while retaining its original details. |
 | `intake/` | `<plan-stem>.md` | `intake` skill | `parseIntakeSourceRef` reads `Source-Ref: owner/repo#N`; `Owner: <id>` drives the daemon owner gate |
 | `manual-test-results.md` | loose file | legacy | **no code reference** — superseded by `.pipeline/manual-test-results.md` |
 | `observation/` | free-form | manual | **no code reference** |
@@ -722,7 +722,12 @@ outside `refs/heads` in the shared `.git`, so they survive worktree recreation:
 [restack](configuration.md#restack) adds `refs/conductor/<slug>/restack/journal` (the in-flight
 operation's journal), `refs/conductor/<slug>/restack/staging/c<k>` (replayed tips before the move),
 `refs/conductor/<slug>/cascades` (per-originating-child repair counts and raised limits), and
-`refs/conductor/<slug>/leaf-moved` (the leaf has been moved onto the last closure). Under
+`refs/conductor/<slug>/leaf-moved` (the leaf has been moved onto the last closure). An
+operator-actionable halt on a feature with durable child state appends a commit to
+`refs/conductor/<slug>/halt-record` instead of committing `.docs/halted/<slug>.md` on a branch. Each
+commit's tree holds only `.docs/halted/<slug>.md`, its parent is the previous record, and every
+update is a compare-and-swap, so the chain is the halt audit trail. Readers use the ref first and
+fall back to `HEAD:.docs/halted/<slug>.md` for a record committed before the ref existed. Under
 [`route_whole_feature_fixes`](configuration.md#stacked_prs), routing state lives at
 `refs/conductor/<slug>/routes/r<n>` (route records), `rejected/r<n>/<m>`, `repairing` (the repair-host
 marker), `revalidate` (the revalidation queue), and `red/c<k>`; teardown deletes them only for a
@@ -869,7 +874,7 @@ when a reseal changes a story's owner without moving a task; and the restack eve
 `restack_planned` (`opId`, `cause`, `children`), `restack_applied` (per child: `oldTip`, `newTip`,
 `wouldInvalidate`, `parentOverlapPaths`), `restack_conflict` (`commit`, `paths`), `restack_refused`
 (`reason`, optional `detail`), `restack_recovered` (`opId`, `fromState`), `restack_resolution`
-(`opId`, `child`, `action` of `recorded` or `consumed`, `tip`, optional `operator`), and
+(`opId`, `child`, `action` of `recorded`, `consumed`, or `retired`, `tip`, optional `operator`), and
 `restack_decision` (`child`, `action` of `recorded`, `applied`, or `stale`, `commit`, `paths`, optional
 `operator`, optional `opId`). Routed repair adds
 `remediation_routed` (`roundId`, `kind`, `items` of `findingId`/`owner`/`host`/`reason`),

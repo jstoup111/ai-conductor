@@ -392,3 +392,48 @@ Task 16 ─▶ Task 17
 - [ ] All happy path criteria covered by at least one task
 - [ ] All negative path criteria covered by at least one task
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-refusal-a62e8e2b-0279-4f2c-96b7-be6c61ed7cfd: In src/conductor/src/engine/rebase.ts, restore originDefaultBranch to resolve origin/HEAD only, with no `git remote show origin` call. Add a separate exported helper that tries origin/HEAD, then `git remote show origin`, with no fetch. Call that helper only from resolveBaseCore and from child-lifecycle.ts moveLeaf. Leave every other originDefaultBranch caller unchanged.
+**Gate:** prd-audit
+**Rationale:** Removal-only rework under Task 17. The refused behavior was widening rebase.ts originDefaultBranch, which has about 18 callers including autoheal, with a `git remote show origin` round-trip. The recorded decision keeps originDefaultBranch as origin/HEAD-only and puts the fallback in a new exported helper used only by resolveBaseCore and moveLeaf, which is the shape Task 17 Step 2 asked for. This adds no new capability: it moves existing fallback behavior back to the two approved callers and reverts the collateral test edits. Task 17's leaf-move tests must keep passing.
+**Criterion:** NC-1
+**Governing clause:** Refused NC-1 (decision a62e8e2b-0279-4f2c-96b7-be6c61ed7cfd r1)
+**Done when:**
+- [test] NC-1 is satisfied by this task.
+- Refused NC-1 (decision a62e8e2b-0279-4f2c-96b7-be6c61ed7cfd r1) is satisfied by this task.
+- The repair for task rem-prd-audit-refusal-a62e8e2b-0279-4f2c-96b7-be6c61ed7cfd is committed and its targeted tests pass.
+
+### Task rem-prd-audit-refusal-a62e8e2b-0279-4f2c-96b7-be6c61ed7cfd-2: Restore src/conductor/test/engine/autoheal.test.ts to its main-branch 'fails closed with a default-branch resolution anomaly' test. Revert the collateral push-evidence.test.ts `-b main` change and the fixture-portability.test.ts allowlist and line edits wherever they are no longer needed. Confirm child-lifecycle-leaf-move.realgit.test.ts still passes against the new helper.
+**Gate:** prd-audit
+**Rationale:** Removal-only rework under Task 17. The refused behavior was widening rebase.ts originDefaultBranch, which has about 18 callers including autoheal, with a `git remote show origin` round-trip. The recorded decision keeps originDefaultBranch as origin/HEAD-only and puts the fallback in a new exported helper used only by resolveBaseCore and moveLeaf, which is the shape Task 17 Step 2 asked for. This adds no new capability: it moves existing fallback behavior back to the two approved callers and reverts the collateral test edits. Task 17's leaf-move tests must keep passing.
+**Criterion:** NC-1
+**Governing clause:** Refused NC-1 (decision a62e8e2b-0279-4f2c-96b7-be6c61ed7cfd r1)
+**Done when:**
+- [test] NC-1 is satisfied by this task.
+- Refused NC-1 (decision a62e8e2b-0279-4f2c-96b7-be6c61ed7cfd r1) is satisfied by this task.
+- The repair for task rem-prd-audit-refusal-a62e8e2b-0279-4f2c-96b7-be6c61ed7cfd-2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-R1: Add a real-git test in src/conductor/test/engine/restack/restack-resolver-lost-commit.realgit.test.ts: recoverRestackJournal resumes a planned journal with a fake resolver that continues without the environment, and the child ends with all of its candidates, matching the runRestack run. Fix restack-recovery.ts only if the test fails.
+**Gate:** prd-audit
+**Rationale:** Verified (95%): Task 4's fifth Done-when check requires a test where recoverRestackJournal resumes a planned journal with a resolver that continues without the environment. restack-recovery.ts calls the same resolveRestackConflict, but no changed test drives that path. This is missing test coverage inside Task 4's RED/GREEN scope, which already admits restack-resolver-lost-commit.realgit.test.ts. No architecture or product decision is needed.
+**Criterion:** S1.6
+**Parent task:** 4
+**Done when:**
+- [test] S1.6 is satisfied by this task.
+- The repair for task rem-prd-audit-R1 is committed and its targeted tests pass.
+
+### Task rem-as-built-R2: In src/conductor/src/engine/restack/restack-conflict-record.ts retireRecordedResolution, treat an unreadable conflict record as having no usable record: delete the resolution ref, return retired with no record, and keep the unreadable record bytes. Add real-git tests in restack-resolution-stale.realgit.test.ts and restack-recovery-resolution.realgit.test.ts. A malformed-JSON record must leave runRestack and recoverRestackJournal with the resolution ref absent, restack_resolution 'retired' emitted, and the ordinary replay run.
+**Gate:** as-built
+**Rationale:** Verified (99%): ADR decision 5 explicitly retires 'a resolution ref with no readable record', then runs the ordinary replay. retireRecordedResolution (restack-conflict-record.ts) instead returns unavailable when readConflictRecord reports unreadable, so the executor throws and recovery returns unavailable. The approved architecture is unambiguous, so this is conforming implementation drift. Task 10 (orphan retirement on both paths, files restack-executor.ts, restack-recovery.ts and their stale and recovery tests) admits the fix.
+**Governing clause:** adr-2026-11-02-stacked-restack-recovery-and-halt-record-ref decision 5
+**Done when:**
+- adr-2026-11-02-stacked-restack-recovery-and-halt-record-ref decision 5 is satisfied by this task.
+- The repair for task rem-as-built-R2 is committed and its targeted tests pass.
+
+### Task rem-as-built-R3: In src/conductor/src/engine/restack/restack-recovery.ts, turn the single orphan retire-and-resume step into a bounded loop that retires each successive record-stale orphan, emits 'retired' for each, and resumes the planned journal. Confirm restack-executor.ts runRestack handles successive orphans the same way. Add a real-git test in restack-recovery-resolution.realgit.test.ts: orphan resolution refs for two children, no matching record, recoverRestackJournal retires both and replays both by the ordinary replay.
+**Gate:** as-built
+**Rationale:** Verified (97%): restack-recovery.ts runs a single `if (resumed.kind === 'resolution-stale' && resumed.field === 'record')` retire-and-resume step. A second child's orphan then reaches the later resolution-stale branch, which aborts the journal and returns unavailable because no matching record exists. ADR decision 5 requires retirement plus ordinary replay for every orphan. Task 10 admits both paths. The sibling runRestack path in restack-executor.ts is in scope for the same check under Task 10.
+**Governing clause:** adr-2026-11-02-stacked-restack-recovery-and-halt-record-ref decision 5
+**Done when:**
+- adr-2026-11-02-stacked-restack-recovery-and-halt-record-ref decision 5 is satisfied by this task.
+- The repair for task rem-as-built-R3 is committed and its targeted tests pass.

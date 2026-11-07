@@ -1038,6 +1038,7 @@ export class ClaudeProvider implements LLMProvider {
       ...process.env,
       ...options.selfHost?.env,
       ...options.env,
+      ...options.environmentOverlay,
       ...(options.effort ? { CLAUDE_CODE_EFFORT_LEVEL: options.effort } : {}),
       ...FOREGROUND_ONLY_ENV,
     });

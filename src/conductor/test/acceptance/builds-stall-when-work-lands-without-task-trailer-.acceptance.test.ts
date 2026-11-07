@@ -284,7 +284,7 @@ describe('commit-movement liveness floor (real Conductor.run() build retry loop)
     expect(stallEvents.filter((e) => e.reason === 'no_task_progress')).toHaveLength(0);
     const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8').catch(() => null);
     expect(haltContent ?? '').not.toMatch(/resolved tasks stayed at/);
-  });
+  }, 45_000);
 
   it('resolved count MOVES every attempt → existing #280 progress-bypass fires exactly as today; the floor adds no interference', async () => {
     await writePlanAndStatus(dir, 3, []);

@@ -157,7 +157,7 @@ describe('resolveRestackConflict (real local Git)', () => {
     }
   });
 
-  it('refuses to report the bare new parent when a replayed resolver session left no rewrite list', async () => {
+  it('uses the settled checkout HEAD and rebuilds rewrites when a replayed resolver session left no rewrite list', async () => {
     const subject = await fixture();
     const result = await resolveRestackConflict({
       worktree: subject.repo, range: subject.range, newParent: subject.newParent, stamp,
@@ -172,9 +172,13 @@ describe('resolveRestackConflict (real local Git)', () => {
         return { resolved: true };
       },
     });
-    expect(result.tip).toBeUndefined();
-    expect(result.outcome).toMatchObject({ kind: 'conflict_halt' });
-    expect((result.outcome as { reason: string }).reason).toContain('rewrite');
+    // The provider omitted the hook environment, but the settled detached
+    // checkout still carries every candidate. Its HEAD is authoritative and
+    // unique subjects reconstruct the rewrite map.
+    expect(result.tip).toBeDefined();
+    expect(result.tip).not.toBe(subject.newParent);
+    expect(result.outcome).toMatchObject({ kind: 'changed' });
+    expect([...result.rewrites.keys()]).toEqual([subject.empty, subject.conflicting]);
     expect(await worktreePaths(subject.repo)).toEqual([subject.repo]);
   });
 

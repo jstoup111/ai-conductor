@@ -27,7 +27,7 @@ import {
   type RestackMoveRef,
 } from './restack-move.js';
 import { replayChildRange, RemBlockBodyMismatchError } from './restack-replay.js';
-import { consumeRecordedResolution } from './restack-conflict-record.js';
+import { consumeRecordedResolution, retireRecordedResolution } from './restack-conflict-record.js';
 import { prepareRestackDecisionDelivery, restackDecisionDetailLines } from './restack-decision-delivery.js';
 import { checkPathOwnership } from './restack-ownership.js';
 import { RestackSyncOperatorEditError, syncRestackedWorktree } from './restack-sync.js';
@@ -44,6 +44,7 @@ import { replayCandidateSubjects, resolveRestackConflict, type RestackResolver }
 import { haltRecordedRestackConflict } from './restack-conflict-halt.js';
 import { resolveUnenteredLeafOwner, type ConsumedTipCorrespondence } from './restack-unentered-leaf.js';
 import { haltRecordPathFor } from './halt-record-bookkeeping.js';
+import { readHaltRecordRef } from '../halt-record-ref.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
 import { publishedStackRefusal } from '../stack-publication.js';
 import { routedRoundOpen } from '../routing/round-admission.js';
@@ -376,10 +377,10 @@ async function unenteredLeafOwner(
   return identityMatches.length === 1 ? identityMatches[0] : undefined;
 }
 
-/** The committed halt record is the only durable answer after worktree loss. */
-async function hasOutstandingHalt(slug: string, git: GitRunner): Promise<boolean> {
-  const record = await runGit(git, ['show', `HEAD:.docs/halted/${slug}.md`]);
-  return record?.exitCode === 0 && /^Status:\s*halted\s*$/mi.test(record.stdout);
+/** The ref-backed record wins over a legacy committed record while a stack upgrades. */
+async function hasOutstandingHalt(worktree: string, slug: string, git: GitRunner): Promise<boolean> {
+  const record = await readHaltRecordRef(worktree, slug, { git });
+  return record.kind === 'record' && /^Status:\s*halted\s*$/mi.test(record.text);
 }
 
 /**
@@ -397,7 +398,7 @@ export async function cleanClearedAbortedRestackJournal(
   if (read.kind === 'missing') return 'none';
   if (read.kind !== 'journal') return 'unavailable';
   if (read.journal.state !== 'aborted') return 'none';
-  if (await hasOutstandingHalt(slug, git)) return 'none';
+  if (await hasOutstandingHalt(worktree, slug, git)) return 'none';
   return await cleanJournal(worktree, { slug: read.slug, blob: read.blob, journal: read.journal }, git)
     ? 'cleaned'
     : 'unavailable';
@@ -422,6 +423,7 @@ type ResumePlannedResult =
     readonly journal: StoredRestackJournal;
     readonly child: ChildRange['child'];
     readonly field: 'record' | 'range' | 'parent-tree';
+    readonly newParent: CommitSha;
   }
   | {
     readonly kind: 'conflict-unresolved';
@@ -512,10 +514,13 @@ async function resumePlanned(
       const recorded = await consumeRecordedResolution({
         slug: current.slug, range, parent, committer: current.journal.committer, git,
         replay: (replayRange, replayParent, replayCommitter, replayGit) => replayChildRange(
-          replayRange, replayParent, replayCommitter, replayGit, { comparisonCommits: [] },
+          replayRange, replayParent, replayCommitter, replayGit, {
+            comparisonCommits: [],
+            haltRecordSlug: current.slug,
+          },
         ),
       });
-      if (recorded.kind === 'stale') return { kind: 'resolution-stale', journal: current, child: range.child, field: recorded.field };
+      if (recorded.kind === 'stale') return { kind: 'resolution-stale', journal: current, child: range.child, field: recorded.field, newParent: parent };
       if (recorded.kind === 'consumed') {
         const ownership = await checkPathOwnership(range, parent, recorded.tip, git);
         if (ownership.kind === 'refused') return { kind: 'ownership-refused', journal: current, child: range.child, paths: ownership.paths };
@@ -759,7 +764,22 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
         await options.events?.emit({ type: 'restack_recovered', opId: journal.journal.opId, fromState });
         return { kind: 'recovered', fromState };
       }
-      const resumed = await resumePlanned(options.worktree, journal, git, options);
+      let resumed = await resumePlanned(options.worktree, journal, git, options);
+      // A resolution with no matching record belongs to an interrupted or
+      // superseded hand-off. Retire only that answer, preserve another
+      // child's record, then resume the untouched planned journal normally.
+      let orphanRetirements = 0;
+      const orphanRetirementLimit = journal.journal.ranges.length;
+      while (resumed.kind === 'resolution-stale' && resumed.field === 'record') {
+        if (orphanRetirements >= orphanRetirementLimit) {
+          return { kind: 'unavailable', detail: 'cannot retire successive orphaned restack resolutions' };
+        }
+        const retired = await retireRecordedResolution(options.worktree, options.slug, resumed.child, { git });
+        if (retired.kind !== 'retired') return { kind: 'unavailable', detail: `cannot retire orphaned restack resolution: ${retired.kind}` };
+        await options.events?.emit({ type: 'restack_resolution', opId: resumed.journal.journal.opId, child: resumed.child, action: 'retired', tip: retired.tip });
+        resumed = await resumePlanned(options.worktree, resumed.journal, git, options);
+        orphanRetirements += 1;
+      }
       if (resumed.kind === 'flatten-refused') {
         journal = resumed.journal;
         if (!await pinStagingRef(options.worktree, options.slug, resumed.range.child, resumed.range.oldTip, { git })) {
@@ -811,9 +831,24 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
         journal = resumed.journal;
         const aborted = await transition(options.worktree, journal, 'aborted', git);
         if (!aborted) return { kind: 'unavailable', detail: 'cannot abort stale recovered restack resolution' };
-        await haltRestack(options.worktree, 'restack-resolution-stale', options.events, {
-          child: resumed.child,
-          detail: resumed.field,
+        const retired = await retireRecordedResolution(options.worktree, options.slug, resumed.child, { git });
+        if (retired.kind !== 'retired' || !retired.record) {
+          return { kind: 'unavailable', detail: `cannot retire stale recovered restack resolution: ${retired.kind}` };
+        }
+        await options.events?.emit({ type: 'restack_resolution', opId: journal.journal.opId, child: resumed.child, action: 'retired', tip: retired.tip });
+        await options.events?.emit(emitRestackRefused({ reason: 'restack-resolution-stale', child: resumed.child, detail: resumed.field }));
+        const range = journal.journal.ranges.find((candidate) => candidate.child === resumed.child);
+        if (!range) return { kind: 'unavailable', detail: 'cannot find stale recovered restack range' };
+        const candidates = await runGit(git, ['rev-list', '--reverse', `${range.oldParent}..${range.oldTip}`]);
+        if (candidates?.exitCode !== 0) return { kind: 'unavailable', detail: 'cannot list stale recovered restack candidates' };
+        const parsedCandidates = (candidates?.stdout ?? '').split('\n').filter(Boolean).map(parseCommitSha);
+        if (parsedCandidates.some((candidate) => !candidate)) return { kind: 'unavailable', detail: 'cannot parse stale recovered restack candidate' };
+        await haltRecordedRestackConflict({
+          worktree: options.worktree, slug: options.slug, journal, range, replayParent: resumed.newParent,
+          candidateSubjects: await replayCandidateSubjects(git, parsedCandidates as CommitSha[]),
+          commit: retired.record.commit, paths: retired.record.paths,
+          detail: `restack-resolution-stale\n${resumed.field}`,
+          events: options.events, git, writeHalt: haltRestackConflict,
         });
         return { kind: 'halted' };
       }
