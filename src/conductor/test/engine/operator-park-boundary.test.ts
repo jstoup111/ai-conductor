@@ -448,6 +448,76 @@ describe('operator park boundary contract', () => {
     });
   });
 
+  // Covers: task:5
+  it('drains a yielded first serial attempt and preempts the free second attempt without spending accounting', async () => {
+    await writeState(statePath, stateWithPending('memory'));
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    const taskStatusPath = join(projectRoot, '.pipeline', 'task-status.json');
+    const evidencePath = join(projectRoot, '.pipeline', 'task-evidence.json');
+    const taskStatuses = {
+      tasks: [
+        { id: '1', name: 'completed task', status: 'completed' },
+        { id: '2', name: 'active task', status: 'in_progress' },
+      ],
+    };
+    const evidence = {
+      evidenceStamps: {},
+      noEvidenceAttempts: 7,
+      noEvidenceReasons: ['zero_work_product'],
+      migrationGrandfather: [],
+      lastResolvedCount: 0,
+    };
+    await writeFile(taskStatusPath, JSON.stringify(taskStatuses));
+    await writeFile(evidencePath, JSON.stringify(evidence));
+    const started = deferred();
+    const release = deferred<{ success: false; output: string }>();
+    let yielded = false;
+    const run = vi.fn<StepRunner['run']>(async () => {
+      started.resolve();
+      return release.promise;
+    });
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events: new ConductorEventEmitter(),
+      fromStep: 'memory',
+      mode: 'auto',
+      daemon: true,
+      maxRetries: 3,
+      verifyArtifacts: false,
+      featureSlug: 'preempted-feature',
+      operatorParkBoundary: async () => false,
+      preemptionRequested: () => yielded,
+    });
+
+    const resultPromise = conductor.run();
+    await started.promise;
+    yielded = true;
+    release.resolve({ success: false, output: 'first attempt drained normally' });
+    const result = await resultPromise;
+    const persisted = await readState(statePath);
+
+    expect({
+      result,
+      dispatchedAttempts: run.mock.calls.map(([, , options]) => ({
+        attempt: options?.attempt,
+        aborted: options?.abortSignal?.aborted ?? false,
+      })),
+      state: persisted.ok ? persisted.value.memory : persisted,
+      taskStatuses: JSON.parse(await readFile(taskStatusPath, 'utf8')),
+      evidence: JSON.parse(await readFile(evidencePath, 'utf8')),
+      terminalMarkers: await terminalMarkerNames(projectRoot),
+    }).toEqual({
+      result: { kind: 'preempted', boundary: { kind: 'attempt', step: 'memory', attempt: 2 } },
+      dispatchedAttempts: [{ attempt: 1, aborted: false }],
+      state: 'in_progress',
+      taskStatuses,
+      evidence,
+      terminalMarkers: [],
+    });
+  });
+
   it('routes a self-host admission cancellation to the operator-park terminal before retry accounting', async () => {
     await writeState(statePath, stateWithPending('build'));
     const events = new ConductorEventEmitter();
@@ -936,7 +1006,8 @@ describe('operator park boundary contract', () => {
     parked = true;
     expect(run).toHaveBeenCalledTimes(1);
     release.resolve({ success: false, output: 'drained failure output' });
-    const [result, persisted] = await Promise.all([resultPromise, readState(statePath)]);
+    const result = await resultPromise;
+    const persisted = await readState(statePath);
 
     expect({
       result,
@@ -1477,6 +1548,78 @@ describe('operator park boundary contract', () => {
       },
       laterSerialDispatches: 0,
       settledMembers: 2,
+    });
+  });
+
+  // Covers: task:5
+  it('drains every yielded parallel member and preempts only after their group join', async () => {
+    await writeState(statePath, stateWithPending('memory', 'explore'));
+    const alphaStarted = deferred();
+    const betaStarted = deferred();
+    const releaseAlpha = deferred();
+    const releaseBeta = deferred();
+    let yielded = false;
+    const terminalEvents: ConductorEvent[] = [];
+    const events = new ConductorEventEmitter();
+    events.on('parallel_failure', (event) => { terminalEvents.push(event); });
+    events.on('step_failed', (event) => { terminalEvents.push(event); });
+    const run = vi.fn<StepRunner['run']>(async (step) => {
+      if (step === ('alpha' as StepName)) {
+        alphaStarted.resolve();
+        await releaseAlpha.promise;
+      }
+      if (step === ('beta' as StepName)) {
+        betaStarted.resolve();
+        await releaseBeta.promise;
+      }
+      return { success: true };
+    });
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events,
+      config: { steps: { memory: { max_retries: 3, parallel: [
+        { name: 'alpha', skill: 'skills/memory/SKILL.md' },
+        { name: 'beta', skill: 'skills/memory/SKILL.md' },
+      ] } } },
+      fromStep: 'memory',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      featureSlug: 'preempted-feature',
+      operatorParkBoundary: async () => false,
+      preemptionRequested: () => yielded,
+    });
+
+    const resultPromise = conductor.run();
+    await Promise.all([alphaStarted.promise, betaStarted.promise]);
+    yielded = true;
+    releaseAlpha.resolve();
+    releaseBeta.resolve();
+    const result = await resultPromise;
+    const persisted = await readState(statePath);
+
+    expect({
+      result,
+      dispatchedMembers: run.mock.calls.map(([step, , options]) => ({ step, attempt: options?.attempt })),
+      terminalEvents,
+      state: persisted.ok ? {
+        group: persisted.value.memory,
+        alpha: (persisted.value as Record<string, unknown>)['memory__alpha'],
+        beta: (persisted.value as Record<string, unknown>)['memory__beta'],
+        later: persisted.value.explore,
+      } : persisted,
+      terminalMarkers: await terminalMarkerNames(projectRoot),
+    }).toEqual({
+      result: { kind: 'preempted', boundary: { kind: 'group', name: 'memory' } },
+      dispatchedMembers: [
+        { step: 'alpha', attempt: 1 },
+        { step: 'beta', attempt: 1 },
+      ],
+      terminalEvents: [],
+      state: { group: 'done', alpha: 'done', beta: 'done', later: 'pending' },
+      terminalMarkers: [],
     });
   });
 

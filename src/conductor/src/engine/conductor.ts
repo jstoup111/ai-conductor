@@ -8414,6 +8414,7 @@ export class Conductor {
     // completion must continue through the tail without trying to close again.
     let activeChildRequiresClosure = false;
     let parkedAtOperatorBoundary = false;
+    let preemptedAtBoundary = false;
     // Routing has durable work but no runnable whole-feature gate.  This is a
     // resumable parking boundary, not loop convergence and not a failure.
     let parkedForRouting = false;
@@ -8459,6 +8460,7 @@ export class Conductor {
         });
         process.off('SIGINT', sigintHandler);
         process.off('SIGTERM', sigterm);
+        preemptedAtBoundary = true;
         return { kind: 'preempted', boundary };
       };
     // Late declarations cannot reopen existing work, but their refusal must be
@@ -16530,6 +16532,7 @@ export class Conductor {
       if (
         this.daemon &&
         !parkedAtOperatorBoundary &&
+        !preemptedAtBoundary &&
         !parkedForRouting &&
         !(await this.markerExists(DONE_MARKER)) &&
         !(await this.markerExists(LOOP_HALT_MARKER))
@@ -17514,8 +17517,12 @@ export class Conductor {
           providerAvailability: this.providerExecution?.providerAvailability,
           onProviderSuppressed: this.providerExecution?.onProviderSuppressed,
           executionContext,
+          // A configured group's members must drain once admitted. An
+          // operator park is still an immediate member boundary, but a yield
+          // is safe only at the owning group's join, where the composed
+          // predicate is checked immediately after every member has settled.
           operatorParkBoundary: this.daemon && this.featureSlug !== undefined
-            ? this.operatorParkBoundary
+            ? this.rawOperatorParkBoundary
             : undefined,
           lifecycleObserver: {
             onAdmitted: async (_observation) => {
