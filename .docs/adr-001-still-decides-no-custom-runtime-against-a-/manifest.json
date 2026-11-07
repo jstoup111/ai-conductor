@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "slug": "adr-001-still-decides-no-custom-runtime-against-a-",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/adr-001-still-decides-no-custom-runtime-against-a-.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/adr-001-still-decides-no-custom-runtime-against-a-.md"
+    },
+    {
+      "kind": "coherence-waiver",
+      "path": ".docs/coherence-waivers/adr-001-still-decides-no-custom-runtime-against-a-.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/adr-001-still-decides-no-custom-runtime-against-a-.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/adr-001-still-decides-no-custom-runtime-against-a-.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-09-28-skills-may-bundle-executable-helpers.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-11-07-decision-corpus-query-and-known-record-shapes.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/adr-001-still-decides-no-custom-runtime-against-a-.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/adr-001-still-decides-no-custom-runtime-against-a-.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/adr-001-still-decides-no-custom-runtime-against-a-.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/adr-001-still-decides-no-custom-runtime-against-a-.md"
+    }
+  ]
+}
