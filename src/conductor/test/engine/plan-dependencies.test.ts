@@ -110,30 +110,39 @@ describe('validatePlanDependencies', () => {
     expect(validatePlanDependencies(planText)).toEqual([]);
   });
 
-  it.each([
-    ['a two-task cycle', [task(1, 'Task 2'), task(2, 'Task 1')].join('\n\n'), ['1', '2']],
-    ['a three-task cycle beside an independent task', [
+  it('reports a two-task dependency cycle', () => {
+    const violations = validatePlanDependencies([task(1, 'Task 2'), task(2, 'Task 1')].join('\n\n'));
+
+    expect(violations).toEqual([{
+      code: 'dependency-cycle',
+      taskId: '1',
+      message: 'Tasks 1, 2 form a dependency cycle and cannot be ordered',
+    }]);
+  });
+
+  it('reports a three-task dependency cycle without its independent task', () => {
+    const violations = validatePlanDependencies([
       task(1, 'none'),
       task(3, 'Task 5'),
       task(5, 'Task 7'),
       task(7, 'Task 3'),
-    ].join('\n\n'), ['3', '5', '7']],
-    ['a self-dependency', [task(1, 'none'), task(2, 'Task 2')].join('\n\n'), ['2']],
-  ])('reports %s as a dependency cycle', (_name, planText, cycleTaskIds) => {
-    const violations = validatePlanDependencies(planText);
+    ].join('\n\n'));
 
-    expect(violations).toHaveLength(1);
-    expect(violations[0]).toMatchObject({
+    expect(violations).toEqual([{
       code: 'dependency-cycle',
-      taskId: cycleTaskIds[0],
-    });
-    for (const taskId of cycleTaskIds) {
-      expect(violations[0].message).toContain(taskId);
-    }
-    if (cycleTaskIds[0] === '3') expect(violations[0].message).not.toContain('1');
-    expect(violations[0].message).toBe(
-      `Tasks ${cycleTaskIds.join(', ')} form a dependency cycle and cannot be ordered`,
-    );
+      taskId: '3',
+      message: 'Tasks 3, 5, 7 form a dependency cycle and cannot be ordered',
+    }]);
+  });
+
+  it('reports a self-dependency cycle', () => {
+    const violations = validatePlanDependencies([task(1, 'none'), task(2, 'Task 2')].join('\n\n'));
+
+    expect(violations).toEqual([{
+      code: 'dependency-cycle',
+      taskId: '2',
+      message: 'Tasks 2 form a dependency cycle and cannot be ordered',
+    }]);
   });
 
   it('reports unknown dependency task ids with their citing task', () => {
@@ -164,8 +173,19 @@ describe('validatePlanDependencies', () => {
     ]);
   });
 
-  it.each(['Tasks 1–9', 'all prior'])('reports malformed Dependencies %j', (dependencies) => {
-    const violations = validatePlanDependencies([task(1, 'none'), task(2, dependencies)].join('\n\n'));
+  it('reports range Dependencies as malformed', () => {
+    const violations = validatePlanDependencies([task(1, 'none'), task(2, 'Tasks 1–9')].join('\n\n'));
+
+    expect(violations).toEqual([expect.objectContaining({
+      code: 'malformed-dependencies',
+      taskId: '2',
+      message: expect.stringContaining('expected "none" or comma-separated task references'),
+    })]);
+    expect(violations[0].message).toContain('Task 2');
+  });
+
+  it('reports free-prose Dependencies as malformed', () => {
+    const violations = validatePlanDependencies([task(1, 'none'), task(2, 'all prior')].join('\n\n'));
 
     expect(violations).toEqual([expect.objectContaining({
       code: 'malformed-dependencies',
