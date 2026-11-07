@@ -402,6 +402,49 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     );
   });
 
+  // Covers: task:7 — merged plans retain the historical presence-only
+  // dependency-tree eligibility check; strict dependency validation is not a
+  // daemon backlog concern.
+  it('keeps legacy dependency forms and a dependency cycle eligible', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/legacy-dependencies.md'),
+      `# Plan
+**Stories:** .docs/stories/legacy-dependencies.md
+### Task 1
+**Dependencies:** Tasks 1–9
+### Task 2
+**Dependencies:** none (parallel with 1–6)
+### Task 3
+**Dependencies:** 1-11
+`,
+    );
+    await writeFile(join(dir, '.docs/stories/legacy-dependencies.md'), APPROVED_STORIES);
+    await writeCoherence('legacy-dependencies');
+
+    await writeFile(
+      join(dir, '.docs/plans/cyclic-dependencies.md'),
+      `# Plan
+**Stories:** .docs/stories/cyclic-dependencies.md
+### Task 1
+**Dependencies:** Task 2
+### Task 2
+**Dependencies:** Task 1
+`,
+    );
+    await writeFile(join(dir, '.docs/stories/cyclic-dependencies.md'), APPROVED_STORIES);
+    await writeCoherence('cyclic-dependencies');
+
+    const result = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(result.items.map((item) => item.slug)).toEqual([
+      'cyclic-dependencies',
+      'legacy-dependencies',
+    ]);
+    expect(result.blocked).toEqual([]);
+  });
+
   // Covers: task:7 — discovery keeps non-S coherence failures fail-closed
   // through the shared parser, while S remains exempt.
   it('blocks a merged non-S spec with no coherence file and warns once per slug', async () => {
