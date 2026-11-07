@@ -128,6 +128,7 @@ command — inside this session.
 - Test must fail for the RIGHT reason (not a syntax error; a missing import of not-yet-written code
   is expected, but COMMIT step 5's stub check still applies)
 - Assert production behavior, not source text, a test-local helper or fixture, or a mock's canned return
+- A stub of the code under test (constant, empty, or pre-change return) must fail at least one assertion
 - Test name describes the behavior: `test_expired_token_returns_401`, not `test_auth`
 - If tech-context loaded: follow stack test conventions (e.g., RSpec `describe`/`context`/`it`)
 - **Declare feature coverage with a `Covers:` marker.** Every test file this cycle creates or
@@ -243,8 +244,7 @@ inputs without failing open or closed). Has veto authority to send back to GREEN
    uncommitted work aside, and never discard, roll back or overwrite paths to reach the base
    version. A test that still passes proves nothing
    and will fail build_review's testQuality rubric one expensive lap later. A test that fails there
-   only because the new module is missing proves nothing either: also confirm a stub (constant,
-   empty, or pre-change return) fails an assertion. A value computed by the
+   only because the new module is missing proves nothing either; apply the stub rule from RED. A value computed by the
    test but never asserted on is an automatic fail of this check. Exempt: tasks under the
    **No Legitimate RED for Already-Existing Behavior** and **Removal Boundary** sections, and
    plan-declared `**Verify-only:** yes` tasks — their evidence forms replace this check.
