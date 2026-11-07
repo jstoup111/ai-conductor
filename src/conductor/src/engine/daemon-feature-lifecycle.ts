@@ -32,7 +32,7 @@ import type { StepRunner } from './step-runner-types.js';
 import { prepareWorktree } from './worktree-prepare.js';
 import type { WorktreeLifecycleQueue } from './worktree.js';
 import type { HarnessConfig } from '../types/config.js';
-import type { OperatorParkedTermination } from './conductor-options.js';
+import type { OperatorParkedTermination, PreemptedTermination } from './conductor-options.js';
 import { ConductorEventEmitter } from './conductor-event-emitter.js';
 import type { ReadOnlyReviewCapability } from './build-review-read-only-capability.js';
 import { resolveFeatureRemoteMutation } from './remote-git-operations.js';
@@ -59,6 +59,8 @@ export interface DaemonFeatureLifecycleContext {
   readonly rateLimitEpisode: RateLimitEpisode;
   readonly readOnlyReviewCapabilities: Readonly<Record<string, ReadOnlyReviewCapability>>;
   readonly liveBoundaryCoordinator?: LiveBoundaryCoordinator;
+  /** Child-executor-only supervisor yield request; in-process dispatch omits it. */
+  readonly preemptionRequested?: () => boolean;
   readonly ownerGh: GhRunner;
   readonly createProviderExecution: () => ProviderExecutionContext;
   readonly events: ConductorEventEmitter;
@@ -166,7 +168,7 @@ export async function runDaemonFeatureConductor(
   featureEvents: ConductorEventEmitter = context.events,
   featureLog = context.log,
   sessionId = uuidv4(),
-): Promise<void | OperatorParkedTermination> {
+): Promise<void | OperatorParkedTermination | PreemptedTermination> {
   const {
     projectRoot, config, baseBranch, isSelfHost, effectiveDaemonConcurrency, worktreeLifecycle,
     rateLimitEpisode, readOnlyReviewCapabilities, ownerGh,
@@ -205,6 +207,7 @@ export async function runDaemonFeatureConductor(
     liveBoundaryCoordinator: context.liveBoundaryCoordinator,
     baseBranch, verifyArtifacts: true, resume: true, daemon: true, featureSlug: item.slug,
     operatorParkBoundary: () => isOperatorParked(projectRoot, item.slug, (error) => featureLog(`operator park marker read failed: ${error.message}`)),
+    preemptionRequested: context.preemptionRequested,
     rateLimitEpisode, readOnlyReviewCapabilities,
     registerAbortController: context.registerAbortController,
   });
