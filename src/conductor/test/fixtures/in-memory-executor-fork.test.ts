@@ -117,7 +117,7 @@ describe('in-memory executor fork', () => {
     const completed: string[] = [];
     const rootEvents = new ConductorEventEmitter();
     rootEvents.on('feature_complete', (event) => {
-      if (event.type === 'feature_complete') completed.push(event.featureDesc);
+      if (event.type === 'feature_complete' && event.featureDesc !== undefined) completed.push(event.featureDesc);
     });
     const fork = createInMemoryExecutorFork({
       projectRoot: fixture.root,

@@ -259,7 +259,7 @@ describe('executor child shared lifecycle', () => {
     const subject = await fixture('stacked-child');
     const completions: string[] = [];
     subject.rootEvents.on('feature_complete', (event) => {
-      if (event.type === 'feature_complete') completions.push(event.featureDesc);
+      if (event.type === 'feature_complete' && event.featureDesc !== undefined) completions.push(event.featureDesc);
     });
     seams.prepareWorktree.mockImplementation(async (worktree: string) => completeConductorState(worktree));
 
