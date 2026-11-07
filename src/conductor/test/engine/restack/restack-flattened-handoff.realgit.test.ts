@@ -183,7 +183,7 @@ describe('buildFlattenedHandoff (real local Git)', () => {
     const base = await commit(git, 'base');
     await git(['checkout', '-qb', 'child']);
     await writeFile(join(repo, 'equivalent.txt'), 'same patch\n');
-    const equivalent = await commit(git, 'upstream equivalent');
+    await commit(git, 'upstream equivalent');
     await git(['checkout', '-qb', 'side', base]);
     await writeFile(join(repo, 'side.txt'), 'side\n');
     await commit(git, 'side');
