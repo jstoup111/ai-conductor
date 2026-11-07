@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
+import { readConflictRecord } from '../../../src/engine/restack/restack-conflict-record.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { readRestackJournal } from '../../../src/engine/restack/restack-journal.js';
 import { parseCommitSha, type CommitSha } from '../../../src/engine/restack/restack-types.js';
@@ -32,7 +33,7 @@ afterEach(async () => {
   await Promise.all(repositories.splice(0).map((repository) => rm(repository, { recursive: true, force: true })));
 });
 
-async function fixture(q: 'carried' | 'not-carried') {
+async function fixture(q: 'carried' | 'not-carried' | 'empty') {
   const repo = await mkdtemp(join(tmpdir(), 'restack-merge-bearing-conflict-'));
   repositories.push(repo);
   const git = (args: string[]) => execFile('git', args, { cwd: repo });
@@ -74,7 +75,16 @@ async function fixture(q: 'carried' | 'not-carried') {
   }
 
   const merge = sha((await git(['rev-parse', 'feat/c2/demo'])).stdout);
-  const newDefault = await commit('new default', 'shared.txt', 'default\n');
+  let newDefault: CommitSha;
+  if (q === 'empty') {
+    await writeFile(join(repo, 'shared.txt'), 'default\n');
+    await writeFile(join(repo, 'side.txt'), 'side\n');
+    await git(['add', 'shared.txt', 'side.txt']);
+    await git(['commit', '-qm', 'new default carries merge']);
+    newDefault = sha((await git(['rev-parse', 'HEAD'])).stdout);
+  } else {
+    newDefault = await commit('new default', 'shared.txt', 'default\n');
+  }
   await git(['update-ref', 'refs/conductor/demo/closed/c2', merge]);
   await git(['checkout', '-qb', 'feat/daemon-demo', merge]);
   await commit('leaf', 'leaf.txt', 'leaf\n');
@@ -209,5 +219,64 @@ describe('runRestack merge-bearing conflicts (real local Git)', () => {
     expect(halt).toMatch(/^restack refused \(replay-mismatch\) child 2/m);
     expect(halt).toContain('outside-child-two.txt');
     expect(await stackRefs(subject)).toBe(before);
+  });
+
+  // Covers: task:6
+  it('omits an already-carried flattened merge from settled and recorded conflict candidates', async () => {
+    const settled = await fixture('empty');
+    const result = await runRestack({
+      worktree: settled.repo, slug: 'demo', cause: 'base-refresh', newDefault: settled.newDefault,
+      git: makeGitRunner(settled.repo), resolverCap: 1,
+      resolver: async (context) => {
+        await writeFile(join(context.projectRoot, 'shared.txt'), 'resolved\n');
+        const git = makeGitRunner(context.projectRoot);
+        await git(['add', 'shared.txt'], { env: context.environment });
+        await git(['rebase', '--continue'], { env: context.environment });
+        return { resolved: true };
+      },
+    });
+    expect(result).toMatchObject({ kind: 'applied' });
+    const settledSubjects = (await settled.git(['log', '--format=%s', `${settled.newDefault}..feat/c2/demo`])).stdout;
+    expect(settledSubjects).not.toContain('merge uncarried Q');
+
+    const unresolved = await fixture('empty');
+    await expect(runRestack({
+      worktree: unresolved.repo, slug: 'demo', cause: 'base-refresh', newDefault: unresolved.newDefault,
+      git: makeGitRunner(unresolved.repo), resolver: async () => ({ resolved: false, reason: 'leave it for the operator' }),
+    })).resolves.toMatchObject({ kind: 'halted' });
+    await expect(readConflictRecord(unresolved.repo, 'demo')).resolves.toMatchObject({
+      kind: 'record', record: { candidateSubjects: expect.not.arrayContaining(['merge uncarried Q']) },
+    });
+  });
+
+  // Covers: task:6
+  it('halts an unresolved merge-bearing conflict when no resolver is available without moving stack refs', async () => {
+    const subject = await fixture('not-carried');
+    const before = await stackRefs(subject);
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
+      git: makeGitRunner(subject.repo),
+    })).resolves.toMatchObject({ kind: 'halted' });
+    const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toMatch(/^restack conflict child 2/m);
+    expect(halt).toContain('restack resolver unavailable');
+    expect(await stackRefs(subject)).toBe(before);
+  });
+
+  // Covers: task:6
+  it('limits an unsettled merge-bearing resolver to its cap before the ordinary conflict halt', async () => {
+    const subject = await fixture('not-carried');
+    let dispatches = 0;
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
+      git: makeGitRunner(subject.repo), resolverCap: 2,
+      resolver: async () => {
+        dispatches += 1;
+        return { resolved: false, reason: 'unsettled' };
+      },
+    })).resolves.toMatchObject({ kind: 'halted' });
+    const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
+    expect(dispatches).toBeLessThanOrEqual(2);
+    expect(halt).toMatch(/^restack conflict child 2/m);
   });
 });
