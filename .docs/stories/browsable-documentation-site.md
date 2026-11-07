@@ -85,16 +85,20 @@ As a maintainer, I want every maintained topic represented in site navigation so
 
 - Given the current repository documentation corpus, when navigation coverage is enumerated, then every human-facing Markdown topic maps to exactly one reachable place in the hosted hierarchy.
 - Given a new topic is added with valid navigation membership, when repository validation runs, then it passes without requiring a hand-maintained duplicate content list.
+- Given a topic is added, retitled, or reordered with valid navigation membership and sibling `nav_order` values that remain unique and contiguous from 1, when repository validation runs, then it passes without editing any expected title or `nav_order` value inside a test; the real tree is checked only through structural invariants.
 
 #### Negative Paths
 
 - Given an existing or new topic has no navigation membership, when repository validation runs, then it fails and prints the orphaned path.
 - Given one topic is represented more than once under conflicting parents, when repository validation runs, then it fails and identifies the ambiguous membership.
+- Given two topics under one parent (top-level topics share one group) declare the same `nav_order`, when repository validation runs, then it fails and names both paths and the duplicated order.
+- Given sibling `nav_order` values skip a number, when repository validation runs, then it fails and names the first out-of-sequence path with the expected and found order.
 
 ### Done When
 
 - [ ] A deterministic enumeration reports zero orphaned current topics.
 - [ ] A fixture or scoped failure case proves that an unregistered topic is rejected with its path.
+- [ ] Fixture cases prove a duplicate and a gap in sibling `nav_order` are each rejected with their paths.
 
 ## Story 5: Keep repository Markdown authoritative
 
