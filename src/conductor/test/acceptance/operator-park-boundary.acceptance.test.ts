@@ -587,7 +587,6 @@ describe('boundary-aware operator parking acceptance', () => {
       'plan',
       'coherence_check',
       'plan_review',
-      'coverage_binding',
     ];
     for (const step of resolvedBeforeBuild) state[step] = 'done';
     state.acceptance_specs = 'failed';

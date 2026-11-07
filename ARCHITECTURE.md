@@ -35,6 +35,8 @@ Agent prompt templates are in `agents/`. Skills define *what* to do; agents defi
 Use the least expensive provider-native capability tier that can do the job.
 The Claude autonomous family is `fable`, `opus`, `sonnet`, and `haiku`.
 The Codex autonomous family is `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`.
+Codex ids are tier floors: at dispatch boot each resolves to the newest same-tier catalog id
+(see [model resolution](docs/reference/models.md#codex-catalog-tier-resolution)).
 Each provider policy assigns those native models independently; no cross-provider alias
 translation occurs.
 
@@ -69,7 +71,6 @@ this section. CI enforces both content drift (the table matches the source) and 
 | architecture-diagram | autonomous engine | sonnet | medium | gpt-5.6-terra | medium | config-required | medium | Structured output generation from codebase scan — pattern-following. |
 | architecture-review | autonomous engine | opus | high | gpt-5.6-sol | high | config-required | high | Pre-implementation design feasibility and alignment requires a high-capability model from the selected provider policy. |
 | worktree-manager | autonomous engine | haiku | low | gpt-5.6-luna | low | config-required | low | Git operations — mechanical branch/worktree management. |
-| coverage_binding (engine gate) | autonomous engine | sonnet | low | gpt-5.6-terra | low | config-required | low | Engine-native no-op gate; records plan slice topology for stacked delivery and dispatches no model. |
 | writing-system-tests | autonomous engine | opus | medium (S/M), high (L) | gpt-5.6-sol | medium (S/M), high (L) | config-required | medium | Translating acceptance criteria into executable boundary-level specs requires strong reasoning to preserve behavioral intent and negative paths, using MEDIUM effort for S/M and HIGH effort for Large work. |
 | pipeline | autonomous engine | sonnet | medium (S/M), high (L) | gpt-5.6-terra | medium (S/M), high (L) | config-required | medium | Launches the implementation session that authors code through the TDD RED/DOMAIN/GREEN cycle — the actual coding lane, not a thin dispatcher. Each provider policy uses its standard model with MEDIUM effort for reliable code authoring, rising to HIGH effort for Large work. S tier keeps the fixed three-attempt retry floor, so small features can still recover from a bad first pass. |
 | build-review | autonomous engine | opus | high | gpt-5.6-sol | high | config-required | high | Fresh-session grader for the default-on implementation-quality rubric and explicitly enabled peer concerns — adversarial evidence judgement demands a high-capability model, same class as prd_audit/code-review. |
@@ -96,6 +97,7 @@ this section. CI enforces both content drift (the table matches the source) and 
 | intake | supported-host interactive | inherits caller | n/a | inherits model from the Codex session or spawned-agent configuration | inherits effort from the Codex session or spawned-agent configuration | n/a | n/a | Issue authoring runs in whatever session observed the problem (operator chat, halt monitor, build session) — evidence is freshest there; structured writing needs no dedicated dispatch. |
 | conduct | supported-host interactive | haiku | n/a | inherits model from the Codex session or spawned-agent configuration | inherits effort from the Codex session or spawned-agent configuration | n/a | n/a | Artifact checking and status reporting — mechanical. |
 | daemon-triage | supported-host interactive | sonnet | n/a | inherits model from the Codex session or spawned-agent configuration | inherits effort from the Codex session or spawned-agent configuration | n/a | n/a | Operator-invoked, read-only triage. Routing determinism lives in the skill's signal table, not the model; the model gathers evidence and matches rows. |
+| stack-land | supported-host interactive | sonnet | n/a | inherits model from the Codex session or spawned-agent configuration | inherits effort from the Codex session or spawned-agent configuration | n/a | n/a | Operator-invoked stack landing guidance: ownership is gathered mechanically, while the model presents the evidence and obtains the required confirmation before a mutation. |
 | pr | supported-host interactive | sonnet | n/a | inherits model from the Codex session or spawned-agent configuration | inherits effort from the Codex session or spawned-agent configuration | n/a | n/a | Diff analysis and structured PR body — templated output. |
 | tdd-red | supported-host interactive | sonnet | n/a | inherits model from the Codex session or spawned-agent configuration | inherits effort from the Codex session or spawned-agent configuration | n/a | n/a | Writing one test at a time — focused, constrained. |
 | tdd-green | supported-host interactive | sonnet | n/a | inherits model from the Codex session or spawned-agent configuration | inherits effort from the Codex session or spawned-agent configuration | n/a | n/a | Writing minimal implementation — constrained scope. |
@@ -176,7 +178,7 @@ history.
 > (`low→medium→high→xhigh→max`); **attempt 3+** holds that effort and bumps the model
 > **(attempt − 2) tiers** up the selected provider's native capability ladder. Claude
 > ascends `haiku→sonnet→opus→fable`; Codex ascends
-> `gpt-5.6-luna→gpt-5.6-terra→gpt-5.6-sol`. Attempt 3 is one tier and attempt 4 two
+> `gpt-5.6-luna→gpt-5.6-terra→gpt-5.6-sol→gpt-6-astra`. Attempt 3 is one tier and attempt 4 two
 > tiers. Bumps are capped at the selected policy's top — an effort already at `max` or
 > a model already at its provider's deepest rung is a no-op, never an error. Thus the
 > normal M/L/no-tier `explore` and every `prd` move `high→xhigh` on attempt 2

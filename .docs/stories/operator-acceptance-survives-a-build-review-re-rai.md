@@ -48,7 +48,7 @@ As an operator who accepted a build_review finding, I want a later lap that re-r
 - Given the #3211 sequence replayed with a custom eventSpine rubric finding whose finding id differs on every lap, when the second lap binds the re-raised finding to the accepted case, then that lap settles with no halt.
 
 #### Negative Paths
-- Given resolved action case C with an `applied` or `failed` effect that holds no acceptance origin and no operator resolution, when lap L2 binds F2 to C by `existingCaseId` with disposition `act`, then the lap halts `semantic remediation case regression C` exactly as today and persists no carried link.
+- Given resolved action case C with a `failed` effect, or with an `applied` effect where the binding row declares a `reRaise` of kind `repeat`, that holds no acceptance origin and no operator resolution, when lap L2 binds F2 to C by `existingCaseId` with disposition `act`, then the lap halts `semantic remediation case regression C` exactly as today and persists no carried link.
 - Given C's only acceptance origin was recorded on the current lap, when the same lap's judgement binds another finding to C, then that finding is not carried and today's reuse rule applies to it.
 - Given lap L2 binds F2 to carry-eligible C and also raises an unbound content finding G, when the lap settles, then only F2 is carried and G routes exactly as it would without F2.
 - Given lap L2 has an infrastructure failure beside carried F2, when the effective verdict is derived, then the infrastructure result still blocks until it heals or has an exact reduced-coverage decision.
@@ -256,12 +256,15 @@ As an operator, I want a clean build_review PASS to settle an action case whose 
 - Given open action case O with a `failed` effect whose source is still raised and unaccepted, when a PASS is attempted, then settlement halts naming O and the exact command `ai-conductor build-review resolve-case --feature <slug> --case <O>`, with `--child <child>` when the case store is child-scoped.
 - Given open action case O whose source is not raised on a lap where any built-in or custom rubric had an infrastructure failure or incomplete scope, even when a reduced-coverage decision covers it, when the lap settles, then O is not retired by absence.
 - Given a failed deferral or an open decision stop that no operator resolved with `build-review resolve-case`, when a clean PASS is attempted, then settlement still blocks exactly as today.
+- Given open deferral case D with a `reserved` or `failed` effect, such as a deferral whose intake issue was never filed, when a clean PASS is attempted, then settlement blocks naming D and the exact command `ai-conductor build-review resolve-case --feature <slug> --case <D>`, with `--child <child>` when the case store is child-scoped (#3575).
+- Given an adjudication lap halts `remediation effect is not finalized` on an open case, when the halt is recorded, then it names that case and the exact `resolve-case` command; a halt whose unfinished effect belongs only to resolved cases keeps the bare reason (#3575).
 - Given settlement runs again after a crash, when O is retired, then O is resolved once and exactly one `remediation_case_reconciled` event exists for it.
 
 ### Done When
 - [ ] The #3303 store shape is replayed through the conductor and settles at PASS without a hand edit.
 - [ ] Tests pin the still-raised block, the unhealthy-lap no-retire and the deferral or decision-stop block.
 - [ ] The halt text test asserts the exact `resolve-case` command with and without `--child`.
+- [ ] The deferral clean-PASS halt and the not-finalized adjudication halt tests assert the exact `resolve-case` command.
 
 ---
 

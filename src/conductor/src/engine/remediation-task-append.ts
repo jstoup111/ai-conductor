@@ -27,7 +27,10 @@ export async function appendConductorRemediationTasks(
     criterionBoundGaps?: CriterionBoundRemediationGap[];
     gateSource?: string;
   },
-): Promise<{ success: true; appendedIds: string[] } | { success: false; error: string }> {
+): Promise<
+  | { success: true; appendedIds: string[]; appendedIdsByGapId?: ReadonlyMap<string, readonly string[]> }
+  | { success: false; error: string }
+> {
   const log = options?.log ?? (() => {});
 
   // TASK_ID_PATTERN from autoheal.ts: [A-Za-z0-9._-]+
@@ -86,7 +89,11 @@ export async function appendConductorRemediationTasks(
         error: `Failed to append remediation tasks to plan: ${error instanceof Error ? error.message : 'unknown error'}`,
       };
     }
-    return { success: true, appendedIds: rendered.ids };
+    return {
+      success: true,
+      appendedIds: rendered.ids,
+      appendedIdsByGapId: rendered.idsByGapId,
+    };
   }
 
   // Parse existing task headers to detect duplicates and content drift

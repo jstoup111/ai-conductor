@@ -9,9 +9,9 @@ import { classifyIndependence, orderReviewerCandidates, resolveAuthoringHost } f
 import type { ProviderRuntimeSet } from './provider-runtime.js';
 import type { ProviderSessionStore } from './provider-session.js';
 import { executeProviderCandidates, type ExecuteProviderCandidatesInput } from './provider-execution.js';
-import { resolveIdeaFiles } from './engineer/spec-change-set.js';
+import { readMergeBaseTexts, resolveIdeaFiles } from './engineer/spec-change-set.js';
 import { parseAdrDecisions } from './artifacts.js';
-import { selectPlanReviewAdrDecisionSections, selectPlanReviewAdrStems, selectPlanReviewAdrTexts } from './plan-review-adr-scope.js';
+import { selectPlanReviewAdrDecisionSections, selectPlanReviewAdrStems, selectPlanReviewAdrTexts, splitPlanReviewAdrDecisions } from './plan-review-adr-scope.js';
 
 function isSchemaValidFinding(value: unknown): boolean {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -35,10 +35,19 @@ async function files(root: string, at = root): Promise<string[]> {
     ? (entry.name === '.git' || entry.name === 'node_modules' ? [] : files(root, join(at, entry.name)))
     : entry.isFile() ? [relative(root, join(at, entry.name)).replaceAll('\\', '/')] : []))).flat();
 }
-async function reviewInputs(worktreePath: string, planStem: string, canonicalPath?: string) {
+async function reviewInputs(
+  worktreePath: string,
+  planStem: string,
+  canonicalPath?: string,
+  readBaseTexts: typeof readMergeBaseTexts = readMergeBaseTexts,
+) {
   const planText = await readFile(join(worktreePath, '.docs', 'plans', `${planStem}.md`), 'utf8');
   const storiesText = await readFile(join(worktreePath, '.docs', 'stories', `${planStem}.md`), 'utf8').catch(() => '');
-  const coherenceText = await readFile(join(worktreePath, '.docs', 'coherence', `${planStem}.md`), 'utf8').catch(() => '');
+  const coherenceResult = await readFile(join(worktreePath, '.docs', 'coherence', `${planStem}.md`), 'utf8').then(
+    (text) => ({ text, exists: true }),
+    () => ({ text: '', exists: false }),
+  );
+  const coherenceText = coherenceResult.text;
   const architectureReviewText = await (async () => {
     try {
       const review = (await readdir(join(worktreePath, '.docs', 'decisions')))
@@ -61,10 +70,20 @@ async function reviewInputs(worktreePath: string, planStem: string, canonicalPat
   const adrScope = { planText, adrTexts: allAdrTexts, changedPaths: [...changedPaths] };
   const adrTexts = selectPlanReviewAdrTexts(adrScope);
   const adrDecisionSections = selectPlanReviewAdrDecisionSections(adrScope);
+  const changedAdrPaths = selectPlanReviewAdrStems(adrScope)
+    .map((stem) => `.docs/decisions/${stem}.md`)
+    .filter((path) => changedPaths.has(path));
+  const baseByPath = canonicalPath
+    ? await readBaseTexts(worktreePath, canonicalPath, changedAdrPaths)
+    : undefined;
+  const baseAdrTexts = baseByPath === undefined ? undefined : Object.fromEntries(
+    changedAdrPaths.map((path) => [path.slice('.docs/decisions/'.length, -'.md'.length), baseByPath[path]!]),
+  );
+  const adrDecisionSplit = splitPlanReviewAdrDecisions({ ...adrScope, baseAdrTexts });
   const sourceFiles: Record<string, string> = {};
   for (const path of await files(worktreePath)) if (!path.startsWith('.pipeline/')) sourceFiles[path] = await readFile(join(worktreePath, path), 'utf8').catch(() => '');
   const digest = computeReviewedDigest({ planText, storiesText, adrTexts: allAdrTexts, artifactTexts: { [` .docs/coherence/${planStem}.md`.trim()]: coherenceText }, changedPaths: [...changedPaths] });
-  return { planText, storiesText, coherenceText, architectureReviewText, adrTexts, adrDecisionSections, sourceFiles, digest };
+  return { planText, storiesText, coherenceText, hasCoherence: coherenceResult.exists, architectureReviewText, adrTexts, adrDecisionSections, adrDecisionSplit, sourceFiles, digest };
 }
 
 function selectedPlanTasks(planText: string, ids: readonly string[]): string {
@@ -103,6 +122,10 @@ function selectedDecisions(adrTexts: Readonly<Record<string, string>>, ids: read
  */
 export const PLAN_REVIEW_MAX_PROMPT_CHARS = 400_000;
 
+/** Explains that the index is a read-through reference, not prompt context. */
+export const PLAN_REVIEW_INDEX_INSTRUCTION =
+  'INDEX (not inlined; read each item from its listed worktree path, and open it before a finding quotes or relies on it):';
+
 /** The reviewer reads source itself, so reachability rows carry a path count, not the list. */
 function promptCandidates(candidates: readonly unknown[]): unknown[] {
   return candidates.map((candidate) => {
@@ -119,13 +142,15 @@ export interface RunPlanReviewInput {
   onCandidateStart?: ExecuteProviderCandidatesInput['onCandidateStart'];
   /** Prompt budget; defaults to {@link PLAN_REVIEW_MAX_PROMPT_CHARS}. */
   maxPromptChars?: number;
+  /** Injectable merge-base reader for runner-boundary tests. */
+  readMergeBaseTexts?: typeof readMergeBaseTexts;
 }
 export async function runPlanReview(input: RunPlanReviewInput): Promise<PlanReviewArtifact> {
   const previousPath = join(input.worktreePath, '.docs', 'plan-review', `${input.planStem}.md`);
   const previousText = await readFile(previousPath, 'utf8').catch(() => '');
   const previous = previousText ? parsePlanReviewArtifact(previousText) : undefined;
   if (previous && !('kind' in previous) && previous.round >= 2) throw new Error(`plan review bound reached: ${previous.findings.filter((f) => f.severity === 'blocking').map((f) => `${f.id} ${f.summary}`).join('; ')}`);
-  const source = await reviewInputs(input.worktreePath, input.planStem, input.canonicalPath);
+  const source = await reviewInputs(input.worktreePath, input.planStem, input.canonicalPath, input.readMergeBaseTexts);
   const host = resolveAuthoringHost(input.env);
   const candidates = orderReviewerCandidates({ config: input.config, host, configuredProviders: input.configuredProviders });
   if (!candidates.length) throw new Error('plan review has no configured reviewer provider');
@@ -140,17 +165,36 @@ export async function runPlanReview(input: RunPlanReviewInput): Promise<PlanRevi
   const reviewStories = changed ? selectedStories(source.storiesText, changed.storyIds) : source.storiesText;
   const reviewDecisions = changed
     ? selectedDecisions(source.adrTexts, changed.adrDecisionIds)
-    : source.adrDecisionSections;
+    : source.adrDecisionSplit.inline;
   const priorFindings = prior?.findings.filter((finding) => finding.severity === 'blocking' || finding.severity === 'significant') ?? [];
   const roundCandidates = changed
     ? rows.flat().filter((candidate: any) => changed.planTaskIds.includes(candidate.taskId))
     : rows.flat();
   const decisionsJson = JSON.stringify(reviewDecisions);
   const candidatesJson = JSON.stringify(promptCandidates(roundCandidates));
-  const prompt = `$plan-review\n\nPLAN:\n${reviewPlan}\n\nSTORIES:\n${reviewStories}\n\nADR DECISIONS:\n${decisionsJson}\n\nCOHERENCE:\n${source.coherenceText}\n\nCANDIDATES:\n${candidatesJson}${prior ? `\n\nPRIOR BLOCKING AND SIGNIFICANT FINDINGS:\n${JSON.stringify(priorFindings)}` : ''}`;
+  const index = source.adrDecisionSplit.indexed.map((entry) => `- ${entry.id} | ${entry.title} | ${entry.path}`);
+  if (source.hasCoherence) index.push(`- coherence | .docs/coherence/${input.planStem}.md`);
+  const indexText = index.join('\n');
+  const prompt = changed
+    ? `$plan-review\n\nPLAN:\n${reviewPlan}\n\nSTORIES:\n${reviewStories}\n\nADR DECISIONS:\n${decisionsJson}\n\nCOHERENCE:\n${source.coherenceText}\n\nCANDIDATES:\n${candidatesJson}${prior ? `\n\nPRIOR BLOCKING AND SIGNIFICANT FINDINGS:\n${JSON.stringify(priorFindings)}` : ''}`
+    : `$plan-review\n\nPLAN:\n${reviewPlan}\n\nSTORIES:\n${reviewStories}\n\nADR DECISIONS (changed in this spec):\n${decisionsJson}\n\n${PLAN_REVIEW_INDEX_INSTRUCTION}\n${indexText}\n\nCANDIDATES:\n${candidatesJson}`;
   const maxPromptChars = input.maxPromptChars ?? PLAN_REVIEW_MAX_PROMPT_CHARS;
   if (prompt.length > maxPromptChars) {
-    throw new Error(`plan review prompt is too large: ${prompt.length} characters exceeds ${maxPromptChars} (plan ${reviewPlan.length}, stories ${reviewStories.length}, ADR decisions ${decisionsJson.length}, coherence ${source.coherenceText.length}, candidates ${candidatesJson.length})`);
+    const sections: Array<[string, number]> = [
+      ['plan', reviewPlan.length],
+      ['stories', reviewStories.length],
+      ['ADR decisions', decisionsJson.length],
+      ...(changed ? [['coherence', source.coherenceText.length] as [string, number]] : [['index', indexText.length] as [string, number]]),
+      ['candidates', candidatesJson.length],
+      ...(prior ? [['prior findings', JSON.stringify(priorFindings).length] as [string, number]] : []),
+    ];
+    const largest = sections.reduce((current, section) => section[1] > current[1] ? section : current);
+    throw new Error(
+      `plan review prompt is too large: ${prompt.length} characters exceeds ${maxPromptChars} ` +
+      `(${sections.map(([name, size]) => `${name} ${size}`).join(', ')}). ` +
+      `Largest section: ${largest[0]}. To proceed, rerun with --max-prompt-chars ${prompt.length}, ` +
+      `or set plan_review.max_prompt_chars: ${prompt.length} in .ai-conductor/config.yml, or shrink the ${largest[0]} section.`,
+    );
   }
   const executor = input.providerExecutor ?? executeProviderCandidates;
   let findings: readonly import('./plan-review-contract.js').PlanReviewFinding[] | undefined;

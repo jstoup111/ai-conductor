@@ -98,6 +98,41 @@ describe('localWorkSource — parked state residence', () => {
   });
 });
 
+describe('localWorkSource — latest discovery partitions', () => {
+  // Covers: task:9
+  it('exposes cached waiting, blocked, and gated partitions without triggering another discovery', async () => {
+    const mod = await load(WS_MOD);
+    const localWorkSource = requireFn(mod, 'localWorkSource');
+    const waiting = [{ slug: 'waiting-spec', reason: 'blocked by #123' }];
+    const blocked = [{ slug: 'blocked-spec', reason: 'stories-not-approved', remedy: 'approve stories' }];
+    const gated = [{ slug: 'gated-spec', reason: 'other-owner', owner: 'someone', remedy: 'ask owner' }];
+    const discoverBacklog = vi.fn(async () => ({
+      items: [fakeItem('eligible-spec')],
+      waiting,
+      blocked,
+      gated,
+    }));
+    const source = localWorkSource({
+      projectRoot: '/repo',
+      baseBranch: 'main',
+      log: vi.fn(),
+      isProcessed: vi.fn().mockResolvedValue(false),
+      hasWarned: vi.fn().mockResolvedValue(false),
+      markWarned: vi.fn().mockResolvedValue(undefined),
+      fastForwardRoot: vi.fn(async () => {}),
+      discoverBacklog,
+    });
+
+    expect(source.partitions?.()).toBeUndefined();
+
+    await source.discover({ refresh: false });
+
+    expect(source.partitions?.()).toEqual({ waiting, blocked, gated });
+    expect(source.partitions?.()).toEqual({ waiting, blocked, gated });
+    expect(discoverBacklog).toHaveBeenCalledTimes(1);
+  });
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Fast-forward ordering
 // ─────────────────────────────────────────────────────────────────────────────

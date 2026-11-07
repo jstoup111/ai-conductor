@@ -10,15 +10,20 @@ export const ADMITTED_EXTERNAL_PIPELINE_EVENT_TYPES = [
   'build_review_reduced_coverage_accepted',
   'build_review_disposition_refused',
   'build_review_outer_verdict',
+  'github_operation_failed',
   'kickback_budget_adjustment_authorized',
 ] as const satisfies readonly ConductorEvent['type'][];
 
 export type AdmittedExternalPipelineEventType =
   (typeof ADMITTED_EXTERNAL_PIPELINE_EVENT_TYPES)[number];
 export type BuildReviewExternalEvent = Extract<ConductorEvent,
-  { type: Exclude<AdmittedExternalPipelineEventType, 'kickback_budget_adjustment_authorized'> }> & { ts: string };
-export type ExternalPipelineEvent = BuildReviewExternalEvent | Extract<ConductorEvent,
-  { type: 'kickback_budget_adjustment_authorized' }>;
+  { type: Exclude<AdmittedExternalPipelineEventType, 'kickback_budget_adjustment_authorized' | 'github_operation_failed'> }> & { ts: string };
+export type GithubOperationFailedExternalEvent = Extract<ConductorEvent,
+  { type: 'github_operation_failed' }> & { ts: string };
+export type ExternalPipelineEvent =
+  | BuildReviewExternalEvent
+  | GithubOperationFailedExternalEvent
+  | Extract<ConductorEvent, { type: 'kickback_budget_adjustment_authorized' }>;
 export type KickbackBudgetExternalEvent = Extract<ExternalPipelineEvent,
   { type: 'kickback_budget_adjustment_authorized' }>;
 

@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:13, task:14
+// Covers: task:1, task:2, task:3, task:6, task:13, task:14
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
@@ -19,6 +19,7 @@ import {
   validateProviderCatalog,
 } from '../../src/execution/provider-catalog.js';
 import { parsePiModelId, parsePiModelListing } from '../../src/execution/pi-provider.js';
+import { parseCodexModelListing } from '../../src/execution/codex-provider.js';
 import { rateCardModelIds } from '../../src/engine/provider-model-policy.js';
 
 const executableOverrides = ['CLAUDE_EXECUTABLE', 'CODEX_EXECUTABLE', 'PI_EXECUTABLE'] as const;
@@ -76,17 +77,40 @@ describe('built-in provider catalog', () => {
     expect(DEFAULT_PROVIDER).toBe('claude');
   });
 
+  it('declares credential-file recovery exclusively for Pi', () => {
+    const recoveryDeclaration = (provider: (typeof BUILT_IN_PROVIDERS)[number]) => {
+      const descriptor = provider as typeof provider & {
+        capabilities: { credentialFileRecovery?: boolean };
+        credentialRecoveryFile?: string;
+      };
+      return {
+        credentialFileRecovery: descriptor.capabilities.credentialFileRecovery,
+        credentialRecoveryFile: descriptor.credentialRecoveryFile,
+      };
+    };
+
+    expect(Object.fromEntries(
+      BUILT_IN_PROVIDERS.map((provider) => [provider.id, recoveryDeclaration(provider)]),
+    )).toEqual({
+      claude: { credentialFileRecovery: undefined, credentialRecoveryFile: undefined },
+      codex: { credentialFileRecovery: undefined, credentialRecoveryFile: undefined },
+      pi: { credentialFileRecovery: true, credentialRecoveryFile: 'auth.json' },
+    });
+  });
+
   it('requires configured Pi models while built-in policies retain their model defaults', () => {
     const policies = BUILT_IN_PROVIDERS.map((provider) => provider.modelPolicy);
     const piPolicy = policies[2]!;
 
     expect({
       configuredModelRequirements: policies.map((policy) => policy.requiresConfiguredModels),
+      codexModelEscalationCap: policies[1]!.modelEscalationOrder.at(-1),
       piModelEscalationOrder: piPolicy.modelEscalationOrder,
       piModelFallbackLadder: piPolicy.modelFallbackLadder,
       piHasNonEmptyStepModel: Object.values(piPolicy.stepModels).some(Boolean),
     }).toEqual({
       configuredModelRequirements: [false, false, true],
+      codexModelEscalationCap: 'gpt-6-astra',
       piModelEscalationOrder: [],
       piModelFallbackLadder: [],
       piHasNonEmptyStepModel: false,
@@ -149,6 +173,18 @@ describe('built-in provider catalog', () => {
       claude: undefined,
       codex: undefined,
       pi: { argv: ['--list-models'], parse: parsePiModelListing },
+    });
+  });
+
+  it('declares the Codex tier catalog without enabling configured-id validation', () => {
+    const codex = BUILT_IN_PROVIDERS.find((provider) => provider.id === 'codex')!;
+
+    expect({
+      modelCatalog: codex.modelCatalog,
+      modelTierCatalog: codex.modelTierCatalog,
+    }).toEqual({
+      modelCatalog: undefined,
+      modelTierCatalog: { argv: ['debug', 'models'], parse: parseCodexModelListing },
     });
   });
 

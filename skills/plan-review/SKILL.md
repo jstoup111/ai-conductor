@@ -27,8 +27,10 @@ through the read-only session, then return the terminal structured result reques
 ## Inputs and evidence
 
 Use the supplied stories, every plan task, relevant ADR Decision sections, coherence artifact,
-candidate rows, and the target worktree source. Assess the final plan rather than reconstructing
-candidate generation or routing.
+candidate rows, and the target worktree source. `ADR DECISIONS` contains the decisions changed by
+the spec. `INDEX` lists the remaining in-scope decisions and coherence artifact by path; read each
+indexed item from its listed worktree path before relying on it. Assess the final plan rather than
+reconstructing candidate generation or routing.
 
 Every finding needs concrete evidence. Record a feasibility finding citing the source `file:line`
 when a planned input differs from what production passes. Quote both passages for every

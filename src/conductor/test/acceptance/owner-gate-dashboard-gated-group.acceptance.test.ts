@@ -212,13 +212,12 @@ describe('owner-gate dashboard GATED group acceptance (Covers: FR-1, FR-3, FR-4,
     };
     const state = await scanInheritedState(deps);
 
-    // Existing failure behavior: ELIGIBLE degrades to an empty (0) section, and
-    // the failure is logged (never thrown out of scanInheritedState).
+    // Discovery failure is logged (never thrown out of scanInheritedState) and
+    // all discovery-derived partitions explicitly report their unknown state.
     expect(logs.some((l) => l.includes('backlog discovery failed'))).toBe(true);
 
     const rendered = renderDashboard({ ...state, gated: [] } as InheritedState & { gated: GatedEntry[] });
-    expect(extractSection(rendered, 'ELIGIBLE')).toContain('ELIGIBLE (0)');
-    // Fails today: no GATED section exists in the failure-fallback rendering.
-    expect(rendered).toContain('GATED (0)');
+    expect(rendered).toContain('ELIGIBLE: unknown — discovery did not complete');
+    expect(rendered).toContain('GATED: unknown — discovery did not complete');
   });
 });

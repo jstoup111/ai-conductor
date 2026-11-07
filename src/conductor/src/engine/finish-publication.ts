@@ -30,6 +30,42 @@ export class StackPublicationRetryError extends Error {
   }
 }
 
+/** A guarded operation failed while a FINISH effect was publishing PR prose. */
+export class PublicationOperationFailedError extends Error {
+  override readonly name = 'PublicationOperationFailedError';
+
+  constructor(
+    readonly operation: string,
+    readonly error: string,
+  ) {
+    super(`${operation} failed: ${error}`);
+  }
+}
+
+export function isPublicationOperationFailedError(
+  error: unknown,
+): error is PublicationOperationFailedError {
+  return error instanceof PublicationOperationFailedError;
+}
+
+/** The authoring pass completed without returning usable PR prose. */
+export class PrProseAuthoringFailedError extends Error {
+  override readonly name = 'PrProseAuthoringFailedError';
+
+  constructor(
+    override readonly cause: 'not_returned' | 'invalid',
+    readonly detail: string,
+  ) {
+    super(detail);
+  }
+}
+
+export function isPrProseAuthoringFailedError(
+  error: unknown,
+): error is PrProseAuthoringFailedError {
+  return error instanceof PrProseAuthoringFailedError;
+}
+
 /**
  * Closed domain vocabulary for resumable FINISH publication.  The coordinator
  * derives these values from authoritative repository and external evidence;
@@ -118,6 +154,8 @@ export type PublicationPullRequest =
       identity: 'one';
       url: string;
       prose: 'accepted' | 'revision_required' | 'stale' | 'placeholder' | 'halt' | 'indeterminate';
+      /** Opaque digest of the observed title/body revision, when available. */
+      proseRevision?: string;
       /** The persisted objection for this exact judged-deficient revision, when available. */
       revisionGuidance?: string;
       /** A machine-readable `needs-remediation` signal, distinct from prose judgment. */
@@ -175,6 +213,8 @@ export type PullRequestObservation =
       state: 'one';
       url: string;
       prose: 'accepted' | 'revision_required' | 'stale' | 'placeholder' | 'halt';
+      /** Opaque digest of the observed title/body revision, when available. */
+      proseRevision?: string;
       /** Persisted objection for this exact judged-deficient PR revision. */
       revisionGuidance?: string;
       /** The observer found a `needs-remediation` title, label, or body marker. */
@@ -373,6 +413,7 @@ function mapPullRequest(
         identity: 'one',
         url: observation.url,
         prose: observation.prose,
+        ...(observation.proseRevision === undefined ? {} : { proseRevision: observation.proseRevision }),
         ...(observation.revisionGuidance === undefined
           ? {}
           : { revisionGuidance: observation.revisionGuidance }),
@@ -544,6 +585,7 @@ export type HumanRequiredReason =
   | 'judgment_halt_prose'
   | 'halt_state_pr'
   | 'publication_transition_unmoved'
+  | 'publication_operation_failed'
   | 'publication_coordinator_unavailable'
   | 'ambiguous_pr_identity'
   | 'invalid_shipped_record'
@@ -560,6 +602,8 @@ export type HumanRequiredReason =
 
 export type PublicationDisposition =
   | { kind: 'complete' }
+  /** A verified authoring transition; the conductor re-enters FINISH without charging a retry. */
+  | { kind: 'advanced'; transition: PublicationTransition }
   | { kind: 'publication_progress'; transition: PublicationTransition }
   | {
       kind: 'publication_revision_progress';
@@ -649,6 +693,10 @@ export const HUMAN_REQUIRED_REASONS = {
     message: 'A FINISH publication transition did not change the state it owns.',
     nextAction: 'Inspect the listed transition and state, resolve why it is unchanged, then retry FINISH.',
   },
+  publication_operation_failed: {
+    message: 'A FINISH pull-request publish failed, so the authored prose never reached the pull request.',
+    nextAction: 'Resolve the failure named below, then retry FINISH.',
+  },
   publication_coordinator_unavailable: {
     message: 'FINISH publication coordination is unavailable.',
     nextAction: 'Restore the engine-owned FINISH publication coordinator, then retry FINISH.',
@@ -730,6 +778,8 @@ const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]
     'publication_transition_indeterminate',
     'authoring_effect_unavailable',
     'authoring_dispatch_failed',
+    'prose_not_returned',
+    'prose_invalid',
     'authoring_not_verified_after_pass',
   ],
   write_shipped_record: [
@@ -750,6 +800,7 @@ const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]
     // feature whose prose may be perfectly fine.
     'judgment_malformed_response',
     'judgment_completed_reobserve',
+    'judgment_revision_changed',
   ],
   ready_pr: [
     'publication_transition_indeterminate',
@@ -855,6 +906,7 @@ export function routeFinishPublicationDisposition(
   switch (disposition.kind) {
     case 'complete':
       return { kind: 'complete' };
+    case 'advanced':
     case 'publication_progress':
       return { kind: 'progress_finish', transition: disposition.transition };
     case 'publication_revision_progress':
@@ -891,6 +943,16 @@ export function routeFinishPublicationDisposition(
   }
 }
 
+/**
+ * Narrows a boundary value before its human-required metadata is forwarded
+ * onto the conductor event spine.
+ */
+export function isHumanRequiredPublicationDisposition(
+  disposition: unknown,
+): disposition is { kind: 'human_required'; reason: string; detail?: string } {
+  return isExactDisposition(disposition) && disposition.kind === 'human_required';
+}
+
 function isExactDisposition(
   disposition: unknown,
 ): disposition is PublicationDisposition {
@@ -903,6 +965,7 @@ function isExactDisposition(
   switch (value.kind) {
     case 'complete':
       return hasOnly('kind');
+    case 'advanced':
     case 'publication_progress':
       return hasOnly('kind', 'transition') && isPublicationTransition(value.transition);
     case 'publication_revision_progress':
@@ -1445,6 +1508,7 @@ export type AdvanceFinishPublicationResult =
       reason:
         | 'publication_transition_unmoved'
         | 'publication_coordinator_unavailable'
+        | 'publication_operation_failed'
         | 'ambiguous_pr_identity'
         | 'invalid_shipped_record'
         | 'stack_tip_diverged'
@@ -1772,7 +1836,8 @@ export async function advanceFinishPublication(
     result.kind === 'publication_revision_progress' ||
     (result.kind === 'publication_retry' &&
       'transition' in result &&
-      result.reason !== 'publication_transition_indeterminate')
+      result.reason !== 'publication_transition_indeterminate' &&
+      result.reason !== 'judgment_revision_changed')
   )
     ? reconcileSelectablePublicationRetry(result, input.observe)
     : result;
@@ -1934,6 +1999,8 @@ async function advanceFinishPublicationUnreconciled(
     });
     return coalescePublicationEffect(input.effects, 'author_pr_prose', async () => {
       let dispatchFailure = false;
+      let publicationFailure: PublicationOperationFailedError | undefined;
+      let authoringFailure: PrProseAuthoringFailedError | undefined;
       try {
         await input.effects.authorProse!(prProseAuthoringRequest(pr));
       } catch (error) {
@@ -1944,14 +2011,63 @@ async function advanceFinishPublicationUnreconciled(
             detail: error.message,
           };
         }
-        // A dispatcher can lose its response after the provider already edited
-        // the PR. The mandatory re-observation below is the only authority.
-        dispatchFailure = true;
+        if (isPublicationOperationFailedError(error)) {
+          publicationFailure = error;
+        } else if (isPrProseAuthoringFailedError(error)) {
+          authoringFailure = error;
+        } else {
+          // A dispatcher can lose its response after the provider already edited
+          // the PR. The mandatory re-observation below is the only authority.
+          dispatchFailure = true;
+        }
       }
 
       const observedAfterAuthoring = await input.observe();
       if (observedAfterAuthoring.pr.identity === 'ambiguous') {
         return { kind: 'human_required', reason: 'ambiguous_pr_identity' };
+      }
+
+      if (publicationFailure !== undefined) {
+        if (
+          observedAfterAuthoring.pr.identity === 'one' &&
+          observedAfterAuthoring.pr.prose !== 'placeholder' &&
+          observedAfterAuthoring.pr.prose !== 'indeterminate' &&
+          observedAfterAuthoring.pr.prose !== pr.prose
+        ) {
+          return advancedPublicationTransition(
+            input.emit,
+            'author_pr_prose',
+            snapshot,
+            observedAfterAuthoring,
+          );
+        }
+        return {
+          kind: 'human_required',
+          reason: 'publication_operation_failed',
+          detail: `${publicationFailure.operation} failed: ${publicationFailure.error}`,
+        };
+      }
+
+      if (authoringFailure !== undefined) {
+        if (
+          observedAfterAuthoring.pr.identity === 'one' &&
+          observedAfterAuthoring.pr.prose !== 'placeholder' &&
+          observedAfterAuthoring.pr.prose !== 'indeterminate' &&
+          observedAfterAuthoring.pr.prose !== pr.prose
+        ) {
+          return advancedPublicationTransition(
+            input.emit,
+            'author_pr_prose',
+            snapshot,
+            observedAfterAuthoring,
+          );
+        }
+        return {
+          kind: 'publication_retry',
+          transition: 'author_pr_prose',
+          reason: authoringFailure.cause === 'not_returned' ? 'prose_not_returned' : 'prose_invalid',
+          detail: authoringFailure.detail,
+        };
       }
 
       // A lost authoring response is not evidence that the completed pass
@@ -1963,7 +2079,8 @@ async function advanceFinishPublicationUnreconciled(
         if (
           observedAfterAuthoring.pr.identity === 'one' &&
           observedAfterAuthoring.pr.prose !== 'placeholder' &&
-          observedAfterAuthoring.pr.prose !== 'indeterminate'
+          observedAfterAuthoring.pr.prose !== 'indeterminate' &&
+          observedAfterAuthoring.pr.prose !== pr.prose
         ) {
           return advancedPublicationTransition(
             input.emit,
@@ -2035,15 +2152,47 @@ async function advanceFinishPublicationUnreconciled(
         };
       }
 
-      if (
-        result.kind === 'publication_revision_progress' ||
-        (result.kind === 'publication_retry' && 'transition' in result)
-      ) {
+      if (result.kind === 'publication_revision_progress') {
+        // The production observer supplies an opaque digest for the exact
+        // title/body revision. A provider-side edit can race its own verdict;
+        // a changed stale revision must be judged anew, while stale-to-stale
+        // without a changed digest remains the existing fixed point.
+        if (pr.proseRevision !== undefined) {
+          const observedAfterJudgment = await input.observe();
+          if (
+            observedAfterJudgment.pr.identity === 'one' &&
+            observedAfterJudgment.pr.prose === 'stale' &&
+            observedAfterJudgment.pr.proseRevision !== undefined &&
+            observedAfterJudgment.pr.proseRevision !== pr.proseRevision
+          ) {
+            return {
+              kind: 'publication_retry',
+              transition: 'judge_pr_prose',
+              reason: 'judgment_revision_changed',
+            };
+          }
+        }
+        return result;
+      }
+      if (result.kind === 'publication_retry' && 'transition' in result) {
         return result;
       }
       if (result.kind !== 'advanced') return result;
 
       const observedAfterJudgment = await input.observe();
+      if (
+        observedAfterJudgment.pr.identity === 'one' &&
+        observedAfterJudgment.pr.prose === 'stale' &&
+        pr.proseRevision !== undefined &&
+        observedAfterJudgment.pr.proseRevision !== undefined &&
+        observedAfterJudgment.pr.proseRevision !== pr.proseRevision
+      ) {
+        return {
+          kind: 'publication_retry',
+          transition: 'judge_pr_prose',
+          reason: 'judgment_revision_changed',
+        };
+      }
       return (await advancedPublicationTransition(
         input.emit,
         'judge_pr_prose',

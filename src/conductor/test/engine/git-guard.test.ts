@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:6, task:7
 import { chmod, lstat, mkdtemp, mkdir, readFile, rm, symlink, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -135,7 +137,7 @@ describe('git guard provisioning primitives', () => {
     await damage(guard);
 
     const spawns: Array<{ env?: Record<string, string | undefined> }> = [];
-    const provider = new ClaudeProvider(undefined, ((_file: string, _args: string[], options: ExecaOptions) => {
+    const provider = new ClaudeProvider(dispatchGitGuard, undefined, ((_file: string, _args: string[], options: ExecaOptions) => {
       spawns.push({ env: options.env });
       return Promise.resolve({
         stdout: JSON.stringify({ type: 'result', result: 'ok', usage: { input_tokens: 1, output_tokens: 1 } }),
@@ -165,7 +167,7 @@ describe('git guard provisioning primitives', () => {
     await expect(ensureGitGuardForDispatch(linked)).resolves.toBeNull();
 
     const spawns: Array<{ env?: Record<string, string | undefined> }> = [];
-    const provider = new ClaudeProvider(undefined, ((_file: string, _args: string[], options: ExecaOptions) => {
+    const provider = new ClaudeProvider(dispatchGitGuard, undefined, ((_file: string, _args: string[], options: ExecaOptions) => {
       spawns.push({ env: options.env });
       return Promise.resolve({
         stdout: JSON.stringify({ type: 'result', result: 'ok', usage: { input_tokens: 1, output_tokens: 1 } }),

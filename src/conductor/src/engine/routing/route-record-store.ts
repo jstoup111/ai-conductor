@@ -69,11 +69,18 @@ export type RoutingTransactionOp =
   | { readonly kind: 'verify-ref'; readonly ref: string; readonly value: CommitSha };
 
 export interface RouteRecordStoreDependencies { readonly git?: GitRunner }
-/** Every newly admitted route seals its authored-task denominator. */
+/**
+ * Every newly admitted audit or operator route seals its authored-task
+ * denominator. A revalidate route authors no remediation tasks, so it seals none.
+ */
 export type CreateRouteRecordInput = Pick<
   RouteRecord,
-  'roundId' | 'kind' | 'items' | 'allocation' | 'pendingAsBuiltFindings'
-> & { readonly sealedAuthored: number; readonly receipt?: RouteRecord['receipt'] };
+  'roundId' | 'items' | 'allocation' | 'pendingAsBuiltFindings' | 'operator'
+> & { readonly receipt?: RouteRecord['receipt'] } & (
+  | { readonly kind: 'audit'; readonly sealedAuthored: number }
+  | { readonly kind: 'revalidate'; readonly sealedAuthored?: never }
+  | { readonly kind: 'operator'; readonly sealedAuthored: number }
+);
 export type PersistOutboxEvent = (event: ConductorEvent) => Promise<'persisted' | 'duplicate'>;
 export type DrainOutboxResult = { readonly kind: 'drained' } | { readonly kind: 'persist-failed' } | { readonly kind: 'retry' } | { readonly kind: 'restack-journal-open' } | { readonly kind: 'unavailable' };
 
@@ -233,7 +240,41 @@ export async function writeRoutingTransaction(
     lines.push(`verify ${journalRefFor(slug)} ${journal.kind === 'journal' ? journal.blob : ZERO_SHA}`, 'prepare', 'commit', '');
     const input = lines.join('\n');
     const updated = await git(['update-ref', '--stdin'], { input });
-    return updated.exitCode === 0 ? { kind: 'updated' } : { kind: 'cas-failed' };
+    if (updated.exitCode === 0) return { kind: 'updated' };
+
+    // `update-ref` uses one exit status for both a stale old value and an
+    // ordinary write failure.  Only call it contention after re-reading every
+    // value this transaction fenced proves that one has moved.
+    const expected = new Map<string, CommitSha | undefined>();
+    const expectRef = (ref: string, value: CommitSha | undefined): void => {
+      const prior = expected.get(ref);
+      if (expected.has(ref) && prior !== value) throw new Error('inconsistent transaction fence');
+      expected.set(ref, value);
+    };
+    for (const op of ops) {
+      switch (op.kind) {
+        case 'create-record': expectRef(routeRecordRefFor(slug, op.record.roundId), undefined); break;
+        case 'update-record': expectRef(routeRecordRefFor(slug, op.record.roundId), op.previous.blob); break;
+        case 'delete-record': expectRef(routeRecordRefFor(slug, op.previous.record.roundId), op.previous.blob); break;
+        case 'create-marker': expectRef(repairMarkerRefFor(slug), undefined); break;
+        case 'replace-marker': expectRef(repairMarkerRefFor(slug), op.previous.blob); break;
+        case 'update-queue': expectRef(revalidationQueueRefFor(slug), op.previous.blob); break;
+        case 'delete-queue': expectRef(revalidationQueueRefFor(slug), op.previous.blob); break;
+        case 'update-branch': expectRef(op.ref, op.old); break;
+        case 'create-pin': expectRef(op.ref, undefined); break;
+        case 'update-marker':
+        case 'delete-marker': expectRef(repairMarkerRefFor(slug), op.old); break;
+        case 'verify-ref': expectRef(op.ref, op.value); break;
+      }
+    }
+    expectRef(journalRefFor(slug), journal.kind === 'journal' ? journal.blob : undefined);
+    for (const [ref, value] of expected) {
+      const reread = await git(['rev-parse', '-q', '--verify', ref]);
+      const actual = reread.exitCode === 1 ? undefined : reread.exitCode === 0 ? parseCommitSha(reread.stdout.trim()) : undefined;
+      if (reread.exitCode !== 0 && reread.exitCode !== 1) return { kind: 'unavailable' };
+      if (actual !== value) return { kind: 'cas-failed' };
+    }
+    return { kind: 'unavailable' };
   } catch { return { kind: 'unavailable' }; }
 }
 
@@ -254,12 +295,25 @@ export function transitionHost(
   stored: StoredRouteRecord,
   host: import('../child-context.js').ChildId,
   to: import('./route-types.js').HostState,
-  options: { readonly credit: boolean },
+  options: { readonly credit: boolean; readonly reason?: 'derived-already-complete' },
 ): { readonly kind: 'updated'; readonly record: RouteRecord } | { readonly kind: 'illegal-transition' } {
   const from = stored.record.hosts[host];
-  if (from === undefined || !isLegalHostTransition(from, to)) return { kind: 'illegal-transition' };
-  const record = { ...stored.record, hosts: { ...stored.record.hosts, [host]: to } };
-  return { kind: 'updated', record: withOutboxEvent(record, routedRepairPhaseEvent(record.roundId, host, to, options.credit)) };
+  if (from === undefined || !isLegalHostTransition(from, to) || (options.reason !== undefined && to !== 'repairing')) {
+    return { kind: 'illegal-transition' };
+  }
+  const priorReasons = stored.record.hostReasons ?? {};
+  const nextReasons = options.reason === undefined
+    ? Object.fromEntries(Object.entries(priorReasons).filter(([rawHost]) => Number(rawHost) !== host))
+    : { ...priorReasons, [host]: options.reason };
+  const record = {
+    ...stored.record,
+    hosts: { ...stored.record.hosts, [host]: to },
+    ...(Object.keys(nextReasons).length === 0 ? { hostReasons: undefined } : { hostReasons: nextReasons }),
+  };
+  return {
+    kind: 'updated',
+    record: withOutboxEvent(record, routedRepairPhaseEvent(record.roundId, host, to, options.credit, options.reason)),
+  };
 }
 
 /** Applies the host state recorded when a routed repair leaves the restack. */

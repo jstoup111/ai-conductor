@@ -434,15 +434,15 @@ describe('Structural guard: fixture portability (git-init pattern)', () => {
   // still fails the test.
   const KNOWN_BARE_REMOTE_OFFENDERS: ReadonlyArray<{ file: string; line: number }> = [
     { file: 'acceptance/daemon-build-agents-leak-edits-into-the-main-check.acceptance.test.ts', line: 50 },
-    { file: 'engine/autoheal.test.ts', line: 1274 },
-    { file: 'engine/autoheal.test.ts', line: 1314 },
-    { file: 'engine/autoheal.test.ts', line: 1348 },
-    { file: 'engine/autoheal.test.ts', line: 1385 },
-    { file: 'engine/autoheal.test.ts', line: 1424 },
-    { file: 'engine/autoheal.test.ts', line: 1457 },
-    { file: 'engine/autoheal.test.ts', line: 1549 },
-    { file: 'engine/autoheal.test.ts', line: 1585 },
-    { file: 'engine/autoheal.test.ts', line: 1829 },
+    { file: 'engine/autoheal.test.ts', line: 1275 },
+    { file: 'engine/autoheal.test.ts', line: 1315 },
+    { file: 'engine/autoheal.test.ts', line: 1349 },
+    { file: 'engine/autoheal.test.ts', line: 1386 },
+    { file: 'engine/autoheal.test.ts', line: 1425 },
+    { file: 'engine/autoheal.test.ts', line: 1458 },
+    { file: 'engine/autoheal.test.ts', line: 1550 },
+    { file: 'engine/autoheal.test.ts', line: 1586 },
+    { file: 'engine/autoheal.test.ts', line: 1830 },
     { file: 'engine/push-evidence.test.ts', line: 281 },
   ];
 

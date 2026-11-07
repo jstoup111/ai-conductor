@@ -160,7 +160,7 @@ function makeRunner(fixture: Fixture, downstream: StepName[]): StepRunner {
       config: ReturnType<typeof resolveBuildReviewConfig>,
     ) => Promise<StepRunResult>;
   }).runRubricBuildReview(
-    { sourceSnapshot: { headSha: HEAD_SHA, digest: `sha256:${HEAD_SHA}`, mergeBase: 'base' } } as BuildReviewFrozenInputs,
+    { sourceSnapshot: { headSha: HEAD_SHA, digest: `sha256:${HEAD_SHA}`, mergeBase: 'base', diff: '' } } as BuildReviewFrozenInputs,
     resolveBuildReviewConfig({ build_review: { enabled: true } } as HarnessConfig),
   );
   return {

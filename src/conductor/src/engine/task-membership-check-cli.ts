@@ -6,14 +6,10 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execa } from 'execa';
 import { extractBodyTaskIds, canonicalTaskId } from './autoheal.js';
-import {
-  COVERAGE_BINDING_COMPLETION_STATUSES,
-  readCoverageBindingEnvelope,
-  type CoverageBindingEnvelopeFilesystem,
-} from './coverage-binding-envelope.js';
 import { parseChildId } from './child-context.js';
 import { loadConfig } from './config.js';
 import { parseFeatureBranch } from './feature-branch-identity.js';
+import { loadSliceTopology } from './slice-topology.js';
 import { resolveRemediationTaskChild } from './routing/owner-derivation.js';
 import { readRepairMarker, readRouteRecord } from './routing/route-record-store.js';
 import { routedTaskIdsForHost } from './routing/round-router.js';
@@ -37,13 +33,6 @@ export interface TaskMembershipCheckDependencies {
   symbolicRef?: () => Promise<string | undefined>;
   print?: (message: string) => void;
 }
-
-const coverageBindingFilesystem: CoverageBindingEnvelopeFilesystem = {
-  readFile: (path) => readFile(path, 'utf8'),
-  mkdir: async () => undefined,
-  writeFile: async () => undefined,
-  rename: async () => undefined,
-};
 
 async function currentBranch(projectRoot: string): Promise<string | undefined> {
   try {
@@ -113,12 +102,12 @@ export async function runTaskMembershipCheck(deps: TaskMembershipCheckDependenci
   }
   if (taskIds.length === 0) return 0;
 
-  const envelope = await readCoverageBindingEnvelope(deps.projectRoot, coverageBindingFilesystem);
-  if (!envelope?.sliceMembership || !COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status)) {
-    return unreadable(taskIds[0]!, identity.child, 'coverage-binding envelope is missing or invalid', print);
+  const topology = await loadSliceTopology(deps.projectRoot, identity.slug);
+  if (topology.kind === 'unavailable') {
+    return unreadable(taskIds[0]!, identity.child, `slice topology is unavailable (${topology.cause})`, print);
   }
-  if (envelope.slug !== identity.slug) {
-    return unreadable(taskIds[0]!, identity.child, 'coverage-binding envelope belongs to another feature', print);
+  if (topology.kind === 'unsliced') {
+    return unreadable(taskIds[0]!, identity.child, 'slice topology has no child task membership', print);
   }
 
   let engineState: unknown = {};
@@ -138,7 +127,7 @@ export async function runTaskMembershipCheck(deps: TaskMembershipCheckDependenci
   // fields. Their shape must never overrule a valid committed Child line.
 
   const owners = new Map<string, number>();
-  for (const [id, child] of Object.entries(envelope.sliceMembership.taskSlices)) {
+  for (const [id, child] of Object.entries(topology.sliceMembership.taskSlices)) {
     const canonical = canonicalTaskId(id);
     if (owners.has(canonical) || parseChildId(child) === undefined) {
       return unreadable(taskIds[0]!, identity.child, 'coverage-binding task membership is malformed', print);
@@ -171,7 +160,7 @@ export async function runTaskMembershipCheck(deps: TaskMembershipCheckDependenci
         deps.projectRoot,
         taskId,
         remediationChildren[taskId],
-        envelope.slug,
+        identity.slug,
       );
       if (resolved.kind === 'unreadable') {
         return unreadable(taskId, identity.child, 'remediation task membership is missing or malformed', print);

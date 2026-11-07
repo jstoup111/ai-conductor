@@ -1,4 +1,4 @@
-// Covers: task:9
+// Covers: task:3, task:9
 import { access, mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,7 +11,7 @@ import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { providerDescriptor } from '../../src/execution/provider-catalog.js';
 import { provisionProviderHome } from '../../src/engine/self-host/provider-home.js';
 import type { SelfHostGuardrails } from '../../src/engine/self-host/wiring.js';
-import { ProviderSetupUnavailableError } from '../../src/engine/provider-setup-failure.js';
+import { ProviderSetupUnavailableError } from '../../src/execution/provider-setup-failure.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductState, ConductorEvent } from '../../src/types/index.js';
 

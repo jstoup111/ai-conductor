@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:1, task:2, task:3, task:4, task:5, task:6, task:8
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -26,6 +28,7 @@ const invokeOptions: InvokeOptions = {
 
 const environment: PiEnvironment = {
   stat: vi.fn(async () => ({ isFile: () => true, isDirectory: () => false })),
+  access: async () => {},
   env: {},
   homeDir: () => '/home/agent',
   cwd: () => '/workspace/project',
@@ -101,7 +104,7 @@ async function providerAttemptFor(
   readonly event: ProviderAttemptEvent;
 }> {
   const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode });
-  const pi = new PiProvider('/resolved/pi', spawn, environment, undefined, loadRates);
+  const pi = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment, undefined, loadRates);
   const emitted: ProviderAttemptEvent[] = [];
   const config: HarnessConfig = {
     llm_provider: 'pi',
@@ -140,7 +143,7 @@ describe('PiProvider usage', () => {
       (message.usage as { cost?: { total?: unknown } }).cost = { total: 0 };
     });
     const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
-    const provider = new PiProvider('/resolved/pi', spawn, environment, undefined, () => RATE_CARD);
+    const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment, undefined, () => RATE_CARD);
 
     const result = await provider.invoke(invokeOptions);
 
@@ -171,7 +174,7 @@ describe('PiProvider usage', () => {
       },
     };
     const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
-    const provider = new PiProvider('/resolved/pi', spawn, environment, undefined, () => rateCard);
+    const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment, undefined, () => rateCard);
 
     const result = await provider.invoke(invokeOptions);
 
@@ -188,7 +191,7 @@ describe('PiProvider usage', () => {
       }
     });
     const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
-    const provider = new PiProvider('/resolved/pi', spawn, environment, undefined, () => RATE_CARD);
+    const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment, undefined, () => RATE_CARD);
 
     const result = await provider.invoke(invokeOptions);
 
@@ -210,7 +213,7 @@ describe('PiProvider usage', () => {
       stderr: '',
       exitCode: 0,
     });
-    const provider = new PiProvider('/resolved/pi', spawn, environment, undefined, () => RATE_CARD);
+    const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment, undefined, () => RATE_CARD);
 
     const result = await provider.invoke(invokeOptions);
 
@@ -242,7 +245,7 @@ describe('PiProvider usage', () => {
   it('uses Pi-reported cost when every token-bearing message is priced', async () => {
     const stdout = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
     const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
-    const provider = new PiProvider('/resolved/pi', spawn, environment);
+    const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
 
     const result = await provider.invoke(invokeOptions);
 
@@ -254,7 +257,7 @@ describe('PiProvider usage', () => {
   it('attributes worked-stream usage to its last valid assistant model', async () => {
     const stdout = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
     const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
-    const provider = new PiProvider('/resolved/pi', spawn, environment);
+    const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
 
     const result = await provider.invoke(invokeOptions);
 
@@ -279,7 +282,7 @@ describe('PiProvider usage', () => {
       stderr: '',
       exitCode: 0,
     });
-    const provider = new PiProvider('/resolved/pi', spawn, environment);
+    const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
 
     const result = await provider.invoke(invokeOptions);
 
@@ -296,7 +299,7 @@ describe('PiProvider usage', () => {
       (message.usage as { cost?: { total?: unknown } }).cost = { total: 0 };
     });
     const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
-    const provider = new PiProvider('/resolved/pi', spawn, environment, undefined, () => RATE_CARD);
+    const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment, undefined, () => RATE_CARD);
 
     const result = await provider.invoke({ ...invokeOptions, model: 'openai/gpt-5.6-sol' });
 
@@ -310,7 +313,7 @@ describe('PiProvider usage', () => {
   it('records the complete usage of a settled worked stream whose process exited non-zero', async () => {
     const stdout = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
     const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 1 });
-    const provider = new PiProvider('/resolved/pi', spawn, environment);
+    const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
 
     const result = await provider.invoke(invokeOptions);
 
@@ -328,7 +331,7 @@ describe('PiProvider usage', () => {
     // Through the second assistant message's start and partial update; no message_end, no agent_end.
     const stdout = worked.slice(0, 12).join('\n');
     const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: null, signal: 'SIGKILL' });
-    const provider = new PiProvider('/resolved/pi', spawn, environment);
+    const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
 
     const result = await provider.invoke(invokeOptions);
 
@@ -343,7 +346,7 @@ describe('PiProvider usage', () => {
   it('records no usage, so the cost stays unknown, when killed before any message completed', async () => {
     const worked = (await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8')).split('\n');
     const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout: worked.slice(0, 7).join('\n'), stderr: '', exitCode: 1 });
-    const provider = new PiProvider('/resolved/pi', spawn, environment);
+    const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
 
     const result = await provider.invoke(invokeOptions);
 
@@ -359,7 +362,7 @@ describe('PiProvider usage', () => {
       controller.abort();
       return { stdout: worked.slice(0, 10).join('\n'), stderr: '', exitCode: null, signal: 'SIGTERM' };
     });
-    const provider = new PiProvider('/resolved/pi', spawn, environment);
+    const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
 
     const result = await provider.invoke({ ...invokeOptions, abortSignal: controller.signal });
 
@@ -375,7 +378,7 @@ describe('PiProvider usage', () => {
       (message.usage as { cost?: { total?: unknown } }).cost = { total: 0 };
     });
     const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
-    const provider = new PiProvider('/resolved/pi', spawn, environment, undefined, () => RATE_CARD);
+    const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment, undefined, () => RATE_CARD);
 
     const result = await provider.invoke(invokeOptions);
 
@@ -390,7 +393,7 @@ describe('PiProvider usage', () => {
       (message.usage as { cost?: { total?: unknown } }).cost = { total: 0 };
     });
     const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
-    const provider = new PiProvider('/resolved/pi', spawn, environment, undefined, () => RATE_CARD);
+    const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment, undefined, () => RATE_CARD);
 
     const result = await provider.invoke(invokeOptions);
 
@@ -410,7 +413,7 @@ describe('PiProvider usage', () => {
       if (turn === 1) invalidate(message);
     });
     const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
-    const provider = new PiProvider('/resolved/pi', spawn, environment, undefined, () => RATE_CARD);
+    const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment, undefined, () => RATE_CARD);
 
     const result = await provider.invoke(invokeOptions);
 
@@ -426,7 +429,7 @@ describe('PiProvider usage', () => {
     const workedStream = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
     const stdout = replaceTerminalCost(workedStream, '0.0021', JSON.stringify(invalidCost));
     const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
-    const provider = new PiProvider('/resolved/pi', spawn, environment, undefined, () => undefined);
+    const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment, undefined, () => undefined);
 
     const result = await provider.invoke(invokeOptions);
 
@@ -448,7 +451,7 @@ describe('PiProvider usage', () => {
       stderr: '',
       exitCode: 0,
     });
-    const provider = new PiProvider('/resolved/pi', spawn, environment);
+    const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
 
     const result = await provider.invoke(invokeOptions);
 
@@ -462,7 +465,7 @@ describe('PiProvider usage', () => {
   ])('falls back to the message model rate card when %s', async (_name, rewrite) => {
     const workedStream = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
     const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout: rewrite(workedStream), stderr: '', exitCode: 0 });
-    const provider = new PiProvider('/resolved/pi', spawn, environment, undefined, () => RATE_CARD);
+    const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment, undefined, () => RATE_CARD);
 
     const result = await provider.invoke(invokeOptions);
 
@@ -485,7 +488,7 @@ describe('PiProvider usage', () => {
       '0',
     );
     const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
-    const provider = new PiProvider('/resolved/pi', spawn, environment, undefined, () => RATE_CARD);
+    const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment, undefined, () => RATE_CARD);
 
     const result = await provider.invoke(invokeOptions);
 
@@ -510,7 +513,7 @@ describe('PiProvider usage', () => {
       const workedStream = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
       const stdout = replaceTerminalCost(replaceTerminalCost(workedStream, '0.0021', '0'), '0.0014', '0');
       const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
-      const provider = new PiProvider('/resolved/pi', spawn, environment, undefined, loadRateCard);
+      const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment, undefined, loadRateCard);
 
       const result = await provider.invoke({ ...invokeOptions, cwd: project });
 
@@ -530,7 +533,7 @@ describe('PiProvider usage', () => {
   it('sums only terminal assistant message usage without counting partial or repeated events', async () => {
     const stdout = await readFile(new URL('../fixtures/pi/worked-stream.jsonl', import.meta.url), 'utf8');
     const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
-    const provider = new PiProvider('/resolved/pi', spawn, environment);
+    const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
 
     await expect(provider.invoke(invokeOptions)).resolves.toMatchObject({
       success: true,
@@ -559,7 +562,7 @@ describe('PiProvider usage', () => {
       stderr: '',
       exitCode: 0,
     });
-    const provider = new PiProvider('/resolved/pi', spawn, environment);
+    const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
 
     await expect(provider.invoke(invokeOptions)).resolves.toMatchObject({
       success: true,
@@ -581,7 +584,7 @@ describe('PiProvider usage', () => {
       stderr: '',
       exitCode: 0,
     });
-    const provider = new PiProvider('/resolved/pi', spawn, environment);
+    const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
 
     const result = await provider.invoke(invokeOptions);
 
@@ -600,7 +603,7 @@ describe('PiProvider usage', () => {
       },
     });
     const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
-    const provider = new PiProvider('/resolved/pi', spawn, environment);
+    const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
 
     await expect(provider.invoke(invokeOptions)).resolves.toMatchObject({
       success: true,
@@ -635,7 +638,7 @@ describe('PiProvider usage', () => {
     },
   ])('returns no token usage for $name', async ({ stdout }) => {
     const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
-    const provider = new PiProvider('/resolved/pi', spawn, environment);
+    const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
 
     const result = await provider.invoke(invokeOptions);
 
@@ -649,7 +652,7 @@ describe('PiProvider usage', () => {
       stderr: '',
       exitCode: 0,
     });
-    const provider = new PiProvider('/resolved/pi', spawn, environment);
+    const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
 
     const result = await provider.invoke(invokeOptions);
 
@@ -716,7 +719,7 @@ describe('PiProvider usage', () => {
     const lines = workedStream.split('\n');
     lines.splice(10, 0, '{ malformed JSONL');
     const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout: lines.join('\n'), stderr: '', exitCode: 0 });
-    const provider = new PiProvider('/resolved/pi', spawn, environment);
+    const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
 
     await expect(provider.invoke(invokeOptions)).resolves.toMatchObject({
       success: true,
@@ -779,7 +782,7 @@ describe('PiProvider pi-subagents usage', () => {
 
   async function invoke(stdout: string) {
     const spawn = vi.fn<PiSubprocessFactory>().mockResolvedValue({ stdout, stderr: '', exitCode: 0 });
-    return new PiProvider('/resolved/pi', spawn, environment).invoke(invokeOptions);
+    return new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment).invoke(invokeOptions);
   }
 
   it('adds the nested subagent rollup once on top of the direct child usage already on the tool result', async () => {

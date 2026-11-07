@@ -1,9 +1,7 @@
-/** Closed reasons for a bot credential refusal eligible for operator fallback. */
-export type GithubBotAuthRefusalReason =
-  | 'token-unavailable'
-  | 'auth-refused'
-  | 'unsupported-remote-transport';
+import type { GithubBotAuthRefusalReason } from '../types/github.js';
+export type { GithubBotAuthRefusalReason };
 
+/** Closed reasons for a bot credential refusal eligible for operator fallback. */
 /**
  * A typed, secret-safe signal from a bot-authenticated transport to its
  * authorized fallback boundary. Callers must branch on this class, never on

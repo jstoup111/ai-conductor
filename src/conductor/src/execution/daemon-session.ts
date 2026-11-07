@@ -6,7 +6,7 @@ import {
 } from './session-event-producer.js';
 import type { SessionCommandRefusedEvent } from '../types/events.js';
 import { isSessionEventIdentity } from './session-event-identity.js';
-import { isFeatureSlug } from '../engine/worktree.js';
+import { isFeatureSlug } from './feature-slug.js';
 
 /**
  * Deterministic daemon-session boundary enforcement for the ai-conductor CLI.
@@ -89,11 +89,13 @@ export const SESSION_SANCTIONED_SUBCOMMANDS = [
   // `Round:` trailer to the session's own commit message; it writes nothing
   // but that message file.
   'round-stamp',
-  // engine/conductor.ts FINISH publication prompts + skills/pr/SKILL.md — the
-  // author_pr_prose / repair passes submit PR edits as a guarded
-  // `pull-request.edit` request. github-operations.ts enforces feature
-  // ownership, and shared-write approval needs an interactive TTY a daemon
-  // session never has, so admitting it cannot reach another feature.
+  // git-hook-assets.ts — this pre-commit guard is the session-owned commit
+  // boundary for an active operator round.
+  'stack-commit-guard',
+  // engine/conductor.ts FINISH publication — the engine submits its retained
+  // PR edit as a guarded `pull-request.edit` request. github-operations.ts
+  // enforces feature ownership, and shared-write approval needs an interactive
+  // TTY a daemon session never has, so admitting it cannot reach another feature.
   'github-operation',
 ] as const;
 
@@ -166,6 +168,15 @@ export function evaluateDaemonSessionCommandPolicy(
     return { allowed: true };
   }
   const bounded = boundedSubcommand(subcommand);
+  if (bounded === 'none') {
+    return {
+      allowed: false,
+      subcommand: 'none',
+      message:
+        'ai-conductor was invoked without a subcommand from inside a daemon-managed session. ' +
+        `Sanctioned subcommands: ${SESSION_SANCTIONED_SUBCOMMANDS.join(', ')}.`,
+    };
+  }
   return {
     allowed: false,
     subcommand: bounded,

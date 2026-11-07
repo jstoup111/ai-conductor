@@ -251,7 +251,7 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
 
     expect(projectConfig.ok && projectConfig.config.test_suite).toEqual({
       commands: [
-        { command: 'npm run typecheck --silent', working_directory: 'src/conductor' },
+        { command: 'npm run typecheck --silent && npm run typecheck:test --silent', working_directory: 'src/conductor' },
         { command: 'npm test', working_directory: 'src/conductor' },
         { command: 'test/test_harness_integrity.sh', working_directory: '.' },
       ],

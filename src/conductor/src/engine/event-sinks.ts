@@ -47,20 +47,14 @@ export const EVENT_SINKS = {
   intake_overlap_checked: { render: false, persist: true, audit: false, otel: false },
   land_gate_rejected: { render: false, persist: true, audit: false, otel: false },
   land_dependency_decided: { render: false, persist: true, audit: false, otel: false },
+  feature_artifacts_registered: { render: false, persist: true, audit: false, otel: false },
   dependency_drift_swept: { render: false, persist: true, audit: false, otel: false },
   operator_rewind: { render: true, persist: true, audit: true, otel: false },
   setup_repair: { render: true, persist: true, audit: false, otel: false },
   project_setup: { render: true, persist: true, audit: false, otel: false },
   memory_setup: { render: true, persist: true, audit: false, otel: true, otelTrace: false },
   plan_growth: { render: true, persist: true, audit: false, otel: false },
-  coverage_binding_judged: { render: false, persist: true, audit: false, otel: false },
   rebase_regrade_judged: { render: false, persist: true, audit: false, otel: false },
-  coverage_binding_amendment_judged: { render: false, persist: true, audit: false, otel: false },
-  coverage_binding_conflict_judged: { render: false, persist: true, audit: false, otel: false },
-  coverage_binding_disabled: { render: false, persist: true, audit: false, otel: false },
-  coverage_binding_invalidated: { render: false, persist: true, audit: false, otel: false },
-  coverage_binding_task_reopened: { render: false, persist: true, audit: false, otel: false },
-  plan_slices_changed: { render: false, persist: true, audit: false, otel: false },
   // Plan-review lifecycle observations stay durable on the shared spine; a
   // later task owns any renderer, audit, or OTel projection.
   plan_review_dispatched: { render: false, persist: true, audit: false, otel: false },
@@ -77,13 +71,17 @@ export const EVENT_SINKS = {
   restack_planned: { render: false, persist: true, audit: false, otel: false },
   restack_applied: { render: false, persist: true, audit: false, otel: false },
   restack_conflict: { render: false, persist: true, audit: false, otel: false },
+  restack_resolution: { render: false, persist: true, audit: false, otel: false },
+  restack_decision: { render: false, persist: true, audit: false, otel: false },
   restack_refused: { render: false, persist: true, audit: false, otel: false },
   restack_recovered: { render: false, persist: true, audit: false, otel: false },
   push_lease_refused: { render: false, persist: true, audit: false, otel: false },
-  story_reowned: { render: false, persist: true, audit: false, otel: false },
   remediation_routed: { render: false, persist: true, audit: false, otel: false },
   remediation_rerouted: { render: false, persist: true, audit: false, otel: false },
   routed_repair_phase: { render: false, persist: true, audit: false, otel: false },
+  routing_rounds_stalled: { render: false, persist: true, audit: false, otel: false },
+  operator_round: { render: false, persist: true, audit: false, otel: false },
+  routing_round_superseded: { render: false, persist: true, audit: false, otel: false },
   child_revalidated: { render: false, persist: true, audit: false, otel: false },
   config_deprecated_key: { render: false, persist: true, audit: false, otel: false },
   build_review_read_only_capability: { render: true, persist: true, audit: false, otel: false },
@@ -99,6 +97,7 @@ export const EVENT_SINKS = {
   build_review_rubric_skipped: { render: true, persist: true, audit: false, otel: false },
   build_review_cache_hit: { render: true, persist: true, audit: true, otel: false },
   build_review_scope_summary: { render: false, persist: true, audit: false, otel: false },
+  build_review_review_scope: { render: false, persist: true, audit: false, otel: false },
   // adr-2026-08-21 D5: discards are attributable in the daemon log, the
   // ledger, and the audit trail by rubric and cause.
   build_review_cache_discarded: { render: true, persist: true, audit: true, otel: false },
@@ -122,6 +121,7 @@ export const EVENT_SINKS = {
   build_review_acceptance_carried: { render: false, persist: true, audit: false, otel: false },
   remediation_case_operator_resolved: { render: false, persist: true, audit: false, otel: false },
   remediation_case_reconciled: { render: false, persist: true, audit: false, otel: false },
+  as_built_finding_reconciled: { render: false, persist: true, audit: false, otel: false },
   remediation_case_refuted: { render: true, persist: true, audit: true, otel: false },
   prd_widening_reconciled: { render: false, persist: true, audit: false, otel: false },
   remediation_effect_reserved: { render: false, persist: true, audit: false, otel: false },
@@ -139,6 +139,7 @@ export const EVENT_SINKS = {
   // Ownership denials remain visible and durable through the one event spine;
   // the event excludes payloads and request bodies by construction.
   github_operation_refused: { render: true, persist: true, audit: false, otel: false },
+  github_operation_failed: { render: true, persist: true, audit: false, otel: false },
   github_write_credential_fallback: { render: true, persist: true, audit: false, otel: false },
   bot_co_author_skipped: { render: true, persist: true, audit: false, otel: false },
   provider_discovery: { render: false, persist: true, audit: false, otel: false },
@@ -273,6 +274,11 @@ export const EVENT_SINKS = {
 
 export type OtelEventType = {
   [Type in keyof typeof EVENT_SINKS]: (typeof EVENT_SINKS)[Type]['otel'] extends true ? Type : never;
+}[keyof typeof EVENT_SINKS];
+
+/** Event types which have a daemon renderer declared by the canonical sink registry. */
+export type RenderedEventType = {
+  [Type in keyof typeof EVENT_SINKS]: (typeof EVENT_SINKS)[Type]['render'] extends true ? Type : never;
 }[keyof typeof EVENT_SINKS];
 
 export type OtelTracedEventType = {

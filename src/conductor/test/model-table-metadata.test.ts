@@ -1,4 +1,4 @@
-// Covers: task:1, task:12, task:16, task:17, task:rem-prd-audit-12
+// Covers: task:1, task:12, task:16, task:17, task:30, task:rem-prd-audit-12
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -85,7 +85,7 @@ describe('STEP_RATIONALE completeness (TS-1)', () => {
 
     expect(missing).toEqual([]);
     expect(empty).toEqual([]);
-    expect(policySteps.size).toBe(26);
+    expect(policySteps.size).toBe(25);
   });
 
   it('describes deterministic BUILD gates as engine machinery rather than generative review', () => {
@@ -170,6 +170,7 @@ const EXPECTED_EXTRA_ROW_NAMES = [
   'intake',
   'conduct',
   'daemon-triage',
+  'stack-land',
   'pr',
   'tdd-red',
   'tdd-green',

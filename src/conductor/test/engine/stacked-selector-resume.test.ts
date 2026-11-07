@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { readConductStateOverlay } from '../../src/engine/conduct-state-store.js';
 import { Conductor, findResumeIndex, resolveRunnableResumeEntry } from '../../src/engine/conductor.js';
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
 import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { selectNextGate } from '../../src/engine/selector.js';
@@ -17,7 +17,7 @@ import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const execFile = promisify(execFileCallback);
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -52,7 +52,7 @@ beforeEach(async () => {
   await git(['add', '.ai-conductor/config.yml']);
   await git(['commit', '-qm', 'configure stack']);
   await writeFile(join(root, '.git', 'info', 'exclude'), '.pipeline/\n');
-  await writeCoverageBindingEnvelope(root, {
+  await writeSliceTopologyFixture(root, {
     version: 1,
     slug: 'demo',
     runId: 'selector-resume',

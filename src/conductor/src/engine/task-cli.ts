@@ -11,6 +11,7 @@ import { execa } from 'execa';
 import {
   completeTaskDoneWhen,
   openRepairForTask,
+  resolveTaskScopeSlug,
   type DoneWhenEvidenceInput,
   type DoneWhenUnverifiedInput,
 } from './task-progress.js';
@@ -19,12 +20,8 @@ import { parsePlanTaskDoneWhen, TEST_DONE_WHEN_TAG } from './plan-task-parse.js'
 import { startOperatorEventSpine } from './event-persister.js';
 import { resolveRepairPlanBinding } from './repair-plan-binding.js';
 import { childStateExists, parseChildId } from './child-context.js';
-import {
-  projectChildOwnership,
-  readCoverageBindingEnvelope,
-  type CoverageBindingEnvelopeFilesystem,
-} from './coverage-binding-envelope.js';
 import { isEngineAppendedRemediationTaskId } from './remediation-append.js';
+import { loadSliceTopology } from './slice-topology.js';
 import { resolveActiveChildForCurrentFeature } from './child-cursor.js';
 import { featureSlugOf, parseFeatureBranch } from './feature-branch-identity.js';
 import { resolveExecutionChild } from './routing/execution-child.js';
@@ -48,13 +45,6 @@ export type TaskDispatch =
     }
   | { kind: 'status'; child?: string }
   | { kind: 'guide' };
-
-const coverageBindingFilesystem: CoverageBindingEnvelopeFilesystem = {
-  readFile: (path) => readFile(path, 'utf8'),
-  mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
-  writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
-  rename,
-};
 
 /**
  * Parse argv for the `task` subcommand.
@@ -203,7 +193,7 @@ export async function dispatchTaskCommand(cmd: TaskDispatch, cwd: string): Promi
   }
   const selectedChild = cmd.child ?? ('target' in execution ? String(execution.target.child) : undefined);
   let selectedChildId: ReturnType<typeof parseChildId>;
-  let envelope: Awaited<ReturnType<typeof readCoverageBindingEnvelope>> | undefined;
+  let childTaskIds: readonly string[] = [];
 
   if (selectedChild !== undefined) {
     const child = parseChildId(selectedChild);
@@ -215,15 +205,22 @@ export async function dispatchTaskCommand(cmd: TaskDispatch, cwd: string): Promi
       console.error(`[task-cli] child ${child} has no child state (.pipeline/children/${child}/ does not exist)`);
       return 1;
     }
-    envelope = await readCoverageBindingEnvelope(projectRoot, coverageBindingFilesystem);
-    if (!envelope?.sliceMembership) {
-      console.error('[task-cli] no slice membership is recorded for the feature (coverage-binding envelope missing)');
+    const slug = await resolveTaskScopeSlug(projectRoot);
+    const topology = await loadSliceTopology(projectRoot, slug ?? '');
+    if (topology.kind === 'unavailable') {
+      console.error(`[task-cli] feature topology is unavailable (${topology.cause})`);
+      return 1;
+    }
+    if (topology.kind === 'unsliced') {
+      console.error('[task-cli] no slice membership is recorded for the feature (plan is unsliced)');
       return 1;
     }
     selectedChildId = child;
+    const membership = topology.sliceMembership.taskSlices;
+    childTaskIds = Object.entries(membership).flatMap(([id, owner]) => owner === child ? [id] : []);
     if (cmd.kind !== 'status' && !isEngineAppendedRemediationTaskId(cmd.id)) {
-      const membership = envelope.sliceMembership.taskSlices[cmd.id];
-      const allowed = new Set(projectChildOwnership(envelope, child).taskIds);
+      const owner = membership[cmd.id];
+      const allowed = new Set(childTaskIds);
       if (execution.source === 'routed-host' && execution.target.child === child) {
         if (execution.roundId === undefined) {
           console.error('[task-cli] active routed task allocation is unavailable');
@@ -237,11 +234,11 @@ export async function dispatchTaskCommand(cmd: TaskDispatch, cwd: string): Promi
         for (const id of routed) allowed.add(id);
       }
       if (!allowed.has(cmd.id)) {
-        if (membership === undefined) {
+        if (owner === undefined) {
           console.error(`[task-cli] task ${cmd.id} has no recorded slice membership`);
           return 1;
         }
-        console.error(`[task-cli] task ${cmd.id} belongs to child ${membership}, not child ${child}`);
+        console.error(`[task-cli] task ${cmd.id} belongs to child ${owner}, not child ${child}`);
         return 1;
       }
     }
@@ -251,7 +248,7 @@ export async function dispatchTaskCommand(cmd: TaskDispatch, cwd: string): Promi
     return runTaskStatus(
       projectRoot,
       selectedChildId,
-      envelope,
+      childTaskIds,
       execution.source === 'routed-host' ? execution.roundId : undefined,
     );
   }
@@ -272,7 +269,7 @@ export async function dispatchTaskCommand(cmd: TaskDispatch, cwd: string): Promi
 async function runTaskStatus(
   projectRoot: string,
   child: ReturnType<typeof parseChildId>,
-  envelope: Awaited<ReturnType<typeof readCoverageBindingEnvelope>> | undefined,
+  childTaskIds: readonly string[],
   routedRoundId?: Parameters<typeof readRouteRecord>[2],
 ): Promise<number> {
   let status: { tasks?: unknown };
@@ -287,9 +284,7 @@ async function runTaskStatus(
     return 1;
   }
 
-  const taskIds = new Set(child === undefined || !envelope
-    ? []
-    : projectChildOwnership(envelope, child).taskIds);
+  const taskIds = new Set(child === undefined ? [] : childTaskIds);
   if (child !== undefined && routedRoundId !== undefined) {
     const routed = await routedTaskIds(projectRoot, child, routedRoundId);
     if (routed === undefined) {

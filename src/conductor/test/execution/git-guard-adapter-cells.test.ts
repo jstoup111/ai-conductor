@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:7, task:8, task:9
 import { chmod, lstat, mkdtemp, mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -67,7 +69,7 @@ describe('git guard adapter cells', () => {
       stdout: JSON.stringify({ type: 'result', result: 'complete' }), stderr: '', exitCode: 0,
       };
     });
-    const provider = new ClaudeProvider(undefined, spawn as never);
+    const provider = new ClaudeProvider(dispatchGitGuard, undefined, spawn as never);
 
     await withEmptyOperatorHome(home, () => provider.invoke(invokeOptions(root)));
 
@@ -85,7 +87,7 @@ describe('git guard adapter cells', () => {
       stdout: JSON.stringify({ type: 'result', result: 'complete' }), stderr: '', exitCode: 0,
       };
     });
-    const provider = new ClaudeProvider(undefined, spawn as never);
+    const provider = new ClaudeProvider(dispatchGitGuard, undefined, spawn as never);
 
     await provider.invoke(invokeOptions(root, selfHost(home, 'claude')));
 
@@ -107,7 +109,7 @@ describe('git guard adapter cells', () => {
       stderr: '', exitCode: 0,
       };
     });
-    const provider = new CodexProvider(
+    const provider = new CodexProvider(dispatchGitGuard,
       vi.fn(async () => ({
         stdout: JSON.stringify({ schemaVersion: 1, auth: { selectedMode: 'cached-login', configured: true }, transport: { authenticated: true } }),
         exitCode: 0,
@@ -136,7 +138,7 @@ describe('git guard adapter cells', () => {
       stderr: '', exitCode: 0,
       };
     });
-    const provider = new CodexProvider(
+    const provider = new CodexProvider(dispatchGitGuard,
       vi.fn(async () => ({
         stdout: JSON.stringify({ schemaVersion: 1, auth: { selectedMode: 'cached-login', configured: true }, transport: { authenticated: true } }),
         exitCode: 0,
@@ -174,8 +176,8 @@ describe('git guard adapter cells', () => {
   const makeProvider = (kind: 'claude' | 'codex', calls: CapturedSpawnOptions[]) => {
     const spawn = kind === 'claude' ? claudeSpawn(calls) : codexSpawn(calls);
     const provider = kind === 'claude'
-      ? new ClaudeProvider(undefined, spawn as never)
-      : new CodexProvider(codexDoctor(), 'codex', undefined, spawn as never);
+      ? new ClaudeProvider(dispatchGitGuard, undefined, spawn as never)
+      : new CodexProvider(dispatchGitGuard, codexDoctor(), 'codex', undefined, spawn as never);
     return { spawn, provider };
   };
 

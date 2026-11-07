@@ -150,6 +150,8 @@ The decisions below incorporate the fixes.
 
 > **Amended 2026-10-23 by #3365:** With the envelope gone, "child refs present and no sealed envelope" cannot occur. A cursor that cannot resolve (`topology-unavailable` with its cause, `git-error`, or `detached-head`) makes the resume stack preflight write its own needs-human HALT naming the cause and a recovery command (adr-2026-10-23-slice-topology-from-sealed-plan decision 5). `coverage_binding` no longer precedes the region.
 
+> **Amended 2026-10-24 by #3203:** With routing eligible, the shared stack preflight no longer repairs commits appended past a closure. `repair-pending` with no marker halts `unlanded-closed-child-commits`; with routing off it repairs as written (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decision 8).
+
 3. **Child branch creation, switching and the leaf move.**
    - **Creation** happens at the active child's region entry, only after:
      - `stacked_prs.max_slices` is re-checked;
@@ -171,6 +173,8 @@ The decisions below incorporate the fixes.
      needs-human.
 
 > **Amended 2026-10-10 by #2943:** The leaf also moves inside a restack move transaction: when it is the active child, or when it is unentered and its tip lies inside a moved child's own range (for example a pre-region halt record), it moves to that commit's rewrite so the later leaf move sees no stray commit (decision 2) (`adr-2026-10-10-stacked-restack-journaled-replay`).
+
+> **Amended 2026-11-02 by #3582:** The leaf move ignores strays that are non-merge commits changing only this feature's halt record, and any other stray still refuses by name. A clone without `origin/HEAD` discovers the default branch as the rebase path does, and discovery failure alone no longer refuses (adr-2026-11-02-stacked-restack-recovery-and-halt-record-ref decision 8).
 
 4. **Region state is read through an overlay and written through a routed port.**
    - Region step status, verdicts, test-suite evidence, acceptance evidence (the RED marker, run
@@ -317,6 +321,10 @@ The decisions below incorporate the fixes.
 > closed-child rewind (`adr-2026-10-12-routed-whole-feature-repair` decision 8).
 
 > **Amended 2026-10-17 by #2945:** A child branch is pushed only by FINISH's `establish_child_prs`, after every gate has passed, through `executeRemoteGit`, as a plain push of its closure SHA after an `ls-remote` shows the branch absent. Halt records are still never pushed to a child (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decision 4).
+
+> **Amended 2026-10-24 by #3203:** `rewind --child k` for a closed child is no longer refused. It opens a declared operator round on k and restages k's region from the target; the children above are re-validated by the queue rather than demoted. `stack land` and `stack owners` join the operator surfaces (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decisions 5, 11 and 14).
+
+> **Amended 2026-11-02 by #3582:** New halt records no longer land on a child branch; they go to `refs/conductor/<slug>/halt-record` (adr-2026-11-02-stacked-restack-recovery-and-halt-record-ref decision 1). Records already committed on a branch keep the handling above.
 
 12. **Rebase guards until #2943.**
     - While the active child is not the leaf, `resumeRebaseFirst` and the base-advance re-kick

@@ -1,7 +1,7 @@
 import { lstat, mkdir, realpath } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { isSessionEventIdentity } from './session-event-identity.js';
-import { isFeatureSlug } from '../engine/worktree.js';
+import { isFeatureSlug } from './feature-slug.js';
 
 /** The explicit owner of a managed session; cwd is deliberately not an input. */
 export type ManagedSessionScope =

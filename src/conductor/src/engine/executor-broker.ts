@@ -1,5 +1,5 @@
 import type { ConductorEvent } from '../types/events.js';
-import { ConductorEventEmitter } from '../ui/events.js';
+import { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { EVENT_SINKS } from './event-sinks.js';
 import { createForwardingFeatureEventEmitter } from './event-persister.js';
 import { parseExecutorMessage } from './executor-protocol.js';

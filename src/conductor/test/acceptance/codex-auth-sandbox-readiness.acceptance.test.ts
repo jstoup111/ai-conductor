@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 /**
  * RED acceptance specs for #905. These drive the real Codex provider entrypoint
  * and mock only its external Codex CLI process boundary. They deliberately fail
@@ -76,7 +78,7 @@ function codexCompleted(output = 'completed') {
 }
 
 function mockedCodexProvider(): CodexProvider {
-  return new CodexProvider(
+  return new CodexProvider(dispatchGitGuard,
     mockExeca as never,
     'codex',
     undefined,

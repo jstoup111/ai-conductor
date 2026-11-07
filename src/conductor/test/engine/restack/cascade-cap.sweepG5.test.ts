@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { writeCoverageBindingEnvelope } from '../../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture } from '../slice-topology-fixture.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { cascadesRefFor } from '../../../src/engine/restack/cascade-cap.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
@@ -46,7 +46,7 @@ async function repairDueFixture() {
   await commit('repair child', 'repair.txt');
   await git(['checkout', '-qb', 'feat/daemon-demo', closed]);
   await mkdir(join(repo, '.pipeline', 'children', '2'), { recursive: true });
-  await writeCoverageBindingEnvelope(repo, {
+  await writeSliceTopologyFixture(repo, {
     version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
     sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['Child 1', 'Leaf'] },
     storyOwnership: { S1: 1, S2: 2 },
@@ -74,7 +74,7 @@ describe('cascade cap sweep G5', () => {
 
       const result = await runRestack({ worktree: subject.repo, slug: 'demo', cause: 'feature-repair', events, git: makeGitRunner(subject.repo) });
 
-      expect({ variant, result }).toEqual({ variant, result: { kind: 'halted' } });
+      expect({ variant, result }).toMatchObject({ variant, result: { kind: 'halted' } });
       expect({ variant, seen }).toMatchObject({ variant, seen: [{ type: 'restack_refused', reason: 'cascade-cap', child: 1 }] });
       await expect(subject.git(['rev-parse', '--verify', 'refs/conductor/demo/restack/journal'])).rejects.toBeDefined();
       expect(await readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).toBe('needs-human');

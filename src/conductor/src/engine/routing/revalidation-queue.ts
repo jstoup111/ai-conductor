@@ -11,8 +11,8 @@ import {
   writeRoutingTransaction,
   type StoredRouteRecord,
 } from './route-record-store.js';
-import { admitRound } from './round-admission.js';
-import { parseRoundId } from './route-types.js';
+import { admitRound, checkRoundAdmissionFence } from './round-admission.js';
+import { assertNever, parseRoundId } from './route-types.js';
 import type { RevalidationQueueEntry, RevalidationQueueRecord, RoundId } from './route-types.js';
 
 export interface MergeQueueGenerationOptions {
@@ -48,7 +48,7 @@ export function mergeQueueGeneration(
 
 export type ConsumeLowestQueuedResult =
   | { readonly kind: 'admitted'; readonly roundId: RoundId; readonly host: ChildId }
-  | { readonly kind: 'none' | 'busy' | 'unavailable' };
+  | { readonly kind: 'none' | 'busy' | 'unavailable' | 'stalled'; readonly detail?: string };
 
 /** Converts only the queue head into a durable revalidate route. */
 export async function consumeLowestQueued(
@@ -66,12 +66,15 @@ export async function consumeLowestQueued(
   const entry = queue.queue.entries[0]!;
   const roundId = await nextRoundId(worktree, slug, { git });
   if (typeof roundId !== 'string') return { kind: 'unavailable' };
+  const fence = await checkRoundAdmissionFence(worktree, slug, { roundId, kind: 'revalidate' }, { git });
+  if (fence !== undefined) {
+    return fence.detail.includes('unreadable') ? { kind: 'stalled', detail: fence.detail } : { kind: 'busy', detail: fence.detail };
+  }
   const created = await createRouteRecord(worktree, slug, {
     roundId,
     kind: 'revalidate',
     items: [],
     allocation: { [entry.child]: { remTaskIds: [], blockBodies: [] } },
-    sealedAuthored: 0,
   }, { git });
   if (created.kind !== 'created') return { kind: created.kind === 'cas-failed' ? 'busy' : 'unavailable' };
   const admitted = await admitRound(worktree, slug, created.record, entry.child, { git });
@@ -116,14 +119,28 @@ export async function acknowledgeQueueEntry(
   // A revalidate round with no more queue work deliberately stays open for
   // returnToLeaf. Audit rounds, however, retain their recorded host sequence;
   // acknowledging one queued host must never close away a later pending host.
-  const leavesRoundOpen = stored.record.kind === 'revalidate'
-    && queueWithEvent.entries.length === 0
-    && !otherRoundOpen;
+  const leavesRoundOpen = (() => {
+    switch (stored.record.kind) {
+      case 'revalidate':
+        return queueWithEvent.entries.length === 0 && !otherRoundOpen;
+      case 'audit':
+      case 'operator':
+        return false;
+    }
+    return assertNever(stored.record.kind);
+  })();
   const done = transitionHost(stored, host, 'done', { credit: false });
   if (done.kind !== 'updated') return { kind: 'stale' };
-  const record = stored.record.kind === 'audit' || leavesRoundOpen
-    ? done.record
-    : { ...done.record, phase: 'closed' as const };
+  const record = (() => {
+    switch (stored.record.kind) {
+      case 'audit':
+      case 'operator':
+        return done.record;
+      case 'revalidate':
+        return leavesRoundOpen ? done.record : { ...done.record, phase: 'closed' as const };
+    }
+    return assertNever(stored.record.kind);
+  })();
   const wrote = await writeRoutingTransaction(worktree, slug, [
     { kind: 'verify-ref', ref: `refs/conductor/${slug}/closed/c${host}`, value: entry.closureSha },
     { kind: 'update-record', previous: stored, record },

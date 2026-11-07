@@ -1672,6 +1672,9 @@ describe('engine/conductor', () => {
         config: {
           kickback_escalation: { enabled: false },
           retry_routing: { enabled: false },
+          // This fallback test owns a single BUILD attempt, independent of
+          // the feature-tier default remediation allowance.
+          prd_audit: { max_remediation_laps: 1 },
         },
       });
 

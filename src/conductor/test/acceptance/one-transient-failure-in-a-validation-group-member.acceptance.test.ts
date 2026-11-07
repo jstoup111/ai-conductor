@@ -498,7 +498,6 @@ describe('validation-group no-verdict sibling retention (#1425)', () => {
       const calls: StepName[] = [];
       const runner: StepRunner = { run: vi.fn(async (step: StepName, _state, options) => {
         calls.push(step);
-        if (step === 'coverage_binding') await writeFile(join(dir, '.pipeline/coverage-binding.json'), JSON.stringify({ version: 1, slug: 'one-transient-failure-in-a-validation-group-member', runId: 'test-run', status: 'disabled', entries: [] }));
         if (step === 'manual_test') await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
         if (step === 'prd_audit') await writePrdAuditPass(dir, options);
         if (step === 'architecture_review_as_built') await writeAsBuiltApproval(dir, options);

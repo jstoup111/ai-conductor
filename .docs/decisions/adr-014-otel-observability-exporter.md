@@ -336,6 +336,26 @@ Relevant existing facts (evidence):
 > events, while the visualizer's exhaustively checked traced set excludes them. No no-op
 > visualizer handlers or duplicate metric recording are required to satisfy this decision.
 
+> **Amended 2026-10-26 by feature-active-duration-is-dropped-from-otel-whene (measured active
+> duration on partial rollups):** Decision 9's clause "`feature.duration.active` (omitted, never
+> fabricated, when the rollup state is `partial` or `unavailable`)" now reads: `feature.duration.active`
+> is recorded whenever `feature_shipped` carries an `activeMs`, and omitted, never fabricated,
+> otherwise. The timing rollup supplies `activeMs` only when the active-step union is complete:
+> state `exact`, or state `partial` solely because the provider partition is incomplete
+> (`provider-evidence-incomplete`), where the active total is measured and only the
+> provider/no-provider split is unknown. Every recorded point carries the rollup `state`
+> (`exact | partial`) and, when `partial`, a `reason`, so a partial total stays visibly partial as
+> adr-2026-07-29-engine-observed-provider-time-partition requires. A shipped feature with no
+> `activeMs` increments `conductor.feature.duration.active.missing` with `state`
+> (`partial | unavailable`) and, when `partial`, `reason`, so the gap is counted instead of
+> silent. `reason` is the closed set `empty-active-union | active-evidence-incomplete |
+> open-executions | provider-outside-active-union | provider-evidence-incomplete |
+> ledger-unreadable`, the rollup routes named by adr-2026-08-12-execution-lifecycle-completeness-for-timing
+> plus an unreadable ledger; open execution keys never become label values. `state` and `reason`
+> are label names already in the #1940 vocabulary, so the closed label contract is unchanged.
+> `feature_shipped.active` gains the optional `reason` field carrying the same class. The original
+> clause is preserved above; the omission discipline for an incomplete active union is unchanged.
+
 > **Amended 2026-09-08 by #1937 (as-built decisions AB-6, AB-7, AB-10):** “traces are
 > unaffected” in Decision 7 is literal: the trace Resource, including its existing
 > `service.instance.id`, remains byte-identical to the pre-feature trace Resource. Decision 8's

@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "slug": "routed-round-growth-halt-misreports-cap-overrun-as",
+  "artifacts": [
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/routed-round-growth-halt-misreports-cap-overrun-as.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/routed-round-growth-halt-misreports-cap-overrun-as.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/routed-round-growth-halt-misreports-cap-overrun-as.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/routed-round-growth-halt-misreports-cap-overrun-as.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/routed-round-growth-halt-misreports-cap-overrun-as.md"
+    }
+  ]
+}

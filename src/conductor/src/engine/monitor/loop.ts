@@ -4,7 +4,7 @@ import { recordDeferralSafely, type DeferralKey } from './deferrals.js';
 import type { ProjectHalt } from './halt-inventory.js';
 import { snapshotHaltMarker } from '../halt-marker.js';
 import type { ConductorEvent } from '../../types/events.js';
-import type { ConductorEventEmitter } from '../../ui/events.js';
+import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 
 type MonitorTransitionType = Extract<ConductorEvent, {
   type:

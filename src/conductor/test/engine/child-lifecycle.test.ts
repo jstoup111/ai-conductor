@@ -1,32 +1,23 @@
 // Covers: task:6, task:7, task:8
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, rename, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   closeChild,
+  enterChildRegion,
   moveLeaf,
   startChild,
   switchToChild,
   type StartChildGitRunner,
 } from '../../src/engine/child-lifecycle.js';
 import { parseChildId } from '../../src/engine/child-context.js';
-import {
-  writeCoverageBindingEnvelope,
-  type CoverageBindingEnvelopeFilesystem,
-} from '../../src/engine/coverage-binding-envelope.js';
+import { resolveActiveChild } from '../../src/engine/child-cursor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const execFile = promisify(execFileCallback);
-
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
-  readFile: (path) => readFile(path, 'utf8'),
-  mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
-  writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
-  rename,
-};
 
 let repository: string;
 
@@ -42,16 +33,26 @@ async function commit(message: string): Promise<string> {
 }
 
 async function seal(positions: readonly number[]): Promise<void> {
-  const taskSlices = Object.fromEntries(positions.map((position) => [String(position), position]));
-  await writeCoverageBindingEnvelope(repository, {
-    version: 1,
-    slug: 'demo',
-    runId: 'run-1',
-    status: 'done',
-    entries: [],
-    sliceMembership: { taskSlices, titles: positions.map((position) => `Child ${position}`) },
-    storyOwnership: Object.fromEntries(positions.map((position) => [`S${position}`, position])),
-  }, envelopeFilesystem);
+  const rows = positions.map((position) => `| ${position} | Child ${position} | ${position} |`);
+  const tasks = positions.flatMap((position) => [
+    `### Task ${position}: Child ${position}`,
+    `**Story:** Story ${position}`,
+    '**Dependencies:** none',
+    '',
+  ]);
+  await Promise.all([
+    mkdir(join(repository, '.docs', 'plans'), { recursive: true }),
+    mkdir(join(repository, '.docs', 'stories'), { recursive: true }),
+    mkdir(join(repository, '.docs', 'complexity'), { recursive: true }),
+  ]);
+  await Promise.all([
+    writeFile(join(repository, '.docs', 'plans', 'demo.md'), [
+      '# Implementation Plan: demo', '', '**Stories:** .docs/stories/demo.md', '', '## Slices', '',
+      '| Slice | Title | Tasks |', '| --- | --- | --- |', ...rows, '', ...tasks,
+    ].join('\n')),
+    writeFile(join(repository, '.docs', 'stories', 'demo.md'), positions.map((position) => `## Story ${position}: Child ${position}`).join('\n\n')),
+    writeFile(join(repository, '.docs', 'complexity', 'demo.md'), 'Tier: M\nStacked-Delivery: approved\n'),
+  ]);
 }
 
 async function configure(maxSlices: number): Promise<void> {
@@ -70,8 +71,14 @@ async function installOriginMainAt(tip: string): Promise<void> {
 }
 
 async function commitConfig(): Promise<void> {
-  await git(['add', '.ai-conductor/config.yml']);
+  await git(['add', '.ai-conductor', '.docs']);
   await git(['commit', '-qm', 'configure stack']);
+}
+
+async function recordPositions(positions: readonly number[]): Promise<void> {
+  await writeFile(join(repository, 'positions.json'), JSON.stringify(positions));
+  const blob = (await git(['hash-object', '-w', 'positions.json'])).trim();
+  await git(['update-ref', 'refs/conductor/demo/positions', blob]);
 }
 
 function events(): { emitter: ConductorEventEmitter; emitted: unknown[] } {
@@ -123,11 +130,50 @@ describe('startChild', () => {
     expect(emitted).toEqual([]);
   });
 
+  it('uses the plan topology to resolve the pending leaf parent without a coverage envelope', async () => {
+    await configure(2);
+    await seal([1, 2]);
+    const base = (await git(['rev-parse', 'HEAD'])).trim();
+    await installOriginMainAt(base);
+    const tip = await commit('C1');
+    await git(['update-ref', 'refs/conductor/demo/closed/c1', tip]);
+    await recordPositions([1, 2]);
+    await mkdir(join(repository, '.pipeline', 'children', '1'), { recursive: true });
+
+    await expect(enterChildRegion(repository, 'demo', {
+      child: parseChildId(2)!, position: parseChildId(2)!, branch: 'feat/daemon-demo', isLeaf: true, leafMovePending: true,
+    }, events().emitter)).resolves.toEqual({ kind: 'completed' });
+
+    await expect(git(['rev-parse', 'feat/daemon-demo'])).resolves.toBe(`${tip}\n`);
+  });
+
+  it('uses repository-root eligibility rather than an enabled feature-worktree config', async () => {
+    await configure(2);
+    await seal([1, 2]);
+    await writeFile(join(repository, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: false\n  max_slices: 2\n');
+    await git(['add', '.ai-conductor', '.docs']);
+    await git(['commit', '-qm', 'add ineligible stack topology']);
+    await git(['branch', 'feat/daemon-other']);
+    const worktree = join(repository, '.worktrees', 'demo');
+    await git(['worktree', 'add', worktree, 'feat/daemon-other']);
+    try {
+      await writeFile(join(worktree, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 2\n');
+
+      await expect(resolveActiveChild(worktree, 'demo')).resolves.toEqual({ kind: 'no-child' });
+      await expect(startChild(worktree, 'demo', parseChildId(1)!, events().emitter)).resolves.toMatchObject({ kind: 'refused' });
+      await expect(git(['show-ref', '--verify', '--quiet', 'refs/heads/feat/c1/demo'], worktree)).rejects.toMatchObject({ code: 1 });
+      await expect(git(['show-ref', '--verify', '--quiet', 'refs/conductor/demo/positions'], worktree)).rejects.toMatchObject({ code: 1 });
+    } finally {
+      await git(['worktree', 'remove', '--force', worktree]).catch(() => undefined);
+    }
+  });
+
   it('uses the previous declared child closure for a gap position', async () => {
     await configure(3);
     await seal([1, 3, 5]);
     const parentTip = await commit('B');
     await git(['update-ref', 'refs/conductor/demo/closed/c1', parentTip, '']);
+    await recordPositions([1, 3, 5]);
 
     await expect(startChild(repository, 'demo', parseChildId(3)!, events().emitter)).resolves.toEqual({ kind: 'started' });
 
@@ -152,7 +198,7 @@ describe('startChild', () => {
     await seal([1, 2, 3]);
 
     await expect(startChild(repository, 'demo', parseChildId(1)!, events().emitter)).resolves.toMatchObject({
-      kind: 'refused', reason: expect.stringContaining('stacked_prs.max_slices'),
+      kind: 'refused', reason: expect.stringContaining('not a declared stacked position'),
     });
 
     await expect(git(['show-ref', '--verify', '--quiet', 'refs/heads/feat/c1/demo'])).rejects.toMatchObject({ code: 1 });
@@ -165,6 +211,7 @@ describe('startChild', () => {
     await git(['update-ref', 'refs/conductor/demo/closed/c1', parentTip, '']);
     const existing = await commit('C');
     await git(['update-ref', 'refs/heads/feat/c2/demo', existing, '']);
+    await recordPositions([1, 2, 3]);
 
     await expect(startChild(repository, 'demo', parseChildId(2)!, events().emitter)).resolves.toMatchObject({
       kind: 'refused', reason: expect.stringContaining('refs/heads/feat/c2/demo'),

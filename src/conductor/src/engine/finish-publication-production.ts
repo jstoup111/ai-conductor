@@ -8,7 +8,7 @@
  */
 import { access, lstat, readFile, readdir, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import type { ConductorEvent, ConductState, FinishPublicationEvent, RunMode } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
 import type { StepRunResult } from './step-runner-types.js';
@@ -35,14 +35,12 @@ import { activePublicationRecord, readPublicationRecord, writePublicationRecord,
 import type { GitRunner as PublicationRecordGitRunner } from './rebase.js';
 import { leafBranchFor } from './feature-branch-identity.js';
 import { checkChildBodyPostconditions, renderChildBody, renderStackNavigation } from './stack-member-body.js';
-import {
-  COVERAGE_BINDING_COMPLETION_STATUSES,
-  projectChildOwnership,
-  readCoverageBindingEnvelope,
-  type CoverageBindingEnvelopeFilesystem,
-} from './coverage-binding-envelope.js';
 import { splitStoryBlocks } from './story-criteria.js';
+import { loadSliceTopology } from './slice-topology.js';
+import { resolveFeaturePlanPath } from './artifacts.js';
+import { resolveFeatureStoriesRef } from './plan-stories-reference.js';
 import { gateSatisfied } from './selector.js';
+import { worktreeManifestSource } from './feature-manifest-source.js';
 import {
   dispatchFinishRecord,
   makeProductionFinishRecordRunners,
@@ -55,6 +53,8 @@ import {
   resolveUnattendedPublicationIntent,
   StackPublicationHaltError,
   StackPublicationRetryError,
+  PublicationOperationFailedError,
+  PrProseAuthoringFailedError,
   type PublicationDisposition,
   type PrProseAuthoringRequest,
   type PrProseJudgmentRequest,
@@ -69,6 +69,7 @@ import { guardPublishedStackWrite } from './stack-tip-guard.js';
 import { selectFinishPrerequisiteSteps } from './finish-custom-step-prerequisites.js';
 import { buildStepRegistry } from './steps.js';
 import { decodePrProseJudgment } from './finish-pr-prose-judgment.js';
+import { applyAuthoredPrProse, clearPrProseHandoff, readPrProseHandoff } from './finish-pr-prose-handoff.js';
 import { type BuildReviewAdvisoryFinding, upsertBuildReviewAcceptedRisk } from './build-review-accepted-risk.js';
 import { maskProjectOwnedRegions, restoreRegion } from './pr-body-regions.js';
 import { readRegionCaptures } from './pr-body-region-store.js';
@@ -91,14 +92,7 @@ import {
   withoutShipmentPlanDeclarations,
 } from './shipment-plan-declaration.js';
 import { runTrackerAmbientRead, runTrackerRepositoryRead, runTrackerUrlRead } from './tracker-client.js';
-
-/** FINISH only reads the sealed coverage evidence; writes remain step-runner owned. */
-const coverageBindingFilesystem: CoverageBindingEnvelopeFilesystem = {
-  readFile: (path) => readFile(path, 'utf8'),
-  mkdir: async () => { throw new Error('finish publication coverage evidence is read-only'); },
-  writeFile: async () => { throw new Error('finish publication coverage evidence is read-only'); },
-  rename: async () => { throw new Error('finish publication coverage evidence is read-only'); },
-};
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 
 export interface ProductionFinishPublicationCoordinator {
   requiresArtifactValidation: true;
@@ -151,7 +145,9 @@ export interface ProductionFinishPublicationDeps {
   /** Test-only terminal remote-Git seam; production uses executeRemoteGit. */
   remoteGit?: typeof executeRemoteGit;
   /** Canonical event spine; required for D9 warned operator-credential fallback. */
-  events?: { emit(event: ConductorEvent): Promise<void> };
+  events?: ConductorEventEmitter;
+  /** Delivers completed external-process records without stopping the feature tail. */
+  flushSessionEvents?: () => Promise<void>;
   /**
    * Production composition owns the ordered presentation repair.  Callers
    * inject the existing halt-rehabilitation/floor/ready composition so this
@@ -247,7 +243,7 @@ async function mutateRetainedPullRequest(input: {
   operations?: GithubOperationRunner;
   prUrl: string;
   operation: 'pull-request.edit' | 'pull-request.ready';
-  payload?: { readonly body: string };
+  payload?: { readonly title?: string; readonly body: string };
 }): Promise<RetainedPullRequestMutation> {
   if (!input.operations) {
     return { ok: false, message: `guarded ${input.operation} unavailable: missing feature operation boundary` };
@@ -294,24 +290,53 @@ async function sealedChildPresentation(input: {
   base: string;
   git: GitRunner;
 }): Promise<{ slice: { position: number; name: string; taskIds: readonly string[]; storyIds: readonly string[] }; stories: readonly { id: string; title: string }[]; diffstat: string }> {
-  const envelope = await readCoverageBindingEnvelope(input.root, coverageBindingFilesystem).catch(() => null);
-  if (!envelope?.sliceMembership || !COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status)) {
-    throw new StackPublicationHaltError('stack_publication_precondition_failed', 'sealed stack coverage evidence is unreadable');
+  // FINISH's historical Git seam requires a cwd while the topology reader's
+  // shared seam owns cwd at construction. Adapt only the compatible read
+  // options here so stack publication stays on its injected process boundary.
+  const topology = await loadSliceTopology(input.root, input.slug, {
+    git: async (args, options) => {
+      const result = await input.git(args, {
+        cwd: input.root,
+        ...(options?.credential === undefined ? {} : { credential: options.credential }),
+        ...(options?.endpoint === undefined ? {} : { endpoint: options.endpoint }),
+        ...(options?.input === undefined ? {} : { input: options.input }),
+      });
+      return { exitCode: result.exitCode ?? 0, stdout: result.stdout, stderr: '' };
+    },
+  });
+  if (topology.kind !== 'sliced') {
+    const detail = topology.kind === 'unavailable' ? topology.cause : 'unsliced';
+    throw new StackPublicationHaltError('stack_publication_precondition_failed', `sealed stack topology is unavailable: ${detail}`);
   }
-  const positions = [...new Set(Object.values(envelope.sliceMembership.taskSlices))].sort((left, right) => left - right);
-  const title = envelope.sliceMembership.titles[positions.indexOf(input.position)];
+  const title = topology.sliceMembership.titles[topology.positions.indexOf(input.position)];
   if (!title) throw new StackPublicationHaltError('stack_publication_precondition_failed', `sealed stack slice ${input.position} is missing`);
-  const ownership = projectChildOwnership(envelope, input.position);
-  if (ownership.taskIds.length === 0) throw new StackPublicationHaltError('stack_publication_precondition_failed', `sealed stack slice ${input.position} has no tasks`);
-  const storiesPath = join(input.root, '.docs', 'stories', `${input.slug}.md`);
-  const storiesText = await readFile(storiesPath, 'utf8').catch(() => '');
+  const taskIds = Object.entries(topology.sliceMembership.taskSlices)
+    .filter(([, position]) => position === input.position)
+    .map(([taskId]) => taskId);
+  const storyIds = Object.entries(topology.storyOwnership)
+    .filter(([, position]) => position === input.position)
+    .map(([storyId]) => storyId);
+  if (taskIds.length === 0) throw new StackPublicationHaltError('stack_publication_precondition_failed', `sealed stack slice ${input.position} has no tasks`);
+  const planPath = await resolveFeaturePlanPath(input.root, input.slug);
+  const planText = planPath === undefined ? undefined : await readFile(planPath, 'utf8').catch(() => undefined);
+  const storiesPath = planPath === undefined || planText === undefined
+    ? null
+    : await resolveFeatureStoriesRef(
+      worktreeManifestSource(input.root),
+      relative(input.root, planPath).replaceAll('\\', '/'),
+      planText,
+    );
+  if (storiesPath === null) {
+    throw new StackPublicationHaltError('stack_publication_precondition_failed', 'sealed stack stories path is unavailable');
+  }
+  const storiesText = await readFile(join(input.root, storiesPath), 'utf8').catch(() => '');
   const stories = splitStoryBlocks(storiesText).flatMap((story) => story.id === undefined ? [] : [{
     id: story.id,
     title: story.text.split('\n').find((line) => /^##\s+Story\s+/i.test(line))?.replace(/^##\s+Story\s+[^:]+:?\s*/i, '') || story.id,
   }]);
   const diff = await input.git(['diff', '--stat', `${input.base}...${input.branch}`], { cwd: input.root });
   return {
-    slice: { position: input.position, name: title, taskIds: ownership.taskIds, storyIds: ownership.storyIds },
+    slice: { position: input.position, name: title, taskIds, storyIds },
     stories,
     diffstat: diff.stdout.trim(),
   };
@@ -1202,6 +1227,12 @@ function prHaltState(title: unknown, body: unknown, rawLabels: unknown): boolean
   return hasHaltSignal({ title: prTitle, body: prBody, labels, isDraft: false });
 }
 
+/** The shared floor predicate for observation and returned author prose. */
+function isPlaceholderPrProse(title: string, body: string, templateBytes?: string): boolean {
+  const text = `${title}\n${body}`.trim();
+  return !text || isEngineFlooredBody(body, templateBytes) || /Draft opened automatically/i.test(maskProjectOwnedRegions(text));
+}
+
 function prProse(
   title: unknown,
   body: unknown,
@@ -1211,9 +1242,9 @@ function prProse(
 ): 'accepted' | 'revision_required' | 'stale' | 'placeholder' | 'halt' {
   const prTitle = typeof title === 'string' ? title : '';
   const prBody = typeof body === 'string' ? body : '';
-  const text = `${prTitle}\n${prBody}`.trim();
-  if (!text) return 'placeholder';
+  if (`${prTitle}\n${prBody}`.trim() === '') return 'placeholder';
   if (halted) return 'halt';
+  if (isPlaceholderPrProse(prTitle, prBody, templateBytes)) return 'placeholder';
   // The floor marker is provenance, not a verdict: it is an invisible comment
   // an authoring pass can preserve while rewriting every word around it, and
   // marker-presence-alone classification then pinned genuine prose at
@@ -1221,9 +1252,6 @@ function prProse(
   // (#1703). `isEngineFlooredBody` reads the body content instead, so an
   // intact floor still classifies as a placeholder and authored prose does
   // not.
-  if (isEngineFlooredBody(prBody, templateBytes) || /Draft opened automatically/i.test(maskProjectOwnedRegions(text))) {
-    return 'placeholder';
-  }
   // Existing prose is a judgment candidate until this coordinator either
   // authored that exact revision or received an accepted judgment for it.
   // The PR remains the observation authority; this cache only records the
@@ -1331,6 +1359,29 @@ export function createProductionFinishPublicationCoordinator(
   const acceptedProseRevisionByPr = new Map<string, string>();
   const authoredPlaceholderProsePendingByPr = new Set<string>();
   const authoringOriginByPr = new Map<string, 'placeholder' | 'revision_required'>();
+  // Retry guidance is intentionally process-local: the next attempt can use
+  // the concrete handoff failure, while a restarted coordinator begins with
+  // no unverifiable provider-side state.
+  const authoringFailureGuidanceByPr = new Map<string, string>();
+  const recordAuthoringFailure = (
+    pullRequestUrl: string,
+    cause: 'not_returned' | 'invalid',
+    detail: string,
+  ): never => {
+    authoringFailureGuidanceByPr.set(
+      pullRequestUrl,
+      cause === 'not_returned'
+        ? 'No PR-prose handoff was written to .pipeline/finish-pr-prose.json.'
+        : detail,
+    );
+    throw new PrProseAuthoringFailedError(cause, detail);
+  };
+  // Once a retained PR exists, its finish pass observes one immutable sealed
+  // topology. Reuse that cursor across its coordinator lifetime to avoid
+  // repeating durable-child-state probes while retaining the loader's
+  // all-cardinality position check for the observation.
+  const retainedPrObservationChildByFeature = new Map<string, Promise<Awaited<ReturnType<typeof resolveActiveChild>>>>();
+  let retainedPrFinish = false;
   // Interactive authority is acquired once per coordinator lifetime. A retry
   // must re-observe publication state, not ask the operator to re-authorize
   // the same requested outcome.
@@ -1437,6 +1488,7 @@ export function createProductionFinishPublicationCoordinator(
   return {
     requiresArtifactValidation: true,
     async advance({ state, mode, daemon, dispatchJudgment, dispatchAuthoring, emit }) {
+      retainedPrFinish ||= state.pr_url !== undefined;
       const attended = !daemon && (mode === 'default' || mode === 'interactive');
       const requestedOutcome = attended
         ? await (attendedRequestedOutcome ??= Promise.resolve().then(
@@ -1522,10 +1574,18 @@ export function createProductionFinishPublicationCoordinator(
 
       let activeChildForObservation: Awaited<ReturnType<typeof resolveActiveChild>> | undefined;
       const resolveObservationChild = async () => {
-        if (activeChildForObservation !== undefined) return activeChildForObservation;
-        activeChildForObservation = state.feature_desc === undefined
-          ? { kind: 'no-child' as const }
-          : await resolveActiveChild(deps.projectRoot, state.feature_desc);
+        if (state.feature_desc === undefined) return { kind: 'no-child' as const };
+        if (retainedPrFinish) {
+          let cursor = retainedPrObservationChildByFeature.get(state.feature_desc);
+          if (cursor === undefined) {
+            cursor = resolveActiveChild(deps.projectRoot, state.feature_desc, { reuseDurableChildState: true });
+            retainedPrObservationChildByFeature.set(state.feature_desc, cursor);
+          }
+          return cursor;
+        }
+        if (activeChildForObservation === undefined) {
+          activeChildForObservation = await resolveActiveChild(deps.projectRoot, state.feature_desc);
+        }
         return activeChildForObservation;
       };
       const observeStackReadiness = async (prUrl: string, leafReady: boolean): Promise<boolean> => {
@@ -1601,7 +1661,12 @@ export function createProductionFinishPublicationCoordinator(
                 };
                 if (typeof pr.url === 'string') {
                   const ready = await observeStackReadiness(pr.url, pr.isDraft === false);
-                  const halted = prHaltState(pr.title, pr.body, pr.labels);
+                  // Empty retained title/body text is an unauthored PR even
+                  // when a stale halt label remains on it. Keep this derived
+                  // halt state in the same order as `prProse`: only prose
+                  // that exists can select the halt terminal state.
+                  const halted = `${typeof pr.title === 'string' ? pr.title : ''}\n${typeof pr.body === 'string' ? pr.body : ''}`.trim() !== ''
+                    && prHaltState(pr.title, pr.body, pr.labels);
                   // The declaration is mechanically maintained shipment
                   // metadata, not reader-facing prose. Its append/replacement
                   // must not invalidate the verdict for an otherwise identical
@@ -1658,6 +1723,7 @@ export function createProductionFinishPublicationCoordinator(
                       state: 'one' as const,
                       url: pr.url,
                       prose,
+                      proseRevision: revisionDigest(revision),
                       ...(halted ? { halted: true as const } : {}),
                       ...(revisionGuidance === undefined ? {} : { revisionGuidance }),
                       ready,
@@ -1735,8 +1801,9 @@ export function createProductionFinishPublicationCoordinator(
         observe: async () => {
           // The snapshot ports are evaluated in a fixed order. Reuse the
           // cursor within one observation so adding the stack dimension does
-          // not add duplicate N=1 Git discovery; discard it before every
-          // re-observation after an effect.
+          // not add duplicate N=1 Git discovery. A retained PR keeps its
+          // sealed cursor for the whole coordinator pass; a new PR rechecks
+          // after each effect because branch publication can change state.
           activeChildForObservation = undefined;
           return observePublicationSnapshot(
             observationInput as Parameters<typeof observePublicationSnapshot>[0],
@@ -1745,13 +1812,23 @@ export function createProductionFinishPublicationCoordinator(
         emit,
         effects: {
           // Authoring is dispatched only when the engine itself observed an
-          // unauthored body. The provider's reply is not inspected at all: the
-          // coordinator re-observes the PR and only a body that no longer
-          // carries the placeholder classification counts as progress.
+          // unauthored body. The provider returns a handoff; the engine alone
+          // re-splices, validates, and publishes it before re-observation
+          // decides whether the transition progressed.
           ...(dispatchAuthoring
             ? {
                 authorProse: async (request: PrProseAuthoringRequest) => {
-                  const dispatched = await dispatchAuthoring(request);
+                  await clearPrProseHandoff(pipelineDir);
+                  const failureGuidance = authoringFailureGuidanceByPr.get(request.pullRequestUrl);
+                  const authoringRequest = failureGuidance === undefined
+                    ? request
+                    : {
+                        ...request,
+                        revisionGuidance: [request.revisionGuidance, failureGuidance]
+                          .filter((guidance): guidance is string => guidance !== undefined)
+                          .join('\n\n'),
+                      };
+                  const dispatched = await dispatchAuthoring(authoringRequest);
                   // A failed provider run returns, it does not throw. Passing
                   // it through as a completed pass made the coordinator's
                   // fixed-point guard read an aborted attempt as "authoring
@@ -1760,6 +1837,50 @@ export function createProductionFinishPublicationCoordinator(
                   if (!dispatched.success) {
                     throw new Error('PR prose authoring dispatch did not complete successfully');
                   }
+                  const handoff = await readPrProseHandoff(pipelineDir);
+                  const prose = handoff.kind === 'returned'
+                    ? handoff.prose
+                    : recordAuthoringFailure(
+                      request.pullRequestUrl,
+                      handoff.kind,
+                      handoff.kind === 'not_returned'
+                        ? 'PR-prose handoff was not returned.'
+                        : handoff.detail,
+                    );
+                  const stdout = await runTrackerUrlRead(
+                    deps.gh,
+                    deps.projectRoot,
+                    'pull-request',
+                    request.pullRequestUrl,
+                    ['pr', 'view', request.pullRequestUrl, '--json', 'title,body'],
+                  );
+                  const retained = JSON.parse(stdout) as { title?: unknown; body?: unknown };
+                  const retainedBody = typeof retained.title === 'string' && typeof retained.body === 'string'
+                    ? retained.body
+                    : recordAuthoringFailure(
+                        request.pullRequestUrl,
+                        'invalid',
+                        'retained PR title or body is malformed.',
+                      );
+                  const applied = applyAuthoredPrProse({
+                    currentBody: retainedBody,
+                    prose,
+                    isPlaceholder: (title, body) => isPlaceholderPrProse(title, body, deps.prTemplateBytes),
+                  });
+                  const appliedProse = applied.kind === 'apply'
+                    ? applied
+                    : recordAuthoringFailure(request.pullRequestUrl, 'invalid', applied.detail);
+                  const operations = await retainedOperations(request.pullRequestUrl);
+                  const mutation = await mutateRetainedPullRequest({
+                    operations,
+                    prUrl: request.pullRequestUrl,
+                    operation: 'pull-request.edit',
+                    payload: { title: appliedProse.title, body: appliedProse.body },
+                  });
+                  if (!mutation.ok) {
+                    throw new PublicationOperationFailedError('pull-request.edit', mutation.message);
+                  }
+                  authoringFailureGuidanceByPr.delete(request.pullRequestUrl);
                   if (authoringOriginByPr.get(request.pullRequestUrl) === 'placeholder') {
                     authoredPlaceholderProsePendingByPr.add(request.pullRequestUrl);
                   }
@@ -1978,9 +2099,11 @@ export function createProductionFinishPublicationCoordinator(
       });
 
       // A transition is intentionally one effect per attempt. The core
-      // coordinator has verified the effect before reporting an advance, so
-      // re-enter FINISH without charging it to the retry budget.
+      // coordinator has verified the effect before reporting an advance. Keep
+      // a completed prose-authoring transition observable to callers; it is
+      // still routed as FINISH progress and therefore does not spend a retry.
       if (result.kind === 'advanced') {
+        if (result.transition === 'author_pr_prose') return result;
         return {
           kind: 'publication_progress',
           transition: result.transition,

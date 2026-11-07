@@ -30,6 +30,8 @@ export interface ReconcileRemediationCasesInput {
   readonly liveSourceIds?: ReadonlySet<string>;
   /** Preserve the established absence settlement for completed non-action history. */
   readonly resolveAbsentOpenNonActionCases?: boolean;
+  /** Explicit resolved-action owner for an unbound recurrence minted by the coordinator. */
+  readonly recurrenceOwnersByCaseRef?: ReadonlyMap<string, string>;
   /** An attempted applied effect may settle on a normal adjudication lap, never a missing-order PASS. */
   readonly allowAppliedByAbsence?: boolean;
   /** The occurrence lap for any absence retirement performed in this mutation. */
@@ -41,6 +43,14 @@ export interface ReconcileRemediationCasesInput {
     readonly caseRefs: readonly string[];
     readonly lapId: string;
   };
+  /**
+   * Coordinator-selected repair provenance. Exact source ownership still wins;
+   * this data is used only for an unbound act with no exact owner.
+   */
+  readonly provenanceByCaseRef?: ReadonlyMap<string, {
+    readonly selectedCaseId: string;
+    readonly candidateCaseIds: readonly string[];
+  }>;
 }
 
 export type RemediationCaseReconciliationRejection =
@@ -82,6 +92,33 @@ export type RemediationCaseReuseDisposition = 'resume' | 'reuse' | 'halt-repeat'
 export interface RemediationCaseCarryInput {
   readonly currentLapId: string;
   readonly effectiveAcceptedSourceIds: ReadonlySet<string>;
+}
+
+export type BindableRemediationCaseDisposition = Exclude<RemediationCaseRow['disposition'], 'escalate'>;
+
+const ALL_BINDABLE_DISPOSITIONS = ['act', 'advisory', 'defer', 'refute', 'reject'] as const satisfies readonly BindableRemediationCaseDisposition[];
+
+/**
+ * The engine-owned transition vocabulary for a binding to durable case state.
+ * Escalations remain an unbound decision-stop lane, so they are intentionally
+ * absent from the reviewer-visible binding contract.
+ */
+export function bindableDispositions(
+  record: RemediationCaseRecord,
+  attemptedCaseIds: ReadonlySet<string>,
+  carryInput?: RemediationCaseCarryInput,
+): readonly BindableRemediationCaseDisposition[] {
+  if (carryInput && isCarryEligibleRemediationCase(record, carryInput)) return ALL_BINDABLE_DISPOSITIONS;
+  if (record.disposition !== 'act') {
+    return record.disposition === 'escalate' ? [] : [record.disposition];
+  }
+
+  const bindable: BindableRemediationCaseDisposition[] = ['act'];
+  if (record.effect.kind === 'action' && record.effect.status === 'applied') {
+    bindable.push('defer');
+    if (record.resolution === 'open' && attemptedCaseIds.has(record.id)) bindable.push('refute');
+  }
+  return bindable;
 }
 
 /** A durable operator decision carries only after its origin remains effective in a later lap. */
@@ -274,9 +311,30 @@ function reconcileState(
         ? undefined
         : takeId(input.generateId, usedIds);
       if (effectId === 'id-generation-failed' || effectId === 'id-collision') return { ok: false, reason: effectId };
-      const recurrence = caseRow.disposition === 'act'
+      const exactRecurrence = caseRow.disposition === 'act'
         ? classifyBuildReviewRecurrence(state.cases, sources.map((source) => source.sourceId), caseRow.distinctFrom ?? [])
         : undefined;
+      const explicitOwner = input.recurrenceOwnersByCaseRef?.get(caseRow.caseRef);
+      const provenance = explicitOwner === undefined && exactRecurrence !== undefined && exactRecurrence.recurrenceOf.length === 0 && exactRecurrence.distinctFrom.length === 0
+        ? input.provenanceByCaseRef?.get(caseRow.caseRef)
+        : undefined;
+      const provenanceDistinctFrom = provenance === undefined
+        ? []
+        : (caseRow.distinctFrom ?? []).filter((entry) => provenance.candidateCaseIds.includes(entry.caseId));
+      const selectedProvenanceIsDistinct = provenance !== undefined &&
+        provenanceDistinctFrom.some((entry) => entry.caseId === provenance.selectedCaseId);
+      const recurrenceOf = exactRecurrence === undefined
+        ? []
+        : explicitOwner !== undefined
+          ? [...new Set([...exactRecurrence.recurrenceOf, explicitOwner])]
+          : exactRecurrence.recurrenceOf.length > 0
+            ? exactRecurrence.recurrenceOf
+          : provenance !== undefined && !selectedProvenanceIsDistinct
+            ? [provenance.selectedCaseId]
+            : [];
+      const distinctFrom = exactRecurrence === undefined
+        ? []
+        : [...exactRecurrence.distinctFrom, ...provenanceDistinctFrom];
       claimed.add(caseId);
       caseIdsByRef.set(caseRow.caseRef, caseId);
       additions.push({
@@ -295,8 +353,8 @@ function reconcileState(
         })),
         effect: effectFor(caseRow, effectId),
         ...(caseRow.escalation === undefined ? {} : { escalation: caseRow.escalation }),
-        ...(recurrence === undefined || recurrence.recurrenceOf.length === 0 ? {} : { recurrenceOf: recurrence.recurrenceOf }),
-        ...(recurrence === undefined || recurrence.distinctFrom.length === 0 ? {} : { distinctFrom: recurrence.distinctFrom }),
+        ...(recurrenceOf.length === 0 ? {} : { recurrenceOf }),
+        ...(distinctFrom.length === 0 ? {} : { distinctFrom }),
       });
       continue;
     }
@@ -315,6 +373,9 @@ function reconcileState(
     let admitsDeferral = false;
     let admitsActionRetry = false;
     if (!admitsCarry) {
+      if (caseRow.disposition !== 'escalate' && !bindableDispositions(existing, attemptedIds).includes(caseRow.disposition)) {
+        return { ok: false, reason: 'illegal-disposition-transition' };
+      }
       admitsRefutation = caseRow.disposition === 'refute'
         && existing.disposition === 'act'
         && existing.resolution === 'open'
@@ -340,7 +401,6 @@ function reconcileState(
         && existing.effect.kind === 'action'
         && existing.effect.status === 'failed';
       if (caseRow.disposition === 'refute' && existing.refutation) return { ok: false, reason: 'refutation-repeat' };
-      if (existing.disposition !== caseRow.disposition && !admitsRefutation && !admitsDeferral) return { ok: false, reason: 'illegal-disposition-transition' };
     }
     referencedExisting.add(existingCaseId);
     claimed.add(existingCaseId);

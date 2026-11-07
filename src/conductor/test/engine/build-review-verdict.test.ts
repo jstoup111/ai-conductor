@@ -412,7 +412,7 @@ describe('engine/build-review verdict wiring contract', () => {
       }),
     });
     const inputs = {
-      sourceSnapshot: { headSha: 'mechanical-lap', digest: 'sha256:mechanical-lap', mergeBase: 'base' },
+      sourceSnapshot: { headSha: 'mechanical-lap', digest: 'sha256:mechanical-lap', mergeBase: 'base', diff: '' },
     } as BuildReviewFrozenInputs;
 
     const result = await (runner as unknown as {
@@ -457,7 +457,7 @@ describe('engine/build-review verdict wiring contract', () => {
     });
     const outcome = await (runner as unknown as {
       runRubricBuildReview: (inputs: BuildReviewFrozenInputs, config: ReturnType<typeof resolveBuildReviewConfig>) => Promise<{ success: boolean; currentLapMechanicalFault?: boolean; output: string }>;
-    }).runRubricBuildReview({ sourceSnapshot: { headSha: 'scope-incomplete', digest: snapshotDigest, mergeBase: 'base' } } as BuildReviewFrozenInputs, resolveBuildReviewConfig({ build_review: { enabled: true } } as HarnessConfig));
+    }).runRubricBuildReview({ sourceSnapshot: { headSha: 'scope-incomplete', digest: snapshotDigest, mergeBase: 'base', diff: '' } } as BuildReviewFrozenInputs, resolveBuildReviewConfig({ build_review: { enabled: true } } as HarnessConfig));
 
     expect(outcome).toMatchObject({ success: false, currentLapMechanicalFault: true, output: expect.stringContaining('(scope-incomplete)') });
     expect((await readKickbackLedger(dir)).gates.build_review.lastMechanicalFault).toMatchObject({ reason: 'scope-incomplete', lapId: 'lap-scope-incomplete' });
@@ -510,7 +510,7 @@ describe('engine/build-review verdict wiring contract', () => {
       }),
     });
     const inputs = {
-      sourceSnapshot: { headSha: 'mixed-lap', digest: 'sha256:mixed-lap', mergeBase: 'base' },
+      sourceSnapshot: { headSha: 'mixed-lap', digest: 'sha256:mixed-lap', mergeBase: 'base', diff: '' },
     } as BuildReviewFrozenInputs;
 
     const result = await (runner as unknown as {
@@ -569,7 +569,7 @@ describe('engine/build-review verdict wiring contract', () => {
 
     const result = await (runner as unknown as {
       runRubricBuildReview: (inputs: BuildReviewFrozenInputs, config: ReturnType<typeof resolveBuildReviewConfig>) => Promise<{ success: boolean; refusal?: { kind: string } }>;
-    }).runRubricBuildReview({ sourceSnapshot: { headSha: 'mixed-infra', digest: snapshotDigest, mergeBase: 'base' } } as BuildReviewFrozenInputs, resolveBuildReviewConfig({ build_review: { enabled: true } } as HarnessConfig));
+    }).runRubricBuildReview({ sourceSnapshot: { headSha: 'mixed-infra', digest: snapshotDigest, mergeBase: 'base', diff: '' } } as BuildReviewFrozenInputs, resolveBuildReviewConfig({ build_review: { enabled: true } } as HarnessConfig));
 
     expect((await readKickbackLedger(dir)).gates.build_review.mechanicalFaults).toBe(faults);
     if (halts) expect(result).toMatchObject({ success: false, refusal: { kind: 'needs-human' } });
@@ -614,7 +614,7 @@ describe('engine/build-review verdict wiring contract', () => {
       }),
     });
     const inputs = {
-      sourceSnapshot: { headSha: 'mechanical-stale-aggregate', digest: 'sha256:mechanical-stale-aggregate', mergeBase: 'base' },
+      sourceSnapshot: { headSha: 'mechanical-stale-aggregate', digest: 'sha256:mechanical-stale-aggregate', mergeBase: 'base', diff: '' },
     } as BuildReviewFrozenInputs;
 
     const result = await (runner as unknown as {
@@ -659,7 +659,7 @@ describe('engine/build-review verdict wiring contract', () => {
         pipelineDir: join(dir, '.pipeline'),
       });
       const inputs = {
-        sourceSnapshot: { headSha: 'mechanical-write-failure', digest: 'sha256:mechanical-write-failure', mergeBase: 'base' },
+        sourceSnapshot: { headSha: 'mechanical-write-failure', digest: 'sha256:mechanical-write-failure', mergeBase: 'base', diff: '' },
       } as BuildReviewFrozenInputs;
 
       const result = await (runner as unknown as {
@@ -706,7 +706,7 @@ describe('engine/build-review verdict wiring contract', () => {
         }),
       });
       const inputs = {
-        sourceSnapshot: { headSha: 'mechanical-write-failure', digest: 'sha256:mechanical-write-failure', mergeBase: 'base' },
+        sourceSnapshot: { headSha: 'mechanical-write-failure', digest: 'sha256:mechanical-write-failure', mergeBase: 'base', diff: '' },
       } as BuildReviewFrozenInputs;
 
       await (runner as unknown as {

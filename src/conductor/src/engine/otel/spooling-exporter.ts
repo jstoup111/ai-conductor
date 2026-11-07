@@ -2,7 +2,7 @@ import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
 import { ProtobufMetricsSerializer, ProtobufTraceSerializer } from '@opentelemetry/otlp-transformer';
 import type { PushMetricExporter, ResourceMetrics } from '@opentelemetry/sdk-metrics';
 import type { ReadableSpan, SpanExporter } from '@opentelemetry/sdk-trace-base';
-import type { ConductorEventEmitter } from '../../ui/events.js';
+import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import { type SpoolWriteResult, SpoolStore } from './spool-store.js';
 
 function emitEviction(

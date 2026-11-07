@@ -924,13 +924,21 @@ export async function sweepMergeableLabels({
                     continue;
                   }
                   if (result.kind === 'kept') {
+                    // A kept member is terminal: its branch and the tornDown
+                    // record stay, and only a failure keeps the watch entry.
                     await writePublicationRecord(entry.repoCwd, entry.slug, publication, {
                       ...publication.record,
                       tornDown: true,
                     }, publicationRecordDependencies);
+                    log?.(
+                      `[mergeable-sweep] reaped ${entry.slug} — reason: shipped-record-on-main (stack members kept, record tornDown)`,
+                    );
+                    continue;
                   }
+                  log?.(`[mergeable-sweep] retained ${entry.slug} — reason: stack-teardown-failed`);
                   survivors.push(entry);
                 } else {
+                  log?.(`[mergeable-sweep] retained ${entry.slug} — reason: stack-repository-unresolved`);
                   survivors.push(entry);
                 }
                 continue;

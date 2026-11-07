@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
-import { writeCoverageBindingEnvelope } from '../../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture } from '../slice-topology-fixture.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { journalRefFor, writeRestackJournalBlob, type RestackJournal } from '../../../src/engine/restack/restack-journal.js';
@@ -67,7 +67,7 @@ async function fixture() {
   const operatorX = await commit('operator X', 'operator.txt', 'X\n');
   await git(['checkout', '-qb', 'feat/c3/demo', closureTwo]);
   const activeTip = await commit('child three', 'three.txt', 'three\n');
-  await writeCoverageBindingEnvelope(repo, {
+  await writeSliceTopologyFixture(repo, {
     version: 1,
     slug: 'demo',
     runId: 'run-1',

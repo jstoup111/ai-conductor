@@ -82,7 +82,7 @@ describe('runRestack unresolved conflict sweep (real local Git)', () => {
         // Claims success without resolving, so every attempt is consumed.
         resolver: async () => { attempts += 1; return { resolved: true }; },
         resolverCap: 2,
-      })).resolves.toEqual({ kind: 'halted' });
+      })).resolves.toMatchObject({ kind: 'halted' });
     } finally {
       persister.stop();
     }
@@ -132,7 +132,7 @@ describe('runRestack unresolved conflict sweep (real local Git)', () => {
       await expect(runRestack({
         worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault, events,
         git: makeGitRunner(subject.repo), resolver, resolverCap: 1,
-      })).resolves.toEqual({ kind: 'halted' });
+      })).resolves.toMatchObject({ kind: 'halted' });
 
       const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
       expect(halt).toMatch(/^restack conflict child 2\n/);
@@ -164,7 +164,7 @@ describe('runRestack unresolved conflict sweep (real local Git)', () => {
         await git(['rebase', '--continue']);
         return { resolved: true };
       },
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
     expect(refusals).toEqual([expect.objectContaining({ reason: 'replay-mismatch', child: 2, detail: expect.stringContaining('src/unowned.ts') })]);
     expect(await unowned.git(['show', 'feat/c2/demo:src/unowned.ts']).then(() => 'present', () => 'absent')).toBe('absent');
     expect(await stackRefs(unowned)).toBe(unownedBefore);
@@ -184,7 +184,7 @@ describe('runRestack unresolved conflict sweep (real local Git)', () => {
         dispatched.push([...context.conflicts]);
         return { resolved: false, reason: 'rename collision left for the operator' };
       },
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
     expect(dispatched).toHaveLength(1);
     expect(dispatched[0]).toContain('src/z.ts');
     expect(conflicts).toHaveLength(1);

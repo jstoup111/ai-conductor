@@ -1,4 +1,4 @@
-// Covers: task:14, task:15, task:16, task:31, task:rem-prd-audit-rem-vg-4
+// Covers: task:4, task:6, task:14, task:15, task:16, task:31, task:rem-prd-audit-rem-vg-4
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFile as execFileCallback } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -9,9 +9,13 @@ import type { ConductState } from '../../src/types/index.js';
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { runExecutorChild, withExecutorBrokerProxies } from '../../src/engine/executor-child.js';
+import { makeExecutorChildRun } from '../../src/engine/executor-child-runtime.js';
 import { EXECUTOR_PROTOCOL_VERSION } from '../../src/engine/executor-protocol.js';
+import { installDaemonBotCoAuthor, withDaemonCoAuthorTrailer } from '../../src/engine/bot-co-author.js';
 import { dispatchShippedRecord } from '../../src/engine/shipped-record-cli.js';
 import { parseShippedRecord } from '../../src/engine/shipped-record.js';
+import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
+import type { GhRunner } from '../../src/engine/tracker-client.js';
 import type { WorkOrder } from '../../src/engine/work-order.js';
 import type { SelfHostGuardrails } from '../../src/engine/self-host/wiring.js';
 
@@ -66,9 +70,222 @@ function legacyGuardrails(): SelfHostGuardrails {
 }
 
 let root: string | undefined;
-afterEach(async () => { if (root) await rm(root, { recursive: true, force: true }); root = undefined; });
+afterEach(async () => {
+  installDaemonBotCoAuthor(undefined);
+  if (root) await rm(root, { recursive: true, force: true });
+  root = undefined;
+});
 
 describe('executor child entrypoint', () => {
+  it('installs the daemon co-author resolver on the feature bus before the child feature run', async () => {
+    root = await mkdtemp(join(tmpdir(), 'executor-child-co-author-'));
+    await execFile('git', ['init', '-b', 'main', root]);
+    await execFile('git', ['-C', root, 'config', 'user.name', 'Operator']);
+    await execFile('git', ['-C', root, 'config', 'user.email', 'operator@example.com']);
+    await execFile('git', ['-C', root, 'commit', '--allow-empty', '-m', 'initial']);
+    const port = new FakePort();
+    let coAuthor = '';
+    let engineMessage = '';
+    let commitAuthor = '';
+    let commitTrailers = '';
+
+    const done = runExecutorChild(port, withExecutorBrokerProxies(port, {
+      moduleDir: CHILD_MODULE_DIR,
+      createWorktree: async () => ({ path: root! }),
+      run: makeExecutorChildRun({
+        projectRoot: root,
+        githubBoundary: {
+          runner: (async () => ({ stdout: JSON.stringify({ login: 'example-bot', id: 42 }) })) as GhRunner,
+          readCredential: async () => ({ kind: 'configured', tokenFile: '/token' }),
+          readToken: async () => ({ kind: 'token', token: 'secret' }),
+        },
+        runFeature: async (input) => {
+          await prepareWorktree(root!, undefined, {
+            events: input.events,
+            dispatchStart: true,
+            dispatchStartTimeoutSeconds: 1,
+          });
+          coAuthor = await readFile(join(root!, '.pipeline', 'co-author'), 'utf8');
+          await execFile('git', ['-C', root!, 'commit', '--allow-empty', '-m', 'agent commit']);
+          commitAuthor = (await execFile('git', ['-C', root!, 'log', '-1', '--format=%an <%ae>'])).stdout.trim();
+          commitTrailers = (await execFile('git', ['-C', root!, 'log', '-1', '--format=%(trailers:only,unfold)'])).stdout.trim();
+          engineMessage = withDaemonCoAuthorTrailer('halt record');
+          return { slug: input.order.slug, status: 'done' };
+        },
+      }),
+    }));
+
+    port.dispatch({ kind: 'work-order', order });
+    await done;
+
+    expect({
+      coAuthor,
+      commitAuthor,
+      commitTrailers,
+      engineMessage,
+    }).toEqual({
+      coAuthor: 'Co-authored-by: example-bot <42+example-bot@users.noreply.github.com>\n',
+      commitAuthor: 'Operator <operator@example.com>',
+      commitTrailers: 'Co-authored-by: example-bot <42+example-bot@users.noreply.github.com>',
+      engineMessage: 'halt record\n\nCo-authored-by: example-bot <42+example-bot@users.noreply.github.com>',
+    });
+  });
+
+  it('persists and forwards the token-unavailable co-author skip without stamping commits', async () => {
+    root = await mkdtemp(join(tmpdir(), 'executor-child-co-author-token-unavailable-'));
+    await execFile('git', ['init', '-b', 'main', root]);
+    await execFile('git', ['-C', root, 'config', 'user.name', 'Operator']);
+    await execFile('git', ['-C', root, 'config', 'user.email', 'operator@example.com']);
+    await execFile('git', ['-C', root, 'commit', '--allow-empty', '-m', 'initial']);
+    const port = new FakePort();
+    const done = runExecutorChild(port, withExecutorBrokerProxies(port, {
+      moduleDir: CHILD_MODULE_DIR,
+      createWorktree: async () => ({ path: root! }),
+      run: makeExecutorChildRun({
+        projectRoot: root,
+        githubBoundary: {
+          runner: vi.fn() as unknown as GhRunner,
+          readCredential: async () => ({ kind: 'configured', tokenFile: '/token' }),
+          readToken: async () => ({ kind: 'unavailable' }),
+        },
+        runFeature: async (input) => {
+          await prepareWorktree(root!, undefined, {
+            events: input.events,
+            dispatchStart: true,
+            dispatchStartTimeoutSeconds: 1,
+          });
+          await execFile('git', ['-C', root!, 'commit', '--allow-empty', '-m', 'agent commit']);
+          await execFile('git', ['-C', root!, 'commit', '--allow-empty', '-m', withDaemonCoAuthorTrailer('halt record')]);
+          return { slug: input.order.slug, status: 'done' };
+        },
+      }),
+    }));
+
+    port.dispatch({ kind: 'work-order', order });
+    await done;
+
+    await expect(readFile(join(root, '.pipeline', 'co-author'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    const commitSubjects = (await execFile('git', ['-C', root, 'log', '-2', '--format=%s'])).stdout.trim().split('\n');
+    const commitBodies = (await execFile('git', ['-C', root, 'log', '-2', '--format=%B'])).stdout;
+    const events = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8'))
+      .trim().split('\n').map((line) => JSON.parse(line));
+    const skips = events.filter((event) => event.type === 'bot_co_author_skipped');
+    const forwarded = port.sent.filter((message) => (
+      (message as { kind?: string; payload?: { type?: string } }).kind === 'event'
+      && (message as { payload?: { type?: string } }).payload?.type === 'bot_co_author_skipped'
+    ));
+    expect({ commitSubjects, skips, forwarded }).toEqual({
+      commitSubjects: ['halt record', 'agent commit'],
+      skips: [expect.objectContaining({ type: 'bot_co_author_skipped', reason: 'token-unavailable' })],
+      forwarded: [{ kind: 'event', scope: 'feature', payload: { type: 'bot_co_author_skipped', reason: 'token-unavailable' } }],
+    });
+    expect(commitBodies).not.toContain('Co-authored-by:');
+  });
+
+  it('persists and forwards the identity-read failure without stamping either child commit', async () => {
+    root = await mkdtemp(join(tmpdir(), 'executor-child-co-author-identity-failure-'));
+    await execFile('git', ['init', '-b', 'main', root]);
+    await execFile('git', ['-C', root, 'config', 'user.name', 'Operator']);
+    await execFile('git', ['-C', root, 'config', 'user.email', 'operator@example.com']);
+    await execFile('git', ['-C', root, 'commit', '--allow-empty', '-m', 'initial']);
+    const port = new FakePort();
+    let haltCommitMessage = '';
+    const done = runExecutorChild(port, withExecutorBrokerProxies(port, {
+      moduleDir: CHILD_MODULE_DIR,
+      createWorktree: async () => ({ path: root! }),
+      run: makeExecutorChildRun({
+        projectRoot: root,
+        githubBoundary: {
+          runner: (async () => { throw new Error('identity unavailable'); }) as GhRunner,
+          readCredential: async () => ({ kind: 'configured', tokenFile: '/token' }),
+          readToken: async () => ({ kind: 'token', token: 'secret' }),
+        },
+        runFeature: async (input) => {
+          await prepareWorktree(root!, undefined, {
+            events: input.events,
+            dispatchStart: true,
+            dispatchStartTimeoutSeconds: 1,
+          });
+          await execFile('git', ['-C', root!, 'commit', '--allow-empty', '-m', 'agent commit']);
+          haltCommitMessage = withDaemonCoAuthorTrailer('halt record');
+          await execFile('git', ['-C', root!, 'commit', '--allow-empty', '-m', haltCommitMessage]);
+          return { slug: input.order.slug, status: 'done' };
+        },
+      }),
+    }));
+
+    port.dispatch({ kind: 'work-order', order });
+    await done;
+
+    const commitSubjects = (await execFile('git', ['-C', root, 'log', '-2', '--format=%s'])).stdout.trim().split('\n');
+    const commitBodies = (await execFile('git', ['-C', root, 'log', '-2', '--format=%B'])).stdout;
+    const events = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8'))
+      .trim().split('\n').map((line) => JSON.parse(line));
+    const skips = events.filter((event) => event.type === 'bot_co_author_skipped');
+    const forwarded = port.sent.filter((message) => (
+      (message as { kind?: string; payload?: { type?: string } }).kind === 'event'
+      && (message as { payload?: { type?: string } }).payload?.type === 'bot_co_author_skipped'
+    ));
+    expect({ commitSubjects, haltCommitMessage, skips, forwarded }).toEqual({
+      commitSubjects: ['halt record', 'agent commit'],
+      haltCommitMessage: 'halt record',
+      skips: [expect.objectContaining({ type: 'bot_co_author_skipped', reason: 'identity-read-failed' })],
+      forwarded: [{ kind: 'event', scope: 'feature', payload: { type: 'bot_co_author_skipped', reason: 'identity-read-failed' } }],
+    });
+    expect(commitBodies).not.toContain('Co-authored-by:');
+  });
+
+  it('does not stamp or emit a co-author skip when the child bot is unconfigured', async () => {
+    root = await mkdtemp(join(tmpdir(), 'executor-child-co-author-unconfigured-'));
+    await execFile('git', ['init', '-b', 'main', root]);
+    await execFile('git', ['-C', root, 'config', 'user.name', 'Operator']);
+    await execFile('git', ['-C', root, 'config', 'user.email', 'operator@example.com']);
+    await execFile('git', ['-C', root, 'commit', '--allow-empty', '-m', 'initial']);
+    const port = new FakePort();
+    const done = runExecutorChild(port, withExecutorBrokerProxies(port, {
+      moduleDir: CHILD_MODULE_DIR,
+      createWorktree: async () => ({ path: root! }),
+      run: makeExecutorChildRun({
+        projectRoot: root,
+        githubBoundary: {
+          runner: vi.fn() as unknown as GhRunner,
+          readCredential: async () => ({ kind: 'unconfigured' }),
+          readToken: vi.fn(),
+        },
+        runFeature: async (input) => {
+          await prepareWorktree(root!, undefined, {
+            events: input.events,
+            dispatchStart: true,
+            dispatchStartTimeoutSeconds: 1,
+          });
+          await execFile('git', ['-C', root!, 'commit', '--allow-empty', '-m', 'agent commit']);
+          await execFile('git', ['-C', root!, 'commit', '--allow-empty', '-m', withDaemonCoAuthorTrailer('halt record')]);
+          return { slug: input.order.slug, status: 'done' };
+        },
+      }),
+    }));
+
+    port.dispatch({ kind: 'work-order', order });
+    await done;
+
+    await expect(readFile(join(root, '.pipeline', 'co-author'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    const commitSubjects = (await execFile('git', ['-C', root, 'log', '-2', '--format=%s'])).stdout.trim().split('\n');
+    const commitBodies = (await execFile('git', ['-C', root, 'log', '-2', '--format=%B'])).stdout;
+    const events = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8'))
+      .trim().split('\n').map((line) => JSON.parse(line));
+    const skips = events.filter((event) => event.type === 'bot_co_author_skipped');
+    const forwarded = port.sent.filter((message) => (
+      (message as { kind?: string; payload?: { type?: string } }).kind === 'event'
+      && (message as { payload?: { type?: string } }).payload?.type === 'bot_co_author_skipped'
+    ));
+    expect({ commitSubjects, skips, forwarded }).toEqual({
+      commitSubjects: ['halt record', 'agent commit'],
+      skips: [],
+      forwarded: [],
+    });
+    expect(commitBodies).not.toContain('Co-authored-by:');
+  });
+
   it('writes the shipped record with the pin derived from the child module directory', async () => {
     root = await mkdtemp(join(tmpdir(), 'executor-child-shipped-record-'));
     await mkdir(join(root, '.docs', 'plans'), { recursive: true });

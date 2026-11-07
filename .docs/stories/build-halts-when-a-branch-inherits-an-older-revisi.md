@@ -68,8 +68,9 @@ tampering to pass.
 - Given an accepted inheritance, when the acceptance is explained, then it rests on either
   byte-equality with the base ref's copy or on the branch's own commit range containing no change to
   the path — both derived from a ref the agent does not write.
-- Given the branch legitimately amends an artifact whose stem names its **own** feature, when the
-  seal is verified, then the existing self-amendment reporting path is reached unchanged and the
+- Given the branch legitimately amends its **own** artifact (for a feature without an artifact
+  manifest, one whose stem names the feature; for a feature with one, a listed artifact of a protected
+  kind), when the seal is verified, then the existing self-amendment reporting path is reached unchanged and the
   amendment is still reported durably.
 
 #### Negative Paths

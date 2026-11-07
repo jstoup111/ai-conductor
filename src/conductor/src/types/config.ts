@@ -1,6 +1,7 @@
 import type { ComplexityTier, EnforcementLevel, StepName, Phase } from './steps.js';
-import type { BUILD_REVIEW_RUBRIC_IDS } from '../engine/build-review-registry.js';
-import type { BuildReviewSeverity } from '../engine/build-review-domain.js';
+import type { BuildReviewSeverity } from './build-review.js';
+
+export const BUILD_REVIEW_RUBRIC_IDS = ['testQuality', 'security', 'implementationQuality'] as const;
 
 /**
  * Claude's native reasoning effort levels — set per invocation via
@@ -269,6 +270,15 @@ export interface OtelHeaderEnvironmentReference {
   env: string;
 }
 
+/** Command reference for an OTLP HTTP header value, resolved when telemetry is sent. */
+export interface OtelHeaderCommandReference {
+  command: string[];
+  prefix?: string;
+  cache_seconds?: number;
+}
+
+export type OtelHeaderReference = OtelHeaderEnvironmentReference | OtelHeaderCommandReference;
+
 /** Toggles for provenance fields exported with OpenTelemetry traces. */
 export interface OtelProvenanceConfig {
   commit?: boolean;
@@ -299,8 +309,8 @@ export interface OtelConfig {
   file?: string;
   /** OTLP wire protocol. Defaults to 'http/protobuf' (port 4318). */
   protocol?: 'http/protobuf' | 'grpc';
-  /** OTLP HTTP headers whose values are read from the process environment. */
-  headers?: Record<string, OtelHeaderEnvironmentReference>;
+  /** OTLP HTTP headers whose values are resolved from an environment variable or command. */
+  headers?: Record<string, OtelHeaderReference>;
   /** Optional metric project identity. Defaults to the project root basename. */
   project_name?: string;
   /** Stable worker identity for daemon-scoped metric Resources. */
@@ -405,17 +415,6 @@ export interface GateCodeValidityConfig {
 export interface RetryRoutingConfig {
   /** Master on/off switch for retry classify rerun-vs-route. Defaults to true. */
   enabled?: boolean;
-}
-
-/**
- * Retired coverage-binding judge settings. Still accepted and validated so
- * existing configs load, but ignored: the coverage_binding step is a no-op.
- */
-export interface CoverageBindingConfig {
-  judge?: {
-    enabled?: boolean;
-    batch_size?: number;
-  };
 }
 
 /** Per-project opt-in for declaring selected feature steps inapplicable. */
@@ -564,6 +563,22 @@ export interface HarnessConfig {
   /** Exact template region bytes keyed by the declared custom step that owns them. */
   pr_template_region_owners?: Record<string, string>;
   complexity?: Record<string, never>;
+  /**
+   * PRD-audit remediation limits. A positive integer applies to every tier;
+   * a tier map selectively overrides the S/M/L defaults.
+   */
+  prd_audit?: {
+    max_remediation_laps?: number | Partial<Record<ComplexityTier, number>>;
+    max_appended_tasks?: number;
+    max_appended_ratio?: number;
+    halt_on_any_plan_gap?: boolean;
+  };
+  /** As-built remediation policy and its optional tier-aware lap limits. */
+  architecture_review_as_built?: {
+    checks?: Record<string, { tiers?: ComplexityTier[] }>;
+    remediation?: { enabled?: boolean };
+    max_remediation_laps?: number | Partial<Record<ComplexityTier, number>>;
+  };
   /** User-level global state — loaded from ~/.ai-conductor/config.yml. */
   conductor?: ConductorConfig;
   /** Preferred markdown viewer — user-level default, project can override. */
@@ -642,8 +657,6 @@ export interface HarnessConfig {
    * runtime resolution (not this type). See `RetryRoutingConfig`.
    */
   retry_routing?: RetryRoutingConfig;
-  /** Pre-BUILD criterion-to-Done-when binding judge. Absent → disabled. */
-  coverage_binding?: CoverageBindingConfig;
   /** Per-project opt-in for declaring selected feature steps inapplicable. */
   feature_applicability?: FeatureApplicabilityConfig;
   /**
@@ -812,6 +825,10 @@ export interface HarnessConfig {
    * `steps.build_review.disable: true` is rejected by `validateConfig()`.
    */
   build_review?: BuildReviewConfig;
+  /** Optional prompt-character budget for the plan-review runner. */
+  plan_review?: {
+    max_prompt_chars?: number;
+  };
   /**
    * CI watch feature that observes shipped PRs' CI and drives bounded
    * auto-remediation of red ships. Absent → enabled (true, fail-safe).
@@ -840,6 +857,8 @@ export interface StackedPrsConfig {
   enabled?: boolean;
   /** Maximum number of stacked plan slices. Default: 1 when configured. */
   max_slices?: number;
+  /** Optional cap on feature-repair restack cascades, globally or by complexity tier. */
+  max_restack_cascades?: number | Partial<Record<'S' | 'M' | 'L', number>>;
   /** Opt in to routed whole-feature remediation; absent remains dark. */
   route_whole_feature_fixes?: boolean;
 }

@@ -69,6 +69,8 @@ Operators can choose Codex models for daemon work, but Astra is not represented 
 ## Key Decisions & Rationale
 
 - Astra is opt-in because the operator requested configurability rather than a default-policy migration.
+
+> **Amended 2026-10-25 by codex-steps-resolve-the-newest-catalog-model-per-t (operator decision, composer DECIDE):** Astra remains opt-in for every default step model and the default fallback ladder, but it is now the top rung of Codex's automatic retry escalation (`adr-2026-10-25-codex-model-floors-upgraded-from-cli-catalog` D1).
 - Support includes cost accounting and failure behavior because dispatch forwarding alone would leave an incomplete and potentially misleading operator experience.
 - Existing defaults remain stable to avoid changing cost and capability choices for operators who do not opt in.
 

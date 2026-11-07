@@ -1,10 +1,11 @@
+// Covers: task:3
 import { describe, expect, it } from 'vitest';
 import type { InvokeResult } from '../../src/execution/llm-provider.js';
 import {
   ProviderSetupUnavailableError,
   isProviderSetupUnavailableError,
   normalizeProviderSetupUnavailable,
-} from '../../src/engine/provider-setup-failure.js';
+} from '../../src/execution/provider-setup-failure.js';
 
 describe('provider setup failure normalization', () => {
   const unavailable = {

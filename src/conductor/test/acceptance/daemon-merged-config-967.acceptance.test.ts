@@ -187,7 +187,7 @@ describe('#1039 Story 4 — daemon Codex readiness timeout composition', () => {
     expect(result.error).toBeUndefined();
     const registry = registeredProviderRoots[0];
     expect(registry).toBeDefined();
-    expect(codexFactory).toHaveBeenCalledWith({ codexDoctorTimeoutMs: 2_500 });
+    expect(codexFactory).toHaveBeenCalledWith(expect.objectContaining({ codexDoctorTimeoutMs: 2_500 }));
     expect(daemonResolvedConfigs[0]).toMatchObject({
       codex_doctor_timeout_seconds: 2.5,
       harness_self_host: { auth_park_timeout_minutes: 7 },

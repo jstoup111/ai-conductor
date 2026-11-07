@@ -16,6 +16,9 @@ describe('daemon halt-PR reconciliation live operation composition', () => {
     let committedOwner = 'alice';
     const gh = vi.fn(async () => ({ stdout: '' }));
     const git = vi.fn(async (args: string[]) => {
+      if (args[1] === 'main:.docs/owned-halt/manifest.json') {
+        return { exitCode: 1, stdout: '', stderr: 'missing' };
+      }
       expect(args).toEqual(['show', 'main:.docs/intake/owned-halt.md']);
       return { exitCode: 0, stdout: `Owner: ${committedOwner}\n`, stderr: '' };
     });
@@ -48,7 +51,7 @@ describe('daemon halt-PR reconciliation live operation composition', () => {
     }, operations)).resolves.toMatchObject({ kind: 'refused', reason: 'other-owner' });
 
     expect(resolveMachineOwner).toHaveBeenCalledTimes(2);
-    expect(git).toHaveBeenCalledTimes(2);
+    expect(git).toHaveBeenCalledTimes(4);
     expect(gh).toHaveBeenCalledTimes(1);
   });
 

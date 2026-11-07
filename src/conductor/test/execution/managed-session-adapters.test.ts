@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 import { describe, expect, it, vi } from 'vitest';
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import { CodexProvider } from '../../src/execution/codex-provider.js';
@@ -11,6 +13,7 @@ const piEnvironment: PiEnvironment = {
     isFile: () => path === '/test-home/.agents/skills/HARNESS.md',
     isDirectory: () => false,
   }),
+  access: async () => {},
   env: {},
   homeDir: () => '/test-home',
   cwd: () => '/test-project',
@@ -43,19 +46,19 @@ describe('managed session adapter environments', () => {
   it.each([
     ['claude', () => {
       const calls: Array<{ args: readonly string[]; env?: NodeJS.ProcessEnv }> = [];
-      return { provider: new ClaudeProvider(undefined, ((_file: string, args: readonly string[], launch: { env?: NodeJS.ProcessEnv }) => {
+      return { provider: new ClaudeProvider(dispatchGitGuard, undefined, ((_file: string, args: readonly string[], launch: { env?: NodeJS.ProcessEnv }) => {
         calls.push({ args, env: launch.env }); return Promise.resolve(completeClaude());
       }) as never), calls };
     }],
     ['codex', () => {
       const calls: Array<{ args: readonly string[]; env?: NodeJS.ProcessEnv }> = [];
-      return { provider: new CodexProvider(vi.fn(async () => ({ stdout: JSON.stringify({ schemaVersion: 1, auth: { selectedMode: 'cached-login', configured: true }, transport: { authenticated: true } }), exitCode: 0 })) as never, 'codex', undefined, ((_file: string, args: readonly string[], launch: { env?: NodeJS.ProcessEnv }) => {
+      return { provider: new CodexProvider(dispatchGitGuard, vi.fn(async () => ({ stdout: JSON.stringify({ schemaVersion: 1, auth: { selectedMode: 'cached-login', configured: true }, transport: { authenticated: true } }), exitCode: 0 })) as never, 'codex', undefined, ((_file: string, args: readonly string[], launch: { env?: NodeJS.ProcessEnv }) => {
         calls.push({ args, env: launch.env }); return Promise.resolve(completeCodex());
       }) as never), calls };
     }],
     ['pi', () => {
       const calls: Array<{ args: readonly string[]; env?: NodeJS.ProcessEnv }> = [];
-      return { provider: new PiProvider('pi', ((_file: string, args: readonly string[], launch: { env?: NodeJS.ProcessEnv }) => {
+      return { provider: new PiProvider(dispatchGitGuard, 'pi', ((_file: string, args: readonly string[], launch: { env?: NodeJS.ProcessEnv }) => {
         calls.push({ args, env: launch.env }); return Promise.resolve(completePi());
       }) as never, piEnvironment), calls };
     }],

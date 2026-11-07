@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "slug": "daemon-log-lines-have-inconsistent-leading-spacing",
+  "artifacts": [
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/daemon-log-lines-have-inconsistent-leading-spacing.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/daemon-log-lines-have-inconsistent-leading-spacing.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/daemon-log-lines-have-inconsistent-leading-spacing.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/daemon-log-lines-have-inconsistent-leading-spacing.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/daemon-log-lines-have-inconsistent-leading-spacing.md"
+    }
+  ]
+}

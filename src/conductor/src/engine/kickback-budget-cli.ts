@@ -2,30 +2,35 @@ import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { KICKBACK_BUDGET_GATES, type KickbackBudgetDispatch } from '../cli.js';
+import { KICKBACK_BUDGET_GATES, type KickbackBudgetDispatch } from './kickback-budget-command.js';
 import { appendCloseoutEvent, appendKickbackBudgetAuthorizationEvent, readKickbackBudgetAuthorizationEvents } from './closeout-events.js';
 import { EventPersister } from './event-persister.js';
 import { AuditTrailWriter } from './audit-trail.js';
-import { ConductorEventEmitter } from '../ui/events.js';
-import { dispatchDaemonPark } from './daemon-park-cli.js';
+import { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { applyKickbackBudgetAdjustment, discardPendingKickbackBudgetAdjustment, isUnreadableKickbackGate, isUnreadableKickbackLedger, readKickbackLedger, stageKickbackBudgetAdjustment, unreadableKickbackGates, type KickbackBudgetAdjustment, type KickbackGateEntry, type KickbackLedger } from './kickback-ledger.js';
 import { kickbackBudgetView, renderKickbackBudgetView, withPendingGrowth, type KickbackPlanGrowthView } from './kickback-budget-view.js';
-import { resolveMainRepoRoot, isOperatorParked } from './park-marker.js';
+import { createOwnedPark, releaseOwnedPark, resolveMainRepoRoot } from './park-marker.js';
 import { isAcceptableOperatorRationale, resolveCliFeatureWorktree, resolveMachineOperatorIdentity } from './cli-operator-authority.js';
 import { HALT_CLASS_MARKER } from './halt-marker.js';
 import { RECOVERABLE_CAP_HALT_CLASS_BY_GATE } from './halt-classification.js';
 import { readKickbackHaltGeneration } from './daemon-rekick.js';
 import { loadConfig } from './config.js';
-import { kickbackBudgetFallbackLimit, readPlanGrowthBudget } from './remediation-caps.js';
+import { kickbackBudgetFallbackLimit, readPlanGrowthBudget, resolveRemediationLapAllowance, type RemediationLapAllowance } from './remediation-caps.js';
+import { readState } from './state.js';
 import { childStateExists, parseChildId, type ChildId } from './child-context.js';
 import { resolveActiveChildForCurrentFeature } from './child-cursor.js';
 import { resolveExecutionChild } from './routing/execution-child.js';
-import { applyCascadeAdjustment, MAX_RESTACK_CASCADES_PER_CHILD, readCascadeCounts } from './restack/cascade-cap.js';
+import { applyCascadeAdjustment, readCascadeCounts } from './restack/cascade-cap.js';
+import { renderCascadeSummary, resolveCascadeAllowanceForWorktree, type RestackCascadeAllowance } from './restack/cascade-allowance.js';
 import type { HarnessConfig } from '../types/config.js';
 import type { ConductorEvent } from '../types/events.js';
 
 const GATES = new Set<string>(KICKBACK_BUDGET_GATES);
 const WHOLE_FEATURE_GATES = new Set(['prd_audit', 'architecture_review_as_built', 'manual_test']);
+
+function childCursorRefusal(cursor: Awaited<ReturnType<typeof resolveActiveChildForCurrentFeature>>): string {
+  return cursor.kind === 'topology-unavailable' ? `${cursor.kind}: ${cursor.cause}` : cursor.kind;
+}
 
 function defaultsToExecutionChild(gate: string | undefined): boolean {
   return gate !== undefined && !WHOLE_FEATURE_GATES.has(gate) && gate === 'build_review';
@@ -37,20 +42,38 @@ async function executionChildFor(worktree: string): Promise<ChildId | undefined>
   const execution = resolveExecutionChild(cursor, 'kickback-budget');
   return 'target' in execution ? execution.target.child : undefined;
 }
-async function defaultsFor(worktree: string): Promise<Record<string, number>> {
+interface BudgetDefaults {
+  limits: Record<string, number>;
+  allowances: Partial<Record<string, RemediationLapAllowance>>;
+  restackAllowance: RestackCascadeAllowance;
+}
+
+async function defaultsFor(worktree: string): Promise<BudgetDefaults> {
   const loaded = await loadConfig(worktree);
   const config = loaded.ok ? loaded.config : {} as HarnessConfig;
-  return Object.fromEntries(
-    [...GATES].map((gate) => [
+  const state = await readState(join(worktree, '.pipeline', 'conduct-state.json'));
+  const tier = state.ok ? state.value.complexity_tier : undefined;
+  const restackAllowance = await resolveCascadeAllowanceForWorktree(worktree);
+  const allowances = Object.fromEntries(
+    ['prd_audit', 'architecture_review_as_built'].map((gate) => [
       gate,
-      gate === 'restack' ? MAX_RESTACK_CASCADES_PER_CHILD : kickbackBudgetFallbackLimit(gate, config),
+      resolveRemediationLapAllowance(gate as 'prd_audit' | 'architecture_review_as_built', config, tier),
     ]),
-  );
+  ) as Partial<Record<string, RemediationLapAllowance>>;
+  return {
+    allowances,
+    restackAllowance,
+    limits: Object.fromEntries(
+    [...GATES].map((gate) => [
+      gate, gate === 'restack' ? restackAllowance.limit : kickbackBudgetFallbackLimit(gate, config, tier),
+    ]),
+    ),
+  };
 }
 
 /** Resolve the shared plan-growth accounting view without consulting halt prose. */
-async function planGrowthViewFor(worktree: string, ledger: KickbackLedger): Promise<KickbackPlanGrowthView> {
-  const config = await loadConfig(worktree);
+async function planGrowthViewFor(worktree: string, root: string, ledger: KickbackLedger): Promise<KickbackPlanGrowthView> {
+  const config = await loadConfig(root);
   const budget = await readPlanGrowthBudget(worktree, config.ok ? config.config : {} as HarnessConfig, { persist: false });
   return withPendingGrowth({
     ...budget.growth,
@@ -99,7 +122,7 @@ async function reconcilePendingAdjustments(worktree: string, slug: string, child
   let eventText = '';
   try { eventText = await readKickbackBudgetAuthorizationEvents(worktree); }
   catch { throw new Error('authorization event ledger is unreadable'); }
-  const defaults = await defaultsFor(worktree);
+  const { limits: defaults, restackAllowance } = await defaultsFor(worktree);
   for (const [gate, entry] of Object.entries(ledger.gates)) {
     const pending = entry.pendingAdjustment;
     if (!pending || isUnreadableKickbackGate(ledger, gate)) continue;
@@ -110,7 +133,7 @@ async function reconcilePendingAdjustments(worktree: string, slug: string, child
     const recorded = records.some((event) => event.adjustmentId === pending.id);
     if (!recorded) await discardPendingKickbackBudgetAdjustment(worktree, gate, pending.id, child);
     else {
-      if (gate === 'restack') await applyRestackCascadeAdjustment(worktree, slug, pending, entry);
+      if (gate === 'restack') await applyRestackCascadeAdjustment(worktree, slug, pending, entry, restackAllowance.limit);
       await applyKickbackBudgetAdjustment(worktree, gate, pending, gate === 'restack' ? pending.beforeLimit : (defaults[gate] ?? 1), child);
     }
   }
@@ -128,6 +151,7 @@ async function applyRestackCascadeAdjustment(
   slug: string,
   adjustment: KickbackBudgetAdjustment,
   entry: KickbackGateEntry,
+  defaultLimit: number,
 ): Promise<void> {
   const originatingChild = restackOriginatingChild(entry);
   if (originatingChild === undefined) throw new Error('restack cap evidence does not name an originating child');
@@ -138,7 +162,7 @@ async function applyRestackCascadeAdjustment(
     afterConsumed: adjustment.afterConsumed,
     beforeLimit: adjustment.beforeLimit,
     afterLimit: adjustment.afterLimit,
-  });
+  }, defaultLimit);
   if (changed.kind === 'stale') throw new Error('cascade counts changed concurrently; no resume authorization was installed');
   if (changed.kind === 'unreadable') throw new Error(changed.detail);
 }
@@ -157,7 +181,7 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
   if (command.action === 'inspect') {
     const cursor = await resolveActiveChildForCurrentFeature(worktree);
     if (cursor.kind !== 'no-child' && cursor.kind !== 'active' && cursor.kind !== 'repair-pending') {
-      print(`kickback-budget: active child resolution refused (${cursor.kind}).`);
+      print(`kickback-budget: active child resolution refused (${childCursorRefusal(cursor)}).`);
       return 1;
     }
     // `inspect` has no gate selector, so retain its established region view;
@@ -187,10 +211,10 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     const childLedger = child === undefined ? flatLedger : await readKickbackLedger(worktree, child);
     if (isUnreadableKickbackLedger(flatLedger) || isUnreadableKickbackLedger(childLedger)) { print('kickback-budget: ledger is unreadable.'); return 1; }
     const ledgerFor = (gate: string) => WHOLE_FEATURE_GATES.has(gate) ? flatLedger : childLedger;
-    const defaults = await defaultsFor(worktree);
+    const { limits: defaults, allowances, restackAllowance } = await defaultsFor(worktree);
     // Resolve plan growth from the same authored-task cap as remediation. A
     // read-only inspect deliberately does not reconcile or persist it.
-    const planGrowth = await planGrowthViewFor(worktree, flatLedger);
+    const planGrowth = await planGrowthViewFor(worktree, root, flatLedger);
     // adr-2026-08-31 decision 3: one malformed gate is reported as unavailable;
     // its healthy siblings still render their authoritative values.
     const unavailable = child === undefined
@@ -211,19 +235,37 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
         ? flatLedger.pendingRepair?.charges[gate]?.laps ?? 0
         : 0;
     const views = readable.map((gate) => kickbackBudgetView(
-      ledgerFor(gate).gates[gate], gate, defaults[gate], planGrowth, liveHaltGeneration, pendingLaps(gate),
+      ledgerFor(gate).gates[gate], gate, defaults[gate], planGrowth, liveHaltGeneration, pendingLaps(gate), allowances[gate],
     ));
+    const cascadeState = child === undefined ? undefined : await readCascadeCounts(worktree, command.feature);
+    const cascadeSummary = cascadeState?.kind === 'counts'
+      ? renderCascadeSummary(cascadeState.counts, restackAllowance)
+      : undefined;
+    const unavailableCascade = cascadeState?.kind === 'unreadable'
+      ? cascadeState.detail
+      : undefined;
     const human = [
         ...views.map((view) => renderKickbackBudgetView(
           ledgerFor(view.gate).gates[view.gate], view.gate, defaults[view.gate], planGrowth, liveHaltGeneration,
-          undefined, pendingLaps(view.gate),
+          undefined, pendingLaps(view.gate), allowances[view.gate],
         )),
         ...unavailable.map((gate) => `${gate}: budget unavailable (durable entry failed validation)`),
+        ...(cascadeSummary === undefined
+          ? unavailableCascade === undefined ? [] : [`Restack cascades: unavailable (${unavailableCascade})`]
+          : [cascadeSummary.inspectLines.join('\n')]),
       ].join('\n\n');
     print(command.format === 'json'
-      ? JSON.stringify({ feature: command.feature, ...(child === undefined ? {} : { child }), gates: views, ...(unavailable.length > 0 ? { unavailableGates: unavailable } : {}) })
+      ? JSON.stringify({
+        feature: command.feature,
+        ...(child === undefined ? {} : { child }),
+        gates: views,
+        ...(unavailable.length > 0 ? { unavailableGates: unavailable } : {}),
+        ...(cascadeSummary === undefined
+          ? unavailableCascade === undefined ? {} : { restackCascades: { unavailable: unavailableCascade } }
+          : { restackCascades: cascadeSummary.json }),
+      })
       : `${child === undefined ? '' : `Child: ${child}\n\n`}${human}`);
-    return unavailable.length > 0 ? 1 : 0;
+    return unavailable.length > 0 || unavailableCascade !== undefined ? 1 : 0;
   }
   if (!deps.isInteractive?.() && deps.isInteractive !== undefined || (deps.isInteractive === undefined && !process.stdin.isTTY)) {
     print('kickback-budget: mutations require an interactive local operator terminal.'); return 2;
@@ -259,7 +301,7 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
   if (restackChild !== undefined) {
     const activeCursor = await resolveActiveChildForCurrentFeature(worktree);
     if (activeCursor.kind !== 'active' && activeCursor.kind !== 'repair-pending') {
-      print(`kickback-budget: active child resolution refused (${activeCursor.kind}).`);
+      print(`kickback-budget: active child resolution refused (${childCursorRefusal(activeCursor)}).`);
       return 1;
     }
     // Restack cap evidence belongs to the cursor range (normally the leaf);
@@ -296,17 +338,20 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
       return 1;
     }
   }
-  const parked = await isOperatorParked(root, command.feature);
-  if (!parked) {
-    const result = await dispatchDaemonPark({ kind: 'park', slug: command.feature }, { cwd: root, out: () => {} });
-    if (result !== 0) { print(`kickback-budget: could not park '${command.feature}'.`); return 1; }
+  let ownedPark: Awaited<ReturnType<typeof createOwnedPark>>;
+  try {
+    ownedPark = await createOwnedPark(root, command.feature);
+  } catch {
+    print(`kickback-budget: could not park '${command.feature}'.`);
+    return 1;
   }
-  const ownsPark = !parked;
+  const ownedParkToken = ownedPark.created ? ownedPark.token : undefined;
+  const parked = !ownedPark.created;
   let staged = false;
   let committed = false;
   let liveHaltGeneration = '';
   try {
-    const defaults = await defaultsFor(worktree);
+    const { limits: defaults, restackAllowance } = await defaultsFor(worktree);
     const remediation = gate !== 'build_review' && gate !== 'restack';
     // D3: machine-scoped identity through the approved user-config → GitHub
     // chain. `GITHUB_ACTOR` is an environment variable any pipeline process can
@@ -320,7 +365,7 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
       const allowance = entry.capEvidence.allowance ?? 'laps';
       const growth = allowance === 'growth';
       const currentLimit = gate === 'restack'
-        ? (cascadeState!.counts.limits?.[String(restackChild!)] ?? MAX_RESTACK_CASCADES_PER_CHILD)
+        ? (cascadeState!.counts.limits?.[String(restackChild!)] ?? restackAllowance.limit)
         : growth
         ? (ledger.effectiveGrowthCap ?? entry.capEvidence.limit)
         : remediation ? (entry.effectiveLapCap ?? entry.capEvidence.limit) : (entry.effectiveLimit ?? defaults[gate]);
@@ -362,7 +407,7 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
       if (isUnreadableKickbackLedger(stagedLedger)) throw new Error('kickback ledger is unreadable');
       const stagedEntry = stagedLedger.gates[gate];
       if (!stagedEntry) throw new Error('current cap evidence is missing or no longer matches the live halt');
-      await applyRestackCascadeAdjustment(worktree, command.feature, adjustment, stagedEntry);
+      await applyRestackCascadeAdjustment(worktree, command.feature, adjustment, stagedEntry, restackAllowance.limit);
     }
     const applied = await applyKickbackBudgetAdjustment(
       worktree,
@@ -373,7 +418,7 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     );
     committed = true;
     const flatLedger = await readKickbackLedger(worktree);
-    const planGrowth = await planGrowthViewFor(worktree, flatLedger);
+    const planGrowth = await planGrowthViewFor(worktree, root, flatLedger);
     print(`${renderKickbackBudgetView(applied, gate, defaults[gate], planGrowth)}${parked ? '\nFeature remains parked; unpark it when ready.' : ''}`);
     return 0;
   } catch (error) {
@@ -381,9 +426,9 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
   } finally {
     // Pre-stage refusals have left no durable change and release the temporary
     // park. Once staged, retain it until the adjustment is fully observable.
-    if (ownsPark && (!staged || committed)) {
-      await dispatchDaemonPark({ kind: 'unpark', slug: command.feature }, { cwd: root, out: () => {} });
-    } else if (ownsPark) {
+    if (ownedParkToken !== undefined && (!staged || committed)) {
+      await releaseOwnedPark(root, command.feature, ownedParkToken);
+    } else if (ownedParkToken !== undefined) {
       print(`kickback-budget: adjustment is staged but incomplete; feature remains parked. Reconcile or unpark '${command.feature}' explicitly after recovery.`);
     }
   }

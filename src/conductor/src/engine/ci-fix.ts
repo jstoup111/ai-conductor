@@ -23,7 +23,7 @@ import {
 } from './autoresolve.js';
 import { makeGitRunner } from './rebase.js';
 import type { CiFailureAttempt } from './rebase.js';
-import type { ProviderSetupExhaustion } from './provider-setup-failure.js';
+import type { ProviderSetupExhaustion } from '../execution/provider-setup-failure.js';
 import { execa } from 'execa';
 import { dispatchTestSuiteCommand } from './test-suite-cli.js';
 import { executeRemoteGit, resolveFeatureRemoteMutation } from './remote-git-operations.js';

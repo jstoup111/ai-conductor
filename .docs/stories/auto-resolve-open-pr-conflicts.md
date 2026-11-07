@@ -178,7 +178,8 @@ sides, since those files are additive by convention.
 #### Negative Paths
 - Given a conflict on the SAME `.docs/` file with divergent content edits on both sides, when
   Tier 1 evaluates it, then keep-both does NOT apply (no blind union of one file) and it falls
-  through to Tier 2.
+  through to Tier 2, unless the file is a feature artifact manifest (`.docs/<name>/manifest.json`):
+  a manifest conflict reaches no tier and stops as needs-human naming the manifest.
 - Given a conflicted path outside `.docs/` (code, config, `src/`), when Tier 1 evaluates it,
   then keep-both never applies regardless of conflict shape (strict path scope).
 - Given a mixed conflict set (one `.docs/` add/add plus one `src/` content conflict), when

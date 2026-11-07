@@ -1,8 +1,11 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:12
 import { describe, expect, it, vi } from 'vitest';
 import { PassThrough } from 'node:stream';
 import { execa, type Options as ExecaOptions, type Result as ExecaResult, type ResultPromise } from 'execa';
 import { CodexProvider, type CodexDoctorRunner } from '../../src/execution/codex-provider.js';
+import { buildProviderAttemptMetadata } from '../../src/engine/provider-execution.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 
 const invokeOptions: InvokeOptions = {
@@ -22,7 +25,7 @@ const readyDoctor: CodexDoctorRunner = async () => ({
 });
 
 function provider(subprocessFactory: (file: string, args: readonly string[], options: ExecaOptions) => ResultPromise) {
-  return new CodexProvider(readyDoctor, 'codex', undefined, subprocessFactory);
+  return new CodexProvider(dispatchGitGuard, readyDoctor, 'codex', undefined, subprocessFactory);
 }
 
 describe('CodexProvider abort handling', () => {
@@ -63,7 +66,8 @@ describe('CodexProvider abort handling', () => {
     });
   });
 
-  it('records the tokens of turns completed before an abort, unpriced', async () => {
+  // Covers: task:6
+  it('records post-spawn abort evidence and leaves a non-zero exit unstamped', async () => {
     const controller = new AbortController();
     const stdout = new PassThrough();
     const subprocessFactory = vi.fn((_file: string, _args: readonly string[], options: ExecaOptions) =>
@@ -84,22 +88,71 @@ describe('CodexProvider abort handling', () => {
     const result = await invocation;
 
     expect(result).toMatchObject({ success: false, output: 'Codex invocation aborted.' });
+    expect(result).not.toHaveProperty('executionDisposition');
     // The cancelled turn's spend is unseen, so no price is applied: cost-unmetered, never $0.
     expect(result.tokenUsage).toEqual({ input: 40, output: 5, cacheRead: 10, numTurns: 1 });
+    expect(buildProviderAttemptMetadata({
+      providerKey: 'codex',
+      result,
+      resolvedModel: 'gpt-5.6-sol',
+    })).toMatchObject({
+      invoked: true,
+      tokenUsage: { input: 40, output: 5, cacheRead: 10, numTurns: 1 },
+    });
+
+    const nonZeroFactory = vi.fn((_file: string, _args: readonly string[], _options: ExecaOptions) =>
+      Promise.resolve({ stdout: 'Codex exited unsuccessfully', stderr: '', exitCode: 1 }) as ResultPromise,
+    );
+    const nonZero = await provider(nonZeroFactory).invoke(invokeOptions);
+
+    expect(nonZeroFactory).toHaveBeenCalledOnce();
+    expect(nonZero).toMatchObject({ success: false, exitCode: 1 });
+    expect(nonZero).not.toHaveProperty('executionDisposition');
   });
 
-  it('does not spawn when already aborted', async () => {
+  // Covers: task:6
+  it('marks an entry abort as not started without spawning', async () => {
     const controller = new AbortController();
     controller.abort();
-    const subprocessFactory = vi.fn();
+    const subprocessFactory = vi.fn((_file: string, _args: readonly string[], _options: ExecaOptions) =>
+      Promise.resolve({ stdout: '{"type":"turn.completed"}', stderr: '', exitCode: 0 }) as ResultPromise,
+    );
+
+    await expect(provider(subprocessFactory).invoke(invokeOptions)).resolves.toMatchObject({ success: true });
+    expect(subprocessFactory).toHaveBeenCalledOnce();
+    subprocessFactory.mockClear();
 
     const result = await provider(subprocessFactory as never).invoke({ ...invokeOptions, abortSignal: controller.signal });
 
-    expect({ success: result.success, output: result.output, calls: subprocessFactory.mock.calls.length }).toEqual({
+    expect({
+      success: result.success,
+      output: result.output,
+      executionDisposition: result.executionDisposition,
+      calls: subprocessFactory.mock.calls.length,
+    }).toEqual({
       success: false,
       output: 'Codex invocation aborted.',
+      executionDisposition: 'not-started',
       calls: 0,
     });
+  });
+
+  // Covers: task:6
+  it('leaves a spawned non-zero exit unstamped', async () => {
+    const subprocessFactory = vi.fn<
+      (file: string, args: readonly string[], options: ExecaOptions) => ResultPromise
+    >()
+      .mockReturnValueOnce(Promise.resolve({ stdout: '{"type":"turn.completed"}', stderr: '', exitCode: 0 }) as ResultPromise)
+      .mockReturnValueOnce(Promise.resolve({ stdout: 'Codex exited unsuccessfully', stderr: '', exitCode: 1 }) as ResultPromise);
+    const codex = provider(subprocessFactory);
+
+    await expect(codex.invoke(invokeOptions)).resolves.toMatchObject({ success: true });
+    expect(subprocessFactory).toHaveBeenCalledOnce();
+    const result = await codex.invoke(invokeOptions);
+
+    expect(subprocessFactory).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ success: false, exitCode: 1 });
+    expect(result).not.toHaveProperty('executionDisposition');
   });
 
   it('leaves subprocess cancellation options absent without an abort signal', async () => {

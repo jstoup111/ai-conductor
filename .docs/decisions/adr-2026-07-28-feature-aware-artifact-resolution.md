@@ -58,6 +58,8 @@ Add a public `resolveArtifactFiles(dir, step, context)` beside the registry and 
 
 The resolver returns both files and a diagnostic reason so a completion failure or dashboard can name ambiguity rather than report a generic absence. It does not write `.pipeline`, `.docs`, or any new manifest.
 
+> **Amended 2026-10-24 by #3405:** For a feature-scoped pattern whose files map to a manifest kind (prd, stories, conflicts, plan, coherence), the resolver now consults a feature's committed artifact manifest (`.docs/<slug>/manifest.json`, `adr-2026-10-24-per-feature-artifact-manifest`) before this ladder. When a manifest exists it is authoritative and the ladder is not consulted. When none exists, the ladder above runs unchanged. A malformed manifest fails closed. Every other pattern, including the architecture-review and plan-review records, resolves as before. The resolver still writes nothing: the manifest is written by composer land, never by resolution.
+
 ### D4 — Generic consumers share resolution; raw globbing remains policy-free
 
 `checkStepCompletion`, the interactive artifact-review path, and `getArtifactStatus` consume `resolveArtifactFiles`. `findArtifactFiles` remains the low-level pattern expander for callers that explicitly need a repository-wide corpus and for resolver internals.

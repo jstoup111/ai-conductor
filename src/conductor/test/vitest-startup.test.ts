@@ -56,6 +56,7 @@ async function writeFakeVitest(path: string, binary: string) {
     '  scope: process.env.AI_CONDUCTOR_TEST_TMP_SCOPE,',
     '  originalTmpdir: process.env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR,',
     '  gitCeiling: process.env.GIT_CEILING_DIRECTORIES,',
+    '  gitExternalDiff: process.env.GIT_EXTERNAL_DIFF,',
     '  nodeOptions: process.env.NODE_OPTIONS,',
     '  managedGhObserverBypass: process.env.CONDUCT_GH_REAL_EXECUTABLE,',
     '}), \'utf8\');',
@@ -116,6 +117,14 @@ describe('run-vitest startup', () => {
     expect(observation.managedGhObserverBypass).toBeUndefined();
   });
 
+  it('does not forward an inherited external Git diff hook to Vitest', async () => {
+    const result = await launch({ GIT_EXTERNAL_DIFF: '/tmp/leaking-diff-hook' });
+    const observation = JSON.parse(await readFile(observationPath, 'utf8')) as Record<string, string | undefined>;
+
+    expect(result.exitCode).toBe(0);
+    expect(observation.gitExternalDiff).toBeUndefined();
+  });
+
   it('fails without either Vitest binary and reclaims its run root', async () => {
     await rm(join(fixtureRoot, 'bin', 'vitest'));
 
@@ -141,6 +150,24 @@ describe('run-vitest startup', () => {
     expect(observation.root).toMatch(new RegExp(`^${join(fixtureRoot, '.vitest-tmp', 'ai-conductor-vitest-run-')}`));
     expect(observation.gitCeiling?.split(delimiter)).toContain(observation.root);
     expect(existsSync(observation.root)).toBe(false);
+  });
+
+  it('replaces an inherited parent scope with its fresh child scope', async () => {
+    const parentScope = join(fixtureRoot, 'parent-run-root');
+    await mkdir(parentScope);
+
+    const result = await launch({
+      TMPDIR: parentScope,
+      AI_CONDUCTOR_TEST_TMP_ROOT: parentScope,
+      AI_CONDUCTOR_TEST_TMP_SCOPE: parentScope,
+      AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR: join(fixtureRoot, 'original-tmpdir'),
+    });
+    const observation = JSON.parse(await readFile(observationPath, 'utf8')) as Record<string, string>;
+
+    expect(result.exitCode).toBe(0);
+    expect(observation.root).not.toBe(parentScope);
+    expect(observation.scope).toBe(observation.root);
+    expect(observation.tmpdir).toBe(observation.root);
   });
 
   it('installs an explicit storage parent before launching Vitest', async () => {

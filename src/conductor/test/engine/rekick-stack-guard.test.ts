@@ -5,13 +5,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
 import { REKICK_SENTINEL, resumeRebaseFirst } from '../../src/engine/daemon-rekick.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const execFile = promisify(execFileCallback);
 
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -25,7 +25,7 @@ async function git(...args: string[]): Promise<string> {
 }
 
 async function seal(positions: readonly number[]): Promise<void> {
-  await writeCoverageBindingEnvelope(repository, {
+  await writeSliceTopologyFixture(repository, {
     version: 1,
     slug: 'demo',
     runId: 'stack-guard',
@@ -55,7 +55,7 @@ async function initializeStack(activeChild: 2 | 3): Promise<void> {
   await mkdir(join(repository, '.ai-conductor'), { recursive: true });
   await writeFile(join(repository, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n');
   await seal([1, 2, 3]);
-  await git('add', '.ai-conductor/config.yml', '.pipeline/coverage-binding.json');
+  await git('add', '.ai-conductor/config.yml');
   await git('commit', '-qm', 'seal stacked region');
 
   const tip = await git('rev-parse', 'HEAD');

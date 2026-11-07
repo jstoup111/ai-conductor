@@ -177,9 +177,9 @@ keeps engine prompts and shipped skills from directing a managed session to a re
 
 ```bash
 ai-conductor build-review findings --feature <slug> [--child <child>] [--json]
-ai-conductor build-review accept --feature <slug> --lap <lap> --finding <id> --rationale <text>
+ai-conductor build-review accept --feature <slug> [--child <child>] --lap <lap> --finding <id> --rationale <text>
 ai-conductor build-review resolve-case --feature <slug> [--child <child>] --case <id> --rationale <text>
-ai-conductor build-review record-reduced-coverage --feature <slug> --lap <lap> --rubric <rubric> --rationale <text>
+ai-conductor build-review record-reduced-coverage --feature <slug> [--child <child>] --lap <lap> --rubric <rubric> --rationale <text>
 ```
 
 `findings` is read-only and renders the current feature's raw and effective build-review findings plus
@@ -190,8 +190,9 @@ case adds `recurs from <cases>; <n> of 3 applied attempts`; a `distinctFrom` dec
 declaring case (`distinct from <case>: <reason>`) and on the named case (`declared distinct by <case>:
 <reason>`). A missing
 case store is a successful listing with no autonomous cases. An unreadable or unsupported case store makes
-`findings` name the store and exit 1 rather than silently omitting its cases. `--child` reads that
-child's case store instead of the feature's. `findings` also lists each carried source (its case,
+`findings` name the store and exit 1 rather than silently omitting its cases. `--child` scopes the read to that
+child's aggregate (`.pipeline/children/<child>/build-review.json`), kickback ledger, and case store;
+operator dispositions stay feature-scoped. `findings` also lists each carried source (its case,
 origin source ids, origin laps, and the origin dispositions' operators and rationales), each
 operator-resolved case (operator, rationale, and time), and each case-store outbox entry the engine has
 not yet delivered; `--json` reports them under `carriedSources`, `operatorResolvedCases`, and
@@ -199,20 +200,33 @@ not yet delivered; `--json` reports them under `carriedSources`, `operatorResolv
 `min_severity` threshold, or downgraded by the adjudicator — with its rubric, severity, reviewer summary,
 and any adjudicator rationale; `--json` reports them under `advisoryFindings` as `id`, `rubric`,
 `severity`, `threshold`, and `origin` (`threshold` or `adjudicated`), omitting summaries and rationales,
-and omits the key when empty. `accept` changes state only from an interactive terminal with
+and omits the key when empty. Human output also lists `Out-of-delta findings` — findings outside
+the lap's [review delta](../explanation/gates.md#later-laps-judge-only-the-unsettled-delta), which
+never block. `findings` reads the same shared effective-verdict resolver the live gate uses. `accept` changes state only from an interactive terminal with
 a resolved local operator identity. It requires the exact current lap identity, canonical finding ID,
 and a non-empty rationale. Acceptance works on every registered rubric — `testQuality`, `security`, and `implementationQuality` —
 because the identity the engine prints is the identity the disposition store accepts back. Stale, unknown, unauthorized, or non-interactive requests are refused without changing
 artifacts and exit 1; successful findings inspection and accepted exact-current findings exit 0.
-A refusal names the check that failed — unreadable aggregate, non-current lap, unknown finding, or a
-disposition-store rejection — and records the same reason on the feature's
-`build_review_disposition_refused` event. `record-reduced-coverage` also requires an interactive
+`accept --child <child>` checks the lap and finding against that child's aggregate and records the
+disposition in the feature's store. A refusal names the check that failed — invalid child id,
+unreadable aggregate, non-current lap, unknown finding, or a disposition-store rejection — and records
+the same reason on the feature's `build_review_disposition_refused` event. Both `findings` and
+`accept` name the aggregate path and whether it is missing, malformed, or unreadable; `findings` also
+names an unreadable disposition store or kickback-ledger gate. When `--child` is omitted and the root
+aggregate is missing on a stacked feature, the message lists the children that have an aggregate and
+asks for `--child <k>`. `record-reduced-coverage` also requires an interactive
 terminal, resolved local operator identity, exact current lap, named rubric, and non-empty rationale.
 It derives the closed infrastructure cause from the current review state; callers cannot supply one.
 It records a decision only when that rubric currently has an exhausted mechanical infrastructure
 fault, or a current `projection-oversized` fault (which halts without consuming that allowance).
 Judged, skipped, duplicate, unknown-rubric, allowance-remaining for every other cause, and stale-review
-requests are refused without changing the decision state.
+requests are refused without changing the decision state. `record-reduced-coverage --child <child>`
+checks the lap, rubric, and mechanical-fault allowance against that child's aggregate and kickback
+ledger (`.pipeline/children/<child>/`) and records the decision in the feature's store. Each refusal
+names its cause and exits 1: an invalid child id; the aggregate path and whether it is missing,
+malformed, or unreadable (with the same `--child <k>` hint as `accept`); the requested and current
+laps; the consumed allowance and the ledger it was read from (`<n> of 3 consumed in <ledger>`); an
+unreadable kickback-ledger gate; or a disposition-store rejection.
 
 `resolve-case` resolves one open remediation case in the feature's case store, or in the child's with
 `--child`. It has the same interactive-terminal and local-operator-identity gate as `accept` and
@@ -224,7 +238,7 @@ empty rationale, an invalid child id, a non-interactive session, an unresolved i
 mismatch is refused without changing the store and exits 1. A resolved case can carry acceptance to
 later same-substance findings; see
 [post-join build-review adjudication](../explanation/gates.md#post-join-build-review-adjudication).
-Recovery use: [open action case blocks build_review](../runbooks/stalled-or-stuck-feature.md#build_review-halted-on-an-open-action-case).
+Recovery use: [open action case blocks build_review](../runbooks/stalled-or-stuck-feature.md#build_review-halted-on-an-open-action-or-deferral-case).
 
 ## `ai-conductor done-when`
 
@@ -282,7 +296,7 @@ provisioning wires it automatically.
 
 On any branch other than `feat/c<k>/<slug>` it exits 0 without reading state. On a child branch it
 collects the task ids from the message and `.pipeline/current-task`, then resolves each id's owning child
-from the coverage-binding envelope's slice membership plus the remediation-task child map in
+from the sealed plan's slice membership plus the remediation-task child map in
 `.pipeline/engine-state.json`.
 
 | Exit | Meaning | Hook behavior |
@@ -452,7 +466,7 @@ Runs the background build/ship loop, or manages one. Procedures are in
 deliberately checked before every daemon dispatcher — without it, `daemon --help` would be treated as
 an unknown flag and launch a daemon run.
 
-A non-flag token after `daemon` that is not one of `status`, `logs`, `park`, `unpark`,
+A non-flag token after `daemon` that is not one of `status`, `logs`, `stories-refs`, `park`, `unpark`,
 `reclaim-worktree`, `start`, `stop`, `restart`, `connect`, `debug`, `pause`, `resume` prints
 `conduct daemon: unknown subcommand '<token>'.` plus the daemon help to stderr and exits 1.
 
@@ -474,7 +488,7 @@ ai-conductor daemon [--concurrency <n>] [--max-items <n>] [--continuous] [--max-
 | `--idle-poll <seconds>` | integer | `60` | Seconds between polls when the backlog is empty. |
 | `--max-idle-polls <n>` | integer | unbounded | Stop after this many consecutive empty polls; dispatching a feature restarts the count. |
 | `--no-watch` | boolean | watcher on | Drops the HALT-marker filesystem watcher and relies on polling alone. |
-| `--completed`, `--all` | boolean | `false` | Include already-processed features in the startup dashboard's console output. The persisted log sink never includes them. |
+| `--completed`, `--all` | boolean | `false` | Print the full startup dashboard to the console, including already-processed features, instead of the compact width-clipped render. The persisted log sink never includes processed rows. See [read the startup dashboard](../guides/running-the-daemon.md#read-the-startup-dashboard). |
 
 Every integer flag reads the next token, and a token beginning with `--` is treated as absent. So
 `ai-conductor daemon --max-items --continuous` silently uses the default for `--max-items` rather than
@@ -504,8 +518,8 @@ the latest RSS as `mem <MB> at <timestamp>`. It then prints a `GATED:` section f
 reason, and remediation text, followed by the snapshot age. An empty valid snapshot prints that no
 specs are blocked. If the snapshot is missing, malformed, or unreadable, status reports blocked
 state unknown rather than implying an all-clear. This is a read-only local-file view: it does not
-invoke Git, GitHub, or the network. The daemon startup dashboard does not yet render this section;
-that UI work is tracked in [#1332](https://github.com/jstoup111/ai-conductor/issues/1332).
+invoke Git, GitHub, or the network. The daemon startup dashboard lists the same specs under
+`BLOCKED (<n>)` from its own startup discovery pass.
 
 A `SHIPPED PRS:` section follows `BLOCKED`. It reads the newest `shipped_pr_readiness` event per PR
 from `.daemon/events.jsonl` and lists each PR still in `.daemon/mergeable-watch.jsonl` whose verdict
@@ -515,7 +529,7 @@ unknown`. It reads local files only. Verdicts are defined in
 [shipped-PR readiness](../guides/running-the-daemon.md#shipped-pr-readiness).
 
 For every in-progress feature it also prints a `PLAN GROWTH [<slug>]:` line reading the feature's
-kickback ledger and resolved `prd_audit` cap. For a stacked feature the line reads
+kickback ledger and the `prd_audit` cap resolved from the main checkout's configuration. For a stacked feature the line reads
 `PLAN GROWTH [<slug> child <k>/<N>]:`, and its per-gate budgets come from the active child's ledger. It shows the plan's authored task count, the number of tasks added
 so far (broken down by the gate that added them, when any), and how many remain under the cap.
 The authored count comes from the feature's resolved plan — the same selection the daemon uses — so
@@ -530,6 +544,12 @@ For an unresolved plan the pending segment replaces `remaining` and carries no m
 never rewrites the ledger.
 When the growth accounting cannot be read, the line reads `PLAN GROWTH [<slug>]: unavailable (<error>)`
 and the budget lines still print.
+
+A stacked feature with an active child also prints `RESTACK CASCADES [<slug>]: <allowance>; <children>`.
+`<allowance>` is the [restack cascade allowance](configuration.md#restack) phrase, for example
+`tier L allowance 8 (default)`; `<children>` is `none charged` or
+`child <k> <consumed>/<limit>[ (raised)], ...`. An unreadable cascade ref prints
+`RESTACK CASCADES [<slug>]: unavailable (<error>)`.
 
 Each in-progress feature also prints one `KICKBACK BUDGET [<slug>]:` line for `prd_audit` and one for
 `architecture_review_as_built`, even before any halt. Each line is the
@@ -601,6 +621,43 @@ Reads `.daemon/daemon.log`.
 `--follow` with `--all` prints `--follow is not supported with --all; showing a static snapshot.` and
 does not follow. A missing log prints `(no daemon log yet for <path>)` and contributes 0. Exit 1 when a
 log is unreadable, or when `--all` is used and the registry cannot be read.
+
+### `daemon stories-refs`
+
+```bash
+ai-conductor daemon stories-refs [--repo <path>]
+```
+
+Read-only. Scans every committed spec at the daemon's pinned base — `origin/<default branch>`, else
+the local default branch — and lists each plan whose Stories reference cannot resolve. Specs are
+read from the committed base tree, not the working tree.
+
+| Flag | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `--repo <path>`, `--repo=<path>` | path | cwd | Repo to scan. Resolved to its main repo root. |
+
+Output:
+
+```text
+stories-refs: scanned <n> specs at <base ref> (<short sha>)
+  • <plan> — <state> — <kind> — reference: <reference> — attempted: <paths|none>
+stories-refs: <n> broken (actionable <n>, halted <n>, parked <n>, shipped <n>, processed <n>)
+```
+
+With no findings, the summary line is replaced by
+`stories-refs: clean — no spec has an unresolvable Stories reference`.
+
+| Field | Values |
+| --- | --- |
+| `<kind>` | `missing` — the referenced or manifest-listed stories path is absent at the base; `unresolvable` — the reference cannot be resolved to a path; `malformed-manifest` — `.docs/<slug>/manifest.json` failed validation. |
+| `<state>` | First match wins: `processed` (`.daemon/processed/<slug>` exists), `shipped` (`.docs/shipped/<slug>.md` at the base), `parked` (operator park), `halted` (`.worktrees/<slug>/.pipeline/HALT` without `DONE`), else `actionable`. |
+| `<reference>` | The plan's `**Stories:**` text, `manifest <path>` for a manifest source, or `(no Stories line; same-stem fallback)`. |
+
+Repair `actionable` findings per [blocked merged spec](../runbooks/stalled-or-stuck-feature.md#blocked-merged-spec).
+
+Exit 0 for any completed scan, including one with findings. Exit 1 with
+`stories-refs: scan failed — <reason>` on stderr when the path is not in a Git repository, the base
+cannot be resolved, or the scan throws.
 
 ### `daemon park` and `daemon unpark`
 
@@ -802,9 +859,10 @@ returns 1.
 | --- | --- | --- | --- |
 | `projects` | `compose projects` | Prints the registry as JSON. Read-only. | 0; 1 on unknown flag |
 | `worktree` | `compose worktree --project <name> --idea "<text>" [--source-ref <ref>] [--body <text>]` | Resolves the project, resolves the target repo, and creates the per-idea git worktree and branch. Prints `{kind, slug, branch, worktreePath, reconcile}`. With `--source-ref` and no `--body`, loads the Desired-outcome body from the persisted claim record or, if no record exists, from the referenced GitHub issue. A resolved empty or bulletless body stages the source reference with zero outcome bullets. An unreadable, missing, or unparseable source leaves no outcomes file and prints a diagnostic, without failing worktree creation; `--body` takes precedence. | 0; 1 on project not found, target resolution error, or worktree creation error |
+| `phase` | `compose phase --worktree <path> --phase <phase>` | Marks the start of a DECIDE step by [labeling the composer pane](#composer-pane-labels). `<phase>` must match `^[a-z0-9-]+$`, and the worktree must be on `spec/<slug>`. Changes no artifact or workflow state. | 0, including a skipped label; 1 on an invalid phase, a non-`spec/` worktree branch, or an unknown flag |
 | `dep-audit` | `compose dep-audit --project <name>` | Read-only dependency drift report for the project's GitHub repository. Prints counts and findings for `unlinked` (declared in prose, no native link), `stale`, `cycles`, `contradictions` (reverse-direction declarations), and `indeterminate`, or `Dependency drift audit: indeterminate (<cause>)` when the repository cannot be read. Never creates, removes, or changes a link. | 0, including indeterminate results; 1 on project not found or unknown flag |
 | `land` | `compose land --project <name> --idea "<text>" --worktree <path> [--source-ref <ref>] [--depends-on <owner/repo#N>]… [--decline-dependency <owner/repo#N>]… [--skip-dependency-check "<reason>"]` | Reads machine owner config, performs a fail-fast identity check, then commits the authored spec artifacts in the worktree onto `spec/<slug>`. With a GitHub `--source-ref`, it first runs the [dependency gate](#land-dependency-gate). With `--source-ref`, comments on the issue and advances the ledger to `routed` — advisory, so a `gh` failure never fails the land. On failure the worktree is kept and its path is reported. | 0; 1 on project not found, unresolved identity, or a land failure |
-| `plan-review` | `compose plan-review --project <name> --worktree <path> [--source-ref <ref>] [--accept <finding-id> --reason "<text>" \| --acknowledge --reason "<text>"]` | Medium/Large DECIDE gate between `/coherence-check` and `land`. The worktree must be on `spec/<slug>` and contain `.docs/plans/<slug>.md`. Without a disposition flag, runs one bounded review round in a read-only reviewer session and writes `.docs/plan-review/<slug>.md`; prints `plan review clean` when no `blocking` finding remains. A third round is refused with `plan review bound reached` and the standing findings. After round 2, `--accept` records an accepted disposition for one finding, and `--acknowledge` re-stamps the reviewed digest after later plan edits without a model call; both require a non-empty `--reason` and are mutually exclusive. Events go to the target repository's `.pipeline/composer-events.jsonl`. | 0, including a round with blocking findings; 1 on project not found, target or config resolution error, a non-`spec/` branch, a missing plan, an exhausted round bound, a reviewer failure on every provider, a refused disposition, or an unknown flag |
+| `plan-review` | `compose plan-review --project <name> --worktree <path> [--source-ref <ref>] [--max-prompt-chars <positive-integer>] [--accept <finding-id> --reason "<text>" \| --acknowledge --reason "<text>"]` | Medium/Large DECIDE gate between `/coherence-check` and `land`. The worktree must be on `spec/<slug>` and contain `.docs/plans/<slug>.md`. Without a disposition flag, runs one bounded review round in a read-only reviewer session and writes `.docs/plan-review/<slug>.md`; prints `plan review clean` when no `blocking` finding remains. A prompt over the budget — `--max-prompt-chars`, else [`plan_review.max_prompt_chars`](configuration.md#plan_review), else 400000 characters — is refused before any provider call with `plan review prompt is too large`, the per-section sizes, the largest section, and the value to rerun with; `--max-prompt-chars` is rejected alongside a disposition flag. A third round is refused with `plan review bound reached` and the standing findings. After round 2, `--accept` records an accepted disposition for one finding, and `--acknowledge` re-stamps the reviewed digest after later plan edits without a model call; both require a non-empty `--reason` and are mutually exclusive. Events go to the target repository's `.pipeline/composer-events.jsonl`. | 0, including a round with blocking findings; 1 on project not found, target or config resolution error, a non-`spec/` branch, a missing plan, an exhausted round bound, a reviewer failure on every provider, a refused disposition, an oversized prompt, an invalid `--max-prompt-chars`, or an unknown flag |
 | `handoff` | `compose handoff --project <name> --branch <branch> --worktree <path> [--source-ref <ref>]` | Opens the spec PR with the `spec` label and with `gh` running inside the per-idea worktree, then removes the worktree and prints `{kind:'pr-opened', url}` or `{kind:'local-commit', branch, repoPath, reason}`. `--branch` must be `spec/<slug>`, where `<slug>` is 1–50 lowercase alphanumeric segments joined by single hyphens; one trailing hyphen is permitted. Then starts the target repo's daemon, fire-and-forget. With `--source-ref`, writes back to the ledger, applies the `engineer:handled` label, and mirrors the issue's `priority: <band>` criticality labels onto the spec PR (fail-open — a read or write failure logs one `[pr-criticality]` line and never fails the handoff). On failure it records branch evidence and keeps the worktree. | 0, including when worktree removal fails (warned); 1 on project not found, target resolution error, or PR open failure |
 | `poll` | `compose poll` | One synchronous sweep of the GitHub issues adapter, enqueuing every returned envelope into the durable inbox. A registration whose path is absent is skipped without a GitHub call, while other registrations continue polling. Prints `{kind:'poll', enqueued, sourceRefs}`. No routing, no timer, no detached process; the ledger dedups, so a second poll enqueues nothing new. | 0; 1 on unknown flag |
 | `claim` | `compose claim` | Claims the oldest unblocked inbox entry. The whole claim walk holds the inbox lease (`<engineer dir>/inbox.lease`) and waits up to 5 minutes for a concurrent claim. It first returns inbox envelopes left `.claimed` while their ledger entry is still pending, reporting `released <n> stranded intake claim(s)` on stderr. Before selecting work, it also reaps stranded `claimed` entries older than `stale_claim_window_hours` (24 hours by default), returns them to pending, and may serve a reaped entry in that same claim. Builds a fresh blocker resolver per call and reads issue labels uncached. Prints `{empty:true}`, `{allBlocked:true, entries:[…]}`, or the claimed envelope. A real claim acks the queue, moves the ledger to `claimed`, and persists a claim record for a later `worktree --source-ref`. | 0 for each printed outcome; 1 on unknown flag, corrupt intake ledger, lease wait timeout (`engineer claim: Intake claim in progress: …`), or stranded-claim recovery or queue read fault (`engineer claim: <message>`), with nothing claimed |
@@ -820,13 +878,27 @@ from the root `--help` output. Likewise, `land`'s
 `--depends-on`, `--decline-dependency`, and `--skip-dependency-check` are absent from both the root
 guide and `compose land --help`.
 
+#### Composer pane labels
+
+When the composer runs inside herdr or tmux, `compose` labels the current pane `<slug> · <phase>`:
+
+- `worktree` labels with phase `worktree` after creating the worktree.
+- `phase` labels with the supplied `--phase`.
+- `plan-review`, `land`, and `handoff` label with their own name when `--worktree` is on `spec/<slug>`.
+
+The environment alone identifies the pane: herdr when `HERDR_ENV=1` and `HERDR_PANE_ID` is set
+(`herdr pane rename <id> <label>`), tmux when `TMUX_PANE` is set (`tmux select-pane -t <pane> -T
+<label>`). Both run when both are present; outside either, nothing runs. Labeling is best-effort: a
+failure or 2-second timeout prints one `compose: pane label skipped (<command>): <reason>` line on
+stderr and never changes the subcommand's output or exit code.
+
 Every subcommand that touches the ledger — `launch`'s pre-poll, `land`, `handoff`, `claim`, `forget`,
 `unclaim`, `requeue`, and `resolve` — fails closed on a corrupt ledger: exit 1 with
 `compose <kind>: intake ledger is corrupt at <path>; quarantine path: <path>; ledger was not
 modified.` The ledger itself is left untouched for repair. See
 [corrupt intake ledger or stuck ledger lease](../runbooks/corrupt-intake-ledger.md).
 
-> **Known limitation.** Omitting a required flag or positional on `worktree`, `land`, `handoff`,
+> **Known limitation.** Omitting a required flag or positional on `worktree`, `phase`, `land`, `handoff`,
 > `plan-review`, `forget`, or `resolve` prints the full guide text and exits **0**, not a usage error. A script that
 > checks only the exit code will read a malformed invocation as success. Check for the expected JSON on
 > stdout instead. Tracked in [#1012](https://github.com/jstoup111/ai-conductor/issues/1012).
@@ -858,6 +930,11 @@ commit; a failed write prints `engineer land: dependency write failed for <ref>:
 fails the land. Every decision, including write outcomes, is recorded as a `land_dependency_decided`
 event in the target repository's `.pipeline/composer-events.jsonl`. Declining a proposal never
 removes an existing declaration or link.
+
+Every successful land regenerates and commits `.docs/<slug>/manifest.json` — see
+[feature manifest](artifacts.md#feature-manifest). The final JSON adds `manifestChanged` (the rendered
+manifest differs from the prior bytes) and `added` (newly registered `{ kind, path }` entries). A changed
+manifest also records a `feature_artifacts_registered` event in `.pipeline/composer-events.jsonl`.
 
 `compose land` keeps amendments to artifacts that already existed at the branch's merge base
 under their original feature names. Those amendments remain in the commit and applicable ADR/coherence
@@ -1016,9 +1093,10 @@ selects the execution child; other gates use the flat ledger. A feature with no 
 resolved, for example on a diverged stack, these commands exit 1 before any read or write. A repeated `--child`, or one without a value, prints the `task` guide (exit 2); for
 `rewind` and `kickback-budget` it falls through to `error: unknown command` (exit 1).
 
-`task start|done --child <k>` also requires the coverage-binding envelope's slice membership to place
-the task in child `k`. `task status` uses that same membership to filter its output. A missing envelope,
-an unmapped task, or a task in another child exits 1.
+`task start|done --child <k>` also requires the sealed plan's slice membership to place the task in
+child `k`. `task status` uses that same membership to filter its output. Unavailable slice topology
+(missing or invalid plan, changed or unreadable positions), an unsliced plan, an unmapped task, or a
+task in another child exits 1.
 Engine-appended remediation task ids skip the membership check. After validation the verb runs
 unchanged against the flat `task-status.json` and `current-task`.
 
@@ -1352,6 +1430,14 @@ the cap. `consumed` and `laps` count only charged laps. Human output adds
 `Pending charge: <n> lap(s) (charged when build dispatches)` while a charge is pending; JSON reports
 `pendingLaps` (`0` when none) on both remediation gates.
 
+Each remediation gate's budget line also names its resolved
+[tier-aware allowance](configuration.md#tier-aware-remediation-lap-caps), for example
+`Kickback budget (prd_audit): 1/5 consumed; 4 remaining — tier M allowance 5 (configured)`. The source
+is `default`, `configured`, or `raised from <resolved>` after a `raise`; a feature with no recorded tier
+prints `tier unrecorded, treated as M;`. JSON adds `tier` (`S`, `M`, `L`, or `null`) and
+`allowanceSource` (`default`, `configured`, or `raised`) to those gates. `build_review` carries neither.
+`kickback-cap` halts and `daemon status` print the same line.
+
 Plan growth follows the same rule: the plan-growth `remaining` also subtracts a pending repair's growth
 (floored at `0`). Human output prints, directly after the `Plan growth:` line,
 `Pending growth: <total> (<gate> <n>, ...); would reach <projected>/<cap> when build dispatches`,
@@ -1360,6 +1446,14 @@ plan-growth `raise --by` that lets `build` settle the repair. Without a resolved
 `Pending growth: <total> (<gate> <n>, ...)` prints. JSON adds
 `planGrowth.pendingGrowth: { total, byGate, projected, minimumRaise? }`. A pending repair that charges
 laps but no growth adds neither.
+
+With `--child`, inspect also prints a restack cascade summary headed
+`Restack cascades — tier <T> allowance <n> (<default|configured>)`, then one
+`child <k>: <consumed>/<limit> consumed; <remaining> remaining` line per charged or raised child
+(suffixed ` (raised)` for a raised limit), or `none charged`. JSON adds
+`restackCascades: { tier, allowance, source, children: [{ child, consumed, limit, remaining, raised }] }`.
+An unreadable `refs/conductor/<slug>/cascades` prints `Restack cascades: unavailable (<error>)`, adds
+`restackCascades: { unavailable }` to JSON, and exits 1.
 
 Inspect reports each gate's resume authorization against the live halt generation. Human output
 prints one `Resume authorization:` line per gate:
@@ -1387,8 +1481,8 @@ gate's effective lap limit by `--by`; for a plan-growth halt it increases the fe
 plan-growth cap by `--by`. `reset` returns only a gate's lap count to zero without lowering an
 already authorized effective limit, and refuses plan-growth evidence; use `raise` for that recovery.
 Inspect shows the effective plan-growth cap and whether it is config-derived or raised. With or
-without `--child`, it computes that feature-wide cap from the feature's resolved plan without
-rewriting the ledger; when no plan resolves and the cap was not raised, it prints `Plan growth: plan unresolved; <n> added` instead of a zero cap. For either
+without `--child`, it computes that feature-wide cap from the feature's resolved plan and the main
+checkout's configuration without rewriting the ledger; when no plan resolves and the cap was not raised, it prints `Plan growth: plan unresolved; <n> added` instead of a zero cap. For either
 mutation, the command temporarily parks an unparked feature while it records the authorization and
 removes that temporary park after success. It preserves a park that already existed; unpark that
 feature when ready, otherwise the daemon leaves the authorization unconsumed.
@@ -1405,7 +1499,8 @@ authorization to, child `k`'s ledger; the feature-wide gates always use the flat
 `--child <k>`, where `k` is the originating child the halt names. The live halt must be
 `needs-human` and its cap evidence must name the same originating child; otherwise the command
 exits 1 and changes nothing. The cap evidence is read from the active child's ledger, and the
-originating child's count and limit (default 3) from `refs/conductor/<slug>/cascades`, so the
+originating child's count and limit (its raised limit, else the feature's
+[cascade allowance](configuration.md#restack)) from `refs/conductor/<slug>/cascades`, so the
 originating child needs no child state directory. `raise` raises that child's cascade limit by
 `--by`; `reset` returns its count to zero.
 
@@ -1515,14 +1610,147 @@ the corrective restoration also failed and needs operator attention.
 
 With `--child <k>`, `--to` must be a child-region step: `acceptance_specs`, `build`, `test_suite`, or
 `build_review`; any other target exits 1. The target must be earlier than child `k`'s own `last_step`.
-The command demotes child `k`'s region from the target, then the region steps of every existing child
-above `k` in ascending order, then every later whole-feature step in the flat state. It then clears
-those verdicts and the halt markers, emits `operator_rewind` with a `child` field, and prints
-`Rewound child <k> to <step>.` A failure restores every changed store and leaves the halt in place.
-An explicit `--child <k>` naming a closed child other than the execution child exits 1 with
-`child <k> is closed and cannot be rewound (#3203)`. To change a closed child, commit to its branch and let the next
-[restack](configuration.md#restack) carry the change upward.
+On a feature branch without durable stacked-child state, an explicit `--child` exits 1 with
+`rewind: --child is available only for a stacked feature.` For an open child, the command demotes child `k`'s region from the target, then the region steps of
+every existing child above `k` in ascending order, then every later whole-feature step in the flat
+state. It then clears those verdicts and the halt markers, emits `operator_rewind` with a `child`
+field, and prints `Rewound child <k> to <step>.` A failure restores every changed store and leaves
+the halt in place.
+
+### Closed-child landing and rewind
+
+Do not commit directly to a closed child's branch or rely on a later restack to carry that commit.
+First identify the affected path's stack owner with one of these read-only commands; each prints JSON
+with the matching children, their positions, branch names, and slice titles:
+
+```bash
+ai-conductor stack owners --slug <slug> --path <path> [--path <path> ...]
+ai-conductor stack owners --slug <slug> --diff <git-range>
+```
+
+Open a landing on the lowest closed child that owns the change. If a closed child above that host
+already has post-closure commits that must travel with the landing, name each one with `--carry`:
+
+```bash
+ai-conductor stack land --slug <slug> --child <k> [--carry <j> ...] --reason "<why>"
+```
+
+The command prepares the host branch for the operator change and parks the feature. It acquires the
+feature dispatch lease for its mutation; a live or unreadable lease owner is refused. Its park is
+token-owned: `--done` or `--abandon` removes it only when this landing created that exact park, so an
+earlier or later operator park remains in force. Commit the reviewer change on the prepared host
+branch, then declare it from that clean branch:
+
+```bash
+ai-conductor stack land --slug <slug> --done
+```
+
+Declaration records the change and lets the daemon re-validate the host from `acceptance_specs`. To
+discard an open landing instead, run:
+
+```bash
+ai-conductor stack land --slug <slug> --abandon
+```
+
+It restores the host through its recorded recovery stages. `stack land`, `--done`, and `--abandon`
+each acquire the feature dispatch lease while they mutate the feature.
+
+### Routed rounds
+
+Inspect a stacked feature's routed rounds and repair marker without taking a lease or changing state:
+
+```bash
+ai-conductor stack rounds --slug <slug>
+```
+
+Each round prints one line: id, kind, phase, `host:state` pairs, current host, receipt
+(`settled`/`unsettled`), and outbox length. A final line reports the repair marker as a host and round,
+`absent`, or `unreadable`. When an open round has a `pending` host and no active host while the marker
+holds a different round, a `wedge:` line names the round and the close command to run. Exit `0`; exit
+`1` when the ref listing, any round, or the marker is unreadable.
+
+Close a stale audit round that a later round supersedes:
+
+```bash
+ai-conductor stack rounds --slug <slug> --close r<N> --reason "<why>"
+```
+
+All checks run read-only before the feature dispatch lease is taken. The command refuses, naming the
+cause, when the round is missing, unreadable, or not `open`; its kind is not `audit` (an operator round
+points to `stack land --abandon`); it has an in-progress reroute; any host is `admitted`, `repairing`,
+`reroute-moved`, `built`, `abandoning`, or `abandoned`; the repair marker is unreadable or holds this
+round; or no other non-closed round exists to supersede it. The lowest-numbered other non-closed round
+becomes `supersededBy`. One compare-and-swap closes the round, marks each `pending` host `done`,
+verifies the survivor round is unchanged, and queues a `routing_round_superseded` event naming the
+dropped hosts, their finding ids, the reason, and the operator. On success it prints the closed round,
+dropped hosts, and finding ids. It does not clear a halt; run [`halt clear`](#ai-conductor-halt-clear)
+before the daemon resumes. `--close` requires an approved operator identity and a non-empty
+`--reason`.
+
+To rewind a closed child, use the declared operator-round form rather than the open-child rewind:
+
+```bash
+ai-conductor rewind --to <step> --child <k> --reason "<why>"
+```
+
+For a closed child, `<step>` must be `acceptance_specs`, `build`, `test_suite`, or `build_review`.
+The command requires the live halt and opens a declared round on the closed host at that step; the
+daemon then resumes the host through the routed exit. `--done` is for `stack land` rounds only.
+
+With `stacked_prs.route_whole_feature_fixes: false`, `stack owners`, `stack land`, `stack rounds`,
+and the closed-child rewind refuse; `stack rounds` also refuses a feature without durable child state; see [child-by-child build](configuration.md#child-by-child-build).
 See [Per-child selection](#per-child-selection---child).
+
+### Restack conflict resolution
+
+When a `restack conflict child <k>` HALT carries a `Restack-Conflict: <k> <op-id>` line, rebase the
+child on the scratch branch the HALT names, then record the resolved tip:
+
+```bash
+ai-conductor stack restack-resolve --slug <slug> --child <k> --tip <resolved-tip>
+```
+
+Alternatively, for either a base-refresh or feature-repair conflict (including a closed child),
+record the operator's decision and let the next restack resume the replay:
+
+```bash
+ai-conductor stack restack-resolve --slug <slug> --child <k> --decision "<answer>"
+```
+
+`--decision` and `--tip` are mutually exclusive: a `--tip`/`--decision` flag conflict is refused.
+The decision command requires the recorded child,
+a matching live conflict HALT, durable stacked child state, and an available feature dispatch lease;
+it is refused for a wrong child, a cleared or unrelated HALT, an unstacked feature, or a held lease.
+It is also refused from a daemon session, and for an answer outside 1–4000 characters. On success it
+writes `refs/conductor/<slug>/restack/decision/c<k>` (replacing any recorded `--tip` for that child),
+appends a `restack_decision` event with `action: recorded` and the operator identity, clears the HALT,
+and exits `0`. The next restack gives that answer to the resolver before it retries the conflicted
+child and emits `restack_decision` with `action: applied`. A decision recorded against a different
+old parent or old tip is not delivered: the restack emits `action: stale`, and if the conflict halts
+again, the HALT names the stale answer.
+
+The command acquires the feature dispatch lease, then validates the tip against the recorded
+conflict: the feature is stacked, the live HALT names the same child and operation, the tip descends
+from the recorded new parent, contains every candidate commit subject, has no merge commits, and
+touches only paths child `<k>` owns. On success it writes
+`refs/conductor/<slug>/restack/resolution/c<k>` (replacing any recorded `--decision` for that
+child), appends a `restack_resolution` event with
+`action: recorded` and the operator identity, clears the HALT, and exits `0`. The next restack uses
+the recorded tip for that child instead of replaying the conflicted range, emits
+`restack_resolution` with `action: consumed`, and deletes the resolution and conflict refs.
+Commits that change only `.docs/halted/<slug>.md` are bookkeeping: halt-record drift in the old
+range or the new parent's tree does not make the tip stale. A tip that cannot be consumed is retired:
+the restack deletes the resolution ref and emits `restack_resolution` with `action: retired`.
+
+- **Orphan (`record`):** no conflict record for that child exists. The replay continues normally.
+- **Stale (`range` or `parent-tree`):** the child's old range or the new parent's tree has changed.
+  The restack emits `restack_refused` with reason `restack-resolution-stale`. It then writes a new
+  `restack conflict child <k>` HALT whose detail lines are `restack-resolution-stale` and the field,
+  followed by a fresh `Restack-Conflict` recipe. Resolve that recipe again.
+
+A refusal prints `stack restack-resolve: refused — <detail>` and exits `1`. A failure after the ref is
+written prints `stack restack-resolve: recorded but could not …`, exits `1`, and leaves the HALT in
+place.
 
 ## `ai-conductor reseal`
 
@@ -1562,9 +1790,11 @@ an `operator` origin, distinct from step-attributed records. See
 [the stalled-feature runbook](../runbooks/stalled-or-stuck-feature.md#the-halt-is-a-protected-artifact-violation)
 for the full recovery procedure.
 
-When the changed resealed path is a current coverage-binding DECIDE input, a completed
-coverage-binding result is invalidated. The next re-kick runs the no-op coverage-binding step before
-BUILD, which re-records only the plan's slice topology. No task is reopened.
+When the feature has child state and a resealed path is its plan, `reseal` compares the plan's
+`## Slices` positions with `refs/conductor/<slug>/positions` before resealing. A change that moves,
+adds, or removes a position, an invalid manifest, or an unverifiable positions ref refuses the whole
+reseal and names the recorded and proposed positions. Task membership may change within the recorded
+positions. No task is reopened.
 
 The `--reason` rationale is not just an audit-trail entry: the next `build_review` on this feature
 renders every `operator-reseal`-triggered entry, with its paths, rationale, and commit range, in the

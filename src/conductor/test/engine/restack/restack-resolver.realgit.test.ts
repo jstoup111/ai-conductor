@@ -157,6 +157,31 @@ describe('resolveRestackConflict (real local Git)', () => {
     }
   });
 
+  it('uses the settled checkout HEAD and rebuilds rewrites when a replayed resolver session left no rewrite list', async () => {
+    const subject = await fixture();
+    const result = await resolveRestackConflict({
+      worktree: subject.repo, range: subject.range, newParent: subject.newParent, stamp,
+      comparisonCommits: [subject.carried], cap: 1,
+      resolver: async (context) => {
+        await writeFile(join(context.projectRoot, 'shared.txt'), 'resolved\n');
+        const git = makeGitRunner(context.projectRoot);
+        // A provider session that never received context.environment: the
+        // rebase finishes, but the engine's post-rewrite hook does not run.
+        await git(['add', 'shared.txt']);
+        await git(['rebase', '--continue'], { env: { GIT_EDITOR: 'true' } });
+        return { resolved: true };
+      },
+    });
+    // The provider omitted the hook environment, but the settled detached
+    // checkout still carries every candidate. Its HEAD is authoritative and
+    // unique subjects reconstruct the rewrite map.
+    expect(result.tip).toBeDefined();
+    expect(result.tip).not.toBe(subject.newParent);
+    expect(result.outcome).toMatchObject({ kind: 'changed' });
+    expect([...result.rewrites.keys()]).toEqual([subject.empty, subject.conflicting]);
+    expect(await worktreePaths(subject.repo)).toEqual([subject.repo]);
+  });
+
   it('cleans the detached worktree after a rejected resolver hand-off', async () => {
     const subject = await fixture();
     const result = await resolveRestackConflict({

@@ -1,4 +1,4 @@
-// Covers: task:32, task:33
+// Covers: task:3, task:32, task:33
 //
 // FINISH-boundary tests for the stacked `rebase` step.  Each test drives the
 // conductor's engine-native `runRebaseStep` (daemon mode) — or, for the
@@ -7,27 +7,41 @@
 // `feat/daemon-demo`.  No remote exists (base resolves to local `main`), and
 // the step runner is a fake whose `run` is never reached.
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { Conductor, type StepRunner, type StepRunResult } from '../../src/engine/conductor.js';
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
 import { resumeRebaseFirst, REKICK_SENTINEL } from '../../src/engine/daemon-rekick.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
-import { readVerdict } from '../../src/engine/gate-verdicts.js';
+import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
+import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { readBaseAdvanceHistory, resolveBaseAdvanceForFailure } from '../../src/engine/test-suite-remediation.js';
-import type { ConductState } from '../../src/types/index.js';
+import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+
+const publicationSeam = vi.hoisted(() => ({ forcePublishedStackRefusal: false }));
+
+vi.mock('../../src/engine/stack-publication.js', async (importActual) => {
+  const actual = await importActual<typeof import('../../src/engine/stack-publication.js')>();
+  return {
+    ...actual,
+    publishedStackRefusal: (...args: Parameters<typeof actual.publishedStackRefusal>) =>
+      publicationSeam.forcePublishedStackRefusal
+        ? Promise.resolve(true)
+        : actual.publishedStackRefusal(...args),
+  };
+});
 
 const execFile = promisify(execFileCallback);
 const repositories: string[] = [];
 const persisters: EventPersister[] = [];
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -35,6 +49,7 @@ const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
 };
 
 afterEach(async () => {
+  publicationSeam.forcePublishedStackRefusal = false;
   for (const persister of persisters.splice(0)) persister.stop();
   await Promise.all(repositories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
 });
@@ -42,9 +57,12 @@ afterEach(async () => {
 interface StackOptions {
   /** Commit a default-branch advance on `main` before child 1 branches. */
   readonly preBranchAdvance?: { readonly path: string; readonly value: string };
+  /** Default fixtures retain their three-child history; Task 12 needs two. */
+  readonly childCount?: 2 | 3;
 }
 
 async function stackedFixture(options: StackOptions = {}) {
+  const childCount = options.childCount ?? 3;
   const repo = await mkdtemp(join(tmpdir(), 'stacked-finish-rebase-'));
   repositories.push(repo);
   const git = async (args: string[]) => (await execFile('git', args, { cwd: repo })).stdout.trim();
@@ -71,18 +89,24 @@ async function stackedFixture(options: StackOptions = {}) {
   await git(['checkout', '-qb', 'feat/c1/demo']);
   const closedOne = await commit('closed one', 'src/one.ts', 'export const one = 1;\n');
   await git(['update-ref', 'refs/conductor/demo/closed/c1', closedOne]);
-  await git(['checkout', '-qb', 'feat/c2/demo']);
-  const closedTwo = await commit('closed two', 'src/two.ts', 'export const two = 2;\n');
-  await git(['update-ref', 'refs/conductor/demo/closed/c2', closedTwo]);
+  let closedTwo: string | undefined;
+  if (childCount === 3) {
+    await git(['checkout', '-qb', 'feat/c2/demo']);
+    closedTwo = await commit('closed two', 'src/two.ts', 'export const two = 2;\n');
+    await git(['update-ref', 'refs/conductor/demo/closed/c2', closedTwo]);
+  }
   await git(['checkout', '-qb', 'feat/daemon-demo']);
   const leaf = await commit('leaf', 'src/leaf.ts', 'export const leaf = 3;\n');
   await mkdir(join(repo, '.ai-conductor'), { recursive: true });
   await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n  route_whole_feature_fixes: false\n');
-  await writeCoverageBindingEnvelope(repo, {
+  await writeSliceTopologyFixture(repo, {
     version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
-    sliceMembership: { taskSlices: { a: 1, b: 2, c: 3 }, titles: ['one', 'two', 'leaf'] },
-    storyOwnership: { S1: 1, S2: 2, S3: 3 },
+    sliceMembership: childCount === 2
+      ? { taskSlices: { a: 1, b: 2 }, titles: ['one', 'leaf'] }
+      : { taskSlices: { a: 1, b: 2, c: 3 }, titles: ['one', 'two', 'leaf'] },
+    storyOwnership: childCount === 2 ? { S1: 1, S2: 2 } : { S1: 1, S2: 2, S3: 3 },
   }, envelopeFilesystem);
+  await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit: leaf });
 
   const statePath = join(repo, '.pipeline', 'conduct-state.json');
   const state: ConductState = { feature_desc: 'demo' };
@@ -146,12 +170,236 @@ async function runFinishRebaseStep(subject: Fixture, events: ConductorEventEmitt
   return { result, runner };
 }
 
+/**
+ * Exercise the daemon loop through the native rebase completion. The child
+ * overlay is the durable resume authority, so this fixture observes its
+ * persisted reopen rather than trying to drive unrelated tail gates.
+ */
+async function runStackedRebaseLifecycle(subject: Fixture) {
+  const firstEvents = new ConductorEventEmitter();
+  const seen = observe(firstEvents, [...OBSERVED, 'step_completed', 'rebase_gate_invalidated', 'loop_halt']);
+  const firstRunner: StepRunner = { run: vi.fn<StepRunner['run']>().mockResolvedValue({ success: true }) };
+  // A daemon observes the park marker between completed work and the next
+  // dispatch.  Stop at that boundary so this test can assert the persisted
+  // restack transition without letting its intentionally-successful runner
+  // consume the child gate that the following resume must select.
+  let rebaseCompleted = false;
+  firstEvents.on('step_completed', () => { rebaseCompleted = true; });
+  const parkAfterRebase = async () => rebaseCompleted;
+  const first = new Conductor({
+    stateFilePath: subject.statePath,
+    stepRunner: firstRunner,
+    events: firstEvents,
+    projectRoot: subject.repo,
+    daemon: true,
+    featureSlug: 'demo',
+    mode: 'auto',
+    fromStep: 'rebase',
+    operatorParkBoundary: parkAfterRebase,
+    // This test observes the rebase transition, not artifact completion.
+    verifyArtifacts: false,
+  });
+  const before = await readState(subject.statePath);
+  if (!before.ok) throw new Error(before.error.message);
+  await writeState(subject.statePath, { ...before.value, finish: 'done' });
+  await first.run();
+
+  return { seen };
+}
+
+async function resumeStackedRebaseLifecycle(subject: Fixture): Promise<RecordedEvent[]> {
+  const events = new ConductorEventEmitter();
+  const seen = observe(events, ['step_started', 'loop_halt']);
+  let testSuiteStarted = false;
+  events.on('step_started', ((event: RecordedEvent) => {
+    if (event.step === 'test_suite') testSuiteStarted = true;
+  }) as never);
+  const resumed = new Conductor({
+    stateFilePath: subject.statePath,
+    stepRunner: { run: vi.fn<StepRunner['run']>().mockResolvedValue({ success: true }) },
+    events,
+    projectRoot: subject.repo,
+    daemon: true,
+    featureSlug: 'demo',
+    mode: 'auto',
+    resume: true,
+    operatorParkBoundary: async () => testSuiteStarted,
+    verifyArtifacts: false,
+  });
+  await resumed.run();
+  return seen;
+}
+
+async function seedLeafRegionAtPreFinish(subject: Fixture, child: 2 | 3): Promise<void> {
+  const childStore = join(subject.repo, '.pipeline', 'children', String(child));
+  await mkdir(childStore, { recursive: true });
+  await writeState(join(childStore, 'conduct-state.json'), {
+    acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+  } as ConductState);
+}
+
 const OBSERVED = [
   'restack_planned', 'restack_applied', 'restack_refused',
   'rebase_changed', 'rebase_noop', 'rebase_mergeable_skip',
 ] as const;
 
 describe('FINISH rebase step on a stacked feature (real local Git)', () => {
+  // Covers: task:3
+  it('halts after one dispatch when a published-stack refusal leaves a stale rebase verdict', async () => {
+    const subject = await stackedFixture();
+    const staleReason = 'routed leaf return requires fresh whole-feature validation';
+    await writeVerdict(subject.repo, 'rebase', {
+      satisfied: false,
+      reason: staleReason,
+      checkedAt: 1,
+    });
+    publicationSeam.forcePublishedStackRefusal = true;
+    const events = new ConductorEventEmitter();
+    const seen = observe(events, ['restack_refused']);
+    const conductor = new Conductor({
+      stateFilePath: subject.statePath,
+      stepRunner: { run: vi.fn<StepRunner['run']>().mockResolvedValue({ success: true }) },
+      events,
+      projectRoot: subject.repo,
+      daemon: true,
+      featureSlug: 'demo',
+      mode: 'auto',
+      verifyArtifacts: true,
+    });
+    const state = await readState(subject.statePath);
+    if (!state.ok) throw new Error(state.error.message);
+    const privateConductor = conductor as unknown as {
+      persistedStateSnapshot: ConductState;
+      runRebaseStep(state: ConductState): Promise<StepRunResult>;
+      advanceTail(
+        step: (typeof ALL_STEPS)[number],
+        state: ConductState,
+        stuckGate: Map<StepName, number>,
+        steps: typeof ALL_STEPS,
+        indexOf: (name: StepName) => number,
+      ): Promise<number | 'halt'>;
+    };
+    privateConductor.persistedStateSnapshot = { ...state.value };
+
+    expect(await privateConductor.runRebaseStep(state.value)).toEqual({ success: true });
+    expect(seen).toEqual([expect.objectContaining({ type: 'restack_refused', reason: 'published-stack' })]);
+
+    const rebase = ALL_STEPS.find((step) => step.name === 'rebase');
+    if (!rebase) throw new Error('rebase step missing');
+    expect(await privateConductor.advanceTail(
+      rebase,
+      state.value,
+      new Map<StepName, number>(),
+      ALL_STEPS,
+      (name) => ALL_STEPS.findIndex((step) => step.name === name),
+    )).toBe('halt');
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      "step 'rebase' completed but its gate verdict was not refreshed",
+    );
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(staleReason);
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+  });
+
+  // Covers: task:3
+  it('adopts an advanced-default restack so the resumed leaf reaches test_suite without a loop halt', async () => {
+    const subject = await stackedFixture({ childCount: 2 });
+    await seedLeafRegionAtPreFinish(subject, 2);
+    await subject.advanceDefault('src/upstream.ts', 'export const upstream = 1;\n');
+
+    const { seen: firstSeen } = await runStackedRebaseLifecycle(subject);
+    const resumedSeen = await resumeStackedRebaseLifecycle(subject);
+    const events = [...firstSeen, ...resumedSeen];
+    const rebaseCompleted = events.findIndex((event) => event.type === 'step_completed' && event.step === 'rebase');
+    const testSuiteStarted = events.findIndex((event, index) => index > rebaseCompleted && event.type === 'step_started' && event.step === 'test_suite');
+
+    expect(rebaseCompleted).toBeGreaterThanOrEqual(0);
+    expect(testSuiteStarted).toBeGreaterThan(rebaseCompleted);
+    expect(events.some((event) => event.type === 'loop_halt')).toBe(false);
+    await expect(access(join(subject.repo, '.pipeline', 'HALT'))).rejects.toThrow();
+  });
+
+  // Covers: task:3
+  it('keeps a no-op restack leaf complete without redispatching test_suite or halting', async () => {
+    const subject = await stackedFixture({ childCount: 2 });
+    await seedLeafRegionAtPreFinish(subject, 2);
+
+    await runStackedRebaseLifecycle(subject);
+    const resumedSeen = await resumeStackedRebaseLifecycle(subject);
+    const leaf = await readState(join(subject.repo, '.pipeline', 'children', '2', 'conduct-state.json'));
+
+    expect(leaf.ok && leaf.value).toMatchObject({ test_suite: 'done', build_review: 'done' });
+    expect(resumedSeen.some((event) => event.type === 'step_started' && event.step === 'test_suite')).toBe(false);
+    expect(resumedSeen.some((event) => event.type === 'loop_halt')).toBe(false);
+  });
+
+  // Covers: task:3
+  it('does not write while adopting the durable state already returned by a restack', async () => {
+    const subject = await stackedFixture({ childCount: 2 });
+    await seedLeafRegionAtPreFinish(subject, 2);
+    await subject.advanceDefault('src/upstream.ts', 'export const upstream = 1;\n');
+    const events = new ConductorEventEmitter();
+    const conductor = new Conductor({
+      stateFilePath: subject.statePath,
+      stepRunner: { run: vi.fn<StepRunner['run']>().mockResolvedValue({ success: true }) },
+      events,
+      projectRoot: subject.repo,
+      daemon: true,
+      mode: 'auto',
+    });
+    const state = await readState(subject.statePath);
+    if (!state.ok) throw new Error(state.error.message);
+    const internals = conductor as unknown as {
+      persistedStateSnapshot: ConductState;
+      runRebaseStepBody(state: ConductState): Promise<StepRunResult>;
+      adoptDurableState(state: ConductState): Promise<void>;
+    };
+    internals.persistedStateSnapshot = { ...state.value };
+
+    await expect(internals.runRebaseStepBody(state.value)).resolves.toEqual({ success: true });
+    const rootBefore = await readFile(subject.statePath, 'utf8');
+    const leafPath = join(subject.repo, '.pipeline', 'children', '2', 'conduct-state.json');
+    const leafBefore = await readFile(leafPath, 'utf8');
+    await internals.adoptDurableState(state.value);
+
+    await expect(readFile(subject.statePath, 'utf8')).resolves.toBe(rootBefore);
+    await expect(readFile(leafPath, 'utf8')).resolves.toBe(leafBefore);
+  });
+
+  // Covers: task:12
+  it('reopens the two-child leaf suite after a non-DECIDE base refresh without reviving coverage_binding', async () => {
+    const subject = await stackedFixture({ childCount: 2 });
+    await seedLeafRegionAtPreFinish(subject, 2);
+    await subject.advanceDefault('src/upstream.ts', 'export const upstream = 1;\n');
+
+    const { seen } = await runStackedRebaseLifecycle(subject);
+
+    expect(seen.filter((event) => event.type === 'step_completed')).toEqual([
+      expect.objectContaining({ step: 'rebase', status: 'done' }),
+    ]);
+    expect(seen.some((event) => JSON.stringify(event).includes('coverage_binding'))).toBe(false);
+    const leaf = await readState(join(subject.repo, '.pipeline', 'children', '2', 'conduct-state.json'));
+    expect(leaf.ok && leaf.value).toMatchObject({ test_suite: 'pending' });
+    // Resume reads this child overlay; the restack must not revive the retired
+    // whole-feature coverage gate while reopening the next suite run.
+  });
+
+  // Covers: task:12
+  it('reopens the plan-authorized as-built gate for a two-child stack', async () => {
+    const subject = await stackedFixture({ childCount: 2 });
+    await seedLeafRegionAtPreFinish(subject, 2);
+    await subject.advanceDefault('.docs/coherence/demo.md', '# coherence amended upstream\n');
+    const events = new ConductorEventEmitter();
+    const seen = observe(events, [...OBSERVED, 'rebase_gate_invalidated']);
+
+    await expect(runFinishRebaseStep(subject, events)).resolves.toMatchObject({ result: { success: true } });
+
+    const state = await readState(subject.statePath);
+    expect(state.ok && state.value).toMatchObject({ architecture_review_as_built: 'pending' });
+    expect(seen.filter((event) => event.type === 'rebase_gate_invalidated').map((event) => event.gate))
+      .toContain('architecture_review_as_built');
+    expect(seen.some((event) => JSON.stringify(event).includes('coverage_binding'))).toBe(false);
+  });
+
   // Covers: S10.1, task:rem-prd-audit-R7, task:32
   it('base-refreshes the whole three-child stack onto the advanced default and records the whole-stack tuple', async () => {
     const subject = await stackedFixture();
@@ -242,6 +490,10 @@ describe('FINISH rebase step on a stacked feature (real local Git)', () => {
     expect(result).toEqual({ success: true });
     expect(seen.map((event) => event.type)).toEqual(['rebase_mergeable_skip']);
     expect(seen[0]).toMatchObject({ baseRef: 'main', baseSha: advanced });
+    expect(await readVerdict(subject.repo, 'rebase')).toMatchObject({
+      satisfied: true,
+      reason: expect.stringContaining('rebase skipped'),
+    });
     expect(await subject.refSnapshot()).toBe(before);
     const state = await readState(subject.statePath);
     expect(state.ok && state.value.rebase).toBe('done');
@@ -250,7 +502,7 @@ describe('FINISH rebase step on a stacked feature (real local Git)', () => {
   // Covers: S10.5, task:rem-prd-audit-R9-2, task:32
   it('runs a base-refresh restack despite a mergeable leaf when the base advance changes an active review input', async () => {
     const subject = await stackedFixture();
-    const advanced = await subject.advanceDefault('.docs/plans/demo.md', '# demo plan, amended upstream\n');
+    const advanced = await subject.advanceDefault('.docs/coherence/demo.md', '# coherence, amended upstream\n');
     // The leaf merges cleanly onto B' — mergeability alone would allow the skip.
     expect((await execFile('git', ['merge-tree', '--write-tree', '--quiet', 'main', 'HEAD'], { cwd: subject.repo }).then(() => 0, () => 1))).toBe(0);
     const events = new ConductorEventEmitter();
@@ -348,6 +600,50 @@ describe('stacked no-op when B-prime is already contained (real local Git)', () 
     ]);
     const state = await readState(subject.statePath);
     expect(state.ok && state.value.rebase).toBe('done');
+  });
+
+  // Covers: #3479
+  it('satisfies the rebase gate a routed leaf return re-pended when the FINISH step is a stacked no-op', async () => {
+    const subject = await stackedFixture({ preBranchAdvance: { path: 'src/upstream.ts', value: 'export const upstream = 1;\n' } });
+    await writeVerdict(subject.repo, 'rebase', {
+      satisfied: false,
+      reason: 'routed leaf return requires fresh whole-feature validation',
+      checkedAt: Date.now(),
+    });
+
+    const { result } = await runFinishRebaseStep(subject, new ConductorEventEmitter());
+
+    expect(result).toEqual({ success: true });
+    expect(await readVerdict(subject.repo, 'rebase')).toMatchObject({
+      satisfied: true,
+      reason: 'branch already current with base',
+    });
+  });
+
+  // Covers: #3479
+  it('satisfies the rebase gate a routed leaf return re-pended when the daemon re-kick is a stacked no-op', async () => {
+    const subject = await stackedFixture({ preBranchAdvance: { path: 'src/upstream.ts', value: 'export const upstream = 1;\n' } });
+    await writeFile(join(subject.repo, REKICK_SENTINEL), '');
+    await writeVerdict(subject.repo, 'rebase', {
+      satisfied: false,
+      reason: 'routed leaf return requires fresh whole-feature validation',
+      checkedAt: Date.now(),
+    });
+
+    const outcome = await resumeRebaseFirst({
+      worktreePath: subject.repo,
+      localBase: 'main',
+      events: new ConductorEventEmitter(),
+      ranManualTest: false,
+      slug: 'demo',
+      performRebase: vi.fn() as never,
+    });
+
+    expect(outcome).toBe('rebased');
+    expect(await readVerdict(subject.repo, 'rebase')).toMatchObject({
+      satisfied: true,
+      reason: 'branch already current with base',
+    });
   });
 
   // Covers: S10.3, task:rem-prd-audit-R10, task:33

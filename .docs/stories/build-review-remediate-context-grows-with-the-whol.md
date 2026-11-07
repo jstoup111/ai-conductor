@@ -69,9 +69,9 @@ As the build_review adjudication coordinator, I want one engine-run expansion ro
 
 #### Negative Paths
 - Given the expansion round's judgement again admits an index-only task 21, when it is validated, then no third dispatch occurs and the lap halts needs-human with a reason naming `unknown-admission-task` and task id 21.
-- Given the expansion round's judgement fails validation for any other reason, when it is validated, then the lap halts with the existing `invalid remediation judgement` reason and no further dispatch occurs.
+- Given the expansion round's judgement fails validation for any reason other than an inadmissible case binding, when it is validated, then the lap halts with the existing `invalid remediation judgement` reason and no further dispatch occurs; an inadmissible case binding instead gets the lap's one binding correction round.
 - Given the round-1 judgement admits a task id absent from the plan, when the coordinator handles the rejection, then no expansion round is dispatched and the lap halts naming that id as absent from the plan.
-- Given a case-v1 lap, when its judgement is invalid, then no expansion round is dispatched and the lap halts exactly as before this change.
+- Given a case-v1 lap, when its judgement is invalid for any reason other than an inadmissible case binding, then no expansion round is dispatched and the lap halts exactly as before this change.
 - Given adding the requested bodies pushes the expansion context past `maxSerializedBytes`, when the expansion context is assembled, then no round-2 dispatch occurs and the lap halts with `serialized-byte-overflow` naming the actual and limit bytes.
 - Given an operator accepts every dispatched source while the expansion round is running, when its judgement returns, then the lap finalizes as operator-resolved with no reconciliation of either round's judgement, exactly as for a single-round lap.
 

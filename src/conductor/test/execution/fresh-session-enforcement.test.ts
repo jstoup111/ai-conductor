@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 import { describe, expect, it, vi } from 'vitest';
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import { CodexProvider } from '../../src/execution/codex-provider.js';
@@ -26,7 +28,7 @@ function claudeCapture() {
     calls.push([...args]);
     return Promise.resolve({ stdout: 'ok', stderr: '', exitCode: 0, failed: false }) as any;
   });
-  return { calls, provider: new ClaudeProvider(undefined, subprocessFactory) };
+  return { calls, provider: new ClaudeProvider(dispatchGitGuard, undefined, subprocessFactory) };
 }
 
 function sessionIdFromArgs(args: string[]): string {
@@ -110,7 +112,7 @@ describe('fresh-session enforcement (codex adapter)', () => {
         failed: false,
       }) as any;
     });
-    return { argv, provider: new CodexProvider(runDoctor, 'codex', undefined, subprocessFactory as any) };
+    return { argv, provider: new CodexProvider(dispatchGitGuard, runDoctor, 'codex', undefined, subprocessFactory as any) };
   }
 
   it('never forwards the caller-supplied session id and reports the replacement', async () => {

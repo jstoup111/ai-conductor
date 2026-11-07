@@ -111,7 +111,7 @@ vi.mock('../../src/engine/gate-verdicts.js', async (importOriginal) => {
 });
 
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
 import { readVerdict } from '../../src/engine/gate-verdicts.js';
 import { journalRefFor, readRestackJournal, writeRestackJournalBlob } from '../../src/engine/restack/restack-journal.js';
 import { runStackPreflight } from '../../src/engine/restack/stack-preflight.js';
@@ -123,7 +123,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const execFile = promisify(execFileCallback);
 const repositories: string[] = [];
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -178,8 +178,8 @@ async function stack() {
   cwd = repo;
   probe.worktree = repo;
   await mkdir(join(repo, '.ai-conductor'), { recursive: true });
-  await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n');
-  await writeCoverageBindingEnvelope(repo, {
+  await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n  route_whole_feature_fixes: false\n');
+  await writeSliceTopologyFixture(repo, {
     version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
     sliceMembership: { taskSlices: { a: 1, b: 2, c: 3 }, titles: ['one', 'two', 'leaf'] },
     storyOwnership: { S1: 1, S2: 2, S3: 3 },

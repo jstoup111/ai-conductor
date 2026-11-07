@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "slug": "halt-records-committed-on-stacked-child-branches-m",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/halt-records-committed-on-stacked-child-branches-m.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/halt-records-committed-on-stacked-child-branches-m.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/halt-records-committed-on-stacked-child-branches-m.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/halt-records-committed-on-stacked-child-branches-m.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-10-stacked-restack-journaled-replay.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/halt-records-committed-on-stacked-child-branches-m.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/halt-records-committed-on-stacked-child-branches-m.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/halt-records-committed-on-stacked-child-branches-m.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/halt-records-committed-on-stacked-child-branches-m.md"
+    }
+  ]
+}

@@ -204,6 +204,8 @@ same field. Under `adr-2026-08-13-engine-managed-build-review-rubric-branches` D
 an identity carried in the projection digest, so the cache invalidates mechanically. The
 testQuality counterfactual preflight is unchanged and still covers the whole diff.
 
+> **Amended 2026-10-24 by #3294:** Operator decision during BUILD: built-in projections stay at v4 and do not move to v5. v4 (#3374) has not shipped in any release (v1.6.0 carries v3), so no consumer holds a v4 cache entry or input shape. Because `reviewScope` participates in the projection digest, any earlier v4 cache entry misses mechanically, so the invalidation this decision relies on holds without a version bump. The cache's admitted descriptor pairs and the registry descriptors are unchanged.
+
 Rubrics receive no case history, prior findings, dispositions or settled ids. The scope is an
 engine computation over those records, never the records themselves.
 `adr-2026-08-29-build-review-remediate-case-adjudication` D1 and its rejected "give every rubric

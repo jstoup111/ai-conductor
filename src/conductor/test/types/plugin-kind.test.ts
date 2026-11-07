@@ -9,7 +9,7 @@ import {
 
 const RETRIEVAL_SITES: Record<PluginKind, string> = {
   llm_provider: '../../src/engine/provider-runtime.ts',
-  ui_renderer: '../../src/index.ts',
+  ui_renderer: '../../src/terminal-builtins.ts',
   visualizer: '../../src/index.ts',
   memory_provider: '../../src/engine/config.ts',
 };
@@ -40,7 +40,9 @@ describe('PluginKind retrieval-site guard', () => {
 
       const source = readFileSync(sourcePath, 'utf8');
       expect(source).toMatch(
-        new RegExp(`registry\\.(?:get|tryGet)(?:<[^>]+>)?\\(\\s*['\"]${kind}['\"]`),
+        kind === 'ui_renderer'
+          ? (/registry\.register\(\s*['"]ui_renderer['"]/)
+          : new RegExp(`registry\\.(?:get|tryGet)(?:<[^>]+>)?\\(\\s*['\"]${kind}['\"]`),
       );
     }
   });

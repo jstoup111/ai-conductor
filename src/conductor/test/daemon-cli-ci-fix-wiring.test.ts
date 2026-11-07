@@ -1,5 +1,6 @@
 // Covers: task:4, task:11
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createClaimTimeRepairRunner } from '../src/daemon-cli.js';
@@ -81,7 +82,7 @@ describe('daemon CI-fix production dispatch callback', () => {
     ['non-conflicting autoresolve', { ...selected, mergeable: 'MERGEABLE' }, 'autoresolve'],
     ['rejected state read', undefined, 'autoresolve'],
   ] as const)('drops a stale %s repair before its attempt write or adapter call', async (_caseName, result, kind) => {
-    const root = await mkdtemp('/tmp/daemon-claim-repair-');
+    const root = await mkdtemp(join(tmpdir(), 'daemon-claim-repair-'));
     roots.push(root);
     await mkdir(join(root, '.daemon'), { recursive: true });
     const prUrl = 'https://github.com/acme/widget/pull/7';
@@ -122,7 +123,7 @@ describe('daemon CI-fix production dispatch callback', () => {
   });
 
   it('writes the claimed failed CI-fix attempt before calling its adapter', async () => {
-    const root = await mkdtemp('/tmp/daemon-claim-repair-');
+    const root = await mkdtemp(join(tmpdir(), 'daemon-claim-repair-'));
     roots.push(root);
     await mkdir(join(root, '.daemon'), { recursive: true });
     const prUrl = 'https://github.com/acme/widget/pull/7';
@@ -163,7 +164,7 @@ describe('daemon CI-fix production dispatch callback', () => {
   });
 
   it('keeps the request-owned adapter with a repair deferred for an in-flight feature', async () => {
-    const root = await mkdtemp('/tmp/daemon-claim-repair-');
+    const root = await mkdtemp(join(tmpdir(), 'daemon-claim-repair-'));
     roots.push(root);
     const queue = new RepairQueue();
     const prUrl = 'https://github.com/acme/widget/pull/7';
@@ -184,7 +185,7 @@ describe('daemon CI-fix production dispatch callback', () => {
   });
 
   it('stamps a claimed autoresolve before its adapter and makes the next sweep observe cooldown', async () => {
-    const root = await mkdtemp('/tmp/daemon-claim-repair-');
+    const root = await mkdtemp(join(tmpdir(), 'daemon-claim-repair-'));
     roots.push(root);
     await mkdir(join(root, '.daemon'), { recursive: true });
     const prUrl = 'https://github.com/acme/widget/pull/7';

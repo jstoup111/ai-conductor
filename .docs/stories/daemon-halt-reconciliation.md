@@ -32,8 +32,9 @@ dispatch, so that on restart I immediately see what is parked, half-built, eligi
   first line / summary of the reason read from `.pipeline/HALT`.
 - Given an in-progress worktree whose `conduct-state.json` has `build: in_progress`, when the
   dashboard renders, then its line shows the slug and last meaningful step `build`.
-- Given the dashboard is rendered, when it is emitted, then the identical content reaches both
-  stdout and `daemon.log` via the existing `log()` sink.
+- Given the dashboard is rendered, when it is emitted, then `daemon.log` receives the full render
+  and stdout receives the compact render, or the full render when `--all` or `--completed` is
+  given; both renders share the same attention line and group membership.
 
 #### Negative Paths
 - Given the dashboard is rendering, when a worktree is BOTH in the processed ledger AND has a

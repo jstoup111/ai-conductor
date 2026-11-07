@@ -1,10 +1,9 @@
-// Covers: task:2, task:4, task:5
+// Covers: task:1, task:2, task:4, task:5
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
-  checkGateCompletion,
   computeAndWriteVerdict,
   readAllVerdicts,
   readVerdict,
@@ -58,6 +57,27 @@ describe('engine/gate-verdicts', () => {
     expect(onDisk?.checkedAt).toBeTypeOf('number');
   });
 
+  it('stamps a routed round only on child-region verdicts', async () => {
+    const child = parseChildId('1')!;
+
+    await writeVerdict(dir, 'build', { satisfied: true, checkedAt: 1 }, child, { routedRound: 'r5' });
+
+    expect(await readVerdict(dir, 'build', child)).toMatchObject({ routedRound: 'r5' });
+
+    await writeVerdict(dir, 'build', { satisfied: true, checkedAt: 2 }, undefined, { routedRound: 'r5' });
+    expect(await readVerdict(dir, 'build')).not.toHaveProperty('routedRound');
+
+    for (const step of ['acceptance_specs', 'build', 'test_suite', 'build_review'] as const) {
+      await computeAndWriteVerdict(dir, step, { activeChild: child, routedRound: 'r5' });
+      expect(await readVerdict(dir, step, child)).toMatchObject({ routedRound: 'r5' });
+    }
+
+    await computeAndWriteVerdict(dir, 'build', { activeChild: child });
+    expect(await readVerdict(dir, 'build', child)).not.toHaveProperty('routedRound');
+    await computeAndWriteVerdict(dir, 'build', { routedRound: 'r5' });
+    expect(await readVerdict(dir, 'build')).not.toHaveProperty('routedRound');
+  });
+
   it('readAllVerdicts returns every persisted gate', async () => {
     await writeVerdict(dir, 'build', { satisfied: true, checkedAt: 1 });
     await writeVerdict(dir, 'plan', { satisfied: false, reason: 'x', checkedAt: 2 });
@@ -75,16 +95,6 @@ describe('engine/gate-verdicts', () => {
     const v = await readVerdict(dir, 'plan');
     expect(v?.kickback?.from).toBe('build');
     expect(v?.kickback?.evidence).toMatch(/AC-7/);
-  });
-
-  it('preserves decide-change kickback provenance for an unsatisfied coverage binding', async () => {
-    await writeVerdict(dir, 'coverage_binding', {
-      satisfied: false,
-      checkedAt: 6,
-      kickback: { from: 'decide-change', evidence: 'accepted plan amendment changed coverage' },
-    });
-
-    expect((await readVerdict(dir, 'coverage_binding'))?.kickback?.from).toBe('decide-change');
   });
 
   it('round trips replay-bound preservation without replacing the original judge identity', async () => {
@@ -239,19 +249,6 @@ describe('engine/gate-verdicts', () => {
     const verdict = await readVerdict(dir, 'build_review');
     expect(verdict?.preservation).toBeUndefined();
     expect(verdict?.rebaseOperation).toBeUndefined();
-  });
-
-  it.each(['failed', 'refused'] as const)('does not satisfy coverage_binding for a %s envelope', async (status) => {
-    await mkdir(join(dir, '.pipeline'), { recursive: true });
-    await writeFile(join(dir, '.pipeline', 'coverage-binding.json'), JSON.stringify({
-      version: 1,
-      slug: 'coverage-feature',
-      runId: 'coverage-run',
-      status,
-      entries: [],
-    }));
-
-    expect(await checkGateCompletion(dir, 'coverage_binding')).toMatchObject({ done: false });
   });
 
   it('resolves flat and region-child verdict paths', () => {

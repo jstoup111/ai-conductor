@@ -56,6 +56,14 @@ export interface VisualizerStartContext {
   /** False when a daemon-lifetime listener owns metrics for this event stream. */
   metrics?: boolean;
 }
+export interface ConductorEventBus {
+  emit(event: import('./events.js').ConductorEvent): Promise<void>;
+  emitOrThrow(event: import('./events.js').ConductorEvent): Promise<void>;
+  on(type: import('./events.js').ConductorEvent['type'], handler: (event: import('./events.js').ConductorEvent) => void | Promise<void>): void;
+  off(type: import('./events.js').ConductorEvent['type'], handler: (event: import('./events.js').ConductorEvent) => void | Promise<void>): void;
+  once(type: import('./events.js').ConductorEvent['type'], handler: (event: import('./events.js').ConductorEvent) => void | Promise<void>): void;
+  waitFor(type: import('./events.js').ConductorEvent['type']): Promise<import('./events.js').ConductorEvent>;
+}
 
 /**
  * Runtime dependencies supplied when constructing a visualizer plugin.
@@ -64,7 +72,7 @@ export interface VisualizerFactoryContext {
   config: import('./config.js').HarnessConfig;
   pipelineDir: string;
   startContext: VisualizerStartContext;
-  emitter: import('../ui/events.js').ConductorEventEmitter;
+  emitter: ConductorEventBus;
   /** Optional transport owned by a durable spool runtime. */
   otelSpanExporter?: import('@opentelemetry/sdk-trace-base').SpanExporter;
   /** The caller already emitted resolved-config warnings on the shared event spine. */
@@ -87,7 +95,7 @@ export interface VisualizerPlugin {
    * Implementations must only call emitter.on() — never modify emission sites.
    */
   start(
-    emitter: import('../ui/events.js').ConductorEventEmitter,
+    emitter: ConductorEventBus,
     context: VisualizerStartContext,
   ): void;
   /** Detach from the emitter and flush pending export data. Returns when flush completes. */

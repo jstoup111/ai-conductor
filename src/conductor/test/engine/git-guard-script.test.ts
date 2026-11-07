@@ -314,7 +314,9 @@ esac
     ['bundled force branch deletion', ['branch', '-df', 'unreachable'], /commits unreachable/],
     ['reversed bundled force branch deletion', ['branch', '-fd', 'unreachable'], /commits unreachable/],
     ['expanded force branch deletion', ['branch', '-Dq', 'unreachable'], /commits unreachable/],
-    ['abbreviated branch deletion', ['branch', '--del', '--force', 'unreachable'], /commits unreachable/],
+    ['abbreviated branch force', ['branch', '--delete', '--forc', 'unreachable'], /commits unreachable/],
+    // Git 2.56 --delete-merged makes every --delete abbreviation ambiguous; refuse it rather than guess.
+    ['ambiguous branch deletion prefix', ['branch', '--del', '--force', 'unreachable'], /unrecognized option «--del»/],
     ['path checkout after option terminator', ['checkout', '--', '--har'], /path checkout/],
   ])('normalizes %s before classifying it', async (_name, args, reason) => {
     await mkdir(join(fixtureDir, 'fixture'));

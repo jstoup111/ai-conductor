@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:5
+// Covers: task:1, task:3, task:5, task:rem-prd-audit-refusal-a62e8e2b-0279-4f2c-96b7-be6c61ed7cfd
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, readFile, access, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -9,6 +9,7 @@ import { execa } from 'execa';
 import {
   resolveBase,
   resolveBaseCore,
+  originDefaultBranch,
   resolveFreshBase,
   isBranchCurrent,
   rebaseStateActive,
@@ -445,6 +446,40 @@ describe('engine/rebase — resolveBase (FR-2/FR-3)', () => {
 });
 
 describe('engine/rebase — resolveBaseCore (shared seam, Task 1)', () => {
+  it('keeps originDefaultBranch origin/HEAD-only while resolveBaseCore owns the remote-show fallback', async () => {
+    const sharedCalls: string[][] = [];
+    const sharedRunner: GitRunner = async (args) => {
+      sharedCalls.push(args);
+      return { exitCode: 1, stdout: '', stderr: 'origin/HEAD is unset' };
+    };
+
+    await expect(originDefaultBranch(sharedRunner)).resolves.toBeNull();
+    expect(sharedCalls).toEqual([['symbolic-ref', 'refs/remotes/origin/HEAD']]);
+
+    const fallbackCalls: string[][] = [];
+    const fallbackRunner: GitRunner = async (args) => {
+      fallbackCalls.push(args);
+      if (args[0] === 'remote' && args.length === 1) {
+        return { exitCode: 0, stdout: 'origin\n', stderr: '' };
+      }
+      if (args[0] === 'symbolic-ref') {
+        return { exitCode: 1, stdout: '', stderr: 'origin/HEAD is unset' };
+      }
+      if (args.join(' ') === 'remote show origin') {
+        return { exitCode: 0, stdout: '  HEAD branch: trunk\n', stderr: '' };
+      }
+      if (args.join(' ') === 'fetch origin trunk') {
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
+      throw new Error(`unexpected git call: ${args.join(' ')}`);
+    };
+
+    await expect(resolveBaseCore(fallbackRunner, 'main')).resolves.toEqual({
+      ref: 'origin/trunk', kind: 'remote', branch: 'trunk',
+    });
+    expect(fallbackCalls).toContainEqual(['remote', 'show', 'origin']);
+  });
+
   it('is the extracted core that resolveBase delegates to — identical result on success', async () => {
     const { git } = fakeGit([
       { match: ['remote'], result: { stdout: 'origin\n' } },
@@ -923,7 +958,6 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(r.satisfied).toBe(true);
     expect(r.kickedBack).toEqual([
       'build',
-      'coverage_binding',
       'build_review',
       'test_suite',
       'manual_test',
@@ -950,10 +984,6 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     });
     expect(await readVerdict(dir, 'build')).toBeNull();
     expect(await readVerdict(dir, 'build_review')).toBeNull();
-    expect(await readVerdict(dir, 'coverage_binding')).toMatchObject({
-      satisfied: false,
-      kickback: { from: 'rebase' },
-    });
   });
 
   it('changed but manual_test did not run (featureSurface uncomputable) → build/deterministic group/build_review/audits kicked back, manual_test excluded', async () => {
@@ -961,7 +991,6 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     const r = await applyRebaseVerdicts(dir, outcome, false);
     expect(r.kickedBack).toEqual([
       'build',
-      'coverage_binding',
       'build_review',
       'test_suite',
       'prd_audit',
@@ -1005,7 +1034,6 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(r.satisfied).toBe(true);
     expect(r.kickedBack).toEqual([
       'build',
-      'coverage_binding',
       'build_review',
       'test_suite',
       'manual_test',
@@ -1043,9 +1071,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
 
     // build is reverified, NOT in kickedBack (featureSurface uncomputable —
     // fail-closed set, includes the judged audits per the ADR amendment)
-    expect(r.kickedBack).toEqual([
-      'coverage_binding',
-      'build_review',
+    expect(r.kickedBack).toEqual(['build_review',
       'test_suite',
       'manual_test',
       'prd_audit',
@@ -1087,7 +1113,6 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // fail-closed set, includes the judged audits per the ADR amendment)
     expect(r.kickedBack).toEqual([
       'build',
-      'coverage_binding',
       'build_review',
       'test_suite',
       'manual_test',
@@ -1132,7 +1157,6 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // uncomputable here too — fail-closed set includes the judged audits)
     expect(r.kickedBack).toEqual([
       'build',
-      'coverage_binding',
       'build_review',
       'test_suite',
       'manual_test',
@@ -1176,9 +1200,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // manual_test NOT present (ranManualTest: false); featureSurface is
     // uncomputable here too, so the fail-closed set still includes the
     // judged audits (ADR amendment) regardless of ranManualTest.
-    expect(r.kickedBack).toEqual([
-      'coverage_binding',
-      'build_review',
+    expect(r.kickedBack).toEqual(['build_review',
       'test_suite',
       'prd_audit',
       'architecture_review_as_built',
@@ -1219,7 +1241,6 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // audits (featureSurface uncomputable, ADR amendment).
     expect(r.kickedBack).toEqual([
       'build',
-      'coverage_binding',
       'build_review',
       'test_suite',
       'prd_audit',
@@ -1268,9 +1289,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(r.satisfied).toBe(true);
     // The directly matched gates and every unproved candidate preservation
     // are invalidated. Completed BUILD is not selected by rebase position.
-    expect(r.kickedBack).toEqual([
-      'coverage_binding',
-      'build_review',
+    expect(r.kickedBack).toEqual(['build_review',
       'test_suite',
       'manual_test',
       'prd_audit',
@@ -1346,7 +1365,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     });
 
     await emitGateInvalidationEvents(events, outcome, false, {
-      kickedBack: ['build', 'coverage_binding', 'build_review', 'test_suite', 'prd_audit', 'architecture_review_as_built'],
+      kickedBack: ['build', 'build_review', 'test_suite', 'prd_audit', 'architecture_review_as_built'],
       reverified: [],
     });
 
@@ -1354,7 +1373,6 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(invalidated.sort()).toEqual([
       'architecture_review_as_built',
       'build_review',
-      'coverage_binding',
       'prd_audit',
       'test_suite',
     ]);
@@ -1391,22 +1409,17 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
 
     const byGate = Object.fromEntries(preserved.map((e) => [e.gate, e]));
     expect(Object.keys(byGate).sort()).toEqual(
-      ['coverage_binding', 'prd_audit', 'architecture_review_as_built'].sort(),
+      ['prd_audit', 'architecture_review_as_built'].sort(),
     );
     // Document-bound gates declare only their document inputs.
     expect(byGate.prd_audit.surface).toEqual([
       '<.docs/stories/|.docs/specs/>',
     ]);
-    expect(byGate.coverage_binding.surface).toEqual([
-      '<.docs/stories/|.docs/specs/|.docs/plans/|.docs/coherence/|.docs/decisions/>',
-    ]);
-    // The as-built review consumes the same coverage/review decision inputs
-    // as coverage_binding.
+    // The as-built review consumes the review decision inputs.
     expect(byGate.architecture_review_as_built.surface).toEqual([
       '<.docs/stories/|.docs/specs/|.docs/plans/|.docs/coherence/|.docs/decisions/>',
     ]);
     expect(byGate.prd_audit.deltaConsidered).toEqual([]);
-    expect(byGate.coverage_binding.deltaConsidered).toEqual([]);
     // The as-built review sees neither feature runtime nor declared inputs.
     expect(byGate.architecture_review_as_built.deltaConsidered).toEqual([]);
     // Invalidated gates must not appear in the preserved set.
@@ -1435,10 +1448,6 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     await emitGateInvalidationEvents(events, outcome, true);
 
     const byGate = Object.fromEntries(invalidated.map((event) => [event.gate, event.matchedPaths]));
-    expect(byGate.coverage_binding).toEqual([
-      '.docs/stories/feature.md',
-      '.docs/specs/feature.md',
-    ]);
     expect(byGate.prd_audit).toEqual([
       '.docs/stories/feature.md',
       '.docs/specs/feature.md',
@@ -1570,12 +1579,12 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     });
 
     await emitGateInvalidationEvents(events, outcome, false, {
-      kickedBack: ['build', 'coverage_binding', 'build_review', 'test_suite', 'prd_audit', 'architecture_review_as_built'],
+      kickedBack: ['build', 'build_review', 'test_suite', 'prd_audit', 'architecture_review_as_built'],
       reverified: [],
     });
 
     expect(seen.sort()).toEqual([
-      'architecture_review_as_built', 'build_review', 'coverage_binding', 'prd_audit', 'test_suite',
+      'architecture_review_as_built', 'build_review', 'prd_audit', 'test_suite',
     ]);
   });
 
@@ -1596,9 +1605,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     const r = await applyRebaseVerdicts(dir, outcome, true);
 
     expect(r.satisfied).toBe(true);
-    expect(r.kickedBack).toEqual([
-      'coverage_binding',
-      'build_review',
+    expect(r.kickedBack).toEqual(['build_review',
       'test_suite',
       'manual_test',
       'prd_audit',
@@ -1637,7 +1644,6 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
 
     expect(r.kickedBack).toEqual([
       'build',
-      'coverage_binding',
       'build_review',
       'test_suite',
       'manual_test',
@@ -2313,7 +2319,7 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
         // Overlapping feature runtime reopens build_review but not the
         // document-bound gates.
         invalidated: ['build_review', 'test_suite', 'manual_test'],
-        preserved: ['coverage_binding', 'prd_audit', 'architecture_review_as_built'],
+        preserved: ['prd_audit', 'architecture_review_as_built'],
       });
     }
   }, 20000);
@@ -2385,7 +2391,6 @@ describe('engine/rebase — Task 10: fail-closed on uncomputable F (real git)', 
     // audits, not just the pre-#655 fixed four.
     expect(r.kickedBack).toEqual([
       'build',
-      'coverage_binding',
       'build_review',
       'test_suite',
       'manual_test',
@@ -2440,7 +2445,6 @@ describe('engine/rebase — Task 10: fail-closed on uncomputable F (real git)', 
     // audits, not just the pre-#655 fixed four.
     expect(r.kickedBack).toEqual([
       'build',
-      'coverage_binding',
       'build_review',
       'test_suite',
       'manual_test',
@@ -2530,7 +2534,6 @@ describe('engine/rebase — Task 11: fail-closed on uncomputable D (real git)', 
     // audits, not just the pre-#655 fixed four.
     expect(r.kickedBack).toEqual([
       'build',
-      'coverage_binding',
       'build_review',
       'test_suite',
       'manual_test',
@@ -2753,10 +2756,10 @@ describe('engine/rebase — resolveReviewInputs decision scoping', () => {
     expect(inputs).not.toContain('.docs/decisions/adr-2026-01-03-upstream.md');
     expect(classifyGateInvalidation(['.docs/decisions/adr-2026-01-03-upstream.md'], [], true, inputs).invalidated).toEqual([]);
     expect(classifyGateInvalidation(['.docs/decisions/adr-2026-01-01-cited.md'], [], true, inputs).invalidated.sort())
-      .toEqual(['architecture_review_as_built', 'coverage_binding']);
+      .toEqual(['architecture_review_as_built']);
   });
 
-  it('Task 13: treats a plan-cited ADR as a coverage-binding rebase input', async () => {
+  it('Task 13: treats a plan-cited ADR as a review rebase input', async () => {
     const { resolveReviewInputs } = await import('../../src/engine/rebase.js');
     const citedAdr = '.docs/decisions/adr-2026-01-01-cited.md';
 
@@ -2764,6 +2767,6 @@ describe('engine/rebase — resolveReviewInputs decision scoping', () => {
     const invalidation = classifyGateInvalidation([citedAdr], [], true, inputs);
 
     expect(inputs).toContain(citedAdr);
-    expect(invalidation.invalidated).toContain('coverage_binding');
+    expect(invalidation.invalidated).toEqual(['architecture_review_as_built']);
   });
 });

@@ -1,7 +1,7 @@
 import { fork as nodeFork } from 'node:child_process';
 import { setTimeout as delay } from 'node:timers/promises';
 import { join } from 'node:path';
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import type { FeatureExecutionOutcome, FeatureExecutor } from './feature-executor.js';
 import type { WorkOrder } from './work-order.js';
 import { EXECUTOR_PROTOCOL_VERSION, parseExecutorMessage, type ExecutorMessage } from './executor-protocol.js';

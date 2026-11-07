@@ -1,4 +1,4 @@
-// Covers: task:66
+// Covers: task:2, task:66
 import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,12 +18,13 @@ import { readGrowthAccounting } from '../../src/engine/kickback-ledger.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import { createRouteRecord } from '../../src/engine/routing/route-record-store.js';
 import { routeRecordRefFor } from '../../src/engine/routing/routing-refs.js';
+import { readRoutedGrowthSnapshot } from '../../src/engine/routing/round-receipt.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { parseRoundId } from '../../src/engine/routing/route-types.js';
 
 const roots: string[] = [];
 const child = parseChildId(1)!;
-const roundId = parseRoundId('r1')!;
+const roundId = parseRoundId('r8')!;
 
 afterEach(async () => {
   routing.resolveActiveChild.mockReset();
@@ -79,6 +80,17 @@ describe('stacked routed growth accounting', () => {
       .rejects.toThrow('routed sealed growth denominator is unreadable: route receipt unreadable');
     await expect(access(join(subject.root, '.pipeline', 'kickback-ledger.json'))).rejects.toMatchObject({ code: 'ENOENT' });
     expect(routing.resolveActiveChild).toHaveBeenCalledTimes(1);
+  });
+
+  it('names the unreadable route ref in the routed growth snapshot failure', async () => {
+    const subject = await fixture();
+    const malformed = await subject.git(['hash-object', '-w', '--stdin'], { input: '{not-json' });
+    const ref = routeRecordRefFor('demo', roundId);
+    await subject.git(['update-ref', ref, malformed.stdout.trim()]);
+
+    await expect(readRoutedGrowthSnapshot(subject.root, 'demo', {
+      cursor: { kind: 'active' }, config: { stacked_prs: { route_whole_feature_fixes: true } },
+    }, subject.git)).rejects.toThrow(/route receipt unreadable.*refs\/conductor\/demo\/routes\/r8/);
   });
 
   it('fails closed rather than reconciling a routed stored zero denominator', async () => {

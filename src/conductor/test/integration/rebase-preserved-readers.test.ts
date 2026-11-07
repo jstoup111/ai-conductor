@@ -111,7 +111,7 @@ describe('integration/rebase-preserved-readers (Task 8)', () => {
     await writeState(join(dir, '.pipeline/conduct-state.json'), {
       memory: 'done', explore: 'done', complexity: 'done', prd: 'done', architecture_diagram: 'done',
       architecture_review: 'done', stories: 'done', conflict_check: 'done', plan: 'done', coherence_check: 'skipped',
-      acceptance_specs: 'done', build: 'done', coverage_binding: 'done', test_suite: 'done', build_review: 'done',
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
       manual_test: 'done', prd_audit: 'done', architecture_review_as_built: 'done', rebase: 'done',
       pr_url: 'https://example.test/pr/1',
     });

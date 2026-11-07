@@ -1,5 +1,5 @@
 import { execSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 /**
@@ -10,6 +10,21 @@ export async function initTestRepo(dir: string): Promise<void> {
   execSync('git init -b main', { cwd: dir });
   execSync('git config user.email "test@example.com"', { cwd: dir });
   execSync('git config user.name "Test User"', { cwd: dir });
+
+  // Some plan-topology fixtures are authored before this helper establishes
+  // the local repository.  Materialize their durable positions ref now that
+  // Git has an object database, so they exercise the production loader rather
+  // than the retired envelope cache.
+  try {
+    const markerPath = join(dir, '.pipeline', 'slice-topology-fixture-positions.json');
+    const marker = JSON.parse(readFileSync(markerPath, 'utf8')) as { slug?: unknown; positions?: unknown };
+    if (typeof marker.slug === 'string' && Array.isArray(marker.positions) && marker.positions.every((position) => Number.isSafeInteger(position) && position > 0)) {
+      const object = execSync('git hash-object -w --stdin', { cwd: dir, input: JSON.stringify(marker.positions) }).toString().trim();
+      execSync(`git update-ref "refs/conductor/${marker.slug}/positions" ${object}`, { cwd: dir });
+    }
+  } catch {
+    // This generic fixture has no topology marker.
+  }
 
   // A real-Git fixture must not inherit an operator checkout's hooks. Those
   // hooks can run arbitrary repository tooling during a test rebase (and,

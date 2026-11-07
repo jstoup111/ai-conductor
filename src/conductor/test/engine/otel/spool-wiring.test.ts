@@ -1,4 +1,4 @@
-// Covers: task:15, task:19
+// Covers: task:7, task:10, task:15, task:19
 import { execFile as execFileCallback } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import { access, mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
@@ -57,6 +57,137 @@ afterEach(async () => {
 });
 
 describe("resolveSpoolDir", () => {
+  it("delivers a command credential from createSpoolRuntime to the loopback collector", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "spool-wiring-command-"));
+    temporaryDirectories.push(directory);
+    let authorization = "";
+    const arrival = collectorArrival();
+    const collector = createServer(async (request, response) => {
+      authorization = String(request.headers.authorization);
+      for await (const _chunk of request) { /* consume */ }
+      response.writeHead(200).end();
+      arrival.arrive();
+    });
+    const config = resolveOtelConfig({ otel: {
+      exporter: "otlp", endpoint: await endpoint(collector),
+      headers: { authorization: { command: ["credential"], prefix: "Bearer " } }, spool: { enabled: true },
+    } }, join(directory, ".pipeline"));
+    if (!config.enabled || config.exporter !== "otlp") throw new Error("expected OTLP configuration");
+    const runner = vi.fn().mockResolvedValue({ stdout: "tok-123\n" });
+    const runtime = createSpoolRuntime(directory, config, undefined, { commandRunner: runner });
+    await runtime.store.write("traces", Buffer.from("batch"));
+    const draining = runtime.drainer.drainUntilStopped();
+    try { await arrival.arrived; } finally { await runtime.drainer.stop(); await draining; }
+
+    expect({ authorization, calls: runner.mock.calls.length }).toEqual({ authorization: "Bearer tok-123", calls: 1 });
+  });
+
+  it("keeps a successful command credential out of spool files and events", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "spool-wiring-secret-"));
+    temporaryDirectories.push(directory);
+    const sentinel = "SENTINEL-VALUE";
+    const captured: unknown[] = [];
+    const events = { emit: vi.fn(async (event: unknown) => { captured.push(event); }) } as unknown as ConductorEventEmitter;
+    const collector = createServer(async (request, response) => {
+      for await (const _chunk of request) { /* consume */ }
+      response.writeHead(200).end();
+    });
+    const config = resolveOtelConfig({ otel: {
+      exporter: "otlp", endpoint: await endpoint(collector), headers: { authorization: { command: ["credential"] } }, spool: { enabled: true },
+    } }, join(directory, ".pipeline"));
+    if (!config.enabled || config.exporter !== "otlp") throw new Error("expected OTLP configuration");
+    const runtime = createSpoolRuntime(directory, config, events, { commandRunner: vi.fn().mockResolvedValue({ stdout: `${sentinel}\n` }) });
+    await runtime.store.write("traces", Buffer.from("batch"));
+    const draining = runtime.drainer.drainUntilStopped();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const deadline = setTimeout(() => reject(new Error("spool did not drain")), 5_000);
+        const poll = async () => (await runtime.store.list("traces")).length === 0 ? (clearTimeout(deadline), resolve()) : setImmediate(poll);
+        void poll();
+      });
+    } finally { await runtime.drainer.stop(); await draining; }
+    const files = await readdir(directory, { recursive: true });
+    const contents = await Promise.all(files.map(async (file) => readFile(join(directory, file.toString()), "utf8").catch(() => "")));
+    expect(JSON.stringify({ contents, captured })).not.toContain(sentinel);
+  });
+
+  it("keeps failed command output out of the runtime credential event", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "spool-wiring-failed-secret-"));
+    temporaryDirectories.push(directory);
+    const captured: unknown[] = [];
+    let report!: () => void;
+    const reported = new Promise<void>((resolve) => { report = resolve; });
+    const events = {
+      emit: vi.fn(async (event: unknown) => {
+        captured.push(event);
+        report();
+      }),
+    } as unknown as ConductorEventEmitter;
+    const config = resolveOtelConfig({ otel: {
+      exporter: "otlp", endpoint: "http://127.0.0.1:1",
+      headers: { authorization: { command: ["credential"] } }, spool: { enabled: true },
+    } }, join(directory, ".pipeline"));
+    if (!config.enabled || config.exporter !== "otlp") throw new Error("expected OTLP configuration");
+    const runtime = createSpoolRuntime(directory, config, events, {
+      commandRunner: vi.fn().mockRejectedValue(Object.assign(new Error("credential failed"), {
+        code: 3, stdout: "SENTINEL-OUT", stderr: "SENTINEL-ERR",
+      })),
+    });
+    await runtime.store.write("traces", Buffer.from("batch"));
+    const draining = runtime.drainer.drainUntilStopped();
+    try {
+      await Promise.race([
+        reported,
+        new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("credential failure was not reported")), 5_000)),
+      ]);
+    } finally {
+      await runtime.drainer.stop();
+      await draining;
+    }
+
+    expect(JSON.stringify(captured)).toMatch(/authorization.*credential.*exit code 3/i);
+    expect(JSON.stringify(captured)).not.toContain("SENTINEL-OUT");
+    expect(JSON.stringify(captured)).not.toContain("SENTINEL-ERR");
+  });
+
+  it("reads a changed environment credential on the next runtime delivery", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "spool-wiring-rotated-env-"));
+    temporaryDirectories.push(directory);
+    const received: string[] = [];
+    let arrive!: () => void;
+    const secondRequest = new Promise<void>((resolve) => { arrive = resolve; });
+    const collector = createServer(async (request, response) => {
+      received.push(String(request.headers.authorization));
+      for await (const _chunk of request) { /* consume */ }
+      response.writeHead(200).end();
+      if (received.length === 2) arrive();
+    });
+    const previous = process.env.OTLP_TOKEN;
+    process.env.OTLP_TOKEN = "first";
+    try {
+      const config = resolveOtelConfig({ otel: {
+        exporter: "otlp", endpoint: await endpoint(collector), headers: { authorization: { env: "OTLP_TOKEN" } }, spool: { enabled: true },
+      } }, join(directory, ".pipeline"));
+      if (!config.enabled || config.exporter !== "otlp") throw new Error("expected OTLP configuration");
+      const environment: NodeJS.ProcessEnv = { OTLP_TOKEN: "first" };
+      const runtime = createSpoolRuntime(directory, config, undefined, { environment });
+      await runtime.store.write("traces", Buffer.from("first"));
+      const draining = runtime.drainer.drainUntilStopped();
+      await new Promise<void>((resolve, reject) => {
+        const deadline = setTimeout(() => reject(new Error("first delivery did not arrive")), 5_000);
+        const poll = () => received.length === 1 ? (clearTimeout(deadline), resolve()) : setImmediate(poll);
+        poll();
+      });
+      environment.OTLP_TOKEN = "rotated";
+      await runtime.store.write("traces", Buffer.from("second"));
+      await secondRequest;
+      await runtime.drainer.stop();
+      await draining;
+    } finally { if (previous === undefined) delete process.env.OTLP_TOKEN; else process.env.OTLP_TOKEN = previous; }
+
+    expect(received).toEqual(["first", "rotated"]);
+  });
+
   it("resolves referenced headers at drain time through the production runtime", async () => {
     const directory = await mkdtemp(join(tmpdir(), "spool-wiring-headers-"));
     temporaryDirectories.push(directory);

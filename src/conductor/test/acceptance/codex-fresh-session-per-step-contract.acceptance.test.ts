@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 /**
  * RED acceptance specs for the Codex fresh-session-per-step contract (#903).
  *
@@ -207,10 +209,10 @@ afterEach(() => {
 
 describe('S1 — Codex dispatch never requests session resume', () => {
   it('declares session resume unsupported for every provider', () => {
-    const codex = new CodexProvider(
+    const codex = new CodexProvider(dispatchGitGuard,
       vi.fn(async () => ({ stdout: '{}', exitCode: 0 })) as never,
     );
-    const claude = new ClaudeProvider();
+    const claude = new ClaudeProvider(dispatchGitGuard);
 
     expect({
       codex: declaredResumeCapability(codex),

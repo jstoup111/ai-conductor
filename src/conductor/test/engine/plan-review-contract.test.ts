@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:10
 import { describe, expect, it } from 'vitest';
 
 import { toCodexStrictSchema } from '../../src/execution/codex-strict-schema.js';
@@ -110,6 +110,56 @@ describe('plan-review contract', () => {
     });
 
     expect(result.kind).toBe('accepted');
+  });
+
+  it('accepts a contradiction grounded in an indexed ADR decision and a plan task', () => {
+    const result = validatePlanReviewResult({ findings: [finding('contradiction', {
+      reference: 'adr-a#D3',
+      evidence: [
+        '.docs/plans/example.md:1',
+        '"D3. Preserve the indexed decision text for validation."',
+        '"Build the contract"',
+      ],
+    })] }, {
+      ...context,
+      adrTexts: { 'adr-a': '## Decision\nD3. Preserve the indexed decision text for validation.' },
+      sourceFiles: { ...context.sourceFiles, '.docs/plans/example.md': context.planText },
+    });
+
+    expect(result.kind).toBe('accepted');
+  });
+
+  it('rejects a contradiction whose quoted passages are grounded nowhere', () => {
+    const result = validatePlanReviewResult({ findings: [finding('contradiction', {
+      evidence: [
+        '.docs/plans/example.md:1',
+        '"Uninvented passage one"',
+        '"Uninvented passage two"',
+      ],
+    })] }, {
+      ...context,
+      sourceFiles: { ...context.sourceFiles, '.docs/plans/example.md': context.planText },
+    });
+
+    expect(result).toMatchObject({ kind: 'rejected' });
+    expect(result.kind === 'rejected' && result.diagnostics.join('\n')).toContain('requires two quoted passages grounded');
+  });
+
+  it('rejects a finding that references the coherence index entry', () => {
+    const result = validatePlanReviewResult({ findings: [finding('contradiction', {
+      reference: 'the coherence index entry',
+      evidence: [
+        '.docs/plans/example.md:1',
+        '"Build the contract"',
+        '"Wire the contract"',
+      ],
+    })] }, {
+      ...context,
+      sourceFiles: { ...context.sourceFiles, '.docs/plans/example.md': context.planText },
+    });
+
+    expect(result).toMatchObject({ kind: 'rejected' });
+    expect(result.kind === 'rejected' && result.diagnostics.join('\n')).toContain('reference must name a task, story, or ADR decision');
   });
 
   it.each([

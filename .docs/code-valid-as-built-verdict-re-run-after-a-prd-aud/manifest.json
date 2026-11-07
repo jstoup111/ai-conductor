@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "slug": "code-valid-as-built-verdict-re-run-after-a-prd-aud",
+  "artifacts": [
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/code-valid-as-built-verdict-re-run-after-a-prd-aud.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/code-valid-as-built-verdict-re-run-after-a-prd-aud.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/code-valid-as-built-verdict-re-run-after-a-prd-aud.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/code-valid-as-built-verdict-re-run-after-a-prd-aud.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/code-valid-as-built-verdict-re-run-after-a-prd-aud.md"
+    }
+  ]
+}

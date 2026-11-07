@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 import { PassThrough } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -24,7 +26,7 @@ describe('CodexProvider provider stream observations', () => {
     const process = Object.assign(new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
       resolveProcess = resolve;
     }), { stdout, kill: vi.fn() });
-    const provider = new CodexProvider(readyDoctor, 'codex', undefined, () => {
+    const provider = new CodexProvider(dispatchGitGuard, readyDoctor, 'codex', undefined, () => {
       resolveStarted!();
       return process as any;
     });

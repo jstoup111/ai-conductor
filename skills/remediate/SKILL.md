@@ -57,6 +57,22 @@ effect. Do not create BUILD work, amend a plan, write a remediation artifact, or
 from markdown/prose. For every other mode, including `build_review` `case-v1`/`case-v2` and legacy gap
 planning, skip this branch and follow the existing instructions unchanged.
 
+## As-built gap-plan reconciliation
+
+When the engine supplies `priorAsBuiltCases` in an ordinary gap-plan projection, every
+as-built finding disposition must include its engine-owned `reconciliation`. Judge the
+supplied evidence, not wording alone: use `same` for the same unresolved case,
+`recurrence` when an earlier repair recurred, `materially-changed` when the prior case
+is relevant but the failure is materially different, and `new` when no prior case fits.
+
+`same` and `recurrence` name the supplied `priorCaseId`. They may only use
+`existing-task` (binding at least one repair task from that case, plus a cited owner
+task when present) or `halt`; they never append replacement work. `materially-changed`
+names its prior case but plans a new repair under normal admission. `new` has no prior
+case id and follows normal admission. Supply a specific non-empty reason for every
+relation. The engine validates and persists these fields; do not create case ids,
+event records, or a parallel reconciliation artifact.
+
 ## Engine-selected refusal-rework mode
 
 Use this branch **only when the engine-stamped dispatch context carries refusal evidence** for a
@@ -88,7 +104,12 @@ are:
 - `currentFindings`: every current operator-unresolved content finding, each with its rubric id,
   stable finding id, anchor, summary, and evidence locations.
 - `priorCases`: all feature-local prior cases, each with outcome, source links, effect status, and
-  resolution evidence.
+  resolution evidence, and `priorCases[].bindableDispositions`.
+  - A prior source may carry `finding`, a bounded digest of the earlier finding: `rubric`,
+    `concernKind`, a bounded `summary`, bounded `evidenceLocations`, and `lapId`.
+  - Treat a supplied `finding` digest as binding context when deciding whether a current finding is
+    an equivalent re-raise of that prior source. It is never report text: do not copy, quote, or
+    treat it as a new finding; use it only to bind or distinguish the current source and case.
 - `planContract`: the active approved-plan contract that determines whether work is admitted.
 - `taskStatus`: the engine-supplied task-status evidence.
 - `effectPointers`: the engine-supplied prior effect and BUILD-attempt pointers.
@@ -122,6 +143,11 @@ Each `cases` row has exactly `caseRef`, optional `existingCaseId`, `disposition`
 
 - `caseRef` is the provider-local reference used by source rows. `existingCaseId`, when supplied by
   the engine in `priorCases`, may bind that existing case only.
+- A non-escalation row binding an `existingCaseId` must use a disposition listed in that prior case's
+  `bindableDispositions`.
+- A refused binding is named in `bindingCorrections` for one corrected judgement. This is the single
+  correction retry; correct the named binding without changing the
+  supplied sources or inventing a new case.
 - `disposition` is closed: `act` | `defer` | `reject` | `refute` | `advisory` when the context declares severity thresholds.
 - `priority` is closed: `critical` | `high` | `medium` | `low`.
 - `rationale` is bounded, evidence-grounded prose explaining the judgement, and `confidence` is
@@ -132,7 +158,12 @@ Each `cases` row has exactly `caseRef`, optional `existingCaseId`, `disposition`
   `{ "caseId": "...", "reason": "..." }` entries declaring it distinct from resolved action
   owners of its sources. A reason must be non-empty. A re-raise over a resolved action case is
   a recurrence unless declared distinct with a reason; its lineage gets three applied attempts.
-  A malformed `distinctFrom` shape rejects the artifact. An entry not naming a resolved action owner of a row source is ignored.
+  A malformed `distinctFrom` shape rejects the artifact. An entry may name either a provenance
+  candidate of the row or a resolved act owner of a row source; an entry not naming a resolved action owner of a row source is ignored unless it names a provenance candidate.
+- A bound `act` row on a resolved `act` case with an applied action effect may carry `reRaise`
+  `{ "kind": "residual-gap" | "repeat", "reason": "..." }`; its reason is non-empty.
+  `residual-gap` routes the repair to BUILD under the lineage limit of three applied attempts;
+  `repeat` halts the lap. An absent `reRaise` is treated as a residual gap.
 - A `defer` effect is exactly `{ "kind": "deferral", "title": "...", "body": "...",
   "exclusionRationale": "..." }`. Its `exclusionRationale` explains why no current plan task admits
   the work.
@@ -147,6 +178,8 @@ Each `cases` row has exactly `caseRef`, optional `existingCaseId`, `disposition`
   `upheld` verdict, and evidence entries containing only `path` and `excerpt`. Evidence proves current
   tree content: use no line numbers, hunks, commits, or SHAs. A case may be refuted once only; a later
   attempt to refute the same case is rejected for human review.
+- A re-raised finding judged no longer present on an attempted applied action receives an
+  evidence-backed `refute`, not a bound `reject`.
 
 ### Authority boundaries
 

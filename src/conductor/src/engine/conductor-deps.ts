@@ -2,7 +2,7 @@ import type { ConductState } from '../types/index.js';
 import type { ConductStateStore } from './conduct-state-store.js';
 import type { StateMutationDiagnostics } from './conduct-state-conflicts.js';
 import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 
 /**
  * Maps the skipped-to-stale domain refusal onto the shared event spine.

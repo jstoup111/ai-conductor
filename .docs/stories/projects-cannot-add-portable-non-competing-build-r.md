@@ -363,7 +363,7 @@ As an operator, I want accepted custom-policy repairs to receive fresh verificat
 
 #### Negative Paths
 
-- Given an attempted or regressed case that holds no operator acceptance and no operator resolution is reported again with equivalent substance despite wording or code movement, when the judgement binds that unrefuted recurrence to the prior case by `existingCaseId` and again proposes action, then it follows the existing repeated-case stop rather than granting a fresh repair allowance.
+- Given an attempted or regressed case that holds no operator acceptance and no operator resolution is reported again with equivalent substance despite wording or code movement, when the judgement binds that unrefuted recurrence to the prior case by `existingCaseId` and again proposes action, then an attempted open case, a regressed case whose effect is not `applied`, or a regressed case the row declares a `reRaise` of kind `repeat` follows the existing repeated-case stop rather than granting a fresh repair allowance, and a regressed applied case bound with kind `residual-gap` or no `reRaise` gets one new case that shares that case's lineage limit of three applied attempts.
 - Given the cumulative bound is exhausted or a policy is renamed, updated, disabled, and re-enabled, when new repair routing is evaluated, then those changes do not reset the feature's accumulated charges or authorize an over-limit route.
 - Given repair completes but invalidated test or review evidence is stale, missing, or failing, when progression is attempted, then the feature cannot proceed on the pre-repair success and the known failure remains blocking.
 

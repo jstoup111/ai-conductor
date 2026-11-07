@@ -1,6 +1,6 @@
 # Components + Sequence: Provider Model Policy Registry
 
-**Last updated:** 2026-07-23
+**Last updated:** 2026-10-25
 **Scope:** Provider-native step defaults, effort ordering, retry escalation,
 model-unavailability fallback, and generated documentation for the built-in
 Claude and Codex providers (issue #902).
@@ -23,7 +23,7 @@ graph LR
     subgraph policy ["engine/provider-model-policy.ts"]
         PR["policy lookup<br/>built-in policies + compatibility"]
         CP["Claude policy<br/>explicit per-step table<br/>models unchanged<br/>explore / prd effort high"]
-        XP["Codex policy<br/>explicit per-step table<br/>Luna / Terra / Sol"]
+        XP["Codex policy<br/>explicit per-step table<br/>pinned ids are per-tier floors<br/>upgraded from codex catalog at dispatching boot"]
         LC["legacy compatibility<br/>unknown key uses Claude policy<br/>warning once"]
     end
 
@@ -158,6 +158,7 @@ an independent table:
 
 | Date | Change | Reason |
 |------|--------|--------|
+| 2026-10-25 | Codex policy ids become per-tier floors upgraded per process from `codex debug models`; see [codex tier model resolution](codex-steps-resolve-the-newest-catalog-model-per-t.md) | DECIDE architecture for Codex tier model resolution |
 | 2026-07-24 | Added awaited plugin discovery before provider selection and compatibility-policy lookup | As-built verification after issue #902 Task 20 |
 | 2026-07-23 | Added conductor/group/attribution and daemon auxiliary wiring; corrected escalation ownership | Plan-update pass for issue #902 |
 | 2026-07-23 | Raised normal explore/PRD effort to high; retained explore.S low | Operator-approved effort amendment for issue #902 |

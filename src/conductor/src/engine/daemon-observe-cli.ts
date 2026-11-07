@@ -26,7 +26,8 @@ import { readGatedSnapshot, type GatedSpecItem, type GatedRepoItem, type Clock }
 import { summarizeAccuracyLedger } from './attribution-audit.js';
 import { scanInheritedState } from './daemon-dashboard.js';
 import { formatHeartbeatAge } from './step-heartbeat.js';
-import { kickbackBudgetFallbackLimit, readPlanGrowthBudget } from './remediation-caps.js';
+import { kickbackBudgetFallbackLimit, readPlanGrowthBudget, resolveRemediationLapAllowance } from './remediation-caps.js';
+import { readState } from './state.js';
 import { loadConfig } from './config.js';
 import {
   isUnreadableKickbackGate,
@@ -37,12 +38,15 @@ import { renderKickbackBudgetView, withPendingGrowth } from './kickback-budget-v
 import { readWatch } from './mergeable-sweep.js';
 import { resolveActiveChild } from './child-cursor.js';
 import { resolveExecutionChild } from './routing/execution-child.js';
-import { parseChildId, type ChildId } from './child-context.js';
+import { type ChildId } from './child-context.js';
 import {
-  COVERAGE_BINDING_COMPLETION_STATUSES,
-  readCoverageBindingEnvelope,
-  type CoverageBindingEnvelopeFilesystem,
-} from './coverage-binding-envelope.js';
+  renderStoriesRefsReport,
+  scanStoriesRefs,
+  type StoriesRefsScan,
+} from './stories-refs-diagnostic.js';
+import { hasDurableChildState, loadSliceTopology, type SliceTopologyUnavailableCause } from './slice-topology.js';
+import { readCascadeCounts } from './restack/cascade-cap.js';
+import { renderCascadeSummary, resolveCascadeAllowanceForWorktree } from './restack/cascade-allowance.js';
 import {
   readDaemonTimeline,
   type DaemonExitRecord,
@@ -63,15 +67,6 @@ function installedConductorRoot(): string {
 /** Chunk size for reverse event-log scans.  Capability events are emitted at
  * startup and can be much older than ordinary daemon telemetry. */
 const CAPABILITY_EVENT_SCAN_CHUNK_BYTES = 64 * 1024;
-
-const coverageBindingFilesystem: CoverageBindingEnvelopeFilesystem = {
-  readFile: (path) => readFile(path, 'utf8'),
-  // `daemon status` is an observation boundary. The envelope reader only uses
-  // readFile, and these fail loudly if that promise is ever broken.
-  mkdir: async () => { throw new Error('daemon status is read-only'); },
-  writeFile: async () => { throw new Error('daemon status is read-only'); },
-  rename: async () => { throw new Error('daemon status is read-only'); },
-};
 
 /**
  * Derive a version id label from a pidfile's `engineDir` (FR-14). Pure string
@@ -701,28 +696,39 @@ async function renderAgreementLine(repoPath: string, out: (line: string) => void
   out(`  attribution agreement: ${pct}% (n=${summary.sampleCount})`);
 }
 
-type ActiveChildStatusLabel = { child: ChildId; total: number };
+type ActiveChildStatusLabel = {
+  child: ChildId;
+  total: number;
+  taskIds: readonly string[];
+};
+
+type StackTopologyStatus = { cause: SliceTopologyUnavailableCause };
 
 /**
  * Resolve the one child whose ledger/status is visible. The cursor remains the
- * authority: envelope data supplies only the human-facing denominator.
+ * authority; sealed plan topology supplies the presentation scope.
  */
 async function activeChildStatusLabel(
   featureRoot: string,
   slug: string,
-): Promise<ActiveChildStatusLabel | undefined> {
+): Promise<ActiveChildStatusLabel | StackTopologyStatus | undefined> {
+  const topology = await loadSliceTopology(featureRoot, slug);
+  if (topology.kind === 'unavailable') {
+    return await hasDurableChildState(featureRoot, slug) === true ? { cause: topology.cause } : undefined;
+  }
+  if (topology.kind !== 'sliced' || topology.positions.length < 2) return undefined;
   const cursor = await resolveActiveChild(featureRoot, slug);
   if (cursor.kind !== 'active' && cursor.kind !== 'repair-pending') return undefined;
-  const envelope = await readCoverageBindingEnvelope(featureRoot, coverageBindingFilesystem);
-  const positions = envelope?.sliceMembership && COVERAGE_BINDING_COMPLETION_STATUSES.includes(envelope.status)
-    ? [...new Set(Object.values(envelope.sliceMembership.taskSlices))]
-      .map((position) => parseChildId(position))
-      .filter((position): position is ChildId => position !== undefined)
-    : [];
   const execution = resolveExecutionChild(cursor, slug);
   if (!('target' in execution)) return undefined;
   const executionChild = execution.target.child;
-  return positions.length >= 2 ? { child: executionChild, total: positions.length } : undefined;
+  return {
+    child: executionChild,
+    total: topology.positions.length,
+    taskIds: Object.entries(topology.sliceMembership.taskSlices)
+      .filter(([, position]) => position === executionChild)
+      .map(([taskId]) => taskId),
+  };
 }
 
 /**
@@ -743,15 +749,19 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
     .filter((feature, index, features) => features.findIndex((item) => item.slug === feature.slug) === index);
   for (const feature of visibleFeatures) {
     const featureRoot = join(repoPath, '.worktrees', feature.slug);
-    const activeChild = await activeChildStatusLabel(featureRoot, feature.slug);
+    const stackStatus = await activeChildStatusLabel(featureRoot, feature.slug);
+    const activeChild = stackStatus && 'child' in stackStatus ? stackStatus : undefined;
     const child = activeChild?.child;
-    const childStatus = activeChild ? ` child ${activeChild.child}/${activeChild.total}` : '';
+    const childStatus = activeChild
+      ? ` child ${activeChild.child}/${activeChild.total}${activeChild.taskIds.length ? `; tasks ${activeChild.taskIds.join(', ')}` : ''}`
+      : stackStatus && 'cause' in stackStatus ? ` stack unavailable: ${stackStatus.cause}` : '';
     const config = await loadConfig(featureRoot);
+    const growthConfig = await loadConfig(repoPath);
     const ledger = await readKickbackLedger(featureRoot, child);
     try {
       const { growth, cap, capSource, authoredSource } = await readPlanGrowthBudget(
         featureRoot,
-        config.ok ? config.config : ({} as HarnessConfig),
+        growthConfig.ok ? growthConfig.config : ({} as HarnessConfig),
         { persist: false },
       );
       const byGate = Object.entries(growth.byGate)
@@ -781,18 +791,37 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
         `${error instanceof Error ? error.message : String(error)})`,
       );
     }
+    if (activeChild) {
+      try {
+        const cascades = await readCascadeCounts(featureRoot, feature.slug);
+        if (cascades.kind === 'unreadable') {
+          out(`  RESTACK CASCADES [${feature.slug}]: unavailable (${cascades.detail})`);
+        } else {
+          const allowance = await resolveCascadeAllowanceForWorktree(featureRoot);
+          out(`  RESTACK CASCADES [${feature.slug}]: ${renderCascadeSummary(cascades.counts, allowance).statusFragment}`);
+        }
+      } catch (error) {
+        out(
+          `  RESTACK CASCADES [${feature.slug}]: unavailable (` +
+          `${error instanceof Error ? error.message : String(error)})`,
+        );
+      }
+    }
     const budgetConfig = config.ok ? config.config : {} as HarnessConfig;
+    const state = await readState(join(featureRoot, '.pipeline', 'conduct-state.json'));
+    const tier = state.ok ? state.value.complexity_tier : undefined;
     const renderBudget = (gate: 'build_review' | 'prd_audit' | 'architecture_review_as_built') => {
       const entry = ledger.gates[gate];
       const pendingLaps = gate === 'build_review' ? 0 : ledger.pendingRepair?.charges[gate]?.laps ?? 0;
       const view = renderKickbackBudgetView(
         entry,
         gate,
-        kickbackBudgetFallbackLimit(gate, budgetConfig),
+        kickbackBudgetFallbackLimit(gate, budgetConfig, tier),
         undefined,
         undefined,
         child,
         pendingLaps,
+        gate === 'build_review' ? undefined : resolveRemediationLapAllowance(gate, budgetConfig, tier),
       ).replace(/\n/g, ' | ');
       const allowance = entry?.capEvidence ? `Allowance: ${entry.capEvidence.allowance}; ` : '';
       out(`  KICKBACK BUDGET [${feature.slug}]: ${allowance}${view}`);
@@ -1056,10 +1085,11 @@ function waitForSigint(): Promise<void> {
 
 export type DaemonDispatch =
   | { kind: 'status' }
-  | { kind: 'logs'; repo?: string; follow: boolean; all: boolean; lines?: number };
+  | { kind: 'logs'; repo?: string; follow: boolean; all: boolean; lines?: number }
+  | { kind: 'stories-refs'; repo?: string };
 
 /**
- * Detect a `conduct daemon <status|logs …>` observability sub-subcommand. Returns
+ * Detect a `conduct daemon <status|logs|stories-refs …>` observability sub-subcommand. Returns
  * null for anything else — including the bare `conduct daemon …` *run* command
  * (handled by `detectDaemonCommand` in daemon-command.ts), which has no
  * `status`/`logs` second positional. index.ts checks this BEFORE the run command
@@ -1070,6 +1100,20 @@ export function detectDaemonObserveCommand(argv: string[]): DaemonDispatch | nul
   if (args[0] !== 'daemon') return null;
   const sub = args[1];
   if (sub === 'status') return { kind: 'status' };
+  if (sub === 'stories-refs') {
+    const rest = args.slice(2);
+    let repo: string | undefined;
+    for (let i = 0; i < rest.length; i++) {
+      const arg = rest[i];
+      if (arg === '--repo') {
+        repo = rest[i + 1];
+        i++;
+      } else if (arg.startsWith('--repo=')) {
+        repo = arg.slice('--repo='.length);
+      }
+    }
+    return { kind: 'stories-refs', repo };
+  }
   if (sub === 'logs') {
     const rest = args.slice(2);
     let repo: string | undefined;
@@ -1103,10 +1147,53 @@ export function detectDaemonObserveCommand(argv: string[]): DaemonDispatch | nul
   return null;
 }
 
+export interface DaemonStoriesRefsArgs {
+  /** Target repo path; defaults to cwd. */
+  repo?: string;
+}
+
+export interface DaemonStoriesRefsDeps {
+  cwd?: string;
+  out?: (line: string) => void;
+  err?: (line: string) => void;
+  scan?: (repoPath: string) => Promise<StoriesRefsScan>;
+}
+
+/**
+ * `conduct daemon stories-refs [--repo <path>]` — report committed specs whose
+ * Stories references cannot resolve at the daemon's pinned base. This is an
+ * observe-only command: findings are a completed report, not an error.
+ */
+export async function runDaemonStoriesRefs(
+  args: DaemonStoriesRefsArgs,
+  deps: DaemonStoriesRefsDeps = {},
+): Promise<number> {
+  const out = deps.out ?? ((line: string) => console.log(line));
+  const err = deps.err ?? ((line: string) => console.error(line));
+  let scan: StoriesRefsScan;
+  try {
+    scan = await (deps.scan ?? scanStoriesRefs)(args.repo ?? deps.cwd ?? process.cwd());
+  } catch (error) {
+    err(`stories-refs: scan failed — ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+  if (scan.kind !== 'ok') {
+    err(`stories-refs: scan failed — ${scan.reason}`);
+    return 1;
+  }
+
+  for (const line of renderStoriesRefsReport(scan)) out(line);
+  if (scan.broken.length === 0) {
+    out('stories-refs: clean — no spec has an unresolvable Stories reference');
+  }
+  return 0;
+}
+
 export async function dispatchDaemonObserve(d: DaemonDispatch): Promise<number> {
   if (d.kind === 'status') {
     const { code } = await runDaemonStatus();
     return code;
   }
+  if (d.kind === 'stories-refs') return runDaemonStoriesRefs({ repo: d.repo });
   return runDaemonLogs({ repo: d.repo, follow: d.follow, all: d.all, lines: d.lines });
 }

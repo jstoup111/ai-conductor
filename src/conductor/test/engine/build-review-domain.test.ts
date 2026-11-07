@@ -1,10 +1,11 @@
-// Covers: task:1, task:2, task:3
+// Covers: task:1, task:2, task:3, task:7
 // Covers: task:5, task:6, task:11
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
 import {
   BUILD_REVIEW_FINDING_VOCABULARIES,
+  BUILD_REVIEW_JUDGED_V4_SCHEMA,
   buildReviewFindingReferenceContext,
   diagnoseBuildReviewJudgedResultRejection,
   deriveBuildReviewInfrastructureFailureReason,
@@ -20,6 +21,7 @@ import {
   parseBuildReviewLapId,
   parseBuildReviewRubricContractVersion,
   parseBuildReviewRubricResult,
+  parseBuildReviewScopeEmpty,
   parseBuildReviewSeverity,
   parseBuildReviewSkip,
   renderBuildReviewUnresolvedSkillRemedy,
@@ -118,6 +120,13 @@ describe('build-review domain', () => {
     expect(parseBuildReviewSkip({ ...skipped, rubric: 'security' })).toBeUndefined();
   });
 
+  it('admits only a closed scope-empty rubric result', () => {
+    const scopeEmpty = { kind: 'scope-empty', rubric: 'testQuality' } as const;
+    expect(parseBuildReviewScopeEmpty(scopeEmpty)).toEqual(scopeEmpty);
+    expect(parseBuildReviewRubricResult(scopeEmpty)).toEqual(scopeEmpty);
+    expect(parseBuildReviewScopeEmpty({ ...scopeEmpty, extra: true })).toBeUndefined();
+  });
+
   it('accepts security content-region anchors only for a projected changed content region', () => {
     const anchor = { rubric: 'security', locus: { path: 'src/auth.ts', contentHash: HASH, display: 'request-derived shell command' } };
     const references = buildReviewFindingReferenceContext({
@@ -198,6 +207,50 @@ describe('build-review domain', () => {
     expect(withoutConfidence).toMatchObject({ kind: 'custom-findings' });
     if (withoutConfidence?.kind !== 'custom-findings') throw new Error('expected custom findings payload');
     expect(withoutConfidence.findings[0]).not.toHaveProperty('confidence');
+  });
+
+  // Covers: task:14
+  it('retains an optional cause hunk on built-in v4 and custom v2 findings without re-keying identity', () => {
+    const causeHunk = { path: 'src/widget.ts', contentHash: HASH, display: 'new causal boundary', occurrence: 2 };
+    const withoutCause = parseBuildReviewJudgedResult(judged([finding()]));
+    const builtIn = parseBuildReviewJudgedResult(judged([finding({ causeHunk })]));
+    const custom = parseBuildReviewCustomReviewerPayload(customPayload([customFinding({ causeHunk })]));
+    const findingProperties = (BUILD_REVIEW_JUDGED_V4_SCHEMA.properties.findings as { items: { properties: Record<string, unknown> } }).items.properties;
+
+    expect(findingProperties.causeHunk).toMatchObject({
+      type: 'object', additionalProperties: false, required: ['path', 'contentHash', 'display'],
+    });
+    expect(builtIn?.findings[0]).toMatchObject({ causeHunk });
+    expect(custom).toMatchObject({ kind: 'custom-findings', findings: [{ causeHunk }] });
+
+    const identityWithoutCause = canonicalizeBuildReviewFindingIdentity({
+      rubric: withoutCause!.rubric, contractVersion: withoutCause!.contractVersion,
+      concernKind: withoutCause!.findings[0]!.concernKind, anchor: withoutCause!.findings[0]!.anchor,
+    });
+    const identityWithCause = canonicalizeBuildReviewFindingIdentity({
+      rubric: builtIn!.rubric, contractVersion: builtIn!.contractVersion,
+      concernKind: builtIn!.findings[0]!.concernKind, anchor: builtIn!.findings[0]!.anchor,
+    });
+    expect(identityWithCause).toEqual(identityWithoutCause);
+  });
+
+  // Covers: task:14
+  it('rejects malformed built-in cause hunks as contract-invalid', () => {
+    const expected = { lapId: 'lap-1', snapshotDigest: 'sha256:abc' };
+    for (const causeHunk of [
+      { path: 'src/widget.ts', display: 'missing content hash' },
+      { path: 'src/widget.ts', contentHash: HASH, display: 'unexpected field', extra: true },
+    ]) {
+      const value = judged([finding({ causeHunk })]);
+      expect(parseBuildReviewJudgedResult(value), JSON.stringify(causeHunk)).toBeUndefined();
+      expect(diagnoseBuildReviewJudgedResultRejection(value, 'testQuality', expected)).toMatchObject({
+        kind: 'explained',
+        problems: [{
+          field: 'findings[0].causeHunk',
+          required: 'must be a content-region reference {"path", "contentHash", "display", "occurrence"?}',
+        }],
+      });
+    }
   });
 
   it('ignores custom reviewer routing claims and rejects other identity claims and invalid bounded finding values', () => {
@@ -826,6 +879,7 @@ describe('build-review domain', () => {
         obligationReferences: ['S5.4'], missingEvidenceReason: 'Pinned source cannot establish the marker association.',
       }]).changedTestRegions).toContainEqual({
         path: candidateRegion.path, contentHash: HASH, display: candidateRegion.display,
+        startLine: candidateRegion.startLine, endLine: candidateRegion.endLine,
       });
       expect(buildReviewFindingReferenceContext(projection, [{
         candidateId: 'candidate-unresolved', status: 'indeterminate', sourceRegion: candidateRegion,
@@ -886,8 +940,8 @@ describe('build-review domain', () => {
       ]);
 
       expect(references.changedTestRegions).toEqual([
-        { path: 'test/shared.test.ts', contentHash: titleHash('shared setup > first candidate'), display: 'shared setup > first candidate' },
-        { path: 'test/shared.test.ts', contentHash: titleHash('shared setup > second candidate'), display: 'shared setup > second candidate' },
+        { path: 'test/shared.test.ts', contentHash: titleHash('shared setup > first candidate'), display: 'shared setup > first candidate', startLine: 4, endLine: 9 },
+        { path: 'test/shared.test.ts', contentHash: titleHash('shared setup > second candidate'), display: 'shared setup > second candidate', startLine: 4, endLine: 9 },
       ]);
       expect(parseBuildReviewFindingAnchor({ rubric: 'testQuality', locus: { path: 'test/shared.test.ts', contentHash: titleHash('shared setup > second candidate'), display: 'second' } }, references)).toBeDefined();
       expect(parseBuildReviewFindingAnchor({ rubric: 'testQuality', locus: { path: 'test/shared.test.ts', contentHash: HASH, display: 'source bytes' } }, references)).toBeUndefined();
@@ -915,7 +969,7 @@ describe('build-review domain', () => {
         obligationReferences: ['S5.4'], associationReason: 'The second declared assertion is the pinned candidate.',
       }]);
       const first = { path: 'test/duplicate.test.ts', contentHash: titleHash('duplicate assertion'), display: 'duplicate assertion' };
-      const second = { ...first, occurrence: 1 };
+      const second = { ...first, occurrence: 1, startLine: 12, endLine: 16 };
 
       expect(references.changedTestRegions).toEqual([first, second]);
       expect(parseBuildReviewFindingAnchor({ rubric: 'testQuality', locus: first }, references)).toBeDefined();
@@ -936,7 +990,7 @@ describe('build-review domain', () => {
 
       expect(references.changedTestRegions).toEqual([
         { path: selector, contentHash: coarseHash, display: `${selector} changed test` },
-        { path: selector, contentHash: coarseHash, display: 'fallback candidate', occurrence: 1 },
+        { path: selector, contentHash: coarseHash, display: 'fallback candidate', occurrence: 1, startLine: 4, endLine: 8 },
       ]);
     });
 

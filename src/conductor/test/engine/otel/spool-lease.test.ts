@@ -106,7 +106,11 @@ describe('SpoolLease', () => {
 
     const lease = new SpoolLease(directory, { now: () => now, isProcessAlive: () => false });
     await expect(lease.acquire()).resolves.toEqual({ acquired: true });
-    await expect(readFile(join(directory, 'lease.json'), 'utf8').then(JSON.parse)).resolves.toMatchObject({ uuid: expect.not.stringMatching(/dead/) });
+    // The replacement identity need only differ from the orphan it supersedes.
+    // Matching its random UUID against fixture prose makes this test probabilistic:
+    // a valid UUID may naturally contain "dead".
+    const replacement = await readFile(join(directory, 'lease.json'), 'utf8').then(JSON.parse);
+    expect(replacement.uuid).not.toBe('dead-successor');
     await expect(readFile(join(directory, 'lease.json.next'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 

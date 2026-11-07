@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from './dispatch-git-guard.js';
+
 import { access, lstat, readdir } from 'node:fs/promises';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
@@ -62,7 +64,7 @@ describe('provisionLiveProviderHome', () => {
     try {
       process.env.CLAUDE_CODE_OAUTH_TOKEN = 'claude-provider-owned-token';
       process.env.CODEX_API_KEY = 'ambient-codex-key';
-      const provider = new ClaudeProvider();
+      const provider = new ClaudeProvider(dispatchGitGuard);
       const home = await provisionLiveProviderHome(sourceRoot, claudeDescriptor, provider);
       try {
         expect(home.childEnv().CLAUDE_CODE_OAUTH_TOKEN).toBe('claude-provider-owned-token');

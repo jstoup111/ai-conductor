@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "slug": "finish-author-pr-prose-halts-unmoved-provider-has-",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/finish-author-pr-prose-halts-unmoved-provider-has-.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/finish-author-pr-prose-halts-unmoved-provider-has-.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/finish-author-pr-prose-halts-unmoved-provider-has-.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/finish-author-pr-prose-halts-unmoved-provider-has-.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-24-finish-surfaces-guarded-publish-failures.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-31-engine-performs-finish-pr-prose-write.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/finish-author-pr-prose-halts-unmoved-provider-has-.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/finish-author-pr-prose-halts-unmoved-provider-has-.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/finish-author-pr-prose-halts-unmoved-provider-has-.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/finish-author-pr-prose-halts-unmoved-provider-has-.md"
+    }
+  ]
+}

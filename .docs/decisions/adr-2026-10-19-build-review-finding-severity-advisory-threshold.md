@@ -86,6 +86,16 @@ Option A. Each decision below states how it extends the existing suppression arc
   - `minor`: a real, low-impact quality issue;
   - `nit`: cosmetic, such as naming or style.
 
+> **Amended 2026-10-28 by #3381:** Reviewer guidance is engine-owned, not skill-owned. The engine
+> holds one severity definition text carrying the four meanings above, and renders it word for word
+> into every build_review rubric dispatch prompt, built-in and custom, next to the result schema. A
+> newly registered rubric receives it through that shared prompt assembly. No rubric `SKILL.md`
+> defines the severity scale, and no prompt carries its own copy. This replaces "Each built-in rubric
+> skill and the custom-review contract state what each level means for their concern kinds", because
+> separate copies can drift and grade one defect differently by rubric. Per-concern-kind calibration
+> is not decided here; reintroducing it would need its own decision. The severity values, their order,
+> reviewer ownership of the value, and its exclusion from identity are unchanged.
+
 ### D2 — The contracts bump to built-in v4 and custom v2, and built-in finding ids re-key once
 
 - **Fresh results.** A fresh built-in rubric result must declare `contractVersion: v4`. A fresh

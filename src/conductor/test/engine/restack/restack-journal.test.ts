@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:10
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -129,6 +129,43 @@ describe('ref-backed restack journal (real local Git)', () => {
           input: JSON.stringify({ ...stored.journal, routed: malformed }),
         })).stdout.trim());
         await fixture.git(['update-ref', journalRefFor('demo'), blob]);
+        await expect(readRestackJournal(fixture.repo, 'demo')).resolves.toEqual({ kind: 'unreadable', blob });
+      }
+    } finally {
+      await rm(fixture.repo, { recursive: true, force: true });
+    }
+  });
+
+  it('round-trips a delivered decision and rejects malformed decision identity', async () => {
+    const fixture = await createRepo();
+    try {
+      const oldSha = sha((await fixture.git(['rev-parse', 'HEAD'])).stdout.trim());
+      expect((await createRestackJournal(fixture.repo, 'demo', draft(oldSha))).kind).toBe('created');
+      const stored = await readCreated(fixture.repo);
+      const deliveredDecision = {
+        child: child(2),
+        blob: sha('1111111111111111111111111111111111111111'),
+        record: sha('2222222222222222222222222222222222222222'),
+        parent: sha('3333333333333333333333333333333333333333'),
+      };
+      const write = async (value: unknown) => {
+        const blob = sha((await makeGitRunner(fixture.repo)(['hash-object', '-w', '--stdin'], {
+          input: JSON.stringify({ ...stored.journal, deliveredDecision: value }),
+        })).stdout.trim());
+        await fixture.git(['update-ref', journalRefFor('demo'), blob]);
+        return blob;
+      };
+
+      await write(deliveredDecision);
+      await expect(readRestackJournal(fixture.repo, 'demo')).resolves.toMatchObject({
+        kind: 'journal', journal: { deliveredDecision },
+      });
+
+      for (const malformed of [
+        { ...deliveredDecision, child: 0 },
+        { ...deliveredDecision, blob: 'not-a-sha' },
+      ]) {
+        const blob = await write(malformed);
         await expect(readRestackJournal(fixture.repo, 'demo')).resolves.toEqual({ kind: 'unreadable', blob });
       }
     } finally {

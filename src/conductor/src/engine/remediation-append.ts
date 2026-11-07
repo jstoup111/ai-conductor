@@ -90,6 +90,8 @@ export interface AppendRemediationResult {
   planText: string;
   /** One resolved plan-task id per input gap task (existing or newly appended). */
   ids: string[];
+  /** Resolved plan-task ids attributed to each input remediation gap. */
+  idsByGapId: ReadonlyMap<string, readonly string[]>;
 }
 
 /** One admitted remediation gap, ready to render into a routed host's frozen allocation. */
@@ -401,9 +403,11 @@ export function appendRemediationTasks(
   const resolvedThisRound = new Map<string, string>();
 
   const ids: string[] = [];
+  const idsByGapId = new Map<string, string[]>();
   const blocks: string[] = [];
 
   for (const gap of gaps) {
+    const gapIds: string[] = [];
     const source = gap.gateSource === undefined
       ? defaultSource
       : sanitizeSegment(gap.gateSource, 'gate source');
@@ -425,11 +429,13 @@ export function appendRemediationTasks(
       if (resolved !== undefined) {
         // A restatement within one round is the same task, not drift.
         ids.push(resolved);
+        gapIds.push(resolved);
         continue;
       }
       const resolve = (id: string): void => {
         resolvedThisRound.set(canonical, id);
         ids.push(id);
+        gapIds.push(id);
       };
 
       const existingTitle = existing.get(canonical);
@@ -475,15 +481,16 @@ export function appendRemediationTasks(
       existing.set(id, title);
       resolve(id);
     }
+    idsByGapId.set(gap.id, [...new Set([...(idsByGapId.get(gap.id) ?? []), ...gapIds])]);
   }
 
   // Several findings can bind to one shared task; each id is one task, and a
   // pending repair rejects duplicate task ids.
   const uniqueIds = [...new Set(ids)];
   if (blocks.length === 0) {
-    return { planText, ids: uniqueIds };
+    return { planText, ids: uniqueIds, idsByGapId };
   }
 
   const separator = planText.endsWith('\n') ? '\n' : '\n\n';
-  return { planText: planText + separator + blocks.join('\n'), ids: uniqueIds };
+  return { planText: planText + separator + blocks.join('\n'), ids: uniqueIds, idsByGapId };
 }

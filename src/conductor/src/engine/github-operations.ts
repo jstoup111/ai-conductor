@@ -2,6 +2,25 @@ import type {
   ConductorEvent,
   GithubOperationRefusalRemedy,
 } from '../types/events.js';
+import type {
+  GithubOperationName as GithubOperationNameFromTypes,
+  GithubOperationRefusalReason,
+  GithubOperationTarget,
+  GithubIssueTarget,
+  GithubPullRequestTarget,
+  GithubStackTarget,
+  GithubLabelDefinitionTarget,
+  GithubRemoteRefTarget,
+} from '../types/github.js';
+export type {
+  GithubOperationRefusalReason,
+  GithubOperationTarget,
+  GithubIssueTarget,
+  GithubPullRequestTarget,
+  GithubStackTarget,
+  GithubLabelDefinitionTarget,
+  GithubRemoteRefTarget,
+};
 import {
   resolveGithubTarget,
   type GithubTargetDiscovery,
@@ -30,49 +49,6 @@ export type GithubResourceKind =
   | 'label-definition'
   | 'remote-ref'
   | 'repository';
-
-interface GithubRepositoryTarget {
-  readonly repository: string;
-  readonly kind: 'repository';
-}
-
-export interface GithubIssueTarget {
-  readonly repository: string;
-  readonly kind: 'issue';
-  readonly number: number;
-}
-
-export interface GithubPullRequestTarget {
-  readonly repository: string;
-  readonly kind: 'pull-request';
-  readonly number: number;
-}
-
-export interface GithubStackTarget {
-  readonly repository: string;
-  readonly kind: 'stack';
-  readonly number: number;
-}
-
-export interface GithubLabelDefinitionTarget {
-  readonly repository: string;
-  readonly kind: 'label-definition';
-  readonly name: string;
-}
-
-export interface GithubRemoteRefTarget {
-  readonly repository: string;
-  readonly kind: 'remote-ref';
-  readonly ref: string;
-}
-
-export type GithubOperationTarget =
-  | GithubRepositoryTarget
-  | GithubIssueTarget
-  | GithubPullRequestTarget
-  | GithubStackTarget
-  | GithubLabelDefinitionTarget
-  | GithubRemoteRefTarget;
 
 export interface GithubPullRequestEditPayload {
   readonly title?: string;
@@ -303,23 +279,9 @@ export const GITHUB_OPERATION_REGISTRY = {
   'repository.create': { access: 'shared-write', targetKinds: ['repository'], payload: 'repository-create' },
   'remote-ref.push': { access: 'remote-ref-write', targetKinds: ['remote-ref'] },
   'remote-ref.delete': { access: 'remote-ref-write', targetKinds: ['remote-ref'] },
-} as const satisfies Readonly<Record<string, GithubOperationDefinition>>;
+} as const satisfies Readonly<Record<GithubOperationNameFromTypes, GithubOperationDefinition>>;
 
-export type GithubOperationName = keyof typeof GITHUB_OPERATION_REGISTRY;
-
-export type GithubOperationRefusalReason =
-  | 'other-owner'
-  | 'unresolved-actor'
-  | 'missing-provenance'
-  | 'conflicting-provenance'
-  | 'provenance-unreadable'
-  | 'provenance-timeout'
-  | 'invalid-target'
-  | 'invalid-payload'
-  /** Remote stack guard refusal; callers decide whether it is a terminal halt. */
-  | 'stack-tip-mismatch'
-  | 'unsupported-operation'
-  | 'explicit-authorization-required';
+export type GithubOperationName = GithubOperationNameFromTypes;
 
 interface GithubOperationBase {
   readonly operation: GithubOperationName;

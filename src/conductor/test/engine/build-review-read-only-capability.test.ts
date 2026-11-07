@@ -1,4 +1,4 @@
-// Covers: task:11
+// Covers: task:7, task:11
 import { execFile } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';

@@ -201,8 +201,8 @@ require_pattern 'pipeline scopes session-hook mechanics to Claude Code' \
 require_pattern 'pipeline scopes its Claude model selection' \
   'Claude.{0,120}model|model.{0,120}Claude' \
   "$HARNESS_DIR/skills/pipeline/SKILL.md"
-require_pattern 'pipeline builds a ready frontier for Standard and Full autonomy' \
-  '(Standard|Full).{0,120}ready frontier|ready frontier.{0,120}(Standard|Full)' \
+require_pattern 'pipeline schedules every plan by ready frontier' \
+  'MUST schedule work by \*\*ready frontier\*\*' \
   "$HARNESS_DIR/skills/pipeline/SKILL.md"
 require_pattern 'pipeline uses one host-native fan-out operation for a ready frontier' \
   '(one|single) host-native fan-out operation' \
@@ -219,11 +219,17 @@ require_pattern 'pipeline gives Codex one-response collaboration spawn fan-out m
 require_pattern 'pipeline joins every concurrent dispatch before verification' \
   '(wait|join).{0,120}(all|every).{0,120}(dispatch|agent)|(all|every).{0,120}(dispatch|agent).{0,120}(wait|join)' \
   "$HARNESS_DIR/skills/pipeline/SKILL.md"
-require_pattern 'pipeline fails closed when selected host lacks native fan-out' \
-  '(fan-out|concurrent dispatch).{0,180}(unavailable|unsupported).{0,180}(fail closed|stop|halt)|(fail closed|stop|halt).{0,180}(fan-out|concurrent dispatch).{0,180}(unavailable|unsupported)' \
+require_pattern 'pipeline sizes each fan-out to the free sub-agent slots on its host' \
+  'X.{0,40}min\(3,.{0,80}(free|available).{0,40}(slot|sub-agent)' \
   "$HARNESS_DIR/skills/pipeline/SKILL.md"
-require_pattern 'pipeline keeps Conservative autonomy sequential' \
-  'Conservative.{0,120}sequential|sequential.{0,120}Conservative' \
+require_pattern 'pipeline runs a one-slot frontier sequentially' \
+  '(X = 1|X is 1).{0,120}(sequential|one at a time)' \
+  "$HARNESS_DIR/skills/pipeline/SKILL.md"
+require_pattern 'pipeline never halts for a lack of free slots' \
+  'never halt or ask the operator to choose' \
+  "$HARNESS_DIR/skills/pipeline/SKILL.md"
+require_absent_pattern 'pipeline has a single mode with no autonomy levels' \
+  '(Conservative|Standard|Full) autonomy|autonomy level' \
   "$HARNESS_DIR/skills/pipeline/SKILL.md"
 require_pattern 'pipeline defers dependent or overlapping-file tasks to a later frontier' \
   '(dependent|overlapping-file|overlapping file).{0,180}(next|later) frontier|(next|later) frontier.{0,180}(dependent|overlapping-file|overlapping file)' \
@@ -242,6 +248,18 @@ fi
 
 # These lifecycle skills share outcomes and gates across supported hosts. Only
 # installation, invocation, and interactive-session mechanics may differ.
+require_pattern 'bootstrap suggests the Codex sub-agent slot setting the pipeline cap reads' \
+  '\[agents\].{0,40}max_threads' \
+  "$HARNESS_DIR/skills/bootstrap/SKILL.md"
+require_pattern 'bootstrap names the Claude Code concurrent sub-agent setting' \
+  'CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS' \
+  "$HARNESS_DIR/skills/bootstrap/SKILL.md"
+require_pattern 'pipeline sizes Claude Code fan-out from its concurrent sub-agent setting' \
+  'CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS' \
+  "$HARNESS_DIR/skills/pipeline/SKILL.md"
+require_pattern 'bootstrap asks before editing operator-level provider config' \
+  'never edit them without the operator' \
+  "$HARNESS_DIR/skills/bootstrap/SKILL.md"
 require_pattern 'bootstrap identifies the current Codex skill location' \
   '~/.agents/skills.*(active|current)' \
   "$HARNESS_DIR/skills/bootstrap/SKILL.md"

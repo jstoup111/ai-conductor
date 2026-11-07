@@ -10,7 +10,7 @@ import type {
   CiRepairDiagnosticStage,
   ConductorEvent,
 } from '../types/index.js';
-import { ConductorEventEmitter, type EventHandler } from '../ui/events.js';
+import { ConductorEventEmitter, type EventHandler } from './conductor-event-emitter.js';
 import { resolveExecutionIdentity, type ExecutionScope } from './execution-identity.js';
 import { persistedEventTypes } from './event-sinks.js';
 import { CloseoutEventTail } from './closeout-tail.js';
@@ -312,10 +312,11 @@ const OBSERVATION_EVENT_TYPES = new Set<ConductorEvent['type']>([
   'session_event_delivery_diagnostic',
 ]);
 const ROUTING_OCCURRENCE_TYPES = new Set<ConductorEvent['type']>([
-  'remediation_routed', 'remediation_rerouted', 'routed_repair_phase', 'child_revalidated',
+  'remediation_routed', 'remediation_rerouted', 'routed_repair_phase', 'routing_rounds_stalled', 'operator_round', 'routing_round_superseded', 'child_revalidated',
 ]);
 const REMEDIATION_CASE_OCCURRENCE_TYPES = new Set<ConductorEvent['type']>([
   'build_review_acceptance_carried', 'remediation_case_operator_resolved', 'remediation_case_reconciled',
+  'as_built_finding_reconciled',
 ]);
 
 /** Producer observations and at-least-once lifecycle events are replay-deduplicated; ordinary events still append. */
@@ -423,6 +424,8 @@ export interface SessionEventTailOwner {
   stop(): void;
   /** Stop polling, join an in-flight read, then make one settled final pass. */
   drain(): Promise<void>;
+  /** Poll once without stopping the tail, joining any in-flight poll. */
+  flush(): Promise<void>;
 }
 
 /**
@@ -434,8 +437,10 @@ export function startSessionEventTail(
   projectRoot: string,
   events: ConductorEventEmitter,
   featureSlug?: string,
+  /** Test seam for a controlled in-flight ledger read. */
+  tailOverride?: CloseoutEventTail,
 ): SessionEventTailOwner {
-  const tail = new CloseoutEventTail({ projectRoot, featureSlug, events });
+  const tail = tailOverride ?? new CloseoutEventTail({ projectRoot, featureSlug, events });
   tail.start();
   let drainPromise: Promise<void> | undefined;
   return {
@@ -449,6 +454,7 @@ export function startSessionEventTail(
       }
       return drainPromise;
     },
+    flush: () => tail.flush(),
   };
 }
 
@@ -475,7 +481,7 @@ export function startFeatureEventPersistence(
   worktreePath: string,
   globalEvents: ConductorEventEmitter,
   slug?: string,
-): { events: ConductorEventEmitter; stop: () => void; drain: () => Promise<void> } {
+): { events: ConductorEventEmitter; stop: () => void; drain: () => Promise<void>; flush: () => Promise<void> } {
   const featureEvents = createForwardingFeatureEventEmitter(globalEvents, slug ?? basename(worktreePath));
   const persister = new EventPersister(
     join(worktreePath, FEATURE_EVENT_LOG_PATH),
@@ -523,6 +529,7 @@ export function startFeatureEventPersistence(
       }
       return drainPromise;
     },
+    flush: () => tail.flush(),
   };
 }
 

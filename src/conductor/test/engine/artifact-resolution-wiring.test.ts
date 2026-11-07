@@ -19,7 +19,6 @@ const EXPECTED_CUSTOM_COMPLETION_PREDICATES = [
   'architecture_review_as_built',
   'build',
   'build_review',
-  'coverage_binding',
   'finish',
   'manual_test',
   'plan_review',

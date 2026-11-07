@@ -266,6 +266,12 @@ out-of-closure task introduces — and the reviewer confirms or discards each wi
 for contradictions. Candidates are prompts, never findings by themselves; deterministic candidate
 generation keeps the reviewer's judgement scoped, and schema validation constrains its output.
 
+The first-round prompt inlines only the in-scope ADR decisions the spec changed against the merge base;
+unchanged decisions and the coherence artifact appear in an `INDEX` of worktree paths the reviewer reads
+directly. When the merge base cannot be read, every in-scope decision stays inline. A prompt over the
+[`plan_review.max_prompt_chars`](../reference/configuration.md#plan_review) budget is refused before
+dispatch, never truncated.
+
 The engine records the result in `.docs/plan-review/<plan-stem>.md`, guarded by an integrity hash and a
 digest of exactly the reviewed inputs. Land fails closed when the review is missing, tampered with, or
 stale against those inputs, or when a `blocking` finding stands without an operator acceptance. Review is
@@ -476,7 +482,7 @@ requirements as context for intent when a PRD exists (FR-7). Each finding carrie
 | Grade | Meaning | What happens |
 | --- | --- | --- |
 | `PASS` | The shipped behavior satisfies the criterion. | Nothing — no finding is recorded. |
-| `FIXABLE` | The criterion is unmet and an existing plan task owns the repair; the finding names that task and the criterion (FR-11) or is rejected as malformed. | Appends at most one remediation lap's worth of tasks, capped at both a fixed count (default 5) and a fraction of the authored task count (default 25%), whichever is lower — both operator-configurable (FR-12). Exceeding the cap, or needing a second lap, halts for the operator listing every finding (FR-13); the tasks are appended and left pending first, and the halt fires at the `build` transition (see [remediation caps settle at the build transition](#remediation-caps-settle-at-the-build-transition)). |
+| `FIXABLE` | The criterion is unmet and an existing plan task owns the repair; the finding names that task and the criterion (FR-11) or is rejected as malformed. | Appends at most one remediation lap's worth of tasks, capped at both a fixed count (default 5) and a fraction of the authored task count (default 25%), whichever is lower — both operator-configurable (FR-12). Exceeding the cap, or needing a lap beyond the feature's [tier-aware lap allowance](../reference/configuration.md#tier-aware-remediation-lap-caps), halts for the operator listing every finding (FR-13); the tasks are appended and left pending first, and the halt fires at the `build` transition (see [remediation caps settle at the build transition](#remediation-caps-settle-at-the-build-transition)). |
 | `PLAN_GAP` | The criterion is unmet and no plan task owns the repair. | Halts for the operator when the unmet criterion is a happy-path scenario; for a negative-path or edge scenario it is recorded in the verdict and the shipped record and the feature may ship, unless operator configuration requires a halt (FR-14). |
 | `OVER_SCOPE` | Shipped behavior goes beyond the planned implementation, judged against intent — the PRD's Goals/Non-Goals and In/Out Scope when a PRD exists, otherwise the stories plus the plan's stated outcome (FR-9). | A widening within intent is self-accepted and recorded. A widening outside intent with no user-visible effect is recorded in the verdict and the shipped record and the feature ships. Every outside-visible finding is presented in one decision block. An explicit accept applies only through its immutable original source/case reference and a fresh relationship. A refusal remains blocking. When every blocking outside-visible finding is refused and no projection defect exists, a daemon run with `prd_audit` lap allowance left routes the refusals to `/remediate`, which must return removal/rework-only tasks bound to each decision (`rem-prd-audit-refusal-<decisionId>`); the tasks append to the plan and the feature kicks back to `build`, charged to the same `prd_audit` lap and growth caps as `FIXABLE`. Otherwise — a pending finding alongside the refusals, a non-daemon run, a spent lap, a malformed ledger, or an unusable or unbound plan — it halts as “refused — rework required”; a spent growth allowance at dispatch halts as `kickback-cap`. The refused decision block offers an explicit revision linked to that refusal, never an implicit acceptance. Legacy attributed evidence remains available for reconciliation, while malformed or unsupported legacy history stays visible and halts with recovery rather than being treated as absent. |
 
@@ -537,6 +543,34 @@ report) halts for a human decision and names each DESIGN finding with its govern
 the run was not a daemon, or the planner produced no usable plan, and lists every blocking finding.
 An invalid report halts with its parse fault. After a later successful as-built verdict, each remediated
 finding is retained in the verdict artifact and the shipped record.
+
+#### As-built case reconciliation
+
+Each as-built finding id is minted per attempt, so a reworded re-raise of an already-repaired finding
+carries a new id. Identity across attempts is therefore a planner judgement, recorded as durable case
+history in `remediation-cases.json` (`asBuiltCases`):
+
+1. The remediation projection supplies `priorAsBuiltCases` — each case's id, status, recurrence count,
+   source summaries and references, and repair tasks with their resolution.
+2. The planner answers every as-built finding with a `reconciliation` relation and a non-empty reason:
+   `same` (the same unresolved case), `recurrence` (an earlier repair recurred), `materially-changed`
+   (related, but a materially different failure), or `new`. Every relation except `new` names a
+   projected `priorCaseId`; `new` must not.
+3. The engine rejects a plan that breaks these rules. `same` and `recurrence` admit only `existing-task` or
+   `halt`: an `existing-task` binding must name at least one repair task from the prior case, plus the
+   finding's owner task when it cites one, and no other task. They never append replacement work.
+   `materially-changed` and `new` follow normal admission and open a new case.
+4. Before BUILD dispatches, the engine records the admitted results atomically and emits one
+   `as_built_finding_reconciled` per finding. A `same` or `recurrence` source joins and reopens its prior
+   case; `recurrence` increments its recurrence count. A finding is recorded once; a repeat of an
+   already-recorded finding id is ignored.
+5. A `DESIGN` halt or a planner `halt` disposition records each affected finding as a `needs-human` case
+   before the halt. An `APPROVED`, `APPROVED WITH DRIFT NOTES`, or outcome-delivered `PLAN_GAP` verdict
+   resolves every open case. Resolved and `needs-human` cases stay in the history.
+
+These faults halt `needs-human` rather than `mechanical`: an unreadable case store or case-store write
+fault, prior-case history over its projection size limit, and a prior case's repair task missing from
+the active plan.
 
 ### Per-task `Done when:` evidence
 
@@ -727,6 +761,48 @@ conformance.
 Kickback counting is untouched by the consolidation — a `build_review` FAIL routed to `build` counts
 against the per-gate cap like any other.
 
+### Later laps judge only the unsettled delta
+
+The engine decides each rubric's review scope before it derives the rubric's projection. Each lap's
+branch artifact, `.pipeline/build-review/<lap>/<rubric>.json`, records that decision as `reviewScope`:
+`mode` (`full` or `delta`), `reason`, `sequence`, `mergeBase`, `headSha`, `policyIdentity`,
+`predecessorLapId`, `reviewedHunks`, `deltaHunks`, `outOfDeltaSourceIds`, and `unreadableLapIds`. A
+hunk is identified by its path and a content hash of its `+`/`-` lines only, so line shifts and pure
+rebases do not change it. The decision is persisted as `build_review_review_scope` with `mode`,
+`reason`, `deltaHunkCount`, and `settledHunkCount`.
+
+A rubric runs a **full** lap, judging every current hunk, for the first matching reason:
+
+| Reason | Cause |
+|---|---|
+| `record-unreadable` | A prior record cannot be parsed and no readable record already lists its lap. One corrupt record costs one full lap. |
+| `first-lap` | The rubric has no readable prior record. |
+| `merge-base-changed` | The merge base differs from the latest record's, whatever caused the rebase. |
+| `version-changed` | The rubric's policy identity changed: contract or projection version, declaration fingerprint, skill or policy bundle digest, provider, model, effort, or the `testQuality` test-scope identity. An engine rebuild alone does not count. |
+| `open-source-unmapped` | An open case whose action is not applied owns a source on a path with no current hunk. |
+
+Otherwise the lap is a **delta** lap (reason `delta`) over every hunk that is not settled. A hunk is
+settled when an earlier lap at the same merge base and policy identity judged it, no finding from those
+laps that maps to it still blocks, no open, `failed`, or `reserved` action case owns a source on it,
+and, for `testQuality`, no indeterminate scope candidate maps to it. Hunks owned by an open case
+therefore always stay in scope. A re-lap at the same lap id, such as a mechanical retry or a
+disposition-only rejoin, reuses that lap's recorded scope.
+
+The projection's `changedFiles` stays the whole diff as context, and gains `reviewScope: { mode,
+deltaHunks }`. Rubrics still receive no history. A rubric whose delta is empty is not dispatched and
+runs no `testQuality` preflight; its outcome is `scope-empty`, announced on
+`build_review_rubric_skipped` with reason `scope-empty`. It contributes no findings, does not fail
+the aggregate, and is never evidence that a source is no longer raised.
+
+In a delta lap, a finding whose mapped hunks are all settled is **out of delta**, unless its
+reviewer severity is `critical` or its optional `causeHunk` names a hunk in this lap's delta. The
+engine verifies only that the named hunk is in the delta; causality is the reviewer's judgement. A
+full lap classifies nothing as out of delta. Out-of-delta findings sit after settled and carried
+findings in the effective verdict. They never block, are never judged, never route BUILD, never charge
+a kickback, and are never accepted risk. They are durable in `reviewScope.outOfDeltaSourceIds`,
+counted as `outOfDeltaCount` on `build_review_outer_verdict`, and listed by
+[`build-review findings`](../reference/cli.md#ai-conductor-build-review).
+
 ### Post-join build-review adjudication
 
 For a current aggregate FAIL, the daemon normally runs one `remediate` judgement after the rubric
@@ -745,8 +821,29 @@ judgement again. Any other fault halts as `invalid remediation judgement <reason
 admission after the expansion round, or one naming an id absent from the plan, halts as
 `invalid remediation judgement unknown-admission-task`, listing the `index-only task ids` and
 `absent from plan` ids. A failed dispatch halts with `remediate judgement failed:` followed by the
-provider name and its bounded exit facts, suffixed `(expansion round)` on the second round. The plan
-index is capped at 1,024 entries; a larger plan halts as an adjudication context `field-overflow`.
+provider name and its bounded exit facts, suffixed `(expansion round)` or `(correction round)` for
+those rounds. The plan index is capped at 1,024 entries; a larger plan halts as an adjudication
+context `field-overflow`.
+
+Each prior case carries engine-computed `bindableDispositions`: the dispositions a row binding it
+through `existingCaseId` may use. A carry-eligible case accepts every non-escalation disposition. An
+`act` case accepts `act`; with an applied action it also accepts `defer`, and while still open and
+attempted, `refute`. Any other case accepts only its own disposition; an `escalate` case accepts
+none. `escalate` rows are never checked against this set. A binding outside it fails the judgement as
+`inadmissible-case-binding`, and the engine runs one correction round: it re-dispatches the same
+context, after any expansion, plus `bindingCorrections` naming each refused binding's `caseRef`,
+`existingCaseId`, disposition, and bindable set. That round's `remediation_adjudication_started`
+carries `bindingCorrectionCaseIds`. A second refusal halts as `invalid remediation judgement
+inadmissible-case-binding (case <id> bound as <disposition>; bindable: <list>)`. An index-only
+admission in the correction round halts as `unknown-admission-task`; no expansion follows it.
+
+Prior case sources may carry a `finding` digest read from the lap artifact that raised them: `rubric`,
+`concernKind`, a `summary` of at most 1,000 bytes, up to 8 `evidenceLocations`, and `lapId`. Only the
+latest 4 sources of each case carry one. All digests share a budget of the smaller of 64 KiB and the
+headroom left under the context size limit after cases, current sources, and plan context; it is
+recomputed for an expansion round. Oldest digests drop first, the count is reported as
+`priorDigestsOmitted`, and digests never cause an overflow. A source whose lap artifact is missing has
+no digest. Digests are binding context for the judge, not report text.
 
 The engine validates the judgement as a complete source-to-case mapping, assigns durable case and
 effect identities, and records the feature-local state before applying an effect. An action publishes
@@ -759,14 +856,25 @@ remainder; the refuted source settles only after that residual is applied, while
 residual remains blocking. A second refutation of the same case halts `needs-human`. In a mixed lap,
 an action route takes precedence while an uncovered infrastructure failure remains blocking after the
 BUILD attempt. Invalid, incomplete, stale, repeated, or unfinished case state halts rather than silently
-routing or passing.
+routing or passing. A repeated action case, or a regression the judgement declares a repeat, halts
+naming its recovery command; see
+[semantic case repeat or regression](../runbooks/stalled-or-stuck-feature.md#build_review-halted-on-a-semantic-case-repeat-or-regression).
 
 Only open cases own a source. A later judgement may re-raise a source that resolved history already
 links; the re-raise opens a new case, leaves the resolved case intact, and an action charges the
 `build_review` kickback cap like any other. An unbound `act` re-raise over a resolved action case is a
 recurrence: the new case records that owner in `recurrenceOf`, unless the judgement declares it
-distinct through `distinctFrom` with a non-empty reason. A declaration naming any other case is
-ignored. A recurrence lineage — the case and its `recurrenceOf` ancestry — gets three applied BUILD
+distinct through `distinctFrom` with a non-empty reason. An `act` row bound through `existingCaseId`
+to a resolved case whose action effect was applied may declare `reRaise` `{ kind, reason }`.
+`repeat` halts as a regression. `residual-gap`, or no declaration, opens a new unbound case whose
+`recurrenceOf` includes the bound case, so the repair routes to BUILD under the lineage limit below;
+`remediation_case_reconciled` carries `reRaiseKind` (`residual-gap` or `undeclared`) and
+`boundCaseId`. The engine drops `reRaise` from any other row. A new unbound `act` case with no such owner,
+one of whose sources maps to a delta hunk, may instead continue a repair: its provenance candidates
+are act cases with an applied action that own a source raised in the predecessor lap on the same
+path. The engine stamps `recurrenceOf` with the candidate whose lineage has the most applied attempts,
+breaking ties by lowest case id, unless `distinctFrom` names that candidate with a reason. A
+declaration naming any other case is ignored. A recurrence lineage — the case and its `recurrenceOf` ancestry — gets three applied BUILD
 attempts. A re-raise whose lineage already holds three halts `needs-human` before BUILD dispatch, binds
 the new source to the latest owner, and emits `remediation_semantic_repeat_halt` with reason
 `recurrence-limit` and `lineageCaseIds`; see
@@ -792,7 +900,10 @@ PR and shipped-record accepted-risk section lists carried findings and operator-
 operator names or rationales.
 
 Every built-in (contract `v4`) and custom (`custom-findings` `v2`) finding carries a reviewer-assigned
-`severity`: `critical`, `major`, `minor`, or `nit`. Severity is not part of finding identity. When a
+`severity`: `critical`, `major`, `minor`, or `nit`. The engine owns what each level means
+(`BUILD_REVIEW_SEVERITY_DEFINITIONS` in `src/conductor/src/engine/build-review-contract.ts`) and
+renders those definitions into every built-in and custom reviewer prompt; rubric skills and review
+policies do not restate them. Severity is not part of finding identity. When a
 rubric sets [`min_severity`](../reference/configuration.md#build_review), a finding ranked strictly below
 it is classified advisory after accepted, settled, replication, and suppressed findings, and before
 unresolved ones. Advisory findings never block, never reach the judgement, and charge no kickback; the
@@ -818,7 +929,7 @@ failure or incomplete scope in that lap; a reduced-coverage decision does not ma
 action case whose effect is `failed` or `reserved` also retires when every source is covered, and a
 `reserved` effect becomes `failed` with a diagnostic. A failed action whose source is still raised
 and unaccepted, a failed deferral, and an open decision stop still block; the halt names the exact
-[`resolve-case` command](../runbooks/stalled-or-stuck-feature.md#build_review-halted-on-an-open-action-case)
+[`resolve-case` command](../runbooks/stalled-or-stuck-feature.md#build_review-halted-on-an-open-action-or-deferral-case)
 for an action case. Inspect the durable state and lifecycle events in
 [`artifacts`](../reference/artifacts.md#verdict-and-evidence-artifacts) when diagnosing a halt.
 

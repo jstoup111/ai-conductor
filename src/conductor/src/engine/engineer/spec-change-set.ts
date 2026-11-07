@@ -5,6 +5,40 @@ import { deriveDefaultBranch } from './spec-branch.js';
 const execFile = promisify(execFileCb);
 
 /**
+ * Reads requested paths as they existed at the feature branch's merge base.
+ * `undefined` means the base itself could not be resolved; `null` means an
+ * individual path did not exist there or could not be read.
+ */
+export async function readMergeBaseTexts(
+  worktreePath: string,
+  canonicalPath: string,
+  paths: readonly string[],
+): Promise<Record<string, string | null> | undefined> {
+  let base: string;
+  try {
+    const defaultBranch = await deriveDefaultBranch(canonicalPath);
+    const { stdout } = await execFile(
+      'git', ['merge-base', 'HEAD', defaultBranch], { cwd: worktreePath },
+    );
+    base = stdout.trim();
+    if (!base) return undefined;
+  } catch {
+    return undefined;
+  }
+
+  const texts: Record<string, string | null> = {};
+  for (const path of paths) {
+    try {
+      const { stdout } = await execFile('git', ['show', `${base}:${path}`], { cwd: worktreePath });
+      texts[path] = stdout;
+    } catch {
+      texts[path] = null;
+    }
+  }
+  return texts;
+}
+
+/**
  * Resolves the `.docs/` paths attributable to an engineer spec: committed
  * branch changes since its canonical default branch plus untracked artifacts.
  * Both plan-review creation and its land gate consume this one scope.

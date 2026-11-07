@@ -101,6 +101,52 @@ describe('routed acceptance verify-green', () => {
       .resolves.toEqual({ kind: 'verified', headSha: 'a'.repeat(40) });
   });
 
+  describe('disposition-only child with no acceptance run', () => {
+    const marker = { outcome: 'disposition-only', dispositions: [{ criterion: 'Story 1 happy: proven below', disposition: 'planned-lower-layer-test', citation: 'plan.md:1', owningTask: 'Task 1', layer: 'unit' }] };
+    async function dispositionFixture(refBlob: string | undefined) {
+      const root = await mkdtemp(join(tmpdir(), 'verify-green-'));
+      roots.push(root);
+      const childDir = join(root, '.pipeline', 'children', '1');
+      await mkdir(childDir, { recursive: true });
+      await writeFile(join(childDir, 'acceptance-specs-red.json'), JSON.stringify(marker));
+      const git: GitRunner = vi.fn(async (args) => {
+        if (args[0] === 'rev-parse' && args.at(-1) === 'HEAD') return { exitCode: 0, stdout: 'a'.repeat(40), stderr: '' };
+        if (args[0] === 'rev-parse' && args.at(-1) === 'refs/conductor/demo/red/c1') {
+          return refBlob === undefined ? { exitCode: 1, stdout: '', stderr: '' } : { exitCode: 0, stdout: 'b'.repeat(40), stderr: '' };
+        }
+        if (args[0] === 'cat-file' && refBlob !== undefined) return { exitCode: 0, stdout: refBlob, stderr: '' };
+        return { exitCode: 1, stdout: '', stderr: '' };
+      });
+      return { root, childDir, git };
+    }
+
+    it('verifies without running anything when the marker digest matches the close-time RED ref', async () => {
+      const digest = createHash('sha256').update(JSON.stringify(marker), 'utf8').digest('hex');
+      const subject = await dispositionFixture(`${digest}\n`);
+      const exec = vi.fn();
+
+      await expect(verifyGreenAcceptance({ worktree: subject.root, slug: 'demo', roundId, host: child, git: subject.git, exec }))
+        .resolves.toEqual({ kind: 'verified', headSha: 'a'.repeat(40) });
+      expect(exec).not.toHaveBeenCalled();
+      await expect(checkStepCompletion(subject.root, 'acceptance_specs', {
+        routedVerifyGreen: { roundId: 'r1', host: child, headSha: 'a'.repeat(40) },
+      })).resolves.toEqual({ done: true, viaException: false });
+    });
+
+    it.each([
+      ['its digest differs from the close-time RED ref', 'not-the-marker-digest\n'],
+      ['no close-time RED ref exists', undefined],
+    ])('refuses when %s', async (_name, refBlob) => {
+      const subject = await dispositionFixture(refBlob);
+      const exec = vi.fn();
+
+      await expect(verifyGreenAcceptance({ worktree: subject.root, slug: 'demo', roundId, host: child, git: subject.git, exec }))
+        .resolves.toMatchObject({ kind: 'refused', reason: expect.stringContaining('missing command or cwd') });
+      expect(exec).not.toHaveBeenCalled();
+      await expect(readFile(join(subject.childDir, 'acceptance-verify-green.json'), 'utf8')).rejects.toThrow();
+    });
+  });
+
   it.each([
     ['a failing spec', { executed: 1, passed: 0, failed: 1, skipped: 0, errors: 0 }],
     ['a skipped spec', { executed: 1, passed: 1, failed: 0, skipped: 1, errors: 0 }],

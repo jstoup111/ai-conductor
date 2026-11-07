@@ -79,6 +79,10 @@ describe('daemon-lock boundary: confine lock primitive (FR-20, C3)', () => {
       // Conduct-state leasing protects one state file, not daemon process
       // ownership; its separate owner record deliberately uses O_EXCL.
       'engine/conduct-state-lease.ts',
+      // Feature dispatch leasing serializes a single feature's daemon and
+      // operator work. Its exclusive owner publication and stale-recovery
+      // claim do not use the global daemon pidfile or its ownership boundary.
+      'engine/feature-dispatch-lease.ts',
       // Atomic state replacement creates a unique same-directory temporary
       // file before rename; it is unrelated to the daemon pidfile.
       'engine/filesystem-conduct-state-store.ts',

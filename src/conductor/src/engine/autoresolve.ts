@@ -20,7 +20,7 @@ import {
   postSupersessionAudit,
   NEEDS_REMEDIATION_MARKER,
 } from './pr-labels.js';
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import {
   resolveRebaseConflicts,
   type RebaseOutcome,

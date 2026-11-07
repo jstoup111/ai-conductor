@@ -1,9 +1,10 @@
 import { CHILD_REGION_STEPS, type ChildId } from '../child-context.js';
 import { makeGitRunner } from '../rebase.js';
 import type { GitRunner } from '../rebase.js';
-import { ConductorEventEmitter } from '../../ui/events.js';
+import { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import { EventPersister } from '../event-persister.js';
 import { resolveActiveChild, resolveSealedLeaf } from '../child-cursor.js';
+import type { RestackResolver } from '../restack/restack-resolver.js';
 import { runRestack, type RunRestackResult } from '../restack/restack-executor.js';
 import { haltRestack } from '../restack/restack-move.js';
 import { writeHaltMarker } from '../halt-marker.js';
@@ -45,6 +46,47 @@ export type AdvanceRoundResult =
   | { readonly kind: 'leaf-returned' }
   | { readonly kind: 'unavailable'; readonly detail: string };
 
+export type SettleDerivedNoOpHostResult =
+  | { readonly kind: 'settled' }
+  | { readonly kind: 'halt' }
+  | { readonly kind: 'refused' };
+
+export interface SettleDerivedNoOpHostInput {
+  readonly worktree: string;
+  readonly slug: string;
+  readonly roundId: RoundId;
+  readonly host: ChildId;
+  readonly git?: GitRunner;
+}
+
+/**
+ * Starts the ordinary routed exit for a host whose admitted work is already
+ * complete.  A no-op may only settle while there is another host whose work
+ * could still advance the round; otherwise the caller preserves the existing
+ * needs-human halt.
+ */
+export async function settleDerivedNoOpHost(input: SettleDerivedNoOpHostInput): Promise<SettleDerivedNoOpHostResult> {
+  const git = input.git ?? makeGitRunner(input.worktree);
+  const stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
+  if (stored.kind !== 'record' || stored.record.kind !== 'audit' || stored.record.hosts[input.host] !== 'admitted') {
+    return { kind: 'refused' };
+  }
+
+  const canAdvanceAnotherHost = Object.entries(stored.record.hosts).some(([rawHost, state]) =>
+    Number(rawHost) !== input.host && (state === 'pending' || state === 'restacked' || state === 'rerouted'));
+  if (!canAdvanceAnotherHost) return { kind: 'halt' };
+
+  const repairing = transitionHost(stored, input.host, 'repairing', {
+    credit: false,
+    reason: 'derived-already-complete',
+  });
+  if (repairing.kind !== 'updated') return { kind: 'refused' };
+  const wrote = await writeRoutingTransaction(input.worktree, input.slug, [
+    { kind: 'update-record', previous: stored, record: repairing.record },
+  ], { git });
+  return wrote.kind === 'updated' ? { kind: 'settled' } : { kind: 'refused' };
+}
+
 function pendingHost(state: HostState): boolean {
   switch (state) {
     case 'pending':
@@ -56,6 +98,8 @@ function pendingHost(state: HostState): boolean {
     case 'restacked':
     case 'done':
     case 'rerouted':
+    case 'abandoning':
+    case 'abandoned':
       return false;
   }
   return assertNever(state);
@@ -133,7 +177,9 @@ export async function advanceRound(
   }
   const admitted = transitionHost(stored, next.host, 'admitted', { credit: false });
   if (admitted.kind !== 'updated') return { kind: 'unavailable', detail: `cannot admit routed host ${next.host}` };
-  const record = { ...admitted.record, currentHostIndex: next.index };
+  // The entry baseline belongs to the settled host; the admitted host records
+  // its own when it enters its BUILD region.
+  const record = { ...admitted.record, currentHostIndex: next.index, entry: undefined };
   const wrote = await writeRoutingTransaction(worktree, slug, [
     { kind: 'update-record', previous: stored, record },
     { kind: 'create-marker', marker: { host: next.host, roundId: stored.record.roundId } },
@@ -190,7 +236,7 @@ export async function returnToLeaf(
   worktree: string,
   slug: string,
   stored: StoredRouteRecord,
-  options: { readonly git?: GitRunner; readonly events?: ConductorEventEmitter } = {},
+  options: { readonly git?: GitRunner; readonly events?: ConductorEventEmitter; readonly abandon?: boolean } = {},
 ): Promise<Extract<AdvanceRoundResult, { readonly kind: 'closed' | 'leaf-returned' | 'unavailable' }>> {
   const git = options.git ?? makeGitRunner(worktree);
   if (stored.record.phase === 'closed') return { kind: 'closed' };
@@ -220,8 +266,13 @@ export async function returnToLeaf(
     if (reread.kind !== 'record') return { kind: 'unavailable', detail: 'cannot reread leaf return record' };
     currentStored = reread;
   }
-  const restageFailure = await restageLeafGates(worktree);
-  if (restageFailure !== undefined) return { kind: 'unavailable', detail: restageFailure };
+  // An operator abandon restores the host's prior region and deliberately
+  // discards its landing. Returning from that path is bookkeeping only: the
+  // leaf's prior whole-feature validation remains authoritative.
+  if (!options.abandon) {
+    const restageFailure = await restageLeafGates(worktree);
+    if (restageFailure !== undefined) return { kind: 'unavailable', detail: restageFailure };
+  }
   const closed = { ...currentStored.record, phase: 'closed' as const };
   const closedWrite = await writeRoutingTransaction(worktree, slug, [{ kind: 'update-record', previous: currentStored, record: closed }], { git });
   if (closedWrite.kind !== 'updated') return { kind: 'unavailable', detail: `round close ${closedWrite.kind}` };
@@ -260,6 +311,9 @@ export interface RequestRoutedExitInput {
   readonly skipBuiltCompareAndSwap?: boolean;
   readonly persist?: PersistOutboxEvent;
   readonly git?: GitRunner;
+  /** Provider-backed resolver for replay conflicts in the exit restack, and its attempt budget. */
+  readonly resolver?: RestackResolver;
+  readonly resolverCap?: number;
 }
 
 /** Reads the durable entry baseline before a routed host selects its exit. */
@@ -290,6 +344,16 @@ export async function hostNoOpEvidence(
 
 function halted(detail: string): RequestRoutedExitResult {
   return { kind: 'halted', detail };
+}
+
+function unlandedClosedChildCommitsHalt(slug: string, host: ChildId, child: ChildId): string {
+  return [
+    `unlanded-closed-child-commits: child ${child}`,
+    // ai-conductor:session-command-context=operator-only
+    `ai-conductor stack land --slug ${slug} --child ${host} --carry ${child} --reason "<why>"`,
+    // /ai-conductor:session-command-context
+    '',
+  ].join('\n');
 }
 
 /**
@@ -394,6 +458,17 @@ export async function requestRoutedExit(input: RequestRoutedExitInput): Promise<
     await writeHaltMarker(input.worktree, `routing foreign-round commit: child ${child}\n`, 'needs-human', input.events);
     return halted(`routed exit host ${input.host}: foreign round on child ${child}`);
   }
+  const declaredOrigins = new Set(cursor.coOrigins ?? []);
+  const uncarried = cursor.repairChildren.find((child) => child !== input.host && !declaredOrigins.has(child));
+  if (uncarried !== undefined) {
+    await writeHaltMarker(
+      input.worktree,
+      unlandedClosedChildCommitsHalt(input.slug, input.host, uncarried),
+      'needs-human',
+      input.events,
+    );
+    return halted(`routed exit host ${input.host}: unlanded closed-child commits on child ${uncarried}`);
+  }
   const origins = [...new Set([input.host, ...(cursor.coOrigins ?? [])])].sort((left, right) => left - right) as ChildId[];
   const restack = await runRestack({
     worktree: input.worktree,
@@ -402,6 +477,8 @@ export async function requestRoutedExit(input: RequestRoutedExitInput): Promise<
     originatingChildren: origins,
     routed: { roundId: input.roundId, host: input.host, routeOld: built.blob, markerOld: marker.blob },
     ...(input.events === undefined ? {} : { events: input.events }),
+    ...(input.resolver === undefined ? {} : { resolver: input.resolver }),
+    ...(input.resolverCap === undefined ? {} : { resolverCap: input.resolverCap }),
     git,
   });
   if (restack.kind !== 'applied') return halted(`routed exit host ${input.host}: ${restackDetail(restack)}`);
@@ -418,5 +495,9 @@ export async function requestRoutedExit(input: RequestRoutedExitInput): Promise<
 }
 
 function restackDetail(result: Exclude<RunRestackResult, { readonly kind: 'applied' }>): string {
-  return result.kind === 'unavailable' ? result.detail : result.kind === 'refused' ? result.reason : result.kind;
+  return result.kind === 'halted' || result.kind === 'unavailable'
+    ? result.detail
+    : result.kind === 'refused'
+      ? result.reason
+      : result.kind;
 }

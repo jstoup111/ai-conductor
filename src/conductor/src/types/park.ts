@@ -1,0 +1,1 @@
+export type RefusalReason = 'invalid-slug' | 'in-flight' | 'child-branch' | 'ancestry-check-failed' | 'branch-missing' | 'no-merge-proof' | 'unmerged-commits' | 'branch-behind-merged-head' | 'record-missing' | 'dirty-worktree' | 'worktree-remove-failed' | 'branch-delete-failed' | 'unpark-failed';

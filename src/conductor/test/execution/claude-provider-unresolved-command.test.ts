@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -16,7 +18,7 @@ const successfulEnvelopePath = fileURLToPath(
 );
 
 async function invokeEnvelope(prompt: string, envelope: Record<string, unknown>) {
-  const provider = new ClaudeProvider(undefined, () => Promise.resolve({
+  const provider = new ClaudeProvider(dispatchGitGuard, undefined, () => Promise.resolve({
     stdout: JSON.stringify({ ...envelope, type: 'result' }),
     stderr: '',
     exitCode: 0,
@@ -28,7 +30,7 @@ async function invokeEnvelope(prompt: string, envelope: Record<string, unknown>)
 describe('Claude custom-step command resolution evidence (#1311)', () => {
   it('reports the pinned zero-turn /pipeline envelope as an unresolved command failure', async () => {
     const unresolvedRaw = await readFile(unresolvedEnvelopePath, 'utf8');
-    const provider = new ClaudeProvider(undefined, () => Promise.resolve({
+    const provider = new ClaudeProvider(dispatchGitGuard, undefined, () => Promise.resolve({
       stdout: JSON.stringify({ ...JSON.parse(unresolvedRaw), type: 'result' }),
       stderr: '',
       exitCode: 0,

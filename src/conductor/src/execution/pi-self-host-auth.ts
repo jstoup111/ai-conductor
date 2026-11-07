@@ -2,10 +2,10 @@ import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execa } from 'execa';
 import { parsePiModelId } from './pi-provider.js';
-import { PI_PROVIDER, providerDescriptor } from './provider-catalog.js';
 import { scrubTmuxEnvironment } from './tmux-environment.js';
-import { assertRealExecAllowed } from '../engine/tracker-client.js';
-import { ProviderSetupUnavailableError } from '../engine/provider-setup-failure.js';
+import { assertRealExecAllowed } from './real-exec-guard.js';
+import { ProviderSetupUnavailableError } from './provider-setup-failure.js';
+import { PI_DISPLAY_NAME, PI_PROVIDER } from './provider-catalog-identities.js';
 import type { SelfHostAuthPreparation } from './llm-provider.js';
 
 export interface PiSelfHostAuthFs {
@@ -42,14 +42,6 @@ const realPiSelfHostAuthRunner: PiSelfHostAuthRunner = async (executable, argv, 
   };
 };
 
-/**
- * Catalog display name; diagnostics render it rather than restating the
- * provider. Read lazily: the catalog and Pi adapter import each other.
- */
-function piDisplayName(): string {
-  return providerDescriptor(PI_PROVIDER).displayName;
-}
-
 const UNKNOWN_PROVIDER_RE = /\bunknown provider\b/i;
 
 function isTimedOut(error: unknown): boolean {
@@ -65,7 +57,7 @@ function setupUnavailable(providerSegment: string, reason: string): ProviderSetu
     provider: PI_PROVIDER,
     capability: 'self-host-isolation',
     reason,
-    recoveryAction: `Configure an API key for ${piDisplayName()} provider ${providerSegment} in the operator ${piDisplayName()} home, then retry.`,
+    recoveryAction: `Configure an API key for ${PI_DISPLAY_NAME} provider ${providerSegment} in the operator ${PI_DISPLAY_NAME} home, then retry.`,
   });
 }
 
@@ -86,7 +78,7 @@ export async function preparePiSelfHostAuth({
   fs?: PiSelfHostAuthFs;
 }): Promise<SelfHostAuthPreparation> {
   const parsed = parsePiModelId(model);
-  if (!('provider' in parsed)) throw new TypeError(`Invalid ${piDisplayName()} model id: ${parsed.reason}`);
+  if (!('provider' in parsed)) throw new TypeError(`Invalid ${PI_DISPLAY_NAME} model id: ${parsed.reason}`);
 
   let result: Awaited<ReturnType<PiSelfHostAuthRunner>>;
   try {
@@ -97,24 +89,24 @@ export async function preparePiSelfHostAuth({
     });
   } catch (error) {
     if (isTimedOut(error)) {
-      throw setupUnavailable(parsed.provider, `${piDisplayName()} self-host credential resolution for ${parsed.provider} timed out.`);
+      throw setupUnavailable(parsed.provider, `${PI_DISPLAY_NAME} self-host credential resolution for ${parsed.provider} timed out.`);
     }
-    throw setupUnavailable(parsed.provider, `${piDisplayName()} self-host credential resolution for ${parsed.provider} failed before reporting an exit status.`);
+    throw setupUnavailable(parsed.provider, `${PI_DISPLAY_NAME} self-host credential resolution for ${parsed.provider} failed before reporting an exit status.`);
   }
 
   if (result.timedOut === true) {
-    throw setupUnavailable(parsed.provider, `${piDisplayName()} self-host credential resolution for ${parsed.provider} timed out.`);
+    throw setupUnavailable(parsed.provider, `${PI_DISPLAY_NAME} self-host credential resolution for ${parsed.provider} timed out.`);
   }
 
   const exitCode = result.exitCode ?? 0;
   if (exitCode !== 0) {
     const classification = resolverOutputNamesUnknownProvider(result) ? ' reported an unknown provider' : '';
-    throw setupUnavailable(parsed.provider, `${piDisplayName()} self-host credential resolution for ${parsed.provider}${classification} with exit status ${exitCode}.`);
+    throw setupUnavailable(parsed.provider, `${PI_DISPLAY_NAME} self-host credential resolution for ${parsed.provider}${classification} with exit status ${exitCode}.`);
   }
 
   const key = result.stdout.trim();
   if (!key) {
-    throw setupUnavailable(parsed.provider, `${piDisplayName()} self-host credential resolution for ${parsed.provider} returned empty output with exit status ${exitCode}.`);
+    throw setupUnavailable(parsed.provider, `${PI_DISPLAY_NAME} self-host credential resolution for ${parsed.provider} returned empty output with exit status ${exitCode}.`);
   }
 
   const authPath = join(homeDir, 'auth.json');

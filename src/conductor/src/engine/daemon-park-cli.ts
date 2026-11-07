@@ -12,6 +12,7 @@ import type { GithubOperationEventEmitter } from './github-operations.js';
 import { existsSync, writeSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { resolveFeatureArtifact, worktreeManifestSource } from './feature-manifest-source.js';
 import {
   isOperatorParked,
   removeOperatorPark,
@@ -102,10 +103,17 @@ export function detectDaemonParkCommand(argv: string[]): DaemonParkDispatch | nu
  * worktree cwd) so that a plan at the main root is visible even when parking
  * from a worktree directory.
  */
-export function validateSlug(slug: string, root: string = process.cwd()): boolean {
+export function validateSlug(slug: string, root: string = process.cwd()): boolean | Promise<boolean> {
   const planPath = join(root, '.docs', 'plans', `${slug}.md`);
   const worktreePath = join(root, '.worktrees', slug);
-  return existsSync(planPath) || existsSync(worktreePath);
+  const manifestPath = join(root, '.docs', slug, 'manifest.json');
+  if (!existsSync(manifestPath)) return existsSync(planPath) || existsSync(worktreePath);
+  return resolveFeatureArtifact(
+    worktreeManifestSource(root),
+    slug,
+    'plan',
+    async () => [`.docs/plans/${slug}.md`],
+  ).then((plan) => plan.paths.some((path) => plan.origin === 'legacy' || !plan.missing.includes(path)) || existsSync(worktreePath));
 }
 
 export interface DaemonParkDeps {
@@ -334,7 +342,7 @@ export async function dispatchDaemonPark(
     }
 
     if (cmd.kind === 'park') {
-      if (!validateSlug(cmd.slug, resolvedRoot)) {
+      if (!await validateSlug(cmd.slug, resolvedRoot)) {
         out(
           `error: slug '${cmd.slug}' not found under ${resolvedRoot} (no .docs/plans/${cmd.slug}.md or .worktrees/${cmd.slug})`,
         );

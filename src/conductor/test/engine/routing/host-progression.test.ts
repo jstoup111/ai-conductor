@@ -1,4 +1,4 @@
-// Covers: task:19
+// Covers: task:7, task:19
 import { describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
@@ -54,6 +54,12 @@ describe('routed host progression', () => {
       record: record({ [child1]: 'rerouted', [child2]: 'pending', [leaf]: 'pending' }),
       queue: queue(false),
       expected: { kind: 'child-host', host: child2, index: 1 },
+    },
+    {
+      name: 'never selects an abandoning or abandoned operator host',
+      record: record({ [child1]: 'abandoning', [child2]: 'abandoned', [leaf]: 'done' }),
+      queue: queue(false),
+      expected: { kind: 'settled' },
     },
     {
       name: 'settles after every child and the leaf settle',

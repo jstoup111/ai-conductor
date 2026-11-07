@@ -1,5 +1,5 @@
-// Covers: task:60
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+// Covers: task:1, task:7, task:60
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -19,12 +19,19 @@ vi.mock('../../../src/engine/kickback-ledger.js', async (importOriginal) => {
 });
 
 import { parseChildId } from '../../../src/engine/child-context.js';
-import { readKickbackLedger } from '../../../src/engine/kickback-ledger.js';
+import {
+  applyKickbackBudgetAdjustment,
+  readKickbackLedger,
+  recordKickbackCapEvidence,
+  stageKickbackBudgetAdjustment,
+} from '../../../src/engine/kickback-ledger.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
+import { parseCommitSha } from '../../../src/engine/restack/restack-types.js';
+import { writeKickbackLedger } from '../../kickback-ledger-test-support.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord, readRouteRecord, writeRouteRecord } from '../../../src/engine/routing/route-record-store.js';
 import { settleRoundAtDispatch } from '../../../src/engine/routing/round-receipt.js';
-import { currentHostOf, emptyUnsettledReceipt, parseRoundId, parseRouteRecord, type ReceiptLapCharges } from '../../../src/engine/routing/route-types.js';
+import { currentHostOf, emptyUnsettledReceipt, parseRoundId, parseRouteRecord, type ReceiptLapCharges, type RouteRecord, type SettledRoundReceipt } from '../../../src/engine/routing/route-types.js';
 
 const host = parseChildId(1)!;
 const leaf = parseChildId(2)!;
@@ -73,7 +80,226 @@ async function fixture(options: { readonly laps?: ReceiptLapCharges; readonly le
   return { root, git, firstHost: options.leafOnly ? leaf : host };
 }
 
+async function settlementFixture(options: {
+  readonly roundId?: string;
+  readonly laps?: ReceiptLapCharges;
+  readonly growth?: number;
+  readonly allocation?: RouteRecord['allocation'];
+  readonly items?: RouteRecord['items'];
+} = {}) {
+  const root = await mkdtemp(join(tmpdir(), 'round-receipt-settlement-'));
+  const git = makeGitRunner(root);
+  await git(['init', '-q', '-b', 'main']);
+  await git(['config', 'user.email', 'receipt@example.test']);
+  await git(['config', 'user.name', 'Receipt']);
+  await writeFile(join(root, 'base.txt'), 'base\n');
+  await git(['add', 'base.txt']);
+  await git(['commit', '-qm', 'base']);
+  const fixtureRoundId = parseRoundId(options.roundId ?? 'r8')!;
+  const allocation = options.allocation ?? {
+    [host]: { remTaskIds: ['rem-prd-audit-6.r1', 'rem-prd-audit-6.r2'], blockBodies: ['### Task rem-prd-audit-6.r1\n', '### Task rem-prd-audit-6.r2\n'] },
+  };
+  const made = await createRouteRecord(root, 'demo', {
+    roundId: fixtureRoundId,
+    sealedAuthored: 1,
+    kind: 'audit',
+    items: options.items ?? [
+      { findingId: 'S1.1', kind: 'audit', owner: host, host, reason: 'task-slice', fallback: [] },
+      { findingId: 'S3.1', kind: 'audit', owner: host, host, reason: 'task-slice', fallback: [] },
+    ],
+    allocation,
+    receipt: {
+      ...emptyUnsettledReceipt(),
+      laps: options.laps ?? { prd_audit: 1 },
+      growth: options.growth ?? Object.values(allocation).reduce((sum, value) => sum + value.remTaskIds.length, 0),
+    },
+  });
+  if (made.kind !== 'created') throw new Error(made.kind);
+  return { root, git, roundId: fixtureRoundId };
+}
+
+async function operatorFixture() {
+  const subject = await fixture({ leafOnly: true });
+  const initial = await readRouteRecord(subject.root, 'demo', roundId, { git: subject.git });
+  if (initial.kind !== 'record') throw new Error('missing initial operator route record');
+  if ((await admitRound(subject.root, 'demo', initial.record, subject.firstHost, { git: subject.git })).kind !== 'admitted') {
+    throw new Error('cannot admit operator route record');
+  }
+  const stored = await readRouteRecord(subject.root, 'demo', roundId, { git: subject.git });
+  if (stored.kind !== 'record') throw new Error('missing operator route record');
+  const tip = parseCommitSha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
+  if (!tip) throw new Error('invalid operator tip');
+  const operator: RouteRecord = {
+    ...stored.record,
+    kind: 'operator',
+    receipt: emptyUnsettledReceipt(),
+    operator: {
+      origin: 'land',
+      reason: 'reviewer requested change',
+      operator: 'operator@example.test',
+      entryStep: 'build',
+      carried: [],
+      otherTips: { 'feat/daemon-demo': tip },
+      priorRegion: {
+        statuses: { acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' },
+        verdicts: {},
+      },
+    },
+  };
+  if ((await writeRouteRecord(subject.root, stored, operator, { git: subject.git })).kind !== 'updated') {
+    throw new Error('cannot write operator route record');
+  }
+  return subject;
+}
+
 describe('round receipt settlement', () => {
+  it('describes a growth-refused round with its findings, tasks, charge, and settled ledger position', async () => {
+    const subject = await settlementFixture();
+    try {
+      await writeKickbackLedger(subject.root, {
+        version: 1, effectiveGrowthCap: 14, gates: {}, growth: { authored: 1, added: 13, byGate: {} },
+      });
+
+      await expect(settleRoundAtDispatch({ projectRoot: subject.root, slug: 'demo', roundId: subject.roundId, dispatchingChild: host, budgets: budgets(), routing, git: subject.git }))
+        .resolves.toEqual({
+          kind: 'exhausted', gate: 'prd_audit', allowance: 'growth', round: {
+            roundId: 'r8', findingIds: ['S1.1', 'S3.1'], remTaskIds: ['rem-prd-audit-6.r1', 'rem-prd-audit-6.r2'], existingTaskIds: [], pendingAsBuiltFindings: [],
+            charges: { prd_audit: { laps: 1, growth: 2 } }, settledAdded: 13, growthCap: 14,
+            growthCapSource: 'raised', growthAuthored: 1, growthAuthoredSource: 'plan', settledGrowthByGate: {},
+            capEvidence: { consumed: 13, limit: 14 },
+          },
+        });
+    } finally { await rm(subject.root, { recursive: true, force: true }); }
+  });
+
+  it('uses host order, deterministic growth ownership, and existing-task bindings in refused-round detail', async () => {
+    const subject = await settlementFixture({
+      laps: { architecture_review_as_built: 1, prd_audit: 1 }, growth: 3,
+      allocation: {
+        [host]: { remTaskIds: ['rem-host-1'], blockBodies: ['### Task rem-host-1\n'] },
+        [leaf]: { remTaskIds: ['rem-host-2'], blockBodies: ['### Task rem-host-2\n'] },
+      },
+    });
+    const existing = await settlementFixture({
+      roundId: 'r3', growth: 0, allocation: { [host]: { remTaskIds: [], blockBodies: [] } },
+      items: [{ findingId: 'S2.1', kind: 'audit', owner: host, host, reason: 'task-slice', fallback: [], existingTask: true, taskIds: ['4', '7'] }],
+    });
+    try {
+      await writeKickbackLedger(subject.root, { version: 1, effectiveGrowthCap: 2, gates: {}, growth: { authored: 1, added: 0, byGate: {} } });
+      await writeKickbackLedger(existing.root, { version: 1, gates: { prd_audit: { count: 0, cumulative: 0, laps: 2, treeHash: null, lastReason: '', priorVerdict: false, resolvedBefore: 0 } }, growth: { authored: 1, added: 0, byGate: {} } });
+
+      await expect(settleRoundAtDispatch({ projectRoot: subject.root, slug: 'demo', roundId: subject.roundId, dispatchingChild: host, budgets: budgets(['prd_audit', 'architecture_review_as_built']), routing, git: subject.git }))
+        .resolves.toMatchObject({ round: { remTaskIds: ['rem-host-1', 'rem-host-2'], charges: { prd_audit: { laps: 1, growth: 3 }, architecture_review_as_built: { laps: 1, growth: 0 } } } });
+      await expect(settleRoundAtDispatch({ projectRoot: existing.root, slug: 'demo', roundId: existing.roundId, dispatchingChild: host, budgets: budgets(), routing, git: existing.git }))
+        .resolves.toMatchObject({ kind: 'exhausted', round: { remTaskIds: [], existingTaskIds: ['4', '7'] } });
+    } finally { await Promise.all([subject.root, existing.root].map((root) => rm(root, { recursive: true, force: true }))); }
+  });
+
+  it('reports reconciled settled growth, then settles after the necessary growth-cap raise', async () => {
+    const subject = await settlementFixture({ growth: 3 });
+    try {
+      const earlierRoundId = parseRoundId('r4')!;
+      const created = await createRouteRecord(subject.root, 'demo', {
+        roundId: earlierRoundId, sealedAuthored: 1, kind: 'audit',
+        items: [{ findingId: 'earlier', kind: 'audit', owner: host, host, reason: 'task-slice', fallback: [] }],
+        allocation: { [host]: { remTaskIds: ['rem-earlier-task', 'rem-earlier-task-2'], blockBodies: ['### Task rem-earlier-task\n', '### Task rem-earlier-task-2\n'] } },
+        receipt: { ...emptyUnsettledReceipt(), laps: { prd_audit: 1 }, growth: 2 },
+      }, { git: subject.git });
+      if (created.kind !== 'created') throw new Error('cannot create earlier record');
+      const earlierStored = await readRouteRecord(subject.root, 'demo', earlierRoundId, { git: subject.git });
+      if (earlierStored.kind !== 'record') throw new Error('missing earlier route record');
+      const settledReceipt: SettledRoundReceipt = {
+        ...earlierStored.record.receipt,
+        settlementId: 'r4-settled',
+        acks: { [host]: true } as Record<typeof host, true>,
+      };
+      const settledEarlier: RouteRecord = { ...earlierStored.record, receipt: settledReceipt };
+      if ((await writeRouteRecord(subject.root, earlierStored, settledEarlier, { git: subject.git })).kind !== 'updated') throw new Error('cannot seed earlier record');
+      await writeKickbackLedger(subject.root, { version: 1, effectiveGrowthCap: 10, gates: {}, growth: { authored: 1, added: 6, byGate: {} } });
+
+      await expect(settleRoundAtDispatch({ projectRoot: subject.root, slug: 'demo', roundId: subject.roundId, dispatchingChild: host, budgets: budgets(), routing, git: subject.git }))
+        .resolves.toMatchObject({ kind: 'exhausted', round: { settledAdded: 8, growthCap: 10 } });
+
+      const r8 = await settlementFixture();
+      try {
+        await writeKickbackLedger(r8.root, { version: 1, effectiveGrowthCap: 14, gates: {}, growth: { authored: 1, added: 13, byGate: {} } });
+        await expect(settleRoundAtDispatch({ projectRoot: r8.root, slug: 'demo', roundId: r8.roundId, dispatchingChild: host, budgets: budgets(), routing, git: r8.git })).resolves.toMatchObject({ kind: 'exhausted' });
+        await writeKickbackLedger(r8.root, { version: 1, effectiveGrowthCap: 15, gates: {}, growth: { authored: 1, added: 13, byGate: {} } });
+        await expect(settleRoundAtDispatch({ projectRoot: r8.root, slug: 'demo', roundId: r8.roundId, dispatchingChild: host, budgets: budgets(), routing, git: r8.git })).resolves.toMatchObject({ kind: 'settled' });
+        expect(await readKickbackLedger(r8.root)).toMatchObject({ growth: { added: 15 }, gates: { prd_audit: { laps: 1 } } });
+      } finally { await rm(r8.root, { recursive: true, force: true }); }
+    } finally { await rm(subject.root, { recursive: true, force: true }); }
+  });
+
+  it('refuses an oversized round without assigning a receipt settlement or mutating the ledger', async () => {
+    const subject = await settlementFixture({ growth: 17 });
+    try {
+      await writeKickbackLedger(subject.root, { version: 1, effectiveGrowthCap: 16, gates: {}, growth: { authored: 1, added: 0, byGate: {} } });
+      const ledgerPath = join(subject.root, '.pipeline', 'kickback-ledger.json');
+      const before = await readFile(ledgerPath, 'utf8');
+      await expect(settleRoundAtDispatch({ projectRoot: subject.root, slug: 'demo', roundId: subject.roundId, dispatchingChild: host, budgets: budgets(), routing, git: subject.git }))
+        .resolves.toMatchObject({ kind: 'exhausted', round: { settledAdded: 0, growthCap: 16 } });
+      expect(await readFile(ledgerPath, 'utf8')).toBe(before);
+      const stored = await readRouteRecord(subject.root, 'demo', subject.roundId, { git: subject.git });
+      expect(stored).toMatchObject({ kind: 'record' });
+      if (stored.kind === 'record') expect(stored.record.receipt).not.toHaveProperty('settlementId');
+    } finally { await rm(subject.root, { recursive: true, force: true }); }
+  });
+
+  it('reports settled laps for a refused receipt and accepts a matching reset recovery', async () => {
+    const subject = await settlementFixture({ laps: { prd_audit: 1 }, growth: 0 });
+    try {
+      await writeKickbackLedger(subject.root, {
+        version: 1,
+        gates: { prd_audit: { count: 0, cumulative: 0, laps: 2, treeHash: null, lastReason: '', priorVerdict: false, resolvedBefore: 0 } },
+        growth: { authored: 1, added: 0, byGate: {} },
+      });
+      const ledgerPath = join(subject.root, '.pipeline', 'kickback-ledger.json');
+      const before = await readFile(ledgerPath, 'utf8');
+
+      const result = await settleRoundAtDispatch({
+        projectRoot: subject.root, slug: 'demo', roundId: subject.roundId, dispatchingChild: host, budgets: budgets(), routing, git: subject.git,
+      });
+
+      expect(result).toMatchObject({ kind: 'exhausted', gate: 'prd_audit', allowance: 'laps', round: { capEvidence: { consumed: 2, limit: 2 } } });
+      expect(await readFile(ledgerPath, 'utf8')).toBe(before);
+      if (result.kind !== 'exhausted') throw new Error('expected lap exhaustion');
+
+      const capEntry = await recordKickbackCapEvidence(subject.root, result.gate, {
+        ...result.round.capEvidence,
+        allowance: result.allowance,
+        latestReason: 'lap cap exhausted',
+        haltGeneration: 'lap-cap-halt',
+      });
+      const adjustment = {
+        id: 'lap-cap-reset', kind: 'reset' as const, beforeConsumed: 2, afterConsumed: 0,
+        beforeLimit: 2, afterLimit: 2, operator: 'operator', rationale: 'reset reviewed lap budget',
+        timestamp: '2026-10-28T00:00:00.000Z', haltGeneration: capEntry.capEvidence!.haltGeneration,
+      };
+
+      await expect(stageKickbackBudgetAdjustment(subject.root, result.gate, () => adjustment)).resolves.toEqual(adjustment);
+      await expect(applyKickbackBudgetAdjustment(subject.root, result.gate, adjustment, 2)).resolves.toMatchObject({ laps: 0, effectiveLapCap: 2 });
+    } finally { await rm(subject.root, { recursive: true, force: true }); }
+  });
+
+  it('acknowledges an operator dispatch without settling or charging its empty receipt', async () => {
+    const subject = await operatorFixture();
+    try {
+      const before = await readKickbackLedger(subject.root);
+      const result = await settleRoundAtDispatch({
+        projectRoot: subject.root, slug: 'demo', roundId, dispatchingChild: subject.firstHost,
+        budgets: budgets(), routing, git: subject.git,
+      });
+
+      expect(result).toEqual({ kind: 'acknowledged' });
+      expect(result).not.toHaveProperty('settlementId');
+      expect(await readKickbackLedger(subject.root)).toEqual(before);
+      await expect(readRouteRecord(subject.root, 'demo', roundId, { git: subject.git })).resolves.toMatchObject({
+        kind: 'record', record: { receipt: { laps: {}, growth: 0, taskless: {}, acks: {} } },
+      });
+    } finally { await rm(subject.root, { recursive: true, force: true }); }
+  });
+
   it('uses the parser current host for sparse host keys before settling', async () => {
     const root = await mkdtemp(join(tmpdir(), 'round-receipt-sparse-hosts-'));
     const git = makeGitRunner(root);

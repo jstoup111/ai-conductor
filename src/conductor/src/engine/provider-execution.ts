@@ -46,7 +46,7 @@ import {
   normalizeProviderSetupUnavailable,
   type ProviderSetupUnavailable,
   type ProviderSetupExhaustion,
-} from './provider-setup-failure.js';
+} from '../execution/provider-setup-failure.js';
 import { acquireScratchHome, releaseScratchHome } from './self-host/provider-scratch.js';
 import {
   transcriptCaptureSource,
@@ -172,7 +172,7 @@ export interface PreparedCandidateOperationContext {
   /** Candidate-local review policy may tighten prompt, cwd, or access after preparation. */
   invoke(
     overrides?: Partial<Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>>,
-    onModelRung?: (candidate: ProviderCandidateRung, invoke: () => Promise<InvokeResult>) => Promise<InvokeResult>,
+    onModelRung?: (candidate: ProviderCandidateRung, invoke: (overrides?: Partial<Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>>) => Promise<InvokeResult>) => Promise<InvokeResult>,
   ): Promise<InvokeResult>;
   /** Candidate-owned cleanup, always run from the provider execution finally. */
   onTeardown(teardown: () => Promise<void>): void;
@@ -468,6 +468,11 @@ function skippedCandidateSetupUnavailable(provider: string, result: InvokeResult
     reason: result.providerUnavailableReason ?? result.output ?? 'Provider read-only review mode is unavailable.',
     recoveryAction: 'Install or update the provider so its read-only review mode is available, then re-queue this feature.',
   };
+  if (result.systemPromptUndeliverable === true) return {
+    provider, capability: 'system-prompt-delivery',
+    reason: result.output ?? 'Provider cannot receive the engine system prompt.',
+    recoveryAction: 'Declare systemPromptCapability on the provider and deliver InvokeOptions.systemPrompt, then re-queue this feature.',
+  };
   if (result.providerUnavailable === true) return {
     provider, capability: 'synchronous-spawn-permit',
     reason: result.providerUnavailableReason ?? result.output ?? 'Provider lifecycle capability is unavailable.',
@@ -673,7 +678,7 @@ export interface InvokeProviderCandidateInput {
   modelFallbackLadder?: readonly string[];
   /** Allocate invocation-only resources after any per-model cache lookup. */
   prepareInvocationOptions?: (options: InvokeOptions) => Promise<InvokeOptions>;
-  onModelRung?: (candidate: ProviderCandidateRung, invoke: () => Promise<InvokeResult>) => Promise<InvokeResult>;
+  onModelRung?: (candidate: ProviderCandidateRung, invoke: (overrides?: Partial<Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>>) => Promise<InvokeResult>) => Promise<InvokeResult>;
   onCandidateStart?: (model: string | undefined) => void | Promise<void>;
 }
 
@@ -760,11 +765,11 @@ export async function invokeProviderCandidate({
         invocationOptions,
         prepareFallback,
         (rungOptions) => onModelRung
-          ? onModelRung({ providerKey, ...resolved, model: rungOptions.model ?? resolved.model }, () => invokeModel(rungOptions))
+          ? onModelRung({ providerKey, ...resolved, model: rungOptions.model ?? resolved.model }, (overrides) => invokeModel({ ...rungOptions, ...overrides }))
           : invokeModel(rungOptions),
       )
     : onModelRung
-      ? { result: await onModelRung({ providerKey, ...resolved }, () => invokeModel(invocationOptions)), model: resolved.model }
+      ? { result: await onModelRung({ providerKey, ...resolved }, (overrides) => invokeModel({ ...invocationOptions, ...overrides })), model: resolved.model }
       : await invokeRuntimeResolved(runtime, invocationOptions, prepareFallback, invokeModel);
   return {
     result: invocation.result,
@@ -816,7 +821,8 @@ export function buildProviderAttemptMetadata({
   setupUnavailable,
   cachedUnavailable,
 }: BuildProviderAttemptMetadataInput): ProviderAttemptMetadata {
-  const invoked = result.providerInvocationSkipped !== true;
+  const invoked = result.providerInvocationSkipped !== true
+    && result.executionDisposition !== 'not-started';
   const failureReason = redactSafetyText(unavailable?.reason ?? result.output ?? 'Provider attempt failed.');
   return {
     provider: providerKey,
@@ -1060,7 +1066,7 @@ export async function executeProviderCandidates({
       runtimes.nativeSchemaCapabilityFor(providerKey)?.nativeOutputSchema === true;
     const invokeProvider = (
       overrides?: Partial<Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>>,
-      onModelRung?: (candidate: ProviderCandidateRung, invoke: () => Promise<InvokeResult>) => Promise<InvokeResult>,
+      onModelRung?: (candidate: ProviderCandidateRung, invoke: (overrides?: Partial<Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>>) => Promise<InvokeResult>) => Promise<InvokeResult>,
     ): Promise<InvokeResult> => {
       invocationResult ??= (async () => {
         const candidateInvocationOptions = candidateObserver
@@ -1291,7 +1297,8 @@ export async function executeProviderCandidates({
     } catch (error) {
       // A teardown that throws after the provider ran must not erase what the
       // provider billed: the completed invocation's usage stays on the attempt.
-      const billedUsage = (invocation as { result?: InvokeResult } | undefined)?.result?.tokenUsage;
+      const completedInvocation = (invocation as { result?: InvokeResult } | undefined)?.result;
+      const billedUsage = completedInvocation?.tokenUsage;
       if (nativeSchemaScratchFailure === undefined) {
         if (billedUsage !== undefined) {
           const abandoned = buildProviderAttemptMetadata({
@@ -1327,10 +1334,19 @@ export async function executeProviderCandidates({
           ? nativeSchemaScratchFailure.message
           : String(nativeSchemaScratchFailure)}`,
         ...(billedUsage ? { tokenUsage: billedUsage } : {}),
+        ...(completedInvocation?.observedIntervals
+          ? { observedIntervals: completedInvocation.observedIntervals }
+          : {}),
+        ...(completedInvocation === undefined
+          ? { executionDisposition: 'not-started' as const }
+          : {}),
       };
     }
     // A prepared cache hit or cancellation did not consult provider availability.
-    if (result.providerUnavailable === true) {
+    if (
+      result.providerUnavailable === true ||
+      result.systemPromptUndeliverable === true
+    ) {
       setupUnavailable ??= skippedCandidateSetupUnavailable(providerKey, result, cachedUnavailable);
     }
     const invokedModel = invocation?.invokedModel;

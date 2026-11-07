@@ -26,7 +26,7 @@ const FEATURE_A_DECLARATION = {
 function allDoneExcept(step: StepName, extras: Partial<ConductState> = {}): ConductState {
   const names: StepName[] = [
     'bootstrap', 'memory', 'assess', 'explore', 'prd', 'complexity', 'stories',
-    'conflict_check', 'plan', 'coherence_check', 'coverage_binding', 'architecture_diagram',
+    'conflict_check', 'plan', 'coherence_check', 'architecture_diagram',
     'architecture_review', 'worktree', 'acceptance_specs', 'build', 'test_suite',
     'build_review', 'manual_test', 'prd_audit', 'architecture_review_as_built', 'rebase', 'finish',
   ];

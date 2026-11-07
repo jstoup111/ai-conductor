@@ -51,6 +51,24 @@ describe('daemon-cli startup dashboard wiring (Task 8)', () => {
     expect(scans).toBe(0);
   });
 
+  // Covers: task:rem-prd-audit-10
+  it('uses compact rendering defaults so the console includes the processed count', async () => {
+    const rendered: string[] = [];
+    const binding = createStartupDashboardBinding({
+      projectRoot: '/project', worktreeBase: '/project/.worktrees', processedDir: '/project/.daemon/processed', log: () => {},
+      discoverTick: async () => [],
+      scanInheritedState: async () => ({ halted: [], inProgress: [], eligible: [], processed: [{ slug: 'done' }], processedCount: 1 }),
+      listOperatorParkedSlugs: async () => [],
+      reconcileParkedFeatures: async () => ({ entries: [], counts: { reconciled: 0, deferred: 0, orphaned: 0, parked: 0, refused: 0, skipped: 0 }, refusedByReason: {} }),
+      isOperatorParked: async () => false,
+      getProvenanceType: async () => null,
+      writeDashboard: (_persisted, consoleOutput) => rendered.push(consoleOutput),
+    });
+    await binding.discoverAndCacheStartup({ refresh: true });
+    await binding.renderStartupDashboard(false);
+    expect(rendered[0]).toContain('PROCESSED (');
+  });
+
   // Covers: task:rem-as-built-R7.
   it('renders the exact cached startup discovery without another discovery, root refresh, or git fetch', async () => {
     const cachedDiscovery = [{ slug: 'cached-eligible' }];

@@ -1,6 +1,7 @@
-// Covers: task:1
+// Covers: task:1, task:3
 import { describe, expect, it } from 'vitest';
 import {
+  isStepName,
   resolveExecutionIdentity,
   type ExecutionScope,
 } from '../../src/engine/execution-identity.js';
@@ -137,6 +138,18 @@ describe('engine/execution-identity', () => {
       executionContext: {
         executionId: 'execution-4',
         subject: { kind: 'lifecycle-step', step: 'not-a-step' },
+      },
+    })).toBeUndefined();
+  });
+
+  it('continues rejecting retired coverage_binding from the global lifecycle-step domain', () => {
+    expect(isStepName('coverage_binding')).toBe(false);
+    expect(resolveExecutionIdentity({
+      scope: featureOneRunOne,
+      legacyStep: 'coverage_binding',
+      executionContext: {
+        executionId: 'coverage-binding-1',
+        subject: { kind: 'lifecycle-step', step: 'coverage_binding' },
       },
     })).toBeUndefined();
   });

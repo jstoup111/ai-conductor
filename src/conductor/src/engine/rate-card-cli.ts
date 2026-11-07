@@ -19,6 +19,7 @@ import {
   type ModelRate,
   type RateCard,
 } from '../execution/rate-card.js';
+import { newerSameTierModelIds } from './model-tier-resolution.js';
 import { rateCardModelIds } from './provider-model-policy.js';
 
 export type RateCardDispatch =
@@ -92,6 +93,18 @@ export function pruneRateCard(
   return { models: pruned, missing };
 }
 
+/** Top-level ids of the upstream catalog; empty when unparseable (pruning reports that). */
+function upstreamModelIds(upstreamJson: string): string[] {
+  try {
+    const upstream: unknown = JSON.parse(upstreamJson);
+    return typeof upstream === 'object' && upstream !== null && !Array.isArray(upstream)
+      ? Object.keys(upstream)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 /** Serialize a card deterministically so a refresh with no rate change is a no-op diff. */
 export function renderRateCard(card: RateCard): string {
   return `${JSON.stringify(card, null, 2)}\n`;
@@ -157,7 +170,12 @@ export async function dispatchRateCard(
 
   let pruned: { models: Record<string, ModelRate>; missing: string[] };
   try {
-    pruned = pruneRateCard(upstreamJson, wanted);
+    // The daemon's codex catalog probe upgrades floor ids at runtime, so price
+    // the upgrade candidates too or those dispatches go cost-unmetered.
+    pruned = pruneRateCard(upstreamJson, [
+      ...wanted,
+      ...newerSameTierModelIds(wanted, upstreamModelIds(upstreamJson)),
+    ]);
   } catch (e) {
     console.error(
       `  rate-card refresh failed: ${e instanceof Error ? e.message : String(e)}. ` +

@@ -1,4 +1,4 @@
-// Covers: task:74
+// Covers: task:7, task:74
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,7 +16,7 @@ import { admitRound } from '../../../src/engine/routing/round-admission.js';
 import { consumeRoutedRepairCredit, grantRoutedRepairCredit } from '../../../src/engine/routing/round-receipt.js';
 import { createRouteRecord, readRouteRecord, transitionHost, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
 import { closureRefFor } from '../../../src/engine/routing/routing-refs.js';
-import { parseRoundId } from '../../../src/engine/routing/route-types.js';
+import { parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { ALL_STEPS } from '../../../src/engine/steps.js';
 import { writeState } from '../../../src/engine/state.js';
 import type { ConductState, StepName } from '../../../src/types/index.js';
@@ -64,7 +64,7 @@ function failingBuildReviewAggregate() {
   });
 }
 
-async function cumulativeCapFixture(credit: 'available' | 'consumed') {
+async function cumulativeCapFixture(credit: 'available' | 'consumed', routeKind: 'audit' | 'operator' = 'audit') {
   const root = await fixture();
   const git = makeGitRunner(root);
   await git(['init', '-q', '-b', 'main']);
@@ -76,6 +76,22 @@ async function cumulativeCapFixture(credit: 'available' | 'consumed') {
     allocation: { [child]: { remTaskIds: [], blockBodies: [] } },
   }, { git });
   if (route.kind !== 'created') throw new Error(`failed to create routed credit fixture: ${route.kind}`);
+  if (routeKind === 'operator') {
+    const stored = await readRouteRecord(root, 'demo', roundId, { git });
+    if (stored.kind !== 'record') throw new Error('missing operator cap route');
+    const operator: RouteRecord = {
+      ...stored.record,
+      kind: 'operator',
+      operator: {
+        origin: 'land', reason: 'reviewer request', operator: 'operator@example.test', entryStep: 'acceptance_specs',
+        carried: [], otherTips: { 'feat/c1/demo': 'a'.repeat(40) as never },
+        priorRegion: { statuses: { acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' }, verdicts: {} },
+      },
+    };
+    if ((await writeRoutingTransaction(root, 'demo', [{ kind: 'update-record', previous: stored, record: operator }], { git })).kind !== 'updated') {
+      throw new Error('cannot write operator cap route');
+    }
+  }
   const statePath = join(root, '.pipeline', 'conduct-state.json');
   const state = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])) as ConductState;
   Object.assign(state, { feature_desc: 'demo', complexity_tier: 'M', run_started_at: 1 });
@@ -261,8 +277,8 @@ describe('routed repair credit', () => {
     });
   });
 
-  it('halts needs-human and names the child after the routed credit is spent', async () => {
-    const subject = await cumulativeCapFixture('consumed');
+  it('halts an operator round with the current cumulative cap class and names child 1 after its credit is spent', async () => {
+    const subject = await cumulativeCapFixture('consumed', 'operator');
 
     await subject.conductor.run();
     expect(subject.dispatched).toEqual(['build_review']);

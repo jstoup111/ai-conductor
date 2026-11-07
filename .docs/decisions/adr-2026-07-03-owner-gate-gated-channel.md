@@ -44,6 +44,12 @@ result** — an empty dashboard with no explanation is the invisibility bug agai
 dashboard renders GATED after WAITING; a spec appears in exactly one bucket. Gate decisions
 and build outcomes are byte-identical — this channel only observes `GateDecision`.
 
+> **Amended 2026-10-24 by #1332:** "The dashboard renders GATED after WAITING" no longer holds.
+> The startup dashboard now orders groups for display by operator actionability, separately from
+> bucket precedence. GATED needs the operator, so it renders with the actionable groups, ahead of
+> WAITING. The shipped code already rendered GATED before WAITING. The rule that a spec appears
+> in exactly one bucket is unchanged.
+
 > **Decision index (backfilled 2026-10-03, #2140).** Additive citable ids over the approved text above;
 > no change of substance. Each id names a decision exactly as already stated above.
 >

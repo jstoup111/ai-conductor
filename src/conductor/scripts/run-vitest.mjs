@@ -9,6 +9,9 @@ const runRoot = installation.root;
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const packageVitest = join(packageRoot, 'node_modules', '.bin', 'vitest');
 const vitestCommand = existsSync(packageVitest) ? packageVitest : 'vitest';
+// Global setup can build the engine before worker setup files run. Do not let
+// an inherited diff hook materialize files in the operator's real tmpdir.
+delete process.env.GIT_EXTERNAL_DIFF;
 // A managed daemon process uses this private bypass to keep its PATH-level gh
 // observer from recursing.  Test fixtures own their own gh boundary, so passing
 // the bypass through makes production adapters escape those fixtures.
@@ -17,6 +20,11 @@ const child = spawn(vitestCommand, process.argv.slice(2), {
   env: {
     ...testEnvironment,
     AI_CONDUCTOR_TEST_TMP_ROOT: runRoot,
+    // A fresh launcher owns a fresh scope as well as a fresh root.  Without
+    // this override, a nested run inherits its parent's scope marker while
+    // using this launcher's root, so helpers that recover test temp storage
+    // can escape the child root after a temporary environment reset.
+    AI_CONDUCTOR_TEST_TMP_SCOPE: runRoot,
     TMPDIR: runRoot,
     // Native subprocesses do not consistently prefer TMPDIR: some read TMP
     // or TEMP first. Keep all three aliases inside the run root so they

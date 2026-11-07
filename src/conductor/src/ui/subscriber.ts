@@ -25,9 +25,12 @@ export class TerminalSubscriber implements UISubscriber {
   private renderers: UIRenderer[] = [];
   private handlers: Array<{ type: ConductorEvent['type']; handler: EventHandler }> = [];
 
-  constructor(private readonly eventEmitter: ConductorEventEmitter) {}
+  constructor(
+    private readonly eventEmitter: ConductorEventEmitter,
+    private readonly initialRenderers: UIRenderer[] = [],
+  ) {}
 
-  start(renderers: UIRenderer[]): void {
+  start(renderers: UIRenderer[] = this.initialRenderers): void {
     this.renderers = renderers;
     // Dashboard renders are event-driven. No periodic refresh — the sticky
     // live region is updated when conductor state changes. A polling refresh

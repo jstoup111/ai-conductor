@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 /**
  * Acceptance coverage for Story 7 in
  * `.docs/stories/subagent-activity-and-live-per-step-token-burn-are.md`.
@@ -62,7 +64,7 @@ function invoke(
   options: Partial<InvokeOptions> = {},
   exitCode = 0,
 ): Promise<InvokeResult> {
-  const provider = new ClaudeProvider(
+  const provider = new ClaudeProvider(dispatchGitGuard,
     scriptedClock(1_000, 1_025),
     subprocessFactory(chunks, {
       stdout,
@@ -81,7 +83,7 @@ function invoke(
 }
 
 function invokeCodex(chunks: string[], stdout: string, options: Partial<InvokeOptions> = {}): Promise<InvokeResult> {
-  const provider = new CodexProvider(
+  const provider = new CodexProvider(dispatchGitGuard,
     async () => ({ stdout: '{not-json', stderr: '', exitCode: 0 }) as never,
     'codex',
     scriptedClock(1_000, 1_025),

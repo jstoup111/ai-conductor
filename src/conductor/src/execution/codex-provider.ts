@@ -13,6 +13,7 @@ import type {
   SelfHostAuthContext,
   SelfHostAuthPreparation,
   TokenUsage,
+  DispatchGitGuard,
 } from './llm-provider.js';
 import { applyRateCard, loadRateCard, type RateCardLoader } from './rate-card.js';
 import { withholdCost } from './token-usage.js';
@@ -35,15 +36,49 @@ import { composeManagedSessionEnvironment } from './managed-session-context.js';
 import { composePreparedManagedSessionEnvironment } from './managed-session-preparation.js';
 import { rateLimitDurationUnitAlternation, scaleRateLimitDurationSeconds } from './rate-limit-duration.js';
 import { validateSpawnPermit } from './spawn-permit.js';
-import { writeScratchSchema } from '../engine/self-host/provider-scratch.js';
+import { writeScratchSchema } from './scratch-schema.js';
 import { fromCodexStrictResult, toCodexStrictSchema } from './codex-strict-schema.js';
 import { ProviderStreamAssembler } from './provider-stream.js';
-import { providerDescriptor } from './provider-catalog.js';
-import { buildCodexReadOnlyProducerRootPolicyArgs } from '../engine/build-review-read-only-capability.js';
-import { ensureGitGuardForDispatch } from './dispatch-git-guard.js';
+import { buildCodexReadOnlyProducerRootPolicyArgs } from './build-review-read-only-capability.js';
+import { CODEX_DISPLAY_NAME } from './provider-catalog-identities.js';
+import type { ProviderModelCatalogParseResult } from './provider-catalog.js';
 
 function codexDisplayName(): string {
-  return providerDescriptor('codex').displayName;
+  return CODEX_DISPLAY_NAME;
+}
+
+/** Parse Codex's debug model catalog into API-dispatchable visible model ids. */
+export function parseCodexModelListing(stdout: string): ProviderModelCatalogParseResult {
+  const firstLine = stdout.split(/\r?\n/, 1)[0] ?? '';
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return { kind: 'unparseable', firstLine };
+  }
+
+  if (
+    typeof parsed !== 'object'
+    || parsed === null
+    || !Array.isArray((parsed as { models?: unknown }).models)
+  ) {
+    return { kind: 'unparseable', firstLine };
+  }
+
+  const modelIds = (parsed as { models: unknown[] }).models.flatMap((model) => {
+    if (typeof model !== 'object' || model === null) return [];
+    const { slug, visibility, supported_in_api: supportedInApi } = model as {
+      slug?: unknown;
+      visibility?: unknown;
+      supported_in_api?: unknown;
+    };
+    return typeof slug === 'string' && visibility === 'list' && supportedInApi === true
+      ? [slug]
+      : [];
+  });
+
+  return { kind: 'parsed', modelIds };
 }
 
 function abortedInvocationResult(): InvokeResult {
@@ -269,12 +304,14 @@ export class CodexProvider implements LLMProvider {
   readonly supportsSessionResume = false;
   readonly lifecycleCapability = { synchronousSpawnPermit: true } as const;
   readonly nativeSchemaCapability = { nativeOutputSchema: true } as const;
+  readonly systemPromptCapability = { deliversSystemPrompt: true } as const;
 
   private readonly authentication: SelectedAuthentication;
   private readonly executable: string;
   private readonly cachedLoginSource: string;
 
   constructor(
+    private readonly dispatchGitGuard: DispatchGitGuard,
     private readonly runDoctor: CodexDoctorRunner = defaultCodexDoctorRunner,
     executable = 'codex',
     private readonly intervalClock: IntervalClock = epochAnchoredMonotonicClock,
@@ -339,10 +376,17 @@ export class CodexProvider implements LLMProvider {
     // session id, but the invariant is enforced uniformly at every adapter
     // entry so no future arg-building change can resurrect reuse.
     options = enforceFreshSessionOptions(options, 'codex');
-    if (options.abortSignal?.aborted) return abortedInvocationResult();
+    if (options.abortSignal?.aborted) {
+      return { ...abortedInvocationResult(), executionDisposition: 'not-started' };
+    }
     let guardDir: string | null;
-    try { guardDir = options.reviewDispatch ? null : await ensureGitGuardForDispatch(options.cwd); } catch (error) {
-      return { success: false, output: error instanceof Error ? error.message : String(error), exitCode: 1 };
+    try { guardDir = options.reviewDispatch ? null : await this.dispatchGitGuard(options.cwd); } catch (error) {
+      return {
+        success: false,
+        output: error instanceof Error ? error.message : String(error),
+        exitCode: 1,
+        executionDisposition: 'not-started',
+      };
     }
     const repl = options.interactive === true;
     const jsonOutput = !repl;
@@ -365,6 +409,7 @@ export class CodexProvider implements LLMProvider {
           success: false,
           output: `${codexDisplayName()} native schema setup failed: ${error instanceof Error ? error.message : String(error)}`,
           exitCode: 1,
+          executionDisposition: 'not-started',
         };
       }
     }
@@ -1119,6 +1164,8 @@ export class CodexProvider implements LLMProvider {
     // process.env underneath it) so the child cannot resolve the daemon's pane.
     const environment = withDaemonSessionMarker({
       ...(options.selfHost?.env ?? {}),
+      ...options.env,
+      ...options.environmentOverlay,
       ...auth,
     });
     return scrubTmuxEnvironment(options.managedSessionContext

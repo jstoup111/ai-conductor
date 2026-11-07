@@ -48,7 +48,7 @@ own commits, so that no child replays its parent's history and no child loses it
 - Given a restack in which child 2's commit `C2` becomes empty because the new `closed/c1` already carries its change, when child 2 is replayed, then no commit for `C2` appears in the new child 2.
 - Given a repair restack whose originating commit `X` on child 1 was already cherry-picked into child 2 as `X2`, when child 2 is replayed, then `X2` does not appear in the new child 2.
 - Given the one-closed-one-active stack, when a restack runs, then `feat/daemon-demo` is not moved, and no branch is created for position 3.
-- Given the one-closed-one-active stack, where `feat/c1/demo` was created from a pre-region halt record `H` on the unentered leaf (the leaf still sits at `H`), when a `base-refresh` restack rewrites `H` to `H'`, then: the leaf moves to `H'` in the same move; no `refs/conductor/demo/leaf-moved` ref is written; when child 2 later closes, the leaf move succeeds with no stray-commit refusal.
+- Given the one-closed-one-active stack, where `feat/c1/demo` was created from a pre-region halt record `H` on the unentered leaf (the leaf still sits at `H`), when a `base-refresh` restack replays child 1 and leaves the halt-record-only commit `H` out as bookkeeping, then: the leaf moves in the same move to the single commit `H` maps to (the rewrite of the nearest earlier commit that has one, or the new default when none precedes it); no `refs/conductor/demo/leaf-moved` ref is written; when child 2 later closes, the leaf move succeeds with no stray-commit refusal.
 - Given the journaled old `closed/c1` is not an ancestor of `feat/c2/demo`'s tip (child 2 was rebased elsewhere), when a restack is planned, then it halts needs-human with `restack_refused` reason `range-not-ancestor`, naming child 2, and no ref moves.
 - Given the operator's git config sets `rebase.updateRefs=true`, `rebase.autoSquash=true` and `merge.renames=false`, when a restack, an N=1 rebase, or a resolver hand-off runs, then its result and resolver todo are identical to those produced with the keys unset.
 - Given a crash at `planned` after child 1 was replayed, when the next resume re-plans, then child 1's rewritten SHAs are identical to the first attempt's.
@@ -80,7 +80,7 @@ conflict needlessly nor silently resurrect reverted lines.
 #### Negative Paths
 - Given child 2 merged `origin/main` at `D1`, and main later changed the same lines at `D2` (the new parent contains `D2`), when a `base-refresh` restack replays child 2, then no conflict is raised and child 2's tree keeps `D2`'s lines.
 - Given child 2 merged `origin/main` at `D1`, and main later reverted `D1`'s line (the new parent contains the revert), when child 2 is replayed, then the reverted line is absent from child 2.
-- Given a merge-bearing child whose replay conflicts (Q carried or not), when the conflict is handled, then: the restack halts with `restack_refused` reason `flatten_refused`, naming the merge; no resolver is dispatched; no ref moves; the halt's recovery text tells the operator to resolve on the child branch and resume, and never prescribes a single-branch `git rebase` of a stacked branch.
+- Given a merge-bearing child whose replay conflicts (Q carried or not), when the conflict is handled, then: the resolver is dispatched with the merge flattened in its todo; when unsettled, the ordinary restack conflict halt is written; no ref moves before an accepted result; and the halt never prescribes a `git rebase` of a stacked branch.
 
 ### Done When
 - [ ] Ancestry-only merges are dropped, Q-carried merges replay only their hand resolution, and
@@ -180,14 +180,14 @@ recoverable.
 - Given child 2's commit `C2` conflicts when replayed onto the new `closed/c1`, and the resolver resolves it, when the restack continues, then: the leaf is replayed onto the resolved child-2 tip; the restack applies; child 1 is not replayed again.
 - Given a resolver hand-off, when it ends (accepted, rejected or crashed), then: no real branch moved during it; its temporary worktree no longer appears in `git worktree list`.
 - Given child 2 has a started-empty commit `E` and a commit cherry-picked to main within the default advance, when its resolver hand-off runs, then the commits it replays include `E` and exclude the cherry-picked commit, matching the clean replay's list.
-- Given child 1's and child 2's ranges both contain halt-record commits that conflict only on `.docs/halted/demo.md`, when child 2 is replayed, then child 2's record is kept and no resolver is dispatched.
+- Given child 1's and child 2's ranges both contain halt-record commits with different `.docs/halted/demo.md` records, when child 2 is replayed, then child 2's halt-record-only commits are not replayed, child 2's new tip carries the newer of the two records (by `Resolved at:`, else `Halted at:`), and no resolver is dispatched.
 
 #### Negative Paths
 - Given child 2's commit `C2` conflicts on `src/c.ts` and the resolver exhausts its budget, when the restack ends, then: it halts needs-human, naming child 2, `C2` and `src/c.ts`; `restack_conflict` is persisted; no child branch or closure ref moved; the journal (`aborted`) and child 2's staging ref remain until that halt is cleared.
 - Given a resolver result missing one of child 2's own commit subjects, when acceptance is checked, then it is rejected, and the run halts as the unresolved conflict above.
 - Given a resolver result not based on the new `closed/c1`, when acceptance is checked, then it is rejected, and the run halts as the unresolved conflict above.
 - Given a resolver result changing a path child 2 never owned, when acceptance is checked, then it is rejected with reason `replay-mismatch`.
-- Given a conflict touching `.docs/halted/demo.md` and `src/c.ts` together, when child 2 is replayed, then it is not resolved mechanically, and goes to the resolver.
+- Given a conflict touching `.docs/halted/demo.md` and `src/c.ts` together, when child 2 is replayed, then `src/c.ts` goes to the resolver, and `.docs/halted/demo.md` is never handed to the resolver: it keeps the side being rebuilt.
 
 ### Done When
 - [ ] Only the conflicting child is handed off, and its replay list equals the clean replay's.
@@ -270,7 +270,7 @@ automatically, so that I no longer recover a "restack required" halt by hand.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a three-child stack in which the operator committed `X` on `feat/c1/demo` past `closed/c1`, when the next daemon dispatch or conductor resume runs with no `refs/conductor/<slug>/repairing` marker, then: a `feature-repair` restack moves `closed/c1` to `X`; child 2 and the leaf are replayed onto it; no needs-human halt is written.
+- Given a three-child stack with `stacked_prs.route_whole_feature_fixes: false` in which the operator committed `X` on `feat/c1/demo` past `closed/c1`, when the next daemon dispatch or conductor resume runs with no `refs/conductor/<slug>/repairing` marker, then: a `feature-repair` restack moves `closed/c1` to `X`; child 2 and the leaf are replayed onto it; no needs-human halt is written.
 - Given that state before the restack runs, when `consumeResumeAuthorizations`, `kickback-budget` inspection, `task` or `rewind` reads the active child, then: they report the active child; none throws; none moves a ref or starts a restack (`kickback-budget raise` or `reset --gate restack` updates `cascades` by design; see Story 13).
 - Given an operator commit on a closed child and a default advance at the same resume, with no `repairing` marker, no route record that is not `closed`, and no queued child after the repair applies, when it runs, then a `feature-repair` restack applies first, and a `base-refresh` restack second, with distinct opIds.
 - Given the operator committed `X` from another worktree that still has `feat/c1/demo` checked out, when the repair runs, then it applies.
@@ -286,7 +286,7 @@ automatically, so that I no longer recover a "restack required" halt by hand.
 - Given the repair reached `applied` and the process died before the base refresh started, when the next resume runs with no `repairing` marker, no route record that is not `closed`, and no queued child, then the base-refresh restack runs.
 - Given routing is on and the repair's `applied` transaction queued a closed child, when the follow-on base refresh would run, then it is suppressed, `restack_refused` with reason `deferred-base-refresh` is persisted, and the request is retained until the queue drains.
 - Given the repair's journal is `applied` with a pending follow-on, when an unrelated restack is planned, then it is refused `restack-outstanding`, and the follow-on still runs unless the deferral below applies.
-- Given `rewind --child 1` on a closed child, when it runs, then it is refused with a message naming #3203.
+- Given `rewind --child 1` on a closed child with no live HALT, when it runs, then it is refused naming the missing HALT.
 
 ### Done When
 - [ ] The preflight runs after the park checks, and before resume authorization, the re-kick
@@ -309,9 +309,9 @@ rebase runs on a stacked feature.
 #### Happy Path
 - Given a three-child stack and a default advance, when the FINISH `rebase` step runs, then: a `base-refresh` restack moves child 1 onto `B'` and restacks child 2 and the leaf; the `rebase` step verdict's operation carries `cause: 'base-refresh'` and the whole-stack tuple: P = old leaf tip, B = `merge-base(old c1, B)`, O = `B'`, H = new leaf tip.
 - Given the one-closed-one-active stack mid-build and a default advance, with no routing round open, when the daemon re-kicks the feature, then: a `base-refresh` restack moves child 1 and the active child 2; no `rebase_skipped_for_stack` event is emitted.
-- Given `B'` is already an ancestor of `feat/c1/demo`, when the FINISH step or a re-kick runs, then no ref moves.
+- Given `B'` is already an ancestor of `feat/c1/demo`, including after a routed leaf return left the `rebase` verdict unsatisfied, when the FINISH step or a re-kick runs, then: no ref moves; the `rebase` verdict is rewritten satisfied with reason `branch already current with base`, so the gate passes on that first run.
 - Given a `base-refresh` restack applies, when the events are read, then `rebase_changed` is persisted with the whole-stack delta from `B` to `B'`, so base-caused test failures stay attributed to the base advance.
-- Given the leaf PR is mergeable and the base delta does not touch the feature's review inputs, when the FINISH step runs, then the existing mergeable-skip applies.
+- Given the leaf PR is mergeable and the base delta does not touch the feature's review inputs, when the FINISH step runs, then: the existing mergeable-skip applies; the `rebase` verdict is rewritten satisfied with the unstacked path's mergeable-skip reason.
 
 #### Negative Paths
 - Given a stacked feature, when the FINISH step or a re-kick runs, then no single-branch rebase runs on any child branch or the leaf.
@@ -386,23 +386,25 @@ so that a repair loop halts with the child named instead of churning indefinitel
 ### Acceptance Criteria
 
 #### Happy Path
-- Given child 1 has originated 2 applied `feature-repair` restacks, when a third applies, then child 1's cascade count in `refs/conductor/demo/cascades` is 3.
+- Given a feature with no recorded complexity tier (cascade allowance 3) whose child 1 has originated 2 applied `feature-repair` restacks, when a third applies, then child 1's cascade count in `refs/conductor/demo/cascades` is 3.
 - Given `base-refresh` restacks and aborted restacks, when they finish, then no cascade count changes.
 - Given the cascade-cap halt for child 1, when the operator runs `kickback-budget raise --gate restack --child 1`, then: the raised limit is stored in `refs/conductor/demo/cascades`; the next resume runs the repair.
 - Given the cascade-cap halt for child 1, when the operator runs `kickback-budget reset --gate restack --child 1`, then child 1's count is 0, and the next resume runs the repair.
 - Given the worktree is recreated, when the counts are read, then they are unchanged.
 
 #### Negative Paths
-- Given child 1 has originated 3 applied `feature-repair` restacks, when a fourth repair is due, then: no journal is created and no `restack_planned` event is emitted; it halts with `HALT.class` `needs-human`, naming child 1; the active child's ledger holds cap evidence for gate `restack`, with allowance `restacks`, naming child 1.
+- Given a feature with no recorded complexity tier (cascade allowance 3) whose child 1 has originated 3 applied `feature-repair` restacks, when a fourth repair is due, then: no journal is created and no `restack_planned` event is emitted; it halts with `HALT.class` `needs-human`, naming child 1; the active child's ledger holds cap evidence for gate `restack`, with allowance `restacks`, naming child 1.
 - Given no live cascade-cap halt and no `restack` cap evidence, when `kickback-budget reset --gate restack --child 1` runs, then it is refused, and the ref is unchanged.
 - Given the cascade-cap halt for child 1 and a recreated worktree with no `.pipeline/children/1/`, when `kickback-budget raise --gate restack --child 1` runs, then it is accepted, because `--child` is validated against the `cascades` ref.
 - Given the `cascades` blob is unreadable or malformed, when a repair is due, then the cap counts as exhausted, and it halts needs-human naming the unreadable ref.
 - Given cap evidence for child 1, when `kickback-budget raise --gate restack --child 2` runs, then it is refused, and the ref is unchanged.
 - Given the CLI's update to `cascades` loses a race with a concurrent write, when it ends, then it has failed, no resume authorization is staged, and the concurrent write is kept.
 - Given repairs originate from child 1 and child 2 alternately, when counts are read, then each child's count reflects only the restacks it originated, and the leaf's count is 0.
+- Given the operator raised child 1's cascade limit from 3 to 4 and child 2 then originates its third cascade, when the next repair is due, then it halts naming child 2 at 3/3, and the HALT's `Kickback budget (restack)` line reads `3/3 consumed; 0 remaining`, because a raise never changes another originating child's limit (#3475).
+- Given that child 2 cascade-cap halt, when the operator runs `kickback-budget raise --gate restack --child 2 --by 1`, then it is accepted, `refs/conductor/demo/cascades` holds limit 4 for both child 1 and child 2, and the printed budget reads `3/4 consumed; 1 remaining`; the restack limit is read from the cap evidence and the `cascades` ref, never from a limit shared on the active child's ledger entry (#3475).
 
 ### Done When
-- [ ] The bound is 3, charged to the originating child, and checked before any journal exists.
+- [ ] The bound is the originating child's tier-resolved cascade allowance (3 for an unrecorded or tier-M feature, #3472), charged to the originating child, and checked before any journal exists.
 - [ ] `raise` and `reset` work end to end for `--gate restack`, and the PR body carries a
       `## Migration` block.
 

@@ -76,7 +76,7 @@ describe('buildExporters', () => {
   });
 
   describe('buildHttpExporterOptions', () => {
-    it('preserves per-signal URL suffixes and carries resolved headers', () => {
+    it('preserves per-signal URL suffixes and resolves headers at send time', async () => {
       const config = {
         enabled: true as const,
         exporter: 'otlp' as const,
@@ -84,14 +84,12 @@ describe('buildExporters', () => {
         headers: { Authorization: 'Bearer resolved-token', 'X-Tenant': 'acme' },
       };
 
-      expect(buildHttpExporterOptions(config, 'traces')).toEqual({
-        url: 'http://localhost:4318/v1/traces',
-        headers: { Authorization: 'Bearer resolved-token', 'X-Tenant': 'acme' },
-      });
-      expect(buildHttpExporterOptions(config, 'metrics')).toEqual({
-        url: 'http://localhost:4318/v1/metrics',
-        headers: { Authorization: 'Bearer resolved-token', 'X-Tenant': 'acme' },
-      });
+      const traces = buildHttpExporterOptions(config, 'traces');
+      const metrics = buildHttpExporterOptions(config, 'metrics');
+      expect(traces.url).toBe('http://localhost:4318/v1/traces');
+      expect(metrics.url).toBe('http://localhost:4318/v1/metrics');
+      await expect(typeof traces.headers === 'function' ? traces.headers() : traces.headers).resolves.toEqual({ Authorization: 'Bearer resolved-token', 'X-Tenant': 'acme' });
+      await expect(typeof metrics.headers === 'function' ? metrics.headers() : metrics.headers).resolves.toEqual({ Authorization: 'Bearer resolved-token', 'X-Tenant': 'acme' });
     });
 
     it('omits headers when the resolved config has none', () => {

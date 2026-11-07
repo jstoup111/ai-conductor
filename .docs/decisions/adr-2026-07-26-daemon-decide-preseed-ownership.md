@@ -86,6 +86,8 @@ tier is not `S`, the merged spec must carry a `.docs/coherence/<slug>.md` that i
 non-empty, and parseable as a coherence table with at least one data row. Failing that, the spec
 is warn-skipped through the existing `warnOnce` channel and never enters the backlog.
 
+> **Amended 2026-10-24 by #3405:** For a spec with a committed artifact manifest (`.docs/<slug>/manifest.json`, `adr-2026-10-24-per-feature-artifact-manifest`), the coherence artifact is the manifest's `coherence` entry rather than `.docs/coherence/<slug>.md`; a manifest-backed non-S spec without that entry is rejected as missing coherence. Specs without a manifest are checked exactly as above.
+
 This is not a new mechanism. That loop's own comment states the requirement: *"The daemon
 pre-seeds the front half (stories/plan = done) and never re-runs their gates, so this is the only
 place specs are vetted before autonomous build. Reject unapproved or dependency-tree-less plans

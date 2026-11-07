@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execa } from 'execa';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
@@ -77,7 +79,7 @@ function claudeCapture() {
       return Promise.resolve({ stdout: 'ok', stderr: '', exitCode: 0, failed: false }) as any;
     },
   );
-  return { calls, provider: new ClaudeProvider(undefined, subprocessFactory) };
+  return { calls, provider: new ClaudeProvider(dispatchGitGuard, undefined, subprocessFactory) };
 }
 
 function codexCapture() {
@@ -104,7 +106,7 @@ function codexCapture() {
       }) as any;
     },
   );
-  return { calls, provider: new CodexProvider(runDoctor, 'codex', undefined, subprocessFactory as any) };
+  return { calls, provider: new CodexProvider(dispatchGitGuard, runDoctor, 'codex', undefined, subprocessFactory as any) };
 }
 
 describe('provider child env tmux scrub', () => {

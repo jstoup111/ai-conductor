@@ -1,4 +1,4 @@
-// Covers: task:rem-prd-audit-rem-s10-6-diverged-positions-halt
+// Covers: task:rem-prd-audit-rem-s10-6-diverged-positions-halt, task:6
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, unlink, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -1321,6 +1321,74 @@ describe('Conductor FINISH publication routing', () => {
     );
   });
 
+  // Covers: task:8
+  it('carries the last publication retry detail into the exhausted FINISH halt', async () => {
+    const dispositions: string[] = [];
+    const events = new ConductorEventEmitter();
+    events.on('finish_publication_disposition', (event) => {
+      if (event.type === 'finish_publication_disposition') dispositions.push(event.disposition);
+    });
+    const advance = vi.fn(async (): Promise<PublicationDisposition> => {
+      const attempt = advance.mock.calls.length;
+      return {
+        kind: 'publication_retry',
+        transition: 'author_pr_prose',
+        reason: 'prose_invalid',
+        detail: attempt === 3 ? 'last failed check: title is blank' : `failed check on attempt ${attempt}`,
+      };
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      finishPublication: { advance },
+      events,
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'auto',
+      maxRetries: 3,
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+    });
+
+    await conductor.run();
+
+    expect(advance).toHaveBeenCalledTimes(3);
+    expect(dispositions).toEqual(['retry_finish', 'retry_finish', 'retry_finish']);
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
+      'FINISH publication retry exhausted: prose_invalid Detail: last failed check: title is blank',
+    );
+  });
+
+  // Covers: task:8
+  it('keeps the exhausted FINISH halt unchanged when the retry has no detail', async () => {
+    const advance = vi.fn(async (): Promise<PublicationDisposition> => ({
+      kind: 'publication_retry',
+      transition: 'author_pr_prose',
+      reason: 'prose_not_returned',
+    }));
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      finishPublication: { advance },
+      events: new ConductorEventEmitter(),
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'auto',
+      maxRetries: 3,
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+    });
+
+    await conductor.run();
+
+    expect(advance).toHaveBeenCalledTimes(3);
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toBe(
+      'FINISH publication retry exhausted: prose_not_returned\n',
+    );
+  });
+
   it.each([
     {
       name: 'repeated ready_pr progress',
@@ -1486,12 +1554,14 @@ describe('Conductor FINISH publication routing', () => {
     state.architecture_review = 'skipped';
     await writeState(productionStatePath, state as ConductState);
     const runner: StepRunner = {
-      run: vi.fn(async () => {
-        pullRequest = {
-          ...pullRequest,
-          title: 'feat: publish coherent finish',
-          body: 'Reader-facing summary of the completed change.',
-        };
+      run: vi.fn(async (_step, _state, options) => {
+        if (options.finishProsePass === 'author') {
+          await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({
+            version: 1,
+            title: 'feat: publish coherent finish',
+            body: 'Reader-facing summary of the completed change.',
+          }));
+        }
         return { success: true, publicationDisposition: { kind: 'accepted' } };
       }),
     };
@@ -1553,14 +1623,121 @@ describe('Conductor FINISH publication routing', () => {
 
     await conductor.run();
 
-    // Placeholder prose requires authoring. Its resulting retained-PR
-    // title/body is accepted by the GitHub observation without another pass.
+    // Placeholder prose requires authoring; the authenticated engine handoff
+    // marks its newly published revision accepted without a second pass.
     expect(runner.run).toHaveBeenCalledTimes(1);
     expect(recordFinish).toHaveBeenCalledOnce();
     await expect(readFile(join(pipeline, 'finish-choice'), 'utf8')).resolves.toBe('pr\n');
     expect(dispositions).not.toContain('retry_finish');
     expect(dispositions).not.toContain('human_required');
     await expect(readFile(join(pipeline, 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  // Covers: task:6
+  it.each([
+    { name: 'the last same-PR publish failure', writeFailures: true },
+    { name: 'no publish failure', writeFailures: false },
+  ])('halts FINISH on %s rather than treating placeholder prose as authored', async ({ writeFailures }) => {
+    const pipeline = join(dir, '.pipeline');
+    const productionStatePath = join(pipeline, 'conduct-state.json');
+    const prUrl = 'https://github.com/acme/repo/pull/17';
+    const missingScope = 'GraphQL: Resource not accessible by integration (missing required scope read:org)';
+    const pullRequest = {
+      url: prUrl,
+      title: 'feat: draft publication',
+      body: '<!-- conductor:pr-body-floor -->\n\nDraft opened automatically.',
+      isDraft: true,
+    };
+    await mkdir(pipeline);
+    await writeGreenShipValidatorEvidence(dir);
+    await mkdir(join(dir, '.docs', 'shipped'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'shipped', 'finish-publication.md'), '---\nslug: finish-publication\n---\n');
+    const state: Record<string, unknown> = {
+      complexity_tier: 'S', track: 'technical', feature_desc: 'finish-publication',
+      worktree_branch: 'feat/finish-publication', pr_url: prUrl,
+    };
+    for (const step of [
+      'bootstrap', 'memory', 'assess', 'explore', 'prd', 'complexity', 'stories',
+      'conflict_check', 'plan', 'coherence_check', 'architecture_diagram',
+      'worktree', 'acceptance_specs', 'build', 'build_review', 'test_suite', 'manual_test',
+      'prd_audit', 'architecture_review_as_built', 'rebase',
+    ] satisfies StepName[]) state[step] = 'done';
+    state.architecture_review = 'skipped';
+    await writeState(productionStatePath, state as ConductState);
+    const queuedPublishFailures: Array<{
+      type: 'github_operation_failed'; operation: 'pull-request.edit';
+      target: { kind: 'pull-request'; repository: string; number: number }; error: string; ts: string;
+    }> = [];
+    const runner: StepRunner = { run: vi.fn(async (_step, _state, options) => {
+      if (options.finishProsePass === 'author') {
+        await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({
+          version: 1,
+          title: 'feat: publish coherent finish',
+          body: 'Reader-facing summary of the completed change.',
+        }));
+      }
+      if (writeFailures) {
+        queuedPublishFailures.push(
+          { type: 'github_operation_failed', operation: 'pull-request.edit', target: { kind: 'pull-request', repository: 'acme/repo', number: 17 }, error: 'first missing-scope error', ts: '2026-10-25T00:00:00.000Z' },
+          { type: 'github_operation_failed', operation: 'pull-request.edit', target: { kind: 'pull-request', repository: 'acme/repo', number: 17 }, error: missingScope, ts: '2026-10-25T00:00:01.000Z' },
+        );
+      }
+      return { success: true };
+    }) };
+    const events = new ConductorEventEmitter();
+    const dispositions: Array<{ reason?: string; detail?: string }> = [];
+    const loopHalts: string[] = [];
+    events.on('finish_publication_disposition', (event) => {
+      if (event.type === 'finish_publication_disposition') dispositions.push(event);
+    });
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') loopHalts.push(event.reason);
+    });
+    const coordinator = createProductionFinishPublicationCoordinator({
+      projectRoot: dir, stateFilePath: productionStatePath, baseBranch: 'main',
+      git: async (args) => args[0] === 'rev-parse'
+        ? { stdout: 'refs/remotes/origin/feat/finish-publication\n' }
+        : args[0] === 'cat-file' ? { stdout: '', exitCode: 1 } : { stdout: '' },
+      gh: async (args) => {
+        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify(pullRequest) };
+        throw new Error(`unexpected gh command: ${args.join(' ')}`);
+      },
+      operations: {
+        run: async () => {
+          if (writeFailures) throw new Error(missingScope);
+          return {};
+        },
+      },
+      observeReleaseReadiness: async () => 'present',
+      events,
+      flushSessionEvents: async () => {
+        for (const event of queuedPublishFailures) await events.emit(event);
+      },
+    });
+    const conductor = new Conductor({
+      stateFilePath: productionStatePath, stepRunner: runner, finishPublication: coordinator, events,
+      projectRoot: dir, fromStep: 'finish', mode: 'auto', daemon: true, verifyArtifacts: false,
+      git: async () => ({ stdout: '' }), gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
+    });
+
+    await conductor.run();
+
+    const halt = await readFile(join(pipeline, 'HALT'), 'utf8');
+    expect(runner.run).toHaveBeenCalledTimes(1);
+    if (writeFailures) {
+      expect(halt).toContain('A FINISH pull-request publish failed');
+      expect(halt).toContain(missingScope);
+      expect(halt).not.toContain('left pr.prose unchanged at placeholder');
+      expect(dispositions).toEqual([expect.objectContaining({
+        reason: 'publication_operation_failed', detail: `pull-request.edit failed: guarded pull-request.edit failed: ${missingScope}`,
+      })]);
+      expect(loopHalts).toEqual([
+        expect.stringContaining('A FINISH pull-request publish failed'),
+      ]);
+      expect(loopHalts[0]).toContain(missingScope);
+    } else {
+      expect(halt).toContain('The author_pr_prose transition left pr.prose unchanged at placeholder.');
+    }
   });
 
   // Regression: a small-tier feature resolves manual_test by SKIPPING it. The production

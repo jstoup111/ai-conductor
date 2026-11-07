@@ -50,7 +50,6 @@ const BUILD_COMPLETE: ConductState = {
   plan: 'done',
   coherence_check: 'done',
   plan_review: 'done',
-  coverage_binding: 'done',
   architecture_diagram: 'done',
   architecture_review: 'done',
   acceptance_specs: 'done',

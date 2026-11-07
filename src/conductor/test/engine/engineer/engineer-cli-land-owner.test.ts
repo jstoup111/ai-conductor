@@ -454,7 +454,7 @@ describe('engineer land — owner-gate wiring (CLI seam)', () => {
     await rm(fakeHome, { recursive: true, force: true });
   });
 
-  it('does not create a rejection event for a successful land', async () => {
+  it('records registration rather than rejection telemetry for a successful land', async () => {
     const worktree = await seedWorktree();
     const fakeHome = await makeUserHome('spec_owner: bob\n');
     const { opts } = captureOpts({ gh: async () => ({ stdout: 'unused\n' }) });
@@ -465,8 +465,11 @@ describe('engineer land — owner-gate wiring (CLI seam)', () => {
     ));
 
     expect(code).toBe(0);
-    await expect(readFile(join(repoPath, '.pipeline', 'composer-events.jsonl'), 'utf-8'))
-      .rejects.toMatchObject({ code: 'ENOENT' });
+    const events = (await readFile(join(repoPath, '.pipeline', 'composer-events.jsonl'), 'utf-8'))
+      .trim().split('\n').map((line) => JSON.parse(line) as { type: string });
+    expect(events).toEqual([
+      expect.objectContaining({ type: 'feature_artifacts_registered' }),
+    ]);
     await rm(fakeHome, { recursive: true, force: true });
   });
 

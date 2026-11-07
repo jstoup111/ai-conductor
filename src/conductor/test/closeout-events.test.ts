@@ -19,7 +19,8 @@ describe('external pipeline event writer', () => {
   it('admits only the declared external types and writes them to the sibling ledger', async () => {
     expect(ADMITTED_EXTERNAL_PIPELINE_EVENT_TYPES).toEqual([
       'build_review_disposition_accepted', 'build_review_reduced_coverage_accepted',
-      'build_review_disposition_refused', 'build_review_outer_verdict', 'kickback_budget_adjustment_authorized',
+      'build_review_disposition_refused', 'build_review_outer_verdict', 'github_operation_failed',
+      'kickback_budget_adjustment_authorized',
     ]);
     const projectRoot = await mkdtemp(join(tmpdir(), 'closeout-events-'));
     directories.push(projectRoot);

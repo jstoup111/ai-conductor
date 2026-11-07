@@ -1,5 +1,8 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:4
 // Covers: task:5
+// Covers: task:8
 // Covers: task:3
 // Covers: task:9
 import { toCodexStrictSchema } from '../../src/execution/codex-strict-schema.js';
@@ -125,7 +128,7 @@ class CodexProvider extends ProductionCodexProvider {
     doctorTimeoutMs: number | undefined = undefined,
     loadRates: RateCardLoader | undefined = undefined,
   ) {
-    super(runDoctor, executable, intervalClock, subprocessFactory, doctorTimeoutMs, loadRates);
+    super(dispatchGitGuard, runDoctor, executable, intervalClock, subprocessFactory, doctorTimeoutMs, loadRates);
   }
 }
 
@@ -166,14 +169,20 @@ describe('CodexProvider', () => {
       resume: false,
     }));
     mockEnsureGitGuardForDispatch.mockResolvedValue(null);
-    provider = new CodexProvider(
-      vi.fn(async (_command, _args, options) =>
+    provider = new CodexProvider(vi.fn(async (_command, _args, options) =>
         readyDoctorResult(options.env?.CODEX_API_KEY ? 'api-key' : 'cached-login'),
       ),
       'codex',
       undefined,
       mockExeca as never,
     );
+  });
+
+  it('overlays the dispatch environment on the spawned session', async () => {
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('done'), stderr: '', exitCode: 0, failed: false } as any);
+    await provider.invoke({ ...baseOptions, env: { GIT_CONFIG_VALUE_0: '/helpers/hooks' } });
+    const [, , options] = mockExeca.mock.calls.at(-1) as [string, string[], ExecaOptions];
+    expect((options.env as NodeJS.ProcessEnv).GIT_CONFIG_VALUE_0).toBe('/helpers/hooks');
   });
 
   it('carries the guarded child PATH in the shell-environment policy only for a guarded dispatch', async () => {
@@ -239,8 +248,7 @@ describe('CodexProvider', () => {
     const priorKey = process.env.CODEX_API_KEY;
     const priorPath = process.env.PATH;
     delete process.env.CODEX_API_KEY;
-    provider = new CodexProvider(
-      vi.fn(async () => readyDoctorResult()),
+    provider = new CodexProvider(vi.fn(async () => readyDoctorResult()),
       'codex',
       undefined,
       mockExeca as never,
@@ -282,17 +290,58 @@ describe('CodexProvider', () => {
     }
   });
 
-  it('fails before launch when a missing guard cannot be rewritten in its read-only directory', async () => {
+  // Covers: task:6
+  it('fails before launch for a read-only git guard and an entry abort', async () => {
     const guardPath = '/prepared/.pipeline/bin/git';
     const priorPath = process.env.PATH;
+    mockExeca.mockResolvedValueOnce({ stdout: jsonlMessage('spawn boundary reached'), stderr: '', exitCode: 0, failed: false } as any);
+    await expect(provider.invoke(baseOptions)).resolves.toMatchObject({ success: true });
+    expect(mockExeca).toHaveBeenCalledOnce();
+    mockExeca.mockClear();
     mockEnsureGitGuardForDispatch.mockRejectedValue(new Error(`git guard repair failed: ${guardPath}`));
 
     const result = await provider.invoke({ ...baseOptions, cwd: '/prepared' });
 
     expect(mockEnsureGitGuardForDispatch).toHaveBeenCalledWith('/prepared');
-    expect(result).toEqual({ success: false, output: `git guard repair failed: ${guardPath}`, exitCode: 1 });
+    expect(result).toEqual({
+      success: false,
+      output: `git guard repair failed: ${guardPath}`,
+      exitCode: 1,
+      executionDisposition: 'not-started',
+    });
     expect(mockExeca).not.toHaveBeenCalled();
     expect(process.env.PATH).toBe(priorPath);
+
+    const controller = new AbortController();
+    controller.abort();
+    const aborted = await provider.invoke({ ...baseOptions, abortSignal: controller.signal });
+
+    expect(aborted).toMatchObject({
+      success: false,
+      output: 'Codex invocation aborted.',
+      executionDisposition: 'not-started',
+    });
+    expect(mockExeca).not.toHaveBeenCalled();
+  });
+
+  // Covers: task:6
+  it('marks a native schema setup failure as not started before launch', async () => {
+    mockExeca.mockResolvedValueOnce({ stdout: jsonlMessage('spawn boundary reached'), stderr: '', exitCode: 0, failed: false } as any);
+    await expect(provider.invoke(baseOptions)).resolves.toMatchObject({ success: true });
+    expect(mockExeca).toHaveBeenCalledOnce();
+    mockExeca.mockClear();
+
+    const result = await provider.invoke({
+      ...baseOptions,
+      nativeSchema: { type: 'object', properties: { answer: { type: 'string' } } },
+    });
+
+    expect(result).toMatchObject({
+      success: false,
+      executionDisposition: 'not-started',
+      output: expect.stringContaining('native schema setup failed'),
+    });
+    expect(mockExeca).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -373,8 +422,7 @@ describe('CodexProvider', () => {
   });
 
   it('preserves an autonomous step envelope output and usage on the unified dispatch', async () => {
-    const autonomousProvider = new CodexProvider(
-      vi.fn(async () => readyDoctorResult()),
+    const autonomousProvider = new CodexProvider(vi.fn(async () => readyDoctorResult()),
       'codex',
       undefined,
       undefined,
@@ -830,8 +878,7 @@ describe('CodexProvider', () => {
       source: 'test',
       models: {},
     };
-    const unpriceable = new CodexProvider(
-      vi.fn(async () => readyDoctorResult()),
+    const unpriceable = new CodexProvider(vi.fn(async () => readyDoctorResult()),
       'codex',
       undefined,
       undefined,
@@ -1303,8 +1350,7 @@ describe('CodexProvider', () => {
     >(() =>
       Promise.resolve({ stdout: jsonlMessage('unattended'), exitCode: 0, failed: false }) as any,
     );
-    provider = new CodexProvider(
-      vi.fn(async () => readyDoctorResult()),
+    provider = new CodexProvider(vi.fn(async () => readyDoctorResult()),
       'codex',
       undefined,
       subprocessFactory,
@@ -1384,8 +1430,7 @@ describe('CodexProvider', () => {
     >(() =>
       Promise.resolve({ stdout: 'interactive', exitCode: 0, failed: false }) as any,
     );
-    provider = new CodexProvider(
-      vi.fn(async () => readyDoctorResult()),
+    provider = new CodexProvider(vi.fn(async () => readyDoctorResult()),
       'codex',
       undefined,
       subprocessFactory,
@@ -1500,8 +1545,7 @@ describe('CodexProvider', () => {
           throw new Error('scripted clock exhausted');
         })(),
     };
-    const timedProvider = new CodexProvider(
-      vi.fn(async () => readyDoctorResult()),
+    const timedProvider = new CodexProvider(vi.fn(async () => readyDoctorResult()),
       'codex',
       clock,
     );
@@ -1720,8 +1764,7 @@ describe('CodexProvider', () => {
     const priorKey = process.env.CODEX_API_KEY;
     process.env.CODEX_API_KEY = key;
     mockExeca.mockResolvedValue({ stdout: 'Streamed.', exitCode: 0 } as any);
-    const apiKeyProvider = new CodexProvider(
-      vi.fn(async (_command, _args, options) =>
+    const apiKeyProvider = new CodexProvider(vi.fn(async (_command, _args, options) =>
         readyDoctorResult(options.env?.CODEX_API_KEY ? 'api-key' : 'cached-login'),
       ),
     );
@@ -1903,8 +1946,7 @@ describe('CodexProvider', () => {
         stderr: `Invalid API key ${key ?? 'cached-login-path'}`,
         exitCode: 1,
       } as any);
-      const selectedProvider = new CodexProvider(
-        vi.fn(async (_command, _args, options) =>
+      const selectedProvider = new CodexProvider(vi.fn(async (_command, _args, options) =>
           readyDoctorResult(options.env?.CODEX_API_KEY ? 'api-key' : 'cached-login'),
         ),
       );
@@ -2180,8 +2222,7 @@ describe('CodexProvider', () => {
     // the full 60-minute auth-park timeout because `codex doctor` returned
     // `overallStatus: "warning"` (its `updates.status` version probe was
     // HTTP 403 rate-limited) while `auth.credentials` was perfectly healthy.
-    const readiness = await new CodexProvider(
-      vi.fn().mockResolvedValue({
+    const readiness = await new CodexProvider(vi.fn().mockResolvedValue({
         stdout: JSON.stringify({
           schemaVersion: 1,
           overallStatus: 'warning',
@@ -2213,8 +2254,7 @@ describe('CodexProvider', () => {
       'upstream.reachability.internal',
       'arbitrary doctor diagnostic text',
     ];
-    const readiness = await new CodexProvider(
-      vi.fn().mockResolvedValue({
+    const readiness = await new CodexProvider(vi.fn().mockResolvedValue({
         stdout: JSON.stringify({
           schemaVersion: 1,
           overallStatus: 'fail',
@@ -2261,8 +2301,7 @@ describe('CodexProvider', () => {
       },
     ],
   ] as const)('returns probe-failed for inconclusive %s documented doctor evidence', async (_name, evidence) => {
-    const readiness = await new CodexProvider(
-      vi.fn().mockResolvedValue({ stdout: JSON.stringify(evidence), exitCode: 0 }),
+    const readiness = await new CodexProvider(vi.fn().mockResolvedValue({ stdout: JSON.stringify(evidence), exitCode: 0 }),
     ).readiness();
 
     expect(readiness).toMatchObject({
@@ -2334,8 +2373,7 @@ describe('CodexProvider', () => {
   ] as const)(
     'classifies $name as a closed parser rejection without a credential verdict',
     async ({ stdout, facts }) => {
-      const readiness = await new CodexProvider(
-        vi.fn().mockResolvedValue({ stdout, exitCode: 0 }),
+      const readiness = await new CodexProvider(vi.fn().mockResolvedValue({ stdout, exitCode: 0 }),
       ).readiness();
 
       expect(readiness).toEqual({

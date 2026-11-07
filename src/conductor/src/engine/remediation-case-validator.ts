@@ -41,7 +41,8 @@ export type RemediationCaseGraphRejection =
   | 'duplicate-admission-task'
   | 'unknown-admission-task'
   | 'missing-admission-rationale'
-  | 'invalid-advisory-threshold';
+  | 'invalid-advisory-threshold'
+  | 'inadmissible-case-binding';
 
 /** Engine-supplied identities; provider output cannot expand either set. */
 export interface RemediationCaseValidationReferences {
@@ -55,6 +56,12 @@ export interface RemediationCaseValidationReferences {
   readonly sourceReviewerSeverities?: Readonly<Partial<Record<string, import('./build-review-domain.js').BuildReviewSeverity>>>;
   /** Resolved non-nit thresholds declared by the operator, keyed by rubric. */
   readonly declaredSeverityThresholds?: Readonly<Partial<Record<string, import('./build-review-domain.js').BuildReviewSeverity>>>;
+  /** Engine-selected exact owners and repair provenance candidates for each proposed row. */
+  readonly allowedDistinctFromCaseIdsByCaseRef?: Readonly<Record<string, readonly string[]>>;
+  /** Resolved action cases with an applied action effect that may receive a re-raise declaration. */
+  readonly reRaiseEligibleCaseIds?: readonly string[];
+  /** Engine-owned disposition sets for bindings to each supplied prior case. */
+  readonly bindableDispositionsByCaseId?: Readonly<Record<string, readonly Exclude<RemediationCaseRow['disposition'], 'escalate'>[]>>;
 }
 
 export interface ProposedRemediationCase {
@@ -80,10 +87,22 @@ export interface UnknownAdmissionTaskRejection {
   readonly absentTaskIds: readonly string[];
 }
 
+export interface InadmissibleCaseBindingRejection {
+  readonly ok: false;
+  readonly reason: 'inadmissible-case-binding';
+  readonly bindings: readonly {
+    readonly caseRef: string;
+    readonly existingCaseId: string;
+    readonly disposition: Exclude<RemediationCaseRow['disposition'], 'escalate'>;
+    readonly bindableDispositions: readonly Exclude<RemediationCaseRow['disposition'], 'escalate'>[];
+  }[];
+}
+
 export type ValidateRemediationCaseGraphResult =
   | { readonly ok: true; readonly graph: RemediationCaseGraph }
   | UnknownAdmissionTaskRejection
-  | { readonly ok: false; readonly reason: Exclude<RemediationCaseGraphRejection, 'unknown-admission-task'> };
+  | InadmissibleCaseBindingRejection
+  | { readonly ok: false; readonly reason: Exclude<RemediationCaseGraphRejection, 'unknown-admission-task' | 'inadmissible-case-binding'> };
 
 function hasOwn(value: object, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
@@ -105,6 +124,40 @@ function hasValidDistinctFrom(caseRow: RemediationCaseRow): boolean {
     });
 }
 
+function hasValidReRaise(caseRow: RemediationCaseRow): boolean {
+  if (caseRow.reRaise === undefined) return true;
+  const reRaise = caseRow.reRaise as unknown as Record<string, unknown>;
+  return typeof reRaise === 'object' && reRaise !== null && !Array.isArray(reRaise) &&
+    Object.keys(reRaise).length === 2 && Object.hasOwn(reRaise, 'kind') && Object.hasOwn(reRaise, 'reason') &&
+    (reRaise.kind === 'residual-gap' || reRaise.kind === 'repeat') &&
+    typeof reRaise.reason === 'string' && reRaise.reason.length > 0 && reRaise.reason.length <= 8_000;
+}
+
+function retainAllowedDistinctFrom(
+  caseRow: RemediationCaseRow,
+  references: RemediationCaseValidationReferences,
+): RemediationCaseRow {
+  const allowed = references.allowedDistinctFromCaseIdsByCaseRef?.[caseRow.caseRef];
+  if (allowed === undefined || caseRow.distinctFrom === undefined) return caseRow;
+  const allowedCaseIds = new Set(allowed);
+  const distinctFrom = caseRow.distinctFrom.filter((entry) => allowedCaseIds.has(entry.caseId));
+  if (distinctFrom.length > 0) return { ...caseRow, distinctFrom };
+  const { distinctFrom: _distinctFrom, ...withoutDistinctFrom } = caseRow;
+  return withoutDistinctFrom;
+}
+
+function retainEligibleReRaise(
+  caseRow: RemediationCaseRow,
+  references: RemediationCaseValidationReferences,
+): RemediationCaseRow {
+  if (caseRow.reRaise === undefined) return caseRow;
+  const eligibleCaseIds = new Set(references.reRaiseEligibleCaseIds);
+  if (caseRow.disposition === 'act' && caseRow.existingCaseId !== undefined &&
+    eligibleCaseIds.has(caseRow.existingCaseId)) return caseRow;
+  const { reRaise: _reRaise, ...withoutReRaise } = caseRow;
+  return withoutReRaise;
+}
+
 function hasProviderDurableId(caseRow: RemediationCaseRow): boolean {
   const candidate = caseRow as unknown as Record<string, unknown>;
   const effect = caseRow.effect as unknown as Record<string, unknown>;
@@ -124,7 +177,7 @@ function providerOperatorOwnedState(caseRow: RemediationCaseRow):
 function validateEffect(
   caseRow: RemediationCaseRow,
   judgement: RemediationCaseJudgement,
-): Exclude<RemediationCaseGraphRejection, 'unknown-admission-task'> | undefined {
+): Exclude<RemediationCaseGraphRejection, 'unknown-admission-task' | 'inadmissible-case-binding'> | undefined {
   const effect = caseRow.effect as unknown as Record<string, unknown>;
   if (caseRow.disposition === 'act') {
     if (effect.kind !== 'action' || effect.route !== 'build' || !Array.isArray(effect.tasks) || effect.tasks.length === 0) {
@@ -169,6 +222,28 @@ function validateEffect(
   }
   if (caseRow.disposition === 'advisory') return effect.kind === 'none' ? undefined : 'invalid-reject-effect';
   return effect.kind === 'none' ? undefined : 'invalid-reject-effect';
+}
+
+function inadmissibleCaseBindings(
+  judgement: RemediationCaseJudgement,
+  references: RemediationCaseValidationReferences,
+): InadmissibleCaseBindingRejection['bindings'] {
+  const bindableByCaseId = references.bindableDispositionsByCaseId;
+  if (bindableByCaseId === undefined) return [];
+
+  const bindings: InadmissibleCaseBindingRejection['bindings'][number][] = [];
+  for (const caseRow of judgement.cases) {
+    if (caseRow.existingCaseId === undefined || caseRow.disposition === 'escalate') continue;
+    const bindableDispositions = bindableByCaseId[caseRow.existingCaseId];
+    if (bindableDispositions === undefined || bindableDispositions.includes(caseRow.disposition)) continue;
+    bindings.push({
+      caseRef: caseRow.caseRef,
+      existingCaseId: caseRow.existingCaseId,
+      disposition: caseRow.disposition,
+      bindableDispositions,
+    });
+  }
+  return bindings;
 }
 
 function unknownAdmissionTaskIds(
@@ -233,7 +308,7 @@ function validateConsistency(
   currentSources: ReadonlySet<string>,
   casesByRef: ReadonlyMap<string, RemediationCaseRow>,
   judgement: Extract<RemediationCaseJudgement, { readonly mode: 'case-v2' }>,
-): Exclude<RemediationCaseGraphRejection, 'unknown-admission-task'> | undefined {
+): Exclude<RemediationCaseGraphRejection, 'unknown-admission-task' | 'inadmissible-case-binding'> | undefined {
   const consistency = judgement.consistency as unknown as Record<string, unknown>;
   if (!nonEmptyString(consistency.rationale)) return 'missing-consistency-rationale';
   // The consistency record names the *implicated* sources and cases
@@ -275,6 +350,7 @@ export function validateRemediationCaseGraph(
   const casesByRef = new Map<string, RemediationCaseRow>();
   for (const caseRow of judgement.cases) {
     if (!hasValidDistinctFrom(caseRow)) return { ok: false, reason: 'invalid-case-keys' };
+    if (!hasValidReRaise(caseRow)) return { ok: false, reason: 'invalid-case-keys' };
     if (hasProviderDurableId(caseRow)) return { ok: false, reason: 'provider-durable-id' };
     const operatorState = providerOperatorOwnedState(caseRow);
     if (operatorState) return { ok: false, reason: operatorState };
@@ -348,13 +424,17 @@ export function validateRemediationCaseGraph(
     const consistencyError = validateConsistency(currentSources, casesByRef, judgement);
     if (consistencyError) return { ok: false, reason: consistencyError };
   }
+  const inadmissibleBindings = inadmissibleCaseBindings(judgement, references);
+  if (inadmissibleBindings.length > 0) {
+    return { ok: false, reason: 'inadmissible-case-binding', bindings: inadmissibleBindings };
+  }
 
   return {
     ok: true,
     graph: {
       sourceOutcomes: judgement.sourceOutcomes,
       cases: judgement.cases.map((caseRow) => ({
-        case: caseRow,
+        case: retainEligibleReRaise(retainAllowedDistinctFrom(caseRow, references), references),
         sources: sourcesByCase.get(caseRow.caseRef)!,
       })),
     },

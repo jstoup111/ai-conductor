@@ -17,6 +17,7 @@ import { persistFixtureProjectedRemediationPlan } from './remediation-plan-fixtu
 import { parseChildId } from '../../src/engine/child-context.js';
 import { readRouteRecord } from '../../src/engine/routing/route-record-store.js';
 import { parseRoundId } from '../../src/engine/routing/route-types.js';
+import { writeSliceTopologyFixture } from './slice-topology-fixture.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
 
@@ -98,24 +99,14 @@ async function seedRoutedTasklessFixture(dir: string): Promise<void> {
   await execa('git', ['commit', '-q', '-m', 'fixture: initialize'], { cwd: dir });
   await Promise.all([
     mkdir(join(dir, '.pipeline', 'children', '1'), { recursive: true }),
-    mkdir(join(dir, '.docs', 'plans'), { recursive: true }),
+    mkdir(join(dir, '.ai-conductor'), { recursive: true }),
   ]);
-  await Promise.all([
-    writeFile(join(dir, '.pipeline', 'coverage-binding.json'), JSON.stringify({
-      version: 1,
-      slug: 'validation-group-handshake-retry',
-      runId: 'fixture',
-      status: 'done',
-      entries: [],
-      sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: [] },
-    })),
-    writeFile(join(dir, '.docs', 'plans', 'validation-group-handshake-retry.md'), [
-      '### Task 1: Existing work',
-      '',
-      '### Task 2: Existing work',
-      '',
-    ].join('\n')),
-  ]);
+  await writeFile(join(dir, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 2\n');
+  await writeSliceTopologyFixture(dir, {
+    slug: 'validation-group-handshake-retry',
+    sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['first', 'leaf'] },
+    storyOwnership: { S1: 1, S2: 2 },
+  });
 }
 
 describe('validation-group dispatch handshake retries', () => {

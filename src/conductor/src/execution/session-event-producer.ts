@@ -13,7 +13,7 @@ import type {
 } from '../types/events.js';
 import { createSessionEventIdentity, isSessionEventIdentity } from './session-event-identity.js';
 import { validateManagedSessionProducerPath } from './managed-session-context.js';
-import { isFeatureSlug } from '../engine/worktree.js';
+import { isFeatureSlug } from './feature-slug.js';
 
 /** PIPE_BUF-safe ceiling for one producer-owned JSONL record, including its newline. */
 export const MAX_SESSION_EVENT_RECORD_BYTES = 4_096;

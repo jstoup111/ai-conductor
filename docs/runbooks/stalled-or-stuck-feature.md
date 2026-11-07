@@ -23,6 +23,8 @@ marker remains in place and no journal was created, so neither the route nor any
 **Recovery:** after reviewing the repeated repair, authorize one more restack with
 `ai-conductor kickback-budget raise --gate restack` and resume the feature. Slices merged before
 the routing flag flip route without re-validation; do not reopen them merely to clear this halt.
+Which child to name, and what to do when the resume stops silently, is covered in
+[Stacked feature manual recovery](stacked-feature-manual-recovery.md#2-restack-cascade-cap).
 
 ## Symptom
 
@@ -44,16 +46,20 @@ All daemon-level evidence lives at the main repo root: `.daemon/`.
 
 **Symptom:** A merged plan never dispatches, and `ai-conductor daemon status` lists it in `BLOCKED`
 with a reason and remedy. This is a discovery refusal, not a feature HALT: no feature worktree or
-`.pipeline/HALT` exists yet. The startup dashboard does not render this state
-([#1332](https://github.com/jstoup111/ai-conductor/issues/1332)); use `daemon status`.
+`.pipeline/HALT` exists yet. The startup dashboard also lists it under `BLOCKED (<n>)` and counts it
+on the `NEEDS YOU:` line; `daemon status` reads the latest snapshot without a restart.
 
 **Diagnosis:** Read the `BLOCKED` line. Common reasons are `unresolvable-stories-ref`,
-`stories-missing`, `stories-not-approved`, `adr-not-approved`, `no-dependency-tree`, and
-`missing-coherence`. `adr-not-approved` means the default branch's `.docs/decisions/` corpus
+`stories-missing`, `stories-not-approved`, `adr-not-approved`, `no-dependency-tree`,
+`missing-coherence`, and `malformed-manifest`. `malformed-manifest` means
+`.docs/<slug>/manifest.json` failed validation; the remedy names the defect — see
+[feature manifest](../reference/artifacts.md#feature-manifest). `adr-not-approved` means the default branch's `.docs/decisions/` corpus
 contains an ADR whose first declared status is not `APPROVED` or `SUPERSEDED` (or that declares no
 status); it blocks every merged spec, not just the one it names. The
 snapshot is `.daemon/blocked.json`; a missing or malformed snapshot means only that no completed
-discovery pass is available, not that the spec is clear.
+discovery pass is available, not that the spec is clear. For a repo-wide list of plans with broken
+Stories references, labelled by lifecycle state, run
+[`ai-conductor daemon stories-refs`](../reference/cli.md#daemon-stories-refs); it needs no running daemon.
 
 **Recovery:** Apply the line's remedy on the repository's default branch. Do not repair only a
 feature branch or a local working tree: discovery reads the committed default-branch tree. After an
@@ -91,6 +97,17 @@ git -C .worktrees/<slug> show HEAD:.docs/halted/<slug>.md
 
 Repair the push failure separately; do not treat a missing remote copy as a missing halt record.
 
+A stacked feature (one with child branches or stack refs) commits no record to a branch and pushes
+none. Read its record from the local ref; `git log` on the ref lists earlier records of the halt
+history:
+
+```bash
+git -C .worktrees/<slug> show refs/conductor/<slug>/halt-record:.docs/halted/<slug>.md
+git -C .worktrees/<slug> log --format='%h %ci %s' refs/conductor/<slug>/halt-record
+```
+
+If the ref is absent, the record predates ref storage; read `HEAD:.docs/halted/<slug>.md` as above.
+
 ### 1. Read the halt marker
 
 ```bash
@@ -112,7 +129,7 @@ never absent for long. Content the reader doesn't recognize still reads as `uncl
 | `needs-human` | Only an operator can resolve it. A detail naming a remediation-planner mismatch is a plan gap wearing this class; see [the remediation planner disagreed with the parsed findings](#the-remediation-planner-disagreed-with-the-parsed-findings). | No — except a matching, one-use `kickback-budget` authorization for a budget-cap halt. |
 | `kickback-cap` | A bounded `prd_audit` or as-built-review remediation allowance is exhausted. | No — except a matching, one-use `kickback-budget` authorization. |
 | `plan-gap` | A BUILD task reported a Done-when check the approved plan cannot satisfy, or `prd_audit` or the as-built review found an outcome no active plan task owns; see [the plan-gap recovery](#the-halt-is-a-plan-gap). | No — skipped on every sweep. |
-| `stack-tip-diverged` | A [published stack](../reference/configuration.md#stacked-publication) member's remote tip no longer matches its recorded tip; the detail begins `published stack tip diverged` and names the positions. | No — skipped on every sweep. |
+| `stack-tip-diverged` | A [published stack](../reference/configuration.md#stacked-publication) member no longer matches what the engine recorded: its remote tip moved, it was closed or merged, or its base or stack membership changed. The body names the diverged positions or PRs; see [a published stack halted on `stack-tip-diverged`](#a-published-stack-halted-on-stack-tip-diverged). | No — skipped on every sweep. |
 | `mechanical` | The daemon may safely retry it. | Yes, on a base-branch advance. |
 | `protected-artifact` | BUILD or SHIP found a genuine protected DECIDE-artifact violation. | No — skipped on every sweep until an operator resolves it. |
 | `legacy` | Predates total classification; stamped by the daemon's startup migration. | Yes, on a base-branch advance, same as `mechanical`. |
@@ -387,7 +404,10 @@ A FINISH publication failure or non-converging progress halts one of four ways, 
 
 - `FINISH publication retry exhausted: <reason>` — the reason was transient (transport, GitHub,
   filesystem, provider judgment, or a re-observation), so every attempt in the budget was spent
-  before giving up.
+  before giving up. An authoring pass that wrote no `.pipeline/finish-pr-prose.json` handoff
+  (`prose_not_returned`) or an invalid one (`prose_invalid` — unparsable, wrong `version`, empty
+  title or body, still placeholder, or missing a retained `Closes` reference) retries this way, and
+  the next authoring prompt carries the failure.
 - `FINISH publication cannot proceed: <reason> is not retryable — …` — the reason can never be
   satisfied by re-running the identical transition, so the run halted on the **first** observation
   and the retry budget was deliberately left unspent. Only `author_pr_prose` and `judge_pr_prose`
@@ -411,7 +431,9 @@ A FINISH publication failure or non-converging progress halts one of four ways, 
   dispatched, so no provider pass is spent), a publication transition that ran but left its owned
   state unchanged (`publication_transition_unmoved` — the detail names the transition and the
   state that did not move, whether the transition reported success or asked for a retry it could
-  not perform), an unresolvable PR match or shipped record (`ambiguous_pr_identity`,
+  not perform), the engine's own PR edit of the authored handoff failing so the prose never
+  reached the PR (`publication_operation_failed` — the detail is
+  `pull-request.edit failed: <GitHub error>`, e.g. a token missing a required scope), an unresolvable PR match or shipped record (`ambiguous_pr_identity`,
   `invalid_shipped_record`), and destructive or unrecognized publication intent
   (`interactive_intent_*`, `unattended_intent_*`). It is always a `needs-human` halt.
 
@@ -565,6 +587,11 @@ episode recovery; the daemon log names the blocking halt disposition.
 `credentials_park_progress` events report readiness probes as they happen. The park times out
 after `harness_self_host.auth_park_timeout_minutes` (default 60), then HALTs with an actionable
 reason naming the credential to refresh.
+
+A Pi auth failure parks on Pi's own credentials file, `$PI_CODING_AGENT_DIR/auth.json` (default
+`~/.pi/agent/auth.json`), and resumes when that file changes to a valid JSON object. Recover with
+Pi's `/login`, or fix the upstream provider's environment key and restart the daemon.
+`build-auth-status` does not inspect Pi credentials.
 
 ```bash
 ai-conductor build-auth-status
@@ -900,34 +927,58 @@ from a `remediate` or `build_review` disposition asking for a DECIDE revision.
    edited is sealed — any plan amended after first BUILD entry is — reseal it first, per
    [the protected-artifact recovery](#the-halt-is-a-protected-artifact-violation).
 
+   **Stacked features:** the child cursor is derived from the sealed plan, so a reseal that keeps the
+   plan's slice positions leaves the active child resolvable. Clear the halt and resume re-enters
+   BUILD on that child; `rewind` works as usual. `reseal` refuses a plan change that moves, adds, or
+   removes a slice position once children exist.
+
 If the feature is parked while you do this, unpark it last — the daemon re-dispatches as soon as it
 is eligible.
 
 If the grant remains, the feature did not enter the authorized step; re-read the HALT rather than
 clearing it again.
 
-### coverage_binding refused a plan conflict
+### Stack cursor cannot be resolved
 
-`coverage_binding` is a no-op step: it no longer judges plan conflicts, criterion coverage, DECIDE
-amendments, or ADR obligations, never reopens tasks, and never halts on plan content. An invalid slice
-manifest or a plan ineligible for stacked delivery builds flat instead of halting.
+**Symptom:** a stacked feature halts `needs-human` before BUILD, and `.pipeline/HALT` begins
+`cannot resolve stack cursor: <cause>:`. The body names the cause, any plan path, positions ref,
+recorded positions, and plan positions, then a `Recovery:` command.
 
-**Symptom:** `.pipeline/HALT` still contains a `coverage_binding refused:` reason written before this
-change (plan conflicts, cited Done when checks, architecture obligation coverage, plan slices, or
-stacked-delivery eligibility).
+**Diagnosis:** the stack preflight derives the active child from the sealed plan's `## Slices`
+manifest and `refs/conductor/<slug>/positions`. Match the cause:
 
-**Recovery:** Clear the halt with `rm -f .worktrees/<slug>/.pipeline/HALT
-.worktrees/<slug>/.pipeline/HALT.class` and let the daemon re-dispatch. The step re-runs and passes.
+| Cause | Meaning | Printed recovery |
+| --- | --- | --- |
+| `plan-missing` | The feature plan cannot be found or read. | `ai-conductor reseal` for the plan path |
+| `plan-invalid` | The `## Slices` manifest is invalid, or the plan's stories artifact is missing, unreadable, or does not map every story to one slice. | `ai-conductor reseal` for the plan path |
+| `positions-changed` | The plan's slice positions differ from the recorded positions. | `ai-conductor reseal` for the plan path |
+| `positions-ref-unreadable` | Child state exists but the positions ref is absent or malformed. | `git update-ref` that rewrites the ref from the plan positions |
+| `detached-head` | The worktree is not on a branch. | `git switch feat/daemon-<slug>` |
+| `git-error` | A git probe of child state, journal recovery, or the cursor failed. | `rm -f .pipeline/HALT .pipeline/HALT.class` |
 
-**Exception: sealed child positions.** The only refusal the step still raises is
-`coverage_binding refused: sealed child positions are immutable after child state exists`. It fires
-when a stacked feature that has already started building children has a plan whose slice positions
-differ from `refs/conductor/<slug>/positions`. Restore the plan's `## Slices` positions to the sealed
-set, then clear the halt. A [restack](../reference/configuration.md#restack) carries changes through
-the existing positions; it never changes them.
+**Recovery:**
 
-**Verification:** The next `.pipeline/coverage-binding.json` has status `disabled` and no entries, and
-the step is marked done.
+1. For `plan-missing` or `plan-invalid`, restore or repair the plan and its stories so the manifest
+   validates with the recorded positions, then run the printed `reseal` command from an interactive
+   terminal.
+2. For `positions-changed`, restore the plan's `## Slices` positions to the recorded set first.
+   `reseal` refuses any position change once children exist, so the printed command succeeds only
+   after the positions match. Task membership may change within the recorded positions. A
+   [restack](../reference/configuration.md#restack) carries changes through the existing positions;
+   it never changes them.
+3. For `positions-ref-unreadable`, confirm the printed positions match the plan, then run the
+   printed `git update-ref` command from the feature worktree.
+4. For `detached-head`, run the printed `git switch` command in the feature worktree.
+5. For `git-error`, fix the underlying git failure, then clear the halt.
+6. Clear any remaining halt with `rm -f .worktrees/<slug>/.pipeline/HALT
+   .worktrees/<slug>/.pipeline/HALT.class` and let the daemon re-dispatch.
+
+**Verification:** the next dispatch passes the stack preflight and enters BUILD on the active child;
+`ai-conductor daemon status` shows that child.
+
+**Legacy halts.** The `coverage_binding` step is retired. A HALT beginning `coverage_binding refused:`
+was written by an older engine; clear it as in step 6. Resume selects the next step from the
+current lifecycle and ignores a leftover `.pipeline/coverage-binding.json`.
 
 ### The halt is a plan gap
 
@@ -1178,9 +1229,8 @@ the daemon log. That approval is bound to the content it was taken against, not 
 artifact again after resealing and it refuses exactly as before, because the sealed fingerprint no
 longer matches. Reseal again only after reviewing the new amendment.
 
-For a changed path in the feature's coverage-binding DECIDE set, a successful reseal also invalidates
-completed coverage evidence. On the next re-kick, the no-op `coverage_binding` step re-runs before
-BUILD and re-records only the plan's slice topology; it never reopens work.
+For a stacked feature with child state, `reseal` of its plan refuses a change to the `## Slices`
+positions; see [stack cursor cannot be resolved](#stack-cursor-cannot-be-resolved).
 
 If REKICK encounters this refusal before starting git, the HALT begins
 `protected-artifact seal error` and explicitly says no rebase is active. Do not use the rebase
@@ -1256,7 +1306,7 @@ the stack. Read the reason, the named child, and the detail lines in the HALT, t
 
 | Reason | Meaning |
 | --- | --- |
-| `cascade-cap` | The named originating child already caused its allowed feature repairs (default 3). |
+| `cascade-cap` | The named originating child already caused its allowed feature repairs (its [tier allowance](../reference/configuration.md#restack); default `S`/`M` 3, `L` 8). |
 | `closed-child-rewritten` | A closed child's branch no longer contains its closure tip. |
 | `range-not-ancestor` | A closure tip is not an ancestor of the named next child's branch. |
 | `dirty-overlap` | Uncommitted tracked changes overlap paths the restack would rewrite. |
@@ -1265,9 +1315,45 @@ the stack. Read the reason, the named child, and the detail lines in the HALT, t
 | `lock-unavailable`, `stack-ref-changed` | Another Git operation held or moved a stack ref during the move. |
 | `replay-mismatch`, `verification-failed` | The replayed result failed path-ownership or post-move verification. |
 | `flatten_refused` | A content-bearing merge in the named child conflicts with its new parent. |
+| `published-stack` | The stack is published and frozen; see [what the published-stack freeze blocks](#what-the-published-stack-freeze-blocks). Only a local-work restack halts with it; a base refresh refuses and continues. |
+| `deferred-base-refresh` | A routed round or revalidation queue is open, so the base refresh was deferred. It appears only as a `restack_refused` event, never as a HALT; the re-kick retries later. |
+
+A restack journal still owned by a live process halts `mechanical`, not `needs-human`, with
+`restack journal owned by live process <pid> on <host>` (or `journal owner unreadable`) and a
+`restack_refused` event with reason `journal-live-owner`. Another operation is mid-restack; let it
+finish. No halt record is committed, and the re-kick sweep clears the HALT on a base-branch
+advance; otherwise [clear the halt](#clear-a-halt-and-let-the-feature-resume) once the owner exits.
 
 A `restack conflict child <k>` HALT lists the conflicting commit and paths the resolver could not
 settle within the rebase resolution attempt budget.
+
+When that HALT includes `Restack-Conflict: <k> <op-id>`, resolve it on the scratch branch named in
+the recipe, never on `feat/c<k>/<slug>` or a closed ref:
+
+```bash
+git switch -c restack-resolve/<slug>/c<k> <old-tip>
+git rebase --onto <new-parent> <old-parent>
+ai-conductor stack restack-resolve --slug <slug> --child <k> --tip <resolved-tip>
+```
+
+For a base-refresh or feature-repair conflict — including a closed child — an operator can instead
+record a decision and let the daemon resume the replay:
+
+```bash
+ai-conductor stack restack-resolve --slug <slug> --child <k> --decision "<answer>"
+```
+
+Use exactly one of `--tip` and `--decision`; a `--tip`/`--decision` flag conflict is refused.
+`--decision` also refuses a wrong child, no matching live
+HALT, an unstacked feature, a held feature-dispatch lease, and invocation from a daemon session.
+On success it clears the HALT and the next restack supplies the answer to the resolver.
+
+A recorded `--tip` that the restack cannot use is retired, not left in place. When the HALT returns
+as `restack conflict child <k>` with `restack-resolution-stale` and `range` or `parent-tree` on its
+detail lines, the child's history moved after you resolved it. Run the HALT's new
+`Restack-Conflict` recipe from scratch; the old scratch branch is based on the outdated range. For
+validation rules, refusals, and stale handling, see
+[restack conflict resolution](../reference/cli.md#restack-conflict-resolution).
 
 **Recovery:**
 
@@ -1279,15 +1365,169 @@ settle within the rebase resolution attempt budget.
 
   The daemon consumes the authorization on its next loop iteration. See the
   [CLI reference](../reference/cli.md#ai-conductor-kickback-budget).
+- **`published-stack`:** the engine cannot carry local work onto a published child. Follow
+  [what the published-stack freeze blocks](#what-the-published-stack-freeze-blocks); do not clear the
+  halt to retry the restack.
 - **Every other reason:** park the feature, remove the named condition (commit the overlapping
   changes, move the colliding untracked file, release the other checkout, let the concurrent Git operation finish,
-  or settle the conflict on the named child's branch), then
+  or settle the conflict using its scratch-branch recipe), then
   [clear the halt](#clear-a-halt-and-let-the-feature-resume). Do not delete
   `refs/conductor/<slug>/restack/*` refs by hand; the next stack preflight recovers or retries the
   operation from its journal.
 
 **Verification:** the feature's next dispatch records `restack_recovered` or `restack_applied`
 events and no new restack HALT.
+
+For routed-round faults, silent preflight stops, and resolver escalations such as halt-record-only
+replay commits, see [Stacked feature manual recovery](stacked-feature-manual-recovery.md).
+
+### A published stack halted on `stack-tip-diverged`
+
+**Symptom:** `.pipeline/HALT.class` is `stack-tip-diverged`. The HALT begins `A published stack
+member no longer matches its recorded tip.` and its `Detail:` names the diverged positions or PRs,
+for example `published stack tip diverged at positions: 2`. The re-kick sweep never clears it.
+
+**Diagnosis:** FINISH publication found that a
+[published stack](../reference/configuration.md#stacked-publication) no longer matches the engine's
+record. A member's remote tip moved, a member was closed or merged, or a base or the stack's
+membership or order changed. The usual causes are GitHub's server-side rebase of the remaining
+members after you merge only the bottom of the stack, and a human push to a member PR. The engine
+stops rather than write over the change. Find which members diverged:
+
+```bash
+cat .worktrees/<slug>/.pipeline/HALT
+grep '"stack_tip_diverged"' .worktrees/<slug>/.pipeline/events.jsonl | tail -1
+git -C .worktrees/<slug> cat-file -p refs/conductor/<slug>/publication
+```
+
+The event lists the diverged PR numbers. The publication record maps each position to its branch
+(`feat/c<k>/<slug>` for a child, `feat/daemon-<slug>` for the leaf) and its PR. For each named
+member, compare the engine's recorded tip with GitHub's:
+
+```bash
+git -C .worktrees/<slug> rev-parse refs/conductor/<slug>/pushed/<branch>
+git -C .worktrees/<slug> ls-remote origin refs/heads/<branch>
+gh pr view <pr> --json state,isDraft,baseRefName,headRefOid
+```
+
+A different SHA means the tip moved. A state other than `OPEN`, or an unexpected base, means the
+member was merged, closed, or retargeted.
+
+**Recovery:** choose one. Do not clear the halt first: the next FINISH entry observes the same
+mismatch and halts again.
+
+- **Merge the remaining stack.** Use this when the divergence is an expected server-side rebase or
+  a human push you have reviewed and want to keep.
+  1. Review each diverged member's new commits in GitHub.
+  2. Merge the rest of the stack in GitHub, bottom up through the leaf, in one go if you can. Every
+     member still needs its required checks and approval. The engine never merges a member.
+  3. Confirm the leaf merged and the feature's shipped record reached the default branch:
+
+     ```bash
+     gh pr view <leaf-pr> --json state
+     git fetch origin && git cat-file -e origin/main:.docs/shipped/<slug>.md && echo shipped
+     ```
+
+  4. Clear the halt:
+
+     ```bash
+     ai-conductor halt clear --feature <slug> --rationale "merged the remaining stack after tip divergence at <positions>"
+     ```
+
+- **Close the stack and park the feature.** Use this when the stack should not ship as it stands.
+  1. Park first, so nothing re-dispatches while you change GitHub:
+     `ai-conductor daemon park <slug>`.
+  2. Close every open member PR in GitHub, the leaf included.
+  3. Leave the feature parked and the halt in place. Unparking re-enters FINISH, which observes the
+     closed members and halts again. Adopting a changed stack is #3268's `conduct stack adopt`, which
+     is not yet available.
+
+**Never edit recorded tips by hand.** Do not update, delete, or re-create
+`refs/conductor/<slug>/pushed/<branch>` or `refs/conductor/<slug>/publication` to make the halt go
+away. The tip guard lets the engine write to a published member only while every recorded tip
+matches GitHub. A hand-recorded tip makes the guard accept a stack the engine never verified, so the
+next engine push or retarget could undo GitHub's rewrite or a human's commits.
+
+**Verification:** after a merge, the daemon log shows `skip <slug>: shipped dedup — implementation
+already merged (base-branch shipped record found); not re-dispatching.`, and the mergeable sweep
+reaps the worktree and deletes the merged child branches (see
+[retained worktrees](../guides/running-the-daemon.md#retained-worktrees)). If
+`ai-conductor daemon status` still lists the feature under `RETAINED WORKTREES`, follow its
+`remedy:` line. After a close, `.daemon/parked/<slug>` exists and the feature is not dispatched.
+
+#### What the published-stack freeze blocks
+
+Once a stack is published, the engine rewrites none of its members.
+
+| Engine action | On a published stack |
+| --- | --- |
+| Base refresh (the FINISH `rebase` step, the re-kick base refresh) | Refuses with `restack_refused` reason `published-stack` and continues on the current base. No HALT, unless an older unsatisfied rebase verdict survives the refusal: see [the rebase step completed without refreshing its gate verdict](#the-rebase-step-completed-without-refreshing-its-gate-verdict). |
+| Local-work restack (stack-preflight feature repair, routed-exit restack) | Halts `needs-human` with `restack refused (published-stack)`, naming the child. |
+| Routed-repair admission | Halts `needs-human` with `routing admission refused: published-stack`. |
+| CI fix or open-PR autoresolve on the leaf | CI fix logs `skipped(published-stack)`. Both label the leaf PR `needs-remediation` and comment `published stacked feature requires manual resolution (#2945)`. |
+| Best-effort pushes | The halt-record push is skipped and emits `halt_record_push_failed` with reason `stack-tip-mismatch`. The post-FINISH shipped-record refresh logs its skip. Agent `github-operation` writes are refused `stack-tip-mismatch`. |
+
+**When `main` moves:** the stack stays on its old base. If GitHub can still merge the bottom member,
+merge the stack as above. If it conflicts with `main`, resolve the conflict yourself on that member's
+branch in GitHub. That moves the member's tip, so plan to merge the whole stack straight afterwards;
+any later engine write to it halts `stack-tip-diverged`.
+
+**When CI goes red on a member:** the engine does not fix it. Fix the failure yourself on that
+member's branch and then merge the stack, or close the stack and park the feature as above.
+Engine-driven refresh of a published stack is #3268.
+
+### A closed stacked child needs an operator landing
+
+**Symptom:** A `needs-human` HALT begins `unlanded-closed-child-commits`, or an operator-round
+HALT begins `Operator-Halt: operator-round-undeclared <round>` or
+`Operator-Halt: operator-round-branch-moved <round>`. The dashboard may instead retain the
+feature with reason `feature-lease-held` while another writer is active.
+
+**Diagnosis:** A closed child has commits that the automatic restack is not allowed to close over,
+or an opened landing is awaiting a declaration. The branch-moved form names each branch whose tip
+no longer matches the operator round's recorded tip; no restack ran. `feature-lease-held` is not a
+HALT: a live daemon or operator command owns the feature dispatch lease and the daemon safely
+skipped that dispatch.
+
+**Recovery:** Do not remove these HALTs by hand. The command that resolves the condition clears
+only its matching HALT atomically; unrelated HALTs remain in place.
+
+- For `unlanded-closed-child-commits`, run the exact `stack land` command printed in the HALT.
+  Its `--child` is the landing host and every printed `--carry` is required. It opens the round,
+  takes the feature lease, and clears the HALT only when the admitted host and carried children
+  cover every child named in it. Make and commit the reviewed change on the host branch, then
+  declare it from that feature worktree:
+
+  ```bash
+  cd .worktrees/<slug>
+  ai-conductor stack land --slug <slug> --done
+  ```
+
+- For `operator-round-undeclared`, either commit the intended reviewer change on the host branch
+  and run `ai-conductor stack land --slug <slug> --done`, or discard the landing through
+  `ai-conductor stack land --slug <slug> --abandon`. Both commands must run from the host branch
+  with a clean worktree. `--done` refuses an empty or halt-record-only landing; use `--abandon`
+  when there is no change to declare.
+- For `operator-round-branch-moved`, first restore every branch named by the HALT to its recorded
+  tip, preserving any independent work elsewhere before doing so. Then run `--done` for an
+  undeclared landing, or re-run the original `stack land --slug <slug> --child <k> ... --reason
+  "<why>"` command to resume a declared or undeclared round. If the landing should not continue,
+  `ai-conductor stack land --slug <slug> --abandon` is the safe escape route: it does not require
+  unaffected or carried branch tips to be repaired first.
+- For `feature-lease-held`, read the reported owner purpose and pid, then wait for that live
+  command or daemon dispatch to finish. Do not delete `.daemon/leases/<slug>` or start a competing
+  landing. A stale lease is recovered by the next acquiring command; an unreadable owner remains a
+  refusal rather than a condition to remove manually.
+
+`stack land` creates an operator park only if none exists and records a token proving it owns that
+park. `--done` and `--abandon` release only that owned marker. A pre-existing park, or one recreated
+by another operator, remains parked; unpark it explicitly with `ai-conductor daemon unpark <slug>`
+only after the landing is resolved and the feature should resume.
+
+**Verification:** `--done` prints that daemon dispatch will re-validate the host from
+`acceptance_specs`; `--abandon` reports the abandoned round. Run `ai-conductor daemon status` and
+confirm that no matching operator HALT remains. A deliberately retained park stays visible until it
+is unparked.
 
 ### The completed rebase halted for missing feature content
 
@@ -1360,6 +1600,38 @@ commands complete the rebase; they do not reconcile the daemon's pipeline marker
 
 The next dashboard snapshot should list the feature under ELIGIBLE or IN-PROGRESS rather than
 PARKED or HALTED. The daemon log should show `↻ resume <slug>` after dispatch.
+
+### The rebase step completed without refreshing its gate verdict
+
+**Symptom:** `.pipeline/HALT` is `needs-human` and reads `step 'rebase' completed but its gate
+verdict was not refreshed (stale verdict: <reason>)`. `<reason>` is the earlier unsatisfied
+verdict still stored in `.pipeline/gates/rebase.json`.
+
+**Diagnosis:** a rebase dispatch normally rewrites its own gate verdict. After the dispatch, the
+engine compares the stored verdict's `checkedAt` with the dispatch start. An unsatisfied verdict
+older than the dispatch is stale:
+
+| Dispatch outcome | Behavior |
+|---|---|
+| No-op rebase, or a cleanly mergeable skip | Re-applies the outcome to the rebase verdict, emits `gate_verdict`, and selects `finish`. No HALT. |
+| Conflict halt | Keeps the existing conflict HALT. |
+| Any other outcome, for example a `published-stack` refusal | Halts once with the line above instead of re-selecting `rebase` until the selection cap. |
+
+A verdict written during the dispatch, satisfied or not, is never treated as stale.
+
+**Recovery:**
+
+```bash
+ai-conductor daemon park <slug>
+cat .worktrees/<slug>/.pipeline/gates/rebase.json
+```
+
+Resolve the condition named in `<reason>`. For a published stack, follow
+[What the published-stack freeze blocks](#what-the-published-stack-freeze-blocks). Then clear the
+halt with [the resume procedure](#clear-a-halt-and-let-the-feature-resume).
+
+**Verification:** the daemon log shows `↻ resume <slug>` and the feature does not re-write the
+same halt.
 
 ### Resume halted on the rebase transition record
 
@@ -1439,8 +1711,14 @@ A revision entry left `pending` keeps the prior decision unchanged. A revision t
 prior decision (for example, `refuse` on an existing refusal) is inert: it records nothing new and
 does not fail the recovery. Only a changed decision creates a new revision.
 
+Each entry is captured on its own. Valid decisions in the block are recorded even when a sibling
+entry is defective; each defective entry is named by its criterion, and the halt prints one
+recovery line per reason. A decision is accepted only for a criterion the latest PRD-audit verdict
+offered as an outside-visible `OVER_SCOPE` finding.
+
 For a durable PRD-widening recovery, keep every unaffected decision and refusal in place. The
-halt body names the affected source, case, decision, or artifact and one of these actions:
+halt body names the affected criterion, source, case, decision, or artifact and one of these
+actions:
 
 - `malformed-history`: restore the original widening history from a known-good copy, then resume.
 - `unsupported-history`: preserve the history and upgrade to a conductor version that supports it.
@@ -1452,6 +1730,13 @@ halt body names the affected source, case, decision, or artifact and one of thes
 - `context-overflow`: the halt and event name the dimension, actual size, and limit; reduce the cited source input without pruning history.
 - `projection-failed`: repair the named stored evidence or verdict renderer without re-deciding valid authority.
 - `uncertain-relation`: review the preserved original and current evidence, then submit a new explicit decision if desired.
+- `changed-offer-reference`: correct the entry against the latest halt, or leave it `pending`, then clear again.
+- `missing-rationale`: add a rationale to the entry, or leave it `pending`, then clear again.
+- `duplicate-decision-entry`: keep one entry per criterion, then clear again.
+- `unreadable-decision-block`: repair the block's JSON, then clear again.
+- `unreadable-decision-entry`: repair the named entry, or leave it `pending`, then clear again.
+- `unknown-criterion`: remove the criterion the audit did not offer, or leave it `pending`, then clear again.
+- `offered-set-unavailable`: the PRD-audit verdict could not be read; leave the entry `pending` so the next audit offers it again, then clear again.
 
 Version-2 `accepted-widenings.json` preserves valid legacy attributed evidence in its original
 order. A refusal is also preserved: revise it only through its offered explicit revision entry,
@@ -1658,19 +1943,20 @@ not cover that case.
 repeats the same rejection. A repeat means the transition is still inadmissible. Leave the feature
 halted.
 
-### build_review halted on an open action case
+### build_review halted on an open action or deferral case
 
 **Symptom:** `.pipeline/HALT` (class `needs-human`) reads one of:
 
 ```text
 build_review adjudication halted: open action case <case> has a failed effect while a current remediation source remains unaccepted; resolve with ai-conductor build-review resolve-case --feature <slug> [--child <child>] --case <case> --rationale "<why>"
-build_review clean-PASS durable settlement halted: clean PASS cannot settle open action case <case> (<status>); resolve with ai-conductor build-review resolve-case --feature <slug> [--child <child>] --case <case> --rationale "<why>"
+build_review clean-PASS durable settlement halted: clean PASS cannot settle open <action|deferral> case <case> (<status>); resolve with ai-conductor build-review resolve-case --feature <slug> [--child <child>] --case <case> --rationale "<why>"
+build_review adjudication halted: remediation effect is not finalized for case <case>; resolve with ai-conductor build-review resolve-case --feature <slug> [--child <child>] --case <case> --rationale "<why>"
 ```
 
 **Diagnosis:** an action case's BUILD effect failed or never finished, and the engine cannot retire it:
 at least one of its sources is still raised and not accepted, or the lap was not mechanically healthy
-enough to treat an absent source as gone. A clean-PASS settlement halt that names a `deferral` case
-carries no `resolve with` command; this section does not cover it.
+enough to treat an absent source as gone. For a `deferral` case, its intake issue was never filed (the
+effect is `reserved`) or filing failed (`failed`); the engine never drops a deferral silently.
 
 **Recovery:**
 
@@ -1688,6 +1974,8 @@ carries no `resolve with` command; this section does not cover it.
    ai-conductor build-review resolve-case --feature <slug> [--child <child>] --case <case> --rationale "<why>"
    ```
 
+   For a deferral case, first make sure the follow-up exists: file it with `/intake` if needed, and
+   name the issue in the rationale (for example `"deferred finding filed as #<N>"`).
    Otherwise, fix the finding in the feature worktree and leave the case open.
 4. Clear the halt with an [audited clear](#audited-clear).
 
@@ -1695,6 +1983,9 @@ carries no `resolve with` command; this section does not cover it.
 until the engine's next pass. After that pass, `.pipeline/events.jsonl` holds one
 `remediation_case_operator_resolved` event for the case, and `build_review` settles or routes without
 repeating this halt.
+
+On a stacked child, pass `--child <child>` to `findings`; see
+[Stacked feature manual recovery](stacked-feature-manual-recovery.md#7-build_review-halts-on-a-stacked-child).
 
 ### build_review halted on a recurrence limit
 
@@ -1707,7 +1998,9 @@ build_review adjudication halted: semantic remediation case recurrence limit <ca
 **Diagnosis:** the judgement re-raised a concern over a resolved action case without declaring it
 distinct, and that recurrence lineage already consumed three applied BUILD attempts. Another BUILD
 route is not progress. The engine bound the current source to `<case>` and emitted
-`remediation_semantic_repeat_halt` with reason `recurrence-limit` and `lineageCaseIds`.
+`remediation_semantic_repeat_halt` with reason `recurrence-limit` and `lineageCaseIds`. When the
+judgement bound the re-raise to a resolved, applied action case, the event also carries
+`reRaiseKind` (`residual-gap` or `undeclared`).
 
 **Recovery:**
 
@@ -1723,7 +2016,7 @@ route is not progress. The engine bound the current source to `<case>` and emitt
 3. If the finding is accepted risk, accept it from an interactive terminal:
 
    ```bash
-   ai-conductor build-review accept --feature <slug> --lap <lap> --finding <id> --rationale "<why>"
+   ai-conductor build-review accept --feature <slug> [--child <child>] --lap <lap> --finding <id> --rationale "<why>"
    ```
 
    Otherwise, fix the finding in the feature worktree.
@@ -1733,6 +2026,79 @@ route is not progress. The engine bound the current source to `<case>` and emitt
 `.pipeline/events.jsonl` holds no new `remediation_semantic_repeat_halt` with reason
 `recurrence-limit` for the lineage.
 
+### build_review halted on a semantic case repeat or regression
+
+**Symptom:** `.pipeline/HALT` (class `needs-human`) reads one of:
+
+```text
+build_review adjudication halted: semantic remediation case repeat <case>; resolve with ai-conductor build-review resolve-case --feature <slug> [--child <child>] --case <case> --rationale "<why>"
+build_review adjudication halted: semantic remediation case regression <case>; accept with ai-conductor build-review accept --feature <slug> --lap <lap> --finding <id> --rationale "<why>", or fix the finding in the feature worktree
+build_review adjudication halted: semantic remediation case regression <case>; fix the finding on child <child> (build-review accept has no --child yet)
+```
+
+A regression on a case whose action was applied also names the lineage after the case:
+`regression <case>; declared repeat; lineage <cases> has <n> applied attempts; ...`.
+
+The matching `remediation_semantic_repeat_halt` event carries reason `already-attempted` for a repeat
+or `regressed` for a regression. A declared-repeat regression also carries `reRaiseKind: "repeat"`,
+`lineageCaseIds`, and `appliedAttempts`.
+
+**Diagnosis:** the judgement bound a current finding to an `act` case whose BUILD action already ran.
+Another BUILD route would repeat that action, so the engine halts instead.
+
+- **Repeat:** the case is still open. Its action was applied (`effect.status: applied`), and the next
+  lap raised the same concern again.
+- **Regression:** the case was resolved, and the finding came back. When the case's action was
+  applied, the judgement declared the re-raise a `repeat`; a residual gap or an undeclared re-raise
+  routes to BUILD as a recurrence instead and halts only at the
+  [recurrence limit](#build_review-halted-on-a-recurrence-limit).
+
+Decide whether the finding can be satisfied. A repair that did not satisfy it once will not satisfy
+it on a second attempt. Example: a test-insensitivity finding on a behavior-preserving refactor. No
+test can fail against the base, so the finding is accepted risk.
+
+**Recovery:**
+
+1. Inspect the case and the re-raised finding:
+
+   ```bash
+   ai-conductor build-review findings --feature <slug> [--child <child>]
+   ```
+
+   Pass `--child <child>` on a stacked child. See
+   [Stacked feature manual recovery](stacked-feature-manual-recovery.md#7-build_review-halts-on-a-stacked-child).
+2. Leave `.pipeline/remediation-cases.json` unchanged. Do not hand-edit case history.
+3. If the finding is accepted risk or already fixed, run the command from the halt in an interactive
+   terminal:
+   - **Repeat:** use `resolve-case`, passing `--child <child>` on a stacked child. The engine carries
+     an operator-resolved case forward, so the next lap does not halt on it again.
+
+     ```bash
+     ai-conductor build-review resolve-case --feature <slug> [--child <child>] --case <case> --rationale "<why>"
+     ```
+
+   - **Regression:** `resolve-case` refuses because the case is already resolved. Accept each
+     re-raised finding instead:
+
+     ```bash
+     ai-conductor build-review accept --feature <slug> [--child <child>] --lap <lap> --finding <id> --rationale "<why>"
+     ```
+
+     On a stacked child, pass `--child <child>` and the child's lap. The child halt text still says
+     `build-review accept has no --child yet`; that text is stale.
+
+   If the finding is real, fix it in the feature worktree. For a repeat, also leave the case open.
+4. Clear the halt with an [audited clear](#audited-clear):
+
+   ```bash
+   ai-conductor halt clear --feature <slug> --rationale "<case> resolved: <why>"
+   ```
+
+**Verification:** `resolve-case` prints `resolved <case>`, or `accept` prints
+`accepted <id> for lap <lap>`. The next
+`build_review` lap settles or routes. `.pipeline/events.jsonl` holds no new
+`remediation_semantic_repeat_halt` for the case.
+
 ### build_review halted on an exhausted mechanical fault allowance
 
 **Symptom:** `.pipeline/HALT` reads:
@@ -1740,9 +2106,13 @@ route is not progress. The engine bound the current source to `<case>` and emitt
 ```text
 build_review mechanical fault allowance exhausted: <consumed> of 3 shared faults consumed.
 Current lap <lap>: <rubric> closed cause <reason> (<detail>).
-1. Record a reduced-coverage decision: ai-conductor build-review record-reduced-coverage --feature <slug> --lap <lap> --rubric <rubric> --rationale "<rationale>".
+1. Record a reduced-coverage decision: ai-conductor build-review record-reduced-coverage --feature <slug> [--child <child>] --lap <lap> --rubric <rubric> --rationale "<rationale>".
 2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.
 ```
+
+On a stacked feature halted inside a child region, step 1 includes `--child <child>`, and `<lap>`
+and `<consumed>` come from that child's aggregate and kickback ledger under
+`.pipeline/children/<child>/`. A flat feature's halt has no `--child`.
 
 When the current lap has no readable aggregate (for example, its verdict came from an earlier
 lap and the completion guard scored it `absent`), the halt instead reads:
@@ -1795,9 +2165,12 @@ A missing record means retention failed; the fault itself is unaffected.
    not actually exhausted, a duplicate reduced-coverage record, or the lap/review has since gone
    stale):
    ```bash
-   ai-conductor build-review record-reduced-coverage --feature <slug> --lap <lap> \
+   ai-conductor build-review record-reduced-coverage --feature <slug> [--child <child>] --lap <lap> \
      --rubric <rubric> --rationale "<why this rubric's coverage is being reduced>"
    ```
+   Copy `--child` exactly as the halt prints it. A refusal names the failed check and the file it
+   read, for example `the mechanical-fault allowance remains (2 of 3 consumed in
+   .pipeline/children/2/kickback-ledger.json)`.
    This only writes the decision — it does not touch the halt marker.
 2. Clear the halt using [the resume procedure](#clear-a-halt-and-let-the-feature-resume).
 

@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 /**
  * RED acceptance specs for #970. They drive the production Codex provider and
  * shared authentication-park coordinator; only the external Codex CLI process
@@ -81,7 +83,7 @@ function codexCompleted(output = 'completed') {
 }
 
 function mockedCodexProvider(): CodexProvider {
-  return new CodexProvider(
+  return new CodexProvider(dispatchGitGuard,
     mockExeca as never,
     'codex',
     undefined,

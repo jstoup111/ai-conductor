@@ -13,6 +13,7 @@ import { chargeTasklessAtAdmission } from '../../../src/engine/routing/round-rec
 import { createRouteRecord, readRouteRecord, writeRouteRecord } from '../../../src/engine/routing/route-record-store.js';
 import { emptyUnsettledReceipt, parseRoundId } from '../../../src/engine/routing/route-types.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
+import { writeSliceTopologyFixture } from '../slice-topology-fixture.js';
 
 const roots: string[] = [];
 const child = parseChildId(1)!;
@@ -62,10 +63,10 @@ describe('taskless routed admission receipts', () => {
   ])('seals the authored denominator for first-round %s admission', async (kind, receipt) => {
     const subject = await fixture({ route: false });
     await mkdir(join(subject.root, '.pipeline', 'children', '1'), { recursive: true });
-    await writeFile(join(subject.root, '.pipeline', 'coverage-binding.json'), JSON.stringify({
-      version: 1, slug: 'demo', runId: 'fixture', status: 'done', entries: [],
-      sliceMembership: { taskSlices: { T1: 1 }, titles: [] },
-    }));
+    await writeSliceTopologyFixture(subject.root, {
+      slug: 'demo',
+      sliceMembership: { taskSlices: { T1: 1, T2: 1 }, titles: ['First'] },
+    });
     const conductor = new Conductor({
       projectRoot: subject.root,
       stateFilePath: join(subject.root, '.pipeline', 'conduct-state.json'),

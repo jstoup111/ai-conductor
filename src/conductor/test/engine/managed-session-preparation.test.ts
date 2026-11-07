@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -120,7 +122,7 @@ describe('managed observation destination preparation', () => {
 
     it('launches the real Claude read-only policy with no producer destination and no proof', async () => {
       const managed = { ...(await context()), provider: 'claude' };
-      const claude = new ClaudeProvider();
+      const claude = new ClaudeProvider(dispatchGitGuard);
       const invoke = vi.fn(async () => ({ success: true, output: 'reviewed', exitCode: 0 }));
       const prepareManagedSessionObservation = vi.fn(createManagedSessionObservationPreparer(unprovenProbe));
 
@@ -171,7 +173,7 @@ describe('managed observation destination preparation', () => {
 
     it('still refuses setup when real self-host args widen the Claude launch', async () => {
       const managed = { ...(await context()), provider: 'claude' };
-      const claude = new ClaudeProvider();
+      const claude = new ClaudeProvider(dispatchGitGuard);
       const invoke = vi.fn(async () => ({ success: true, output: 'must not run', exitCode: 0 }));
 
       const result = await executeProviderCandidates({

@@ -1,3 +1,6 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
+// Covers: task:1, task:2
 import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 import type {
   AuthenticationReadiness,
@@ -5,6 +8,7 @@ import type {
   InvokeOptions,
   InvokeResult,
   LLMProvider,
+  ProviderSystemPromptCapability,
   ProviderStreamCandidateObserver,
 } from '../../src/execution/llm-provider.js';
 import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
@@ -66,6 +70,49 @@ async function executeCodexCandidate(
 }
 
 describe('InvokeResult provider-unavailable contract', () => {
+  it('admits Pi cached-login authentication records while rejecting Claude', () => {
+    const piCachedLogin: NonNullable<InvokeResult['authentication']> = {
+      provider: 'pi',
+      source: 'cached-login',
+      state: 'unusable',
+    } as const;
+
+    expectTypeOf<typeof piCachedLogin>().toMatchTypeOf<
+      NonNullable<InvokeResult['authentication']>
+    >();
+
+    const claudeCachedLogin: NonNullable<InvokeResult['authentication']> = {
+      // @ts-expect-error cached-login authentication is exclusive to Pi.
+      provider: 'claude',
+      source: 'cached-login',
+      state: 'unusable',
+    };
+    void claudeCachedLogin;
+  });
+
+  it('declares provider system-prompt delivery and its refusal marker', () => {
+    expectTypeOf<LLMProvider['systemPromptCapability']>().toEqualTypeOf<
+      ProviderSystemPromptCapability | undefined
+    >();
+
+    const undeliverable: InvokeResult = {
+      success: false,
+      output: 'system prompt cannot be delivered',
+      exitCode: 1,
+      systemPromptUndeliverable: true,
+    };
+
+    expect({
+      claude: new ClaudeProvider(dispatchGitGuard).systemPromptCapability,
+      codex: new CodexProvider(dispatchGitGuard).systemPromptCapability,
+      undeliverable: undeliverable.systemPromptUndeliverable,
+    }).toEqual({
+      claude: { deliversSystemPrompt: true },
+      codex: { deliversSystemPrompt: true },
+      undeliverable: true,
+    });
+  });
+
   it('exposes invoke as the sole built-in provider dispatch member', () => {
     type RemovedInteractiveMember = Extract<keyof LLMProvider, 'invokeInteractive'>;
 
@@ -82,7 +129,7 @@ describe('InvokeResult provider-unavailable contract', () => {
   });
 
   it('exposes the #1069 fail-closed Codex session-resume capability seam', () => {
-    const provider: LLMProvider = new CodexProvider();
+    const provider: LLMProvider = new CodexProvider(dispatchGitGuard);
     const buildArgs = (
       provider as unknown as {
         buildArgs(options: InvokeOptions, json: boolean, unattended: boolean): string[];
@@ -138,8 +185,8 @@ describe('InvokeResult provider-unavailable contract', () => {
   });
 
   it('keeps both built-in providers fail-closed for session resume', async () => {
-    const codex = new CodexProvider(vi.fn(async () => ({ stdout: '{}', exitCode: 0 })) as never);
-    const claude = new ClaudeProvider();
+    const codex = new CodexProvider(dispatchGitGuard, vi.fn(async () => ({ stdout: '{}', exitCode: 0 })) as never);
+    const claude = new ClaudeProvider(dispatchGitGuard);
     const calls: InvokeOptions[] = [];
     const resumeCapableProvider: LLMProvider = {
       supportsSessionResume: true,

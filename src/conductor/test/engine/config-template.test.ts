@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:1, task:2
 /**
  * Regression coverage for issue #1010: copying
  * templates/ai-conductor-config.yml.template produced an invalid
@@ -306,6 +306,11 @@ describe('templates/project-config.yml.template', () => {
   it('covers every validator-accepted key with a block or its section reference, and no rejected key', async () => {
     const raw = await readFile(PROJECT_TEMPLATE_PATH, 'utf8');
     expect(coverageViolations(raw)).toEqual({ rejected: [], uncovered: [] });
+    const documented = documentedKeys(raw);
+    expect(documented.has('plan_review')).toBe(true);
+    expect(documented.has('plan_review.max_prompt_chars')).toBe(true);
+    expect(raw).toMatch(/^# Controls: plan_review — .+$/m);
+    expect(raw).toMatch(/^# Controls: plan_review\.max_prompt_chars — .+$/m);
     expect(raw).toContain('\n# CONFIG_INIT_TEST_SUITE_VERIFICATION\n');
   });
 

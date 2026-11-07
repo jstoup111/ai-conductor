@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:7
 /**
  * RED acceptance specs for
@@ -52,7 +54,7 @@ function providerForEnvelope(envelope: Record<string, unknown>): ClaudeProvider 
     exitCode: 0,
     failed: false,
   }) as never;
-  return new ClaudeProvider(undefined, subprocessFactory);
+  return new ClaudeProvider(dispatchGitGuard, undefined, subprocessFactory);
 }
 
 async function invokeEnvelope(

@@ -1,4 +1,4 @@
-// Covers: task:2, task:6, task:7, task:9
+// Covers: task:2, task:3, task:6, task:7, task:9
 import { describe, expect, it } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
 import { access, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, symlink, writeFile, chmod } from 'node:fs/promises';
@@ -14,7 +14,7 @@ import {
   realProviderHomeFs,
   type ProviderHomeFs,
 } from '../../../src/engine/self-host/provider-home.js';
-import { ProviderSetupUnavailableError } from '../../../src/engine/provider-setup-failure.js';
+import { ProviderSetupUnavailableError } from '../../../src/execution/provider-setup-failure.js';
 import { OPERATOR_ONLY_SKILLS } from '../../../src/engine/worktree-prepare.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';

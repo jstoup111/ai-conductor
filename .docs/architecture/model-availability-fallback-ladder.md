@@ -1,6 +1,6 @@
 # Components + Sequence: Provider-Aware Model Availability Fallback
 
-**Last updated:** 2026-07-23
+**Last updated:** 2026-10-25
 **Scope:** Reactive model-unavailable detection in the selected provider and the
 per-process provider-native fallback ladder that degrades invocations instead of
 HALTing (issues #186 and #902).
@@ -79,7 +79,9 @@ sequenceDiagram
   step's `max_retries` budget.
 - An explicit `model_fallback_ladder` remains an opaque provider-native override.
   Without it, Claude defaults to `fable → opus → sonnet` and Codex defaults to
-  `gpt-5.6-sol → gpt-5.6-terra → gpt-5.6-luna`.
+  `gpt-5.6-sol → gpt-5.6-terra → gpt-5.6-luna` as per-tier floors, each upgraded per process to its newest catalog id
+  (see [codex tier model resolution](codex-steps-resolve-the-newest-catalog-model-per-t.md));
+  the sequence above shows the floor ids.
 - Cache lifetime remains per process; restart clears it.
 
 ## Change Log
@@ -88,3 +90,4 @@ sequenceDiagram
 |------|--------|--------|
 | 2026-07-03 | Initial generation | DECIDE phase for intake #186 |
 | 2026-07-23 | Made the default ladder provider-native | DECIDE architecture for issue #902 |
+| 2026-10-25 | Codex ladder rungs are floors upgraded from the Codex catalog | DECIDE architecture for Codex tier model resolution |

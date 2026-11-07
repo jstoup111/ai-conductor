@@ -1,4 +1,4 @@
-import { dirname, isAbsolute, join, normalize, relative, sep } from 'node:path';
+import { dirname, join, normalize } from 'node:path';
 import * as fsp from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import type { StepName } from '../../types/steps.js';
@@ -6,7 +6,7 @@ import type { SelfHostProviderId } from './provider-home.js';
 import { BUILT_IN_PROVIDERS, isBuiltInProviderId, providerDescriptor } from '../../execution/provider-catalog.js';
 import { isStepName } from '../execution-identity.js';
 import { LEGACY_TRANSCRIPT_OWNER_STEP, type ConductorEvent, type TranscriptOwnerStep } from '../../types/events.js';
-import type { ConductorEventEmitter } from '../../ui/events.js';
+import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import {
   emitTranscriptHarvest as emitTranscriptHarvestEvent,
   harvestProviderHome,
@@ -18,6 +18,8 @@ import {
 } from './transcript-harvest.js';
 import { sanitizeProviderMember } from './provider-member.js';
 import { TranscriptRetention } from './transcript-retention.js';
+
+export { writeScratchSchema } from '../../execution/scratch-schema.js';
 
 const OWNER_LEASE_FILE = 'owner.json';
 const LEGACY_SCRATCH_PREFIXES = ['self-host-', 'harness-selfbuild-'] as const;
@@ -36,33 +38,6 @@ export interface ResolveScratchHomeOptions {
    * member's release must never remove a sibling's live home.
    */
   readonly member?: string;
-}
-
-/**
- * Materialize a short-lived provider input inside an already-acquired scratch
- * home. The attempt owner owns the home and removes it through its existing
- * teardown; callers must not create a parallel scratch lifetime for a file.
- */
-export async function writeScratchSchema(options: {
-  readonly worktreeRoot: string;
-  readonly homeDir: string;
-  readonly schema: Readonly<Record<string, unknown>>;
-}): Promise<string> {
-  const scratchRoot = join(normalize(options.worktreeRoot), '.daemon', 'scratch');
-  const homeDir = normalize(options.homeDir);
-  const fromScratchRoot = relative(scratchRoot, homeDir);
-  if (
-    fromScratchRoot === '' ||
-    fromScratchRoot === '..' ||
-    fromScratchRoot.startsWith(`..${sep}`) ||
-    isAbsolute(fromScratchRoot)
-  ) {
-    throw new Error(`provider scratch home is outside the worktree scratch root: ${homeDir}`);
-  }
-
-  const schemaPath = join(homeDir, 'output-schema.json');
-  await fsp.writeFile(schemaPath, JSON.stringify(options.schema), 'utf8');
-  return schemaPath;
 }
 
 /** Minimal filesystem boundary for acquiring and reading a scratch-home lease. */

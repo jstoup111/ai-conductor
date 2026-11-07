@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import type { RestackResolver } from '../../../src/engine/restack/restack-resolver.js';
 import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
@@ -14,7 +14,7 @@ import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const execFile = promisify(execFileCallback);
 const repositories: string[] = [];
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -52,7 +52,7 @@ async function threeChildStack(prefix: string, files: { c2: string; c2Content: s
   await git(['update-ref', 'refs/conductor/demo/closed/c2', closureTwo]);
   await git(['checkout', '-qb', 'feat/daemon-demo']);
   const leaf = await commit('L1', 'l1.txt');
-  await writeCoverageBindingEnvelope(repo, {
+  await writeSliceTopologyFixture(repo, {
     version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
     sliceMembership: { taskSlices: { a: 1, b: 2, c: 3 }, titles: ['one', 'two', 'leaf'] },
     storyOwnership: { S1: 1, S2: 2, S3: 3 },

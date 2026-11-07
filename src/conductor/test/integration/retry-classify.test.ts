@@ -188,7 +188,7 @@ describe('integration/retry-classify (#646)', () => {
   ): Promise<void> {
     const refusalReason = 'coverage binding needs a human decision';
     let dispatches = 0;
-    await seedTailAt(statePath, 'coverage_binding');
+    await seedTailAt(statePath, 'acceptance_specs');
     const runner: StepRunner = {
       run: async () => {
         dispatches++;
@@ -209,14 +209,14 @@ describe('integration/retry-classify (#646)', () => {
       daemon,
       verifyArtifacts: false,
       maxRetries,
-      fromStep: 'coverage_binding',
+      fromStep: 'acceptance_specs',
     });
 
     await conductor.run();
 
     expect(dispatches).toBe(1);
     expect(retryDecisions).toContainEqual(expect.objectContaining({
-      step: 'coverage_binding',
+      step: 'acceptance_specs',
       attempt: 1,
       decision: 'route',
       signal: 'terminal-refusal',
@@ -226,7 +226,7 @@ describe('integration/retry-classify (#646)', () => {
     await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toBe(`${refusalReason}\n`);
     await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
     const state = JSON.parse(await readFile(statePath, 'utf8')) as Record<string, unknown>;
-    expect(state.coverage_binding).toBe('refused');
+    expect(state.acceptance_specs).toBe('refused');
   }
 
   it('Task 3: routes a needs-human refusal once before a three-attempt budget', async () => {
@@ -245,7 +245,7 @@ describe('integration/retry-classify (#646)', () => {
 
   it('Task 4: retries an ordinary failure through its full budget without terminal-refusal routing', async () => {
     let dispatches = 0;
-    await seedTailAt(statePath, 'coverage_binding');
+    await seedTailAt(statePath, 'acceptance_specs');
     const runner: StepRunner = {
       run: async () => {
         dispatches++;
@@ -262,7 +262,7 @@ describe('integration/retry-classify (#646)', () => {
       daemon: true,
       verifyArtifacts: false,
       maxRetries: 3,
-      fromStep: 'coverage_binding',
+      fromStep: 'acceptance_specs',
     });
 
     await conductor.run();
@@ -271,14 +271,14 @@ describe('integration/retry-classify (#646)', () => {
     expect(stepRetries).toHaveLength(2);
     expect(retryDecisions).not.toContainEqual(expect.objectContaining({ signal: 'terminal-refusal' }));
     await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toMatch(
-      /coverage_binding.*retries exhausted/,
+      /acceptance_specs.*retries exhausted/,
     );
   });
 
   it('Task 4: a successful step emits no terminal-refusal retry decision', async () => {
-    await seedTailAt(statePath, 'coverage_binding');
+    await seedTailAt(statePath, 'acceptance_specs');
     const runner: StepRunner = {
-      run: async (step) => step === 'coverage_binding'
+      run: async (step) => step === 'acceptance_specs'
         ? { success: true, output: 'bound coverage' }
         : { success: false, output: 'stop after the success observation' },
     };
@@ -292,7 +292,7 @@ describe('integration/retry-classify (#646)', () => {
       daemon: true,
       verifyArtifacts: false,
       maxRetries: 1,
-      fromStep: 'coverage_binding',
+      fromStep: 'acceptance_specs',
     });
 
     await conductor.run();
@@ -421,7 +421,7 @@ describe('integration/retry-classify (#646)', () => {
 
   it('Task 6: conductor records an interface-valid refusal reason when its output is omitted', async () => {
     const refusalReason = 'coverage binding needs a human decision';
-    await seedTailAt(statePath, 'coverage_binding');
+    await seedTailAt(statePath, 'acceptance_specs');
     const runner: StepRunner = {
       run: async () => ({
         success: false,
@@ -438,7 +438,7 @@ describe('integration/retry-classify (#646)', () => {
       daemon: true,
       verifyArtifacts: false,
       maxRetries: 2,
-      fromStep: 'coverage_binding',
+      fromStep: 'acceptance_specs',
       config: { retry_routing: { enabled: false } } as never,
     });
 
@@ -452,7 +452,7 @@ describe('integration/retry-classify (#646)', () => {
   // ── Task 7: refusal output does not displace other diagnostics ─────────
 
   it('Task 7: a blank non-refusal result keeps the produced-no-output diagnostic', async () => {
-    await seedTailAt(statePath, 'coverage_binding');
+    await seedTailAt(statePath, 'acceptance_specs');
     const runner: StepRunner = {
       run: async () => ({ success: false, output: '   ' }),
     };
@@ -466,7 +466,7 @@ describe('integration/retry-classify (#646)', () => {
       daemon: true,
       verifyArtifacts: true,
       maxRetries: 2,
-      fromStep: 'coverage_binding',
+      fromStep: 'acceptance_specs',
     });
 
     await conductor.run();
@@ -480,7 +480,7 @@ describe('integration/retry-classify (#646)', () => {
   it('Task 8: disabled retry routing consumes the full refusal retry budget', async () => {
     const refusalReason = 'coverage binding needs a human decision';
     let dispatches = 0;
-    await seedTailAt(statePath, 'coverage_binding');
+    await seedTailAt(statePath, 'acceptance_specs');
     const runner: StepRunner = {
       run: async () => {
         dispatches++;
@@ -501,7 +501,7 @@ describe('integration/retry-classify (#646)', () => {
       daemon: true,
       verifyArtifacts: false,
       maxRetries: 3,
-      fromStep: 'coverage_binding',
+      fromStep: 'acceptance_specs',
       config: { retry_routing: { enabled: false } } as never,
     });
 
@@ -518,7 +518,7 @@ describe('integration/retry-classify (#646)', () => {
   it('Task 8: omitted retry routing keeps terminal-refusal routing enabled by default', async () => {
     const refusalReason = 'coverage binding needs a human decision';
     let dispatches = 0;
-    await seedTailAt(statePath, 'coverage_binding');
+    await seedTailAt(statePath, 'acceptance_specs');
     const runner: StepRunner = {
       run: async () => {
         dispatches++;
@@ -539,14 +539,14 @@ describe('integration/retry-classify (#646)', () => {
       daemon: true,
       verifyArtifacts: false,
       maxRetries: 3,
-      fromStep: 'coverage_binding',
+      fromStep: 'acceptance_specs',
     });
 
     await conductor.run();
 
     expect(dispatches).toBe(1);
     expect(retryDecisions).toContainEqual(expect.objectContaining({
-      step: 'coverage_binding',
+      step: 'acceptance_specs',
       attempt: 1,
       decision: 'route',
       signal: 'terminal-refusal',

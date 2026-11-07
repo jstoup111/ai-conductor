@@ -70,7 +70,6 @@ export const GATE_SURFACE: Record<string, GateSurfaceKind> = {
   // those documents changes (plan/coherence/stories/specs/cited ADRs).  An
   // upstream runtime edit overlapping a feature file is build_review's and
   // test_suite's concern; reopening these on it fired on nearly every rebase.
-  coverage_binding: 'feature-coverage-inputs',
   // Grades THE FEATURE'S OWN diff against its plan (plan-vs-diff
   // completeness), so only the feature's own code or tests can change the
   // grade — a foreign main-side delta leaves that diff, and therefore the
@@ -89,7 +88,7 @@ export const GATE_SURFACE: Record<string, GateSurfaceKind> = {
   // intent context; only those declared documents reopen it.
   prd_audit: 'feature-prd-inputs',
   // The as-built review is bound to the same document inputs as
-  // coverage_binding (plans, coherence, stories, specs, cited ADRs).
+  // architecture_review_as_built (plans, coherence, stories, specs, cited ADRs).
   architecture_review_as_built: 'feature-coverage-inputs',
 };
 
@@ -245,8 +244,7 @@ export function projectGateSurfaces(
  * Per gate surface kind (see `GATE_SURFACE`):
  * - 'feature-prd-inputs' (prd_audit): preserved iff no declared
  *   stories/spec/PRD input changed.
- * - 'feature-coverage-inputs' (coverage_binding,
- *   architecture_review_as_built): preserved iff no declared plan,
+ * - 'feature-coverage-inputs' (architecture_review_as_built): preserved iff no declared plan,
  *   coherence, stories, spec or cited-ADR input changed.
  * - 'feature-codetest' (build_review): preserved iff `featureSrc` AND the
  *   feature's own test paths are both empty — a foreign-only delta (runtime

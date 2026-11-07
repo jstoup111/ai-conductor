@@ -6,13 +6,13 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Conductor } from '../../src/engine/conductor.js';
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
+import { sealSliceTopologyPositions, writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 
 const execFile = promisify(execFileCallback);
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -39,6 +39,9 @@ async function closeFirstChild(): Promise<void> {
   const tip = (await git(['rev-parse', 'HEAD'])).trim();
   await git(['branch', 'feat/c1/demo', tip]);
   await git(['update-ref', 'refs/conductor/demo/closed/c1', tip]);
+  await sealSliceTopologyPositions(root, {
+    slug: 'demo', sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['first', 'leaf'] },
+  });
 }
 
 beforeEach(async () => {
@@ -54,8 +57,8 @@ beforeEach(async () => {
   await git(['add', '.ai-conductor/config.yml']);
   await git(['commit', '-qm', 'configure stack']);
   await writeFile(join(root, '.git', 'info', 'exclude'), '.pipeline/\n');
-  await writeCoverageBindingEnvelope(root, {
-    version: 1, slug: 'demo', runId: 'events-1', status: 'done', entries: [],
+  await writeSliceTopologyFixture(root, {
+    version: 1, slug: 'demo', runId: 'events-1', status: 'done', entries: [], materializeTopologyCommit: true,
     sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['first', 'leaf'] },
     // An empty, but present, ownership map keeps both children on the
     // no-owned-criteria fast path and lets this test observe both transitions.
@@ -63,7 +66,7 @@ beforeEach(async () => {
   }, envelopeFilesystem);
   await mkdir(join(root, '.pipeline'), { recursive: true });
   await writeFile(join(root, '.pipeline', 'conduct-state.json'), JSON.stringify({
-    feature_desc: 'demo', plan: 'done', coverage_binding: 'done',
+    feature_desc: 'demo', plan: 'done',
   }));
   for (const child of [1, 2]) {
     const childPipeline = join(root, '.pipeline', 'children', String(child));
@@ -109,8 +112,8 @@ describe('stacked BUILD region events', () => {
   });
 
   it('persists the active child on dispatched region step starts', async () => {
-    await writeCoverageBindingEnvelope(root, {
-      version: 1, slug: 'demo', runId: 'events-2', status: 'done', entries: [],
+    await writeSliceTopologyFixture(root, {
+      version: 1, slug: 'demo', runId: 'events-2', status: 'done', entries: [], materializeTopologyCommit: true,
       sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['first', 'leaf'] },
       storyOwnership: { S1: 1, S2: 2 },
     }, envelopeFilesystem);

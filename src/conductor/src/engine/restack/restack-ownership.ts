@@ -51,7 +51,7 @@ async function removeCarriedMergePaths(
   }
 }
 
-async function ownedPaths(range: ChildRange, newParent: CommitSha, git: GitRunner): Promise<Set<string>> {
+export async function ownedPaths(range: ChildRange, newParent: CommitSha, git: GitRunner): Promise<Set<string>> {
   const owned = await changedPaths(git, range.oldParent, range.oldTip);
   await removeCarriedMergePaths(git, range, newParent, owned);
   return owned;

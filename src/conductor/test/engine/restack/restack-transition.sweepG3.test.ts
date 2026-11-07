@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { parseChildId, pipelinePathFor } from '../../../src/engine/child-context.js';
-import { writeCoverageBindingEnvelope } from '../../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture } from '../slice-topology-fixture.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { readVerdict, writeVerdict } from '../../../src/engine/gate-verdicts.js';
 import { readKickbackLedger } from '../../../src/engine/kickback-ledger.js';
@@ -142,7 +142,7 @@ describe('applyRestackTransition cause-scoped refunds (sweep)', () => {
     await commit('operator repair', 'repair.txt');
     await git(['checkout', '-qb', 'feat/daemon-demo', 'refs/conductor/demo/closed/c1']);
     await commit('L1', 'l1.txt');
-    await writeCoverageBindingEnvelope(repo, {
+    await writeSliceTopologyFixture(repo, {
       version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
       sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['Child 1', 'Leaf'] },
       storyOwnership: { S1: 1, S2: 2 },

@@ -27,7 +27,6 @@ import {
   MANUAL_TEST_CODE_STAMP,
   MANUAL_TEST_FAIL_EVIDENCE,
 } from './artifacts.js';
-import { COVERAGE_BINDING_CODE_STAMP } from './coverage-binding-envelope.js';
 import type { GitRunner } from './rebase.js';
 import { makeGitRunner, originDefaultBranch, changedPathsBetween, resolveReviewInputs } from './rebase.js';
 import { featureTestPaths, GATE_SURFACE, partitionDelta, projectGateSurfaces } from './gate-invalidation.js';
@@ -166,7 +165,6 @@ async function hasOutstandingVerificationRepair(projectRoot: string): Promise<bo
 }
 
 const PRESERVED_GATE_ARTIFACTS: Partial<Record<StepName, string>> = {
-  coverage_binding: '.pipeline/coverage-binding.json',
   build_review: '.pipeline/build-review.json',
   test_suite: '.pipeline/test-suite-evidence.json',
   manual_test: '.pipeline/manual-test-results.md',
@@ -227,15 +225,6 @@ export async function currentPreservedJudgeIdentity(
       // Build-review's lap and the suite proof's provenance head are durable,
       // source-bound judge identities. Do not substitute the mutable session.
       runId = gate === 'build_review' ? parsed.lapId : parsed.provenanceHeadSha;
-    } else if (gate === 'coverage_binding') {
-      // The envelope's closed schema carries the run; the runner's sidecar
-      // carries the judged HEAD. A stamp from another run is not this
-      // envelope's identity.
-      const envelope = JSON.parse(artifact) as { runId?: unknown };
-      const stamp = JSON.parse(await readFile(join(projectRoot, COVERAGE_BINDING_CODE_STAMP), 'utf-8')) as { codeStamp?: unknown; runId?: unknown };
-      if (stamp.runId !== envelope.runId) return null;
-      codeStamp = stamp.codeStamp;
-      runId = envelope.runId;
     }
     if (!nonEmptyString(codeStamp) || !nonEmptyString(runId)) return null;
     const normalizedRunId = runId.trim();

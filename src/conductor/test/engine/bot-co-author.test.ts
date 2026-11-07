@@ -1,10 +1,20 @@
+// Covers: task:1
 import { describe, expect, it, vi } from 'vitest';
-import { createBotCoAuthorResolver, installDaemonBotCoAuthor, withDaemonCoAuthorTrailer } from '../../src/engine/bot-co-author.js';
+import { createBotCoAuthorResolver, formatBotCoAuthorSkipped, installDaemonBotCoAuthor, withDaemonCoAuthorTrailer } from '../../src/engine/bot-co-author.js';
 import type { ConductorEvent } from '../../src/types/index.js';
 import type { GhRunner } from '../../src/engine/tracker-client.js';
 import { GithubBotAuthRefusalError } from '../../src/engine/github-bot-auth-refusal.js';
 
 describe('daemon bot co-author resolver', () => {
+  it.each([
+    ['token-unavailable', 'bot co-author skipped: token unavailable'],
+    ['identity-read-failed', 'bot co-author skipped: identity read failed'],
+    ['worktree-write-failed', 'bot co-author skipped: worktree setup failed'],
+    ['resolver-absent', 'bot co-author skipped: resolver not installed for daemon dispatch'],
+  ] as const)('formats the %s skip reason', (reason, expected) => {
+    expect(formatBotCoAuthorSkipped({ type: 'bot_co_author_skipped', reason })).toBe(expected);
+  });
+
   it('uses the bot-only identity read once and exposes a trailer without rereading', async () => {
     const runner = vi.fn(async () => ({ stdout: JSON.stringify({ login: 'conductor-bot', id: 4242 }) })) as unknown as GhRunner;
     const resolver = createBotCoAuthorResolver({

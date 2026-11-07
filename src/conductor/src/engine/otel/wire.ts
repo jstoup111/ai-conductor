@@ -6,7 +6,7 @@ import type {
   VisualizerPlugin,
   VisualizerStartContext,
 } from '../../types/plugin.js';
-import type { ConductorEventEmitter } from '../../ui/events.js';
+import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import { resolveOtelConfig } from './otel-config.js';
 import { resolveWorkerName } from './otel-config.js';
 import {
@@ -87,9 +87,9 @@ export interface OtelVisualizerStartContext extends VisualizerStartContext {
   env?: NodeJS.ProcessEnv;
 }
 
-export function createOtelVisualizerRegistry(events: ConductorEventEmitter): PluginRegistry {
+export function createOtelVisualizerRegistry(_events: ConductorEventEmitter): PluginRegistry {
   const registry = new PluginRegistry();
-  registerBuiltins(registry, events, () => {}, undefined, 10, new Set());
+  registerBuiltins(registry, 10, new Set());
   registry.markInitialized();
   return registry;
 }

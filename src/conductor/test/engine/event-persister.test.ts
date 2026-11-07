@@ -1,4 +1,4 @@
-// Covers: task:4, task:3, task:1, task:2
+// Covers: task:4, task:3, task:1, task:2, task:5, task:rem-operator-5-r2
 // Covers: task:7
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, readFile, writeFile } from 'fs/promises';
@@ -9,8 +9,10 @@ import {
   EventPersistError,
   isForwardedFromFeature,
   persistOnActiveEventSpine,
+  startSessionEventTail,
   startFeatureEventPersistence,
 } from '../../src/engine/event-persister.js';
+import { CloseoutEventTail } from '../../src/engine/closeout-tail.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { MetricsListener } from '../../src/engine/otel/metrics-listener.js';
@@ -25,6 +27,8 @@ import type { ConductorEvent, ExecutionContext, ProviderAttemptEvent, RunPrDispo
 import { parseChildId } from '../../src/engine/child-context.js';
 import { parseRoundId } from '../../src/engine/routing/route-types.js';
 import { parseCommitSha } from '../../src/engine/restack/restack-types.js';
+import { EVENT_SINKS } from '../../src/engine/event-sinks.js';
+import { toProviderId } from '../../src/execution/provider-catalog.js';
 
 const CURRENT_TEST_SUITE_PROOF = {
   status: 'CURRENT',
@@ -35,7 +39,7 @@ const ROUTING_CHILD = parseChildId(1)!;
 const ROUTING_ROUND = parseRoundId('r1')!;
 const ROUTING_CLOSURE = parseCommitSha('a'.repeat(40))!;
 
-function routingEvent(type: 'remediation_routed' | 'remediation_rerouted' | 'routed_repair_phase' | 'child_revalidated', eventId: string): ConductorEvent {
+function routingEvent(type: 'remediation_routed' | 'remediation_rerouted' | 'routed_repair_phase' | 'child_revalidated' | 'routing_round_superseded', eventId: string): ConductorEvent {
   const occurredAt = '2026-10-12T00:00:00.000Z';
   switch (type) {
     case 'remediation_routed':
@@ -58,6 +62,12 @@ function routingEvent(type: 'remediation_routed' | 'remediation_rerouted' | 'rou
       return {
         type, eventId, occurredAt, child: ROUTING_CHILD, generation: 1,
         closureSha: ROUTING_CLOSURE, outcome: 'passed',
+      };
+    case 'routing_round_superseded':
+      return {
+        type, eventId, occurredAt, roundId: ROUTING_ROUND, child: ROUTING_CHILD,
+        supersededBy: parseRoundId('r2')!, droppedHosts: [ROUTING_CHILD],
+        findingIds: ['finding-1'], reason: 'stale audit round', operator: 'operator@example.test',
       };
   }
 }
@@ -95,6 +105,35 @@ describe('EventPersister', () => {
       if (value === undefined) throw new Error('scripted clock exhausted');
       return value;
     },
+  });
+
+  it('flushes a fresh ledger read after joining an in-flight poll', async () => {
+    const received: ConductorEvent[] = [];
+    emitter.on('github_operation_failed', (event) => { received.push(event); });
+    let releaseFirstRead: ((content: Buffer) => void) | undefined;
+    let reads = 0;
+    const tail = new CloseoutEventTail({
+      projectRoot: tempDir,
+      events: emitter,
+      readLedger: vi.fn(() => {
+        reads += 1;
+        if (reads === 1) return new Promise<Buffer>((resolve) => { releaseFirstRead = resolve; });
+        return Promise.resolve(Buffer.from(`${JSON.stringify({
+          type: 'github_operation_failed', operation: 'pull-request.edit',
+          target: { kind: 'pull-request', repository: 'owner/repo', number: 7 },
+          error: 'appended after first read', ts: '2026-10-25T00:00:00.000Z',
+        })}\n`));
+      }),
+    });
+    const scope = startSessionEventTail(tempDir, emitter, undefined, tail);
+
+    const poll = tail.poll();
+    const flushed = scope.flush();
+    releaseFirstRead!(Buffer.from(''));
+    await Promise.all([poll, flushed]);
+
+    expect(received).toEqual([expect.objectContaining({ error: 'appended after first read' })]);
+    expect(reads).toBe(2);
   });
 
   const configuredMember = (executionId: string, member = 'reviewer'): ExecutionContext => ({
@@ -178,6 +217,39 @@ describe('EventPersister', () => {
     });
   });
 
+  // Covers: task:5
+  it('persists a build-review review-scope occurrence with its complete scope summary', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    const event = {
+      type: 'build_review_review_scope',
+      rubric: 'security',
+      lapId: 'lap-2',
+      mode: 'delta',
+      reason: 'delta',
+      deltaHunkCount: 3,
+      settledHunkCount: 5,
+    } satisfies ConductorEvent;
+    persister.start();
+
+    await emitter.emit(event);
+    persister.stop();
+
+    const records = (await readFile(eventsPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+    expect(records).toHaveLength(1);
+    const { ts: _ts, ...record } = records[0];
+    expect(record).toEqual(event);
+  });
+
+  // Covers: task:5
+  it('registers build-review review-scope occurrences as persistent but non-rendered', () => {
+    expect(EVENT_SINKS).toHaveProperty('build_review_review_scope', {
+      render: false,
+      persist: true,
+      audit: false,
+      otel: false,
+    });
+  });
+
   it('indexes persisted observation ids once and updates the index after each append', async () => {
     const readPersistedEvents = vi.fn(() => '');
     const persister = new EventPersister(eventsPath, emitter, undefined, { readPersistedEvents });
@@ -203,11 +275,13 @@ describe('EventPersister', () => {
     expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(2);
   });
 
+  // Covers: task:1
   it.each([
     'remediation_routed',
     'remediation_rerouted',
     'routed_repair_phase',
     'child_revalidated',
+    'routing_round_superseded',
   ] as const)('deduplicates replayed %s events by eventId', async (type) => {
     const persister = new EventPersister(eventsPath, emitter);
     persister.start();
@@ -216,6 +290,17 @@ describe('EventPersister', () => {
     await emitter.emit(event);
     await emitter.emit(event);
     persister.stop();
+
+    expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(1);
+  });
+
+  // Covers: task:1
+  it('returns duplicate when a routing-round supersession is replayed', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    const event = routingEvent('routing_round_superseded', 'superseded-r1');
+
+    await expect(persister.persistDurably(event)).resolves.toBe('persisted');
+    await expect(persister.persistDurably(event)).resolves.toBe('duplicate');
 
     expect((await readFile(eventsPath, 'utf8')).trim().split('\n')).toHaveLength(1);
   });
@@ -420,24 +505,6 @@ describe('EventPersister', () => {
       .map((line) => JSON.parse(line));
     expect(Object.hasOwn(records[3], 'child')).toBe(false);
     expect(records[4].child).toBe(2);
-  });
-
-  it('persists a coverage-binding judgement to the shared pipeline ledger', async () => {
-    const persister = new EventPersister(eventsPath, emitter);
-    const event = {
-      type: 'coverage_binding_judged',
-      step: 'coverage_binding',
-      verdict: 'asserts',
-      digest: 'sha256:claim',
-      taskIds: ['17'],
-    } satisfies ConductorEvent;
-    persister.start();
-
-    await emitter.emit(event);
-    persister.stop();
-
-    const { ts: _ts, ...record } = JSON.parse((await readFile(eventsPath, 'utf-8')).trim());
-    expect(record).toEqual(event);
   });
 
   it('persists a step-scoped loop halt without closing the active step interval', async () => {
@@ -684,7 +751,7 @@ describe('EventPersister', () => {
 
     await emitter.emit({
       type: 'credentials_park_progress',
-      provider: 'codex',
+      provider: toProviderId('codex'),
       source: 'cached-login',
       readiness: 'unusable',
       elapsedSeconds: 3,
@@ -697,7 +764,7 @@ describe('EventPersister', () => {
     const { ts: _ts, ...record } = JSON.parse((await readFile(eventsPath, 'utf-8')).trim());
     expect(record).toEqual({
       type: 'credentials_park_progress',
-      provider: 'codex',
+      provider: toProviderId('codex'),
       source: 'cached-login',
       readiness: 'unusable',
       elapsedSeconds: 3,
@@ -715,7 +782,7 @@ describe('EventPersister', () => {
 
     await emitter.emit({
       type: 'credentials_park_progress',
-      provider: 'codex',
+      provider: toProviderId('codex'),
       source: 'cached-login',
       readiness: 'probe-failed',
       elapsedSeconds: 3,
@@ -753,7 +820,7 @@ describe('EventPersister', () => {
 
     await scope.events.emit({
       type: 'credentials_park_progress',
-      provider: 'codex',
+      provider: toProviderId('codex'),
       source: 'cached-login',
       readiness: 'probe-failed',
       elapsedSeconds: 3,
@@ -786,13 +853,39 @@ describe('EventPersister', () => {
     });
   });
 
+  it('flushes a newly appended external event without stopping the feature tail', async () => {
+    const globalEvents = new ConductorEventEmitter();
+    const observed: ConductorEvent[] = [];
+    globalEvents.on('github_operation_failed', (event) => { observed.push(event); });
+    const scope = startFeatureEventPersistence(tempDir, globalEvents, 'feature');
+    const ledger = join(tempDir, '.pipeline', 'pipeline-events.jsonl');
+    await mkdir(join(tempDir, '.pipeline'), { recursive: true });
+
+    await writeFile(ledger, `${JSON.stringify({
+      type: 'github_operation_failed', operation: 'pull-request.edit',
+      target: { kind: 'pull-request', repository: 'owner/repo', number: 7 },
+      error: 'first failure', ts: '2026-10-25T00:00:00.000Z',
+    })}\n`);
+    await scope.flush();
+    await writeFile(ledger, `${JSON.stringify({
+      type: 'github_operation_failed', operation: 'pull-request.edit',
+      target: { kind: 'pull-request', repository: 'owner/repo', number: 7 },
+      error: 'second failure', ts: '2026-10-25T00:00:01.000Z',
+    })}\n`, { flag: 'a' });
+    await scope.flush();
+    scope.stop();
+
+    expect(observed.map((event) => event.type === 'github_operation_failed' ? event.error : undefined))
+      .toEqual(['first failure', 'second failure']);
+  });
+
   it('persists only the closed progress contract, not doctor diagnostics', async () => {
     const persister = new EventPersister(eventsPath, emitter);
     persister.start();
     const rawFragment = 'sk-live-super-secret-token /private/codex/credentials.json';
 
     await emitter.emit({
-      type: 'credentials_park_progress', provider: 'codex', source: 'cached-login',
+      type: 'credentials_park_progress', provider: toProviderId('codex'), source: 'cached-login',
       readiness: 'unusable', elapsedSeconds: 60, nextProbeDelaySeconds: 30,
       degradation: 'credential-failure',
     });

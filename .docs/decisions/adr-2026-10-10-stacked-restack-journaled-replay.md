@@ -157,6 +157,31 @@ Operator decisions (2026-10-10):
        and the branch's reflog keeps them. The live halt record is on the active branch.
      - Inside a range: replayed. A conflict confined to `.docs/halted/<slug>.md` resolves
        mechanically: the upper child's record wins.
+
+     > **Amended 2026-10-28 by #3451:** Inside a range, a halt-record-only commit is no longer
+     > replayed; it is bookkeeping. A halt-record-only commit is a non-merge commit whose changed
+     > paths are exactly `.docs/halted/<slug>.md`; a merge is never one. When a kept commit and the
+     > accumulator have both changed the halt record, the accumulator's record is kept, so a
+     > halt-record conflict never occurs.
+     >
+     > After the range replays, the replayed tip must carry the winning record:
+     >
+     > - **Range never touched the record** (the halt path is not among the child's owned paths, as
+     >   this decision's path-ownership rule computes them): the new parent's record wins.
+     > - **Range touched the record:** the newer of the new parent's record and the record at the
+     >   range's old tip wins. "Newer" compares each record's `Resolved at:`, or `Halted at:` when
+     >   unresolved. A tie, or a record that cannot be read on both sides, picks the new parent's.
+     >   When only one side can be read, that side wins.
+     >
+     > When the tip's record differs from the winner, one engine commit, `halt record: <slug>`, sets
+     > it. The commit's message is exactly that subject. Its author and committer are the journal's
+     > committer stamp, so a recovered replay produces the same commit. This also undoes an older
+     > record that a kept commit applied cleanly.
+     >
+     > Each omitted commit's rewrite is the rewrite of the nearest earlier commit in the range that
+     > has one, or the new parent. Omitted commits after the last commit that has a rewrite map to
+     > the final tip. This replaces "the upper child's record wins", which could replay an older
+     > record over a newer one.
    - **Patch-equivalent commits** are skipped only against commits that are **new to the stack in
      this operation**:
      - for a base refresh, `oldDefault..newDefault`;
@@ -322,6 +347,8 @@ Operator decisions (2026-10-10):
 > in both the executor path and the recovery path. Rollback leaves them untouched
 > (`adr-2026-10-12-routed-whole-feature-repair` decision 13).
 
+> **Amended 2026-11-02 by #3582:** "Outstanding" reads `refs/conductor/<slug>/halt-record` first, then the committed record at the active branch tip (adr-2026-11-02-stacked-restack-recovery-and-halt-record-ref decision 2).
+
 5. **One atomic move, then a worktree sync that never loses local work.**
    - **Checks at `ready`, before any ref moves.** The planner refuses with nothing moved, never
      autostashing, in any of these cases:
@@ -387,9 +414,31 @@ Operator decisions (2026-10-10):
      the conflicting commit and the paths. Both sides stay recoverable: the refs never moved, and the
      staging refs are kept until the halt clears.
 
+> **Amended 2026-11-01 by #3438:** A merge-bearing child no longer refuses the hand-off. The resolver's todo is built from one linear flattened chain rooted at `oldParent`, using decision 3's classification: ancestry-only merges are dropped, a Q-carried merge contributes only its hand-resolved part, any other merge becomes one flattened commit, and a flattened commit whose change the new parent already contains is dropped. The FR-9 subjects are those of the remaining entries, and the rewritten list is translated back to the original commits. The same budget and guards apply. When the resolver cannot settle the conflict, the child takes the ordinary unresolved conflict halt. `flatten_refused` is no longer a restack refusal reason, so decision 12's closed list loses it. N=1 `flatten_refused` rebases are unchanged.
+
 > **Amended 2026-10-12 by #2944:** Before the resolver, a deterministic merge unions appended rem-*
 > blocks in the plan by id. The same id with a different body halts
 > (`adr-2026-10-12-routed-whole-feature-repair` decision 9).
+
+> **Amended 2026-10-25 by #3421:** An unresolved `feature-repair` conflict also writes a durable
+> conflict record outside `restack/staging/` and halts with a resolution recipe. An operator can
+> then record a resolution with `ai-conductor stack restack-resolve`. The command applies this
+> decision's FR-8, FR-9 and path-ownership guards. A later run consumes that resolution as the
+> resolver's output for the child when the range and the parent tree match, and halts
+> `restack-resolution-stale` otherwise (`adr-2026-10-25-operator-recorded-restack-conflict-resolution`).
+
+> **Amended 2026-10-28 by #3451:** The resolver's todo still lists exactly the commits the plumbing
+> replay would apply, so it omits halt-record-only commits (decision 2). When both sides changed
+> `.docs/halted/<slug>.md`, the rebase keeps the side being rebuilt, through a merge driver. The driver is set only
+> in the rebase's own environment, through `core.attributesFile` and `merge.<driver>.driver`, and
+> nothing is written to the repository's config or attributes. The provider resolver therefore
+> never receives a halt-record path. FR-9's expected subjects are the todo's subjects, so
+> omitted halt-record-only commits are not reported as lost. A resolved tip gets the same
+> newest-record bookkeeping commit as a replayed one before the path-ownership check.
+
+> **Amended 2026-10-31 by #3478:** An unresolved `base-refresh` conflict also writes the conflict record and recipe. An operator can answer the resolver's missing decision with `ai-conductor stack restack-resolve --decision`. The next restack passes that decision to this decision's resolver primitive as `operatorDecision` when the child and range match. The FR-8, FR-9 and path-ownership guards still apply to the result (adr-2026-10-31-operator-decision-for-stacked-restack-conflicts).
+
+> **Amended 2026-11-02 by #3582:** The resolver's Git environment reaches the provider, and an accepted tip is the temporary checkout's HEAD rather than the last rewritten-list entry, which is now only a fallback. A todo with candidates never settles at `newParent`, and a candidate subject missing from the settled range halts as unresolved (adr-2026-11-02-stacked-restack-recovery-and-halt-record-ref decisions 6 and 7).
 
 7. **One shared stack preflight runs before anything that judges the stack.**
    - **What it is.** The preflight is one function in three phases:
@@ -558,6 +607,8 @@ Operator decisions (2026-10-10):
 > due base refresh is deferred with `restack_refused` reason `deferred-base-refresh`
 > (`adr-2026-10-12-routed-whole-feature-repair` decision 7).
 
+> **Amended 2026-10-24 by #3203:** With routing eligible, the automatic repair in the stack preflight is retired. A `repair-pending` cursor with no marker halts needs-human with reason `unlanded-closed-child-commits`, naming the command that carries the commits into an operator round. With routing off it runs as written. The closed-child `rewind` refusal is lifted; it opens an operator round (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decisions 8 and 11).
+
 10. **Cause scopes refunds. A per-child cap bounds repair cascades.**
     - **Cause.** Every stacked restack, and the rebase operation record it writes, carries
       `cause: 'feature-repair' | 'base-refresh'`. N=1 records omit the field, and an absent cause
@@ -613,6 +664,16 @@ Operator decisions (2026-10-10):
 > one cascade. A `feature-repair` restack still never refunds. A routed pass's `build_review`
 > allowance is the separate `routedRepairCredit` (`adr-2026-10-12-routed-whole-feature-repair`
 > decisions 12 and 13).
+
+> **Amended 2026-10-28 by #3472:** The bound is no longer one constant. Each originating child's
+> allowance resolves at each use from the feature's complexity tier: Small 3, Medium 3, Large 8.
+> An unrecorded tier is treated as Medium. `stacked_prs.max_restack_cascades` may override it with
+> a positive integer (every tier) or an `{S, M, L}` map. A per-child `limits` entry written to the
+> `cascades` ref by an operator raise still takes precedence. The cap halt, `kickback-budget
+> inspect` and `daemon status` name the tier, the allowance and its source. Wherever another ADR
+> cites `MAX_RESTACK_CASCADES_PER_CHILD` as a bound (for example the re-validation bound in
+> `adr-2026-10-12-routed-whole-feature-repair`), it now means this resolved per-child allowance,
+> which is still finite.
 
 11. **Force pushes lease against the remote tip the engine expects.**
     - **Recording.** `executeRemoteGit` is the single chokepoint for engine pushes. On every
@@ -680,12 +741,27 @@ Operator decisions (2026-10-10):
         `verification-failed`, `replay-mismatch`, `range-not-ancestor`,
         `closed-child-rewritten`, `flatten_refused`, `restack-outstanding`,
         `published-stack` or `deferred-base-refresh`.
+
+        > **Amended 2026-11-01 by #3438:** `flatten_refused` is no longer a restack refusal reason. A merge-bearing conflict reaches the resolver and, when unsettled, takes the ordinary conflict halt (decision 6). `rebase_merge_audit` and N=1's `flatten_refused` rebase outcome are unchanged.
+
+        > **Amended 2026-10-27 by #3446:** The reason set also includes `journal-live-owner`. It
+        > is emitted when the stack preflight stops because journal recovery returns `live-owner`
+        > on either recovery pass, with `detail` naming the owner as
+        > `restack journal owned by live process <pid> on <host>`, or `journal owner unreadable`
+        > when no owner was read. The preflight then writes a `mechanical` HALT. It stays distinct
+        > from `restack-outstanding`, which a competing planner receives, because only this reason
+        > ends the run on a live owner (operator decision 2026-10-26).
       - `restack_recovered` {opId, fromState}, emitted only when recovery drives a journal out of
         `planned`, `ready`, `moved`, `rolling-back` or `synced`. Deleting a leftover `applied` or
         `aborted` journal emits nothing;
       - `push_lease_refused` {ref, expected, actual}.
     - **Re-kick.** `rebase_skipped_for_stack` is no longer emitted for the re-kick, because it no
       longer skips.
+
+> **Amended 2026-10-25 by #3421:** `restack_refused`'s reason list also includes
+> `restack-resolution-stale`. A new variant, `restack_resolution {opId, child, action, tip, operator?}`,
+> reports an operator-recorded conflict resolution being `recorded` or `consumed`
+> (`adr-2026-10-25-operator-recorded-restack-conflict-resolution` decision 8).
     - **Base-advance attribution.** A `base-refresh` restack also persists `rebase_changed` with the
       unfiltered whole-stack delta, as `adr-2026-08-13-durable-base-advance-attribution` requires,
       so test failures caused by the base advance stay attributed to it.

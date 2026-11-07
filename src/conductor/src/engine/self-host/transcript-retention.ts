@@ -7,7 +7,7 @@ import type { TranscriptOwner } from '../../types/events.js';
 import { isBuiltInProviderId } from '../../execution/provider-catalog.js';
 import type { SelfHostProviderId } from './provider-home.js';
 import { isStepName } from '../execution-identity.js';
-import { ConductorEventEmitter, type EventHandler } from '../../ui/events.js';
+import { ConductorEventEmitter, type EventHandler } from '../conductor-event-emitter.js';
 import type { TranscriptCaptureSource } from './transcript-harvest.js';
 
 /** Every terminal step disposition that decides an attempt's captured transcripts. */

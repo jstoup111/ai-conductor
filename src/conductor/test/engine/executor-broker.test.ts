@@ -1,4 +1,4 @@
-// Covers: task:8, task:9, task:10, task:11
+// Covers: task:7, task:8, task:9, task:10, task:11
 import { describe, expect, it } from 'vitest';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { create as createRateLimitEpisode } from '../../src/engine/rate-limit-episode.js';
@@ -6,6 +6,7 @@ import { createProviderAvailability } from '../../src/engine/provider-availabili
 import { WorktreeLifecycleQueue } from '../../src/engine/worktree.js';
 import { createExecutorBroker } from '../../src/engine/executor-broker.js';
 import { LiveBoundaryCoordinator } from '../../src/engine/self-host/live-boundary-coordinator.js';
+import { attachFeatureEventRenderer } from '../../src/daemon-cli.js';
 import {
   createExecutorRequestClient,
   createLiveBoundaryProxy,
@@ -80,6 +81,47 @@ function brokerFixture() {
 }
 
 describe('executor broker', () => {
+  it.each([
+    'token-unavailable',
+    'identity-read-failed',
+    'worktree-write-failed',
+    'resolver-absent',
+  ] as const)('relays a child %s co-author skip once on its feature bus', (reason) => {
+    const fixture = brokerFixture();
+    const channel = pair();
+    const attachment = fixture.broker.attach('feature', channel.supervisor);
+    const received: unknown[] = [];
+    attachment.events.on('bot_co_author_skipped', (event) => { received.push(event); });
+
+    channel.child.send({ kind: 'event', scope: 'feature', payload: { type: 'bot_co_author_skipped', reason } });
+    channel.flush();
+
+    expect(received).toEqual([{ type: 'bot_co_author_skipped', reason }]);
+  });
+
+  it.each([
+    ['token-unavailable', 'bot co-author skipped: token unavailable'],
+    ['identity-read-failed', 'bot co-author skipped: identity read failed'],
+  ] as const)('renders a relayed child %s co-author skip once', (reason, renderedReason) => {
+    const featureLog: string[] = [];
+    const channel = pair();
+    const broker = createExecutorBroker({
+      rateLimitEpisode: createRateLimitEpisode({ now: () => 1_000 }),
+      providerAvailability: createProviderAvailability({ now: () => 1_000 }),
+      worktreeLifecycle: new WorktreeLifecycleQueue(),
+      rootEvents: new ConductorEventEmitter(),
+      featureLogFor: () => (line) => featureLog.push(line),
+      attachFeatureEventRenderer: (_slug, events) => attachFeatureEventRenderer(events, (line) => featureLog.push(line)),
+    });
+    broker.attach('feature', channel.supervisor);
+
+    channel.child.send({ kind: 'event', scope: 'feature', payload: { type: 'bot_co_author_skipped', reason } });
+    channel.flush();
+
+    expect(featureLog).toHaveLength(1);
+    expect(featureLog[0]).toContain(renderedReason);
+  });
+
   it('replays authoritative state after hello for the production attach ordering', () => {
     const fixture = brokerFixture();
     fixture.episode.enter(2_000);

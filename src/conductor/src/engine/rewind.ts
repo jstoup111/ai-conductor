@@ -4,7 +4,7 @@ import { buildStepRegistry } from './steps.js';
 import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
 import { readState } from './state.js';
 import { loadConfig } from './config.js';
-import { ConductorEventEmitter } from '../ui/events.js';
+import { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { EventPersister } from './event-persister.js';
 import { AuditTrailWriter } from './audit-trail.js';
 import { HALT_CLASS_MARKER, HALT_MARKER, writeHaltMarker } from './halt-marker.js';
@@ -22,10 +22,15 @@ import {
 } from './child-context.js';
 import { basename, join } from 'node:path';
 import { access, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { resolveActiveChildForCurrentFeature } from './child-cursor.js';
+import { hasDurableChildState, resolveActiveChildForCurrentFeature } from './child-cursor.js';
 import { resolveExecutionChild } from './routing/execution-child.js';
 import { makeGitRunner } from './rebase.js';
 import { featureSlugOf, parseFeatureBranch } from './feature-branch-identity.js';
+import { acquireFeatureDispatchLease, formatFeatureDispatchLeaseRefusal } from './feature-dispatch-lease.js';
+import { resolveMachineOperatorIdentity } from './cli-operator-authority.js';
+import { resolveMainRepoRoot } from './park-marker.js';
+import { checkOpenOperatorRound, openOperatorRound, type CheckOpenOperatorRoundResult } from './routing/operator-round.js';
+import { nextRoundId } from './routing/route-record-store.js';
 
 export interface RewindStateInput {
   state: ConductState;
@@ -69,7 +74,7 @@ export interface RewindChildStateResult {
   applied: AppliedChildRewindBatch[];
 }
 
-export type RewindDispatch = { kind: 'rewind'; target: string; child?: string };
+export type RewindDispatch = { kind: 'rewind'; target: string; child?: string; reason?: string };
 
 /** Test seams for the operator command boundary; production uses filesystem defaults. */
 export interface RewindCommandDependencies {
@@ -81,6 +86,12 @@ export interface RewindCommandDependencies {
   clearDerivedRecords?: (root: string, demoted: RewindChildDemotion[]) => Promise<void>;
   markerFilesystem?: RewindMarkerFilesystem;
   emit?: (result: RewindStateResult & { child?: ChildId }) => Promise<void>;
+  resolveMainRoot?: (cwd: string) => Promise<string>;
+  resolveOperator?: (root: string) => Promise<string | undefined>;
+  acquireLease?: typeof acquireFeatureDispatchLease;
+  checkOpenRound?: typeof checkOpenOperatorRound;
+  nextRound?: typeof nextRoundId;
+  openRound?: typeof openOperatorRound;
 }
 
 export interface RewindMarkerFilesystem {
@@ -104,19 +115,45 @@ const markerFilesystem: RewindMarkerFilesystem = {
   writeClass: (path, contents) => writeFile(path, contents, 'utf-8'),
 };
 
+async function emitOperatorRewind(
+  cwd: string,
+  result: RewindStateResult & { readonly child?: ChildId },
+  emit: RewindCommandDependencies['emit'],
+): Promise<void> {
+  if (emit) {
+    await emit(result);
+    return;
+  }
+  const events = new ConductorEventEmitter();
+  const persister = new EventPersister(join(cwd, '.pipeline', 'events.jsonl'), events);
+  new AuditTrailWriter(cwd, { throwOnWriteFailure: true }).subscribe(events);
+  persister.start();
+  await events.emitOrThrow({
+    type: 'operator_rewind', operator: process.env.USER ?? 'operator', ...result,
+  });
+  persister.stop();
+}
+
 export function detectRewindCommand(argv: string[]): RewindDispatch | null {
   if (argv[2] !== 'rewind') return null;
   const values = new Map<string, string>();
   for (let index = 3; index < argv.length; index += 2) {
     const flag = argv[index];
     const value = argv[index + 1];
-    if (!flag || value === undefined || !['--to', '--child'].includes(flag) || values.has(flag)) return null;
+    if (!flag || value === undefined || !['--to', '--child', '--reason'].includes(flag) || values.has(flag)) return null;
     values.set(flag, value);
   }
   const target = values.get('--to');
   if (!target || target.startsWith('--')) return null;
   const child = values.get('--child');
-  return { kind: 'rewind', target, ...(child === undefined ? {} : { child }) };
+  const reason = values.get('--reason');
+  if (reason !== undefined && (reason.trim() === '' || reason.startsWith('--'))) return null;
+  return {
+    kind: 'rewind',
+    target,
+    ...(child === undefined ? {} : { child }),
+    ...(reason === undefined ? {} : { reason }),
+  };
 }
 
 export function inPlaceHaltRecoveryHint(state: ConductState, target: string, slug: string): string | undefined {
@@ -382,26 +419,127 @@ export async function dispatchRewindCommand(
   cwd = process.cwd(),
   dependencies: RewindCommandDependencies = {},
 ): Promise<number> {
-  const cursor = await resolveActiveChildForCurrentFeature(cwd);
-  if (cursor.kind !== 'no-child' && cursor.kind !== 'active' && cursor.kind !== 'repair-pending') {
-    console.error(`rewind: active child resolution refused (${cursor.kind})`);
-    return 1;
-  }
-  const head = await makeGitRunner(cwd)(['symbolic-ref', '-q', '--short', 'HEAD']).catch(() => undefined);
+  const git = makeGitRunner(cwd);
+  const head = await git(['symbolic-ref', '-q', '--short', 'HEAD']).catch(() => undefined);
   const slug = head?.exitCode === 0 ? featureSlugOf(parseFeatureBranch(head.stdout.trim())) : undefined;
-  const execution = resolveExecutionChild(cursor, slug ?? 'rewind');
-  const executionChild = 'target' in execution ? execution.target.child : undefined;
-  const requestedChild = command.child ?? (executionChild === undefined ? undefined : String(executionChild));
+  let requestedChild = command.child;
+  if (requestedChild === undefined) {
+    const cursor = await resolveActiveChildForCurrentFeature(cwd);
+    if (cursor.kind !== 'no-child' && cursor.kind !== 'active' && cursor.kind !== 'repair-pending') {
+      const detail = cursor.kind === 'topology-unavailable' ? `${cursor.kind}: ${cursor.cause}` : cursor.kind;
+      console.error(`rewind: active child resolution refused (${detail})`);
+      return 1;
+    }
+    const execution = resolveExecutionChild(cursor, slug ?? 'rewind');
+    requestedChild = 'target' in execution ? String(execution.target.child) : undefined;
+  }
   if (requestedChild !== undefined) {
     const child = parseChildId(requestedChild);
     if (child === undefined) {
       console.error(`rewind: invalid child id "${requestedChild}" (expected 1-9)`);
       return 1;
     }
-    const closed = slug === undefined ? false : (await makeGitRunner(cwd)(['show-ref', '--verify', '--quiet', `refs/conductor/${slug}/closed/c${child}`])).exitCode === 0;
-    if (command.child !== undefined && executionChild !== child && closed) {
-      console.error(`rewind: child ${child} is closed and cannot be rewound (#3203)`);
-      return 1;
+    if (command.child !== undefined) {
+      // Direct unit fixtures use child-local state without a Git feature
+      // branch. A real feature branch, however, must prove durable stack
+      // ownership before an explicit child can bypass cursor resolution.
+      if (slug !== undefined) {
+        const durableChildState = await hasDurableChildState(cwd, slug, { git });
+        if (durableChildState === 'git-error') {
+          console.error('rewind: active child resolution refused (git-error)');
+          return 1;
+        }
+        if (!durableChildState) {
+          console.error('rewind: --child is available only for a stacked feature.');
+          return 1;
+        }
+      }
+    }
+    const closed = slug === undefined ? false : (await git(['show-ref', '--verify', '--quiet', `refs/conductor/${slug}/closed/c${child}`])).exitCode === 0;
+    if (command.child !== undefined && closed) {
+      if (slug === undefined) {
+        console.error('rewind: cannot identify the feature for a closed child rewind.');
+        return 1;
+      }
+      if (!isRegionStep(command.target)) {
+        console.error('rewind: only acceptance_specs, build, test_suite and build_review can be rewound per child');
+        return 1;
+      }
+      const entryStep = command.target as typeof CHILD_REGION_STEPS[number];
+      const preflight = dependencies.preflightDerivedRecords ?? preflightDerivedRecords;
+      const clear = dependencies.clearDerivedRecords
+        ?? ((root, demoted) => clearDerivedRecords(root, demoted, dependencies.markerFilesystem));
+      try {
+        await preflight(cwd);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          console.error('rewind: a live .pipeline/HALT and HALT.class are required before rewinding a closed child.');
+        } else {
+          console.error(`rewind: ${error instanceof Error ? error.message : String(error)}`);
+        }
+        return 1;
+      }
+      const reason = command.reason ?? '';
+      const checked: CheckOpenOperatorRoundResult = await (dependencies.checkOpenRound ?? checkOpenOperatorRound)({
+        worktree: cwd,
+        slug,
+        child,
+        carry: [],
+        reason,
+      });
+      if (checked.kind === 'refused') {
+        console.error(`rewind: ${checked.refusal.text}`);
+        return 1;
+      }
+      const root = await (dependencies.resolveMainRoot ?? resolveMainRepoRoot)(cwd);
+      const operator = await (dependencies.resolveOperator ?? resolveMachineOperatorIdentity)(root);
+      if (!operator?.trim()) {
+        console.error('rewind: no approved operator identity is available.');
+        return 1;
+      }
+      const acquired = await (dependencies.acquireLease ?? acquireFeatureDispatchLease)(root, slug, 'rewind --child');
+      if (acquired.kind !== 'acquired') {
+        console.error(`rewind: ${formatFeatureDispatchLeaseRefusal(acquired)}`);
+        return 1;
+      }
+      try {
+        const roundId = await (dependencies.nextRound ?? nextRoundId)(cwd, slug);
+        if (typeof roundId !== 'string') {
+          console.error(`rewind: ${roundId.kind === 'round-limit' ? 'routing round limit is reached.' : 'cannot allocate a routing round.'}`);
+          return 1;
+        }
+        const opened = await (dependencies.openRound ?? openOperatorRound)({
+          worktree: cwd,
+          slug,
+          roundId,
+          host: checked.host,
+          reason: reason.trim(),
+          operator: operator.trim(),
+          carried: checked.carried,
+          origin: 'rewind',
+          entryStep,
+          declared: true,
+          emitter: new ConductorEventEmitter(),
+        });
+        if (opened.kind === 'refused') {
+          console.error(`rewind: ${opened.detail}`);
+          return 1;
+        }
+        const demotions = CHILD_REGION_STEPS
+          .slice(CHILD_REGION_STEPS.indexOf(entryStep))
+          .map((step) => ({ child, step }));
+        const demoted = demotions.map(({ child: demotedChild, step }) => `children/${demotedChild}/${step}`);
+        await emitOperatorRewind(cwd, { target: command.target, demoted, child }, dependencies.emit);
+        await clear(cwd, demotions);
+        console.log(`Rewound child ${child} to ${command.target}.`);
+        return 0;
+      } catch (error) {
+        console.error(`rewind: ${error instanceof Error ? error.message : String(error)}`);
+        return 1;
+      } finally {
+        const released = await acquired.lease.release();
+        if (!released.ok) console.error(`rewind: ${released.message}`);
+      }
     }
     if (!(await childStateExists(cwd, child))) {
       console.error(`rewind: child ${child} has no child state (.pipeline/children/${child}/ does not exist)`);
@@ -453,18 +591,7 @@ export async function dispatchRewindCommand(
     const demoted = result.demotions.map(({ child: demotedChild, step }) =>
       demotedChild === undefined ? step : `children/${demotedChild}/${step}`,
     );
-    if (dependencies.emit) {
-      await dependencies.emit({ target: result.target, demoted, child: result.child });
-    } else {
-      const events = new ConductorEventEmitter();
-      const persister = new EventPersister(join(cwd, '.pipeline', 'events.jsonl'), events);
-      new AuditTrailWriter(cwd, { throwOnWriteFailure: true }).subscribe(events);
-      persister.start();
-      await events.emitOrThrow({
-        type: 'operator_rewind', operator: process.env.USER ?? 'operator', target: result.target, demoted, child: result.child,
-      });
-      persister.stop();
-    }
+    await emitOperatorRewind(cwd, { target: result.target, demoted, child: result.child }, dependencies.emit);
     console.log(`Rewound child ${result.child} to ${result.target}.`);
     return 0;
   }
@@ -512,16 +639,7 @@ export async function dispatchRewindCommand(
     return 1;
   }
   if (!result) return 1;
-  if (dependencies.emit) {
-    await dependencies.emit(result);
-  } else {
-    const events = new ConductorEventEmitter();
-    const persister = new EventPersister(join(cwd, '.pipeline', 'events.jsonl'), events);
-    new AuditTrailWriter(cwd, { throwOnWriteFailure: true }).subscribe(events);
-    persister.start();
-    await events.emitOrThrow({ type: 'operator_rewind', operator: process.env.USER ?? 'operator', target: result.target, demoted: result.demoted });
-    persister.stop();
-  }
+  await emitOperatorRewind(cwd, result, dependencies.emit);
   console.log(`Rewound to ${result.target}.`);
   return 0;
 }

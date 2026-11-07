@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { journalRefFor, readRestackJournal, stagingRefFor } from '../../../src/engine/restack/restack-journal.js';
@@ -18,7 +18,7 @@ import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const execFile = promisify(execFileCallback);
 const repositories: string[] = [];
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -83,7 +83,7 @@ async function fixture(kind: 'content' | 'rename' = 'content') {
   }
   const newDefault = sha((await git(['rev-parse', 'HEAD'])).stdout);
   await git(['checkout', '-q', 'feat/daemon-demo']);
-  await writeCoverageBindingEnvelope(repo, {
+  await writeSliceTopologyFixture(repo, {
     version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
     sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf'] },
     storyOwnership: { S1: 1, S2: 2, S3: 3 },
@@ -158,7 +158,7 @@ describe('runRestack conflict resolver (real local Git)', () => {
     await expect(runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
       git: makeGitRunner(subject.repo), events, resolver: async () => ({ resolved: false, reason: 'budget exhausted' }), resolverCap: 1,
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
     persister.stop();
 
     expect(await refs(subject)).toBe(before);
@@ -189,7 +189,7 @@ describe('runRestack conflict resolver (real local Git)', () => {
         return { resolved: true };
       },
       resolverCap: 1,
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
 
     expect(attempts).toBe(1);
     await expect(readRestackJournal(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'journal', journal: { state: 'aborted' } });
@@ -213,7 +213,7 @@ describe('runRestack conflict resolver (real local Git)', () => {
     await expect(runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
       git: makeGitRunner(subject.repo), events, resolver, resolverCap: 1,
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
     persister.stop();
     await expect(readRestackJournal(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'journal', journal: { state: 'aborted' } });
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(`commit ${subject.c2}; paths: src/c.ts`);
@@ -234,7 +234,7 @@ describe('runRestack conflict resolver (real local Git)', () => {
     await expect(runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
       git: makeGitRunner(subject.repo), events, resolver: resolverThatContinues('one\nchild\n', 'src/unowned.ts'), resolverCap: 1,
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
     persister.stop();
 
     const persisted = (await readFile(join(subject.repo, '.pipeline', 'events.jsonl'), 'utf8'))
@@ -260,7 +260,7 @@ describe('runRestack conflict resolver (real local Git)', () => {
         return { resolved: false, reason: 'cannot resolve rename collision' };
       },
       resolverCap: 1,
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
 
     expect(contexts).toHaveLength(1);
     expect(contexts[0]?.conflicts).toContain('src/z.ts');

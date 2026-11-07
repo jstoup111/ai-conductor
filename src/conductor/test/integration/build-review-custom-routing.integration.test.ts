@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:4, task:13, task:33
 import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -222,7 +224,7 @@ describe('custom build-review compatibility routing', () => {
       },
     } as HarnessConfig;
     const launches: Array<{ executable: string; args: string[]; cwd: string | undefined; prompt: string }> = [];
-    const provider = new ClaudeProvider(undefined, ((executable: string, args: readonly string[], options: { readonly input?: string | Uint8Array; readonly cwd?: string }) => {
+    const provider = new ClaudeProvider(dispatchGitGuard, undefined, ((executable: string, args: readonly string[], options: { readonly input?: string | Uint8Array; readonly cwd?: string }) => {
       const prompt = typeof options.input === 'string' ? options.input : '';
       launches.push({ executable, args: [...args], cwd: options.cwd, prompt });
       const result = prompt.includes('portable-policy')

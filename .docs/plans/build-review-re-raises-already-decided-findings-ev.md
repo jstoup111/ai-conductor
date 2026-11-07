@@ -38,7 +38,7 @@ jstoup111/ai-conductor#3294.
   carries a `sequence` because laps have no durable order today, and the settled set is a union over
   eligible laps (same merge base and policy identity).
 - **Contracts.**
-  - Projections move to v5 and carry `reviewScope`.
+  - Projections stay at v4 and carry `reviewScope`.
   - The built-in v4 and custom v2 output schemas gain an optional `causeHunk` in the existing
     content-region shape. It is outside identity, so no finding id re-keys.
 - **Reducers.**
@@ -197,6 +197,9 @@ jstoup111/ai-conductor#3294.
 **Files:** src/conductor/src/engine/step-runners.ts; src/conductor/test/engine/build-review-lap-scope-runner.test.ts
 
 ### Task 7: Map every finding to hunks
+
+> **Amended 2026-10-25 by #3294:** Operator decision on the Task 7 BUILD halt: a custom finding's `sourceRegions` may span several paths, so the mapping is per region. The result is a non-empty list of targets, one per region (deduplicated): `{ kind: "hunks", hunks }` for the hunks the region intersects on its own path, or `{ kind: "file", path }` for that region's path when it intersects none. The finding is in scope when any target is (a hunk target in the delta, or a file target whose path has a delta hunk), so uncertainty still fails toward in scope (adr-2026-10-24-lap-monotonic-build-review-scope D3). A single-path finding yields one target, so the single-target checks below are unchanged in meaning.
+
 **Story:** Story 2
 **Type:** infrastructure
 **Dependencies:** none
@@ -204,13 +207,14 @@ jstoup111/ai-conductor#3294.
 **Steps:**
 1. Write failing tests in `src/conductor/test/engine/build-review-review-frontier.test.ts` for each rubric kind's mapping.
 2. Verify RED.
-3. Implement `mapBuildReviewFindingToHunks(finding, changedFiles)` in `src/conductor/src/engine/build-review-review-frontier.ts` returning a closed union: `{ kind: "hunks", hunks }` or `{ kind: "file", path }`. Security and implementationQuality use the anchor's content hash. Custom `sourceRegions` and testQuality anchored test regions intersect new-side hunk ranges (`newStart`, `newCount`) on the same path. Reuse `contentHashForHunk` identity from `build-review-projections.ts`; do not re-hash.
+3. Implement `mapBuildReviewFindingToHunks(finding, changedFiles)` in `src/conductor/src/engine/build-review-review-frontier.ts` returning a non-empty list of targets, each a closed union: `{ kind: "hunks", hunks }` or `{ kind: "file", path }`; custom findings map each `sourceRegion` on its own path. Security and implementationQuality use the anchor's content hash. Custom `sourceRegions` and testQuality anchored test regions intersect new-side hunk ranges (`newStart`, `newCount`) on the same path. Reuse `contentHashForHunk` identity from `build-review-projections.ts`; do not re-hash.
 4. Verify GREEN and commit: "feat(build-review): map findings onto diff hunks".
 
 **Done when:**
 - [test] `mapBuildReviewFindingToHunks` returns the anchor hunk for a security or implementationQuality finding, keyed by path and `contentHashForHunk`.
 - [test] `mapBuildReviewFindingToHunks` returns the hunks whose new-side range intersects a custom finding's `sourceRegions`, or a testQuality finding's anchored test region, on the same path.
 - [test] `mapBuildReviewFindingToHunks` returns `{ kind: "file", path }` for a custom or testQuality finding whose region intersects no hunk.
+- [test] For a custom finding whose `sourceRegions` span two paths, one intersecting a hunk and one intersecting none, `mapBuildReviewFindingToHunks` returns the intersected hunks on the first path and `{ kind: "file", path }` for the second, and that finding is in scope when only the second path has a delta hunk.
 - [test] Two hunks with identical `+`/`-` content at different line numbers map to the same `(path, contentHash)` identity, and two adjacent edits that git fuses into one hunk map to the fused hunk's new content hash only.
 - [test] A prior-lap security or implementationQuality source whose anchor `contentHash` is absent from the current diff maps to `{ kind: "file", path }`.
 
@@ -256,19 +260,22 @@ jstoup111/ai-conductor#3294.
 
 **Files:** src/conductor/src/engine/build-review-review-frontier.ts; src/conductor/test/engine/build-review-review-frontier.test.ts
 
-### Task 10: Projection v5 carries the review scope
+### Task 10: Projection v4 carries the review scope
+
+> **Amended 2026-10-24 by #3294:** Operator decision on the Task 10 BUILD halt: projections stay at `v4` instead of moving to `v5`. `v4` (#3374) has not shipped in any release (v1.6.0 carries `v3`), and `reviewScope` participates in `projectionDigest`, so earlier `v4` cache entries miss mechanically without a version bump. `build-review-registry.ts` and `build-review-cache.ts` therefore need no change. The superseded text named `v5` in the title, Steps 1, 3 and 4, and the first Done-when check.
+
 **Story:** Story 3
 **Type:** happy-path
 **Dependencies:** Task 1
 
 **Steps:**
-1. Write failing tests in `src/conductor/test/engine/build-review-projections.test.ts` for v5 projections, the custom input and cache identity.
+1. Write failing tests in `src/conductor/test/engine/build-review-projections.test.ts` for v4 projections carrying the scope, the custom input and cache identity.
 2. Verify RED.
-3. In `build-review-projections.ts`, bump the built-in projection version to `v5` and add `reviewScope: { mode, deltaHunks }` to `common()`, keeping `changedFiles` as the whole diff. In `build-review-materialization.ts`, render the same field in `renderBuildReviewFrozenInputScope`. Do not add the field to the provenance-key exclusion list of `projectionDigest`, so it participates in the digest (adr-2026-08-13 D2.1).
-4. Verify GREEN and commit: "feat(build-review): carry the review scope in v5 projections".
+3. In `build-review-projections.ts`, keep the built-in projection version at `v4` and add `reviewScope: { mode, deltaHunks }` to `common()`, keeping `changedFiles` as the whole diff. In `build-review-materialization.ts`, render the same field in `renderBuildReviewFrozenInputScope`. Do not add the field to the provenance-key exclusion list of `projectionDigest`, so it participates in the digest (adr-2026-08-13 D2.1).
+4. Verify GREEN and commit: "feat(build-review): carry the review scope in v4 projections".
 
 **Done when:**
-- [test] `deriveBuildReviewRubricProjections` for a delta scope returns projectionVersion `v5` projections whose `changedFiles` equals the by-reference parse of the whole frozen diff and whose `reviewScope` is mode `delta` with exactly the supplied delta hunks.
+- [test] `deriveBuildReviewRubricProjections` for a delta scope returns projectionVersion `v4` projections whose `changedFiles` equals the by-reference parse of the whole frozen diff and whose `reviewScope` is mode `delta` with exactly the supplied delta hunks.
 - [test] The custom rubric input rendered by `renderBuildReviewFrozenInputScope` carries the same `reviewScope` mode and delta hunks.
 - [test] A serialized delta-lap projection contains no prior findings, case records, dispositions, settled ids, suppression history or prior-lap scope records.
 - [test] `projectionDigest` is equal for two projections with the same whole-diff references, delta hunks and versions, and differs when only the delta hunks differ, so `classifyBuildReviewCacheLookup` returns a hit for the first pair and a miss for the second under the same engine identity and policy, and the coordinator dispatches the rubric on the miss.
@@ -276,6 +283,9 @@ jstoup111/ai-conductor#3294.
 **Files:** src/conductor/src/engine/build-review-projections.ts; src/conductor/src/engine/build-review-materialization.ts; src/conductor/test/engine/build-review-projections.test.ts
 
 ### Task 11: A rubric with an empty delta is scope-empty and is not dispatched
+
+> **Amended 2026-10-25 by #3294:** Operator decision on the Task 11 BUILD halt: the `scope-empty` branch outcome that adr-2026-10-24-lap-monotonic-build-review-scope D3 requires also joins the closed build-review result union and its persisted-artifact parser, so `build-review-domain.ts` and `build-review-artifacts.ts` are in scope, and `step-runners.ts` for the exhaustive switch over branch outcomes. The change is limited to admitting the `scope-empty` kind; no other domain or artifact behavior changes.
+
 **Story:** Story 3
 **Type:** happy-path
 **Dependencies:** Task 10
@@ -292,7 +302,7 @@ jstoup111/ai-conductor#3294.
 - [test] A `scope-empty` record adds no reviewed hunks: the next lap's `settledBuildReviewHunks` equals the settled set computed before that lap.
 - [test] `build-tail-rollup` counts a `scope-empty` rubric as a skip with reason `scope-empty` and never as judged, and the absence-retirement input excludes the sources of a `scope-empty` rubric from the sources not raised this lap.
 
-**Files:** src/conductor/src/engine/build-review-coordinator.ts; src/conductor/src/engine/build-review-aggregate.ts; src/conductor/src/engine/build-review-adjudication-coordinator.ts; src/conductor/test/engine/build-review-coordinator.test.ts
+**Files:** src/conductor/src/engine/build-review-coordinator.ts; src/conductor/src/engine/build-review-aggregate.ts; src/conductor/src/engine/build-review-adjudication-coordinator.ts; src/conductor/src/engine/build-review-domain.ts; src/conductor/src/engine/build-review-artifacts.ts; src/conductor/src/engine/step-runners.ts; src/conductor/test/engine/build-review-coordinator.test.ts
 
 ### Task 12: The testQuality preflight keeps whole-diff coverage
 **Story:** Story 3
@@ -605,7 +615,7 @@ Slice 2
 | Story 1 negative: Given L1's scope record for R is missing because the worktree's pipeline state was recreated, when L2 decides R's scope, then R's mode is `full` with reason `first-lap` and every current hunk is reviewed. | 3 | "`decideBuildReviewReviewScope` with no readable prior record for R returns mode `full`, reason `first-lap`, sequence 1, the lap's merge base and head, no predecessor lap, `reviewedHunks` and `deltaHunks` equal to every current hunk, and an empty `outOfDeltaSourceIds`." | diff-local |
 | Story 1 negative: Given L1's branch artifact for R exists but its scope record cannot be parsed, when L2 decides R's scope, then R's mode is `full` with reason `record-unreadable`, and the unreadable artifact is neither rewritten nor deleted. | 6, 1 | "A step run whose prior lap's R artifact holds an unreadable `reviewScope` records R's scope as `full` with reason `record-unreadable`, and the prior artifact file still exists with byte-identical content." | diff-local |
 | Story 1 negative: Given L2 ran a `record-unreadable` full lap for L1's unreadable record of R, when L3 decides R's scope, then L1's record is ignored and L3 is not `full` because of it. | 3 | "A `record-unreadable` full lap lists the unreadable lap ids it saw in its record's `unreadableLapIds`, and the next lap of R ignores an unreadable record already listed there, so it is not `full` because of that record." | diff-local |
-| Story 1 negative: Given L1 recorded R under projection v5 and L2 runs under a different projection or contract version, when L2 decides R's scope, then R's mode is `full` with reason `version-changed`. | 3 | "`decideBuildReviewReviewScope` returns mode `full` with reason `version-changed` when the latest record's policy identity differs in projection version, contract version, skill bundle digest, custom declaration, provider, model or effort." | diff-local |
+| Story 1 negative: Given L1 recorded R under projection v4 and L2 runs under a different projection or contract version, when L2 decides R's scope, then R's mode is `full` with reason `version-changed`. | 3 | "`decideBuildReviewReviewScope` returns mode `full` with reason `version-changed` when the latest record's policy identity differs in projection version, contract version, skill bundle digest, custom declaration, provider, model or effort." | diff-local |
 | Story 1 negative: Given L1 failed R with an infrastructure fault and so recorded no scope for R, when L2 decides R's scope, then L1 contributes no reviewed hunks for R and only earlier successful laps of R at merge base M can settle anything. | 4 | "A prior lap whose R result was an infrastructure failure with no `reviewScope` contributes no reviewed hunks, so a hunk judged only in that lap stays in `deltaHunks`, while a hunk judged in an earlier successful lap at the same merge base is settled." | diff-local |
 | Story 1 negative: Given a rebase that moved the merge base of a stacked child whose kickback cause is `feature-repair`, when the child's next lap decides scope, then no rubric of that child is delta-scoped against records from the old merge base. | 6 | "A step run after the stacked child's parent was restacked with kickback cause `feature-repair`, moving the merge base, records mode `full` reason `merge-base-changed` for every rubric of that child." | diff-local |
 | Story 1 negative: Given R already has a readable scope record at the current lap id, merge base and policy identity, as after a mechanical retry, a halt-clear re-dispatch or a disposition-only rejoin, when the lap decides R's scope, then it reuses that record's scope unchanged and R's earlier reviewed hunks are not lost. | 4, 6 | "When R already has a readable record at the current lap id, merge base and policy identity, `decideBuildReviewReviewScope` returns that record's mode, reason, sequence, reviewedHunks and deltaHunks unchanged, and excludes that record from the eligible prior laps." | diff-local |
@@ -626,10 +636,10 @@ Slice 2
 | Story 2 negative: Given an open act case whose action effect is not applied and whose source maps to no current hunk on path P, when R's scope is decided, then every current hunk on P is in R's delta, and when P has no current hunk R's lap is `full` with reason `open-source-unmapped`. | 9 | "When an open act case whose action effect is not applied has a source that maps at file level, or to an anchor absent from the current diff, on path P, every current hunk on P is in the delta, and with no current hunk on P `decideBuildReviewReviewScope` returns mode `full` with reason `open-source-unmapped`; the same source of an open case whose action effect is applied adds no hunk beyond the unsettled hunks and forces no full lap." | diff-local |
 | Story 2 negative: Given an open act case whose action effect is applied and whose source's anchor hunk the repair rewrote, when R's scope is decided, then that source adds no hunk to R's delta beyond the unsettled hunks, and R's lap is not `full` because of it. | 9 | "When an open act case whose action effect is not applied has a source that maps at file level, or to an anchor absent from the current diff, on path P, every current hunk on P is in the delta, and with no current hunk on P `decideBuildReviewReviewScope` returns mode `full` with reason `open-source-unmapped`; the same source of an open case whose action effect is applied adds no hunk beyond the unsettled hunks and forces no full lap." | diff-local |
 | Story 2 negative: Given testQuality's current test scope holds an unresolved marker or an indeterminate candidate that maps to H, when testQuality's scope is decided, then H is not settled. | 9 | "For testQuality, `settledBuildReviewHunks` does not settle H while an unresolved marker or indeterminate scope candidate of the current test scope maps to H." | diff-local |
-| Story 3 happy: Given L2 is a delta lap for R, when R's projection is derived, then it is projection v5 with `changedFiles` listing the whole diff and a `reviewScope` naming mode `delta` and exactly R's delta hunks. | 10 | "`deriveBuildReviewRubricProjections` for a delta scope returns projectionVersion `v5` projections whose `changedFiles` equals the by-reference parse of the whole frozen diff and whose `reviewScope` is mode `delta` with exactly the supplied delta hunks." | diff-local |
+| Story 3 happy: Given L2 is a delta lap for R, when R's projection is derived, then it is projection v4 with `changedFiles` listing the whole diff and a `reviewScope` naming mode `delta` and exactly R's delta hunks. | 10 | "`deriveBuildReviewRubricProjections` for a delta scope returns projectionVersion `v4` projections whose `changedFiles` equals the by-reference parse of the whole frozen diff and whose `reviewScope` is mode `delta` with exactly the supplied delta hunks." | diff-local |
 | Story 3 happy: Given L2 is a delta lap for a custom rubric, when its input is assembled, then the input carries the same `reviewScope` with mode and delta hunks. | 10 | "The custom rubric input rendered by `renderBuildReviewFrozenInputScope` carries the same `reviewScope` mode and delta hunks." | diff-local |
 | Story 3 happy: Given L2 is a delta lap for R and R's delta is empty, when the coordinator reaches R, then R is not dispatched and runs no preflight, its branch outcome is `scope-empty` with no findings and with its scope record, `build_review_rubric_skipped` is emitted with reason `scope-empty`, and R counts as non-failing in the aggregate. | 11 | "`coordinateBuildReviewRubrics` with an empty delta for R makes no provider dispatch and no preflight call for R, writes R's branch artifact with outcome `scope-empty`, no findings and its `reviewScope`, and emits `build_review_rubric_skipped` with reason `scope-empty`." | diff-local |
-| Story 3 happy: Given an earlier lap of R with the same v5 projection digest, covering the whole-diff references and the delta, and with the same engine identity and policy, when L2 looks up R's cache, then the earlier judged result is reused as a cache hit. | 10 | "`projectionDigest` is equal for two projections with the same whole-diff references, delta hunks and versions, and differs when only the delta hunks differ, so `classifyBuildReviewCacheLookup` returns a hit for the first pair and a miss for the second under the same engine identity and policy, and the coordinator dispatches the rubric on the miss." | diff-local |
+| Story 3 happy: Given an earlier lap of R with the same v4 projection digest, covering the whole-diff references and the delta, and with the same engine identity and policy, when L2 looks up R's cache, then the earlier judged result is reused as a cache hit. | 10 | "`projectionDigest` is equal for two projections with the same whole-diff references, delta hunks and versions, and differs when only the delta hunks differ, so `classifyBuildReviewCacheLookup` returns a hit for the first pair and a miss for the second under the same engine identity and policy, and the coordinator dispatches the rubric on the miss." | diff-local |
 | Story 3 happy: Given the rubric and remediate skill contracts, when a Claude dispatch and a Codex dispatch render R, then both read the same skill text, which tells the rubric to judge the delta hunks, to treat the whole diff as context only, and to name a cause hunk in the delta for any finding outside it. | 13 | "Each of the three built-in build-review SKILL.md files and the custom rubric prompt text from `renderBuildReviewFrozenInputScope` contains the instruction to judge the `reviewScope` delta hunks, to treat `changedFiles` as context only, and to set `causeHunk` to a delta hunk for any finding outside the delta." | diff-local |
 | Story 3 negative: Given L2 is a delta lap for R, when R's projection is serialized, then it contains no prior findings, case records, dispositions, settled ids, suppression history or scope records of earlier laps. | 10 | "A serialized delta-lap projection contains no prior findings, case records, dispositions, settled ids, suppression history or prior-lap scope records." | diff-local |
 | Story 3 negative: Given L1 and L2 have identical diffs but different delta hunks for R, when L2 looks up R's cache, then the lookup misses and R is judged again. | 10 | "`projectionDigest` is equal for two projections with the same whole-diff references, delta hunks and versions, and differs when only the delta hunks differ, so `classifyBuildReviewCacheLookup` returns a hit for the first pair and a miss for the second under the same engine identity and policy, and the coordinator dispatches the rubric on the miss." | diff-local |
@@ -692,7 +702,7 @@ Slice 2
 | adr-2026-10-24-lap-monotonic-build-review-scope#D9 | task | task-13, task-22, task-24 | embeds the same skill file path and identical contract text |
 | adr-2026-10-24-lap-monotonic-build-review-scope#D10 | no-change | none | D10 adds no configuration key and no flag; the tasks above ship the behavior default-on, and re-enabling implementationQuality stays an operator configuration decision outside this plan |
 | adr-2026-08-13-engine-managed-build-review-rubric-branches#D1 | no-change | none | build_review stays one public engine gate: the scope is decided inside the existing build_review runner (Task 6) and no step is added |
-| adr-2026-08-13-engine-managed-build-review-rubric-branches#D2 | task | task-10 | returns projectionVersion `v5` projections whose `changedFiles` equals the by-reference parse of the whole frozen diff |
+| adr-2026-08-13-engine-managed-build-review-rubric-branches#D2 | task | task-10 | returns projectionVersion `v4` projections whose `changedFiles` equals the by-reference parse of the whole frozen diff |
 | adr-2026-08-13-engine-managed-build-review-rubric-branches#D3 | task | task-12 | is called with the whole frozen diff, restoring every changed production file |
 | adr-2026-08-13-engine-managed-build-review-rubric-branches#D4 | task | task-13 | embeds the same skill file path and identical contract text |
 | adr-2026-08-13-engine-managed-build-review-rubric-branches#D5 | task | task-2 | returns a different identity when the contract version, projection version, declaration fingerprint, effective skill or policy bundle digest, provider, model or effort differs |
@@ -753,3 +763,111 @@ Slice 2
 - [x] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism (3c)
 - [x] Dependencies are explicit and acyclic
 - [x] Tasks do not invalidate each other's fixtures or assertions (swept by plan review at Tier L)
+
+### Task rem-as-built-rem-6: Child-scope the build_review branch-artifact paths the same way the aggregate and case store are already child-scoped. Apply this to the scope-history reader (step-runners.ts:3463), the branch-artifact writers (:3860, :4186, :4287, :4884), and the readers in build-review-effective.ts:321 and build-review-adjudication-artifact-facts.ts:107. Add a test in which a sibling child's records settle no hunk for another child.
+**Gate:** as-built
+**Rationale:** Verified (98%): priorArtifactsFor at step-runners.ts:3463 reads every root .pipeline/build-review/lap-* directory with no child discriminator, and the writes at :3860, :4186, :4287 and :4884 are also root-scoped. Task 4's done-when explicitly requires a stacked child to read only its own branch artifacts and case store, so the plan already admits this repair. The readers in build-review-effective.ts:321 and build-review-adjudication-artifact-facts.ts:107 are included because they consume the same scope history. Routes to BUILD.
+**Parent task:** 4
+**Governing clause:** Task 4
+**Done when:**
+- Task 4 is satisfied by this task.
+- The repair for task rem-as-built-rem-6 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r4
+### Task rem-as-built-rem-2: In step-runners.ts, pass the testQuality test-scope analysis version and binding identity into buildReviewPolicyIdentity for the testQuality rubric. Add a runner-level test showing that a change to either value makes the next lap full instead of delta.
+**Gate:** as-built
+**Rationale:** Verified (100%): the built-in buildReviewPolicyIdentity call at step-runners.ts:3539 omits the testQuality test-scope analysis version and binding identity, so frontier hashing receives nulls. ADR D1 and Task 2 require both inputs, and Task 6 owns production scope calculation. The fix conforms to the ADR, so it routes to BUILD.
+**Governing clause:** adr-2026-10-24-lap-monotonic-build-review-scope decision 1
+**Done when:**
+- adr-2026-10-24-lap-monotonic-build-review-scope decision 1 is satisfied by this task.
+- The repair for task rem-as-built-rem-2 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r4
+### Task rem-as-built-rem-5: In step-runners.ts, derive testQuality indeterminateCandidates from the current test scope only: the current sourceSnapshot candidates at the current merge base and policy identity, superseded by later resolutions. Stop taking them from all historical artifacts. Add a test in which a candidate that was indeterminate in L1 and resolved in L2 no longer vetoes settlement of its hunk, while a currently indeterminate candidate still does.
+**Gate:** as-built
+**Rationale:** Verified (99%): step-runners.ts:3553-3565 collects indeterminate scope resolutions from every historical artifact and forwards them as current unknown sources. ADR D2 and Task 9's done-when restrict the veto to indeterminate candidates 'of the current test scope', so a resolved historical candidate keeps hunks unsettled forever. This is conforming implementation drift and routes to BUILD.
+**Governing clause:** adr-2026-10-24-lap-monotonic-build-review-scope decision 2
+**Done when:**
+- adr-2026-10-24-lap-monotonic-build-review-scope decision 2 is satisfied by this task.
+- The repair for task rem-as-built-rem-5 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r4
+
+### Task rem-prd-audit-6-r1: step-runners.ts: resolve the installed custom policy bundle digest before scope decision (move bundle capture ahead of the :4327 scope-empty return) and feed it to effectiveBundleDigest in place of 'pending-candidate-policy'; add test that changing custom bundle content between L1 and L2 yields full review on L2
+**Gate:** prd-audit
+**Rationale:** Verified: step-runners.ts:3657 hardcodes effectiveBundleDigest 'pending-candidate-policy' for custom rubrics, so the policy identity ignores the custom bundle's content. Built-ins already pass the resolved digest. ADR decision 1 still governs, so this is conforming implementation drift inside Task 6 (the runner decides each rubric's scope), not an architecture question.
+**Criterion:** S1.12
+**Parent task:** 6
+**Done when:**
+- [test] S1.12 is satisfied by this task.
+- The repair for task rem-prd-audit-6-r1 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r5
+### Task rem-as-built-6-r2: step-runners.ts / build-review-policy-resolver.ts / build-review-materialization.ts: project custom reviewer input scope to {mode, deltaHunks} only, excluding predecessor, reviewedHunks and out-of-delta history; add test asserting the serialized custom reviewer input carries no predecessor or reviewed-hunk fields
+**Gate:** as-built
+**Rationale:** ADR decision 4 already requires the reviewer projection to carry only mode and deltaHunks. The code forwards the full durable reviewScope through step-runners.ts:4368, the policy resolver at :26, and serialization at step-runners.ts:4628 and materialization.ts:42. This is a clear projection fix inside Task 6's scope recording and announcement work.
+**Governing clause:** adr-2026-10-24-lap-monotonic-build-review-scope decision 4
+**Done when:**
+- adr-2026-10-24-lap-monotonic-build-review-scope decision 4 is satisfied by this task.
+- The repair for task rem-as-built-6-r2 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r5
+### Task rem-as-built-6-r3: step-runners.ts:5412: pass the built-in peer rubric's projected reviewScope (mode + deltaHunks) to renderBuildReviewFrozenInputScope; add test that a delta-lap built-in peer prompt names its actual delta hunks and a full-lap prompt does not instruct delta-only judgement
+**Gate:** as-built
+**Rationale:** Verified at step-runners.ts:5412: the built-in peer prompt calls renderBuildReviewFrozenInputScope without reviewScope. The renderer then substitutes a full scope with empty deltaHunks while telling the reviewer to judge only those hunks. ADR decision 9 is clear, so the fix is to pass the rubric's projected scope. This is implementation work in Task 6.
+**Governing clause:** adr-2026-10-24-lap-monotonic-build-review-scope decision 9
+**Done when:**
+- adr-2026-10-24-lap-monotonic-build-review-scope decision 9 is satisfied by this task.
+- The repair for task rem-as-built-6-r3 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r5
+
+### Task rem-as-built-6-r6: step-runners.ts: make the scope decision fail closed when the custom policy identity is uncertain. When resolveBuildReviewCustomPolicyBundleDigest cannot resolve or capture the bundle (the current 'unavailable' paths at :4324/:4335), it must return a marker that decideBuildReviewReviewScope treats as forcing mode full (reason version-changed). That marker must never match an earlier record's identity, so it never allows a delta lap or a scope-empty skip at :4367. Add a runner test: L1 completes, L2's preliminary custom bundle lookup fails, and L2 is a full lap rather than a delta or scope-empty lap.
+**Gate:** as-built
+**Rationale:** Checked against the source; 95% confident. At step-runners.ts:4308-4338, resolveBuildReviewCustomPolicyBundleDigest looks up the catalog with the first configured provider (llm_provider[0]) and no prepared env. When the lookup or capture fails it returns the constant 'unavailable'. step-runners.ts:3660-3665 hashes that value into policyIdentity. Because the fallback is a stable constant, two laps where the lookup failed get the same identity, so delta reuse and scope-empty (:4367) are allowed even if the bundle actually dispatched changed. Dispatch then finds the catalog again using the prepared candidate's provider and env (:4549-4556) and captures its bundle (:4610), but :4971 persists the pre-dispatch reviewScope unchanged. ADR adr-2026-10-24-lap-monotonic-build-review-scope D1 still governs and says a policy identity change forces a full lap. No architecture or product decision is needed. This is implementation drift in Task 6, where the runner decides each rubric's scope, and it continues the earlier repair rem-prd-audit-6-r1, which brought custom bundle digests into the identity. Route it to BUILD.
+**Governing clause:** adr-2026-10-24-lap-monotonic-build-review-scope decision 1
+**Done when:**
+- adr-2026-10-24-lap-monotonic-build-review-scope decision 1 is satisfied by this task.
+- The repair for task rem-as-built-6-r6 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r6
+### Task rem-as-built-6-r7: step-runners.ts: tie the persisted custom reviewScope.policyIdentity to the bundle that actually judged the lap. After the prepared candidate captures its bundle (:4610), recompute the policy identity from that bundle's digest and the dispatching provider, and write that identity at :4971 instead of the pre-dispatch value. If it differs from the identity used to choose scope, persist the lap as full, since a delta scope picked under a different identity is not valid evidence. Add a runner test: the preliminary lookup sees bundle A (or provider P1), dispatch uses bundle B (or fallback provider P2), and the persisted scope carries B/P2's identity, so the next lap is full whenever B's content differs from what L1 recorded.
+**Gate:** as-built
+**Rationale:** Checked against the source; 95% confident. At step-runners.ts:4308-4338, resolveBuildReviewCustomPolicyBundleDigest looks up the catalog with the first configured provider (llm_provider[0]) and no prepared env. When the lookup or capture fails it returns the constant 'unavailable'. step-runners.ts:3660-3665 hashes that value into policyIdentity. Because the fallback is a stable constant, two laps where the lookup failed get the same identity, so delta reuse and scope-empty (:4367) are allowed even if the bundle actually dispatched changed. Dispatch then finds the catalog again using the prepared candidate's provider and env (:4549-4556) and captures its bundle (:4610), but :4971 persists the pre-dispatch reviewScope unchanged. ADR adr-2026-10-24-lap-monotonic-build-review-scope D1 still governs and says a policy identity change forces a full lap. No architecture or product decision is needed. This is implementation drift in Task 6, where the runner decides each rubric's scope, and it continues the earlier repair rem-prd-audit-6-r1, which brought custom bundle digests into the identity. Route it to BUILD.
+**Governing clause:** adr-2026-10-24-lap-monotonic-build-review-scope decision 1
+**Done when:**
+- adr-2026-10-24-lap-monotonic-build-review-scope decision 1 is satisfied by this task.
+- The repair for task rem-as-built-6-r7 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r6
+
+### Task rem-prd-audit-25: In step-runners.ts, custom-policy branch of runRubricBuildReviewInner: derive the policy identity and resolve reviewScope from the model that actually judges (the fallback rung), not context.candidate.model. Do this before cache reuse and judgement, and persist the actual-model identity in the branch artifact's reviewScope. Add a RED test in build-review-lap-scope-runner.test.ts: L1 judged by fallback model B records B's identity, and an L2 run on candidate A must not reuse L1's settled scope or skip review.
+**Gate:** prd-audit
+**Rationale:** Confirmed in step-runners.ts. Around line 4557, actualPolicyIdentity and resolveReviewScope use context.candidate.model. The fallback ladder at line 4705 can judge with a different rung model, read later as actualModel = context.invokedModel() around line 4745. That value updates cache and provenance, but the branch-artifact write around line 4980 persists the pre-dispatch reviewScope unchanged. When a fallback model judges L1, the lap is recorded under the first candidate's identity. ADR adr-2026-10-24-lap-monotonic-build-review-scope decision 1 already says policy identity includes the model, so the approved architecture is unambiguous and this is conforming implementation drift. The code is Task 25's integration point: passing each rubric's decided scope through the build_review step and writing reviewScope.
+**Governing clause:** adr-2026-10-24-lap-monotonic-build-review-scope decision 1
+**Done when:**
+- adr-2026-10-24-lap-monotonic-build-review-scope decision 1 is satisfied by this task.
+- The repair for task rem-prd-audit-25 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r7
+
+### Task rem-prd-audit-6.r1: In step-runners.ts build_review scope loop, derive the security rubric's changedFiles, mergeBase and headSha (for priorArtifactsFor merge-base matching, settledBuildReviewHunks, decideBuildReviewReviewScope, hasUnappliedLiveSourceWithoutCurrentHunk and the persisted scopes changedFiles at ~4205) from inputs.securitySourceSnapshot when it is defined, falling back to inputs.sourceSnapshot; add a step-runner test at a stacked leaf asserting security's first-lap reviewScope is full/first-lap over every hunk of the whole-feature security snapshot while other rubrics use the child snapshot
+**Gate:** prd-audit
+**Rationale:** Verified (95%): step-runners.ts:3467 derives changedFiles from inputs.sourceSnapshot.diff and the built-in scope loop (3553-3630) passes inputs.sourceSnapshot.mergeBase/headSha to settledBuildReviewHunks and decideBuildReviewReviewScope for every rubric. But build-review-projections.ts:452 reviews security against source.securitySnapshot (the whole-feature default-branch snapshot) at a stacked leaf. So security's first-lap scope does not cover every hunk security actually reviews. The frontier logic is correct and no architecture decision is needed. This is implementation drift inside approved Task 6, which decides and records each rubric's scope. Fix: choose the security rubric's scope inputs from its review snapshot.
+**Criterion:** S1.1
+**Parent task:** 6
+**Done when:**
+- [test] S1.1 is satisfied by this task.
+- The repair for task rem-prd-audit-6.r1 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r8
+### Task rem-prd-audit-6.r2: Add a build-review-projections/step-runner test at a stacked leaf (securitySourceSnapshot defined) asserting the security projection's reviewScope.deltaHunks are a subset of the hunks of its securitySnapshot changedFiles and include whole-feature hunks absent from the child diff, while non-security rubric projections remain scoped to the child sourceSnapshot
+**Gate:** prd-audit
+**Rationale:** Verified (95%): this has the same root cause as S1.1. projections common() takes security's changedFiles from securitySnapshot, but reviewScope.deltaHunks come from reviewScopes computed against the child sourceSnapshot. At a stacked leaf the delta handed to security therefore misses hunks from security's own diff. The non-leaf path is already correct. The fix lands in Task 6's runner (6.r1). This task adds projection-level coverage that the security projection's deltaHunks are drawn from the same snapshot as its changedFiles. That is BUILD work in an approved task, not a planning or architecture gap.
+**Criterion:** S3.1
+**Parent task:** 6
+**Done when:**
+- [test] S3.1 is satisfied by this task.
+- The repair for task rem-prd-audit-6.r2 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r8

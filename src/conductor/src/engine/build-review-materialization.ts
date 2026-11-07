@@ -6,6 +6,7 @@ import {
   type BuildReviewSourceSnapshot,
   type BuildReviewSourceViewIdentity,
 } from './build-review-inputs.js';
+import type { BuildReviewProjectionReviewScope } from './build-review-projections.js';
 import type { GitRunner } from './rebase.js';
 
 export interface BuildReviewMaterializationMember {
@@ -29,13 +30,31 @@ export interface BuildReviewFrozenInputScope {
   readonly mergeBase: string;
   readonly headSha: string;
   readonly changes: readonly ({ readonly kind: string; readonly path: string; readonly oldPath?: string })[];
+  /** The hunk subset the custom rubric must judge; whole input remains context. */
+  readonly reviewScope?: BuildReviewProjectionReviewScope;
   readonly view?: { readonly baselinePath: string; readonly headPath: string };
 }
 
 /** Engine-authored description of the same immutable change every lap member inspects. */
 export function renderBuildReviewFrozenInputScope(scope: BuildReviewFrozenInputScope): string {
+  // The renderer is a containment boundary as well as a description.  It
+  // receives a structurally compatible durable scope from some callers, so
+  // select only the reviewer contract rather than serializing it wholesale.
+  const reviewScope = scope.reviewScope === undefined
+    ? { mode: 'full' as const, deltaHunks: [] }
+    : {
+      mode: scope.reviewScope.mode,
+      deltaHunks: scope.reviewScope.deltaHunks.map((hunk) => ({
+        path: hunk.path,
+        contentHash: hunk.contentHash,
+      })),
+    };
   return [
     `Frozen build-review input ${scope.contentDigest}.`,
+    `Review scope: ${JSON.stringify({ reviewScope })}`,
+    ...(reviewScope.mode === 'delta'
+      ? ['Judge only the `reviewScope` delta hunks. Treat `changedFiles` as context only. If that review identifies a finding outside the delta, set `causeHunk` to the delta hunk that causes it.']
+      : ['Judge the full changed diff described by `changedFiles`.']),
     ...(scope.view === undefined ? [] : [
       `Reviewed baseline ${scope.mergeBase} (read-only): ${scope.view.baselinePath}`,
       `Reviewed head ${scope.headSha} (read-only): ${scope.view.headPath}`,

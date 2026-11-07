@@ -151,6 +151,18 @@ describe('managed session instruction contexts', () => {
     expect(auditManagedSessionInstructionSource({ file: 'engine/step-runners.ts', source, family: 'engine' })).toEqual([]);
   });
 
+  it('excludes an operator-only engine hint outside a managed prompt surface', () => {
+    const source = [
+      '// ai-conductor:session-command-context=operator-only',
+      "const operatorHint = 'Run ai-conductor rate-card refresh --model gpt-6.1-sol';",
+      '// /ai-conductor:session-command-context',
+    ].join('\n');
+
+    expect(auditShippedManagedSessionInstructionSource({
+      file: 'engine/provider-model-probe.ts', source, family: 'engine',
+    })).toEqual([]);
+  });
+
   it('audits a managed retry-shaped producer without relying on its identifier', () => {
     const source = [
       'export function buildRetryHint() {',

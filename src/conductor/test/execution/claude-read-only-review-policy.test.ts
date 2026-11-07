@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -25,7 +27,7 @@ describe('claude read-only review observed-command reach', () => {
   });
 
   it('derives the provider verdict from the real launch args, including self-host args', () => {
-    const provider = new ClaudeProvider();
+    const provider = new ClaudeProvider(dispatchGitGuard);
     expect(provider.readOnlyReviewObservedCommandReach({ systemPrompt: 'review', model: 'opus' })).toBe('none');
     expect(provider.readOnlyReviewObservedCommandReach({
       selfHost: { executable: '/isolated/claude', env: {}, args: ['--settings', '{}'], teardown: async () => {} },
@@ -33,7 +35,7 @@ describe('claude read-only review observed-command reach', () => {
   });
 
   it('judges only the provider args of a contained self-host invocation, not its launcher prefix', () => {
-    const provider = new ClaudeProvider();
+    const provider = new ClaudeProvider(dispatchGitGuard);
     const launcher = ['--dev-bind', '/', '/', '--unshare-pid', '--proc', '/proc', '--ro-bind', '/live', '/live', '--', '/isolated/claude'];
     expect(provider.readOnlyReviewObservedCommandReach({
       selfHost: { executable: 'bwrap', env: {}, args: launcher, launcherArgCount: launcher.length, teardown: async () => {} },

@@ -1,3 +1,4 @@
+// Covers: task:10
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -6,8 +7,37 @@ import {
 } from '../../src/cli-pre-dispatch.js';
 import { diffDetectorSets, undeclaredRegistryCommands } from './support/cli-catalog-checks.js';
 import { createProgram } from '../../src/cli.js';
+import { detectRewindCommand } from '../../src/engine/rewind.js';
 
 describe('pre-dispatch command registry', () => {
+  // Covers: task:28
+  it('parses a closed-child rewind reason and refuses malformed supplied reasons', () => {
+    expect(detectRewindCommand([
+      'node', 'ai-conductor', 'rewind', '--child', '1', '--to', 'test_suite', '--reason', 're-run after flaky fixture',
+    ])).toEqual({
+      kind: 'rewind', child: '1', target: 'test_suite', reason: 're-run after flaky fixture',
+    });
+
+    expect(detectRewindCommand(['node', 'ai-conductor', 'rewind', '--child', '1', '--to', 'test_suite']))
+      .toEqual({ kind: 'rewind', child: '1', target: 'test_suite' });
+    expect(detectRewindCommand(['node', 'ai-conductor', 'rewind', '--to', 'test_suite', '--reason']))
+      .toBeNull();
+    expect(detectRewindCommand(['node', 'ai-conductor', 'rewind', '--to', 'test_suite', '--reason', '--child', '1']))
+      .toBeNull();
+    expect(detectRewindCommand(['node', 'ai-conductor', 'rewind', '--to', 'test_suite', '--reason', '']))
+      .toBeNull();
+    expect(detectRewindCommand([
+      'node', 'ai-conductor', 'rewind', '--to', 'test_suite', '--reason', 'first', '--reason', 'second',
+    ])).toBeNull();
+  });
+
+  // Covers: task:10
+  it('registers stack land with its pre-dispatch detector and declared command path', () => {
+    expect(PRE_DISPATCH_COMMANDS).toContainEqual({
+      detector: 'detectStackLandCommand', commandPath: ['stack', 'land'], helpOwner: 'router',
+    });
+  });
+
   // Covers: task:1, task:19
   it('covers exactly the detectors invoked by the pre-dispatch chains', async () => {
     const source = await readFile(join(process.cwd(), 'src', 'index.ts'), 'utf8');

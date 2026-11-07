@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { Conductor, type StepRunOptions } from '../../src/engine/conductor.js';
 import { parseChildId } from '../../src/engine/child-context.js';
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
 import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
 import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
 import { writeState } from '../../src/engine/state.js';
@@ -19,7 +19,7 @@ const c3 = parseChildId(3)!;
 const c5 = parseChildId(5)!;
 const repository = 'acme/demo';
 
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => import('node:fs/promises').then(({ readFile }) => readFile(path, 'utf8')),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -80,7 +80,7 @@ async function fixture() {
 
   const positions = await run(['hash-object', '-w', '--stdin'], { input: JSON.stringify([c1, c3, c5]) });
   await run(['update-ref', 'refs/conductor/demo/positions', positions.stdout.trim()]);
-  await writeCoverageBindingEnvelope(root, {
+  await writeSliceTopologyFixture(root, {
     version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
     sliceMembership: { taskSlices: { one: c1, three: c3, leaf: c5 }, titles: ['One', 'Three', 'Leaf'] },
     storyOwnership: { S1: c1, S3: c3, S5: c5 },

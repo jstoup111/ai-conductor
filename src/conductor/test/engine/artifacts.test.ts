@@ -171,52 +171,6 @@ describe('engine/artifacts', () => {
     await writeFile(fullPath, content);
   }
 
-  it.each([
-    ['disabled', true],
-    ['done', true],
-    ['failed', false],
-    ['refused', false],
-  ] as const)('accepts coverage-binding completion evidence only when status is %s', async (status, done) => {
-    await createFile('.pipeline/coverage-binding.json', JSON.stringify({
-      version: 1,
-      slug: 'coverage-feature',
-      runId: 'coverage-run',
-      status,
-      entries: [],
-    }));
-
-    expect(await checkStepCompletion(dir, 'coverage_binding')).toMatchObject({ done });
-  });
-
-  it('reports a partial coverage-binding envelope as incomplete rather than completion evidence', async () => {
-    await createFile('.pipeline/coverage-binding.json', JSON.stringify({
-      version: 1,
-      slug: 'coverage-feature',
-      runId: 'coverage-run',
-      status: 'partial',
-      entries: [],
-    }));
-
-    await expect(checkStepCompletion(dir, 'coverage_binding')).resolves.toEqual({
-      done: false,
-      reason: '.pipeline/coverage-binding.json has non-completing status: partial',
-    });
-  });
-
-  it('reports an invalidated coverage-binding envelope as incomplete rather than completion evidence', async () => {
-    await createFile('.pipeline/coverage-binding.json', JSON.stringify({
-      version: 1,
-      slug: 'coverage-feature',
-      runId: 'coverage-run',
-      status: 'invalidated',
-      entries: [],
-    }));
-
-    await expect(checkStepCompletion(dir, 'coverage_binding')).resolves.toEqual({
-      done: false,
-      reason: '.pipeline/coverage-binding.json has non-completing status: invalidated',
-    });
-  });
   describe('STEP_ARTIFACT_GLOBS', () => {
     it('derives the complete ordered compatibility map while retaining per-pattern scope', async () => {
       const expected: Record<StepName, string[]> = {
@@ -237,7 +191,6 @@ describe('engine/artifacts', () => {
           '.docs/decisions/adr-*.md',
         ],
         worktree: [],
-        coverage_binding: ['.pipeline/coverage-binding.json'],
         acceptance_specs: [
           'spec/acceptance/**/*',
           'spec/requests/**/*',
@@ -286,12 +239,6 @@ describe('engine/artifacts', () => {
         ],
         derivedProjection: true,
       });
-    });
-
-    it('declares coverage_binding as run-scoped completion evidence', () => {
-      expect(STEP_ARTIFACT_CONTRACTS.coverage_binding).toEqual([
-        { pattern: '.pipeline/coverage-binding.json', scope: 'run' },
-      ]);
     });
 
     it('declares lifecycle scope and feature identity for every built-in artifact pattern', () => {

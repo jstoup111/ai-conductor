@@ -31,6 +31,20 @@ const policy: AsBuiltPolicy = {
 };
 
 describe('as-built recorded-findings projection', () => {
+  it('treats an absent verdict as a no-op when no remediation finding is pending', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'as-built-empty-projection-'));
+    dirs.push(dir);
+    const conductor = new Conductor({
+      stateFilePath: join(dir, '.pipeline', 'conduct-state.json'),
+      stepRunner: { run: vi.fn().mockResolvedValue({ success: true }) },
+      events: new ConductorEventEmitter(), projectRoot: dir,
+    });
+
+    await expect((conductor as unknown as {
+      projectPendingAsBuiltRemediationFindings: () => Promise<string | undefined>;
+    }).projectPendingAsBuiltRemediationFindings()).resolves.toBeUndefined();
+  });
+
   // Covers: task:14
   it('writes remediation outcomes into the typed verdict, re-renders the report, and clears the ledger', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'as-built-projection-'));

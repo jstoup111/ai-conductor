@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Covers: task:4, task:8
+# Covers: task:4, task:8, task:11
 # Covers: task:3
+# Covers: task:5
 # BEGIN integrity failure reporting
 set -eEuo pipefail
 
@@ -283,6 +284,25 @@ if invocation_policy_fixture_output=$(bash "$SCRIPT_DIR/test_skill_invocation_po
 else
   printf '%s\n' "$invocation_policy_fixture_output" | sed 's/^/    /'
   assert "invocation policy checker rejects invalid metadata mutations" 1
+fi
+
+# ── 2b. Repository-local skill host wiring ──────────────────────────────────
+
+echo ""
+echo -e "${BOLD}2b. Repository-local skill host wiring${NC}"
+
+if local_skill_host_wiring_output=$(bash "$SCRIPT_DIR/check_local_skill_host_wiring.sh" "$HARNESS_DIR" 2>&1); then
+  assert "every repository-local skill is wired for both Claude and Codex" 0
+else
+  printf '%s\n' "$local_skill_host_wiring_output" | sed 's/^/    /'
+  assert "every repository-local skill is wired for both Claude and Codex" 1
+fi
+
+if local_skill_host_wiring_fixture_output=$(bash "$SCRIPT_DIR/test_local_skill_host_wiring.sh" 2>&1); then
+  assert "local skill host-wiring checker rejects one-host mutations" 0
+else
+  printf '%s\n' "$local_skill_host_wiring_fixture_output" | sed 's/^/    /'
+  assert "local skill host-wiring checker rejects one-host mutations" 1
 fi
 
 # ── 3. Agent references ─────────────────────────────────────────────────────
@@ -1695,6 +1715,55 @@ else
     finish_no_legacy_outcomes_status=1
   fi
   assert "skills/finish/SKILL.md — contains no legacy merge-local/discard outcome instructions" "$finish_no_legacy_outcomes_status"
+
+  finish_pr_prose_handoff_status=0
+  grep -qF 'write `.pipeline/finish-pr-prose.json`' "$finish_skill" \
+    && grep -qiE 'engine.*performs.*PR title and body write' "$finish_skill" || finish_pr_prose_handoff_status=$?
+  assert "skills/finish/SKILL.md — states the FINISH PR-prose handoff and engine-owned write" "$finish_pr_prose_handoff_status"
+
+  # Covers: task:rem-prd-audit-finish-skill-judge-no-repair
+  finish_judgment_grants_repair() {
+    local contract=$1
+    grep -qiE 'judge_pr_prose[^.]{0,160}(repair|write|change)|judgment[^.]{0,160}(repair|write|change)|provider judged[^.]{0,160}(repair|write|change)' <<<"$contract"
+  }
+
+  finish_judgment_repair_status=0
+  if finish_judgment_grants_repair "$(<"$finish_skill")"; then
+    finish_judgment_repair_status=1
+  fi
+  assert "skills/finish/SKILL.md — keeps PR-prose judgment verdict-only" "$finish_judgment_repair_status"
+
+  # These were the three repair grants removed by the remediation. Keep a
+  # historical fixture so a weakened matcher cannot silently accept them.
+  finish_judgment_repair_fixture=$'For `author_pr_prose` and `judge_pr_prose` alike, this skill may inspect and repair only the retained PR\'s title and body.\nWhen the coordinator supplies a retained PR for judgment, make one bounded title/body quality and repair pass:\n- [ ] The provider judged and, when needed, repaired only the retained PR title/body.'
+  finish_judgment_repair_fixture_status=0
+  if ! finish_judgment_grants_repair "$finish_judgment_repair_fixture"; then
+    finish_judgment_repair_fixture_status=1
+  fi
+  assert "FINISH judgment repair guard rejects the pre-remediation contract" "$finish_judgment_repair_fixture_status"
+
+  finish_no_in_place_status=0
+  if grep -qiF 'in place' "$finish_skill"; then
+    finish_no_in_place_status=1
+  fi
+  assert "skills/finish/SKILL.md — contains no in-place PR prose instruction" "$finish_no_in_place_status"
+fi
+
+pr_skill="${HARNESS_DIR}/skills/pr/SKILL.md"
+if [ ! -f "$pr_skill" ]; then
+  assert "skills/pr/SKILL.md exists" 1
+else
+  pr_pr_prose_handoff_status=0
+  grep -qiE 'during FINISH' "$pr_skill" \
+    && grep -qF 'write `.pipeline/finish-pr-prose.json`' "$pr_skill" \
+    && grep -qiE 'engine.*performs.*PR title and body write' "$pr_skill" || pr_pr_prose_handoff_status=$?
+  assert "skills/pr/SKILL.md — states the FINISH PR-prose handoff and engine-owned write" "$pr_pr_prose_handoff_status"
+
+  pr_no_in_place_status=0
+  if grep -qiF 'in place' "$pr_skill"; then
+    pr_no_in_place_status=1
+  fi
+  assert "skills/pr/SKILL.md — contains no in-place PR prose instruction" "$pr_no_in_place_status"
 fi
 
 # ── 19. Migration block authoring contract ──────────────────────────────────

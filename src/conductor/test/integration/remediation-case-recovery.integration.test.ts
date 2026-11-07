@@ -370,7 +370,7 @@ describe('remediation case recovery', () => {
       projectRoot, feature, aggregate: lapOne, operatorResolvedFindingIds: new Set<string>(), mechanical: 'healthy',
       judge: async () => lapOneJudgement, chargeInput: { treeHash: 'tree-one', resolvedCount: 1, reason: 'lap one' },
       generateId: (() => { const ids = ['orphaned-case-id', 'orphaned-effect']; return () => ids.shift()!; })(),
-    })).resolves.toMatchObject({ ok: false, detail: 'semantic remediation case repeat repeat-case' });
+    })).resolves.toMatchObject({ ok: false, detail: expect.stringMatching(/^semantic remediation case repeat repeat-case;/) });
 
     const lapTwo = actionAggregate('lap-two', [{ name: 'materially distinct case', path: 'test/distinct.test.ts' }]);
     const distinctSource = projectBuildReviewAggregateSources(lapTwo)![0]!;

@@ -137,13 +137,13 @@ As an operator, I want how long a feature takes from first dispatch to ship, and
 - Given S halted for two days between two dispatches, when both durations are recorded, then wall exceeds active by at least those two days
 
 #### Negative Paths
-- Given the timing rollup reports state partial or unavailable, when the ship is recorded, then conductor.feature.duration.active has no data point for S (absent, never zero or a fabricated total) and conductor.feature.duration.wall is still recorded
+- Given the timing rollup reports state partial with no active total, or state unavailable, when the ship is recorded, then conductor.feature.duration.active has no data point for S (absent, never zero or a fabricated total) and conductor.feature.duration.wall is still recorded
 - Given the worktree's conduct-state has no run_started_at, when the ship is recorded, then conductor.feature.duration.wall has no data point for S and the ship counter still increments
 - Given a feature terminates by halt rather than ship, when the terminal is recorded, then neither duration histogram gains an observation
 
 ### Done When
 - [ ] A test ships a feature with known run_started_at and an exact rollup and asserts both histograms have one observation with the expected values
-- [ ] A test with a partial rollup asserts duration.active is absent (not zero) while duration.wall is present
+- [ ] A test with a partial rollup that carries no active total asserts duration.active is absent (not zero) while duration.wall is present
 - [ ] A test with no run_started_at asserts duration.wall is absent while feature.shipped still increments
 
 ## Story 7: Daemon-level signals ride the event spine and are persisted once

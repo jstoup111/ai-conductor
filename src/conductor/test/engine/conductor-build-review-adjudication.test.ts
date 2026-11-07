@@ -1,4 +1,4 @@
-// Covers: task:1, task:4, task:5, task:7, task:8, task:15, task:18, task:16, task:19, task:20, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab3-1, task:rem-as-built-rem-as-built-r12-2
+// Covers: task:1, task:4, task:5, task:7, task:8, task:11, task:15, task:18, task:16, task:19, task:20, task:rem-as-built-rem-ab1-4, task:rem-as-built-rem-ab2-4, task:rem-as-built-rem-ab3-1, task:rem-as-built-rem-as-built-r12-2
 //
 // Task 18's production-wiring clauses. Three build laps closed the components
 // and left the seam open: the coordinator was reachable, but the deferral
@@ -7,7 +7,7 @@
 // necessary but not sufficient, so every assertion below observes the
 // PRODUCTION call path — the real `Conductor` branch, the real coordinator, the
 // real effects, with fakes only at the provider and `gh` boundaries.
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -16,9 +16,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CompletionContext } from '../../src/engine/artifacts.js';
 import type { StepRunner, StepRunResult, StepRunOptions } from '../../src/engine/conductor.js';
 import type { chargeBuildReviewEffectInLedger } from '../../src/engine/kickback-ledger.js';
-import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
+import type { GitRunner } from '../../src/engine/pr-labels.js';
+import { isBuildReviewFindingOutOfDelta, joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
 import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-adjudication-context.js';
+import { writeBuildReviewBranchArtifact } from '../../src/engine/build-review-artifacts.js';
 import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
+import { deriveChangedFileReferences } from '../../src/engine/build-review-projections.js';
 import { parseChildId, pipelinePathFor } from '../../src/engine/child-context.js';
 import { parseBuildReviewLapId, type BuildReviewFinding } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
@@ -26,6 +29,7 @@ import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-revie
 import { EventPersister } from '../../src/engine/event-persister.js';
 import * as remediationCaseReconciler from '../../src/engine/remediation-case-reconciler.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
+import { markBuildReviewWorkOrderAttempted, publishBuildReviewWorkOrder } from '../../src/engine/build-review-work-order.js';
 import type { RemediationCaseV2Judgement } from '../../src/engine/remediation-case-artifact.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeState } from '../../src/engine/state.js';
@@ -106,6 +110,23 @@ function passAggregate(): unknown {
         kind: 'judged', rubric: 'testQuality', lapId: LAP_ID, snapshotDigest: SNAPSHOT,
         contractVersion: 'v3', findings: [], verdict: 'PASS',
       },
+      security: {
+        kind: 'judged', rubric: 'security', lapId: LAP_ID, snapshotDigest: SNAPSHOT,
+        contractVersion: 'v3', findings: [], verdict: 'PASS',
+      },
+      implementationQuality: {
+        kind: 'judged', rubric: 'implementationQuality', lapId: LAP_ID, snapshotDigest: SNAPSHOT,
+        contractVersion: 'v3', findings: [], verdict: 'PASS',
+      },
+    },
+  });
+}
+
+function scopeEmptyAggregate(): unknown {
+  return joinBuildReviewRubricOutcomes({
+    lapId: LAP_ID, snapshotDigest: SNAPSHOT,
+    results: {
+      testQuality: { kind: 'scope-empty', rubric: 'testQuality' },
       security: {
         kind: 'judged', rubric: 'security', lapId: LAP_ID, snapshotDigest: SNAPSHOT,
         contractVersion: 'v3', findings: [], verdict: 'PASS',
@@ -325,9 +346,13 @@ interface FixtureOptions {
   readonly adjudicationEnabled?: boolean;
   /** Forces an actual BUILD entry without relying on durable retry recovery. */
   readonly buildPending?: boolean;
+  /** Observes the durable handoff at the BUILD dispatch boundary. */
+  readonly onBuildDispatch?: (projectRoot: string) => Promise<void>;
   readonly chargeEffect?: typeof chargeBuildReviewEffectInLedger;
   /** A clean lap. The adjudication coordinator never runs for one. */
   readonly rawVerdict?: 'PASS' | 'FAIL';
+  /** A clean lap where testQuality deliberately did not inspect settled sources. */
+  readonly scopeEmpty?: boolean;
   /** Drives the built-in-only effective-PASS advisory path. */
   readonly advisory?: boolean;
   /** Adds an infrastructure failure to the advisory-only aggregate. */
@@ -351,6 +376,10 @@ interface FixtureOptions {
   readonly reRaised?: boolean;
   /** Attach the production event-spine persister when a test observes durable event order. */
   readonly persistEvents?: boolean;
+  /** Supplies a fixture-specific completed build-review aggregate. */
+  readonly aggregate?: unknown;
+  /** Keeps the production conductor's frozen-diff lookup local and deterministic. */
+  readonly frozenDiff?: string;
 }
 
 async function fixture(options: FixtureOptions = {}) {
@@ -376,7 +405,7 @@ async function fixture(options: FixtureOptions = {}) {
   const mixed = options.infrastructure && options.infrastructure !== 'none';
   const scopeIncomplete = options.scopeIncomplete !== undefined;
   const clean = options.rawVerdict === 'PASS';
-  const raw = clean ? passAggregate() : options.advisory ? advisoryAggregate({ infrastructure: options.advisoryInfrastructure }) : options.reRaised ? reRaisedAggregate() : options.customInfrastructure ? customInfrastructureAggregate() : options.custom ? customAggregate() : scopeIncomplete ? scopeIncompleteAggregate() : aggregate(mixed ? 'mixed' : 'judged');
+  const raw = options.aggregate ?? (options.scopeEmpty ? scopeEmptyAggregate() : clean ? passAggregate() : options.advisory ? advisoryAggregate({ infrastructure: options.advisoryInfrastructure }) : options.reRaised ? reRaisedAggregate() : options.customInfrastructure ? customInfrastructureAggregate() : options.custom ? customAggregate() : scopeIncomplete ? scopeIncompleteAggregate() : aggregate(mixed ? 'mixed' : 'judged'));
 
   const dispatched: StepName[] = [];
   const artifactMtimes = new Map<string, number>();
@@ -386,7 +415,10 @@ async function fixture(options: FixtureOptions = {}) {
     run: async (step: StepName, _state: ConductState, opts?: StepRunOptions): Promise<StepRunResult> => {
       dispatched.push(step);
       if (opts?.retryReason !== undefined) retryReasons.set(step, opts.retryReason);
-      if (step === 'build') throw new Error('stop after BUILD dispatch');
+      if (step === 'build') {
+        await options.onBuildDispatch?.(projectRoot);
+        throw new Error('stop after BUILD dispatch');
+      }
       if (step === 'remediate') {
         remediateDispatches += 1;
         const result = options.remediateResults?.[remediateDispatches - 1];
@@ -422,6 +454,7 @@ async function fixture(options: FixtureOptions = {}) {
   const uncoveredScopeIncomplete = options.scopeIncomplete === 'uncovered'
     ? (['testQuality'] as const) : ([] as const);
   const resolver: NonNullable<CompletionContext['buildReviewEffectiveResolver']> = vi.fn(async () => {
+    const rawSources = projectBuildReviewAggregateSources(raw as never) ?? [];
     const acceptedFindingIds = [...(options.acceptedFindingIds?.() ?? [])];
     const suppressedFindingIds = [...(options.suppressedFindingIds ?? [])];
     const settledFindingIds = [...(options.settledFindingIds ?? [])];
@@ -435,7 +468,8 @@ async function fixture(options: FixtureOptions = {}) {
         verdict: effectivePass ? ('PASS' as const) : ('FAIL' as const),
         acceptedFindingIds,
         unresolvedFindingIds: mixed || scopeIncomplete || effectivePass || acceptedFindingIds.includes(FINDING_ID)
-          ? [] : options.reRaised ? [FINDING_ID, RE_RAISED_FINDING_ID] : [FINDING_ID],
+          ? [] : options.aggregate === undefined && options.reRaised ? [FINDING_ID, RE_RAISED_FINDING_ID]
+            : rawSources.map((source) => source.findingId),
         suppressedFindingIds,
         settledFindingIds,
         ...(advisoryFindingIds.length === 0 ? {} : { advisoryFindingIds }),
@@ -521,6 +555,9 @@ async function fixture(options: FixtureOptions = {}) {
     }),
     gh,
   } as never);
+  const git = options.frozenDiff === undefined
+    ? undefined
+    : vi.spyOn(conductor as unknown as { git: GitRunner }, 'git').mockResolvedValue({ stdout: options.frozenDiff });
   for (const relative of ['.pipeline/remediation-cases.json', '.pipeline/build-review-work-order.json']) {
     await stat(join(projectRoot, relative)).then((metadata) => artifactMtimes.set(relative, metadata.mtimeMs)).catch(() => {});
   }
@@ -531,6 +568,7 @@ async function fixture(options: FixtureOptions = {}) {
     });
   } finally {
     persister?.stop();
+    git?.mockRestore();
   }
 
   return {
@@ -546,7 +584,213 @@ async function fixture(options: FixtureOptions = {}) {
   };
 }
 
+const task26Filesystem = {
+  readFile: (path: string) => readFile(path, 'utf8'),
+  mkdir: async (path: string) => { await mkdir(path, { recursive: true }); },
+  writeFile,
+  rename,
+};
+
+const TASK_26_DIFF = [
+  'diff --git a/test/example.test.ts b/test/example.test.ts',
+  '@@ -1 +1 @@',
+  '-export const previous = true;',
+  '+export const repaired = true;',
+].join('\n');
+const TASK_26_HUNK = deriveChangedFileReferences(TASK_26_DIFF)[0]!.hunks[0]!;
+const TASK_26_L1 = parseBuildReviewLapId('lap-task-26-l1')!;
+
+function task26Finding(contentHash: string, summary: string, causeHunk?: { readonly path: string; readonly contentHash: string; readonly display: string }): BuildReviewFinding {
+  return {
+    concernKind: 'test-insensitive', severity: 'major', summary,
+    evidenceLocations: ['test/example.test.ts:1'],
+    anchor: { rubric: 'testQuality', locus: { path: 'test/example.test.ts', contentHash, display: 'example test' } },
+    ...(causeHunk === undefined ? {} : { causeHunk }),
+  };
+}
+
+function task26SourceId(finding: BuildReviewFinding): string {
+  return buildReviewAdjudicationSourceId({
+    rubric: 'testQuality',
+    findingId: canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v4', ...finding })!.id,
+  });
+}
+
+function task26Aggregate(findings: readonly BuildReviewFinding[]) {
+  return joinBuildReviewRubricOutcomes({
+    lapId: LAP_ID, snapshotDigest: SNAPSHOT,
+    results: {
+      testQuality: {
+        kind: 'judged', rubric: 'testQuality', lapId: LAP_ID, snapshotDigest: SNAPSHOT,
+        contractVersion: 'v4', findings, verdict: 'FAIL',
+      },
+    },
+  });
+}
+
+function task26Scope(deltaHunks: readonly { readonly path: string; readonly contentHash: string }[], predecessorLapId?: NonNullable<ReturnType<typeof parseBuildReviewLapId>>) {
+  return {
+    mode: predecessorLapId === undefined ? 'full' as const : 'delta' as const,
+    reason: predecessorLapId === undefined ? 'first-lap' as const : 'delta' as const,
+    sequence: predecessorLapId === undefined ? 1 : 2,
+    unreadableLapIds: [], mergeBase: 'base', headSha: predecessorLapId === undefined ? 'head-l1' : 'head-l2', policyIdentity: 'policy',
+    ...(predecessorLapId === undefined ? {} : { predecessorLapId }),
+    reviewedHunks: deltaHunks, deltaHunks, outOfDeltaSourceIds: [],
+  };
+}
+
+async function writeTask26Artifact(
+  root: string,
+  lapId: NonNullable<ReturnType<typeof parseBuildReviewLapId>>,
+  findings: readonly BuildReviewFinding[],
+  scope: ReturnType<typeof task26Scope>,
+) {
+  await writeBuildReviewBranchArtifact(root, {
+    rubric: 'testQuality', lapId, snapshotDigest: `sha256:${lapId}`,
+    result: { kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: `sha256:${lapId}`, contractVersion: 'v4', findings, verdict: findings.length === 0 ? 'PASS' : 'FAIL' },
+    provenance: { kind: 'fresh' }, reviewScope: scope,
+  }, task26Filesystem);
+}
+
+function task26AppliedCase(id: string, sourceId: string, recurrenceOf?: readonly string[]) {
+  return {
+    id, domain: 'build_review' as const, disposition: 'act' as const, priority: 'high' as const, confidence: 'high' as const,
+    rationale: `Repair ${id}.`, resolution: 'resolved' as const,
+    sources: [{ sourceId, outcome: 'acted' as const, recordedAt: '2026-10-26T00:00:00.000Z' }],
+    effect: { id: `effect-${id}`, kind: 'action' as const, status: 'applied' as const, workOrderId: `order-${id}` },
+    ...(recurrenceOf === undefined ? {} : { recurrenceOf }),
+  };
+}
+
+function task26ActionJudgement(sourceId: string) {
+  return {
+    mode: 'case-v1', domain: 'build_review',
+    sourceOutcomes: [{ sourceId, outcome: 'acted', caseRef: 'repair' }],
+    cases: [{
+      caseRef: 'repair', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'Repair the new regression.',
+      effect: { kind: 'action', route: 'build', tasks: [{ title: 'test/example.test.ts:1 — repair regression' }] },
+    }],
+  };
+}
+
 describe('engine/conductor — build_review post-join adjudication wiring', () => {
+  // Covers: task:26
+  it("kicks L2 back to BUILD and stamps recurrenceOf when L1's applied repair introduced the delta defect", async () => {
+    const l1Finding = task26Finding(`sha256:${'1'.repeat(64)}`, 'L1 repair target.');
+    const l2Finding = task26Finding(TASK_26_HUNK.contentHash, 'L1 repair introduced this defect.');
+    const l1SourceId = task26SourceId(l1Finding);
+    const l2SourceId = task26SourceId(l2Finding);
+    const run = await fixture({
+      aggregate: task26Aggregate([l2Finding]), frozenDiff: TASK_26_DIFF,
+      judgement: task26ActionJudgement(l2SourceId),
+      seedPipeline: async (root) => {
+        await writeTask26Artifact(root, TASK_26_L1, [l1Finding], task26Scope([{ path: 'test/example.test.ts', contentHash: l1Finding.anchor.locus.contentHash }]));
+        await writeTask26Artifact(root, LAP_ID, [l2Finding], task26Scope([{ path: 'test/example.test.ts', contentHash: TASK_26_HUNK.contentHash }], TASK_26_L1));
+        await writeFile(join(root, '.pipeline', 'remediation-cases.json'), JSON.stringify({
+          version: 'v1', feature: { version: 'v1', repository: root, feature: 'adjudicated-feature' },
+          cases: [task26AppliedCase('l1-repair', l1SourceId)],
+        }), 'utf8');
+      },
+    });
+
+    const cases = await run.readJson('.pipeline/remediation-cases.json') as { cases: readonly { readonly id: string; readonly recurrenceOf?: readonly string[] }[] };
+    expect(run.kickbacks).toContainEqual({ from: 'build_review', to: 'build' });
+    expect(run.dispatched).toContain('build');
+    expect(cases.cases.find((record) => record.id !== 'l1-repair')).toMatchObject({ recurrenceOf: ['l1-repair'] });
+  });
+
+  // Covers: task:26
+  it('treats an unchanged anchor as actionable when L2 names its delta hunk as causeHunk', async () => {
+    const settledHash = `sha256:${'2'.repeat(64)}`;
+    const finding = task26Finding(settledHash, 'The L2 change breaks settled code.', {
+      path: 'test/example.test.ts', contentHash: TASK_26_HUNK.contentHash, display: 'L2 causal hunk',
+    });
+    const sourceId = task26SourceId(finding);
+    const scope = task26Scope([{ path: 'test/example.test.ts', contentHash: TASK_26_HUNK.contentHash }], TASK_26_L1);
+    const run = await fixture({
+      aggregate: task26Aggregate([finding]), frozenDiff: TASK_26_DIFF,
+      judgement: task26ActionJudgement(sourceId),
+      seedPipeline: async (root) => {
+        await writeTask26Artifact(root, TASK_26_L1, [], task26Scope([{ path: 'test/example.test.ts', contentHash: settledHash }]));
+        await writeTask26Artifact(root, LAP_ID, [finding], scope);
+      },
+    });
+
+    expect(isBuildReviewFindingOutOfDelta(finding, {
+      reviewScope: scope,
+      changedFiles: deriveChangedFileReferences(TASK_26_DIFF),
+    })).toBe(false);
+    expect(run.kickbacks).toContainEqual({ from: 'build_review', to: 'build' });
+    expect(run.dispatched).toContain('build');
+  });
+
+  // Covers: task:26
+  it('halts the fourth applied repair lineage instead of issuing another conductor BUILD kickback', async () => {
+    const l2 = parseBuildReviewLapId('lap-task-26-l2')!;
+    const l3 = parseBuildReviewLapId('lap-task-26-l3')!;
+    const first = task26Finding(`sha256:${'3'.repeat(64)}`, 'First repair target.');
+    const second = task26Finding(`sha256:${'4'.repeat(64)}`, 'First repair introduced a defect.');
+    const third = task26Finding(`sha256:${'5'.repeat(64)}`, 'Second repair introduced a defect.');
+    const fourth = task26Finding(TASK_26_HUNK.contentHash, 'Third repair introduced a defect.');
+    const run = await fixture({
+      aggregate: task26Aggregate([fourth]), frozenDiff: TASK_26_DIFF,
+      judgement: task26ActionJudgement(task26SourceId(fourth)),
+      seedPipeline: async (root) => {
+        await writeTask26Artifact(root, TASK_26_L1, [first], task26Scope([{ path: 'test/example.test.ts', contentHash: first.anchor.locus.contentHash }]));
+        await writeTask26Artifact(root, l2, [second], task26Scope([{ path: 'test/example.test.ts', contentHash: second.anchor.locus.contentHash }], TASK_26_L1));
+        await writeTask26Artifact(root, l3, [third], task26Scope([{ path: 'test/example.test.ts', contentHash: third.anchor.locus.contentHash }], l2));
+        await writeTask26Artifact(root, LAP_ID, [fourth], task26Scope([{ path: 'test/example.test.ts', contentHash: TASK_26_HUNK.contentHash }], l3));
+        await writeFile(join(root, '.pipeline', 'remediation-cases.json'), JSON.stringify({
+          version: 'v1', feature: { version: 'v1', repository: root, feature: 'adjudicated-feature' },
+          cases: [
+            task26AppliedCase('repair-1', task26SourceId(first)),
+            task26AppliedCase('repair-2', task26SourceId(second), ['repair-1']),
+            task26AppliedCase('repair-3', task26SourceId(third), ['repair-2']),
+          ],
+        }), 'utf8');
+      },
+    });
+
+    expect(await run.haltMarker()).toContain('semantic remediation case recurrence limit repair-3');
+    expect(run.kickbacks).toEqual([]);
+    expect(run.dispatched).not.toContain('build');
+  });
+
+  // Covers: task:26
+  it('passes bounded prior-source digests, including a nonzero priorDigestsOmitted count, to remediate', async () => {
+    const history = Array.from({ length: 128 }, (_, index) => task26Finding(
+      `sha256:${index.toString(16).padStart(64, '0')}`,
+      `Historical finding ${index}: ${'x'.repeat(1_000)}`,
+    )).map((finding, index) => ({
+      ...finding,
+      evidenceLocations: Array.from({ length: 8 }, (__, evidenceIndex) => `test/history-${index}-${evidenceIndex}-${'e'.repeat(220)}.test.ts:1`),
+    }));
+    const current = task26Finding(TASK_26_HUNK.contentHash, 'Current repair target.');
+    const currentSourceId = task26SourceId(current);
+    const run = await fixture({
+      aggregate: task26Aggregate([current]), frozenDiff: TASK_26_DIFF,
+      judgement: task26ActionJudgement(currentSourceId),
+      seedPipeline: async (root) => {
+        const historyLap = parseBuildReviewLapId('lap-task-26-history')!;
+        await writeTask26Artifact(root, historyLap, history, task26Scope(history.map((finding) => ({ path: finding.anchor.locus.path, contentHash: finding.anchor.locus.contentHash }))));
+        await writeTask26Artifact(root, LAP_ID, [current], task26Scope([{ path: 'test/example.test.ts', contentHash: TASK_26_HUNK.contentHash }], historyLap));
+        await writeFile(join(root, '.pipeline', 'remediation-cases.json'), JSON.stringify({
+          version: 'v1', feature: { version: 'v1', repository: root, feature: 'adjudicated-feature' },
+          cases: history.map((finding, index) => task26AppliedCase(`history-${index}`, task26SourceId(finding))),
+        }), 'utf8');
+      },
+    });
+
+    const prompt = run.retryReasons.get('remediate');
+    expect(prompt).toBeDefined();
+    const context = JSON.parse(prompt!.slice(prompt!.indexOf('\n') + 1)) as {
+      readonly priorDigestsOmitted: number;
+      readonly priorCases: readonly { readonly sources: readonly { readonly finding?: { readonly summary: string } }[] }[];
+    };
+    expect(context.priorDigestsOmitted).toBeGreaterThan(0);
+    expect(context.priorCases.some((prior) => prior.sources.some((source) => source.finding?.summary.startsWith('Historical finding')))).toBe(true);
+  });
+
   it.each([
     [{ processErrorCode: 'E2BIG' }, ['claude subprocess exited without a classifiable result: processErrorCode=E2BIG']],
     [{ exitCode: 137, signal: 'SIGKILL' }, ['exitCode=137', 'signal=SIGKILL']],
@@ -585,6 +829,153 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(halt).toContain('remediate judgement failed:');
     expect(halt).not.toContain('claude subprocess exited without a classifiable result');
     expect(halt).not.toContain('processErrorCode=E2BIG');
+  });
+
+  // Covers: task:8, task:rem-prd-audit-8
+  // Parse failure must precede every durable remediation write.
+  it.each([
+    { kind: 'maybe', reason: 'A bounded reason.' },
+    { kind: 'residual-gap', reason: '' },
+    { kind: 'residual-gap', reason: 'x'.repeat(8_001) },
+    { kind: 'residual-gap', reason: 'A bounded reason.', note: 'unexpected' },
+  ])('halts malformed reRaise judgement without changing durable remediation state: %o', async (reRaise) => {
+    let caseStoreBytes = '';
+    const ledgerBytes = '{"version":1,"gates":{}}';
+    const baseJudgement = actionJudgement() as {
+      readonly [key: string]: unknown;
+      readonly cases: readonly [Record<string, unknown>];
+    };
+    const run = await fixture({
+      judgement: {
+        ...baseJudgement,
+        cases: [{ ...baseJudgement.cases[0], reRaise }],
+      },
+      seedPipeline: async (root) => {
+        // These are deliberately inert bytes: malformed parsing must halt before
+        // any durable remediation reader or writer can normalize them.
+        caseStoreBytes = JSON.stringify({ version: 'v1', feature: { version: 'v1', repository: root, feature: 'adjudicated-feature' }, cases: [] });
+        await writeFile(join(root, '.pipeline/remediation-cases.json'), caseStoreBytes, 'utf8');
+        await writeFile(join(root, '.pipeline/kickback-ledger.json'), ledgerBytes, 'utf8');
+      },
+    });
+
+    expect(await run.haltMarker()).toContain('remediate judgement failed: invalid-case-keys');
+    await expect(Promise.all([
+      readFile(join(run.projectRoot, '.pipeline/remediation-cases.json'), 'utf8'),
+      readFile(join(run.projectRoot, '.pipeline/kickback-ledger.json'), 'utf8'),
+    ])).resolves.toEqual([caseStoreBytes, ledgerBytes]);
+    // A missing pre-lap work order is durable state too: parsing must not
+    // materialize one while rejecting the malformed declaration.
+    await expect(readFile(join(run.projectRoot, '.pipeline/build-review-work-order.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  // Covers: S2.4, task:8, task:rem-prd-audit-R8b
+  it('routes the #3348 undeclared rebind through build_review to the Task 16 work order', async () => {
+    const tasks = [{ title: 'Task 16 — add the focused regression assertion.' }];
+    const judgement = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId: SOURCE_ID, outcome: 'acted', caseRef: 'case-N' }],
+      cases: [{
+        caseRef: 'case-N', existingCaseId: '26a04ec0', disposition: 'act', priority: 'high', confidence: 'high',
+        rationale: 'The new testQuality finding needs the Task 16 repair.',
+        effect: { kind: 'action', route: 'build', tasks },
+      }],
+    };
+    let publishedTasks: unknown;
+    await fixture({
+      planText: '# Plan\n\n### Task 16: Regression repair\n**Files:** test/example.test.ts\n',
+      remediateJudgements: [judgement],
+      seedPipeline: async (root) => {
+        await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{ id: '16', status: 'in_progress' }] }), 'utf8');
+        await writeFile(join(root, '.pipeline', 'remediation-cases.json'), JSON.stringify({
+          version: 'v1', feature: { version: 'v1', repository: root, feature: 'adjudicated-feature' },
+          cases: [{
+            id: '26a04ec0', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+            rationale: 'The prior repair was applied.', resolution: 'resolved',
+            sources: [{ sourceId: 'testQuality:previous', outcome: 'acted', recordedAt: '2026-10-20T00:00:00.000Z' }],
+            effect: { id: '74d67e04', kind: 'action', status: 'applied', workOrderId: 'order-R' },
+          }],
+        }), 'utf8');
+      },
+      onBuildDispatch: async (root) => {
+        await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+        const order = JSON.parse(await readFile(join(root, '.pipeline', 'build-review-work-order.json'), 'utf8')) as { cases: Array<{ tasks: unknown }> };
+        expect(order.cases).toHaveLength(1);
+        publishedTasks = order.cases[0]!.tasks;
+      },
+    });
+
+    expect(publishedTasks).toEqual(tasks);
+  });
+
+  // Covers: S2.1, S2.2, S2.3, task:4
+  it('re-dispatches remediate with binding corrections before routing the corrected refutation', async () => {
+    const rejected = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId: SOURCE_ID, outcome: 'rejected', caseRef: 'rejected-A' }],
+      cases: [{ caseRef: 'rejected-A', existingCaseId: 'case-A', disposition: 'reject', priority: 'high', confidence: 'high', rationale: 'Reject the earlier action.', effect: { kind: 'none' } }],
+    };
+    const refuted = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId: SOURCE_ID, outcome: 'refuted', caseRef: 'refuted-A' }],
+      cases: [{
+        caseRef: 'refuted-A', existingCaseId: 'case-A', disposition: 'refute', priority: 'high', confidence: 'high', rationale: 'The repair is absent.', effect: { kind: 'none' },
+        refutation: { claim: 'The repair is absent.', assertions: [{ assertion: 'The tree proves absence.', verdict: 'refuted', evidence: [{ path: 'test/example.test.ts', excerpt: 'assertion' }] }] },
+      }],
+    };
+    const run = await fixture({
+      remediateJudgements: [rejected, refuted],
+      seedPipeline: async (root) => {
+        const feature = { version: 'v1' as const, repository: root, feature: 'adjudicated-feature' };
+        await mkdir(join(root, 'test'), { recursive: true });
+        await writeFile(join(root, 'test', 'example.test.ts'), 'assertion\n', 'utf8');
+        await writeFile(join(root, '.pipeline', 'remediation-cases.json'), JSON.stringify({
+          version: 'v1', feature,
+          cases: [{
+            id: 'case-A', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'The repair was attempted.', resolution: 'open',
+            sources: [{ sourceId: SOURCE_ID, outcome: 'acted', recordedAt: '2026-10-28T00:00:00.000Z' }],
+            effect: { id: 'effect-A', kind: 'action', status: 'applied', workOrderId: 'order-A' },
+          }],
+        }), 'utf8');
+        await publishBuildReviewWorkOrder(root, { version: 'v1', domain: 'build_review', feature, effectId: 'effect-A', cases: [{ caseId: 'case-A', priority: 'high', tasks: [{ title: 'The attempted repair' }] }] });
+        await markBuildReviewWorkOrderAttempted(root, feature);
+      },
+    });
+
+    expect(run.remediateDispatches()).toBe(2);
+    expect(run.retryReasons.get('remediate')).toContain('bindingCorrections');
+    expect(run.retryReasons.get('remediate')).toContain('case-A');
+    expect(await run.haltMarker()).toBe('');
+    expect(run.kickbacks).toEqual([]);
+  });
+
+  // Covers: S2.4, task:5
+  it('through build_review writes the named HALT after a corrected binding is refused again', async () => {
+    const rejected = {
+      mode: 'case-v1', domain: 'build_review',
+      sourceOutcomes: [{ sourceId: SOURCE_ID, outcome: 'rejected', caseRef: 'rejected-R' }],
+      cases: [{ caseRef: 'rejected-R', existingCaseId: 'case-R', disposition: 'reject', priority: 'high', confidence: 'high', rationale: 'Reject the reserved action.', effect: { kind: 'none' } }],
+    };
+    const run = await fixture({
+      remediateJudgements: [rejected, rejected],
+      seedPipeline: async (root) => {
+        const feature = { version: 'v1' as const, repository: root, feature: 'adjudicated-feature' };
+        await writeFile(join(root, '.pipeline', 'remediation-cases.json'), JSON.stringify({
+          version: 'v1', feature,
+          cases: [{
+            id: 'case-R', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'The action is reserved.', resolution: 'open',
+            sources: [{ sourceId: SOURCE_ID, outcome: 'acted', recordedAt: '2026-10-28T00:00:00.000Z' }],
+            effect: { id: 'effect-R', kind: 'action', status: 'reserved' },
+          }],
+        }), 'utf8');
+      },
+    });
+
+    expect(run.remediateDispatches()).toBe(2);
+    const halt = await run.haltMarker();
+    expect(halt).toContain('inadmissible-case-binding');
+    expect(halt).toContain('case case-R bound as reject');
+    expect(halt).toContain('bindable: act');
   });
 
   it('labels provider failure in the expansion round and retains that round\'s exit facts', async () => {
@@ -1276,6 +1667,36 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     ]);
   });
 
+  // Covers: task:11
+  it('keeps a scope-empty rubric source live during clean-PASS settlement', async () => {
+    const caseId = 'case-scope-empty';
+    const run = await fixture({
+      rawVerdict: 'PASS',
+      scopeEmpty: true,
+      seedPipeline: async (root) => {
+        const feature = { version: 'v1' as const, repository: root, feature: 'adjudicated-feature' };
+        const store = new RemediationCaseStore(root, feature);
+        const seeded = await store.mutate(async (state) => ({
+          value: undefined,
+          nextState: {
+            ...state,
+            cases: [{
+              id: caseId, domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high',
+              rationale: 'The source was not judged in this lap.', resolution: 'open',
+              sources: [{ sourceId: SOURCE_ID, outcome: 'acted', recordedAt: '2026-10-20T00:00:00.000Z' }],
+              effect: { id: 'effect-scope-empty', kind: 'action', status: 'failed', diagnostic: 'prior effect failed' },
+            }],
+          },
+        }));
+        if (!seeded.ok) throw new Error(`case-store seed failed: ${seeded.reason}`);
+      },
+    });
+
+    expect(await run.readJson('.pipeline/remediation-cases.json')).toMatchObject({
+      cases: [expect.objectContaining({ id: caseId, resolution: 'open' })],
+    });
+  });
+
   // Covers: task:rem-as-built-rem-as-built-R17g
   it('keeps absent failed and reserved action cases open for a current custom infrastructure failure', async () => {
     const run = await fixture({
@@ -1874,8 +2295,9 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     });
 
     // A reserved/failed deferral is durable unfinished evidence: it must never
-    // resolve by benign absence into a terminal PASS.
-    expect(await run.haltMarker()).toContain(`build_review clean-PASS durable settlement halted: clean PASS cannot settle open deferral case ${caseId} (${status})`);
+    // resolve by benign absence into a terminal PASS. The halt names the
+    // operator command that resolves it (adr-2026-10-20 D7).
+    expect(await run.haltMarker()).toContain(`build_review clean-PASS durable settlement halted: clean PASS cannot settle open deferral case ${caseId} (${status}); resolve with ai-conductor build-review resolve-case --feature adjudicated-feature --case ${caseId} --rationale "<why>"`);
     expect((await run.state()).build_review).not.toBe('done');
     const settled = await run.readJson('.pipeline/remediation-cases.json') as { cases: Array<{ resolution: string }> };
     expect(settled.cases).toEqual([expect.objectContaining({ resolution: 'open' })]);

@@ -1,0 +1,3 @@
+export type BuildReviewSeverity = 'critical' | 'major' | 'minor' | 'nit';
+export type BuildReviewInfrastructureFailureReason = 'provider-error' | 'retry-exhausted' | 'missing-artifact' | 'malformed-artifact' | 'stale-artifact' | 'identity-mismatch' | 'preflight-failed' | 'artifact-read-failed' | 'artifact-write-failed' | 'scope-incomplete' | 'projection-oversized' | 'invalid-structured-result' | 'native-schema-unsupported' | 'review-input-mutated' | 'read-only-review-unavailable';
+export interface BuildReviewJudgedResultRejection { readonly kind: 'explained' | 'unexplained'; readonly problems: readonly { readonly field: string; readonly required: string; readonly detail: string }[]; readonly omittedProblemCount?: number; }

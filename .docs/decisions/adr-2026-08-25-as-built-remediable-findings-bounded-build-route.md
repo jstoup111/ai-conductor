@@ -105,6 +105,14 @@ closed schema, with all bookkeeping (parsing, caps, ledger, halts) mechanical an
 > routing round, at the first host's BUILD dispatch, from the route record's receipt
 > (`adr-2026-10-12-routed-whole-feature-repair` decision 10). The cap and its halt are unchanged.
 
+> **Amended 2026-10-25 by #2413:** The default lap cap is no longer 1. It is derived from the
+> feature's complexity tier: Small 2, Medium 3, Large 4, with a feature that has no recorded tier
+> treated as Medium. `architecture_review_as_built.max_remediation_laps` may set a positive
+> integer (every tier) or a map of `S`/`M`/`L` to positive integers (unset tiers keep their
+> default). An operator `kickback-budget raise` still takes precedence. Exhausting the allowance
+> halts `kickback-cap` as before, and the halt names the tier and allowance it was measured
+> against.
+
 5. **One appender, restated (amends adr-2026-08-22-one-owner-per-review-question).** The
    binding principle becomes: *a gate may fail a lap or halt, and only the
    `planRemediation` → remediation-append seam may append plan tasks — with `prd_audit` and

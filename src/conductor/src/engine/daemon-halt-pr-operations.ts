@@ -12,6 +12,7 @@ import {
   type GhRunner,
 } from './tracker-client.js';
 import type { OwnerResolution } from './owner-gate/identity.js';
+import { resolveFeatureArtifact, type ManifestSource } from './feature-manifest-source.js';
 
 export interface DaemonHaltPrOperationsOptions {
   readonly projectRoot: string;
@@ -85,11 +86,31 @@ export function createDaemonHaltPrOperations(
           resolveMachineOwner: options.resolveMachineOwner,
           provenanceDiscovery: {
             readCommittedRecords: async ({ ref }) => {
-              const result = await options.git(['show', `${ref}:${featureMarker}`]);
-              if (result.exitCode !== 0) {
-                throw new Error(`committed ownership record unavailable at ${ref}:${featureMarker}`);
+              const source: ManifestSource = {
+                async readFile(path) {
+                  const result = await options.git(['show', `${ref}:${path}`]);
+                  return result.exitCode === 0 ? result.stdout : null;
+                },
+                async exists(path) {
+                  return (await options.git(['show', `${ref}:${path}`])).exitCode === 0;
+                },
+              };
+              const intake = await resolveFeatureArtifact(
+                source,
+                slug,
+                'intake',
+                async () => [featureMarker],
+              );
+              const path = intake.paths[0];
+              const content = path === undefined || (intake.origin === 'manifest' && intake.missing.includes(path))
+                ? null
+                : await source.readFile(path);
+              if (content === null) {
+                throw new Error(`committed ownership record unavailable at ${ref}:${path ?? featureMarker}`);
               }
-              return [{ path: featureMarker, content: result.stdout }];
+              // The owner gate's mutation identity remains the feature's stable
+              // logical marker while the manifest selects its physical location.
+              return [{ path: featureMarker, content }];
             },
           },
         },

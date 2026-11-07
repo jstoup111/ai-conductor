@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { preparePiSelfHostAuth } from '../../src/execution/pi-self-host-auth.js';
-import { ProviderSetupUnavailableError } from '../../src/engine/provider-setup-failure.js';
+import { ProviderSetupUnavailableError } from '../../src/execution/provider-setup-failure.js';
 
 describe('preparePiSelfHostAuth', () => {
   const directories: string[] = [];

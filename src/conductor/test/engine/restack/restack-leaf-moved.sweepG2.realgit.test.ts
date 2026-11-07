@@ -57,14 +57,14 @@ describe('leaf-moved marker sweep (real local Git)', () => {
     expect(await refExists(intermediate, marker)).toBe(false);
   });
 
-  // Covers: S1.10, task:20
-  it("moves an unentered leaf at pre-region halt record H to H' in the same restack without leaf-moved, so moveLeaf later completes", async () => {
+  // Covers: S1.10, task:7, task:20
+  it('moves an unentered leaf at pre-region halt record H to the advanced default without leaf-moved, so moveLeaf later completes', async () => {
     const subject = await createSweepRepository('restack-leaf-unentered-sweep-', cleanup);
     const base = await subject.commit('base', 'base.txt', 'base\n');
     await subject.git(['update-ref', 'refs/remotes/origin/main', base]);
     await subject.git(['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']);
     await subject.git(['checkout', '-qb', 'feat/daemon-demo']);
-    const haltRecord = await subject.commit('halt record', '.docs/halted/demo.md', 'Status: halted\n');
+    await subject.commit('halt record', '.docs/halted/demo.md', 'Status: halted\n');
     await subject.git(['checkout', '-qb', 'feat/c1/demo']);
     await subject.git(['update-ref', 'refs/conductor/demo/closed/c1', await subject.commit('C1', 'one.txt', 'one\n')]);
     await subject.git(['checkout', '-qb', 'feat/c2/demo']);
@@ -84,10 +84,10 @@ describe('leaf-moved marker sweep (real local Git)', () => {
       },
     })).resolves.toMatchObject({ kind: 'applied' });
 
-    const rewrittenHalt = await subject.rev('feat/daemon-demo');
-    expect(rewrittenHalt).not.toBe(haltRecord);
-    expect((await subject.git(['show', '-s', '--format=%s %P', rewrittenHalt])).stdout.trim()).toBe(`halt record ${advanced}`);
-    expect(await subject.rev('feat/c1/demo^')).toBe(rewrittenHalt);
+    expect(await subject.rev('feat/daemon-demo')).toBe(advanced);
+    // The child retains its carried halt record; the unentered leaf maps the
+    // omitted record to the advanced default rather than that bookkeeping tip.
+    expect(await subject.rev('feat/c1/demo^^')).toBe(advanced);
     // One transaction moved the leaf together with child 1 and child 2.
     expect(moved).toHaveLength(1);
     expect(moved[0]).toContain('update refs/heads/feat/c1/demo ');

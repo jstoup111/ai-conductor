@@ -1,6 +1,7 @@
+// Covers: task:3
 import { describe, expect, it, vi } from 'vitest';
 import { executeProviderCandidates } from '../../src/engine/provider-execution.js';
-import { ProviderSetupUnavailableError } from '../../src/engine/provider-setup-failure.js';
+import { ProviderSetupUnavailableError } from '../../src/execution/provider-setup-failure.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionScope } from '../../src/engine/provider-session.js';
 import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';

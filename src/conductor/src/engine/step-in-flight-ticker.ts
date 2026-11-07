@@ -1,5 +1,5 @@
 import { resolveBuildProgressConfig } from './config.js';
-import type { ConductorEventEmitter } from '../ui/events.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import type { HarnessConfig, StepName } from '../types/index.js';
 
 export interface StepInFlightTickerOptions {

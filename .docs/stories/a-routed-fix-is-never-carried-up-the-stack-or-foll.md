@@ -112,7 +112,7 @@ stop safely at every limit, so that it neither drops work nor rewrites what revi
 ### Acceptance Criteria
 
 #### Happy Path
-- Given an operator committed unstamped work on closed child 2 during round `r1`, when host 1's exit restack is planned, then its origins are children 1 and 2, and `applied` charges one cascade on each.
+- Given an operator round `r1` hosted on child 1 that carries closed child 2 with unstamped work, when host 1's exit restack is planned, then its origins are children 1 and 2, and `applied` charges one cascade on each.
 
 #### Negative Paths
 - Given child 2's post-closure commits carry a `Round:` stamp of a different round, when host 1's exit restack is planned, then it halts needs-human naming child 2 and creates no journal.
@@ -162,6 +162,7 @@ survives a crash, so that every host is repaired exactly once and nothing is ski
 
 #### Happy Path
 - Given a round with hosts 1 and 2 pending in that order and host 1 `restacked`, when the loop continues, then the round's current host becomes child 2 and child 2 is admitted.
+- Given host 1 settled with its entry baseline still on the route record, when child 2 is admitted, then the same write clears host 1's entry baseline, and the advance is not refused.
 - Given a round whose child hosts are all `restacked`, `done` or `rerouted`, whose leaf host is pending, and the queue is empty, when the loop continues, then the leaf host is admitted.
 - Given a round whose every host, including the leaf host, is `restacked`, `done` or `rerouted`, when the last host settles, then the round is marked `closed`.
 - Given a round's leaf host region passes, when region exit runs, then one compare-and-swap marks the leaf host `done` and deletes the marker, and no restack is requested.
@@ -214,7 +215,7 @@ queued for re-validation, so that a lower fix cannot silently break an upper chi
 
 #### Happy Path
 - Given host 1's exit restack moved closed child 2 and invalidated child 2's `test_suite`, when `applied` commits, then the queue's next generation holds one entry for child 2 with its new closure SHA, its position, its invalidated gates and its old and new replay parent.
-- Given a base-refresh restack, or a repair caused by an operator commit on a closed child, when its `applied` transaction commits, then every moved closed child with an invalidated gate is queued in that same transaction.
+- Given a base-refresh restack, or a repair caused by an operator commit on a closed child (carried by an operator round, or with routing off), when its `applied` transaction commits, then every moved closed child with an invalidated gate is queued in that same transaction.
 - Given a restack moved closed child 2 whose verdict files are missing or unreadable, when the queue is written, then child 2 is queued.
 - Given a delta that changes the signature of `parseA` in `src/a.ts`, a file child 2 does not own, when the restack moves child 2, then child 2 is queued because its `test_suite` is invalidated.
 - Given a restack whose replay of child 2 is proven unchanged and which leaves each of child 2's region gate verdicts present and fresh, when the queue is written, then child 2 is not queued.
@@ -257,7 +258,7 @@ only when the check still matches the child, so that no child is marked green on
 #### Negative Paths
 - Given a newer generation replaced child 2's entry while child 2 was being validated, when the PASS acknowledgement is attempted, then the compare-and-swap fails and child 2 stays queued.
 - Given child 2's closure moved during validation, when the PASS acknowledgement is attempted, then it fails, and the entry, the round and the marker stay pending.
-- Given a queued child and no `revalidate` round for it, when region entry is attempted for that child, then it is refused, and no region step is dispatched.
+- Given a queued child and no `revalidate` round for it, when region entry is attempted for that child, then no region step is dispatched before queue admission has created that child's `revalidate` round and repair marker, and a refused admission halts with no region step dispatched.
 - Given the same `revalidate` round is entered again after a crash, when region entry runs, then child 2's region is not restaged a second time.
 - Given a crash after child 2's `revalidate` record is created in phase `prepared` and before its marker is set, when the feature resumes, then that record is aborted, nothing was mutated, and child 2 stays queued.
 - Given child 2's `revalidate` round dispatches BUILD after a failing gate, when the dispatch runs, then no round receipt is settled and no lap or growth is charged.

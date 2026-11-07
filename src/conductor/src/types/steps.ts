@@ -10,7 +10,6 @@ export type StepName =
   | 'plan'
   | 'coherence_check'
   | 'plan_review'
-  | 'coverage_binding'
   | 'architecture_diagram'
   | 'architecture_review'
   | 'worktree'

@@ -5,11 +5,12 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { parseChildId } from '../../src/engine/child-context.js';
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
 import { pushedTipRef } from '../../src/engine/push-lease.js';
 import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
 import type { GithubMutationExecutionContext, GhRunner } from '../../src/engine/tracker-client.js';
 import type { ConductState } from '../../src/types/index.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const c1 = parseChildId(1)!;
 const c3 = parseChildId(3)!;
@@ -19,7 +20,7 @@ const leafUrl = 'https://github.com/acme/demo/pull/500';
 let root: string;
 let origin: string;
 
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -37,7 +38,7 @@ async function ref(name: string): Promise<string> {
 async function sealStack(): Promise<void> {
   const positions = await git(['hash-object', '-w', '--stdin'], { input: JSON.stringify([c1, c3, c5]) });
   await git(['update-ref', 'refs/conductor/demo/positions', positions.stdout.trim()]);
-  await writeCoverageBindingEnvelope(root, {
+  await writeSliceTopologyFixture(root, {
     version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
     sliceMembership: { taskSlices: { one: c1, three: c3, leaf: c5 }, titles: ['One', 'Three', 'Leaf'] },
     storyOwnership: { S1: c1, S3: c3, S5: c5 },
@@ -66,6 +67,14 @@ function listedPullRequests(listed: readonly number[]): GhRunner {
 
 const operations = { run: async () => ({}) };
 
+function recordingEvents(records: unknown[]): ConductorEventEmitter {
+  const events = new ConductorEventEmitter();
+  events.on('stack_tip_diverged', (event) => { records.push(event); });
+  events.on('stack_member_redrafted', (event) => { records.push(event); });
+  events.on('stack_member_published', (event) => { records.push(event); });
+  return events;
+}
+
 async function establishThroughProductionCoordinator(gh: GhRunner, events: unknown[]): Promise<unknown> {
   vi.resetModules();
   vi.doMock('../../src/engine/finish-publication.js', async (importOriginal) => {
@@ -88,7 +97,7 @@ async function establishThroughProductionCoordinator(gh: GhRunner, events: unkno
       gh,
       operations,
       remoteMutation: {} as GithubMutationExecutionContext,
-      events: { emit: async (event) => { events.push(event); } },
+      events: recordingEvents(events),
     }).advance({
       state: { feature_desc: 'demo', pr_url: leafUrl } as ConductState,
       mode: 'auto', daemon: true, dispatchJudgment: async () => ({ success: true }), emit: async () => {},
@@ -164,7 +173,7 @@ async function establishThroughTargetBoundProductionCoordinator(
           }],
         };
       },
-      events: { emit: async (event) => { events.push(event); } },
+      events: recordingEvents(events),
     }).advance({
       state: { feature_desc: 'demo', worktree_branch: 'feat/daemon-demo', pr_url: leafUrl } as ConductState,
       mode: 'auto', daemon: true, dispatchJudgment: async () => ({ success: true }), emit: async () => {},
@@ -207,6 +216,8 @@ beforeEach(async () => {
     '## Story S1: One',
     '',
     '## Story S3: Three',
+    '',
+    '## Story S5: Leaf',
   ].join('\n'));
 });
 

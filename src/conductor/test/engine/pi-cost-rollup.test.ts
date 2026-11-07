@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:11, task:12
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -34,6 +36,7 @@ const RATE_CARD: RateCard = {
 
 const piEnvironment: PiEnvironment = {
   stat: async () => ({ isFile: () => true, isDirectory: () => false }),
+  access: async () => {},
   env: {},
   homeDir: () => '/home/test-agent',
   cwd: () => '/workspace',
@@ -72,7 +75,7 @@ describe('Pi cost rollup integration', () => {
     model?: string;
     rateCard?: RateCard;
   } = {}): Promise<ProviderAttemptEvent> {
-    const pi = new PiProvider(
+    const pi = new PiProvider(dispatchGitGuard,
       'pi',
       async () => ({ stdout, stderr: '', exitCode: options.exitCode ?? 0 }),
       piEnvironment,

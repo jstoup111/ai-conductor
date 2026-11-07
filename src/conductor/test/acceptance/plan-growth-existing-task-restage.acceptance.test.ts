@@ -697,6 +697,7 @@ describe('existing-task refusals carry the finding onto the spine (S1.4, S7.2)',
               rationale: 'Bound to a task the plan does not declare.',
               tasks: [],
               boundTaskIds: ['99'],
+              reconciliation: { relation: 'new', reason: 'The finding has no prior case.' },
             }],
           }, request.projection);
           if (rejected.kind !== 'rejected') throw new Error('expected owner-binding rejection');

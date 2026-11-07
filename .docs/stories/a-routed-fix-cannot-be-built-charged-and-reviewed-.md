@@ -54,7 +54,7 @@ child 1's gates re-run, so that child 1's PR is green with its own fix.
 - Given round `r1` region entry, when it completes, then host 1 is `repairing` in the route record, and that transition happened only after the append commit exists.
 - Given round `r1` region entry, when it begins, then host 1's base is pinned in the route record as the `closed/c1` SHA before any branch switch or commit.
 - Given a round whose only host is the leaf, when region entry runs, then the leaf's frozen blocks are written on `feat/daemon-demo` and the pinned base is the leaf tip read before the append commit.
-- Given an audit round whose every routed task for host 1, frozen rem ids and restaged bound ids alike, is already evidence-complete on child 1's tree after region entry, when the no-op guard runs, then the feature halts with outcome `derived-already-complete` on its halt record and no build is dispatched.
+- Given an audit round whose every routed task for host 1, frozen rem ids and restaged bound ids alike, is already evidence-complete on child 1's tree after region entry, and no other host in the round is `pending`, `restacked` or `rerouted`, when the no-op guard runs, then the feature halts with outcome `derived-already-complete` on its halt record and no build is dispatched.
 - Given round `r1` admitted and region entry run, when the events are read, then exactly one `kickback` event and one leaf rewind exist for the round, and region entry emitted neither.
 
 #### Negative Paths
@@ -132,6 +132,7 @@ worktree recreation or an older child never blocks a repair on missing RED evide
 - Given a child with no owned criteria and so no RED marker, when it closes, then no `red/c<k>` ref is written, and its later routed pass runs verify-green without a refusal.
 - Given host 1's routed pass with a present RED marker whose digest differs from `red/c1`, when `acceptance_specs` runs, then the step fails naming the digest mismatch.
 - Given an N=1 feature, when `acceptance_specs` runs, then today's RED lifecycle applies unchanged.
+- Given a routed pass whose host is the leaf, which never closes and so has no `red/c<leaf>` ref, when `acceptance_specs` runs, then verify-green is not invoked, the ordinary `acceptance_specs` step runs for the leaf, and its completion is judged by the ordinary predicate rather than by a verify-green record.
 
 ### Done When
 - [ ] Tests assert `closeChild` writes `red/c<k>` only with routing on and a RED marker, accepts a same-digest blob on resume, and refuses a different one.
@@ -152,6 +153,7 @@ grants extra laps or growth, and a crash never double-charges or refunds.
 - Given that settled round, when a later BUILD dispatch for the round's current host occurs, then only an acknowledgement is recorded, and the ledger's laps and growth are unchanged.
 - Given one round admitting a `prd_audit` FIXABLE and an as-built REMEDIABLE, when host 1 dispatches, then one lap is charged to each gate and their growth once, in one settlement.
 - Given a stacked feature's first ledger record, when growth is read, then `authored` is stored as 12 from the sealed plan, and it stays 12 after rem blocks exist only on child 1's plan.
+- Given a stacked feature with an audit round sealed at 12 authored tasks and a revalidate round, when growth is read, then `authored` is 12: a revalidate round seals no denominator, and one recorded as `0` before this rule is ignored rather than refused.
 - Given rem blocks pending only on child 1's plan, when growth is read before settlement, then the pending-task exclusion takes those ids from the frozen allocation.
 - Given a worktree recreated after settlement, when the feature resumes, then settled laps, growth and taskless counters are rebuilt from the round receipts, and the ledger has no `pendingRepair` field.
 - Given a worktree recreated while an as-built round is open, when as-built runs again, then its prior-findings input includes the pending findings read from the route record.

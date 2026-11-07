@@ -1,4 +1,4 @@
-// Covers: task:1, task:3, task:35, task:rem-prd-audit-rem-v3-n1-guard-gate, task:rem-as-built-rem-as-built-rem-v4-n1-push-argv, task:rem-as-built-rem-asbuilt-d1-n1-golden-probe-list, task:rem-as-built-rem-asbuilt-d1-durable-ref-detection, task:rem-prd-audit-rem-s1-4-n1-golden-leaf-push, task:rem-prd-audit-rem-s1-6-resume-golden-pushed-receipt
+// Covers: task:1, task:3, task:17, task:35, task:rem-prd-audit-rem-v3-n1-guard-gate, task:rem-as-built-rem-as-built-rem-v4-n1-push-argv, task:rem-as-built-rem-asbuilt-d1-n1-golden-probe-list, task:rem-as-built-rem-asbuilt-d1-durable-ref-detection, task:rem-prd-audit-rem-s1-4-n1-golden-leaf-push, task:rem-prd-audit-rem-s1-6-resume-golden-pushed-receipt, task:rem-operator-17-r3, task:rem-prd-audit-refusal-2da9f283-c8ce-40b8-b6e8-4a9105947451-2
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -27,6 +27,16 @@ import { executeRemoteGit } from '../../src/engine/remote-git-operations.js';
 import { BASE_SHA, CELLS, expectGolden, normalizeGolden, partitionConductorRefProbes, RECORD, withGitArgvShim } from './n1-golden-shared.js';
 
 const execFile = promisify(execFileCb);
+const N1_GOLDEN_SUITE_CHILD = 'AI_CONDUCTOR_N1_GOLDEN_SUITE_CHILD';
+const PRE_CHANGE_N1_GOLDEN_SHA = 'd4870bd95b9bfebe09def9a03fa511e370f6af17';
+const GIT_PROBE_GOLDEN_PATH = 'src/conductor/test/fixtures/n1-golden/finish/git-probe-argv.golden';
+const STALE_RUN_ROOT_TELEMETRY = String.raw`tmpdir-leak-guard: swept \d+ stale run root\(s\) left behind by a previous interrupted run: [^\n]+`;
+const IGNORED_CONCURRENT_TMPDIR_TELEMETRY = String.raw`tmpdir-leak-guard: ignored \d+ new [^\n]+ entry/entries attributed to concurrent tooling \(not the test suite\): [^\n]+`;
+const EXPECTED_CHILD_GUARD_STDERR = new RegExp(String.raw`^(?:|${STALE_RUN_ROOT_TELEMETRY}\n?|${IGNORED_CONCURRENT_TMPDIR_TELEMETRY}\n?|${STALE_RUN_ROOT_TELEMETRY}\n${IGNORED_CONCURRENT_TMPDIR_TELEMETRY}\n?)$`);
+const DURABLE_CHILD_STATE_PROBE_PAIR = [
+  ['for-each-ref', '--format=%(refname)', 'refs/heads/feat'],
+  ['for-each-ref', '--format=%(refname)', 'refs/conductor/n1-golden/'],
+] as const;
 
 describe('N=1 golden renderings', () => {
   const roots: string[] = [];
@@ -51,6 +61,74 @@ describe('N=1 golden renderings', () => {
 
   afterEach(async () => {
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+  });
+
+  // Covers: task:17, task:rem-operator-17-r3
+  // This is a coordinator test: it launches the three complete fixture files
+  // in a child Vitest process.  The child suite itself completes in ~15s; the
+  // extra allowance covers the parent worker and process startup, while still
+  // bounding a wedged child run.
+  it('runs the complete N=1 golden suite against regenerated goldens', async () => {
+    // The child includes this file, but skips this coordinator, so this test
+    // directly proves all three Task 17 members pass without recursing.
+    if (RECORD || process.env[N1_GOLDEN_SUITE_CHILD] === '1') return;
+    // A concurrent test may mutate TMPDIR after global setup. Preserve the
+    // run-root marker rather than forwarding that mutable value, otherwise
+    // this nested Vitest run can create shell fixtures in the real /tmp.
+    const runTmpRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+    // The nested runner needs a short, private parent.  Do not use the real
+    // system tmpdir here: its global leak guard would then observe unrelated
+    // outer-suite workers that happen to create entries while this child runs.
+    // Keeping the base below this run's root also avoids the package-local
+    // socket-path limit that made Vitest fall back to `/tmp/tmp.*`.
+    const childTmpBase = await mkdtemp(join(runTmpRoot ?? tmpdir(), 'n1-golden-child-suite-'));
+    roots.push(childTmpBase);
+    const result = await execFile(process.execPath, [
+      'scripts/run-vitest.mjs',
+      'run',
+      '--reporter=dot',
+      '--silent=true',
+      'test/engine/n1-golden-state.test.ts',
+      'test/engine/n1-golden-renderings.test.ts',
+      'test/engine/n1-golden-routing-guard.test.ts',
+    ], {
+      cwd: join(import.meta.dirname, '..', '..'),
+      env: {
+        ...process.env,
+        [N1_GOLDEN_SUITE_CHILD]: '1',
+        AI_CONDUCTOR_TEST_TMP_BASE: childTmpBase,
+        // `run-vitest.mjs` preserves this marker across its fresh allocation;
+        // make the child's real-tmpdir guard observe only its private base.
+        AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR: childTmpBase,
+        TMPDIR: childTmpBase,
+        TMP: childTmpBase,
+        TEMP: childTmpBase,
+      },
+    });
+    // The child may report the pre-run stale-root sweep and its teardown's
+    // concurrent-tooling notice. Any other child stderr remains a failure.
+    expect(result.stderr).toMatch(EXPECTED_CHILD_GUARD_STDERR);
+  }, 30_000);
+
+  // Covers: task:17, task:rem-operator-17-r3
+  it('allows the FINISH probe golden to differ from its pre-change version only by removed coverage_binding probes and one durable-child-state probe pair', async () => {
+    if (RECORD) return;
+    const repositoryRoot = join(import.meta.dirname, '..', '..', '..', '..');
+    const [preChange, current] = await Promise.all([
+      execFile('git', ['show', `${PRE_CHANGE_N1_GOLDEN_SHA}:${GIT_PROBE_GOLDEN_PATH}`], { cwd: repositoryRoot }),
+      readFile(join(repositoryRoot, GIT_PROBE_GOLDEN_PATH), 'utf8'),
+    ]);
+    const parseProbeGolden = (raw: string) => JSON.parse(raw.replace(/^<!-- Recorded from [a-f0-9]+ -->\n/, '')) as string[][];
+    const coverageBindingProbePairs = Array.from({ length: 8 }, () => DURABLE_CHILD_STATE_PROBE_PAIR).flat();
+
+    // The pre-change fixture contains eight repeated probes from the retired
+    // coverage_binding lifecycle step, followed by the one D3 probe that must
+    // remain for every cardinality when durable child state is checked.
+    expect(parseProbeGolden(preChange.stdout)).toEqual([
+      ...coverageBindingProbePairs,
+      ...DURABLE_CHILD_STATE_PROBE_PAIR,
+    ]);
+    expect(parseProbeGolden(current)).toEqual(DURABLE_CHILD_STATE_PROBE_PAIR);
   });
 
   it.each(CELLS)('matches golden for $name', async (cell) => {
@@ -89,7 +167,6 @@ describe('N=1 golden renderings', () => {
       conflict_check: 'done',
       plan: 'done',
       coherence_check: 'done',
-      coverage_binding: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       prd: 'done',
@@ -404,8 +481,11 @@ describe('N=1 golden renderings', () => {
         mode: 'auto',
         daemon: true,
         dispatchAuthoring: async () => {
-          title = 'feat: freeze N=1 FINISH';
-          body = '## Why\n\nFreeze the single-leaf FINISH baseline.\n\n## What Changed\n\nCommitted N=1 goldens.\n\n## Testing\n\nai-conductor scoped-run src/conductor/test/engine/n1-golden-renderings.test.ts\n';
+          await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({
+            version: 1,
+            title: 'feat: freeze N=1 FINISH',
+            body: '## Why\n\nFreeze the single-leaf FINISH baseline.\n\n## What Changed\n\nCommitted N=1 goldens.\n\n## Testing\n\nai-conductor scoped-run src/conductor/test/engine/n1-golden-renderings.test.ts\n',
+          }));
           return { success: true };
         },
         dispatchJudgment: async () => ({ success: true, output: '{"kind":"accepted"}' }),
@@ -415,7 +495,7 @@ describe('N=1 golden renderings', () => {
       const gitArgv = await withGitArgvShim(root, async () => {
         let coordinator = makeCoordinator();
         const first = await advance(coordinator);
-        expect(first).toEqual({ kind: 'publication_progress', transition: 'author_pr_prose' });
+        expect(first).toEqual({ kind: 'advanced', transition: 'author_pr_prose' });
         if (resumeAfterAuthoring) coordinator = makeCoordinator();
         const outcomes: unknown[] = [];
         for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -432,12 +512,16 @@ describe('N=1 golden renderings', () => {
     const normal = await run(false);
     await expectFinishGolden('leaf-body', normal.body);
     await expectFinishGolden('conduct-state', JSON.stringify(JSON.parse(await readFile(statePath, 'utf8')), null, 2));
-    await expectFinishGolden('gh-argv', JSON.stringify(normal.ghArgv, null, 2));
+    await expectFinishGolden('gh-argv', `${JSON.stringify(normal.ghArgv, null, 2)}\n`);
     // ADR 2026-10-17 D1 (amended 2026-10-20): local read-only conductor-ref
     // probes are recorded separately; remote and mutating argv stay pinned.
     const normalGit = partitionConductorRefProbes(normal.gitArgv, 'n1-golden');
     await expectFinishGolden('git-argv', JSON.stringify(normalGit.parity, null, 2));
     await expectFinishGolden('git-probe-argv', `${JSON.stringify(normalGit.probes, null, 2)}\n`);
+    expect(normalGit.probes).toEqual([
+      ['for-each-ref', '--format=%(refname)', 'refs/heads/feat'],
+      ['for-each-ref', '--format=%(refname)', 'refs/conductor/n1-golden/'],
+    ]);
     await expectFinishGolden('events', normal.events.map((event) => JSON.stringify(event)).join('\n'));
     await expectFinishGolden('shipped-record', normalizeRecord(normal.record));
     expect(normal.record).toMatch(/^## Cost\n[\s\S]*^## Time\n(?:state|active_ms):/m);

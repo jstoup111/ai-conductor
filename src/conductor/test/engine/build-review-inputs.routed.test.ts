@@ -15,6 +15,7 @@ import { createRouteRecord, readRepairMarker, readRouteRecord, writeRouteRecord,
 import { parseRoundId } from '../../src/engine/routing/route-types.js';
 import { resolveBuildReviewExecutionChild } from '../../src/engine/step-runners.js';
 import type { FullSuiteInspectionResult } from '../../src/engine/full-suite-verifier.js';
+import { writeSliceTopologyFixture } from './slice-topology-fixture.js';
 
 const execFile = promisify(execFileCallback);
 const roots: string[] = [];
@@ -51,6 +52,11 @@ async function createRoutedFixture(): Promise<RoutedFixture> {
   await writeFile(join(root, 'README.md'), 'base\n');
   await git(root, ['add', '.']);
   await git(root, ['commit', '-qm', 'base']);
+  await writeSliceTopologyFixture(root, {
+    slug: 'demo',
+    sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['parent', 'child'] },
+    storyOwnership: { S1: 1, S2: 2 },
+  });
   await git(root, ['branch', 'feat/daemon-demo']);
   await git(root, ['checkout', '-q', '-b', 'feat/c1/demo']);
   await writeFile(join(root, 'child.ts'), 'export const child = true;\n');
@@ -61,16 +67,6 @@ async function createRoutedFixture(): Promise<RoutedFixture> {
   await writeFile(join(root, 'repair.ts'), 'export const repair = true;\n');
   await git(root, ['add', 'repair.ts']);
   await git(root, ['commit', '-qm', 'routed repair']);
-  await mkdir(join(root, '.pipeline'), { recursive: true });
-  await writeFile(join(root, '.pipeline', 'coverage-binding.json'), JSON.stringify({
-    version: 1,
-    slug: 'demo',
-    runId: 'run-1',
-    status: 'done',
-    entries: [],
-    sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['parent', 'child'] },
-  }));
-
   const created = await createRouteRecord(root, 'demo', {
     roundId,
     sealedAuthored: 1,

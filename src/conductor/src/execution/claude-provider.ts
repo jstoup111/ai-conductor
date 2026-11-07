@@ -9,6 +9,7 @@ import type {
   SelfHostAuthContext,
   SelfHostAuthPreparation,
   TokenUsage,
+  DispatchGitGuard,
 } from './llm-provider.js';
 import {
   epochAnchoredMonotonicClock,
@@ -38,12 +39,11 @@ import {
   scaleRateLimitDurationSeconds,
 } from './rate-limit-duration.js';
 import { validateSpawnPermit } from './spawn-permit.js';
-import { providerDescriptor } from './provider-catalog.js';
 import { claudeLaunchObservedCommandReach, claudeReadOnlyReviewPolicyArgs } from './claude-read-only-review-policy.js';
-import { ensureGitGuardForDispatch } from './dispatch-git-guard.js';
+import { CLAUDE_DISPLAY_NAME } from './provider-catalog-identities.js';
 
 function claudeDisplayName(): string {
-  return providerDescriptor('claude').displayName;
+  return CLAUDE_DISPLAY_NAME;
 }
 
 function abortedInvocationResult(): InvokeResult {
@@ -81,8 +81,11 @@ const RATE_LIMIT_RE = /rate limit|429|overloaded/i;
 // "You've hit your session limit and not logged in" classifies as session-limit,
 // not auth failure. Avoids false positives by requiring context beyond bare
 // "session limit" in prose.
-const SESSION_LIMIT_RE = /you've hit your \S+ limit|session limit reached|usage limit reached|\S+ limit\s+·\s+resets/i;
-const PERIOD_LIMIT_RE = /you've hit your (?!session\b|usage\b)\S+ limit/i;
+// Anchored (#3545): the notice is the CLI's own message, so it must open the
+// trimmed terminal result text or a stderr line (see `isCliNotice`). A model
+// answer that quotes the wording mid-prose never classifies.
+const SESSION_LIMIT_RE = /^(?:you've hit your \S+ limit|session limit reached|usage limit reached|\S+ limit\s+·\s+resets)/i;
+const PERIOD_LIMIT_RE = /^you've hit your (?!session\b|usage\b)\S+ limit/i;
 // Signatures indicating authentication failure — the daemon's OAuth token is
 // missing, stale, or invalid. Distinct from model unavailability (entitled
 // but token expired) or rate limiting (entitled but quota hit). Drives the
@@ -125,8 +128,19 @@ export const MODEL_UNAVAILABLE_RE =
 // Treated as model-unavailable so ModelAvailability ladders to the next model
 // with credits (a different model on the same account is unaffected), instead
 // of the step silently "completing" with no artifact and halting.
+// Anchored like SESSION_LIMIT_RE (#3545); the captured notice opens with "You're".
 export const OUT_OF_CREDITS_RE =
-  /out of usage credits|out of credits|run \/usage-credits|(?:^|\n)you've hit your monthly spend limit\. \/model to switch models\.(?:\n|$)/i;
+  /^(?:(?:you're )?out of (?:usage )?credits|run \/usage-credits|you've hit your monthly spend limit\. \/model to switch models\.(?:\n|$))/i;
+
+/**
+ * True when `re` (start-anchored, no multiline flag) matches a CLI-owned
+ * notice: the start of the trimmed terminal result text, or the start of a
+ * stderr line. Model-authored prose that merely quotes a notice never matches.
+ */
+function isCliNotice(re: RegExp, resultText: string, stderr = ''): boolean {
+  if (re.test(resultText.trim())) return true;
+  return stderr.split(/\r?\n/).some((line) => re.test(line.trimStart()));
+}
 
 /**
  * Result of parsing a rate-limit message.
@@ -234,7 +248,9 @@ export function parseRateLimitWaitSeconds(
 ): ParseRateLimitResult {
   const now = options?.now || new Date();
   try {
-    const deadlineCapSeconds = PERIOD_LIMIT_RE.test(output) ? 86400 : 3600;
+    const deadlineCapSeconds = output.split(/\r?\n/).some((line) => PERIOD_LIMIT_RE.test(line.trimStart()))
+      ? 86400
+      : 3600;
 
     // Try duration-based patterns first: "retry after N seconds", "retry in N seconds", etc.
     const durationMatch = output.match(new RegExp(
@@ -435,12 +451,12 @@ function parseResetHour(hour: number, ampm?: string): number {
 
 /** Test helper: true if `output` matches the out-of-credits signature. */
 export function detectsOutOfCredits(output: string): boolean {
-  return OUT_OF_CREDITS_RE.test(output);
+  return isCliNotice(OUT_OF_CREDITS_RE, output);
 }
 
 /** Test helper: true if `output` matches the session-limit signature. */
 export function detectsSessionLimit(output: string): boolean {
-  return SESSION_LIMIT_RE.test(output);
+  return isCliNotice(SESSION_LIMIT_RE, output);
 }
 
 /** Test helper: true if `output` matches the auth-failure signature. */
@@ -569,9 +585,11 @@ export class ClaudeProvider implements LLMProvider {
   readonly supportsSessionResume = false;
   readonly lifecycleCapability = { synchronousSpawnPermit: true } as const;
   readonly nativeSchemaCapability = { nativeOutputSchema: true } as const;
+  readonly systemPromptCapability = { deliversSystemPrompt: true } as const;
   private readonly oauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
 
   constructor(
+    private readonly dispatchGitGuard: DispatchGitGuard,
     private readonly intervalClock: IntervalClock = epochAnchoredMonotonicClock,
     private readonly subprocessFactory: ClaudeSubprocessFactory = execa,
     private readonly executable = 'claude',
@@ -695,10 +713,17 @@ export class ClaudeProvider implements LLMProvider {
     // enforceFreshSessionOptions for the 2026-08-14 megatoken incident this
     // deterministically prevents.
     options = enforceFreshSessionOptions(options, 'claude');
-    if (options.abortSignal?.aborted) return abortedInvocationResult();
+    if (options.abortSignal?.aborted) {
+      return { ...abortedInvocationResult(), executionDisposition: 'not-started' };
+    }
     let guardDir: string | null;
-    try { guardDir = options.reviewDispatch ? null : await ensureGitGuardForDispatch(options.cwd); } catch (error) {
-      return { success: false, output: error instanceof Error ? error.message : String(error), exitCode: 1 };
+    try { guardDir = options.reviewDispatch ? null : await this.dispatchGitGuard(options.cwd); } catch (error) {
+      return {
+        success: false,
+        output: error instanceof Error ? error.message : String(error),
+        exitCode: 1,
+        executionDisposition: 'not-started',
+      };
     }
     // Claude's native JSON-schema mode is a non-interactive print-mode
     // capability. A REPL cannot return its terminal result envelope, so never
@@ -709,23 +734,24 @@ export class ClaudeProvider implements LLMProvider {
         output: `${claudeDisplayName()} native output schema is unsupported for interactive ${claudeDisplayName()} invocation. Recovery action: dispatch the schema request in non-interactive print mode.`,
         exitCode: 1,
         nativeSchemaUnsupported: true,
+        executionDisposition: 'not-started',
       };
     }
     const hasMachineEnvelope = !options.interactive;
-    const systemPromptFile = options.systemPrompt ? await writeSystemPromptFile(options.systemPrompt) : undefined;
-    const args = this.buildArgs(options, systemPromptFile?.path);
-
-    const promptOnStdin =
-      typeof options.prompt === 'string' && options.prompt.length > 0 && !options.interactive;
-
-    if (options.prompt && options.interactive) {
-      // REPL mode keeps the prompt positional and stdin attached to the terminal.
-      args.push(options.prompt);
-    }
-
-    // Non-REPL print mode receives its prompt through stdin to avoid the argv
-    // size limit; the REPL retains inherited stdin and positional prompt behavior.
+    let systemPromptFile: Awaited<ReturnType<typeof writeSystemPromptFile>> | undefined;
     try {
+      systemPromptFile = options.systemPrompt ? await writeSystemPromptFile(options.systemPrompt) : undefined;
+      const args = this.buildArgs(options, systemPromptFile?.path);
+      const promptOnStdin =
+        typeof options.prompt === 'string' && options.prompt.length > 0 && !options.interactive;
+
+      if (options.prompt && options.interactive) {
+        // REPL mode keeps the prompt positional and stdin attached to the terminal.
+        args.push(options.prompt);
+      }
+
+      // Non-REPL print mode receives its prompt through stdin to avoid the argv
+      // size limit; the REPL retains inherited stdin and positional prompt behavior.
       const observed = await observeInterval(this.intervalClock, () =>
         this.runClaude(args, {
           ...(promptOnStdin
@@ -849,8 +875,8 @@ export class ClaudeProvider implements LLMProvider {
     // 4. Rate limit (non-session): only on exit !== 0
     // 5. Auth failure: only on exit !== 0
 
-    const sessionLimit = SESSION_LIMIT_RE.test(output);
-    const outOfCredits = OUT_OF_CREDITS_RE.test(output);
+    const sessionLimit = isCliNotice(SESSION_LIMIT_RE, parsed.output, stderr);
+    const outOfCredits = isCliNotice(OUT_OF_CREDITS_RE, parsed.output, stderr);
     const modelUnavailable =
       outOfCredits || (exitCode !== 0 && MODEL_UNAVAILABLE_RE.test(output));
     const rateLimited = sessionLimit || (exitCode !== 0 && RATE_LIMIT_RE.test(output));
@@ -1011,6 +1037,8 @@ export class ClaudeProvider implements LLMProvider {
     const environment = withDaemonSessionMarker({
       ...process.env,
       ...options.selfHost?.env,
+      ...options.env,
+      ...options.environmentOverlay,
       ...(options.effort ? { CLAUDE_CODE_EFFORT_LEVEL: options.effort } : {}),
       ...FOREGROUND_ONLY_ENV,
     });
@@ -1023,13 +1051,38 @@ export class ClaudeProvider implements LLMProvider {
 /** Stands in for the per-invocation file when argv is only inspected, never launched. */
 const SYSTEM_PROMPT_FILE_PLACEHOLDER = '<system-prompt-file>';
 
+// A test can temporarily override TMPDIR while exercising a subprocess path.
+// Preserve the startup marker so a concurrent or nested helper cannot redirect
+// a prompt file into the operator's real temp directory after clearing it.
+const testTmpRootAtModuleLoad = process.env.AI_CONDUCTOR_TEST_TMP_ROOT
+  ?? process.env.AI_CONDUCTOR_TEST_TMP_SCOPE;
+
+/**
+ * Resolve the private prompt-file parent without allowing a nested Vitest
+ * helper's temporary root override to escape its enclosing run scope.
+ */
+export function resolveSystemPromptTempRoot(
+  environment: NodeJS.ProcessEnv = process.env,
+  fallback: () => string = tmpdir,
+): string {
+  return environment.AI_CONDUCTOR_TEST_TMP_ROOT
+    ?? environment.AI_CONDUCTOR_TEST_TMP_SCOPE
+    ?? testTmpRootAtModuleLoad
+    ?? fallback();
+}
+
 /** Write one invocation's system prompt to a private temp file Claude reads at startup. */
 async function writeSystemPromptFile(systemPrompt: string): Promise<{ readonly path: string; dispose(): Promise<void> }> {
   // Resolve this at invocation time: Vitest installs its run root after some
   // modules have already loaded, and fixtures can temporarily change TMPDIR.
-  const tempRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT ?? tmpdir();
+  const tempRoot = resolveSystemPromptTempRoot();
   const dir = await mkdtemp(join(tempRoot, 'ai-conductor-claude-system-prompt-'));
   const path = join(dir, 'system-prompt.md');
-  await writeFile(path, systemPrompt, { encoding: 'utf8', mode: 0o600 });
+  try {
+    await writeFile(path, systemPrompt, { encoding: 'utf8', mode: 0o600 });
+  } catch (error) {
+    await rm(dir, { recursive: true, force: true });
+    throw error;
+  }
   return { path, dispose: () => rm(dir, { recursive: true, force: true }) };
 }

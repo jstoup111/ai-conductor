@@ -97,6 +97,7 @@ operator approval follow §3b instead of the DECIDE list below.
 From `worktreePath`, run the genuine skills in canonical conduct order, honoring each skill's gates
 and writing the complete build-ready `.docs/` set only inside the worktree:
 
+As each DECIDE step starts, run `ai-conductor compose phase --worktree <worktreePath> --phase <step>`.
 1. `/explore` → confirm product/technical track at `.docs/track/<stem>.md`.
 2. Assess S/M/L and record `Tier: <S|M|L>` plus rationale in `.docs/complexity/<plan-stem>.md`.
    The stem **MUST** match the `.docs/plans/<stem>.md` filename so the daemon resolves it.
@@ -106,7 +107,9 @@ and writing the complete build-ready `.docs/` set only inside the worktree:
    every ADR is **APPROVED** (no `Status: DRAFT`) before landing. Runs **before** stories.
 6. `/stories` with **Status: Accepted**.
 7. `/conflict-check` for Medium/Large only.
-8. `/plan` in `.docs/plans/`.
+8. `/plan` in `.docs/plans/`. Before the plan declares a `## Slices` section, ask the operator to
+   choose stacked or single-PR delivery, and record an acceptance as `Stacked-Delivery: approved`
+   in `.docs/complexity/<plan-stem>.md`. `land` refuses a sliced plan without it.
 9. `/coherence-check` for Medium/Large only in `.docs/coherence/`.
 10. For Medium/Large, run `ai-conductor compose plan-review --project <name> --worktree <worktreePath> [--source-ref <ref>]`; resolve blocking findings, or after the bounded second round use `--accept <finding-id> --reason <reason>` and `--acknowledge --reason <reason>` for post-bound edits.
 
@@ -167,7 +170,10 @@ impact — stop, tell the operator, and either run the full DECIDE in the same w
    `git commit`.
 5. Publish. `land` rejects a hotfix (no plan) and `handoff` refuses one (no `land` provenance
    marker), so push the branch and open the PR from the worktree with `gh pr create --base main`,
-   using `/pr` for the title and body. The body carries `Closes <owner/repo#N>` for an intake idea
+   using `/pr` for the title and body. When the user config (`~/.ai-conductor/config.yml`) sets
+   `github_bot.token_file`, open the PR as the bot, as `handoff` does:
+   `GH_TOKEN="$(cat <token_file>)" gh pr create --base main …`, expanding a leading `~`. If the
+   file is missing or empty, open it under the operator's account and say so in the report. The body carries `Closes <owner/repo#N>` for an intake idea
    (this PR is the implementation), the target repo's release-disposition metadata when it requires
    one, and the eligibility evidence. Never merge and do not nudge the daemon.
 6. For an intake idea, record delivery with

@@ -25,7 +25,7 @@ burn without weakening high-cascade gates.
 
 - **HP-1:** Given either built-in provider and no explicit model or effort
   override, when an affected step is resolved, then it receives the following
-  provider-native policy:
+  provider-native policy, where each Codex model is a floor that a dispatching process may upgrade to a newer listed model of the same tier (codex-steps-resolve-the-newest-catalog-model-per-t Story 1):
 
   | Step | Claude model | Codex model | Effort |
   |---|---|---|---|

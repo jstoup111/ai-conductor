@@ -14,7 +14,7 @@ export function citedRepositoryPaths(text: string): string[] {
   ];
   for (const rawToken of tokens) {
     const path = rawToken
-      .replace(/^[`"']+|[`"'),.;:!?]+$/g, '')
+      .replace(/^[`"'([<]+|[`"'),.;:!?\])>]+$/g, '')
       .replace(/^\.\//, '')
       .replace(CITED_PATH_LINE_SUFFIX, '');
     if (

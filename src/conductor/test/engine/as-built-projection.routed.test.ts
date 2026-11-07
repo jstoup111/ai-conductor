@@ -12,6 +12,7 @@ import { createRouteRecord, readRouteRecord, writeRouteRecord } from '../../src/
 import { routeRecordRefFor } from '../../src/engine/routing/routing-refs.js';
 import { parseRoundId } from '../../src/engine/routing/route-types.js';
 import { parseCommitSha } from '../../src/engine/restack/restack-types.js';
+import { writeSliceTopologyFixture } from './slice-topology-fixture.js';
 
 const roots: string[] = [];
 const child = parseChildId(1)!;
@@ -27,6 +28,11 @@ async function fixture(): Promise<{ readonly root: string; readonly git: ReturnT
   await writeFile(join(root, 'base.txt'), 'base\n');
   await git(['add', 'base.txt']);
   await git(['commit', '-qm', 'base']);
+  await writeSliceTopologyFixture(root, {
+    slug: 'demo',
+    sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['first', 'second'] },
+    storyOwnership: { S1: 1, S2: 2 },
+  });
   await git(['branch', 'feat/c1/demo']);
   await git(['checkout', '-qb', 'feat/daemon-demo']);
 
@@ -35,15 +41,6 @@ async function fixture(): Promise<{ readonly root: string; readonly git: ReturnT
   await mkdir(join(root, '.pipeline'), { recursive: true });
   // conduct-state is deliberately absent: a recreated worktree derives its
   // feature slug from the durable feature branch instead.
-  await writeFile(join(root, '.pipeline', 'coverage-binding.json'), JSON.stringify({
-    version: 1,
-    slug: 'demo',
-    runId: 'run-1',
-    status: 'done',
-    entries: [],
-    sliceMembership: { taskSlices: { '1': 1, '2': 2 }, titles: ['first', 'second'] },
-    storyOwnership: { '1': 1, '2': 2 },
-  }));
   return { root, git };
 }
 

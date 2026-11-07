@@ -18,10 +18,10 @@ rubric can erase a sibling or independently order contradictory rework.
 
 #### Happy Path
 
-- Given two or more enabled rubrics produce valid judged findings for one frozen lap, when the raw join settles, then exactly one authoritative `remediate` judgement (one dispatch, or two when the single mixed-laps D2 expansion round runs) receives every operator-unresolved finding from that lap.
+- Given two or more enabled rubrics produce valid judged findings for one frozen lap, when the raw join settles, then exactly one authoritative `remediate` judgement (one dispatch, plus at most one mixed-laps D2 expansion round and at most one binding correction round) receives every operator-unresolved finding from that lap.
 - Given every raw finding is already covered by a current operator disposition, when the raw join settles, then the effective gate passes without dispatching `remediate`, creating a case, applying an effect, or consuming a kickback.
-- Given an exhausted infrastructure result has exact current operator reduced coverage and content siblings remain unresolved, when the aggregate is evaluated, then the infrastructure branch stays outside autonomous judgement and exactly one authoritative `remediate` judgement (one dispatch, or two when the single mixed-laps D2 expansion round runs) receives the content findings.
-- Given one rubric has an uncovered infrastructure failure while siblings have valid unresolved content findings, when every branch settles, then the current-lap aggregate preserves both kinds, exactly one authoritative `remediate` judgement (one dispatch, or two when the single mixed-laps D2 expansion round runs) receives only the content findings, and a new actionable work order may take the existing one semantic BUILD route while infrastructure remains independently blocking.
+- Given an exhausted infrastructure result has exact current operator reduced coverage and content siblings remain unresolved, when the aggregate is evaluated, then the infrastructure branch stays outside autonomous judgement and exactly one authoritative `remediate` judgement (one dispatch, plus at most one mixed-laps D2 expansion round and at most one binding correction round) receives the content findings.
+- Given one rubric has an uncovered infrastructure failure while siblings have valid unresolved content findings, when every branch settles, then the current-lap aggregate preserves both kinds, exactly one authoritative `remediate` judgement (one dispatch, plus at most one mixed-laps D2 expansion round and at most one binding correction round) receives only the content findings, and a new actionable work order may take the existing one semantic BUILD route while infrastructure remains independently blocking.
 
 #### Negative Paths
 
@@ -193,8 +193,8 @@ semantic non-progress stops instead of cycling.
 
 #### Negative Paths
 
-- Given BUILD already attempted an action case and a later complete lap binds a current finding to that unresolved case with any disposition other than an admitted `refute` row, when routing is derived, then no new or free BUILD route occurs and the gate halts `needs-human` with both current and prior evidence even if the tree moved.
-- Given an action case not resolved by refutation was marked resolved, holds no operator acceptance and no operator resolution, and the judgement binds a reappearing finding to that case by `existingCaseId` with disposition `act`, when reconciliation runs, then the gate halts as a regression of the prior case rather than resetting its history or consuming another kickback.
+- Given BUILD already attempted an action case and a later complete lap binds a current finding to that unresolved case with any disposition other than an admitted `refute` row, when routing is derived, then no new or free BUILD route occurs and the gate halts `needs-human` with both current and prior evidence even if the tree moved, and the halt names its recovery: `ai-conductor build-review resolve-case --feature <slug> [--child <k>] --case <case> --rationale "<why>"`.
+- Given an action case not resolved by refutation was marked resolved, holds no operator acceptance and no operator resolution, and the judgement binds a reappearing finding to that case by `existingCaseId` with disposition `act` while the case's action effect is not `applied` or the row declares a `reRaise` of kind `repeat`, when reconciliation runs, then the gate halts as a regression of the prior case rather than resetting its history or consuming another kickback, and the halt names its recovery: on a flat feature, `ai-conductor build-review accept --feature <slug> --lap <lap> --finding <id> --rationale "<why>"` for each re-raised finding, or a fix; on a stacked child, a fix on that child, because `accept` has no `--child`.
 
 ### Done When
 

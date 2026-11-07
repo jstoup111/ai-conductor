@@ -16,6 +16,7 @@
 
 import type { GitRunner } from '../rebase.js';
 import { normalizeOwnerId } from './identity.js';
+import { resolveFeatureArtifact, type ManifestSource } from '../feature-manifest-source.js';
 
 /**
  * The result of reading a spec's committed owner stamp. `present: true` carries
@@ -36,8 +37,25 @@ export async function readSpecOwnerStamp(
   baseBranch: string,
   slug: string,
 ): Promise<OwnerStamp> {
-  const { exitCode, stdout } = await git(['show', `${baseBranch}:.docs/intake/${slug}.md`]);
-  if (exitCode !== 0) return { present: false };
+  const source: ManifestSource = {
+    async readFile(path) {
+      const result = await git(['show', `${baseBranch}:${path}`]);
+      return result.exitCode === 0 ? result.stdout : null;
+    },
+    async exists(path) {
+      return (await git(['show', `${baseBranch}:${path}`])).exitCode === 0;
+    },
+  };
+  const intake = await resolveFeatureArtifact(
+    source,
+    slug,
+    'intake',
+    async () => [`.docs/intake/${slug}.md`],
+  );
+  const path = intake.paths[0];
+  if (path === undefined || (intake.origin === 'manifest' && intake.missing.includes(path))) return { present: false };
+  const stdout = await source.readFile(path);
+  if (stdout === null) return { present: false };
 
   for (const line of stdout.split('\n')) {
     const m = /^\s*Owner:\s*(.*)$/.exec(line);

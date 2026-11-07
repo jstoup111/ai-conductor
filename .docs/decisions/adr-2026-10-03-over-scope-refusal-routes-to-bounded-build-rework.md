@@ -92,6 +92,12 @@ the `/remediate` planner, appends `rem-prd-audit-*` plan tasks through the singl
    refused key. Once the audit stops flagging the criterion, the refusal is moot as before; this
    route never deletes or rewrites the decision record.
 
+   > **Amended 2026-10-25 by #2413:** The `gates.prd_audit` lap allowance is now tier-derived
+   > (Small 2, Medium 3, Large 4; no recorded tier → Medium), per the #2413 amendment to
+   > adr-2026-08-22-prd-audit-stories-authority-and-bounded-kickback decision 5. A refusal still
+   > flagged once that allowance is spent halts as described; it no longer halts after a single lap
+   > by default.
+
 6. **Parity across SHIP shapes.** The serial SHIP tail and the validation-group join consume the
    same route result (`CurrentPrdAuditRoute`). A new variant carries the refusal evidence, so the
    two shapes cannot diverge. This applies wherever `prd_audit` remediation already applies;

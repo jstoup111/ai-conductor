@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:10
 import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -110,7 +112,7 @@ describe('architecture_review_as_built native-schema dispatch', () => {
       stdout: JSON.stringify({ type: 'result', result: 'review complete', structured_output: JSON.stringify(approvedVerdict()) }),
       stderr: '', exitCode: 0,
     }));
-    const adapter = new ClaudeProvider(undefined, subprocess as never);
+    const adapter = new ClaudeProvider(dispatchGitGuard, undefined, subprocess as never);
     const invoke = vi.fn(adapter.invoke.bind(adapter));
     const provider: LLMProvider = { ...adapter, invoke };
 
@@ -154,7 +156,7 @@ describe('architecture_review_as_built native-schema dispatch', () => {
         stderr: '', exitCode: 0,
       };
     });
-    const adapter = new CodexProvider(
+    const adapter = new CodexProvider(dispatchGitGuard,
       async () => ({ stdout: JSON.stringify({ schemaVersion: 1, auth: { selectedMode: 'cached-login', configured: true }, transport: { authenticated: true } }), exitCode: 0 }),
       'codex',
       undefined,

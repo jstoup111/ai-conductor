@@ -1,4 +1,4 @@
-// Covers: task:16, rem-as-built-rem-validation-AB1
+// Covers: task:8, task:16, rem-as-built-rem-validation-AB1
 import { execFile } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
+import { runPlanReview } from '../../src/engine/plan-review-runner.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 
 const execFileAsync = promisify(execFile);
@@ -68,5 +69,50 @@ describe('plan_review step runner', () => {
 
     await expect(runner.run('plan_review', {} as any)).resolves.toEqual({ success: true });
     expect(log).toHaveBeenCalledWith(expect.stringContaining(`plan review independence: ${independence}`));
+  });
+
+  it('passes plan_review.max_prompt_chars to the engine-owned runner', async () => {
+    const root = await fixture(); const calls: any[] = [];
+    await writeFile(join(root, '.docs', 'plans', 'feature.md'), `# Plan\n\n${'x'.repeat(450_000)}`, 'utf8');
+    const runner = new DefaultStepRunner({ invoke: vi.fn() } as any, 'attempt', root, {
+      mode: 'interactive', featureDesc: 'feature', config: { llm_provider: 'codex', plan_review: { max_prompt_chars: 600_000 } } as any,
+      configuredProviders: ['codex'], providerRuntimes: {} as any, sessionStore: {} as any,
+      providerExecutor: (async (input: any) => { calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    });
+    await expect(runner.run('plan_review', {} as any)).resolves.toEqual({ success: true });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('uses the configured budget for its refusal and otherwise keeps the runner default', async () => {
+    const root = await fixture();
+    await writeFile(join(root, '.docs', 'plans', 'feature.md'), `# Plan\n\n${'x'.repeat(600_001)}`, 'utf8');
+    const configured = new DefaultStepRunner({ invoke: vi.fn() } as any, 'attempt', root, {
+      mode: 'interactive', featureDesc: 'feature', config: { llm_provider: 'codex', plan_review: { max_prompt_chars: 600_000 } } as any,
+      configuredProviders: ['codex'], providerRuntimes: {} as any, sessionStore: {} as any,
+      providerExecutor: (async () => ({ success: true, finalStructuredResult: { findings: [] } })) as any,
+    });
+    await expect(configured.run('plan_review', {} as any)).resolves.toEqual(expect.objectContaining({ success: false, output: expect.stringContaining('exceeds 600000') }));
+
+    const defaultBudget = new DefaultStepRunner({ invoke: vi.fn() } as any, 'attempt', root, {
+      mode: 'interactive', featureDesc: 'feature', config: { llm_provider: 'codex' } as any,
+      configuredProviders: ['codex'], providerRuntimes: {} as any, sessionStore: {} as any,
+      providerExecutor: (async () => ({ success: true, finalStructuredResult: { findings: [] } })) as any,
+    });
+    await expect(defaultBudget.run('plan_review', {} as any)).resolves.toEqual(expect.objectContaining({ success: false, output: expect.stringContaining('exceeds 400000') }));
+  });
+
+  it('returns the same size-refusal text that compose prefixes for the same inputs', async () => {
+    const root = await fixture();
+    await writeFile(join(root, '.docs', 'plans', 'feature.md'), `# Plan\n\n${'x'.repeat(450_000)}`, 'utf8');
+    let composeRefusal = '';
+    await runPlanReview({ worktreePath: root, planStem: 'feature', config: { llm_provider: 'codex' } as any, runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async () => ({ success: true, finalStructuredResult: { findings: [] } })) as any,
+    }).catch((error) => { composeRefusal = error.message; });
+    const runner = new DefaultStepRunner({ invoke: vi.fn() } as any, 'attempt', root, {
+      mode: 'interactive', featureDesc: 'feature', config: { llm_provider: 'codex' } as any,
+      configuredProviders: ['codex'], providerRuntimes: {} as any, sessionStore: {} as any,
+      providerExecutor: (async () => ({ success: true, finalStructuredResult: { findings: [] } })) as any,
+    });
+    await expect(runner.run('plan_review', {} as any)).resolves.toEqual({ success: false, output: composeRefusal });
   });
 });

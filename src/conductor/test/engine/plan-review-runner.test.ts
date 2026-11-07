@@ -1,12 +1,12 @@
-// Covers: task:3, task:12, task:17, task:rem-prd-audit-R1-5, task:rem-prd-audit-R1-6, task:rem-prd-audit-R2, task:rem-prd-audit-R2-2, task:rem-prd-audit-R2-3, task:rem-prd-audit-R3, task:rem-as-built-R4, task:rem-as-built-rem-validation-AB2
+// Covers: task:3, task:4, task:5, task:6, task:9, task:12, task:17, task:rem-prd-audit-R1-5, task:rem-prd-audit-R1-6, task:rem-prd-audit-R2, task:rem-prd-audit-R2-2, task:rem-prd-audit-R2-3, task:rem-prd-audit-R3, task:rem-as-built-R4, task:rem-as-built-rem-validation-AB2
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { parsePlanReviewArtifact } from '../../src/engine/plan-review-artifact.js';
-import { runPlanReview } from '../../src/engine/plan-review-runner.js';
+import { computeReviewedDigest, parsePlanReviewArtifact } from '../../src/engine/plan-review-artifact.js';
+import { PLAN_REVIEW_INDEX_INSTRUCTION, runPlanReview } from '../../src/engine/plan-review-runner.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
@@ -68,7 +68,7 @@ describe('runPlanReview', () => {
   });
 
   // Covers: task:rem-as-built-rem-validation-AB4
-  it('loads cited and changed ADR Decision sections while excluding unchanged unrelated ADRs and review files from the prompt', async () => {
+  it('indexes cited unchanged ADR decisions while inlining changed ADR decisions and excluding unrelated review files', async () => {
     const root = await fixture(true);
     const uncitedAdr = join(root, '.docs/decisions/adr-uncited.md');
     await writeFile(uncitedAdr, '## Decision\n\nD1. This changed uncited ADR must reach the prompt.\n', 'utf8');
@@ -85,9 +85,258 @@ describe('runPlanReview', () => {
     });
 
     expect(artifact.reviewedDigest.adrDecisionDigests).toHaveProperty('adr-uncited#D1');
-    expect(calls[0].options.prompt).toContain('D1. The flag is allowed.');
+    expect(calls[0].options.prompt).toContain('- adr-review#D1 | D1. The flag is allowed. | .docs/decisions/adr-review.md');
+    expect(calls[0].options.prompt).not.toContain('ADR DECISIONS (changed in this spec):\n{"adr-review#D1":"D1. The flag is allowed."}');
     expect(calls[0].options.prompt).toContain('This changed uncited ADR must reach the prompt.');
     expect(calls[0].options.prompt).not.toContain('This unrelated review must not reach the prompt.');
+  });
+
+  it('assembles round one from changed decision passages and an index of stable decisions', async () => {
+    const root = await fixture();
+    await mkdir(join(root, '.docs', 'coherence'), { recursive: true });
+    await writeFile(join(root, '.docs', 'coherence', 'idea.md'), '# Coherence\n\nThis body is indexed, not inlined.\n', 'utf8');
+    await writeFile(join(root, '.docs', 'decisions', 'adr-review.md'), `# ADR review
+
+## Decision
+
+D1. Stable first decision.
+
+D2. Stable second decision.
+`, 'utf8');
+    await writeFile(join(root, '.docs', 'decisions', 'adr-b.md'), `# ADR B
+
+## Decision
+
+D1. Stable B decision.
+
+D2. Original B decision.
+`, 'utf8');
+    await writeFile(join(root, '.docs', 'plans', 'idea.md'), `# Plan
+
+This plan follows adr-review and adr-b.
+
+### Task 1: Configure
+**Steps:**
+1. Add \`reviewFlag\`.
+
+**Done when:**
+- [test] the flag works.
+
+**Dependencies:** none
+`, 'utf8');
+    await execFile('git', ['add', '.'], { cwd: root });
+    await execFile('git', ['commit', '-m', 'add decisions'], { cwd: root });
+    await writeFile(join(root, '.docs', 'decisions', 'adr-b.md'), `# ADR B
+
+## Decision
+
+D1. Stable B decision.
+
+D2. Amended B decision.
+`, 'utf8');
+
+    const calls: any[] = [];
+    const artifact = await runPlanReview({
+      worktreePath: root, canonicalPath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any,
+      runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async (request: any) => { calls.push(request); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    });
+
+    const prompt = calls[0].options.prompt;
+    expect(prompt).toContain('### Task 1: Configure');
+    expect(prompt).toContain('## Story 1: Review');
+    expect(prompt).toContain('D2. Amended B decision.');
+    expect(prompt).toContain('- adr-review#D1 | D1. Stable first decision. | .docs/decisions/adr-review.md');
+    expect(prompt).toContain('- adr-review#D2 | D2. Stable second decision. | .docs/decisions/adr-review.md');
+    expect(prompt).toContain('- adr-b#D1 | D1. Stable B decision. | .docs/decisions/adr-b.md');
+    expect(prompt).toContain('- coherence | .docs/coherence/idea.md');
+    expect(prompt).not.toContain('This body is indexed, not inlined.');
+    expect(artifact.reviewedDigest).toEqual(computeReviewedDigest({
+      planText: await readFile(join(root, '.docs', 'plans', 'idea.md'), 'utf8'),
+      storiesText: await readFile(join(root, '.docs', 'stories', 'idea.md'), 'utf8'),
+      adrTexts: {
+        'adr-b': await readFile(join(root, '.docs', 'decisions', 'adr-b.md'), 'utf8'),
+        'adr-review': await readFile(join(root, '.docs', 'decisions', 'adr-review.md'), 'utf8'),
+      },
+      artifactTexts: { '.docs/coherence/idea.md': await readFile(join(root, '.docs', 'coherence', 'idea.md'), 'utf8') },
+      changedPaths: ['.docs/decisions/adr-b.md'],
+    }));
+  });
+
+  it('tells the reviewer that indexed material must be read from its worktree path', async () => {
+    const root = await fixture(); const calls: any[] = [];
+    await runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any, runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async (input: any) => { calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    });
+    expect(calls[0].options.prompt).toContain(PLAN_REVIEW_INDEX_INSTRUCTION);
+    expect(PLAN_REVIEW_INDEX_INSTRUCTION).toContain('not inlined');
+    expect(PLAN_REVIEW_INDEX_INSTRUCTION).toContain('read each item from its listed worktree path');
+    expect(PLAN_REVIEW_INDEX_INSTRUCTION).toContain('open it before a finding quotes or relies on it');
+  });
+
+  it('inlines every decision from an ADR added after the merge base', async () => {
+    const root = await fixture();
+    await writeFile(join(root, '.docs', 'decisions', 'adr-new.md'), `# New ADR
+
+## Decision
+
+D1. First new decision.
+
+D2. Second new decision.
+`, 'utf8');
+    const calls: any[] = [];
+    await runPlanReview({
+      worktreePath: root, canonicalPath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any,
+      runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async (request: any) => { calls.push(request); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    });
+    expect(calls[0].options.prompt).toContain('D1. First new decision.');
+    expect(calls[0].options.prompt).toContain('D2. Second new decision.');
+  });
+
+  it('keeps every cited decision inline when no canonical path supplies a change set', async () => {
+    const root = await fixture(); const calls: any[] = [];
+    await writeFile(join(root, '.docs', 'decisions', 'adr-extra.md'), '## Decision\n\nD1. Extra cited decision.\n', 'utf8');
+    await writeFile(join(root, '.docs', 'plans', 'idea.md'), '# Plan\n\nThis plan follows adr-review and adr-extra.\n', 'utf8');
+
+    await runPlanReview({
+      worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any,
+      runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async (request: any) => { calls.push(request); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    });
+
+    const prompt = calls[0].options.prompt;
+    expect(prompt).toContain('D1. The flag is allowed.');
+    expect(prompt).toContain('D1. Extra cited decision.');
+    expect(prompt).not.toContain('- adr-review#');
+    expect(prompt).not.toContain('- adr-extra#');
+  });
+
+  it('rejects before review dispatch when its canonical path cannot resolve a merge base', async () => {
+    const root = await fixture(); const calls: any[] = [];
+    const canonical = await mkdtemp(join(tmpdir(), 'plan-review-unrelated-')); roots.push(canonical);
+    await execFile('git', ['init', '-b', 'missing-base'], { cwd: canonical });
+    await execFile('git', ['config', 'user.email', 'test@example.com'], { cwd: canonical });
+    await execFile('git', ['config', 'user.name', 'Test'], { cwd: canonical });
+    await writeFile(join(canonical, 'README.md'), 'unrelated\n', 'utf8');
+    await execFile('git', ['add', '.'], { cwd: canonical });
+    await execFile('git', ['commit', '-m', 'unrelated base'], { cwd: canonical });
+
+    await expect(runPlanReview({
+      worktreePath: root, canonicalPath: canonical, planStem: 'idea', config: { llm_provider: 'codex' } as any,
+      runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async (request: any) => { calls.push(request); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    })).rejects.toThrow();
+    expect(calls).toHaveLength(0);
+  });
+
+  it('keeps every decision inline when merge-base text is unavailable after resolving the change set', async () => {
+    const root = await fixture(); const calls: any[] = [];
+    await writeFile(join(root, '.docs', 'decisions', 'adr-extra.md'), '## Decision\n\nD1. Extra changed decision.\n', 'utf8');
+    await writeFile(join(root, '.docs', 'plans', 'idea.md'), '# Plan\n\nThis plan follows adr-review and adr-extra.\n', 'utf8');
+
+    await runPlanReview({
+      worktreePath: root, canonicalPath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any,
+      runtimes: {} as any, sessions: {} as any,
+      readMergeBaseTexts: async () => undefined,
+      providerExecutor: (async (request: any) => { calls.push(request); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    });
+
+    const prompt = calls[0].options.prompt;
+    expect(prompt).toContain('D1. The flag is allowed.');
+    expect(prompt).toContain('D1. Extra changed decision.');
+    expect(prompt).not.toContain('- adr-review#');
+    expect(prompt).not.toContain('- adr-extra#');
+  });
+
+  it('inlines every decision from an unreadable changed ADR while indexing stable decisions from another changed ADR', async () => {
+    const root = await fixture(); const calls: any[] = [];
+    await writeFile(join(root, '.docs', 'decisions', 'adr-unreadable.md'), '## Decision\n\nD1. Original unreadable decision.\n\nD2. Another unreadable decision.\n', 'utf8');
+    await writeFile(join(root, '.docs', 'decisions', 'adr-split.md'), '## Decision\n\nD1. Stable split decision.\n\nD2. Original split decision.\n', 'utf8');
+    await writeFile(join(root, '.docs', 'plans', 'idea.md'), '# Plan\n\nThis plan follows adr-unreadable and adr-split.\n', 'utf8');
+    await execFile('git', ['add', '.'], { cwd: root });
+    await execFile('git', ['commit', '-m', 'add fallback ADRs'], { cwd: root });
+    await writeFile(join(root, '.docs', 'decisions', 'adr-unreadable.md'), '## Decision\n\nD1. Changed unreadable decision.\n\nD2. Another unreadable decision.\n', 'utf8');
+    await writeFile(join(root, '.docs', 'decisions', 'adr-split.md'), '## Decision\n\nD1. Stable split decision.\n\nD2. Changed split decision.\n', 'utf8');
+
+    await runPlanReview({
+      worktreePath: root, canonicalPath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any,
+      runtimes: {} as any, sessions: {} as any,
+      readMergeBaseTexts: async () => ({
+        '.docs/decisions/adr-unreadable.md': null,
+        '.docs/decisions/adr-split.md': '## Decision\n\nD1. Stable split decision.\n\nD2. Original split decision.\n',
+      }),
+      providerExecutor: (async (request: any) => { calls.push(request); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    });
+
+    const prompt = calls[0].options.prompt;
+    expect(prompt).toContain('D1. Changed unreadable decision.');
+    expect(prompt).toContain('D2. Another unreadable decision.');
+    expect(prompt).toContain('D2. Changed split decision.');
+    expect(prompt).toContain('- adr-split#D1 | D1. Stable split decision. | .docs/decisions/adr-split.md');
+  });
+
+  it('omits ADRs without decisions and coherence when no coherence artifact exists', async () => {
+    const root = await fixture(); const calls: any[] = [];
+    await writeFile(join(root, '.docs', 'decisions', 'adr-empty.md'), '# ADR empty\n\nNo decision heading here.\n', 'utf8');
+    await writeFile(join(root, '.docs', 'plans', 'idea.md'), '# Plan\n\nThis plan follows adr-review and adr-empty.\n', 'utf8');
+
+    await runPlanReview({
+      worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any,
+      runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async (request: any) => { calls.push(request); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].options.prompt).not.toContain('adr-empty#');
+    expect(calls[0].options.prompt).not.toContain('- coherence |');
+  });
+
+  it('treats trailing whitespace as changed but normalized CRLF line endings as stable', async () => {
+    const root = await fixture(); const calls: any[] = [];
+    await writeFile(join(root, '.docs', 'decisions', 'adr-whitespace.md'), '## Decision\n\nD1. Whitespace-sensitive decision.\n', 'utf8');
+    await writeFile(join(root, '.docs', 'decisions', 'adr-line-endings.md'), '## Decision\n\nD1. Line ending-stable decision.\n', 'utf8');
+    await writeFile(join(root, '.docs', 'plans', 'idea.md'), '# Plan\n\nThis plan follows adr-whitespace and adr-line-endings.\n', 'utf8');
+    await execFile('git', ['add', '.'], { cwd: root });
+    await execFile('git', ['commit', '-m', 'add formatting ADRs'], { cwd: root });
+    await writeFile(join(root, '.docs', 'decisions', 'adr-whitespace.md'), '## Decision\n\nD1. Whitespace-sensitive decision.  \n', 'utf8');
+    await writeFile(join(root, '.docs', 'decisions', 'adr-line-endings.md'), '## Decision\r\n\r\nD1. Line ending-stable decision.\r\n', 'utf8');
+
+    await runPlanReview({
+      worktreePath: root, canonicalPath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any,
+      runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async (request: any) => { calls.push(request); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    });
+
+    const prompt = calls[0].options.prompt;
+    expect(prompt).toContain('D1. Whitespace-sensitive decision.  ');
+    expect(prompt).toContain('- adr-line-endings#D1 | D1. Line ending-stable decision. | .docs/decisions/adr-line-endings.md');
+  });
+
+  it('dispatches the reviewer for a generated #2945-shaped fixture with a prompt under 400,000 characters', async () => {
+    const root = await fixture();
+    const plan = `# Plan\n\n${'p'.repeat(125_627)}\n`;
+    const stories = `# Stories\n\n${'s'.repeat(33_172)}\n`;
+    await writeFile(join(root, '.docs', 'plans', 'idea.md'), plan, 'utf8');
+    await writeFile(join(root, '.docs', 'stories', 'idea.md'), stories, 'utf8');
+    await mkdir(join(root, '.docs', 'coherence'), { recursive: true });
+    await writeFile(join(root, '.docs', 'coherence', 'idea.md'), `# Coherence\n\n${'c'.repeat(50_769)}\n`, 'utf8');
+    for (let index = 1; index <= 15; index += 1) {
+      await writeFile(join(root, '.docs', 'decisions', `adr-${index}.md`), `# ADR ${index}\n\n## Decision\n\nD1. ${'d'.repeat(9_360)}\n`, 'utf8');
+    }
+    await execFile('git', ['add', '.'], { cwd: root });
+    await execFile('git', ['commit', '-m', 'large review baseline'], { cwd: root });
+    for (let index = 1; index <= 6; index += 1) {
+      await writeFile(join(root, '.docs', 'decisions', `adr-${index}.md`), `# ADR ${index}\n\n## Decision\n\nD1. ${'x'.repeat(9_360)}\n`, 'utf8');
+    }
+    const calls: any[] = [];
+    await runPlanReview({
+      worktreePath: root, canonicalPath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any,
+      runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async (request: any) => { calls.push(request); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].options.prompt.length).toBeLessThan(400_000);
   });
 
   // Covers: task:rem-as-built-R6
@@ -110,6 +359,65 @@ describe('runPlanReview', () => {
     expect(prompts).toHaveLength(2);
     expect(prompts[1]).toContain('1. The numbered replacement is allowed.');
     expect(prompts[1]).not.toContain('D1. The flag is allowed.');
+  });
+
+  it('keeps the round-two prompt byte-identical to the pre-index layout with coherence and prior blocking findings', async () => {
+    const root = await fixture();
+    await mkdir(join(root, '.docs', 'coherence'), { recursive: true });
+    const coherence = '# Coherence\n\nThe full coherence body remains in round two.\n';
+    await writeFile(join(root, '.docs', 'coherence', 'idea.md'), coherence, 'utf8');
+    const prompts: string[] = [];
+    const finding = {
+      id: 'prior-blocker', severity: 'blocking', lens: 'reachability',
+      artifact: '.docs/plans/idea.md', reference: 'task 1', relatedReference: null, resolvesPrior: null,
+      summary: 'The first round found a blocker.', evidence: ['source.ts:1'],
+    };
+    const input = {
+      worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any,
+      runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async (request: any) => {
+        prompts.push(request.options.prompt);
+        return { success: true, finalStructuredResult: { findings: prompts.length === 1 ? [finding] : [] } };
+      }) as any,
+    };
+
+    await runPlanReview(input);
+    const changedPlan = `# Plan
+
+This plan follows adr-review.
+
+### Task 1: Configure the revised flag
+**Steps:**
+1. Add \`reviewFlag\`.
+
+**Done when:**
+- [test] the revised flag works.
+
+**Dependencies:** none
+`;
+    await writeFile(join(root, '.docs', 'plans', 'idea.md'), changedPlan, 'utf8');
+    await runPlanReview(input);
+
+    const selectedTask = changedPlan.slice(changedPlan.indexOf('### Task 1:'));
+    expect(prompts[1]).toBe(`$plan-review
+
+PLAN:
+${selectedTask}
+
+STORIES:
+
+
+ADR DECISIONS:
+{}
+
+COHERENCE:
+${coherence}
+
+CANDIDATES:
+[]
+
+PRIOR BLOCKING AND SIGNIFICANT FINDINGS:
+${JSON.stringify([finding])}`);
   });
 
   it('falls through a failed candidate while preserving round one and recording same-provider independence', async () => {
@@ -318,12 +626,60 @@ describe('runPlanReview prompt bounds', () => {
     expect(calls[0].options.prompt).not.toContain('"searchedPaths"');
   });
 
-  it('refuses before dispatch, naming the sizes, when the review prompt exceeds its budget', async () => {
-    const root = await fixture(); const calls: any[] = [];
-    await expect(runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any, runtimes: {} as any, sessions: {} as any,
-      maxPromptChars: 10,
-      providerExecutor: (async (input: any) => { calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
-    })).rejects.toThrow(/plan review prompt is too large: \d+ characters exceeds 10 \(plan \d+, stories \d+, ADR decisions \d+, coherence \d+, candidates \d+\)/);
+  it('refuses before dispatch with every present section, both overrides, and no side effects', async () => {
+    const root = await fixture(); const calls: any[] = []; const events: any[] = [];
+    await mkdir(join(root, '.docs', 'coherence'), { recursive: true });
+    await writeFile(join(root, '.docs', 'coherence', 'idea.md'), '# Coherence\n\nThe round-two coherence body.\n', 'utf8');
+    const finding = {
+      id: 'prior-blocker', severity: 'blocking', lens: 'reachability', artifact: '.docs/plans/idea.md',
+      reference: 'task 1', relatedReference: null, resolvesPrior: null, summary: 'The first round found a blocker.', evidence: ['source.ts:1'],
+    };
+    await runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any, runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async () => ({ success: true, finalStructuredResult: { findings: [finding] } })) as any,
+    });
+    const artifactPath = join(root, '.docs/plan-review/idea.md');
+    const artifactBeforeRefusal = await readFile(artifactPath, 'utf8');
+    await writeFile(join(root, '.docs', 'plans', 'idea.md'), `# Plan\n\n### Task 1: Changed\n**Steps:**\n1. Change \`reviewFlag\`.\n\n**Done when:**\n- [test] the changed flag works.\n\n**Dependencies:** none\n`, 'utf8');
+    let message = '';
+    try {
+      await runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any, runtimes: {} as any, sessions: {} as any,
+        maxPromptChars: 10,
+        providerExecutor: (async (input: any) => { calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+        emit: async (event) => { events.push(event); },
+      });
+    } catch (error) { message = error instanceof Error ? error.message : String(error); }
+    const promptLength = message.match(/plan review prompt is too large: (\d+) characters exceeds 10/)?.[1];
+    expect(promptLength).toBeDefined();
+    expect(message).toMatch(/\(plan \d+, stories \d+, ADR decisions \d+, coherence \d+, candidates \d+, prior findings \d+\)/);
+    expect(message).toMatch(/Largest section: \w+(?: \w+)?\./);
+    expect(message).toContain(`--max-prompt-chars ${promptLength}`);
+    expect(message).toContain(`plan_review.max_prompt_chars: ${promptLength}`);
     expect(calls).toHaveLength(0);
+    expect(events).toEqual([]);
+    expect(await readFile(artifactPath, 'utf8')).toBe(artifactBeforeRefusal);
+  });
+
+  it('uses the 400000-character default budget when no override is supplied', async () => {
+    const root = await fixture(); const calls: any[] = [];
+    await writeFile(join(root, '.docs', 'plans', 'idea.md'), `# Plan\n\n${'x'.repeat(400_001)}`, 'utf8');
+    await expect(runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any, runtimes: {} as any, sessions: {} as any,
+      providerExecutor: (async (input: any) => { calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    })).rejects.toThrow('exceeds 400000');
+    expect(calls).toEqual([]);
+  });
+
+  it('allows a prompt exactly equal to its override budget', async () => {
+    const root = await fixture(); const calls: any[] = [];
+    let promptLength = 0;
+    await runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any, runtimes: {} as any, sessions: {} as any,
+      maxPromptChars: Number.MAX_SAFE_INTEGER,
+      providerExecutor: (async (input: any) => { promptLength = input.options.prompt.length; calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    });
+    await rm(join(root, '.docs', 'plan-review'), { recursive: true, force: true });
+    await runPlanReview({ worktreePath: root, planStem: 'idea', config: { llm_provider: 'codex' } as any, runtimes: {} as any, sessions: {} as any,
+      maxPromptChars: promptLength,
+      providerExecutor: (async (input: any) => { calls.push(input); return { success: true, finalStructuredResult: { findings: [] } }; }) as any,
+    });
+    expect(calls).toHaveLength(2);
   });
 });

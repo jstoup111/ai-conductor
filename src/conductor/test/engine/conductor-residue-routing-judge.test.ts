@@ -180,7 +180,7 @@ vi.mock('../../src/engine/repair-restage.js', async (importOriginal) => {
 
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { childBranchFor, leafBranchFor } from '../../src/engine/feature-branch-identity.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
@@ -195,7 +195,7 @@ import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import type { PrdAuditJudgment } from '../../src/engine/prd-audit-contract.js';
 
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -398,12 +398,56 @@ class AsBuiltTaskBoundRunner implements StepRunner {
   }
 }
 
+class AsBuiltExistingTaskRunner implements StepRunner {
+  constructor(private readonly projectRoot: string) {}
+
+  async run(_step: string, _state: ConductState, options: Parameters<StepRunner['run']>[2]) {
+    const request = options?.remediationRequest;
+    if (request?.mode !== 'gap-plan' || options?.runId === undefined) {
+      throw new Error('fixture requires a remediation gap-plan request');
+    }
+    const finding = request.projection.requiredReferences[0];
+    if (finding?.kind !== 'as-built-finding') throw new Error('fixture requires an as-built finding');
+    await persistFixtureProjectedRemediationPlan(this.projectRoot, options, [{
+      id: finding.id, referenceKind: 'as-built-finding', disposition: 'existing-task', category: null,
+      rationale: 'The authored task already owns this repair.',
+      tasks: [], boundTaskIds: ['first'],
+    }]);
+    return { success: true };
+  }
+}
+
 const AS_BUILT_FIXTURE_POLICY: AsBuiltPolicy = {
   reachability: { enabled: true, reason: 'fixture' },
   planGap: { enabled: true, reason: 'fixture' },
   adrCompliance: { enabled: false, reason: 'fixture' },
   diagramDrift: { enabled: false, reason: 'fixture' },
 };
+
+function slicedRoutingPlan(firstDetails = '', childRepair = ''): string {
+  return [
+    '# Implementation plan',
+    '',
+    '**Stories:** .docs/stories/feature.md',
+    '',
+    '## Slices',
+    '',
+    '| Slice | Title | Tasks |',
+    '| --- | --- | --- |',
+    '| 1 | first | first |',
+    '| 2 | leaf | second |',
+    '',
+    '### Task first: authored work',
+    '**Story:** S1',
+    '**Dependencies:** none',
+    firstDetails,
+    childRepair,
+    '### Task second: leaf work',
+    '**Story:** S2',
+    '**Dependencies:** none',
+    '',
+  ].filter(Boolean).join('\n');
+}
 
 describe('Conductor residue routing judge binding', () => {
   let projectRoot: string;
@@ -433,7 +477,7 @@ describe('Conductor residue routing judge binding', () => {
       JSON.stringify({ activePlanPath: planPath }),
       'utf8',
     );
-    await writeCoverageBindingEnvelope(projectRoot, {
+    await writeSliceTopologyFixture(projectRoot, {
       version: 1, slug: 'demo', runId: 'fixture', status: 'done', entries: [],
       sliceMembership: { taskSlices: { first: 1, second: 2 }, titles: ['first', 'second'] },
     }, envelopeFilesystem);
@@ -681,7 +725,7 @@ describe('Conductor residue routing judge binding', () => {
   it('routes a proposed repair task to its admitted authored parent host', async () => {
     await writeFile(
       join(projectRoot, '.docs', 'plans', 'feature.md'),
-      '# Implementation plan\n\n### Task first: authored work\n',
+      slicedRoutingPlan(),
       'utf8',
     );
     await persistAsBuiltVerdict(projectRoot, {
@@ -733,7 +777,7 @@ describe('Conductor residue routing judge binding', () => {
       '# Implementation plan\n\n### Task T2: second authored work\n\n### Task T3: third authored work\n',
       'utf8',
     );
-    await writeCoverageBindingEnvelope(projectRoot, {
+    await writeSliceTopologyFixture(projectRoot, {
       version: 1, slug: 'demo', runId: 'fixture', status: 'done', entries: [],
       sliceMembership: { taskSlices: { T2: 1, T3: 2 }, titles: ['second', 'third'] },
     }, envelopeFilesystem);
@@ -760,7 +804,7 @@ describe('Conductor residue routing judge binding', () => {
     routingMutationSpy.projectionResult = {
       ok: true,
       projection: {
-        version: 1,
+        version: 2,
         source: 'as-built',
         requiredReferences: [{
           kind: 'as-built-finding', id: 'as-built:fixture-multi-task:1',
@@ -847,7 +891,7 @@ describe('Conductor residue routing judge binding', () => {
 
     await writeFile(
       join(projectRoot, '.docs', 'plans', 'feature.md'),
-      '# Implementation plan\n\n### Task first: authored work\n\n**Files:** src/owner.ts\n\n**Done when:**\n- [test] `src/child-two.ts` is available to the repair.\n',
+      slicedRoutingPlan('**Files:** src/owner.ts\n\n**Done when:**\n- [test] `src/child-two.ts` is available to the repair.'),
       'utf8',
     );
     await persistAsBuiltVerdict(projectRoot, {
@@ -907,7 +951,7 @@ describe('Conductor residue routing judge binding', () => {
     await mustSucceed(['checkout', child.branch]);
     await writeFile(
       join(projectRoot, '.docs', 'plans', 'feature.md'),
-      '# Implementation plan\n\n### Task first: authored work\n\n### Task rem-as-built-repair-task-for-first: Existing child repair\n',
+      slicedRoutingPlan('', '### Task rem-as-built-repair-task-for-first: Existing child repair'),
       'utf8',
     );
     await mustSucceed(['add', '.docs/plans/feature.md']);
@@ -915,7 +959,7 @@ describe('Conductor residue routing judge binding', () => {
     await mustSucceed(['checkout', leafBranchFor('demo')]);
     await writeFile(
       join(projectRoot, '.docs', 'plans', 'feature.md'),
-      '# Implementation plan\n\n### Task first: authored work\n',
+      slicedRoutingPlan(),
       'utf8',
     );
     await persistAsBuiltVerdict(projectRoot, {
@@ -961,7 +1005,7 @@ describe('Conductor residue routing judge binding', () => {
   it('passes validation-group FAIL rows verbatim to the router and returns the stored host retry hint', async () => {
     await writeFile(
       join(projectRoot, '.docs', 'plans', 'feature.md'),
-      '# Implementation plan\n\n### Task first: authored work\n',
+      slicedRoutingPlan(),
       'utf8',
     );
     await persistAsBuiltVerdict(projectRoot, {
@@ -1010,6 +1054,60 @@ describe('Conductor residue routing judge binding', () => {
     expect(routingMutationSpy.consolidatedManualTestFail).toEqual(failRows);
     expect(outcome.hint).toContain(failRows[0]!);
     expect(outcome.hint).toContain(failRows[1]!);
+  });
+
+  it('routes an existing-task finding to its bound owner in a mixed round with manual-test FAIL rows', async () => {
+    await writeFile(
+      join(projectRoot, '.docs', 'plans', 'feature.md'),
+      slicedRoutingPlan(),
+      'utf8',
+    );
+    await persistAsBuiltVerdict(projectRoot, {
+      version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
+      findings: [{
+        class: 'REMEDIABLE',
+        reference: { kind: 'plan-task', taskId: 'first' },
+        summary: 'The authored boundary needs repair.',
+      }],
+      violations: 'The task-bound implementation is incomplete.',
+      resolution: 'Repair the task boundary.',
+    }, { attemptId: 'fixture-existing-task', codeStamp: null, policy: AS_BUILT_FIXTURE_POLICY });
+
+    const second = parseChildId(2)!;
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: join(projectRoot, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo',
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      stepRunner: new AsBuiltExistingTaskRunner(projectRoot),
+      events: new ConductorEventEmitter(),
+      mode: 'auto', daemon: true, verifyArtifacts: false, maxRetries: 1,
+      childRegionLifecycle: {
+        resolveActiveChild: async () => ({
+          kind: 'active' as const, child: second, position: second, isLeaf: true,
+          branch: 'feat/daemon-demo', nextChild: undefined,
+        }),
+      },
+    });
+    const failRows = ['manual_test: FAIL row one'];
+    const outcome = await (conductor as unknown as {
+      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; detail?: string; hint?: string }>;
+    }).planRemediation(
+      { session_started_at: Date.now() - 1_000, feature_desc: 'demo' } as ConductState,
+      ALL_STEPS,
+      'validation-group existing-task finding with manual-test FAIL rows',
+      {
+        source: 'validation-group',
+        consolidatedManualTestFail: true,
+        consolidatedManualTestFailRows: failRows,
+        evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.json' }],
+      },
+    );
+
+    expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+    expect(routingMutationSpy.ownerTaskIds).toEqual([['first']]);
+    expect(routingMutationSpy.allocatedRemTaskIds).toEqual([]);
+    expect(outcome.hint).toContain(failRows[0]!);
   });
 
   // Covers: task:rem-as-built-W12, task:rem-as-built-W13

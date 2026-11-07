@@ -3,6 +3,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { TerminalSubscriber } from '../../src/ui/subscriber.js';
 import type { ConductorEvent } from '../../src/types/index.js';
 import type { UIRenderer } from '../../src/ui/types.js';
+import { toProviderId } from '../../src/execution/provider-catalog.js';
 
 describe('TerminalSubscriber event forwarding', () => {
   let emitter: ConductorEventEmitter;
@@ -61,7 +62,7 @@ describe('TerminalSubscriber event forwarding', () => {
   it('forwards closed probe-failure recovery progress', async () => {
     const event = {
       type: 'credentials_park_progress',
-      provider: 'codex',
+      provider: toProviderId('codex'),
       source: 'cached-login',
       readiness: 'probe-failed',
       elapsedSeconds: 3,

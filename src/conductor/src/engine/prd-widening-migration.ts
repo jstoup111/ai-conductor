@@ -49,6 +49,16 @@ export interface MigrateLegacyPrdWideningDecisionsOptions {
   readonly legacyClear?: { readonly entries: readonly LegacyPrdWideningClear[]; readonly operator: string };
 }
 
+export type PrdWideningMigrationFailureReason =
+  | 'corrupt-history'
+  | 'unsupported-history'
+  | 'foreign-feature-history'
+  | 'unknown-history-version'
+  | 'unreadable-legacy'
+  | 'unsupported-legacy-row'
+  | 'case-write-failed'
+  | 'decision-write-failed';
+
 export type MigrateLegacyPrdWideningDecisionsResult =
   | { readonly kind: 'absent'; readonly decisions: readonly []; readonly cases: readonly [] }
   | { readonly kind: 'already-migrated'; readonly decisions: readonly []; readonly cases: readonly [] }
@@ -59,15 +69,7 @@ export type MigrateLegacyPrdWideningDecisionsResult =
     }
   | {
       readonly kind: 'failed';
-      readonly reason:
-        | 'corrupt-history'
-        | 'unsupported-history'
-        | 'foreign-feature-history'
-        | 'unknown-history-version'
-        | 'unreadable-legacy'
-        | 'unsupported-legacy-row'
-        | 'case-write-failed'
-        | 'decision-write-failed';
+      readonly reason: PrdWideningMigrationFailureReason;
       readonly decisions: readonly [];
       readonly cases: readonly [];
     };

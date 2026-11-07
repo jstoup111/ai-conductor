@@ -21,16 +21,15 @@ skills_dir="${HARNESS_INTEGRITY_SKILLS_DIR:-${HARNESS_DIR}/skills}"
 architecture_file="${HARNESS_INTEGRITY_ARCHITECTURE_FILE:-${HARNESS_DIR}/ARCHITECTURE.md}"
 
 # Entries use skill|rows|reason. The table has separate rows for the two TDD
-# phases, while coverage_binding is an engine gate whose table spelling uses
-# an underscore.
+# phases.
 ROW_ALIASES=(
   'tdd|tdd-red,tdd-green|phase rows'
-  'coverage-binding|coverage_binding|engine-step row spelling'
 )
 
 # engineer remains temporarily while its pending removal is completed.
 SKILL_NO_ROW_ALLOWLIST=(
   'engineer|pending removal of the retired engineer skill'
+  'coverage-binding|plan §7a coverage-judge policy with no engine step'
 )
 
 if [ "${HARNESS_INTEGRITY_MODEL_TABLE_ALLOWLIST+x}" = x ]; then
@@ -75,8 +74,7 @@ for entry in "${ROW_ALIASES[@]}"; do
 done
 
 # A row name is its first table cell, with surrounding whitespace and a single
-# trailing parenthetical annotation removed. This makes the engine-gate row
-# `coverage_binding (engine gate)` resolve as `coverage_binding`.
+# trailing parenthetical annotation removed.
 row_names=$(awk -F '|' '
   /^[[:space:]]*\|/ {
     name = $2

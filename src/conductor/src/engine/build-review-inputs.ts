@@ -20,7 +20,8 @@ import {
 } from './full-suite-verifier.js';
 import type { FullSuitePassEvidence } from './full-suite-evidence.js';
 import { parsePlanTaskPaths } from './plan-task-parse.js';
-import { resolvePlanStoriesPath } from './plan-stories-reference.js';
+import { resolveFeatureStoriesRef } from './plan-stories-reference.js';
+import { gitRefManifestSource } from './feature-manifest-source.js';
 import { parseCoversMarkers } from './covers-marker.js';
 import { isTestPath } from './test-path.js';
 import {
@@ -88,6 +89,8 @@ export interface BuildReviewInputs {
    * head, no fetch needed) — `false` on both "fetched a stale ref" and the
    * no-remote/probe-failure fallback. */
   fresh: boolean;
+  /** Durable reason for an operator-owned routed repair, when this is its host review. */
+  operatorWorkOrder?: string;
   /** Engine-recorded aggregate failures exposed after base advances. The
    * grader judges whether diff hunks implement them; they are not exemptions. */
   repairContext?: TestSuiteRemediationRecord[];
@@ -137,6 +140,8 @@ export interface BuildReviewSourceSnapshot {
   readonly headSha: string;
   readonly diff: string;
   readonly planBody: string;
+  /** Operator landing reason, pinned with the remaining grader source. */
+  readonly operatorWorkOrder?: string;
   readonly repairContext: readonly TestSuiteRemediationRecord[];
   readonly removalContext: {
     readonly deletedFiles: readonly string[];
@@ -265,6 +270,8 @@ export interface BuildReviewInputOptions {
   readonly securityScope?: 'leaf' | 'non-leaf';
   /** Child-local suite evidence that must prove the review's test-suite gate. */
   readonly activeChild?: FullSuiteActiveChild;
+  /** Durable operator landing reason supplied by the routed host owner. */
+  readonly operatorWorkOrder?: string;
 }
 
 /** The three distinguishable grading-provenance cases (Task 24). */
@@ -475,8 +482,17 @@ function semanticRepairContext(repairs: readonly TestSuiteRemediationRecord[]) {
   return repairs.map(({ gate, reason, diagnostic }) => ({ gate, reason, diagnostic }));
 }
 
-function activeStoriesPath(planRepoPath: string, planBody: string): string | undefined {
-  const storiesRepoPath = resolvePlanStoriesPath(planRepoPath, planBody);
+async function activeStoriesPath(
+  sourceRoot: string,
+  sourceRef: string,
+  planRepoPath: string,
+  planBody: string,
+): Promise<string | undefined> {
+  const storiesRepoPath = await resolveFeatureStoriesRef(
+    gitRefManifestSource(sourceRoot, sourceRef),
+    planRepoPath,
+    planBody,
+  );
   return storiesRepoPath === null ? undefined : storiesRepoPath;
 }
 
@@ -985,7 +1001,7 @@ export async function assembleBuildReviewInputs(
   }
 
   const removalContext = deriveBuildReviewRemovals(diffResult.stdout);
-  const storiesPath = activeStoriesPath(planRepoPath, planBody);
+  const storiesPath = await activeStoriesPath(projectRoot, liveHeadSha, planRepoPath, planBody);
   const storiesRead = storiesPath === undefined ? undefined : await source.readOptional(storiesPath);
   const storiesBody = storiesRead?.kind === 'present' ? storiesRead.value : '';
   const typedTestScope = await snapshotTypedTestScope(
@@ -1002,6 +1018,7 @@ export async function assembleBuildReviewInputs(
     headSha: liveHeadSha,
     diff: diffResult.stdout,
     planBody,
+    ...(options.operatorWorkOrder === undefined ? {} : { operatorWorkOrder: options.operatorWorkOrder }),
     repairContext: Object.freeze([...repairContext]),
     removalContext: Object.freeze({
       deletedFiles: Object.freeze([...removalContext.deletedFiles]),
@@ -1044,6 +1061,7 @@ export async function assembleBuildReviewInputs(
     trackingRefSha,
     remoteHeadSha,
     fresh,
+    ...(options.operatorWorkOrder === undefined ? {} : { operatorWorkOrder: options.operatorWorkOrder }),
     removalContext: sourceSnapshot.removalContext,
     repairContext,
     repairProvenance,

@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 /**
  * RED acceptance specs for "Daemon rate-limit episode coordinator"
  * (jstoup111/ai-conductor#270; ADR adr-2026-07-05-daemon-rate-limit-episode-coordinator.md).
@@ -214,7 +216,7 @@ describe('acceptance: the exact observed session-limit message routes to a coord
       });
     }) as never);
 
-    const provider = new ClaudeProvider(undefined, mockedExeca as never);
+    const provider = new ClaudeProvider(dispatchGitGuard, undefined, mockedExeca as never);
     const runner: StepRunner = {
       run: async (): Promise<StepRunResult> => {
         const result = await provider.invoke({

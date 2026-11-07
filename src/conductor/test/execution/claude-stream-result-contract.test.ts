@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 import { readFile } from 'node:fs/promises';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
@@ -20,7 +22,7 @@ describe('Claude stream terminal result contract', () => {
       stdout,
       kill: vi.fn(),
     });
-    const provider = new ClaudeProvider(undefined, () => process as any);
+    const provider = new ClaudeProvider(dispatchGitGuard, undefined, () => process as any);
 
     const invocation = provider.invoke({ prompt: 'Do the thing', sessionId: 'session-123', resume: false });
     stdout.end(`${terminalResult}\n`);

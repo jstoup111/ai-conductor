@@ -38,7 +38,7 @@ describe('customStepsInPerChildRegion', () => {
   it('leaves DECIDE, pre-acceptance, and post-review customs outside the per-child region', () => {
     expect(customStepsInPerChildRegion(registry({
       decide: { after: 'explore' },
-      plain: { after: 'coverage_binding' },
+      plain: { after: 'plan_review' },
       after_review: { after: 'build_review' },
     }))).toEqual([]);
   });
@@ -57,18 +57,15 @@ describe('customStepsInPerChildRegion', () => {
     ]);
   });
 
-  it('detects BUILD customs coupled to the loop without treating DECIDE or post-review customs as coupled', () => {
+  it('does not couple pre-BUILD or post-review customs to the child loop', () => {
     expect(customStepsInPerChildRegion(registry({
-      prep: { after: 'coverage_binding', kickback_target: true },
-      prep2: { after: 'coverage_binding', gate: true },
-      plain: { after: 'coverage_binding' },
+      prep: { after: 'plan_review', kickback_target: true },
+      prep2: { after: 'plan_review', gate: true },
+      plain: { after: 'plan_review' },
       decide_gate: { after: 'explore', gate: true },
       decide_kickback: { after: 'explore', kickback_target: true },
       review_gate: { after: 'build_review', gate: true },
-    }))).toEqual([
-      { name: 'prep', coupling: 'loop-coupled' },
-      { name: 'prep2', coupling: 'loop-coupled' },
-    ]);
+    }))).toEqual([]);
   });
 
   it('does not report an unresolved after target, which config validation still rejects', async () => {

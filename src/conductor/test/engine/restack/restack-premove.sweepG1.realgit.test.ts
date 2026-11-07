@@ -9,14 +9,14 @@ import { EventPersister } from '../../../src/engine/event-persister.js';
 import { readRestackJournal } from '../../../src/engine/restack/restack-journal.js';
 
 import { createProtectedArtifactSeal } from '../../../src/engine/protected-artifact-seal.js';
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
 import { makeGitRunner, REBASE_UNTRACKED_QUARANTINE_DIR } from '../../../src/engine/rebase.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const execFile = promisify(execFileCallback);
 const repositories: string[] = [];
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -64,7 +64,7 @@ async function fixture(
   let advancedDefault = await commit('base advance', advance.path, advance.content);
   for (const extra of extraAdvances) advancedDefault = await commit('base advance', extra.path, extra.content);
   await git(['checkout', '-q', 'feat/daemon-demo']);
-  await writeCoverageBindingEnvelope(repo, {
+  await writeSliceTopologyFixture(repo, {
     version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
     sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf'] },
     storyOwnership: { S1: 1, S2: 2, S3: 3 },
@@ -141,7 +141,7 @@ describe('runRestack pre-move checks (sweep G1, real local Git)', () => {
     const elsewhere = await worktreeElsewhere(baseRefresh, 'feat/c1/demo');
     const before = await refSnapshot(baseRefresh);
     const refused = await persisted(baseRefresh, (events) => restack(baseRefresh, events));
-    expect(refused.result).toEqual({ kind: 'halted' });
+    expect(refused.result).toMatchObject({ kind: 'halted' });
     expect(refused.refusals).toEqual([{ type: 'restack_refused', reason: 'checked-out-elsewhere', detail: elsewhere }]);
     expect(await refSnapshot(baseRefresh)).toBe(before);
     expect(await readRestackJournal(baseRefresh.repo, 'demo')).toMatchObject({ kind: 'journal', journal: { state: 'aborted' } });
@@ -152,7 +152,7 @@ describe('runRestack pre-move checks (sweep G1, real local Git)', () => {
     const c2Worktree = await worktreeElsewhere(childTwoElsewhere, 'feat/c2/demo');
     const beforeTwo = await refSnapshot(childTwoElsewhere);
     const refusedTwo = await persisted(childTwoElsewhere, (events) => repair(childTwoElsewhere, events));
-    expect(refusedTwo.result).toEqual({ kind: 'halted' });
+    expect(refusedTwo.result).toMatchObject({ kind: 'halted' });
     expect(refusedTwo.refusals).toEqual([{ type: 'restack_refused', reason: 'checked-out-elsewhere', detail: c2Worktree }]);
     expect(await refSnapshot(childTwoElsewhere)).toBe(beforeTwo);
 
@@ -180,7 +180,7 @@ describe('runRestack pre-move checks (sweep G1, real local Git)', () => {
 
     const { result, refusals } = await persisted(subject, (events) => restack(subject, events));
 
-    expect(result).toEqual({ kind: 'halted' });
+    expect(result).toMatchObject({ kind: 'halted' });
     expect(refusals).toEqual([{ type: 'restack_refused', reason: 'dirty-overlap', detail: 'src/a.ts' }]);
     expect(await refSnapshot(subject)).toBe(before);
     await expect(readFile(join(subject.repo, 'src', 'a.ts'), 'utf8')).resolves.toBe('operator edit\n');
@@ -208,7 +208,7 @@ describe('runRestack pre-move checks (sweep G1, real local Git)', () => {
     const before = await refSnapshot(readOnly);
     try {
       const { result, refusals } = await persisted(readOnly, (events) => restack(readOnly, events));
-      expect(result).toEqual({ kind: 'halted' });
+      expect(result).toMatchObject({ kind: 'halted' });
       expect(refusals).toEqual([{ type: 'restack_refused', reason: 'sync-collision', detail: 'tmp/out.txt' }]);
       expect(await refSnapshot(readOnly)).toBe(before);
       await expect(readFile(join(readOnly.repo, 'tmp', 'out.txt'), 'utf8')).resolves.toBe('untracked output\n');
@@ -220,19 +220,19 @@ describe('runRestack pre-move checks (sweep G1, real local Git)', () => {
   // Covers: S5.7, task:9
   it('halts on an already-violated protected-artifact seal before any ref moves', async () => {
     const subject = await fixture();
-    await mkdir(join(subject.repo, '.docs', 'plans'), { recursive: true });
-    await writeFile(join(subject.repo, '.docs', 'plans', 'demo.md'), 'approved\n');
-    await subject.git(['add', '.docs/plans/demo.md']);
-    await subject.git(['commit', '-qm', 'add approved plan']);
+    await mkdir(join(subject.repo, '.docs', 'decisions'), { recursive: true });
+    await writeFile(join(subject.repo, '.docs', 'decisions', 'approved.md'), 'approved\n');
+    await subject.git(['add', '.docs/decisions/approved.md']);
+    await subject.git(['commit', '-qm', 'add approved decision']);
     await createProtectedArtifactSeal({ projectRoot: subject.repo, baselineCommit: await tipOf(subject, 'HEAD') });
-    await writeFile(join(subject.repo, '.docs', 'plans', 'demo.md'), 'mutated\n');
+    await writeFile(join(subject.repo, '.docs', 'decisions', 'approved.md'), 'mutated\n');
     const before = await refSnapshot(subject);
 
-    await expect(restack(subject)).resolves.toEqual({ kind: 'halted' });
+    await expect(restack(subject)).resolves.toMatchObject({ kind: 'halted' });
 
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('protected-artifact seal error');
     expect(await refSnapshot(subject)).toBe(before);
-    await expect(readFile(join(subject.repo, '.docs', 'plans', 'demo.md'), 'utf8')).resolves.toBe('mutated\n');
+    await expect(readFile(join(subject.repo, '.docs', 'decisions', 'approved.md'), 'utf8')).resolves.toBe('mutated\n');
   });
 
   // Covers: S5.8, task:9

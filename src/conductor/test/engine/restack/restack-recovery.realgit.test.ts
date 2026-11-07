@@ -390,7 +390,7 @@ describe('recoverRestackJournal (real local Git)', () => {
       },
     });
 
-    expect(result).toEqual({ kind: 'halted' });
+    expect(result).toMatchObject({ kind: 'halted' });
     expect(resolverCalls).toBe(0);
     expect((await subject.git([
       'for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads/feat/', 'refs/conductor/demo/closed/',
@@ -544,7 +544,7 @@ describe('recoverRestackJournal (real local Git)', () => {
       slug: 'demo',
       events,
       git: makeGitRunner(subject.repo),
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted', detail: expect.any(String) });
 
     expect(refusals).toEqual([expect.objectContaining({
       reason: 'replay-mismatch', child: 1, detail: 'base.txt',

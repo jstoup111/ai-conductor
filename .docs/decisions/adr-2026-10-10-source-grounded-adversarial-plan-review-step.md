@@ -116,6 +116,18 @@ plan review authors no spec artifact, and the engine writes its review artifact 
    - **Brief:** a new shipped skill, `skills/plan-review/`, is the reviewer's instructions,
      following the `prd_audit` precedent.
 
+   > **Amended 2026-10-24 by #3278:** the round-1 prompt no longer inlines every in-scope ADR
+   > decision or the coherence artifact. It inlines the stories, every plan task, the candidate
+   > rows, and only the in-scope decisions whose passage text differs from the spec's merge base,
+   > plus every decision of an ADR the spec adds. Every other in-scope decision, and the coherence
+   > artifact, is listed in an index by id, title and worktree path, and the read-only reviewer
+   > opens what it needs. Finding validation still grounds quotes against the full in-scope ADR
+   > texts. The prompt budget defaults to 400,000 characters and is raised by
+   > `plan_review.max_prompt_chars` or the one-shot `compose plan-review --max-prompt-chars` flag.
+   > An over-budget prompt is refused before dispatch, naming each section's size and the override.
+   > Reason: #2945 (tier L, 15 amended ADRs) produced a 447,320-character prompt and could not be
+   > reviewed at all.
+
 4. **Reviewer provider is chosen for independence, and the choice never blocks land.**
    - **Selection order:**
      1. `steps.plan_review.llm_provider` when it is configured.

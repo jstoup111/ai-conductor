@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { makeGitRunner } from '../../../src/engine/rebase.js';
-import { writeCoverageBindingEnvelope, type CoverageBindingEnvelopeFilesystem } from '../../../src/engine/coverage-binding-envelope.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { replayChildRange, type CommitterStamp } from '../../../src/engine/restack/restack-replay.js';
 import { parseChildId } from '../../../src/engine/child-context.js';
@@ -15,7 +15,7 @@ import { parseCommitSha, type CommitSha } from '../../../src/engine/restack/rest
 
 const execFile = promisify(execFileCallback);
 const repositories: string[] = [];
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
+const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -38,7 +38,7 @@ interface Repository {
 }
 
 async function sealStack(repo: Repository, positions: readonly number[]): Promise<void> {
-  await writeCoverageBindingEnvelope(repo.path, {
+  await writeSliceTopologyFixture(repo.path, {
     version: 1,
     slug: 'demo',
     runId: 'run-1',

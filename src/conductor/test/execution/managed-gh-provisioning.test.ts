@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 import { access, constants, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -20,6 +22,7 @@ const piEnvironment: PiEnvironment = {
     isFile: () => path === '/test-home/.agents/skills/HARNESS.md',
     isDirectory: () => false,
   }),
+  access: async () => {},
   env: {},
   homeDir: () => '/test-home',
   cwd: () => '/test-project',
@@ -108,13 +111,13 @@ describe('managed gh observation provisioning', () => {
   });
 
   it.each([
-    ['claude', (calls: NodeJS.ProcessEnv[]) => new ClaudeProvider(undefined, ((_file: string, _args: string[], launch: { env?: NodeJS.ProcessEnv }) => {
+    ['claude', (calls: NodeJS.ProcessEnv[]) => new ClaudeProvider(dispatchGitGuard, undefined, ((_file: string, _args: string[], launch: { env?: NodeJS.ProcessEnv }) => {
       calls.push(launch.env ?? {}); return Promise.resolve({ stdout: JSON.stringify({ type: 'result', result: 'done' }), stderr: '', exitCode: 0, failed: false } as any);
     }) as never)],
-    ['codex', (calls: NodeJS.ProcessEnv[]) => new CodexProvider(vi.fn(async () => ({ stdout: JSON.stringify({ schemaVersion: 1, auth: { selectedMode: 'cached-login', configured: true }, transport: { authenticated: true } }), exitCode: 0 })) as never, 'codex', undefined, ((_file: string, _args: readonly string[], launch: { env?: NodeJS.ProcessEnv }) => {
+    ['codex', (calls: NodeJS.ProcessEnv[]) => new CodexProvider(dispatchGitGuard, vi.fn(async () => ({ stdout: JSON.stringify({ schemaVersion: 1, auth: { selectedMode: 'cached-login', configured: true }, transport: { authenticated: true } }), exitCode: 0 })) as never, 'codex', undefined, ((_file: string, _args: readonly string[], launch: { env?: NodeJS.ProcessEnv }) => {
       calls.push(launch.env ?? {}); return Promise.resolve({ stdout: `${JSON.stringify({ type: 'turn.completed' })}\n`, stderr: '', exitCode: 0, failed: false } as any);
     }) as never)],
-    ['pi', (calls: NodeJS.ProcessEnv[]) => new PiProvider('pi', ((_file: string, _args: readonly string[], launch: { env?: NodeJS.ProcessEnv }) => {
+    ['pi', (calls: NodeJS.ProcessEnv[]) => new PiProvider(dispatchGitGuard, 'pi', ((_file: string, _args: readonly string[], launch: { env?: NodeJS.ProcessEnv }) => {
       calls.push(launch.env ?? {}); return Promise.resolve({ stdout: JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'done' }] } }), stderr: '', exitCode: 0, failed: false } as any);
     }) as never, piEnvironment)],
   ] as const)('adds the wrapper only to the prepared %s child environment', async (_provider, create) => {

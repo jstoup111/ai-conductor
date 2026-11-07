@@ -6,14 +6,13 @@ Technical-track stories. Acceptance criteria are Given/When/Then over the retry
 loop's observable behavior. Every ladder boundary carries an explicit negative path
 (adversarial input at each call site).
 
-> **Provider-aware amendment (#902, approved 2026-07-23):** The concrete
-> `haiku → sonnet → opus → fable` examples below are the built-in **Claude**
-> policy. Their provider-neutral invariants remain authoritative: attempt 2
-> raises effort, attempt 3+ cumulatively raises the model from the base, both
-> ladders cap, non-consuming retries stay on the same rung, and opt-out pins the
-> base. Codex applies those same invariants to
-> `gpt-5.6-luna → gpt-5.6-terra → gpt-5.6-sol` as specified in
-> `model-and-effort-resolution-provider-aware-902.md`.
+The concrete `haiku → sonnet → opus → fable` examples below are the built-in
+**Claude** policy. Their provider-neutral invariants are authoritative: attempt 2
+raises effort, attempt 3+ cumulatively raises the model from the base, both
+ladders cap, non-consuming retries stay on the same rung, and opt-out pins the
+base. Codex applies those same invariants to
+`gpt-5.6-luna → gpt-5.6-terra → gpt-5.6-sol → gpt-6-astra` as specified in
+`model-and-effort-resolution-provider-aware-902.md`.
 
 ---
 

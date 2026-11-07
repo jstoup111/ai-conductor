@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "slug": "build-review-halts-as-regression-when-a-repair-lef",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/build-review-halts-as-regression-when-a-repair-lef.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/build-review-halts-as-regression-when-a-repair-lef.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/build-review-halts-as-regression-when-a-repair-lef.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/2026-10-28-build-review-halts-as-regression-when-a-repair-lef.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-08-29-mixed-build-review-laps-preserve-content-adjudication.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/build-review-halts-as-regression-when-a-repair-lef.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/build-review-halts-as-regression-when-a-repair-lef.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/build-review-halts-as-regression-when-a-repair-lef.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/build-review-halts-as-regression-when-a-repair-lef.md"
+    }
+  ]
+}

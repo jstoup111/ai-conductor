@@ -215,6 +215,14 @@ export interface VerifyProtectedArtifactSealOptions {
    * (fully protected, prior behavior).
    */
   baseBranch?: string;
+  /**
+   * Accept a protected artifact whose only drift from its sealed bytes is the
+   * engine's own recorded remediation-task append (the same
+   * `isEngineAppendedRemediationAmendment` rule seal rotation applies). For
+   * strict callers that pass no `featureDesc`, such as restack, so an
+   * engine-committed routed remediation does not read as tampering.
+   */
+  toleratesEngineAppendedRemediation?: boolean;
   /** Test seam for the atomic seal writer used by verification rebaselines. */
   fileOperations?: ProtectedArtifactSealFileOperations;
   onRebaseline?: ProtectedArtifactSealRebaselineObserver;
@@ -1137,6 +1145,7 @@ async function inspectSeal(
   featureDesc?: string,
   baseBranch?: string,
   excludedPaths?: ReadonlySet<string>,
+  engineAppendedTaskIds?: readonly string[],
 ): Promise<ProtectedArtifactSealVerdict> {
   const selfAmendments: ProtectedArtifactSelfAmendment[] = [];
   // Resolved at most once per verification, and only lazily — a fully clean
@@ -1224,6 +1233,14 @@ async function inspectSeal(
     const sealedFingerprint = expected.get(path);
     const currentFingerprint = fingerprint(content);
     if (currentFingerprint !== sealedFingerprint) {
+      if (engineAppendedTaskIds?.length) {
+        const sealedContent = (await protectedArtifactsAtCommit(projectRoot, seal.baselineCommit).catch(() => undefined))?.get(path);
+        if (
+          sealedContent !== undefined
+          && fingerprint(sealedContent) === sealedFingerprint
+          && isEngineAppendedRemediationAmendment(sealedContent, Buffer.from(content), engineAppendedTaskIds)
+        ) continue;
+      }
       // #1047 / ADR: verify inherited base content before treating drift as a
       // self-amendment. The base branch is an independent authority, so content
       // it already contains is neither a local amendment nor a seal violation.
@@ -1442,6 +1459,13 @@ async function verifyExistingProtectedArtifactSeal(
     seal,
     options.featureDesc,
     options.baseBranch,
+    undefined,
+    options.toleratesEngineAppendedRemediation
+      ? [
+          ...await readRecordedAppendedRemediationTaskIds(options.projectRoot),
+          ...await readFrozenAllocationRemediationTaskIds(options.projectRoot, makeRouteRecordGitRunner(options.projectRoot)),
+        ]
+      : undefined,
   );
   if (!options.baseBranch) return inspection;
 

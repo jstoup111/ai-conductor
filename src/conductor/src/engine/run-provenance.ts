@@ -1,6 +1,7 @@
 import { parseIntakeSourceRef, planStem, resolveFeaturePlanPath, type FinishChoice } from './artifacts.js';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { MalformedFeatureManifestError, resolveFeatureArtifact, worktreeManifestSource } from './feature-manifest-source.js';
 
 export type PrDisposition = 'opened' | 'none' | 'unrecorded';
 
@@ -46,15 +47,23 @@ export async function resolveRunSourceRef(
   try {
     const planPath = await resolveFeaturePlanPath(projectRoot, featureDesc);
     if (!planPath) return undefined;
-    const intakePath = join(projectRoot, '.docs', 'intake', `${planStem(planPath)}.md`);
-    const intakeContent = await readFile(intakePath, 'utf-8').catch(() => null);
+    const intake = await resolveFeatureArtifact(
+      worktreeManifestSource(projectRoot),
+      planStem(planPath),
+      'intake',
+      async () => [`.docs/intake/${planStem(planPath)}.md`],
+    );
+    const intakePath = intake.paths[0];
+    if (intakePath === undefined || (intake.origin === 'manifest' && intake.missing.includes(intakePath))) return undefined;
+    const intakeContent = await readFile(join(projectRoot, intakePath), 'utf-8').catch(() => null);
     // `parseIntakeSourceRef` validates and canonicalizes the marker value. Its
     // whitespace matcher also accepts a newline, so first reject a blank marker
     // line rather than accidentally reading the following line as its value.
     const sourceRefLine = intakeContent?.match(/^\s*Source-Ref:[^\S\r\n]*(\S+)?[^\r\n]*$/im);
     if (!sourceRefLine?.[1]) return undefined;
     return parseIntakeSourceRef(intakeContent);
-  } catch {
+  } catch (error) {
+    if (error instanceof MalformedFeatureManifestError) throw error;
     return undefined;
   }
 }

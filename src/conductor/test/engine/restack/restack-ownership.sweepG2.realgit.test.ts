@@ -41,7 +41,7 @@ describe('restack path ownership sweep (real local Git)', () => {
 
     await expect(runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'feature-repair', events, git: makeGitRunner(subject.repo),
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
 
     expect(refusals).toEqual([expect.objectContaining({ reason: 'replay-mismatch', child: 2, detail: 'src/g.ts' })]);
     expect(await stackRefs(subject)).toBe(before);

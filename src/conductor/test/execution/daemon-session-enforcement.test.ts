@@ -1,4 +1,6 @@
-// Covers: task:1, task:10, task:15
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
+// Covers: task:1, task:6, task:10, task:15
 
 import { describe, expect, it, vi } from 'vitest';
 import { readFile, readdir } from 'node:fs/promises';
@@ -35,7 +37,7 @@ describe('guardDaemonSessionInvocation', () => {
   it('exports exactly the sanctioned worker subcommands and permits each one', () => {
     expect(SESSION_SANCTIONED_SUBCOMMANDS).toEqual([
       'scoped-run', 'task', 'overlap-scan', 'plan-protected-targets', 'manual-test-record',
-      'derive-feedback', 'scope-check', 'task-membership-check', 'round-stamp', 'github-operation',
+      'derive-feedback', 'scope-check', 'task-membership-check', 'round-stamp', 'stack-commit-guard', 'github-operation',
     ]);
     for (const subcommand of SESSION_SANCTIONED_SUBCOMMANDS) {
       expect(guardDaemonSessionInvocation(argvFor(subcommand), markedEnv())).toEqual({ allowed: true });
@@ -53,6 +55,7 @@ describe('guardDaemonSessionInvocation', () => {
     ['scope-check', true],
     ['task-membership-check', true],
     ['round-stamp', true],
+    ['stack-commit-guard', true],
     ['github-operation', true],
     ['daemon', false],
     ['config', false],
@@ -69,15 +72,13 @@ describe('guardDaemonSessionInvocation', () => {
     },
   );
 
-  it('refuses any conductor invocation when the daemon-session marker is set', () => {
+  it('refuses any conductor invocation with a subcommand when the daemon-session marker is set', () => {
     for (const argv of [
       argvFor('daemon', 'park', 'some-slug'),
       argvFor('daemon', 'restart'),
       argvFor('reseal', '--feature', 'x'),
       argvFor('shipped-record', '--slug', 'x', '--pr', 'url'),
       argvFor('engineer'),
-      argvFor('--interactive'),
-      argvFor(),
     ]) {
       const verdict = guardDaemonSessionInvocation(argv, markedEnv());
       expect(verdict.allowed).toBe(false);
@@ -90,6 +91,41 @@ describe('guardDaemonSessionInvocation', () => {
         );
       }
     }
+  });
+
+  // Covers: task:12
+  it.each([
+    [argvFor()],
+    [argvFor('--help')],
+    [argvFor('--help', '--zz-unknown-token')],
+  ])('explains a missing subcommand without reflecting argv: %j', (argv) => {
+    const verdict = guardDaemonSessionInvocation(argv, markedEnv());
+
+    expect(verdict).toMatchObject({ allowed: false, subcommand: 'none' });
+    if (verdict.allowed) throw new Error('expected no-subcommand refusal');
+    expect(verdict.message).toContain(
+      'ai-conductor was invoked without a subcommand from inside a daemon-managed session.',
+    );
+    expect(verdict.message).not.toContain('blocked subcommand: <none>');
+    expect(verdict.message).not.toContain('--zz-unknown-token');
+    for (const sanctioned of SESSION_SANCTIONED_SUBCOMMANDS) {
+      expect(verdict.message).toContain(sanctioned);
+    }
+  });
+
+  // Covers: task:12
+  it('leaves known blocked and sanctioned subcommands unchanged', () => {
+    expect(guardDaemonSessionInvocation(argvFor('daemon', 'status'), markedEnv())).toEqual({
+      allowed: false,
+      subcommand: 'daemon',
+      message: expect.stringContaining('blocked subcommand: daemon'),
+    });
+    expect(
+      guardDaemonSessionInvocation(
+        argvFor('github-operation', '--request-file', '/tmp/request.json'),
+        markedEnv(),
+      ),
+    ).toEqual({ allowed: true });
   });
 
   it('names the blocked subcommand in the refusal', () => {
@@ -131,6 +167,8 @@ describe('guardDaemonSessionInvocation', () => {
       argvFor('task-membership-check', '/worktree/.git/COMMIT_EDITMSG'),
       // prepare-commit-msg stamps the routed round onto the session's own commit.
       argvFor('round-stamp', '/worktree/.git/COMMIT_EDITMSG'),
+      // The pre-commit hook invokes this guard before any phase-marker check.
+      argvFor('stack-commit-guard'),
       // FINISH publication prompts submit PR prose through the guarded operation.
       argvFor('github-operation', '--request-file', '/tmp/pr-prose-request.json'),
     ]) {
@@ -138,6 +176,31 @@ describe('guardDaemonSessionInvocation', () => {
     }
     // The sanctioned set is worker commands only — orchestration verbs stay blocked.
     expect(guardDaemonSessionInvocation(argvFor('test-suite'), markedEnv()).allowed).toBe(false);
+  });
+
+  // Covers: task:13
+  it('sanctions only the stack commit guard, never operator landing commands', () => {
+    expect(SESSION_SANCTIONED_SUBCOMMANDS).toContain('stack-commit-guard');
+    expect(guardDaemonSessionInvocation(argvFor('stack', 'land'), markedEnv()).allowed).toBe(false);
+    expect(guardDaemonSessionInvocation(argvFor('stack', 'owners'), markedEnv()).allowed).toBe(false);
+  });
+
+  // Covers: task:8
+  it('refuses operator-recorded restack decisions before any feature read or command dispatch', async () => {
+    expect(SESSION_SANCTIONED_SUBCOMMANDS).not.toContain('stack');
+    const readFeaturePath = vi.fn();
+    const dispatch = vi.fn(async () => {
+      readFeaturePath('/project/.worktrees/demo');
+      return 0;
+    });
+    await expect(dispatchCliEntry({
+      argv: argvFor('stack', 'restack-resolve', '--slug', 'demo', '--child', '2', '--decision', 'operator answer'),
+      environment: markedEnv(),
+      dispatch,
+      diagnostic: vi.fn(),
+    })).resolves.toEqual({ exitCode: 1, refused: true });
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(readFeaturePath).not.toHaveBeenCalled();
   });
 
   it('never grants build-review operator authority to a daemon session', () => {
@@ -220,7 +283,7 @@ function claudeCapture() {
       return Promise.resolve({ stdout: 'ok', stderr: '', exitCode: 0, failed: false }) as any;
     },
   );
-  return { calls, provider: new ClaudeProvider(undefined, subprocessFactory) };
+  return { calls, provider: new ClaudeProvider(dispatchGitGuard, undefined, subprocessFactory) };
 }
 
 function codexCapture() {
@@ -250,7 +313,7 @@ function codexCapture() {
       }) as any;
     },
   );
-  return { calls, provider: new CodexProvider(runDoctor, 'codex', undefined, subprocessFactory as any) };
+  return { calls, provider: new CodexProvider(dispatchGitGuard, runDoctor, 'codex', undefined, subprocessFactory as any) };
 }
 
 function piCapture() {
@@ -269,11 +332,12 @@ function piCapture() {
     },
   );
   // Provision HARNESS.md so Pi's invocation preflight reaches the spawn.
-  const provider = new PiProvider('pi', subprocessFactory, {
+  const provider = new PiProvider(dispatchGitGuard, 'pi', subprocessFactory, {
     stat: async (path) => ({
       isFile: () => path === '/home/agent/.agents/skills/HARNESS.md',
       isDirectory: () => false,
     }),
+    access: async () => {},
     env: {},
     homeDir: () => '/home/agent',
     cwd: () => '/workspace',

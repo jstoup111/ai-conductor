@@ -1,4 +1,4 @@
-// Covers: task:1, task:20, task:24
+// Covers: task:20, task:24, task:1
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { execFile as execFileCallback } from 'node:child_process';
@@ -402,6 +402,24 @@ describe('appendTimingSection', () => {
     expect(rendered.endsWith(
       '\n## Time\nstate: partial\nactive_ms: 100\nreason: open-executions:parallel:manual_test,step:build_review\n',
     )).toBe(true);
+  });
+
+  // Covers: task:1
+  it('keeps an unreadable-ledger partial Time block reason-free', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'shipped-record-unreadable-timing-'));
+    try {
+      await mkdir(join(directory, '.pipeline'), { recursive: true });
+      await writeFile(join(directory, '.pipeline', 'events.jsonl'), 'not json\n', 'utf8');
+
+      const rendered = appendTimingSection(
+        renderShippedRecordWithCost(fields, rollup),
+        await computeTimingRollup(directory),
+      );
+
+      expect(rendered.endsWith('\n## Time\nstate: partial\n')).toBe(true);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it('escapes NUL delimiters in a partial reason before writing Markdown', () => {

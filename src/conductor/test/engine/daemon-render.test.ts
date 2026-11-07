@@ -89,7 +89,8 @@ describe('renderDaemonEvent', () => {
       '· ✗ build failed (try 2): boom',
     ]);
     expect(lines({ type: 'step_failed', step: 'build', error: 'boom\nat frame', retryCount: 2 })).toEqual([
-      '· ✗ build failed (try 2): boom\nat frame',
+      '· ✗ build failed (try 2): boom',
+      '· │ at frame',
     ]);
     expect(lines({
       type: 'step_refused',
@@ -154,8 +155,8 @@ describe('renderDaemonEvent', () => {
         { rubric: 'testQuality', findingId: 'sha256:two', confidence: 40, floor: 50 },
       ],
     })).toEqual([
-      '· build_review suppressed testQuality:sha256:one (confidence 69 < floor 70)',
-      '· build_review suppressed testQuality:sha256:two (confidence 40 < floor 50)',
+      '·   build_review suppressed testQuality:sha256:one (confidence 69 < floor 70)',
+      '·   build_review suppressed testQuality:sha256:two (confidence 40 < floor 50)',
       '·   build_review [lap-current] outer verdict: PASS (raw: FAIL)',
     ]);
   });
@@ -365,7 +366,7 @@ describe('renderDaemonEvent', () => {
   it('renders closed FINISH publication progress and dispositions without raw evidence', () => {
     expect(lines({
       type: 'finish_publication_transition', phase: 'started', transition: 'write_shipped_record',
-    } as ConductorEvent)).toEqual(['· ▶ FINISH publication: write_shipped_record']);
+    } as ConductorEvent)).toEqual(['·   ▶ FINISH publication: write_shipped_record']);
     expect(lines({
       type: 'finish_publication_blocked', condition: 'release_readiness_missing',
     } as ConductorEvent)).toEqual(['· ✋ FINISH publication blocked: release_readiness_missing']);

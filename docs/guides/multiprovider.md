@@ -173,9 +173,26 @@ loading.
    ```
 
 **Observable outcome:** each Pi step spawns `pi` with `--provider`, `--model`, and `--thinking <effort>`.
-A Pi run that exits `0` but ends with an error stop — for example `No API key for provider: cline` —
-fails the step with that message instead of passing. Keys, precedence, and every validation error are
-in the [configuration reference](../reference/configuration.md#llm_providers).
+A Pi run that exits `0` but ends with an error stop fails the step with that message instead of
+passing. Keys, precedence, and every validation error are in the
+[configuration reference](../reference/configuration.md#llm_providers).
+
+### Pi auth, rate-limit, and usage failures
+
+The engine classifies these Pi failures from the terminal error stop, or from stderr on a non-zero
+exit. A classified failure reports a fixed message and never echoes Pi's text:
+
+| A Pi output line starts with | Classified as | Engine behavior |
+| --- | --- | --- |
+| `No API key found for `, `No API key for provider: ` | auth, credential missing | park on Pi's `auth.json` |
+| `Authentication failed for "`, `OAuth refresh failed for `, `401` | auth, credential rejected | park on Pi's `auth.json` |
+| `429` plus a quota term (for example `insufficient_quota`, `Monthly usage limit reached`, `billing`) | usage exhausted | suppress Pi for 3600 seconds; later walks use the next candidate |
+| `429` without a quota term | rate limited | wait and retry Pi without consuming retry budget |
+
+An auth park watches `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`). Run Pi's
+`/login` to rewrite it with a valid JSON object; the step resumes at the same attempt. Recovery steps
+are in [auth parks](../runbooks/stalled-or-stuck-feature.md#auth-parks). Any other Pi failure stays an
+ordinary step failure.
 
 ## Usage-exhaustion recovery
 
@@ -194,7 +211,7 @@ records the exhausted provider and deadline; see [artifacts](../reference/artifa
 | --- | --- | --- | --- |
 | Executable | `$CLAUDE_EXECUTABLE`, default `claude` | `$CODEX_EXECUTABLE`, default `codex` | `$PI_EXECUTABLE`, default `pi` |
 | Skill catalog | `~/.claude/skills` | `~/.agents/skills` | `~/.agents/skills`, `$PI_CODING_AGENT_DIR/skills` (default `~/.pi/agent/skills`), and the project's `.agents/skills` |
-| Project instruction file | `CLAUDE.md` | `AGENTS.md` | n/a; `~/.agents/skills/HARNESS.md` is passed with `--append-system-prompt` |
+| Project instruction file | `CLAUDE.md` | `AGENTS.md` | n/a; `~/.agents/skills/HARNESS.md` is passed with `--append-system-prompt`, and the step's engine system prompt follows in a second `--append-system-prompt` file (private `0600` temp file, removed after the run) |
 | Skill invocation syntax | `/skill-name` | `$skill-name` | `/skill:skill-name`, passed on standard input |
 | Explicit-only metadata | `disable-model-invocation: true` in `SKILL.md` | `policy.allow_implicit_invocation: false` in `agents/openai.yaml` | n/a |
 | Interactive steps | a real REPL | none — `codex exec` is one-shot, streamed as JSONL | none — one-shot JSONL output |
@@ -282,6 +299,14 @@ A manifest requires three fields — `kind: llm_provider`, a `name` matching `[a
 usable in `llm_provider` exactly like `claude` or `codex`. An `llm_provider` entrypoint must export
 `invoke`. The engine selects an operator-facing interactive dispatch through
 `InvokeOptions.interactive`; plugins do not implement a separate interactive method.
+
+A provider that delivers the engine-built system prompt (`InvokeOptions.systemPrompt`) to its model
+must declare `systemPromptCapability = { deliversSystemPrompt: true }`. Without that declaration, the
+engine refuses every dispatch that carries a system prompt before the plugin's `invoke` runs, and
+treats the candidate as setup-unavailable with capability `system-prompt-delivery`. When no candidate
+can deliver the prompt, the daemon halts `needs-human` with the reason
+`Provider <name> cannot receive the engine system prompt: missing systemPromptCapability declaration.`
+Dispatches without a system prompt are unaffected.
 
 An invalid manifest is skipped with a warning. An incompatible `harness_version` or a missing or
 malformed entrypoint aborts startup rather than degrading silently.

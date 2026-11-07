@@ -158,6 +158,57 @@ describe('remediation case artifact', () => {
     }));
   });
 
+  it('accepts a bound act row declaring a residual-gap reRaise', async () => {
+    const reRaise = { kind: 'residual-gap', reason: 'the repair left a narrower gap' } as const;
+    const judgement = {
+      ...CASE_V1,
+      cases: [{ ...CASE_V1.cases[0], reRaise }, ...CASE_V1.cases.slice(1)],
+    };
+
+    await expect(read(judgement)).resolves.toEqual({
+      ok: true,
+      judgement,
+    });
+  });
+
+  it('accepts a bound act row declaring a repeat reRaise', async () => {
+    const reRaise = { kind: 'repeat', reason: 'the same defect is back' } as const;
+    const judgement = {
+      ...CASE_V1,
+      cases: [{ ...CASE_V1.cases[0], reRaise }, ...CASE_V1.cases.slice(1)],
+    };
+
+    await expect(read(judgement)).resolves.toEqual({
+      ok: true,
+      judgement,
+    });
+  });
+
+  async function expectMalformedReRaise(reRaise: unknown) {
+    const judgement = {
+      ...CASE_V1,
+      cases: [{ ...CASE_V1.cases[0], reRaise }, ...CASE_V1.cases.slice(1)],
+    };
+
+    await expect(read(judgement)).resolves.toEqual({ ok: false, reason: 'invalid-case-keys' });
+  }
+
+  it('rejects reRaise with an unknown kind as a malformed case row', async () => {
+    await expectMalformedReRaise({ kind: 'maybe', reason: 'the repair left a narrower gap' });
+  });
+
+  it('rejects reRaise with an empty reason as a malformed case row', async () => {
+    await expectMalformedReRaise({ kind: 'residual-gap', reason: '' });
+  });
+
+  it('rejects reRaise with an 8,001 character reason as a malformed case row', async () => {
+    await expectMalformedReRaise({ kind: 'residual-gap', reason: 'r'.repeat(8_001) });
+  });
+
+  it('rejects reRaise with an extra note as a malformed case row', async () => {
+    await expectMalformedReRaise({ kind: 'residual-gap', reason: 'the repair left a narrower gap', note: 'unexpected' });
+  });
+
   it.each([
     ['an empty list', []],
     ['an empty reason', [{ caseId: 'R', reason: '' }]],

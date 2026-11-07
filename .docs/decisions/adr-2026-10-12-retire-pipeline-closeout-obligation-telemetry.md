@@ -70,6 +70,11 @@ Amend D3 only. The event kinds, CLI, and consumers stay, and simply receive noth
    `pipeline_tail_diagnostic` with reason `unadmitted-type`, the ledger path, and the record's byte offset, and polling
    continues. This makes adr-2026-08-13 decision 5's allowlist mechanical. It also means leftover `pipeline_closeout*`
    lines in existing worktrees never reach the bus as undeclared kinds.
+
+   > **Amended 2026-10-24 by #3376:** The admitted set also includes `github_operation_failed`, which the
+   > `github-operation` CLI writes to the sibling ledger when a guarded operation fails. The set is still exactly the
+   > `ExternalPipelineEvent` union, and unadmitted kinds are still diagnosed and not re-emitted
+   > (adr-2026-10-24-finish-surfaces-guarded-publish-failures D1, D2).
 4. **The build-tail rollup measures task execution and post-resolution ticks only.** A build window carries its
    classification, task-execution segment, and post-resolution ticks. The tick label `closeout` for a no-head-move
    tick is unchanged, because it names a tail phase, not an obligation event. A window no longer needs a closeout

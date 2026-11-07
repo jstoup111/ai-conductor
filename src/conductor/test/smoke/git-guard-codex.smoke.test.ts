@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 // Covers: task:16
 import { execFileSync } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -33,7 +35,7 @@ describe.skipIf(!available)('Codex git guard live smoke', () => {
     await initTestRepo(worktree);
     await prepareWorktree(worktree);
 
-    const result = await new CodexProvider().invoke({
+    const result = await new CodexProvider(dispatchGitGuard).invoke({
       cwd: worktree,
       sessionId: 'git-guard-codex-smoke',
       resume: false,

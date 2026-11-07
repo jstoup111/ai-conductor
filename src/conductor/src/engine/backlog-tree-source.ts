@@ -6,6 +6,8 @@
  */
 export interface BacklogTreeSource {
   listPlanFiles(): Promise<string[]>;
+  /** Repo-relative `.docs/<slug>/manifest.json` paths in the committed tree. */
+  listFeatureManifests?(): Promise<string[]>;
   listShippedFiles(): Promise<string[]>;
   listAdrFiles(): Promise<string[]>;
   readFile(relPath: string): Promise<string | null>;

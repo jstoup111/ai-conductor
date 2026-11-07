@@ -12,13 +12,9 @@ import {
 } from '../types/plugin.js';
 import type { BuiltInProviderId } from '../execution/provider-catalog.js';
 import { registerBuiltInLlmProviders } from './builtin-llm-providers.js';
-import { TerminalSubscriber } from '../ui/subscriber.js';
-import { TerminalRenderer, type TerminalRendererOptions } from '../ui/terminal-renderer.js';
 import { LocalMemoryProvider } from './local-memory-provider.js';
 import { resolveOtelConfig } from './otel/otel-config.js';
 import { createOtelVisualizer } from './otel/create-otel-visualizer.js';
-import type { ConductorEventEmitter } from '../ui/events.js';
-import type { UIEventHandler } from '../ui/types.js';
 
 /**
  * Load and instantiate a plugin from its manifest and entrypoint.
@@ -197,36 +193,29 @@ export async function discoverPlugins(
 }
 
 /**
- * Registers built-in plugins (ClaudeProvider, CodexProvider, TerminalRenderer) into the registry.
+ * Registers built-in engine plugins into the registry.
  * Task 11: ClaudeProvider registers as llm_provider:claude
- * TerminalRenderer registers as ui_renderer:terminal; the subscriber is internal lifecycle infrastructure.
- * @returns TerminalSubscriber instance so caller can call start()/stop()
  */
 export function registerBuiltins(
   registry: PluginRegistry,
-  events: ConductorEventEmitter,
-  rendererOptsOrLegacyCallback?: TerminalRendererOptions | UIEventHandler,
-  legacyRendererOptsOrTimeout?: TerminalRendererOptions | number,
-  timeout = 10,
-  installed?: ReadonlySet<BuiltInProviderId>,
-): TerminalSubscriber {
-  // Compatibility for callers compiled before ADR-003. The callback is ignored:
-  // subscriber fan-out only receives UIRenderers through start().
-  const rendererOpts = typeof rendererOptsOrLegacyCallback === 'function'
-    ? legacyRendererOptsOrTimeout as TerminalRendererOptions | undefined
-    : rendererOptsOrLegacyCallback;
-  const codexDoctorTimeoutSeconds = typeof legacyRendererOptsOrTimeout === 'number'
-    ? legacyRendererOptsOrTimeout
-    : timeout;
-  const codexDoctorTimeoutMs = codexDoctorTimeoutSeconds * 1_000;
+  timeoutOrLegacy: number | unknown = 10,
+  installed?: ReadonlySet<BuiltInProviderId> | unknown,
+  ...legacy: unknown[]
+): void {
+  // Older engine callers supplied UI construction arguments here. Keep them
+  // harmless while downstream callers move to entry-level terminal composition.
+  const timeout = typeof timeoutOrLegacy === 'number'
+    ? timeoutOrLegacy
+    : legacy.find((argument): argument is number => typeof argument === 'number') ?? 10;
+  const installedProviders = installed instanceof Set
+    ? installed
+    : legacy.find((argument): argument is ReadonlySet<BuiltInProviderId> => argument instanceof Set);
+  const codexDoctorTimeoutMs = timeout * 1_000;
   if (!Number.isFinite(codexDoctorTimeoutMs) || codexDoctorTimeoutMs <= 0) {
     throw new Error('codex_doctor_timeout_seconds must be a finite positive number representable in milliseconds');
   }
 
-  registerBuiltInLlmProviders(registry, { installed, codexDoctorTimeoutMs });
-
-  if (rendererOpts) registry.register('ui_renderer', 'terminal', new TerminalRenderer(rendererOpts));
-  const subscriber = new TerminalSubscriber(events);
+  registerBuiltInLlmProviders(registry, { installed: installedProviders, codexDoctorTimeoutMs });
 
   // adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration / Task A3: Register built-in local memory provider (C1 — real provider, not null)
   registry.register('memory_provider', 'local', LocalMemoryProvider);
@@ -246,9 +235,8 @@ export function registerBuiltins(
         env: (ctx.startContext as import('../types/plugin.js').VisualizerStartContext & { env?: NodeJS.ProcessEnv }).env,
         resolvedWarningsHandled: ctx.resolvedWarningsHandled,
       },
-      ctx.emitter,
+      ctx.emitter as import('./conductor-event-emitter.js').ConductorEventEmitter,
     );
   });
 
-  return subscriber;
 }

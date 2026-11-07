@@ -1,3 +1,5 @@
+import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
+
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ClaudeProvider, parseJsonResult } from '../../src/execution/claude-provider';
 import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
@@ -82,7 +84,7 @@ describe('Claude stream JSON result parsing', () => {
     ].join('\n');
     mockExeca.mockResolvedValue({ stdout, stderr: '', exitCode: 0, failed: false } as any);
 
-    const result = await new ClaudeProvider(undefined, mockExeca as never).invoke({ prompt: 'Do the thing', sessionId: 'abc-123', resume: false });
+    const result = await new ClaudeProvider(dispatchGitGuard, undefined, mockExeca as never).invoke({ prompt: 'Do the thing', sessionId: 'abc-123', resume: false });
 
     expect(result).toMatchObject({
       success: false,
@@ -98,7 +100,7 @@ describe('Claude stream JSON result parsing', () => {
     });
     mockExeca.mockResolvedValue({ stdout, stderr: '', exitCode: 0, failed: false } as any);
 
-    const result = await new ClaudeProvider(undefined, mockExeca as never).invoke({ prompt: 'Do the thing', sessionId: 'abc-123', resume: false });
+    const result = await new ClaudeProvider(dispatchGitGuard, undefined, mockExeca as never).invoke({ prompt: 'Do the thing', sessionId: 'abc-123', resume: false });
 
     expect(result).toMatchObject({ output: 'text without complete usage', tokenUsage: undefined });
   });
@@ -110,7 +112,7 @@ describe('Claude stream JSON result parsing', () => {
     ].join('\n');
     mockExeca.mockResolvedValue({ stdout, stderr: '', exitCode: 0, failed: false } as any);
 
-    const result = await new ClaudeProvider(undefined, mockExeca as never).invoke({ prompt: 'Do the thing', sessionId: 'abc-123', resume: false });
+    const result = await new ClaudeProvider(dispatchGitGuard, undefined, mockExeca as never).invoke({ prompt: 'Do the thing', sessionId: 'abc-123', resume: false });
 
     expect(result).toMatchObject({
       success: false,

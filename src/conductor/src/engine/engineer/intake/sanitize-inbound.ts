@@ -6,6 +6,8 @@
 
 import { createHash } from 'node:crypto';
 import { formatWorkRef, type WorkRef } from '../source-ref.js';
+import type { InboundNeutralization } from '../../../types/intake.js';
+export type { InboundNeutralization };
 
 /** Stable categories reported when inbound prose is neutralized. */
 export type InboundCategory =
@@ -14,11 +16,6 @@ export type InboundCategory =
   | 'system-prompt'
   | 'tool-call'
   | 'armor-lookalike';
-
-export interface InboundNeutralization {
-  category: InboundCategory;
-  count: number;
-}
 
 export interface InboundSanitizeResult {
   text: string;

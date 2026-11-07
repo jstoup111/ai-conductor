@@ -313,6 +313,8 @@ As an operator, I want a shipped stacked feature's child branches and refs clean
 #### Negative Paths
 - Given #500 was closed unmerged, when the operator runs `reclaim-worktree demo`, then the worktree is removed as today, `feat/c1/demo` and `feat/c3/demo` are kept, and the record is kept marked `tornDown`.
 - Given local `feat/c1/demo` has a commit past #c1's merged head, when the sweep reaps `demo`, then `feat/c1/demo` is kept, and the record is kept marked `tornDown`.
+- Given local `feat/c3/demo` differs from #c3's merged head, when the sweep reaps `demo`, then `feat/c3/demo` is kept, the record is kept marked `tornDown`, the watch entry is dropped in that pass, and the sweep logs the reap naming the kept members.
+- Given child teardown fails or the repository cannot be resolved, when the sweep reaps `demo`, then the watch entry is retained and the sweep logs a retained line naming the reason.
 - Given a `tornDown` record for `demo`, when a new feature reusing slug `demo` reaches FINISH, then the freeze, the tip guard and the stack observer ignore the old record, and the new publication replaces it.
 - Given #c3 is unreachable from `origin/main`, when the sweep reaps `demo`, then `feat/c3/demo` is kept, the record is kept marked `tornDown`, and `feat/c1/demo` is deleted.
 - Given deleting `feat/c1/demo` fails, when the sweep reaps `demo`, then the watch entry is retained, the remaining refs are not deleted, and the next sweep retries.

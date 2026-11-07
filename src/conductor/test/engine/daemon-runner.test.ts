@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:3, task:5, task:6, task:8, task:1
 import { describe, it, expect, vi } from 'vitest';
 
 const filesystemWriteOrder = vi.hoisted(() => ({
@@ -62,9 +62,14 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   };
 });
 
+vi.mock('../../src/engine/halt-marker.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/halt-marker.js')>();
+  return { ...actual, writeHaltMarker: vi.fn(actual.writeHaltMarker) };
+});
+
 import { mkdtemp, readFile, rm, mkdir, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import {
@@ -82,11 +87,25 @@ import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ShipmentEvidenceInput } from '../../src/engine/shipment-evidence.js';
 import { renderShippedRecord, specHash } from '../../src/engine/shipped-record.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 import type { OperatorParkedTermination } from '../../src/engine/conductor.js';
+import { makeGitRunner } from '../../src/engine/rebase.js';
+import { readWorktreeOutcome } from '../../src/engine/daemon-deps.js';
+import { runStackPreflight } from '../../src/engine/restack/stack-preflight.js';
+import { writeHaltMarker } from '../../src/engine/halt-marker.js';
+import { journalRefFor, writeRestackJournalBlob } from '../../src/engine/restack/restack-journal.js';
+import type { RestackOpId } from '../../src/engine/restack/restack-types.js';
+import { readRawHaltClass, resolveHaltRetention } from '../../src/engine/daemon-rekick.js';
+import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
+import { parseChildId } from '../../src/engine/child-context.js';
+import { parseRoundId } from '../../src/engine/routing/route-types.js';
+import { Conductor } from '../../src/engine/conductor.js';
+import { admitRound } from '../../src/engine/routing/round-admission.js';
+import { createRouteRecord } from '../../src/engine/routing/route-record-store.js';
 
 // Covers: task:1
 
@@ -155,7 +174,270 @@ function deps(
   };
 }
 
+async function stackPreflightFixture(slug: string): Promise<string> {
+  const repo = await mkdtemp(join(tmpdir(), 'daemon-runner-stack-preflight-'));
+  const git = (args: string[]) => execFile('git', args, { cwd: repo });
+  const commit = async (message: string, path: string, value: string) => {
+    await mkdir(join(repo, path, '..'), { recursive: true });
+    await writeFile(join(repo, path), value);
+    await git(['add', path]);
+    await git(['commit', '-qm', message]);
+    return (await git(['rev-parse', 'HEAD'])).stdout.trim();
+  };
+  await initTestRepo(repo);
+  await writeFile(join(repo, '.gitignore'), '.pipeline/\n');
+  await git(['add', '.gitignore']);
+  await git(['commit', '-qm', 'ignore pipeline']);
+  await commit('base', 'base.txt', 'base\n');
+  await git(['checkout', '-qb', `feat/c1/${slug}`]);
+  const closed = await commit('closed one', 'one.txt', 'one\n');
+  await git(['update-ref', `refs/conductor/${slug}/closed/c1`, closed]);
+  await git(['checkout', '-qb', `feat/daemon-${slug}`]);
+  await commit('leaf', 'leaf.txt', 'leaf\n');
+  await mkdir(join(repo, '.ai-conductor'));
+  await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n  route_whole_feature_fixes: true\n');
+  await mkdir(join(repo, '.docs', 'plans'), { recursive: true });
+  await mkdir(join(repo, '.docs', 'stories'), { recursive: true });
+  await writeFile(join(repo, '.docs', 'stories', `${slug}.md`), `# Stories: ${slug}\n\n## Story 1: One\n\n## Story 2: Two\n`);
+  await writeFile(join(repo, '.docs', 'plans', `${slug}.md`), [
+    `# Implementation Plan: ${slug}`, '', `**Stories:** .docs/stories/${slug}.md`, '', '## Slices', '',
+    '| Slice | Title | Tasks |', '| --- | --- | --- |', '| 1 | One | 1 |', '| 2 | Two | 2 |', '',
+    '### Task 1: One', '**Story:** Story 1', '**Dependencies:** none', '',
+    '### Task 2: Two', '**Story:** Story 2', '**Dependencies:** none', '',
+  ].join('\n'));
+  await writeFile(join(repo, 'positions.json'), '[1,2]');
+  const positions = (await git(['hash-object', '-w', 'positions.json'])).stdout.trim();
+  await git(['update-ref', `refs/conductor/${slug}/positions`, positions]);
+  return repo;
+}
+
+async function leaveLiveRestackJournal(repo: string, slug: string): Promise<void> {
+  const stat = await readFile(`/proc/${process.pid}/stat`, 'utf8');
+  const processStartTime = stat.slice(stat.lastIndexOf(') ') + 2).trim().split(/\s+/)[19];
+  if (processStartTime === undefined) throw new Error('could not read test process start time');
+  const blob = await writeRestackJournalBlob(repo, {
+    opId: 'test-live-owner' as RestackOpId,
+    cause: 'base-refresh',
+    committer: { name: 'Test', email: 'test@example.test', date: '0 +0000' },
+    dirtyPaths: [],
+    refs: [],
+    ranges: [],
+    children: [],
+    state: 'planned',
+    owner: { host: hostname(), pid: process.pid, processStartTime },
+  });
+  await execFile('git', ['update-ref', journalRefFor(slug), blob], { cwd: repo });
+}
+
 describe('engine/daemon-runner — makeRunFeature', () => {
+  it('reports a live journal owner and does not retain its mechanical HALT', async () => {
+    const worktreePath = await stackPreflightFixture(ITEM.slug);
+    const log: string[] = [];
+    try {
+      await leaveLiveRestackJournal(worktreePath, ITEM.slug);
+      const featureDeps = deps({ done: false, halted: false });
+      featureDeps.createWorktree = async () => ({ path: worktreePath, branch: `feat/${ITEM.slug}` });
+      featureDeps.runConductor = async (worktree) => {
+        await runStackPreflight({
+          worktree: worktree.path, slug: ITEM.slug, git: makeGitRunner(worktree.path),
+        });
+      };
+      featureDeps.readOutcome = (worktree) => readWorktreeOutcome(worktree.path);
+      featureDeps.beginFeatureRun = () => ({
+        events: new ConductorEventEmitter(),
+        providerExecution: {
+          configuredProviders: [],
+          runtimes: new ProviderRuntimeSet([]),
+          sessions: new ProviderSessionStore(),
+        },
+        log: (line) => log.push(line),
+        stop: () => {},
+      });
+
+      const outcome = await makeRunFeature(featureDeps)(ITEM);
+      expect(outcome).toMatchObject({ status: 'halted', reason: expect.stringContaining(`${process.pid}`) });
+      expect(log.join('\n')).not.toContain('loop ended without DONE or HALT marker');
+      await expect(resolveHaltRetention(() => readRawHaltClass(worktreePath))).resolves.toEqual({
+        haltClass: 'mechanical', retained: false,
+      });
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a stalled routing preflight refusal from the durable mechanical HALT, not the no-marker fallback', async () => {
+    const worktreePath = await stackPreflightFixture(ITEM.slug);
+    const log: string[] = [];
+    try {
+      const featureDeps = deps({ done: false, halted: false });
+      featureDeps.createWorktree = async () => ({ path: worktreePath, branch: `feat/${ITEM.slug}` });
+      featureDeps.runConductor = async (worktree) => {
+        const events = new ConductorEventEmitter();
+        const persister = new EventPersister(join(worktree.path, '.pipeline', 'events.jsonl'), events);
+        persister.start();
+        try {
+          await runStackPreflight({
+            worktree: worktree.path,
+            slug: ITEM.slug,
+            events: events ?? new ConductorEventEmitter(),
+            git: makeGitRunner(worktree.path),
+            reconcileRounds: async () => ({
+              kind: 'stalled', detail: 'next-host admission refused',
+              rounds: [{
+                roundId: parseRoundId('r1')!, readable: true,
+                unsettledHosts: { [parseChildId(1)!]: 'pending' },
+              }],
+            }),
+          });
+        } finally {
+          persister.stop();
+        }
+      };
+      featureDeps.readOutcome = (worktree) => readWorktreeOutcome(worktree.path);
+      featureDeps.beginFeatureRun = () => ({
+        events: new ConductorEventEmitter(),
+        providerExecution: {
+          configuredProviders: [],
+          runtimes: new ProviderRuntimeSet([]),
+          sessions: new ProviderSessionStore(),
+        },
+        log: (line) => log.push(line),
+        stop: () => {},
+      });
+
+      const outcome = await makeRunFeature(featureDeps)(ITEM);
+      expect(outcome.status).toBe('halted');
+      expect(outcome.reason).toContain('routing rounds stalled: r1 (1: pending); next-host admission refused');
+      expect(log.join('\n')).not.toContain('loop ended without DONE or HALT marker');
+      await expect(resolveHaltRetention(() => readRawHaltClass(worktreePath))).resolves.toEqual({
+        haltClass: 'mechanical', retained: false,
+      });
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:8
+  it('reports the first line when a conductor dispatch ends on a parked r5 routing stop', async () => {
+    const worktreePath = await stackPreflightFixture(ITEM.slug);
+    const log: string[] = [];
+    try {
+      const host = parseChildId(1)!;
+      const roundId = parseRoundId('r5')!;
+      const git = makeGitRunner(worktreePath);
+      const created = await createRouteRecord(worktreePath, ITEM.slug, {
+        roundId,
+        kind: 'audit',
+        sealedAuthored: 0,
+        items: [],
+        allocation: { [host]: { remTaskIds: [], blockBodies: [] } },
+      });
+      if (created.kind !== 'created') throw new Error(`route fixture creation failed: ${created.kind}`);
+      await admitRound(worktreePath, ITEM.slug, created.record, host, { git });
+      await mkdir(join(worktreePath, '.pipeline', 'children', '1'), { recursive: true });
+      await writeFile(join(worktreePath, '.pipeline', 'conduct-state.json'), JSON.stringify({
+        acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done', feature_desc: ITEM.slug,
+      }));
+      await writeFile(join(worktreePath, '.pipeline', 'children', '1', 'conduct-state.json'), JSON.stringify({
+        acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+      }));
+      await execFile('git', ['add', '.ai-conductor', '.docs'], { cwd: worktreePath });
+      await execFile('git', ['commit', '-qm', 'commit conductor fixture artifacts'], { cwd: worktreePath });
+
+      const featureDeps = deps({ done: false, halted: false });
+      featureDeps.createWorktree = async () => ({ path: worktreePath, branch: `feat/${ITEM.slug}` });
+      featureDeps.runConductor = async (worktree, _item, _provider, events) => {
+        const parked = vi.spyOn(
+          Conductor.prototype as unknown as { advanceTail: () => Promise<number | null | 'halt' | 'parked'> },
+          'advanceTail',
+        ).mockResolvedValue('parked');
+        try {
+          await new Conductor({
+            projectRoot: worktree.path,
+            stateFilePath: join(worktree.path, '.pipeline', 'conduct-state.json'),
+            featureSlug: ITEM.slug,
+            fromStep: 'build_review',
+            mode: 'auto',
+            daemon: true,
+            verifyArtifacts: false,
+            config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+            events: events ?? new ConductorEventEmitter(),
+            stepRunner: { run: vi.fn(async () => ({ success: true })), resetSession: vi.fn(async () => {}) },
+            acceptanceRedExec: vi.fn(),
+            childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'no-child' }) },
+          }).run();
+        } finally {
+          parked.mockRestore();
+        }
+      };
+      featureDeps.readOutcome = (worktree) => readWorktreeOutcome(worktree.path);
+      featureDeps.beginFeatureRun = () => ({
+        events: new ConductorEventEmitter(),
+        providerExecution: {
+          configuredProviders: [],
+          runtimes: new ProviderRuntimeSet([]),
+          sessions: new ProviderSessionStore(),
+        },
+        log: (line) => log.push(line),
+        stop: () => {},
+      });
+
+      const outcome = await makeRunFeature(featureDeps)(ITEM);
+      const firstLine = (await readFile(join(worktreePath, '.pipeline', 'HALT'), 'utf8')).split('\n', 1)[0]!;
+      expect(firstLine).toContain('r5');
+      expect(firstLine).toContain('child');
+      expect(outcome).toMatchObject({ status: 'halted', reason: expect.stringContaining(firstLine) });
+      expect(outcome.reason).not.toContain('loop ended without DONE or HALT marker');
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves a failed stack-preflight HALT write reason instead of the no-marker fallback', async () => {
+    const worktreePath = await stackPreflightFixture(ITEM.slug);
+    const log: string[] = [];
+    try {
+      vi.mocked(writeHaltMarker).mockResolvedValueOnce({
+        status: 'failed',
+        path: join(worktreePath, '.pipeline', 'HALT'),
+        reason: 'injected write failure',
+      });
+      const featureDeps = deps({ done: false, halted: false });
+      featureDeps.createWorktree = async () => ({ path: worktreePath, branch: `feat/${ITEM.slug}` });
+      featureDeps.runConductor = async (worktree) => {
+        await runStackPreflight({
+          worktree: worktree.path,
+          slug: ITEM.slug,
+          git: makeGitRunner(worktree.path),
+          reconcileRounds: async () => ({ kind: 'unavailable', detail: 'round advance cas-failed' }),
+        });
+      };
+      featureDeps.readOutcome = (worktree) => readWorktreeOutcome(worktree.path);
+      featureDeps.beginFeatureRun = () => ({
+        events: new ConductorEventEmitter(),
+        providerExecution: {
+          configuredProviders: [],
+          runtimes: new ProviderRuntimeSet([]),
+          sessions: new ProviderSessionStore(),
+        },
+        log: (line) => log.push(line),
+        stop: () => {},
+      });
+
+      const outcome = await makeRunFeature(featureDeps)(ITEM);
+      expect(outcome).toMatchObject({
+        status: 'error',
+        reason: expect.stringContaining('round advance cas-failed'),
+      });
+      expect(outcome.reason).toContain('could not be written');
+      expect(outcome.reason).toContain('injected write failure');
+      expect(log.join('\n')).not.toContain('loop ended without DONE or HALT marker');
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:1
   it.each([
     { item: { slug: 'feature-tiered', tier: 'M' as const }, expectedTier: 'M' },
     { item: { slug: 'feature-untiered' }, expectedTier: undefined },
@@ -193,6 +475,138 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     ]);
     for (const event of emitted) {
       expect(Object.hasOwn(event, 'tier')).toBe(expectedTier !== undefined);
+    }
+  });
+
+  it.each([
+    {
+      name: 'provider evidence is incomplete',
+      events: [
+        { type: 'provider_attempt', step: 'plan', invoked: true },
+        { type: 'step_completed', step: 'plan', activeInterval: { startedAtMs: 0, durationMs: 100 } },
+      ],
+      expected: { state: 'partial', activeMs: 100, reason: 'provider-evidence-incomplete' },
+    },
+    {
+      name: 'the active union is empty',
+      events: [{ type: 'step_completed', step: 'plan' }],
+      expected: { state: 'partial', reason: 'empty-active-union' },
+    },
+    {
+      name: 'active evidence is incomplete',
+      events: [
+        { type: 'step_completed', step: 'explore' },
+        { type: 'step_completed', step: 'plan', activeInterval: { startedAtMs: 0, durationMs: 100 } },
+      ],
+      expected: { state: 'partial', reason: 'active-evidence-incomplete' },
+    },
+    {
+      name: 'provider time falls outside the active union',
+      events: [
+        { type: 'provider_attempt', step: 'plan', invoked: true, observedIntervals: [{ startedAtMs: 200, durationMs: 20 }] },
+        { type: 'step_completed', step: 'plan', activeInterval: { startedAtMs: 0, durationMs: 100 } },
+      ],
+      expected: { state: 'partial', reason: 'provider-outside-active-union' },
+    },
+    {
+      name: 'executions remain open',
+      events: [
+        { type: 'step_started', step: 'build' },
+        { type: 'parallel_started', step: 'wiring_check', branches: ['wiring_check'] },
+        { type: 'step_completed', step: 'plan', activeInterval: { startedAtMs: 0, durationMs: 100 } },
+      ],
+      expected: { state: 'partial', reason: 'open-executions' },
+    },
+  ])('emits the bounded timing reason when $name', async ({ events: timingEvents, expected }) => {
+    const worktreePath = await mkdtemp(join(tmpdir(), 'daemon-runner-feature-shipped-'));
+    try {
+      await mkdir(join(worktreePath, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(worktreePath, '.pipeline', 'events.jsonl'),
+        `${timingEvents.map((event) => JSON.stringify(event)).join('\n')}\n`,
+        'utf8',
+      );
+      await writeFile(join(worktreePath, '.pipeline', 'pipeline-events.jsonl'), '', 'utf8');
+      const events = new ConductorEventEmitter();
+      const emitted: Array<Record<string, unknown>> = [];
+      events.on('feature_shipped', (event) => { emitted.push(event as Record<string, unknown>); });
+      const featureDeps = deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'https://github.com/owner/repo/pull/1' });
+      featureDeps.daemon = true;
+      featureDeps.deferTerminalEffects = true;
+      featureDeps.createWorktree = async () => ({ path: worktreePath, branch: 'feat/feature-shipped' });
+      featureDeps.beginFeatureRun = () => ({
+        events: new ConductorEventEmitter(), rootEvents: events,
+        providerExecution: { configuredProviders: [], runtimes: new ProviderRuntimeSet([]), sessions: new ProviderSessionStore() },
+        stop: () => {},
+      });
+
+      await makeRunFeature(featureDeps)(ITEM);
+
+      expect(emitted[0]?.active).toEqual(expected);
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:1
+  it('labels an unreadable timing ledger at the feature_shipped boundary', async () => {
+    const worktreePath = await mkdtemp(join(tmpdir(), 'daemon-runner-feature-shipped-unreadable-'));
+    try {
+      await mkdir(join(worktreePath, '.pipeline'), { recursive: true });
+      await writeFile(join(worktreePath, '.pipeline', 'events.jsonl'), 'not json\n', 'utf8');
+      const events = new ConductorEventEmitter();
+      const emitted: Array<Record<string, unknown>> = [];
+      events.on('feature_shipped', (event) => { emitted.push(event as Record<string, unknown>); });
+      const featureDeps = deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'https://github.com/owner/repo/pull/1' });
+      featureDeps.daemon = true;
+      featureDeps.deferTerminalEffects = true;
+      featureDeps.createWorktree = async () => ({ path: worktreePath, branch: 'feat/feature-shipped' });
+      featureDeps.beginFeatureRun = () => ({
+        events: new ConductorEventEmitter(), rootEvents: events,
+        providerExecution: { configuredProviders: [], runtimes: new ProviderRuntimeSet([]), sessions: new ProviderSessionStore() },
+        stop: () => {},
+      });
+
+      await makeRunFeature(featureDeps)(ITEM);
+
+      expect({ rollup: await computeTimingRollup(worktreePath), active: emitted[0]?.active }).toEqual({
+        rollup: { state: 'partial' },
+        active: { state: 'partial', reason: 'ledger-unreadable' },
+      });
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:1
+  it('omits the timing reason for a measured feature shipment', async () => {
+    const worktreePath = await mkdtemp(join(tmpdir(), 'daemon-runner-feature-shipped-measured-'));
+    try {
+      await mkdir(join(worktreePath, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(worktreePath, '.pipeline', 'events.jsonl'),
+        `${JSON.stringify({ type: 'step_completed', step: 'plan', activeInterval: { startedAtMs: 0, durationMs: 100 } })}\n`,
+        'utf8',
+      );
+      await writeFile(join(worktreePath, '.pipeline', 'pipeline-events.jsonl'), '', 'utf8');
+      const events = new ConductorEventEmitter();
+      const emitted: Array<Record<string, unknown>> = [];
+      events.on('feature_shipped', (event) => { emitted.push(event as Record<string, unknown>); });
+      const featureDeps = deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'https://github.com/owner/repo/pull/1' });
+      featureDeps.daemon = true;
+      featureDeps.deferTerminalEffects = true;
+      featureDeps.createWorktree = async () => ({ path: worktreePath, branch: 'feat/feature-shipped' });
+      featureDeps.beginFeatureRun = () => ({
+        events: new ConductorEventEmitter(), rootEvents: events,
+        providerExecution: { configuredProviders: [], runtimes: new ProviderRuntimeSet([]), sessions: new ProviderSessionStore() },
+        stop: () => {},
+      });
+
+      await makeRunFeature(featureDeps)(ITEM);
+
+      expect(emitted[0]?.active).toEqual({ state: 'exact', activeMs: 100 });
+    } finally {
+      await rm(worktreePath, { recursive: true, force: true });
     }
   });
 

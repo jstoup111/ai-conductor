@@ -1,26 +1,24 @@
-// Covers: task:4, task:5, task:20, task:29, task:rem-as-built-rem-asbuilt-b00b54a4-1-r1, task:rem-as-built-rem-as-built-rem-v4-n1-push-argv, task:rem-as-built-rem-asbuilt-d1-durable-ref-detection, task:rem-prd-audit-rem-s1-1-exclude-leaf-push-receipts
+// Covers: task:2, task:4, task:5, task:7, task:20, task:29, task:rem-as-built-1-r2, task:rem-as-built-rem-asbuilt-b00b54a4-1-r1, task:rem-as-built-rem-as-built-rem-v4-n1-push-argv, task:rem-as-built-rem-asbuilt-d1-durable-ref-detection, task:rem-prd-audit-rem-s1-1-exclude-leaf-push-receipts
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, rename, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { hasDurableChildState, resolveActiveChild } from '../../src/engine/child-cursor.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Conductor } from '../../src/engine/conductor.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { hasDurableChildState, resolveActiveChild, resolveChildBase, resolveSealedFirst, resolveSealedLeaf } from '../../src/engine/child-cursor.js';
 import { observeStackDimension } from '../../src/engine/stack-publication.js';
-import type { GitRunner } from '../../src/engine/rebase.js';
-import {
-  writeCoverageBindingEnvelope,
-  type CoverageBindingEnvelopeFilesystem,
-} from '../../src/engine/coverage-binding-envelope.js';
+import { loadSliceTopology } from '../../src/engine/slice-topology.js';
+import { parseChildId } from '../../src/engine/child-context.js';
+import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
+import { parseCommitSha } from '../../src/engine/restack/restack-types.js';
+import { admitRound } from '../../src/engine/routing/round-admission.js';
+import { createRouteRecord, readRouteRecord, writeRoutingTransaction } from '../../src/engine/routing/route-record-store.js';
+import { closureRefFor, repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../../src/engine/routing/routing-refs.js';
+import { parseRoundId, type RouteRecord } from '../../src/engine/routing/route-types.js';
 
 const execFile = promisify(execFileCallback);
-
-const envelopeFilesystem: CoverageBindingEnvelopeFilesystem = {
-  readFile: (path) => readFile(path, 'utf8'),
-  mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
-  writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
-  rename,
-};
 
 let repository: string;
 const linkedWorktrees: string[] = [];
@@ -35,21 +33,50 @@ async function seal(
   status: 'done' | 'failed' = 'done',
   storyOwnership = true,
 ): Promise<void> {
-  const taskSlices = Object.fromEntries(positions.map((position) => [String(position), position]));
-  await writeCoverageBindingEnvelope(worktree, {
-    version: 1,
-    slug: 'demo',
-    runId: 'run-1',
-    status,
-    entries: [],
-    sliceMembership: { taskSlices, titles: positions.map((position) => `Child ${position}`) },
-    ...(storyOwnership ? { storyOwnership: Object.fromEntries(positions.map((position) => [`S${position}`, position])) } : {}),
-  }, envelopeFilesystem);
+  void status;
+  void storyOwnership;
+  await writeTopology(worktree, positions);
+  if (positions.length > 1) await recordPositions(worktree, positions);
 }
 
 async function configureStacked(worktree: string, enabled: boolean): Promise<void> {
   await mkdir(join(worktree, '.ai-conductor'), { recursive: true });
   await writeFile(join(worktree, '.ai-conductor', 'config.yml'), `stacked_prs:\n  enabled: ${enabled}\n  max_slices: 3\n`);
+}
+
+function slicedPlan(positions: readonly number[]): string {
+  const rows = positions.map((position) => `| ${position} | Child ${position} | ${position} |`);
+  const tasks = positions.flatMap((position) => [
+    `### Task ${position}: Child ${position}`,
+    `**Story:** Story ${position}`,
+    '**Dependencies:** none',
+    '',
+  ]);
+  return [
+    '# Implementation Plan: demo', '', '**Stories:** .docs/stories/demo.md', '', '## Slices', '',
+    '| Slice | Title | Tasks |', '| --- | --- | --- |', ...rows, '', ...tasks,
+  ].join('\n');
+}
+
+async function writeTopology(worktree: string, positions: readonly number[], enabled?: boolean): Promise<void> {
+  await Promise.all([
+    ...(enabled === undefined ? [] : [configureStacked(worktree, enabled)]),
+    mkdir(join(worktree, '.docs', 'plans'), { recursive: true }),
+    mkdir(join(worktree, '.docs', 'stories'), { recursive: true }),
+    mkdir(join(worktree, '.docs', 'complexity'), { recursive: true }),
+  ]);
+  await Promise.all([
+    writeFile(join(worktree, '.docs', 'plans', 'demo.md'), slicedPlan(positions)),
+    writeFile(join(worktree, '.docs', 'stories', 'demo.md'), positions.map((position) => `## Story ${position}: Child ${position}`).join('\n\n')),
+    writeFile(join(worktree, '.docs', 'complexity', 'demo.md'), 'Tier: M\nStacked-Delivery: approved\n'),
+  ]);
+}
+
+async function recordPositions(worktree: string, positions: readonly number[]): Promise<void> {
+  const path = join(worktree, 'positions.json');
+  await writeFile(path, JSON.stringify(positions));
+  const blob = (await git(['hash-object', '-w', path], worktree)).trim();
+  await git(['update-ref', 'refs/conductor/demo/positions', blob], worktree);
 }
 
 async function createLinkedLeafWorktree(label: string): Promise<string> {
@@ -80,14 +107,91 @@ afterEach(async () => {
 });
 
 describe('resolveActiveChild', () => {
+  // Covers: task:2
+  it('resolves a two-child stack from sealed topology with no coverage envelope', async () => {
+    await writeTopology(repository, [1, 2], true);
+    const tip = (await git(['rev-parse', 'feat/daemon-demo'])).trim();
+    await git(['branch', 'feat/c1/demo', tip]);
+    await git(['update-ref', 'refs/conductor/demo/closed/c1', tip]);
+    await recordPositions(repository, [1, 2]);
+    await git(['checkout', '-q', 'feat/daemon-demo']);
+
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({
+      kind: 'active', child: 2, position: 2, isLeaf: true, branch: 'feat/daemon-demo',
+    });
+    await expect(resolveSealedFirst(repository)).resolves.toBe(1);
+    await expect(resolveSealedLeaf(repository)).resolves.toBe(2);
+    await expect(resolveChildBase(repository, 'demo', parseChildId(2)!)).resolves.toMatchObject({ kind: 'parent', parent: 1, sha: tip });
+  });
+
+  // Covers: task:2
+  it('keeps a durable stack active when stacked delivery is later disabled', async () => {
+    await writeTopology(repository, [1, 2], false);
+    const tip = (await git(['rev-parse', 'feat/daemon-demo'])).trim();
+    await git(['branch', 'feat/c1/demo', tip]);
+    await git(['update-ref', 'refs/conductor/demo/closed/c1', tip]);
+    await recordPositions(repository, [1, 2]);
+
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toMatchObject({ kind: 'active', child: 2 });
+    await expect(loadSliceTopology(repository, 'demo')).resolves.toMatchObject({
+      kind: 'sliced', storyOwnership: { '2': 2 },
+    });
+  });
+
+  // Covers: task:2
+  it('carries a changed positions cause when durable stack topology cannot resolve', async () => {
+    await writeTopology(repository, [1, 3], true);
+    await recordPositions(repository, [1, 2]);
+
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({
+      kind: 'topology-unavailable', cause: 'positions-changed',
+      planPath: '.docs/plans/demo.md', recordedPositions: [1, 2], planPositions: [1, 3],
+    });
+  });
+
+  it.each([
+    ['an unsliced plan', '# Implementation Plan: demo\n\n### Task 1: Flat\n**Dependencies:** none\n', []],
+    ['a singleton plan', undefined, [1]],
+  ] as const)('does not resolve %s as no-child after a two-child stack was sealed', async (_label, plan, proposed) => {
+    await writeTopology(repository, plan === undefined ? [1] : [1, 2], true);
+    if (plan !== undefined) await writeFile(join(repository, '.docs', 'plans', 'demo.md'), plan);
+    await recordPositions(repository, [1, 2]);
+
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({
+      kind: 'topology-unavailable', cause: 'positions-changed',
+      planPath: '.docs/plans/demo.md', recordedPositions: [1, 2], planPositions: proposed,
+    });
+  });
+
+  // Covers: task:2
+  it('keeps a flat feature on the no-child path', async () => {
+    await mkdir(join(repository, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(repository, '.docs', 'plans', 'demo.md'), '# Implementation Plan: demo\n\n### Task 1: Flat\n**Dependencies:** none\n');
+
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'no-child' });
+  });
+
   it('retains stacked protection from conductor refs after disposable child metadata is gone', async () => {
     await rm(join(repository, '.pipeline', 'children'), { recursive: true, force: true });
-    await rm(join(repository, '.pipeline', 'coverage-binding-envelope.json'), { force: true });
     const tip = (await git(['rev-parse', 'HEAD'])).trim();
     await git(['update-ref', 'refs/conductor/demo/publication', tip]);
 
     await expect(hasDurableChildState(repository, 'demo')).resolves.toBe(true);
-    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'envelope-missing' });
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'topology-unavailable', cause: 'plan-missing', planPath: '.docs/plans/demo.md' });
+  });
+
+  // Covers: S1.1
+  it('keeps the active child after a positions-preserving DECIDE amendment, with no rebinding step to wait on', async () => {
+    await writeTopology(repository, [1, 2], true);
+    const tip = (await git(['rev-parse', 'feat/daemon-demo'])).trim();
+    await git(['branch', 'feat/c1/demo', tip]);
+    await git(['update-ref', 'refs/conductor/demo/closed/c1', tip]);
+    await recordPositions(repository, [1, 2]);
+    await writeFile(join(repository, '.docs', 'plans', 'demo.md'), `${slicedPlan([1, 2])}\nOperator clarified the leaf scope.\n`);
+
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({
+      kind: 'active', child: 2, position: 2, isLeaf: true, branch: 'feat/daemon-demo',
+    });
   });
 
   // Covers: task:rem-prd-audit-rem-s1-2-not-applicable-after-leaf-push
@@ -107,18 +211,18 @@ describe('resolveActiveChild', () => {
   });
 
   it.each([
-    'refs/conductor/demo/positions',
-    'refs/conductor/demo/publication',
-    'refs/conductor/demo/closed/c1',
-    'refs/conductor/demo/pushed/feat/c1/demo',
-    'refs/conductor/demo/push-intent/feat/c1/demo',
-  ])('keeps the stack guard on for a recreated worktree holding only %s', async (ref) => {
+    ['refs/conductor/demo/positions', 'plan-missing'],
+    ['refs/conductor/demo/publication', 'plan-missing'],
+    ['refs/conductor/demo/closed/c1', 'plan-missing'],
+    ['refs/conductor/demo/pushed/feat/c1/demo', 'plan-missing'],
+    ['refs/conductor/demo/push-intent/feat/c1/demo', 'plan-missing'],
+  ])('keeps the stack guard on for a recreated worktree holding only %s', async (ref, cause) => {
     const tip = (await git(['rev-parse', 'HEAD'])).trim();
     await git(['update-ref', 'refs/conductor/demo/pushed/feat/daemon-demo', tip]);
     await git(['update-ref', ref, tip]);
 
     await expect(hasDurableChildState(repository, 'demo')).resolves.toBe(true);
-    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'envelope-missing' });
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'topology-unavailable', cause, planPath: '.docs/plans/demo.md' });
   });
 
   it('selects the leaf after every non-leaf closure, independent of the checked-out branch', async () => {
@@ -174,10 +278,10 @@ describe('resolveActiveChild', () => {
     });
   });
 
-  it('does not let an incomplete envelope activate a child', async () => {
+  it('activates a child from the sealed plan without an envelope status', async () => {
     await seal(repository, [1, 2], 'failed');
 
-    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'no-child' });
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toMatchObject({ kind: 'active', child: 1 });
   });
 
   it('does not treat a noncanonical closure ref as a closure for a declared child', async () => {
@@ -254,7 +358,7 @@ describe('resolveActiveChild', () => {
 
   it('detects ref-only child state without disposable metadata, then fails closed for sealed child state errors', async () => {
     await git(['branch', 'feat/c1/demo', 'feat/daemon-demo']);
-    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'envelope-missing' });
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'topology-unavailable', cause: 'plan-missing', planPath: '.docs/plans/demo.md' });
 
     await configureStacked(repository, true);
     await seal(repository, [1, 2]);
@@ -265,6 +369,115 @@ describe('resolveActiveChild', () => {
     await expect(resolveActiveChild(repository, 'demo', { git: failingGit })).resolves.toEqual({ kind: 'git-error' });
   });
 
+  // Covers: task:6
+  it.each([
+    ['queue', async () => {
+      const path = join(repository, '.pipeline', 'bad-queue.json');
+      await writeFile(path, '{not json');
+      const blob = (await git(['hash-object', '-w', path], repository)).trim();
+      await git(['update-ref', revalidationQueueRefFor('demo'), blob], repository);
+      return revalidationQueueRefFor('demo');
+    }],
+    ['marker', async () => {
+      const path = join(repository, '.pipeline', 'bad-marker.json');
+      await writeFile(path, '{not json');
+      const blob = (await git(['hash-object', '-w', path], repository)).trim();
+      await git(['update-ref', repairMarkerRefFor('demo'), blob], repository);
+      return repairMarkerRefFor('demo');
+    }],
+    ['route record', async () => {
+      const round = parseRoundId('r1')!;
+      const markerPath = join(repository, '.pipeline', 'marker.json');
+      const routePath = join(repository, '.pipeline', 'bad-route.json');
+      await writeFile(markerPath, JSON.stringify({ host: 1, roundId: round }));
+      await writeFile(routePath, '{not json');
+      const marker = (await git(['hash-object', '-w', markerPath], repository)).trim();
+      const route = (await git(['hash-object', '-w', routePath], repository)).trim();
+      await git(['update-ref', repairMarkerRefFor('demo'), marker], repository);
+      await git(['update-ref', routeRecordRefFor('demo', round), route], repository);
+      return routeRecordRefFor('demo', round);
+    }],
+  ])('carries the unreadable routing $kind on its git-error cursor', async (_kind, breakRef) => {
+    await configureStacked(repository, true);
+    await seal(repository, [1, 2]);
+    await mkdir(join(repository, '.pipeline', 'children', '1'), { recursive: true });
+    const ref = await breakRef();
+
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'git-error', unreadableRef: ref });
+  });
+
+  // Covers: task:6
+  it('does not probe routing refs after a git error with routing disabled', async () => {
+    await configureStacked(repository, false);
+    await seal(repository, [1, 2]);
+    await mkdir(join(repository, '.pipeline', 'children', '1'), { recursive: true });
+    await writeFile(join(repository, '.pipeline', 'rebase-rewrites.json'), '{not json');
+    const calls: string[][] = [];
+    const realGit = makeGitRunner(repository);
+    const recordingGit: GitRunner = async (args, options) => {
+      calls.push([...args]);
+      return realGit(args, options);
+    };
+
+    let callsAtCursorResolution = 0;
+    await writeFile(join(repository, '.pipeline', 'conduct-state.json'), JSON.stringify({ feature_desc: 'demo', acceptance_specs: 'pending' }));
+    const conductor = new Conductor({
+      projectRoot: repository,
+      stateFilePath: join(repository, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo',
+      fromStep: 'acceptance_specs',
+      events: new ConductorEventEmitter(),
+      stepRunner: { run: vi.fn() },
+      config: { stacked_prs: { enabled: true } } as never,
+      childRegionLifecycle: {
+        resolveActiveChild: async () => {
+          const cursor = await resolveActiveChild(repository, 'demo', { git: recordingGit });
+          callsAtCursorResolution = calls.length;
+          return cursor;
+        },
+      },
+    });
+
+    await conductor.run();
+
+    expect(calls.slice(callsAtCursorResolution).map((args) => args.join(' ')).filter((command) => /routes|repairing|revalidate/.test(command))).toEqual([]);
+    await expect(readFile(join(repository, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('git failed while resolving the active child cursor');
+  });
+
+  // Covers: task:6
+  it('does not probe routing refs when durable child-state detection fails', async () => {
+    const calls: string[][] = [];
+    const failingGit: GitRunner = async (args) => {
+      calls.push([...args]);
+      return { exitCode: 2, stdout: '', stderr: 'git unavailable' };
+    };
+
+    let callsAtCursorResolution = 0;
+    await mkdir(join(repository, '.pipeline'), { recursive: true });
+    await writeFile(join(repository, '.pipeline', 'conduct-state.json'), JSON.stringify({ feature_desc: 'demo', acceptance_specs: 'pending' }));
+    const conductor = new Conductor({
+      projectRoot: repository,
+      stateFilePath: join(repository, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo',
+      fromStep: 'acceptance_specs',
+      events: new ConductorEventEmitter(),
+      stepRunner: { run: vi.fn() },
+      config: { stacked_prs: { enabled: true } } as never,
+      childRegionLifecycle: {
+        resolveActiveChild: async () => {
+          const cursor = await resolveActiveChild(repository, 'demo', { git: failingGit });
+          callsAtCursorResolution = calls.length;
+          return cursor;
+        },
+      },
+    });
+
+    await conductor.run();
+
+    expect(calls.slice(callsAtCursorResolution).map((args) => args.join(' ')).filter((command) => /routes|repairing|revalidate/.test(command))).toEqual([]);
+    await expect(readFile(join(repository, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('git failed while resolving the active child cursor');
+  });
+
   it('returns no-child only when no child artifacts exist and stack eligibility is absent', async () => {
     await configureStacked(repository, true);
     await seal(repository, [1]);
@@ -272,11 +485,13 @@ describe('resolveActiveChild', () => {
 
     await configureStacked(repository, false);
     await seal(repository, [1, 2]);
+    await git(['update-ref', '-d', 'refs/conductor/demo/positions']);
+    await writeFile(join(repository, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: false\n  max_slices: 1\n');
     await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'no-child' });
 
     await configureStacked(repository, true);
     await seal(repository, [1, 2], 'done', false);
-    await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({ kind: 'no-child' });
+    await expect(resolveActiveChild(repository, 'demo')).resolves.toMatchObject({ kind: 'active', child: 1 });
   });
 
   it('keeps child state active even when stacked delivery is now disabled', async () => {
@@ -351,5 +566,43 @@ describe('resolveActiveChild', () => {
     await expect(resolveActiveChild(repository, 'demo')).resolves.toEqual({
       kind: 'active', child: 2, position: 2, isLeaf: true, branch: 'feat/daemon-demo', leafMovePending: true,
     });
+  });
+
+  it('uses the pinned closure as the routed-repair base for an operator host', async () => {
+    const host = parseChildId(1)!;
+    const roundId = parseRoundId('r1')!;
+    await writeTopology(repository, [1, 2], true);
+    await writeFile(join(repository, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: true\n');
+    await recordPositions(repository, [1, 2]);
+    const closure = (await git(['rev-parse', 'HEAD'])).trim();
+    await git(['branch', 'feat/c1/demo', closure]);
+    await git(['update-ref', closureRefFor('demo', host), closure]);
+    const created = await createRouteRecord(repository, 'demo', {
+      roundId, sealedAuthored: 0, kind: 'audit', items: [],
+      allocation: { [host]: { remTaskIds: [], blockBodies: [] } },
+    });
+    if (created.kind !== 'created') throw new Error(created.kind);
+    if ((await admitRound(repository, 'demo', created.record, host)).kind !== 'admitted') throw new Error('cannot admit route');
+    const stored = await readRouteRecord(repository, 'demo', roundId);
+    if (stored.kind !== 'record') throw new Error('missing route record');
+    const pinnedBase = parseCommitSha(closure);
+    const tree = parseCommitSha((await git(['rev-parse', `${closure}^{tree}`])).trim());
+    if (!pinnedBase || !tree) throw new Error('invalid operator route pin');
+    const operator: RouteRecord = {
+      ...stored.record,
+      kind: 'operator',
+      hosts: { [host]: 'repairing' },
+      entry: { host, pinnedBase, tree },
+      operator: {
+        origin: 'land', reason: 'reviewer request', operator: 'operator@example.test', entryStep: 'acceptance_specs',
+        carried: [], otherTips: { 'feat/daemon-demo': pinnedBase },
+        priorRegion: { statuses: { acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' }, verdicts: {} },
+      },
+    };
+    await expect(writeRoutingTransaction(repository, 'demo', [
+      { kind: 'update-record', previous: stored, record: operator },
+    ])).resolves.toEqual({ kind: 'updated' });
+
+    await expect(resolveChildBase(repository, 'demo', host)).resolves.toEqual({ kind: 'routed-repair', child: host, sha: closure });
   });
 });

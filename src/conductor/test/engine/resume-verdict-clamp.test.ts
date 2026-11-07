@@ -695,9 +695,9 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
     });
 
     it('daemon resume halts through the existing DECIDE-entry disposition after reconciliation', async () => {
-      const seed = seedDoneThrough('coverage_binding');
+      const seed = seedDoneThrough('acceptance_specs');
       seed.plan = 'failed';
-      seed.coverage_binding = 'in_progress';
+      seed.acceptance_specs = 'in_progress';
       await writeState(statePath, seed as ConductState);
       const { runner, log } = trackingRunner(dir);
       const conductor = new Conductor({

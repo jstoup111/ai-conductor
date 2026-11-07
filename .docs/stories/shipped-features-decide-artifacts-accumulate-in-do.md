@@ -152,7 +152,7 @@ can review the PR and audit later runs.
 #### Negative Paths
 - Given a run that has nothing to prune, when the event log is read, then the `decide_artifacts_pruned` event carries an empty removed list and no PR URL.
 - Given a run that fails before publishing, when the event log is read, then no `decide_artifacts_pruned` event claims any path as removed.
-- Given a deferral or skip, when its reason is read, then it is exactly `open-pr-modifies` or `no-shipped-record`, and the event type rejects any other value.
+- Given a deferral or skip, when its reason is read, then it is exactly `open-pr-modifies`, `no-shipped-record` or `malformed-manifest`, and the event type rejects any other value.
 
 ### Done When
 - [ ] `decide_artifacts_pruned` is a member of the `ConductorEvent` union and is persisted by the existing event persister.
