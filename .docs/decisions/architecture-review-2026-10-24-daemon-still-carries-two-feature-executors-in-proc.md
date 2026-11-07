@@ -35,6 +35,8 @@ decisions:
    make the child run it, then delete the in-process path. Moving the runner is chosen over porting
    each gap separately, so one implementation exists.
 6. *(2026-11-07)* **Stacked delivery.** Slice 1 delivers parity, and slice 2 delivers decisions 1–4.
+7. *(2026-11-07)* **One spec above the ceiling.** The 36-task estimate ships as one spec with a
+   scope exception, not as two specs.
 
 ## Parity inventory (verified 2026-11-07)
 
@@ -199,11 +201,11 @@ High: one module moves across a process boundary, and about fifteen test files c
 bounded by doing the move as a pure relocation first (both adapters call it), and by giving each
 parity row its own test through the child path.
 
-The estimate is 34 tasks: 25 in slice 1 and 9 in slice 2. The second review added five slice-1
+The estimate is 36 tasks: 26 in slice 1 and 10 in slice 2. The second review added five slice-1
 tasks: the admission mode, the base-branch field, the visualizer API, the process-services mode and
-the forced-prepare `skillNameRoot` fix. That is above the 30-task ceiling. The operator chose two
-stacked slices in one spec. Delivering that needs either a `**Scope-exception:**` citing that
-decision, or two sequential specs (parity, then removal). **Open operator decision.**
+the forced-prepare `skillNameRoot` fix. That is above the 30-task ceiling. *(Operator decision 7, 2026-11-07)* The spec stays one
+stacked spec with two slices, and the plan carries a `**Scope-exception:**` that cites decisions 6
+and 7. It is not split into two specs.
 
 ## Alignment
 
@@ -279,7 +281,7 @@ No new config key, event type, CLI subcommand, hook or job. Removed in slice 2: 
    by a list: every test that imports a moved helper or mocks `makeRunFeature`, for example
    `daemon-cli-skill-name-root.test.ts` and `stack-preflight-wiring.sweepG4.test.ts`.
 5. Engine-pin test fixtures use ids that match `VERSION_ID_PATTERN`.
-6. The plan's scope decision (Complexity) is recorded before the plan lands.
+6. The plan carries a `**Scope-exception:**` citing operator decisions 6 and 7.
 
 ## ADRs Created
 
