@@ -1,7 +1,8 @@
 // Covers: task:1
 import { describe, expect, it } from 'vitest';
 
-import { classifyKind, matchesKnownShape } from '../../src/engine/decision-corpus.js';
+import { adrApprovalStatus } from '../../src/engine/artifacts.js';
+import { classifyKind, deriveDisposition, matchesKnownShape } from '../../src/engine/decision-corpus.js';
 
 describe('decision corpus known shapes', () => {
   it('recognizes every known filename shape', () => {
@@ -53,5 +54,55 @@ describe('decision corpus known shapes', () => {
       classifyKind('notes.md', '```markdown\n**Status:** APPROVED\n```'),
       classifyKind('notes.md', '```markdown\n**Verdict:** APPROVED\n```'),
     ]).toEqual([false, false, 'unclassified', 'unclassified', 'unclassified', 'unclassified']);
+  });
+
+  // Covers: task:3
+  it('derives approved and superseded dispositions from declared ADR statuses', () => {
+    const approved = '**Status:** APPROVED';
+    const operatorApproved = '**Status:** Approved (operator, 2026-09-28)';
+    const superseded = '**Status:** SUPERSEDED by ADR-002';
+
+    expect(deriveDisposition(approved)).toEqual({ disposition: 'approved', declared: 'APPROVED' });
+    expect(deriveDisposition(operatorApproved)).toEqual({
+      disposition: 'approved',
+      declared: 'Approved (operator, 2026-09-28)',
+    });
+    expect(deriveDisposition(superseded)).toEqual({
+      disposition: 'superseded',
+      declared: 'SUPERSEDED by ADR-002',
+    });
+    expect(adrApprovalStatus(approved).approved).toBe(true);
+    expect(adrApprovalStatus(operatorApproved).approved).toBe(true);
+    expect(adrApprovalStatus(superseded).approved).toBe(true);
+  });
+
+  // Covers: task:3
+  it('preserves declared statuses that are neither approved nor superseded', () => {
+    expect(deriveDisposition('**Status:** Accepted')).toEqual({
+      disposition: 'other',
+      declared: 'Accepted',
+    });
+    expect(deriveDisposition('**Status:** ACTIVE')).toEqual({ disposition: 'other', declared: 'ACTIVE' });
+    expect(deriveDisposition('**Status:** Proposed')).toEqual({ disposition: 'other', declared: 'Proposed' });
+    expect(deriveDisposition('**Verdict:** APPROVED WITH CONDITIONS')).toEqual({
+      disposition: 'other',
+      declared: 'APPROVED WITH CONDITIONS',
+    });
+    expect(deriveDisposition('**Status:** Proposed\n\n**Verdict:** APPROVED')).toEqual({
+      disposition: 'other',
+      declared: 'Proposed',
+    });
+  });
+
+  // Covers: task:3
+  it('does not treat absent or fenced-only declarations as dispositions', () => {
+    expect(deriveDisposition('# ADR without a declaration')).toEqual({
+      disposition: 'undeclared',
+      declared: null,
+    });
+    expect(deriveDisposition('```markdown\n**Status:** APPROVED\n```')).toEqual({
+      disposition: 'undeclared',
+      declared: null,
+    });
   });
 });
