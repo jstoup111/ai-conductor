@@ -115,7 +115,7 @@ async function seed(
   await writeFile(join(worktreePath, '.docs', 'complexity', 'stacked-delivery.md'), `# Complexity\n\n${complexity}`);
   await writeFile(join(worktreePath, '.docs', 'conflicts', 'stacked-delivery.md'), '# Conflicts\n\nNone.\n');
   await writeFile(join(worktreePath, '.docs', 'architecture', 'stacked-delivery.md'), '# Architecture\n\n```mermaid\nflowchart TD\n  A --> B\n```\n');
-  await writeFile(join(worktreePath, '.docs', 'decisions', 'stacked-delivery.md'), '# Review\n\nApproved.\n');
+  await writeFile(join(worktreePath, '.docs', 'decisions', 'stacked-delivery.md'), '# Review\n\n**Verdict:** APPROVED\n');
   const reviewedDigest = computeReviewedDigest({
     planText: planContent,
     storiesText: stories,

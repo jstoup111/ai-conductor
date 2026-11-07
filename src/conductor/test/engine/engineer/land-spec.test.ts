@@ -279,7 +279,7 @@ async function seedNamedTierMWorktree(
     join(dir, '.docs', 'architecture', `${slug}.md`),
     '# Architecture\n\n```mermaid\nflowchart TD\n  A --> B\n```\n',
   );
-  await writeFile(join(dir, '.docs', 'decisions', `${slug}.md`), '# Review\n\nApproved.\n');
+  await writeFile(join(dir, '.docs', 'decisions', `${slug}.md`), '# Review\n\n**Verdict:** APPROVED\n');
   if (options.coherenceStem !== undefined) {
     await mkdir(join(dir, '.docs', 'coherence'), { recursive: true });
     await writeFile(
@@ -1683,7 +1683,7 @@ describe('Task 3: idea-scoped stories/plan/complexity/conflicts/architecture/dec
       join(dir, '.docs', 'architecture', 'dep-bump.md'),
       '# Architecture\n\n```mermaid\nflowchart TD\n  A --> B\n```\n',
     );
-    await writeFile(join(dir, '.docs', 'decisions', 'dep-bump.md'), '# Review\n\nApproved.\n');
+    await writeFile(join(dir, '.docs', 'decisions', 'dep-bump.md'), '# Review\n\n**Verdict:** APPROVED\n');
     await seedCleanPlanReview(dir, 'dep-bump', PLAN_WITH_DEPS, ACCEPTED_STORIES);
 
     const result = await landSpec(target(), idea, dir, undefined, {

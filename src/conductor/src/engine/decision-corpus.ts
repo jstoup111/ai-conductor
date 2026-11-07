@@ -32,8 +32,8 @@ function shapeKind(filename: string): DecisionRecordKind | null {
   return null;
 }
 
-export function matchesKnownShape(filename: string): boolean {
-  return shapeKind(filename) !== null;
+export function matchesKnownShape(filename: string, content = ''): boolean {
+  return classifyKind(filename, content) !== 'unclassified';
 }
 
 const FENCED_CODE_BLOCK_RE =

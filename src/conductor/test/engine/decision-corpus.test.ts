@@ -65,6 +65,14 @@ describe('decision corpus known shapes', () => {
     ]);
   });
 
+  it('recognizes status- and verdict-bearing legacy records as known shapes', () => {
+    expect([
+      matchesKnownShape('legacy-decision.md', '**Status:** Accepted'),
+      matchesKnownShape('legacy-review.md', '**Verdict:** APPROVED'),
+      matchesKnownShape('notes.md', '# Notes'),
+    ]).toEqual([true, true, false]);
+  });
+
   // Covers: task:2
   it('does not infer a kind from deprecated or fenced-only status markers', () => {
     expect(classifyKind('adr-2026-01-01-x.md', '**Verdict:** APPROVED')).toBe('decision');

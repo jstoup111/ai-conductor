@@ -175,6 +175,7 @@ describe('landSpec decision record shape gate', () => {
       join(worktreePath, '.docs', 'decisions', 'adr-2026-11-01-old.md'),
       join(worktreePath, '.docs', 'decisions', 'old-notes.md'),
     );
+    await writeFile(join(worktreePath, '.docs', 'decisions', 'old-notes.md'), '# Notes\n');
     await git(['add', '-A', '.docs/decisions'], worktreePath);
     await git(['commit', '-m', 'rename ADR'], worktreePath);
 

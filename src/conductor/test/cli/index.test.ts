@@ -55,6 +55,7 @@ const HIDDEN_PRE_DISPATCH_COMMANDS = [
 const VISIBLE_PRE_DISPATCH_COMMANDS = [
   'render-diagrams',
   'rate-card',
+  'decisions',
   'overlap-scan',
   'version',
   'update',

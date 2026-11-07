@@ -734,7 +734,13 @@ export async function landSpec(
     mergeBase,
     MANIFEST_KIND_LOCATIONS.decision.directory,
   );
-  const offShapeRecords = addedDecisionRecords.filter((path) => !matchesKnownShape(basename(path)));
+  const addedDecisionRecordContents = await Promise.all(addedDecisionRecords.map(async (path) => ({
+    path,
+    content: await readFile(join(worktreePath, path), 'utf8'),
+  })));
+  const offShapeRecords = addedDecisionRecordContents
+    .filter(({ path, content }) => !matchesKnownShape(basename(path), content))
+    .map(({ path }) => path);
   if (offShapeRecords.length > 0) {
     const acceptedShapes = DECISION_RECORD_SHAPES.map((shape) =>
       'prefix' in shape ? `${shape.prefix}*` : shape.filename).join(', ');
