@@ -30,7 +30,7 @@ As an operator, I want a merge-bearing restack conflict settled under the same b
 
 #### Negative Paths
 - Given a settled result missing `M`'s subject, when the acceptance guards run, then the result is rejected, the ordinary conflict halt is written, and no branch or closure ref moves.
-- Given a settled result that changes a path outside child 2's owned paths, when path ownership runs, then the restack halts `replay-mismatch` naming that path and no branch or closure ref moves.
+- Given a settled result that changes a path in neither child 2's owned paths nor its new parent's changes, when path ownership runs, then the restack halts `replay-mismatch` naming that path and no branch or closure ref moves.
 - Given a flattened merge whose change the new parent already contains, when the todo is built, then the merge has no todo entry, the rebase does not stop on an empty pick, and its subject is not in the recorded candidate subjects.
 - Given a merge-bearing conflict with no resolver supplied, when the restack runs, then the ordinary conflict halt is written with the reason `restack resolver unavailable` and no branch or closure ref moves.
 - Given a fake resolver that never settles the conflict, when the attempt budget is exhausted, then it was dispatched no more times than the budget allows and the ordinary conflict halt is written.
