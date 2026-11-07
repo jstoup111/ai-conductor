@@ -119,7 +119,7 @@ export interface TautologyScopedRunEvidence {
 
 export interface TautologyCompletedPreflight {
       readonly classification: 'nonzero-exit' | 'stayed-green' | 'approved-exception';
-      readonly exception?: 'empty-test-set' | 'removal-maintenance';
+      readonly exception?: 'empty-test-set' | 'removal-maintenance' | 'test-only-change';
       readonly cacheable: true;
       readonly cacheProvenance: 'hit' | 'miss';
       readonly changedPaths: readonly string[];
@@ -137,7 +137,7 @@ export interface TautologyCompletedPreflight {
 
 export type TautologyPreflightResult = TautologyCompletedPreflight | {
       readonly classification: 'infrastructure-failure';
-      readonly reason: 'no-changed-tests' | 'no-production-changes' | 'missing-scoped-configuration' | 'materialization-failed' | 'missing-merge-base-file' | 'scoped-run-failed' | 'scoped-run-launch-failed' | 'scoped-run-timeout' | 'scoped-run-signaled' | 'aborted' | 'cleanup-failed' | 'cache-read-failed' | 'cache-write-failed';
+      readonly reason: 'no-changed-tests' | 'missing-scoped-configuration' | 'materialization-failed' | 'missing-merge-base-file' | 'scoped-run-failed' | 'scoped-run-launch-failed' | 'scoped-run-timeout' | 'scoped-run-signaled' | 'aborted' | 'cleanup-failed' | 'cache-read-failed' | 'cache-write-failed';
       /** Bounded combined output from a scoped-run infrastructure failure. */
       readonly failureExcerpt?: string;
       readonly changedPaths: readonly string[];
@@ -393,7 +393,15 @@ export async function materializeTautologyPreflight(
     };
     try { await deps.writeCache?.(key, completed); return completed; } catch { return failure('cache-write-failed', paths, classified.tests, sourceIdentities); }
   }
-  if (classified.production.length === 0) return failure('no-production-changes', paths, classified.tests, sourceIdentities);
+  // No production changed, so reverting it is a no-op: settle as a judged exception and let the
+  // reviewer grade the changed tests rather than faulting the rubric (#3580).
+  if (classified.production.length === 0) {
+    const completed: TautologyCompletedPreflight = {
+      classification: 'approved-exception', exception: 'test-only-change', cacheable: true, cacheProvenance: 'miss',
+      changedPaths: paths, changedTestSelectors: classified.tests, revertedProductionManifest: [], eligibleSelectorRemovals, sourceIdentities,
+    };
+    try { await deps.writeCache?.(key, completed); return completed; } catch { return failure('cache-write-failed', paths, classified.tests, sourceIdentities); }
+  }
 
   const checkout = join(deps.scopedWorkingDirectory, '.pipeline', 'build-review-preflight', deps.headSha);
   // Best effort by construction: the write that follows is the authority on

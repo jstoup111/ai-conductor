@@ -662,6 +662,11 @@ green test run twice.
 - Given the isolated checkout cannot be created, the scoped command cannot execute, or cleanup
   cannot be verified, when preflight completes, then Tautology records an infrastructure failure
   rather than inventing RED evidence or mutating either live checkout.
+- Given the graded diff changes tests but no production file (for example, a routed or
+  re-validation repair that fixes only tests or fixtures), when preflight completes, then it records
+  a cacheable approved exception without creating a checkout or running a counterfactual, and
+  Tautology judges the changed tests rather than recording an infrastructure failure. A diff that
+  changes production code is still counterfactual-checked.
 - Given the preceding `test_suite` evidence is missing, failed, or not valid for current HEAD, when
   review reaches preflight, then review refuses to dispatch rubrics instead of using stale green
   proof.
@@ -676,6 +681,8 @@ green test run twice.
   failure/cleanup path.
 - [ ] Preflight-cache tests prove exact-input hits make zero checkout/runner calls and every key
   change or infrastructure outcome misses closed.
+- [ ] A preflight test proves a test-only diff settles as a cached `test-only-change` approved
+  exception with zero checkout, merge-base read, or scoped-run calls.
 
 ## Story 25: Short-circuit unchanged rubric judgements
 
