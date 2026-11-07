@@ -220,8 +220,9 @@ export async function runDaemonFeatureConductor(
       return { kind: 'operator-parked', boundary: { kind: 'pre-first-unit' } };
     }
     const rekickPath = join(pipelineDir, 'REKICK');
+    const isRekick = existsSync(rekickPath);
     const stackPreflight = await runDaemonRekickStackPreflight({
-      worktree: wt.path, slug: item.slug, baseRefreshDue: existsSync(rekickPath),
+      worktree: wt.path, slug: item.slug, baseRefreshDue: isRekick,
       consumeRekick: async () => { await unlinkFile(rekickPath).catch((error: unknown) => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }); },
       rearmRekick: async () => { await writeFile(rekickPath, ''); }, events: featureEvents,
       resolver: restackResolverForStepRunner(stepRunner), resolverCap: resolveRebaseResolutionAttempts(config),
@@ -232,12 +233,14 @@ export async function runDaemonFeatureConductor(
       },
     }, featureLog);
     if (stackPreflight.kind === 'halted' || stackPreflight.kind === 'unavailable') return;
-    const resume = await resumeRebaseFirst({
-      worktreePath: wt.path, localBase: baseBranch, events: featureEvents, ranManualTest,
-      resolveAttempts: resolveRebaseResolutionAttempts(config),
-      resolveConflict: stepRunner.resolveRebaseConflict ? (ctx) => stepRunner.resolveRebaseConflict!(ctx) : undefined,
-      runGh: ownerGh, prUrl: baseState.pr_url, slug: item.slug, log: featureLog,
-    });
+    const resume = isRekick
+      ? await resumeRebaseFirst({
+        worktreePath: wt.path, localBase: baseBranch, events: featureEvents, ranManualTest,
+        resolveAttempts: resolveRebaseResolutionAttempts(config),
+        resolveConflict: stepRunner.resolveRebaseConflict ? (ctx) => stepRunner.resolveRebaseConflict!(ctx) : undefined,
+        runGh: ownerGh, prUrl: baseState.pr_url, slug: item.slug, log: featureLog,
+      })
+      : 'skipped';
     if (resume === 'halted') return;
     if (resume === 'already_shipped') featureLog(`merged shipment evidence verified for ${item.slug}; continuing normal completion`);
     if (context.isShutdownRequested()) return;

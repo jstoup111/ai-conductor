@@ -1,4 +1,4 @@
-// Covers: task:8, task:9, task:10
+// Covers: task:8, task:9, task:10, task:11
 import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -9,6 +9,7 @@ import { SetupFailureError } from '../../src/engine/worktree-prepare.js';
 const seams = vi.hoisted(() => ({
   prepareWorktree: vi.fn(),
   acquireFeatureDispatchLease: vi.fn(),
+  resumeRebaseFirst: vi.fn(),
 }));
 
 vi.mock('../../src/engine/config.js', async (importOriginal) => {
@@ -48,6 +49,17 @@ vi.mock('../../src/engine/feature-dispatch-lease.js', async (importOriginal) => 
     acquireFeatureDispatchLease: async (...args: Parameters<typeof actual.acquireFeatureDispatchLease>) => {
       seams.acquireFeatureDispatchLease(...args);
       return actual.acquireFeatureDispatchLease(...args);
+    },
+  };
+});
+
+vi.mock('../../src/engine/daemon-rekick.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/daemon-rekick.js')>();
+  return {
+    ...actual,
+    resumeRebaseFirst: async (...args: Parameters<typeof actual.resumeRebaseFirst>) => {
+      seams.resumeRebaseFirst(...args);
+      return actual.resumeRebaseFirst(...args);
     },
   };
 });
@@ -150,6 +162,19 @@ async function prepareStackedRekick(subject: Awaited<ReturnType<typeof fixture>>
   return worktree;
 }
 
+async function prepareRekick(subject: Awaited<ReturnType<typeof fixture>>): Promise<string> {
+  const worktree = join(subject.root, '.worktrees', subject.order.slug);
+  await mkdir(join(subject.root, '.worktrees'), { recursive: true });
+  await execa('git', ['worktree', 'add', '-b', `feat/daemon-${subject.order.slug}`, worktree, subject.order.baseSha], {
+    cwd: subject.root,
+  });
+  await mkdir(join(worktree, '.pipeline'), { recursive: true });
+  await writeFile(join(worktree, '.pipeline', 'conduct-state.json'), JSON.stringify({ build: 'pending' }));
+  await writeFile(join(worktree, '.pipeline', 'REKICK'), '');
+  seams.prepareWorktree.mockResolvedValue(undefined);
+  return worktree;
+}
+
 describe('executor child shared lifecycle', () => {
   it('uses its admitted stacked-dispatch lease once and runs the shared conductor', async () => {
     const subject = await fixture('stacked-child');
@@ -243,5 +268,25 @@ describe('executor child shared lifecycle', () => {
     await expect(readFile(join(worktree, '.pipeline', 'REKICK'), 'utf8')).resolves.toBe('');
     expect(run).not.toHaveBeenCalled();
     expect(outcome.reason).not.toContain('loop ended without DONE or HALT marker');
+  });
+
+  it('runs rebase-first only for REKICK and consumes the marker before entering the conductor', async () => {
+    const subject = await fixture('rekick-rebase-first', { durableChildState: false });
+    const worktree = await prepareRekick(subject);
+    const rekickPath = join(worktree, '.pipeline', 'REKICK');
+    const run = vi.spyOn(Conductor.prototype, 'run').mockResolvedValue(undefined);
+
+    await subject.execute();
+
+    expect(seams.resumeRebaseFirst).toHaveBeenCalledWith(expect.objectContaining({ worktreePath: worktree }));
+    expect(seams.resumeRebaseFirst.mock.invocationCallOrder[0]).toBeLessThan(run.mock.invocationCallOrder[0]!);
+    await expect(readFile(rekickPath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+
+    seams.resumeRebaseFirst.mockClear();
+    run.mockClear();
+    await subject.execute();
+
+    expect(seams.resumeRebaseFirst).not.toHaveBeenCalled();
+    expect(run).toHaveBeenCalledTimes(1);
   });
 });
