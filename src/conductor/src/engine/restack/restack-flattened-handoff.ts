@@ -1,7 +1,8 @@
 import { withDaemonCoAuthorTrailer } from '../bot-co-author.js';
 import type { GitRunner } from '../rebase.js';
+import { authorOf, mergeParents, messageOf, requiredCommitSha, sideLineageCount } from './restack-commit-metadata.js';
 import { selectReplayCandidates } from './restack-replay-candidates.js';
-import { parseCommitSha, type ChildRange, type CommitSha } from './restack-types.js';
+import type { ChildRange, CommitSha } from './restack-types.js';
 
 export interface FlattenedHandoff {
   readonly todo: readonly CommitSha[];
@@ -31,46 +32,14 @@ interface ReplayMerge {
   readonly autoTree?: string;
 }
 
-function requiredSha(raw: string, context: string): CommitSha {
-  const sha = parseCommitSha(raw.trim());
-  if (!sha) throw new Error(`${context} did not return a full Git object name`);
-  return sha;
-}
-
 async function commitTree(git: GitRunner, commit: CommitSha): Promise<CommitSha> {
   const result = await git(['rev-parse', `${commit}^{tree}`]);
   if (result.exitCode !== 0) throw new Error(`could not read tree for ${commit}: ${result.stderr}`);
-  return requiredSha(result.stdout, `tree for ${commit}`);
-}
-
-async function commitParents(git: GitRunner, commit: CommitSha): Promise<readonly CommitSha[]> {
-  const result = await git(['rev-list', '--parents', '-n', '1', commit]);
-  if (result.exitCode !== 0) throw new Error(`could not read parents for ${commit}: ${result.stderr}`);
-  return result.stdout.trim().split(/\s+/).slice(1).map((value) => requiredSha(value, `parent for ${commit}`));
-}
-
-async function commitAuthor(git: GitRunner, commit: CommitSha): Promise<{ name: string; email: string; date: string }> {
-  const result = await git(['show', '-s', '--format=%an%x00%ae%x00%aI', commit]);
-  if (result.exitCode !== 0) throw new Error(`could not read author for ${commit}: ${result.stderr}`);
-  const [name, email, date, extra] = result.stdout.split('\0');
-  if (!name || !email || !date || extra !== undefined) throw new Error(`could not parse author for ${commit}`);
-  return { name, email, date: date.trim() };
-}
-
-async function commitMessage(git: GitRunner, commit: CommitSha): Promise<string> {
-  const result = await git(['show', '-s', '--format=%B', commit]);
-  if (result.exitCode !== 0) throw new Error(`could not read message for ${commit}: ${result.stderr}`);
-  return result.stdout;
-}
-
-async function sideLineageCount(git: GitRunner, firstParent: CommitSha, secondParent: CommitSha): Promise<number> {
-  const result = await git(['rev-list', `${firstParent}..${secondParent}`]);
-  if (result.exitCode !== 0) throw new Error(`could not list side lineage for ${secondParent}: ${result.stderr}`);
-  return result.stdout.split('\n').filter(Boolean).length;
+  return requiredCommitSha(result.stdout, `tree for ${commit}`);
 }
 
 async function writeLinearCommit(git: GitRunner, tree: CommitSha, parent: CommitSha, source: CommitSha, message?: string): Promise<CommitSha> {
-  const [author, renderedMessage] = await Promise.all([commitAuthor(git, source), message === undefined ? commitMessage(git, source) : message]);
+  const [author, renderedMessage] = await Promise.all([authorOf(git, source), message === undefined ? messageOf(git, source) : message]);
   const result = await git(['commit-tree', tree, '-p', parent], {
     input: withDaemonCoAuthorTrailer(renderedMessage),
     env: {
@@ -79,7 +48,7 @@ async function writeLinearCommit(git: GitRunner, tree: CommitSha, parent: Commit
     },
   });
   if (result.exitCode !== 0) throw new Error(`could not write flattened hand-off commit for ${source}: ${result.stderr}`);
-  return requiredSha(result.stdout, `flattened hand-off commit for ${source}`);
+  return requiredCommitSha(result.stdout, `flattened hand-off commit for ${source}`);
 }
 
 async function flattenedMergeIsCarried(git: GitRunner, parent: CommitSha, newParent: CommitSha, flattened: CommitSha): Promise<boolean> {
@@ -104,8 +73,8 @@ export async function buildFlattenedHandoff(range: ChildRange, newParent: Commit
   let sideLineageCountTotal = 0;
   let accumulator = range.oldParent;
   for (const raw of listed.stdout.split('\n').filter(Boolean)) {
-    const commit = requiredSha(raw, 'flattened hand-off range entry');
-    const parents = await commitParents(git, commit);
+    const commit = requiredCommitSha(raw, 'flattened hand-off range entry');
+    const parents = await mergeParents(git, commit);
     if (parents.length < 2) {
       accumulator = await writeLinearCommit(git, await commitTree(git, commit), accumulator, commit);
       flattenedOrdinaryCommitsByCommit.set(accumulator, commit);
@@ -113,18 +82,18 @@ export async function buildFlattenedHandoff(range: ChildRange, newParent: Commit
       continue;
     }
     const merge = await options.classifyMerge(git, commit, newParent, 'stacked');
-    sideLineageCountTotal += await sideLineageCount(git, requiredSha(merge.firstParent, `first parent for ${commit}`), requiredSha(merge.secondParent, `second parent for ${commit}`));
+    sideLineageCountTotal += await sideLineageCount(git, requiredCommitSha(merge.firstParent, `first parent for ${commit}`), requiredCommitSha(merge.secondParent, `second parent for ${commit}`));
     if (merge.kind === 'ancestry-only') {
-      accumulator = await writeLinearCommit(git, requiredSha(merge.mergeTree, `automatic tree for ${commit}`), accumulator, commit);
+      accumulator = await writeLinearCommit(git, requiredCommitSha(merge.mergeTree, `automatic tree for ${commit}`), accumulator, commit);
       ancestryOnlyMerges.push(commit);
       continue;
     }
     if (merge.kind === 'q-carried') {
-      accumulator = await writeLinearCommit(git, requiredSha(merge.autoTree ?? '', `automatic tree for ${commit}`), accumulator, commit);
+      accumulator = await writeLinearCommit(git, requiredCommitSha(merge.autoTree ?? '', `automatic tree for ${commit}`), accumulator, commit);
     }
     else flattenedMerges.push(commit);
     const flattenedParent = accumulator;
-    const flattened = await writeLinearCommit(git, requiredSha(merge.mergeTree, `merge tree for ${commit}`), accumulator, commit, `${await commitMessage(git, commit)}\nFlattened-merge: ${commit}\n`);
+    const flattened = await writeLinearCommit(git, requiredCommitSha(merge.mergeTree, `merge tree for ${commit}`), accumulator, commit, `${await messageOf(git, commit)}\nFlattened-merge: ${commit}\n`);
     accumulator = flattened;
     flattenedMergesByCommit.set(flattened, commit);
     if (!(await flattenedMergeIsCarried(git, flattenedParent, newParent, flattened))) { todo.push(flattened); candidates.push(flattened); }
