@@ -104,7 +104,7 @@ adapter case, the `in-process` acceptance case in `config.test.ts`, and the owne
 | Single `FeatureExecutor` (child) in daemon composition | Built unconditionally in `daemon-cli.ts`'s daemon startup and passed as `featureExecution` to its sole `runDaemon` call |
 | `runDaemon` one-of feature-execution dependency | `engine/daemon.ts` dispatch reads `featureExecution` when present and `runFeature` otherwise. Production supplies `featureExecution`; `engine/daemon.ts` unit tests supply `runFeature` |
 | daemon-cli `fork` option | Passed through to `createChildProcessFeatureExecutor`, which defaults to `child_process.fork` when absent. Production passes nothing; tests inject the in-memory fork |
-| `createExecutorChildRuntime({ projectRoot })` in `engine/executor-child-runtime.ts` | Called by the `executor-child` branch of `src/index.ts` for its `createWorktree` and `run`. It moves that branch's existing inline composition, so the test fork reuses the exact production child composition |
+| `createExecutorChildRuntime({ projectRoot })` in `engine/executor-child-runtime.ts` | Called by the `executor-child` branch of `src/index.ts` for its `admitDispatch`, `createWorktree` and `run`. It moves that branch's existing inline composition, so the test fork reuses the exact production child composition |
 | Collapsed `formatDaemonConsoleTeeLine` / `createOwnershipAwareDaemonLogger` | Existing callers in `daemon-cli.ts` (console tee and global bus subscriber), unchanged |
 
 No new config key, event, CLI subcommand, hook, or job. Removed surfaces: the `executor_isolation`

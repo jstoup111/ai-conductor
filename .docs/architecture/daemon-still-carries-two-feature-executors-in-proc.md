@@ -27,7 +27,7 @@ graph TD
 
     subgraph Proc["Executor child — forked per dispatch"]
         Entry["executor-child.ts runExecutorChild"]
-        Runtime["executor-child-runtime.ts<br/>createExecutorChildRuntime: createWorktree + run<br/>makeRunFeature (deferTerminalEffects)"]
+        Runtime["executor-child-runtime.ts<br/>createExecutorChildRuntime: admitDispatch + createWorktree + run<br/>makeRunFeature (deferTerminalEffects)"]
     end
 
     TestFork["Test in-memory ForkedExecutor<br/>runs runExecutorChild over an in-memory IPC port<br/>with the same createExecutorChildRuntime"]
@@ -80,7 +80,7 @@ sequenceDiagram
   optional daemon-cli option, is the only test boundary for feature execution. It replaces the
   former `opts.runFeature` bypass, so composition, integration, and acceptance tests run the
   production work-order, broker, and terminal-effect path. Only the OS process creation differs.
-  The `executor-child` entry point and the test fork build the child's `createWorktree` and `run`
+  The `executor-child` entry point and the test fork build the child's `admitDispatch`, `createWorktree` and `run`
   from one factory, `createExecutorChildRuntime`, so the child composition is identical.
 - **Unchanged.** The child's IPC protocol, broker services, engine pinning, executor records, and
   GC protection behave as in the per-dispatch engine pinning architecture.

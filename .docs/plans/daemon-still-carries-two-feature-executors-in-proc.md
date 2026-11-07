@@ -15,23 +15,28 @@ work is fourteen tasks.
 
 ## Technical Approach
 
-- **Sequencing.** This spec is blocked by #3377, which is being built now. BUILD starts from a base
-  that already contains #3377's shared daemon-process bootstrap, `makeExecutorChildRun`, and its
-  trailer tests. Wherever this plan names the `executor-child` entry composition, it means the
-  composition on that base.
+- **Sequencing.** This spec was blocked by #3377, which shipped in #3406. BUILD starts from a base
+  that contains #3377's shared daemon-process bootstrap, `makeExecutorChildRun`, and its trailer
+  tests. The base also contains the feature dispatch lease (#3480), which added
+  `makeExecutorChildDispatchAdmission` and the child's `admitDispatch` input. Wherever this plan
+  names the `executor-child` entry composition, it means the composition on that base.
 - **Executor-child runtime factory (Task 1).** The `executor-child` branch of `src/conductor/src/index.ts`
-  builds its `withExecutorBrokerProxies` input inline: `createWorktree` through `makeFeatureRunnerDeps`,
-  and `run`. Move that composition into one exported factory in
+  builds its `withExecutorBrokerProxies` input inline: `admitDispatch` through
+  `makeExecutorChildDispatchAdmission`, `createWorktree` through `makeFeatureRunnerDeps`, and `run`.
+  Move that composition into one exported factory in
   `src/conductor/src/engine/executor-child-runtime.ts`,
-  `createExecutorChildRuntime({ projectRoot })`, returning `{ createWorktree, run }`. `index.ts` calls
-  it, so the production child and the test fork compose the child identically. This is a pure move;
-  the child's behavior does not change.
+  `createExecutorChildRuntime({ projectRoot })`, returning `{ admitDispatch, createWorktree, run }`.
+  `index.ts` calls it, so the production child and the test fork compose the child identically,
+  including the root-owned dispatch lease that durable stacked children take before their first
+  worktree mutation. The entry keeps its process-bound inputs (`liveBoundaryEnabled`, `log`, `exit`)
+  inline. This is a pure move; the child's behavior does not change.
 - **In-memory fork fixture (Task 1).** `src/conductor/test/fixtures/in-memory-executor-fork.ts`
   exports `createInMemoryExecutorFork(options)`. It returns a function with the
   `ChildFeatureExecutorDeps['fork']` signature. Each call creates an in-memory child port, the
   `FixtureChild` shape now in `executor-parity.integration.test.ts`, and on the next microtask runs
   the real `runExecutorChild(port, withExecutorBrokerProxies(port, input))`. `input` defaults to
-  `createExecutorChildRuntime({ projectRoot })`; a test may override `run` alone.
+  `createExecutorChildRuntime({ projectRoot })`; a test may override `run` alone, so `admitDispatch`
+  and `createWorktree` always stay the production ones.
   `options.handshake: 'silent'` makes a child that never sends its hello, and
   `options.protocolVersion` makes a child that reports another version. The fixture also exports
   `useTempEngineStore()`. It creates a temp store with `dist` → `dist-versions/«id»`, points
@@ -90,15 +95,16 @@ Search hints: `FixtureChild` and `runChildProcess` in
 **Type:** infrastructure
 
 **Steps:**
-1. Write failing test `src/conductor/test/fixtures/in-memory-executor-fork.test.ts`: a `createChildProcessFeatureExecutor` with `fork: createInMemoryExecutorFork({ projectRoot, run })` and a real `createExecutorBroker` executes one order. Assert that the broker receives the child's hello, the child's `run` receives the dispatched WorkOrder, and the executor returns the `run` outcome. A second case uses `handshake: 'silent'` and asserts no hello reaches the broker.
+1. Write failing test `src/conductor/test/fixtures/in-memory-executor-fork.test.ts`: a `createChildProcessFeatureExecutor` with `fork: createInMemoryExecutorFork({ projectRoot, run })` and a real `createExecutorBroker` executes one order. Assert that the broker receives the child's hello, the child's `run` receives the dispatched WorkOrder, and the executor returns the `run` outcome. A second case uses `handshake: 'silent'` and asserts no hello reaches the broker. A third case uses the default runtime for an order whose slug has durable child state while another holder owns its feature dispatch lease. It asserts the executor returns a `parked` outcome with reason `feature-lease-held` and no `.worktrees/<slug>` directory is created.
 2. Verify RED.
-3. Move the `executor-child` branch's inline `createWorktree`/`run` composition from `src/conductor/src/index.ts` into `createExecutorChildRuntime({ projectRoot })` in `executor-child-runtime.ts`, and call it from `index.ts`. Build the fixture as described in Technical Approach. Pattern: replace only process creation; reuse the parity test's `FixtureChild` port shape; never stub the broker or handshake.
+3. Move the `executor-child` branch's inline `admitDispatch`/`createWorktree`/`run` composition from `src/conductor/src/index.ts` into `createExecutorChildRuntime({ projectRoot })` in `executor-child-runtime.ts`, and call it from `index.ts`. Build the fixture as described in Technical Approach. Pattern: replace only process creation; reuse the parity test's `FixtureChild` port shape; never stub the broker or handshake.
 4. Verify GREEN; commit.
 
 **Done when:**
 - [test] `in-memory-executor-fork.test.ts` shows `createInMemoryExecutorFork` reaching the real `runExecutorChild` and broker: hello received, WorkOrder delivered to `run`, and the `run` outcome returned by `execute`.
 - [test] The `handshake: 'silent'` case delivers no hello to the broker.
-- The `executor-child` branch of `src/conductor/src/index.ts` obtains its `createWorktree` and `run` only from `createExecutorChildRuntime({ projectRoot })`.
+- [test] With the default runtime, a durable-child order whose dispatch lease is held returns `parked` with reason `feature-lease-held` before any worktree is created.
+- The `executor-child` branch of `src/conductor/src/index.ts` obtains its `admitDispatch`, `createWorktree` and `run` only from `createExecutorChildRuntime({ projectRoot })`.
 - `useTempEngineStore()` points `ENGINE_STORE_ENV_VAR` at a temp store whose `dist` resolves to `dist-versions/«id»`, and restores the variable on teardown.
 
 **Files likely touched:**
