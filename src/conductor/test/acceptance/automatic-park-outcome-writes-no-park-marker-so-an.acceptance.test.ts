@@ -139,6 +139,7 @@ describe('automatic park termination — real runner to durable daemon consumers
   }): FeatureRunnerDeps {
     const { record } = opts;
     return {
+      dispatchAdmission: 'acquire',
       createWorktree: async () => ({ path: worktreePath, branch: `feat/${SLUG}` }),
       prepareWorktree: async () => {
         if (opts.prepareError) throw opts.prepareError;

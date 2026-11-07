@@ -480,6 +480,7 @@ describe('daemon ship path — writes NO shipped record (ADR Decision 1 complian
       prUrl: 'https://github.com/acme/repo/pull/42',
     };
     const deps: FeatureRunnerDeps = {
+      dispatchAdmission: 'acquire',
       createWorktree: async () => ({ path: repo, branch: BRANCH }),
       runConductor: async () => {},
       readOutcome: async () => outcome,

@@ -42,6 +42,7 @@ describe('provider admission at the daemon dispatch entry point', () => {
     };
     const events = new ConductorEventEmitter();
     const run = makeRunFeature({
+      dispatchAdmission: 'acquire',
       createWorktree: async () => ({ path: root, branch: 'feature' }),
       runConductor: async (_worktree, _item, execution) => {
         await executeProviderCandidates({
@@ -87,6 +88,7 @@ describe('provider admission at the daemon dispatch entry point', () => {
       },
     };
     const run = makeRunFeature({
+      dispatchAdmission: 'acquire',
       createWorktree: async () => ({ path: root, branch: 'feature' }),
       runConductor: async (_worktree, _item, execution) => {
         await executeProviderCandidates({

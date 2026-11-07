@@ -104,6 +104,12 @@ export function classifyDispatchKind({ wasExisting, rekickSignal }: { wasExistin
  * Claude, or gh.
  */
 export interface FeatureRunnerDeps {
+  /**
+   * Admission ownership for a durable child dispatch. The ordinary daemon
+   * runner acquires and releases its own lease; a child that was already
+   * admitted by its supervisor must not acquire that same lease again.
+   */
+  dispatchAdmission: 'acquire' | 'admitted';
   /** `git worktree add` a fresh branch+dir for the feature, cut from the
    *  fast-forwarded default branch — so the vetted stories+plan physically exist
    *  in it already (no separate materialization/copy step). */
@@ -433,7 +439,12 @@ export function makeRunFeature(
       // A durable child stack has shared mutable state outside its disposable
       // worktree. Inspect that state from the root and acquire before the
       // first worktree mutation; flat features retain their lock-free path.
-      if (deps.daemon && deps.projectRoot && await hasDurableChildState(deps.projectRoot, item.slug) === true) {
+      if (
+        deps.dispatchAdmission === 'acquire' &&
+        deps.daemon &&
+        deps.projectRoot &&
+        await hasDurableChildState(deps.projectRoot, item.slug) === true
+      ) {
         const leaseResult = await acquireFeatureDispatchLease(deps.projectRoot, item.slug, 'daemon dispatch');
         if (leaseResult.kind !== 'acquired') {
           if (leaseResult.kind === 'live-owner') {

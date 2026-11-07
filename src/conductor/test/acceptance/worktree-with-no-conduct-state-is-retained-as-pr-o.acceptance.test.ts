@@ -74,6 +74,7 @@ function failingRunnerDeps(
   createWorktree: FeatureRunnerDeps['createWorktree'],
 ): FeatureRunnerDeps {
   return {
+    dispatchAdmission: 'acquire',
     projectRoot,
     project: 'acceptance',
     daemon: false,

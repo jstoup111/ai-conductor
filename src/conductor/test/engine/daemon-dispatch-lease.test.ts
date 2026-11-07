@@ -106,6 +106,7 @@ function childOutcome(port: ChildPort): unknown {
 
 function runnerDeps(trace: string[]): FeatureRunnerDeps {
   return {
+    dispatchAdmission: 'acquire',
     // The daemon runner reaches the production `git worktree add` mutation
     // through this seam. Keep it real while observing the ordering boundary.
     createWorktree: async () => {

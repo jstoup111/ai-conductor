@@ -419,6 +419,7 @@ fi
       },
       project: 'test-project',
       ...overrides,
+      dispatchAdmission: overrides.dispatchAdmission ?? 'acquire',
     };
     return base as FeatureRunnerDeps;
   }

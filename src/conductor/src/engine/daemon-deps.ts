@@ -153,6 +153,7 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): DaemonFeatureRunnerD
 
   return {
     log: cfg.log,
+    dispatchAdmission: 'acquire',
     // The real daemon path always emits to the engineer store on completion
     // (Phase 9.1). Manual `/conduct` runs don't go through makeFeatureRunnerDeps.
     daemon: true,

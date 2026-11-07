@@ -152,6 +152,7 @@ exit 0
     const runSetupTriage = vi.fn(async () => ({ kind: 'pass' as const, outputTail: '' }));
     let conductorCalls = 0;
     const deps: FeatureRunnerDeps = {
+      dispatchAdmission: 'acquire',
       createWorktree: async () => ({ path: worktree, branch: 'feat/setup-once' }),
       beginFeatureRun: () => ({
         events,

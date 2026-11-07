@@ -98,6 +98,7 @@ describe('acceptance: setup fix-session repairs converge (#1346)', () => {
         ),
       );
       const deps: FeatureRunnerDeps = {
+      dispatchAdmission: 'acquire',
         createWorktree: async () => ({ path: root, branch: `feat/${SLUG}` }),
         beginFeatureRun: async () => ({
           events: persistence.events,
@@ -177,6 +178,7 @@ describe('acceptance: setup fix-session repairs converge (#1346)', () => {
     );
 
     const deps: FeatureRunnerDeps = {
+      dispatchAdmission: 'acquire',
       createWorktree: async () => ({ path: root, branch: `feat/${SLUG}` }),
       beginFeatureRun: async () => ({
         events: persistence.events,
@@ -252,6 +254,7 @@ describe('acceptance: setup fix-session repairs converge (#1346)', () => {
     };
 
     const deps: FeatureRunnerDeps = {
+      dispatchAdmission: 'acquire',
       createWorktree: async () => ({ path: root, branch: `feat/${SLUG}` }),
       prepareWorktree: async () => {
         throw new SetupFailureError('setup failed', 'fixture compile failure');
@@ -297,6 +300,7 @@ describe('acceptance: setup fix-session repairs converge (#1346)', () => {
     await git('worktree', 'add', '-q', occupiedWorktree, quarantineRef);
     try {
       const deps: FeatureRunnerDeps = {
+      dispatchAdmission: 'acquire',
         createWorktree: async () => ({ path: root, branch: `feat/${SLUG}` }),
         prepareWorktree: async () => {
           throw new SetupFailureError('setup failed', 'fixture compile failure');

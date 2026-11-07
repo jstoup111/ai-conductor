@@ -11,6 +11,7 @@ describe('daemon dispatch session ID wiring', () => {
     const scopeSessionIds = ['scope-session-a', 'scope-session-b'];
     let nextScope = 0;
     const deps: FeatureRunnerDeps = {
+      dispatchAdmission: 'acquire',
       createWorktree: async () => ({ path: '/worktree', branch: 'feat/session-id' }),
       runConductor,
       readOutcome: async () => ({ done: false, halted: true }),

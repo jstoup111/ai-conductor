@@ -81,6 +81,7 @@ function makeDeps(
     return { stdout: '{}' };
   };
   return {
+    dispatchAdmission: 'acquire',
     createWorktree: async () => ({ path: worktreePath, branch: 'feat/false-ship' }),
     runConductor: async () => {},
     readOutcome: async () => outcome,

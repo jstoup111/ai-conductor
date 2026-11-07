@@ -46,6 +46,7 @@ function lifecycle(
   overrides: Partial<FeatureRunnerDeps> = {},
 ): FeatureRunnerDeps {
   return {
+    dispatchAdmission: 'acquire',
     createWorktree: vi.fn(async () => worktree),
     runConductor: vi.fn(async () => {}),
     readOutcome: vi.fn(async () => outcome),

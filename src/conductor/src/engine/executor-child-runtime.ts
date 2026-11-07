@@ -342,6 +342,9 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
   const beginShutdown = () => shutdown ??= closeForShutdown();
   signal.addEventListener('abort', () => { void beginShutdown(); }, { once: true });
   const runner = makeExecutorChildFeatureRunner({ order, worktree, events, providerExecution, log: input.log, stateStore }, {
+    // Task 8 replaces this hand-built lifecycle with makeFeatureRunnerDeps and
+    // overrides it to admitted after the child admission boundary is wired.
+    dispatchAdmission: 'acquire',
     createWorktree: async () => worktree,
     prepareWorktree: async (featureWorktree, featureLog, featureEvents) => prepareWorktree(
       featureWorktree.path,

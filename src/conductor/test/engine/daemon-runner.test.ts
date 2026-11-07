@@ -136,6 +136,7 @@ function deps(
   if (!rec.cleanupCalls) rec.cleanupCalls = [];
 
   return {
+    dispatchAdmission: 'acquire',
     createWorktree: async (slug) => {
       maybeThrow('createWorktree');
       return { path: `/wt/${slug}`, branch: `feat/${slug}` };

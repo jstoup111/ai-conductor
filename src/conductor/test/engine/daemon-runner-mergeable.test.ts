@@ -28,6 +28,7 @@ const ITEM: BacklogItem = { slug: 'feat-x' };
 
 function baseDeps(overrides: Partial<FeatureRunnerDeps> = {}): FeatureRunnerDeps {
   return {
+    dispatchAdmission: 'acquire',
     createWorktree: async (slug) => ({ path: `/wt/${slug}`, branch: `feat/${slug}` }),
     runConductor: async () => {},
     readOutcome: async (): Promise<WorktreeOutcome> => ({ done: false, halted: false }),

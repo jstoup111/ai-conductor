@@ -151,6 +151,7 @@ describe('deferred feature-worktree reap — production lifecycle entry points',
     const logs: string[] = [];
 
     const deps: FeatureRunnerDeps = {
+      dispatchAdmission: 'acquire',
       createWorktree: async () => ({ path: worktree, branch: `feat/${SLUG}` }),
       runConductor: async () => {},
       readOutcome: async () => ({

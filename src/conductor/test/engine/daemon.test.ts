@@ -49,6 +49,7 @@ function makeSetupTriageParkingRunner(
   onTriage: () => void,
 ) {
   return makeRunFeature({
+    dispatchAdmission: 'acquire',
     createWorktree: async (slug) => {
       const path = join(projectRoot, '.worktrees', slug);
       await mkdir(path, { recursive: true });
@@ -566,6 +567,7 @@ describe('engine/daemon — runDaemon', () => {
     const logs: string[] = [];
     try {
       const runParkedFeature = makeRunFeature({
+        dispatchAdmission: 'acquire',
         createWorktree: async (slug) => {
           const path = join(projectRoot, '.worktrees', slug);
           await mkdir(path, { recursive: true });
@@ -677,6 +679,7 @@ describe('engine/daemon — runDaemon', () => {
     const diagnostic = 'working tree left dirty after setup';
     try {
       const runFeature = makeRunFeature({
+        dispatchAdmission: 'acquire',
         createWorktree: async (slug) => ({ path: worktree, branch: `feat/${slug}` }),
         prepareWorktree: async () => {
           throw new SetupFailureError('setup failed', 'setup output');
@@ -844,6 +847,7 @@ describe('engine/daemon — runDaemon', () => {
       await mkdir(join(worktree, '.pipeline'), { recursive: true });
       await mkdir(join(worktree, '.pipeline', 'HALT.class'));
       const runFeature = makeRunFeature({
+        dispatchAdmission: 'acquire',
         createWorktree: async (slug) => ({ path: worktree, branch: `feat/${slug}` }),
         runConductor: async () => {
           throw new Error('original terminal failure');

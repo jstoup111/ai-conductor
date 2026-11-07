@@ -2268,6 +2268,7 @@ describe('engine/daemon-rekick — verified merged-history continuation', () => 
     let realConductorInvoked = false;
 
     const deps: FeatureRunnerDeps = {
+      dispatchAdmission: 'acquire',
       createWorktree: async () => ({ path: dir, branch: 'feature/foo' }),
       // A valid merged record allows the normal conductor path to continue;
       // it must not manufacture finish-choice/DONE markers or process-cache

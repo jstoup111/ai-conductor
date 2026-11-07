@@ -70,6 +70,7 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
   ): FeatureRunnerDeps {
     const wt = extra.wtPath ?? worktreePath;
     const base: Omit<FeatureRunnerDeps, 'daemon' | 'project'> = {
+      dispatchAdmission: 'acquire',
       createWorktree: async () => {
         await seedEvents(wt);
         return { path: wt, branch: `feat/${ITEM.slug}` } as FeatureWorktree;
