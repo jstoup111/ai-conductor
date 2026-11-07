@@ -1892,7 +1892,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     for (const w of memoryResolveCtx.warnings) log(`WARNING: ${w}`);
   }
 
-  const lifecycleContext = (): DaemonFeatureLifecycleContext => ({
+  const lifecycleContext = (featureEvents: ConductorEventEmitter): DaemonFeatureLifecycleContext => ({
     projectRoot,
     config,
     baseBranch,
@@ -1906,15 +1906,17 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     createProviderExecution,
     events,
     log,
-    supervisorState: {
-      activeConductors,
-      allWaitSignals,
-      featureEventFlushers,
-      isShutdownRequested: () => shutdownRequested,
+    registerConductor: (conductor) => {
+      activeConductors.add(conductor);
+      return () => activeConductors.delete(conductor);
     },
+    registerAbortController: (controller) => allWaitSignals.add(controller),
+    isShutdownRequested: () => shutdownRequested,
+    flushFeatureEvents: featureEventFlushers.get(featureEvents) ?? (async () => {}),
+    engineVersionId: resolveEngineVersion(__dirname),
   });
-  const runConductorInWorktree = async (wt: FeatureWorktree, item: BacklogItem, providerExecution = createProviderExecution(), featureEvents: ConductorEventEmitter = events, featureLog = log, sessionId = uuidv4()) => runDaemonFeatureConductor(lifecycleContext(), wt, item, providerExecution, featureEvents, featureLog, sessionId);
-  const runSetupTriage = async (error: any, worktree: FeatureWorktree, item: BacklogItem, providerExecution = createProviderExecution(), featureLog = log, featureEvents?: ConductorEventEmitter, workOrderBaseSha?: string) => runDaemonSetupTriage(lifecycleContext(), error, worktree, item, providerExecution, featureLog, featureEvents, workOrderBaseSha);
+  const runConductorInWorktree = async (wt: FeatureWorktree, item: BacklogItem, providerExecution = createProviderExecution(), featureEvents: ConductorEventEmitter = events, featureLog = log, sessionId = uuidv4()) => runDaemonFeatureConductor(lifecycleContext(featureEvents), wt, item, providerExecution, featureEvents, featureLog, sessionId);
+  const runSetupTriage = async (error: any, worktree: FeatureWorktree, item: BacklogItem, providerExecution = createProviderExecution(), featureLog = log, featureEvents?: ConductorEventEmitter, workOrderBaseSha?: string) => runDaemonSetupTriage(lifecycleContext(featureEvents ?? events), error, worktree, item, providerExecution, featureLog, featureEvents, workOrderBaseSha);
 
   // The same registry backs dispatcher claims and every maintenance liveness
   // check. A sweep may observe a terminal PR while its executor still owns the

@@ -63,12 +63,16 @@ export interface DaemonFeatureLifecycleContext {
   readonly createProviderExecution: () => ProviderExecutionContext;
   readonly events: ConductorEventEmitter;
   readonly log: (message: string) => void;
-  readonly supervisorState: {
-    readonly activeConductors: Set<Conductor>;
-    readonly allWaitSignals: Set<AbortController>;
-    readonly featureEventFlushers: WeakMap<ConductorEventEmitter, () => Promise<void>>;
-    readonly isShutdownRequested: () => boolean;
-  };
+  /** Registers a live conductor and returns the adapter's cleanup operation. */
+  readonly registerConductor: (conductor: Conductor) => () => void;
+  /** Registers a rate-limit wait so this adapter can abort it during shutdown. */
+  readonly registerAbortController: (controller: AbortController) => void;
+  /** Whether this adapter has started its shutdown sequence. */
+  readonly isShutdownRequested: () => boolean;
+  /** Flushes this feature's event tail before FINISH publication. */
+  readonly flushFeatureEvents: () => Promise<void>;
+  /** Immutable engine identity recorded by FINISH publication. */
+  readonly engineVersionId: string;
 }
 
 /** One git adapter for WorkOrder build and its executor-side verification. */
@@ -167,7 +171,6 @@ export async function runDaemonFeatureConductor(
     projectRoot, config, baseBranch, isSelfHost, effectiveDaemonConcurrency, worktreeLifecycle,
     rateLimitEpisode, readOnlyReviewCapabilities, ownerGh,
   } = context;
-  const { activeConductors, allWaitSignals, featureEventFlushers, isShutdownRequested } = context.supervisorState;
   const pipelineDir = join(wt.path, '.pipeline');
   await mkdir(pipelineDir, { recursive: true });
   const selectedRuntime = providerExecution.runtimes.get(providerExecution.configuredProviders[0]);
@@ -190,7 +193,8 @@ export async function runDaemonFeatureConductor(
     finishPublication: createProductionFinishPublicationCoordinator({
       projectRoot: wt.path, stateFilePath, baseBranch, prTemplateBytes: config?.pr_template_bytes,
       git: finishPublicationGit, gh: finishPublicationGh, events: featureEvents,
-      flushSessionEvents: featureEventFlushers.get(featureEvents),
+      flushSessionEvents: context.flushFeatureEvents,
+      engineVersionId: context.engineVersionId,
       repairPresentation: createProvenanceGuardedFinishPresentationRepair({
         projectRoot: wt.path, git: finishPublicationGit, gh: finishPublicationGh, baseBranch,
         log: featureLog, events: featureEvents,
@@ -202,9 +206,9 @@ export async function runDaemonFeatureConductor(
     baseBranch, verifyArtifacts: true, resume: true, daemon: true, featureSlug: item.slug,
     operatorParkBoundary: () => isOperatorParked(projectRoot, item.slug, (error) => featureLog(`operator park marker read failed: ${error.message}`)),
     rateLimitEpisode, readOnlyReviewCapabilities,
-    registerAbortController: (controller) => allWaitSignals.add(controller),
+    registerAbortController: context.registerAbortController,
   });
-  activeConductors.add(conductor);
+  const unregisterConductor = context.registerConductor(conductor);
   try {
     const ranManualTest = getStepStatus(baseState, 'manual_test') !== 'skipped';
     const parked = await isOperatorParked(projectRoot, item.slug);
@@ -233,7 +237,7 @@ export async function runDaemonFeatureConductor(
     });
     if (resume === 'halted') return;
     if (resume === 'already_shipped') featureLog(`merged shipment evidence verified for ${item.slug}; continuing normal completion`);
-    if (isShutdownRequested()) return;
+    if (context.isShutdownRequested()) return;
     const conductorTermination = await conductor.run();
     if (conductorTermination) return conductorTermination;
     const finalState = await readState(stateFilePath);
@@ -248,7 +252,7 @@ export async function runDaemonFeatureConductor(
       sourceRef: item.sourceRef, prUrl: implementationPrUrl, cwd: wt.path, slug: item.slug, log: featureLog,
     });
   } finally {
-    activeConductors.delete(conductor);
+    unregisterConductor();
   }
 }
 
