@@ -96,6 +96,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - FINISH now publishes author-approved PR prose through the engine and retries safely when retained prose remains unchanged. ([implementation PR #3573](https://github.com/jstoup111/ai-conductor/pull/3573)).
 - prd-audit defines the within, outside-harmless and outside-visible intent relations, so fail-closed hardening and test repairs no longer halt SHIP as user-visible over-scope. ([implementation PR #3607](https://github.com/jstoup111/ai-conductor/pull/3607)).
 - BUILD's TDD and pipeline skills now require proving every Done-when bullet, asserting full outcomes, passing a stub check, and per-test Covers markers, and pass the implementer the criterion and ADR text SHIP grades. ([implementation PR #3611](https://github.com/jstoup111/ai-conductor/pull/3611)).
+- BUILD records a file missing from a task's Files list with a `Scope:` trailer instead of halting for a plan gap, and plans list the call sites, unions and registries a task forces. ([implementation PR #3606](https://github.com/jstoup111/ai-conductor/pull/3606)).
 
 ### Removed
 
