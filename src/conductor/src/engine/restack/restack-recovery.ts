@@ -979,7 +979,14 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
         return { kind: 'unavailable', detail: 'cannot clean recovered restack journal' };
       }
     }
-    if (recoveredMergeAudit !== undefined) await options.events?.emit({ type: 'rebase_merge_audit', ...recoveredMergeAudit });
+    if (recoveredMergeAudit !== undefined) {
+      await options.events?.emit({
+        type: 'rebase_merge_audit',
+        flattenedMerges: [...recoveredMergeAudit.flattenedMerges],
+        ancestryOnlyMerges: [...recoveredMergeAudit.ancestryOnlyMerges],
+        sideLineageCount: recoveredMergeAudit.sideLineageCount,
+      });
+    }
     await options.events?.emit({ type: 'restack_recovered', opId: read.journal.opId, fromState });
     return { kind: 'recovered', fromState };
   } catch (error) {

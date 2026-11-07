@@ -181,11 +181,12 @@ function parseConflictRecord(value: unknown): RestackConflictRecord | undefined 
   const newParent = parseCommitSha(value.newParent);
   const newParentTree = parseCommitSha(value.newParentTree);
   const commit = parseCommitSha(value.commit);
-  const flattenedTip = value.flattenedTip === undefined ? undefined : parseCommitSha(value.flattenedTip);
+  const hasFlattenedTip = value.flattenedTip !== undefined;
+  const flattenedTip = typeof value.flattenedTip === 'string' ? parseCommitSha(value.flattenedTip) : undefined;
   const candidateSubjects = parseStringArray(value.candidateSubjects);
   const paths = parseStringArray(value.paths);
   if (!child || !oldParent || !oldTip || !newParent || !newParentTree || !commit || !candidateSubjects || !paths
-    || (value.flattenedTip !== undefined && !flattenedTip)) return undefined;
+    || (hasFlattenedTip && !flattenedTip)) return undefined;
   return {
     opId: value.opId as RestackOpId,
     child,
