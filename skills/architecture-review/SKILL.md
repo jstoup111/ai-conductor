@@ -315,7 +315,6 @@ Terminal ADR declarations use only `Status: APPROVED` or `Status: SUPERSEDED by 
 - `build_review`, the as-built review, and `/finish` may cite APPROVED ADRs
 - If a subsequent feature conflicts with an APPROVED ADR, the conflict must be resolved by
   either superseding the ADR (new ADR with `Supersedes: <old>`) or changing the implementation
-  (the as-built gate blocks only on governing ADRs; others are drift notes for that resolution)
 - Superseded ADRs get `Status: SUPERSEDED` and a `Superseded by:` reference
 
 **HARD GATE: No feature proceeds past architecture-review with DRAFT ADRs. All ADRs created
@@ -444,9 +443,7 @@ this SHIP sweep is unchanged and never relies on BUILD proof as authority.
 
 **Scope (only this):**
 - For `adrCompliance`, load only the **APPROVED** ADRs (`.docs/decisions/`, `Status: APPROVED`).
-  Block only on ADRs listed under GOVERNING ADRS in the input projection; when that list is empty,
-  judge every APPROVED ADR. A conflict with a non-governing ADR is a drift note naming the decision
-  to amend only when the code follows the plan; unplanned code gets no such exemption. DRAFT/SUPERSEDED ADRs are not authoritative and are not gated against (per §7b). For
+  DRAFT/SUPERSEDED ADRs are not authoritative and are not gated against (per §7b). For
   `diagramDrift`, compare the shipped code with the approved architecture diagrams
   (`.docs/architecture/`).
 - For each enabled check, compare the shipped source with its governing evidence: new structural
@@ -546,7 +543,7 @@ this SHIP sweep is unchanged and never relies on BUILD proof as authority.
 
 **Verdict meanings**
 - **APPROVED** — shipped code matches the approved architecture. Proceed to finish.
-- **APPROVED WITH DRIFT NOTES** — minor drift or a non-governing ADR conflict (e.g. a diagram is now slightly stale,
+- **APPROVED WITH DRIFT NOTES** — minor, non-violating drift (e.g. a diagram is now slightly stale,
   a pattern was extended consistently). Record the drift; proceed. Note it for a follow-up ADR only
   when it makes or changes a structural decision; otherwise no ADR is needed, and it does not block.
 - **PLAN_GAP** — the shipped code faithfully implements the approved design, but the design is the
@@ -569,7 +566,6 @@ work) or `DESIGN` (a human architectural decision is required) — with its type
 | Unreachable rung; no plan task or approved entry point covers it | `DESIGN` | the APPROVED ADR decision it conflicts with |
 | Code diverges from an APPROVED ADR decision the plan already requires | `REMEDIABLE` | `<adr-stem> D<n>` |
 | Complying needs a changed or new architectural decision | `DESIGN` | `<adr-stem> D<n>` |
-| Code follows the plan; conflicts only with an APPROVED ADR outside a non-empty GOVERNING ADRS | none | drift note naming `<adr-stem> D<n>` |
 | Story criterion or desired outcome unmet | none | out of scope; `/prd-audit` owns it |
 
 Write a plan-task reference as `task <id>` exactly, not `plan task <id>` or `Task <id>`.
@@ -592,5 +588,5 @@ Write a plan-task reference as `task <id>` exactly, not `plan task <id>` or `Tas
 - [ ] `.pipeline/review-required-architecture_review` marker written IF
       verdict ≠ clean APPROVED, or any ADR was drafted/superseded, or any
       High-impact risk was registered (skip only on truly clean APPROVED)
-- [ ] **As-built mode:** BLOCKED on any enabled violation of a governing APPROVED ADR; resolved by code fix or
+- [ ] **As-built mode:** BLOCKED on any enabled APPROVED-ADR violation; resolved by code fix or
       human-approved superseding ADR (never silent downgrade)
