@@ -107,6 +107,7 @@ function renderPlan(slug: string, files: string, inherited = false): string {
     ? [
         '',
         '### Task 2: inherit the protected target',
+        '**Dependencies:** Task 1',
         '',
         '**Files:** same as Task 1',
         '',
@@ -123,6 +124,7 @@ function renderPlan(slug: string, files: string, inherited = false): string {
     `**Stories:** .docs/stories/${slug}.md`,
     '',
     '### Task 1: implement the change',
+    '**Dependencies:** none',
     '',
     `**Files:** ${files}`,
     '',
