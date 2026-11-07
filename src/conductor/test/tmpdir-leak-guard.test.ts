@@ -364,6 +364,7 @@ describe('tmpdir-leak-guard: diffTmpdirEntries', () => {
       'existing',
       `${RUN_TMP_ROOT_PREFIX}A1b2C3`,
       'self-host-daemon-home',
+      'ai-conductor-claude-system-prompt-AbCdEf',
       'claude-1000',
       'moshi-codex-rl.json.tmp',
       '.X11-unix',
@@ -375,6 +376,7 @@ describe('tmpdir-leak-guard: diffTmpdirEntries', () => {
     expect(diff.ignored).toEqual([
       `${RUN_TMP_ROOT_PREFIX}A1b2C3`,
       'self-host-daemon-home',
+      'ai-conductor-claude-system-prompt-AbCdEf',
       'claude-1000',
       'moshi-codex-rl.json.tmp',
       '.X11-unix',
