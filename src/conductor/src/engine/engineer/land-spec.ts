@@ -82,6 +82,7 @@ import {
   evaluateStackEligibility,
   validatePlanSlices,
 } from '../plan-slices.js';
+import { validatePlanDependencies } from '../plan-dependencies.js';
 import { assessAcceptedStoryReadability } from '../story-criteria.js';
 import { composeSpecCommitMessage } from './spec-commit-message.js';
 import { isEngineAppendedRemediationTaskId } from '../remediation-append.js';
@@ -431,6 +432,14 @@ export async function landSpec(
     throw landGateError(
       'plan-slices',
       `landSpec: ${planSlicesValidation.violations.map(({ message }) => message).join('; ')}`,
+    );
+  }
+
+  const planDependencyViolations = validatePlanDependencies(planContent);
+  if (planDependencyViolations.length > 0) {
+    throw landGateError(
+      'plan-dependencies',
+      `landSpec: ${planDependencyViolations.map(({ message }) => message).join('; ')}`,
     );
   }
 
