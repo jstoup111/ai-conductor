@@ -359,9 +359,9 @@ through `ai-conductor scoped-run <selectors...>`, then commit and leave the aggr
 `test_suite`. A scoped PASS does not establish an aggregate PASS.
 
 **Build-review work order:** A retry carrying a `Build-review remediation work order` is the job
-even when every task already reads completed. Make each listed repair under its admitted task id and
-commit. If you judge a repair already done or wrong, do not exit without a commit: write the halt
-marker as `Need user decision: case <caseId> — <evidence>`.
+even when every task already reads completed. Each listed repair ends in a commit under its admitted
+task id, or, if you judge it done or wrong, in `Need user decision: case <caseId> — <evidence>`
+written to `.pipeline/halt-user-input-required`.
 
 **Batch affected-test union:** At each batch boundary, compute one named
 `BATCH_AFFECTED_TESTS` union by deduplicating every task's scoped affected-test set and retain
