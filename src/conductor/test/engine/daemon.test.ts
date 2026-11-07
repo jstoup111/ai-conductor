@@ -72,6 +72,49 @@ async function applyTerminalEffects(projectRoot: string, outcome: FeatureOutcome
 }
 
 describe('engine/daemon — runDaemon', () => {
+  // Covers: task:7
+  it('asks the lowest-priority running feature to yield for an earlier critical arrival', async () => {
+    let discovery = 0;
+    let resolveLow!: (outcome: FeatureOutcome) => void;
+    let resolveMedium!: (outcome: FeatureOutcome) => void;
+    let requestObserved!: () => void;
+    const requested = new Promise<void>((resolve) => { requestObserved = resolve; });
+    const requests: string[] = [];
+    let stop = false;
+    const daemon = runDaemon({
+      discoverBacklog: async () => discovery++ < 2
+        ? [
+            { slug: 'low', band: 'low', resolutionMode: 'banded' },
+            { slug: 'medium', band: 'medium', resolutionMode: 'banded' },
+          ]
+        : [
+            { slug: 'critical', band: 'critical', resolutionMode: 'banded' },
+            { slug: 'low', band: 'low', resolutionMode: 'banded' },
+            { slug: 'medium', band: 'medium', resolutionMode: 'banded' },
+          ],
+      runFeature: async (item) => new Promise<FeatureOutcome>((resolve) => {
+        if (item.slug === 'low') resolveLow = resolve;
+        else if (item.slug === 'medium') resolveMedium = resolve;
+        else resolve({ slug: item.slug, status: 'done' });
+      }),
+      requestYield: (slug) => {
+        requests.push(slug);
+        stop = true;
+        requestObserved();
+        return true;
+      },
+      sleep: async () => {},
+      shouldStop: () => stop,
+    }, { concurrency: 2, once: false, idlePollMs: 0 });
+
+    await requested;
+    resolveLow({ slug: 'low', status: 'preempted' });
+    resolveMedium({ slug: 'medium', status: 'done' });
+    await daemon;
+
+    expect(requests).toEqual(['low']);
+  });
+
   it('refreshes the snapshot and all dispatch gates on a full-pool pass', async () => {
     let release: ((outcome: FeatureOutcome) => void) | undefined;
     let stop = false;
