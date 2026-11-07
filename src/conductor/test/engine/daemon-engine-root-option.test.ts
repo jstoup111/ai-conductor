@@ -19,20 +19,21 @@ vi.mock('../../src/engine/child-feature-executor.js', async (importOriginal) => 
   })),
 }));
 
-vi.mock('../../src/engine/work-order.js', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../../src/engine/work-order.js')>(),
-  buildWorkOrder: vi.fn(async (input) => ({
-    schemaVersion: 1,
-    repository: input.repository,
-    slug: input.slug,
-    baseSha: input.baseSha,
-    ...(input.baseBranch === undefined ? {} : { baseBranch: input.baseBranch }),
-    engineVersionId: input.enginePin.engineVersionId,
-    manifest: [],
-  })),
-}));
+vi.mock('../../src/engine/work-order.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/work-order.js')>();
+  return {
+    ...actual,
+    // The daemon fixture is not a Git repository. Preserve the production
+    // serializer while replacing only its document-read process boundary.
+    buildWorkOrder: vi.fn((input) => actual.buildWorkOrder(
+      input,
+      async (args) => ({ exitCode: 0, stdout: `contents for ${args[1]}`, stderr: '' }),
+    )),
+  };
+});
 
 import { runDaemonMode } from '../../src/daemon-cli.js';
+import { buildWorkOrder, WORK_ORDER_SCHEMA_VERSION } from '../../src/engine/work-order.js';
 import {
   ENGINE_STORE_ENV_VAR,
   TEMP_ENGINE_VERSION_ID,
@@ -76,7 +77,7 @@ describe('runDaemonMode engineRoot', () => {
     ]);
   });
 
-  it('carries the configured daemon base branch into the work order', async () => {
+  it('createWorkOrder carries the configured daemon base branch through JSON without changing the schema', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-work-order-base-branch-'));
     roots.push(projectRoot);
     const store = await useTempEngineStore();
@@ -98,9 +99,14 @@ describe('runDaemonMode engineRoot', () => {
       await store.teardown();
     }
 
-    expect(seams.executions).toEqual([
-      expect.objectContaining({ baseBranch: 'trunk' }),
+    expect(JSON.parse(JSON.stringify(seams.executions))).toEqual([
+      expect.objectContaining({ baseBranch: 'trunk', schemaVersion: WORK_ORDER_SCHEMA_VERSION }),
     ]);
+    expect(buildWorkOrder).toHaveBeenLastCalledWith(
+      expect.objectContaining({ baseBranch: 'trunk' }),
+      expect.any(Function),
+    );
+    expect(WORK_ORDER_SCHEMA_VERSION).toBe(1);
   });
 
   it('restores the engine-store environment override on teardown', async () => {
