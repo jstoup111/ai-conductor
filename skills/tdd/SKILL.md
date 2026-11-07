@@ -109,7 +109,7 @@ coverage, and need no RED of their own.
 **Goal:** Write exactly one failing test that captures the next behavior.
 
 1. Choose the next acceptance criterion from the plan (or the most obvious next behavior)
-2. Write one test with one assertion
+2. Write one test for one behavior
 3. The agent derives selectors, retains the test under change as an expected failing member,
    and runs the scoped union of affected tests through `ai-conductor scoped-run <selectors...>`
 4. Confirm that the test under change fails for the expected reason and every
@@ -124,12 +124,14 @@ dedicated aggregate gate. Never run the full suite — or any aggregate
 command — inside this session.
 
 **Rules:**
-- One test, one behavior, one assertion
-- Test must fail for the RIGHT reason (not syntax error, not missing import)
+- One test, one behavior; assert every outcome its `Covers:` target names (content, not only a count or call)
+- Test must fail for the RIGHT reason (not a syntax error; a missing import of not-yet-written code
+  is expected, but COMMIT step 5's stub check still applies)
+- Assert production behavior, not source text, a test-local helper or fixture, or a mock's canned return
 - Test name describes the behavior: `test_expired_token_returns_401`, not `test_auth`
 - If tech-context loaded: follow stack test conventions (e.g., RSpec `describe`/`context`/`it`)
 - **Declare feature coverage with a `Covers:` marker.** Every test file this cycle creates or
-  changes carries a leading comment line binding it to the active feature, using the same marker
+  changes carries a `Covers:` comment binding it to the active feature, using the same marker
   contract as `/writing-system-tests`: a criterion in the active stories (`Covers: S<n>.<m>`), a
   task in the active plan (`Covers: task:<id>`), or — product track — a PRD requirement
   (`Covers: FR-N`). Criterion ids are positional — `S<n>.<m>` names the m-th Given/When/Then bullet
@@ -139,8 +141,8 @@ command — inside this session.
   bare ordinal happens to resolve in the active plan. Markers are resolvable only against the feature's own stories and plan; the
   build_review test-quality rubric scopes itself to changed tests with a resolvable `Covers:`
   binding, so a changed test without one is invisible to that review and the rubric passes
-  vacuously. A file-level marker listing every covered id is sufficient; update it in the same
-  feature when the cycle extends an existing test file so the diff establishes feature ownership.
+  vacuously. Put the marker directly above the `it`/`describe` it covers; a file-header marker binds
+  every test in the file, so use one only in files without test declarations.
 
 **If the test passes immediately:** The behavior already exists. Either the test is wrong
 (testing something already implemented) or the criterion is already met. Investigate — don't
@@ -192,7 +194,8 @@ inside this session.
   change that materially departs from that basis without its recorded no-fit or authorized
   departure is incomplete. This does not authorize behavior beyond the failing test.
 - Don't implement behavior not required by a failing test.
-- Don't fix other things you notice. Note them for a future task.
+- Don't fix other things you notice. Note them for a future task. A `Scope:` trailer explains a
+  widening; it does not authorize a user-visible behavior change.
 - Do not refactor during GREEN; refactoring remains a separate batch-boundary activity.
 - If tech-context loaded: follow stack conventions (e.g., Rails model/controller patterns)
 
@@ -239,7 +242,9 @@ inputs without failing open or closed). Has veto authority to send back to GREEN
    Change no worktree's files beyond adding those copies, the temporary one included: never set
    uncommitted work aside, and never discard, roll back or overwrite paths to reach the base
    version. A test that still passes proves nothing
-   and will fail build_review's testQuality rubric one expensive lap later. A value computed by the
+   and will fail build_review's testQuality rubric one expensive lap later. A test that fails there
+   only because the new module is missing proves nothing either: also confirm a stub (constant,
+   empty, or pre-change return) fails an assertion. A value computed by the
    test but never asserted on is an automatic fail of this check. Exempt: tasks under the
    **No Legitimate RED for Already-Existing Behavior** and **Removal Boundary** sections, and
    plan-declared `**Verify-only:** yes` tasks — their evidence forms replace this check.
@@ -290,8 +295,8 @@ inputs without failing open or closed). Has veto authority to send back to GREEN
    sanctioned rebases are the daemon's finish-time rebase-onto-latest and the `/rebase`
    resolver — both outside this loop. See the repository's rebase policy.
 
-**After commit:** Return to RED for the next cycle, or stop if all criteria for the current
-task are covered.
+**After commit:** Return to RED for the next cycle. Stop only when every `Done when:` bullet,
+including each enumerated case and negative outcome, has a committed assertion you can cite.
 
 ### Commit-less Completions: Evidence Trailers
 

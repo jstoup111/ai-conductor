@@ -285,7 +285,8 @@ records its task-level proof through `conduct task done <id> --done-when <n>=<ev
 editing a verdict artifact.
 
 **Subagent context scoping:** The implementer receives ONLY:
-- The task description and acceptance criteria (from the plan)
+- The task description, its `Done when:` checks, and the verbatim text of every story criterion
+  and ADR decision mapped to it (SHIP grades that text, not the plan's paraphrase)
 - File paths to modify (from the plan's "Files likely touched")
 - The TDD skill instructions
 - Every implementer dispatch prompt MUST carry this SHIP verdict read-only rule.
