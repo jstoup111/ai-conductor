@@ -19,27 +19,76 @@ import {
   isHaltRecordOnlyCommit,
   mapOmittedHaltRecordCommits,
 } from './halt-record-bookkeeping.js';
-import { missingCandidateSubjects, rewritesByUniqueSubject } from './restack-conflict-record.js';
+import { missingCandidateSubjects, rewritesByUniqueSubject, writeConflictRecord } from './restack-conflict-record.js';
+import type { StoredRestackJournal } from './restack-journal.js';
+import {
+  buildFlattenedHandoff as buildFlattenedHandoffImpl,
+  replayCandidateSubjects,
+  type FlattenedHandoff,
+} from './restack-flattened-handoff.js';
+export { replayCandidateSubjects } from './restack-flattened-handoff.js';
+export type { FlattenedHandoff } from './restack-flattened-handoff.js';
 
-export interface FlattenedHandoff {
-  /** Commits suitable for the resolver's engine-authored pick todo. */
-  readonly todo: readonly CommitSha[];
-  /** A linear, old-parent-rooted representation of the original first-parent range. */
-  readonly tip: CommitSha;
-  /** Todo commits whose subjects must survive a settled resolver replay. */
-  readonly candidates: readonly CommitSha[];
-  /** Resolver-todo commit to original merge identity correspondence. */
-  readonly flattenedMergesByCommit: ReadonlyMap<CommitSha, CommitSha>;
-  readonly audit: {
-    readonly flattenedMerges: readonly CommitSha[];
-    readonly ancestryOnlyMerges: readonly CommitSha[];
-    readonly sideLineageCount: number;
-  };
+export async function buildFlattenedHandoff(
+  range: ChildRange,
+  newParent: CommitSha,
+  git: GitRunner,
+  options: Omit<import('./restack-flattened-handoff.js').BuildFlattenedHandoffOptions, 'classifyMerge'> = {},
+): Promise<FlattenedHandoff> {
+  return buildFlattenedHandoffImpl(range, newParent, git, { ...options, classifyMerge: classifyReplayMerge });
 }
 
-export interface BuildFlattenedHandoffOptions {
-  readonly comparisonCommits?: readonly CommitSha[];
-  readonly haltRecordSlug?: string;
+interface HaltRecordedRestackConflictOptions {
+  readonly worktree: string;
+  readonly slug: string;
+  readonly journal: StoredRestackJournal;
+  readonly range: ChildRange;
+  readonly replayParent: CommitSha;
+  readonly candidateSubjects: readonly string[];
+  readonly commit: CommitSha;
+  readonly paths: readonly string[];
+  readonly detail: string;
+  readonly events?: import('../conductor-event-emitter.js').ConductorEventEmitter;
+  readonly git: GitRunner;
+  readonly writeHalt: (worktree: string, child: ChildRange['child'], detail: string, events?: import('../conductor-event-emitter.js').ConductorEventEmitter, recipe?: {
+    readonly slug: string; readonly opId: string; readonly oldTip: CommitSha; readonly newParent: CommitSha; readonly oldParent: CommitSha; readonly startingTip?: CommitSha;
+  }) => Promise<unknown>;
+}
+
+async function rangeHasMergeForHalt(git: GitRunner, range: ChildRange): Promise<boolean> {
+  const result = await git(['rev-list', '--min-parents=2', `${range.oldParent}..${range.oldTip}`]);
+  if (result.exitCode !== 0) throw new Error(`could not inspect restack range for merges: ${result.stderr}`);
+  return result.stdout.trim() !== '';
+}
+
+/** Persist the conflict context before writing its matching operator halt. */
+export async function haltRecordedRestackConflict(options: HaltRecordedRestackConflictOptions): Promise<void> {
+  const { journal, range } = options;
+  let recordFailure = '';
+  let flattenedTip: CommitSha | undefined;
+  try {
+    let candidateSubjects = options.candidateSubjects;
+    if (await rangeHasMergeForHalt(options.git, range)) {
+      const handoff = await buildFlattenedHandoff(range, options.replayParent, options.git);
+      candidateSubjects = await replayCandidateSubjects(options.git, handoff.candidates);
+      flattenedTip = handoff.tip;
+    }
+    const tree = await options.git(['rev-parse', '--verify', `${options.replayParent}^{tree}`]);
+    const replayParentTree = tree.exitCode === 0 ? parseCommitSha(tree.stdout.trim()) : undefined;
+    if (!replayParentTree) throw new Error('cannot read replay parent tree');
+    const written = await writeConflictRecord(options.worktree, options.slug, {
+      opId: journal.journal.opId, child: range.child, oldParent: range.oldParent, oldTip: range.oldTip,
+      newParent: options.replayParent, newParentTree: replayParentTree, candidateSubjects,
+      commit: options.commit, paths: options.paths, ...(flattenedTip === undefined ? {} : { flattenedTip }),
+    }, { git: options.git });
+    if (written.kind !== 'updated') recordFailure = `\nconflict record write failed: ${written.kind}`;
+  } catch (error) {
+    recordFailure = `\nconflict record write failed: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  await options.writeHalt(options.worktree, range.child, `${options.detail}${recordFailure}`, options.events, {
+    slug: options.slug, opId: journal.journal.opId, oldTip: range.oldTip, newParent: options.replayParent, oldParent: range.oldParent,
+    ...(flattenedTip === undefined ? {} : { startingTip: flattenedTip }),
+  });
 }
 
 /** Resolver dispatch receives the same immutable identity as every Git child. */
@@ -109,149 +158,6 @@ async function patchId(git: GitRunner, commit: CommitSha): Promise<string | unde
   return result.stdout.trim().split('\n').find(Boolean)?.split(/\s+/, 1)[0];
 }
 
-async function commitTree(git: GitRunner, commit: CommitSha): Promise<CommitSha> {
-  const result = await git(['rev-parse', `${commit}^{tree}`]);
-  if (result.exitCode !== 0) throw new Error(`could not read tree for ${commit}: ${result.stderr}`);
-  return requiredSha(result.stdout, `tree for ${commit}`);
-}
-
-async function commitParents(git: GitRunner, commit: CommitSha): Promise<readonly CommitSha[]> {
-  const result = await git(['rev-list', '--parents', '-n', '1', commit]);
-  if (result.exitCode !== 0) throw new Error(`could not read parents for ${commit}: ${result.stderr}`);
-  return result.stdout.trim().split(/\s+/).slice(1).map((value) => requiredSha(value, `parent for ${commit}`));
-}
-
-async function commitAuthor(git: GitRunner, commit: CommitSha): Promise<{ name: string; email: string; date: string }> {
-  const result = await git(['show', '-s', '--format=%an%x00%ae%x00%aI', commit]);
-  if (result.exitCode !== 0) throw new Error(`could not read author for ${commit}: ${result.stderr}`);
-  const [name, email, date, extra] = result.stdout.split('\0');
-  if (!name || !email || !date || extra !== undefined) throw new Error(`could not parse author for ${commit}`);
-  return { name, email, date: date.trim() };
-}
-
-async function commitMessage(git: GitRunner, commit: CommitSha): Promise<string> {
-  const result = await git(['show', '-s', '--format=%B', commit]);
-  if (result.exitCode !== 0) throw new Error(`could not read message for ${commit}: ${result.stderr}`);
-  return result.stdout;
-}
-
-async function sideLineageCount(git: GitRunner, firstParent: CommitSha, secondParent: CommitSha): Promise<number> {
-  const result = await git(['rev-list', `${firstParent}..${secondParent}`]);
-  if (result.exitCode !== 0) throw new Error(`could not list side lineage for ${secondParent}: ${result.stderr}`);
-  return result.stdout.split('\n').filter(Boolean).length;
-}
-
-async function writeLinearCommit(
-  git: GitRunner,
-  tree: CommitSha,
-  parent: CommitSha,
-  source: CommitSha,
-  message: string | undefined = undefined,
-): Promise<CommitSha> {
-  const [author, renderedMessage] = await Promise.all([commitAuthor(git, source), message === undefined ? commitMessage(git, source) : message]);
-  const result = await git(['commit-tree', tree, '-p', parent], {
-    input: renderedMessage,
-    env: {
-      GIT_AUTHOR_NAME: author.name,
-      GIT_AUTHOR_EMAIL: author.email,
-      GIT_AUTHOR_DATE: author.date,
-      GIT_COMMITTER_NAME: author.name,
-      GIT_COMMITTER_EMAIL: author.email,
-      GIT_COMMITTER_DATE: author.date,
-    },
-  });
-  if (result.exitCode !== 0) throw new Error(`could not write flattened hand-off commit for ${source}: ${result.stderr}`);
-  return requiredSha(result.stdout, `flattened hand-off commit for ${source}`);
-}
-
-async function flattenedMergeIsCarried(git: GitRunner, parent: CommitSha, newParent: CommitSha, flattened: CommitSha): Promise<boolean> {
-  const [merged, newParentTree] = await Promise.all([
-    git(['merge-tree', '--write-tree', '--merge-base', parent, newParent, flattened]),
-    commitTree(git, newParent),
-  ]);
-  return merged.exitCode === 0 && merged.stdout.trim() === newParentTree;
-}
-
-/**
- * Builds a linear, old-parent-rooted hand-off for resolver replay. The chain
- * retains every first-parent tree, while the todo selects only commits whose
- * patches still need a user-visible pick.
- */
-export async function buildFlattenedHandoff(
-  range: ChildRange,
-  newParent: CommitSha,
-  git: GitRunner,
-  options: BuildFlattenedHandoffOptions = {},
-): Promise<FlattenedHandoff> {
-  const comparedPatchIds = new Set<string>();
-  for (const comparison of options.comparisonCommits ?? []) {
-    const id = await patchId(git, comparison);
-    if (id !== undefined) comparedPatchIds.add(id);
-  }
-  const listed = await git(['rev-list', '--first-parent', '--reverse', `${range.oldParent}..${range.oldTip}`]);
-  if (listed.exitCode !== 0) throw new Error(`could not list restack range: ${listed.stderr}`);
-  const todo: CommitSha[] = [];
-  const candidates: CommitSha[] = [];
-  const flattenedMergesByCommit = new Map<CommitSha, CommitSha>();
-  const flattenedMerges: CommitSha[] = [];
-  const ancestryOnlyMerges: CommitSha[] = [];
-  let sideLineageCountTotal = 0;
-  let accumulator = range.oldParent;
-
-  for (const raw of listed.stdout.split('\n').filter(Boolean)) {
-    const commit = requiredSha(raw, 'flattened hand-off range entry');
-    const parents = await commitParents(git, commit);
-    if (parents.length < 2) {
-      accumulator = await writeLinearCommit(git, await commitTree(git, commit), accumulator, commit);
-      const omitted = (options.haltRecordSlug !== undefined && await isHaltRecordOnlyCommit(commit, options.haltRecordSlug, git))
-        || comparedPatchIds.has(await patchId(git, commit) ?? '');
-      if (!omitted) {
-        todo.push(commit);
-        candidates.push(commit);
-      }
-      continue;
-    }
-
-    const merge = await classifyReplayMerge(git, commit, newParent, 'stacked');
-    sideLineageCountTotal += await sideLineageCount(
-      git,
-      requiredSha(merge.firstParent, `first parent for ${commit}`),
-      requiredSha(merge.secondParent, `second parent for ${commit}`),
-    );
-    if (merge.kind === 'ancestry-only') {
-      // For an ancestry-only merge its recorded tree is the automatic tree.
-      accumulator = await writeLinearCommit(git, requiredSha(merge.mergeTree, `automatic tree for ${commit}`), accumulator, commit);
-      ancestryOnlyMerges.push(commit);
-      continue;
-    }
-    if (merge.kind === 'q-carried') {
-      accumulator = await writeLinearCommit(git, requiredSha(merge.autoTree, `automatic tree for ${commit}`), accumulator, commit);
-    } else {
-      flattenedMerges.push(commit);
-    }
-    const flattenedParent = accumulator;
-    const flattened = await writeLinearCommit(
-      git,
-      requiredSha(merge.mergeTree, `merge tree for ${commit}`),
-      accumulator,
-      commit,
-      `${await commitMessage(git, commit)}\nFlattened-merge: ${commit}\n`,
-    );
-    accumulator = flattened;
-    flattenedMergesByCommit.set(flattened, commit);
-    if (!(await flattenedMergeIsCarried(git, flattenedParent, newParent, flattened))) {
-      todo.push(flattened);
-      candidates.push(flattened);
-    }
-  }
-  return {
-    todo,
-    tip: accumulator,
-    candidates,
-    flattenedMergesByCommit,
-    audit: { flattenedMerges, ancestryOnlyMerges, sideLineageCount: sideLineageCountTotal },
-  };
-}
 
 /** The non-merge candidate selection shared semantically with plumbing replay. */
 async function replayCandidates(
@@ -312,17 +218,6 @@ function translateFlattenedRewrites(
   return translated;
 }
 
-export async function replayCandidateSubjects(git: GitRunner, candidates: readonly CommitSha[]): Promise<string[]> {
-  const subjects: string[] = [];
-  for (const candidate of candidates) {
-    const result = await git(['show', '-s', '--format=%s', candidate]);
-    if (result.exitCode !== 0 || result.stdout.trim() === '') {
-      throw new Error(`could not read restack replay subject for ${candidate}`);
-    }
-    subjects.push(result.stdout.trim());
-  }
-  return subjects;
-}
 
 /**
  * Resolve one restack child's conflict off-worktree. No branch or conductor ref

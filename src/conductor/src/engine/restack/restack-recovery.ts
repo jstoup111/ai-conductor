@@ -39,8 +39,7 @@ import {
   RoutedApplyPlanRefChangedError,
   runRestack,
 } from './restack-executor.js';
-import { replayCandidateSubjects, resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
-import { haltRecordedRestackConflict } from './restack-conflict-halt.js';
+import { haltRecordedRestackConflict, replayCandidateSubjects, resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
 import { resolveUnenteredLeafOwner, type ConsumedTipCorrespondence } from './restack-unentered-leaf.js';
 import { haltRecordPathFor } from './halt-record-bookkeeping.js';
 import { readHaltRecordRef } from '../halt-record-ref.js';
