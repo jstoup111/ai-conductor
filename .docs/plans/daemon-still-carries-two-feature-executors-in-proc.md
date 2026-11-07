@@ -121,7 +121,7 @@ Slice 2
 | adr-2026-10-15-per-dispatch-engine-pinned-executor#D1 | task | task-8, task-28, task-32 | `runExecutorChildFeature` obtains its prepare, triage, conductor and teardown only from `makeFeatureRunnerDeps` and the lifecycle module |
 | adr-2026-10-15-per-dispatch-engine-pinned-executor#D2 | task | task-28 | whose WorkOrder carries `engineVersionId` `20261107T000000Z-0123456789ab` |
 | adr-2026-10-15-per-dispatch-engine-pinned-executor#D3 | task | task-29 | A protocol mismatch terminates the first child and relaunches the dispatch through the fork pinned to the supervisor's engine directory |
-| adr-2026-10-15-per-dispatch-engine-pinned-executor#D4 | task | task-24, task-25, task-21, task-36 | `feature_dispatch_started` carries `kind` `rekick` and the WorkOrder's `tier` |
+| adr-2026-10-15-per-dispatch-engine-pinned-executor#D4 | task | task-24, task-25, task-21, task-36 | emits `feature_dispatch_started` with `kind` `rekick` and the WorkOrder's `tier` |
 | adr-2026-10-15-per-dispatch-engine-pinned-executor#D5 | task | task-26, task-28 | the wait is aborted, `closeOpenExecutionsForShutdown` is called, and the outcome is `parked` with the stop reason |
 | adr-2026-10-15-per-dispatch-engine-pinned-executor#D6 | no-change | none | Executor records and GC protection are written by the child executor path this feature keeps; no task touches them. |
 | adr-2026-10-15-per-dispatch-engine-pinned-executor#D7 | no-change | none | The supervisor restart policy is independent of executor selection; no task changes it. |
