@@ -336,12 +336,12 @@ Slice 2
 **Type:** negative-path
 
 **Steps:**
-1. Add cases: a stacked REKICK feature runs `runDaemonRekickStackPreflight` before `resumeRebaseFirst`; when the preflight refuses, the dispatch halts with the preflight's recovery text and `resumeRebaseFirst` is never called. Stub at the git runner. Pattern: in-memory child fork.
+1. Add cases: a stacked REKICK feature runs `runDaemonRekickStackPreflight` before `resumeRebaseFirst`; when the preflight refuses, the dispatch halts with the preflight's detail, never `loop ended without DONE or HALT marker`, and `resumeRebaseFirst` is never called. Stub at the git runner. Pattern: in-memory child fork.
 2. Run; fix if needed; commit.
 
 **Done when:**
 - [test] A stacked REKICK dispatch through the child runs the stack preflight before `resumeRebaseFirst`.
-- [test] A refused stack preflight halts the child dispatch with the preflight's recovery, and `resumeRebaseFirst` is never called.
+- [test] A refused stack preflight halts the child dispatch with the preflight's detail, never `loop ended without DONE or HALT marker`, and `resumeRebaseFirst` is never called.
 
 **Files likely touched:**
 - src/conductor/test/engine/executor-child-lifecycle.integration.test.ts — row 2
@@ -599,13 +599,13 @@ Slice 2
 **Type:** happy-path
 
 **Steps:**
-1. Write failing cases: a resumed feature whose worktree holds `conduct-session-id` `s1` is traced with run id `s1`, the installed harness version and the order's `sourceRef`, and the visualizer's `stop()` resolves before `feature_dispatch_ended` is emitted; an initial dispatch uses a fresh run id.
+1. Write failing cases: a resumed feature whose worktree holds `conduct-session-id` `s1` is traced with run id `s1`, `service.version` set to the installed released harness version, `conductor.engine.version` set to the order's pinned `engineVersionId`, and the order's `sourceRef`, and the visualizer's `stop()` resolves before `feature_dispatch_ended` is emitted; an initial dispatch uses a fresh run id.
 2. Verify RED.
 3. Change `attachFeatureOtelVisualizer` in `executor-broker.ts` to take the visualizer context and return `{ stop(): Promise<void> }`; `daemon-cli.ts`'s `attachChildFeatureOtelVisualizer` builds the context; `createChildProcessFeatureExecutor` awaits `stop()` at collection.
 4. Verify GREEN; commit.
 
 **Done when:**
-- [test] A resumed child dispatch whose worktree holds `conduct-session-id` `s1` is traced with run id `s1`, the installed harness version and the order's `sourceRef`.
+- [test] A resumed child dispatch whose worktree holds `conduct-session-id` `s1` is traced with run id `s1`, `service.version` set to the installed released harness version, `conductor.engine.version` set to the order's pinned `engineVersionId`, and the order's `sourceRef`.
 - [test] The visualizer's `stop()` resolves before `feature_dispatch_ended` is emitted.
 - [test] An initial child dispatch is traced with a fresh run id.
 

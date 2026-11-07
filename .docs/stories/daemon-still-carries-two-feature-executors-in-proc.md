@@ -55,7 +55,7 @@ As the operator, I want a resumed or stacked feature to take the same park, pref
 
 #### Negative Paths
 - Given a REKICK feature that the operator parked after it was claimed, when the child dispatches it, then the dispatch returns `parked`, the conductor never runs, and `.pipeline/REKICK` is still present.
-- Given a stacked feature whose stack preflight refuses, when the child dispatches it, then the dispatch halts with the preflight's recovery and `resumeRebaseFirst` is never called.
+- Given a stacked feature whose stack preflight refuses, when the child dispatches it, then the dispatch halts with the preflight's detail, never `loop ended without DONE or HALT marker`, and `resumeRebaseFirst` is never called.
 - Given a WorkOrder with no `baseBranch` field, when the child dispatches it, then the child uses the origin default branch, as before this change.
 
 ### Done When
@@ -116,7 +116,7 @@ As the operator, I want each child dispatch's events, traces and shutdown to say
 #### Happy Path
 - Given a feature whose worktree carries `.pipeline/REKICK`, when the supervisor dispatches it to a child, then `feature_dispatch_started` carries `kind` `rekick` and the WorkOrder's `tier`.
 - Given a child dispatch that halts at `build_review` with halt class `needs-human`, when the supervisor collects it, then `feature_dispatch_ended` carries outcome `halted`, `haltClass` `needs-human` and `step` `build_review`.
-- Given a resumed feature whose worktree holds `conduct-session-id` `s1`, when its child dispatch is traced, then the visualizer run id is `s1`, the harness version is the installed one, the trace carries the order's `sourceRef`, and the visualizer stop completes before `feature_dispatch_ended`.
+- Given a resumed feature whose worktree holds `conduct-session-id` `s1`, when its child dispatch is traced, then the visualizer run id is `s1`, `service.version` is the installed released harness version, `conductor.engine.version` stays the order's pinned `engineVersionId`, the trace carries the order's `sourceRef`, and the visualizer stop completes before `feature_dispatch_ended`.
 - Given a child dispatch waiting on a rate limit, when the supervisor stops it, then the wait is aborted, open executions are closed, and the outcome is `parked` with the stop reason.
 
 #### Negative Paths

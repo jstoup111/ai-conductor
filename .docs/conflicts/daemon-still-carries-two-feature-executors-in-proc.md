@@ -1,13 +1,55 @@
-# Conflict Check: The daemon runs every feature in one executor (#3333)
+# Conflict Check: The daemon runs every feature in one executor, with one lifecycle (#3333)
 
-**Date:** 2026-10-24
-**Stories checked:** `.docs/stories/daemon-still-carries-two-feature-executors-in-proc.md` (Stories 1–4)
-against the full `.docs/stories/` corpus (625 files), narrowed by subject: executor selection,
-`executor_isolation`, the daemon `runFeature` seam, daemon-log slug attribution (console tee,
-global subscriber), and config unknown or retired top-level keys.
-**Result:** PASSED. 0 blocking. 2 degrading conflicts, both resolved by in-place story amendment
-(operator decision 2026-10-24). Two pre-existing cross-spec dependencies were resolved during
-`/stories`.
+**Date:** 2026-11-07
+**Stories checked:** `.docs/stories/daemon-still-carries-two-feature-executors-in-proc.md` (Stories 1–9)
+against the full `.docs/stories/` corpus (672 files). Stories 6–9 are the 2026-10-24 Stories 1–4,
+renumbered, and keep that check's results below. Stories 1–5 (parity) were checked on 2026-11-07,
+narrowed by subject to 67 files: dispatch events, REKICK and stack preflight, the WorkOrder, the
+dispatch lease, provider suppression, `skillNameRoot`, setup triage, memory setup, the audit trail,
+the `Closes` link, the visualizer, and child shutdown.
+**Result:** PASSED. 0 blocking. 2 degrading wording conflicts in Stories 2 and 5, resolved by
+in-place story amendment on 2026-11-07, plus the 2 degrading conflicts from 2026-10-24.
+
+## Check of 2026-11-07 (Stories 1–5)
+
+### Conflict: Stack-preflight refusal wording
+
+**Stories involved:** Story 2 vs `stack-preflight-refusals-end-the-run-with-no-halt-.md` Story 5
+**Type:** contradiction (wording) **Severity:** degrading
+
+Story 2 said a refused preflight halts "with the preflight's recovery". #3446 Story 5 requires the
+dispatch to be classified halted with the preflight's `detail`, never `loop ended without DONE or
+HALT marker`, and `StackPreflightResult` has a `detail` field, not a recovery field.
+**Resolution:** Story 2 and plan Task 10 now say "halts with the preflight's detail, never `loop
+ended without DONE or HALT marker`".
+
+### Conflict: Which harness version the child's trace carries
+
+**Stories involved:** Story 5 vs `stamp-released-harness-version-on-otel-trace-resou.md` Story 2 and
+`engine-updates-reach-dispatched-features-only-afte.md` Story 13
+**Type:** contradiction risk **Severity:** degrading
+
+Story 5 said "the harness version is the installed one" without naming the attribute. #2235 stamps
+the released harness version on `service.version`, and #2392 Story 13 requires
+`conductor.engine.version` to be the WorkOrder's pinned `engineVersionId`.
+**Resolution:** Story 5 and plan Task 25 now name both: `service.version` is the installed released
+harness version, and `conductor.engine.version` stays the order's pinned `engineVersionId`.
+
+### Consistent overlaps (no action)
+
+- Story 1's handshake-timeout case repeats #2392 Story 3 through the in-memory fork.
+- Story 1's fixture supplies the real-runtime test that #2392 Story 16 names.
+- Story 5's shutdown and supervisor-owned dispatch events match #2392 Stories 7 and 9. #2392 fixes
+  only the WorkOrder's `engineVersionId` and `schemaVersion` (Story 2); the additive `baseBranch`
+  leaves both unchanged.
+- Story 2's single lease acquisition and parked REKICK match #3203 Story 2 and the operator-park
+  REKICK criterion.
+- #3377 Story 2 requires the daemon-process bootstrap call to stay in `executor-child-runtime.ts`.
+  The `install | inherited` mode keeps it there, and the test fork's install is test code.
+
+## Check of 2026-10-24 (now Stories 6–9)
+
+This section keeps its original numbering: its Stories 1, 2, 3 and 4 are now Stories 6, 7, 8 and 9.
 
 ## Resolved before this check (during /stories, operator decisions 2026-10-24)
 
@@ -24,7 +66,7 @@ global subscriber), and config unknown or retired top-level keys.
 
 ## Conflict: Legacy config story allows unknown top-level keys
 
-**Stories involved:** Story 2 (retired executor key fails to load) vs ST-052 Config File Loading and Validation
+**Stories involved:** Story 7, formerly Story 2 (retired executor key fails to load) vs ST-052 Config File Loading and Validation
 **Files:** [.docs/stories/daemon-still-carries-two-feature-executors-in-proc.md] vs [.docs/stories/features/config/ST-052-config-loading.md]
 **Type:** contradiction
 **Severity:** degrading
