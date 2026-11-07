@@ -196,7 +196,7 @@ that halt/ship triage stays readable at N>1.
 - Given interleaved lifecycle transitions from two features, when the transition-suppression logic runs, then suppression stays per-slug (one feature's repeated status does not suppress the other's).
 
 ### Done When
-- [ ] The warn/error tee and the global bus subscriber attribute feature-owned output at N=2 in a test with two interleaved fake builds.
+- [ ] Forwarded console output and feature events from two concurrent child executors carry each feature's own slug tag in a test at N=2.
 - [ ] Any new dispatcher/executor event types declare render/persist/audit sinks in the exhaustive registry.
 
 ## Story 10: The legacy env-mutating dispatch path refuses concurrency
