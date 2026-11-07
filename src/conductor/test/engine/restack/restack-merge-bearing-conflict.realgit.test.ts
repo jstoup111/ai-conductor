@@ -158,4 +158,56 @@ describe('runRestack merge-bearing conflicts (real local Git)', () => {
     const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
     expect(halt).toMatch(/^restack conflict child 2/m);
   });
+
+  // Covers: task:5
+  it('rejects a settled resolver tip that drops the flattened merge subject through the FR-9 guard', async () => {
+    const subject = await fixture('not-carried');
+    const before = await stackRefs(subject);
+    let settledSubjects = '';
+
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
+      git: makeGitRunner(subject.repo), resolverCap: 1,
+      resolver: async (context) => {
+        await writeFile(join(context.projectRoot, 'shared.txt'), 'resolved\n');
+        const git = makeGitRunner(context.projectRoot);
+        await git(['add', 'shared.txt'], { env: context.environment });
+        await git(['rebase', '--continue'], { env: context.environment });
+        await git(['reset', '--hard', 'HEAD^'], { env: context.environment });
+        settledSubjects = (await git(['log', '--format=%s'], { env: context.environment })).stdout;
+        return { resolved: true };
+      },
+    })).resolves.toMatchObject({ kind: 'halted' });
+
+    const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toMatch(/^restack conflict child 2/m);
+    expect(settledSubjects).toContain('child conflict');
+    expect(settledSubjects).not.toContain('merge uncarried Q');
+    expect(halt).toContain('feature commit(s) lost during resolution: merge uncarried Q');
+    expect(await stackRefs(subject)).toBe(before);
+  });
+
+  // Covers: task:5
+  it('refuses a settled resolver tip that writes outside child 2 ownership without moving stack refs', async () => {
+    const subject = await fixture('not-carried');
+    const before = await stackRefs(subject);
+
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
+      git: makeGitRunner(subject.repo), resolverCap: 1,
+      resolver: async (context) => {
+        await writeFile(join(context.projectRoot, 'shared.txt'), 'resolved\n');
+        await writeFile(join(context.projectRoot, 'outside-child-two.txt'), 'unowned\n');
+        const git = makeGitRunner(context.projectRoot);
+        await git(['add', 'shared.txt', 'outside-child-two.txt'], { env: context.environment });
+        await git(['rebase', '--continue'], { env: context.environment });
+        return { resolved: true };
+      },
+    })).resolves.toMatchObject({ kind: 'halted' });
+
+    const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toMatch(/^restack refused \(replay-mismatch\) child 2/m);
+    expect(halt).toContain('outside-child-two.txt');
+    expect(await stackRefs(subject)).toBe(before);
+  });
 });
