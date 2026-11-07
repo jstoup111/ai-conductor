@@ -1,4 +1,4 @@
-// Covers: task:8, task:9, task:10, task:11, task:12, task:13
+// Covers: task:8, task:9, task:10, task:11, task:12, task:13, task:14
 import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -422,5 +422,36 @@ describe('executor child shared lifecycle', () => {
     await subject.execute();
 
     expect(seams.ghCalls.filter((args) => args[0] === 'pr' && args[1] === 'edit')).toEqual([]);
+  });
+
+  it('writes satisfied and unsatisfied gate verdicts to the child worktree audit trail', async () => {
+    const subject = await fixture('child-gate-audit');
+    vi.spyOn(Conductor.prototype, 'run').mockImplementation(async function (this: Conductor) {
+      const events = (this as unknown as { events: ConductorEventEmitter }).events;
+      await events.emit({ type: 'gate_verdict', step: 'plan', satisfied: true, reason: 'plan accepted' });
+      await events.emit({ type: 'gate_verdict', step: 'stories', satisfied: false, reason: 'story rejected' });
+    });
+
+    await subject.execute();
+
+    const worktreeAuditPath = join(
+      subject.root,
+      '.worktrees',
+      subject.order.slug,
+      '.pipeline',
+      'audit-trail',
+      'events.jsonl',
+    );
+    const records = (await readFile(worktreeAuditPath, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { origin: string; event: string; reason?: string });
+
+    expect(records).toEqual(expect.arrayContaining([
+      expect.objectContaining({ origin: 'plan', event: 'gate_pass', reason: 'plan accepted' }),
+      expect.objectContaining({ origin: 'stories', event: 'gate_fail', reason: 'story rejected' }),
+    ]));
+    await expect(readFile(join(subject.root, '.pipeline', 'audit-trail', 'events.jsonl'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
