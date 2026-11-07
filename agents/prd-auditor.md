@@ -33,7 +33,7 @@ Return exactly one grade:
 - **FIXABLE:** the criterion is unmet and a real active-plan task owns the repair. State that task.
 - **PLAN_GAP:** the criterion is unmet with no owning plan task, or a PRD FR has no story coverage.
 - **OVER_SCOPE:** behavior exceeds the plan; judge it against the available intent sources and say
-  whether it is within intent, outside but invisible, or outside and user-visible.
+  give its intent relation (`within`, `outside-harmless`, or `outside-visible`) as the skill defines.
 
 For an OVER_SCOPE judgement, weigh any `Scope:` trailer and operator-reseal rationale. A reseal
 rationale is evidence, not an automatic exemption: identify a mismatch when it does not justify the
