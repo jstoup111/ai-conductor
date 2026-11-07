@@ -332,7 +332,8 @@ without making the task undeliverable or its evidence stale.
 3. **Negative paths are explicit tasks** — Each negative path scenario gets its own task, not a "clean up error handling" catch-all
 4. **Integration points identified** — Mark tasks where components connect for the first time
 5. **Dependencies declared** — If Task 5 requires Task 3's model, say so. Declare only genuine
-   dependencies and keep each task's `**Files likely touched:**` to the files it actually changes:
+   dependencies. List in `**Files likely touched:**` every file the task must change, including
+   the call sites, exhaustive unions or switches, and registries its change forces, and nothing more:
    BUILD schedules by ready frontier and fans out independent tasks concurrently, so a dependency
    that is merely narrative order, or a file set padded beyond the task's real reach, serializes
    work that could have been delivered in parallel
