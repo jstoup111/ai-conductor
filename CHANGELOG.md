@@ -100,6 +100,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The rebase, finish, simplify, manual-test and writing-system-tests skills are 16% shorter, with duplicated checklists and engine-internal narration removed and no instruction an agent acts on dropped. ([implementation PR #3612](https://github.com/jstoup111/ai-conductor/pull/3612)).
 - implementationQuality no longer flags persisted shapes guarded by a single validating parser, and simplify flags duplication at the same threshold implementationQuality reviews it. ([implementation PR #3613](https://github.com/jstoup111/ai-conductor/pull/3613)).
 - BUILD treats a build-review remediation work order as the retry's job and records disagreement as a stall question, so a kickback can no longer end in a silent no-change halt. ([implementation PR #3609](https://github.com/jstoup111/ai-conductor/pull/3609)).
+- The pipeline, tdd, remediate, prd-audit and as-built skills are 3,346 words shorter (pipeline −32%), with engine-internal narration and contradictory trailer and task-reset instructions removed. ([implementation PR #3614](https://github.com/jstoup111/ai-conductor/pull/3614)).
 
 ### Removed
 
