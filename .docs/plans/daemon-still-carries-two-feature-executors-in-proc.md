@@ -325,6 +325,7 @@ Slice 2
 
 **Done when:**
 - [test] An operator-parked REKICK feature dispatched through the child returns `parked`, the conductor never runs, and `.pipeline/REKICK` is still present.
+- [test] The same feature, unparked, dispatches through the child and runs the conductor, so the park marker alone caused the skip.
 
 **Files likely touched:**
 - src/conductor/test/engine/executor-child-lifecycle.integration.test.ts — row 1
@@ -358,6 +359,7 @@ Slice 2
 
 **Done when:**
 - [test] A REKICK dispatch through the child calls `resumeRebaseFirst` before the conductor's first step, and `.pipeline/REKICK` no longer exists afterwards.
+- [test] A dispatch of the same worktree without `.pipeline/REKICK` never calls `resumeRebaseFirst`.
 
 **Files likely touched:**
 - src/conductor/test/engine/executor-child-lifecycle.integration.test.ts — row 3
@@ -408,6 +410,7 @@ Slice 2
 
 **Done when:**
 - [test] A child dispatch emitting a satisfied and an unsatisfied `gate_verdict` leaves a `gate_pass` and a `gate_fail` record in the feature's audit trail.
+- [test] The audit records are written under the feature worktree's `.pipeline`, not under the supervisor's root checkout.
 
 **Files likely touched:**
 - src/conductor/test/engine/executor-child-lifecycle.integration.test.ts — row 5
@@ -424,6 +427,7 @@ Slice 2
 
 **Done when:**
 - [test] A child dispatch runs the `.memory` setup during worktree preparation and records a `memory_setup` event on the feature bus.
+- [test] The `memory_setup` event is forwarded to the supervisor on the feature scope, so it lands in the feature's `.pipeline/events.jsonl`.
 
 **Files likely touched:**
 - src/conductor/test/engine/executor-child-lifecycle.integration.test.ts — row 12
@@ -495,6 +499,7 @@ Slice 2
 
 **Done when:**
 - [test] A child dispatch's provider execution context carries a prepared managed-session context and observation preparer whose repository root is the project root, not the worktree path.
+- [test] The managed-session context's worktree root is the feature worktree path.
 
 **Files likely touched:**
 - src/conductor/src/engine/executor-child-runtime.ts — provider execution context
@@ -514,6 +519,7 @@ Slice 2
 
 **Done when:**
 - [test] With `dispatch_start_timeout_seconds` set only in user config, a child dispatch's prepare and teardown use the user's value.
+- [test] With the same key set in both user and project config, the child uses the project value.
 
 **Files likely touched:**
 - src/conductor/src/engine/executor-child-runtime.ts — merged config
@@ -533,6 +539,7 @@ Slice 2
 
 **Done when:**
 - [test] A provider suppressed during a child dispatch produces exactly one `provider_suppressed` event on the supervisor's root bus.
+- [test] The forwarded `provider_suppressed` event carries the suppressed provider's id and is not duplicated on the feature scope.
 
 **Files likely touched:**
 - src/conductor/src/engine/executor-child-runtime.ts — `onProviderSuppressed`
@@ -550,6 +557,7 @@ Slice 2
 
 **Done when:**
 - [test] With `daemon_verbose: true` and configured setup and teardown timeouts, the child's prepare, forced prepare and teardown each receive the timeouts and the verbose flag.
+- [test] With `daemon_verbose` unset, the child's prepare, forced prepare and teardown receive the verbose flag as false.
 
 **Files likely touched:**
 - src/conductor/test/engine/executor-child-lifecycle.integration.test.ts — row 10
@@ -566,6 +574,7 @@ Slice 2
 
 **Done when:**
 - [test] With `CONDUCT_SETUP_TRIAGE_KILLSWITCH` set, a failing child setup dispatches no triage session and triage returns `park` with output `setup-triage disabled by env killswitch`.
+- [test] With the variable unset, the same failing setup dispatches one setup-triage session.
 
 **Files likely touched:**
 - src/conductor/test/engine/executor-child-lifecycle.integration.test.ts — row 11
@@ -627,6 +636,7 @@ Slice 2
 
 **Done when:**
 - [test] A child dispatch stopped while waiting on a rate limit: the wait is aborted, `closeOpenExecutionsForShutdown` is called, and the outcome is `parked` with the stop reason.
+- [test] A stop received before the conductor starts returns `parked` with the stop reason and never runs the conductor.
 
 **Files likely touched:**
 - src/conductor/test/engine/executor-child-lifecycle.integration.test.ts — shutdown
@@ -791,6 +801,7 @@ Slice 2
 
 **Done when:**
 - [test] A daemon test fixture whose config sets `executor_isolation` fails at config load with `Unknown top-level key: "executor_isolation"` and never calls the injected executor fork.
+- [test] With the key removed, the same fixture dispatches through the injected executor fork, so the load failure is caused by the key alone.
 
 **Files likely touched:**
 - src/conductor/test/fixtures/in-memory-executor-fork.test.ts — stale-fixture case
@@ -842,14 +853,3 @@ Slice 2
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic, and no slice-1 task depends on a slice-2 task
 - [ ] Tasks do not invalidate each other's fixtures or assertions
-- [test] The same feature, unparked, dispatches through the child and runs the conductor, so the park marker alone caused the skip.
-- [test] A dispatch of the same worktree without `.pipeline/REKICK` never calls `resumeRebaseFirst`.
-- [test] The audit records are written under the feature worktree's `.pipeline`, not under the supervisor's root checkout.
-- [test] The `memory_setup` event is forwarded to the supervisor on the feature scope, so it lands in the feature's `.pipeline/events.jsonl`.
-- [test] The managed-session context's worktree root is the feature worktree path.
-- [test] With the same key set in both user and project config, the child uses the project value.
-- [test] The forwarded `provider_suppressed` event carries the suppressed provider's id and is not duplicated on the feature scope.
-- [test] With `daemon_verbose` unset, the child's prepare, forced prepare and teardown receive the verbose flag as false.
-- [test] With the variable unset, the same failing setup dispatches one setup-triage session.
-- [test] A stop received before the conductor starts returns `parked` with the stop reason and never runs the conductor.
-- [test] With the key removed, the same fixture dispatches through the injected executor fork, so the load failure is caused by the key alone.
