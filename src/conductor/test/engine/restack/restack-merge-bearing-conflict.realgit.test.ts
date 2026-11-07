@@ -6,10 +6,12 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
 import { conflictFlattenedTipRefFor, conflictParentRefFor, conflictRecordRefFor, decisionRefFor, readConflictRecord, resolutionRefFor } from '../../../src/engine/restack/restack-conflict-record.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
+import { resolveRestackConflict } from '../../../src/engine/restack/restack-resolver.js';
 import { readRestackJournal } from '../../../src/engine/restack/restack-journal.js';
 import { dispatchStackRestackResolve } from '../../../src/engine/stack-restack-resolve-cli.js';
 import { parseCommitSha, type CommitSha } from '../../../src/engine/restack/restack-types.js';
@@ -96,7 +98,7 @@ async function fixture(q: 'carried' | 'not-carried' | 'empty' | 'none' | 'clean'
     storyOwnership: { S1: 1, S2: 2, S3: 3 },
   }, envelopeFilesystem);
 
-  return { repo, git, merge, newDefault };
+  return { repo, git, childOne, merge, newDefault };
 }
 
 async function stackRefs(subject: Awaited<ReturnType<typeof fixture>>): Promise<string> {
@@ -125,6 +127,29 @@ function resolveDeps(repo: string, print: (message: string) => void = () => unde
 }
 
 describe('runRestack merge-bearing conflicts (real local Git)', () => {
+  // Covers: task:12
+  it('starts a no-merge resolver hand-off with the ordinary interactive rebase argv', async () => {
+    const subject = await fixture('none');
+    const child = parseChildId(2);
+    if (!child) throw new Error('expected child 2');
+    const calls: string[][] = [];
+    const resolution = await resolveRestackConflict({
+      worktree: subject.repo,
+      range: { child, oldParent: subject.childOne, oldTip: subject.merge, kind: 'closed' },
+      newParent: subject.newDefault,
+      stamp: { name: 'Restack test', email: 'restack@example.test', date: '2030-01-02T03:04:05Z' },
+      resolver: async () => ({ resolved: false, reason: 'observe argv' }), cap: 1,
+      git: makeGitRunner(subject.repo),
+      temporaryGit: (worktree) => async (args, options) => {
+        calls.push(args);
+        return makeGitRunner(worktree)(args, options);
+      },
+    });
+    expect(resolution.outcome).toMatchObject({ kind: 'conflict_halt' });
+    expect(calls).toContainEqual(['rebase', '-i', '--onto', subject.newDefault, subject.childOne]);
+    expect(calls.find((args) => args[0] === 'rebase')).not.toContain('--empty');
+  });
+
   // Covers: task:12
   it('keeps an ordinary no-merge conflict record, HALT recipe, and refs unchanged', async () => {
     const subject = await fixture('none');
