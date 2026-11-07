@@ -102,7 +102,7 @@ class InMemoryForkedExecutor implements ForkedExecutor {
     return true;
   }
 
-  exit(code = 0, signal: NodeJS.Signals | null = null): void {
+  exit(code: number | null = 0, signal: NodeJS.Signals | null = null): void {
     if (this.exited) return;
     this.exited = true;
     this.exitListener?.(code, signal);

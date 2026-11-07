@@ -21,7 +21,7 @@ const seams = vi.hoisted(() => ({
 
 vi.mock('../../src/engine/config.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/config.js')>();
-  return { ...actual, loadConfig: async () => ({ ok: true as const, config: { llm_provider: 'codex' }, warnings: [] }) };
+  return { ...actual, loadMergedConfig: async () => ({ ok: true as const, config: { llm_provider: 'codex' }, warnings: [] }) };
 });
 
 vi.mock('../../src/engine/provider-discovery.js', async (importOriginal) => {
@@ -116,8 +116,13 @@ describe('in-memory executor fork', () => {
     const brokerHellos: string[] = [];
     const completed: string[] = [];
     const rootEvents = new ConductorEventEmitter();
-    rootEvents.on('feature_complete', (event) => completed.push(event.featureDesc));
-    const fork = createInMemoryExecutorFork({ projectRoot: fixture.root, onHello: (hello) => brokerHellos.push(hello.engineVersionId) });
+    rootEvents.on('feature_complete', (event) => {
+      if (event.type === 'feature_complete') completed.push(event.featureDesc);
+    });
+    const fork = createInMemoryExecutorFork({
+      projectRoot: fixture.root,
+      onHello: (hello) => { brokerHellos.push(hello.engineVersionId); },
+    });
 
     await expect(executor(fixture.root, fork, 50, rootEvents).execute(fixture.order)).resolves.toMatchObject({
       slug: 'fixture-conductor',
@@ -177,7 +182,9 @@ describe('in-memory executor fork', () => {
     const fixture = await fixtureOrder('engine-identity');
     seams.prepareWorktree.mockImplementation(async (worktree: string) => completeConductorState(worktree));
     const rootEvents = new ConductorEventEmitter();
-    rootEvents.on('executor_started', (event) => identities.push(event.engineVersionId));
+    rootEvents.on('executor_started', (event) => {
+      if (event.type === 'executor_started') identities.push(event.engineVersionId);
+    });
 
     await executor(fixture.root, createInMemoryExecutorFork({ projectRoot: fixture.root }), 50, rootEvents).execute(fixture.order);
 

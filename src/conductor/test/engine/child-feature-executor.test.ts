@@ -242,8 +242,8 @@ describe('child feature executor dispatch lifecycle', () => {
     let exit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
     const events = new ConductorEventEmitter();
     const lifecycle: Array<Record<string, unknown>> = [];
-    events.on('feature_dispatch_started', (event) => lifecycle.push(event as Record<string, unknown>));
-    events.on('feature_dispatch_ended', (event) => lifecycle.push(event as Record<string, unknown>));
+    events.on('feature_dispatch_started', (event) => { lifecycle.push(event as Record<string, unknown>); });
+    events.on('feature_dispatch_ended', (event) => { lifecycle.push(event as Record<string, unknown>); });
     const executor = createChildProcessFeatureExecutor({
       projectRoot: root,
       engineDirForOrder: () => `/store/dist-versions/${VERSION}`,

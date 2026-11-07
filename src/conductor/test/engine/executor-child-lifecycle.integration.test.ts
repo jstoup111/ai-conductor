@@ -196,7 +196,7 @@ async function fixture(slug: string, { durableChildState = true }: { durableChil
     slug,
     baseSha,
     baseBranch: 'main',
-    engineVersionId: '20261107T000000Z-0123456789ab',
+    engineVersionId: '20261107T000000Z-0123456789ab' as WorkOrder['engineVersionId'],
     tier: 'S',
     track: 'technical',
     manifest: [],
@@ -258,7 +258,9 @@ describe('executor child shared lifecycle', () => {
   it('uses its admitted stacked-dispatch lease once and runs the shared conductor', async () => {
     const subject = await fixture('stacked-child');
     const completions: string[] = [];
-    subject.rootEvents.on('feature_complete', (event) => completions.push(event.featureDesc));
+    subject.rootEvents.on('feature_complete', (event) => {
+      if (event.type === 'feature_complete') completions.push(event.featureDesc);
+    });
     seams.prepareWorktree.mockImplementation(async (worktree: string) => completeConductorState(worktree));
 
     const outcome = await subject.execute();
