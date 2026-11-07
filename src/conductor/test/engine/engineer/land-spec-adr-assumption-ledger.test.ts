@@ -56,7 +56,7 @@ async function seedWorktree(): Promise<string> {
   ].join('\n'));
   await writeFile(join(worktreePath, '.docs', 'plans', 'ledger-landing.md'), [
     '# Implementation Plan', '', '**Stories:** .docs/stories/ledger-landing.md', '',
-    '### Task 1: Land', '**Story:** Story 1', '', '**Done when:**',
+    '### Task 1: Land', '**Story:** Story 1', '**Dependencies:** none', '', '**Done when:**',
     '- Given valid artifacts, when land runs, then it commits.',
     '- Given invalid artifacts, when land runs, then it refuses.', '',
     '## Coverage Check', '', '| Criterion | Task ids | Quote | Disposition |',

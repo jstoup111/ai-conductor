@@ -336,6 +336,7 @@ describe('accepted-story readability consumer agreement', () => {
         '',
         '### Task 1: Preserve agreement',
         '**Story:** Story 1',
+        '**Dependencies:** none',
         '',
         '**Done when:**',
         '- Given an operator reads Story 1, when land validates it, then the criterion is readable.',

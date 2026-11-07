@@ -10,6 +10,8 @@ import { isEngineAppendedRemediationTaskId } from './remediation-append.js';
 import { ALL_STEPS } from './steps.js';
 import type { StepDefinition } from '../types/index.js';
 
+export { validatePlanDependencies } from './plan-dependencies.js';
+
 export interface PlanSlice {
   position: number;
   title: string;

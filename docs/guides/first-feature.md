@@ -80,7 +80,7 @@ Four content gates decide whether the merged spec is buildable at all, so check 
 | Requirement | Where | Checked how |
 | --- | --- | --- |
 | Stories approved | the stories artifact | must contain `Status: Accepted` and must **not** contain a `Status: DRAFT` |
-| Plan declares task dependencies | `.docs/plans/<slug>.md` | a `## Task Dependency Graph` section, or per-task `**Dependencies:**` lines |
+| Plan declares task dependencies | `.docs/plans/<slug>.md` | every task except engine-appended remediation tasks has exactly one `**Dependencies:**` line: `none` or a comma-separated list of references to declared tasks (for example `Task 1, Task 2`), with no cycles. `land` refuses violations (`plan-dependencies`); the conduct `plan` gate does too when the plan is absent at the merge base. A plan already on the merge base needs only a `## Task Dependency Graph` section or per-task `**Dependencies:**` lines |
 | Plan task completion checks | `.docs/plans/<slug>.md` | every `### Task …` has a `**Done when:**` block with 2–5 nonblank list checks; fenced-code examples do not count |
 | Plan task count | `.docs/plans/<slug>.md` | 1–20 tasks proceed normally; 21–29 require a planning warning; 30 or more are refused at land unless the plan contains exactly one `**Scope-exception:** <non-empty rationale>` declaration |
 

@@ -53,6 +53,7 @@ export type SliceTopology =
     };
 
 export { hasDurableChildState, type DurableChildStateDependencies } from './durable-child-state.js';
+export { validatePlanDependencies } from './plan-slices.js';
 
 export interface LoadSliceTopologyDependencies extends DurableChildStateDependencies {
   /** The root whose project config decides whether a new stack is eligible. */
