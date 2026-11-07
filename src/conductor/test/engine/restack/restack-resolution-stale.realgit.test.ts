@@ -295,6 +295,27 @@ describe('stale restack resolutions (real local Git)', () => {
     await expect(readFile(join(recovery.repo, '.pipeline', 'events.jsonl'), 'utf8')).resolves.toContain('"action":"retired"');
   });
 
+  it('retires an orphaned resolution with a malformed conflict record before ordinary replay', async () => {
+    const value = await subject(false);
+    const malformed = await value.runner(['hash-object', '-w', '--stdin'], { input: '{not json' });
+    await value.runner(['update-ref', conflictRecordRefFor('demo'), malformed.stdout.trim()]);
+    await value.git(['update-ref', resolutionRefFor('demo', child(2)), value.second]);
+    const events = new ConductorEventEmitter();
+    const retired: unknown[] = [];
+    events.on('restack_resolution', (event) => {
+      if (event.type === 'restack_resolution' && event.action === 'retired') retired.push(event);
+    });
+
+    await expect(runRestack({
+      worktree: value.repo, slug: 'demo', cause: 'base-refresh', newDefault: value.newDefault, events, git: value.runner,
+    })).resolves.toMatchObject({ kind: 'applied' });
+
+    await expect(value.runner(['rev-parse', '-q', '--verify', resolutionRefFor('demo', child(2))])).resolves.toMatchObject({ exitCode: 1 });
+    expect(retired).toContainEqual(expect.objectContaining({ child: 2, action: 'retired' }));
+    await expect(value.git(['cat-file', 'blob', conflictRecordRefFor('demo')])).resolves.toMatchObject({ stdout: '{not json' });
+    expect((await value.git(['rev-parse', 'feat/c2/demo'])).stdout.trim()).not.toBe(value.second);
+  });
+
   it('preserves a different child record when it retires an orphan, and records a fresh ordinary-replay conflict', async () => {
     const value = await subject(false);
     await value.git(['update-ref', resolutionRefFor('demo', child(2)), value.second]);

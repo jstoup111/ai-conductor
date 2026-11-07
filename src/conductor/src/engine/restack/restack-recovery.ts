@@ -768,11 +768,17 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
       // A resolution with no matching record belongs to an interrupted or
       // superseded hand-off. Retire only that answer, preserve another
       // child's record, then resume the untouched planned journal normally.
-      if (resumed.kind === 'resolution-stale' && resumed.field === 'record') {
+      let orphanRetirements = 0;
+      const orphanRetirementLimit = journal.journal.ranges.length;
+      while (resumed.kind === 'resolution-stale' && resumed.field === 'record') {
+        if (orphanRetirements >= orphanRetirementLimit) {
+          return { kind: 'unavailable', detail: 'cannot retire successive orphaned restack resolutions' };
+        }
         const retired = await retireRecordedResolution(options.worktree, options.slug, resumed.child, { git });
         if (retired.kind !== 'retired') return { kind: 'unavailable', detail: `cannot retire orphaned restack resolution: ${retired.kind}` };
         await options.events?.emit({ type: 'restack_resolution', opId: resumed.journal.journal.opId, child: resumed.child, action: 'retired', tip: retired.tip });
         resumed = await resumePlanned(options.worktree, resumed.journal, git, options);
+        orphanRetirements += 1;
       }
       if (resumed.kind === 'flatten-refused') {
         journal = resumed.journal;

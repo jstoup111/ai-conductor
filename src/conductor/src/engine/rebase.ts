@@ -206,10 +206,9 @@ export function isDegradedBase(base: ResolvedBase): boolean {
 
 /**
  * origin's default branch NAME (no `origin/` prefix) from
- * `git symbolic-ref refs/remotes/origin/HEAD`, then `git remote show origin`,
- * e.g. `main` / `trunk`, or null if neither identifies one. Shared by
- * `resolveBase` (the rebase ref), leaf movement, and the conductor's
- * local-base discovery so the no-fetch discovery lives in one place.
+ * `git symbolic-ref refs/remotes/origin/HEAD`, e.g. `main` / `trunk`, or null
+ * if there is no origin/HEAD. This deliberately performs only a local ref
+ * read: its many callers must not acquire a remote round trip.
  */
 export async function originDefaultBranch(git: GitRunner): Promise<string | null> {
   const head = await git(['symbolic-ref', 'refs/remotes/origin/HEAD']);
@@ -218,12 +217,21 @@ export async function originDefaultBranch(git: GitRunner): Promise<string | null
     const m = head.stdout.trim().match(/^refs\/remotes\/origin\/(.+)$/);
     if (m) return m[1];
   }
-  const show = await git(['remote', 'show', 'origin']);
-  if (show.exitCode === 0) {
-    const m = show.stdout.match(/HEAD branch:\s*(\S+)/);
-    if (m && m[1] !== '(unknown)') return m[1];
-  }
   return null;
+}
+
+/**
+ * Discover origin's default branch for the two callers that need the
+ * no-fetch remote fallback.  Keep this separate from `originDefaultBranch`:
+ * callers such as autoheal intentionally remain origin/HEAD-only.
+ */
+export async function discoverOriginDefaultBranch(git: GitRunner): Promise<string | null> {
+  const fromHead = await originDefaultBranch(git);
+  if (fromHead) return fromHead;
+  const show = await git(['remote', 'show', 'origin']);
+  if (show.exitCode !== 0) return null;
+  const match = show.stdout.match(/HEAD branch:\s*(\S+)/);
+  return match?.[1] && match[1] !== '(unknown)' ? match[1] : null;
 }
 
 /**
@@ -252,7 +260,7 @@ export async function resolveBaseCore(
   }
 
   // Discover the default branch name without hardcoding main.
-  const defaultBranch = await originDefaultBranch(git);
+  const defaultBranch = await discoverOriginDefaultBranch(git);
   if (!defaultBranch) {
     // Discovery failed entirely — degrade to the local base, do not assume main.
     return { ref: localBase, kind: 'local', branch: localBase, degraded: 'discovery-failed' };

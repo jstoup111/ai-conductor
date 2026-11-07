@@ -10,7 +10,8 @@ import { restackResolverForStepRunner } from '../../../src/daemon-cli.js';
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
-import { readRestackJournal } from '../../../src/engine/restack/restack-journal.js';
+import { journalRefFor, readRestackJournal, writeRestackJournalBlob, type RestackJournal } from '../../../src/engine/restack/restack-journal.js';
+import { recoverRestackJournal } from '../../../src/engine/restack/restack-recovery.js';
 import { resolveRestackConflict, type ResolveRestackConflictOptions } from '../../../src/engine/restack/restack-resolver.js';
 import type { CommitterStamp } from '../../../src/engine/restack/restack-replay.js';
 import { parseCommitSha, type CommitSha } from '../../../src/engine/restack/restack-types.js';
@@ -25,6 +26,8 @@ interface Fixture {
   readonly newDefault: CommitSha;
   readonly oldParent: CommitSha;
   readonly oldTip: CommitSha;
+  readonly first: CommitSha;
+  readonly second: CommitSha;
   readonly leafCommits: readonly CommitSha[];
 }
 
@@ -81,7 +84,7 @@ async function createFixture(): Promise<Fixture> {
   const newDefault = sha((await git(['rev-parse', 'HEAD'])).stdout);
   await git(['checkout', '-q', 'feat/daemon-demo']);
   await sealStack(repo);
-  return { repo, git, newDefault, oldParent, oldTip, leafCommits };
+  return { repo, git, newDefault, oldParent, oldTip, first: c1, second: c2, leafCommits };
 }
 
 async function stackRefs(subject: Fixture): Promise<string> {
@@ -225,5 +228,49 @@ describe('restack resolver lost commit (real local Git)', () => {
     expect(halt).toContain('ai-conductor stack restack-resolve --slug demo --child 3 --tip <sha>');
     expect(halt).toContain('ai-conductor stack restack-resolve --slug demo --child 3 --decision "<answer>"');
     expect(halt).toContain('child three 1');
+  });
+
+  it('recovers a planned journal when the resolver continues without its supplied environment', async () => {
+    const resolver = async (context: Parameters<NonNullable<ResolveRestackConflictOptions['resolver']>>[0]) => {
+      await writeFile(join(context.projectRoot, 'conflict.txt'), 'resolved\n');
+      const git = makeGitRunner(context.projectRoot);
+      await git(['add', 'conflict.txt']);
+      const continued = await git(['rebase', '--continue'], { env: { GIT_EDITOR: 'true' } });
+      if (continued.exitCode !== 0) throw new Error(`continue failed: ${continued.stderr}`);
+      return { resolved: true as const };
+    };
+    const subject = await createFixture();
+    const first = parseChildId(1);
+    const second = parseChildId(2);
+    const third = parseChildId(3);
+    if (!first || !second || !third) throw new Error('expected child ids');
+    const base = sha((await subject.git(['rev-parse', `${subject.first}^`])).stdout);
+    const journal: RestackJournal = {
+      opId: 'recover-resolver-without-environment' as never,
+      cause: 'base-refresh', newDefault: subject.newDefault, committer: stamp, dirtyPaths: [],
+      refs: [
+        { ref: 'refs/heads/feat/c1/demo' as never, oldSha: subject.first },
+        { ref: 'refs/conductor/demo/closed/c1' as never, oldSha: subject.first },
+        { ref: 'refs/heads/feat/c2/demo' as never, oldSha: subject.second },
+        { ref: 'refs/conductor/demo/closed/c2' as never, oldSha: subject.second },
+        { ref: 'refs/heads/feat/daemon-demo' as never, oldSha: subject.oldTip },
+      ],
+      ranges: [
+        { child: first, oldParent: base, oldTip: subject.first, kind: 'closed' },
+        { child: second, oldParent: subject.first, oldTip: subject.second, kind: 'closed' },
+        { child: third, oldParent: subject.second, oldTip: subject.oldTip, kind: 'leaf-active' },
+      ],
+      children: [{ child: first, status: 'pending' }, { child: second, status: 'pending' }, { child: third, status: 'pending' }],
+      state: 'planned', owner: { host: 'dead-recovery-host', pid: 1, processStartTime: '0' },
+    };
+    const blob = await writeRestackJournalBlob(subject.repo, journal);
+    await subject.git(['update-ref', journalRefFor('demo'), blob]);
+
+    await expect(recoverRestackJournal({
+      worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo), resolver, resolverCap: 1,
+    })).resolves.toEqual({ kind: 'recovered', fromState: 'planned' });
+
+    const subjects = (await subject.git(['log', '--format=%s', 'feat/daemon-demo'])).stdout.split('\n');
+    for (let index = 1; index <= 8; index += 1) expect(subjects).toContain(`child three ${index}`);
   });
 });

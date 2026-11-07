@@ -3,7 +3,7 @@ import { mkdir, readFile, rm } from 'node:fs/promises';
 import { parseChildId, pipelinePathFor, type ChildId } from './child-context.js';
 import { loadConfig } from './config.js';
 import { childBranchFor, leafBranchFor } from './feature-branch-identity.js';
-import { makeGitRunner, originDefaultBranch, type GitRunner } from './rebase.js';
+import { discoverOriginDefaultBranch, makeGitRunner, type GitRunner } from './rebase.js';
 import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { resolveActiveChild } from './child-cursor.js';
 import { resolveMainRepoRoot } from './park-marker.js';
@@ -295,7 +295,7 @@ export async function moveLeaf(
   if (!old || old.exitCode !== 0 || !oldTip) return refused(`cannot resolve leaf branch ${branch}`);
   let defaultBranch: string | null;
   try {
-    defaultBranch = await originDefaultBranch(git);
+    defaultBranch = await discoverOriginDefaultBranch(git);
   } catch {
     defaultBranch = null;
   }

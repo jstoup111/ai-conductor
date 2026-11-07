@@ -396,7 +396,9 @@ export async function retireRecordedResolution(
   const tip = resolved?.exitCode === 0 ? parseCommitSha(resolved.stdout.trim()) : undefined;
   if (!tip) return { kind: 'unavailable' };
   const stored = await readConflictRecord(worktree, slug, { git });
-  if (stored.kind === 'unreadable') return { kind: 'unavailable' };
+  // An unreadable record cannot authorize a resolution.  Preserve its bytes
+  // for diagnosis, but retire the orphaned tip and let ordinary replay create
+  // any new conflict state it needs.
   const deleted = await runGit(git, ['update-ref', '-d', ref, tip]);
   if (deleted?.exitCode === 0) {
     return {
