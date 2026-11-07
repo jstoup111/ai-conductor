@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "slug": "task-dependency-gate-is-a-presence-check-unorderab",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/task-dependency-gate-is-a-presence-check-unorderab.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/task-dependency-gate-is-a-presence-check-unorderab.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/task-dependency-gate-is-a-presence-check-unorderab.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/task-dependency-gate-is-a-presence-check-unorderab.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-09-29-plan-slice-manifest.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/task-dependency-gate-is-a-presence-check-unorderab.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/task-dependency-gate-is-a-presence-check-unorderab.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/task-dependency-gate-is-a-presence-check-unorderab.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/task-dependency-gate-is-a-presence-check-unorderab.md"
+    }
+  ]
+}

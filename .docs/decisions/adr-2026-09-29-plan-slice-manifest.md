@@ -85,6 +85,8 @@ strict Dependencies grammar, and none that contradicts this design. The decision
    production callers. Daemon discovery and `planHasDependencyTree` stay presence-only and
    unchanged.
 
+> **Amended 2026-11-05 by #1393:** Daemon discovery and `planHasDependencyTree` stay presence-only. Strict dependency validation of unsliced plans is owned by `plan-dependencies.ts`, not by `validatePlanSlices`; its callers are the land gate and the conduct `plan` gate for a plan new in the feature's diff (see the decision 4 amendment).
+
 > **Amended 2026-10-23 by #3365:** `validatePlanSlices`' production callers are the land gate and the slice-topology loader (`slice-topology.ts`), which replaces the removed `coverage_binding` slice layer (adr-2026-10-23-slice-topology-from-sealed-plan decision 2).
 
 3. **Membership rules.** Engine-appended remediation tasks (`isEngineAppendedRemediationTaskId`)
@@ -127,6 +129,8 @@ strict Dependencies grammar, and none that contradicts this design. The decision
    dependency on the same slice or an earlier one is allowed. An unparseable line, a missing line,
    or an unknown id is also a violation. Unsliced plans keep today's presence-only check, so the
    229 existing free-form lines are unaffected.
+
+> **Amended 2026-11-05 by #1393:** Strict Dependencies validation extends to every plan at two authoring-time points, with the grammar above unchanged. At land, every plan, sliced or not, must give every task except engine-appended remediation tasks exactly one parseable `**Dependencies:**` line, cite only ids the plan declares, and form an acyclic graph; a cycle is rejected naming every task id in the unorderable set. The conduct `plan` gate applies the same check only when the plan file is absent at the merge-base with the default branch; when it exists there, or the merge-base cannot be resolved, the gate keeps the presence check and names the reason. A `## Task Dependency Graph` section no longer satisfies either strict point on its own. Daemon discovery, BUILD-time re-evaluation of plans already on the default branch, and the existing free-form lines in merged plans stay unaffected (a 2026-11-05 scan found 130 of 240 merged plans that the strict parser rejects, none with a cycle).
 
 5. **Land rung `plan-slices`: every tier, flag-independent, non-waivable.** `landSpec` calls
    `validatePlanSlices` beside the Done-when and task-count checks. Any `invalid` result throws
