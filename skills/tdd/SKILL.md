@@ -97,11 +97,9 @@ authored during this lap, do not amend the sealed plan, and close the task with 
 ### Removal Boundary
 
 Deleting code starts no RED cycle. For removal-shaped work, follow `/code-removal` for the
-absence-test prohibition, survivor method, test triage, and completeness sweep. Review ownership is
-defined by APPROVED `adr-2026-08-22-one-owner-per-review-question.md`, which retires the rubric
-exemptions the earlier removal-anchored ADR carried; maintenance edits that keep existing tests
-compiling after a removal (updating imports, dropping dead selectors) are ordinary edits, not new
-coverage, and need no RED of their own.
+absence-test prohibition, survivor method, test triage, and completeness sweep. Maintenance edits
+that keep existing tests compiling after a removal (updating imports, dropping dead selectors) are
+ordinary edits and need no RED of their own.
 
 ### Phase 1: RED
 
@@ -222,10 +220,8 @@ See `references/drill-down.md` for nested TDD cycle instructions.
 **Mechanical pre-check (before dispatching the reviewer):** If tech-context defines a type-check
 command for a statically-typed stack (e.g. `tsc --noEmit` / `npm run typecheck` for TypeScript),
 run it now. A type error returns straight to GREEN — do NOT dispatch the domain reviewer (or
-advance to COMMIT) against code that does not type-check. This catches stale imports, renamed
-properties, and signature drift introduced by the GREEN agent at the cheapest point — the cycle
-boundary — instead of at batch, PR, or CI time. Skip silently for stacks with no compile step
-(e.g. Rails — the linter at COMMIT covers static checks there).
+advance to COMMIT) against code that does not type-check. Skip silently for stacks with no compile
+step (e.g. Rails — the linter at COMMIT covers static checks there).
 
 **Agent:** Domain Reviewer (see `agents/domain-reviewer.md` for full criteria)
 **Goal:** Review the implementation for domain integrity — primitive obsession, leaky
@@ -252,38 +248,12 @@ inputs without failing open or closed). Has veto authority to send back to GREEN
    test but never asserted on is an automatic fail of this check. Exempt: tasks under the
    **No Legitimate RED for Already-Existing Behavior** and **Removal Boundary** sections, and
    plan-declared `**Verify-only:** yes` tasks — their evidence forms replace this check.
-   (Engine-owned enforcement of this check is tracked by #1619; until it lands, this step is
-   the only guard.)
 6. **Commit immediately** — do not defer commits to end of cycle or batch. Connection
    interruptions lose uncommitted work. Commit as soon as GREEN passes and linter is clean.
 7. Commit with descriptive message referencing the behavior added
-8. **Commit includes Task trailer** — All commits (feature, refactor, fixups) in this TDD
-   cycle must include `Task: <id>` as a trailer in the commit body. This anchors commits
-   to their implementation task and enables task-status tracking.
-
-   **Grammar Rule:** The trailer ID MUST match the plan header ID exactly. For example:
-   - Plan header: `### Task 7:` → Trailer must be: `Task: 7` (NOT `Task: task-7`)
-   - Forbidden: `Task: task-7`, `Task: task-N`, `task-7` (incorrect spellings)
-   - Required: `Task: 7`, `Task: 42` (bare numeric ID only)
-
-   **Subject ⇒ Trailer Discipline:** If the commit subject line references a task ID
-   (e.g., `fix: resolve Task 7 token rejection`), the commit MUST include the matching
-   `Task: <id>` trailer. A commit whose subject names a task but lacks the corresponding
-   trailer FAILS this gate — amend the commit before proceeding. This ensures
-   bidirectional traceability: commits identify their task, and tasks can find their commits.
-
-   Example (good):
-   ```
-   feat(auth): reject expired tokens at request boundary
-
-   Validates token expiry before processing request body. Stores expiry
-   time in secure cookie (not in header). Rejects with 401 if expired.
-
-   Task: 42
-   ```
-
-   Refactor commits within the same task also carry the same Task: <id> so the task
-   is atomically marked complete when the final commit lands.
+8. **Commit includes Task trailer** — every commit in this cycle (feature, refactor, fixup)
+   carries `Task: <id>` with the bare plan header id (`### Task 7:` → `Task: 7`, never
+   `Task: task-7`). The commit-msg hook stamps it from `.pipeline/current-task`; confirm it parsed.
 
 9. **Cross-boundary integration proved by its owning task.** When the current task owns a
    cross-boundary integration check under `/plan` §3d, a test (new or existing) must exercise the
@@ -296,8 +266,7 @@ inputs without failing open or closed). Has veto authority to send back to GREEN
 10. **Commit only to the current feature branch — never integrate upstream.** Do NOT run
    `git fetch`, `git pull`, `git rebase`, or switch branches during the cycle. Mid-build
    rebase onto a moved `origin/<default>` rewrites history under active work. The only
-   sanctioned rebases are the daemon's finish-time rebase-onto-latest and the `/rebase`
-   resolver — both outside this loop. See the repository's rebase policy.
+   sanctioned rebases run outside this loop.
 
 **After commit:** Return to RED for the next cycle. Stop only when every `Done when:` bullet,
 including each enumerated case and negative outcome, has a committed assertion you can cite.
@@ -316,11 +285,8 @@ Evidence forms below — `Evidence: satisfied-by <sha>` when a prior commit alre
 satisfies the criteria, or `Evidence: skipped <reason>` when there is no applicable
 satisfying commit — rather than a code commit.
 
-The engine reads commits only — it does not inspect task reports or summary lines. Evidence
-forms MUST be emitted as `git commit --allow-empty` with the Evidence trailer in the commit
-body. This ensures the conductor can track task completion by reading the commit log, achieving
-bidirectional traceability: tasks identify their commits via trailers, and commits carry proof
-of completion.
+Evidence forms MUST be emitted as `git commit --allow-empty` with the Evidence trailer in the
+commit body; the engine reads commits only, not task reports.
 
 **Form 1: `Evidence: satisfied-by <sha>`**
 Use when a task's acceptance criteria are already met by existing code (discovered during
@@ -340,11 +306,8 @@ git commit --allow-empty -m "chore(evidence): task deferred" \
   -m "Evidence: skipped awaiting_stakeholder_input"
 ```
 
-Each empty commit carries `Task: <id>` (the task ID) plus `Evidence: satisfied-by <sha>` OR
-`Evidence: skipped <reason>` (the evidence form). The conductor recognizes these commits and
-marks the task `completed` without requiring ordinary code changes. This enables honest tracking:
-a task that "completes" via verification is marked differently from one that completes via code
-delivery, supporting pipeline audits.
+Each empty commit carries `Task: <id>` plus one Evidence form; the conductor records the task as
+completed by verification rather than code delivery.
 
 ### Memory Checkpoint (Per-Cycle, Conditional)
 
@@ -354,24 +317,11 @@ After COMMIT, if this TDD cycle revealed any of the following, persist immediate
 
 Most cycles will NOT trigger a memory write — that is correct. Only persist genuinely surprising discoveries.
 
-### Refactoring Principle: Dry Business Logic, Not Dry Code
+### Refactoring
 
-**Refactoring does NOT happen during GREEN.** GREEN writes the simplest passing code — nothing
-more. Refactoring happens at **batch boundaries** (after completing a group of related tasks),
-as a distinct step between batches.
-
-At batch boundaries, run the `simplify` workflow (Claude `/simplify`; Codex `$simplify`) and check for:
-
-1. **Duplicated business logic** — same authorization check, same event recording pattern,
-   same calculation appearing in 2+ places. Extract on the **second** occurrence, don't wait
-   for a third.
-2. **Complex methods** — any method >15 lines or >3 conditional branches should be extracted
-   to a service object.
-3. **Do NOT over-abstract** — similar-looking code that serves different purposes is fine.
-   Three controllers with similar `before_action` patterns are not duplication if they
-   authorize differently. Only extract shared *behavior*, not shared *shape*.
-
-Refactoring gets its own commit(s) — separate from feature commits. Tests must still pass after.
+Refactoring never happens during GREEN. It runs at batch boundaries through the `simplify` workflow
+(Claude `/simplify`; Codex `$simplify`), in its own commits, and uses simplify's thresholds: 3+
+similar blocks across files, or a method over 25 lines, 4 conditional branches, or 3 nesting levels.
 
 ### User-Requested Exit During TDD
 
@@ -381,21 +331,14 @@ a TDD cycle (RED, GREEN, DOMAIN, or COMMIT), the orchestrator MUST:
 1. **Do NOT commit incomplete work.** If the cycle is mid-flight (test written but no code,
    or code written but domain review not passed), do not attempt to force a commit.
 
-2. **Reset the task to `pending`** in `.pipeline/task-status.json` if you marked it `in_progress`.
-   The next session will re-enter this task and resume the cycle.
-
-3. **Write a halt marker** (`.pipeline/halt-user-input-required`) with a one-line summary
+2. **Write a halt marker** (`.pipeline/halt-user-input-required`) with a one-line summary
    of the in-flight cycle state (e.g., "user requested exit; RED phase complete, awaiting GREEN").
-
-This contract ensures that user interruption is non-destructive: the task cleanly resets,
-and the next session resumes from the known state without losing work or creating orphaned
-commits.
 
 ### Structural Enforcement
 
-When dispatching through the selected host's available subagent facility, **inline the relevant
-context directly in the prompt** rather than giving broad file access. This keeps each dispatch
-focused and token-efficient. In Claude Code, this applies to Agent tool dispatches.
+When dispatching through the selected host's available subagent facility, give each phase only
+the context below — paths and metadata, not file contents. In Claude Code, this applies to Agent
+tool dispatches.
 
 | Phase | Agent | Provide in Prompt | Do NOT Provide |
 |-------|-------|-------------------|----------------|
@@ -407,8 +350,7 @@ focused and token-efficient. In Claude Code, this applies to Agent tool dispatch
 
 **Context budget rules:**
 - **Provide file paths and metadata, not full contents.** Give subagents file paths, line
-  counts, and key method names/signatures. Subagents read files themselves — copying full
-  file contents into prompts wastes tokens (40-50K per feature observed in prior runs).
+  counts, and key method names/signatures. Subagents read files themselves.
 - **For domain review: inline the diff only.** Paste the specific new/changed code (the diff)
   into the domain reviewer prompt — this is typically small (<50 lines). Do NOT inline entire files.
 - **Name domain types that exist** (e.g., "Domain types: Contact, Tag, ContactTag") so the
@@ -435,8 +377,6 @@ Right-size the model to the diff size to reduce API cost and rate limit pressure
 - **Other supported hosts:** select the native equivalent of the same focused versus deep-review
   capability; do not weaken the review boundary or veto authority.
 
-Most TDD diffs are small (under 20 lines), so the majority of domain reviews will use Sonnet.
-
 ### Orchestrator Output Discipline
 
 Between TDD phases, the orchestrator outputs ONLY:
@@ -460,22 +400,10 @@ exact replication still follows its full delta cycle and required scoped verific
 
 ## Verification
 
-- [ ] Test written BEFORE implementation (no exceptions)
-- [ ] Test failed for the right reason (not syntax/import error)
-- [ ] Domain review ran after RED (test reviewed for domain integrity)
-- [ ] Implementation is minimal (passes scope check)
-- [ ] Domain review ran after GREEN (implementation reviewed)
-- [ ] Scoped affected-test set passes before commit (the engine's dedicated aggregate gate owns
-      broad pre-SHIP verification, not each task)
-- [ ] Commit carries the `Task: <id>` trailer (bare plan id — auto-stamped from
-      `.pipeline/current-task` when dispatched correctly; verify it parsed, never paragraph-split)
-- [ ] Linter passes before commit
-- [ ] Type-check passes before commit (typed stacks — run as the Phase 4 pre-check; skipped for stacks with no compile step)
-- [ ] Working tree clean at commit
-- [ ] Any cross-boundary integration check owned by this task is proven through the appropriate
-      project entry point, not only by a helper-level unit test
-- [ ] One behavior per cycle (not multiple changes lumped together)
-- [ ] Every new/changed test file carries a resolvable `Covers:` marker bound to the active
-      feature's stories or plan (build_review test-quality scope)
-- [ ] Coverage proves each changed behavior or failure boundary at the lowest sufficient layer
-- [ ] Non-obvious gotchas or new patterns persisted to `.memory/` (if encountered this cycle)
+- [ ] Test written BEFORE implementation and failed for the right reason
+- [ ] Domain review ran after RED and after GREEN
+- [ ] Scoped affected-test set, linter, and type-check (typed stacks) pass before commit
+- [ ] Pre-diff sensitivity check run for every new or changed behavioral test
+- [ ] Every new/changed test file carries a resolvable `Covers:` marker for the active feature
+- [ ] Any cross-boundary integration check owned by this task is proven through its entry point
+- [ ] Working tree clean at commit; one behavior per cycle

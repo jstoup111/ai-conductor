@@ -416,13 +416,9 @@ echo "verdict: APPROVED_WITH_CONDITIONS, new ADRs: 2" > .pipeline/review-require
 
 ### 12. As-Built Compliance Gate (`--as-built` mode)
 
-Invoked at **SHIP** as `/architecture-review --as-built`, a member of the concurrent
-validation group — fanned out alongside `/manual-test` and `/prd-audit` in daemon/auto
-runs; in interactive runs it runs serially, after `/prd-audit` and before `/finish`.
-It runs for **every feature**, including Small features and features whose DECIDE-time
-architecture review was skipped. This is the final architectural drift sweep. It is lightweight —
-it does **no** new design or feasibility/complexity assessment, and reuses the drift logic of §10
-(Recurring Review) and the ADR lifecycle of §7b.
+Invoked at **SHIP** as `/architecture-review --as-built`. It runs for **every feature**, including
+Small features and features whose DECIDE-time review was skipped. It does **no** new design or
+feasibility/complexity assessment.
 
 **Managed as-built review.** When the engine dispatches `--as-built`, it supplies the bounded,
 versioned input projection, check policy, and terminal native structured-result shape. Treat those
@@ -443,13 +439,8 @@ with its supplied reason. By default, `reachability` and `planGap` apply at ever
 diagrams exist. Operator configuration can disable any check for a tier. Missing ADRs or diagrams
 therefore disable only their respective check — never this SHIP gate.
 
-**Relationship to BUILD-time judgement:** [ADR: The build_review wiring rubric is
-retired](../../.docs/decisions/adr-2026-08-14-retire-build-review-wiring-rubric.md) removes static
-reachability from the BUILD gate, superseding the relocation made by
-[adr-2026-08-11](../../.docs/decisions/adr-2026-08-11-wiring-judged-in-build-review.md). BUILD no
-longer judges reachability at all. This §12 sweep is unchanged: when it runs at SHIP, it
-independently verifies the approved architecture against the shipped source and remains
-authoritative for the SHIP compliance verdict. It never relied on BUILD proof as authority.
+**Relationship to BUILD-time judgement:** BUILD no longer judges reachability ([ADR](../../.docs/decisions/adr-2026-08-14-retire-build-review-wiring-rubric.md));
+this SHIP sweep is unchanged and never relies on BUILD proof as authority.
 
 **Scope (only this):**
 - For `adrCompliance`, load only the **APPROVED** ADRs (`.docs/decisions/`, `Status: APPROVED`).
@@ -482,20 +473,12 @@ authoritative for the SHIP compliance verdict. It never relied on BUILD proof as
     behavior. Name the primitive and what was searched.
     In the structured verdict, record it as a `reachability` entry with an empty `callerChain`
     (`[]`); the engine admits an empty chain only under a `BLOCKED` verdict.
-    Classify it `REMEDIABLE` and cite the plan task that introduced or changed the primitive:
-    wiring the primitive into its production caller is part of delivering that task. Classify it
-    `DESIGN` only when no plan task introduced the primitive or the approved design names no
-    production entry point it could be wired into. Never cite this section as the governing
-    reference.
+    Classify it per the table under **Verdict meanings**. Never cite this section as the
+    governing reference.
   - **Statically reachable but not yet observed running** (e.g. a new log line no production log
     shows yet) → record it under Drift Notes as `UNEXERCISED: <primitive> — signature: <the
     greppable line/event that will prove it live>`. Not blocking; the signature tells a later
     observer exactly what proves the behavior live in production.
-  - The failure shapes this exists to catch: an event callback shipped with no caller anywhere;
-    a capability wired into one of its several consumers while the rest silently kept the old
-    behavior; a primary code path whose fallback carries 100% of production traffic because the
-    primary's precondition is never produced. All are green under unit tests and invisible to a
-    conformance-only review.
 - **Plan-gap check.** When the shipped code faithfully implements the approved design but that
   design is itself the limit that prevents an outcome the sealed story criteria require, issue
   `PLAN_GAP`. Record the affected outcome and whether it was delivered; do not send unplanned work
@@ -556,11 +539,6 @@ authoritative for the SHIP compliance verdict. It never relied on BUILD proof as
      subagent it spawned has not returned. Collect every digest before grading; if a subagent is
      slow, wait for it — do not summarize partial results and do not report progress in place of a
      verdict.
-  - **Why.** Both rules exist to prevent a daemon halt class. Running project code from a validator
-    mutates the worktree the SHIP gates fingerprint; and ending the turn with subagents outstanding
-    ends the session in print mode, so the host's background-wait ceiling kills the pending
-    subagents, no verdict artifact is written, and the engine's freshness handshake HALTs the
-    feature (`post-dispatch verdict write handshake failed ... is stale`).
 - Do NOT re-run §2/§3/§5 (feasibility/complexity/domain pre-checks) — those belong to the DECIDE
   pass. This is a code-vs-approved-design pattern match plus the reachability sweep above,
   deliberately cheap.
@@ -581,13 +559,8 @@ authoritative for the SHIP compliance verdict. It never relied on BUILD proof as
   (`Supersedes: <old>`, old → `Status: SUPERSEDED`). **Never silently downgrade** an APPROVED ADR
   or auto-resolve the violation. After resolution, re-run the as-built gate.
 
-For standalone interactive use, state one verdict from the closed set `APPROVED`,
-`APPROVED WITH DRIFT NOTES`, `PLAN_GAP`, or `BLOCKED`. State the affected
-outcome and whether it was delivered for a plan gap. For a blocked result,
-state each finding's `REMEDIABLE` or `DESIGN` class, summary, and typed
-governing reference: either an APPROVED ADR's whole decision or an active plan
-task. `REMEDIABLE` means the approved design already requires bounded BUILD
-work; `DESIGN` means a human architectural decision is required.
+Classify each BLOCKED finding — `REMEDIABLE` (the approved design already requires bounded BUILD
+work) or `DESIGN` (a human architectural decision is required) — with its typed governing reference:
 
 | Finding | Class | Governing reference |
 |---|---|---|
@@ -618,16 +591,5 @@ Write a plan-task reference as `task <id>` exactly, not `plan task <id>` or `Tas
 - [ ] `.pipeline/review-required-architecture_review` marker written IF
       verdict ≠ clean APPROVED, or any ADR was drafted/superseded, or any
       High-impact risk was registered (skip only on truly clean APPROVED)
-- [ ] **As-built mode:** at SHIP, each enabled check compares shipped code with its governing
-      evidence only (no new design)
-- [ ] **As-built mode:** runs for every feature; each enabled check follows the supplied policy and
-      each disabled check records its reason
-- [ ] **As-built mode:** every diff-introduced primitive cites a production caller (`file:line`)
-      from a real entry point; no caller ⇒ BLOCKED as an unreachable rung
-- [ ] **As-built mode:** a same-file caller counts only after independently verifying the exact
-      current-source root-to-caller-to-export chain; own-module-only and stale BUILD-proof claims
-      remain rejected
-- [ ] **As-built mode:** statically-reachable-but-unobserved behavior recorded as `UNEXERCISED`
-      with its greppable observation signature
 - [ ] **As-built mode:** BLOCKED on any enabled violation of a governing APPROVED ADR; resolved by code fix or
       human-approved superseding ADR (never silent downgrade)
