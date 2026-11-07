@@ -40,4 +40,18 @@ describe('decision corpus known shapes', () => {
       'review',
     ]);
   });
+
+  // Covers: task:2
+  it('does not infer a kind from deprecated or fenced-only status markers', () => {
+    expect(classifyKind('adr-2026-01-01-x.md', '**Verdict:** APPROVED')).toBe('decision');
+
+    expect([
+      matchesKnownShape('Styleguide.md'),
+      matchesKnownShape('styleguide-v2.md'),
+      classifyKind('Styleguide.md', '# Style guide'),
+      classifyKind('styleguide-v2.md', '# Style guide'),
+      classifyKind('notes.md', '```markdown\n**Status:** APPROVED\n```'),
+      classifyKind('notes.md', '```markdown\n**Verdict:** APPROVED\n```'),
+    ]).toEqual([false, false, 'unclassified', 'unclassified', 'unclassified', 'unclassified']);
+  });
 });
