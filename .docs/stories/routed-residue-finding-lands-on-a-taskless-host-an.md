@@ -47,8 +47,8 @@ repairs routed to the other hosts in the round still run.
 - Given audit round `r2` where host 1 ended `restacked` and the leaf host 3 is the last host and is already evidence-complete after region entry, when the conductor enters host 3, then host 3 ends `done`, the round closes, the worktree returns to the leaf branch, and the leaf's gates are pending again.
 
 #### Negative Paths
-- Given audit round `r2` whose only host is host 1 and host 1 is already evidence-complete after region entry, when the conductor enters host 1, then the feature halts needs-human with `Outcome: derived-already-complete` exactly as before.
-- Given audit round `r2` where host 1 settled as a no-op (`done`), host 2 is the last host, and host 2 is already evidence-complete after region entry, when the conductor enters host 2, then the feature halts needs-human with `Outcome: derived-already-complete` and host 2 stays `admitted`.
+- Given audit round `r2` whose only host is host 1, host 1 has at least one routed task and no taskless obligation, and host 1 is already evidence-complete after region entry, when the conductor enters host 1, then the feature halts needs-human with `Outcome: derived-already-complete` exactly as before.
+- Given audit round `r2` where host 1 settled as a no-op (`done`), host 2 is the last host, host 2 has at least one routed task and no taskless obligation, and host 2 is already evidence-complete after region entry, when the conductor enters host 2, then the feature halts needs-human with `Outcome: derived-already-complete` and host 2 stays `admitted`.
 - Given host 1 already evidence-complete but region entry committed a frozen block on child 1's branch, when host 1 settles, then host 1 leaves through `built` and `restacked`, so the committed block reaches every child above it.
 - Given a crash after host 1 became `repairing` for the settle and before its exit, when the feature resumes, then host 1 is not entered as a new admission, and the round reaches host 2 with host 1 ended `done` or `restacked`.
 - Given a revalidate or operator round whose host is entered, when region entry runs, then no no-op settle or no-op halt is applied, as before.
@@ -71,7 +71,7 @@ that halt to let the round continue, so that I can recover without editing routi
 - Given that recovery, when `ai-conductor stack rounds --slug demo` runs, then it reports `r2` with host 1 `done` and the repair marker on host 2.
 
 #### Negative Paths
-- Given a feature halted needs-human with `Outcome: derived-already-complete` on the last host of a round where no host did work, when the HALT is cleared and the feature is dispatched again, then it halts needs-human again with the same outcome and no host state changes.
+- Given a feature halted needs-human with `Outcome: derived-already-complete` on the last host of a round where no host did work and that host has at least one routed task and no taskless obligation, when the HALT is cleared and the feature is dispatched again, then it halts needs-human again with the same outcome and no host state changes.
 - Given that halted feature, when the HALT is not cleared, then the daemon's re-kick retains it as needs-human and no routing ref changes.
 
 ### Done When
