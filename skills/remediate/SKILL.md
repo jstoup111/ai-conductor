@@ -12,32 +12,11 @@ requires: [verify-claims]
 ## Purpose
 
 Turns a **blocking gate into action**. When `build_review` fails, or when `prd-audit`,
-`architecture-review --as-built`, or the `finish` verification reports SHIP gaps the daemon would
-otherwise HALT on, this skill reasons over each blocking gap and decides *how the daemon should
-proceed* — autonomously where it can, human-in-the-loop only where it must.
-
-**Correctness gate:** a gap's disposition and its routing target rest on a claim about the gap's
-nature. Per the `/verify-claims` protocol, ground that classification in the audit evidence with a
-confidence %, and do not auto-route on an unverified assumption about what the gap is — when the
-nature is genuinely uncertain (not just the fix), that low confidence is itself a signal to HALT
-for a human rather than to guess a route.
-
-The daemon should be autonomous. So the default is to **remediate**: translate each gap into
-concrete, file-scoped work and route it back to the right SDLC step. A **HALT** is reserved for the
-three cases a machine genuinely cannot close:
-
-1. **architectural-clarity** — an architectural gap that needs a human *decision* (ambiguous trade-off,
-   missing ADR, conflicting constraints), not just a code change.
-2. **product-scope** — functionality the **initial design never accounted for** (a real product gap),
-   which needs a human DECIDE amendment.
-3. **unanswerable** — a stall-question that cannot be answered from committed artifacts alone and
-   needs more evidence.
-
-If a gap can be turned into concrete work, it is **not** a HALT. This skill guides planning only: it
-does **not** edit code, write tests, or amend the PRD; the owning step does that.
-
-**Run when `build_review` fails, or at SHIP when a prior audit BLOCKED — dispatched by the
-conductor on the blocking path.**
+`architecture-review --as-built`, or the `finish` verification blocks at SHIP, reason over each
+blocking gap and decide how the daemon should proceed. The default is to **remediate**: translate
+each gap into concrete, file-scoped work routed to the owning SDLC step. HALT only for the three
+cases in **Gap-plan judgment guidance**. This skill plans only: it does **not** edit code, write
+tests, or amend the PRD; the owning step does that.
 
 ## Engine-selected PRD widening reconciliation mode
 
@@ -183,9 +162,8 @@ Each `cases` row has exactly `caseRef`, optional `existingCaseId`, `disposition`
 
 ### Authority boundaries
 
-The provider must not mint durable case ids or effect ids. The engine validates the complete graph.
-The engine stamps durable ids, reconciles history, reserves and applies effects, publishes any work
-order, charges the kickback, and derives the effective route.
+The provider must not mint durable case ids or effect ids;
+the engine validates the graph, stamps durable ids, and applies every effect.
 
 Never omit, duplicate, or replace a supplied source outcome. A `merged` source is a trace outcome,
 not a case disposition; it still names its canonical `caseRef`. A same-substance finding may be bound
