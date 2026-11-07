@@ -1,3 +1,4 @@
+// Covers: task:3
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConductorEventEmitter } from '../../src/engine/conductor-event-emitter.js';
 import { createExecutorChildRuntime } from '../../src/engine/executor-child-runtime.js';
