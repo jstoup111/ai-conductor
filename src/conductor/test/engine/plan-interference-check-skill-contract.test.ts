@@ -1,4 +1,4 @@
-// Covers: task:4, task:18, task:19, task:20
+// Covers: task:4, task:8, task:18, task:19, task:20
 import { readdir, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
@@ -28,7 +28,7 @@ async function readSkill(name: string): Promise<string> {
 }
 
 describe('plan skill non-interference contract', () => {
-  it('keeps acyclic dependencies and task non-interference as separate verification checks', async () => {
+  it('keeps acyclic dependencies and task non-interference as separate verification checks (Task 8)', async () => {
     const planSkill = await readFile(planSkillPath, 'utf8');
     const sections = verificationSections(planSkill);
 
