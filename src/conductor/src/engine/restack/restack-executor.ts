@@ -829,19 +829,6 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         }
         const conflict = await replayConflict(git, options.slug, error);
         if (!conflict) throw error;
-        const merge = await mergeInRange(git, range);
-        if (merge) {
-          if (!await pinStagingRef(options.worktree, options.slug, range.child, range.oldTip, { git })) {
-            throw new Error(`cannot pin original tip for merge-bearing child ${range.child}`);
-          }
-          await abortJournal(options.worktree, journal, git, []);
-          await haltRestack(options.worktree, 'flatten_refused', options.events, {
-            child: range.child,
-            detail: `merge ${merge}; resolve the conflict on child branch ${branchRefForRange(options.slug, range).slice('refs/heads/'.length)} and resume`,
-          });
-          terminal = true;
-          return haltedResult(options.worktree);
-        }
         const decisionDelivery = await prepareRestackDecisionDelivery({
           worktree: options.worktree, slug: options.slug, range, opId: journal.journal.opId, git, events: options.events,
         });
@@ -884,6 +871,11 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         exactRewrites.set(range.child, resolution.rewrites);
         overlaps.set(range.child, await parentOverlapPaths(range, parent, git));
         parent = resolution.tip;
+        if (resolution.audit !== undefined) {
+          mergeAudit.flattenedMerges.push(...resolution.audit.flattenedMerges);
+          mergeAudit.ancestryOnlyMerges.push(...resolution.audit.ancestryOnlyMerges);
+          mergeAudit.sideLineageCount += resolution.audit.sideLineageCount;
+        }
         continue;
       }
       const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'replayed', replay.tip, replay.rewrites, { git });

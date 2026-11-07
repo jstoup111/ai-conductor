@@ -140,59 +140,6 @@ describe('restack conflict record (real local Git)', () => {
     ])).stdout).toBe(before);
   });
 
-  // Covers: task:3
-  it('halts a merge-bearing base refresh as flatten_refused without writing conflict refs', async () => {
-    const subject = await createRepo();
-    const commit = async (message: string, path: string, contents: string): Promise<CommitSha> => {
-      await writeFile(join(subject.repo, path), contents);
-      await subject.git(['add', path]);
-      await subject.git(['commit', '-qm', message]);
-      return sha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
-    };
-    await mkdir(join(subject.repo, 'src'), { recursive: true });
-    await commit('add flag', 'src/flag.ts', 'base\n');
-    await subject.git(['checkout', '-qb', 'feat/c1/demo']);
-    const childOne = await commit('child one', 'src/one.ts', 'one\n');
-    await subject.git(['update-ref', 'refs/conductor/demo/closed/c1', childOne]);
-    await subject.git(['checkout', '-qb', 'feat/c2/demo']);
-    await commit('child two changes flag', 'src/flag.ts', 'child two\n');
-    await subject.git(['checkout', '-q', 'main']);
-    await commit('main commit', 'src/flag.ts', 'main\n');
-    await subject.git(['checkout', '-q', 'feat/c2/demo']);
-    await subject.git(['merge', '--no-ff', '--no-commit', 'main']).catch(() => undefined);
-    await writeFile(join(subject.repo, 'src/flag.ts'), 'merge resolution\n');
-    await subject.git(['add', 'src/flag.ts']);
-    await subject.git(['commit', '-qm', 'child two merge']);
-    const childTwoMerge = sha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
-    await subject.git(['update-ref', 'refs/conductor/demo/closed/c2', childTwoMerge]);
-    await subject.git(['checkout', '-qb', 'feat/daemon-demo']);
-    await commit('leaf', 'src/leaf.ts', 'leaf\n');
-    await subject.git(['checkout', '-q', 'main']);
-    const newDefault = await commit('default advance', 'src/flag.ts', 'default\n');
-    await subject.git(['checkout', '-q', 'feat/daemon-demo']);
-    await writeSliceTopologyFixture(subject.repo, {
-      version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
-      sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf'] },
-      storyOwnership: { S1: 1, S2: 2, S3: 3 },
-    }, envelopeFilesystem);
-    const refusals: unknown[] = [];
-    const { ConductorEventEmitter } = await import('../../../src/ui/events.js');
-    const events = new ConductorEventEmitter();
-    events.on('restack_refused', (event) => { refusals.push(event); });
-
-    const result = await runRestack({
-      worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault,
-      events, git: makeGitRunner(subject.repo), resolver: async () => ({ resolved: false, reason: 'must not be called' }),
-    });
-    expect(result).toMatchObject({ kind: 'halted' });
-
-    expect(refusals).toContainEqual(expect.objectContaining({
-      reason: 'flatten_refused', child: 2, detail: expect.stringContaining(childTwoMerge),
-    }));
-    await expect(readConflictRecord(subject.repo, 'demo')).resolves.toEqual({ kind: 'missing' });
-    await expect(makeGitRunner(subject.repo)(['rev-parse', '-q', '--verify', conflictParentRefFor('demo')])).resolves.toMatchObject({ exitCode: 1 });
-  });
-
   // Covers: task:2
   it('writes and reads a fail-closed operator decision for its exact child range', async () => {
     const subject = await createRepo();

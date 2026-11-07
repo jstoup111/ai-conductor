@@ -1,4 +1,4 @@
-// Covers: task:17
+// Covers: task:3
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -33,7 +33,7 @@ afterEach(async () => {
 });
 
 async function fixture(q: 'carried' | 'not-carried') {
-  const repo = await mkdtemp(join(tmpdir(), 'restack-flatten-refused-'));
+  const repo = await mkdtemp(join(tmpdir(), 'restack-merge-bearing-conflict-'));
   repositories.push(repo);
   const git = (args: string[]) => execFile('git', args, { cwd: repo });
   const commit = async (message: string, path: string, content: string) => {
@@ -54,7 +54,7 @@ async function fixture(q: 'carried' | 'not-carried') {
   await git(['update-ref', 'refs/conductor/demo/closed/c1', childOne]);
 
   await git(['checkout', '-qb', 'feat/c2/demo']);
-  await commit('child conflict', 'shared.txt', 'child\n');
+  await commit('child conflict', q === 'carried' ? 'child-conflict.txt' : 'shared.txt', 'child\n');
 
   if (q === 'carried') {
     await git(['checkout', '-q', 'main']);
@@ -93,11 +93,36 @@ async function stackRefs(subject: Awaited<ReturnType<typeof fixture>>): Promise<
   ])).stdout;
 }
 
-describe('runRestack flatten refusal (real local Git)', () => {
+describe('runRestack merge-bearing conflicts (real local Git)', () => {
+  it('applies a settled merge-bearing conflict as a linear history and emits the existing merge audit', async () => {
+    const subject = await fixture('not-carried');
+    const events = new ConductorEventEmitter();
+    const audits: unknown[] = [];
+    events.on('rebase_merge_audit', (event) => { audits.push(event); });
+
+    const result = await runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
+      events, git: makeGitRunner(subject.repo), resolverCap: 1,
+      resolver: async (context) => {
+        await writeFile(join(context.projectRoot, 'shared.txt'), 'resolved\n');
+        const git = makeGitRunner(context.projectRoot);
+        await git(['add', 'shared.txt'], { env: context.environment });
+        await git(['rebase', '--continue'], { env: context.environment });
+        return { resolved: true };
+      },
+    });
+
+    expect(result).toMatchObject({ kind: 'applied' });
+    const tip = sha((await subject.git(['rev-parse', 'feat/c2/demo'])).stdout);
+    expect((await subject.git(['rev-list', '--min-parents=2', `${subject.merge}..${tip}`])).stdout).toBe('');
+    expect((await subject.git(['log', '--format=%B', `${subject.newDefault}..${tip}`])).stdout).toContain(`Flattened-merge: ${subject.merge}`);
+    expect(audits).toEqual([expect.objectContaining({ flattenedMerges: [subject.merge] })]);
+  });
+
   it.each([
     ['when Q is carried', 'carried'],
     ['when Q is not carried', 'not-carried'],
-  ] as const)('%s halts rather than handing a merge-bearing child to the resolver', async (_name, q) => {
+  ] as const)('%s dispatches a merge-bearing child to the resolver without a flatten refusal', async (_name, q) => {
     const subject = await fixture(q);
     const before = await stackRefs(subject);
     const events = new ConductorEventEmitter();
@@ -119,11 +144,9 @@ describe('runRestack flatten refusal (real local Git)', () => {
     });
 
     expect(result).toMatchObject({ kind: 'halted' });
-    expect(resolverCalls).toBe(0);
+    expect(resolverCalls).toBe(1);
     expect(await stackRefs(subject)).toBe(before);
-    expect(refusals).toContainEqual(expect.objectContaining({
-      reason: 'flatten_refused', child: 2, detail: expect.stringContaining(subject.merge),
-    }));
+    expect(refusals).toEqual([]);
     await expect(readRestackJournal(subject.repo, 'demo')).resolves.toMatchObject({
       kind: 'journal', journal: { state: 'aborted' },
     });
@@ -133,7 +156,6 @@ describe('runRestack flatten refusal (real local Git)', () => {
     expect(stagingRefs.stdout).toContain('refs/conductor/demo/restack/staging/c1 ');
     expect(stagingRefs.stdout).toContain(`refs/conductor/demo/restack/staging/c2 ${subject.merge}`);
     const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
-    expect(halt).toMatch(/resolve.*feat\/c2\/demo.*resume/is);
-    expect(halt).not.toMatch(/git\s+rebase/i);
+    expect(halt).toMatch(/^restack conflict child 2/m);
   });
 });
