@@ -1,11 +1,11 @@
-// Covers: task:4
+// Covers: task:4, task:7
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const seams = vi.hoisted(() => ({
-  executions: [] as Array<{ engineVersionId: string }>,
+  executions: [] as Array<{ engineVersionId: string; baseBranch?: string }>,
 }));
 
 vi.mock('../../src/engine/child-feature-executor.js', async (importOriginal) => ({
@@ -26,6 +26,7 @@ vi.mock('../../src/engine/work-order.js', async (importOriginal) => ({
     repository: input.repository,
     slug: input.slug,
     baseSha: input.baseSha,
+    ...(input.baseBranch === undefined ? {} : { baseBranch: input.baseBranch }),
     engineVersionId: input.enginePin.engineVersionId,
     manifest: [],
   })),
@@ -72,6 +73,33 @@ describe('runDaemonMode engineRoot', () => {
 
     expect(seams.executions).toEqual([
       expect.objectContaining({ engineVersionId: TEMP_ENGINE_VERSION_ID }),
+    ]);
+  });
+
+  it('carries the configured daemon base branch into the work order', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-work-order-base-branch-'));
+    roots.push(projectRoot);
+    const store = await useTempEngineStore();
+
+    try {
+      await runDaemonMode({
+        projectRoot,
+        concurrency: 1,
+        maxItems: 1,
+        baseBranch: 'trunk',
+        engineRoot: store.engineRoot,
+        ensureFresh: async () => {},
+        probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+        providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
+        workSource: { discover: async () => [{ slug: 'feature', baseSha: 'a'.repeat(40) }] },
+        watch: false,
+      });
+    } finally {
+      await store.teardown();
+    }
+
+    expect(seams.executions).toEqual([
+      expect.objectContaining({ baseBranch: 'trunk' }),
     ]);
   });
 

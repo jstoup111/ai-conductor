@@ -1973,6 +1973,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         repository: basename(projectRoot),
         slug: item.slug,
         baseSha,
+        baseBranch,
         enginePin,
         effectiveConcurrency: daemonConcurrency.concurrency,
         selfHost: isSelfHost,

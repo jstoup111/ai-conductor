@@ -88,6 +88,17 @@ export interface CreateExecutorChildRuntimeOptions {
 }
 
 /**
+ * A newer supervisor carries its configured base branch in the WorkOrder.
+ * Orders from older supervisors omit it, preserving the prior origin lookup.
+ */
+export async function resolveExecutorChildBaseBranch(
+  order: Pick<WorkOrder, 'baseBranch'>,
+  git: ReturnType<typeof makeGitRunner>,
+): Promise<string> {
+  return order.baseBranch ?? (await originDefaultBranch(git)) ?? 'main';
+}
+
+/**
  * Claim the root-owned stacked-feature lease before an isolated child creates
  * or reuses its worktree. The child process runs with the supervisor's root as
  * its cwd, so this remains the canonical lease and park-marker location.
@@ -316,7 +327,7 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
     undefined,
     createStepStatusWriteRefusalDiagnostics(events),
   );
-  const baseBranch = (await originDefaultBranch(makeGitRunner(worktree.path))) ?? 'main';
+  const baseBranch = await resolveExecutorChildBaseBranch(order, makeGitRunner(worktree.path));
   const git = makeProductionGit();
   const waitControllers = new Set<AbortController>();
   const conductor = new Conductor({

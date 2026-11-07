@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:3
+// Covers: task:1, task:2, task:3, task:7
 import { createHash } from 'node:crypto';
 import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -24,6 +24,7 @@ const ENGINE_PIN: EnginePin = {
 
 describe('engine/work-order', () => {
   it('round-trips a fully populated order with a ref-and-hash document manifest', async () => {
+    expect(WORK_ORDER_SCHEMA_VERSION).toBe(1);
     const documents = new Map([
       ['.docs/specs/parallel-dispatch.md', '# Specification'],
       ['.docs/plans/parallel-dispatch.md', '# Plan'],
@@ -35,6 +36,7 @@ describe('engine/work-order', () => {
         repository: 'jstoup/ai-conductor',
         slug: 'parallel-dispatch',
         baseSha: 'a'.repeat(40),
+        baseBranch: 'trunk',
         enginePin: ENGINE_PIN,
         documentRefs: [...documents.keys()],
         tier: 'L',
@@ -66,6 +68,7 @@ describe('engine/work-order', () => {
         repository: 'jstoup/ai-conductor',
         slug: 'parallel-dispatch',
         baseSha: 'a'.repeat(40),
+        baseBranch: 'trunk',
         engineVersionId: ENGINE_VERSION_ID,
         schemaVersion: WORK_ORDER_SCHEMA_VERSION,
         tier: 'L',
@@ -85,7 +88,7 @@ describe('engine/work-order', () => {
         (content) => `sha256:${createHash('sha256').update(content).digest('hex')}`,
       ),
       gitCalls: [...documents.keys()].map((ref) => ['show', `${'a'.repeat(40)}:${ref}`]),
-      serializedKeys: ['band', 'baseSha', 'engineVersionId', 'manifest', 'repository', 'resolutionMode', 'schemaVersion', 'slug', 'sourceRef', 'tier', 'track'],
+      serializedKeys: ['band', 'baseBranch', 'baseSha', 'engineVersionId', 'manifest', 'repository', 'resolutionMode', 'schemaVersion', 'slug', 'sourceRef', 'tier', 'track'],
       containsAbsolutePath: false,
     });
   });
@@ -103,6 +106,11 @@ describe('engine/work-order', () => {
     );
 
     expect(JSON.parse(JSON.stringify(order))).toEqual(order);
+    expect(order).not.toHaveProperty('baseBranch');
+    await expect(verifyWorkOrder(
+      order,
+      async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    )).resolves.toBeUndefined();
 
     const gitMustNotRun = async () => {
       throw new Error('work-order identity must be checked before Git');

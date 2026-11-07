@@ -27,6 +27,8 @@ export interface WorkOrder {
   slug: string;
   /** Immutable base commit captured when the dispatcher claims this work. */
   baseSha: string;
+  /** Supervisor-configured base branch for child-side resume and publication. */
+  baseBranch?: string;
   /** Immutable engine build selected for this individual dispatch. */
   engineVersionId: EngineVersionId;
   /** Identity of the supervisor that issued this order (diagnostic only). */
@@ -76,6 +78,8 @@ export interface BuildWorkOrderInput {
   repository: string;
   slug: string;
   baseSha: string;
+  /** Supervisor-configured base branch carried across the executor boundary. */
+  baseBranch?: string;
   /** Immutable engine selected at claim time; its path stays dispatcher-local. */
   enginePin: EnginePin;
   /** Supervisor pool width retained for child-mode legacy safety guards. */
@@ -123,6 +127,7 @@ export async function buildWorkOrder(
     repository: input.repository,
     slug: input.slug,
     baseSha: input.baseSha,
+    ...(input.baseBranch === undefined ? {} : { baseBranch: input.baseBranch }),
     engineVersionId: input.enginePin.engineVersionId,
     ...(input.enginePin.fallbackReason === undefined ? {} : { pinFallbackReason: input.enginePin.fallbackReason }),
     ...(input.effectiveConcurrency === undefined ? {} : { effectiveConcurrency: input.effectiveConcurrency }),

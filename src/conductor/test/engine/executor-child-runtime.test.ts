@@ -1,11 +1,15 @@
-// Covers: task:rem-as-built-rem-vg-1
+// Covers: task:rem-as-built-rem-vg-1, task:7
 // Covers: task:rem-as-built-R1
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import { buildExecutorChildConductorBoundaryOptions, makeExecutorChildFeatureRunner } from '../../src/engine/executor-child-runtime.js';
+import {
+  buildExecutorChildConductorBoundaryOptions,
+  makeExecutorChildFeatureRunner,
+  resolveExecutorChildBaseBranch,
+} from '../../src/engine/executor-child-runtime.js';
 import type { FeatureRunnerDeps, FeatureWorktree, WorktreeOutcome } from '../../src/engine/daemon-runner.js';
 import { SetupFailureError } from '../../src/engine/worktree-prepare.js';
 import type { WorkOrder } from '../../src/engine/work-order.js';
@@ -81,6 +85,15 @@ describe('executor child runtime lifecycle composition', () => {
     expect(boundaries.preemptionRequested!()).toBe(false);
     yielded = true;
     expect(boundaries.preemptionRequested!()).toBe(true);
+  });
+
+  it('uses the supervisor base branch when present and preserves the origin-default fallback for old orders', async () => {
+    const originFallback = vi.fn(async () => ({ exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' }));
+
+    await expect(resolveExecutorChildBaseBranch({ ...order, baseBranch: 'trunk' }, originFallback)).resolves.toBe('trunk');
+    expect(originFallback).not.toHaveBeenCalled();
+    await expect(resolveExecutorChildBaseBranch(order, originFallback)).resolves.toBe('main');
+    expect(originFallback).toHaveBeenCalledWith(['symbolic-ref', 'refs/remotes/origin/HEAD']);
   });
 
   it('seeds the order tier and track into conduct-state before the conductor runs', async () => {
