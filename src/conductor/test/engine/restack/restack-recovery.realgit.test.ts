@@ -342,7 +342,7 @@ describe('recoverRestackJournal (real local Git)', () => {
     expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
   });
 
-  it('dispatches a merge-bearing planned-recovery conflict to the resolver without a flatten refusal', async () => {
+  it('settles and applies a merge-bearing planned-recovery conflict through the resolver audit path', async () => {
     const subject = await fixture();
     const child = parseChildId(1);
     if (!child) throw new Error('child id should parse');
@@ -371,12 +371,11 @@ describe('recoverRestackJournal (real local Git)', () => {
     };
     const blob = await writeRestackJournalBlob(subject.repo, journal);
     await subject.git(['update-ref', journalRefFor('demo'), blob, '']);
-    const refsBefore = (await subject.git([
-      'for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads/feat/', 'refs/conductor/demo/closed/',
-    ])).stdout;
     const events = new ConductorEventEmitter();
     const refusals: unknown[] = [];
+    const audits: unknown[] = [];
     events.on('restack_refused', (event) => { refusals.push(event); });
+    events.on('rebase_merge_audit', (event) => { audits.push(event); });
     let resolverCalls = 0;
 
     const result = await recoverRestackJournal({
@@ -384,19 +383,22 @@ describe('recoverRestackJournal (real local Git)', () => {
       slug: 'demo',
       events,
       git: makeGitRunner(subject.repo),
-      resolver: async () => {
+      resolver: async (context) => {
         resolverCalls += 1;
-        return { resolved: false, reason: 'must not be called' };
+        await writeFile(join(context.projectRoot, 'base.txt'), 'resolved hand edit\n');
+        const git = makeGitRunner(context.projectRoot);
+        await git(['add', 'base.txt'], { env: context.environment });
+        await git(['rebase', '--continue'], { env: context.environment });
+        return { resolved: true };
       },
     });
 
-    expect(result).toMatchObject({ kind: 'halted' });
+    expect(result).toEqual({ kind: 'recovered', fromState: 'planned' });
     expect(resolverCalls).toBe(1);
-    expect((await subject.git([
-      'for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads/feat/', 'refs/conductor/demo/closed/',
-    ])).stdout).toBe(refsBefore);
     expect(refusals).toEqual([]);
-    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/^restack conflict child 1/m);
+    await expect(subject.git(['show', 'feat/c1/demo:base.txt'])).resolves.toMatchObject({ stdout: 'resolved hand edit\n' });
+    await expect(subject.git(['show', 'feat/c1/demo:side.txt'])).resolves.toMatchObject({ stdout: 'side\n' });
+    expect(audits).toEqual([expect.objectContaining({ flattenedMerges: [merge] })]);
   });
 
   // Covers: task:rem-as-built-R22
