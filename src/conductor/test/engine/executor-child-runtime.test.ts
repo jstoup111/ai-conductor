@@ -76,7 +76,7 @@ describe('executor child runtime lifecycle composition', () => {
       preemptionRequested: () => yielded,
     });
 
-    await expect(boundaries.operatorParkBoundary()).resolves.toBe(false);
+    await expect(boundaries.operatorParkBoundary!()).resolves.toBe(false);
     expect(boundaries.preemptionRequested!()).toBe(false);
     yielded = true;
     expect(boundaries.preemptionRequested!()).toBe(true);
