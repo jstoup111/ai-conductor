@@ -444,8 +444,9 @@ this SHIP sweep is unchanged and never relies on BUILD proof as authority.
 
 **Scope (only this):**
 - For `adrCompliance`, load only the **APPROVED** ADRs (`.docs/decisions/`, `Status: APPROVED`).
-  Block only on ADRs listed under GOVERNING ADRS in the input projection; any other APPROVED-ADR
-  conflict in code that follows the plan is a drift note naming the decision to amend. DRAFT/SUPERSEDED ADRs are not authoritative and are not gated against (per §7b). For
+  Block only on ADRs listed under GOVERNING ADRS in the input projection; when that list is empty,
+  judge every APPROVED ADR. A conflict with a non-governing ADR is a drift note naming the decision
+  to amend only when the code follows the plan; unplanned code gets no such exemption. DRAFT/SUPERSEDED ADRs are not authoritative and are not gated against (per §7b). For
   `diagramDrift`, compare the shipped code with the approved architecture diagrams
   (`.docs/architecture/`).
 - For each enabled check, compare the shipped source with its governing evidence: new structural
@@ -568,7 +569,7 @@ work) or `DESIGN` (a human architectural decision is required) — with its type
 | Unreachable rung; no plan task or approved entry point covers it | `DESIGN` | the APPROVED ADR decision it conflicts with |
 | Code diverges from an APPROVED ADR decision the plan already requires | `REMEDIABLE` | `<adr-stem> D<n>` |
 | Complying needs a changed or new architectural decision | `DESIGN` | `<adr-stem> D<n>` |
-| Code follows the plan; conflicts only with an APPROVED ADR outside GOVERNING ADRS | none | drift note naming `<adr-stem> D<n>` |
+| Code follows the plan; conflicts only with an APPROVED ADR outside a non-empty GOVERNING ADRS | none | drift note naming `<adr-stem> D<n>` |
 | Story criterion or desired outcome unmet | none | out of scope; `/prd-audit` owns it |
 
 Write a plan-task reference as `task <id>` exactly, not `plan task <id>` or `Task <id>`.
