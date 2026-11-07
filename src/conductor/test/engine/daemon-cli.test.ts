@@ -33,10 +33,10 @@ import { getPidfilePath } from '../../src/engine/daemon-lock.js';
 import type { ConductState } from '../../src/types/index.js';
 import { deriveDaemonBaseState, persistDaemonBaseState } from '../../src/engine/daemon-state.js';
 import {
-  createForcedSetupPrepare,
   renderDaemonEvent,
   runDaemonMode,
 } from '../../src/daemon-cli.js';
+import { createForcedSetupPrepare } from '../../src/engine/daemon-feature-lifecycle.js';
 import { terminateFeature } from '../../src/engine/daemon-runner.js';
 import type { prepareWorktree } from '../../src/engine/worktree-prepare.js';
 import type {
@@ -858,7 +858,10 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
   // future refactor that silently drops the episode construction or wiring.
   // ───────────────────────────────────────────────────────────────────────────
   it('daemon-cli.ts wires RateLimitEpisode: imports create, constructs one episode, passes to Conductor and runDaemon', () => {
-    const src = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8');
+    const src = [
+      readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8'),
+      readFileSync(join(__dirname, '../../src/engine/daemon-feature-lifecycle.ts'), 'utf-8'),
+    ].join('\n');
     // Verify import
     expect(src).toContain("import { create as createRateLimitEpisode } from './engine/rate-limit-episode.js';");
     // Verify construction

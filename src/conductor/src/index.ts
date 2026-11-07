@@ -895,7 +895,7 @@ async function dispatchCliCommand(): Promise<void> {
     ] = await Promise.all([
       import('./engine/executor-child.js'),
       import('./engine/executor-child-runtime.js'),
-      import('./daemon-cli.js'),
+      import('./engine/daemon-feature-lifecycle.js'),
       import('./engine/daemon-deps.js'),
       import('./engine/self-host/detector.js'),
     ]);

@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { resolveActiveChild } from '../../../src/engine/child-cursor.js';
 import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
-import { runDaemonRekickStackPreflight } from '../../../src/daemon-cli.js';
+import { runDaemonRekickStackPreflight } from '../../../src/engine/daemon-feature-lifecycle.js';
 import { Conductor } from '../../../src/engine/conductor.js';
 import { readWorktreeOutcome } from '../../../src/engine/daemon-deps.js';
 import { ALL_STEPS } from '../../../src/engine/steps.js';

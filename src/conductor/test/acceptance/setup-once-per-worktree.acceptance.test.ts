@@ -38,7 +38,7 @@ import {
 import type { BacklogItem } from '../../src/engine/daemon.js';
 import type { ConductorEvent } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import { createForcedSetupPrepare } from '../../src/daemon-cli.js';
+import { createForcedSetupPrepare } from '../../src/engine/daemon-feature-lifecycle.js';
 
 const execFileAsync = promisify(execFile);
 const SETUP_MARKER = join('.daemon', 'setup-ok.json');

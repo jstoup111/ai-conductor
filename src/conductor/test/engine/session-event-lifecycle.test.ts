@@ -10,9 +10,9 @@ import {
   withFeatureEventPersistence,
 } from '../../src/engine/event-persister.js';
 import {
-  prepareDaemonFeatureManagedSessionContext,
   renderDaemonEvent,
 } from '../../src/daemon-cli.js';
+import { prepareDaemonFeatureManagedSessionContext } from '../../src/engine/daemon-feature-lifecycle.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const roots: string[] = [];

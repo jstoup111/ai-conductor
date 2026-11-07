@@ -1,11 +1,18 @@
 import chalk from 'chalk';
 import { runSighupPersistence } from './engine/sighup-persistence.js';
 import { v4 as uuidv4 } from 'uuid';
+import {
+  createWorkOrderGitRunner,
+  prepareDaemonFeatureManagedSessionContext,
+  runDaemonFeatureConductor,
+  runDaemonSetupTriage,
+  type DaemonFeatureLifecycleContext,
+} from './engine/daemon-feature-lifecycle.js';
 import { basename, join, dirname, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { existsSync, realpathSync } from 'node:fs';
-import { access, mkdir, readFile, readlink, unlink as unlinkFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, readlink } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { formatRetryReason, formatProgressDelta, formatRetryCounter, displayBuildPosition, formatCommitAge } from './engine/format-retry-line.js';
@@ -15,7 +22,6 @@ import {
   formatDiagnosticDuration,
   formatFeatureUsageTotal,
 } from './execution/provider-diagnostics.js';
-import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
 import { leafBranchFor } from './engine/feature-branch-identity.js';
 import { emitEngineerSignal, resolveEngineerDir } from './engine/engineer-store.js';
 import {
@@ -57,16 +63,12 @@ import type { TerminalRendererOptions } from './ui/terminal-renderer.js';
 import type { UIRenderer } from './ui/types.js';
 import { ALL_STEPS } from './engine/steps.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
-import type { StepRunner } from './engine/step-runner-types.js';
-import type { RestackResolver } from './engine/restack/restack-resolver.js';
 import { createProviderRuntimeSet } from './engine/provider-runtime.js';
 import { ProviderSessionStore } from './engine/provider-session.js';
 import type { ProviderExecutionContext } from './engine/provider-execution.js';
 import { createCandidateSafetyBoundary, providerExecutionEventCallbacks } from './engine/provider-execution.js';
 import { CODEX_PROVIDER, providerDescriptor } from './execution/provider-catalog.js';
 import {
-  prepareManagedSessionContext,
-  provisionManagedSessionProducerRoot,
   type ManagedSessionContext,
 } from './execution/managed-session-context.js';
 import { createManagedSessionObservationPreparer } from './execution/managed-session-preparation.js';
@@ -89,13 +91,6 @@ import {
 import { ensureInstallFresh, relinkSkillsForSelfBuild, resolveHarnessRoot } from './engine/install-freshness.js';
 import { skillNameRootFor } from './engine/skill-names.js';
 import { Conductor } from './engine/conductor.js';
-import { createProvenanceGuardedFinishPresentationRepair } from './engine/finish-presentation-repair.js';
-import type { OperatorParkedTermination } from './engine/conductor-options.js';
-import { createProductionAcceptanceRedExec } from './engine/acceptance-red-runner.js';
-import {
-  createProductionFinishPublicationCoordinator,
-  createProductionReleaseReadinessObserver,
-} from './engine/finish-publication-production.js';
 import { makeProductionGit as makeFinishPublicationGit } from './engine/pr-labels.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import {
@@ -162,9 +157,7 @@ import { installedHarnessVersionForConfig, resolveHarnessVersion } from './engin
 import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
 import { type GhRunner } from './engine/owner-gate/identity.js';
 import { createGithubTrackerClient, createGuardedGithubOperationRunner, makeProductionGh, runTrackerUrlRead, type TrackerClient } from './engine/tracker-client.js';
-import { bindMutationToPullRequest } from './engine/ship-draft-pr.js';
 import { createGithubIntakeAuthorization } from './engine/engineer/intake/github-issues.js';
-import { resolveFeatureRemoteMutation } from './engine/remote-git-operations.js';
 import { createDaemonHaltPrOperations } from './engine/daemon-halt-pr-operations.js';
 import { GH_VERSION_FLOOR, probeGhVersion } from './engine/gh-version-floor.js';
 import { makeMachineOwnerResolver } from './engine/owner-gate/machine-identity.js';
@@ -183,7 +176,7 @@ import { createInProcessFeatureExecutor } from './engine/feature-executor.js';
 import { createChildProcessFeatureExecutor } from './engine/child-feature-executor.js';
 import { createExecutorBroker } from './engine/executor-broker.js';
 import { sweepExecutorRecordsOnBoot } from './engine/executor-records.js';
-import { buildWorkOrder, type WorkOrder, type WorkOrderGitRunner } from './engine/work-order.js';
+import { buildWorkOrder, type WorkOrder } from './engine/work-order.js';
 import { resolveEnginePin } from './engine/engine-pin.js';
 import { resolveEngineStoreRoot } from './engine/engine-store.js';
 import { createDaemonOrderingReaders } from './engine/daemon-ordering-readers.js';
@@ -214,21 +207,10 @@ import { WorktreeLifecycleQueue } from './engine/worktree.js';
 import { isOperatorParked, reconcileStrandedParkMarkers, writeAutoPark } from './engine/park-marker.js';
 import { amendDeferredAutoParkHaltAtWorktree } from './engine/auto-park-halt.js';
 import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
-import { getStepStatus, readState } from './engine/state.js';
+import { readState } from './engine/state.js';
 import { supersedeHaltRecord } from './engine/halt-record.js';
-import {
-  runStackPreflight,
-  type RunStackPreflightOptions,
-  type StackPreflightResult,
-} from './engine/restack/stack-preflight.js';
-import {
-  createStepStatusWriteRefusalDiagnostics,
-  resolveConductorStateStore,
-} from './engine/conductor-deps.js';
-import { seedDaemonDispatchState } from './engine/daemon-state.js';
 import { makeGitRunner, originDefaultBranch, type RebaseResolver } from './engine/rebase.js';
-import { prepareWorktree } from './engine/worktree-prepare.js';
-import { runSetupFailureTriage, type GitRunner } from './engine/setup-triage.js';
+import type { GitRunner } from './engine/setup-triage.js';
 import {
   readBaseSha,
   readPersistedBaseSha,
@@ -254,7 +236,6 @@ import { writeGatedSnapshot } from './engine/gated-snapshot.js';
 import { announceGatedPr, announceGatedIssue } from './engine/gate-writeback.js';
 import {
   rekickSweep,
-  resumeRebaseFirst,
   listHaltedWorktrees,
   readHaltReason,
   hasRebaseInProgress,
@@ -269,7 +250,7 @@ import {
   resolveHaltRetention,
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
-import { HALT_MARKER, isOperatorActionHalt, readHaltClass } from './engine/halt-marker.js';
+import { isOperatorActionHalt, readHaltClass } from './engine/halt-marker.js';
 import { migrateLegacyHaltClasses } from './engine/halt-class-migration.js';
 import {
   applyPooledRepairOutcome,
@@ -327,23 +308,6 @@ export async function sweepEpisodeHalts(
         (disposition === 'legacy' ? ' (halt class: legacy)' : ''),
     );
   }
-}
-
-/** One git adapter for WorkOrder build and its executor-side verification. */
-export function createWorkOrderGitRunner(projectRoot: string): WorkOrderGitRunner {
-  return async (args) => {
-    try {
-      const { stdout, stderr } = await execFile('git', [...args], { cwd: projectRoot });
-      return { exitCode: 0, stdout, stderr };
-    } catch (error) {
-      const failure = error as { code?: number; stdout?: string; stderr?: string };
-      return {
-        exitCode: typeof failure.code === 'number' ? failure.code : 1,
-        stdout: failure.stdout ?? '',
-        stderr: failure.stderr ?? '',
-      };
-    }
-  };
 }
 
 /** Resolve the two documents carried into a daemon work order at its pinned base. */
@@ -1031,93 +995,6 @@ export function buildRetryableHaltDeps(
 }
 
 /**
- * Construct the setup retry used by both setup-triage stages. Triage must
- * re-run setup even when a prior dispatch left a valid success marker.
- *
- * `force: true` only bypasses the gate. The verification run is a real,
- * observable preparation, so it carries the same two things an ordinary
- * dispatch prepare does (adr-2026-08-26-setup-once-per-worktree-marker,
- * decisions 3 and 4):
- *
- * - the **resolved base SHA**, so a forced run that SUCCEEDS rewrites the
- *   marker and the next dispatch can skip setup. Without it `prepareWorktree`
- *   writes no marker and triage's repair is invisible to the gate. It is
- *   resolved from `base` — a required parameter, not an option — through the
- *   same `resolveDaemonBaseSha` the dispatch path uses, so the two can never
- *   stamp different bases, and so a caller cannot silently omit it.
- * - the **feature emitter**, so the `forced` reason rides the event spine into
- *   the feature's own `events.jsonl` and its rendered daemon log line, instead
- *   of falling back to a raw log write.
- *
- * The base is resolved per invocation: triage may commit a quarantine between
- * two verification runs, and each run stamps the base as it stands when it runs.
- */
-export function createForcedSetupPrepare(
-  prepare: typeof prepareWorktree,
-  log: ((message: string) => void) | undefined,
-  verbose: boolean,
-  base: {
-    projectRoot: string;
-    baseBranch: string;
-    /** Dispatcher's immutable WorkOrder base; legacy callers resolve lazily. */
-    baseSha?: string;
-    events?: ConductorEventEmitter;
-    /**
-     * The other half of the `dispatchStart` contract. `dispatchStart` and
-     * `dispatchStartTimeoutSeconds` are a matched pair: opting in without the
-     * resolved timeout drops the project's configured
-     * `dispatch_start_timeout_seconds` and silently bounds the hook at
-     * `worktree-prepare.ts`'s hardcoded default instead. Bound here so both
-     * triage stages share one value with the ordinary dispatch path.
-     */
-    dispatchStartTimeoutSeconds?: number;
-  },
-): (worktreePath: string) => Promise<void> {
-  return async (worktreePath) => {
-    const baseSha = base.baseSha ?? await resolveDaemonBaseSha(base.projectRoot, base.baseBranch);
-    await prepare(worktreePath, log, {
-      verbose,
-      force: true,
-      baseSha,
-      events: base.events,
-      dispatchStart: true,
-      dispatchStartTimeoutSeconds: base.dispatchStartTimeoutSeconds,
-    });
-  };
-}
-
-/**
- * Establish the one immutable context for a daemon feature dispatch. The
- * daemon owns both roots and the dispatch identity, so this deliberately
- * accepts no cwd-derived input.
- */
-export async function prepareDaemonFeatureManagedSessionContext(input: {
-  readonly projectRoot: string;
-  readonly worktreeRoot: string;
-  readonly featureSlug: string;
-  readonly dispatchId: string;
-  readonly provider: string;
-}): Promise<ManagedSessionContext> {
-  const provisioned = await provisionManagedSessionProducerRoot(input.worktreeRoot, input.dispatchId);
-  if (!provisioned.ok) {
-    throw new Error(`daemon managed-session context refused: ${provisioned.code}`);
-  }
-  const prepared = await prepareManagedSessionContext({
-    projectRoot: input.projectRoot,
-    worktreeRoot: input.worktreeRoot,
-    producerRoot: provisioned.path,
-    scope: { kind: 'feature', featureSlug: input.featureSlug },
-    dispatchId: input.dispatchId,
-    provider: input.provider,
-    daemonFeature: true,
-  });
-  if (!prepared.ok) {
-    throw new Error(`daemon managed-session context refused: ${prepared.code}`);
-  }
-  return prepared.context;
-}
-
-/**
  * Daemon entry (Phase 6). Drains the backlog of features with existing
  * stories+plan, running each in its own worktree via the gate loop
  * (verifyArtifacts + the engine's unconditional fresh-session-per-step),
@@ -1387,33 +1264,6 @@ export function attachFeatureEventRenderer(
   return () => {
     for (const type of renderableEvents) featureEvents.off(type, renderEvent);
   };
-}
-
-/**
- * Run the stack repair boundary that precedes every daemon re-kick.
- *
- * Keeping this small boundary exported lets the dispatch-level test exercise
- * the same call that protects `runConductorInWorktree`, rather than proving
- * only `runStackPreflight` in isolation.
- */
-export async function runDaemonRekickStackPreflight(
-  options: RunStackPreflightOptions,
-  log: (message: string) => void,
-): Promise<StackPreflightResult> {
-  const result = await runStackPreflight(options);
-  if (result.kind === 'halted' || result.kind === 'unavailable') {
-    log(`stack preflight ${options.slug}: ${result.kind} — ${result.detail}`);
-  }
-  return result;
-}
-
-/** The daemon's provider seam for resolver dispatches, including restack hand-offs. */
-export function restackResolverForStepRunner(
-  stepRunner: Pick<StepRunner, 'resolveRebaseConflict'>,
-): RestackResolver | undefined {
-  return stepRunner.resolveRebaseConflict === undefined
-    ? undefined
-    : (context) => stepRunner.resolveRebaseConflict!(context);
 }
 
 export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResult | undefined> {
@@ -2042,343 +1892,29 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     for (const w of memoryResolveCtx.warnings) log(`WARNING: ${w}`);
   }
 
-  const runConductorInWorktree = async (
-    wt: FeatureWorktree,
-    item: BacklogItem,
-    providerExecution = createProviderExecution(),
-    featureEvents: ConductorEventEmitter = events,
-    featureLog = log,
-    sessionId = uuidv4(),
-  ) => {
-    const pipelineDir = join(wt.path, '.pipeline');
-    await mkdir(pipelineDir, { recursive: true });
-    const selectedRuntime = providerExecution.runtimes.get(
-      providerExecution.configuredProviders[0],
-    );
-
-    const stateFilePath = join(pipelineDir, 'conduct-state.json');
-    const stateStore = resolveConductorStateStore(
-      stateFilePath,
-      undefined,
-      createStepStatusWriteRefusalDiagnostics(featureEvents),
-    );
-    const baseState = await seedDaemonDispatchState(pipelineDir, item, stateStore);
-
-    const stepRunner = new DefaultStepRunner(
-      selectedRuntime.provider,
-      sessionId,
-      wt.path,
-      {
-        featureDesc: item.slug,
-        projectRoot,
-        pipelineDir,
-        config,
-        modelPolicy: selectedRuntime.policy,
-        mode: 'auto',
-        providerExecution,
-        events: featureEvents,
-        log: featureLog,
-        worktreeLifecycle,
-        skillNameRoot: skillNameRootFor({ isSelfHost, worktreePath: wt.path, harnessRoot: await resolveHarnessRoot() }),
-      },
-    );
-
-    // Wire AuditTrailWriter: appends friction/positive-evidence records to
-    // <worktree>/.pipeline/audit-trail/events.jsonl, rooted at the worktree
-    // path (never process.cwd() or the daemon's projectRoot) so the audit
-    // trail preserves this feature's run history inside its own worktree.
-    // Daemon runs the engine in-process, so one writer per run covers all
-    // steps for this worktree.
-    const auditWriter = new AuditTrailWriter(wt.path);
-    auditWriter.subscribe(featureEvents);
-
-    const finishPublicationGit = makeFinishPublicationGit();
-    const finishPublicationGh = makeProductionGh();
-    const conductor = new Conductor({
-      stateFilePath,
-      stateStore,
-      stepRunner,
-      events: featureEvents,
-      mode: 'auto',
-      config,
-      modelPolicy: selectedRuntime.policy,
-      providerExecution,
-      effectiveDaemonConcurrency: daemonConcurrency.concurrency,
-      projectRoot: wt.path,
-      acceptanceRedExec: createProductionAcceptanceRedExec(),
-      // Daemon FINISH shares the same engine-owned coordinator as foreground
-      // conduct; its git/GitHub boundaries remain injectable at this root.
-      finishPublication: createProductionFinishPublicationCoordinator({
-        projectRoot: wt.path,
-        stateFilePath,
-        baseBranch,
-        prTemplateBytes: config?.pr_template_bytes,
-        git: finishPublicationGit,
-        gh: finishPublicationGh,
-        events: featureEvents,
-        flushSessionEvents: featureEventFlushers.get(featureEvents),
-        repairPresentation: createProvenanceGuardedFinishPresentationRepair({
-          projectRoot: wt.path,
-          git: finishPublicationGit,
-          gh: finishPublicationGh,
-          baseBranch,
-          log: featureLog,
-          events: featureEvents,
-        }),
-        observeReleaseReadiness: createProductionReleaseReadinessObserver({
-          projectRoot: wt.path,
-          config,
-        }),
-      }),
-      worktreeBranch: wt.branch,
-      log: featureLog,
-      // Self-host guardrails (Phase 6): activate the bundle only when this daemon
-      // is building the harness itself. `baseBranch` feeds the release-artifact
-      // migration classifier (`<base>...HEAD`).
-      selfHost: isSelfHost,
-      liveBoundaryCoordinator,
-      baseBranch,
-      verifyArtifacts: true,
-      // Resume from the first unsatisfied step rather than hardcoding the entry
-      // point. The engine fast-forwards artifact-satisfied DECIDE work before
-      // entering BUILD. A re-dispatch with recorded BUILD/SHIP progress resumes
-      // at its real next step (e.g. prd_audit / finish), rather than re-entering
-      // at acceptance_specs every cycle. (`fromStep` forced acceptance_specs
-      // and, being explicitly targeted, re-ran it on every resume.)
-      resume: true,
-      // Enable daemon-specific lifecycle behavior in the in-process conductor.
-      daemon: true,
-      featureSlug: item.slug,
-      operatorParkBoundary: () =>
-        isOperatorParked(projectRoot, item.slug, (error) =>
-          featureLog(`operator park marker read failed: ${error.message}`),
-        ),
-      rateLimitEpisode,
-      readOnlyReviewCapabilities,
-      // Task 22: Register in-flight wait AbortControllers with daemon-level handler
-      // so process-level SIGTERM can abort all waits across N concurrent conductors.
-      registerAbortController: (controller) => allWaitSignals.add(controller),
-    });
-
-    activeConductors.add(conductor);
-    try {
-
-    // FR-12 (ADR-013): a re-kick dropped a `.pipeline/REKICK` sentinel. Integrate
-    // the advanced base FIRST — run 9.0's rebase-onto-latest BEFORE the conductor
-    // resumes the pending gate, so a gate halt (e.g. prd-audit) re-verifies on the
-    // new base instead of the stale one. One-shot (sentinel consumed). A
-    // re-conflict re-parks via 9.0's existing HALT path — skip `conductor.run()`.
-    const ranManualTest = getStepStatus(baseState, 'manual_test') !== 'skipped';
-    // Task 8 (operator-park): a human-placed halt must survive re-kick sweeps
-    // unconditionally — that includes NOT consuming a pending `.pipeline/REKICK`
-    // sentinel. Checked BEFORE `resumeRebaseFirst` (which is one-shot: it
-    // deletes the sentinel up front regardless of outcome) so a parked
-    // worktree's sentinel is left completely untouched for a human to inspect
-    // or for the eventual un-park to resume normally.
-    const parked = await isOperatorParked(projectRoot, item.slug);
-    if (parked) {
-      featureLog(`re-kick resume ${item.slug}: skipped — operator-parked (sentinel preserved)`);
-      const termination: OperatorParkedTermination = {
-        kind: 'operator-parked',
-        boundary: { kind: 'pre-first-unit' },
-      };
-      return termination;
-    }
-
-    // A stacked feature's closure refs are durable state, not a conductor
-    // concern.  Recover/repair them before the ordinary re-kick path consumes
-    // REKICK or judges the active child.  In particular, a repair which has a
-    // chained base refresh owns consumption of REKICK through its journal;
-    // otherwise resumeRebaseFirst retains its historical one-shot behavior.
-    const rekickPath = join(pipelineDir, 'REKICK');
-    const stackPreflight = await runDaemonRekickStackPreflight({
-      worktree: wt.path,
-      slug: item.slug,
-      baseRefreshDue: existsSync(rekickPath),
-      consumeRekick: async () => {
-        await unlinkFile(rekickPath).catch((error: unknown) => {
-          const code = (error as NodeJS.ErrnoException).code;
-          if (code !== 'ENOENT') throw error;
-        });
-      },
-      rearmRekick: async () => {
-        await writeFile(rekickPath, '');
-      },
-      events: featureEvents,
-      resolver: restackResolverForStepRunner(stepRunner),
-      resolverCap: resolveRebaseResolutionAttempts(config),
-      // Authorizations are consumed by the daemon's pre-dispatch maintenance
-      // boundary. A record left by an already-cleared halt can be resolved
-      // here, after recovery; never supersede a still-live halt record.
-      prepareResume: async () => {
-        if (await access(join(wt.path, HALT_MARKER)).then(() => true).catch(() => false)) return;
-        try {
-          await supersedeHaltRecord(wt.path, item.slug, 'stack-preflight');
-        } catch (error) {
-          featureLog(`stack preflight could not supersede halt record: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      },
-    }, featureLog);
-    if (stackPreflight.kind === 'halted' || stackPreflight.kind === 'unavailable') {
-      return;
-    }
-    const resume = await resumeRebaseFirst({
-      worktreePath: wt.path,
-      localBase: baseBranch,
-      events: featureEvents,
-      ranManualTest,
-      // #300: give the play-forward conflict the SAME gated /rebase attempts the
-      // finish-time step gets, before parking for a human.
-      resolveAttempts: resolveRebaseResolutionAttempts(config),
-      resolveConflict: stepRunner.resolveRebaseConflict
-        ? (ctx) => stepRunner.resolveRebaseConflict(ctx)
-        : undefined,
-      // ADR-2026-07-09-mid-run-merged-pr-guard: pass the gh runner and recorded PR URL
-      // so the guard can check if the feature was merged out-of-band before rebasing.
-      runGh: ownerGh,
-      prUrl: baseState.pr_url,
-      slug: item.slug,
-      log: featureLog,
-    });
-    if (resume === 'halted') return; // re-parked: HALT re-written, do not resume the gate
-    if (resume === 'already_shipped') {
-      // The merged record was verified on merged history. Do not manufacture
-      // local success markers; let the ordinary completion boundary converge.
-      featureLog(`merged shipment evidence verified for ${item.slug}; continuing normal completion`);
-    }
-
-    if (shutdownRequested) return;
-    const conductorTermination = await conductor.run();
-    if (conductorTermination) {
-      return conductorTermination;
-    }
-
-    // Link & close the originating issue (intake specs only): once the
-    // implementation PR exists, add `Closes owner/repo#N` to its body so GitHub
-    // auto-closes the issue when the PR merges to the default branch. Best-effort
-    // and idempotent — a gh failure or a halted build (no pr_url) never affects
-    // the feature outcome.
-    const finalState = await readState(stateFilePath);
-    const implementationPrUrl = finalState.ok ? finalState.value.pr_url : undefined;
-    const ghRunner = makeProductionGh();
-    // The resolved context is bound to the feature branch ref; the `Closes`
-    // edit targets the implementation PR, so rebind to it or the owner gate
-    // refuses the edit as `invalid-target` (#2703).
-    const featureMutation = item.sourceRef && implementationPrUrl
-      ? await resolveFeatureRemoteMutation({
-        cwd: wt.path,
-        slug: item.slug,
-        branch: wt.branch,
-        git: (args) => finishPublicationGit(args, { cwd: wt.path }),
-        gh: ghRunner,
-      })
-      : undefined;
-    const closeIssueMutation = featureMutation && implementationPrUrl
-      ? bindMutationToPullRequest(featureMutation, implementationPrUrl)
-      : undefined;
-    await closeIssueOnImplementationMerge({
-      gh: ghRunner,
-      operations: closeIssueMutation
-        ? createGuardedGithubOperationRunner(ghRunner, {
-          cwd: wt.path,
-          mutation: closeIssueMutation,
-          events: featureEvents,
-        })
-        : undefined,
-      sourceRef: item.sourceRef,
-      prUrl: implementationPrUrl,
-      cwd: wt.path,
-      slug: item.slug,
-      log: featureLog,
-    });
-    } finally {
-      activeConductors.delete(conductor);
-    }
-
-  };
-
-  // Task 15: Production wiring of setup-failure triage in daemon-cli.
-  // Construct runSetupTriage with real deps: git runner for worktree,
-  // prepareWorktree for retry, and fix-session dispatcher that constructs
-  // fresh DefaultStepRunner per dispatch (uuid session).
-  const runSetupTriage = async (
-    error: any, // SetupFailureError
-    worktree: FeatureWorktree,
-    item: BacklogItem,
-    providerExecution = createProviderExecution(),
-    featureLog = log,
-    featureEvents?: ConductorEventEmitter,
-    workOrderBaseSha?: string,
-  ) => {
-    // Kill-switch for testing: prevent actual LLM dispatch
-    if (process.env.CONDUCT_SETUP_TRIAGE_KILLSWITCH) {
-      return { kind: 'park' as const, outputTail: 'setup-triage disabled by env killswitch' };
-    }
-
-    // Create a git runner rooted at the worktree path
-    const git: GitRunner = makeGitRunner(worktree.path);
-
-    // Inject prepareWorktree for retry after quarantine. The base binding is
-    // what makes a successful verification rewrite the setup marker, and the
-    // feature emitter is what puts its `forced` reason on this feature's own
-    // event spine — both stages' `runPrepare` is this one callback.
-    const runPrepare = createForcedSetupPrepare(
-      prepareWorktree,
-      featureLog,
-      config?.daemon_verbose ?? false,
-      {
-        projectRoot,
-        baseBranch,
-        baseSha: workOrderBaseSha,
-        events: featureEvents,
-        // Same resolved value the ordinary dispatch path threads into
-        // makeFeatureRunnerDeps below, so triage's hook and dispatch's hook
-        // can never be bounded differently.
-        dispatchStartTimeoutSeconds: resolveDispatchStartTimeoutSeconds(config),
-      },
-    );
-
-    // The injected callback is called only by stage 2 of the engine-owned
-    // ladder, after stage 1 proves setup still fails at a clean HEAD.
-    const dispatchFixSession = async () => {
-      // Construct a fresh DefaultStepRunner for this fix session
-      const sessionId = uuidv4();
-      const selectedRuntime = providerExecution.runtimes.get(
-        providerExecution.configuredProviders[0],
-      );
-      const stepRunner = new DefaultStepRunner(
-        selectedRuntime.provider,
-        sessionId,
-        worktree.path,
-        {
-          featureDesc: `setup-fix-${item.slug}`,
-          config,
-          modelPolicy: selectedRuntime.policy,
-        mode: 'auto',
-        providerExecution,
-        log: featureLog,
-        skillNameRoot: skillNameRootFor({ isSelfHost, worktreePath: worktree.path, harnessRoot: await resolveHarnessRoot() }),
-        },
-      );
-      featureLog(`[setup-triage] fix-session dispatched for ${item.slug} (session ${sessionId})`);
-      return stepRunner.resolveSetupFailure({
-        worktreePath: worktree.path,
-        outputTail: error.outputTail ?? '',
-        slug: item.slug,
-      });
-    };
-
-    return runSetupFailureTriage(
-      git,
-      worktree.path,
-      item.slug,
-      error,
-      runPrepare,
-      dispatchFixSession,
-      { log: featureLog },
-      featureEvents,
-    );
-  };
+  const lifecycleContext = (): DaemonFeatureLifecycleContext => ({
+    projectRoot,
+    config,
+    baseBranch,
+    isSelfHost,
+    effectiveDaemonConcurrency: daemonConcurrency.concurrency,
+    worktreeLifecycle,
+    rateLimitEpisode,
+    readOnlyReviewCapabilities,
+    liveBoundaryCoordinator,
+    ownerGh,
+    createProviderExecution,
+    events,
+    log,
+    supervisorState: {
+      activeConductors,
+      allWaitSignals,
+      featureEventFlushers,
+      isShutdownRequested: () => shutdownRequested,
+    },
+  });
+  const runConductorInWorktree = async (wt: FeatureWorktree, item: BacklogItem, providerExecution = createProviderExecution(), featureEvents: ConductorEventEmitter = events, featureLog = log, sessionId = uuidv4()) => runDaemonFeatureConductor(lifecycleContext(), wt, item, providerExecution, featureEvents, featureLog, sessionId);
+  const runSetupTriage = async (error: any, worktree: FeatureWorktree, item: BacklogItem, providerExecution = createProviderExecution(), featureLog = log, featureEvents?: ConductorEventEmitter, workOrderBaseSha?: string) => runDaemonSetupTriage(lifecycleContext(), error, worktree, item, providerExecution, featureLog, featureEvents, workOrderBaseSha);
 
   // The same registry backs dispatcher claims and every maintenance liveness
   // check. A sweep may observe a terminal PR while its executor still owns the

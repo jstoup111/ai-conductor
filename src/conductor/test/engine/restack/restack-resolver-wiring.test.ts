@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { restackResolverForStepRunner } from '../../../src/daemon-cli.js';
+import { restackResolverForStepRunner } from '../../../src/engine/daemon-feature-lifecycle.js';
 import { parseChildId } from '../../../src/engine/child-context.js';
 import type { ExecuteProviderCandidatesInput, ProviderExecutionResult } from '../../../src/engine/provider-execution.js';
 import { ProviderRuntimeSet } from '../../../src/engine/provider-runtime.js';
