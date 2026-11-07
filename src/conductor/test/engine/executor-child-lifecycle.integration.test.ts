@@ -1,5 +1,5 @@
-// Covers: task:8, task:9
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+// Covers: task:8, task:9, task:10
+import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
@@ -64,6 +64,7 @@ import { WorktreeLifecycleQueue } from '../../src/engine/worktree.js';
 import type { WorkOrder } from '../../src/engine/work-order.js';
 import { createInMemoryExecutorFork, useTempEngineStore } from '../fixtures/in-memory-executor-fork.js';
 import { commitAll, initTestRepo } from '../fixtures/git-repo.js';
+import { writeSliceTopologyFixture } from './slice-topology-fixture.js';
 
 const roots: string[] = [];
 let engineStore: Awaited<ReturnType<typeof useTempEngineStore>> | undefined;
@@ -132,6 +133,23 @@ async function fixture(slug: string, { durableChildState = true }: { durableChil
   return { root, order, rootEvents, execute: () => executor.execute(order) };
 }
 
+async function prepareStackedRekick(subject: Awaited<ReturnType<typeof fixture>>): Promise<string> {
+  const worktree = join(subject.root, '.worktrees', subject.order.slug);
+  await mkdir(join(subject.root, '.worktrees'), { recursive: true });
+  await execa('git', ['worktree', 'add', '-b', `feat/daemon-${subject.order.slug}`, worktree, subject.order.baseSha], {
+    cwd: subject.root,
+  });
+  await mkdir(join(worktree, '.pipeline', 'children', '1'), { recursive: true });
+  await writeFile(join(worktree, '.pipeline', 'REKICK'), '');
+  await writeSliceTopologyFixture(worktree, {
+    slug: subject.order.slug,
+    sliceMembership: { taskSlices: { T1: 1, T2: 2 }, titles: ['First', 'Second'] },
+    storyOwnership: { S1: 1, S2: 2 },
+  });
+  seams.prepareWorktree.mockResolvedValue(undefined);
+  return worktree;
+}
+
 describe('executor child shared lifecycle', () => {
   it('uses its admitted stacked-dispatch lease once and runs the shared conductor', async () => {
     const subject = await fixture('stacked-child');
@@ -198,5 +216,32 @@ describe('executor child shared lifecycle', () => {
 
     expect(unparked.status).not.toBe('parked');
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs stacked REKICK preflight before resumeRebaseFirst in the child lifecycle', async () => {
+    const subject = await fixture('stacked-rekick-order');
+    const worktree = await prepareStackedRekick(subject);
+    const run = vi.spyOn(Conductor.prototype, 'run').mockResolvedValue(undefined);
+
+    await subject.execute();
+
+    await expect(readFile(join(worktree, '.pipeline', 'REKICK'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it('halts a refused stacked REKICK preflight with its detail before resumeRebaseFirst', async () => {
+    const subject = await fixture('stacked-rekick-refusal');
+    const worktree = await prepareStackedRekick(subject);
+    await unlink(join(worktree, '.docs', 'plans', `${subject.order.slug}.md`));
+    const run = vi.spyOn(Conductor.prototype, 'run').mockResolvedValue(undefined);
+
+    const outcome = await subject.execute();
+
+    const detail = 'cannot resolve stack cursor: plan-missing';
+    expect(outcome).toMatchObject({ status: 'halted', reason: expect.stringContaining(detail) });
+    await expect(readFile(join(worktree, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(detail);
+    await expect(readFile(join(worktree, '.pipeline', 'REKICK'), 'utf8')).resolves.toBe('');
+    expect(run).not.toHaveBeenCalled();
+    expect(outcome.reason).not.toContain('loop ended without DONE or HALT marker');
   });
 });
