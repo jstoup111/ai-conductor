@@ -1,4 +1,4 @@
-// Covers: task:8, task:9, task:10, task:11
+// Covers: task:8, task:9, task:10, task:11, task:12
 import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -10,6 +10,7 @@ const seams = vi.hoisted(() => ({
   prepareWorktree: vi.fn(),
   acquireFeatureDispatchLease: vi.fn(),
   resumeRebaseFirst: vi.fn(),
+  finishPublicationBaseBranches: [] as string[],
 }));
 
 vi.mock('../../src/engine/config.js', async (importOriginal) => {
@@ -64,6 +65,17 @@ vi.mock('../../src/engine/daemon-rekick.js', async (importOriginal) => {
   };
 });
 
+vi.mock('../../src/engine/finish-publication-production.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/finish-publication-production.js')>();
+  return {
+    ...actual,
+    createProductionFinishPublicationCoordinator: (...args: Parameters<typeof actual.createProductionFinishPublicationCoordinator>) => {
+      seams.finishPublicationBaseBranches.push(args[0].baseBranch);
+      return actual.createProductionFinishPublicationCoordinator(...args);
+    },
+  };
+});
+
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { createChildProcessFeatureExecutor } from '../../src/engine/child-feature-executor.js';
 import { Conductor } from '../../src/engine/conductor.js';
@@ -83,6 +95,7 @@ let engineStore: Awaited<ReturnType<typeof useTempEngineStore>> | undefined;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  seams.finishPublicationBaseBranches.length = 0;
 });
 
 afterEach(async () => {
@@ -288,5 +301,33 @@ describe('executor child shared lifecycle', () => {
 
     expect(seams.resumeRebaseFirst).not.toHaveBeenCalled();
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it('rebases and targets finish publication at the order trunk base branch on REKICK', async () => {
+    const subject = await fixture('trunk-rekick-publication', { durableChildState: false });
+    subject.order.baseBranch = 'trunk';
+    await execa('git', ['branch', 'trunk', subject.order.baseSha], { cwd: subject.root });
+    await prepareRekick(subject);
+    vi.spyOn(Conductor.prototype, 'run').mockResolvedValue(undefined);
+
+    await subject.execute();
+
+    expect(seams.resumeRebaseFirst).toHaveBeenCalledWith(expect.objectContaining({ localBase: 'trunk' }));
+    expect(seams.finishPublicationBaseBranches).toEqual(['trunk']);
+  });
+
+  it('uses the origin default for REKICK rebase and finish publication when the order has no base branch', async () => {
+    const subject = await fixture('origin-default-rekick-publication', { durableChildState: false });
+    delete subject.order.baseBranch;
+    await execa('git', ['branch', 'trunk', subject.order.baseSha], { cwd: subject.root });
+    await execa('git', ['update-ref', 'refs/remotes/origin/trunk', subject.order.baseSha], { cwd: subject.root });
+    await execa('git', ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk'], { cwd: subject.root });
+    await prepareRekick(subject);
+    vi.spyOn(Conductor.prototype, 'run').mockResolvedValue(undefined);
+
+    await subject.execute();
+
+    expect(seams.resumeRebaseFirst).toHaveBeenCalledWith(expect.objectContaining({ localBase: 'trunk' }));
+    expect(seams.finishPublicationBaseBranches).toEqual(['trunk']);
   });
 });
