@@ -65,6 +65,13 @@ Concretely:
 4. Retry semantics are unchanged: the feature stays stopped until the operator clears the
    marker. This ADR does not introduce automatic retry.
 
+> **Amended 2026-11-07 by #1929:** The invariant no longer covers every non-done state. A
+> `preempted` outcome, where the daemon stops a running feature at a step boundary so that
+> higher-priority work can take its slot, leaves no operator marker. Its resume condition is
+> ordinary backlog order, not an operator action. Every other non-done outcome still leaves an
+> operator-clearable marker, as above. See `adr-2026-11-07-daemon-step-boundary-preemption`
+> decision 9.
+
 ## Consequences
 
 ### Positive
