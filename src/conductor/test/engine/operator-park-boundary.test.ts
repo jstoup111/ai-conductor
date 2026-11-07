@@ -305,7 +305,7 @@ describe('operator park boundary contract', () => {
 
     const result = await conductor.run();
     persister.stop();
-    const persistedEvents = (await readFile(eventsPath, 'utf8')).trim().split('\n').map(JSON.parse);
+    const persistedEvents = (await readFile(eventsPath, 'utf8')).trim().split('\n').map((text) => JSON.parse(text));
 
     expect({ result, steps: run.mock.calls.map(([step]) => step), persistedEvents }).toEqual({
       result: { kind: 'preempted', boundary: { kind: 'step', name: 'memory' } },

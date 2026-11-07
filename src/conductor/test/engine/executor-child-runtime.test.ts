@@ -77,9 +77,9 @@ describe('executor child runtime lifecycle composition', () => {
     });
 
     await expect(boundaries.operatorParkBoundary()).resolves.toBe(false);
-    expect(boundaries.preemptionRequested()).toBe(false);
+    expect(boundaries.preemptionRequested!()).toBe(false);
     yielded = true;
-    expect(boundaries.preemptionRequested()).toBe(true);
+    expect(boundaries.preemptionRequested!()).toBe(true);
   });
 
   it('seeds the order tier and track into conduct-state before the conductor runs', async () => {

@@ -921,7 +921,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     featureDeps.daemon = true;
     featureDeps.runConductor = vi.fn(async () => ({
       kind: 'preempted' as const,
-      boundary: { kind: 'step' as const, name: 'build' },
+      boundary: { kind: 'step' as const, name: 'build' as const },
     }));
     featureDeps.readOutcome = readOutcome;
     featureDeps.teardownWorktree = teardownWorktree;
