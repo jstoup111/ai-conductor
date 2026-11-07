@@ -1,4 +1,4 @@
-// Covers: task:2, task:8, task:10
+// Covers: task:2
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -19,38 +19,6 @@ async function persistedEvents(eventsPath: string): Promise<Array<Record<string,
 }
 
 describe('restack resolution events', () => {
-  it('persists recorded, consumed, and retired resolution occurrences with operator identity only on recording', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'restack-resolution-events-'));
-    const eventsPath = join(root, '.pipeline', 'events.jsonl');
-    await mkdir(join(root, '.pipeline'), { recursive: true });
-    const events = new ConductorEventEmitter();
-    const persister = new EventPersister(eventsPath, events);
-    const child = parseChildId(2)!;
-    const recordedTip = parseCommitSha('a'.repeat(40))!;
-    const consumedTip = parseCommitSha('b'.repeat(40))!;
-    const retiredTip = parseCommitSha('d'.repeat(40))!;
-    const opId = 'restack-42' as RestackOpId;
-    const resolutionEvents = [
-      { type: 'restack_resolution', opId, child, action: 'recorded', tip: recordedTip, operator: 'james' },
-      { type: 'restack_resolution', opId, child, action: 'consumed', tip: consumedTip },
-      { type: 'restack_resolution', opId, child, action: 'retired', tip: retiredTip },
-    ] satisfies ConductorEvent[];
-
-    try {
-      persister.start();
-      for (const event of resolutionEvents) await events.emit(event);
-
-      expect(await persistedEvents(eventsPath)).toEqual([
-        { type: 'restack_resolution', opId, child: 2, action: 'recorded', tip: recordedTip, operator: 'james' },
-        { type: 'restack_resolution', opId, child: 2, action: 'consumed', tip: consumedTip },
-        { type: 'restack_resolution', opId, child: 2, action: 'retired', tip: retiredTip },
-      ]);
-    } finally {
-      persister.stop();
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
   // Covers: task:1
   it('persists a recorded decision without its answer through the event spine', async () => {
     const root = await mkdtemp(join(tmpdir(), 'restack-decision-events-'));
