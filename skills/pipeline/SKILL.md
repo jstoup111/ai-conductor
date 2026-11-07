@@ -130,8 +130,8 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
                   test for a tagged check is never `--plan-gap`. A check that needs a file the task's
                   `**Files:**` omits (a call site, union member, registry, or test) is not a plan gap:
                   change the file and add a `Scope: <path> — <why>` commit trailer. Use
-                  `conduct task done <id> --plan-gap <n> --reason <text>` and report the HALT only when an
-                  untagged check cannot be met without contradicting a story, the plan, or an ADR.
+                  `conduct task done <id> --plan-gap <n> --reason <text>` and report the HALT only when no code
+                  change can meet an untagged check or meeting it would contradict a story, the plan, or an ADR.
                   A `[test]` citation whose title cannot be provenance-verified as added since the
                   task began closes as `pending-judgement`; the conductor judges it when the BUILD session ends.
                   A refused citation returns as a retry hint naming the check and the judge's reason. Repair it by
@@ -271,7 +271,7 @@ stamps `in_progress` on dispatch, keyed off the dispatch prompt's line-1 `Task: 
 `Task: none` marker (see Per-Task Execution above). At ordinary BUILD closure, use
 `conduct task done <id> --done-when <n>=<evidence>` for every declared check so the engine-owned
 `completeTaskDoneWhen` writer records the task-level proof; use `conduct task done <id> --plan-gap <n> --reason <text>`
-when an approved-plan check cannot be met without contradicting a story, the plan, or an ADR. The CLI still supports operator recovery (for example,
+when no code change can meet an approved-plan check or meeting it would contradict a story, the plan, or an ADR. The CLI still supports operator recovery (for example,
 resetting a task after a crash), but the evidence and plan-gap forms are the normal per-task flow.
 You report the subagent's result (PASS/FAIL) to inform the conductor's logging and audit trail.
 
