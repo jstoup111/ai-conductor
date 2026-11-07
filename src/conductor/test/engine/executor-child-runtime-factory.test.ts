@@ -13,7 +13,7 @@ const order: WorkOrder = {
   repository: 'repo',
   slug: 'feature',
   baseSha: 'a'.repeat(40),
-  engineVersionId: '20261107T000000Z-0123456789ab',
+  engineVersionId: '20261107T000000Z-0123456789ab' as WorkOrder['engineVersionId'],
   manifest: [],
 };
 
