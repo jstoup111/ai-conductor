@@ -36,7 +36,7 @@ import { planRestackRanges } from './restack-plan.js';
 import { checkPathOwnership, parentOverlapPaths } from './restack-ownership.js';
 import { replayChildRange, RemBlockBodyMismatchError, type CommitterStamp } from './restack-replay.js';
 import { replayCandidateSubjects, resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
-import { conflictDeleteLines, conflictParentRefFor, conflictRecordRefFor, consumeRecordedResolution, decisionDeleteLines, retireRecordedResolution } from './restack-conflict-record.js';
+import { conflictDeleteLines, conflictFlattenedTipRefFor, conflictParentRefFor, conflictRecordRefFor, consumeRecordedResolution, decisionDeleteLines, readConflictRecord, retireRecordedResolution } from './restack-conflict-record.js';
 import { prepareRestackDecisionDelivery, restackDecisionDetailLines } from './restack-decision-delivery.js';
 import { haltRecordedRestackConflict } from './restack-conflict-halt.js';
 import { haltRecordPathFor } from './halt-record-bookkeeping.js';
@@ -353,6 +353,13 @@ export async function appliedTransactionLines(
   }
   if (journal.journal.consumedResolution !== undefined) {
     lines.push(...conflictDeleteLines(journal.slug, journal.journal.consumedResolution));
+    const conflict = await readConflictRecord(worktree, journal.slug, { git });
+    if (conflict.kind !== 'record' || conflict.blob !== journal.journal.consumedResolution.record) {
+      throw new Error('cannot delete flattened tip for a changed conflict record');
+    }
+    if (conflict.record.flattenedTip !== undefined) {
+      lines.push(`delete ${conflictFlattenedTipRefFor(journal.slug)} ${conflict.record.flattenedTip}`);
+    }
   }
   if (journal.journal.deliveredDecision !== undefined) {
     const decision = journal.journal.deliveredDecision;
@@ -362,6 +369,13 @@ export async function appliedTransactionLines(
     }));
     lines.push(`delete ${conflictRecordRefFor(journal.slug)} ${decision.record}`);
     lines.push(`delete ${conflictParentRefFor(journal.slug)} ${decision.parent}`);
+    const conflict = await readConflictRecord(worktree, journal.slug, { git });
+    if (conflict.kind !== 'record' || conflict.blob !== decision.record) {
+      throw new Error('cannot delete flattened tip for a changed conflict record');
+    }
+    if (conflict.record.flattenedTip !== undefined) {
+      lines.push(`delete ${conflictFlattenedTipRefFor(journal.slug)} ${conflict.record.flattenedTip}`);
+    }
   }
   lines.push(...journalStateUpdateLines(journal, blob, 'applied'));
   return { journal: { slug: journal.slug, blob, journal: next }, lines };
