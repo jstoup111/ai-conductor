@@ -432,9 +432,11 @@ describe('build-review test-quality preflight', () => {
     });
   });
 
-  it('keeps test support at HEAD and refuses a support-only counterfactual', async () => {
+  it('settles a test-only diff as a judged approved exception without a counterfactual', async () => {
+    const createCheckout = vi.fn(async () => {});
     const readMergeBaseFile = vi.fn(async () => 'BASE production');
     const writeFile = vi.fn(async () => {});
+    const writeCache = vi.fn(async () => {});
     const runScoped = vi.fn(async () => ({ kind: 'nonzero-exit' as const, exitCode: 1, stdout: 'RED', stderr: '' }));
     const diff = [
       'diff --git a/test/engine/memory-writer-helper.ts b/test/engine/memory-writer-helper.ts',
@@ -445,13 +447,15 @@ describe('build-review test-quality preflight', () => {
 
     const result = await materializeTautologyPreflight({
       scopedWorkingDirectory: '/feature', mergeBase: 'base', headSha: 'head', diff,
-      createCheckout: async () => {}, readMergeBaseFile, writeFile, runScoped, removeCheckout: async () => {},
+      createCheckout, readMergeBaseFile, writeFile, runScoped, removeCheckout: async () => {}, writeCache,
     });
 
     expect(result).toMatchObject({
-      classification: 'infrastructure-failure', reason: 'no-production-changes',
-      changedTestSelectors: ['test/engine/build-review-cli.test.ts'],
+      classification: 'approved-exception', exception: 'test-only-change', cacheable: true,
+      changedTestSelectors: ['test/engine/build-review-cli.test.ts'], revertedProductionManifest: [],
     });
+    expect(writeCache).toHaveBeenCalledWith(expect.any(String), result);
+    expect(createCheckout).not.toHaveBeenCalled();
     expect(readMergeBaseFile).not.toHaveBeenCalled();
     expect(writeFile).not.toHaveBeenCalled();
     expect(runScoped).not.toHaveBeenCalled();
@@ -567,7 +571,6 @@ describe('build-review test-quality preflight', () => {
 
   it.each([
     ['no changed tests', () => ({ diff: 'not a git diff' }), 'no-changed-tests'],
-    ['no production changes', () => ({ diff: 'diff --git a/test/a.test.ts b/test/a.test.ts' }), 'no-production-changes'],
     ['missing scoped configuration', () => ({ scopedWorkingDirectory: ' ' }), 'missing-scoped-configuration'],
     ['materialization failure', () => ({ createCheckout: async () => { throw new Error('disk full'); } }), 'materialization-failed'],
     ['missing merge-base file', () => ({ readMergeBaseFile: async () => undefined }), 'missing-merge-base-file'],
