@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "slug": "new-dependencies-enter-the-tree-with-no-review-of-",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/new-dependencies-enter-the-tree-with-no-review-of-.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/new-dependencies-enter-the-tree-with-no-review-of-.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/new-dependencies-enter-the-tree-with-no-review-of-.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/2026-11-07-new-dependencies-enter-the-tree-with-no-review-of-.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/new-dependencies-enter-the-tree-with-no-review-of-.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/new-dependencies-enter-the-tree-with-no-review-of-.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/new-dependencies-enter-the-tree-with-no-review-of-.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/new-dependencies-enter-the-tree-with-no-review-of-.md"
+    }
+  ]
+}
