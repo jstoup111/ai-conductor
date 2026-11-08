@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, task:8
 // ─────────────────────────────────────────────────────────────────────────────
 // Test: daemon-cli wires the REAL progress-gated cross-dispatch re-kick
 // (T8/T9/T10, daemon-halts-a-build-that-is-making-forward-progre) into the

@@ -1,4 +1,4 @@
-// Covers: task:3
+// Covers: task:3, task:9
 // ─────────────────────────────────────────────────────────────────────────────
 // Test: daemon-cli wires the REAL episode-halt tracker into the daemon loop
 // (Task 20, daemon-api-rate-limit-episode-cascades-into-mass-h).
