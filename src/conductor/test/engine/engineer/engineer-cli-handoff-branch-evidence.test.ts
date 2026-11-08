@@ -301,6 +301,11 @@ describe('engineer handoff — branch evidence recording on local-commit/pr-skip
       { command: 'git', args: ['push', '-u', 'origin', `HEAD:refs/heads/${branch}`], cwd: repoPath },
       {
         command: 'gh',
+        args: ['pr', 'view', branch, '--json', 'url,isDraft'],
+        cwd: worktree,
+      },
+      {
+        command: 'gh',
         args: expect.arrayContaining(['pr', 'create', '--head', branch]),
         cwd: repoPath,
       },

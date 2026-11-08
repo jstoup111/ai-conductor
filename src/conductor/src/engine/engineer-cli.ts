@@ -34,7 +34,7 @@ import { loadConfig, loadMergedConfig, validateConfig, type ConfigResult } from 
 import { readUserConfig } from './user-config.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner } from './owner-gate/identity.js';
-import { openSpecPr, type HandoffDeps } from './engineer/handoff.js';
+import { findExistingSpecPullRequest, openSpecPr, type HandoffDeps } from './engineer/handoff.js';
 import { checkpointComposerRun } from './engineer/checkpoint.js';
 import { isSpecSlug } from './engineer/spec-branch.js';
 import {
@@ -1867,6 +1867,16 @@ export async function dispatchEngineer(
             const r = await gh(args, { cwd });
             return { stdout: r.stdout, stderr: '' };
           },
+          findExistingSpecPr: () => findExistingSpecPullRequest(
+            async (args, runnerOpts) => {
+              const cwd = runnerOpts?.cwd ?? worktree;
+              const r = await gh(args, { cwd });
+              return { stdout: r.stdout, stderr: '' };
+            },
+            publication.repository,
+            branch,
+            worktree,
+          ),
           // gh runs in the per-idea worktree (checked out on spec/<slug>) — FR-4.
           worktreePath: worktree,
           ledgerOpts: engineerDir ? { engineerDir } : {},
@@ -1924,16 +1934,20 @@ export async function dispatchEngineer(
         return 1;
       }
 
+      const alreadyDelivered = handoffResult.kind === 'pr-opened' && handoffResult.alreadyDelivered === true;
+
       // The PR opened (or was skipped on no-remote) — the cycle succeeded, so remove
       // the per-idea worktree (FR-5). The spec/<slug> branch + commit persist; a
       // removal failure is REPORTED, never swallowed (FR-5 negative).
-      try {
-        await removeEngineerWorktree(target.canonicalPath, worktree);
-      } catch (err: unknown) {
-        printErr(
-          `⚠ Spec delivered, but the per-idea worktree "${worktree}" could not be removed: ` +
-            `${err instanceof Error ? err.message : String(err)}. Remove it manually.`,
-        );
+      if (!alreadyDelivered) {
+        try {
+          await removeEngineerWorktree(target.canonicalPath, worktree);
+        } catch (err: unknown) {
+          printErr(
+            `⚠ Spec delivered, but the per-idea worktree "${worktree}" could not be removed: ` +
+              `${err instanceof Error ? err.message : String(err)}. Remove it manually.`,
+          );
+        }
       }
 
       if (handoffResult.kind === 'pr-opened') {
@@ -1941,7 +1955,7 @@ export async function dispatchEngineer(
         // apply `engineer:handled`, and advance the ledger to `done`. Advisory —
         // a gh failure never reverts a delivered PR. Only on a PR (not local-commit,
         // which has no URL to report).
-        if (sourceRef) {
+        if (sourceRef && !alreadyDelivered) {
           const engDir = engineerDir ?? resolveEngineerDir({});
           const { ledger, adapter } = buildIntake({
             engineerDir: engDir, registryPath, gh, printErr, resolveActor: opts.intakeResolveActor, events: opts.events,
@@ -1995,21 +2009,23 @@ export async function dispatchEngineer(
       // host throws TmuxNotInstalledError here. Swallowing it would author the spec
       // while launching no daemon (specs pile up unbuilt with no signal). Surface
       // the reason on stderr; the handoff still succeeds.
-      try {
-        const launchFn = opts.ensureRunningLaunch;
-        if (launchFn) {
-          await Promise.resolve(launchFn(target.canonicalPath));
-        } else {
-          await ensureRunning(target.canonicalPath, {
-            ...opts.ensureRunningOpts,
-            onReclaim: (message) => printErr(message),
-          });
+      if (!alreadyDelivered) {
+        try {
+          const launchFn = opts.ensureRunningLaunch;
+          if (launchFn) {
+            await Promise.resolve(launchFn(target.canonicalPath));
+          } else {
+            await ensureRunning(target.canonicalPath, {
+              ...opts.ensureRunningOpts,
+              onReclaim: (message) => printErr(message),
+            });
+          }
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          printErr(
+            `⚠ Spec authored, but the build daemon was not started for "${target.name}": ${reason}`,
+          );
         }
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err);
-        printErr(
-          `⚠ Spec authored, but the build daemon was not started for "${target.name}": ${reason}`,
-        );
       }
 
       return 0;
