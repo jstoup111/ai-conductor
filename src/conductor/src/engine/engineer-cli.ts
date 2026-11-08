@@ -35,6 +35,7 @@ import { readUserConfig } from './user-config.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner } from './owner-gate/identity.js';
 import { openSpecPr, type HandoffDeps } from './engineer/handoff.js';
+import { checkpointComposerRun } from './engineer/checkpoint.js';
 import { isSpecSlug } from './engineer/spec-branch.js';
 import {
   createEngineerWorktree,
@@ -128,6 +129,7 @@ type EngineerDispatchDescriptor =
     dependsOn?: string[]; declinedDependencies?: string[]; skipDependencyCheck?: string;
   }
   | { kind: 'handoff'; project: string; branch: string; worktree: string; sourceRef?: string }
+  | { kind: 'checkpoint'; worktree: string; step: string; state: 'accepted' | 'draft'; notesFile?: string }
   | { kind: 'plan-review'; project: string; worktree: string; sourceRef?: string; accept?: string; acknowledge?: true; reason?: string; maxPromptChars?: number; invalidMaxPromptChars?: true }
   | { kind: 'poll' }
   | { kind: 'claim' }
@@ -149,7 +151,7 @@ export type EngineerDispatch = EngineerDispatchDescriptor & {
 
 /** Single source of truth for the known deterministic subcommands (#524). */
 export const ENGINEER_SUBCOMMANDS = [
-  'projects', 'dep-audit', 'worktree', 'phase', 'land', 'handoff', 'plan-review', 'poll', 'claim', 'forget', 'unclaim', 'requeue',
+  'projects', 'dep-audit', 'worktree', 'phase', 'land', 'handoff', 'checkpoint', 'plan-review', 'poll', 'claim', 'forget', 'unclaim', 'requeue',
   'resolve', 'migrate-issue-deps',
 ] as const;
 
@@ -313,6 +315,18 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
     const unk = findUnknownFlag(argv, ['--project', '--branch', '--worktree', '--source-ref']);
     if (unk) return { kind: 'reject', sub: 'handoff', flag: unk };
     return { kind: 'handoff', project, branch, worktree, sourceRef };
+  }
+
+  if (subCmd === 'checkpoint') {
+    const worktree = parseFlag(argv, '--worktree');
+    const step = parseFlag(argv, '--step');
+    const accept = argv.includes('--accept');
+    const draft = argv.includes('--draft');
+    const notesFile = parseFlag(argv, '--notes-file') ?? undefined;
+    if (!worktree || !step || accept === draft) return { kind: 'guide' };
+    const unk = findUnknownFlag(argv, ['--worktree', '--step', '--accept', '--draft', '--notes-file']);
+    if (unk) return { kind: 'reject', sub: 'checkpoint', flag: unk };
+    return { kind: 'checkpoint', worktree, step, state: accept ? 'accepted' : 'draft', ...(notesFile ? { notesFile } : {}) };
   }
 
   if (subCmd === 'plan-review') {
@@ -637,6 +651,8 @@ export interface DispatchEngineerOpts {
   probeGhVersion?: () => Promise<GhVersionFloorVerdict>;
   /** Injected git runner (for tests). */
   git?: GitRunner;
+  /** Task 3 local-checkpoint seam; production uses checkpointComposerRun. */
+  checkpoint?: (request: { worktree: string; step: string; state: 'accepted' | 'draft'; notesFile?: string }) => Promise<{ slug: string; state: 'accepted' | 'draft'; committed: boolean; published: false }>;
   /** Task 16 handoff-publication seam; production derives this from current machine evidence. */
   handoffPublication?: HandoffDeps['publication'];
   /** Injected ensureRunning launch spy (for tests). */
@@ -951,6 +967,11 @@ export const SUBCOMMAND_HELP = {
     'Flags: --project <name> (required), --branch <branch> (required), --worktree <path> (required), --source-ref <ref> (optional — intake write-back anchor).\n' +
     'Mutates: pushes the spec branch; opens the spec PR or marks an existing draft spec PR ready for review; uses a local-commit fallback when no remote is configured; nudges the daemon and updates ledger write-back state when --source-ref is present.\n' +
     'Loop fit: fourth step — claim → worktree → land → handoff → resolve/forget.',
+  checkpoint:
+    'compose checkpoint --worktree <path> --step <step> (--accept | --draft) [--notes-file <file>] — save one DECIDE boundary as a local commit.\n' +
+    'Flags: --worktree, --step, and exactly one of --accept or --draft are required; --notes-file is optional.\n' +
+    'Mutates: commits only .docs/ artifacts, the composer run record, and the owner marker locally; it never pushes or opens a PR.\n' +
+    'Loop fit: durable per-step DECIDE checkpoint before publication.',
   'plan-review':
     'compose plan-review --project <name> --worktree <path> [--max-prompt-chars <positive-integer>] [--accept <finding-id> --reason <text> | --acknowledge --reason <text>] — run or disposition the bounded source-grounded plan review.\n' +
     'Flags: --project <name> and --worktree <path> are required; --source-ref is optional.\n' +
@@ -1014,6 +1035,7 @@ function printGuide(print: (s: string) => void): void {
       '  ai-conductor compose plan-review --project <n> --worktree <p> [--max-prompt-chars <positive-integer>] [--accept <id> --reason <text> | --acknowledge --reason <text>] — run or disposition bounded plan review\n' +
       '  ai-conductor compose land --project <n> --idea "<i>" --worktree <p> [--source-ref <ref>]    — commit spec artifacts in the worktree\n' +
       '  ai-conductor compose handoff --project <n> --branch <b> --worktree <p> [--source-ref <ref>] — open spec PR + remove worktree + nudge daemon\n' +
+      '  ai-conductor compose checkpoint --worktree <p> --step <step> (--accept | --draft) [--notes-file <f>] — locally save a DECIDE checkpoint\n' +
       '  ai-conductor compose resolve <ref> --pr-url <url> [--branch <b>]              — mark a claimed entry as delivered (recovery from write-back failure)\n' +
       '  ai-conductor compose unclaim <owner/repo#N>              — requeue a claimed ledger entry back to pending (single-idea recovery)\n' +
       '  ai-conductor compose requeue --stale [--older-than <dur>] — bulk-recover stranded claimed ledger entries (e.g. "24h")\n' +
@@ -1771,6 +1793,41 @@ export async function dispatchEngineer(
       }
       print(JSON.stringify(result));
       return 0;
+    }
+
+    // ── checkpoint ────────────────────────────────────────────────────────────
+    case 'checkpoint': {
+      const { worktree, step, state, notesFile } = dispatch;
+      try {
+        const result = opts.checkpoint
+          ? await opts.checkpoint({ worktree, step, state, ...(notesFile ? { notesFile } : {}) })
+          : await (async () => {
+            const events = new ConductorEventEmitter();
+            const persister = new EventPersister(join(worktree, '.pipeline', 'composer-events.jsonl'), events);
+            persister.start();
+            try {
+              return await checkpointComposerRun(
+                { worktree, step, state, ...(notesFile ? { notesFile } : {}) },
+                {
+                  git: async (args) => {
+                    const result = await git([...args], { cwd: worktree });
+                    return { exitCode: result.exitCode ?? 0, stdout: result.stdout, stderr: '' };
+                  },
+                  resolveOwner: async () => resolveDaemonOwner(await readMachineOwnerConfig(), gh, worktree),
+                  emit: async (event) => events.emitOrThrow(event),
+                  provider: (opts.env ?? process.env).AI_CONDUCTOR_AUTHORING_PROVIDER,
+                },
+              );
+            } finally {
+              persister.stop();
+            }
+          })();
+        print(JSON.stringify({ kind: 'checkpoint', ...result }));
+        return 0;
+      } catch (error: unknown) {
+        printErr(`engineer checkpoint: ${error instanceof Error ? error.message : String(error)}`);
+        return 1;
+      }
     }
 
     // ── handoff ───────────────────────────────────────────────────────────────
