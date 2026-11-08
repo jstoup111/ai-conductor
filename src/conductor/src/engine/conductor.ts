@@ -6403,10 +6403,11 @@ export class Conductor {
     state: ConductState,
     indexOf: (name: StepName) => number,
     requireSatisfiedRegion = false,
+    cursor?: ActiveChildResolution,
   ): Promise<{ readonly index: number; readonly activeChild?: ActiveChildLifecycleTarget } | 'halt' | undefined> {
     const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
     if (!slug || this.activeRegionChild === undefined) return undefined;
-    const execution = resolveExecutionChild(await this.resolveActiveChild(this.projectRoot, slug), slug);
+    const execution = resolveExecutionChild(cursor ?? await this.resolveActiveChild(this.projectRoot, slug), slug);
     if (execution.source !== 'routed-host' || execution.roundId === undefined || execution.target.child !== this.activeRegionChild) {
       return undefined;
     }
@@ -13745,6 +13746,10 @@ export class Conductor {
                 completion.missing,
                 join(this.projectRoot, '.pipeline'),
               );
+              // A completed review has no new runner input to consume on a
+              // retry. Its aggregate is consumed once by the post-join
+              // adjudication/failure boundary below.
+              if (step.name === 'build_review') break;
               if (
                 step.name === 'build' &&
                 attempt < stepMaxRetries &&
@@ -14460,7 +14465,11 @@ export class Conductor {
             }
           }
 
-          if (this.verifyArtifacts && stepHasCompletionCheck(step.name, this.config) && !succeeded) break;
+          if (
+            !succeeded &&
+            (step.name === 'build_review' ||
+              (this.verifyArtifacts && stepHasCompletionCheck(step.name, this.config)))
+          ) break;
 
           succeeded = true;
           successOutput = result.output;
@@ -14509,10 +14518,20 @@ export class Conductor {
             process.off('SIGTERM', sigterm);
             return;
           }
-          // Exhausted retries — route through the recovery menu. A raw
-          // build-review FAIL is still pending adjudication, so do not publish
-          // a failed terminal attempt before that authority can settle it.
-          if (step.name !== 'build_review') {
+          const pendingBuildReviewAggregate = step.name === 'build_review' && await readFile(
+            pipelinePathFor(this.projectRoot, 'build-review.json', this.activeRegionChild),
+            'utf8',
+          ).then((content) => {
+            try {
+              const verdict = validateBuildReviewVerdict(JSON.parse(content));
+              return verdict?.ok === true && verdict.verdict === 'FAIL';
+            } catch {
+              return false;
+            }
+          }).catch(() => false);
+          // Only a current raw FAIL is pending adjudication. Dispatch failures
+          // and stale/missing/non-failing verdicts remain terminal failures.
+          if (!pendingBuildReviewAggregate) {
             await this.saveConductorStepStatus(state, step.name, 'failed');
           }
           if (step.name === 'build') {
@@ -14538,7 +14557,7 @@ export class Conductor {
               outcomeStore,
             });
           }
-          if (step.name !== 'build_review') {
+          if (!pendingBuildReviewAggregate) {
             await emitTracked({
               type: 'step_failed',
               step: step.name,
@@ -15191,11 +15210,11 @@ export class Conductor {
                   if (buildReviewKickbackCharged) {
                     await refundBuildReviewKickback(this.projectRoot, buildReviewBeforeConsumption, this.activeRegionChild);
                   }
-                  // The raw runner result remains a FAIL, but the current
-                  // effective verdict has become PASS.  Its caller breaks to
-                  // the shared success tail, which requires this latch to be
-                  // updated before it can persist the completion.
-                  buildReviewAdjudicationSettled = true;
+                  // This is a legacy/raw aggregate race, rather than a
+                  // post-join settlement. Re-land the review so its next
+                  // aggregate records the effective PASS; marking the
+                  // adjudication latch here would skip that required fresh
+                  // review attempt.
                   succeeded = true;
                   return true;
                 };
@@ -16493,6 +16512,20 @@ export class Conductor {
               return;
             }
             const next = await this.resolveActiveChild(this.projectRoot, slug);
+            // An ordinary child closure can reveal the routed overlay only
+            // after its closure CAS. Consume that already-read cursor; a
+            // second cursor read may advance a test or daemon observer past
+            // the host whose durable exit still needs committing.
+            const nextExecution = resolveExecutionChild(next, slug);
+            if (nextExecution.source === 'routed-host' && nextExecution.target.child === activeChild.child) {
+              const routedExitAfterClosure = await this.continueRoutedHostExit(state, indexOf, false, next);
+              if (routedExitAfterClosure === 'halt') return;
+              if (routedExitAfterClosure !== undefined) {
+                activeChild = routedExitAfterClosure.activeChild;
+                i = routedExitAfterClosure.index - 1;
+                continue;
+              }
+            }
             if (next.kind !== 'active') {
               const reason = next.kind === 'no-child'
                 ? `cannot resolve next child after closing ${activeChild.child}: cursor returned no-child`
@@ -17136,12 +17169,7 @@ export class Conductor {
             case 'exhausted':
             case 'halted': {
               const reason = routedAdmission.reason;
-              await this.writeHaltMarker(
-                reason + '\n',
-                routedAdmission.kind === 'halted'
-                  ? (routedAdmission.haltClass ?? 'needs-human')
-                  : 'needs-human',
-              );
+              await this.writeHaltMarker(reason + '\n', routedAdmission.haltClass ?? 'needs-human');
               const prUrl = await this.surfaceRemediationPr(reason);
               await this.emitLoopHalt(reason, prUrl);
               return 'halt';
