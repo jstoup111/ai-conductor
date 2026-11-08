@@ -36,6 +36,8 @@ import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner } from './owner-gate/identity.js';
 import { findExistingSpecPullRequest, openSpecPr, type HandoffDeps } from './engineer/handoff.js';
 import { checkpointComposerRun } from './engineer/checkpoint.js';
+import { resumeComposerRun, type ResumeTarget } from './engineer/resume.js';
+import { ensureWorktree } from './worktree-shared.js';
 import { isSpecSlug } from './engineer/spec-branch.js';
 import {
   createEngineerWorktree,
@@ -98,6 +100,7 @@ import {
   DEFAULT_PROVIDER,
   requireProviderCapability,
   resolveProviderExecutable,
+  type BuiltInProviderId,
 } from '../execution/provider-catalog.js';
 import { resolveComposeLaunchHost } from './compose-launch-host.js';
 import { resolveHarnessRoot } from './install-freshness.js';
@@ -663,8 +666,8 @@ export interface DispatchEngineerOpts {
   /** Injected git runner (for tests). */
   git?: GitRunner;
   /** Task 3 local-checkpoint seam; production uses checkpointComposerRun. */
-  checkpoint?: (request: { worktree: string; step: string; state: 'accepted' | 'draft'; notesFile?: string }) => Promise<{ slug: string; state: 'accepted' | 'draft'; committed: boolean; published: false }>;
-  /** Resume boundary seam; production wiring intentionally requires a registered project. */
+  checkpoint?: (request: { worktree: string; step: string; state: 'accepted' | 'draft'; notesFile?: string }) => Promise<{ slug: string; state: 'accepted' | 'draft'; committed: boolean; published: boolean; prUrl?: string }>;
+  /** Resume boundary seam. */
   resume?: (request: { target: string; provider?: string; project?: string }) => Promise<{ worktree: string; context: unknown }>;
   /** Task 16 handoff-publication seam; production derives this from current machine evidence. */
   handoffPublication?: HandoffDeps['publication'];
@@ -1537,6 +1540,20 @@ export async function dispatchEngineer(
             persister.stop();
           }
         }
+        const launchId = (opts.env ?? process.env).AI_CONDUCTOR_COMPOSE_LAUNCH_ID;
+        if (launchId) {
+          const events = new ConductorEventEmitter();
+          const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
+          persister.start();
+          try {
+            const owner = await resolveDaemonOwner(await readMachineOwnerConfig(), gh, target.canonicalPath);
+            await events.emitOrThrow({
+              type: 'composer_run_started', slug: wt.slug, worktreePath: wt.worktreePath, launchId,
+              provider: (opts.env ?? process.env).AI_CONDUCTOR_AUTHORING_PROVIDER ?? DEFAULT_PROVIDER,
+              actor: owner.resolved ? owner.id : 'unresolved',
+            });
+          } finally { persister.stop(); }
+        }
         print(JSON.stringify({ kind: 'worktree', ...wt }));
         return 0;
       } catch (err: unknown) {
@@ -1851,11 +1868,68 @@ export async function dispatchEngineer(
     // ── resume ────────────────────────────────────────────────────────────────
     case 'resume': {
       try {
-        if (!opts.resume) {
-          printErr('engineer resume: resume requires the registered-project launcher composition.');
-          return 1;
-        }
-        const result = await opts.resume(dispatch);
+        const result = opts.resume
+          ? await opts.resume(dispatch)
+          : await (async () => {
+            const reader = createRegistryReader(registryPath ? { registryPath } : {});
+            const projects = await reader.listProjects();
+            const project = dispatch.project ? projects.find((item) => item.name === dispatch.project) : projects.length === 1 ? projects[0] : undefined;
+            if (!project) throw new Error(dispatch.project
+              ? `project "${dispatch.project}" is not registered; register it before resuming.`
+              : 'resume requires --project when more than one project is registered.');
+            const target = await resolveTargetRepo(project.path, reader);
+            const resolveBranch = async (selector: ResumeTarget) => {
+              if (selector.kind === 'branch') return { branch: selector.branch };
+              if (selector.kind === 'pr') {
+                const answer = await gh(['pr', 'view', String(selector.number), '--repo', project.remote ?? project.name, '--json', 'headRefName,url'], { cwd: target.canonicalPath });
+                const parsed = JSON.parse(answer.stdout || '{}') as { headRefName?: string; url?: string };
+                return parsed.headRefName?.startsWith('spec/') ? { branch: parsed.headRefName, draftPrUrl: parsed.url } : undefined;
+              }
+              const answer = await gh(['pr', 'list', '--repo', selector.repository, '--state', 'open', '--json', 'headRefName,url'], { cwd: target.canonicalPath });
+              const found = (JSON.parse(answer.stdout || '[]') as Array<{ headRefName?: string; url?: string }>).find((item) => item.headRefName?.startsWith('spec/'));
+              return found?.headRefName ? { branch: found.headRefName, draftPrUrl: found.url } : undefined;
+            };
+            const owner = await resolveDaemonOwner(await readMachineOwnerConfig(), gh, target.canonicalPath);
+            const events = new ConductorEventEmitter();
+            const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
+            persister.start();
+            try {
+              const resumed = await resumeComposerRun(dispatch.target, {
+                resolveBranch,
+                fetch: target.remote ? async (branch) => {
+                  const fetched = await git(['fetch', 'origin', branch], { cwd: target.canonicalPath });
+                  if ((fetched.exitCode ?? 0) !== 0) throw new Error(`could not fetch origin ${branch}`);
+                } : undefined,
+                attach: async (branch) => {
+                  const slug = branch.slice('spec/'.length);
+                  const result = await ensureWorktree({ root: target.canonicalPath, path: join(target.canonicalPath, '.worktrees', `engineer-${slug}`), branch, resolveBase: async () => 'HEAD' });
+                  return { worktree: result.path };
+                },
+                recordDeciding: async ({ branch, draftPrUrl }) => {
+                  // Resuming without an intake origin is still a valid local run.
+                  // Existing source entries are updated by checkpoint publication.
+                  void branch; void draftPrUrl;
+                },
+                emit: async (event) => events.emitOrThrow({
+                  type: 'composer_run_resumed', slug: event.slug, provider: dispatch.provider ?? DEFAULT_PROVIDER,
+                  actor: owner.resolved ? owner.id : 'unresolved', previousActor: event.previousActor,
+                  previousProvider: event.previousProvider, ownership: event.ownership,
+                  launchId: (opts.env ?? process.env).AI_CONDUCTOR_COMPOSE_LAUNCH_ID,
+                }),
+              });
+              const provider = (dispatch.provider ?? DEFAULT_PROVIDER) as BuiltInProviderId;
+              const capability = requireProviderCapability(provider, 'interactiveLaunch');
+              const host = capability;
+              const executable = resolveProviderExecutable(provider);
+              const nested = Boolean((opts.env ?? process.env).CLAUDECODE || (opts.env ?? process.env).CODEX_THREAD_ID);
+              if (nested) throw new Error('compose resume: already inside an interactive host; run $composer directly instead of nesting a host.');
+              if (!executable) throw new Error(`compose resume: provider ${provider} is not installed.`);
+              const composerName = await resolveSkillName(opts.skillNameRoot ?? null, 'composer');
+              const prompt = `${host.invocationPrefix}${composerName} --resume ${resumed.worktree} --step ${resumed.context.nextStep}`;
+              await (opts.spawnHost ?? spawnInteractiveHost)(executable, host.interactiveLaunch.argv({ prompt, permissionMode: 'default' }), resumed.worktree, { ...(opts.env ?? process.env), AI_CONDUCTOR_AUTHORING_PROVIDER: provider, AI_CONDUCTOR_COMPOSE_LAUNCH_ID: crypto.randomUUID() });
+              return resumed;
+            } finally { persister.stop(); }
+          })();
         print(JSON.stringify({ kind: 'resume', ...result }));
         return 0;
       } catch (error) {
@@ -2116,6 +2190,18 @@ export async function dispatchEngineer(
           gh,
           logger: { info: (msg) => printErr(msg) },
           config: claimConfig,
+          findCrossReferencedDraft: async (sourceRef) => {
+            const match = /^([^/\s]+\/[^/\s]+)#(\d+)$/.exec(sourceRef);
+            if (!match) return undefined;
+            // GitHub's crossReferencedBy connection is the source of truth: PR
+            // title/body text is neither complete nor safe to parse as routing state.
+            const query = 'query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){timelineItems(first:100,itemTypes:[CROSS_REFERENCED_EVENT]){nodes{... on CrossReferencedEvent{source{... on PullRequest{url headRefName state isDraft}}}}}}}}';
+            const [owner, repo] = match[1].split('/');
+            const response = await gh(['api', 'graphql', '-f', `query=${query}`, '-F', `owner=${owner}`, '-F', `repo=${repo}`, '-F', `number=${match[2]}`], { cwd: process.cwd() });
+            const nodes = (JSON.parse(response.stdout || '{}') as any).data?.repository?.issue?.timelineItems?.nodes ?? [];
+            const pr = nodes.map((node: any) => node?.source).find((value: any) => value?.state === 'OPEN' && value?.isDraft === true && typeof value?.headRefName === 'string' && value.headRefName.startsWith('spec/'));
+            return pr ? { branch: pr.headRefName, url: pr.url } : undefined;
+          },
         });
 
         // Fresh resolver per claim call — createBlockerResolver()'s memo is scoped

@@ -52,8 +52,11 @@ export interface CheckpointDeps {
   readonly publication?: {
     push(branch: string): Promise<void>;
     findOpenPullRequest(branch: string): Promise<{ url: string; body: string } | undefined>;
-    createDraftPullRequest(input: { branch: string; title: string; body: string }): Promise<{ url: string; body: string }>;
+    createDraftPullRequest(input: { branch: string; base: string; title: string; body: string; draft: true }): Promise<{ url: string; body: string }>;
     editPullRequest?(input: { url: string; body: string }): Promise<void>;
+    /** Called only after a branch has a durable draft PR. */
+    published?(input: { slug: string; branch: string; prUrl: string }): Promise<void>;
+    defaultBase?: string;
   };
 }
 
@@ -207,12 +210,26 @@ export async function checkpointComposerRun(request: CheckpointRequest, deps: Ch
   let pr = await deps.publication.findOpenPullRequest(branch);
   const block = renderRunBlock(record);
   if (!pr) {
-    pr = await deps.publication.createDraftPullRequest({ branch, title: `DECIDE: ${slug}`, body: upsertRunBlock('', block) });
+    let sourceRef: string | undefined;
+    try {
+      const marker = await fs.readFile(join(request.worktree, '.docs', 'intake', `${slug}.md`));
+      sourceRef = /^Source-Ref:\s*(.+)$/m.exec(marker)?.[1]?.trim();
+    } catch { /* hand-authored runs have no intake marker */ }
+    const metadata = '## Release metadata\n\nRelease-Disposition: no-note';
+    const refs = sourceRef ? `\n\nRefs ${sourceRef}` : '';
+    pr = await deps.publication.createDraftPullRequest({
+      branch,
+      base: deps.publication.defaultBase ?? 'main',
+      title: `DECIDE: ${slug}`,
+      body: `${metadata}${refs}\n\n${upsertRunBlock('', block)}`,
+      draft: true,
+    });
   } else if (deps.publication.editPullRequest) {
     try { await deps.publication.editPullRequest({ url: pr.url, body: upsertRunBlock(pr.body, block) }); } catch {
       // Remote record is authoritative; refresh is retried at the next checkpoint.
     }
   }
+  await deps.publication.published?.({ slug, branch, prUrl: pr.url });
   await deps.emit({ ...event, published: true });
   return { slug, state: request.state, committed, published: true, prUrl: pr.url };
 }
