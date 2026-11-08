@@ -624,10 +624,15 @@ describe('intake label-sync Action dependency entry point', () => {
       const result = await runActionFixture({
         action: 'opened', body: FORM_BODY.replace('\nminor', `\n${semver}`),
       });
+      const withoutSemver = await runActionFixture({
+        action: 'opened', body: FORM_BODY.replace(/\n### Semver\n\nminor$/, ''),
+      });
 
       expect(result.exitCode, result.stderr).toBe(0);
       expect(result.stdout).not.toContain('semver:');
       expect(result.calls.join(' ')).not.toContain('labels[]=semver:');
+      expect(result.calls.filter((args) => args.some((arg) => arg.startsWith('labels[]='))))
+        .toEqual(withoutSemver.calls.filter((args) => args.some((arg) => arg.startsWith('labels[]='))));
     },
   );
 
