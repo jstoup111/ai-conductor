@@ -219,6 +219,11 @@ describe('commit-movement liveness floor (real Conductor.run() build retry loop)
       stepRunner: runner,
       events,
       projectRoot: dir,
+      // These fixtures observe the automated build retry loop. Keeping the
+      // conductor in auto mode avoids an interactive handoff after a
+      // deliberately seeded stall marker, which is outside the assertion and
+      // can outlive Vitest's test timeout under suite contention.
+      mode: 'auto',
       verifyArtifacts: true,
       maxRetries,
       onRecovery,
