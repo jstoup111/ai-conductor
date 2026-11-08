@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "slug": "refused-over-scope-rework-can-t-start-while-a-rout",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/refused-over-scope-rework-can-t-start-while-a-rout.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/refused-over-scope-rework-can-t-start-while-a-rout.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/refused-over-scope-rework-can-t-start-while-a-rout.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/2026-11-07-refused-over-scope-rework-can-t-start-while-a-rout.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-12-routed-whole-feature-repair.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/refused-over-scope-rework-can-t-start-while-a-rout.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/refused-over-scope-rework-can-t-start-while-a-rout.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/refused-over-scope-rework-can-t-start-while-a-rout.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/refused-over-scope-rework-can-t-start-while-a-rout.md"
+    }
+  ]
+}
