@@ -1349,6 +1349,157 @@ describe('engine/daemon — runDaemon', () => {
       expect(execute).toHaveBeenCalledTimes(1);
       expect(logs.filter((line) => line.includes(`baseline stamp failed for ${slug} — task evidence write failed`))).toHaveLength(1);
     });
+
+    it('bounds an identical retryable stop to its original dispatch and one prompt re-dispatch', async () => {
+      const claims = new InMemoryWorkClaims();
+      const logs: string[] = [];
+      const haltBody = 'test_suite is pending\n';
+      let liveHalt = false;
+      let archivedHalt: string | undefined;
+      let dispatches = 0;
+
+      await runDaemon({
+        claims,
+        discoverBacklog: staticBacklog([{ slug }]),
+        isHalted: async () => liveHalt,
+        readHaltClass: async () => 'mechanical',
+        isFreshRetryableHalt: async () => liveHalt && haltBody !== archivedHalt,
+        isProgressReKickEligible: async () => false,
+        clearRetryableHalt: async () => { archivedHalt = haltBody; liveHalt = false; },
+        log: (line) => logs.push(line),
+        featureExecution: {
+          createWorkOrder: async () => ({ slug } as WorkOrder),
+          executor: {
+            execute: async () => {
+              dispatches++;
+              liveHalt = true;
+              return { slug, status: 'halted' };
+            },
+          },
+        },
+        runFeature: async () => { throw new Error('featureExecution executor must be used'); },
+        sleep: async () => {},
+      }, { concurrency: 1, once: false, maxIdlePolls: 10 });
+
+      expect(dispatches).toBe(2);
+      expect(logs.filter((line) => line.includes(`resume ${slug}`))).toHaveLength(1);
+    });
+
+    it('bounds volatile retryable stops through the shared re-kick ceiling', async () => {
+      const claims = new InMemoryWorkClaims();
+      const logs: string[] = [];
+      let liveHalt = false;
+      let haltBody = '';
+      let archivedHalt: string | undefined;
+      let dispatches = 0;
+
+      await runDaemon({
+        claims,
+        discoverBacklog: staticBacklog([{ slug }]),
+        isHalted: async () => liveHalt,
+        readHaltClass: async () => 'mechanical',
+        isFreshRetryableHalt: async () => liveHalt && haltBody !== archivedHalt,
+        isProgressReKickEligible: async () => false,
+        clearRetryableHalt: async () => { archivedHalt = haltBody; liveHalt = false; },
+        progressReKickDispatchCeiling: 4,
+        log: (line) => logs.push(line),
+        featureExecution: {
+          createWorkOrder: async () => ({ slug } as WorkOrder),
+          executor: {
+            execute: async () => {
+              haltBody = `volatile halt ${++dispatches}\n`;
+              liveHalt = true;
+              return { slug, status: 'halted' };
+            },
+          },
+        },
+        runFeature: async () => { throw new Error('featureExecution executor must be used'); },
+        sleep: async () => {},
+      }, { concurrency: 1, once: false, maxIdlePolls: 10 });
+
+      // The ceiling bounds re-dispatches; the original dispatch is not a re-kick.
+      expect(dispatches).toBe(5);
+      expect(logs.filter((line) => line.includes('dispatch ceiling (4) reached'))).toHaveLength(1);
+    });
+
+    it('does not turn an idle/refused executor into a progress re-kick', async () => {
+      const claims = new InMemoryWorkClaims();
+      const haltBody = 'preflight refused\n';
+      let liveHalt = false;
+      let archivedHalt: string | undefined;
+      const resolved = 2; // already-resolved work owned by earlier children
+      let baseline = 0;
+      let dispatches = 0;
+      const progressChecks: boolean[] = [];
+
+      await runDaemon({
+        claims,
+        discoverBacklog: staticBacklog([{ slug }]),
+        isHalted: async () => liveHalt,
+        readHaltClass: async () => 'mechanical',
+        isFreshRetryableHalt: async () => liveHalt && haltBody !== archivedHalt,
+        isProgressReKickEligible: async () => {
+          const eligible = resolved > baseline;
+          progressChecks.push(eligible);
+          return eligible;
+        },
+        clearRetryableHalt: async () => { archivedHalt = haltBody; liveHalt = false; },
+        stampDispatchBaseline: async () => { baseline = resolved; },
+        featureExecution: {
+          createWorkOrder: async () => ({ slug } as WorkOrder),
+          executor: {
+            execute: async () => {
+              dispatches++;
+              // Simulates a stack-preflight refusal: no step runs and no task resolves.
+              liveHalt = true;
+              return { slug, status: 'halted' };
+            },
+          },
+        },
+        runFeature: async () => { throw new Error('featureExecution executor must be used'); },
+        sleep: async () => {},
+      }, { concurrency: 1, once: false, maxIdlePolls: 10 });
+
+      expect({ dispatches, baseline }).toEqual({ dispatches: 2, baseline: 2 });
+      expect(progressChecks.length).toBeGreaterThan(0);
+      expect(progressChecks.every((eligible) => !eligible)).toBe(true);
+    });
+
+    it('clears the #3601 mechanical prerequisite halt before preflight reaches test_suite', async () => {
+      const claims = new InMemoryWorkClaims();
+      claims.park(slug);
+      const haltBody = "Step 'manual_test' is blocked by unsatisfied prerequisite: test_suite (pending).\n";
+      let liveHalt = true;
+      let archivedHalt: string | undefined;
+      const executedSteps: string[] = [];
+
+      await runDaemon({
+        claims,
+        discoverBacklog: staticBacklog([{ slug }]),
+        isHalted: async () => liveHalt,
+        readHaltClass: async () => 'mechanical',
+        isFreshRetryableHalt: async () => true,
+        clearRetryableHalt: async () => { archivedHalt = haltBody; liveHalt = false; },
+        featureExecution: {
+          createWorkOrder: async () => ({ slug } as WorkOrder),
+          executor: {
+            execute: async () => {
+              // The real stack preflight refuses only a still-live unauthorized HALT.
+              expect(liveHalt).toBe(false);
+              executedSteps.push('test_suite');
+              return { slug, status: 'done' };
+            },
+          },
+        },
+        runFeature: async () => { throw new Error('featureExecution executor must be used'); },
+      }, { concurrency: 1, once: true });
+
+      expect({ archivedHalt, liveHalt, executedSteps }).toEqual({
+        archivedHalt: haltBody,
+        liveHalt: false,
+        executedSteps: ['test_suite'],
+      });
+    });
   });
 
   it('stops at the wall-clock ceiling (injected clock)', async () => {
