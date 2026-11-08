@@ -402,7 +402,7 @@ export async function fileIntakeIssue(
           ...(semver ? [{
             request: {
               operation: 'issue.label.add' as const, access: 'feature-write' as const, target: created,
-              context: { actor: authority.actor }, payload: { label: `semver: ${semver}` },
+              context: { actor: authority.actor }, payload: { label: `semver:${semver}` },
             },
           }] : []),
           ...validDependencies.map((dependency) => ({

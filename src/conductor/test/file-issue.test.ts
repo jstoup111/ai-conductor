@@ -28,7 +28,7 @@ function makeFakeGh(opts: {
     }
     if (args.some((arg) => arg.endsWith('/labels'))) {
       if (opts.failLabelApply) throw new Error('simulated label-apply outage');
-      if (opts.failSemverLabel && args.includes('labels[]=semver: minor')) {
+      if (opts.failSemverLabel && args.includes('labels[]=semver:minor')) {
         throw new Error('simulated semver-label outage');
       }
       return { stdout: '{}' };
@@ -113,7 +113,7 @@ describe('fileIntakeIssue — creation-scoped terminal adapter', () => {
     expect(gh.calls.filter((args) => args.some((arg) => arg.endsWith('/labels')))).toEqual([
       expect.arrayContaining(['labels[]=priority: medium']),
       expect.arrayContaining(['labels[]=size: M']),
-      expect.arrayContaining(['labels[]=semver: minor']),
+      expect.arrayContaining(['labels[]=semver:minor']),
     ]);
   });
 
@@ -183,7 +183,7 @@ describe('fileIntakeIssue — creation-scoped terminal adapter', () => {
     expect(gh.calls.filter((args) => args.some((arg) => arg.endsWith('/labels')))).toEqual([
       expect.arrayContaining(['labels[]=priority: low']),
       expect.arrayContaining(['labels[]=size: S']),
-      expect.arrayContaining(['labels[]=semver: minor']),
+      expect.arrayContaining(['labels[]=semver:minor']),
     ]);
   });
 
