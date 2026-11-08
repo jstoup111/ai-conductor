@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-11-08T20:30:53.656Z
 Slug: restack-refuses-child-resolution-that-adapts-tests
 Class: needs-human
 Halting step: unknown
