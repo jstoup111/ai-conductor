@@ -14996,14 +14996,11 @@ export class Conductor {
 
                   this.log?.(
                     'build_review raw FAIL dropped: every graded finding was accepted ' +
-                      'by operator disposition at exit time; re-running build_review.',
+                      'by operator disposition at exit time; completing the clean-PASS tail.',
                   );
                   if (buildReviewKickbackCharged) {
                     await refundBuildReviewKickback(this.projectRoot, buildReviewBeforeConsumption, this.activeRegionChild);
                   }
-                  await this.saveConductorStepStatus(state, step.name, 'failed');
-                  await this.persistPendingStateChanges(state, 'persist conductor transition');
-                  i = i - 1; // for-loop i++ re-lands on build_review
                   return true;
                 };
                 // Task 8 (build-review-grades-plan-vs-diff-against-a-stale-o):
@@ -15052,7 +15049,7 @@ export class Conductor {
                 }
 
                 if (scopeFailDisposition?.kind === 'halt') {
-                  if (await reenterBuildReviewIfEffectivePass()) continue;
+                  if (await reenterBuildReviewIfEffectivePass()) break settledBuildReviewFailure;
                   const haltBody =
                     `build_review scope-FAIL disposition HALT: a second stale-mirage ` +
                     `detection this feature-session — never re-enters grading.\n` +
@@ -15073,7 +15070,7 @@ export class Conductor {
                 }
 
                 if (scopeFailDisposition?.kind === 'invalidated') {
-                  if (await reenterBuildReviewIfEffectivePass()) continue;
+                  if (await reenterBuildReviewIfEffectivePass()) break settledBuildReviewFailure;
                   await removeBuildReviewVerdict(this.projectRoot, this.activeRegionChild).catch(() => {
                     /* best-effort removal */
                   });
@@ -15095,7 +15092,7 @@ export class Conductor {
                 // of spending another kickback toward the cap.
                 const escalation = await checkKickbackToBuildEscalation('build_review');
                 if (escalation.halt) {
-                  if (await reenterBuildReviewIfEffectivePass()) continue;
+                  if (await reenterBuildReviewIfEffectivePass()) break settledBuildReviewFailure;
                   const reason = `build_review kickback-to-build no-op: ${escalation.reason}`;
                   await this.writeHaltMarker(reason + '\n', 'needs-human');
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
@@ -15117,7 +15114,7 @@ export class Conductor {
                   ? await consumeCurrentRoutedRepairCredit()
                   : false;
                 if (cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted && !routedRepairCreditApplied) {
-                  if (await reenterBuildReviewIfEffectivePass()) continue;
+                  if (await reenterBuildReviewIfEffectivePass()) break settledBuildReviewFailure;
                   const reason = this.withActiveChild(
                     `build_review cumulative kickback cap exceeded:\n` +
                     renderKickbackBudgetView(
@@ -15159,7 +15156,7 @@ export class Conductor {
                     `this build.` + pointerContext;
                   const reworkEvidence = evidence;
 
-                  if (await reenterBuildReviewIfEffectivePass()) continue;
+                  if (await reenterBuildReviewIfEffectivePass()) break settledBuildReviewFailure;
 
                   await emitTracked({
                     type: 'kickback',
@@ -15194,7 +15191,7 @@ export class Conductor {
                 const reason =
                   `build_review FAIL unresolved after ${count} build kickback(s) ` +
                   `(cap ${MAX_KICKBACKS_PER_GATE}): ${kickback.entry.lastReason || 'no reasons recorded'}`;
-                if (await reenterBuildReviewIfEffectivePass()) continue;
+                if (await reenterBuildReviewIfEffectivePass()) break settledBuildReviewFailure;
                 await this.writeHaltMarker(reason + '\n', 'needs-human');
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(reason);
