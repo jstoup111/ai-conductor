@@ -10,6 +10,7 @@ import {
   NO_EVIDENCE_REASON_DESCRIPTIONS,
   stampDispatchBaseline,
 } from '../../src/engine/task-evidence.js';
+import { countResolvedTasks } from '../../src/engine/task-progress.js';
 import { writeSliceTopologyFixture } from './slice-topology-fixture.js';
 
 describe('task-evidence', () => {
@@ -346,7 +347,7 @@ describe('task-evidence', () => {
     it('stamps the whole-feature resolved count across every child', async () => {
       await writeMultiChildTaskFixture();
 
-      await expect(stampDispatchBaseline(dir)).resolves.toBe('stamped');
+      await expect(stampDispatchBaseline(dir, countResolvedTasks)).resolves.toBe('stamped');
 
       const sidecar = JSON.parse(await readFile(join(dir, '.pipeline', 'task-evidence.json'), 'utf-8'));
       expect(sidecar.lastResolvedCount).toBe(5);
@@ -361,7 +362,7 @@ describe('task-evidence', () => {
         await writeFile(join(dir, '.pipeline', 'task-evidence.json'), sidecar);
       }
 
-      await stampDispatchBaseline(dir);
+      await stampDispatchBaseline(dir, countResolvedTasks);
 
       const raw = await readFile(join(dir, '.pipeline', 'task-evidence.json'), 'utf-8');
       expect(JSON.parse(raw).lastResolvedCount).toBe(5);
@@ -370,7 +371,7 @@ describe('task-evidence', () => {
     it('returns no-worktree without creating a sidecar for a nonexistent path', async () => {
       const missingWorktree = join(dir, 'missing-worktree');
 
-      await expect(stampDispatchBaseline(missingWorktree)).resolves.toBe('no-worktree');
+      await expect(stampDispatchBaseline(missingWorktree, countResolvedTasks)).resolves.toBe('no-worktree');
       await expect(lstat(join(missingWorktree, '.pipeline', 'task-evidence.json'))).rejects.toMatchObject({ code: 'ENOENT' });
     });
   });

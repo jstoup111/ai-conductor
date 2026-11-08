@@ -1,6 +1,5 @@
 import { readFile, writeFile, mkdir, rename, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { countResolvedTasks } from './task-progress.js';
 
 /**
  * Stamp structure supporting semantic verification (Task 10).
@@ -235,6 +234,7 @@ export async function readLastResolvedCount(projectRoot: string): Promise<number
  */
 export async function stampDispatchBaseline(
   worktreePath: string,
+  countResolvedTasks: (projectRoot: string) => Promise<number>,
 ): Promise<'stamped' | 'no-worktree'> {
   try {
     if (!(await stat(worktreePath)).isDirectory()) return 'no-worktree';

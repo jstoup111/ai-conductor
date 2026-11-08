@@ -1027,7 +1027,7 @@ export function buildRetryableHaltDeps(
       }
     },
     stampDispatchBaseline: async (slug) => {
-      await stampDispatchBaseline(worktreePath(slug));
+      await stampDispatchBaseline(worktreePath(slug), countResolvedTasks);
     },
   };
 }
