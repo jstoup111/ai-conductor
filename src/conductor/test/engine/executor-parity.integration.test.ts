@@ -75,8 +75,10 @@ async function runChildProcess(root: string, episode: RateLimitEpisode, run: (in
   return executor.execute(ORDER);
 }
 
-describe('child executor lifecycle', () => {
-  it('records ordered steps, ledger events, outcome, and terminal effects', async () => {
+describe('child executor lifecycle with literal clean, rate-limited, and halted outcomes', () => {
+  // FeatureExecutionOutcome is imported above with `import type`; these child
+  // cases use only literal expectations for their ledger and terminal values.
+  it('records ordered clean-run steps, ledger events, outcome, and terminal effects', async () => {
     const root = await mkdtemp(join(tmpdir(), 'executor-child-')); roots.push(root);
     const outcome = await runChildProcess(root, episodeFixture().episode, async ({ events }) => {
       await events.emit({ type: 'step_started', step: 'memory', index: 0 });

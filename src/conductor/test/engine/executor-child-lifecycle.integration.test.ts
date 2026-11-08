@@ -265,7 +265,7 @@ async function prepareIssueLinkProvenance(subject: Awaited<ReturnType<typeof fix
 }
 
 describe('executor child shared lifecycle', () => {
-  it('uses its admitted stacked-dispatch lease once and runs the shared conductor', async () => {
+  it('uses its admitted stacked-dispatch lease once and runs the shared conductor after in-process executor removal', async () => {
     const subject = await fixture('stacked-child');
     const completions: string[] = [];
     subject.rootEvents.on('feature_complete', (event) => {

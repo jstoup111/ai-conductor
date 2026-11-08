@@ -299,7 +299,7 @@ describe('engine/daemon-log', () => {
   });
 
   describe('daemon ownership attribution', () => {
-    it('keeps supervisor console output unattributed while feature work is in flight', async () => {
+    it('keeps supervisor console output and ownership-aware daemon events unattributed while feature work is in flight', async () => {
       const live: string[] = [];
       const persisted: string[] = [];
       const baseLog = createDaemonModeLogger({

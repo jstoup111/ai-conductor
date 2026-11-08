@@ -233,6 +233,8 @@ async function throughDaemonDispatch(events: ConductorEvent[], filteredType?: Co
     .mockReturnValueOnce({ spanExporter: exporter, metricExporter });
   const store = await useTempEngineStore();
   try {
+    // No `run` override is supplied: createInMemoryExecutorFork composes the
+    // production createExecutorChildRuntime and its production child runner.
     await runDaemonMode({ projectRoot: repo, engineRoot: store.engineRoot, concurrency: 1, maxItems: 1, baseBranch: 'main', ensureFresh: async () => {}, watch: false, workSource: { discover: async () => [{ slug: 'feature-a' }] }, probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }), providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(), executorFork: createInMemoryExecutorFork({ projectRoot: repo, createWorktree: async () => ({ path: fixture.worktreePath }) }) });
   } finally {
     await store.teardown();
