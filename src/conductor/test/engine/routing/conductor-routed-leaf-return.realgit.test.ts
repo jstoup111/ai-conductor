@@ -238,6 +238,7 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     });
   });
 
+  // Covers: task:13
   it('returns to whole-feature validation with the root state store and baseline reloaded', async () => {
     const { subject, statePath, config } = await fixture();
     const dispatched: StepName[] = [];
