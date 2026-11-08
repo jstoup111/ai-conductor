@@ -23,20 +23,29 @@ import { writeBuildReviewBranchArtifact } from '../../src/engine/build-review-ar
 import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
 import { deriveChangedFileReferences } from '../../src/engine/build-review-projections.js';
 import { parseChildId, pipelinePathFor } from '../../src/engine/child-context.js';
+import { resolveActiveChild } from '../../src/engine/child-cursor.js';
 import { parseBuildReviewLapId, type BuildReviewFinding } from '../../src/engine/build-review-domain.js';
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
+import { makeGitRunner } from '../../src/engine/rebase.js';
 import * as remediationCaseReconciler from '../../src/engine/remediation-case-reconciler.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
 import { markBuildReviewWorkOrderAttempted, publishBuildReviewWorkOrder } from '../../src/engine/build-review-work-order.js';
 import type { RemediationCaseV2Judgement } from '../../src/engine/remediation-case-artifact.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
+import { consumeLowestQueued } from '../../src/engine/routing/revalidation-queue.js';
+import { admitRound } from '../../src/engine/routing/round-admission.js';
+import { createRouteRecord, readRepairMarker, readRouteRecord, transitionHost, writeRoutingTransaction } from '../../src/engine/routing/route-record-store.js';
+import { requestRoutedExit } from '../../src/engine/routing/routed-exit.js';
+import { closureRefFor, repairMarkerRefFor, routeRecordRefFor } from '../../src/engine/routing/routing-refs.js';
+import { parseRoundId } from '../../src/engine/routing/route-types.js';
 import { writeState } from '../../src/engine/state.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 import { Conductor } from '../test-conductor.js';
+import { createSweepRepository, sealStack } from './restack/restack-sweepG2-fixture.js';
 
 const LAP_ID = parseBuildReviewLapId('lap-adjudication')!;
 const SNAPSHOT = 'sha256:snapshot';
@@ -596,6 +605,64 @@ async function fixture(options: FixtureOptions = {}) {
     events: async (): Promise<ConductorEvent[]> => (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
       .trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as ConductorEvent),
     haltMarker: async (): Promise<string> => readFile(join(projectRoot, '.pipeline/HALT'), 'utf8').catch(() => ''),
+  };
+}
+
+/**
+ * Unlike the shared adjudication fixture, this creates the child overlays that
+ * a routed restack reads from Git.  Keep the two completion variants on this
+ * exact topology: the assertion below compares durable blobs, not a mocked
+ * child-lifecycle call.
+ */
+async function advanceR2AfterSettledBuildReview() {
+  const subject = await createSweepRepository('adjudication-r2-parity-', roots);
+  const c1 = parseChildId(1)!;
+  const c2 = parseChildId(2)!;
+  const r1 = parseRoundId('r1')!;
+  await subject.write('.ai-conductor/config.yml', 'stacked_prs:\n  enabled: true\n  max_slices: 2\n  route_whole_feature_fixes: true\n');
+  await subject.git(['add', '.gitignore', '.ai-conductor/config.yml']);
+  await subject.git(['commit', '-qm', 'configure routing']);
+  await subject.commit('base', 'base.txt', 'base\n');
+  await subject.git(['checkout', '-qb', 'feat/c1/demo']);
+  const closedOne = await subject.commit('closed child one', 'one.txt', 'one\n');
+  await subject.git(['update-ref', closureRefFor('demo', c1), closedOne]);
+  await subject.git(['checkout', '-qb', 'feat/c2/demo']);
+  const closedTwo = await subject.commit('closed child two', 'two.txt', 'two\n');
+  await subject.git(['update-ref', closureRefFor('demo', c2), closedTwo]);
+  await subject.git(['checkout', '-qb', 'feat/daemon-demo']);
+  await subject.commit('leaf', 'leaf.txt', 'leaf\n');
+  await subject.git(['checkout', '-q', 'feat/c1/demo']);
+  await subject.commit('routed repair', 'repair.txt', 'repair\n');
+  await sealStack(subject.repo, [1, 2]);
+
+  const git = makeGitRunner(subject.repo);
+  const tree = (await git(['rev-parse', `${closedOne}^{tree}`])).stdout.trim() as never;
+  const created = await createRouteRecord(subject.repo, 'demo', {
+    roundId: r1, kind: 'audit', items: [{ findingId: 'finding-1', kind: 'audit', owner: c1, host: c1, reason: 'repair', fallback: [] }],
+    allocation: { [c1]: { remTaskIds: ['rem-1'], blockBodies: ['### Task rem-1\n'] } },
+  }, { git });
+  if (created.kind !== 'created') throw new Error(`could not create r1: ${created.kind}`);
+  const admitted = await admitRound(subject.repo, 'demo', created.record, c1, { git });
+  if (admitted.kind !== 'admitted') throw new Error(`could not admit r1: ${admitted.detail}`);
+  const stored = await readRouteRecord(subject.repo, 'demo', r1, { git });
+  if (stored.kind !== 'record') throw new Error('r1 disappeared before repair');
+  const repairing = transitionHost(stored, c1, 'repairing', { credit: true });
+  if (repairing.kind !== 'updated') throw new Error('could not mark r1 repairing');
+  const staged = await writeRoutingTransaction(subject.repo, 'demo', [{ kind: 'update-record', previous: stored, record: { ...repairing.record, entry: { host: c1, pinnedBase: closedOne, tree } } }], { git });
+  if (staged.kind !== 'updated') throw new Error(`could not stage r1: ${staged.kind}`);
+
+  await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId: r1, host: c1, git }))
+    .resolves.toEqual({ kind: 'restacked' });
+  await expect(consumeLowestQueued(subject.repo, 'demo', { git })).resolves.toMatchObject({ kind: 'admitted', host: c2, roundId: parseRoundId('r2')! });
+
+  const route = await git(['rev-parse', routeRecordRefFor('demo', parseRoundId('r2')!)]);
+  const marker = await git(['rev-parse', repairMarkerRefFor('demo')]);
+  const activeMarker = await readRepairMarker(subject.repo, 'demo', { git });
+  if (activeMarker.kind !== 'marker') throw new Error('r2 marker missing');
+  const next = await resolveActiveChild(subject.repo, 'demo', { git });
+  return {
+    route: route.stdout.trim(), marker: marker.stdout.trim(), markerHost: activeMarker.marker.host,
+    next: next.kind === 'repair-pending' ? { kind: next.kind, child: next.child, roundId: next.revalidating?.generation === undefined ? undefined : 'r2' } : { kind: next.kind },
   };
 }
 
@@ -1634,6 +1701,29 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(advance).toHaveBeenCalledWith(run.projectRoot, 'adjudicated-feature', first, expect.anything());
     expect(run.dispatched).toContain('acceptance_specs');
     expect(run.dispatched).not.toContain('manual_test');
+  });
+
+  // Covers: task:2
+  it('keeps the routed r2 durable handoff byte-identical after clean PASS and adjudication settlement', async () => {
+    // Establish both completion modes through the real build_review success
+    // tail before advancing the same two-child Git topology.  The shared
+    // fixture cannot create the per-child overlays required by restack.
+    const clean = await fixture({ rawVerdict: 'PASS', persistEvents: true });
+    const adjudicated = await fixture({ infrastructure: 'covered', persistEvents: true });
+    for (const run of [clean, adjudicated]) {
+      expect(await run.haltMarker()).toBe('');
+      expect(await run.events()).toContainEqual(expect.objectContaining({ type: 'step_completed', step: 'build_review', status: 'done' }));
+      expect(run.stepStarts.filter((event) => event.type === 'step_started' &&
+        ['manual_test', 'prd_audit', 'architecture_review_as_built'].includes(event.step))).toEqual([]);
+    }
+
+    const afterCleanPass = await advanceR2AfterSettledBuildReview();
+    const afterAdjudicationSettlement = await advanceR2AfterSettledBuildReview();
+
+    expect(afterCleanPass.markerHost).toBe(2);
+    expect(afterAdjudicationSettlement.markerHost).toBe(2);
+    expect(afterAdjudicationSettlement).toEqual(afterCleanPass);
+    expect(afterCleanPass.next).toEqual({ kind: 'repair-pending', child: 2, roundId: 'r2' });
   });
 
   // Covers: task:2
