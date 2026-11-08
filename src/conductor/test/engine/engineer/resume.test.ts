@@ -12,7 +12,7 @@ describe('Composer resume', () => {
   it('uses the record for the first unaccepted step and emits a resume transition', async () => {
     const emitted: unknown[] = [];
     const result = await resumeComposerRun('spec/demo', { attach: async () => ({ worktree: '/tmp/demo' }), readRunRecord: async () => JSON.stringify(record), resolveBranch: async () => undefined, emit: async (event) => { emitted.push(event); } });
-    expect(result.context).toMatchObject({ nextStep: 'complexity', lastActor: 'A', decisions: ['technical'] });
+    expect(result.context).toMatchObject({ nextStep: 'architecture_diagram', lastActor: 'A', decisions: ['technical'] });
     expect(emitted).toHaveLength(1);
     expect(contextForRun(record).drafts).toContain('architecture_diagram');
   });

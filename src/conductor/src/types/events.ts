@@ -1376,6 +1376,7 @@ type ConductorEventBody =
   | {
       type: 'composer_run_resumed';
       slug: string;
+      worktreePath?: string;
       provider: string;
       actor: string;
       launchId?: string;

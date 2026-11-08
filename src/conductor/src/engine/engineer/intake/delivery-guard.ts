@@ -309,7 +309,10 @@ export function createDeliveryGuardedQueue(
       // run is still a draft.  Claim must discover that durable remote fact before
       // it serves a brand-new candidate.  Failure is deliberately conservative:
       // leave the candidate pending rather than creating competing spec branches.
-      if (!entry && source === 'github-issues' && deps.findCrossReferencedDraft) {
+      // Pending is not a decision: it may be a locally recorded candidate from
+      // a prior poll, so it must receive the same cross-reference lookup as an
+      // absent entry before we serve it to create a competing branch.
+      if ((!entry || entry.status === 'pending' || entry.status === 'unseen') && source === 'github-issues' && deps.findCrossReferencedDraft) {
         try {
           const inFlight = await deps.findCrossReferencedDraft(sourceRef);
           if (inFlight) {

@@ -71,6 +71,53 @@ export interface CheckpointResult {
   readonly prUrl?: string;
 }
 
+async function publishCheckpoint(
+  slug: string,
+  worktree: string,
+  state: CheckpointRequest['state'],
+  record: RunRecord,
+  deps: CheckpointDeps,
+  event: { type: 'composer_run_checkpointed'; slug: string; step: string; state: 'accepted' | 'draft'; published: boolean; provider: string; actor: string },
+): Promise<CheckpointResult> {
+  const publication = deps.publication;
+  if (!publication) {
+    await deps.emit(event);
+    return { slug, state, committed: false, published: false };
+  }
+  const branch = `spec/${slug}`;
+  try {
+    await publication.push(branch);
+  } catch (error) {
+    throw new Error(`compose checkpoint: local checkpoint was saved but push failed: ${error instanceof Error ? error.message : String(error)}. Retry with compose resume ${branch}`);
+  }
+  let pr = await publication.findOpenPullRequest(branch);
+  const block = renderRunBlock(record);
+  if (!pr) {
+    let sourceRef: string | undefined;
+    try {
+      const marker = await (deps.fs ?? defaultFs).readFile(join(worktree, '.docs', 'intake', `${slug}.md`));
+      sourceRef = /^Source-Ref:\s*(.+)$/m.exec(marker)?.[1]?.trim();
+    } catch { /* hand-authored runs have no intake marker */ }
+    const metadata = '## Release metadata\n\nRelease-Disposition: no-note';
+    const refs = sourceRef ? `\n\nRefs ${sourceRef}` : '';
+    pr = await publication.createDraftPullRequest({
+      branch,
+      base: publication.defaultBase ?? 'main',
+      title: `DECIDE: ${slug}`,
+      body: `${metadata}${refs}\n\n${upsertRunBlock('', block)}`,
+      draft: true,
+    });
+  } else if (publication.editPullRequest) {
+    try { await publication.editPullRequest({ url: pr.url, body: upsertRunBlock(pr.body, block) }); } catch {
+      // A presentation failure never invalidates the durable commit/push.  The
+      // next checkpoint deliberately retries this edit even when it is clean.
+    }
+  }
+  await publication.published?.({ slug, branch, prUrl: pr.url });
+  await deps.emit({ ...event, published: true });
+  return { slug, state, committed: false, published: true, prUrl: pr.url };
+}
+
 const defaultFs: CheckpointFileSystem = {
   readFile: (path) => readFile(path, 'utf8'),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
@@ -174,16 +221,22 @@ export async function checkpointComposerRun(request: CheckpointRequest, deps: Ch
       .map((path) => path.trim())
       .filter((path) => stepForArtifactPath(path) === step)
     : [];
-  // Do not manufacture a record-only commit when no authored docs await a checkpoint.
-  if (dirtyDocs.length === 0 && draftPaths.length === 0) {
-    await deps.emit(event);
-    return { slug, state: request.state, committed: false, published: false };
+  const reconfirming = request.state === 'accepted'
+    && record.needsReconfirm.includes(step)
+    && record.steps[step]?.state === 'accepted';
+  // A clean retry must still publish the previously committed checkpoint.  A
+  // clean reconfirmation is the one exception: it changes the run record only.
+  if (dirtyDocs.length === 0 && draftPaths.length === 0 && !reconfirming) {
+    const published = await publishCheckpoint(slug, request.worktree, request.state, record, deps, event);
+    return { ...published, committed: false };
   }
   const notes = await notesFor(request, fs);
   if (request.state === 'accepted') {
-    const artifacts = await Promise.all((dirtyDocs.length > 0 ? dirtyDocs : draftPaths)
+    const paths = dirtyDocs.length > 0 ? dirtyDocs : draftPaths;
+    const priorArtifacts = record.steps[step]?.state === 'accepted' ? record.steps[step].artifacts : [];
+    const artifacts = paths.length > 0 ? await Promise.all(paths
       .filter((path) => !path.startsWith('.docs/composer-runs/') && !path.startsWith('.docs/intake/'))
-      .map(async (path) => digestArtifact(path, Buffer.from(await fs.readFile(join(request.worktree, path))))));
+      .map(async (path) => digestArtifact(path, Buffer.from(await fs.readFile(join(request.worktree, path)))))) : priorArtifacts;
     record = recordAcceptance(record, { step, actor: owner.id, provider, at: (deps.now ?? (() => new Date().toISOString()))(), artifacts, ...notes });
   } else {
     record = { ...recordDraft(record, step), notes: { ...record.notes, [step]: notes } };
@@ -207,40 +260,6 @@ export async function checkpointComposerRun(request: CheckpointRequest, deps: Ch
     const commit = await deps.git(['commit', '-m', withDaemonCoAuthorTrailer(`composer checkpoint: ${slug} ${step}`)]);
     if (commit.exitCode !== 0) throw new Error(`compose checkpoint: local commit failed: ${commit.stderr}`);
   }
-  if (!committed || !deps.publication) {
-    await deps.emit(event);
-    return { slug, state: request.state, committed, published: false };
-  }
-
-  const branch = `spec/${slug}`;
-  try {
-    await deps.publication.push(branch);
-  } catch (error) {
-    throw new Error(`compose checkpoint: local checkpoint was saved but push failed: ${error instanceof Error ? error.message : String(error)}. Retry with compose resume ${branch}`);
-  }
-  let pr = await deps.publication.findOpenPullRequest(branch);
-  const block = renderRunBlock(record);
-  if (!pr) {
-    let sourceRef: string | undefined;
-    try {
-      const marker = await fs.readFile(join(request.worktree, '.docs', 'intake', `${slug}.md`));
-      sourceRef = /^Source-Ref:\s*(.+)$/m.exec(marker)?.[1]?.trim();
-    } catch { /* hand-authored runs have no intake marker */ }
-    const metadata = '## Release metadata\n\nRelease-Disposition: no-note';
-    const refs = sourceRef ? `\n\nRefs ${sourceRef}` : '';
-    pr = await deps.publication.createDraftPullRequest({
-      branch,
-      base: deps.publication.defaultBase ?? 'main',
-      title: `DECIDE: ${slug}`,
-      body: `${metadata}${refs}\n\n${upsertRunBlock('', block)}`,
-      draft: true,
-    });
-  } else if (deps.publication.editPullRequest) {
-    try { await deps.publication.editPullRequest({ url: pr.url, body: upsertRunBlock(pr.body, block) }); } catch {
-      // Remote record is authoritative; refresh is retried at the next checkpoint.
-    }
-  }
-  await deps.publication.published?.({ slug, branch, prUrl: pr.url });
-  await deps.emit({ ...event, published: true });
-  return { slug, state: request.state, committed, published: true, prUrl: pr.url };
+  const published = await publishCheckpoint(slug, request.worktree, request.state, record, deps, event);
+  return { ...published, committed };
 }

@@ -66,12 +66,17 @@ export function parseResumeTarget(value: string): ResumeTarget {
 }
 
 export function contextForRun(record: RunRecord): ResumeContext {
-  const nextStep = RUN_STEP_ORDER.find((step) => record.steps[step]?.state !== 'accepted' || record.needsReconfirm.includes(step)) ?? 'delivery';
+  // A run record is sparse: track selection can intentionally omit DECIDE
+  // steps.  Therefore the first *recorded* draft/reconfirmation is next, not
+  // the first optional step absent from the record.
+  const nextStep = RUN_STEP_ORDER.find((step) =>
+    record.needsReconfirm.includes(step) || record.steps[step]?.state === 'draft',
+  ) ?? 'delivery';
   const accepted = RUN_STEP_ORDER.flatMap((step) => {
     const value = record.steps[step];
     return value?.state === 'accepted' ? [value] : [];
   });
-  const last = accepted.at(-1);
+  const last = record.ownerHistory.at(-1) ?? accepted.at(-1);
   return {
     slug: record.slug,
     branch: `spec/${record.slug}`,
@@ -90,7 +95,7 @@ export interface ResumeDeps {
   attach(branch: string): Promise<{ worktree: string }>;
   readRunRecord?(worktree: string, slug: string): Promise<string>;
   recordDeciding?(input: { branch: string; draftPrUrl?: string }): Promise<void>;
-  emit?(input: { slug: string; previousActor?: string; previousProvider?: string; ownership: 'unchanged' | 'taken-over' }): Promise<void>;
+  emit?(input: { slug: string; worktreePath: string; previousActor?: string; previousProvider?: string; ownership: 'unchanged' | 'taken-over' }): Promise<void>;
 }
 
 /** Attach an existing run. The caller chooses the project and host; this module never infers either. */
@@ -106,6 +111,6 @@ export async function resumeComposerRun(value: string, deps: ResumeDeps): Promis
   const context = contextForRun(record);
   await deps.recordDeciding?.({ branch: resolved.branch, draftPrUrl: resolved.draftPrUrl });
   const previous = [...RUN_STEP_ORDER].reverse().map((step) => record.steps[step]).find((step) => step?.state === 'accepted');
-  await deps.emit?.({ slug, ownership: 'unchanged', ...(previous?.state === 'accepted' ? { previousActor: previous.actor, previousProvider: previous.provider } : {}) });
+  await deps.emit?.({ slug, worktreePath: attached.worktree, ownership: 'unchanged', ...(previous?.state === 'accepted' ? { previousActor: previous.actor, previousProvider: previous.provider } : {}) });
   return { worktree: attached.worktree, context };
 }
