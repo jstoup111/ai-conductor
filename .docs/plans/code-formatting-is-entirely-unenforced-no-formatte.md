@@ -375,3 +375,12 @@ Task 1 ─▶ Task 2 ─▶ Task 3 ─▶ Task 4 ─▶ Task 5 ─▶ Task 6 ─
 **Done when:**
 - [test] S2.3 is satisfied by this task.
 - The repair for task rem-prd-audit-5-r1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-5-r2: In src/conductor/scripts/format.mjs, skip every candidate path whose lstat is not a regular file (symlinks, including directory symlinks, and directories) before parserFor reads it. Add a format-script.test.ts case in the createRepository() fixture repo (never the real repo) that commits a directory symlink with no extension (e.g. `.claude/skills/x -> ../../dir`) and a non-canonical in-scope TypeScript file. Assert that `--write --all` exits 0 without EISDIR, the TypeScript file is rewritten to canonical form, the symlink is still a symlink, and a following `--check --all` exits 0. Keep the existing --all tests unchanged.
+**Gate:** prd-audit
+**Rationale:** Verified: running `node scripts/format.mjs --check --all` in the real checkout crashes with an unhandled EISDIR. There are 21 tracked mode-120000 entries, and the `.claude/skills/*` ones are directory symlinks. parserFor (format.mjs:26-27) treats them as extensionless and calls readFileSync outside the per-file try/catch, so `--all` aborts before it processes most in-scope files. S2.3 says `--write --all` puts every in-scope tracked file in canonical form, so this is an implementation defect. Task 5 already admits it: its Steps cover implementing the `--all` candidate source, and its Files list includes format.mjs and format-script.test.ts. The approved architecture is unchanged and no product decision is needed, so this is BUILD work. The earlier lap (rem-prd-audit-5-r1) added a fixture test without symlinks and could not catch this. The repair keeps every existing test, including the r1 all-files test and Task 6's ignored/unsafe --all test. It adds one guard: any tracked path that is not a regular file is skipped before it is read, which covers both symlinks and directories. Excluded sibling: the --base candidate source can also list a changed symlink. The same guard in the shared loop covers it, so no extra scope is needed.
+**Criterion:** S2.3
+**Parent task:** 5
+**Done when:**
+- [test] S2.3 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-5-r2 is committed and its targeted tests pass.
