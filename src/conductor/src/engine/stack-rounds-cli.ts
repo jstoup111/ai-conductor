@@ -43,6 +43,11 @@ export type RoundSupersessionCheck =
     readonly droppedHosts: readonly ChildId[];
     readonly findingIds: readonly string[];
   }
+  | {
+    readonly kind: 'leaf-return';
+    readonly stored: Extract<ReadRouteRecordResult, { readonly kind: 'record' }>;
+    readonly hosts: readonly ChildId[];
+  }
   | { readonly kind: 'refused'; readonly detail: string };
 
 export interface SupersedeRoundInput {
@@ -159,9 +164,13 @@ export async function checkRoundSupersession(
   }
 
   const droppedHosts: ChildId[] = [];
+  const leafReturnHosts: ChildId[] = [];
+  let admittedHost: string | undefined;
+  let hostRefusal: string | undefined;
   for (const [host, state] of Object.entries(stored.record.hosts)) {
     const child = parseChildId(Number(host));
     if (child === undefined) return { kind: 'refused', detail: `routing round ${roundId} has invalid host ${host}` };
+    leafReturnHosts.push(child);
     switch (state) {
       case 'pending':
         droppedHosts.push(child);
@@ -171,12 +180,15 @@ export async function checkRoundSupersession(
       case 'rerouted':
         continue;
       case 'admitted':
+        admittedHost ??= host;
+        continue;
       case 'repairing':
       case 'reroute-moved':
       case 'built':
       case 'abandoning':
       case 'abandoned':
-        return { kind: 'refused', detail: `routing round ${roundId} host ${host} is ${state}` };
+        hostRefusal ??= `routing round ${roundId} host ${host} is ${state}`;
+        continue;
     }
     assertNever(state);
   }
@@ -184,9 +196,6 @@ export async function checkRoundSupersession(
   const marker = await readMarker(worktree, slug, { git });
   if (marker.kind === 'unreadable') {
     return { kind: 'refused', detail: `routing round ${roundId}: repair marker is unreadable` };
-  }
-  if (marker.kind === 'marker' && marker.marker.roundId === roundId) {
-    return { kind: 'refused', detail: `routing round ${roundId}: marker holds ${roundId}` };
   }
 
   const listed = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
@@ -206,7 +215,17 @@ export async function checkRoundSupersession(
     if (survivor === undefined && other.record.phase !== 'closed') survivor = other;
   }
   if (survivor === undefined) {
-    return { kind: 'refused', detail: `closing sole non-closed round ${roundId} would skip the leaf return` };
+    if (hostRefusal !== undefined) return { kind: 'refused', detail: hostRefusal };
+    if (marker.kind === 'marker' && marker.marker.roundId !== roundId) {
+      return { kind: 'refused', detail: `routing round ${roundId}: marker holds ${marker.marker.roundId}` };
+    }
+    return { kind: 'leaf-return', stored, hosts: leafReturnHosts };
+  }
+
+  if (hostRefusal !== undefined) return { kind: 'refused', detail: hostRefusal };
+  if (admittedHost !== undefined) return { kind: 'refused', detail: `routing round ${roundId} host ${admittedHost} is admitted` };
+  if (marker.kind === 'marker' && marker.marker.roundId === roundId) {
+    return { kind: 'refused', detail: `routing round ${roundId}: marker holds ${roundId}` };
   }
 
   droppedHosts.sort((left, right) => left - right);
@@ -354,7 +373,7 @@ export async function dispatchStackRoundsCommand(
       reason,
       operator: operator.trim(),
       ...(deps.git === undefined ? {} : { git: deps.git }),
-    });
+    } as SupersedeRoundInput);
     if (result.kind === 'refused') return refused(print, result.detail);
     // ai-conductor:session-command-context=operator-only
     print(`stack rounds: closed ${roundId}; dropped hosts ${checked.droppedHosts.join(', ') || 'none'}; finding ids ${checked.findingIds.join(', ') || 'none'}; reason ${reason}. Clear any HALT with ai-conductor halt clear before the daemon resumes.`);

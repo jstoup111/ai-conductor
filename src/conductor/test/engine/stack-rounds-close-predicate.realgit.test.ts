@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { CHILD_REGION_STEPS, parseChildId } from '../../src/engine/child-context.js';
 import { parseCommitSha } from '../../src/engine/restack/restack-types.js';
-import { checkRoundSupersession, supersedeRound } from '../../src/engine/stack-rounds-cli.js';
+import { checkRoundSupersession, dispatchStackRoundsCommand, supersedeRound } from '../../src/engine/stack-rounds-cli.js';
 import { createRouteRecord, readRouteRecord, writeRoutingTransaction } from '../../src/engine/routing/route-record-store.js';
 import { repairMarkerRefFor, routeRecordRefFor } from '../../src/engine/routing/routing-refs.js';
 import { parseRoundId, type RouteRecord } from '../../src/engine/routing/route-types.js';
@@ -52,6 +52,31 @@ async function fixture() {
   return subject;
 }
 
+async function soleAuditFixture(
+  markerRoundId: typeof r2 | typeof r3 | undefined = r2,
+  hostState: RouteRecord['hosts'][number] = 'admitted',
+) {
+  const subject = await createSweepRepository('stack-rounds-close-leaf-return-', cleanup);
+  await subject.git(['commit', '-qm', 'initial']);
+  await openAudit(subject, r2, { [c1]: hostState }, []);
+  if (markerRoundId !== undefined) {
+    await pointRefAtBlobText(subject, repairMarkerRefFor(slug), JSON.stringify({ host: c1, roundId: markerRoundId }));
+  }
+  return subject;
+}
+
+function closeCommandDeps(subject: Awaited<ReturnType<typeof createSweepRepository>>, output: string[]) {
+  return {
+    cwd: subject.repo,
+    resolveMainRoot: async () => subject.repo,
+    resolveWorktree: async () => subject.repo,
+    loadConfig: async () => ({ ok: true, config: { stacked_prs: { route_whole_feature_fixes: true } }, warnings: [] }),
+    hasDurableChildState: async () => true,
+    resolveOperator: async () => 'operator',
+    print: (line: string) => output.push(line),
+  };
+}
+
 async function routeRefs(subject: Awaited<ReturnType<typeof createSweepRepository>>): Promise<string> {
   return (await subject.git(['for-each-ref', '--format=%(refname) %(objectname)', `refs/conductor/${slug}/`])).stdout;
 }
@@ -86,6 +111,109 @@ async function pointRefAtBlobText(
 }
 
 describe('stack rounds close predicate (real local Git)', () => {
+  // Covers: task:10
+  it('admits a sole open audit round with an admitted host when its marker names the round or is absent', async () => {
+    const marked = await soleAuditFixture();
+    const absent = await soleAuditFixture(undefined);
+
+    await expect(checkRoundSupersession(marked.repo, slug, r2)).resolves.toMatchObject({
+      kind: 'leaf-return', hosts: [c1],
+    });
+    await expect(checkRoundSupersession(absent.repo, slug, r2)).resolves.toMatchObject({
+      kind: 'leaf-return', hosts: [c1],
+    });
+  });
+
+  // Covers: task:10
+  it.each(['repairing', 'built', 'abandoning', 'abandoned'] as const)(
+    'refuses closing a sole round whose host is %s without changing routing refs',
+    async (state) => {
+      const subject = await soleAuditFixture(r2, state);
+      const before = await routeRefs(subject);
+      const output: string[] = [];
+
+      await expect(dispatchStackRoundsCommand({ kind: 'stack-rounds-close', slug, roundId: r2, reason: 'leaf return' }, closeCommandDeps(subject, output) as never)).resolves.toBe(1);
+
+      expect(output.join('\n')).toContain(`host 1 is ${state}`);
+      expect(await routeRefs(subject)).toBe(before);
+    },
+  );
+
+  // Covers: task:10
+  it('refuses closing a sole round whose host is reroute-moved without changing routing refs', async () => {
+    const subject = await soleAuditFixture();
+    const stored = await readRouteRecord(subject.repo, slug, r2);
+    if (stored.kind !== 'record') throw new Error('missing r2');
+    const before = await routeRefs(subject);
+    const output: string[] = [];
+
+    await expect(dispatchStackRoundsCommand({ kind: 'stack-rounds-close', slug, roundId: r2, reason: 'leaf return' }, {
+      ...closeCommandDeps(subject, output),
+      readRouteRecord: async (worktree, feature, id, dependencies) => id === r2
+        ? { ...stored, record: { ...stored.record, hosts: { [c1]: 'reroute-moved' } } }
+        : readRouteRecord(worktree, feature, id, dependencies),
+    } as never)).resolves.toBe(1);
+
+    expect(output.join('\n')).toContain('host 1 is reroute-moved');
+    expect(await routeRefs(subject)).toBe(before);
+  });
+
+  // Covers: task:10
+  it('refuses closing a sole round with an in-progress reroute without changing routing refs', async () => {
+    const subject = await createSweepRepository('stack-rounds-close-reroute-', cleanup);
+    await subject.git(['commit', '-qm', 'initial']);
+    await openAudit(subject, r2, { [c1]: 'restacked', [c2]: 'pending' }, []);
+    await replaceRound(subject, r2, (record) => ({
+      ...record,
+      hosts: { [c1]: 'reroute-moved', [c2]: 'pending' },
+      currentHostIndex: 1,
+      fallback: [{ from: c1, to: c2, evidence: ['because'], branch: 'feat/c1/demo', head: parseCommitSha('1'.repeat(40))! }],
+      reroute: {
+        sourceBranch: 'feat/c1/demo', rejectedTip: parseCommitSha('1'.repeat(40))!,
+        resetTip: parseCommitSha('1'.repeat(40))!, destination: c2,
+      },
+    }));
+    await pointRefAtBlobText(subject, repairMarkerRefFor(slug), JSON.stringify({ host: c2, roundId: r2 }));
+    const before = await routeRefs(subject);
+    const output: string[] = [];
+
+    await expect(dispatchStackRoundsCommand({ kind: 'stack-rounds-close', slug, roundId: r2, reason: 'leaf return' }, closeCommandDeps(subject, output) as never)).resolves.toBe(1);
+
+    expect(output.join('\n')).toContain('in-progress reroute');
+    expect(await routeRefs(subject)).toBe(before);
+  });
+
+  // Covers: task:10
+  it('refuses closing a sole round when the marker names a different round without changing routing refs', async () => {
+    const subject = await soleAuditFixture(r3);
+    const before = await routeRefs(subject);
+    const output: string[] = [];
+
+    await expect(dispatchStackRoundsCommand({ kind: 'stack-rounds-close', slug, roundId: r2, reason: 'leaf return' }, closeCommandDeps(subject, output) as never)).resolves.toBe(1);
+
+    expect(output.join('\n')).toContain(`marker holds ${r3}`);
+    expect(await routeRefs(subject)).toBe(before);
+  });
+
+  // Covers: task:10
+  it('keeps the survivor close predicate when another round remains open', async () => {
+    const subject = await fixture();
+    const stored = await readRouteRecord(subject.repo, slug, r4);
+    if (stored.kind !== 'record') throw new Error('missing r4');
+    const before = await routeRefs(subject);
+    const output: string[] = [];
+
+    await expect(dispatchStackRoundsCommand({ kind: 'stack-rounds-close', slug, roundId: r4, reason: 'newer round' }, {
+      ...closeCommandDeps(subject, output),
+      readRouteRecord: async (worktree, feature, id, dependencies) => id === r4
+        ? { ...stored, record: { ...stored.record, hosts: { [c1]: 'restacked', [c2]: 'admitted' } } }
+        : readRouteRecord(worktree, feature, id, dependencies),
+    } as never)).resolves.toBe(1);
+
+    expect(output.join('\n')).toContain(`host 2 is admitted`);
+    expect(await routeRefs(subject)).toBe(before);
+  });
+
   // Covers: task:4
   it('admits r4 behind r5 and identifies its dropped host findings without writes', async () => {
     const subject = await fixture();
@@ -153,13 +281,13 @@ describe('stack rounds close predicate (real local Git)', () => {
   });
 
   // Covers: task:5
-  it('refuses the sole non-closed round and non-audit rounds without writes', async () => {
+  it('admits the sole non-closed audit round and refuses non-audit rounds without writes', async () => {
     const sole = await createSweepRepository('stack-rounds-close-sole-', cleanup);
     await sole.git(['commit', '-qm', 'initial']);
     await openAudit(sole, r4, { [c1]: 'restacked', [c2]: 'pending' }, []);
     const soleBefore = await routeRefs(sole);
     await expect(checkRoundSupersession(sole.repo, slug, r4)).resolves.toMatchObject({
-      kind: 'refused', detail: expect.stringContaining(`sole non-closed round ${r4} would skip the leaf return`),
+      kind: 'leaf-return', hosts: [c1, c2],
     });
     expect(await routeRefs(sole)).toBe(soleBefore);
 
