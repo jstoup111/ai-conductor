@@ -7,31 +7,31 @@
 // Extracting the mechanism gives the harness ONE worktree story (PRD non-functional
 // "Parity") and lets the engineer inherit the daemon's leftover-branch reconciliation.
 //
-// The three create cases (unchanged from the daemon's original logic, so the daemon
-// path stays byte-identical):
+// The four create cases:
 //   1. a worktree is already registered for this path            → reuse it (resume)
 //   2. the branch exists but its worktree was removed            → attach a worktree
-//   3. neither exists                                            → fresh branch+worktree
+//   3. only the remote-tracking branch exists                    → fetch a tracking worktree
+//   4. neither exists                                            → fresh branch+worktree
 //
-// The base ref for case 3 is resolved LAZILY (only when a fresh branch is cut) so the
+// The base ref for case 4 is resolved LAZILY (only when a fresh branch is cut) so the
 // reuse/attach paths issue no extra git call — the daemon-deps test asserts this exact
 // call ordering.
 
 import { execa } from 'execa';
 import { join, sep } from 'node:path';
 
-/** Which of the three reconciliation cases fired — surfaced so callers can report it (FR-11). */
-export type WorktreeReconcile = 'reused' | 'attached' | 'created';
+/** Which reconciliation case fired — surfaced so callers can report it (FR-11). */
+export type WorktreeReconcile = 'reused' | 'attached' | 'fetched' | 'created';
 
 export interface EnsureWorktreeOpts {
   /** The primary checkout the worktree is added to. */
   root: string;
   /** Absolute path of the per-feature worktree directory. */
   path: string;
-  /** Branch to check out in the worktree (created fresh in case 3, attached in case 2). */
+  /** Branch to check out in the worktree (fetched in case 3, created fresh in case 4, attached in case 2). */
   branch: string;
   /**
-   * Lazily resolves the base ref a FRESH branch forks from (case 3 only). Not invoked
+   * Lazily resolves the base ref a FRESH branch forks from (case 4 only). Not invoked
    * on the reuse/attach paths — keeping those paths free of an extra git call.
    */
   resolveBase: () => Promise<string>;
@@ -60,6 +60,11 @@ export async function ensureWorktree(opts: EnsureWorktreeOpts): Promise<EnsureWo
     log?.(`attaching worktree to existing branch ${branch}`);
     await execa('git', ['worktree', 'add', path, branch], { cwd: root });
     return { path, branch, reconcile: 'attached' };
+  }
+
+  if (await remoteBranchExists(root, branch)) {
+    await execa('git', ['worktree', 'add', '--track', '-b', branch, path, `origin/${branch}`], { cwd: root });
+    return { path, branch, reconcile: 'fetched' };
   }
 
   const base = await resolveBase();
@@ -110,6 +115,16 @@ export async function isRegisteredWorktree(root: string, path: string): Promise<
 export async function branchExists(root: string, branch: string): Promise<boolean> {
   try {
     await execa('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], { cwd: root });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** True if the remote-tracking branch named `branch` exists in `root`. */
+async function remoteBranchExists(root: string, branch: string): Promise<boolean> {
+  try {
+    await execa('git', ['show-ref', '--verify', '--quiet', `refs/remotes/origin/${branch}`], { cwd: root });
     return true;
   } catch {
     return false;
