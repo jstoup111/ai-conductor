@@ -19,6 +19,40 @@ export interface ResumeContext {
   readonly lastAt?: string;
 }
 
+/** Local state is explicit at resume boundaries; callers must choose, never overwrite. */
+export interface ResumeLeftovers {
+  readonly dirtyDocs: readonly string[];
+  readonly unpushedCommits: readonly string[];
+}
+
+export type ResumeLocalChoice = 'keep-local' | 'discard-local' | 'refuse';
+
+export function chooseResumeLocalState(input: {
+  leftovers: ResumeLeftovers;
+  interactive: boolean;
+  choice?: 'keep-local' | 'discard-local';
+  fastForwardable: boolean;
+}): ResumeLocalChoice {
+  if (input.leftovers.dirtyDocs.length === 0 && input.leftovers.unpushedCommits.length === 0) return 'keep-local';
+  if (!input.interactive || !input.choice) return 'refuse';
+  if (input.choice === 'keep-local' && !input.fastForwardable) return 'refuse';
+  return input.choice;
+}
+
+/** Engine sessions cannot take over another operator's local decision branch. */
+export function resumeOwnershipMode(input: {
+  committedOwner?: string;
+  machineOwner?: string;
+  daemonSession: boolean;
+  interactive: boolean;
+  approved?: boolean;
+}): 'unchanged' | 'taken-over' | 'local-only' {
+  if (!input.machineOwner) throw new Error('compose resume: machine identity is unresolved');
+  if (!input.committedOwner || input.committedOwner === input.machineOwner) return 'unchanged';
+  if (input.daemonSession || !input.interactive || input.approved !== true) return 'local-only';
+  return 'taken-over';
+}
+
 /** Parse the only stable resume selectors; GitHub resolution is deliberately injected. */
 export function parseResumeTarget(value: string): ResumeTarget {
   if (/^\d+$/.test(value)) return { kind: 'pr', number: Number(value) };

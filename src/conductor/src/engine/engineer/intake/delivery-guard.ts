@@ -128,6 +128,8 @@ export interface DeliveryGuardDeps {
   gh: GhRunner;
   logger?: Logger;
   config?: HarnessConfig;
+  /** Read-only lookup for an issue already being decided on another spec branch. */
+  findCrossReferencedDraft?: (sourceRef: string) => Promise<{ branch: string; url: string } | undefined>;
 }
 
 /**
@@ -220,6 +222,25 @@ export function createDeliveryGuardedQueue(
 
       // Check if ledger has an entry for this candidate
       const entry = await ledger.get(source, sourceRef);
+
+      // An issue can be re-captured on a second machine while its first Composer
+      // run is still a draft.  Claim must discover that durable remote fact before
+      // it serves a brand-new candidate.  Failure is deliberately conservative:
+      // leave the candidate pending rather than creating competing spec branches.
+      if (!entry && source === 'github-issues' && deps.findCrossReferencedDraft) {
+        try {
+          const inFlight = await deps.findCrossReferencedDraft(sourceRef);
+          if (inFlight) {
+            await ledger.record({ source, sourceRef });
+            await ledger.transition(source, sourceRef, 'deciding', { branch: inFlight.branch, draftPrUrl: inFlight.url });
+            await queue.ack(candidate);
+            return innerClaim();
+          }
+        } catch {
+          held.push(candidate);
+          return innerClaim();
+        }
+      }
 
       // Healthy path: no ledger entry (non-recording source) or pending status
       if (!entry || entry.status === 'pending' || entry.status === 'unseen') {
