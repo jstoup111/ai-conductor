@@ -92,6 +92,7 @@ describe('worktree-shared/ensureWorktree', () => {
     expect(resolveBase).not.toHaveBeenCalled();
   });
 
+  // Covers: task:11
   it('reuses an already-registered worktree without adding (resume)', async () => {
     const { addCalls } = routeGit({ worktreeListed: true, branchExists: true });
     const resolveBase = vi.fn(async () => 'main');
