@@ -129,7 +129,7 @@ export function refusalRoundFault(outcome?: RefusalRoundOutcome): string | undef
 }
 
 export type RefusalRoundOutcome =
-  | { kind: 'halt'; detail: string; haltClass?: string; refusalAdmissionRejected?: true }
+  | { kind: 'halt'; detail: string; haltClass?: string; refusalAdmissionRejected?: true; routingFence?: true }
   | { kind: 'none'; reason: string };
 
 export function thrownRefusalRoundFault(error: unknown): { kind: 'none'; reason: string } {

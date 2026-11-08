@@ -38,7 +38,7 @@ import { admitRound } from '../../src/engine/routing/round-admission.js';
 import { createRouteRecord, readRepairMarker, readRouteRecord, transitionHost, writeRoutingTransaction } from '../../src/engine/routing/route-record-store.js';
 import { requestRoutedExit } from '../../src/engine/routing/routed-exit.js';
 import { closureRefFor, repairMarkerRefFor, routeRecordRefFor } from '../../src/engine/routing/routing-refs.js';
-import { parseRoundId } from '../../src/engine/routing/route-types.js';
+import { emptyUnsettledReceipt, parseRoundId } from '../../src/engine/routing/route-types.js';
 import { writeState } from '../../src/engine/state.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
@@ -87,11 +87,11 @@ function failOnlyDecisionStopMutation() {
   });
 }
 
-function aggregate(kind: 'judged' | 'mixed'): unknown {
+function aggregate(kind: 'judged' | 'mixed', lapId = LAP_ID): unknown {
   return joinBuildReviewRubricOutcomes({
-    lapId: LAP_ID, snapshotDigest: SNAPSHOT,
+    lapId, snapshotDigest: SNAPSHOT,
     results: kind === 'judged'
-      ? { testQuality: { kind: 'judged', rubric: 'testQuality', lapId: LAP_ID, snapshotDigest: SNAPSHOT, contractVersion: 'v3', findings: [FINDING], verdict: 'FAIL' } }
+      ? { testQuality: { kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: SNAPSHOT, contractVersion: 'v3', findings: [FINDING], verdict: 'FAIL' } }
       : { testQuality: { kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'provider-error', detail: 'provider unavailable' } },
   });
 }
@@ -393,6 +393,8 @@ interface FixtureOptions {
   readonly stacked?: boolean;
   /** Forces the durable clean-PASS settlement boundary for its caller test. */
   readonly cleanPassSettlement?: { readonly kind: 'settled' } | { readonly kind: 'invalid'; readonly reason: string };
+  /** Writes the review artifact into a selected child-region overlay. */
+  readonly buildReviewChild?: Parameters<typeof pipelinePathFor>[2];
 }
 
 async function fixture(options: FixtureOptions = {}) {
@@ -449,7 +451,7 @@ async function fixture(options: FixtureOptions = {}) {
         return { success: true };
       }
       if (step === 'build_review') {
-        await writeFile(join(projectRoot, '.pipeline/build-review.json'), JSON.stringify(raw), 'utf8');
+        await writeFile(pipelinePathFor(projectRoot, 'build-review.json', options.buildReviewChild), JSON.stringify(raw), 'utf8');
         return { success: true };
       }
       return { success: true };
@@ -613,7 +615,10 @@ async function fixture(options: FixtureOptions = {}) {
  * exact topology: the assertion below compares durable blobs, not a mocked
  * child-lifecycle call.
  */
-async function advanceR2AfterBuildReview(options: { readonly adjudicated: boolean }) {
+async function advanceR2AfterBuildReview(options: {
+  readonly adjudicated: boolean;
+  readonly routedExit?: (input: Parameters<typeof requestRoutedExit>[0]) => ReturnType<typeof requestRoutedExit>;
+}) {
   const subject = await createSweepRepository('adjudication-r2-parity-', roots);
   const c1 = parseChildId(1)!;
   const c2 = parseChildId(2)!;
@@ -696,7 +701,7 @@ async function advanceR2AfterBuildReview(options: { readonly adjudicated: boolea
         return { kind: 'repair-pending' as const, child: c2, position: c2, isLeaf: true, branch: 'feat/daemon-demo', repairChildren: [c2], revalidating: { child: c2, generation: 1 } };
       },
       enterChildRegion: async () => ({ kind: 'completed' as const }),
-      requestRoutedExit: (input) => requestRoutedExit({ ...input, git }),
+      requestRoutedExit: options.routedExit ?? ((input) => requestRoutedExit({ ...input, git })),
     },
   } as never);
   await conductor.run().catch((error: unknown) => {
@@ -713,7 +718,123 @@ async function advanceR2AfterBuildReview(options: { readonly adjudicated: boolea
   return {
     route: route.stdout.trim(), marker: marker.stdout.trim(), r1Host: closedR1.record.hosts[c1], markerHost: activeMarker.marker.host,
     next: next.kind === 'repair-pending' ? { kind: next.kind, child: next.child, roundId: next.revalidating?.generation === undefined ? undefined : 'r2' } : { kind: next.kind }, starts,
+    halt: await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8').catch(() => ''),
   };
+}
+
+/**
+ * Runs the settled-FAIL success tail through its first whole-feature dispatch.
+ * The snapshot is taken from the runner at that boundary, before a mocked
+ * whole-feature gate can restage its own verdict.
+ */
+async function settledLeafReachesWholeFeature(topology: 'n1' | 'no-routes' | 'closed-routes') {
+  const subject = await createSweepRepository(`adjudication-settled-${topology}-`, roots);
+  const c1 = parseChildId(1)!;
+  const c2 = parseChildId(2)!;
+  const git = makeGitRunner(subject.repo);
+  const statePath = join(subject.repo, '.pipeline', 'conduct-state.json');
+  const feature = { version: 'v1' as const, repository: subject.repo, feature: 'demo' };
+  const starts: StepName[] = [];
+  let gateAtWholeFeature: unknown;
+  let refsBefore: string[] = [];
+  let refsAtWholeFeature: string[] = [];
+  const refs = async () => (await git(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/conductor/demo/']))
+    .stdout.split('\n').filter(Boolean).sort();
+
+  await subject.write('.ai-conductor/config.yml', topology === 'n1'
+    ? 'stacked_prs:\n  enabled: true\n  max_slices: 1\n  route_whole_feature_fixes: true\n'
+    : 'stacked_prs:\n  enabled: true\n  max_slices: 2\n  route_whole_feature_fixes: true\n');
+  await subject.git(['add', '.gitignore', '.ai-conductor/config.yml']);
+  await subject.git(['commit', '-qm', 'configure routing']);
+  await subject.commit('base', 'base.txt', 'base\n');
+
+  let child: ReturnType<typeof parseChildId>;
+  if (topology !== 'n1') {
+    await subject.git(['checkout', '-qb', 'feat/c1/demo']);
+    const closedOne = await subject.commit('closed child one', 'one.txt', 'one\n');
+    await subject.git(['update-ref', closureRefFor('demo', c1), closedOne]);
+    await subject.git(['checkout', '-qb', 'feat/c2/demo']);
+    const closedTwo = await subject.commit('closed child two', 'two.txt', 'two\n');
+    await subject.git(['update-ref', closureRefFor('demo', c2), closedTwo]);
+    await subject.git(['checkout', '-qb', 'feat/daemon-demo']);
+    await subject.commit('leaf', 'leaf.txt', 'leaf\n');
+    await subject.git(['checkout', '-q', 'feat/c1/demo']);
+    await subject.commit('routed repair', 'repair.txt', 'repair\n');
+    await sealStack(subject.repo, [1, 2]);
+    child = c2;
+    if (topology === 'closed-routes') {
+      const roundId = parseRoundId('r1')!;
+      const record = {
+        roundId, kind: 'audit' as const, phase: 'closed' as const,
+        items: [{ findingId: 'closed-finding', kind: 'audit', owner: c1, host: c1, reason: 'already settled', fallback: [] }],
+        allocation: { [c1]: { remTaskIds: ['closed-remediation'], blockBodies: ['### Task closed-remediation\n'] } },
+        hosts: { [c1]: 'restacked' as const }, currentHostIndex: 0,
+        receipt: emptyUnsettledReceipt(), outbox: [],
+      };
+      const blob = (await git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(record) })).stdout.trim();
+      await git(['update-ref', routeRecordRefFor('demo', roundId), blob]);
+    }
+  } else {
+    child = undefined;
+  }
+
+  const rootState = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])) as ConductState;
+  rootState.manual_test = 'pending';
+  await writeState(statePath, { ...rootState, feature_desc: 'demo', complexity_tier: 'M' });
+  if (child !== undefined) {
+    await writeState(pipelinePathFor(subject.repo, 'conduct-state.json', child), {
+      feature_desc: 'demo', acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'pending',
+    });
+  } else {
+    rootState.build_review = 'pending';
+    await writeState(statePath, { ...rootState, feature_desc: 'demo', complexity_tier: 'M' });
+  }
+  refsBefore = await refs();
+  const head = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+  const lapId = parseBuildReviewLapId(`lap-${head}`);
+  if (!lapId) throw new Error(`could not derive build-review lap from ${head}`);
+  const raw = aggregate('judged', lapId);
+
+  const events = new ConductorEventEmitter();
+  events.on('step_started', (event) => { if (event.type === 'step_started') starts.push(event.step); });
+  const resolver: NonNullable<CompletionContext['buildReviewEffectiveResolver']> = async () => ({
+    ok: true as const, feature,
+    effective: {
+      rawVerdict: 'FAIL' as const, verdict: 'PASS' as const, acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], settledFindingIds: [],
+      skippedRubrics: [], infrastructureFailureRubrics: ['testQuality'], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [], hasRecordedReducedCoverage: true,
+    },
+  }) as never;
+  const conductor = new Conductor({
+    projectRoot: subject.repo, stateFilePath: statePath, featureSlug: 'demo', fromStep: 'build_review', mode: 'auto', daemon: true, verifyArtifacts: true,
+    events, config: {
+      stacked_prs: { enabled: true, max_slices: topology === 'n1' ? 1 : 2, route_whole_feature_fixes: true },
+      build_review: { adjudication: { enabled: true }, rubrics: { testQuality: { enabled: true, min_confidence: 70 } } },
+    }, buildReviewEffectiveResolver: resolver,
+    stepRunner: {
+      run: async (step) => {
+        if (step === 'build_review') {
+          await writeFile(pipelinePathFor(subject.repo, 'build-review.json', child), JSON.stringify(raw), 'utf8');
+          return { success: false };
+        }
+        if (step === 'manual_test') {
+          gateAtWholeFeature = JSON.parse(await readFile(pipelinePathFor(subject.repo, 'gates/build_review.json', child), 'utf8'));
+          refsAtWholeFeature = await refs();
+          throw new Error('stop after settled whole-feature dispatch');
+        }
+        return { success: true };
+      },
+    },
+    ...(child === undefined ? {} : { childRegionLifecycle: {
+      resolveActiveChild: async () => ({ kind: 'active' as const, child, position: child, isLeaf: true, branch: 'feat/daemon-demo' }),
+      enterChildRegion: async () => ({ kind: 'completed' as const }),
+    } }),
+  } as never);
+  await conductor.run().catch((error: unknown) => {
+    if (!(error instanceof Error) || !error.message.startsWith('stop after settled whole-feature dispatch')) throw error;
+  });
+  gateAtWholeFeature = JSON.parse(await readFile(pipelinePathFor(subject.repo, 'gates/build_review.json', child), 'utf8'));
+  refsAtWholeFeature = await refs();
+  return { starts, gateAtWholeFeature, refsBefore, refsAtWholeFeature };
 }
 
 const task26Filesystem = {
@@ -1765,6 +1886,60 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(afterAdjudicationSettlement).toEqual(afterCleanPass);
     expect(afterCleanPass.next).toEqual({ kind: 'repair-pending', child: 2, roundId: 'r2' });
     expect(afterCleanPass.starts.filter((step) => ['manual_test', 'prd_audit', 'architecture_review_as_built'].includes(step))).toEqual([]);
+  });
+
+  // Covers: task:3
+  it('keeps the routed-exit refusal HALT and repair marker after adjudication settlement', async () => {
+    const run = await advanceR2AfterBuildReview({
+      adjudicated: true,
+      routedExit: async (input) => {
+        await writeFile(join(input.worktree, '.pipeline', 'HALT'), 'routed exit host 1: restack rolled back\n', 'utf8');
+        return { kind: 'halted', detail: 'routed exit host 1: restack rolled back' };
+      },
+    });
+
+    expect(run.halt).toContain('routed exit host 1: restack rolled back');
+    expect(run.r1Host).toBe('repairing');
+    expect(run.markerHost).toBe(1);
+    expect(run.starts.filter((step) => ['manual_test', 'prd_audit', 'architecture_review_as_built'].includes(step))).toEqual([]);
+  });
+
+  // Covers: task:3
+  it('halts an ordinary child region-exit refusal after adjudication settlement', async () => {
+    const first = { child: parseChildId(1)!, position: parseChildId(1)!, isLeaf: false, branch: 'feat/c1/adjudicated-feature' };
+    const run = await fixture({
+      stacked: true,
+      infrastructure: 'covered',
+      buildReviewChild: first.child,
+      seedPipeline: async (root) => {
+        await mkdir(join(root, '.pipeline', 'children', '1'), { recursive: true });
+        await writeState(join(root, '.pipeline', 'children', '1', 'conduct-state.json'), {
+          feature_desc: 'adjudicated-feature', acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'pending',
+        });
+      },
+      childRegionLifecycle: {
+        resolveActiveChild: async () => ({ kind: 'active' as const, ...first }),
+        enterChildRegion: async () => ({ kind: 'completed' as const }),
+        advanceChildRegion: async () => ({ kind: 'refused' as const, reason: 'closure CAS lost' }),
+      },
+    });
+
+    expect(await run.haltMarker()).toContain('child 1 region exit refused: closure CAS lost');
+    expect(run.stepStarts.filter((event) => event.type === 'step_started' &&
+      ['manual_test', 'prd_audit', 'architecture_review_as_built'].includes(event.step))).toEqual([]);
+  });
+
+  // Covers: task:3
+  it.each([
+    ['an N=1 feature', 'n1'],
+    ['the leaf of a stack without route refs', 'no-routes'],
+    ['the leaf of a stack with only closed route refs', 'closed-routes'],
+  ] as const)('marks build_review satisfied and advances %s after adjudication settlement', async (_label, topology) => {
+    const run = await settledLeafReachesWholeFeature(topology);
+
+    expect(run.starts).toContain('manual_test');
+    expect(run.gateAtWholeFeature).toMatchObject({ satisfied: true });
+    expect(run.refsAtWholeFeature).toEqual(run.refsBefore);
   });
 
   // Covers: task:2

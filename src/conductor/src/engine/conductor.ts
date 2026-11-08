@@ -4381,6 +4381,26 @@ export class Conductor {
     return reason;
   }
 
+  /** A refused admission fence defers routing; it does not reopen scope. */
+  private async writeRoutingFenceRefusalHalt(
+    slug: string | undefined,
+    detail: string,
+    refused: readonly OverScopeRenderableFinding[],
+  ): Promise<string> {
+    let reason = detail;
+    if (slug !== undefined) {
+      const affected = await diagnoseAffectedRounds(this.projectRoot, slug);
+      const stall = await recordRoundStall(this.projectRoot, slug, {
+        kind: 'stalled', detail, rounds: affected.kind === 'affected' ? affected.rounds : [],
+      }, this.events);
+      reason = stall.detail;
+      await this.writeHaltMarker(`${reason}\nFindings: ${[...new Set(refused.map((finding) => finding.criterion))].join(', ')}\n`, stall.haltClass ?? 'needs-human');
+      return `${reason}\nFindings: ${[...new Set(refused.map((finding) => finding.criterion))].join(', ')}`;
+    }
+    await this.writeHaltMarker(`${reason}\nFindings: ${[...new Set(refused.map((finding) => finding.criterion))].join(', ')}\n`, 'needs-human');
+    return `${reason}\nFindings: ${[...new Set(refused.map((finding) => finding.criterion))].join(', ')}`;
+  }
+
   /**
    * A refusal whose prd_audit allowance is spent halts as a recoverable
    * kickback cap: the refused block stays visible, but the class, cap evidence
@@ -4453,6 +4473,8 @@ export class Conductor {
       kickbackOutcome?: string;
       /** The planner did not bind every refusal; `detail` is the refused block itself. */
       refusalAdmissionRejected?: true;
+      /** A route-admission fence is routing deferral, never an over-scope decision request. */
+      routingFence?: true;
     }
     | { kind: 'none'; reason: string }
   > {
@@ -5556,7 +5578,7 @@ export class Conductor {
             const priorSealed = await routedSealedAuthored(this.projectRoot, this.featureSlug, { cursor, config: this.config });
             const sealedAuthored = priorSealed ?? countAuthoredTaskHeadings(planText);
             const fence = await checkRoundAdmissionFence(this.projectRoot, this.featureSlug, { roundId, kind: 'audit' });
-            if (fence !== undefined) return { kind: 'halt', haltClass: fence.fence ? 'mechanical' : 'needs-human', detail: fence.detail };
+            if (fence !== undefined) return { kind: 'halt', haltClass: fence.fence ? 'mechanical' : 'needs-human', detail: fence.detail, ...(fence.fence ? { routingFence: true as const } : {}) };
             const created = await createRouteRecord(this.projectRoot, this.featureSlug, {
               roundId, kind: 'audit', items: routed.items, allocation: routed.allocation, receipt, sealedAuthored,
               pendingAsBuiltFindings: [...this.pendingAsBuiltRemediationFindings.values()],
@@ -5570,7 +5592,7 @@ export class Conductor {
                 return 'persisted';
               },
             });
-            if (admission.kind !== 'admitted') return { kind: 'halt', haltClass: admission.fence ? 'mechanical' : 'needs-human', detail: admission.detail };
+            if (admission.kind !== 'admitted') return { kind: 'halt', haltClass: admission.fence ? 'mechanical' : 'needs-human', detail: admission.detail, ...(admission.fence ? { routingFence: true as const } : {}) };
             return { kind: 'route', target: 'build', hint: routed.hostHints[firstHost] ?? buildRemediationHint(routedFixes, hintSource.source, ''), evidence: `routed round ${roundId}` };
           }
         }
@@ -6432,6 +6454,73 @@ export class Conductor {
       return { index: indexOf('acceptance_specs'), activeChild: next.target };
     }
     await this.haltChildRegionRefusal(await this.renderChildCursorRefusal(nextCursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
+    return 'halt';
+  }
+
+  /**
+   * Whole-feature validators must never overtake durable routed work.  This
+   * runs before their completed-state short circuit so resume cannot walk past
+   * a host which was green when the process stopped but whose exit was not yet
+   * committed.
+   */
+  private async guardOutstandingRoutedWork(
+    state: ConductState,
+    indexOf: (name: StepName) => number,
+  ): Promise<{ readonly index: number; readonly activeChild?: ActiveChildLifecycleTarget } | 'halt' | undefined> {
+    const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+    if (!slug || this.config.stacked_prs?.route_whole_feature_fixes !== true) return undefined;
+
+    const leaf = await resolveSealedLeaf(this.projectRoot);
+    const outstanding = await routedWorkOutstanding(this.projectRoot, slug, {
+      routingEnabled: true,
+      sealedLeaf: leaf,
+    });
+    if (outstanding.kind === 'none') return undefined;
+
+    // First give a fully satisfied marker host its normal exit. This is the
+    // only path which is allowed to close a host; reconciliation below merely
+    // chooses work that still needs its BUILD region.
+    if (outstanding.kind === 'child' || outstanding.kind === 'leaf-host') {
+      const cursor = await this.resolveActiveChild(this.projectRoot, slug);
+      const execution = resolveExecutionChild(cursor, slug);
+      if (execution.source === 'routed-host') {
+        await this.activateChildRegionState(state, execution.target.child, execution.target.isLeaf);
+        const exited = await this.continueRoutedHostExit(state, indexOf, true);
+        if (exited !== undefined) return exited;
+      }
+    }
+
+    // Reconciliation is the existing authority for both a pending host and a
+    // queued revalidation.  It may advance durable routing state, whereas the
+    // classifier above intentionally only reads it.
+    const reconciled = await reconcileRounds(this.projectRoot, slug);
+    const admission = await admitQueuedRevalidation({
+      worktree: this.projectRoot,
+      slug,
+      reconciled,
+    });
+    if (admission.kind === 'admitted') {
+      const cursor = await this.resolveActiveChild(this.projectRoot, slug);
+      const execution = resolveExecutionChild(cursor, slug);
+      if (execution.source === 'routed-host' || execution.source === 'revalidating' || execution.source === 'cursor') {
+        await this.activateChildRegionState(state, execution.target.child, execution.target.isLeaf);
+        return { index: indexOf('acceptance_specs'), activeChild: execution.target };
+      }
+    }
+    if (admission.kind === 'continue' || admission.kind === 'busy') {
+      const cursor = await this.resolveActiveChild(this.projectRoot, slug);
+      const execution = resolveExecutionChild(cursor, slug);
+      if (execution.source === 'routed-host' || execution.source === 'revalidating' || execution.source === 'cursor') {
+        await this.activateChildRegionState(state, execution.target.child, execution.target.isLeaf);
+        return { index: indexOf('acceptance_specs'), activeChild: execution.target };
+      }
+    }
+
+    const subject = outstanding.kind === 'unreadable' ? `unreadable ${outstanding.subject}` : outstanding.kind;
+    await this.stopParkedForRouting({
+      kind: 'parked',
+      reason: `routed work cannot advance (${subject})`,
+    }, state);
     return 'halt';
   }
 
@@ -8500,6 +8589,20 @@ export class Conductor {
         breadcrumb.lastAdvancedStep = step.name;
         breadcrumb.exitIndex = i;
 
+        // A routed round is durable unfinished BUILD work. Check it before a
+        // whole-feature step can be skipped, dispatched, or joined into its
+        // validation group; otherwise a resumed run can validate the feature
+        // while a previous host is still waiting to exit.
+        if (i > indexOf('build_review')) {
+          const routed = await this.guardOutstandingRoutedWork(state, indexOf);
+          if (routed === 'halt') return;
+          if (routed !== undefined) {
+            activeChild = routed.activeChild;
+            i = routed.index - 1;
+            continue stepLoop;
+          }
+        }
+
         // BUILD is a per-child region. Resolve and enter it before checking
         // status, so a persisted child branch is always checked out before a
         // region step can be skipped or dispatched.
@@ -10082,6 +10185,19 @@ export class Conductor {
               outcome?: RefusalRoundOutcome,
             ): Promise<boolean> => {
               if (prdAuditRoute?.kind !== 'over-scope-refusal-rework') return false;
+              if (outcome?.kind === 'halt' && outcome.routingFence) {
+                const reason = await this.writeRoutingFenceRefusalHalt(
+                  state.feature_desc,
+                  outcome.detail,
+                  prdAuditRoute.route.refused,
+                );
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
+                await closeClassifiedPassingMembers();
+                await this.emitLoopHalt(reason);
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return true;
+              }
               if (outcome?.kind === 'halt' && outcome.haltClass === KICKBACK_CAP_HALT_CLASS) return false;
               const blocker = outcome === undefined ? await refusalReworkAllowanceBlocker() : undefined;
               const reason = blocker !== undefined
@@ -13439,7 +13555,7 @@ export class Conductor {
                     : [];
                   let outcome:
                     | { kind: 'route'; target: StepName; hint: string; evidence: string }
-                    | { kind: 'halt'; detail: string; haltClass?: string; kickbackOutcome?: string; refusalAdmissionRejected?: true }
+                    | { kind: 'halt'; detail: string; haltClass?: string; kickbackOutcome?: string; refusalAdmissionRejected?: true; routingFence?: true }
                     | { kind: 'none'; reason: string }
                     | undefined;
                   try {
@@ -13500,6 +13616,19 @@ export class Conductor {
                     await this.persistPendingStateChanges(state, 'persist conductor transition');
                     const prUrl = await this.surfaceRemediationPr(outcome.detail);
                     await this.emitLoopHalt(outcome.detail, prUrl);
+                    process.off('SIGINT', sigintHandler);
+                    process.off('SIGTERM', sigterm);
+                    return;
+                  }
+                  if (outcome?.kind === 'halt' && outcome.routingFence) {
+                    const reason = await this.writeRoutingFenceRefusalHalt(
+                      state.feature_desc,
+                      outcome.detail,
+                      refusalRoute.refused,
+                    );
+                    await this.persistPendingStateChanges(state, 'persist conductor transition');
+                    const prUrl = await this.surfaceRemediationPr(reason);
+                    await this.emitLoopHalt(reason, prUrl);
                     process.off('SIGINT', sigintHandler);
                     process.off('SIGTERM', sigterm);
                     return;

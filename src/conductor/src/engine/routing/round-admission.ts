@@ -126,21 +126,35 @@ export async function checkRoundAdmissionFence(
     if (id === record.roundId) continue;
     const other = await readRouteRecord(worktree, slug, id, { git });
     if (other.kind !== 'record') {
-      return { kind: 'refused', detail: `routing round ${id} is unreadable`, fence: true };
+      return {
+        kind: 'refused',
+        detail: `routing round ${id} is unreadable; inspect with ai-conductor stack rounds --slug ${slug}`,
+        fence: true,
+      };
     }
     const active = other.record.phase === 'open' ||
       (other.record.phase === 'prepared' && marker.kind === 'marker' && marker.marker.roundId === id);
     if (!active) continue;
+    const markerHost = marker.kind === 'marker' && marker.marker.roundId === id
+      ? marker.marker.host
+      : undefined;
+    const openHost = markerHost ?? Number(Object.entries(other.record.hosts)
+      .find(([, state]) => state !== 'restacked' && state !== 'done' && state !== 'rerouted' && state !== 'abandoned')?.[0]);
+    const hostState = Number.isFinite(openHost) ? other.record.hosts[openHost as ChildId] : undefined;
+    const roundDetail = hostState === undefined
+      ? `routing round ${id} is ${other.record.phase}`
+      : `routing round ${id} is ${other.record.phase}; host ${openHost} is ${hostState}`;
+    const recovery = `inspect with ai-conductor stack rounds --slug ${slug}`;
     if (record.kind === 'audit') {
-      return { kind: 'refused', detail: `routing round ${id} is already open; cannot admit ${record.roundId}`, fence: true };
+      return { kind: 'refused', detail: `${roundDetail}; cannot admit ${record.roundId}; ${recovery}`, fence: true };
     }
     if (record.kind === 'revalidate') {
       if (Object.values(other.record.hosts).some((state) => state === 'admitted' || state === 'repairing' || state === 'built')) {
-        return { kind: 'refused', detail: `routing round ${id} has an active host; cannot admit ${record.roundId}`, fence: true };
+        return { kind: 'refused', detail: `${roundDetail}; cannot admit ${record.roundId}; ${recovery}`, fence: true };
       }
       const next = await selectNextHost(worktree, other.record, { entries });
       if (next.kind !== 'queue') {
-        return { kind: 'refused', detail: `routing round ${id} is not waiting for revalidation; cannot admit ${record.roundId}`, fence: true };
+        return { kind: 'refused', detail: `${roundDetail}; cannot admit ${record.roundId}; ${recovery}`, fence: true };
       }
     }
   }
