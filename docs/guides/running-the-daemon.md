@@ -1108,6 +1108,31 @@ only reliable way to make a feature stay stopped.
 Restarting the daemon no longer grants a fresh re-kick at an unchanged base SHA; clearing the halt
 or unparking the feature remains the sanctioned operator lever.
 
+### Fresh retryable halts re-dispatch at the dispatch boundary
+
+A `mechanical` or `legacy` HALT does not wait for a base advance when its body is new. The daemon
+treats a halted feature as eligible when the live `.pipeline/HALT` body differs from
+`.pipeline/HALT.rekicked`, the body the dispatch boundary last cleared. Each such dispatch counts
+against the same per-run ceiling as progress re-kicks, `build_progress_halt.dispatch_ceiling`
+(default 20); a daemon restart resets that count. An identical HALT body never earns a second
+prompt re-dispatch, so a halt that reproduces verbatim stays parked until a base advance, a
+different failure, or an operator clear.
+
+Before it starts the executor for a resumed feature with a live HALT, the daemon:
+
+1. Reads `.pipeline/HALT.class`. A failed read counts as `unclassified`.
+2. For `mechanical` or `legacy`, renames `.pipeline/HALT` to `.pipeline/HALT.rekicked`, removes
+   `HALT.class`, drops `.pipeline/REKICK`, and appends a `halt_cleared` record with cause `rekick`.
+   `.pipeline/HALT.cleared` is left untouched.
+3. For any other class, leaves every marker in place and re-parks the feature without dispatching.
+4. If the clear fails for any reason other than a concurrent removal, logs
+   `re-kick <slug>: HALT clear failed — <reason>`, leaves the HALT live, and re-parks the feature.
+
+Every dispatch then stamps the whole-feature resolved-task count into `task-evidence.json`
+(`lastResolvedCount`) immediately before the executor starts, so a progress re-kick requires tasks
+resolved after that dispatch began. A failed stamp logs `baseline stamp failed for <slug> — <reason>`
+and does not block the dispatch.
+
 ### Budget-cap halts need an authorization
 
 A budget-cap halt is the one exception to the ordinary `needs-human` retention rule. From the main
