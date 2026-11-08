@@ -1,4 +1,4 @@
-// Covers: task:3, task:6, task:7, task:8, task:9, task:10
+// Covers: task:3, task:6, task:7, task:8, task:9, task:10, task:30
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
