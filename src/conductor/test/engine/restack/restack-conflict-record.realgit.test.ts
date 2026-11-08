@@ -265,9 +265,19 @@ describe('restack conflict record (real local Git)', () => {
     const subject = await createRepo();
     await subject.git(['commit', '--allow-empty', '-qm', 'refused resolver tip']);
     const refusedTip = sha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
+    const native = makeGitRunner(subject.repo);
+    const transactions: string[] = [];
+    const recordingGit = async (args: string[], options?: { input?: string }) => {
+      if (args[0] === 'update-ref' && args[1] === '--stdin') transactions.push(options?.input ?? '');
+      return native(args, options);
+    };
 
-    await expect(writeConflictRecord(subject.repo, 'demo', record(subject.head), { refusedTip }))
+    await expect(writeConflictRecord(subject.repo, 'demo', record(subject.head), { git: recordingGit, refusedTip }))
       .resolves.toEqual({ kind: 'updated' });
+    expect(transactions).toHaveLength(1);
+    expect(transactions[0]).toContain(`update ${conflictRecordRefFor('demo')} `);
+    expect(transactions[0]).toContain(`update ${conflictParentRefFor('demo')} ${subject.head} ${'0'.repeat(40)}`);
+    expect(transactions[0]).toContain(`update ${refusedTipRefFor('demo')} ${refusedTip} ${'0'.repeat(40)}`);
     await expect(makeGitRunner(subject.repo)(['rev-parse', '--verify', refusedTipRefFor('demo')]))
       .resolves.toMatchObject({ exitCode: 0, stdout: refusedTip });
 
