@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
-import { makeGitRunner } from '../../../src/engine/rebase.js';
+import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { conflictParentRefFor, readConflictRecord, refusedTipRefFor } from '../../../src/engine/restack/restack-conflict-record.js';
 import { readRestackJournal } from '../../../src/engine/restack/restack-journal.js';
@@ -76,6 +76,34 @@ describe('refused resolver tip (real local Git)', () => {
     expect(halt).toContain(`git switch -c restack-resolve/demo/c2 ${refusedTip}`); expect(halt).toContain('stack restack-resolve --slug demo --child 2 --tip <sha>'); expect(halt).toContain('--decision "<answer>"');
     expect(observed).toContainEqual(expect.objectContaining({ reason: 'replay-mismatch', child: 2, detail: expect.stringContaining(refusal) }));
     await expect(readRestackJournal(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'journal', journal: { state: 'aborted' } });
+    expect((await subject.git(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads/', 'refs/conductor/demo/closed/'])).stdout).toBe(branchesBefore);
+  });
+
+  // Covers: task:7
+  it('keeps the needs-human halt when the refused-tip compare-and-swap pin loses a race', async () => {
+    const subject = await fixture();
+    const branchesBefore = (await subject.git(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads/', 'refs/conductor/demo/closed/'])).stdout;
+    const native = makeGitRunner(subject.repo);
+    let raced = false;
+    const racingGit: GitRunner = async (args, options) => {
+      if (!raced && args[0] === 'update-ref' && args[1] === '--stdin'
+        && options?.input?.includes(`update ${refusedTipRefFor('demo')} `)) {
+        raced = true;
+        await native(['update-ref', refusedTipRefFor('demo'), subject.c2]);
+      }
+      return native(args, options);
+    };
+
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
+      git: racingGit, resolver: refusingResolver('unowned'), resolverCap: 1,
+    })).resolves.toMatchObject({ kind: 'halted' });
+
+    const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
+    expect(raced).toBe(true);
+    expect(halt).toContain('restack conflict child 2');
+    expect(halt).toContain('src/other.ts (unowned)');
+    expect(halt).toContain('refused tip could not be pinned');
     expect((await subject.git(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads/', 'refs/conductor/demo/closed/'])).stdout).toBe(branchesBefore);
   });
 });
