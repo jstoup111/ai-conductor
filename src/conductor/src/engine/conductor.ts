@@ -6477,6 +6477,18 @@ export class Conductor {
     });
     if (outstanding.kind === 'none') return undefined;
 
+    // `advanceTail` may already have written its optimistic convergence marker
+    // before a resumed loop reaches this guard.  Outstanding routing makes
+    // that marker provisional, not success; use the completion-refusal path
+    // so it is removed before the bounded routing halt is recorded.
+    if (await this.markerExists(DONE_MARKER)) {
+      await this.stopParkedForRouting({
+        kind: 'completion-refused',
+        reason: 'a routed round remains open',
+      }, state);
+      return 'halt';
+    }
+
     // First give a fully satisfied marker host its normal exit. This is the
     // only path which is allowed to close a host; reconciliation below merely
     // chooses work that still needs its BUILD region.
