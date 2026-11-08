@@ -474,7 +474,8 @@ describe('runRestack merge-bearing conflicts (real local Git)', () => {
     })).resolves.toMatchObject({ kind: 'halted' });
 
     const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
-    expect(halt).toMatch(/^restack refused \(replay-mismatch\) child 2/m);
+    expect(halt).toMatch(/^restack conflict child 2/m);
+    expect(halt).toContain('refused tip: refs/conductor/demo/restack/conflict/refused-tip');
     expect(halt).toContain('outside-child-two.txt');
     expect(await stackRefs(subject)).toBe(before);
   });

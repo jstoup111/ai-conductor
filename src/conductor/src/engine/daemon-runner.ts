@@ -147,6 +147,8 @@ export interface FeatureRunnerDeps {
   markProcessed: (slug: string, prUrl?: string) => Promise<void>;
   /** Daemon mode. When true, emit a structured engineer signal on completion. */
   daemon: boolean;
+  /** Optional engineer-store location; production resolves it from the environment. */
+  engineerDir?: string;
   /** Optional provider adapter retained for completion-emission compatibility. */
   provider?: LLMProvider;
   /** Fresh provider routing state allocated once for each feature run. */
@@ -364,7 +366,7 @@ export function makeRunFeature(
       // Non-deferred (legacy composition) path: perform the engineer-store
       // signal here. Best-effort inside emitEngineerSignal — never throws.
       await emitEngineerSignal({
-        engineerDir: resolveEngineerDir(),
+        engineerDir: deps.engineerDir ?? resolveEngineerDir(),
         eventsContent: effects.engineerSignal.eventsContent,
         outcome: effects.engineerSignal.outcome,
         project: deps.project,

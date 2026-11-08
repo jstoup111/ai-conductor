@@ -225,7 +225,7 @@ describe('runRestack orchestration (sweep G1, real local Git)', () => {
     const newTips = { 1: await tip(subject.git, 'feat/c1/demo'), 2: await tip(subject.git, 'feat/c2/demo'), 3: await tip(subject.git, 'feat/daemon-demo') } as Record<number, string>;
     expect(applied.map((record) => record.child)).toEqual([1, 2, 3]);
     for (const record of applied) {
-      expect(Object.keys(record).sort()).toEqual(['cause', 'child', 'newTip', 'oldTip', 'opId', 'parentOverlapPaths', 'type', 'wouldInvalidate']);
+      expect(Object.keys(record).sort()).toEqual(['adaptedPaths', 'cause', 'child', 'newTip', 'oldTip', 'opId', 'parentOverlapPaths', 'type', 'wouldInvalidate']);
       expect(record).toMatchObject({
         opId: planned!.opId,
         cause: 'base-refresh',
@@ -234,6 +234,7 @@ describe('runRestack orchestration (sweep G1, real local Git)', () => {
       });
       expect(Array.isArray(record.wouldInvalidate)).toBe(true);
       expect(Array.isArray(record.parentOverlapPaths)).toBe(true);
+      expect(Array.isArray(record.adaptedPaths)).toBe(true);
     }
   });
 

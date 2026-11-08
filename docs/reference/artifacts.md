@@ -872,7 +872,7 @@ it. Stacked builds also persist `child_started`, `child_closed` (with the closur
 `child_switched`, each carrying the position and branch; `story_reowned` (`story`, `from`, `to`)
 when a reseal changes a story's owner without moving a task; and the restack events
 `restack_planned` (`opId`, `cause`, `children`), `restack_applied` (per child: `oldTip`, `newTip`,
-`wouldInvalidate`, `parentOverlapPaths`), `restack_conflict` (`commit`, `paths`), `restack_refused`
+`wouldInvalidate`, `parentOverlapPaths`, `adaptedPaths`), `restack_conflict` (`commit`, `paths`), `restack_refused`
 (`reason`, optional `detail`), `restack_recovered` (`opId`, `fromState`), `restack_resolution`
 (`opId`, `child`, `action` of `recorded`, `consumed`, or `retired`, `tip`, optional `operator`), and
 `restack_decision` (`child`, `action` of `recorded`, `applied`, or `stale`, `commit`, `paths`, optional

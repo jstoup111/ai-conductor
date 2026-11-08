@@ -1341,6 +1341,16 @@ replaced by a single-parent commit carrying `Flattened-merge: <merge sha>`. The 
 `refs/conductor/<slug>/restack/conflict/flattened-tip` until the resolution is consumed. Run the
 recipe as printed.
 
+When the resolver settled the conflict but its tip failed the
+[resolved-tip ownership rule](../reference/cli.md#restack-conflict-resolution), the HALT is still
+`restack conflict child <k>`. Its detail lines add
+`refused tip: refs/conductor/<slug>/restack/conflict/refused-tip` and one `<path> (<cause>)` line
+per refused path, where the cause is `unowned` or `parent-revert`; a `restack_refused` event with
+reason `replay-mismatch` carries the same list. The recipe's `git switch` starts from the refused
+tip, so fix only the named paths: drop the change to an `unowned` path, and keep the new parent's
+change on a `parent-revert` path. The engine deletes the refused-tip ref with the rest of the
+conflict hand-off when the conflict is consumed.
+
 For a base-refresh or feature-repair conflict — including a closed child — an operator can instead
 record a decision and let the daemon resume the replay:
 

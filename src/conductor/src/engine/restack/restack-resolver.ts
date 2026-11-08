@@ -26,6 +26,7 @@ import {
   replayCandidateSubjects,
   type FlattenedHandoff,
 } from './restack-flattened-handoff.js';
+import { refusedTipPinFailureDetail } from './restack-conflict-halt.js';
 export { replayCandidateSubjects } from './restack-flattened-handoff.js';
 export type { FlattenedHandoff } from './restack-flattened-handoff.js';
 
@@ -51,6 +52,8 @@ interface HaltRecordedRestackConflictOptions {
   readonly candidateSubjects: readonly string[];
   readonly commit: CommitSha;
   readonly paths: readonly string[];
+  /** A rejected resolver tip retained for the operator's next attempt. */
+  readonly refusedTip?: CommitSha;
   readonly detail: string;
   readonly events?: import('../conductor-event-emitter.js').ConductorEventEmitter;
   readonly git: GitRunner;
@@ -68,6 +71,9 @@ async function rangeHasMerge(git: GitRunner, range: ChildRange): Promise<boolean
 /** Persist the conflict context before writing its matching operator halt. */
 export async function haltRecordedRestackConflict(options: HaltRecordedRestackConflictOptions): Promise<void> {
   const { journal, range } = options;
+  // `range` belongs to a journal object that later cleanup may replace. Keep
+  // the recipe tied to the same durable hand-off fields that we write below.
+  const recipeOldTip = range.oldTip;
   let recordFailure = '';
   let flattenedTip: CommitSha | undefined;
   try {
@@ -87,14 +93,18 @@ export async function haltRecordedRestackConflict(options: HaltRecordedRestackCo
       opId: journal.journal.opId, child: range.child, oldParent: range.oldParent, oldTip: range.oldTip,
       newParent: options.replayParent, newParentTree: replayParentTree, candidateSubjects,
       commit: options.commit, paths: options.paths, ...(flattenedTip === undefined ? {} : { flattenedTip }),
-    }, { git: options.git });
-    if (written.kind !== 'updated') recordFailure = `\nconflict record write failed: ${written.kind}`;
+    }, { git: options.git, ...(options.refusedTip === undefined ? {} : { refusedTip: options.refusedTip }) });
+    if (written.kind !== 'updated') {
+      const failure = `\nconflict record write failed: ${written.kind}`;
+      recordFailure = options.refusedTip === undefined ? failure : refusedTipPinFailureDetail(failure);
+    }
   } catch (error) {
-    recordFailure = `\nconflict record write failed: ${error instanceof Error ? error.message : String(error)}`;
+    const failure = `\nconflict record write failed: ${error instanceof Error ? error.message : String(error)}`;
+    recordFailure = options.refusedTip === undefined ? failure : refusedTipPinFailureDetail(failure);
   }
   await options.writeHalt(options.worktree, range.child, `${options.detail}${recordFailure}`, options.events, {
-    slug: options.slug, opId: journal.journal.opId, oldTip: range.oldTip, newParent: options.replayParent, oldParent: range.oldParent,
-    ...(flattenedTip === undefined ? {} : { startingTip: flattenedTip }),
+    slug: options.slug, opId: journal.journal.opId, oldTip: recipeOldTip, newParent: options.replayParent, oldParent: range.oldParent,
+    ...((options.refusedTip ?? flattenedTip) === undefined ? {} : { startingTip: options.refusedTip ?? flattenedTip }),
   });
 }
 

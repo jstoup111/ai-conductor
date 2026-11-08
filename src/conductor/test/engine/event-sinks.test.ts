@@ -794,6 +794,7 @@ describe('event sink subscriptions', () => {
         newTip: sha('b'),
         wouldInvalidate: ['build_review'],
         parentOverlapPaths: ['src/conductor/src/engine/restack/restack-events.ts'],
+        adaptedPaths: [],
       },
       {
         type: 'restack_conflict',
