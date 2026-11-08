@@ -737,7 +737,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         await input.emit?.({
           type: 'remediation_adjudication_completed', domain: 'build_review', lapId: input.aggregate.lapId,
           caseIds: settledCases.map((record) => record.id),
-          effectIds: options.dispatchSkipped === true ? [] : settledCases.flatMap((record) => record.effect.kind === 'none' ? [] : [record.effect.id]),
+          effectIds: settledCases.flatMap((record) => record.effect.kind === 'none' ? [] : [record.effect.id]),
           ...(durable.decisionStops.length === 0 ? {} : { decisionStops: durable.decisionStops }),
         });
       }

@@ -1849,7 +1849,7 @@ describe('coordinateBuildReviewAdjudication', () => {
       ...input(root, judge), operatorResolvedFindingIds: new Set([findingId]),
     });
 
-    expect(result).toMatchObject({ ok: true, route: 'pass', dispatchSkipped: false });
+    expect(result).toMatchObject({ ok: true, route: 'pass', dispatchSkipped: true });
     expect(judge).not.toHaveBeenCalled();
   });
 
