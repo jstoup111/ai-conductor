@@ -18,7 +18,7 @@ describe('retryable HALT daemon loop', () => {
       const pipeline = join(base, slug, '.pipeline');
       await mkdir(pipeline, { recursive: true });
       const logs: string[] = [];
-      const retryable = buildRetryableHaltDeps(base, undefined, (line) => logs.push(line));
+      const retryable = buildRetryableHaltDeps(base, undefined);
       const progress = buildProgressReKickDeps({ build_progress_halt: { enabled: false, dispatch_ceiling: 4 } } as any, base);
       let dispatches = 0;
 

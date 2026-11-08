@@ -989,7 +989,6 @@ export function buildProgressReKickDeps(
 export function buildRetryableHaltDeps(
   worktreeBase: string,
   recordRemote: import('./engine/halt-record.js').HaltRecordRemoteOptions | undefined,
-  log?: (message: string) => void,
 ): {
   clearRetryableHalt: (slug: string) => Promise<void>;
   isFreshRetryableHalt: (slug: string) => Promise<boolean>;
@@ -2868,7 +2867,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // — previously constructed and fully unit-tested only at the
       // daemon.ts/pickEligible level, never reachable from this entrypoint.
       ...buildProgressReKickDeps(config, worktreeBase, log),
-      ...buildRetryableHaltDeps(worktreeBase, { events }, log),
+      ...buildRetryableHaltDeps(worktreeBase, { events }),
       // FR-1 (Task 11): gate dispatch on the durable `.daemon/PAUSED` marker,
       // re-polled every loop iteration by runDaemon so a pause lifted mid-run
       // resumes dispatch at the next boundary (no restart required).

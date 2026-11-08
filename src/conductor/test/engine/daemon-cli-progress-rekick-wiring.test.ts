@@ -189,7 +189,7 @@ describe('T14 — daemon-cli wires the real progress-gated re-kick predicate int
       await writeFile(join(pipeline, 'HALT.class'), 'mechanical\n');
       await writeFile(join(pipeline, 'HALT.cleared'), priorClear);
 
-      const deps = buildRetryableHaltDeps(worktreeBase, undefined, () => {});
+      const deps = buildRetryableHaltDeps(worktreeBase, undefined);
       await deps.clearRetryableHalt(slug);
 
       await expect(readFile(join(pipeline, 'HALT.rekicked'), 'utf-8')).resolves.toBe(haltBody);
@@ -211,7 +211,7 @@ describe('T14 — daemon-cli wires the real progress-gated re-kick predicate int
       await mkdir(pipeline, { recursive: true });
       await writeFile(join(pipeline, 'HALT'), 'first\n');
       await writeFile(join(pipeline, 'HALT.class'), 'mechanical\n');
-      const deps = buildRetryableHaltDeps(worktreeBase, undefined, () => {});
+      const deps = buildRetryableHaltDeps(worktreeBase, undefined);
 
       expect(await deps.isFreshRetryableHalt(slug)).toBe(true);
       await writeFile(join(pipeline, 'HALT.rekicked'), 'first\n');

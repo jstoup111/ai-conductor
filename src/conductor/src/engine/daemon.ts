@@ -135,12 +135,6 @@ export interface PickEligibleCtx {
    * operator un-parks it.
    */
   isProgressReKickEligible?: (slug: string) => Promise<boolean>;
-  /**
-   * True when the live retryable HALT body differs from the body this dispatch
-   * boundary last cleared. A distinct mechanical/legacy HALT earns one prompt
-   * re-dispatch, charged against the same bounded counter as progress re-kicks.
-   */
-  isFreshRetryableHalt?: (slug: string) => Promise<boolean>;
 }
 
 /**
@@ -290,6 +284,12 @@ export interface DaemonDeps {
    * full contract). Absent → behavior is unchanged (backward-compatible).
    */
   isProgressReKickEligible?: (slug: string) => Promise<boolean>;
+  /**
+   * True when the live retryable HALT body differs from the body this dispatch
+   * boundary last cleared. A distinct mechanical/legacy HALT earns one prompt
+   * re-dispatch, charged against the same bounded counter as progress re-kicks.
+   */
+  isFreshRetryableHalt?: (slug: string) => Promise<boolean>;
   /**
    * Optional, slug-keyed HALT disposition reader for the progress-gated
    * re-kick path. A failed read is treated as `unclassified` and therefore
