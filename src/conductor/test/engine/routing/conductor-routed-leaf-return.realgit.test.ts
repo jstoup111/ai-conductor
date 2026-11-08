@@ -31,7 +31,12 @@ async function writeBlob(git: GitRunner, value: unknown): Promise<string> {
   return (await git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(value) })).stdout.trim();
 }
 
-async function fixture(): Promise<{ readonly subject: SweepRepository; readonly statePath: string; readonly config: HarnessConfig }> {
+async function fixture(): Promise<{
+  readonly subject: SweepRepository;
+  readonly statePath: string;
+  readonly config: HarnessConfig;
+  readonly leafHead: string;
+}> {
   const subject = await createSweepRepository('conductor-routed-leaf-return-', cleanup);
   await subject.write('.ai-conductor/config.yml', [
     'stacked_prs:',
@@ -54,7 +59,7 @@ async function fixture(): Promise<{ readonly subject: SweepRepository; readonly 
   const closed = await subject.commit('closed child', 'child.txt', 'child\n');
   await subject.git(['update-ref', closureRefFor('demo', host), closed]);
   await subject.git(['checkout', '-qb', 'feat/daemon-demo']);
-  await subject.commit('leaf', 'leaf.txt', 'leaf\n');
+  const leafHead = await subject.commit('leaf', 'leaf.txt', 'leaf\n');
   await sealStack(subject.repo, [1, 2]);
 
   const git = makeGitRunner(subject.repo);
@@ -107,6 +112,7 @@ async function fixture(): Promise<{ readonly subject: SweepRepository; readonly 
       stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true },
       steps: { post_region_check: { after: 'build_review', skill: 'custom/SKILL.md', enforcement: 'gating' } },
     },
+    leafHead,
   };
 }
 
@@ -240,14 +246,18 @@ describe('Conductor routed final leaf return (real local Git)', () => {
 
   // Covers: task:13
   it('returns to whole-feature validation with the root state store and baseline reloaded', async () => {
-    const { subject, statePath, config } = await fixture();
+    const { subject, statePath, config, leafHead } = await fixture();
     const dispatched: StepName[] = [];
+    const dispatchContexts: Array<{ readonly step: StepName; readonly activeChild: number | undefined }> = [];
+    const routedRepairPhases: unknown[] = [];
+    let manualTestDispatch: { readonly worktree: string; readonly head: string } | undefined;
     let leafState: ConductState | undefined;
     let leafSnapshot: ConductState | undefined;
     let persistedRootState: ConductState | undefined;
     let leafVerdicts: Record<string, boolean | undefined> | undefined;
     let parkAfterValidationGroup = false;
     const events = new ConductorEventEmitter();
+    events.on('routed_repair_phase', (event) => { routedRepairPhases.push(event); });
     const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
     persister.start();
     const conductor = new Conductor({
@@ -264,7 +274,16 @@ describe('Conductor routed final leaf return (real local Git)', () => {
       stepRunner: {
         run: async (step, state) => {
           dispatched.push(step);
+          dispatchContexts.push({
+            step,
+            activeChild: (conductor as unknown as { activeRegionChild?: number }).activeRegionChild,
+          });
           if (step === 'manual_test') {
+            const worktree = (conductor as unknown as { projectRoot: string }).projectRoot;
+            manualTestDispatch = {
+              worktree,
+              head: (await makeGitRunner(worktree)(['rev-parse', 'HEAD'])).stdout.trim(),
+            };
             leafState = { ...state };
             leafSnapshot = {
               ...(conductor as unknown as { persistedStateSnapshot: ConductState }).persistedStateSnapshot,
@@ -302,6 +321,15 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     expect(dispatched).toContain('manual_test');
     expect(dispatched).toContain('prd_audit');
     expect(dispatched).toContain('architecture_review_as_built');
+    const wholeFeatureValidationDispatches = dispatchContexts.filter(({ step }) => [
+      'manual_test', 'prd_audit', 'architecture_review_as_built', 'post_region_check',
+    ].includes(step));
+    expect(wholeFeatureValidationDispatches).toEqual(expect.arrayContaining([
+      expect.objectContaining({ step: 'manual_test', activeChild: undefined }),
+    ]));
+    expect(wholeFeatureValidationDispatches.every(({ activeChild }) => activeChild === undefined)).toBe(true);
+    expect(routedRepairPhases).toEqual([]);
+    expect(manualTestDispatch).toEqual({ worktree: subject.repo, head: leafHead });
     expect(leafState).toEqual(persistedRootState);
     expect(leafSnapshot).toEqual(persistedRootState);
     const stores = conductor as unknown as {
