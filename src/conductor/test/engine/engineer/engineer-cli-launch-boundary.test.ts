@@ -21,7 +21,7 @@ describe('Composer launcher boundary', () => {
   });
 
   it('Covers: Task 16 gives a launcher-started Composer host one stable launch id and provider identity', async () => {
-    const spawn = vi.fn(async () => 0);
+    const spawn = vi.fn(async (_executable: string, _argv: string[], _cwd: string, _env: NodeJS.ProcessEnv) => 0);
     const code = await dispatchEngineer({ kind: 'launch', provider: 'codex' }, {
       spawnHost: spawn,
       print: () => {}, printErr: () => {}, isAttachedTerminal: () => true,
