@@ -17118,7 +17118,12 @@ export class Conductor {
             case 'exhausted':
             case 'halted': {
               const reason = routedAdmission.reason;
-              await this.writeHaltMarker(reason + '\n', routedAdmission.haltClass ?? 'needs-human');
+              await this.writeHaltMarker(
+                reason + '\n',
+                routedAdmission.kind === 'halted'
+                  ? (routedAdmission.haltClass ?? 'needs-human')
+                  : 'needs-human',
+              );
               const prUrl = await this.surfaceRemediationPr(reason);
               await this.emitLoopHalt(reason, prUrl);
               return 'halt';
@@ -17147,7 +17152,7 @@ export class Conductor {
         });
         if (disposition.kind === 'halt') {
           const reason = renderDecideEntryHalt(disposition.halt);
-            await this.writeHaltMarker(reason + '\n', routedAdmission.haltClass ?? 'needs-human');
+          await this.writeHaltMarker(reason + '\n', 'needs-human');
           const prUrl = await this.surfaceRemediationPr(reason);
           await this.emitLoopHalt(reason, prUrl);
           return 'halt';
