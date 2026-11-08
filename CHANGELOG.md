@@ -255,6 +255,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Daemon halt telemetry again records halt class, halting step and size tier for features run by the pinned child executor, so the human-involvement dashboard counts halts after 2026-10-21. ([implementation PR #3604](https://github.com/jstoup111/ai-conductor/pull/3604)).
 - build_review no longer halts a test-only diff, such as a routed repair that only fixes tests, on a testQuality `no-production-changes` infrastructure fault; the changed tests are judged instead. ([implementation PR #3623](https://github.com/jstoup111/ai-conductor/pull/3623)).
 - Plan validation now rejects dependencies that reference missing task declarations. ([implementation PR #3616](https://github.com/jstoup111/ai-conductor/pull/3616)).
+- Stacked restack conflicts over merge-bearing child ranges now provide a recoverable flattened hand-off. ([implementation PR #3615](https://github.com/jstoup111/ai-conductor/pull/3615)).
 
 ## Migration
 
