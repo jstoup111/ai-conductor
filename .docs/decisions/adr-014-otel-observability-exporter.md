@@ -272,6 +272,14 @@ Relevant existing facts (evidence):
 >    byte-identical to today. Rationale: one long-lived meter fed by events is the only shape where
 >    "fix the resetting counters", "emit daemon-level signals", and "workers may be remote and
 >    ephemeral" are the same mechanism rather than three.
+> **Amended 2026-11-07 by #3646:** The one long-lived `MeterProvider` and its event-fed
+> projection stand. For a dispatch whose child executor has accepted `otelProjection`, the
+> `MetricsListener` that projects that dispatch's events is the child's own, running the child's
+> pinned engine. It records through a brokered meter whose instruments the supervisor materializes on
+> this provider, stamping `project`, `worker` and `feature` itself. The root-bus listener records
+> only the supervisor-owned events for that dispatch, so a newer engine's metrics are not lost to an
+> older supervisor. See adr-2026-11-07-child-projected-dispatch-otel.
+>
 > 8. **Metric identity is `service.instance.id = <project>/<worker>`; `feature` is a data-point
 >    attribute only.** `<project>` is the resolved project name of the 2026-08-27 amendment;
 >    `<worker>` is `otel.worker_name` from `.ai-conductor/config.yml` when non-blank (trimmed), else
