@@ -209,7 +209,9 @@ export async function checkpointComposerRun(request: CheckpointRequest, deps: Ch
 
   const recordPath = join(request.worktree, '.docs', 'composer-runs', `${slug}.json`);
   let record = emptyRecord(slug);
+  let recordExists = true;
   try { record = parseRunRecord(await fs.readFile(recordPath)); } catch (error) {
+    recordExists = false;
     if (!(error instanceof Error) || !error.message.startsWith('ENOENT')) throw error;
   }
   const acceptingSavedDraft = request.state === 'accepted' && record.steps[step]?.state === 'draft';
@@ -227,6 +229,10 @@ export async function checkpointComposerRun(request: CheckpointRequest, deps: Ch
   // A clean retry must still publish the previously committed checkpoint.  A
   // clean reconfirmation is the one exception: it changes the run record only.
   if (dirtyDocs.length === 0 && draftPaths.length === 0 && !reconfirming) {
+    if (!recordExists) {
+      await deps.emit(event);
+      return { slug, state: request.state, committed: false, published: false };
+    }
     const published = await publishCheckpoint(slug, request.worktree, request.state, record, deps, event);
     return { ...published, committed: false };
   }
