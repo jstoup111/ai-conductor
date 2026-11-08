@@ -15,10 +15,15 @@ const BRANCH = 'spec/add-auth';
 
 /**
  * Route git subcommands. `worktreeListed` controls whether the path is a
- * registered worktree; `branchExists` controls whether `show-ref` resolves.
+ * registered worktree; `branchExists` and `remoteBranchExists` control whether
+ * their respective `show-ref` lookups resolve.
  * `addCalls` records every `worktree add`; `baseResolved` records resolveBase calls.
  */
-function routeGit(opts: { worktreeListed: boolean; branchExists: boolean }) {
+function routeGit(opts: {
+  worktreeListed: boolean;
+  branchExists: boolean;
+  remoteBranchExists?: boolean;
+}) {
   const addCalls: string[][] = [];
   const removeCalls: string[][] = [];
   mockExeca.mockImplementation((async (...callArgs: unknown[]) => {
@@ -27,7 +32,9 @@ function routeGit(opts: { worktreeListed: boolean; branchExists: boolean }) {
       return { stdout: opts.worktreeListed ? `worktree ${PATH}\n` : `worktree ${ROOT}` };
     }
     if (args[0] === 'show-ref') {
-      if (opts.branchExists) return { stdout: '' };
+      const ref = args.at(-1);
+      if (ref === `refs/heads/${BRANCH}` && opts.branchExists) return { stdout: '' };
+      if (ref === `refs/remotes/origin/${BRANCH}` && opts.remoteBranchExists) return { stdout: '' };
       throw new Error('no ref');
     }
     if (args[0] === 'worktree' && args[1] === 'add') {
@@ -65,6 +72,24 @@ describe('worktree-shared/ensureWorktree', () => {
     expect(addCalls).toHaveLength(1);
     expect(addCalls[0]).toEqual(['worktree', 'add', PATH, BRANCH]); // no -b
     expect(resolveBase).not.toHaveBeenCalled(); // base resolved lazily — only for a fresh branch
+  });
+
+  // Covers: task:11
+  it('fetches a remote-only branch into a tracking worktree without resolving base', async () => {
+    const { addCalls } = routeGit({
+      worktreeListed: false,
+      branchExists: false,
+      remoteBranchExists: true,
+    });
+    const resolveBase = vi.fn(async () => 'main');
+
+    const res = await ensureWorktree({ root: ROOT, path: PATH, branch: BRANCH, resolveBase });
+
+    expect(res).toEqual({ path: PATH, branch: BRANCH, reconcile: 'fetched' });
+    expect(addCalls).toEqual([
+      ['worktree', 'add', '--track', '-b', BRANCH, PATH, `origin/${BRANCH}`],
+    ]);
+    expect(resolveBase).not.toHaveBeenCalled();
   });
 
   it('reuses an already-registered worktree without adding (resume)', async () => {
