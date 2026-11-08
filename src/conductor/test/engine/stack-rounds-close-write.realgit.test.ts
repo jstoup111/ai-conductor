@@ -94,6 +94,7 @@ it('refuses a leaf-return close when its checked marker was moved', async () => 
   await expect(subject.git(['rev-parse', repairMarkerRefFor(slug)])).resolves.toMatchObject({ stdout: expect.stringContaining(moved) });
 });
 
+// Covers: task:11
 it('closes pending hosts and appends the supersession event in the one record update', async () => {
   const subject = await createSweepRepository('stack-rounds-close-write-', cleanup);
   await subject.git(['commit', '-qm', 'initial']);
