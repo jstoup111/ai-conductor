@@ -981,10 +981,15 @@ export const SUBCOMMAND_HELP = {
     'Mutates: pushes the spec branch; opens the spec PR or marks an existing draft spec PR ready for review; uses a local-commit fallback when no remote is configured; nudges the daemon and updates ledger write-back state when --source-ref is present.\n' +
     'Loop fit: fourth step — claim → worktree → land → handoff → resolve/forget.',
   checkpoint:
-    'compose checkpoint --worktree <path> --step <step> (--accept | --draft) [--notes-file <file>] — save one DECIDE boundary as a local commit.\n' +
+    'compose checkpoint --worktree <path> --step <step> (--accept | --draft) [--notes-file <file>] — save one DECIDE boundary and publish it when guarded publication is available.\n' +
     'Flags: --worktree, --step, and exactly one of --accept or --draft are required; --notes-file is optional.\n' +
-    'Mutates: commits only .docs/ artifacts, the composer run record, and the owner marker locally; it never pushes or opens a PR.\n' +
+    'Mutates: commits .docs artifacts, the composer run record, and owner marker; guarded publication pushes the checkpoint and creates or refreshes a draft PR.\n' +
     'Loop fit: durable per-step DECIDE checkpoint before publication.',
+  resume:
+    'compose resume <PR|spec/branch|owner/repo#issue> [--provider <id>] [--project <name>] — attach a saved Composer run.\n' +
+    'Flags: a run selector is required; --provider and --project are optional.\n' +
+    'Mutates: may fetch and attach the saved spec branch; it never accepts an unaccepted DECIDE step.\n' +
+    'Loop fit: continue a draft DECIDE run from its first unaccepted step.',
   'plan-review':
     'compose plan-review --project <name> --worktree <path> [--max-prompt-chars <positive-integer>] [--accept <finding-id> --reason <text> | --acknowledge --reason <text>] — run or disposition the bounded source-grounded plan review.\n' +
     'Flags: --project <name> and --worktree <path> are required; --source-ref is optional.\n' +
