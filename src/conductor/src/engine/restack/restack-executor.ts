@@ -524,17 +524,34 @@ async function haltUnresolvedConflict(
   reason: 'conflict' | 'replay-mismatch',
   resolutionDetail?: string,
   candidates: readonly CommitSha[] = [],
+  refusedTip?: CommitSha,
+  refusedPaths: readonly { readonly path: string; readonly cause: string }[] = [],
 ): Promise<void> {
-  // The rejected resolver result is deliberately discarded. Keeping the
-  // journaled own tip reachable gives the operator the exact child history
-  // that entered the hand-off, while no real branch has moved.
+  // Keep the journaled original tip reachable for every conflict. Ownership
+  // refusals additionally retain the resolver's attempted tip in the durable
+  // conflict hand-off, while no feature branch has moved.
   if (!await pinStagingRef(worktree, slug, range.child, range.oldTip, { git })) {
     throw new Error(`cannot pin original tip for conflicted child ${range.child}`);
   }
   await abortJournal(worktree, journal, git, []);
   await events?.emit({ type: 'restack_conflict', opId: journal.journal.opId, child: range.child, commit: conflict.commit, paths: [...conflict.paths] });
-  const detail = `commit ${conflict.commit}; paths: ${conflict.paths.join(', ')}${resolutionDetail === undefined ? '' : `\n${resolutionDetail}`}`;
-  if (reason === 'replay-mismatch') await haltRestack(worktree, 'replay-mismatch', events, { child: range.child, detail });
+  const refusedDetail = refusedTip === undefined ? undefined : [
+    `refused tip: ${refusedTipRefFor(slug)}`,
+    ...refusedPaths.map(({ path, cause }) => `${path} (${cause})`),
+  ].join('\n');
+  const detail = `commit ${conflict.commit}; paths: ${conflict.paths.join(', ')}${resolutionDetail === undefined ? '' : `\n${resolutionDetail}`}${refusedDetail === undefined ? '' : `\n${refusedDetail}`}`;
+  if (refusedTip !== undefined) {
+    await events?.emit(emitRestackRefused({
+      reason: 'replay-mismatch', child: range.child,
+      detail: refusedPaths.map(({ path, cause }) => `${path} (${cause})`).join(', '),
+    }));
+    await haltRecordedRestackConflict({
+      worktree, slug, journal, range, replayParent: newParent,
+      comparisonCommits: journal.journal.comparisonCommits, haltRecordSlug: slug,
+      candidateSubjects: await replayCandidateSubjects(git, candidates),
+      commit: conflict.commit, paths: conflict.paths, detail, refusedTip, events, git, writeHalt: haltRestackConflict,
+    });
+  } else if (reason === 'replay-mismatch') await haltRestack(worktree, 'replay-mismatch', events, { child: range.child, detail });
   else {
     await haltRecordedRestackConflict({
       worktree, slug, journal, range, replayParent: newParent,
@@ -863,7 +880,10 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         }
         const ownership = await checkResolvedTipOwnership(range, parent, resolution.tip, git, { normaliseInheritedRemBlocks: options.routed !== undefined });
         if (ownership.kind === 'refused') {
-          await haltUnresolvedConflict(options.worktree, options.slug, journal, range, { ...conflict, paths: ownership.paths.map(({ path }) => path) }, options.events, git, parent, 'replay-mismatch');
+          await haltUnresolvedConflict(
+            options.worktree, options.slug, journal, range, { ...conflict, paths: ownership.paths.map(({ path }) => path) },
+            options.events, git, parent, 'replay-mismatch', undefined, resolution.candidates, resolution.tip, ownership.paths,
+          );
           terminal = true;
           return haltedResult(options.worktree);
         }

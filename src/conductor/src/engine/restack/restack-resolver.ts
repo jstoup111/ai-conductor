@@ -51,6 +51,8 @@ interface HaltRecordedRestackConflictOptions {
   readonly candidateSubjects: readonly string[];
   readonly commit: CommitSha;
   readonly paths: readonly string[];
+  /** A rejected resolver tip retained for the operator's next attempt. */
+  readonly refusedTip?: CommitSha;
   readonly detail: string;
   readonly events?: import('../conductor-event-emitter.js').ConductorEventEmitter;
   readonly git: GitRunner;
@@ -87,14 +89,14 @@ export async function haltRecordedRestackConflict(options: HaltRecordedRestackCo
       opId: journal.journal.opId, child: range.child, oldParent: range.oldParent, oldTip: range.oldTip,
       newParent: options.replayParent, newParentTree: replayParentTree, candidateSubjects,
       commit: options.commit, paths: options.paths, ...(flattenedTip === undefined ? {} : { flattenedTip }),
-    }, { git: options.git });
+    }, { git: options.git, ...(options.refusedTip === undefined ? {} : { refusedTip: options.refusedTip }) });
     if (written.kind !== 'updated') recordFailure = `\nconflict record write failed: ${written.kind}`;
   } catch (error) {
     recordFailure = `\nconflict record write failed: ${error instanceof Error ? error.message : String(error)}`;
   }
   await options.writeHalt(options.worktree, range.child, `${options.detail}${recordFailure}`, options.events, {
     slug: options.slug, opId: journal.journal.opId, oldTip: range.oldTip, newParent: options.replayParent, oldParent: range.oldParent,
-    ...(flattenedTip === undefined ? {} : { startingTip: flattenedTip }),
+    ...((options.refusedTip ?? flattenedTip) === undefined ? {} : { startingTip: options.refusedTip ?? flattenedTip }),
   });
 }
 
