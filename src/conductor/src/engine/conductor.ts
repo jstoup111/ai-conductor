@@ -5565,7 +5565,15 @@ export class Conductor {
                 ? { consolidatedManualTestFail: hintSource.consolidatedManualTestFailRows }
                 : {}),
             });
-            if (routed.kind === 'halt') return { kind: 'halt', haltClass: 'needs-human', detail: routed.detail };
+            if (routed.kind === 'halt') {
+              const routingFence = 'fence' in routed && routed.fence === true;
+              return {
+                kind: 'halt',
+                haltClass: routingFence ? 'mechanical' : 'needs-human',
+                detail: routed.detail,
+                ...(routingFence ? { routingFence: true as const } : {}),
+              };
+            }
             const lapSources = new Set(routedFixes.map((gap) => (gap as CriterionBoundRemediationGap).gateSource));
             const receipt = {
               laps: {
@@ -13237,14 +13245,19 @@ export class Conductor {
           }
 
           // Step runner returned success. Now verify real completion.
-          if (!(this.verifyArtifacts && stepHasCompletionCheck(step.name, this.config) && step.name !== 'complexity')) {
+          // build_review is an authoritative aggregate, not optional fixture
+          // evidence: consume it even when generic artifact checks are off.
+          const mustCheckCompletion =
+            step.name === 'build_review' ||
+            (this.verifyArtifacts && stepHasCompletionCheck(step.name, this.config) && step.name !== 'complexity');
+          if (!mustCheckCompletion) {
             // No completion check will run this iteration — nothing will
             // consume the in-flight attempt timestamp, so clear it now
             // rather than leaking it into a later completionCtx() call.
             this.currentAttemptStartedAt = undefined;
             this.currentRunId = undefined;
           }
-          if (this.verifyArtifacts && stepHasCompletionCheck(step.name, this.config) && step.name !== 'complexity') {
+          if (mustCheckCompletion) {
             if (step.name === 'acceptance_specs') {
               // The dispatch has returned; publish that RED evidence is now
               // awaiting its authoritative completion-gate verdict.
@@ -13735,6 +13748,10 @@ export class Conductor {
                 completion.missing,
                 join(this.projectRoot, '.pipeline'),
               );
+              // build_review's completed runner result carries no new input
+              // for a retry. Its aggregate must instead be consumed exactly
+              // once by the post-join adjudication boundary below.
+              if (step.name === 'build_review') break;
               if (
                 step.name === 'build' &&
                 attempt < stepMaxRetries &&
@@ -14450,7 +14467,16 @@ export class Conductor {
             }
           }
 
-          if (this.verifyArtifacts && stepHasCompletionCheck(step.name, this.config) && !succeeded) break;
+          // build_review's aggregate is authoritative even in fixture and
+          // compatibility modes that intentionally disable generic artifact
+          // verification. A non-green aggregate must reach the shared
+          // adjudication/failure boundary below; otherwise this fallthrough
+          // turns it back into a successful step and skips that boundary.
+          if (
+            !succeeded &&
+            (step.name === 'build_review' ||
+              (this.verifyArtifacts && stepHasCompletionCheck(step.name, this.config)))
+          ) break;
 
           succeeded = true;
           successOutput = result.output;
@@ -14499,8 +14525,12 @@ export class Conductor {
             process.off('SIGTERM', sigterm);
             return;
           }
-          // Exhausted retries — route through the recovery menu.
-          await this.saveConductorStepStatus(state, step.name, 'failed');
+          // Exhausted retries — route through the recovery menu. A raw
+          // build-review FAIL is still pending adjudication, so do not publish
+          // a failed terminal attempt before that authority can settle it.
+          if (step.name !== 'build_review') {
+            await this.saveConductorStepStatus(state, step.name, 'failed');
+          }
           if (step.name === 'build') {
             const [headAfter, treeAfter, resolvedAfter] = await Promise.all([
               currentCommitSha(this.projectRoot),
@@ -14524,19 +14554,21 @@ export class Conductor {
               outcomeStore,
             });
           }
-          await emitTracked({
-            type: 'step_failed',
-            step: step.name,
-            error: lastError,
-            retryCount: attempt,
-            ...(failedStepResult?.exitFacts !== undefined && { providerExit: failedStepResult.exitFacts }),
-            ...(failedStepResult?.effort !== undefined && { effort: failedStepResult.effort }),
-            ...(state.complexity_tier !== undefined && { tier: state.complexity_tier }),
-            ...(failedStepResult?.observedIntervals
-              ? { observedIntervals: failedStepResult.observedIntervals }
-              : {}),
-            executionContext: serialExecutionContext,
-          });
+          if (step.name !== 'build_review') {
+            await emitTracked({
+              type: 'step_failed',
+              step: step.name,
+              error: lastError,
+              retryCount: attempt,
+              ...(failedStepResult?.exitFacts !== undefined && { providerExit: failedStepResult.exitFacts }),
+              ...(failedStepResult?.effort !== undefined && { effort: failedStepResult.effort }),
+              ...(state.complexity_tier !== undefined && { tier: state.complexity_tier }),
+              ...(failedStepResult?.observedIntervals
+                ? { observedIntervals: failedStepResult.observedIntervals }
+                : {}),
+              executionContext: serialExecutionContext,
+            });
+          }
 
           // Auto mode is unattended — NEVER prompt or open a REPL. An advisory
           // step's failure auto-skips so it can't block the run; a gating or
@@ -15179,6 +15211,7 @@ export class Conductor {
                   // effective verdict has become PASS.  Its caller breaks to
                   // the shared success tail, which requires this latch to be
                   // updated before it can persist the completion.
+                  buildReviewAdjudicationSettled = true;
                   succeeded = true;
                   return true;
                 };
@@ -16450,11 +16483,11 @@ export class Conductor {
           if (
             step.name === 'build_review' &&
             activeChild !== undefined &&
-            activeChildRequiresClosure &&
-            CHILD_REGION_STEPS.every((regionStep) => {
+            (activeChildRequiresClosure || (buildReviewAdjudicationSettled && !activeChild.isLeaf)) &&
+            (buildReviewAdjudicationSettled || CHILD_REGION_STEPS.every((regionStep) => {
               const status = getStepStatus(state, regionStep);
               return status === 'done' || status === 'skipped';
-            })
+            }))
           ) {
             const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
             if (!slug) throw new Error('cannot advance child BUILD region without a feature slug');
@@ -16498,6 +16531,7 @@ export class Conductor {
               steps,
               indexOf,
               buildRoutedForward,
+              buildReviewAdjudicationSettled,
             );
           } catch (transitionErr) {
             // Tag the escaped rejection with which step-transition it happened
@@ -17118,12 +17152,7 @@ export class Conductor {
             case 'exhausted':
             case 'halted': {
               const reason = routedAdmission.reason;
-              await this.writeHaltMarker(
-                reason + '\n',
-                routedAdmission.kind === 'halted'
-                  ? (routedAdmission.haltClass ?? 'needs-human')
-                  : 'needs-human',
-              );
+              await this.writeHaltMarker(reason + '\n', routedAdmission.haltClass ?? 'needs-human');
               const prUrl = await this.surfaceRemediationPr(reason);
               await this.emitLoopHalt(reason, prUrl);
               return 'halt';
@@ -17183,6 +17212,7 @@ export class Conductor {
     steps: StepDefinition[],
     indexOf: (name: StepName) => number,
     buildRoutedForward = false,
+    buildReviewAdjudicationSettled = false,
   ): Promise<number | null | 'halt' | 'parked'> {
     // The gate-driven tail engages only when completion is verified against
     // artifacts (verifyArtifacts=true) — the single satisfaction authority
@@ -17276,6 +17306,12 @@ export class Conductor {
               reason: state.build_routed_reason ?? 'build routed after commit movement',
               checkedAt: Date.now(),
             }
+          : step.name === 'build_review' && buildReviewAdjudicationSettled
+          ? {
+              satisfied: true,
+              reason: 'build_review FAIL settled by post-join adjudication',
+              checkedAt: Date.now(),
+            }
           : step.name === 'finish'
           ? { satisfied: true, checkedAt: Date.now() }
           : await computeAndWriteVerdict(
@@ -17284,7 +17320,11 @@ export class Conductor {
               await this.completionCtx(state),
               { retainReplayPreservation: false },
             );
-      if (step.name === 'finish' || (step.name === 'build' && buildRoutedForward)) {
+      if (
+        step.name === 'finish' ||
+        (step.name === 'build' && buildRoutedForward) ||
+        (step.name === 'build_review' && buildReviewAdjudicationSettled)
+      ) {
         await writeVerdict(
           this.projectRoot,
           step.name,
