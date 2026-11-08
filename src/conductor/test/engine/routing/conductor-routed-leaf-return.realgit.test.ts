@@ -12,7 +12,7 @@ import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { readRouteRecord } from '../../../src/engine/routing/route-record-store.js';
 import { closureRefFor, repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { advanceRound, requestRoutedExit } from '../../../src/engine/routing/routed-exit.js';
-import { checkRoundSupersession, supersedeRound } from '../../../src/engine/stack-rounds-cli.js';
+import { checkRoundSupersession, dispatchStackRoundsCommand, supersedeRound } from '../../../src/engine/stack-rounds-cli.js';
 import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
 import { emptyUnsettledReceipt, parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { readState, writeState } from '../../../src/engine/state.js';
@@ -245,8 +245,50 @@ describe('Conductor routed final leaf return (real local Git)', () => {
   });
 
   // Covers: task:13
-  it('returns to whole-feature validation with the root state store and baseline reloaded', async () => {
-    const { subject, statePath, config, leafHead } = await fixture();
+  it('dispatches whole-feature validation after closing a leaf-return round, an operator leaf commit, and HALT clear', async () => {
+    const { subject, statePath, config } = await fixture();
+    const git = makeGitRunner(subject.repo);
+    const stored = await readRouteRecord(subject.repo, 'demo', roundId, { git });
+    if (stored.kind !== 'record') throw new Error('sole routed round is unavailable');
+    await git(['update-ref', routeRecordRefFor('demo', roundId), await writeBlob(git, {
+      ...stored.record, hosts: { [host]: 'admitted' },
+    })]);
+    const kickbackState = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])) as ConductState;
+    Object.assign(kickbackState, {
+      feature_desc: 'demo',
+      complexity_tier: 'M',
+      acceptance_specs: 'pending',
+      prd_audit: 'pending',
+      architecture_review_as_built: 'pending',
+      manual_test: 'pending',
+      post_region_check: 'pending',
+    });
+    await writeState(statePath, kickbackState);
+    for (const gate of ['prd_audit', 'architecture_review_as_built', 'manual_test', 'post_region_check'] as StepName[]) {
+      await writeVerdict(subject.repo, gate, {
+        satisfied: false,
+        reason: 'routed leaf return requires fresh whole-feature validation',
+        checkedAt: Date.now(),
+      });
+    }
+    await writeFile(join(subject.repo, '.pipeline', 'HALT'), 'manual-test failure\n');
+
+    await expect(dispatchStackRoundsCommand({
+      kind: 'stack-rounds-close', slug: 'demo', roundId, reason: 'manual test repair lands on leaf',
+    }, {
+      cwd: subject.repo,
+      resolveMainRoot: async () => subject.repo,
+      resolveWorktree: async () => subject.repo,
+      loadConfig: async () => ({ ok: true, config, warnings: [] }),
+      hasDurableChildState: async () => true,
+      resolveOperator: async () => 'operator@example.test',
+      print: () => undefined,
+      git,
+    } as never)).resolves.toBe(0);
+    await subject.git(['checkout', '-q', 'feat/daemon-demo']);
+    const operatorCommit = await subject.commit('operator leaf repair', 'operator-leaf.txt', 'fixed\n');
+    await rm(join(subject.repo, '.pipeline', 'HALT'));
+
     const dispatched: StepName[] = [];
     const dispatchContexts: Array<{ readonly step: StepName; readonly activeChild: number | undefined }> = [];
     const routedRepairPhases: unknown[] = [];
@@ -264,7 +306,7 @@ describe('Conductor routed final leaf return (real local Git)', () => {
       projectRoot: subject.repo,
       stateFilePath: statePath,
       featureSlug: 'demo',
-      fromStep: 'build_review',
+      fromStep: 'manual_test',
       mode: 'auto',
       daemon: true,
       verifyArtifacts: false,
@@ -310,6 +352,8 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     });
 
     try {
+      await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', events, git })).resolves.toEqual({ kind: 'clear' });
+      await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', events, git })).resolves.toEqual({ kind: 'clear' });
       await conductor.run();
     } finally {
       persister.stop();
@@ -317,7 +361,15 @@ describe('Conductor routed final leaf return (real local Git)', () => {
 
     const onDisk = await readState(statePath);
     if (!onDisk.ok) throw new Error('leaf conduct state is unreadable');
-    expect(dispatched[0]).toBe('build_review');
+    const persisted = await readFile(join(subject.repo, '.pipeline', 'events.jsonl'), 'utf8');
+    const closes = persisted.split('\n').filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((event) => event.type === 'routing_round_superseded' && event.roundId === roundId);
+    expect(closes).toHaveLength(1);
+    expect(closes[0]).toMatchObject({
+      disposition: 'leaf-return', reason: 'manual test repair lands on leaf', operator: 'operator@example.test',
+    });
+    expect(closes[0]).not.toHaveProperty('supersededBy');
+    expect(dispatched[0]).toBe('manual_test');
     expect(dispatched).toContain('manual_test');
     expect(dispatched).toContain('prd_audit');
     expect(dispatched).toContain('architecture_review_as_built');
@@ -327,9 +379,9 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     expect(wholeFeatureValidationDispatches).toEqual(expect.arrayContaining([
       expect.objectContaining({ step: 'manual_test', activeChild: undefined }),
     ]));
-    expect(wholeFeatureValidationDispatches.every(({ activeChild }) => activeChild === undefined)).toBe(true);
+    expect(dispatchContexts.every(({ activeChild }) => activeChild === undefined)).toBe(true);
     expect(routedRepairPhases).toEqual([]);
-    expect(manualTestDispatch).toEqual({ worktree: subject.repo, head: leafHead });
+    expect(manualTestDispatch).toEqual({ worktree: subject.repo, head: operatorCommit });
     expect(leafState).toEqual(persistedRootState);
     expect(leafSnapshot).toEqual(persistedRootState);
     const stores = conductor as unknown as {
