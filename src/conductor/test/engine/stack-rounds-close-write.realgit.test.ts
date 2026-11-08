@@ -50,6 +50,7 @@ async function pointRefAtBlobText(
 it('closes a sole audit round and deletes its matching marker in one transaction', async () => {
   const subject = await createSweepRepository('stack-rounds-close-leaf-return-', cleanup);
   await subject.git(['commit', '-qm', 'initial']);
+  await subject.git(['checkout', '-qb', 'feat/daemon-demo']);
   await openAudit(subject, r2, { [c1]: 'admitted' }, []);
   await pointRefAtBlobText(subject, repairMarkerRefFor(slug), JSON.stringify({ host: c1, roundId: r2 }));
   const checked = await checkRoundSupersession(subject.repo, slug, r2);
@@ -68,7 +69,7 @@ it('closes a sole audit round and deletes its matching marker in one transaction
   await expect(readRouteRecord(subject.repo, slug, r2)).resolves.toMatchObject({
     kind: 'record', record: { phase: 'closed', hosts: { [c1]: 'done' }, outbox: [{
       event: { type: 'routing_round_superseded', roundId: r2, disposition: 'leaf-return', reason: 'return to leaf', operator: 'operator' },
-    }] },
+    }], leafReturn: { branch: 'feat/daemon-demo', head: (await subject.git(['rev-parse', 'HEAD'])).stdout.trim() } },
   });
   await expect(readRepairMarker(subject.repo, slug)).resolves.toEqual({ kind: 'absent' });
 });
@@ -77,6 +78,7 @@ it('closes a sole audit round and deletes its matching marker in one transaction
 it('refuses a leaf-return close when its checked marker was moved', async () => {
   const subject = await createSweepRepository('stack-rounds-close-leaf-return-race-', cleanup);
   await subject.git(['commit', '-qm', 'initial']);
+  await subject.git(['checkout', '-qb', 'feat/daemon-demo']);
   await openAudit(subject, r2, { [c1]: 'admitted' }, []);
   await pointRefAtBlobText(subject, repairMarkerRefFor(slug), JSON.stringify({ host: c1, roundId: r2 }));
   const checked = await checkRoundSupersession(subject.repo, slug, r2);

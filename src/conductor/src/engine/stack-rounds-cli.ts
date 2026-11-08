@@ -4,6 +4,7 @@ import { loadConfig } from './config.js';
 import { acquireFeatureDispatchLease, formatFeatureDispatchLeaseRefusal } from './feature-dispatch-lease.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
+import { leafBranchFor } from './feature-branch-identity.js';
 import { hasDurableChildState } from './slice-topology.js';
 import type { StackRoundsDispatch } from '../types/cli.js';
 import {
@@ -15,6 +16,7 @@ import {
   type ReadRouteRecordResult,
 } from './routing/route-record-store.js';
 import { routingRoundSupersededEvent, withOutboxEvent } from './routing/routing-events.js';
+import { resolveGitRef } from './routing/git-ref-resolver.js';
 import { assertNever, parseRoundId, routingSettingOn, type RoundId } from './routing/route-types.js';
 
 export interface DescribedRoutingRound {
@@ -69,7 +71,13 @@ export type SupersedeRoundResult =
 /** Close one already-checked audit round with its durable occurrence in one CAS. */
 export async function supersedeRound(input: SupersedeRoundInput): Promise<SupersedeRoundResult> {
   const { worktree, slug, checked } = input;
+  const git = input.git ?? makeGitRunner(worktree);
   const leafReturn = checked.kind === 'leaf-return';
+  const leafReturnBranch = leafBranchFor(slug);
+  const leafReturnHead = leafReturn ? await resolveGitRef(git, leafReturnBranch) : undefined;
+  if (leafReturn && leafReturnHead === undefined) {
+    return { kind: 'refused', detail: `cannot resolve leaf return head for routing round ${checked.stored.record.roundId}` };
+  }
   const hosts = Object.fromEntries(Object.entries(checked.stored.record.hosts).map(([host, state]) => [
     host,
     state === 'pending' || (leafReturn && state === 'admitted') ? 'done' : state,
@@ -91,13 +99,18 @@ export async function supersedeRound(input: SupersedeRoundInput): Promise<Supers
     input.reason.trim(),
     input.operator.trim(),
   );
-  const record = withOutboxEvent({ ...checked.stored.record, phase: 'closed', hosts }, event);
+  const record = withOutboxEvent({
+    ...checked.stored.record,
+    phase: 'closed',
+    hosts,
+    ...(leafReturn ? { leafReturn: { branch: leafReturnBranch, head: leafReturnHead } } : {}),
+  }, event);
   const wrote = await (input.writeRoutingTransaction ?? writeRoutingTransaction)(worktree, slug, [
     { kind: 'update-record', previous: checked.stored, record },
     ...(leafReturn
       ? checked.marker === undefined ? [] : [{ kind: 'delete-marker' as const, old: checked.marker.blob }]
       : [{ kind: 'verify-ref' as const, ref: `refs/conductor/${slug}/routes/${checked.supersededBy}`, value: checked.survivor.blob }]),
-  ], { ...(input.git === undefined ? {} : { git: input.git }) });
+  ], { ...(input.git === undefined ? {} : { git }) });
   if (wrote.kind === 'updated') return { kind: 'superseded', event };
   const detail = wrote.kind === 'cas-failed'
     ? `contested write for routing round ${checked.stored.record.roundId}`

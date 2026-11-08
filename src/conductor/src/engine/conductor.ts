@@ -232,7 +232,7 @@ import { enterHostRegion, verifyGreenAcceptance } from './routing/host-region-en
 import { settleDerivedNoOpHost } from './routing/routed-exit.js';
 import type { requestRoutedExit } from './routing/routed-exit.js';
 import { admitQueuedRevalidation } from './routing/queue-admission.js';
-import { FEATURE_EVENT_LOG_PATH, persistOnActiveEventSpine } from './event-persister.js';
+import { persistOnActiveEventSpine } from './event-persister.js';
 import { childBranchFor, leafBranchFor } from './feature-branch-identity.js';
 import { emitRestackRefused } from './restack/restack-events.js';
 import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
@@ -3246,23 +3246,12 @@ export class Conductor {
     const git = makeGitRunner(this.projectRoot);
     const listed = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
     if (listed.exitCode !== 0) return false;
-    const leafReturnRounds = new Set<RoundId>();
-    const lines = await readFile(join(this.projectRoot, FEATURE_EVENT_LOG_PATH), 'utf8').catch(() => '');
-    for (const line of lines.split('\n')) {
-      try {
-        const event = JSON.parse(line) as { type?: unknown; roundId?: unknown; disposition?: unknown };
-        const roundId = typeof event.roundId === 'string' ? parseRoundId(event.roundId) : undefined;
-        if (event.type === 'routing_round_superseded' && event.disposition === 'leaf-return' && roundId) {
-          leafReturnRounds.add(roundId);
-        }
-      } catch { /* Ignore malformed historical telemetry; durable records remain authoritative. */ }
-    }
     for (const ref of listed.stdout.split('\n').filter(Boolean)) {
       const roundId = parseRoundId(ref.split('/').at(-1) ?? '');
       if (!roundId) return false;
       const stored = await readRouteRecord(this.projectRoot, slug, roundId, { git });
       if (stored.kind !== 'record') return false;
-      if (stored.record.phase === 'closed' && (stored.record.leafReturn !== undefined || leafReturnRounds.has(roundId))) return true;
+      if (stored.record.phase === 'closed' && stored.record.leafReturn !== undefined) return true;
     }
     return false;
   }
@@ -7588,8 +7577,10 @@ export class Conductor {
         // A closed routed round alone is ordinary history. Only returnToLeaf
         // leaves a durable leaf-return receipt whose root state is authoritative.
         // Other stacked resumes must still enter their active child's overlay.
-        const roundIsOpen = await routedRoundOpen(this.projectRoot, resumeSlug);
-        if (!roundIsOpen && await this.hasSettledRoutedLeafReturn(resumeSlug)) {
+        const routingEnabled = this.config.stacked_prs?.route_whole_feature_fixes === true;
+        const hasChildren = routingEnabled && await hasDurableChildState(this.projectRoot, resumeSlug);
+        const roundIsOpen = hasChildren ? await routedRoundOpen(this.projectRoot, resumeSlug) : false;
+        if (hasChildren && !roundIsOpen && await this.hasSettledRoutedLeafReturn(resumeSlug)) {
           await this.restoreWholeFeatureState(state);
           resumedAtWholeFeature = true;
         }
@@ -7597,8 +7588,7 @@ export class Conductor {
         // its cursor after preflight has settled any recorded round so a
         // leaf-return close resumes as ordinary whole-feature validation.
         if (
-          this.config.stacked_prs?.route_whole_feature_fixes === true
-          && await hasDurableChildState(this.projectRoot, resumeSlug)
+          hasChildren
           && roundIsOpen
         ) {
           try {

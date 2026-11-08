@@ -16,10 +16,12 @@ import { checkRoundSupersession, dispatchStackRoundsCommand, supersedeRound } fr
 import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
 import { emptyUnsettledReceipt, parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { readState, writeState } from '../../../src/engine/state.js';
+import { hasDurableChildState } from '../../../src/engine/slice-topology.js';
 import { ALL_STEPS } from '../../../src/engine/steps.js';
 import type { ConductState, HarnessConfig, StepName } from '../../../src/types/index.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { createSweepRepository, removeAll, sealStack, type SweepRepository } from '../restack/restack-sweepG2-fixture.js';
+import { withGitArgvShim } from '../n1-golden-shared.js';
 
 const cleanup: string[] = [];
 const host = parseChildId(1)!;
@@ -167,6 +169,55 @@ async function tasklessExitFixture(withCommit: boolean): Promise<{
 
 describe('Conductor routed final leaf return (real local Git)', () => {
   // Covers: task:13
+  it.each([
+    ['the cursor has no durable children', true, { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } }],
+    ['whole-feature routing is off', false, { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: false } }],
+  ] as const)('does not read routing refs on resume when %s', async (_caseName, removeChildState, config) => {
+    const { subject, statePath } = await fixture();
+    if (removeChildState) {
+      await rm(join(subject.repo, '.pipeline', 'children'), { recursive: true, force: true });
+      const git = makeGitRunner(subject.repo);
+      for (const ref of [
+        'refs/heads/feat/c1/demo',
+        'refs/heads/feat/c2/demo',
+        closureRefFor('demo', host),
+        'refs/conductor/demo/positions',
+      ]) await git(['update-ref', '-d', ref]);
+      expect(await hasDurableChildState(subject.repo, 'demo')).toBe(false);
+    }
+    await writeState(statePath, {
+      ...Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])),
+      feature_desc: 'demo', complexity_tier: 'M', build: 'pending',
+    } as ConductState);
+    let parkAfterDispatch = false;
+    const conductor = new Conductor({
+      projectRoot: subject.repo,
+      stateFilePath: statePath,
+      featureSlug: 'demo',
+      resume: true,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      config,
+      events: new ConductorEventEmitter(),
+      stackPreflight: async () => ({ kind: 'clear' }),
+      operatorParkBoundary: async () => parkAfterDispatch,
+      childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'no-child' }) },
+      // Stop at the first ordinary dispatch so completion's independent
+      // routing fence cannot obscure this resume-boundary assertion.
+      stepRunner: { run: async () => { parkAfterDispatch = true; return { success: true }; } },
+    });
+    // The history check sits immediately before this overlay activation.
+    // Stop there, before later whole-feature completion fences have cause to
+    // read routing state for their own independent decisions.
+    (conductor as unknown as { activateChildRegionStateForResume: () => Promise<boolean> }).activateChildRegionStateForResume = async () => false;
+
+    const gitArgv = await withGitArgvShim(subject.repo, async () => { await conductor.run(); });
+    const routingArgs = gitArgv.filter((args) => args.some((argument) => argument.includes('refs/conductor/demo/routes/') || argument.includes('refs/conductor/demo/revalidate')));
+    expect(routingArgs).toEqual([]);
+  });
+
+  // Covers: task:13
   it('resumes an ordinary active child into its pending BUILD overlay when no routing round was opened', async () => {
     const { subject, statePath, config } = await fixture();
     const git = makeGitRunner(subject.repo);
@@ -213,7 +264,7 @@ describe('Conductor routed final leaf return (real local Git)', () => {
 
   // Covers: task:13
   it('drains a sole-round leaf-return close once and leaves the leaf gates pending', async () => {
-    const { subject, statePath } = await fixture();
+    const { subject, statePath, config } = await fixture();
     const git = makeGitRunner(subject.repo);
     const stored = await readRouteRecord(subject.repo, 'demo', roundId, { git });
     if (stored.kind !== 'record') throw new Error('sole routed round is unavailable');
@@ -247,6 +298,34 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     expect(closes[0]).not.toHaveProperty('supersededBy');
     await expect(readState(statePath)).resolves.toMatchObject({ ok: true, value: { manual_test: 'pending' } });
     expect(persisted).not.toContain('"type":"routed_repair_phase"');
+
+    // The event outbox has already drained. Recovery must use the closed
+    // record's durable leaf-return identity, not the disposable event log.
+    await rm(join(subject.repo, '.pipeline', 'events.jsonl'));
+    const dispatched: StepName[] = [];
+    let parkAfterWholeFeatureDispatch = false;
+    const resumed = new Conductor({
+      projectRoot: subject.repo,
+      stateFilePath: statePath,
+      featureSlug: 'demo',
+      resume: true,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      config,
+      events: new ConductorEventEmitter(),
+      operatorParkBoundary: async () => parkAfterWholeFeatureDispatch,
+      stepRunner: {
+        run: async (step) => {
+          dispatched.push(step);
+          expect((resumed as unknown as { activeRegionChild?: number }).activeRegionChild).toBeUndefined();
+          parkAfterWholeFeatureDispatch = true;
+          return { success: true };
+        },
+      },
+    });
+    await resumed.run();
+    expect(dispatched).toContain('acceptance_specs');
   });
 
   it('restacks a committed taskless host and returns the settled round to the leaf', async () => {
