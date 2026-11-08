@@ -227,7 +227,7 @@ describe('structural: external boundary ratchet', () => {
     ]);
   });
 
-  // Covers: task:4
+  // Covers: task:4, task:5
   it('attributes a top-level process adapter call to git', () => {
     const registry = {
       ...BOUNDARY_REGISTRY,
@@ -243,10 +243,110 @@ describe('structural: external boundary ratchet', () => {
     });
 
     expect(result.touches).toEqual([
+      { file: 'cli.ts', line: 1, boundary: 'process', kind: 'adapter-import' },
       { file: 'cli.ts', line: 2, boundary: 'git', kind: 'command-literal' },
     ]);
     expect(result.violations).toEqual([
       { kind: 'unlisted-touch', file: 'cli.ts', line: 2, boundary: 'git' },
     ]);
+  });
+
+  // Covers: task:5
+  it('allows a top-level entry root to value-import an llm adapter', () => {
+    const registry = {
+      ...BOUNDARY_REGISTRY,
+      llm: { ...BOUNDARY_REGISTRY.llm, adapterModules: ['execution/claude-provider.ts'] },
+    };
+    const result = checkBoundaryRatchet({
+      files: new Map([
+        ['cli.ts', "import { ClaudeProvider } from './execution/claude-provider.js';"],
+        ['execution/claude-provider.ts', 'export class ClaudeProvider {}'],
+      ]),
+      allowlist: [],
+      registry,
+    });
+
+    expect(result).toEqual({
+      touches: [{ file: 'cli.ts', line: 1, boundary: 'llm', kind: 'adapter-import' }],
+      violations: [],
+    });
+  });
+
+  // Covers: task:5
+  it('rejects an unlisted engine value-import of an llm adapter with the composition-root rule', () => {
+    const registry = {
+      ...BOUNDARY_REGISTRY,
+      llm: { ...BOUNDARY_REGISTRY.llm, adapterModules: ['execution/claude-provider.ts'] },
+    };
+    const result = checkBoundaryRatchet({
+      files: new Map([
+        ['engine/a.ts', "import { ClaudeProvider } from '../execution/claude-provider.js';"],
+        ['execution/claude-provider.ts', 'export class ClaudeProvider {}'],
+      ]),
+      allowlist: [],
+      registry,
+    });
+
+    expect(result).toEqual({
+      touches: [{ file: 'engine/a.ts', line: 1, boundary: 'llm', kind: 'adapter-import' }],
+      violations: [{ kind: 'unlisted-touch', file: 'engine/a.ts', line: 1, boundary: 'llm', touchKind: 'adapter-import' }],
+    });
+    expect(formatBoundaryViolations(result.violations, registry)).toContain('only composition roots import adapters');
+  });
+
+  // Covers: task:5
+  it('does not classify a type-only engine import of an llm adapter', () => {
+    const registry = {
+      ...BOUNDARY_REGISTRY,
+      llm: { ...BOUNDARY_REGISTRY.llm, adapterModules: ['execution/claude-provider.ts'] },
+    };
+    const result = checkBoundaryRatchet({
+      files: new Map([
+        ['engine/a.ts', "import type { ClaudeProvider } from '../execution/claude-provider.js';"],
+        ['execution/claude-provider.ts', 'export class ClaudeProvider {}'],
+      ]),
+      allowlist: [],
+      registry,
+    });
+
+    expect(result).toEqual({ touches: [], violations: [] });
+  });
+
+  // Covers: task:5
+  it('rejects a nested entry-looking llm adapter importer', () => {
+    const registry = {
+      ...BOUNDARY_REGISTRY,
+      llm: { ...BOUNDARY_REGISTRY.llm, adapterModules: ['execution/claude-provider.ts'] },
+    };
+    const result = checkBoundaryRatchet({
+      files: new Map([
+        ['engine/cli-entry.ts', "import { ClaudeProvider } from '../execution/claude-provider.js';"],
+        ['execution/claude-provider.ts', 'export class ClaudeProvider {}'],
+      ]),
+      allowlist: [],
+      registry,
+    });
+
+    expect(result.violations).toEqual([
+      { kind: 'unlisted-touch', file: 'engine/cli-entry.ts', line: 1, boundary: 'llm', touchKind: 'adapter-import' },
+    ]);
+  });
+
+  // Covers: task:5
+  it('allows an allowlisted non-root llm adapter importer', () => {
+    const registry = {
+      ...BOUNDARY_REGISTRY,
+      llm: { ...BOUNDARY_REGISTRY.llm, adapterModules: ['execution/claude-provider.ts'] },
+    };
+    const result = checkBoundaryRatchet({
+      files: new Map([
+        ['execution/provider-catalog.ts', "import { ClaudeProvider } from './claude-provider.js';"],
+        ['execution/claude-provider.ts', 'export class ClaudeProvider {}'],
+      ]),
+      allowlist: ['execution/provider-catalog.ts -> llm'],
+      registry,
+    });
+
+    expect(result.violations).toEqual([]);
   });
 });

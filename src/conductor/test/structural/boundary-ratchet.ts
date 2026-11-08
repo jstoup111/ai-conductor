@@ -1,13 +1,13 @@
 import ts from 'typescript';
 
 import type { BoundaryEntry, BoundaryName } from './boundary-registry.js';
-import { resolveSpecifier } from './layer-ratchet.js';
+import { layerFor, resolveSpecifier } from './layer-ratchet.js';
 
 export interface BoundaryTouch {
   readonly file: string;
   readonly line: number;
   readonly boundary: BoundaryName;
-  readonly kind: 'specifier-import' | 'clock-read' | 'command-literal';
+  readonly kind: 'specifier-import' | 'clock-read' | 'command-literal' | 'adapter-import';
 }
 
 export interface UnlistedBoundaryTouchViolation {
@@ -15,6 +15,7 @@ export interface UnlistedBoundaryTouchViolation {
   readonly file: string;
   readonly line: number;
   readonly boundary: BoundaryName;
+  readonly touchKind?: BoundaryTouch['kind'];
 }
 
 export interface BoundaryRatchetInput {
@@ -46,6 +47,17 @@ export function checkBoundaryRatchet({ files, allowlist, registry }: BoundaryRat
           if (!registry[boundary].adapterModules.includes(file) && !allowed.has(`${file} -> ${boundary}`)) {
             violations.push({ kind: 'unlisted-touch', file, line, boundary });
           }
+        }
+      }
+      const adapterBoundary = adapterImportBoundaryFor(node, file, files, registry);
+      if (adapterBoundary !== undefined) {
+        const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+        const touch: BoundaryTouch = { file, line, boundary: adapterBoundary, kind: 'adapter-import' };
+        touches.push(touch);
+        const permitted = registry[adapterBoundary].adapterModules.includes(file)
+          || layerFor(file) === 'entry' || allowed.has(`${file} -> ${adapterBoundary}`);
+        if (!permitted) {
+          violations.push({ kind: 'unlisted-touch', file, line, boundary: adapterBoundary, touchKind: 'adapter-import' });
         }
       }
       const clockPattern = clockPatternFor(node);
@@ -83,7 +95,8 @@ export function formatBoundaryViolations(
     const resolution = entry.status.kind === 'pending'
       ? `pending #${entry.status.issue}`
       : `ported adapters: ${entry.adapterModules.join(', ')}`;
-    return `${violation.kind} ${violation.file}:${violation.line} ${violation.boundary} (${resolution})`;
+    const rule = violation.touchKind === 'adapter-import' ? '; only composition roots import adapters' : '';
+    return `${violation.kind} ${violation.file}:${violation.line} ${violation.boundary} (${resolution}${rule})`;
   }).join('\n');
 }
 
@@ -97,6 +110,20 @@ function matchingBoundaries(
       ? normalized.startsWith(registeredSpecifier)
       : normalized === registeredSpecifier,
   ));
+}
+
+function adapterImportBoundaryFor(
+  node: ts.Node,
+  file: string,
+  files: ReadonlyMap<string, string>,
+  registry: Readonly<Record<BoundaryName, BoundaryEntry>>,
+): BoundaryName | undefined {
+  if (!ts.isImportDeclaration(node) || !isValueImport(node) || !ts.isStringLiteral(node.moduleSpecifier)) return undefined;
+  const imported = resolveSpecifier(file, node.moduleSpecifier.text, files);
+  if (imported === undefined) return undefined;
+  return (Object.keys(registry) as BoundaryName[]).find(
+    (boundary) => registry[boundary].adapterModules.includes(imported),
+  );
 }
 
 function clockPatternFor(node: ts.Node): string | undefined {
