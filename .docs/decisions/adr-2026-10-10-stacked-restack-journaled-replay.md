@@ -245,6 +245,8 @@ Operator decisions (2026-10-10):
 > own contribution when its path ownership is checked (`adr-2026-10-12-routed-whole-feature-repair`
 > decision 9).
 
+> **Amended 2026-11-07 by #3598:** The subset rule above still governs a clean plumbing replay. A *resolved* tip (the resolver's result, a recorded operator `--tip`, or either consumed by recovery) may also change paths in its new parent's delta (`diff --no-renames --name-only oldParent newParent`) that are not owned. These are its *adapted paths*: `(newParent..newTip) ∩ (oldParent..newParent) − owned`. An adapted path is refused as a parent revert when the tip's content at that path equals `oldParent`'s, including the path's absence when the parent added it. A path in neither the owned set nor the parent delta still halts `replay-mismatch`. The stated limit carries over: a partial revert inside an adapted file is not caught by this rule. Instead, adapted paths are emitted as `adaptedPaths` on `restack_applied`, and the restack transition counts them as part of the child's contribution, recomputed from the same formula, when it compares the replay. The child's feature-scoped reviews therefore re-open and judge each adaptation. A refused resolution is not discarded: its tip is pinned with the conflict record and halts as an operator-recoverable conflict (adr-2026-10-25-operator-recorded-restack-conflict-resolution decision 2).
+
 4. **The restack journal is durable, ref-backed, and moves in the same transaction as the refs.**
    - **Storage.** The journal is a blob behind `refs/conductor/<slug>/restack/journal`.
      - It is created by compare-and-swap, create-only, so at most one restack is outstanding. A
