@@ -179,7 +179,9 @@ describe("resolveSpoolDir", () => {
       const draining = runtime.drainer.drainUntilStopped();
       await new Promise<void>((resolve, reject) => {
         const deadline = setTimeout(() => reject(new Error("first delivery did not arrive")), 5_000);
-        const poll = () => received.length === 1 ? (clearTimeout(deadline), resolve()) : setImmediate(poll);
+        const poll = async () => (await runtime.store.list("traces")).length === 0
+          ? (clearTimeout(deadline), resolve())
+          : setImmediate(() => { void poll(); });
         poll();
       });
       environment[credentialVariable] = "rotated";
