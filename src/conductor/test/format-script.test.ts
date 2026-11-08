@@ -186,6 +186,34 @@ describe('format script errors', () => {
 });
 
 describe('format script write mode', () => {
+  it('formats every parseable in-scope tracked file with --all', () => {
+    const repository = createRepository();
+    write(
+      repository,
+      'src/conductor/src/a.ts',
+      'export function greeting() {\r\n    const message="not canonical"\r\n    return buildGreeting(message, "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen")\r\n}\r\n',
+    );
+    write(repository, 'test/x.sh', "if true;then\r\n    echo 'not canonical'\r\nfi\r\n");
+    git(repository, 'add', '.');
+    commit(repository, 'non-canonical in-scope files');
+
+    expect(runFormat(repository, '--write', '--all').status).toBe(0);
+
+    const typescript = readFileSync(join(repository, 'src/conductor/src/a.ts'), 'utf8');
+    const shell = readFileSync(join(repository, 'test/x.sh'), 'utf8');
+    for (const content of [typescript, shell]) {
+      expect(content).not.toContain('\r');
+      expect(content.split('\n').every((line) => line.length <= 120)).toBe(true);
+    }
+    expect(typescript).toContain("'not canonical'");
+    expect(typescript).toMatch(/;$/m);
+    expect(typescript).toContain('\n  const message');
+    expect(shell).toContain("'not canonical'");
+    expect(shell).toContain('if true; then');
+    expect(shell).toContain('\n  echo');
+    expect(runFormat(repository, '--check', '--all').status).toBe(0);
+  });
+
   it('rewrites changed files, leaves untouched files alone, and is idempotent', () => {
     const repository = createRepository();
     git(repository, 'checkout', 'main');
