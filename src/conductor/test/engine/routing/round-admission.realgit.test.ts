@@ -321,6 +321,7 @@ describe('routed-round admission (real local Git)', () => {
       await subject.git(['update-ref', routeRecordRefFor('demo', parseRoundId('r9')!), badBlob]);
       const refused = await admitRound(subject.repo, 'demo', candidate.record, c1);
       expect(refused).toMatchObject({ kind: 'refused', fence: true, detail: expect.stringContaining('r9') });
+      if (refused.kind !== 'refused') throw new Error('expected unreadable route record to refuse admission');
       expect(refused.detail).not.toMatch(/host|pending|admitted|repairing|built|restacked/);
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
   });

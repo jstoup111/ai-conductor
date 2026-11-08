@@ -1,9 +1,7 @@
 // Covers: task:3, task:6, task:7, task:8, task:9, task:10, task:67, task:rem-prd-audit-W7
-import { execFile as execFileCallback } from 'node:child_process';
 import { access, mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -45,6 +43,7 @@ vi.mock('../../../src/engine/routing/queue-admission.js', async (importOriginal)
 
 import { parseChildId, pipelinePathFor } from '../../../src/engine/child-context.js';
 import { Conductor } from '../../../src/engine/conductor.js';
+import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord, readRepairMarker, readRouteRecord, transitionHost, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
@@ -56,7 +55,6 @@ import { ALL_STEPS } from '../../../src/engine/steps.js';
 import type { ConductState, StepName } from '../../../src/types/index.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
-const execFile = promisify(execFileCallback);
 const repositories: string[] = [];
 const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
@@ -86,7 +84,7 @@ function doneThrough(stopAt: StepName): ConductState {
 async function fixture() {
   const repo = await mkdtemp(join(tmpdir(), 'conductor-routing-resume-'));
   repositories.push(repo);
-  const git = (args: string[]) => execFile('git', args, { cwd: repo });
+  const git = makeGitRunner(repo);
   const commit = async (message: string, path: string, value: string) => {
     await writeFile(join(repo, path), value);
     await git(['add', path]);
