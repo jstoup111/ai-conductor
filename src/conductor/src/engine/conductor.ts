@@ -14467,7 +14467,7 @@ export class Conductor {
 
           if (
             !succeeded &&
-            (step.name === 'build_review' ||
+            ((step.name === 'build_review' && lastError !== '') ||
               (this.verifyArtifacts && stepHasCompletionCheck(step.name, this.config)))
           ) break;
 
