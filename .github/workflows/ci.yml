@@ -300,7 +300,8 @@ jobs:
             "https://api.github.com/repos/lycheeverse/lychee/releases/assets/$LYCHEE_ASSET_ID" \
             --output /tmp/lychee.tar.gz
           echo "$LYCHEE_SHA256  /tmp/lychee.tar.gz" | sha256sum --check --strict
-          tar -xzf /tmp/lychee.tar.gz -C /tmp lychee
+          tar -xzf /tmp/lychee.tar.gz -C /tmp --strip-components=1 \
+            lychee-x86_64-unknown-linux-gnu/lychee
           install -D -m 0755 /tmp/lychee "$RUNNER_TEMP/lychee-bin/lychee"
           echo "$RUNNER_TEMP/lychee-bin" >> "$GITHUB_PATH"
       - name: Check documentation links
