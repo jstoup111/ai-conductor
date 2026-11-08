@@ -16645,6 +16645,30 @@ export class Conductor {
       (rows.length > 1 ? ` (+${rows.length - 1} more FAIL row(s))` : '');
   }
 
+  /**
+   * Adapt the conductor's injected PR-operation Git seam to routing helpers,
+   * which require a complete result even when the underlying command fails.
+   */
+  private tasklessRoutingGit(): RebaseGitRunner {
+    return async (args) => {
+      try {
+        const result = await this.git(args, { cwd: this.projectRoot });
+        const observed = result as { stdout: string; stderr?: string; exitCode?: number };
+        return {
+          exitCode: observed.exitCode ?? 0,
+          stdout: observed.stdout,
+          stderr: observed.stderr ?? '',
+        };
+      } catch (error) {
+        return {
+          exitCode: 1,
+          stdout: '',
+          stderr: error instanceof Error ? error.message : String(error),
+        };
+      }
+    };
+  }
+
   /** Creates and admits one taskless round after its receipt-specific charge is durable. */
   private async admitRoutedTasklessKickback(
     state: ConductState,
@@ -16703,7 +16727,7 @@ export class Conductor {
       positions: declaredPositions,
       leafTip: leafBranchFor(slug),
       baseRef: this.baseBranch ?? 'main',
-      git: (args) => this.git(args, { cwd: this.projectRoot }),
+      git: this.tasklessRoutingGit(),
     });
     if ('kind' in changedPaths) {
       return { kind: 'halted', reason: `taskless routing manifest failed: ${changedPaths.detail}` };
@@ -16725,7 +16749,7 @@ export class Conductor {
     }
     const answer = judged.answers[0]!;
     const ownership = resolveResidueOwner(answer);
-    const paths = await resolveCitedPaths(answer.implicatedPaths, leafBranchFor(slug), (args) => this.git(args, { cwd: this.projectRoot }));
+    const paths = await resolveCitedPaths(answer.implicatedPaths, leafBranchFor(slug), this.tasklessRoutingGit());
     if ('kind' in paths) {
       return { kind: 'halted', reason: `taskless routing implicated-path resolution failed: ${paths.detail}` };
     }
@@ -16736,7 +16760,7 @@ export class Conductor {
         inputs: paths.inputs,
         positions: declaredPositions,
         leafTip: leafBranchFor(slug),
-        git: (args) => this.git(args, { cwd: this.projectRoot }),
+        git: this.tasklessRoutingGit(),
       });
     if ('kind' in placement) {
       return { kind: 'halted', reason: `taskless routing host selection failed: ${placement.detail}` };
