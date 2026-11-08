@@ -177,7 +177,7 @@ describe('T14 — daemon-cli wires the real progress-gated re-kick predicate int
   });
 
   it('buildRetryableHaltDeps clears and audits once, without overwriting HALT.cleared', async () => {
-    const { buildProgressReKickDeps, buildRetryableHaltDeps } = await import('../../src/daemon-cli.js');
+    const { buildRetryableHaltDeps } = await import('../../src/daemon-cli.js');
     const worktreeBase = await mkdtemp(join(tmpdir(), 'retryable-halt-wiring-'));
     try {
       const slug = 'retryable';

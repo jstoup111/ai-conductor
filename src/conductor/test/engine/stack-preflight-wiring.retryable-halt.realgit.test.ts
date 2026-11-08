@@ -65,7 +65,7 @@ describe('retryable HALT dispatch reaches the pending prerequisite', () => {
             daemon: true, fromStep: 'test_suite', verifyArtifacts: false,
             config: { test_suite: { commands: [{ command: 'true', working_directory: '.' }] } } as any,
             fullSuiteVerifier: {
-              inspect: async () => ({ status: 'STALE' as const, reason: 'fixture requires test-suite dispatch' }),
+              inspect: async () => ({ status: 'STALE' as const, reason: 'missing' as const }),
               ensure: async () => { executed.push('test_suite'); return { status: 'REUSED' as const, evidence: {} as never }; },
             },
           });
