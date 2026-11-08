@@ -7,7 +7,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  routedExit: undefined as undefined | (() => Promise<unknown>),
+  routedExit: undefined as undefined | ((...args: readonly unknown[]) => Promise<unknown>),
   consumeQueued: undefined as undefined | (() => Promise<unknown>),
   queueAdmission: undefined as undefined | ((...args: readonly unknown[]) => Promise<unknown>),
 }));
@@ -17,7 +17,7 @@ vi.mock('../../../src/engine/routing/round-admission.js', async (importOriginal)
   return {
     ...actual,
     exitRoutedHostAndReconcile: (...args: Parameters<typeof actual.exitRoutedHostAndReconcile>) =>
-      mocks.routedExit === undefined ? actual.exitRoutedHostAndReconcile(...args) : mocks.routedExit(),
+      mocks.routedExit === undefined ? actual.exitRoutedHostAndReconcile(...args) : mocks.routedExit(...args),
   };
 });
 vi.mock('../../../src/engine/routing/revalidation-queue.js', async (importOriginal) => {
@@ -41,8 +41,9 @@ import { parseChildId, pipelinePathFor } from '../../../src/engine/child-context
 import { Conductor } from '../../../src/engine/conductor.js';
 import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
-import { createRouteRecord, readRouteRecord, transitionHost, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
+import { createRouteRecord, readRepairMarker, readRouteRecord, transitionHost, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
 import { parseRoundId } from '../../../src/engine/routing/route-types.js';
+import { advanceRound } from '../../../src/engine/routing/routed-exit.js';
 import { readState, writeState } from '../../../src/engine/state.js';
 import { ALL_STEPS } from '../../../src/engine/steps.js';
 import type { ConductState, StepName } from '../../../src/types/index.js';
@@ -612,5 +613,96 @@ describe('routed round conductor resume', () => {
     conductor.activeRegionChild = host;
     await expect(conductor.continueRoutedHostExit(state, (step) => ALL_STEPS.findIndex((candidate) => candidate.name === step), true)).resolves.toBeDefined();
     await expect(access(join(subject.repo, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  // Covers: task:4
+  it('resumes a satisfied r2 host through its exit before any whole-feature gate', async () => {
+    const subject = await fixture();
+    const first = parseChildId(1)!;
+    const second = parseChildId(2)!;
+    const roundId = parseRoundId('r2')!;
+    const statePath = join(subject.repo, '.pipeline', 'conduct-state.json');
+    const rootState = doneThrough('manual_test');
+    await writeState(statePath, rootState);
+    await writeState(pipelinePathFor(subject.repo, 'conduct-state.json', first), {
+      feature_desc: 'demo', complexity_tier: 'M',
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+    });
+    await writeState(pipelinePathFor(subject.repo, 'conduct-state.json', second), {
+      feature_desc: 'demo', complexity_tier: 'M', acceptance_specs: 'pending', build: 'pending', test_suite: 'pending', build_review: 'pending',
+    });
+    await mkdir(join(subject.repo, '.pipeline', 'children', '1', 'gates'), { recursive: true });
+    await Promise.all(['acceptance_specs', 'build', 'test_suite', 'build_review'].map((step) =>
+      writeFile(join(subject.repo, '.pipeline', 'children', '1', 'gates', `${step}.json`), JSON.stringify({
+        satisfied: true, routedRound: 'r2', checkedAt: 1,
+      }), 'utf8')));
+    const created = await createRouteRecord(subject.repo, 'demo', {
+      roundId, sealedAuthored: 1, kind: 'audit', items: [],
+      allocation: { [first]: { remTaskIds: [], blockBodies: [] }, [second]: { remTaskIds: [], blockBodies: [] } },
+    });
+    if (created.kind !== 'created') throw new Error(`could not create r2: ${created.kind}`);
+    await expect(admitRound(subject.repo, 'demo', created.record, first)).resolves.toMatchObject({ kind: 'admitted' });
+    const admitted = await readRouteRecord(subject.repo, 'demo', roundId);
+    if (admitted.kind !== 'record') throw new Error('r2 was not admitted');
+    const repairing = transitionHost(admitted, first, 'repairing', { credit: true });
+    if (repairing.kind !== 'updated') throw new Error('could not stage r2 host 1');
+    await expect(writeRoutingTransaction(subject.repo, 'demo', [{ kind: 'update-record', previous: admitted, record: repairing.record }]))
+      .resolves.toMatchObject({ kind: 'updated' });
+
+    // This is deliberately not a restack test.  The exit seam advances only
+    // the durable route record and marker, leaving run() bounded at child 2.
+    mocks.routedExit = async (...args) => {
+      const input = args[0] as { readonly worktree: string; readonly slug: string; readonly roundId: typeof roundId; readonly host: typeof first };
+      const beforeExit = await readRouteRecord(input.worktree, input.slug, input.roundId);
+      if (beforeExit.kind !== 'record') throw new Error('r2 missing before mocked exit');
+      const built = transitionHost(beforeExit, input.host, 'built', { credit: false });
+      if (built.kind !== 'updated') throw new Error('could not mark r2 host built');
+      await writeRoutingTransaction(input.worktree, input.slug, [{ kind: 'update-record', previous: beforeExit, record: built.record }]);
+      const builtRecord = await readRouteRecord(input.worktree, input.slug, input.roundId);
+      if (builtRecord.kind !== 'record') throw new Error('r2 missing after built');
+      const restacked = transitionHost(builtRecord, input.host, 'restacked', { credit: false });
+      const marker = await readRepairMarker(input.worktree, input.slug);
+      if (restacked.kind !== 'updated' || marker.kind !== 'marker') throw new Error('could not apply mocked exit');
+      await writeRoutingTransaction(input.worktree, input.slug, [
+        { kind: 'update-record', previous: builtRecord, record: restacked.record },
+        { kind: 'delete-marker', old: marker.blob },
+      ]);
+      const exited = await readRouteRecord(input.worktree, input.slug, input.roundId);
+      if (exited.kind !== 'record') throw new Error('r2 missing after mocked restack');
+      const advanced = await advanceRound(input.worktree, input.slug, exited);
+      if (advanced.kind !== 'admitted') throw new Error(`could not admit r2 host 2: ${advanced.kind}`);
+      return { kind: 'continued', next: { kind: 'navigate-host', roundId: input.roundId, host: second } };
+    };
+    const starts: Array<{ step: StepName; child?: number }> = [];
+    const events = new ConductorEventEmitter();
+    events.on('step_started', (event) => {
+      if (event.type === 'step_started') starts.push({ step: event.step, child: event.child });
+    });
+    const conductor = new Conductor({
+      projectRoot: subject.repo, stateFilePath: statePath, featureSlug: 'demo', fromStep: 'manual_test', resume: true, verifyArtifacts: false, events,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      stepRunner: { run: async (step) => { throw new Error(`stop at child 2: ${step}`); } },
+      childRegionLifecycle: {
+        resolveActiveChild: async () => {
+          const current = await readRepairMarker(subject.repo, 'demo');
+          const child = current.kind === 'marker' ? current.marker.host : second;
+          return child === first
+            ? { kind: 'repair-pending' as const, child: first, position: first, isLeaf: false, branch: 'feat/c1/demo', repairChildren: [first], routedRepair: { child: first, roundId } }
+            : { kind: 'repair-pending' as const, child: second, position: second, isLeaf: true, branch: 'feat/daemon-demo', repairChildren: [second], routedRepair: { child: second, roundId } };
+        },
+        enterHostRegion: async () => ({ kind: 'entered', pinnedBase: 'a'.repeat(40) }) as never,
+        enterChildRegion: async () => ({ kind: 'completed' as const }),
+      },
+    });
+    await conductor.run().catch((error: unknown) => {
+      if (!(error instanceof Error) || !error.message.startsWith('stop at child 2:')) throw error;
+    });
+
+    expect(starts.map(({ step }) => step)).not.toEqual(expect.arrayContaining(['manual_test', 'prd_audit', 'architecture_review_as_built']));
+    const record = await readRouteRecord(subject.repo, 'demo', roundId);
+    const marker = await readRepairMarker(subject.repo, 'demo');
+    expect(record).toMatchObject({ kind: 'record', record: { hosts: { 1: 'restacked', 2: 'admitted' } } });
+    expect(marker).toMatchObject({ kind: 'marker', marker: { host: 2, roundId } });
+    expect(starts).toContainEqual(expect.objectContaining({ child: 2 }));
   });
 });
