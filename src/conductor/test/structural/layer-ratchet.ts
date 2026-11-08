@@ -337,7 +337,7 @@ function isValueExport(statement: ts.ExportDeclaration): boolean {
   return bindings.length === 0 || bindings.some((binding) => !binding.isTypeOnly);
 }
 
-function layerFor(file: string): Layer | undefined {
+export function layerFor(file: string): Layer | undefined {
   const [firstSegment, ...remainingSegments] = file.split('/');
   if (remainingSegments.length === 0) return 'entry';
   return LAYERS.has(firstSegment as Layer) ? firstSegment as Layer : undefined;
@@ -357,7 +357,7 @@ function isForbiddenEdge(from: Layer, to: Layer): boolean {
   return LAYER_RANK[to] > LAYER_RANK[from];
 }
 
-function resolveSpecifier(
+export function resolveSpecifier(
   file: string,
   specifier: string,
   files: ReadonlyMap<string, string>,
