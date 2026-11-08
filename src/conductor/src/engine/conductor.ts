@@ -14828,6 +14828,26 @@ export class Conductor {
                     return;
                   }
                   if (effective.ok && !legacyAdjudicationInput) {
+                  // A raw FAIL can already be an effective PASS through
+                  // acceptance, suppression, or advisory policy.  It has no
+                  // actionable graph to adjudicate; settle durable case state
+                  // and enter the ordinary PASS tail directly.
+                  if (effective.effective.verdict === 'PASS') {
+                    const settlement = await this.settleRemediationCasesOnCleanBuildReview();
+                    if (settlement.kind === 'invalid') {
+                      await this.haltSerialExecution({
+                        reason: `build_review clean-PASS durable settlement halted: ${settlement.reason}`,
+                        haltClass: 'needs-human',
+                        persistState: async () => {
+                          await this.persistPendingStateChanges(state, 'persist conductor transition');
+                        },
+                      });
+                      return;
+                    }
+                    buildReviewAdjudicationSettled = true;
+                    succeeded = true;
+                    break settledBuildReviewFailure;
+                  }
                   // Only uncovered coverage faults pin the mechanical lane.
                   // Mapping an undifferentiated list to `retry` treated a
                   // branch the operator had already covered with an exact
@@ -15040,6 +15060,9 @@ export class Conductor {
                       return;
                     }
                     buildReviewAdjudicationSettled = true;
+                    // A settled raw failure continues through the normal
+                    // success tail, rather than selecting this lap again.
+                    succeeded = true;
                     this.log?.(outcome.trace);
                     break settledBuildReviewFailure;
                   }
@@ -15136,12 +15159,17 @@ export class Conductor {
                   }
 
                   this.log?.(
-                    'build_review raw FAIL dropped: every graded finding was accepted ' +
-                      'by operator disposition at exit time; completing the clean-PASS tail.',
+                    'build_review raw FAIL dropped: its effective verdict is PASS at exit time; ' +
+                      'completing the clean-PASS tail.',
                   );
                   if (buildReviewKickbackCharged) {
                     await refundBuildReviewKickback(this.projectRoot, buildReviewBeforeConsumption, this.activeRegionChild);
                   }
+                  // The raw runner result remains a FAIL, but the current
+                  // effective verdict has become PASS.  Its caller breaks to
+                  // the shared success tail, which requires this latch to be
+                  // updated before it can persist the completion.
+                  succeeded = true;
                   return true;
                 };
                 // Task 8 (build-review-grades-plan-vs-diff-against-a-stale-o):
@@ -16804,7 +16832,7 @@ export class Conductor {
   ): Promise<
     | { readonly kind: 'admitted' }
     | { readonly kind: 'exhausted'; readonly reason: string }
-    | { readonly kind: 'halted'; readonly reason: string }
+    | { readonly kind: 'halted'; readonly reason: string; readonly haltClass?: 'mechanical' | 'needs-human' }
   > {
     const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
     // The flat path remains authoritative when routing does not apply.  Its
@@ -16948,7 +16976,11 @@ export class Conductor {
     }
     return admitted.kind === 'admitted'
       ? { kind: 'admitted' }
-      : { kind: 'halted', reason: `routing round ${roundId} admission failed: ${admitted.detail}` };
+      : {
+        kind: 'halted',
+        reason: `routing round ${roundId} admission failed: ${admitted.detail}`,
+        ...(admitted.fence ? { haltClass: 'mechanical' as const } : {}),
+      };
   }
 
   /** Records the taskless routed receipt for a manual-test kickback. */
@@ -17076,7 +17108,7 @@ export class Conductor {
             case 'exhausted':
             case 'halted': {
               const reason = routedAdmission.reason;
-              await this.writeHaltMarker(reason + '\n', 'needs-human');
+              await this.writeHaltMarker(reason + '\n', routedAdmission.haltClass ?? 'needs-human');
               const prUrl = await this.surfaceRemediationPr(reason);
               await this.emitLoopHalt(reason, prUrl);
               return 'halt';
@@ -17105,7 +17137,7 @@ export class Conductor {
         });
         if (disposition.kind === 'halt') {
           const reason = renderDecideEntryHalt(disposition.halt);
-          await this.writeHaltMarker(reason + '\n', 'needs-human');
+            await this.writeHaltMarker(reason + '\n', routedAdmission.haltClass ?? 'needs-human');
           const prUrl = await this.surfaceRemediationPr(reason);
           await this.emitLoopHalt(reason, prUrl);
           return 'halt';
