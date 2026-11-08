@@ -35,7 +35,7 @@ import { readUserConfig } from './user-config.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner } from './owner-gate/identity.js';
 import { findExistingSpecPullRequest, openSpecPr, type HandoffDeps } from './engineer/handoff.js';
-import { checkpointComposerRun } from './engineer/checkpoint.js';
+import { checkpointComposerRun, type CheckpointDeps } from './engineer/checkpoint.js';
 import { resumeComposerRun, type ResumeTarget } from './engineer/resume.js';
 import { ensureWorktree } from './worktree-shared.js';
 import { isSpecSlug } from './engineer/spec-branch.js';
@@ -90,6 +90,8 @@ import {
 } from './engineer/dependency-reconciler.js';
 import type { GithubOperationEventEmitter } from './github-operations.js';
 import { bindMutationToPullRequest } from './ship-draft-pr.js';
+import { executeGithubOperation } from './github-operations.js';
+import { executeRemoteGit } from './remote-git-operations.js';
 import type { OwnerResolution } from './owner-gate/identity.js';
 import {
   GH_VERSION_FLOOR,
@@ -951,6 +953,75 @@ export function initialSpecPublication(
 }
 
 /**
+ * Compose the checkpoint's guarded transport at the production boundary.  The
+ * checkpoint module deliberately knows only its retryable publication seam;
+ * this is where that seam is bound to the same guarded remote/GitHub paths as
+ * handoff.  In particular, a clean retry reaches this adapter too.
+ */
+function checkpointPublication(
+  target: { remote?: string; canonicalPath: string },
+  branch: string,
+  worktree: string,
+  gh: NonNullable<DispatchEngineerOpts['gh']>,
+  git: GitRunner,
+  events: ConductorEventEmitter,
+  onPublished: (input: { slug: string; branch: string; prUrl: string }) => Promise<void>,
+): NonNullable<CheckpointDeps['publication']> {
+  const guarded = initialSpecPublication(target, branch, worktree, gh, git, events);
+  const repository = guarded.repository;
+  const prNumber = (url: string): number => {
+    const match = /\/pull\/(\d+)$/.exec(url);
+    if (!match) throw new Error(`compose checkpoint: invalid draft PR URL ${url}`);
+    return Number(match[1]);
+  };
+  return {
+    defaultBase: 'main',
+    push: async (requestedBranch) => {
+      const result = await executeRemoteGit(
+        ['push', '-u', 'origin', `HEAD:refs/heads/${requestedBranch}`],
+        guarded.remote,
+      );
+      if (result.kind === 'executed') return;
+      if (result.kind === 'failed') throw new Error(result.error);
+      if (result.kind === 'refused') throw new Error(`guarded push refused: ${result.reason}`);
+      throw new Error('guarded push did not identify a remote write');
+    },
+    findOpenPullRequest: async (requestedBranch) => {
+      const stdout = await runTrackerRepositoryRead(
+        gh, worktree, 'pull-request.read', repository, { kind: 'repository' },
+        ['pr', 'view', requestedBranch, '--repo', repository, '--json', 'url,body'],
+      );
+      const parsed = JSON.parse(stdout || '{}') as { url?: unknown; body?: unknown };
+      return typeof parsed.url === 'string'
+        ? { url: parsed.url, body: typeof parsed.body === 'string' ? parsed.body : '' }
+        : undefined;
+    },
+    createDraftPullRequest: async (input) => {
+      const result = await executeGithubOperation({
+        operation: 'pull-request.create', repository, resource: { kind: 'repository' },
+        context: { actor: 'composer-checkpoint' },
+        payload: { title: input.title, body: input.body, head: input.branch, base: input.base, draft: true },
+      }, guarded.operations);
+      if (result.kind === 'executed') {
+        const url = result.url ?? (result.target.kind === 'pull-request'
+          ? `https://github.com/${result.target.repository}/pull/${result.target.number}` : undefined);
+        if (url) return { url, body: input.body };
+      }
+      if (result.kind === 'refused') throw new Error(`guarded draft PR creation refused: ${result.reason}`);
+      throw new Error(result.kind === 'failed' ? result.error : 'guarded draft PR creation did not identify a pull request');
+    },
+    editPullRequest: async ({ url, body }) => {
+      const result = await executeGithubOperation({
+        operation: 'pull-request.edit', repository, resource: { kind: 'pull-request', number: prNumber(url) },
+        context: { actor: 'composer-checkpoint' }, payload: { body },
+      }, guarded.presentation?.(url) ?? guarded.operations);
+      if (result.kind !== 'executed') throw new Error(result.kind === 'failed' ? result.error : 'guarded PR refresh was refused');
+    },
+    published: onPublished,
+  };
+}
+
+/**
  * Per-subcommand `--help`/`-h` text (#524). Each entry states: what the subcommand
  * does, its flags (required vs optional), what durable state it mutates (or that
  * it is read-only), and where it sits in the idea→spec loop (claim → worktree →
@@ -1286,6 +1357,9 @@ export async function dispatchEngineer(
         return 1;
       }
       const executable = host ? resolveProviderExecutable(host.id) : undefined;
+      // One launcher invocation owns one correlation id.  Worktree/resume
+      // primitives inherit it and write their events to the target ledger.
+      const launchId = launchEnv.AI_CONDUCTOR_COMPOSE_LAUNCH_ID ?? crypto.randomUUID();
       const launchOne = opts.launchInteractive ?? ((idea?: string) => {
         const prompt = `${host!.invocationPrefix}${composerName}${idea?.trim() ? ` ${idea.trim()}` : ''}`;
         return (opts.spawnHost ?? spawnInteractiveHost)(
@@ -1297,7 +1371,7 @@ export async function dispatchEngineer(
               : launchEnv.CONDUCT_ENGINEER_PERMISSION_MODE ?? 'default',
           }),
           launchingDirectory,
-          { ...launchEnv, AI_CONDUCTOR_AUTHORING_PROVIDER: host!.id },
+          { ...launchEnv, AI_CONDUCTOR_AUTHORING_PROVIDER: host!.id, AI_CONDUCTOR_COMPOSE_LAUNCH_ID: launchId },
         );
       });
 
@@ -1842,10 +1916,29 @@ export async function dispatchEngineer(
         const result = opts.checkpoint
           ? await opts.checkpoint({ worktree, step, state, ...(notesFile ? { notesFile } : {}) })
           : await (async () => {
+            const reader = createRegistryReader(registryPath ? { registryPath } : {});
+            const projects = await reader.listProjects();
+            const project = projects.find((candidate) => worktree === candidate.path || worktree.startsWith(`${candidate.path}/.worktrees/`));
+            if (!project) throw new Error(`compose checkpoint: worktree "${worktree}" is not beneath a registered project; register the repository first with conduct register.`);
+            const target = await resolveTargetRepo(project.path, reader);
             const events = new ConductorEventEmitter();
-            const persister = new EventPersister(join(worktree, '.pipeline', 'composer-events.jsonl'), events);
+            const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
             persister.start();
             try {
+              const branchResult = await git(['branch', '--show-current'], { cwd: worktree });
+              const branch = branchResult.stdout.trim();
+              const sourceRef = await readFile(join(worktree, '.docs', 'intake', `${branch.replace(/^spec\//, '')}.md`), 'utf8')
+                .then((marker) => /^Source-Ref:\s*(.+)$/m.exec(marker)?.[1]?.trim())
+                .catch(() => undefined);
+              const publication = target.remote && branch.startsWith('spec/')
+                ? checkpointPublication(target, branch, worktree, gh, git, events, async ({ branch: publishedBranch, prUrl }) => {
+                  if (!sourceRef) return;
+                  const ledger = createLedger(join(engineerDir ?? resolveEngineerDir({}), 'ledger.json'));
+                  const existing = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
+                  if (!existing) await ledger.record({ source: GITHUB_ISSUES_SOURCE, sourceRef });
+                  await ledger.transition(GITHUB_ISSUES_SOURCE, sourceRef, 'deciding', { branch: publishedBranch, draftPrUrl: prUrl });
+                })
+                : undefined;
               return await checkpointComposerRun(
                 { worktree, step, state, ...(notesFile ? { notesFile } : {}) },
                 {
@@ -1856,6 +1949,7 @@ export async function dispatchEngineer(
                   resolveOwner: opts.resolveCheckpointOwner ?? (async () => resolveDaemonOwner(await readMachineOwnerConfig(), gh, worktree)),
                   emit: async (event) => events.emitOrThrow(event),
                   provider: (opts.env ?? process.env).AI_CONDUCTOR_AUTHORING_PROVIDER,
+                  publication,
                 },
               );
             } finally {
@@ -1873,6 +1967,15 @@ export async function dispatchEngineer(
     // ── resume ────────────────────────────────────────────────────────────────
     case 'resume': {
       try {
+        // Host capability and nesting are entry conditions, not post-attach
+        // cleanup.  Refusal here must leave the remote and worktree untouched.
+        const provider = (dispatch.provider ?? DEFAULT_PROVIDER) as BuiltInProviderId;
+        const host = requireProviderCapability(provider, 'interactiveLaunch');
+        const executable = resolveProviderExecutable(provider);
+        const nested = Boolean((opts.env ?? process.env).CLAUDECODE || (opts.env ?? process.env).CODEX_THREAD_ID);
+        if (nested) throw new Error('compose resume: already inside an interactive host; run $composer directly instead of nesting a host.');
+        if (!executable) throw new Error(`compose resume: provider ${provider} is not installed.`);
+        const launchId = (opts.env ?? process.env).AI_CONDUCTOR_COMPOSE_LAUNCH_ID ?? crypto.randomUUID();
         const result = opts.resume
           ? await opts.resume(dispatch)
           : await (async () => {
@@ -1912,7 +2015,7 @@ export async function dispatchEngineer(
                 resolveBranch,
                 fetch: target.remote ? async (branch) => {
                   const fetched = await git(['fetch', 'origin', branch], { cwd: target.canonicalPath });
-                  if ((fetched.exitCode ?? 0) !== 0) throw new Error(`could not fetch origin ${branch}`);
+                  if ((fetched.exitCode ?? 0) !== 0) throw new Error(`could not fetch origin ${branch}: ${fetched.stdout}`);
                 } : undefined,
                 attach: async (branch) => {
                   const slug = branch.slice('spec/'.length);
@@ -1928,19 +2031,12 @@ export async function dispatchEngineer(
                   type: 'composer_run_resumed', slug: event.slug, provider: dispatch.provider ?? DEFAULT_PROVIDER,
                   actor: owner.resolved ? owner.id : 'unresolved', previousActor: event.previousActor,
                   previousProvider: event.previousProvider, ownership: event.ownership,
-                  launchId: (opts.env ?? process.env).AI_CONDUCTOR_COMPOSE_LAUNCH_ID,
+                  worktreePath: event.worktreePath, launchId,
                 }),
               });
-              const provider = (dispatch.provider ?? DEFAULT_PROVIDER) as BuiltInProviderId;
-              const capability = requireProviderCapability(provider, 'interactiveLaunch');
-              const host = capability;
-              const executable = resolveProviderExecutable(provider);
-              const nested = Boolean((opts.env ?? process.env).CLAUDECODE || (opts.env ?? process.env).CODEX_THREAD_ID);
-              if (nested) throw new Error('compose resume: already inside an interactive host; run $composer directly instead of nesting a host.');
-              if (!executable) throw new Error(`compose resume: provider ${provider} is not installed.`);
               const composerName = await resolveSkillName(opts.skillNameRoot ?? null, 'composer');
               const prompt = `${host.invocationPrefix}${composerName} --resume ${resumed.worktree} --step ${resumed.context.nextStep}`;
-              await (opts.spawnHost ?? spawnInteractiveHost)(executable, host.interactiveLaunch.argv({ prompt, permissionMode: 'default' }), resumed.worktree, { ...(opts.env ?? process.env), AI_CONDUCTOR_AUTHORING_PROVIDER: provider, AI_CONDUCTOR_COMPOSE_LAUNCH_ID: crypto.randomUUID() });
+              await (opts.spawnHost ?? spawnInteractiveHost)(executable, host.interactiveLaunch.argv({ prompt, permissionMode: 'default' }), resumed.worktree, { ...(opts.env ?? process.env), AI_CONDUCTOR_AUTHORING_PROVIDER: provider, AI_CONDUCTOR_COMPOSE_LAUNCH_ID: launchId });
               return resumed;
             } finally { persister.stop(); }
           })();
