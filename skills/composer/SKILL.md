@@ -116,6 +116,26 @@ As each DECIDE step starts, run `ai-conductor compose phase --worktree <worktree
 Do not hand-write stub or DRAFT artifacts and do not shell out to `claude -p`. If the operator
 rejects a step, stay within that skill until accepted or abandon the idea.
 
+### Checkpoint every accepted DECIDE boundary
+
+After the operator accepts each completed DECIDE step, save that exact boundary before starting the
+next step:
+
+`ai-conductor compose checkpoint --worktree <worktreePath> --step <step> --accept --notes-file <notes.json>`
+
+`notes.json` contains the accepted step's `decisions` and `openQuestions` string arrays. This is the
+only permitted early publication: the primitive commits and guardedly publishes the run record and
+keeps its spec PR a draft. Do not pre-push by hand. A rejected or unfinished step is not accepted;
+leave it uncheckpointed or save it with `--draft` when the launcher asks at the session boundary.
+
+### Resume mode
+
+When launched by `ai-conductor compose resume <PR|spec/branch|owner/repo#issue>`, read the reported
+resume context and start at its **first unaccepted step**. Do not rerun an accepted step. Present any
+listed draft as unaccepted, then preserve the normal clarifying questions and explicit operator
+acceptance gate for every remaining DECIDE step. A run that completes in one session needs no
+provider switch, resume, or hand-off action beyond these per-step checkpoint calls.
+
 ### 3a. Drop an already-fixed intake idea
 
 If an intake idea is already fixed on the target, do not author a spec. Only after explicit
