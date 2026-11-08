@@ -55,8 +55,16 @@ it('closes a sole audit round and deletes its matching marker in one transaction
   const checked = await checkRoundSupersession(subject.repo, slug, r2);
   if (checked.kind !== 'leaf-return') throw new Error('expected leaf return');
 
-  await expect(supersedeRound({ worktree: subject.repo, slug, checked, reason: '  return to leaf  ', operator: 'operator' }))
+  const transaction = vi.fn(writeRoutingTransaction);
+  await expect(supersedeRound({
+    worktree: subject.repo, slug, checked, reason: '  return to leaf  ', operator: 'operator', writeRoutingTransaction: transaction,
+  }))
     .resolves.toMatchObject({ kind: 'superseded', event: { roundId: r2, disposition: 'leaf-return', reason: 'return to leaf', operator: 'operator' } });
+  expect(transaction).toHaveBeenCalledTimes(1);
+  expect(transaction).toHaveBeenCalledWith(subject.repo, slug, [
+    expect.objectContaining({ kind: 'update-record', previous: checked.stored, record: expect.objectContaining({ phase: 'closed', hosts: { [c1]: 'done' } }) }),
+    expect.objectContaining({ kind: 'delete-marker', old: checked.marker?.blob }),
+  ], {});
   await expect(readRouteRecord(subject.repo, slug, r2)).resolves.toMatchObject({
     kind: 'record', record: { phase: 'closed', hosts: { [c1]: 'done' }, outbox: [{
       event: { type: 'routing_round_superseded', roundId: r2, disposition: 'leaf-return', reason: 'return to leaf', operator: 'operator' },

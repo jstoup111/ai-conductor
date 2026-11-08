@@ -58,6 +58,8 @@ export interface SupersedeRoundInput {
   readonly reason: string;
   readonly operator: string;
   readonly git?: GitRunner;
+  /** Injectable transaction boundary for the atomic-close contract. */
+  readonly writeRoutingTransaction?: typeof writeRoutingTransaction;
 }
 
 export type SupersedeRoundResult =
@@ -90,7 +92,7 @@ export async function supersedeRound(input: SupersedeRoundInput): Promise<Supers
     input.operator.trim(),
   );
   const record = withOutboxEvent({ ...checked.stored.record, phase: 'closed', hosts }, event);
-  const wrote = await writeRoutingTransaction(worktree, slug, [
+  const wrote = await (input.writeRoutingTransaction ?? writeRoutingTransaction)(worktree, slug, [
     { kind: 'update-record', previous: checked.stored, record },
     ...(leafReturn
       ? checked.marker === undefined ? [] : [{ kind: 'delete-marker' as const, old: checked.marker.blob }]
