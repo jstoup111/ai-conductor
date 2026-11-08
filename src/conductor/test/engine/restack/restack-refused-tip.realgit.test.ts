@@ -106,4 +106,33 @@ describe('refused resolver tip (real local Git)', () => {
     expect(halt).toContain('refused tip could not be pinned');
     expect((await subject.git(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads/', 'refs/conductor/demo/closed/'])).stdout).toBe(branchesBefore);
   });
+
+  // Covers: task:11
+  it('clears a prior refused tip when a later unresolved conflict replaces its record', async () => {
+    const subject = await fixture();
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
+      git: makeGitRunner(subject.repo), resolver: refusingResolver('unowned'), resolverCap: 1,
+    })).resolves.toMatchObject({ kind: 'halted' });
+    const refusedTip = sha((await subject.git(['rev-parse', refusedTipRefFor('demo')])).stdout);
+    const firstConflict = await readConflictRecord(subject.repo, 'demo');
+    if (firstConflict.kind !== 'record') throw new Error('expected first conflict record');
+
+    await rm(join(subject.repo, '.pipeline', 'HALT'));
+    await rm(join(subject.repo, '.pipeline', 'HALT.class'));
+
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
+      git: makeGitRunner(subject.repo), resolver: async () => ({ resolved: false, reason: 'operator required' }), resolverCap: 1,
+    })).resolves.toMatchObject({ kind: 'halted' });
+
+    await expect(makeGitRunner(subject.repo)(['rev-parse', '-q', '--verify', refusedTipRefFor('demo')])).resolves.toMatchObject({ exitCode: 1 });
+    const secondConflict = await readConflictRecord(subject.repo, 'demo');
+    expect(secondConflict).toMatchObject({ kind: 'record', record: { child: 2 } });
+    if (secondConflict.kind !== 'record') throw new Error('expected second conflict record');
+    expect(secondConflict.record.opId).not.toBe(firstConflict.record.opId);
+    const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain(`git switch -c restack-resolve/demo/c2 ${subject.c2}`);
+    expect(halt).not.toContain(refusedTip);
+  });
 });
