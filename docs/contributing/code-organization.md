@@ -244,6 +244,17 @@ entry whose edge disappears or stops violating fails the test as stale.
 | engine → engine (cycle) | 225 | `engine/slice-topology.ts` → `engine/plan-slices.ts` |
 | execution → execution (cycle) | 9 | `execution/provider-catalog.ts` ↔ provider adapters |
 
+## External boundaries
+
+Production code reaches eight external boundaries: `llm`, `git`, `gh`, `tmux`, `process`, `clock`,
+`otel`, and `filesystem`. `test/structural/boundary-registry.ts` records each one's port, adapter
+modules, and status. Only `llm` is ported, behind `LLMProvider`; the rest are pending a port.
+
+New code reaches a boundary through an injected dependency, not a direct `fs`, `child_process`,
+`execa`, `@opentelemetry/`, or clock call. Only entry points at the `src/` root import adapter modules.
+`test/structural/boundary-ratchet.test.ts` enforces this against the shrink-only
+`test/structural/boundary-allowlist.txt`; see [external boundary ratchet](testing.md#external-boundary-ratchet).
+
 ## Build output
 
 `npm run build` in `src/conductor` runs `scripts/publish-engine.mjs`, which stages the bundle, finalizes

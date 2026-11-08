@@ -212,7 +212,7 @@ so a bare `npm test` discovers 1328 files and excludes the 18 opt-in smoke files
 | `test/smoke/` | 4 | Real binaries and real third parties. Excluded by default; seven additional `*.smoke.test.ts` files live beside the subsystem they exercise. | See [Smoke tests](#smoke-tests). |
 | `test/cli/` | 6 | CLI entry-point and argument behavior. | `npm test -- test/cli` |
 | `test/corpus/` | 6 | Checks whose verdict depends on the live `.docs/` corpus: ADR corpus conformance, shipped records, and projection limits that must admit the largest corpus inputs. The only tier docs-only pull requests run. | `npm test -- test/corpus/` |
-| `test/structural/` | 26 | Meta-tests that parse the suite itself. See [Structural meta-tests](#structural-meta-tests). | `npm test -- test/structural` |
+| `test/structural/` | 29 | Meta-tests that parse the suite itself. See [Structural meta-tests](#structural-meta-tests). | `npm test -- test/structural` |
 | `test/types/` | 3 | Type-level contracts. | `npm test -- test/types` |
 | `test/fixtures/` | 5 | Fixture helpers and their executable contract tests. | `npm test -- test/fixtures` |
 
@@ -440,6 +440,47 @@ fails if the allowlist holds any upward-edge entry. The checker is the pure modu
 
 ```bash
 cd src/conductor && npm test -- test/structural/layer-ratchet.test.ts
+```
+
+### External boundary ratchet
+
+**`boundary-registry.ts`** declares the eight external boundaries — `llm`, `git`, `gh`, `tmux`,
+`process`, `clock`, `otel`, `filesystem` — with each one's port, adapter modules, matched touches, and
+status. `llm` is `ported` (port `LLMProvider`, adapters `execution/claude-provider.ts`,
+`execution/codex-provider.ts`, `execution/pi-provider.ts`). Every other boundary is `pending` with a
+tracking issue: `git` #3043, `gh` #3637, `tmux` #3639, `process` #3634, `clock` #3638, `otel` #3635,
+`filesystem` #3636. `boundary-registry.test.ts` fails if a name is missing or extra, or if a listed
+adapter module does not exist.
+
+**`boundary-ratchet.test.ts`** parses every `.ts` file under `src/conductor/src/` with the pure checker
+`boundary-ratchet.ts` and records a touch for:
+
+| Touch | Matches | Boundary |
+| --- | --- | --- |
+| Specifier import | Value `import`, value `export … from`, or dynamic `import()` of `fs`, `fs/promises`, `chokidar`, `child_process`, `execa`, or any `@opentelemetry/` package; a `node:` prefix is ignored. `import type` is not a touch. | `filesystem`, `process`, `otel` |
+| Clock read | `Date.now()`, `performance.now()`, or `new Date()` with no arguments. `new Date(value)` is not a touch. | `clock` |
+| Command literal | A call through a binding imported from `child_process`, `execa`, or a registered `process` adapter whose first argument is the string literal `git`, `gh`, or `tmux`. A non-literal command is attributed to `process` only. | `git`, `gh`, `tmux` |
+| Adapter import | A value import of a registered adapter module. | The adapter's boundary |
+
+A touch passes when the file is that boundary's registered adapter, when it is an adapter import from
+an entry point (a file at the `src/` root — the composition roots), or when
+`boundary-allowlist.txt` lists `<file> -> <boundary>`. Each failure line reads `<kind> <detail>`; an
+`unlisted-touch` line names `<file>:<line> <boundary>` and either the pending issue or the ported
+adapters.
+
+| Kind | Fix |
+| --- | --- |
+| `unlisted-touch` | Route the call through an injected dependency instead of touching the boundary directly. For a ported boundary, depend on its port; only a composition root imports an adapter. Do not add allowlist lines for new code. |
+| `stale-entry` | Delete the named line from `boundary-allowlist.txt`; the file no longer touches that boundary, or the touch is now otherwise permitted. |
+| `malformed-entry` | Fix or delete the line. Each is `<file> -> <boundary>`, path relative to `src/conductor/src/`, lines sorted and unique; `#` lines and blank lines are ignored. |
+| `unknown-boundary` | Use one of the eight registered boundary names. |
+
+The allowlist holds the grandfathered touches and can only shrink. When a boundary gains a port, set its
+registry `status` to `ported`, record its `port` and `adapterModules`, and delete the allowlist lines the
+migration removes.
+
+```bash
+cd src/conductor && npm test -- test/structural/boundary-registry.test.ts test/structural/boundary-ratchet.test.ts
 ```
 
 ### Conductor facade guards
