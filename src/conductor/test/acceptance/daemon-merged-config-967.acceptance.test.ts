@@ -32,9 +32,9 @@
 // that scope's contribution to the effective config directly observable:
 //   - sentinel survives  → that scope's value reached the daemon runtime
 //   - sentinel vanishes  → that scope's value was overridden/replaced
-// Nested non-provider policy is observed through two other pre-dispatch
-// production log lines: the self-host activation line (`harness_self_host`) and
-// the memory-provider fallback warning (`memory_provider`).
+// Nested non-provider policy is observed through the self-host activation line
+// (`harness_self_host`). The memory-provider warning is feature-local, so its
+// child-runtime coverage does not belong to this daemon-startup boundary.
 //
 // No LLM, tmux, GitHub, or real backlog work: `ensureFresh` is a no-op and
 // `workSource.discover` is a spy returning an empty backlog, so each launch
@@ -214,11 +214,10 @@ describe('#967 Story 1 — daemon inherits machine-scoped runtime policy', () =>
   });
 
   it('happy: user-only nested runtime policy survives into the daemon runtime', async () => {
-    // Two independent user-only settings, each with a pre-dispatch production
-    // observable: harness_self_host.activation (self-host log line) and
-    // memory_provider (uninstalled-provider warning).
+    // The daemon's self-host decision is a startup observable; feature-local
+    // policy is loaded by the child after dispatch.
     const home = await makeUserHome(
-      'harness_self_host:\n  activation: force_on\nmemory_provider: ghost-user-memory\n',
+      'harness_self_host:\n  activation: force_on\n',
     );
     const project = await makeProject(PROJECT_WITHOUT_POLICY);
 
@@ -226,7 +225,6 @@ describe('#967 Story 1 — daemon inherits machine-scoped runtime policy', () =>
 
     expect(result.error).toBeUndefined();
     expect(result.log).toContain('self-host mode active');
-    expect(result.log).toContain('memory_provider "ghost-user-memory" is not installed');
   });
 
   it('happy: user-only per-step runtime policy reaches the daemon runtime', async () => {

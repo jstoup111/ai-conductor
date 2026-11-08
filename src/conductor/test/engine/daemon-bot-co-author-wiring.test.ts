@@ -50,8 +50,8 @@ function assertDaemonCoAuthorWiring(sources: SourceMap): void {
   if (occurrences(daemonCli, PROCESS_INSTALL) !== 1) {
     throw new Error(`missing ${PROCESS_INSTALL} in ${DAEMON_CLI}`);
   }
-  if (daemonCli.indexOf(PROCESS_INSTALL) >= daemonCli.indexOf('makeRunFeature(')) {
-    throw new Error(`${PROCESS_INSTALL} must precede makeRunFeature( in ${DAEMON_CLI}`);
+  if (daemonCli.indexOf(PROCESS_INSTALL) >= daemonCli.indexOf('createChildProcessFeatureExecutor(')) {
+    throw new Error(`${PROCESS_INSTALL} must precede createChildProcessFeatureExecutor( in ${DAEMON_CLI}`);
   }
 
   const executorChild = requiredSource(sources, EXECUTOR_CHILD);
@@ -80,7 +80,7 @@ function validFixture(): SourceMap {
   return {
     [BOT_CO_AUTHOR]: 'export function installDaemonBotCoAuthor() {}',
     [BOOTSTRAP]: 'installDaemonBotCoAuthor();\nexport function installDaemonProcessServices() {}',
-    [DAEMON_CLI]: 'installDaemonProcessServices();\nmakeRunFeature();',
+    [DAEMON_CLI]: 'installDaemonProcessServices();\ncreateChildProcessFeatureExecutor();',
     [EXECUTOR_CHILD]: 'export function makeExecutorChildRun() {\ninstallDaemonProcessServices();\nrunFeature();\n}',
   };
 }
