@@ -63,28 +63,24 @@ async function writeSuiteConfig(overrides = ''): Promise<void> {
   );
 }
 
-async function invokeSuite(
-  env: Record<string, string | undefined> = {},
-): Promise<CliResult> {
-  return execa(
-    process.execPath,
-    ['--import', TSX_LOADER, SOURCE_INDEX, 'test-suite'],
-    {
-      cwd: repo,
-      env: {
-        ...process.env,
-        AI_CONDUCTOR_NO_REAL_EXEC: '1',
-        ...env,
-      },
-      reject: false,
-      timeout: 20_000,
+async function invokeSuite(env: Record<string, string | undefined> = {}): Promise<CliResult> {
+  return execa(process.execPath, ['--import', TSX_LOADER, SOURCE_INDEX, 'test-suite'], {
+    cwd: repo,
+    env: {
+      ...process.env,
+      AI_CONDUCTOR_NO_REAL_EXEC: '1',
+      ...env,
     },
-  );
+    reject: false,
+    timeout: 20_000,
+  });
 }
 
-function invokeRealSuite(
-  env: Record<string, string | undefined> = {},
-): { exitCode: number | null; stdout: string; stderr: string } {
+function invokeRealSuite(env: Record<string, string | undefined> = {}): {
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+} {
   const pipelineDirectory = join(repo, '.pipeline');
   mkdirSync(pipelineDirectory, { recursive: true });
   realSuiteInvocation += 1;
@@ -127,8 +123,14 @@ function invokeScriptWithFakeVitest(
   const fakeVitestPath = join(fixturePackageRoot, 'node_modules', '.bin', 'vitest');
   const pathFakeVitestPath = join(binDirectory, 'vitest');
   mkdirSync(dirname(fakeVitestPath), { recursive: true });
-  copyFileSync(join(CONDUCTOR_ROOT, 'scripts', 'run-vitest.mjs'), join(fixturePackageRoot, 'scripts', 'run-vitest.mjs'));
-  copyFileSync(join(CONDUCTOR_ROOT, 'scripts', 'vitest-temp.mjs'), join(fixturePackageRoot, 'scripts', 'vitest-temp.mjs'));
+  copyFileSync(
+    join(CONDUCTOR_ROOT, 'scripts', 'run-vitest.mjs'),
+    join(fixturePackageRoot, 'scripts', 'run-vitest.mjs'),
+  );
+  copyFileSync(
+    join(CONDUCTOR_ROOT, 'scripts', 'vitest-temp.mjs'),
+    join(fixturePackageRoot, 'scripts', 'vitest-temp.mjs'),
+  );
   const fakeVitest = [
     '#!/bin/sh',
     'printf "%s\\n" "$@" > "$FAKE_VITEST_ARGUMENTS"',
@@ -144,19 +146,15 @@ function invokeScriptWithFakeVitest(
   chmodSync(fakeVitestPath, 0o755);
   chmodSync(pathFakeVitestPath, 0o755);
 
-  const result = spawnSync(
-    'sh',
-    ['-c', `${script} ${argumentsToForward.map(shellQuote).join(' ')}`],
-    {
-      cwd: fixturePackageRoot,
-      encoding: 'utf8',
-      env: {
-        ...process.env,
-        FAKE_VITEST_ARGUMENTS: runnerArgumentsPath,
-        PATH: `${binDirectory}:${process.env.PATH ?? ''}`,
-      },
+  const result = spawnSync('sh', ['-c', `${script} ${argumentsToForward.map(shellQuote).join(' ')}`], {
+    cwd: fixturePackageRoot,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      FAKE_VITEST_ARGUMENTS: runnerArgumentsPath,
+      PATH: `${binDirectory}:${process.env.PATH ?? ''}`,
     },
-  );
+  });
 
   return {
     exitCode: result.status,
@@ -188,11 +186,11 @@ beforeEach(async () => {
     [
       "import { mkdir, readFile, writeFile } from 'node:fs/promises';",
       "await mkdir('.pipeline', { recursive: true });",
-      "let count = 0;",
+      'let count = 0;',
       "try { count = Number.parseInt(await readFile('.pipeline/test-suite-count', 'utf8'), 10); } catch {}",
       "await writeFile('.pipeline/test-suite-count', String(count + 1));",
       "if (process.env.SUITE_MODE?.startsWith('fail:')) {",
-      "  console.error(`aggregate failure ${process.env.SUITE_MODE}`);",
+      '  console.error(`aggregate failure ${process.env.SUITE_MODE}`);',
       '  process.exit(7);',
       '}',
       "console.log('unit: pass');",
@@ -251,7 +249,10 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
 
     expect(projectConfig.ok && projectConfig.config.test_suite).toEqual({
       commands: [
-        { command: 'npm run format:check --silent && npm run typecheck --silent && npm run typecheck:test --silent', working_directory: 'src/conductor' },
+        {
+          command: 'npm run format:check --silent && npm run typecheck --silent && npm run typecheck:test --silent',
+          working_directory: 'src/conductor',
+        },
         { command: 'npm test', working_directory: 'src/conductor' },
         { command: 'test/test_harness_integrity.sh', working_directory: '.' },
       ],
@@ -313,7 +314,6 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
       command: 'node suite.mjs',
     });
   });
-
 });
 
 describe('Story 7 — package-script selector forwarding (Task 17)', () => {
@@ -436,8 +436,9 @@ describe('Stories 7–9 — finish, PR/CI, and repair boundaries (FR-13, FR-14, 
     expect({
       exitCode: failure.exitCode,
       output: failure.stdout + failure.stderr,
-      contractStopsBeforeChoice:
-        /non-?zero[\s\S]*STOP[\s\S]*(?:choice|options)[\s\S]*finish-choice/i.test(suiteSection),
+      contractStopsBeforeChoice: /non-?zero[\s\S]*STOP[\s\S]*(?:choice|options)[\s\S]*finish-choice/i.test(
+        suiteSection,
+      ),
       finishChoiceExists,
     }).toEqual({
       exitCode: 1,
@@ -446,5 +447,4 @@ describe('Stories 7–9 — finish, PR/CI, and repair boundaries (FR-13, FR-14, 
       finishChoiceExists: false,
     });
   });
-
 });
