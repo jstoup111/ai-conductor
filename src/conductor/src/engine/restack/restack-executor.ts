@@ -12,6 +12,7 @@ import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import {
   createRestackJournal,
   journalRefFor,
+  readRestackJournal,
   pinStagingRef,
   replaceAppliedJournalWithFollowOn,
   stagingRefFor,
