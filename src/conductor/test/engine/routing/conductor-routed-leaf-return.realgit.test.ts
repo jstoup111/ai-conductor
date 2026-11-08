@@ -1,6 +1,6 @@
 // Covers: task:3, task:rem-prd-audit-rem-prd-audit-rem-vg6-s6-1, task:rem-as-built-rem-prd-audit-rem-vg6-asbuilt-47c9-1
 import { afterEach, describe, expect, it } from 'vitest';
-import { writeFile } from 'node:fs/promises';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { checkStepCompletion } from '../../../src/engine/artifacts.js';
@@ -12,6 +12,8 @@ import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { readRouteRecord } from '../../../src/engine/routing/route-record-store.js';
 import { closureRefFor, repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { advanceRound, requestRoutedExit } from '../../../src/engine/routing/routed-exit.js';
+import { checkRoundSupersession, supersedeRound } from '../../../src/engine/stack-rounds-cli.js';
+import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
 import { emptyUnsettledReceipt, parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { readState, writeState } from '../../../src/engine/state.js';
 import { ALL_STEPS } from '../../../src/engine/steps.js';
@@ -158,6 +160,44 @@ async function tasklessExitFixture(withCommit: boolean): Promise<{
 }
 
 describe('Conductor routed final leaf return (real local Git)', () => {
+  // Covers: task:13
+  it('drains a sole-round leaf-return close once and leaves the leaf gates pending', async () => {
+    const { subject, statePath } = await fixture();
+    const git = makeGitRunner(subject.repo);
+    const stored = await readRouteRecord(subject.repo, 'demo', roundId, { git });
+    if (stored.kind !== 'record') throw new Error('sole routed round is unavailable');
+    const admitted: RouteRecord = { ...stored.record, hosts: { [host]: 'admitted' } };
+    await git(['update-ref', routeRecordRefFor('demo', roundId), await writeBlob(git, admitted)]);
+
+    const checked = await checkRoundSupersession(subject.repo, 'demo', roundId, { git });
+    if (checked.kind !== 'leaf-return') throw new Error('sole routed round was not eligible for a leaf return');
+    await expect(supersedeRound({
+      worktree: subject.repo, slug: 'demo', checked, reason: 'manual test repair lands on leaf', operator: 'operator@example.test', git,
+    })).resolves.toMatchObject({ kind: 'superseded', event: { disposition: 'leaf-return' } });
+
+    await writeFile(join(subject.repo, '.pipeline', 'HALT'), 'manual-test failure\n');
+    await rm(join(subject.repo, '.pipeline', 'HALT'));
+    const state = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])) as ConductState;
+    Object.assign(state, {
+      feature_desc: 'demo', complexity_tier: 'M', acceptance_specs: 'pending', build: 'pending', build_review: 'pending', manual_test: 'pending',
+    });
+    await writeState(statePath, state);
+    const events = new ConductorEventEmitter();
+    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', events })).resolves.toEqual({ kind: 'clear' });
+    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', events })).resolves.toEqual({ kind: 'clear' });
+
+    const persisted = await readFile(join(subject.repo, '.pipeline', 'events.jsonl'), 'utf8');
+    const closes = persisted.split('\n').filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((event) => event.type === 'routing_round_superseded' && event.roundId === roundId);
+    expect(closes).toHaveLength(1);
+    expect(closes[0]).toMatchObject({
+      disposition: 'leaf-return', reason: 'manual test repair lands on leaf', operator: 'operator@example.test',
+    });
+    expect(closes[0]).not.toHaveProperty('supersededBy');
+    await expect(readState(statePath)).resolves.toMatchObject({ ok: true, value: { manual_test: 'pending' } });
+    expect(persisted).not.toContain('"type":"routed_repair_phase"');
+  });
+
   it('restacks a committed taskless host and returns the settled round to the leaf', async () => {
     const { subject, git, host: tasklessHost, repair } = await tasklessExitFixture(true);
     if (repair === undefined) throw new Error('fixture did not create the routed repair commit');

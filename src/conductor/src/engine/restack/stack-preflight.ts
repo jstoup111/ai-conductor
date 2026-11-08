@@ -240,16 +240,11 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
   const receiptCursor = routingEnabled
     ? await resolveActiveChild(options.worktree, options.slug, { git: options.git })
     : undefined;
-  if (config.ok && receiptCursor !== undefined && routingEligible(receiptCursor, config.config)) {
-    // A receipt CAS may survive a process crash before its ledger write.  Do
-    // this after journal recovery, while route refs are stable, before any
-    // resumed host can dispatch again.
-    try {
-      await reconcileReceiptLedger(options.worktree, options.slug, { cursor: receiptCursor, config: config.config }, options.git);
-    } catch {
-      return { kind: 'unavailable', detail: 'cannot reconcile routed receipt ledger' };
-    }
-    const persister = new EventPersister(join(options.worktree, '.pipeline', 'events.jsonl'), options.events ?? new ConductorEventEmitter());
+  const persister = new EventPersister(join(options.worktree, '.pipeline', 'events.jsonl'), options.events ?? new ConductorEventEmitter());
+  // A sole-round leaf return intentionally removes its marker. Its durable
+  // close occurrence still belongs to the next dispatch, even though that
+  // dispatch's cursor is now the leaf and is no longer routing-eligible.
+  if (routingEnabled) {
     const drained = await drainRoutingOutboxes(options.worktree, options.slug, (event) => persister.persistDurably(event), { git: options.git });
     if (drained.kind !== 'drained') {
       // A failed outbox must not enter reconciliation: that path may advance
@@ -267,6 +262,16 @@ async function runStackPreflightInner(options: RunStackPreflightOptions): Promis
       return { kind: 'unavailable', detail: affected.kind === 'unavailable'
         ? `${affected.detail}; cannot drain routing outbox: ${drained.kind}`
         : `cannot drain routing outbox: ${drained.kind}` };
+    }
+  }
+  if (config.ok && receiptCursor !== undefined && routingEligible(receiptCursor, config.config)) {
+    // A receipt CAS may survive a process crash before its ledger write.  Do
+    // this after journal recovery, while route refs are stable, before any
+    // resumed host can dispatch again.
+    try {
+      await reconcileReceiptLedger(options.worktree, options.slug, { cursor: receiptCursor, config: config.config }, options.git);
+    } catch {
+      return { kind: 'unavailable', detail: 'cannot reconcile routed receipt ledger' };
     }
     // A due base refresh must yield to *any* durable routed obligation.  In
     // particular, reconciliation can otherwise navigate an admitted host (or
