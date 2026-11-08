@@ -66,7 +66,7 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
   // object cast to the current type until the production type is widened.
   function deps(
     outcome: WorktreeOutcome,
-    extra: { daemon?: boolean; log?: (m: string) => void; wtPath?: string } = {},
+    extra: { daemon?: boolean; log?: (m: string) => void; wtPath?: string; engineerDir?: string } = {},
   ): FeatureRunnerDeps {
     const wt = extra.wtPath ?? worktreePath;
     const base: Omit<FeatureRunnerDeps, 'daemon' | 'project'> = {
@@ -99,7 +99,7 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
       // Inject the process boundary. A test must not depend on a mutable
       // process-wide environment variable to keep emissions out of the
       // operator's engineer store.
-      engineerDir,
+      engineerDir: extra.engineerDir ?? engineerDir,
     } as unknown as FeatureRunnerDeps;
   }
 
@@ -190,13 +190,12 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
     const blocker = join(worktreePath, 'blocker');
     await mkdir(worktreePath, { recursive: true });
     await writeFile(blocker, 'x', 'utf-8');
-    vi.stubEnv('AI_CONDUCTOR_ENGINEER_DIR', join(blocker, 'engineer'));
 
     const logs: string[] = [];
     const run = makeRunFeature(
       deps(
         { done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' },
-        { daemon: true, log: (m) => logs.push(m) },
+        { daemon: true, log: (m) => logs.push(m), engineerDir: join(blocker, 'engineer') },
       ),
     );
     const out = await run(ITEM);
@@ -214,12 +213,11 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
     const blocker = join(worktreePath, 'feature-logger-blocker');
     await mkdir(worktreePath, { recursive: true });
     await writeFile(blocker, 'x', 'utf-8');
-    vi.stubEnv('AI_CONDUCTOR_ENGINEER_DIR', join(blocker, 'engineer'));
 
     const featureLogs: string[] = [];
     const featureDeps = deps(
       { done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' },
-      { daemon: true },
+      { daemon: true, engineerDir: join(blocker, 'engineer') },
     );
     featureDeps.beginFeatureRun = () => ({
       events: new ConductorEventEmitter(),
