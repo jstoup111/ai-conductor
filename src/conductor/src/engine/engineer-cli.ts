@@ -987,14 +987,20 @@ function checkpointPublication(
       throw new Error('guarded push did not identify a remote write');
     },
     findOpenPullRequest: async (requestedBranch) => {
-      const stdout = await runTrackerRepositoryRead(
-        gh, worktree, 'pull-request.read', repository, { kind: 'repository' },
-        ['pr', 'view', requestedBranch, '--repo', repository, '--json', 'url,body'],
-      );
-      const parsed = JSON.parse(stdout || '{}') as { url?: unknown; body?: unknown };
-      return typeof parsed.url === 'string'
-        ? { url: parsed.url, body: typeof parsed.body === 'string' ? parsed.body : '' }
-        : undefined;
+      try {
+        const stdout = await runTrackerRepositoryRead(
+          gh, worktree, 'pull-request.read', repository, { kind: 'repository' },
+          ['pr', 'view', requestedBranch, '--repo', repository, '--json', 'url,body'],
+        );
+        const parsed = JSON.parse(stdout || '{}') as { url?: unknown; body?: unknown };
+        return typeof parsed.url === 'string'
+          ? { url: parsed.url, body: typeof parsed.body === 'string' ? parsed.body : '' }
+          : undefined;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (/no pull requests? found|could not resolve to a pull request|not found/i.test(message)) return undefined;
+        throw error;
+      }
     },
     createDraftPullRequest: async (input) => {
       const result = await executeGithubOperation({
