@@ -95,6 +95,7 @@ describe('deleteFeatureConductorRefs (real local Git)', () => {
     const expected = [
       'refs/conductor/demo/restack/conflict/record',
       'refs/conductor/demo/restack/conflict/parent',
+      'refs/conductor/demo/restack/conflict/refused-tip',
       ...Array.from({ length: MAX_CHILD_ID }, (_unused, index) => `refs/conductor/demo/restack/resolution/c${index + 1}`),
       ...Array.from({ length: MAX_CHILD_ID }, (_unused, index) => `refs/conductor/demo/restack/decision/c${index + 1}`),
     ];

@@ -81,6 +81,11 @@ export interface ConflictRecordDependencies {
   readonly git?: GitRunner;
 }
 
+/** Optional companion pin written atomically with a conflict record. */
+export interface WriteConflictRecordOptions extends ConflictRecordDependencies {
+  readonly refusedTip?: CommitSha;
+}
+
 /** Exact old values needed when a consuming restack removes conflict state. */
 export interface ConsumedConflictRefs {
   readonly child: ChildId;
@@ -137,6 +142,11 @@ export function conflictParentRefFor(slug: string): RefName {
 
 export function conflictFlattenedTipRefFor(slug: string): RefName {
   return `refs/conductor/${slug}/restack/conflict/flattened-tip` as RefName;
+}
+
+/** A resolver tip refused by ownership checks, retained for operator recovery. */
+export function refusedTipRefFor(slug: string): RefName {
+  return `refs/conductor/${slug}/restack/conflict/refused-tip` as RefName;
 }
 
 export function resolutionRefFor(slug: string, child: ChildId): RefName {
@@ -348,22 +358,23 @@ export async function writeConflictRecord(
   worktree: string,
   slug: string,
   input: RestackConflictRecord,
-  dependencies: ConflictRecordDependencies = {},
+  options: WriteConflictRecordOptions = {},
 ): Promise<WriteConflictRecordResult> {
   const serialized = JSON.stringify(input);
   if (!parseConflictRecord(JSON.parse(serialized))) return { kind: 'unavailable' };
-  const git = dependencies.git ?? makeGitRunner(worktree);
+  const git = options.git ?? makeGitRunner(worktree);
   const previous = await readConflictRecord(worktree, slug, { git });
   if (previous.kind === 'unreadable') return { kind: 'unavailable' };
   const oldRecord = previous.kind === 'record' ? previous.blob : ZERO_SHA;
   const oldParent = await refValue(git, conflictParentRefFor(slug));
   const oldFlattenedTip = await refValue(git, conflictFlattenedTipRefFor(slug));
-  if (oldParent === undefined || oldFlattenedTip === undefined) return { kind: 'unavailable' };
+  const oldRefusedTip = await refValue(git, refusedTipRefFor(slug));
+  if (oldParent === undefined || oldFlattenedTip === undefined || oldRefusedTip === undefined) return { kind: 'unavailable' };
   // Existing record and parent must describe one coherent durable hand-off;
   // replacing a partially-written or externally-corrupted pair would hide it.
   if ((previous.kind === 'record' && oldParent !== previous.record.newParent)
     || (previous.kind === 'record' && oldFlattenedTip !== (previous.record.flattenedTip ?? ZERO_SHA))
-    || (previous.kind === 'missing' && (oldParent !== ZERO_SHA || oldFlattenedTip !== ZERO_SHA))) return { kind: 'unavailable' };
+    || (previous.kind === 'missing' && (oldParent !== ZERO_SHA || oldFlattenedTip !== ZERO_SHA || oldRefusedTip !== ZERO_SHA))) return { kind: 'unavailable' };
   const written = await runGit(git, ['hash-object', '-w', '--stdin'], serialized);
   const blob = written?.exitCode === 0 ? parseCommitSha(written.stdout.trim()) : undefined;
   if (!blob) return { kind: 'unavailable' };
@@ -376,6 +387,11 @@ export async function writeConflictRecord(
         ? `verify ${conflictFlattenedTipRefFor(slug)} ${ZERO_SHA}`
         : `delete ${conflictFlattenedTipRefFor(slug)} ${oldFlattenedTip}`)
       : `update ${conflictFlattenedTipRefFor(slug)} ${input.flattenedTip} ${oldFlattenedTip}`,
+    options.refusedTip === undefined
+      ? (oldRefusedTip === ZERO_SHA
+        ? `verify ${refusedTipRefFor(slug)} ${ZERO_SHA}`
+        : `delete ${refusedTipRefFor(slug)} ${oldRefusedTip}`)
+      : `update ${refusedTipRefFor(slug)} ${options.refusedTip} ${oldRefusedTip}`,
     'prepare',
     'commit',
     '',
@@ -386,11 +402,16 @@ export async function writeConflictRecord(
 }
 
 /** Delete all state consumed by a successful restack with explicit old values. */
-export function conflictDeleteLines(slug: string, refs: ConsumedConflictRefs): readonly string[] {
+export function conflictDeleteLines(
+  slug: string,
+  refs: ConsumedConflictRefs,
+  refusedTip?: CommitSha,
+): readonly string[] {
   return [
     `delete ${resolutionRefFor(slug, refs.child)} ${refs.tip}`,
     `delete ${conflictRecordRefFor(slug)} ${refs.record}`,
     `delete ${conflictParentRefFor(slug)} ${refs.parent}`,
+    ...(refusedTip === undefined ? [] : [`delete ${refusedTipRefFor(slug)} ${refusedTip}`]),
   ];
 }
 
@@ -416,7 +437,24 @@ export async function retireRecordedResolution(
   // An unreadable record cannot authorize a resolution.  Preserve its bytes
   // for diagnosis, but retire the orphaned tip and let ordinary replay create
   // any new conflict state it needs.
-  const deleted = await runGit(git, ['update-ref', '-d', ref, tip]);
+  let transaction: readonly string[];
+  if (stored.kind === 'record' && stored.record.child === child) {
+    const [parent, refusedTip] = await Promise.all([
+      refValue(git, conflictParentRefFor(slug)),
+      refValue(git, refusedTipRefFor(slug)),
+    ]);
+    if (parent !== stored.record.newParent || refusedTip === undefined) return { kind: 'unavailable' };
+    transaction = [
+      'start',
+      ...conflictDeleteLines(slug, {
+        child, tip, record: stored.blob, parent,
+      }, refusedTip === ZERO_SHA ? undefined : refusedTip),
+      'prepare', 'commit', '',
+    ];
+  } else {
+    transaction = ['start', `delete ${ref} ${tip}`, 'prepare', 'commit', ''];
+  }
+  const deleted = await runGit(git, ['update-ref', '--stdin'], transaction.join('\n'));
   if (deleted?.exitCode === 0) {
     return {
       kind: 'retired', tip,

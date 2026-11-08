@@ -36,7 +36,7 @@ import { planRestackRanges } from './restack-plan.js';
 import { checkPathOwnership, parentOverlapPaths } from './restack-ownership.js';
 import { replayChildRange, RemBlockBodyMismatchError, type CommitterStamp } from './restack-replay.js';
 import { haltRecordedRestackConflict, replayCandidateSubjects, resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
-import { conflictDeleteLines, conflictFlattenedTipRefFor, conflictParentRefFor, conflictRecordRefFor, consumeRecordedResolution, decisionDeleteLines, readConflictRecord, retireRecordedResolution } from './restack-conflict-record.js';
+import { conflictDeleteLines, conflictFlattenedTipRefFor, conflictParentRefFor, conflictRecordRefFor, consumeRecordedResolution, decisionDeleteLines, readConflictRecord, refusedTipRefFor, retireRecordedResolution } from './restack-conflict-record.js';
 import { prepareRestackDecisionDelivery, restackDecisionDetailLines } from './restack-decision-delivery.js';
 import { haltRecordPathFor } from './halt-record-bookkeeping.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
@@ -351,11 +351,16 @@ export async function appliedTransactionLines(
     else lines.push(`update ${queueRef} ${journal.journal.queueNew} ${journal.journal.queueOld}`);
   }
   if (journal.journal.consumedResolution !== undefined) {
-    lines.push(...conflictDeleteLines(journal.slug, journal.journal.consumedResolution));
     const conflict = await readConflictRecord(worktree, journal.slug, { git });
     if (conflict.kind !== 'record' || conflict.blob !== journal.journal.consumedResolution.record) {
       throw new Error('cannot delete flattened tip for a changed conflict record');
     }
+    const refused = await git(['rev-parse', '-q', '--verify', refusedTipRefFor(journal.slug)]);
+    const refusedTip = refused.exitCode === 1 ? undefined : refused.exitCode === 0 ? parseCommitSha(refused.stdout.trim()) : undefined;
+    if (refused.exitCode !== 0 && refused.exitCode !== 1 || refused.exitCode === 0 && !refusedTip) {
+      throw new Error('cannot delete refused tip for a changed conflict record');
+    }
+    lines.push(...conflictDeleteLines(journal.slug, journal.journal.consumedResolution, refusedTip));
     if (conflict.record.flattenedTip !== undefined) {
       lines.push(`delete ${conflictFlattenedTipRefFor(journal.slug)} ${conflict.record.flattenedTip}`);
     }
@@ -372,6 +377,12 @@ export async function appliedTransactionLines(
     if (conflict.kind !== 'record' || conflict.blob !== decision.record) {
       throw new Error('cannot delete flattened tip for a changed conflict record');
     }
+    const refused = await git(['rev-parse', '-q', '--verify', refusedTipRefFor(journal.slug)]);
+    const refusedTip = refused.exitCode === 1 ? undefined : refused.exitCode === 0 ? parseCommitSha(refused.stdout.trim()) : undefined;
+    if (refused.exitCode !== 0 && refused.exitCode !== 1 || refused.exitCode === 0 && !refusedTip) {
+      throw new Error('cannot delete refused tip for a changed conflict record');
+    }
+    if (refusedTip !== undefined) lines.push(`delete ${refusedTipRefFor(journal.slug)} ${refusedTip}`);
     if (conflict.record.flattenedTip !== undefined) {
       lines.push(`delete ${conflictFlattenedTipRefFor(journal.slug)} ${conflict.record.flattenedTip}`);
     }
