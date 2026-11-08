@@ -75,7 +75,10 @@ export async function supersedeRound(input: SupersedeRoundInput): Promise<Supers
   const leafReturn = checked.kind === 'leaf-return';
   const leafReturnBranch = leafBranchFor(slug);
   const leafReturnHead = leafReturn ? await resolveGitRef(git, leafReturnBranch) : undefined;
-  if (leafReturn && leafReturnHead === undefined) {
+  const leafReturnRecord = leafReturn && typeof leafReturnHead === 'string'
+    ? { branch: leafReturnBranch, head: leafReturnHead }
+    : undefined;
+  if (leafReturn && leafReturnRecord === undefined) {
     return { kind: 'refused', detail: `cannot resolve leaf return head for routing round ${checked.stored.record.roundId}` };
   }
   const hosts = Object.fromEntries(Object.entries(checked.stored.record.hosts).map(([host, state]) => [
@@ -103,7 +106,7 @@ export async function supersedeRound(input: SupersedeRoundInput): Promise<Supers
     ...checked.stored.record,
     phase: 'closed',
     hosts,
-    ...(leafReturn ? { leafReturn: { branch: leafReturnBranch, head: leafReturnHead } } : {}),
+    ...(leafReturnRecord === undefined ? {} : { leafReturn: leafReturnRecord }),
   }, event);
   const wrote = await (input.writeRoutingTransaction ?? writeRoutingTransaction)(worktree, slug, [
     { kind: 'update-record', previous: checked.stored, record },

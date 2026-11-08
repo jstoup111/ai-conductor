@@ -75,6 +75,26 @@ it('closes a sole audit round and deletes its matching marker in one transaction
 });
 
 // Covers: task:11
+it('refuses a leaf-return close when the leaf branch cannot resolve to an immutable tip', async () => {
+  const subject = await createSweepRepository('stack-rounds-close-unresolved-leaf-', cleanup);
+  await subject.git(['commit', '-qm', 'initial']);
+  await subject.git(['checkout', '-qb', 'feat/daemon-demo']);
+  await openAudit(subject, r2, { [c1]: 'admitted' }, []);
+  await pointRefAtBlobText(subject, repairMarkerRefFor(slug), JSON.stringify({ host: c1, roundId: r2 }));
+  const checked = await checkRoundSupersession(subject.repo, slug, r2);
+  if (checked.kind !== 'leaf-return') throw new Error('expected leaf return');
+  const git: GitRunner = vi.fn(async () => ({ exitCode: 1, stdout: '', stderr: 'missing ref' }));
+
+  await expect(supersedeRound({ worktree: subject.repo, slug, checked, reason: 'return to leaf', operator: 'operator', git }))
+    .resolves.toEqual({ kind: 'refused', detail: 'cannot resolve leaf return head for routing round r2' });
+  expect(git).toHaveBeenCalledWith(['rev-parse', '-q', '--verify', 'feat/daemon-demo']);
+  const after = await readRouteRecord(subject.repo, slug, r2);
+  expect(after).toMatchObject({ kind: 'record', blob: checked.stored.blob, record: { phase: 'open' } });
+  if (after.kind !== 'record') throw new Error('missing route record');
+  expect(after.record.leafReturn).toBeUndefined();
+});
+
+// Covers: task:11
 it('refuses a leaf-return close when its checked marker was moved', async () => {
   const subject = await createSweepRepository('stack-rounds-close-leaf-return-race-', cleanup);
   await subject.git(['commit', '-qm', 'initial']);
