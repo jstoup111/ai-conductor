@@ -115,6 +115,7 @@ describe('engine/daemon-maintenance', () => {
     ]);
   });
 
+  // Covers: task:27
   it('refreshes into a free slot while another executor keeps its pinned order', async () => {
     let rootBase = 'base-s1';
     let localDiscoveries = 0;
@@ -167,9 +168,6 @@ describe('engine/daemon-maintenance', () => {
           }
           localDiscoveries++;
           return [];
-        },
-        runFeature: async () => {
-          throw new Error('featureExecution owns this test');
         },
         featureExecution: { createWorkOrder, executor },
         readPersistedBaseSha: async () => 'base-s1',

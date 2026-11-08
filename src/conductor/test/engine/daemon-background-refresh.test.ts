@@ -56,7 +56,9 @@ function harness(opts: {
   refresh: () => Promise<BacklogItem[]>;
   isHalted?: (slug: string) => Promise<boolean>;
   isParked?: (slug: string) => Promise<boolean>;
-  extra?: Partial<DaemonDeps>;
+  extra?: Partial<Omit<DaemonDeps, 'runFeature' | 'featureExecution'>> & {
+    runFeature?: (item: BacklogItem) => Promise<FeatureOutcome>;
+  };
 }): Harness {
   const dispatched: string[] = [];
   const logs: string[] = [];

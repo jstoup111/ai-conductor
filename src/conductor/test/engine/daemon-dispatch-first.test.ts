@@ -10,7 +10,9 @@ const done = (slug: string): FeatureOutcome => ({ slug, status: 'done' });
 function depsFor(
   log: string[],
   startup: BacklogItem[],
-  overrides: Partial<DaemonDeps> = {},
+  overrides: Partial<Omit<DaemonDeps, 'runFeature' | 'featureExecution'>> & {
+    runFeature?: (item: BacklogItem) => Promise<FeatureOutcome>;
+  } = {},
 ): DaemonDeps {
   return {
     discoverBacklog: async ({ refresh }) => {

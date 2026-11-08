@@ -209,7 +209,7 @@ export interface DaemonSweepContext {
   readonly isFeatureInFlight: (slug: string) => boolean;
 }
 
-export interface DaemonDeps {
+interface DaemonSchedulerDeps {
   /** Dispatcher-owned repairs compete with features for the same pool slots. */
   repairs?: {
     queue: RepairQueue;
@@ -240,20 +240,8 @@ export interface DaemonDeps {
    * not re-base an in-flight build.
    */
   discoverBacklog: (opts: { refresh: boolean }) => Promise<BacklogItem[]>;
-  /** Run one feature to DONE/HALT in isolation. Must not throw for normal
-   *  halts — return `{status:'halted'}` — but a thrown error is caught and
-   *  recorded as `{status:'error'}` so the pool survives. */
-  runFeature: (item: BacklogItem) => Promise<FeatureOutcome>;
   /** Ask a child executor to yield at its next conductor scheduling boundary. */
   requestYield?: (slug: string) => boolean;
-  /**
-   * Dispatcher/executor seam. Both sides travel together so an order builder
-   * can never be configured without an executor (or vice versa).
-   */
-  featureExecution?: {
-    createWorkOrder: (item: BacklogItem) => Promise<WorkOrder>;
-    executor: FeatureExecutor;
-  };
   /** Lifecycle accounting shared by both executor and legacy runner routes. */
   onExecutorStarted?: () => void;
   onExecutorSettled?: () => void;
@@ -637,6 +625,30 @@ export interface DaemonDeps {
    */
   sweepEpisodeHalts?: (isParked?: (slug: string) => Promise<boolean>) => Promise<void>;
 }
+
+/** Dispatcher/executor seam. Both sides travel together so an order builder
+ * can never be configured without an executor (or vice versa). */
+interface FeatureExecutionDeps {
+  createWorkOrder: (item: BacklogItem) => Promise<WorkOrder>;
+  executor: FeatureExecutor;
+}
+
+/**
+ * The scheduler has exactly one feature-execution route. The legacy runner
+ * remains injectable for focused composition tests, while production executes
+ * the dispatcher-built WorkOrder through its FeatureExecutor.
+ */
+export type DaemonDeps = DaemonSchedulerDeps & (
+  | {
+    /** Run one feature to DONE/HALT in isolation. */
+    runFeature: (item: BacklogItem) => Promise<FeatureOutcome>;
+    featureExecution?: never;
+  }
+  | {
+    runFeature?: never;
+    featureExecution: FeatureExecutionDeps;
+  }
+);
 
 export interface DaemonTickSnapshot {
   counts: Record<'eligible' | 'waiting' | 'blocked' | 'gated' | 'parked', number>;

@@ -149,6 +149,7 @@ describe('daemon executor-isolation composition', () => {
     expect(logs.join('\n')).toContain('executor isolation: in-process; per-dispatch engine pinning is disabled');
   });
 
+  // Covers: task:27
   it('collects a child terminal outcome and applies its root effects only after releasing the claim', async () => {
     const claims = new InMemoryWorkClaims();
     const observations: Array<{ active: readonly string[]; outcome: FeatureExecutionOutcome }> = [];
@@ -165,9 +166,6 @@ describe('daemon executor-isolation composition', () => {
     const deps: DaemonDeps = {
       claims,
       discoverBacklog: async () => [{ slug: 'child-feature' }],
-      runFeature: async () => {
-        throw new Error('the child executor owns this dispatch');
-      },
       featureExecution: {
         createWorkOrder: async (item) => workOrder(item.slug),
         executor: child,

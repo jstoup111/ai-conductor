@@ -2517,7 +2517,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         void events.emit({ type: 'daemon_backlog_snapshot', ...snapshot });
       },
       getDiscoverySnapshot: async (parkedSlugs) => workSource.snapshot?.(parkedSlugs),
-      runFeature,
       // Only child executors have a separately running conductor to yield.
       // The rollback in-process executor deliberately receives no preemption
       // signal, preserving its existing single-process scheduling semantics.
@@ -2593,7 +2592,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       },
       // An explicit runFeature is the composition-test executor boundary. The
       // normal production path continues through the WorkOrder executor.
-      ...(opts.runFeature ? {} : { featureExecution: { createWorkOrder, executor } }),
+      ...(opts.runFeature
+        ? { runFeature }
+        : { featureExecution: { createWorkOrder, executor } }),
       featureLog: featureLogFor,
       log: daemonCoreLog,
       staleEngineChecker,

@@ -14,7 +14,9 @@ function deferred<T = void>(): { promise: Promise<T>; resolve: (value: T) => voi
 function depsFor(
   calls: string[],
   items: BacklogItem[],
-  overrides: Partial<DaemonDeps> = {},
+  overrides: Partial<Omit<DaemonDeps, 'runFeature' | 'featureExecution'>> & {
+    runFeature?: (item: BacklogItem) => Promise<FeatureOutcome>;
+  } = {},
 ): DaemonDeps {
   return {
     discoverBacklog: async ({ refresh }) => refresh ? items : [],
