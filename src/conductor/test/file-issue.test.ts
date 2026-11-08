@@ -155,13 +155,18 @@ describe('fileIntakeIssue — creation-scoped terminal adapter', () => {
   // Covers: task:1
   it('never infers semver from a noninteractive breaking-fix body', async () => {
     const gh = makeFakeGh();
-    const prompt = async () => 'major';
+    let promptCalls = 0;
+    const prompt = async () => {
+      promptCalls += 1;
+      return 'major';
+    };
 
     const result = await fileIntakeIssue({
       title: 'Breaking fix', body: 'A breaking fix for an API regression.', size: 'S', priority: 'low',
     }, { creation: creation(gh.run), prompt });
 
     expect(result).toMatchObject({ ok: true, semver: null, semverSource: null });
+    expect(promptCalls).toBe(0);
     expect(gh.calls.some((args) => args.some((arg) => arg.startsWith('labels[]=semver:')))).toBe(false);
   });
 
