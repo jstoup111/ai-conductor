@@ -705,11 +705,13 @@ async function advanceR2AfterBuildReview(options: { readonly adjudicated: boolea
 
   const route = await git(['rev-parse', routeRecordRefFor('demo', parseRoundId('r2')!)]);
   const marker = await git(['rev-parse', repairMarkerRefFor('demo')]);
+  const closedR1 = await readRouteRecord(subject.repo, 'demo', r1, { git });
+  if (closedR1.kind !== 'record') throw new Error('r1 missing after routed exit');
   const activeMarker = await readRepairMarker(subject.repo, 'demo', { git });
   if (activeMarker.kind !== 'marker') throw new Error('r2 marker missing');
   const next = await resolveActiveChild(subject.repo, 'demo', { git });
   return {
-    route: route.stdout.trim(), marker: marker.stdout.trim(), markerHost: activeMarker.marker.host,
+    route: route.stdout.trim(), marker: marker.stdout.trim(), r1Host: closedR1.record.hosts[c1], markerHost: activeMarker.marker.host,
     next: next.kind === 'repair-pending' ? { kind: next.kind, child: next.child, roundId: next.revalidating?.generation === undefined ? undefined : 'r2' } : { kind: next.kind }, starts,
   };
 }
@@ -1756,6 +1758,8 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     const afterCleanPass = await advanceR2AfterBuildReview({ adjudicated: false });
     const afterAdjudicationSettlement = await advanceR2AfterBuildReview({ adjudicated: true });
 
+    expect(afterCleanPass.r1Host).toBe('restacked');
+    expect(afterAdjudicationSettlement.r1Host).toBe('restacked');
     expect(afterCleanPass.markerHost).toBe(2);
     expect(afterAdjudicationSettlement.markerHost).toBe(2);
     expect(afterAdjudicationSettlement).toEqual(afterCleanPass);
