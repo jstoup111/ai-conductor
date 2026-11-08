@@ -8422,6 +8422,7 @@ export class Conductor {
       async (
         _alreadyObserved = false,
         observedBoundary?: SchedulingUnitRef,
+        preemptionBoundary?: SchedulingUnitRef,
       ): Promise<OperatorParkedTermination | PreemptedTermination | undefined> => {
         if (
           !this.daemon ||
@@ -8456,12 +8457,12 @@ export class Conductor {
         await emitTracked({
           type: 'preemption_boundary',
           featureSlug: this.featureSlug,
-          boundary,
+          boundary: preemptionBoundary ?? boundary,
         });
         process.off('SIGINT', sigintHandler);
         process.off('SIGTERM', sigterm);
         preemptedAtBoundary = true;
-        return { kind: 'preempted', boundary };
+        return { kind: 'preempted', boundary: preemptionBoundary ?? boundary };
       };
     // Late declarations cannot reopen existing work, but their refusal must be
     // visible even when resume/settled-state short circuits skip the step loop.
@@ -9079,7 +9080,7 @@ export class Conductor {
           if (parkedMember) {
             const parked = await stopAtOperatorParkBoundary(true, {
               kind: 'attempt', step: step.name, attempt: parkedMember.attempt ?? 1, member: parkedMember.name,
-            });
+            }, { kind: 'group', name: step.name });
             if (parked) return parked;
           }
           // State keys are already written inside runParallelGroupViaCore.
@@ -17517,12 +17518,11 @@ export class Conductor {
           providerAvailability: this.providerExecution?.providerAvailability,
           onProviderSuppressed: this.providerExecution?.onProviderSuppressed,
           executionContext,
-          // A configured group's members must drain once admitted. An
-          // operator park is still an immediate member boundary, but a yield
-          // is safe only at the owning group's join, where the composed
-          // predicate is checked immediately after every member has settled.
+          // A configured group's members must drain once admitted. Its retry
+          // gate still observes the composed park+yield predicate: a yield
+          // declines only a redispatch, then surfaces at the owning join.
           operatorParkBoundary: this.daemon && this.featureSlug !== undefined
-            ? this.rawOperatorParkBoundary
+            ? this.operatorParkBoundary
             : undefined,
           lifecycleObserver: {
             onAdmitted: async (_observation) => {

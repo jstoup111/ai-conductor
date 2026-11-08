@@ -1648,6 +1648,69 @@ describe('operator park boundary contract', () => {
     });
   });
 
+  // Covers: task:5
+  it('declines a configured-member retry on yield and preempts at its joined group boundary', async () => {
+    await writeState(statePath, stateWithPending('memory', 'explore'));
+    let yielded = false;
+    const terminalEvents: ConductorEvent[] = [];
+    const retries: ConductorEvent[] = [];
+    const events = new ConductorEventEmitter();
+    events.on('parallel_failure', (event) => { terminalEvents.push(event); });
+    events.on('step_failed', (event) => { terminalEvents.push(event); });
+    events.on('step_retry', (event) => { retries.push(event); });
+    const run = vi.fn<StepRunner['run']>(async (step) => {
+      if (step === ('yielded-member' as StepName)) {
+        yielded = true;
+        return { success: false, output: 'retry after yield' };
+      }
+      return { success: true };
+    });
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events,
+      config: { steps: { memory: { max_retries: 3, parallel: [
+        { name: 'yielded-member', skill: 'skills/memory/SKILL.md' },
+        { name: 'drained-member', skill: 'skills/memory/SKILL.md' },
+      ] } } },
+      fromStep: 'memory',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      featureSlug: 'preempted-feature',
+      operatorParkBoundary: async () => false,
+      preemptionRequested: () => yielded,
+    });
+
+    const result = await conductor.run();
+    const persisted = await readState(statePath);
+
+    expect({
+      result,
+      dispatchedAttempts: run.mock.calls.map(([step, , options]) => ({ step, attempt: options?.attempt })),
+      terminalEvents,
+      retries,
+      state: persisted.ok ? {
+        group: persisted.value.memory,
+        yielded: (persisted.value as Record<string, unknown>)['memory__yielded-member'],
+        drained: (persisted.value as Record<string, unknown>)['memory__drained-member'],
+        later: persisted.value.explore,
+      } : persisted,
+      terminalMarkers: await terminalMarkerNames(projectRoot),
+    }).toEqual({
+      result: { kind: 'preempted', boundary: { kind: 'group', name: 'memory' } },
+      dispatchedAttempts: [
+        { step: 'yielded-member', attempt: 1 },
+        { step: 'drained-member', attempt: 1 },
+      ],
+      terminalEvents: [],
+      retries: [],
+      state: { group: 'in_progress', yielded: 'in_progress', drained: 'done', later: 'pending' },
+      terminalMarkers: [],
+    });
+  });
+
   it('settles a parked configured member, preserves its successful sibling, and stops the join', async () => {
     await writeState(statePath, stateWithPending('memory', 'explore'));
     let parked = false;
