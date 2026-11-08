@@ -6575,10 +6575,10 @@ export class Conductor {
     const detail = cause.kind === 'completion-refused'
       ? `completion refused: ${cause.reason}`
       : `parked ${parked!.kind} ${parked!.subject}: ${cause.reason}`;
-    // `advanceTail` optimistically leaves DONE at selector convergence. A
-    // later completion fence can still reject an open routed round; do not
-    // let the daemon observe that provisional marker as terminal success.
-    if (cause.kind === 'completion-refused') {
+    // `advanceTail` can optimistically leave DONE at selector convergence.
+    // Any routed stop proves that convergence was provisional, whether the
+    // stop came from the terminal completion fence or selector parking.
+    if (cause.kind === 'completion-refused' || cause.kind === 'parked') {
       await unlinkFile(join(this.projectRoot, DONE_MARKER)).catch(() => {});
     }
     const stall = await recordRoundStall(this.projectRoot, slug, {
@@ -13245,11 +13245,8 @@ export class Conductor {
           }
 
           // Step runner returned success. Now verify real completion.
-          // build_review is an authoritative aggregate, not optional fixture
-          // evidence: consume it even when generic artifact checks are off.
           const mustCheckCompletion =
-            step.name === 'build_review' ||
-            (this.verifyArtifacts && stepHasCompletionCheck(step.name, this.config) && step.name !== 'complexity');
+            this.verifyArtifacts && stepHasCompletionCheck(step.name, this.config) && step.name !== 'complexity';
           if (!mustCheckCompletion) {
             // No completion check will run this iteration — nothing will
             // consume the in-flight attempt timestamp, so clear it now
@@ -13748,10 +13745,6 @@ export class Conductor {
                 completion.missing,
                 join(this.projectRoot, '.pipeline'),
               );
-              // build_review's completed runner result carries no new input
-              // for a retry. Its aggregate must instead be consumed exactly
-              // once by the post-join adjudication boundary below.
-              if (step.name === 'build_review') break;
               if (
                 step.name === 'build' &&
                 attempt < stepMaxRetries &&
@@ -14467,16 +14460,7 @@ export class Conductor {
             }
           }
 
-          // build_review's aggregate is authoritative even in fixture and
-          // compatibility modes that intentionally disable generic artifact
-          // verification. A non-green aggregate must reach the shared
-          // adjudication/failure boundary below; otherwise this fallthrough
-          // turns it back into a successful step and skips that boundary.
-          if (
-            !succeeded &&
-            (step.name === 'build_review' ||
-              (this.verifyArtifacts && stepHasCompletionCheck(step.name, this.config)))
-          ) break;
+          if (this.verifyArtifacts && stepHasCompletionCheck(step.name, this.config) && !succeeded) break;
 
           succeeded = true;
           successOutput = result.output;
