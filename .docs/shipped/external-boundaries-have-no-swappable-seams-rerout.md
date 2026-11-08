@@ -4,6 +4,13 @@ spec_hash: 956e39cea21c206c7083956967fd6f1f67d7a540fee1e67715e1d7686e690498
 pr: https://github.com/jstoup111/ai-conductor/pull/3660
 shipped: 2026-11-08
 engine_version: 20261108T000318Z-7a2ff38b78c5
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "Task 2 planned exporting layerFor and resolveSpecifier only. These extra exports and the shared readSourceTree serve the boundary ratchet's import classification and real-tree scan. They are test-only structural helpers with unchanged bodies, and they change no CLI output or persisted state."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
