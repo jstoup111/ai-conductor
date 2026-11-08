@@ -799,7 +799,14 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
           // ref is retired and must continue through the ordinary replay;
           // history drift becomes a new, operator-actionable conflict.
           if (recorded.field !== 'record') await abortJournal(options.worktree, journal, git, moves);
-          const retired = await retireRecordedResolution(options.worktree, options.slug, range.child, { git });
+          // Keep the matching record while retiring a stale answer. The
+          // replacement record is the later atomic write; preserving the old
+          // one lets a failure there leave an ordinary replay path rather
+          // than turning the retirement transaction into an unavailable run.
+          const retired = await retireRecordedResolution(options.worktree, options.slug, range.child, {
+            git,
+            preserveConflictRecord: recorded.field !== 'record',
+          });
           if (retired.kind !== 'retired') throw new Error(`cannot retire stale restack resolution: ${retired.kind}`);
           await options.events?.emit({ type: 'restack_resolution', opId: journal.journal.opId, child: range.child, action: 'retired', tip: retired.tip });
           if (recorded.field !== 'record') {

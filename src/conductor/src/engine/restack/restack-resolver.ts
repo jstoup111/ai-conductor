@@ -71,6 +71,9 @@ async function rangeHasMerge(git: GitRunner, range: ChildRange): Promise<boolean
 /** Persist the conflict context before writing its matching operator halt. */
 export async function haltRecordedRestackConflict(options: HaltRecordedRestackConflictOptions): Promise<void> {
   const { journal, range } = options;
+  // `range` belongs to a journal object that later cleanup may replace. Keep
+  // the recipe tied to the same durable hand-off fields that we write below.
+  const recipeOldTip = range.oldTip;
   let recordFailure = '';
   let flattenedTip: CommitSha | undefined;
   try {
@@ -100,7 +103,7 @@ export async function haltRecordedRestackConflict(options: HaltRecordedRestackCo
     recordFailure = options.refusedTip === undefined ? failure : refusedTipPinFailureDetail(failure);
   }
   await options.writeHalt(options.worktree, range.child, `${options.detail}${recordFailure}`, options.events, {
-    slug: options.slug, opId: journal.journal.opId, oldTip: range.oldTip, newParent: options.replayParent, oldParent: range.oldParent,
+    slug: options.slug, opId: journal.journal.opId, oldTip: recipeOldTip, newParent: options.replayParent, oldParent: range.oldParent,
     ...((options.refusedTip ?? flattenedTip) === undefined ? {} : { startingTip: options.refusedTip ?? flattenedTip }),
   });
 }

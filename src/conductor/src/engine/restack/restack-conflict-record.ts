@@ -425,7 +425,7 @@ export async function retireRecordedResolution(
   worktree: string,
   slug: string,
   child: ChildId,
-  dependencies: ConflictRecordDependencies = {},
+  dependencies: ConflictRecordDependencies & { readonly preserveConflictRecord?: boolean } = {},
 ): Promise<RetireRecordedResolutionResult> {
   const git = dependencies.git ?? makeGitRunner(worktree);
   const ref = resolutionRefFor(slug, child);
@@ -438,7 +438,7 @@ export async function retireRecordedResolution(
   // for diagnosis, but retire the orphaned tip and let ordinary replay create
   // any new conflict state it needs.
   let transaction: readonly string[];
-  if (stored.kind === 'record' && stored.record.child === child) {
+  if (stored.kind === 'record' && stored.record.child === child && !dependencies.preserveConflictRecord) {
     const [parent, refusedTip] = await Promise.all([
       refValue(git, conflictParentRefFor(slug)),
       refValue(git, refusedTipRefFor(slug)),
