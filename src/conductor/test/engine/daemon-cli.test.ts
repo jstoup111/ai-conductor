@@ -1052,6 +1052,10 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
       watch: false,
       executorFork: createInMemoryExecutorFork({
         projectRoot: root,
+        // This fixture only observes supervisor drain behavior. Capturing
+        // child console output locally keeps the in-memory process double
+        // from intercepting supervisor console lines while both run.
+        consoleSinks: new Map(),
         run: async ({ order }) => {
           started.push(order.slug);
           if (started.length === 2) {

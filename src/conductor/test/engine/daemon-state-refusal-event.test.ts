@@ -1,6 +1,6 @@
 // Covers: task:9
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeState } from '../../src/engine/state.js';
@@ -32,9 +32,30 @@ vi.mock('../../src/engine/daemon-deps.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/daemon-deps.js')>();
   return { ...actual, resolveDaemonBaseSha: vi.fn(async () => 'a'.repeat(40)) };
 });
+vi.mock('../../src/engine/config.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/engine/config.js')>()),
+  loadMergedConfig: vi.fn(async () => ({ ok: true as const, config: { llm_provider: 'codex' }, warnings: [] })),
+}));
+vi.mock('../../src/engine/provider-discovery.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/engine/provider-discovery.js')>()),
+  discoverInstalledProviders: vi.fn(async () => ({ installed: ['codex'], missing: [] })),
+}));
+vi.mock('../../src/engine/provider-model-probe.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/engine/provider-model-probe.js')>()),
+  validateConfiguredProviderModels: vi.fn(async () => {}),
+  resolveProviderModelTiers: vi.fn(async () => {}),
+}));
 vi.mock('../../src/engine/work-order.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/work-order.js')>();
-  return { ...actual, buildWorkOrder: vi.fn((input) => input) };
+  return {
+    ...actual,
+    buildWorkOrder: vi.fn((input) => ({
+      ...input,
+      engineVersionId: input.enginePin.engineVersionId,
+      schemaVersion: 1,
+      manifest: [],
+    })),
+  };
 });
 
 vi.mock('../../src/engine/step-runners.js', () => ({
@@ -100,6 +121,7 @@ vi.mock('../../src/engine/daemon-runner.js', () => ({
 
 import { runDaemonMode } from '../../src/daemon-cli.js';
 import { allInstalledProviderDiscoveryRunner } from './boot-test-helpers.js';
+import { createInMemoryExecutorFork, useTempEngineStore } from '../fixtures/in-memory-executor-fork.js';
 
 const directories: string[] = [];
 
@@ -122,17 +144,27 @@ describe('daemon skipped-to-stale refusal event wiring', () => {
       { manual_test: 'skipped' },
     );
 
-    await runDaemonMode({
-      projectRoot,
-      concurrency: 1,
-      maxItems: 1,
-      baseBranch: 'main',
-      ensureFresh: async () => {},
-      probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
-      providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
-      watch: false,
-      workSource: { discover: async () => [{ slug: 'feature-a' }] },
-    });
+    const store = await useTempEngineStore();
+    try {
+      await runDaemonMode({
+        projectRoot,
+        engineRoot: store.engineRoot,
+        concurrency: 1,
+        maxItems: 1,
+        baseBranch: 'main',
+        ensureFresh: async () => {},
+        probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+        providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
+        watch: false,
+        workSource: { discover: async () => [{ slug: 'feature-a' }] },
+        executorFork: createInMemoryExecutorFork({
+          projectRoot,
+          createWorktree: async () => ({ path: fixture.worktreePath }),
+        }),
+      });
+    } finally {
+      await store.teardown();
+    }
 
     const records = (await readFile(join(fixture.worktreePath, '.pipeline', 'events.jsonl'), 'utf-8'))
       .trim()

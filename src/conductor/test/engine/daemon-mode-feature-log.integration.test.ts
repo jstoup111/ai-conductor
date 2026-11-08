@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -24,7 +24,15 @@ vi.mock('../../src/engine/daemon-deps.js', async (importOriginal) => {
 });
 vi.mock('../../src/engine/work-order.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/work-order.js')>();
-  return { ...actual, buildWorkOrder: vi.fn((input) => input) };
+  return {
+    ...actual,
+    buildWorkOrder: vi.fn((input) => ({
+      ...input,
+      engineVersionId: input.enginePin.engineVersionId,
+      schemaVersion: 1,
+      manifest: [],
+    })),
+  };
 });
 
 // The daemon loop checks its build credential before dispatch. This test owns
@@ -34,50 +42,10 @@ vi.mock('../../src/engine/self-host/daemon-build-token.js', () => ({
   readDaemonBuildToken: buildAuthSpy.readDaemonBuildToken,
 }));
 
-// Keep the daemon entry point real while replacing only the external feature
-// executor. Its controlled output exercises beginFeatureRun's actual scoped
-// logger, event renderer, console tee, and durable daemon-log sink.
-vi.mock('../../src/engine/daemon-runner.js', () => ({
-  makeRunFeature: (deps: {
-    beginFeatureRun: (worktree: { path: string; branch: string }, item: { slug: string }) => Promise<{
-      log?: (message: string) => void;
-      events: { emit: (event: unknown) => Promise<void> };
-      stop: () => void;
-    }>;
-  }) => async (item: { slug: string }) => {
-    const scope = await deps.beginFeatureRun(
-      { path: fixture.worktreePath, branch: `feat/${item.slug}` },
-      item,
-    );
-    scope.log?.('setup complete');
-    await scope.events.emit({ type: 'step_started', step: 'build' });
-    await scope.events.emit({
-      type: 'preemption_boundary',
-      featureSlug: item.slug,
-      boundary: { kind: 'attempt', step: 'build', attempt: 2 },
-    });
-    // These all have established daemon render cases. They must remain wired
-    // through the feature-owned event scope, not only the former global bus.
-    await scope.events.emit({ type: 'gate_verdict', step: 'build', satisfied: false, reason: 'blocked' });
-    await scope.events.emit({ type: 'kickback', from: 'build', to: 'plan', count: 1 });
-    await scope.events.emit({ type: 'navigation_back', from: 'manual_test', to: 'build' });
-    await scope.events.emit({ type: 'loop_halt', reason: 'cap' });
-    await scope.events.emit({ type: 'loop_converged' });
-    await scope.events.emit({ type: 'ci_failed', prUrl: 'https://example.test/pr/1', slug: item.slug, checks: ['test'], attempts: 1, phase: 'detected' });
-    await scope.events.emit({ type: 'build_review_base', mergeBase: 'abc1234567890', trackingRefSha: 'abc1234567890', remoteHeadSha: 'abc1234567890', fresh: true });
-    await scope.events.emit({ type: 'build_review_stale_mirage_regrade', mergeBase: 'abc1234567890', regradeCount: 1 });
-    await scope.events.emit({ type: 'auto_park_contradiction', slug: item.slug, verdict: 'empty/missing plan', evidence: { summaryTasksCompleted: 1, evidenceStamps: 1, resolvedTasks: 0 } });
-    scope.log?.('WARNING: provider unavailable');
-    scope.log?.('retrying build (2/3)');
-    scope.log?.('subprocess diagnostic: exit 1');
-    scope.stop();
-    return { slug: item.slug, status: 'done' };
-  },
-}));
-
 import { runDaemonMode } from '../../src/daemon-cli.js';
 import { daemonLogPath } from '../../src/engine/daemon-log.js';
 import { allInstalledProviderDiscoveryRunner } from './boot-test-helpers.js';
+import { createInMemoryExecutorFork, useTempEngineStore } from '../fixtures/in-memory-executor-fork.js';
 
 let dirs: string[] = [];
 
@@ -101,9 +69,11 @@ describe('daemon-mode feature log integration', () => {
     const consoleLines: string[] = [];
     const originalConsoleLog = console.log;
     console.log = (line: unknown) => consoleLines.push(String(line));
+    const store = await useTempEngineStore();
     try {
       await runDaemonMode({
         projectRoot: repo,
+        engineRoot: store.engineRoot,
         concurrency: 1,
         maxItems: 1,
         baseBranch: 'main',
@@ -112,14 +82,43 @@ describe('daemon-mode feature log integration', () => {
         providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
         watch: false,
         workSource: { discover: async () => [{ slug: 'feature-a' }] },
+        executorFork: createInMemoryExecutorFork({
+          projectRoot: repo,
+          createWorktree: async () => ({ path: fixture.worktreePath }),
+          // The child runtime is real; this fixture owns only the feature's
+          // controlled output needed to exercise supervisor log forwarding.
+          run: async ({ order, events, log }) => {
+            log?.('setup complete');
+            await events.emit({ type: 'step_started', step: 'build' });
+            await events.emit({
+              type: 'preemption_boundary',
+              featureSlug: order.slug,
+              boundary: { kind: 'attempt', step: 'build', attempt: 2 },
+            });
+            await events.emit({ type: 'gate_verdict', step: 'build', satisfied: false, reason: 'blocked' });
+            await events.emit({ type: 'kickback', from: 'build', to: 'plan', count: 1 });
+            await events.emit({ type: 'navigation_back', from: 'manual_test', to: 'build' });
+            await events.emit({ type: 'loop_halt', reason: 'cap' });
+            await events.emit({ type: 'loop_converged' });
+            await events.emit({ type: 'ci_failed', prUrl: 'https://example.test/pr/1', slug: order.slug, checks: ['test'], attempts: 1, phase: 'detected' });
+            await events.emit({ type: 'build_review_base', mergeBase: 'abc1234567890', trackingRefSha: 'abc1234567890', remoteHeadSha: 'abc1234567890', fresh: true });
+            await events.emit({ type: 'build_review_stale_mirage_regrade', mergeBase: 'abc1234567890', regradeCount: 1 });
+            await events.emit({ type: 'auto_park_contradiction', slug: order.slug, verdict: 'empty/missing plan', evidence: { summaryTasksCompleted: 1, evidenceStamps: 1, resolvedTasks: 0 } });
+            log?.('WARNING: provider unavailable');
+            log?.('retrying build (2/3)');
+            log?.('subprocess diagnostic: exit 1');
+            return { slug: order.slug, status: 'done' };
+          },
+        }),
       });
     } finally {
+      await store.teardown();
       console.log = originalConsoleLog;
     }
 
     const expected = [
       '▶ start feature-a',
-      'setup complete',
+      '[executor:info] setup complete',
       '· ▶ build',
       '· ■ preempted[feature-a]: after attempt 2 for step build',
       '· gate build: unsatisfied — blocked',
@@ -131,9 +130,9 @@ describe('daemon-mode feature log integration', () => {
       '· build_review base',
       '· build_review stale-mirage regrade',
       '· ✋ auto_park_contradiction[feature-a]',
-      'WARNING: provider unavailable',
-      'retrying build (2/3)',
-      'subprocess diagnostic: exit 1',
+      '[executor:info] WARNING: provider unavailable',
+      '[executor:info] retrying build (2/3)',
+      '[executor:info] subprocess diagnostic: exit 1',
       '■ done feature-a: done',
     ];
     const live = consoleLines.join('\n');

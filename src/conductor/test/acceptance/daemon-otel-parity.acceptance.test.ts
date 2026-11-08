@@ -30,9 +30,30 @@ vi.mock('../../src/engine/daemon-deps.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/daemon-deps.js')>();
   return { ...actual, resolveDaemonBaseSha: vi.fn(async () => 'a'.repeat(40)) };
 });
+vi.mock('../../src/engine/config.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/engine/config.js')>()),
+  loadMergedConfig: vi.fn(async () => ({ ok: true as const, config: { llm_provider: 'codex', otel: { exporter: 'otlp', endpoint: 'http://fake-collector:4318' } }, warnings: [] })),
+}));
+vi.mock('../../src/engine/provider-discovery.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/engine/provider-discovery.js')>()),
+  discoverInstalledProviders: vi.fn(async () => ({ installed: ['codex'], missing: [] })),
+}));
+vi.mock('../../src/engine/provider-model-probe.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/engine/provider-model-probe.js')>()),
+  validateConfiguredProviderModels: vi.fn(async () => {}),
+  resolveProviderModelTiers: vi.fn(async () => {}),
+}));
 vi.mock('../../src/engine/work-order.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/work-order.js')>();
-  return { ...actual, buildWorkOrder: vi.fn((input) => input) };
+  return {
+    ...actual,
+    buildWorkOrder: vi.fn((input) => ({
+      ...input,
+      engineVersionId: input.enginePin.engineVersionId,
+      schemaVersion: 1,
+      manifest: [],
+    })),
+  };
 });
 vi.mock('../../src/engine/daemon-runner.js', () => ({
   makeRunFeature: (deps: { beginFeatureRun: (worktree: { path: string; branch: string }, item: { slug: string }) => Promise<Record<string, unknown>> }) => async (item: { slug: string }) => {
@@ -70,6 +91,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { VisualizerFactoryContext } from '../../src/types/plugin.js';
 import type { OtelVisualizerStartContext } from '../../src/engine/otel/wire.js';
+import { createInMemoryExecutorFork, useTempEngineStore } from '../fixtures/in-memory-executor-fork.js';
 
 let dirs: string[] = [];
 afterEach(async () => {
@@ -91,7 +113,9 @@ const eventSequences: Partial<Record<ConductorEvent['type'], ConductorEvent[]>> 
     pollDurationMs: 1,
   }],
   feature_dispatch_started: [{ type: 'feature_dispatch_started', slug: 'feature-a', kind: 'initial' }],
-  feature_dispatch_ended: [{ type: 'feature_dispatch_ended', slug: 'feature-a', outcome: 'complete' }],
+  // The supervisor owns this terminal event; the child fixture returns its
+  // normal halted outcome, which the supervisor records as `halted`.
+  feature_dispatch_ended: [{ type: 'feature_dispatch_ended', slug: 'feature-a', outcome: 'halted' }],
   feature_shipped: [{ type: 'feature_shipped', slug: 'feature-a', active: { state: 'unavailable' } }],
   memory_setup: [{ type: 'memory_setup', before: 'absent', canonical: true }],
   step_started: [{ type: 'step_started', step: 'build', index: 0 }],
@@ -207,7 +231,12 @@ async function throughDaemonDispatch(events: ConductorEvent[], filteredType?: Co
   buildExporters
     .mockReturnValueOnce({ spanExporter: exporter, metricExporter })
     .mockReturnValueOnce({ spanExporter: exporter, metricExporter });
-  await runDaemonMode({ projectRoot: repo, concurrency: 1, maxItems: 1, baseBranch: 'main', ensureFresh: async () => {}, watch: false, workSource: { discover: async () => [{ slug: 'feature-a' }] }, probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }), providerDiscoveryRunner: allInstalledProviderDiscoveryRunner() });
+  const store = await useTempEngineStore();
+  try {
+    await runDaemonMode({ projectRoot: repo, engineRoot: store.engineRoot, concurrency: 1, maxItems: 1, baseBranch: 'main', ensureFresh: async () => {}, watch: false, workSource: { discover: async () => [{ slug: 'feature-a' }] }, probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }), providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(), executorFork: createInMemoryExecutorFork({ projectRoot: repo, createWorktree: async () => ({ path: fixture.worktreePath }) }) });
+  } finally {
+    await store.teardown();
+  }
   return signals(exporter, metricExporter);
 }
 
@@ -238,7 +267,12 @@ async function runDaemonExportScenario(metricExporter: PushMetricExporter): Prom
   await mkdir(join(fixture.worktreePath, '.pipeline'), { recursive: true }); await mkdir(join(repo, '.ai-conductor'), { recursive: true });
   await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'otel:\n  exporter: otlp\n  endpoint: http://fake-collector:4318\n');
   buildExporters.mockReturnValue({ spanExporter: new InMemorySpanExporter(), metricExporter });
-  await runDaemonMode({ projectRoot: repo, concurrency: 1, maxItems: 1, baseBranch: 'main', ensureFresh: async () => {}, watch: false, workSource: { discover: async () => [{ slug: 'feature-a' }] }, probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }), providerDiscoveryRunner: allInstalledProviderDiscoveryRunner() });
+  const store = await useTempEngineStore();
+  try {
+    await runDaemonMode({ projectRoot: repo, engineRoot: store.engineRoot, concurrency: 1, maxItems: 1, baseBranch: 'main', ensureFresh: async () => {}, watch: false, workSource: { discover: async () => [{ slug: 'feature-a' }] }, probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }), providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(), executorFork: createInMemoryExecutorFork({ projectRoot: repo, createWorktree: async () => ({ path: fixture.worktreePath }) }) });
+  } finally {
+    await store.teardown();
+  }
   const [rawFeatureEvents, rawDaemonEvents] = await Promise.all([
     readFile(join(fixture.worktreePath, '.pipeline/events.jsonl'), 'utf8'),
     readFile(join(repo, '.daemon/events.jsonl'), 'utf8'),

@@ -49,7 +49,9 @@ function episodeFixture(): EpisodeFixture {
 
 async function ledger(root: string): Promise<Array<Record<string, unknown>>> {
   return (await readFile(join(root, '.worktrees', ORDER.slug, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n')
-    .map((line) => JSON.parse(line) as Record<string, unknown>).filter((event) => event.type !== 'executor_started');
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+    .filter((event) => event.type !== 'executor_started')
+    .map(({ ts: _ts, activeInterval: _activeInterval, ...event }) => event);
 }
 
 async function runChildProcess(root: string, episode: RateLimitEpisode, run: (input: Pick<ExecutorChildRunInput, 'events' | 'rateLimitEpisode'> & { worktree: string }) => Promise<FeatureExecutionOutcome>): Promise<FeatureExecutionOutcome> {

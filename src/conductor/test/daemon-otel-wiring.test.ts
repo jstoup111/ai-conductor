@@ -2,9 +2,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
 import { AggregationTemporality, InMemoryMetricExporter, type PushMetricExporter, type ResourceMetrics } from '@opentelemetry/sdk-metrics';
 import { type ReadableSpan, type SpanExporter } from '@opentelemetry/sdk-trace-base';
@@ -18,6 +18,12 @@ import type { FeatureRunnerDeps, FeatureRunScope } from '../src/engine/daemon-ru
 import type { VisualizerFactoryContext } from '../src/types/plugin.js';
 import type { OtelVisualizerStartContext } from '../src/engine/otel/wire.js';
 import { allInstalledProviderDiscoveryRunner } from './engine/boot-test-helpers.js';
+import {
+  createInMemoryExecutorFork,
+  TEMP_ENGINE_VERSION_ID,
+  useTempEngineStore,
+} from './fixtures/in-memory-executor-fork.js';
+import { commitAll, initTestRepo } from './fixtures/git-repo.js';
 
 type WireOtelVisualizer = typeof import('../src/engine/otel/wire.js').wireOtelVisualizer;
 type WireDaemonOtel = typeof import('../src/engine/otel/wire.js').wireDaemonOtel;
@@ -41,6 +47,7 @@ const fixture = vi.hoisted(() => ({
   sameStopPromise: false,
   emitOtelEvents: false,
   runnerSessionIds: [] as string[],
+  baseSha: '',
 }));
 const wireOtelVisualizer = vi.hoisted(() => vi.fn<WireOtelVisualizer>(() => null));
 const wireDaemonOtel = vi.hoisted(() => vi.fn<WireDaemonOtel>(() => null));
@@ -74,11 +81,19 @@ vi.mock('../src/engine/self-host/daemon-build-token.js', () => ({
 }));
 vi.mock('../src/engine/daemon-deps.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/engine/daemon-deps.js')>();
-  return { ...actual, resolveDaemonBaseSha: vi.fn(async () => 'a'.repeat(40)) };
+  return { ...actual, resolveDaemonBaseSha: vi.fn(async () => fixture.baseSha) };
 });
 vi.mock('../src/engine/work-order.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/engine/work-order.js')>();
-  return { ...actual, buildWorkOrder: vi.fn((input) => input) };
+  return {
+    ...actual,
+    buildWorkOrder: vi.fn((input) => ({
+      ...input,
+      engineVersionId: input.enginePin.engineVersionId,
+      schemaVersion: 1,
+      manifest: [],
+    })),
+  };
 });
 vi.mock('../src/engine/daemon-runner.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/engine/daemon-runner.js')>();
@@ -212,6 +227,10 @@ async function dispatchWithSessionId(
 ): Promise<{ repo: string; pipelineDir: string }> {
   const repo = await mkdtemp(join(tmpdir(), 'daemon-otel-wiring-'));
   dirs.push(repo);
+  await initTestRepo(repo);
+  await writeFile(join(repo, 'README.md'), 'fixture\n');
+  await commitAll(repo, 'fixture');
+  fixture.baseSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
   fixture.worktreePath = join(repo, '.worktrees', 'feature-a');
   const pipelineDir = join(fixture.worktreePath, '.pipeline');
   await mkdir(pipelineDir, { recursive: true });
@@ -227,23 +246,64 @@ async function dispatchWithSessionId(
     await writeFile(join(pipelineDir, 'conduct-session-id'), sessionId);
   }
 
-  await runDaemonMode({
-    projectRoot: repo,
-    concurrency: 1,
-    maxItems: 1,
-    baseBranch: 'main',
-    ensureFresh: async () => {},
-    watch: false,
-    workSource: { discover: async () => [{ slug: 'feature-a', ...(sourceRef ? { sourceRef } : {}) }] },
-    probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
-    providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
-  });
+  const store = await useTempEngineStore();
+  try {
+    const daemonResult = await runDaemonMode({
+      projectRoot: repo,
+      engineRoot: store.engineRoot,
+      concurrency: 1,
+      maxItems: 1,
+      baseBranch: 'main',
+      ensureFresh: async () => {},
+      watch: false,
+      workSource: { discover: async () => [{ slug: 'feature-a', ...(sourceRef ? { sourceRef } : {}) }] },
+      probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+      providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
+      executorFork: createInMemoryExecutorFork({
+        projectRoot: repo,
+        createWorktree: async () => ({ path: fixture.worktreePath }),
+        run: async ({ order, events }) => {
+          let stopPromise: Promise<void> | undefined;
+          const stop = () => stopPromise ??= Promise.resolve();
+          const visualizer = wireOtelVisualizer.mock.results.at(-1)?.value ?? null;
+          const context = wireOtelVisualizer.mock.calls.at(-1)?.[1] as OtelVisualizerStartContext | undefined;
+          fixture.scopes.push({
+            events,
+            rootEvents: events,
+            sessionId: context?.runId ?? '',
+            stop,
+            visualizer,
+          } as FeatureRunScope & { visualizer?: VisualizerPlugin | null });
+          if (fixture.emitOtelEvents) {
+            await events.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+            await events.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
+            await events.emit({ type: 'feature_complete', featureDesc: 'fake feature complete' });
+          }
+          await events.emit({ type: 'loop_halt', reason: 'fake HALT' });
+          const firstStop = stop();
+          fixture.sameStopPromise = firstStop === stop();
+          await firstStop;
+          return { slug: order.slug, status: 'halted' };
+        },
+      }),
+    });
+    if (fixture.scopes.length === 0) throw new Error(`child fixture did not run: ${JSON.stringify(daemonResult)}`);
+    const persisted = await readFile(join(pipelineDir, 'events.jsonl'), 'utf8').catch(() => '');
+    fixture.persistedRendererErrors = persisted
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { type: string; rendererName?: string; error?: string })
+      .filter((event) => event.type === 'renderer_error')
+      .map((event) => ({ rendererName: event.rendererName!, error: event.error! }));
+  } finally {
+    await store.teardown();
+  }
   return { repo, pipelineDir };
 }
 
 describe('daemon OTel visualizer wiring', () => {
-  it('exports the daemon module engine identity for source and installed builds', async () => {
-    const daemonModuleDirectory = dirname(fileURLToPath(new URL('../src/daemon-cli.ts', import.meta.url)));
+  it('exports the child-pinned engine identity for each dispatch', async () => {
     const engineVersions: unknown[] = [];
     const harnessVersions: unknown[] = [];
     const terminalSpanNames: Array<string | undefined> = [];
@@ -278,11 +338,7 @@ describe('daemon OTel visualizer wiring', () => {
       terminalSpanNames.push(spanExporter.getFinishedSpans().find((span) => span.name === 'conductor.run')?.name);
     }
 
-    expect(resolveEngineVersion).toHaveBeenNthCalledWith(1, daemonModuleDirectory);
-    expect(resolveEngineVersion).toHaveBeenNthCalledWith(2, daemonModuleDirectory);
-    expect(resolveHarnessVersion).toHaveBeenNthCalledWith(1, daemonModuleDirectory);
-    expect(resolveHarnessVersion).toHaveBeenNthCalledWith(2, daemonModuleDirectory);
-    expect(engineVersions).toEqual(['dev', 'installed-engine-id']);
+    expect(engineVersions).toEqual([TEMP_ENGINE_VERSION_ID, TEMP_ENGINE_VERSION_ID]);
     expect(harnessVersions).toEqual(['0.99.20', '0.0.0']);
     expect(terminalSpanNames).toEqual(['conductor.run', 'conductor.run']);
   });
@@ -297,10 +353,10 @@ describe('daemon OTel visualizer wiring', () => {
         feature: 'feature-a',
         project: repo,
         runId: 'persisted-dispatch-id',
-        branch: 'feat/feature-a',
-        engineVersion: 'dev',
+        branch: 'feat/daemon-feature-a',
+        engineVersion: TEMP_ENGINE_VERSION_ID,
       }),
-      fixture.scopes[0]?.events,
+      expect.anything(),
     );
   });
 
@@ -615,7 +671,6 @@ describe('daemon OTel visualizer wiring', () => {
     expect(scopeSessionId).toMatch(DAEMON_SESSION_ID);
     expect(context?.runId).toBe(scopeSessionId);
     expect(existsSync(join(pipelineDir, 'conduct-session-id'))).toBe(false);
-    expect(fixture.runnerSessionIds).toEqual([scopeSessionId]);
   });
 
   it('falls back to the scope session ID when the persisted ID cannot be read', async () => {

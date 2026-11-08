@@ -42,6 +42,11 @@ export interface InMemoryExecutorForkOptions {
    * has admitted the work order and created its worktree.
    */
   readonly run?: (input: ExecutorChildRunInput) => Promise<FeatureExecutionOutcome>;
+  /**
+   * Supplies an already-owned worktree only when the test's subject begins
+   * after worktree creation (for example, supervisor-side OTel wiring).
+   */
+  readonly createWorktree?: (order: import('../../src/engine/work-order.js').WorkOrder) => Promise<{ path: string }>;
   /** Hello protocol versions emitted by successive in-memory children. */
   readonly protocolVersions?: readonly number[];
   /** Observes a supervisor-issued child termination signal. */
@@ -88,26 +93,23 @@ class InMemoryForkedExecutor implements ForkedExecutor {
           callback?.(null);
           return true;
         }
-        // Restore the supervisor console while dispatching synchronously. A
-        // real child cannot inherit the supervisor's console proxy; without
-        // this boundary substitute, broker logging recursively re-enters the
-        // current in-memory child's proxy.
-        const childConsole = { log: console.log, warn: console.warn, error: console.error };
-        console.log = this.supervisorConsole.log;
-        console.warn = this.supervisorConsole.warn;
-        console.error = this.supervisorConsole.error;
-        try {
-          this.deliver(this.supervisorListeners, 'message', emitted);
-        } finally {
-          console.log = childConsole.log;
-          console.warn = childConsole.warn;
-          console.error = childConsole.error;
-        }
-        callback?.(null);
-        return true;
       }
       if (isHello(emitted)) this.onHello?.({ engineVersionId: emitted.engineVersionId });
-      this.deliver(this.supervisorListeners, 'message', emitted);
+      // Restore the supervisor console while dispatching synchronously. A
+      // real child cannot inherit the supervisor's console proxy; without
+      // this boundary substitute, broker event rendering recursively re-enters
+      // the current in-memory child's proxy as well as direct child logs.
+      const childConsole = { log: console.log, warn: console.warn, error: console.error };
+      console.log = this.supervisorConsole.log;
+      console.warn = this.supervisorConsole.warn;
+      console.error = this.supervisorConsole.error;
+      try {
+        this.deliver(this.supervisorListeners, 'message', emitted);
+      } finally {
+        console.log = childConsole.log;
+        console.warn = childConsole.warn;
+        console.error = childConsole.error;
+      }
       // Node runs this callback after the message is accepted by IPC.  The
       // child waits for it before disconnecting, so an in-memory outcome is
       // never lost to a premature synthetic exit.
@@ -209,6 +211,7 @@ export function createInMemoryExecutorFork({
   captureConsole = false,
   onSupervisorMessage,
   run,
+  createWorktree,
   protocolVersions = [EXECUTOR_PROTOCOL_VERSION],
   onChildKill,
   onFork,
@@ -228,7 +231,9 @@ export function createInMemoryExecutorFork({
         void runExecutorChild(child.port, withExecutorBrokerProxies(child.port, {
           moduleDir: dirname(modulePath),
           admitDispatch: runtime.admitDispatch,
-          createWorktree: runtime.createWorktree,
+          createWorktree: createWorktree === undefined
+            ? runtime.createWorktree
+            : async (order) => createWorktree(order),
           run: run ?? runtime.run,
           log: (message) => child.port.send({ kind: 'log', level: 'info', message }),
           waitForSupervisorVisualizerClose: true,

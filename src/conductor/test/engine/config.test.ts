@@ -3071,7 +3071,7 @@ steps:
       expect(result.warnings).toHaveLength(0);
       const events = new ConductorEventEmitter();
       const emitted: unknown[] = [];
-      events.on('config_deprecated_key', (event) => emitted.push(event));
+      events.on('config_deprecated_key', (event) => { emitted.push(event); });
       await emitDeprecatedConfigKeyEvents(result, events);
       expect(emitted).toEqual([]);
     });
@@ -3085,7 +3085,7 @@ steps:
       expect(result.error.message).toBe('Unknown top-level key: "executor_isolation"');
       const events = new ConductorEventEmitter();
       const emitted: unknown[] = [];
-      events.on('config_deprecated_key', (event) => emitted.push(event));
+      events.on('config_deprecated_key', (event) => { emitted.push(event); });
       await emitDeprecatedConfigKeyEvents(result, events);
       expect(emitted).toEqual([]);
       },
