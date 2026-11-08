@@ -383,12 +383,12 @@ describe('commit-movement liveness floor (real Conductor.run() build retry loop)
     expect(stallEvents.filter((e) => e.reason === 'no_task_progress').length).toBeGreaterThan(0);
     expect(unattributedEvents).toHaveLength(0);
 
-    // This fixture intentionally runs in auto mode. A non-daemon auto run
-    // reaches its terminal failed state without opening the interactive
-    // recovery menu or writing a daemon-only HALT marker.
+    // This fixture intentionally runs in auto mode. It does not open the
+    // interactive recovery menu, but its exhausted gating step writes the
+    // durable HALT marker used by unattended runs.
     expect(onRecovery).not.toHaveBeenCalled();
     const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8').catch(() => null);
-    expect(haltContent).toBeNull();
+    expect(haltContent).toMatch(/build stalled: no task progress/i);
   });
 
   it('Story 1 negative path 3 — SHA read fails (returns null) on one side of the comparison, count pinned → still classifies no_task_progress (fail-closed, never fabricates liveness from missing data)', async () => {

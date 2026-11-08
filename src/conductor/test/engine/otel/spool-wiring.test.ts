@@ -162,14 +162,18 @@ describe("resolveSpoolDir", () => {
       response.writeHead(200).end();
       if (received.length === 2) arrive();
     });
-    const previous = process.env.OTLP_TOKEN;
-    process.env.OTLP_TOKEN = "first";
+    // Config validation reads the ambient environment once, while the runtime
+    // gets its own live environment object. Keep the validation-only key
+    // fixture-local so concurrently running tests cannot unset OTLP_TOKEN.
+    const credentialVariable = "OTEL_SPOOL_WIRING_ROTATED_TOKEN";
+    const previous = process.env[credentialVariable];
+    process.env[credentialVariable] = "first";
     try {
       const config = resolveOtelConfig({ otel: {
-        exporter: "otlp", endpoint: await endpoint(collector), headers: { authorization: { env: "OTLP_TOKEN" } }, spool: { enabled: true },
+        exporter: "otlp", endpoint: await endpoint(collector), headers: { authorization: { env: credentialVariable } }, spool: { enabled: true },
       } }, join(directory, ".pipeline"));
       if (!config.enabled || config.exporter !== "otlp") throw new Error("expected OTLP configuration");
-      const environment: NodeJS.ProcessEnv = { OTLP_TOKEN: "first" };
+      const environment: NodeJS.ProcessEnv = { [credentialVariable]: "first" };
       const runtime = createSpoolRuntime(directory, config, undefined, { environment });
       await runtime.store.write("traces", Buffer.from("first"));
       const draining = runtime.drainer.drainUntilStopped();
@@ -178,12 +182,12 @@ describe("resolveSpoolDir", () => {
         const poll = () => received.length === 1 ? (clearTimeout(deadline), resolve()) : setImmediate(poll);
         poll();
       });
-      environment.OTLP_TOKEN = "rotated";
+      environment[credentialVariable] = "rotated";
       await runtime.store.write("traces", Buffer.from("second"));
       await secondRequest;
       await runtime.drainer.stop();
       await draining;
-    } finally { if (previous === undefined) delete process.env.OTLP_TOKEN; else process.env.OTLP_TOKEN = previous; }
+    } finally { if (previous === undefined) delete process.env[credentialVariable]; else process.env[credentialVariable] = previous; }
 
     expect(received).toEqual(["first", "rotated"]);
   });
