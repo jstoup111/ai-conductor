@@ -220,7 +220,7 @@ describe('recoverRestackJournal refusal paths (real local Git)', () => {
     let resolverTip: string | undefined;
     const events = new ConductorEventEmitter();
     const refusals: unknown[] = [];
-    events.on('restack_refused', (event) => refusals.push(event));
+    events.on('restack_refused', (event) => { refusals.push(event); });
 
     await expect(recoverRestackJournal({
       worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo), events, resolverCap: 1,

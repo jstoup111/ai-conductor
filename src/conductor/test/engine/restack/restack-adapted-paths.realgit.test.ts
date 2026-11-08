@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
+import { parseChildId } from '../../../src/engine/child-context.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
@@ -82,7 +83,7 @@ async function fixture() {
     write,
     tip,
     runner: makeGitRunner(repo),
-    range: { oldParent, oldTip, kind: 'closed' as const },
+    range: { child: parseChildId(2)!, oldParent, oldTip, kind: 'closed' as const },
     newParent,
   };
 }

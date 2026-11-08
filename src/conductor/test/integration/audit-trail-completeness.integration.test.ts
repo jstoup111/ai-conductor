@@ -429,7 +429,7 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   restack_applied: {
     type: 'restack_applied', opId: 'restack-1' as RestackOpId, cause: 'base-refresh', child: parseChildId(1)!,
     oldTip: parseCommitSha('a'.repeat(40))!, newTip: parseCommitSha('b'.repeat(40))!,
-    wouldInvalidate: ['build_review'], parentOverlapPaths: ['src/feature.ts'],
+    wouldInvalidate: ['build_review'], parentOverlapPaths: ['src/feature.ts'], adaptedPaths: [],
   },
   restack_conflict: {
     type: 'restack_conflict', opId: 'restack-1' as RestackOpId, child: parseChildId(1)!,
