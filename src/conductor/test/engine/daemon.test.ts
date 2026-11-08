@@ -1296,6 +1296,59 @@ describe('engine/daemon — runDaemon', () => {
       expect(execute).toHaveBeenCalledTimes(3);
       expect(logs.filter((line) => line.includes('dispatch ceiling (3) reached'))).toHaveLength(1);
     });
+
+    it('stamps the dispatch baseline once after clearing and before invoking the executor', async () => {
+      const claims = new InMemoryWorkClaims();
+      claims.park(slug);
+      const calls: string[] = [];
+
+      await runDaemon({
+        claims,
+        discoverBacklog: staticBacklog([{ slug }]),
+        isHalted: async () => true,
+        isFreshRetryableHalt: async () => true,
+        readHaltClass: async () => 'mechanical',
+        clearRetryableHalt: async () => { calls.push('clear'); },
+        stampDispatchBaseline: async () => { calls.push('stamp'); },
+        featureExecution: {
+          createWorkOrder: async () => ({ slug } as WorkOrder),
+          executor: {
+            execute: async () => {
+              calls.push('execute');
+              return { slug, status: 'done' };
+            },
+          },
+        },
+        runFeature: async () => {
+          throw new Error('featureExecution executor must be used');
+        },
+      }, { concurrency: 1, once: true });
+
+      expect(calls).toEqual(['clear', 'stamp', 'execute']);
+    });
+
+    it('continues to the executor when baseline stamping fails', async () => {
+      const logs: string[] = [];
+      const execute = vi.fn(async () => ({ slug, status: 'done' as const }));
+
+      await runDaemon({
+        discoverBacklog: staticBacklog([{ slug }]),
+        stampDispatchBaseline: async () => {
+          throw new Error('task evidence write failed');
+        },
+        log: (line) => logs.push(line),
+        featureExecution: {
+          createWorkOrder: async () => ({ slug } as WorkOrder),
+          executor: { execute },
+        },
+        runFeature: async () => {
+          throw new Error('featureExecution executor must be used');
+        },
+      }, { concurrency: 1, once: true });
+
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(logs.filter((line) => line.includes(`baseline stamp failed for ${slug} — task evidence write failed`))).toHaveLength(1);
+    });
   });
 
   it('stops at the wall-clock ceiling (injected clock)', async () => {

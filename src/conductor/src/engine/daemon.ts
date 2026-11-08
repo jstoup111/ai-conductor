@@ -304,6 +304,12 @@ export interface DaemonDeps {
    */
   clearRetryableHalt?: (slug: string) => Promise<void>;
   /**
+   * Writes the whole-feature progress baseline at the dispatch boundary.
+   * A failed stamp is diagnostic-only: the executor still receives its
+   * dispatch so a transient sidecar write cannot block feature recovery.
+   */
+  stampDispatchBaseline?: (slug: string) => Promise<void>;
+  /**
    * Task 9: per-spec bound on progress-gated cross-dispatch re-kicks
    * (`isProgressReKickEligible`), mirroring `build_progress_halt.dispatch_ceiling`
    * (resolved config default: 20 — see `config.ts` `BUILD_PROGRESS_HALT_DEFAULTS`).
@@ -1084,6 +1090,12 @@ export async function runDaemon(
         deps.onExecutorSettled?.();
       }
     };
+    try {
+      await deps.stampDispatchBaseline?.(item.slug);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      log(`baseline stamp failed for ${item.slug} — ${reason}`);
+    }
     const completion: Promise<FeatureOutcome> = runFeature()
       .catch((err) => ({
         slug: item.slug,
