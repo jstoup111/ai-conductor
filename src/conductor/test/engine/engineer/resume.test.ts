@@ -79,8 +79,8 @@ describe('Composer resume', () => {
       resolveBranch: async () => ({ branch: 'spec/demo', draftPrUrl: 'https://github.com/acme/demo/pull/17' }),
       attach: async () => ({ worktree: '/tmp/demo' }),
       readRunRecord: async () => JSON.stringify(record),
-      recordDeciding: async (entry) => transitions.push(entry),
-      emit: async (event) => emitted.push(event),
+      recordDeciding: async (entry) => { transitions.push(entry); },
+      emit: async (event) => { emitted.push(event); },
     });
     expect(transitions).toEqual([{ branch: 'spec/demo', draftPrUrl: 'https://github.com/acme/demo/pull/17' }]);
     expect(emitted).toHaveLength(1);
@@ -90,7 +90,7 @@ describe('Composer resume', () => {
   it('Covers: Task 15 launches one Codex Composer resume host at the attached worktree and refuses nested hosts before launch', async () => {
     const root = await mkdtemp(join(tmpdir(), 'composer-resume-launch-'));
     const registryPath = join(root, 'registry.json');
-    const spawned = vi.fn(async () => 0);
+    const spawned = vi.fn(async (_executable: string, _argv: string[], _cwd: string, _env: NodeJS.ProcessEnv) => 0);
     const errors: string[] = [];
     try {
       await execFile('git', ['init', '-b', 'main'], { cwd: root });
