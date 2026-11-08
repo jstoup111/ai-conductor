@@ -9,7 +9,7 @@ describe('draft publication checkpoint', () => {
     ]);
     const create = vi.fn(async (input: any) => ({ url: 'https://github.com/acme/demo/pull/8', body: input.body }));
     const published = vi.fn(async () => {});
-    const git = vi.fn(async (args: string[]) => {
+    const git = vi.fn(async (args: readonly string[]) => {
       if (args[0] === 'branch') return { exitCode: 0, stdout: 'spec/demo\n', stderr: '' };
       if (args[0] === 'status') return { exitCode: 0, stdout: '?? .docs/track/demo.md', stderr: '' };
       if (args[0] === 'diff') return { exitCode: 1, stdout: '', stderr: '' };
