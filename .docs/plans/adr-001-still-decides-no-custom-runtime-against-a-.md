@@ -347,3 +347,12 @@ Task 1 ─┬─ Task 2 ─┐
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-prd-audit-R1: Restore filename-only matchesKnownShape and land shape refusal; rename stem-named decision fixtures to architecture-review-*; add Status/Verdict-bearing notes.md refusal tests
+**Gate:** prd-audit
+**Rationale:** Clear implementation drift from approved architecture (ADR D6: land acceptance uses only D2's prefix and exact-name rules; Task 1 done-when: matchesKnownShape reads only DECISION_RECORD_SHAPES). Commit b8597724eb widened matchesKnownShape (decision-corpus.ts:35) to classifyKind's content fallback, and land-spec.ts:728-733 now reads added-file content and passes it in. As a result, notes.md containing a Status: or Verdict: line lands. No architectural decision is needed, so this is BUILD work admitted by Tasks 1 and 8. Repair: restore matchesKnownShape(filename) to a filename-only shapeKind check, and drop the content read in landSpec. Keep classifyKind's content fallback for the query (D2/D7 legacy findability). The fixtures that b8597724eb rewrote were stem-named decision files (`<stem>.md` / `<slug>.md` / `stacked-delivery.md` / `dep-bump.md`) in land-spec.test.ts, land-spec-applicability.test.ts and land-spec-stacked-delivery.test.ts. Rename them to `architecture-review-<stem>.md`, which pickIdeaFile (land-spec.ts:498) still accepts as the tier-M review file and which matches production naming (skills/architecture-review/SKILL.md). Replace the decision-corpus.test.ts case 'recognizes status- and verdict-bearing legacy records as known shapes' with one asserting that matchesKnownShape rejects off-shape names even with Status/Verdict content, and that classifyKind still classifies them. Add a land-spec-decision-record-shape.test.ts case: an added notes.md containing '**Status:** Proposed' (and one with '**Verdict:** APPROVED') throws gate 'decision-record-shape' with HEAD unchanged. Preserved coverage: Task 8's existing refusal and grandfathering tests, and the classifyKind legacy-content tests from Task 2.
+**Criterion:** S4.4
+**Parent task:** 8
+**Done when:**
+- [test] S4.4 is satisfied by this task.
+- The repair for task rem-prd-audit-R1 is committed and its targeted tests pass.
