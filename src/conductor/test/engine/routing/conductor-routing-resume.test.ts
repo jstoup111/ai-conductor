@@ -479,7 +479,7 @@ describe('routed round conductor resume', () => {
       events: new ConductorEventEmitter(),
       stepRunner: {
         run: async (step, _state, options) => {
-          dispatched.push({ step, retryReason: options.retryReason });
+          dispatched.push({ step, retryReason: options?.retryReason });
           throw new Error('stop after resumed taskless build dispatch');
         },
       },

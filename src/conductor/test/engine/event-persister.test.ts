@@ -66,6 +66,7 @@ function routingEvent(type: 'remediation_routed' | 'remediation_rerouted' | 'rou
     case 'routing_round_superseded':
       return {
         type, eventId, occurredAt, roundId: ROUTING_ROUND, child: ROUTING_CHILD,
+        disposition: 'superseded',
         supersededBy: parseRoundId('r2')!, droppedHosts: [ROUTING_CHILD],
         findingIds: ['finding-1'], reason: 'stale audit round', operator: 'operator@example.test',
       };

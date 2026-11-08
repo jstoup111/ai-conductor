@@ -100,7 +100,7 @@ it('closes pending hosts and appends the supersession event in the one record up
   ]);
   await openAudit(subject, r5, { [c1]: 'repairing' }, []);
   const checked = await checkRoundSupersession(subject.repo, slug, r4);
-  if (checked.kind !== 'supersedable') throw new Error(checked.detail);
+  if (checked.kind !== 'supersedable') throw new Error('expected supersedable round');
 
   await expect(supersedeRound({ worktree: subject.repo, slug, checked, reason: '  newer round  ', operator: 'operator' }))
     .resolves.toMatchObject({ kind: 'superseded', event: { roundId: r4, disposition: 'superseded', supersededBy: r5, droppedHosts: [c2], findingIds: ['host-2'], reason: 'newer round', operator: 'operator' } });
@@ -117,7 +117,7 @@ it('reports a failed write, rather than contention, when update-ref fails withou
   await openAudit(subject, r4, { [c1]: 'restacked', [c2]: 'pending' }, []);
   await openAudit(subject, r5, { [c1]: 'repairing' }, []);
   const checked = await checkRoundSupersession(subject.repo, slug, r4);
-  if (checked.kind !== 'supersedable') throw new Error(checked.detail);
+  if (checked.kind !== 'supersedable') throw new Error('expected supersedable round');
   const git: GitRunner = async (args, options) => {
     if (args[0] === 'update-ref' && args[1] === '--stdin') return { exitCode: 1, stdout: '', stderr: 'disk write failed' };
     const result = await subject.git(args, options?.env);
@@ -137,7 +137,7 @@ it('keeps the target open without an event when its checked survivor closes befo
   await openAudit(subject, r4, { [c1]: 'restacked', [c2]: 'pending' }, []);
   await openAudit(subject, r5, { [c1]: 'repairing' }, []);
   const checked = await checkRoundSupersession(subject.repo, slug, r4);
-  if (checked.kind !== 'supersedable') throw new Error(checked.detail);
+  if (checked.kind !== 'supersedable') throw new Error('expected supersedable round');
   expect(await writeRoutingTransaction(subject.repo, slug, [{
     kind: 'update-record', previous: checked.survivor, record: { ...checked.survivor.record, phase: 'closed', hosts: { [c1]: 'done' } },
   }])).toEqual({ kind: 'updated' });

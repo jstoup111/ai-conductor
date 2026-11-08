@@ -5,7 +5,7 @@ import { parseCommitSha } from '../../src/engine/restack/restack-types.js';
 import { checkRoundSupersession, dispatchStackRoundsCommand, supersedeRound } from '../../src/engine/stack-rounds-cli.js';
 import { createRouteRecord, readRouteRecord, writeRoutingTransaction } from '../../src/engine/routing/route-record-store.js';
 import { repairMarkerRefFor, routeRecordRefFor } from '../../src/engine/routing/routing-refs.js';
-import { parseRoundId, type RouteRecord } from '../../src/engine/routing/route-types.js';
+import { parseRoundId, type HostState, type RoundId, type RouteRecord } from '../../src/engine/routing/route-types.js';
 import { createSweepRepository, removeAll } from './restack/restack-sweepG2-fixture.js';
 
 const cleanup: string[] = [];
@@ -54,7 +54,7 @@ async function fixture() {
 
 async function soleAuditFixture(
   markerRoundId: typeof r2 | typeof r3 | undefined = r2,
-  hostState: RouteRecord['hosts'][number] = 'admitted',
+  hostState: HostState = 'admitted',
 ) {
   const subject = await createSweepRepository('stack-rounds-close-leaf-return-', cleanup);
   await subject.git(['commit', '-qm', 'initial']);
@@ -149,7 +149,7 @@ describe('stack rounds close predicate (real local Git)', () => {
 
     await expect(dispatchStackRoundsCommand({ kind: 'stack-rounds-close', slug, roundId: r2, reason: 'leaf return' }, {
       ...closeCommandDeps(subject, output),
-      readRouteRecord: async (worktree, feature, id, dependencies) => id === r2
+      readRouteRecord: async (worktree: string, feature: string, id: RoundId, dependencies) => id === r2
         ? { ...stored, record: { ...stored.record, hosts: { [c1]: 'reroute-moved' } } }
         : readRouteRecord(worktree, feature, id, dependencies),
     } as never)).resolves.toBe(1);
@@ -205,7 +205,7 @@ describe('stack rounds close predicate (real local Git)', () => {
 
     await expect(dispatchStackRoundsCommand({ kind: 'stack-rounds-close', slug, roundId: r4, reason: 'newer round' }, {
       ...closeCommandDeps(subject, output),
-      readRouteRecord: async (worktree, feature, id, dependencies) => id === r4
+      readRouteRecord: async (worktree: string, feature: string, id: RoundId, dependencies) => id === r4
         ? { ...stored, record: { ...stored.record, hosts: { [c1]: 'restacked', [c2]: 'admitted' } } }
         : readRouteRecord(worktree, feature, id, dependencies),
     } as never)).resolves.toBe(1);
@@ -265,7 +265,7 @@ describe('stack rounds close predicate (real local Git)', () => {
     });
     expect(await routeRefs(subject)).toBe(before);
 
-    if (checked.kind !== 'supersedable') throw new Error(checked.detail);
+    if (checked.kind !== 'supersedable') throw new Error('expected supersedable round');
     await expect(supersedeRound({
       worktree: subject.repo, slug, checked, reason: 'all hosts restacked', operator: 'operator',
     })).resolves.toMatchObject({

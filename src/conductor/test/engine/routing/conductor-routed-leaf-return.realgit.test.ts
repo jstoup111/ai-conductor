@@ -119,7 +119,7 @@ async function fixture(): Promise<{
 async function tasklessExitFixture(withCommit: boolean): Promise<{
   readonly subject: SweepRepository;
   readonly git: GitRunner;
-  readonly host: ReturnType<typeof parseChildId>;
+  readonly host: NonNullable<ReturnType<typeof parseChildId>>;
   readonly leafHead: string;
   readonly repair?: string;
 }> {

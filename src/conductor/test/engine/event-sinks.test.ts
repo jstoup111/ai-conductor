@@ -698,6 +698,7 @@ const routingEvents = [
     occurredAt: '2026-10-12T00:00:05.000Z',
     roundId: routingRoundId,
     child: routingChild,
+    disposition: 'superseded',
     supersededBy: parseRoundId('r2')!,
     droppedHosts: [routingChild],
     findingIds: ['finding-1'],

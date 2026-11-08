@@ -8,6 +8,7 @@ import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { childBranchFor, leafBranchFor } from '../../../src/engine/feature-branch-identity.js';
 import { parseChildId, type ChildId } from '../../../src/engine/child-context.js';
 import { closureRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
+import { parseRoundId } from '../../../src/engine/routing/route-types.js';
 import { writeSliceTopologyFixture } from '../slice-topology-fixture.js';
 
 const seams = vi.hoisted(() => ({
@@ -190,8 +191,9 @@ async function fiveChildSubject(judgeOutput?: (prompt: string) => string) {
     [child(5), ['src/client/art/manifest.ts']],
   ];
   for (const [position, paths] of changes) {
-    const branch = position === child(5) ? leafBranchFor('demo') : childBranchFor('demo', position).branch;
-    if (branch === undefined) throw new Error(`missing fixture branch for child ${position}`);
+    const childBranch = position === child(5) ? undefined : childBranchFor('demo', position);
+    if (childBranch !== undefined && !childBranch.ok) throw new Error(childBranch.reason);
+    const branch = position === child(5) ? leafBranchFor('demo') : childBranch.branch;
     await git(['checkout', '-qb', branch]);
     for (const path of paths) {
       await mkdir(join(root, path, '..'), { recursive: true });
@@ -325,7 +327,7 @@ describe('routed taskless admission failures', () => {
 
     expect(dispatchResidueRoutingJudgement).not.toHaveBeenCalled();
     expect(routes.createRouteRecord).not.toHaveBeenCalled();
-    await expect(git(['rev-parse', '-q', '--verify', routeRecordRefFor('demo', 'r1')])).resolves.toMatchObject({ exitCode: 1 });
+    await expect(git(['rev-parse', '-q', '--verify', routeRecordRefFor('demo', parseRoundId('r1')!)] )).resolves.toMatchObject({ exitCode: 1 });
   });
 
   // Covers: task:7
@@ -342,7 +344,7 @@ describe('routed taskless admission failures', () => {
 
     expect(dispatchResidueRoutingJudgement).toHaveBeenCalledTimes(2);
     expect(routes.createRouteRecord).not.toHaveBeenCalled();
-    await expect(git(['rev-parse', '-q', '--verify', routeRecordRefFor('demo', 'r1')])).resolves.toMatchObject({ exitCode: 1 });
+    await expect(git(['rev-parse', '-q', '--verify', routeRecordRefFor('demo', parseRoundId('r1')!)] )).resolves.toMatchObject({ exitCode: 1 });
   });
 
   // Covers: task:2
@@ -374,7 +376,7 @@ describe('routed taskless admission failures', () => {
     let parked = false;
     const events = new ConductorEventEmitter();
     const loopHalts: unknown[] = [];
-    events.on('loop_halt', (event) => loopHalts.push(event));
+    events.on('loop_halt', (event) => { loopHalts.push(event); });
     const conductor = new Conductor({
       projectRoot: root,
       stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
@@ -434,7 +436,7 @@ describe('routed taskless admission failures', () => {
     }) };
     const events = new ConductorEventEmitter();
     const loopHalts: unknown[] = [];
-    events.on('loop_halt', (event) => loopHalts.push(event));
+    events.on('loop_halt', (event) => { loopHalts.push(event); });
     const conductor = new Conductor({
       projectRoot: root,
       stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
