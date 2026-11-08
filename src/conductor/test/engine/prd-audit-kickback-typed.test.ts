@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { Conductor } from '../../src/engine/conductor.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
@@ -17,6 +18,50 @@ afterEach(async () => {
 });
 
 describe('typed PRD-audit remediation admission', () => {
+  // Covers: task:7
+  // `resolveStackedRoute` is the common producer for the validation-group,
+  // PRD-audit, and as-built consumers; taskless manual-test admission uses
+  // the same fence helper. This verifies the shared producer's durable
+  // mechanical/mechanical/needs-human contract rather than letting each
+  // renderer invent a class.
+  it('persists one bounded fence stall for each shared remediation consumer attempt', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'routing-fence-consumers-'));
+    roots.push(root);
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    const conductor = new Conductor({
+      projectRoot: root,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      stepRunner: { run: async () => ({ success: true }) },
+      events,
+    });
+    try {
+      const fence = conductor as unknown as {
+        recordRoutingFenceHalt(slug: string, detail: string): Promise<{
+          detail: string;
+          haltClass: 'mechanical' | 'needs-human';
+        }>;
+      };
+      const results = [];
+      for (const consumer of ['validation-group', 'prd_audit', 'as-built', 'manual_test'] as const) {
+        void consumer; // all consumers report the same blocked fence identity.
+        results.push(await fence.recordRoutingFenceHalt('feature', 'routing fence awaiting r1'));
+      }
+
+      expect(results.map((result) => result.haltClass)).toEqual([
+        'mechanical', 'mechanical', 'needs-human', 'needs-human',
+      ]);
+      const stalls = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim().split('\n').map((line) => JSON.parse(line))
+        .filter((event) => event.type === 'routing_rounds_stalled');
+      expect(stalls.map((event) => event.attempt)).toEqual([1, 2, 3, 4]);
+    } finally {
+      persister.stop();
+    }
+  });
+
   it('does not admit or charge a matching-attempt FIXABLE verdict whose gate stamp was invalidated', async () => {
     const root = await mkdtemp(join(tmpdir(), 'prd-audit-kickback-typed-'));
     roots.push(root);
