@@ -4,7 +4,8 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { parseChildId } from '../../src/engine/child-context.js';
 import type { GitResult, GitRunner } from '../../src/engine/rebase.js';
 import { checkRoundSupersession, dispatchStackRoundsCommand, supersedeRound } from '../../src/engine/stack-rounds-cli.js';
-import { createRouteRecord, readRouteRecord, writeRoutingTransaction } from '../../src/engine/routing/route-record-store.js';
+import { createRouteRecord, readRepairMarker, readRouteRecord, writeRoutingTransaction } from '../../src/engine/routing/route-record-store.js';
+import { repairMarkerRefFor } from '../../src/engine/routing/routing-refs.js';
 import { parseRoundId, type RouteRecord } from '../../src/engine/routing/route-types.js';
 import { createSweepRepository, removeAll } from './restack/restack-sweepG2-fixture.js';
 
@@ -12,6 +13,7 @@ const cleanup: string[] = [];
 const slug = 'demo';
 const c1 = parseChildId(1)!;
 const c2 = parseChildId(2)!;
+const r2 = parseRoundId('r2')!;
 const r4 = parseRoundId('r4')!;
 const r5 = parseRoundId('r5')!;
 
@@ -34,6 +36,54 @@ async function openAudit(
   }])).toEqual({ kind: 'updated' });
 }
 
+async function pointRefAtBlobText(
+  subject: Awaited<ReturnType<typeof createSweepRepository>>,
+  ref: string,
+  text: string,
+): Promise<void> {
+  await subject.write('routing-blob.json', text);
+  const blob = (await subject.git(['hash-object', '-w', 'routing-blob.json'])).stdout.trim();
+  await subject.git(['update-ref', ref, blob]);
+}
+
+// Covers: task:11
+it('closes a sole audit round and deletes its matching marker in one transaction', async () => {
+  const subject = await createSweepRepository('stack-rounds-close-leaf-return-', cleanup);
+  await subject.git(['commit', '-qm', 'initial']);
+  await openAudit(subject, r2, { [c1]: 'admitted' }, []);
+  await pointRefAtBlobText(subject, repairMarkerRefFor(slug), JSON.stringify({ host: c1, roundId: r2 }));
+  const checked = await checkRoundSupersession(subject.repo, slug, r2);
+  if (checked.kind !== 'leaf-return') throw new Error('expected leaf return');
+
+  await expect(supersedeRound({ worktree: subject.repo, slug, checked, reason: '  return to leaf  ', operator: 'operator' }))
+    .resolves.toMatchObject({ kind: 'superseded', event: { roundId: r2, disposition: 'leaf-return', reason: 'return to leaf', operator: 'operator' } });
+  await expect(readRouteRecord(subject.repo, slug, r2)).resolves.toMatchObject({
+    kind: 'record', record: { phase: 'closed', hosts: { [c1]: 'done' }, outbox: [{
+      event: { type: 'routing_round_superseded', roundId: r2, disposition: 'leaf-return', reason: 'return to leaf', operator: 'operator' },
+    }] },
+  });
+  await expect(readRepairMarker(subject.repo, slug)).resolves.toEqual({ kind: 'absent' });
+});
+
+// Covers: task:11
+it('refuses a leaf-return close when its checked marker was moved', async () => {
+  const subject = await createSweepRepository('stack-rounds-close-leaf-return-race-', cleanup);
+  await subject.git(['commit', '-qm', 'initial']);
+  await openAudit(subject, r2, { [c1]: 'admitted' }, []);
+  await pointRefAtBlobText(subject, repairMarkerRefFor(slug), JSON.stringify({ host: c1, roundId: r2 }));
+  const checked = await checkRoundSupersession(subject.repo, slug, r2);
+  if (checked.kind !== 'leaf-return') throw new Error('expected leaf return');
+  const before = await readRouteRecord(subject.repo, slug, r2);
+  if (before.kind !== 'record') throw new Error('missing r2');
+  await pointRefAtBlobText(subject, repairMarkerRefFor(slug), JSON.stringify({ host: c2, roundId: r2 }));
+  const moved = (await subject.git(['rev-parse', repairMarkerRefFor(slug)])).stdout.trim();
+
+  await expect(supersedeRound({ worktree: subject.repo, slug, checked, reason: 'return to leaf', operator: 'operator' }))
+    .resolves.toEqual({ kind: 'refused', detail: 'contested write for routing round r2' });
+  await expect(readRouteRecord(subject.repo, slug, r2)).resolves.toMatchObject({ kind: 'record', blob: before.blob, record: { phase: 'open' } });
+  await expect(subject.git(['rev-parse', repairMarkerRefFor(slug)])).resolves.toMatchObject({ stdout: expect.stringContaining(moved) });
+});
+
 it('closes pending hosts and appends the supersession event in the one record update', async () => {
   const subject = await createSweepRepository('stack-rounds-close-write-', cleanup);
   await subject.git(['commit', '-qm', 'initial']);
@@ -45,7 +95,7 @@ it('closes pending hosts and appends the supersession event in the one record up
   if (checked.kind !== 'supersedable') throw new Error(checked.detail);
 
   await expect(supersedeRound({ worktree: subject.repo, slug, checked, reason: '  newer round  ', operator: 'operator' }))
-    .resolves.toMatchObject({ kind: 'superseded', event: { roundId: r4, supersededBy: r5, droppedHosts: [c2], findingIds: ['host-2'], reason: 'newer round', operator: 'operator' } });
+    .resolves.toMatchObject({ kind: 'superseded', event: { roundId: r4, disposition: 'superseded', supersededBy: r5, droppedHosts: [c2], findingIds: ['host-2'], reason: 'newer round', operator: 'operator' } });
   await expect(readRouteRecord(subject.repo, slug, r4)).resolves.toMatchObject({
     kind: 'record', record: { phase: 'closed', hosts: { [c1]: 'restacked', [c2]: 'done' }, outbox: [
       { event: { type: 'routing_round_superseded', roundId: r4 } },

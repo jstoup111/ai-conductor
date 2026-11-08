@@ -47,13 +47,14 @@ export type RoundSupersessionCheck =
     readonly kind: 'leaf-return';
     readonly stored: Extract<ReadRouteRecordResult, { readonly kind: 'record' }>;
     readonly hosts: readonly ChildId[];
+    readonly marker?: Extract<ReadRepairMarkerResult, { readonly kind: 'marker' }>;
   }
   | { readonly kind: 'refused'; readonly detail: string };
 
 export interface SupersedeRoundInput {
   readonly worktree: string;
   readonly slug: string;
-  readonly checked: Extract<RoundSupersessionCheck, { readonly kind: 'supersedable' }>;
+  readonly checked: Exclude<RoundSupersessionCheck, { readonly kind: 'refused' }>;
   readonly reason: string;
   readonly operator: string;
   readonly git?: GitRunner;
@@ -66,22 +67,34 @@ export type SupersedeRoundResult =
 /** Close one already-checked audit round with its durable occurrence in one CAS. */
 export async function supersedeRound(input: SupersedeRoundInput): Promise<SupersedeRoundResult> {
   const { worktree, slug, checked } = input;
+  const leafReturn = checked.kind === 'leaf-return';
   const hosts = Object.fromEntries(Object.entries(checked.stored.record.hosts).map(([host, state]) => [
     host,
-    state === 'pending' ? 'done' : state,
+    state === 'pending' || (leafReturn && state === 'admitted') ? 'done' : state,
   ])) as typeof checked.stored.record.hosts;
+  const droppedHosts = leafReturn
+    ? checked.hosts.filter((host) => {
+      const state = checked.stored.record.hosts[host];
+      return state === 'pending' || state === 'admitted';
+    })
+    : checked.droppedHosts;
+  const findingIds = leafReturn ? [] : checked.findingIds;
   const event = routingRoundSupersededEvent(
     checked.stored.record,
-    checked.supersededBy,
-    checked.droppedHosts,
-    checked.findingIds,
+    leafReturn
+      ? { disposition: 'leaf-return' }
+      : { disposition: 'superseded', supersededBy: checked.supersededBy },
+    droppedHosts,
+    findingIds,
     input.reason.trim(),
     input.operator.trim(),
   );
   const record = withOutboxEvent({ ...checked.stored.record, phase: 'closed', hosts }, event);
   const wrote = await writeRoutingTransaction(worktree, slug, [
     { kind: 'update-record', previous: checked.stored, record },
-    { kind: 'verify-ref', ref: `refs/conductor/${slug}/routes/${checked.supersededBy}`, value: checked.survivor.blob },
+    ...(leafReturn
+      ? checked.marker === undefined ? [] : [{ kind: 'delete-marker' as const, old: checked.marker.blob }]
+      : [{ kind: 'verify-ref' as const, ref: `refs/conductor/${slug}/routes/${checked.supersededBy}`, value: checked.survivor.blob }]),
   ], { ...(input.git === undefined ? {} : { git: input.git }) });
   if (wrote.kind === 'updated') return { kind: 'superseded', event };
   const detail = wrote.kind === 'cas-failed'
@@ -219,7 +232,10 @@ export async function checkRoundSupersession(
     if (marker.kind === 'marker' && marker.marker.roundId !== roundId) {
       return { kind: 'refused', detail: `routing round ${roundId}: marker holds ${marker.marker.roundId}` };
     }
-    return { kind: 'leaf-return', stored, hosts: leafReturnHosts };
+    return {
+      kind: 'leaf-return', stored, hosts: leafReturnHosts,
+      ...(marker.kind === 'marker' ? { marker } : {}),
+    };
   }
 
   if (hostRefusal !== undefined) return { kind: 'refused', detail: hostRefusal };
@@ -376,7 +392,9 @@ export async function dispatchStackRoundsCommand(
     } as SupersedeRoundInput);
     if (result.kind === 'refused') return refused(print, result.detail);
     // ai-conductor:session-command-context=operator-only
-    print(`stack rounds: closed ${roundId}; dropped hosts ${checked.droppedHosts.join(', ') || 'none'}; finding ids ${checked.findingIds.join(', ') || 'none'}; reason ${reason}. Clear any HALT with ai-conductor halt clear before the daemon resumes.`);
+    const droppedHosts = checked.kind === 'supersedable' ? checked.droppedHosts : checked.hosts;
+    const findingIds = checked.kind === 'supersedable' ? checked.findingIds : [];
+    print(`stack rounds: closed ${roundId}; dropped hosts ${droppedHosts.join(', ') || 'none'}; finding ids ${findingIds.join(', ') || 'none'}; reason ${reason}. Clear any HALT with ai-conductor halt clear before the daemon resumes.`);
     // /ai-conductor:session-command-context
     return 0;
   } catch (error) {

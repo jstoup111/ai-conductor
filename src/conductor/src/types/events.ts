@@ -2387,7 +2387,21 @@ type ConductorEventBody =
       occurredAt: string;
       roundId: RoundId;
       child: ChildId;
+      disposition: 'superseded';
       supersededBy: RoundId;
+      droppedHosts: readonly ChildId[];
+      findingIds: readonly string[];
+      reason: string;
+      operator: string;
+    }
+  | {
+      /** An operator closed the sole audit round and returned control to the leaf. */
+      type: 'routing_round_superseded';
+      eventId: string;
+      occurredAt: string;
+      roundId: RoundId;
+      child: ChildId;
+      disposition: 'leaf-return';
       droppedHosts: readonly ChildId[];
       findingIds: readonly string[];
       reason: string;
