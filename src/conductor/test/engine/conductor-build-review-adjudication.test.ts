@@ -380,6 +380,9 @@ interface FixtureOptions {
   readonly aggregate?: unknown;
   /** Keeps the production conductor's frozen-diff lookup local and deterministic. */
   readonly frozenDiff?: string;
+  /** Optional stacked-child loop seam for settlement-tail regressions. */
+  readonly childRegionLifecycle?: ConstructorParameters<typeof Conductor>[0]['childRegionLifecycle'];
+  readonly stacked?: boolean;
 }
 
 async function fixture(options: FixtureOptions = {}) {
@@ -530,6 +533,7 @@ async function fixture(options: FixtureOptions = {}) {
     mode: options.attended ? 'default' : 'auto',
     daemon: !options.attended,
     config: {
+      ...(options.stacked ? { stacked_prs: { enabled: true, route_whole_feature_fixes: true } } : {}),
       kickback_escalation: { enabled: false },
       build_review: {
         adjudication: { enabled: options.adjudicationEnabled ?? true },
@@ -554,6 +558,7 @@ async function fixture(options: FixtureOptions = {}) {
       },
     }),
     gh,
+    ...(options.childRegionLifecycle === undefined ? {} : { childRegionLifecycle: options.childRegionLifecycle }),
   } as never);
   const git = options.frozenDiff === undefined
     ? undefined
@@ -1595,6 +1600,29 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(await covered.events()).toContainEqual(expect.objectContaining({
       type: 'step_completed', step: 'build_review', status: 'done',
     }));
+  });
+
+  // Covers: task:2
+  it('closes an ordinary child region after adjudication settlement before entering a whole-feature gate', async () => {
+    const first = { child: parseChildId(1)!, position: parseChildId(1)!, isLeaf: false, branch: 'feat/c1/adjudicated-feature' };
+    const second = { child: parseChildId(2)!, position: parseChildId(2)!, isLeaf: true, branch: 'feat/daemon-adjudicated-feature' };
+    const advance = vi.fn(async () => ({ kind: 'completed' as const }));
+    let calls = 0;
+    const run = await fixture({
+      stacked: true,
+      childRegionLifecycle: {
+        resolveActiveChild: async () => {
+          calls += 1;
+          return calls < 3 ? { kind: 'active' as const, ...first } : { kind: 'active' as const, ...second };
+        },
+        enterChildRegion: async () => ({ kind: 'completed' as const }),
+        advanceChildRegion: advance,
+      },
+    });
+
+    expect(advance).toHaveBeenCalledWith(run.projectRoot, 'adjudicated-feature', first, expect.anything());
+    expect(run.dispatched).toContain('acceptance_specs');
+    expect(run.dispatched).not.toContain('manual_test');
   });
 
   // Covers: S9.5, task:rem-prd-audit-rem-prd-audit-R17d
