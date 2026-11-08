@@ -1,0 +1,76 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { RUN_STEP_ORDER, parseRunRecord, type RunRecord, type RunStepId } from './run-record.js';
+
+export type ResumeTarget =
+  | { kind: 'pr'; number: number }
+  | { kind: 'branch'; branch: string }
+  | { kind: 'intake'; repository: string; number: number };
+
+export interface ResumeContext {
+  readonly slug: string;
+  readonly branch: string;
+  readonly nextStep: RunStepId | 'delivery';
+  readonly acceptedArtifacts: readonly string[];
+  readonly decisions: readonly string[];
+  readonly openQuestions: readonly string[];
+  readonly drafts: readonly RunStepId[];
+  readonly lastActor?: string;
+  readonly lastAt?: string;
+}
+
+/** Parse the only stable resume selectors; GitHub resolution is deliberately injected. */
+export function parseResumeTarget(value: string): ResumeTarget {
+  if (/^\d+$/.test(value)) return { kind: 'pr', number: Number(value) };
+  const url = /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)$/.exec(value);
+  if (url) return { kind: 'pr', number: Number(url[1]) };
+  if (/^spec\/[a-z0-9][a-z0-9-]*$/.test(value)) return { kind: 'branch', branch: value };
+  const intake = /^([^/\s]+\/[^/\s]+)#(\d+)$/.exec(value);
+  if (intake) return { kind: 'intake', repository: intake[1], number: Number(intake[2]) };
+  throw new Error(`compose resume: cannot find a Composer run for "${value}" (searched PR, spec branch, and intake reference)`);
+}
+
+export function contextForRun(record: RunRecord): ResumeContext {
+  const nextStep = RUN_STEP_ORDER.find((step) => record.steps[step]?.state !== 'accepted' || record.needsReconfirm.includes(step)) ?? 'delivery';
+  const accepted = RUN_STEP_ORDER.flatMap((step) => {
+    const value = record.steps[step];
+    return value?.state === 'accepted' ? [value] : [];
+  });
+  const last = accepted.at(-1);
+  return {
+    slug: record.slug,
+    branch: `spec/${record.slug}`,
+    nextStep,
+    acceptedArtifacts: accepted.flatMap((step) => step.artifacts.map((artifact) => artifact.path)),
+    decisions: RUN_STEP_ORDER.flatMap((step) => record.notes[step]?.decisions ?? []),
+    openQuestions: RUN_STEP_ORDER.flatMap((step) => record.notes[step]?.openQuestions ?? []),
+    drafts: RUN_STEP_ORDER.filter((step) => record.steps[step]?.state === 'draft' || record.needsReconfirm.includes(step)),
+    ...(last ? { lastActor: last.actor, lastAt: last.at } : {}),
+  };
+}
+
+export interface ResumeDeps {
+  resolveBranch(target: ResumeTarget): Promise<{ branch: string; draftPrUrl?: string } | undefined>;
+  fetch?(branch: string): Promise<void>;
+  attach(branch: string): Promise<{ worktree: string }>;
+  readRunRecord?(worktree: string, slug: string): Promise<string>;
+  recordDeciding?(input: { branch: string; draftPrUrl?: string }): Promise<void>;
+  emit?(input: { slug: string; previousActor?: string; previousProvider?: string; ownership: 'unchanged' | 'taken-over' }): Promise<void>;
+}
+
+/** Attach an existing run. The caller chooses the project and host; this module never infers either. */
+export async function resumeComposerRun(value: string, deps: ResumeDeps): Promise<{ worktree: string; context: ResumeContext }> {
+  const target = parseResumeTarget(value);
+  const resolved = target.kind === 'branch' ? { branch: target.branch } : await deps.resolveBranch(target);
+  if (!resolved) throw new Error(`compose resume: no saved Composer run found for ${value}`);
+  if (deps.fetch) await deps.fetch(resolved.branch);
+  const attached = await deps.attach(resolved.branch);
+  const slug = resolved.branch.slice('spec/'.length);
+  const raw = await (deps.readRunRecord ?? ((worktree, name) => readFile(join(worktree, '.docs', 'composer-runs', `${name}.json`), 'utf8')))(attached.worktree, slug);
+  const record = parseRunRecord(raw);
+  const context = contextForRun(record);
+  await deps.recordDeciding?.({ branch: resolved.branch, draftPrUrl: resolved.draftPrUrl });
+  const previous = [...RUN_STEP_ORDER].reverse().map((step) => record.steps[step]).find((step) => step?.state === 'accepted');
+  await deps.emit?.({ slug, ownership: 'unchanged', ...(previous?.state === 'accepted' ? { previousActor: previous.actor, previousProvider: previous.provider } : {}) });
+  return { worktree: attached.worktree, context };
+}

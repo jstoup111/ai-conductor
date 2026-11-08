@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { writeIntakeMarker } from './intake-marker.js';
@@ -14,6 +13,7 @@ import {
   type StepNotes,
 } from './run-record.js';
 import type { OwnerResolution } from '../owner-gate/identity.js';
+import { renderRunBlock, upsertRunBlock } from './run-pr-block.js';
 
 export interface CheckpointGitResult {
   readonly exitCode: number;
@@ -48,19 +48,27 @@ export interface CheckpointDeps {
   }) => Promise<void>;
   readonly now?: () => string;
   readonly provider?: string;
+  /** Guarded publication seam. Keeping transport outside record mutation makes retries idempotent. */
+  readonly publication?: {
+    push(branch: string): Promise<void>;
+    findOpenPullRequest(branch: string): Promise<{ url: string; body: string } | undefined>;
+    createDraftPullRequest(input: { branch: string; title: string; body: string }): Promise<{ url: string; body: string }>;
+    editPullRequest?(input: { url: string; body: string }): Promise<void>;
+  };
 }
 
 export interface CheckpointResult {
   readonly slug: string;
   readonly state: 'accepted' | 'draft';
   readonly committed: boolean;
-  readonly published: false;
+  readonly published: boolean;
+  readonly prUrl?: string;
 }
 
 const defaultFs: CheckpointFileSystem = {
   readFile: (path) => readFile(path, 'utf8'),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
-  mkdir: (path) => mkdir(path, { recursive: true }),
+  mkdir: async (path) => { await mkdir(path, { recursive: true }); },
 };
 
 function emptyRecord(slug: string): RunRecord {
@@ -122,8 +130,8 @@ async function resolveSlug(git: CheckpointGitRunner): Promise<string> {
 }
 
 /**
- * Save a DECIDE boundary locally. Publication is intentionally owned by Task 4;
- * this operation has no push/PR path, even when a remote exists.
+ * Save a DECIDE boundary. A committed record remains local if guarded publication
+ * fails, so a retry never re-accepts a step.
  */
 export async function checkpointComposerRun(request: CheckpointRequest, deps: CheckpointDeps): Promise<CheckpointResult> {
   const step = requireStep(request.step);
@@ -185,6 +193,26 @@ export async function checkpointComposerRun(request: CheckpointRequest, deps: Ch
     const commit = await deps.git(['commit', '-m', `composer checkpoint: ${slug} ${step}`]);
     if (commit.exitCode !== 0) throw new Error(`compose checkpoint: local commit failed: ${commit.stderr}`);
   }
-  await deps.emit(event);
-  return { slug, state: request.state, committed, published: false };
+  if (!committed || !deps.publication) {
+    await deps.emit(event);
+    return { slug, state: request.state, committed, published: false };
+  }
+
+  const branch = `spec/${slug}`;
+  try {
+    await deps.publication.push(branch);
+  } catch (error) {
+    throw new Error(`compose checkpoint: local checkpoint was saved but push failed: ${error instanceof Error ? error.message : String(error)}. Retry with compose resume ${branch}`);
+  }
+  let pr = await deps.publication.findOpenPullRequest(branch);
+  const block = renderRunBlock(record);
+  if (!pr) {
+    pr = await deps.publication.createDraftPullRequest({ branch, title: `DECIDE: ${slug}`, body: upsertRunBlock('', block) });
+  } else if (deps.publication.editPullRequest) {
+    try { await deps.publication.editPullRequest({ url: pr.url, body: upsertRunBlock(pr.body, block) }); } catch {
+      // Remote record is authoritative; refresh is retried at the next checkpoint.
+    }
+  }
+  await deps.emit({ ...event, published: true });
+  return { slug, state: request.state, committed, published: true, prUrl: pr.url };
 }

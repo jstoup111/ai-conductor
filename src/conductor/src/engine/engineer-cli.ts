@@ -130,6 +130,7 @@ type EngineerDispatchDescriptor =
   }
   | { kind: 'handoff'; project: string; branch: string; worktree: string; sourceRef?: string }
   | { kind: 'checkpoint'; worktree: string; step: string; state: 'accepted' | 'draft'; notesFile?: string }
+  | { kind: 'resume'; target: string; provider?: string; project?: string }
   | { kind: 'plan-review'; project: string; worktree: string; sourceRef?: string; accept?: string; acknowledge?: true; reason?: string; maxPromptChars?: number; invalidMaxPromptChars?: true }
   | { kind: 'poll' }
   | { kind: 'claim' }
@@ -151,7 +152,7 @@ export type EngineerDispatch = EngineerDispatchDescriptor & {
 
 /** Single source of truth for the known deterministic subcommands (#524). */
 export const ENGINEER_SUBCOMMANDS = [
-  'projects', 'dep-audit', 'worktree', 'phase', 'land', 'handoff', 'checkpoint', 'plan-review', 'poll', 'claim', 'forget', 'unclaim', 'requeue',
+  'projects', 'dep-audit', 'worktree', 'phase', 'land', 'handoff', 'checkpoint', 'resume', 'plan-review', 'poll', 'claim', 'forget', 'unclaim', 'requeue',
   'resolve', 'migrate-issue-deps',
 ] as const;
 
@@ -327,6 +328,16 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
     const unk = findUnknownFlag(argv, ['--worktree', '--step', '--accept', '--draft', '--notes-file']);
     if (unk) return { kind: 'reject', sub: 'checkpoint', flag: unk };
     return { kind: 'checkpoint', worktree, step, state: accept ? 'accepted' : 'draft', ...(notesFile ? { notesFile } : {}) };
+  }
+
+  if (subCmd === 'resume') {
+    const target = argv[4];
+    if (!target || target.startsWith('--')) return { kind: 'guide' };
+    const provider = parseFlag(argv, '--provider') ?? undefined;
+    const project = parseFlag(argv, '--project') ?? undefined;
+    const unk = findUnknownFlag(argv, ['--provider', '--project']);
+    if (unk) return { kind: 'reject', sub: 'resume', flag: unk };
+    return { kind: 'resume', target, ...(provider ? { provider } : {}), ...(project ? { project } : {}) };
   }
 
   if (subCmd === 'plan-review') {
@@ -653,6 +664,8 @@ export interface DispatchEngineerOpts {
   git?: GitRunner;
   /** Task 3 local-checkpoint seam; production uses checkpointComposerRun. */
   checkpoint?: (request: { worktree: string; step: string; state: 'accepted' | 'draft'; notesFile?: string }) => Promise<{ slug: string; state: 'accepted' | 'draft'; committed: boolean; published: false }>;
+  /** Resume boundary seam; production wiring intentionally requires a registered project. */
+  resume?: (request: { target: string; provider?: string; project?: string }) => Promise<{ worktree: string; context: unknown }>;
   /** Task 16 handoff-publication seam; production derives this from current machine evidence. */
   handoffPublication?: HandoffDeps['publication'];
   /** Injected ensureRunning launch spy (for tests). */
@@ -1826,6 +1839,22 @@ export async function dispatchEngineer(
         return 0;
       } catch (error: unknown) {
         printErr(`engineer checkpoint: ${error instanceof Error ? error.message : String(error)}`);
+        return 1;
+      }
+    }
+
+    // ── resume ────────────────────────────────────────────────────────────────
+    case 'resume': {
+      try {
+        if (!opts.resume) {
+          printErr('engineer resume: resume requires the registered-project launcher composition.');
+          return 1;
+        }
+        const result = await opts.resume(dispatch);
+        print(JSON.stringify({ kind: 'resume', ...result }));
+        return 0;
+      } catch (error) {
+        printErr(`engineer resume: ${error instanceof Error ? error.message : String(error)}`);
         return 1;
       }
     }
