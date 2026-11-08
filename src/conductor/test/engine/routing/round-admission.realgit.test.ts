@@ -2,11 +2,11 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
-import { admitRound, reconcileRounds } from '../../../src/engine/routing/round-admission.js';
+import { admitRound, reconcileRounds, routedWorkOutstanding } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord, readRepairMarker, readRouteRecord, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
 import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { parseCommitSha } from '../../../src/engine/restack/restack-types.js';
@@ -70,6 +70,80 @@ async function routingRefSnapshot(subject: Awaited<ReturnType<typeof fixture>>):
 function openAudit(record: RouteRecord, hosts: RouteRecord['hosts'], currentHostIndex = 0): RouteRecord {
   return { ...record, phase: 'open', hosts, currentHostIndex, outbox: [] };
 }
+
+describe('routed work outstanding (real local Git)', () => {
+  const enabled = { routingEnabled: true, sealedLeaf: c3 } as const;
+
+  it.each([
+    ['leaf-host marker', c3, { kind: 'leaf-host' }],
+    ['child marker', c1, { kind: 'child', child: c1 }],
+  ] as const)('reports %s before inspecting queue or routes', async (_name, host, expected) => {
+    const subject = await fixture();
+    try {
+      const blob = (await subject.git(['hash-object', '-w', '--stdin'], {
+        input: JSON.stringify({ host, roundId }),
+      })).stdout.trim();
+      await subject.git(['update-ref', repairMarkerRefFor('demo'), blob]);
+
+      await expect(routedWorkOutstanding(subject.repo, 'demo', enabled)).resolves.toEqual(expected);
+    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+  });
+
+  it('reports a non-empty revalidation queue when no marker exists', async () => {
+    const subject = await fixture();
+    try {
+      await writeQueue(subject);
+
+      await expect(routedWorkOutstanding(subject.repo, 'demo', enabled)).resolves.toEqual({ kind: 'queue' });
+    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+  });
+
+  it('reports an open round by id when no marker or queue work exists', async () => {
+    const subject = await fixture();
+    try {
+      const created = await createRouteRecord(subject.repo, 'demo', input);
+      if (created.kind !== 'created') throw new Error(created.kind);
+      await writeRecord(subject, openAudit(created.record, { [c1]: 'restacked', [c2]: 'pending' }));
+
+      await expect(routedWorkOutstanding(subject.repo, 'demo', enabled)).resolves.toEqual({ kind: 'open-round', roundId });
+    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+  });
+
+  it('reports none when only closed routes remain and marker and queue are absent', async () => {
+    const subject = await fixture();
+    try {
+      const created = await createRouteRecord(subject.repo, 'demo', input);
+      if (created.kind !== 'created') throw new Error(created.kind);
+      await writeRecord(subject, { ...created.record, phase: 'closed', hosts: { [c1]: 'done' } });
+
+      await expect(routedWorkOutstanding(subject.repo, 'demo', enabled)).resolves.toEqual({ kind: 'none' });
+    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+  });
+
+  it.each([
+    ['marker', repairMarkerRefFor('demo'), 'marker'],
+    ['queue', revalidationQueueRefFor('demo'), 'queue'],
+    ['route record', routeRecordRefFor('demo', roundId), roundId],
+  ] as const)('names the unreadable %s', async (_name, ref, subjectName) => {
+    const subject = await fixture();
+    try {
+      const blob = (await subject.git(['hash-object', '-w', '--stdin'], { input: '{not-json' })).stdout.trim();
+      await subject.git(['update-ref', ref, blob]);
+
+      await expect(routedWorkOutstanding(subject.repo, 'demo', enabled)).resolves.toEqual({ kind: 'unreadable', subject: subjectName });
+    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+  });
+
+  it.each([
+    ['routing is disabled', { routingEnabled: false, sealedLeaf: c3 }],
+    ['the sealed leaf is one', { routingEnabled: true, sealedLeaf: c1 }],
+  ] as const)('does not inspect refs when %s', async (_name, options) => {
+    const git = vi.fn<GitRunner>();
+
+    await expect(routedWorkOutstanding('/not-used', 'demo', { ...options, git })).resolves.toEqual({ kind: 'none' });
+    expect(git).not.toHaveBeenCalled();
+  });
+});
 
 describe('routed-round admission (real local Git)', () => {
   // Covers: task:rem-prd-audit-rem-prd-audit-rem-vg6-s6-1
