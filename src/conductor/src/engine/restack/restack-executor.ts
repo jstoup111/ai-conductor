@@ -33,7 +33,7 @@ import {
   type RestackMoveRef,
 } from './restack-move.js';
 import { planRestackRanges } from './restack-plan.js';
-import { checkPathOwnership, parentOverlapPaths } from './restack-ownership.js';
+import { checkPathOwnership, checkResolvedTipOwnership, parentOverlapPaths } from './restack-ownership.js';
 import { replayChildRange, RemBlockBodyMismatchError, type CommitterStamp } from './restack-replay.js';
 import { haltRecordedRestackConflict, replayCandidateSubjects, resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
 import { conflictDeleteLines, conflictFlattenedTipRefFor, conflictParentRefFor, conflictRecordRefFor, consumeRecordedResolution, decisionDeleteLines, readConflictRecord, refusedTipRefFor, retireRecordedResolution } from './restack-conflict-record.js';
@@ -859,9 +859,9 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
           terminal = true;
           return haltedResult(options.worktree);
         }
-        const ownership = await checkPathOwnership(range, parent, resolution.tip, git, { normaliseInheritedRemBlocks: options.routed !== undefined });
+        const ownership = await checkResolvedTipOwnership(range, parent, resolution.tip, git, { normaliseInheritedRemBlocks: options.routed !== undefined });
         if (ownership.kind === 'refused') {
-          await haltUnresolvedConflict(options.worktree, options.slug, journal, range, { ...conflict, paths: ownership.paths }, options.events, git, parent, 'replay-mismatch');
+          await haltUnresolvedConflict(options.worktree, options.slug, journal, range, { ...conflict, paths: ownership.paths.map(({ path }) => path) }, options.events, git, parent, 'replay-mismatch');
           terminal = true;
           return haltedResult(options.worktree);
         }
