@@ -722,6 +722,29 @@ export async function clearMarker(worktreePath: string): Promise<void> {
   await writeFile(join(worktreePath, REKICK_SENTINEL), `rekick\n`, 'utf-8');
 }
 
+/**
+ * Clear the retryable-HALT boundary without touching `HALT.cleared`.
+ *
+ * `HALT.cleared` is also the operator's pending prd-audit decision carrier;
+ * unlike sweep clears, a prompt re-dispatch must retain it verbatim. The
+ * separate `.rekicked` marker records exactly the body this boundary cleared.
+ */
+export async function clearRetryableHaltMarker(worktreePath: string): Promise<void> {
+  const haltPath = join(worktreePath, HALT_MARKER);
+  let body: string;
+  try {
+    body = await readFile(haltPath, 'utf-8');
+  } catch {
+    // A concurrent clear won the race. Do not mint any retry or audit state.
+    return;
+  }
+
+  await writeFile(join(worktreePath, '.pipeline/HALT.rekicked'), body, 'utf-8');
+  await rm(haltPath, { force: true });
+  await rm(join(worktreePath, HALT_CLASS_MARKER), { recursive: true, force: true });
+  await writeFile(join(worktreePath, REKICK_SENTINEL), `rekick\n`, 'utf-8');
+}
+
 // ── FR-12: resume rebase-first (play-forward) ────────────────────────────────
 
 export type RekickResumeResult = 'skipped' | 'rebased' | 'halted' | 'already_shipped';

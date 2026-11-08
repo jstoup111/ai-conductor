@@ -14,6 +14,7 @@ import {
   hasRebaseInProgress,
   abortRebase,
   clearMarker,
+  clearRetryableHaltMarker,
   listHaltedWorktrees,
   readHaltReason,
   type RekickSweepDeps,
@@ -1374,6 +1375,34 @@ describe('engine/daemon-rekick — real primitives (isolated repo)', () => {
 
     expect(await fileExists(join(p, 'HALT'))).toBe(false);
     expect(await fileExists(join(p, 'REKICK'))).toBe(true);
+  });
+
+  it('clearRetryableHaltMarker archives only the retry body and preserves an operator decision carrier', async () => {
+    const p = join(dir, '.pipeline');
+    const haltBody = 'mechanical prerequisite is pending\n';
+    const operatorDecision = '```json\n[{"decision":"accept"}]\n```\n';
+    await mkdir(p, { recursive: true });
+    await writeFile(join(p, 'HALT'), haltBody, 'utf-8');
+    await writeFile(join(p, 'HALT.class'), 'mechanical\n', 'utf-8');
+    await writeFile(join(p, 'HALT.cleared'), operatorDecision, 'utf-8');
+
+    await clearRetryableHaltMarker(dir);
+
+    await expect(readFile(join(p, 'HALT.rekicked'), 'utf-8')).resolves.toBe(haltBody);
+    await expect(access(join(p, 'HALT'))).rejects.toThrow();
+    await expect(access(join(p, 'HALT.class'))).rejects.toThrow();
+    await expect(readFile(join(p, 'REKICK'), 'utf-8')).resolves.toBe('rekick\n');
+    await expect(readFile(join(p, 'HALT.cleared'), 'utf-8')).resolves.toBe(operatorDecision);
+  });
+
+  it('clearRetryableHaltMarker is a complete no-op when HALT raced away', async () => {
+    const p = join(dir, '.pipeline');
+    await mkdir(p, { recursive: true });
+
+    await clearRetryableHaltMarker(dir);
+
+    await expect(access(join(p, 'HALT.rekicked'))).rejects.toThrow();
+    await expect(access(join(p, 'REKICK'))).rejects.toThrow();
   });
 });
 

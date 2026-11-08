@@ -175,4 +175,68 @@ describe('T14 — daemon-cli wires the real progress-gated re-kick predicate int
       await rm(worktreeBase, { recursive: true, force: true });
     }
   });
+
+  it('buildRetryableHaltDeps clears and audits once, without overwriting HALT.cleared', async () => {
+    const { buildProgressReKickDeps, buildRetryableHaltDeps } = await import('../../src/daemon-cli.js');
+    const worktreeBase = await mkdtemp(join(tmpdir(), 'retryable-halt-wiring-'));
+    try {
+      const slug = 'retryable';
+      const pipeline = join(worktreeBase, slug, '.pipeline');
+      const haltBody = 'retry this prerequisite\n';
+      const priorClear = 'operator scope decision\n';
+      await mkdir(pipeline, { recursive: true });
+      await writeFile(join(pipeline, 'HALT'), haltBody);
+      await writeFile(join(pipeline, 'HALT.class'), 'mechanical\n');
+      await writeFile(join(pipeline, 'HALT.cleared'), priorClear);
+
+      const deps = buildRetryableHaltDeps(worktreeBase, undefined, () => {});
+      await deps.clearRetryableHalt(slug);
+
+      await expect(readFile(join(pipeline, 'HALT.rekicked'), 'utf-8')).resolves.toBe(haltBody);
+      await expect(readFile(join(pipeline, 'HALT.cleared'), 'utf-8')).resolves.toBe(priorClear);
+      const audit = await readFile(join(pipeline, 'audit-trail', 'events.jsonl'), 'utf-8');
+      expect(audit.trim().split('\n')).toHaveLength(1);
+      expect(JSON.parse(audit).cause).toBe('rekick');
+    } finally {
+      await rm(worktreeBase, { recursive: true, force: true });
+    }
+  });
+
+  it('buildRetryableHaltDeps judges only distinct retryable live HALTs and is present while progress is disabled', async () => {
+    const { buildProgressReKickDeps, buildRetryableHaltDeps } = await import('../../src/daemon-cli.js');
+    const worktreeBase = await mkdtemp(join(tmpdir(), 'retryable-halt-wiring-'));
+    try {
+      const slug = 'retryable';
+      const pipeline = join(worktreeBase, slug, '.pipeline');
+      await mkdir(pipeline, { recursive: true });
+      await writeFile(join(pipeline, 'HALT'), 'first\n');
+      await writeFile(join(pipeline, 'HALT.class'), 'mechanical\n');
+      const deps = buildRetryableHaltDeps(worktreeBase, undefined, () => {});
+
+      expect(await deps.isFreshRetryableHalt(slug)).toBe(true);
+      await writeFile(join(pipeline, 'HALT.rekicked'), 'first\n');
+      expect(await deps.isFreshRetryableHalt(slug)).toBe(false);
+      await writeFile(join(pipeline, 'HALT.rekicked'), 'different\n');
+      expect(await deps.isFreshRetryableHalt(slug)).toBe(true);
+      await rm(join(pipeline, 'HALT.rekicked'));
+      await mkdir(join(pipeline, 'HALT.rekicked'));
+      expect(await deps.isFreshRetryableHalt(slug)).toBe(true);
+      await rm(join(pipeline, 'HALT.rekicked'), { recursive: true });
+      await writeFile(join(pipeline, 'HALT.class'), 'needs-human\n');
+      expect(await deps.isFreshRetryableHalt(slug)).toBe(false);
+      await writeFile(join(pipeline, 'HALT.class'), 'mechanical\n');
+      await rm(join(pipeline, 'HALT'));
+      expect(await deps.isFreshRetryableHalt(slug)).toBe(false);
+
+      const progress = buildProgressReKickDeps(
+        { build_progress_halt: { enabled: false } } as any,
+        worktreeBase,
+      );
+      expect(progress.isProgressReKickEligible).toBeUndefined();
+      expect(deps.clearRetryableHalt).toBeTypeOf('function');
+      expect(deps.stampDispatchBaseline).toBeTypeOf('function');
+    } finally {
+      await rm(worktreeBase, { recursive: true, force: true });
+    }
+  });
 });
