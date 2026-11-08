@@ -51,7 +51,7 @@ async function project(): Promise<{ root: string; baseSha: string }> {
     mkdir(join(root, '.docs', 'plans'), { recursive: true }),
   ]);
   await writeFile(join(root, 'README.md'), 'base\n');
-  await Promise.all(['feature', 'first', 'second'].flatMap((slug) => [
+  await Promise.all(['feature', 'first', 'second', 'feature-a', 'feature-b'].flatMap((slug) => [
     writeFile(join(root, '.docs', 'stories', `${slug}.md`), `# ${slug}\n`),
     writeFile(join(root, '.docs', 'plans', `${slug}.md`), `# ${slug}\n`),
   ]));
@@ -294,17 +294,14 @@ describe('daemon child dispatch composition', () => {
     const store = await useTempEngineStore();
     const entered = new Set<string>();
     const release: Array<() => void> = [];
-    let supervisorWarned = false;
+    const childConsoleSinks = new Map<string, string[]>();
     const executorFork = createInMemoryExecutorFork({
       projectRoot: root,
-      onFork: () => {
-        if (!supervisorWarned) {
-          supervisorWarned = true;
-          console.warn('supervisor warning during child dispatch');
-        }
-      },
+      consoleSinks: childConsoleSinks,
+      captureConsole: true,
       run: async ({ order, log }) => {
         log?.(`feature log ${order.slug}`);
+        console.warn(`child warning ${order.slug}`);
         entered.add(order.slug);
         await new Promise<void>((resolve) => release.push(resolve));
         return { slug: order.slug, status: 'done' };
@@ -317,18 +314,23 @@ describe('daemon child dispatch composition', () => {
       const daemon = runDaemonMode(daemonOptions(
         root,
         store.engineRoot,
-        { discover: async () => [{ slug: 'first', baseSha }, { slug: 'second', baseSha }] },
+        { discover: async () => [{ slug: 'feature-a', baseSha }, { slug: 'feature-b', baseSha }] },
         executorFork,
         2,
       ));
-      await vi.waitFor(() => expect(entered).toEqual(new Set(['first', 'second'])));
+      await vi.waitFor(() => expect(entered).toEqual(new Set(['feature-a', 'feature-b'])));
+      console.warn('supervisor warning during child dispatch');
       release.splice(0).forEach((resolve) => resolve());
       await daemon;
 
       const daemonLog = await readFile(join(root, '.daemon', 'daemon.log'), 'utf8');
-      for (const slug of ['first', 'second']) {
-        expect(daemonLog).toContain(`[daemon][${slug}] [executor:info] feature log ${slug}`);
-        expect(daemonLog).not.toContain(`[daemon][${slug}] [executor:info] feature log ${slug === 'first' ? 'second' : 'first'}`);
+      for (const [slug, otherSlug] of [['feature-a', 'feature-b'], ['feature-b', 'feature-a']] as const) {
+        expect(childConsoleSinks.get(slug)).toContain(`child warning ${slug}`);
+        for (const message of [`[executor:info] feature log ${slug}`, `[executor:warn] child warning ${slug}`]) {
+          const line = daemonLog.split('\n').find((candidate) => candidate.includes(message));
+          expect(line).toContain(`[daemon][${slug}] ${message}`);
+          expect(line).not.toContain(`[${otherSlug}]`);
+        }
       }
       expect(daemonLog).toContain('[daemon] [warn] supervisor warning during child dispatch');
     } finally {

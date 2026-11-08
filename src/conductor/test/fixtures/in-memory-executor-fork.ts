@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -56,6 +57,7 @@ export interface InMemoryExecutorForkOptions {
 }
 
 type Listener = (value?: unknown) => void;
+type ConsoleMethods = Pick<typeof console, 'log' | 'warn' | 'error'>;
 
 /**
  * A process-shaped endpoint whose two listener sets retain Node IPC's
@@ -71,45 +73,32 @@ class InMemoryForkedExecutor implements ForkedExecutor {
   private exitListener: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
   private exited = false;
   private slug: string | undefined;
-  private readonly supervisorConsole = {
-    log: console.log,
-    warn: console.warn,
-    error: console.error,
-  };
-
   readonly port: ExecutorIpcPort = {
     send: (message, callback) => {
       const emitted = isHello(message)
         ? { ...message, protocolVersion: this.protocolVersion }
         : message;
       if (isLog(emitted)) {
-        if (this.slug !== undefined && this.consoleSinks !== undefined) {
-          const sink = this.consoleSinks?.get(this.slug) ?? [];
-          sink.push(emitted.message);
-          this.consoleSinks?.set(this.slug, sink);
-          // In-memory children share the host's global console. A fixture
-          // explicitly collecting child console output substitutes for the
-          // process boundary and must not re-enter the daemon logger.
-          callback?.(null);
-          return true;
+        // In-memory children share the host's global console. Restore the
+        // supervisor sink while delivery crosses the process boundary, then
+        // restore this child's console proxy before its runner resumes.
+        const childConsole = { log: console.log, warn: console.warn, error: console.error };
+        const supervisorConsole = this.supervisorConsole();
+        console.log = supervisorConsole.log;
+        console.warn = supervisorConsole.warn;
+        console.error = supervisorConsole.error;
+        try {
+          this.deliver(this.supervisorListeners, 'message', emitted);
+        } finally {
+          console.log = childConsole.log;
+          console.warn = childConsole.warn;
+          console.error = childConsole.error;
         }
+        callback?.(null);
+        return true;
       }
       if (isHello(emitted)) this.onHello?.({ engineVersionId: emitted.engineVersionId });
-      // Restore the supervisor console while dispatching synchronously. A
-      // real child cannot inherit the supervisor's console proxy; without
-      // this boundary substitute, broker event rendering recursively re-enters
-      // the current in-memory child's proxy as well as direct child logs.
-      const childConsole = { log: console.log, warn: console.warn, error: console.error };
-      console.log = this.supervisorConsole.log;
-      console.warn = this.supervisorConsole.warn;
-      console.error = this.supervisorConsole.error;
-      try {
-        this.deliver(this.supervisorListeners, 'message', emitted);
-      } finally {
-        console.log = childConsole.log;
-        console.warn = childConsole.warn;
-        console.error = childConsole.error;
-      }
+      this.deliver(this.supervisorListeners, 'message', emitted);
       // Node runs this callback after the message is accepted by IPC.  The
       // child waits for it before disconnecting, so an in-memory outcome is
       // never lost to a premature synthetic exit.
@@ -136,12 +125,21 @@ class InMemoryForkedExecutor implements ForkedExecutor {
     private readonly onSupervisorMessage: ((message: unknown) => void) | undefined,
     private readonly protocolVersion: number,
     private readonly onChildKill: ((signal: NodeJS.Signals) => void) | undefined,
+    private readonly childConsoleContext: AsyncLocalStorage<InMemoryForkedExecutor>,
+    private readonly supervisorConsole: () => ConsoleMethods,
   ) {}
+
+  recordConsoleLine(message: string): void {
+    if (this.slug === undefined || this.consoleSinks === undefined) return;
+    const sink = this.consoleSinks.get(this.slug) ?? [];
+    sink.push(message);
+    this.consoleSinks.set(this.slug, sink);
+  }
 
   send(message: unknown, callback?: (error: Error | null) => void): boolean {
     this.onSupervisorMessage?.(message);
     if (isWorkOrder(message)) this.slug = message.order.slug;
-    this.deliver(this.childListeners, 'message', message);
+    this.childConsoleContext.run(this, () => this.deliver(this.childListeners, 'message', message));
     callback?.(null);
     return true;
   }
@@ -220,12 +218,51 @@ export function createInMemoryExecutorFork({
   // test host owns them once and children therefore inherit rather than
   // replacing a resolver while concurrent in-memory executions are active.
   const runtime = createExecutorChildRuntime({ projectRoot, processServices: 'inherited' });
+  const childConsoleContext = new AsyncLocalStorage<InMemoryForkedExecutor>();
+  let activeConsoleTees = 0;
+  let supervisorConsole: ConsoleMethods | undefined;
+  const teeConsole = (_port: ExecutorIpcPort): (() => void) => {
+    if (activeConsoleTees === 0) {
+      supervisorConsole = { log: console.log, warn: console.warn, error: console.error };
+      const forward = (level: 'info' | 'warn' | 'error', values: unknown[]) => {
+        const child = childConsoleContext.getStore();
+        if (child === undefined) {
+          const method = level === 'info' ? supervisorConsole?.log : supervisorConsole?.[level];
+          method?.(...values);
+          return;
+        }
+        const message = values.map(String).join(' ');
+        child.recordConsoleLine(message);
+        child.port.send({ kind: 'log', level, message });
+      };
+      console.log = (...values: unknown[]) => forward('info', values);
+      console.warn = (...values: unknown[]) => forward('warn', values);
+      console.error = (...values: unknown[]) => forward('error', values);
+    }
+    activeConsoleTees += 1;
+    return () => {
+      activeConsoleTees -= 1;
+      if (activeConsoleTees !== 0 || supervisorConsole === undefined) return;
+      console.log = supervisorConsole.log;
+      console.warn = supervisorConsole.warn;
+      console.error = supervisorConsole.error;
+      supervisorConsole = undefined;
+    };
+  };
   let childCount = 0;
 
   return (modulePath) => {
     onFork?.();
     const protocolVersion = protocolVersions[Math.min(childCount++, protocolVersions.length - 1)] ?? EXECUTOR_PROTOCOL_VERSION;
-    const child = new InMemoryForkedExecutor(consoleSinks, onHello, onSupervisorMessage, protocolVersion, onChildKill);
+    const child = new InMemoryForkedExecutor(
+      consoleSinks,
+      onHello,
+      onSupervisorMessage,
+      protocolVersion,
+      onChildKill,
+      childConsoleContext,
+      () => supervisorConsole ?? { log: console.log, warn: console.warn, error: console.error },
+    );
     if (handshake === 'normal') {
       queueMicrotask(() => {
         void runExecutorChild(child.port, withExecutorBrokerProxies(child.port, {
@@ -238,6 +275,7 @@ export function createInMemoryExecutorFork({
           log: (message) => child.port.send({ kind: 'log', level: 'info', message }),
           waitForSupervisorVisualizerClose: true,
           forwardConsole: captureConsole,
+          teeConsole,
           exit: () => child.exit(),
         }));
       });
