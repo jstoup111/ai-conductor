@@ -7,7 +7,9 @@ import {
   incrementNoEvidenceAttempts,
   resetNoEvidenceAttempts,
   NO_EVIDENCE_REASON_DESCRIPTIONS,
+  stampDispatchBaseline,
 } from '../../src/engine/task-evidence.js';
+import { writeSliceTopologyFixture } from './slice-topology-fixture.js';
 
 describe('task-evidence', () => {
   let dir: string;
@@ -313,6 +315,62 @@ describe('task-evidence', () => {
       expect(description).toBeTruthy();
       expect(typeof description).toBe('string');
       expect(description.length).toBeGreaterThan(10);
+    });
+  });
+
+  describe('stampDispatchBaseline', () => {
+    async function writeMultiChildTaskFixture(): Promise<void> {
+      await writeSliceTopologyFixture(dir, {
+        version: 1,
+        slug: 'feature',
+        runId: 'task-evidence-test',
+        status: 'done',
+        entries: [],
+        sliceMembership: {
+          taskSlices: { T1: 1, T2: 1, T3: 1, T4: 2, T5: 2 },
+          titles: ['first child', 'second child'],
+        },
+      });
+      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
+        tasks: [
+          { id: 'T1', status: 'completed' },
+          { id: 'T2', status: 'skipped' },
+          { id: 'T3', status: 'completed' },
+          { id: 'T4', status: 'completed' },
+          { id: 'T5', status: 'skipped' },
+        ],
+      }));
+    }
+
+    it('stamps the whole-feature resolved count across every child', async () => {
+      await writeMultiChildTaskFixture();
+
+      await expect(stampDispatchBaseline(dir)).resolves.toBe('stamped');
+
+      const sidecar = JSON.parse(await readFile(join(dir, '.pipeline', 'task-evidence.json'), 'utf-8'));
+      expect(sidecar.lastResolvedCount).toBe(5);
+    });
+
+    it.each([
+      ['missing', undefined],
+      ['corrupt', 'not valid json {'],
+    ])('replaces a %s sidecar with the whole-feature resolved count', async (_kind, sidecar) => {
+      await writeMultiChildTaskFixture();
+      if (sidecar !== undefined) {
+        await writeFile(join(dir, '.pipeline', 'task-evidence.json'), sidecar);
+      }
+
+      await stampDispatchBaseline(dir);
+
+      const raw = await readFile(join(dir, '.pipeline', 'task-evidence.json'), 'utf-8');
+      expect(JSON.parse(raw).lastResolvedCount).toBe(5);
+    });
+
+    it('returns no-worktree without creating a sidecar for a nonexistent path', async () => {
+      const missingWorktree = join(dir, 'missing-worktree');
+
+      await expect(stampDispatchBaseline(missingWorktree)).resolves.toBe('no-worktree');
+      await expect(lstat(join(missingWorktree, '.pipeline', 'task-evidence.json'))).rejects.toMatchObject({ code: 'ENOENT' });
     });
   });
 
