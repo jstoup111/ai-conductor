@@ -47,6 +47,10 @@ function format(repository: string, ...args: string[]) {
   });
 }
 
+function runFormat(repository: string, ...args: string[]) {
+  return spawnSync(process.execPath, [FORMAT_SCRIPT, ...args], { cwd: repository, encoding: 'utf8' });
+}
+
 afterEach(() => {
   while (repositories.length > 0) rmSync(repositories.pop()!, { recursive: true, force: true });
 });
@@ -97,5 +101,86 @@ describe('format script check mode', () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).not.toContain('src/conductor/test/fixtures/f.ts');
+  });
+});
+
+describe('format script base resolution', () => {
+  it('does not inspect unchanged or deleted files', () => {
+    const repository = createRepository();
+    git(repository, 'checkout', 'main');
+    write(repository, 'src/conductor/src/old.ts', 'export const old="not canonical"\n');
+    write(repository, 'src/conductor/src/deleted.ts', 'export const deleted="not canonical"\n');
+    commit(repository, 'old files');
+    git(repository, 'checkout', 'feature');
+    git(repository, 'merge', '--no-ff', 'main', '-m', 'merge main');
+    git(repository, 'rm', 'src/conductor/src/deleted.ts');
+    write(repository, 'src/conductor/src/a.ts', "export const a = 'canonical';\n");
+
+    const result = format(repository);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain('old.ts');
+    expect(result.stdout).not.toContain('deleted.ts');
+  });
+
+  it('uses the merge-base when main advances after the branch point', () => {
+    const repository = createRepository();
+    write(repository, 'src/conductor/src/mine.ts', 'export const mine="not canonical"\n');
+    commit(repository, 'branch change');
+    git(repository, 'checkout', 'main');
+    write(repository, 'src/conductor/src/later.ts', 'export const later="not canonical"\n');
+    commit(repository, 'main change');
+    git(repository, 'checkout', 'feature');
+    git(repository, 'merge', '--no-ff', 'main', '-m', 'merge main');
+
+    const result = format(repository);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('not canonical: src/conductor/src/mine.ts');
+    expect(result.stdout).not.toContain('later.ts');
+  });
+
+  it('honors an explicit base reference and succeeds for an empty changed set', () => {
+    const repository = createRepository();
+    write(repository, 'src/conductor/src/first.ts', 'export const first="not canonical"\n');
+    commit(repository, 'first');
+    const first = git(repository, 'rev-parse', 'HEAD').trim();
+    write(repository, 'src/conductor/src/second.ts', 'export const second="not canonical"\n');
+    commit(repository, 'second');
+
+    const changed = runFormat(repository, '--check', '--base', first);
+    expect(changed.status).toBe(1);
+    expect(changed.stdout).toContain('second.ts');
+    expect(changed.stdout).not.toContain('first.ts');
+
+    const clean = createRepository();
+    expect(format(clean).status).toBe(0);
+    expect(format(clean).stdout).not.toContain('not canonical');
+  });
+});
+
+describe('format script errors', () => {
+  it('reports syntax errors without treating them as canonical', () => {
+    const repository = createRepository();
+    write(repository, 'src/conductor/src/bad.ts', 'const = ;\n');
+
+    const result = format(repository);
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('syntax error: src/conductor/src/bad.ts:');
+  });
+
+  it('fails before reading files when its base cannot be resolved', () => {
+    const repository = createRepository();
+    write(repository, 'src/conductor/src/a.ts', 'export const a="not canonical"\n');
+
+    const implicit = runFormat(repository, '--check');
+    expect(implicit.status).toBe(1);
+    expect(implicit.stderr).toContain('format: cannot resolve base reference "origin/main"');
+    expect(implicit.stdout).toBe('');
+
+    const explicit = runFormat(repository, '--check', '--base', 'no-such-ref');
+    expect(explicit.status).toBe(1);
+    expect(explicit.stderr).toContain('format: cannot resolve base reference "no-such-ref"');
   });
 });

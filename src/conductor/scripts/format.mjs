@@ -44,6 +44,7 @@ async function candidates(root) {
 
   const mergeBase = resolveBase(root, base);
   return [...new Set([
+    ...lines(git(root, ['diff', '--name-only', '--diff-filter=ACMR', mergeBase, 'HEAD'])),
     ...lines(git(root, ['diff', '--name-only', '--diff-filter=ACMR', mergeBase])),
     ...lines(git(root, ['ls-files', '--others', '--exclude-standard'])),
   ])];
