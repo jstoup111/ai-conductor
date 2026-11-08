@@ -18,6 +18,7 @@ import { describe, it, expect } from 'vitest';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { rekickSweep } from '../../src/engine/daemon-rekick.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DAEMON_CLI_SRC = join(__dirname, '../../src/daemon-cli.ts');
@@ -94,6 +95,47 @@ describe('Task 20 — daemon-cli wires the episode-halt tracker into runDaemon d
       expect(lines).toContain('episode-end sweep: operator-park operator-parked — left for a human');
       expect(lines).toContain('episode-end sweep: re-kicked mechanical (episode-caused HALT cleared)');
       expect(lines).toContain('episode-end sweep: re-kicked legacy (episode-caused HALT cleared) (halt class: legacy)');
+    } finally {
+      await rm(worktreeBase, { recursive: true, force: true });
+    }
+  });
+
+  it('retains operator-action HALTs across the disposition and episode sweeps', async () => {
+    const cleared: string[] = [];
+    const baseSweep = await rekickSweep({
+      listHaltedWorktrees: async () => ['needs-human', 'unclassified', 'stack-tip-diverged', 'mechanical', 'legacy'],
+      readHaltReason: async () => 'halted',
+      hasRebaseInProgress: async () => false,
+      abortRebase: async () => {},
+      clearMarker: async (slug) => { cleared.push(slug); },
+      lastRekickSha: new Map(),
+      readHaltClass: async (slug) => slug as import('../../src/engine/halt-marker.js').HaltDisposition,
+    }, 'base-sha');
+
+    expect(baseSweep).toEqual({
+      cleared: ['mechanical', 'legacy'],
+      skipped: ['needs-human', 'unclassified', 'stack-tip-diverged'],
+    });
+    expect(cleared).toEqual(['mechanical', 'legacy']);
+
+    const { createEpisodeHaltTracker } = await import('../../src/engine/episode-halt-tracker.js');
+    const { sweepEpisodeHalts } = await import('../../src/daemon-cli.js');
+    const worktreeBase = await mkdtemp(join(process.env.TMPDIR!, 'episode-halt-retention-'));
+    const tracker = createEpisodeHaltTracker();
+    try {
+      for (const [slug, haltClass] of [['mechanical', 'mechanical'], ['needs-human', 'needs-human'], ['missing-sidecar', undefined]] as const) {
+        const pipeline = join(worktreeBase, slug, '.pipeline');
+        await mkdir(pipeline, { recursive: true });
+        await writeFile(join(pipeline, 'HALT'), 'episode-caused halt\n');
+        if (haltClass) await writeFile(join(pipeline, 'HALT.class'), haltClass);
+        tracker.onHaltWritten(slug, true);
+      }
+
+      await sweepEpisodeHalts(tracker, worktreeBase, () => {});
+
+      await expect(access(join(worktreeBase, 'mechanical', '.pipeline', 'HALT'))).rejects.toThrow();
+      await expect(access(join(worktreeBase, 'needs-human', '.pipeline', 'HALT'))).resolves.toBeUndefined();
+      await expect(access(join(worktreeBase, 'missing-sidecar', '.pipeline', 'HALT'))).resolves.toBeUndefined();
     } finally {
       await rm(worktreeBase, { recursive: true, force: true });
     }
