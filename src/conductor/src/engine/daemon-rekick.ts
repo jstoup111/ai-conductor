@@ -739,7 +739,13 @@ export async function clearRetryableHaltMarker(worktreePath: string): Promise<vo
     return;
   }
 
-  await writeFile(join(worktreePath, '.pipeline/HALT.rekicked'), body, 'utf-8');
+  const rekickedPath = join(worktreePath, '.pipeline/HALT.rekicked');
+  // A malformed marker must not turn a retryable mechanical HALT into an
+  // infinite parked state. `isFreshRetryableHalt` deliberately treats an
+  // unreadable archive as fresh, so replace an engine-owned directory before
+  // recording the body that this dispatch consumes.
+  await rm(rekickedPath, { recursive: true, force: true });
+  await writeFile(rekickedPath, body, 'utf-8');
   await rm(haltPath, { force: true });
   await rm(join(worktreePath, HALT_CLASS_MARKER), { recursive: true, force: true });
   await writeFile(join(worktreePath, REKICK_SENTINEL), `rekick\n`, 'utf-8');
