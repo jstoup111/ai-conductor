@@ -35,10 +35,9 @@ import {
 import { planRestackRanges } from './restack-plan.js';
 import { checkPathOwnership, parentOverlapPaths } from './restack-ownership.js';
 import { replayChildRange, RemBlockBodyMismatchError, type CommitterStamp } from './restack-replay.js';
-import { replayCandidateSubjects, resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
-import { conflictDeleteLines, conflictParentRefFor, conflictRecordRefFor, consumeRecordedResolution, decisionDeleteLines, retireRecordedResolution } from './restack-conflict-record.js';
+import { haltRecordedRestackConflict, replayCandidateSubjects, resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
+import { conflictDeleteLines, conflictFlattenedTipRefFor, conflictParentRefFor, conflictRecordRefFor, consumeRecordedResolution, decisionDeleteLines, readConflictRecord, retireRecordedResolution } from './restack-conflict-record.js';
 import { prepareRestackDecisionDelivery, restackDecisionDetailLines } from './restack-decision-delivery.js';
-import { haltRecordedRestackConflict } from './restack-conflict-halt.js';
 import { haltRecordPathFor } from './halt-record-bookkeeping.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
 import { syncRestackedWorktree } from './restack-sync.js';
@@ -353,6 +352,13 @@ export async function appliedTransactionLines(
   }
   if (journal.journal.consumedResolution !== undefined) {
     lines.push(...conflictDeleteLines(journal.slug, journal.journal.consumedResolution));
+    const conflict = await readConflictRecord(worktree, journal.slug, { git });
+    if (conflict.kind !== 'record' || conflict.blob !== journal.journal.consumedResolution.record) {
+      throw new Error('cannot delete flattened tip for a changed conflict record');
+    }
+    if (conflict.record.flattenedTip !== undefined) {
+      lines.push(`delete ${conflictFlattenedTipRefFor(journal.slug)} ${conflict.record.flattenedTip}`);
+    }
   }
   if (journal.journal.deliveredDecision !== undefined) {
     const decision = journal.journal.deliveredDecision;
@@ -362,6 +368,13 @@ export async function appliedTransactionLines(
     }));
     lines.push(`delete ${conflictRecordRefFor(journal.slug)} ${decision.record}`);
     lines.push(`delete ${conflictParentRefFor(journal.slug)} ${decision.parent}`);
+    const conflict = await readConflictRecord(worktree, journal.slug, { git });
+    if (conflict.kind !== 'record' || conflict.blob !== decision.record) {
+      throw new Error('cannot delete flattened tip for a changed conflict record');
+    }
+    if (conflict.record.flattenedTip !== undefined) {
+      lines.push(`delete ${conflictFlattenedTipRefFor(journal.slug)} ${conflict.record.flattenedTip}`);
+    }
   }
   lines.push(...journalStateUpdateLines(journal, blob, 'applied'));
   return { journal: { slug: journal.slug, blob, journal: next }, lines };
@@ -488,15 +501,6 @@ async function replayConflict(git: GitRunner, slug: string, error: unknown): Pro
   return { commit, paths };
 }
 
-export async function mergeInRange(git: GitRunner, range: ChildRange): Promise<CommitSha | undefined> {
-  for (const commit of await commitsInRange(git, `${range.oldParent}..${range.oldTip}`, `child ${range.child} range`)) {
-    const parents = await runGit(git, ['rev-list', '--parents', '-n', '1', commit]);
-    if (parents.exitCode !== 0) throw new Error(`cannot read parents for ${commit}`);
-    if (parents.stdout.trim().split(/\s+/).length > 2) return commit;
-  }
-  return undefined;
-}
-
 async function haltUnresolvedConflict(
   worktree: string,
   slug: string,
@@ -523,6 +527,7 @@ async function haltUnresolvedConflict(
   else {
     await haltRecordedRestackConflict({
       worktree, slug, journal, range, replayParent: newParent,
+      comparisonCommits: journal.journal.comparisonCommits, haltRecordSlug: slug,
       candidateSubjects: await replayCandidateSubjects(git, candidates),
       commit: conflict.commit, paths: conflict.paths, detail, events, git, writeHalt: haltRestackConflict,
     });
@@ -761,6 +766,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
             await options.events?.emit(emitRestackRefused({ reason: 'restack-resolution-stale', child: range.child, detail: recorded.field }));
             await haltRecordedRestackConflict({
               worktree: options.worktree, slug: options.slug, journal, range, replayParent: parent,
+              comparisonCommits: journal.journal.comparisonCommits, haltRecordSlug: options.slug,
               candidateSubjects: await replayCandidateSubjects(git, await commitsInRange(git, `${range.oldParent}..${range.oldTip}`, `child ${range.child} range`)),
               commit: retired.record.commit, paths: retired.record.paths,
               detail: `restack-resolution-stale\n${recorded.field}`,
@@ -815,19 +821,6 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         }
         const conflict = await replayConflict(git, options.slug, error);
         if (!conflict) throw error;
-        const merge = await mergeInRange(git, range);
-        if (merge) {
-          if (!await pinStagingRef(options.worktree, options.slug, range.child, range.oldTip, { git })) {
-            throw new Error(`cannot pin original tip for merge-bearing child ${range.child}`);
-          }
-          await abortJournal(options.worktree, journal, git, []);
-          await haltRestack(options.worktree, 'flatten_refused', options.events, {
-            child: range.child,
-            detail: `merge ${merge}; resolve the conflict on child branch ${branchRefForRange(options.slug, range).slice('refs/heads/'.length)} and resume`,
-          });
-          terminal = true;
-          return haltedResult(options.worktree);
-        }
         const decisionDelivery = await prepareRestackDecisionDelivery({
           worktree: options.worktree, slug: options.slug, range, opId: journal.journal.opId, git, events: options.events,
         });
@@ -870,6 +863,11 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
         exactRewrites.set(range.child, resolution.rewrites);
         overlaps.set(range.child, await parentOverlapPaths(range, parent, git));
         parent = resolution.tip;
+        if (resolution.audit !== undefined) {
+          mergeAudit.flattenedMerges.push(...resolution.audit.flattenedMerges);
+          mergeAudit.ancestryOnlyMerges.push(...resolution.audit.ancestryOnlyMerges);
+          mergeAudit.sideLineageCount += resolution.audit.sideLineageCount;
+        }
         continue;
       }
       const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'replayed', replay.tip, replay.rewrites, { git });

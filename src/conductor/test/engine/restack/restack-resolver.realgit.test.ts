@@ -1,13 +1,14 @@
-// Covers: task:14
+// Covers: task:2, task:14, task:rem-as-built-R2
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { makeGitRunner } from '../../../src/engine/rebase.js';
-import { resolveRestackConflict } from '../../../src/engine/restack/restack-resolver.js';
+import { missingCandidateSubjects } from '../../../src/engine/restack/restack-conflict-record.js';
+import { replayCandidateSubjects, resolveRestackConflict } from '../../../src/engine/restack/restack-resolver.js';
 import type { CommitterStamp } from '../../../src/engine/restack/restack-replay.js';
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { parseCommitSha, type ChildRange, type CommitSha } from '../../../src/engine/restack/restack-types.js';
@@ -102,11 +103,173 @@ async function refSnapshot(repo: string): Promise<string> {
   return (await execFile('git', ['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads/', 'refs/conductor/'], { cwd: repo })).stdout;
 }
 
+async function mergeFixture(kind: 'q-carried' | 'ancestry-only' | 'flattened'): Promise<{
+  repo: string;
+  range: ChildRange;
+  newParent: CommitSha;
+  ordinaryBeforeMerge: CommitSha;
+  merge: CommitSha;
+  ordinaryAfterMerge: CommitSha;
+  sideSubject: string;
+}> {
+  const repo = await mkdtemp(join(tmpdir(), 'restack-resolver-merge-'));
+  repositories.push(repo);
+  const git = (args: string[], env?: NodeJS.ProcessEnv) => execFile('git', args, { cwd: repo, env });
+  const commit = async (subject: string) => {
+    await git(['add', '.']);
+    await git(['commit', '-qm', subject]);
+    return sha((await git(['rev-parse', 'HEAD'])).stdout);
+  };
+  await git(['init', '-q', '-b', 'main']);
+  await git(['config', 'user.name', 'Merge fixture']);
+  await git(['config', 'user.email', 'merge-fixture@example.test']);
+  await writeFile(join(repo, 'shared.txt'), 'base\n');
+  await writeFile(join(repo, 'side.txt'), 'base\n');
+  const base = await commit('base');
+  await git(['checkout', '-qb', 'child']);
+  await writeFile(join(repo, 'child.txt'), 'C\n');
+  const ordinaryBeforeMerge = await commit('C');
+  await git(['checkout', '-qb', 'side', base]);
+  await writeFile(join(repo, 'side.txt'), 'side work\n');
+  const sideSubject = 'S';
+  await commit(sideSubject);
+  await git(['checkout', '-q', 'main']);
+  if (kind !== 'flattened') {
+    await git(['merge', '--no-ff', '-m', 'carry side', 'side']);
+    await writeFile(join(repo, 'side.txt'), 'later main edit\n');
+    await commit('later main edit');
+  }
+  await writeFile(join(repo, 'shared.txt'), 'parent conflict\n');
+  const newParent = await commit('parent conflict');
+  await git(['checkout', '-q', 'child']);
+  if (kind === 'q-carried') {
+    await git(['merge', '--no-ff', '--no-commit', 'side']);
+    await writeFile(join(repo, 'hand.txt'), 'hand edit\n');
+    await git(['add', 'hand.txt']);
+    await git(['commit', '-qm', 'M']);
+  } else {
+    await git(['merge', '--no-ff', '-m', 'M', 'side']);
+  }
+  const merge = sha((await git(['rev-parse', 'HEAD'])).stdout);
+  await writeFile(join(repo, 'shared.txt'), 'later child edit\n');
+  const ordinaryAfterMerge = await commit('T');
+  const child = parseChildId(2);
+  if (!child) throw new Error('child must parse');
+  return { repo, range: { child, oldParent: base, oldTip: ordinaryAfterMerge, kind: 'active' }, newParent, ordinaryBeforeMerge, merge, ordinaryAfterMerge, sideSubject };
+}
+
 afterEach(async () => {
   await Promise.all(repositories.splice(0).map((repo) => rm(repo, { recursive: true, force: true })));
 });
 
 describe('resolveRestackConflict (real local Git)', () => {
+  it('replays a q-carried merge from the flattened todo, maps its rewrite to the original merge, and omits side lineage', async () => {
+    const subject = await mergeFixture('q-carried');
+    const result = await resolveRestackConflict({
+      worktree: subject.repo, range: subject.range, newParent: subject.newParent, stamp, cap: 1,
+      resolver: async (context) => {
+        await writeFile(join(context.projectRoot, 'shared.txt'), 'settled child edit\n');
+        const git = makeGitRunner(context.projectRoot);
+        await git(['add', 'shared.txt'], { env: context.environment });
+        await git(['rebase', '--continue'], { env: context.environment });
+        return { resolved: true };
+      },
+    });
+
+    expect(result.outcome.kind).toBe('changed');
+    expect(result.tip).toBeDefined();
+    expect((await execFile('git', ['show', `${result.tip}:hand.txt`], { cwd: subject.repo })).stdout).toBe('hand edit\n');
+    expect((await execFile('git', ['show', `${result.tip}:side.txt`], { cwd: subject.repo })).stdout).toBe('later main edit\n');
+    expect((await execFile('git', ['log', '--format=%s', `${subject.newParent}..${result.tip}`], { cwd: subject.repo })).stdout).toContain('M');
+    expect((await execFile('git', ['log', '--format=%s', `${subject.newParent}..${result.tip}`], { cwd: subject.repo })).stdout).not.toContain(subject.sideSubject);
+    const candidateSubjects = await replayCandidateSubjects(makeGitRunner(subject.repo), result.candidates);
+    expect(candidateSubjects).not.toContain(subject.sideSubject);
+    await expect(missingCandidateSubjects(makeGitRunner(subject.repo), subject.newParent, result.tip!, candidateSubjects)).resolves.toEqual([]);
+    expect(result.rewrites.get(subject.merge)).toBeDefined();
+    expect(result.audit).toMatchObject({ flattenedMerges: [] });
+  });
+
+  it('maps a not-carried flattened merge rewrite to its original merge and reports it in the audit', async () => {
+    const subject = await mergeFixture('flattened');
+    const result = await resolveRestackConflict({
+      worktree: subject.repo, range: subject.range, newParent: subject.newParent, stamp, cap: 1,
+      resolver: async (context) => {
+        await writeFile(join(context.projectRoot, 'shared.txt'), 'settled child edit\n');
+        const git = makeGitRunner(context.projectRoot);
+        await git(['add', 'shared.txt'], { env: context.environment });
+        await git(['rebase', '--continue'], { env: context.environment });
+        return { resolved: true };
+      },
+    });
+    const candidateSubjects = await replayCandidateSubjects(makeGitRunner(subject.repo), result.candidates);
+    expect(result.outcome.kind).toBe('changed');
+    expect(result.rewrites.get(subject.merge)).toBeDefined();
+    expect(result.audit).toMatchObject({ flattenedMerges: [subject.merge] });
+    expect(candidateSubjects).not.toContain(subject.sideSubject);
+  });
+
+  it('maps missing-hook fallback rewrites from synthetic C, M, T commits to their original commits', async () => {
+    const subject = await mergeFixture('flattened');
+    const noHooks = join(subject.repo, 'no-post-rewrite-hooks');
+    await mkdir(noHooks);
+    const result = await resolveRestackConflict({
+      worktree: subject.repo, range: subject.range, newParent: subject.newParent, stamp, cap: 1,
+      resolver: async (context) => {
+        await writeFile(join(context.projectRoot, 'shared.txt'), 'settled child edit\n');
+        const git = makeGitRunner(context.projectRoot);
+        await git(['add', 'shared.txt'], { env: context.environment });
+        await git(['rebase', '--continue'], { env: context.environment });
+        return { resolved: true };
+      },
+      temporaryGit: (worktree) => async (args, options) => makeGitRunner(worktree)(args, {
+        ...options,
+        env: { ...options?.env, GIT_CONFIG_VALUE_0: noHooks },
+      }),
+    });
+
+    expect(result.outcome.kind).toBe('changed');
+    expect([...result.rewrites.keys()].sort()).toEqual([
+      subject.ordinaryBeforeMerge,
+      subject.merge,
+      subject.ordinaryAfterMerge,
+    ].sort());
+  });
+
+  it('preserves the no-merge resolver path and reports no merge audit', async () => {
+    const subject = await fixture();
+    const result = await resolveRestackConflict({
+      worktree: subject.repo, range: subject.range, newParent: subject.newParent, stamp,
+      comparisonCommits: [subject.carried], cap: 1,
+      resolver: async (context) => {
+        await writeFile(join(context.projectRoot, 'shared.txt'), 'resolved\n');
+        const git = makeGitRunner(context.projectRoot);
+        await git(['add', 'shared.txt'], { env: context.environment });
+        await git(['rebase', '--continue'], { env: context.environment });
+        return { resolved: true };
+      },
+    });
+    expect(result.candidates).toEqual([subject.empty, subject.conflicting]);
+    expect(result.audit).toBeUndefined();
+  });
+
+  it('accepts an ancestry-only merge without requiring its merge subject in the settled history', async () => {
+    const subject = await mergeFixture('ancestry-only');
+    const result = await resolveRestackConflict({
+      worktree: subject.repo, range: subject.range, newParent: subject.newParent, stamp, cap: 1,
+      resolver: async (context) => {
+        await writeFile(join(context.projectRoot, 'shared.txt'), 'hand edit\n');
+        const git = makeGitRunner(context.projectRoot);
+        await git(['add', 'shared.txt'], { env: context.environment });
+        await git(['rebase', '--continue'], { env: context.environment });
+        return { resolved: true };
+      },
+    });
+    const subjects = (await execFile('git', ['log', '--format=%s', `${subject.newParent}..${result.tip}`], { cwd: subject.repo })).stdout;
+    expect(result.outcome.kind).toBe('changed');
+    expect(subjects).not.toContain('M');
+    expect(result.audit).toMatchObject({ ancestryOnlyMerges: [subject.merge] });
+  });
+
   it('resolves only the replay candidates in a detached temporary worktree, stamps every rewritten commit, and moves no real ref', async () => {
     const subject = await fixture();
     const beforeRefs = await refSnapshot(subject.repo);

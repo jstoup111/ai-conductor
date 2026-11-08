@@ -1081,6 +1081,11 @@ Both refusals block `finish` and issue no push. For recovery, see
 
 A stacked feature does not use this path: the re-kick and finish-time rebases run a whole-stack
 [restack](../reference/configuration.md#restack), and autoresolve escalates with `published-stack`.
+A restack conflict on a child whose range contains a merge goes to the resolver with that range
+flattened by the same rule, and a settled restack records a `rebase_merge_audit` event. An
+unsettled conflict takes the ordinary
+[restack conflict halt](../runbooks/stalled-or-stuck-feature.md#a-stacked-restack-halted), whose
+recipe starts from the flattened tip.
 Once the stack is [published](../reference/configuration.md#stacked-publication), the re-kick
 leaves it on its current base and emits `restack_refused` with reason `published-stack`.
 

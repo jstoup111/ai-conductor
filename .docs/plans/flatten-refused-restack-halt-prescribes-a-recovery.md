@@ -337,3 +337,19 @@ Task 1, Task 3 ─▶ Task 8 ─▶ Task 9, Task 10
 - [ ] All negative path criteria covered by at least one task
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-as-built-R1: Pass comparisonCommits and haltRecordSlug into buildFlattenedHandoff in haltRecordedRestackConflict (restack-resolver.ts) and its executor/recovery callers, with a realgit regression proving upstream-equivalent and halt-record-only subjects stay out of the merge-bearing conflict record
+**Gate:** as-built
+**Rationale:** Verified (98%): restack-resolver.ts:72 calls buildFlattenedHandoff(range, replayParent, git) with no comparisonCommits/haltRecordSlug, and :73 replaces options.candidateSubjects with subjects from that unfiltered handoff, so upstream-equivalent and halt-record-only commits re-enter the durable conflict record's candidate subjects. ADR-2026-10-31 D1 stays authoritative; this is conforming implementation drift. Plan Task 8 Step 2 (in haltRecordedRestackConflict, run buildFlattenedHandoff and record its candidate subjects and flattenedTip) admits the repair, and Task 1's done-when already requires halt-record-only commits to produce no candidate. Fix: thread the resolver's candidate-selection context (comparisonCommits, haltRecordSlug) through HaltRecordedRestackConflictOptions into the builder call; update the callers at restack-executor.ts:528/:766 and restack-recovery.ts:805/:839 to pass the journal's comparisonCommits and slug; add a realgit regression where a merge-bearing halt over a range with an upstream-equivalent commit and a halt-record-only commit records neither subject. Completed Task 8 behavior (flattenedTip pin, recipe start) and its tests are kept.
+**Governing clause:** adr-2026-10-31-operator-decision-for-stacked-restack-conflicts decision 1
+**Done when:**
+- adr-2026-10-31-operator-decision-for-stacked-restack-conflicts decision 1 is satisfied by this task.
+- The repair for task rem-as-built-R1 is committed and its targeted tests pass.
+
+### Task rem-as-built-R2: Map cloned ordinary commits in the flattened handoff back to their original shas in translateFlattenedRewrites (restack-flattened-handoff.ts, restack-resolver.ts), with a realgit regression for the missing-hook fallback over C, M, T
+**Gate:** as-built
+**Rationale:** Verified (97%): restack-flattened-handoff.ts:107 writes a linear clone (writeLinearCommit) of every ordinary commit into the synthetic chain while pushing the original sha into the todo. The rewritesByUniqueSubject fallback at restack-resolver.ts:297-300 walks oldParent..handoff.tip, so its keys are the clone shas. translateFlattenedRewrites (:171, applied at :311) maps only flattenedMergesByCommit entries back to originals, so ordinary commits after a merge keep synthetic keys, which breaks ADR-2026-10-10 D6's original-commit rewrite mapping. The ADR stays authoritative; this is implementation drift. Plan Task 2 Step 2 ('Translate readRewrites output from flattened commits to their merges') owns rewrite translation for the merge-bearing path and admits the repair. Fix: have the handoff record a synthetic-to-original map for cloned ordinary commits (alongside flattenedMergesByCommit) and apply it in translateFlattenedRewrites on both the missing-subject and settled return paths; add a realgit regression with ordinary C, merge M and ordinary T where the hook writes no rewrites, asserting the keys are C, M and T's original shas. The existing Task 2 rewrite-key test and the no-merge path stay unchanged.
+**Governing clause:** adr-2026-10-10-stacked-restack-journaled-replay decision 6
+**Done when:**
+- adr-2026-10-10-stacked-restack-journaled-replay decision 6 is satisfied by this task.
+- The repair for task rem-as-built-R2 is committed and its targeted tests pass.

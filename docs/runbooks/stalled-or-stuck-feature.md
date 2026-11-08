@@ -1314,7 +1314,6 @@ the stack. Read the reason, the named child, and the detail lines in the HALT, t
 | `checked-out-elsewhere` | A child branch is checked out in another worktree. |
 | `lock-unavailable`, `stack-ref-changed` | Another Git operation held or moved a stack ref during the move. |
 | `replay-mismatch`, `verification-failed` | The replayed result failed path-ownership or post-move verification. |
-| `flatten_refused` | A content-bearing merge in the named child conflicts with its new parent. |
 | `published-stack` | The stack is published and frozen; see [what the published-stack freeze blocks](#what-the-published-stack-freeze-blocks). Only a local-work restack halts with it; a base refresh refuses and continues. |
 | `deferred-base-refresh` | A routed round or revalidation queue is open, so the base refresh was deferred. It appears only as a `restack_refused` event, never as a HALT; the re-kick retries later. |
 
@@ -1335,6 +1334,12 @@ git switch -c restack-resolve/<slug>/c<k> <old-tip>
 git rebase --onto <new-parent> <old-parent>
 ai-conductor stack restack-resolve --slug <slug> --child <k> --tip <resolved-tip>
 ```
+
+When the child's range contains a merge, the recipe's `git switch` starts from a pinned flattened
+tip instead of `<old-tip>`: the same tree as one linear chain, with each content-bearing merge
+replaced by a single-parent commit carrying `Flattened-merge: <merge sha>`. The engine holds it at
+`refs/conductor/<slug>/restack/conflict/flattened-tip` until the resolution is consumed. Run the
+recipe as printed.
 
 For a base-refresh or feature-repair conflict — including a closed child — an operator can instead
 record a decision and let the daemon resume the replay:

@@ -3,9 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { classifyReplayMerge, type GitRunner } from '../rebase.js';
 import type { CommitSha, ChildRange } from './restack-types.js';
-import { parseCommitSha } from './restack-types.js';
 import { unionRemBlocks } from '../routing/rem-block-merge.js';
-import { carryNewestHaltRecord, haltRecordPathFor, haltRecordTree, isHaltRecordOnlyCommit, mapOmittedHaltRecordCommits } from './halt-record-bookkeeping.js';
+import { carryNewestHaltRecord, haltRecordPathFor, haltRecordTree, mapOmittedHaltRecordCommits } from './halt-record-bookkeeping.js';
+import { selectReplayCandidates } from './restack-replay-candidates.js';
+import { authorOf, mergeParents, messageOf, requiredCommitSha, sideLineageCount, type AuthorIdentity } from './restack-commit-metadata.js';
 
 /** A deterministic append-only plan conflict that must halt without an LLM resolver. */
 export class RemBlockBodyMismatchError extends Error {
@@ -45,77 +46,15 @@ export interface ReplayChildRangeOptions {
   readonly haltRecordOwned?: boolean;
 }
 
-interface AuthorIdentity {
-  readonly name: string;
-  readonly email: string;
-  readonly date: string;
-}
-
-function requiredSha(raw: string, context: string): CommitSha {
-  const value = parseCommitSha(raw.trim());
-  if (!value) throw new Error(`${context} did not return a full Git object name`);
-  return value;
-}
-
 async function requiredShaFrom(git: GitRunner, args: string[], context: string): Promise<CommitSha> {
   const result = await git(args);
   if (result.exitCode !== 0) throw new Error(`${context}: ${result.stderr}`);
-  return requiredSha(result.stdout, context);
-}
-
-async function authorOf(git: GitRunner, commit: CommitSha): Promise<AuthorIdentity> {
-  const result = await git(['show', '-s', '--format=%an%x00%ae%x00%aI', commit]);
-  if (result.exitCode !== 0) throw new Error(`could not read author for ${commit}: ${result.stderr}`);
-  const [name, email, date, extra] = result.stdout.split('\0');
-  if (!name || !email || !date || extra !== undefined) throw new Error(`could not parse author for ${commit}`);
-  return { name, email, date: date.trim() };
-}
-
-async function messageOf(git: GitRunner, commit: CommitSha): Promise<string> {
-  const result = await git(['show', '-s', '--format=%B', commit]);
-  if (result.exitCode !== 0) throw new Error(`could not read message for ${commit}: ${result.stderr}`);
-  return result.stdout;
-}
-
-async function mergeParents(git: GitRunner, commit: CommitSha): Promise<readonly CommitSha[]> {
-  const result = await git(['rev-list', '--parents', '-n', '1', commit]);
-  if (result.exitCode !== 0) throw new Error(`could not read parents for ${commit}: ${result.stderr}`);
-  return result.stdout.trim().split(/\s+/).slice(1).map((parent) => requiredSha(parent, `parent for ${commit}`));
-}
-
-async function sideLineageCount(git: GitRunner, firstParent: CommitSha, secondParent: CommitSha): Promise<number> {
-  const result = await git(['rev-list', `${firstParent}..${secondParent}`]);
-  if (result.exitCode !== 0) throw new Error(`could not list side lineage for ${secondParent}: ${result.stderr}`);
-  return result.stdout.split('\n').filter(Boolean).length;
-}
-
-async function commitsInFirstParentRange(git: GitRunner, range: ChildRange): Promise<CommitSha[]> {
-  const result = await git(['rev-list', '--first-parent', '--reverse', `${range.oldParent}..${range.oldTip}`]);
-  if (result.exitCode !== 0) throw new Error(`could not list restack range: ${result.stderr}`);
-  return result.stdout.split('\n').filter(Boolean).map((value) => requiredSha(value, 'rev-list'));
+  return requiredCommitSha(result.stdout, context);
 }
 
 async function commitsAreSigned(git: GitRunner): Promise<boolean> {
   const result = await git(['config', '--bool', 'commit.gpgSign']);
   return result.exitCode === 0 && result.stdout.trim() === 'true';
-}
-
-async function patchIdForCommit(git: GitRunner, commit: CommitSha): Promise<string | undefined> {
-  const patch = await git(['show', '--format=', '--no-ext-diff', commit]);
-  if (patch.exitCode !== 0) throw new Error(`could not read patch for ${commit}: ${patch.stderr}`);
-  const result = await git(['patch-id', '--stable'], { input: patch.stdout });
-  if (result.exitCode !== 0) throw new Error(`could not compute patch-id for ${commit}: ${result.stderr}`);
-  const line = result.stdout.trim().split('\n').find(Boolean);
-  return line?.split(/\s+/, 1)[0];
-}
-
-async function patchIdsForCommits(git: GitRunner, commits: readonly CommitSha[]): Promise<ReadonlySet<string>> {
-  const patchIds = new Set<string>();
-  for (const commit of commits) {
-    const patchId = await patchIdForCommit(git, commit);
-    if (patchId !== undefined) patchIds.add(patchId);
-  }
-  return patchIds;
 }
 
 function conflictPaths(stdout: string, stderr: string): string[] {
@@ -138,10 +77,10 @@ async function pinnedHaltRecordTree(
   source: CommitSha,
   path: string,
 ): Promise<CommitSha> {
-  const mergedTree = requiredSha(mergeTreeOutput.split('\n', 1)[0] ?? '', `merge-tree for ${commit}`);
+  const mergedTree = requiredCommitSha(mergeTreeOutput.split('\n', 1)[0] ?? '', `merge-tree for ${commit}`);
   const record = await haltRecordTree(git, source, path, { kind: 'read' });
   const tree = await haltRecordTree(git, mergedTree, path, { kind: 'write', record });
-  return requiredSha(tree, `halt-record tree for ${commit}`);
+  return requiredCommitSha(tree, `halt-record tree for ${commit}`);
 }
 
 async function textAt(git: GitRunner, revision: string, path: string): Promise<string | undefined> {
@@ -165,7 +104,7 @@ async function unionPlanConflictTree(
   const union = unionRemBlocks(base, ours, theirs);
   if (union.kind === 'declined') return undefined;
   if (union.kind === 'body-mismatch') throw new RemBlockBodyMismatchError(commit, path, union.remId);
-  const mergedTree = requiredSha(mergeTreeOutput.split('\n', 1)[0] ?? '', `merge-tree for ${commit}`);
+  const mergedTree = requiredCommitSha(mergeTreeOutput.split('\n', 1)[0] ?? '', `merge-tree for ${commit}`);
   const directory = await mkdtemp(join(tmpdir(), 'restack-rem-union-index-'));
   const indexPath = join(directory, 'index');
   const env = { GIT_INDEX_FILE: indexPath };
@@ -173,10 +112,10 @@ async function unionPlanConflictTree(
     const read = await git(['read-tree', mergedTree], { env });
     const blob = await git(['hash-object', '-w', '--stdin'], { input: union.text });
     if (read.exitCode !== 0 || blob.exitCode !== 0) throw new Error(`cannot construct remediation plan union for ${commit}`);
-    const update = await git(['update-index', '--add', '--cacheinfo', `100644,${requiredSha(blob.stdout, 'remediation plan blob')},${path}`], { env });
+    const update = await git(['update-index', '--add', '--cacheinfo', `100644,${requiredCommitSha(blob.stdout, 'remediation plan blob')},${path}`], { env });
     const written = await git(['write-tree'], { env });
     if (update.exitCode !== 0 || written.exitCode !== 0) throw new Error(`cannot write remediation plan union for ${commit}`);
-    return requiredSha(written.stdout, `remediation plan union tree for ${commit}`);
+    return requiredCommitSha(written.stdout, `remediation plan union tree for ${commit}`);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -209,19 +148,13 @@ export async function replayChildRange(
   options: ReplayChildRangeOptions = {},
 ): Promise<ChildRangeReplay> {
   const sign = await commitsAreSigned(git);
-  const comparisonPatchIds = await patchIdsForCommits(git, options.comparisonCommits ?? []);
   const rewrites = new Map<CommitSha, CommitSha>();
   const flattenedMerges: CommitSha[] = [];
   const ancestryOnlyMerges: CommitSha[] = [];
   let sideLineageCountTotal = 0;
   let accumulator = newParent;
 
-  for (const commit of await commitsInFirstParentRange(git, range)) {
-    if (options.haltRecordSlug !== undefined && await isHaltRecordOnlyCommit(commit, options.haltRecordSlug, git)) continue;
-    // Only patches newly introduced by this operation are already carried.
-    // A matching patch in the stack itself (for example a child re-applying a
-    // reverted parent change) must remain part of that child's history.
-    if (comparisonPatchIds.has(await patchIdForCommit(git, commit) ?? '')) continue;
+  for (const commit of await selectReplayCandidates(git, range, options.comparisonCommits, options.haltRecordSlug)) {
     const parents = await mergeParents(git, commit);
     const isMerge = parents.length >= 2;
     const merge = isMerge
@@ -229,11 +162,11 @@ export async function replayChildRange(
       : undefined;
     if (merge?.kind === 'ancestry-only') {
       ancestryOnlyMerges.push(commit);
-      sideLineageCountTotal += await sideLineageCount(git, requiredSha(merge.firstParent, `first parent for ${commit}`), requiredSha(merge.secondParent, `second parent for ${commit}`));
+      sideLineageCountTotal += await sideLineageCount(git, requiredCommitSha(merge.firstParent, `first parent for ${commit}`), requiredCommitSha(merge.secondParent, `second parent for ${commit}`));
       continue;
     }
     if (merge !== undefined) {
-      sideLineageCountTotal += await sideLineageCount(git, requiredSha(merge.firstParent, `first parent for ${commit}`), requiredSha(merge.secondParent, `second parent for ${commit}`));
+      sideLineageCountTotal += await sideLineageCount(git, requiredCommitSha(merge.firstParent, `first parent for ${commit}`), requiredCommitSha(merge.secondParent, `second parent for ${commit}`));
       if (merge.kind === 'flattened') flattenedMerges.push(commit);
     }
     const mergeArgs = merge?.kind === 'q-carried'
@@ -259,7 +192,7 @@ export async function replayChildRange(
     }
     const mergedTree = remUnionTree ?? (pinsHaltRecord
       ? await pinnedHaltRecordTree(git, merged.stdout, commit, pinSource, paths[0]!)
-      : requiredSha(merged.stdout, `merge-tree for ${commit}`));
+      : requiredCommitSha(merged.stdout, `merge-tree for ${commit}`));
 
     // Rebase drops a newly-empty patch, but evidence commits that began empty
     // remain meaningful history and must retain their exact correspondence.
@@ -275,7 +208,7 @@ export async function replayChildRange(
       '-p', accumulator,
     ], { input: replayedMessage, env: commitEnvironment(author, stamp) });
     if (result.exitCode !== 0) throw new Error(`commit-tree failed for ${commit}: ${result.stderr}`);
-    const rewritten = requiredSha(result.stdout, `commit-tree for ${commit}`);
+    const rewritten = requiredCommitSha(result.stdout, `commit-tree for ${commit}`);
     rewrites.set(commit, rewritten);
     accumulator = rewritten;
   }

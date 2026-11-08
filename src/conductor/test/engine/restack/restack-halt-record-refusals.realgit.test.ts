@@ -91,7 +91,7 @@ describe('halt-record bookkeeping preserves restack refusals (real local Git)', 
     expect(movedHistory).not.toContain('halt record: demo');
   });
 
-  it('does not let halt-record pinning bypass flatten_refused for a merge that also conflicts on source', async () => {
+  it('does not let halt-record pinning bypass the ordinary resolver conflict for a merge that also conflicts on source', async () => {
     const subject = await createSweepRepository('restack-halt-record-flatten-', cleanup);
     await subject.write('src/q.ts', 'base\n');
     await subject.git(['add', 'src/q.ts']);
@@ -100,7 +100,7 @@ describe('halt-record bookkeeping preserves restack refusals (real local Git)', 
     const c1 = await subject.commit('C1', 'c1.txt', 'c1\n');
     await subject.git(['update-ref', 'refs/conductor/demo/closed/c1', c1]);
     await subject.git(['checkout', '-qb', 'feat/c2/demo']);
-    await subject.commit('C2', 'src/q.ts', 'child\n');
+    await subject.commit('C2', 'src/c2.ts', 'child\n');
     await subject.git(['checkout', '-qb', 'side', c1]);
     await subject.write('src/q.ts', 'side\n');
     await subject.write('.docs/halted/demo.md', '# Halt record\nHalted at: 2026-10-31T12:00:00.000Z\n');
@@ -125,8 +125,7 @@ describe('halt-record bookkeeping preserves restack refusals (real local Git)', 
       .resolves.toMatchObject({ kind: 'halted', detail: expect.any(String) });
 
     const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
-    expect(halt).toContain('flatten_refused');
-    expect(halt).toContain(merge);
+    expect(halt).toMatch(/^restack conflict child 2/m);
     expect((await subject.git(['merge-base', '--is-ancestor', merge, 'feat/c2/demo'])).stderr).toBe('');
     expect(await stackRefs(subject)).toBe(before);
   });

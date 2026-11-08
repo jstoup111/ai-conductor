@@ -22,6 +22,8 @@ export interface RestackConflictRecord {
   readonly candidateSubjects: readonly string[];
   readonly commit: CommitSha;
   readonly paths: readonly string[];
+  /** Flattened hand-off tip retained until its conflict resolution is consumed. */
+  readonly flattenedTip?: CommitSha;
 }
 
 export interface StoredConflictRecord {
@@ -133,6 +135,10 @@ export function conflictParentRefFor(slug: string): RefName {
   return `refs/conductor/${slug}/restack/conflict/parent` as RefName;
 }
 
+export function conflictFlattenedTipRefFor(slug: string): RefName {
+  return `refs/conductor/${slug}/restack/conflict/flattened-tip` as RefName;
+}
+
 export function resolutionRefFor(slug: string, child: ChildId): RefName {
   return `refs/conductor/${slug}/restack/resolution/c${child}` as RefName;
 }
@@ -175,9 +181,12 @@ function parseConflictRecord(value: unknown): RestackConflictRecord | undefined 
   const newParent = parseCommitSha(value.newParent);
   const newParentTree = parseCommitSha(value.newParentTree);
   const commit = parseCommitSha(value.commit);
+  const hasFlattenedTip = value.flattenedTip !== undefined;
+  const flattenedTip = typeof value.flattenedTip === 'string' ? parseCommitSha(value.flattenedTip) : undefined;
   const candidateSubjects = parseStringArray(value.candidateSubjects);
   const paths = parseStringArray(value.paths);
-  if (!child || !oldParent || !oldTip || !newParent || !newParentTree || !commit || !candidateSubjects || !paths) return undefined;
+  if (!child || !oldParent || !oldTip || !newParent || !newParentTree || !commit || !candidateSubjects || !paths
+    || (hasFlattenedTip && !flattenedTip)) return undefined;
   return {
     opId: value.opId as RestackOpId,
     child,
@@ -188,6 +197,7 @@ function parseConflictRecord(value: unknown): RestackConflictRecord | undefined 
     candidateSubjects,
     commit,
     paths,
+    ...(flattenedTip === undefined ? {} : { flattenedTip }),
   };
 }
 
@@ -332,7 +342,7 @@ export async function readConflictRecord(
 
 /**
  * Store the record blob and its reachable replay parent in one compare-and-
- * swap transaction. Both refs carry an explicit old value, including creates.
+ * swap transaction. Every ref carries an explicit old value, including creates.
  */
 export async function writeConflictRecord(
   worktree: string,
@@ -347,11 +357,13 @@ export async function writeConflictRecord(
   if (previous.kind === 'unreadable') return { kind: 'unavailable' };
   const oldRecord = previous.kind === 'record' ? previous.blob : ZERO_SHA;
   const oldParent = await refValue(git, conflictParentRefFor(slug));
-  if (oldParent === undefined) return { kind: 'unavailable' };
+  const oldFlattenedTip = await refValue(git, conflictFlattenedTipRefFor(slug));
+  if (oldParent === undefined || oldFlattenedTip === undefined) return { kind: 'unavailable' };
   // Existing record and parent must describe one coherent durable hand-off;
   // replacing a partially-written or externally-corrupted pair would hide it.
   if ((previous.kind === 'record' && oldParent !== previous.record.newParent)
-    || (previous.kind === 'missing' && oldParent !== ZERO_SHA)) return { kind: 'unavailable' };
+    || (previous.kind === 'record' && oldFlattenedTip !== (previous.record.flattenedTip ?? ZERO_SHA))
+    || (previous.kind === 'missing' && (oldParent !== ZERO_SHA || oldFlattenedTip !== ZERO_SHA))) return { kind: 'unavailable' };
   const written = await runGit(git, ['hash-object', '-w', '--stdin'], serialized);
   const blob = written?.exitCode === 0 ? parseCommitSha(written.stdout.trim()) : undefined;
   if (!blob) return { kind: 'unavailable' };
@@ -359,6 +371,11 @@ export async function writeConflictRecord(
     'start',
     `update ${conflictRecordRefFor(slug)} ${blob} ${oldRecord}`,
     `update ${conflictParentRefFor(slug)} ${input.newParent} ${oldParent}`,
+    input.flattenedTip === undefined
+      ? (oldFlattenedTip === ZERO_SHA
+        ? `verify ${conflictFlattenedTipRefFor(slug)} ${ZERO_SHA}`
+        : `delete ${conflictFlattenedTipRefFor(slug)} ${oldFlattenedTip}`)
+      : `update ${conflictFlattenedTipRefFor(slug)} ${input.flattenedTip} ${oldFlattenedTip}`,
     'prepare',
     'commit',
     '',
