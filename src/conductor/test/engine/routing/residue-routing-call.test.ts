@@ -126,7 +126,7 @@ describe('residue routing call', () => {
   });
 
   // Covers: task:5
-  it('defaults omitted v2 implicated paths to an empty array', async () => {
+  it('preserves omission of optional v2 implicated paths', async () => {
     const judge = vi.fn<(prompt: string) => Promise<{ success: boolean; output: string }>>(async () => ({
       success: true,
       output: JSON.stringify({
@@ -141,8 +141,8 @@ describe('residue routing call', () => {
     await expect(runResidueRoutingCall({ items, declaredPositions, judge })).resolves.toMatchObject({
       kind: 'routed',
       answers: [
-        { itemId: 'finding-1', implicatedPaths: [] },
-        { itemId: 'finding-2', implicatedPaths: [] },
+        { itemId: 'finding-1' },
+        { itemId: 'finding-2' },
       ],
     });
   });

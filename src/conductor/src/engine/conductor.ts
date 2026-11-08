@@ -16749,7 +16749,7 @@ export class Conductor {
     }
     const answer = judged.answers[0]!;
     const ownership = resolveResidueOwner(answer);
-    const paths = await resolveCitedPaths(answer.implicatedPaths, leafBranchFor(slug), this.tasklessRoutingGit());
+    const paths = await resolveCitedPaths(answer.implicatedPaths ?? [], leafBranchFor(slug), this.tasklessRoutingGit());
     if ('kind' in paths) {
       return { kind: 'halted', reason: `taskless routing implicated-path resolution failed: ${paths.detail}` };
     }

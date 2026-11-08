@@ -41,7 +41,8 @@ export interface ResidueRoutingAnswer {
   readonly child: number;
   readonly candidates: readonly number[];
   readonly rationale: string;
-  readonly implicatedPaths: readonly string[];
+  /** Present only when the judge supplied path evidence for this item. */
+  readonly implicatedPaths?: readonly string[];
 }
 
 export type ParsedResidueRoutingItem =
@@ -130,7 +131,7 @@ export function parseResidueRoutingAnswer(
       child,
       candidates,
       rationale: row.rationale as string,
-      implicatedPaths: (row.implicatedPaths as string[] | undefined) ?? [],
+      ...(row.implicatedPaths === undefined ? {} : { implicatedPaths: row.implicatedPaths as string[] }),
     };
   });
 }
