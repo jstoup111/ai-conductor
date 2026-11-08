@@ -1,8 +1,15 @@
 // Covers: task:2
+import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import { BOUNDARY_REGISTRY } from './boundary-registry.js';
 import { checkBoundaryRatchet, formatBoundaryViolations } from './boundary-ratchet.js';
+import { readAllowlistEntries, readSourceTree } from './layer-ratchet.js';
+
+const structuralDirectory = dirname(fileURLToPath(import.meta.url));
+const boundaryAllowlistFile = join(structuralDirectory, 'boundary-allowlist.txt');
 
 describe('structural: external boundary ratchet', () => {
   it('reports an unlisted node fs promises import with its file, line, and boundary', () => {
@@ -419,5 +426,24 @@ describe('structural: external boundary ratchet', () => {
     });
 
     expect(result).toEqual({ touches: [], violations: [] });
+  });
+
+  // Covers: task:7
+  it('ratchets the real source tree against the committed boundary allowlist', async () => {
+    const files = await readSourceTree();
+    const entries = readAllowlistEntries(await readFile(boundaryAllowlistFile, 'utf8'));
+    const result = checkBoundaryRatchet({ files, allowlist: entries, registry: BOUNDARY_REGISTRY });
+
+    expect(files.size).toBeGreaterThan(0);
+    expect(entries.length).toBeGreaterThan(0);
+    expect(entries).toEqual([...entries].sort());
+    expect(new Set(entries).size).toBe(entries.length);
+    expect(entries.every((entry) => {
+      const parts = entry.split(' -> ');
+      return parts.length === 2 && parts[0] !== '' && parts[1] !== '' && parts[1] in BOUNDARY_REGISTRY;
+    })).toBe(true);
+    expect(entries).toContain('execution/provider-catalog.ts -> llm');
+    expect(result.violations.filter((violation) => violation.kind === 'stale-entry')).toEqual([]);
+    expect(result.violations, formatBoundaryViolations(result.violations, BOUNDARY_REGISTRY)).toEqual([]);
   });
 });
