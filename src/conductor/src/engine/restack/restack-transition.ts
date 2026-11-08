@@ -24,7 +24,6 @@ import { parsePlanTaskBlocks } from '../plan-task-parse.js';
 import { stripInheritedRemBlocks } from '../routing/rem-block-merge.js';
 import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import type { RestackMoveRef } from './restack-move.js';
-import { adaptedPathsFor } from './restack-ownership.js';
 import type { ChildRange, CommitSha, RestackCause } from './restack-types.js';
 
 export interface ApplyRestackTransitionOptions {
@@ -58,6 +57,19 @@ interface RestackTuple {
   readonly base: CommitSha;
   readonly onto: CommitSha;
   readonly head: CommitSha;
+}
+
+// `restack-ownership` reaches the rebase family, which already reaches this
+// transition. Load this resolved-tip-only helper after module initialization so
+// adapting paths remain part of the transition without creating that cycle.
+async function adaptedPathsFor(
+  range: ChildRange,
+  newParent: CommitSha,
+  tip: CommitSha,
+  git: GitRunner,
+): Promise<string[]> {
+  const ownership = await import('./restack-ownership.js');
+  return ownership.adaptedPathsFor(range, newParent, tip, git);
 }
 
 async function exists(path: string): Promise<boolean> {

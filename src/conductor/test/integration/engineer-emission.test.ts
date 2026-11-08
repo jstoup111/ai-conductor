@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -10,8 +10,8 @@ import type { BacklogItem } from '../../src/engine/daemon.js';
 // ───────────────────────────────────────────────────────────────────────────
 // Engineer-signal emission coverage wired into the real `makeRunFeature`.
 //
-// Drives the REAL `makeRunFeature` over a real tmp engineer dir (via
-// `$AI_CONDUCTOR_ENGINEER_DIR`) and real tmp worktree/project dirs. The runner
+// Drives the REAL `makeRunFeature` over a real tmp engineer dir (through its
+// injected store seam) and real tmp worktree/project dirs. The runner
 // does NOT emit today, so each assertion ("one signal line", "no completion
 // narrative", "manual = no emission") fails on its behavioral assertion — RED.
 //
@@ -40,13 +40,9 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
   beforeEach(async () => {
     engineerDir = await mkdtemp(join(tmpdir(), 'engineer-emit-test-'));
     worktreePath = await mkdtemp(join(tmpdir(), 'engineer-emit-wt-'));
-    // The production runner resolves the store through ADR-002 D6's env
-    // override; stub it per test so no fixture can reach the operator store.
-    vi.stubEnv('AI_CONDUCTOR_ENGINEER_DIR', engineerDir);
   });
 
   afterEach(async () => {
-    vi.unstubAllEnvs();
     await rm(engineerDir, { recursive: true, force: true });
     await rm(worktreePath, { recursive: true, force: true });
   });
@@ -100,6 +96,10 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
       // Project key for the store (production sets this to basename(projectRoot),
       // never the worktree path — FR-9).
       project: 'test-project',
+      // Inject the process boundary. A test must not depend on a mutable
+      // process-wide environment variable to keep emissions out of the
+      // operator's engineer store.
+      engineerDir,
     } as unknown as FeatureRunnerDeps;
   }
 
