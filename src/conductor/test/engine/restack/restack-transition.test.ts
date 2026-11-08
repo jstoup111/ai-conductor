@@ -166,7 +166,7 @@ describe('applyRestackTransition', () => {
     expect(await readVerdict(root, 'build_review')).toBeNull();
   });
 
-  it('reopens an active child\'s scoped reviews when its resolved tip adapts a new-parent test', async () => {
+  it("reopens an active child's scoped reviews when its resolved tip adapts a new-parent test", async () => {
     const root = await mkdtemp(join(tmpdir(), 'restack-transition-'));
     directories.push(root);
     const parent = parseChildId(1)!;
