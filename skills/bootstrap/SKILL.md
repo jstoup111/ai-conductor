@@ -377,7 +377,7 @@ Add to `.gitignore` (idempotent — don't duplicate):
 - `.memory` — **no trailing slash.** It's always a symlink (see above), and git's trailing-slash
   gitignore patterns match real directories only, not symlinks-to-directories — `.memory/` looks
   right but silently fails to match, which would let a machine-local symlink (its target embeds
-  the operator's absolute home path) get committed. `ai-conductor memory setup` also writes this
+  the operator's absolute home path) get committed. The harness's memory setup also writes this
   rule to the repository's shared `info/exclude`, so projects that never ran bootstrap are covered;
   the `.gitignore` entry makes it visible to contributors.
 - `.env` — local environment (not committed; `.env.example` is the committed reference)
