@@ -69,6 +69,8 @@ export interface CheckpointResult {
   readonly committed: boolean;
   readonly published: boolean;
   readonly prUrl?: string;
+  /** Presentation refresh failures never invalidate the durable checkpoint. */
+  readonly warnings?: readonly string[];
 }
 
 async function publishCheckpoint(
@@ -91,6 +93,7 @@ async function publishCheckpoint(
     throw new Error(`compose checkpoint: local checkpoint was saved but push failed: ${error instanceof Error ? error.message : String(error)}. Retry with compose resume ${branch}`);
   }
   let pr = await publication.findOpenPullRequest(branch);
+  const warnings: string[] = [];
   const block = renderRunBlock(record);
   if (!pr) {
     let sourceRef: string | undefined;
@@ -111,11 +114,12 @@ async function publishCheckpoint(
     try { await publication.editPullRequest({ url: pr.url, body: upsertRunBlock(pr.body, block) }); } catch {
       // A presentation failure never invalidates the durable commit/push.  The
       // next checkpoint deliberately retries this edit even when it is clean.
+      warnings.push('Composer PR run block could not be refreshed; the checkpoint is saved and will retry on the next checkpoint.');
     }
   }
   await publication.published?.({ slug, branch, prUrl: pr.url });
   await deps.emit({ ...event, published: true });
-  return { slug, state, committed: false, published: true, prUrl: pr.url };
+  return { slug, state, committed: false, published: true, prUrl: pr.url, ...(warnings.length ? { warnings } : {}) };
 }
 
 const defaultFs: CheckpointFileSystem = {

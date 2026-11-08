@@ -92,10 +92,10 @@ describe('dispatchEngineer interactive host launch', () => {
 
     expect([claudeSpawn.mock.calls, codexSpawn.mock.calls]).toEqual([
       [['claude', ['--permission-mode', 'default', '/composer'], process.cwd(), {
-        INHERITED_KEY: 'preserved', AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude',
+        INHERITED_KEY: 'preserved', AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String),
       }]],
       [['codex', ['$composer'], process.cwd(), {
-        INHERITED_KEY: 'preserved', AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex',
+        INHERITED_KEY: 'preserved', AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String),
       }]],
     ]);
   });
@@ -121,8 +121,8 @@ describe('dispatchEngineer interactive host launch', () => {
     expect({ code, spawnCalls: spawnHost.mock.calls, confirmCalls: confirmAnother.mock.calls }).toEqual({
       code: 0,
       spawnCalls: [
-        ['/hosts/initial-codex', ['$composer add retries'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex' }],
-        ['/hosts/initial-codex', ['$composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex' }],
+        ['/hosts/initial-codex', ['$composer add retries'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) }],
+        ['/hosts/initial-codex', ['$composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) }],
       ],
       confirmCalls: [[], []],
     });
@@ -142,7 +142,7 @@ describe('dispatchEngineer interactive host launch', () => {
 
     expect({ code, spawnCalls: spawnHost.mock.calls, confirmCalls: confirmAnother.mock.calls }).toEqual({
       code: 23,
-      spawnCalls: [['codex', ['$composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex' }]],
+      spawnCalls: [['codex', ['$composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) }]],
       confirmCalls: [[]],
     });
   });
@@ -261,7 +261,7 @@ describe('dispatchEngineer interactive host launch', () => {
         'engineer: could not launch codex executable codex (spawn codex ENOENT). ' +
           'Install it or set CODEX_EXECUTABLE; if already in a session, run $composer directly.',
       ]),
-      spawnCalls: [['codex', ['$composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex' }]],
+      spawnCalls: [['codex', ['$composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) }]],
       discoveryCalls: [],
     });
   });
@@ -280,7 +280,7 @@ describe('dispatchEngineer interactive host launch', () => {
     expect([code, printErr.mock.calls.flat(), spawnHost.mock.calls]).toEqual([
       1,
       expect.arrayContaining([expect.stringContaining('/opt/missing/codex'), expect.stringContaining('CODEX_EXECUTABLE'), expect.stringContaining('$composer')]),
-      [['/opt/missing/codex', ['$composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex' }]],
+      [['/opt/missing/codex', ['$composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) }]],
     ]);
   });
 
@@ -295,7 +295,7 @@ describe('dispatchEngineer interactive host launch', () => {
     expect({ code, spawnCalls: spawnHost.mock.calls, discoveryCalls: vi.mocked(discoverInstalledProviders).mock.calls })
       .toEqual({
         code: 0,
-        spawnCalls: [['claude', ['--permission-mode', 'default', '/composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude' }]],
+        spawnCalls: [['claude', ['--permission-mode', 'default', '/composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) }]],
         discoveryCalls: [],
       });
   });
@@ -314,8 +314,8 @@ describe('dispatchEngineer interactive host launch', () => {
     );
 
     expect([codexSpawn.mock.calls, claudeSpawn.mock.calls]).toEqual([
-      [['codex', ['$composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex' }]],
-      [['claude', ['--permission-mode', 'acceptEdits', '/composer'], process.cwd(), { CONDUCT_ENGINEER_PERMISSION_MODE: 'acceptEdits', AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude' }]],
+      [['codex', ['$composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) }]],
+      [['claude', ['--permission-mode', 'acceptEdits', '/composer'], process.cwd(), { CONDUCT_ENGINEER_PERMISSION_MODE: 'acceptEdits', AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) }]],
     ]);
   });
 
@@ -344,8 +344,8 @@ describe('dispatchEngineer interactive host launch', () => {
             'Install it or set CODEX_EXECUTABLE; if already in a session, run $composer directly.',
         ]),
         spawnCalls: [
-          ['codex', ['$composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex' }],
-          ['codex', ['$composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex' }],
+          ['codex', ['$composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) }],
+          ['codex', ['$composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) }],
         ],
         confirmCalls: [[]],
       });
@@ -414,7 +414,7 @@ describe('dispatchEngineer interactive host launch', () => {
       'claude',
       expect.arrayContaining(['--permission-mode', 'default']),
       process.cwd(),
-      { CONDUCT_ENGINEER_PERMISSION_MODE: 'plan', AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude' },
+      { CONDUCT_ENGINEER_PERMISSION_MODE: 'plan', AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) },
     );
   });
 
@@ -426,7 +426,7 @@ describe('dispatchEngineer interactive host launch', () => {
       launchOptions({ ok: true, config: { llm_provider: 'codex' }, warnings: [] }, spawnHost),
     );
 
-    expect(spawnHost).toHaveBeenCalledWith('codex', ['$composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex' });
+    expect(spawnHost).toHaveBeenCalledWith('codex', ['$composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) });
   });
 
   it.each([
@@ -445,7 +445,7 @@ describe('dispatchEngineer interactive host launch', () => {
       executable,
       expect.any(Array),
       process.cwd(),
-      { AI_CONDUCTOR_AUTHORING_PROVIDER: executable },
+      { AI_CONDUCTOR_AUTHORING_PROVIDER: executable, AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) },
     );
   });
 
@@ -461,8 +461,8 @@ describe('dispatchEngineer interactive host launch', () => {
     );
 
     expect([composeSpawn.mock.calls[0], engineerSpawn.mock.calls[0]]).toEqual([
-      ['claude', ['--permission-mode', 'default', '/composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude' }],
-      ['codex', ['$composer add retries'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex' }],
+      ['claude', ['--permission-mode', 'default', '/composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) }],
+      ['codex', ['$composer add retries'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) }],
     ]);
   });
 
@@ -481,8 +481,8 @@ describe('dispatchEngineer interactive host launch', () => {
     );
 
     expect([codexSpawn.mock.calls[0], claudeSpawn.mock.calls[0]]).toEqual([
-      ['/opt/hosts/codex', ['$composer add retries'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex' }],
-      ['claude', ['--permission-mode', 'default', '/composer'], process.cwd(), { CONDUCT_ENGINEER_PERMISSION_MODE: 'plan', AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude' }],
+      ['/opt/hosts/codex', ['$composer add retries'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) }],
+      ['claude', ['--permission-mode', 'default', '/composer'], process.cwd(), { CONDUCT_ENGINEER_PERMISSION_MODE: 'plan', AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) }],
     ]);
   });
 
@@ -531,7 +531,7 @@ describe('dispatchEngineer interactive host launch', () => {
       await rm(root, { recursive: true, force: true });
     }
 
-    expect(spawnHost).toHaveBeenCalledWith('codex', ['$composer'], project, { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex' });
+    expect(spawnHost).toHaveBeenCalledWith('codex', ['$composer'], project, { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) });
   });
 
   it('accepts user-only configuration keys when the launching project has none', async () => {
@@ -570,7 +570,7 @@ describe('dispatchEngineer interactive host launch', () => {
       await rm(root, { recursive: true, force: true });
     }
 
-    expect(spawnHost).toHaveBeenCalledWith('codex', ['$composer'], project, { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex' });
+    expect(spawnHost).toHaveBeenCalledWith('codex', ['$composer'], project, { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) });
   });
 
   it.each(['claude', 'codex'] as const)('refuses %s without an attached terminal before configuration, polling, or spawning', async (provider) => {
