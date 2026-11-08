@@ -366,3 +366,12 @@ Task 1 ─▶ Task 2 ─▶ Task 3 ─▶ Task 4 ─▶ Task 5 ─▶ Task 6 ─
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-prd-audit-5-r1: Add a format-script.test.ts case that uses only parseable in-scope files in the fixture repository, including at least one non-canonical TypeScript file and one non-canonical shell file. Commit them, run `format.mjs --write --all`, and assert exit 0. Assert each in-scope file is now canonical: single quotes, semicolons, two-space indentation, LF endings, and no line over 120 columns. Assert a following `--check --all` exits 0. Use only the fixture repository, never the real one. Leave the existing ignored/unsafe --all test unchanged.
+**Gate:** prd-audit
+**Rationale:** Verified in src/conductor/test/format-script.test.ts:210-228: the only --all test includes the unparseable bad.ts, so `--write --all` exits 1 and `--check --all` is asserted to exit 1. No test checks that a.ts is canonical after `--write --all`, and none shows `--check --all` exiting 0. Task 5's done-when explicitly requires that test, so task 5 admits the repair. This is a missing test inside an existing task, which makes it BUILD work. No architecture or product decision is involved. The test must run against the temporary fixture repository from createRepository(), never the real repository (Story 6.4). The existing test that covers unsafe and ignored files stays unchanged.
+**Criterion:** S2.3
+**Parent task:** 5
+**Done when:**
+- [test] S2.3 is satisfied by this task.
+- The repair for task rem-prd-audit-5-r1 is committed and its targeted tests pass.
