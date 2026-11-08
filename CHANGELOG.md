@@ -260,6 +260,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Stacked builds now route manual-test failures to the child that can repair them. ([implementation PR #3655](https://github.com/jstoup111/ai-conductor/pull/3655)).
 - Memory setup now keeps `.memory` out of git in every worktree, even for projects that never ran bootstrap. ([implementation PR #3644](https://github.com/jstoup111/ai-conductor/pull/3644)).
 - build_review no longer fails a lap as review-input-mutated when reviewer transcripts are captured mid-lap. ([implementation PR #3672](https://github.com/jstoup111/ai-conductor/pull/3672)).
+- Restack safely refuses a child resolution when its recorded target tip has changed. ([implementation PR #3667](https://github.com/jstoup111/ai-conductor/pull/3667)).
 
 ## Migration
 
