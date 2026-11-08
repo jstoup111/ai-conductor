@@ -1,3 +1,4 @@
+// Covers: task:14
 import { describe, expect, it } from 'vitest';
 import { resumeOwnershipMode } from '../../../src/engine/engineer/resume.js';
 
