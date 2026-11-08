@@ -283,11 +283,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: lycheeverse/lychee-action@v2
-        with:
-          # Settings (offline-only, CHANGELOG.md excluded) live in lychee.toml.
-          args: --config lychee.toml docs README.md AGENT_INSTRUCTIONS.md src/conductor/README.md
-          fail: true
+      # lycheeverse/lychee-action@v2 downloads this same asset directly from
+      # github.com with one curl attempt. GitHub's release redirect returned 504
+      # before Lychee ran (CI run 42468242267), even though the asset exists.
+      # The Releases API reaches the storage endpoint and lets this job retry a
+      # transient download while the checksum keeps the pinned binary verifiable.
+      - name: Install Lychee
+        env:
+          LYCHEE_ASSET_ID: '409959156'
+          LYCHEE_SHA256: 1f4e0ef7f6554a6ed33dd7ac144fb2e1bbed98598e7af973042fc5cd43951c9a
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          curl --fail --location --retry 5 --retry-all-errors --retry-delay 2 \
+            --header 'Accept: application/octet-stream' \
+            --header "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/lycheeverse/lychee/releases/assets/$LYCHEE_ASSET_ID" \
+            --output /tmp/lychee.tar.gz
+          echo "$LYCHEE_SHA256  /tmp/lychee.tar.gz" | sha256sum --check --strict
+          tar -xzf /tmp/lychee.tar.gz -C /tmp lychee
+          install -D -m 0755 /tmp/lychee "$RUNNER_TEMP/lychee-bin/lychee"
+          echo "$RUNNER_TEMP/lychee-bin" >> "$GITHUB_PATH"
+      - name: Check documentation links
+        # Settings (offline-only, CHANGELOG.md excluded) live in lychee.toml.
+        run: lychee --config lychee.toml docs README.md AGENT_INSTRUCTIONS.md src/conductor/README.md
 
   # Docs-only PRs skip conductor; this tier is the only live corpus check.
   docs-corpus:
