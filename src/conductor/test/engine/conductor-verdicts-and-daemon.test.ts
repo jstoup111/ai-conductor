@@ -2664,7 +2664,7 @@ describe('engine/conductor', () => {
     });
   });
 
-  describe('T7: lastResolvedCount recorded at build-step dispatch exit', () => {
+  describe('dispatch baseline ownership', () => {
     // Seed state up through (but not including) build, without writing a
     // plan/task-status.json — the runner or the test body supplies those,
     // per exit path under test.
@@ -2703,13 +2703,22 @@ describe('engine/conductor', () => {
       }
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
+      let lastResolvedCount: number | undefined;
+      try {
+        const existing = JSON.parse(await readFile(join(dir, '.pipeline/task-evidence.json'), 'utf8')) as {
+          lastResolvedCount?: unknown;
+        };
+        if (typeof existing.lastResolvedCount === 'number') lastResolvedCount = existing.lastResolvedCount;
+      } catch {
+        // A missing or malformed pre-dispatch sidecar is normal for this fixture.
+      }
       await writeFile(
         join(dir, '.pipeline/task-evidence.json'),
-        JSON.stringify({ evidenceStamps: stamps, noEvidenceAttempts: 0, migrationGrandfather: [] }),
+        JSON.stringify({ evidenceStamps: stamps, noEvidenceAttempts: 0, migrationGrandfather: [], ...(lastResolvedCount !== undefined && { lastResolvedCount }) }),
       );
     }
 
-    it('records lastResolvedCount in the sidecar on a successful/completing build exit', async () => {
+    it('leaves a seeded lastResolvedCount unchanged on a successful/completing build exit', async () => {
       await seedToBuild();
       const TOTAL = 3;
 
@@ -2734,13 +2743,18 @@ describe('engine/conductor', () => {
         fromStep: 'build',
       });
 
+      const seededBaseline = 41;
+      const seededEvidence = await createTaskEvidence(dir);
+      seededEvidence.lastResolvedCount = seededBaseline;
+      await seededEvidence.write();
+
       await conductor.run();
 
       const evidence = await createTaskEvidence(dir);
-      expect(evidence.lastResolvedCount).toBe(TOTAL);
+      expect(evidence.lastResolvedCount).toBe(seededBaseline);
     });
 
-    it('records lastResolvedCount in the sidecar on a park exit (T5 absolute attempt-ceiling backstop)', async () => {
+    it('leaves a seeded lastResolvedCount unchanged on a stall/park exit', async () => {
       await seedToBuild();
       const TOTAL = 5;
       const CEILING = 2;
@@ -2760,6 +2774,11 @@ describe('engine/conductor', () => {
       events.on('loop_halt', (e) => {
         if (e.type === 'loop_halt') loopHaltEvents.push({ reason: e.reason });
       });
+
+      const seededBaseline = 43;
+      const seededEvidence = await createTaskEvidence(dir);
+      seededEvidence.lastResolvedCount = seededBaseline;
+      await seededEvidence.write();
 
       const conductor = new Conductor({
         stateFilePath: statePath,
@@ -2782,7 +2801,7 @@ describe('engine/conductor', () => {
       expect(loopHaltEvents[0].reason).toMatch(/attempt ceiling/i);
 
       const evidence = await createTaskEvidence(dir);
-      expect(evidence.lastResolvedCount).toBe(CEILING);
+      expect(evidence.lastResolvedCount).toBe(seededBaseline);
     });
 
     it.each([false, true])('reports refunded build retries without changing dispatch (selfHost=%s)', async (selfHost) => {

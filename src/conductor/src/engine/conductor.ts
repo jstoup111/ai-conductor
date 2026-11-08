@@ -11968,27 +11968,6 @@ export class Conductor {
                 PROTECTED_ARTIFACT_HALT_CLASS,
               );
             }
-            // T7 invariant: EVERY build-step exit path records
-            // `lastResolvedCount`. This exit short-circuits before any build
-            // dispatch, so none of the T7 stamp sites further below are
-            // reached — and without a stamp here the sidecar keeps whatever
-            // stale (typically 0) count it had while the live count still
-            // counts `Task:`-trailered commits already on the branch. That
-            // makes daemon-cli's `isProgressReKickEligible`
-            // (`liveResolvedCount > lastResolvedCount`) permanently true for
-            // a feature halted at the seal, so the daemon re-dispatches it
-            // forever — a tight spin bounded only by the IN-MEMORY per-run
-            // progress-re-kick dispatch ceiling, which resets on every daemon
-            // restart. Recording the count on this exit is the honest reading
-            // of the predicate's own contract: this dispatch ended without
-            // making forward progress, so it must not earn a re-kick.
-            if (step.name === 'build') {
-              // Re-read fresh from disk rather than writing the possibly-
-              // stale in-memory snapshot — same reason as the other T7 stamps.
-              const freshEvidence = await createTaskEvidence(this.projectRoot);
-              freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot, this.activeRegionChild);
-              await freshEvidence.write();
-            }
           } else
           try {
             const dispatchIdentityArmed =
@@ -12204,12 +12183,6 @@ export class Conductor {
           // Settlement owns its HALT marker and loop-halt event. Preserve the
           // pre-existing terminal routing without retry or failure accounting.
           if (result.pendingRepairSettlementHalt) return;
-
-          if (step.name === 'build') {
-            const freshEvidence = await createTaskEvidence(this.projectRoot);
-            freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot, this.activeRegionChild);
-            await freshEvidence.write();
-          }
 
           // A routed BUILD owns the terminal claim boundary.  No parser or
           // provider output gets to move a ref: parsing, immutable-tree
@@ -13843,16 +13816,6 @@ export class Conductor {
                 }
 
                 if (bpCeilingHit) {
-                  // T7: stamp the ending resolved count on this park exit too
-                  // — every build-step exit path records lastResolvedCount,
-                  // not just success. Re-read fresh from disk (see the
-                  // success-exit comment above) so this doesn't clobber
-                  // stamps written directly to the sidecar elsewhere.
-                  if (step.name === 'build') {
-                    const freshEvidence = await createTaskEvidence(this.projectRoot);
-                    freshEvidence.lastResolvedCount = resolvedTasksAfter;
-                    await freshEvidence.write();
-                  }
                   const reason = `build progressing but hit absolute attempt ceiling ${bpCeilingValue}`;
                   state[step.name] = 'failed';
                   await this.haltSerialExecution({
@@ -13925,17 +13888,6 @@ export class Conductor {
                       })
                     : { parked: false };
                   if (parkResult.parked) {
-                    // T7: stamp the ending resolved count on this park exit
-                    // too — every build-step exit path records
-                    // lastResolvedCount, not just success. Re-read fresh
-                    // from disk (see the success-exit comment above) so this
-                    // doesn't clobber stamps written directly to the
-                    // sidecar elsewhere.
-                    if (step.name === 'build') {
-                      const freshEvidence = await createTaskEvidence(this.projectRoot);
-                      freshEvidence.lastResolvedCount = resolvedTasksAfter;
-                      await freshEvidence.write();
-                    }
                     const reason =
                       `auto-parked: empty/missing plan` +
                       ` — unpark with \`conduct daemon unpark ${slug}\``;
@@ -14293,21 +14245,6 @@ export class Conductor {
                 }
                 continue;
               }
-              // T7: stamp the ending resolved count on this exit too — the
-              // fixed-budget-exhausted / non-daemon-park failure exit is
-              // still a build-step dispatch end, so lastResolvedCount must
-              // be recorded here even though nothing "succeeded".
-              if (step.name === 'build') {
-                // Re-read fresh from disk rather than writing the possibly-
-                // stale in-memory `this.taskEvidence` snapshot — stamps can
-                // be written directly to the sidecar by other pathways
-                // (task-cli / trailer-stamping telemetry paths) between this
-                // Conductor's start and this exit, and blindly writing the
-                // stale snapshot would clobber them.
-                const freshEvidence = await createTaskEvidence(this.projectRoot);
-                freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot, this.activeRegionChild);
-                await freshEvidence.write();
-              }
               // Task 8 (builds-stall-when-work-lands-without-task-trailer-):
               // budget exhausted with NO attempt ever satisfying the
               // completion gate would normally fall straight into the
@@ -14352,11 +14289,6 @@ export class Conductor {
                 // from whatever is already persisted, not from this `state`
                 // object.
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
-                if (step.name === 'build') {
-                  const freshEvidence = await createTaskEvidence(this.projectRoot);
-                  freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot, this.activeRegionChild);
-                  await freshEvidence.write();
-                }
                 succeeded = true;
                 buildRoutedForward = true;
                 successOutput = result.output;
@@ -14373,18 +14305,6 @@ export class Conductor {
           }
 
           if (this.verifyArtifacts && stepHasCompletionCheck(step.name, this.config) && !succeeded) break;
-
-          // T7: stamp the ending resolved count on the success/completing
-          // exit — every build-step exit path (success, park, ceiling)
-          // records lastResolvedCount, not just the park paths above.
-          if (step.name === 'build') {
-            // Re-read fresh from disk — see comment at the fixed-budget-
-            // exhausted exit above for why this must not write the stale
-            // in-memory `this.taskEvidence` snapshot.
-            const freshEvidence = await createTaskEvidence(this.projectRoot);
-            freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot, this.activeRegionChild);
-            await freshEvidence.write();
-          }
 
           succeeded = true;
           successOutput = result.output;

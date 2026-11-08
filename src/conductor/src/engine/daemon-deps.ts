@@ -500,7 +500,7 @@ async function exists(p: string): Promise<boolean> {
  * teardown race) — that must never crash the daemon process, so failures are
  * caught, logged loudly to stderr, and swallowed (never rethrown).
  */
-async function appendHaltClearedRecord(
+export async function appendHaltClearedRecord(
   worktreePath: string,
   cause: 'operator' | 'rekick',
   recordRemote?: HaltRecordRemoteOptions,

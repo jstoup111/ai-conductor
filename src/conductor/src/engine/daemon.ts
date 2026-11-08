@@ -288,11 +288,30 @@ export interface DaemonDeps {
    */
   isProgressReKickEligible?: (slug: string) => Promise<boolean>;
   /**
+   * True when the live retryable HALT body differs from the body this dispatch
+   * boundary last cleared. A distinct mechanical/legacy HALT earns one prompt
+   * re-dispatch, charged against the same bounded counter as progress re-kicks.
+   */
+  isFreshRetryableHalt?: (slug: string) => Promise<boolean>;
+  /**
    * Optional, slug-keyed HALT disposition reader for the progress-gated
    * re-kick path. A failed read is treated as `unclassified` and therefore
    * requires operator action. Absent preserves prior behavior.
    */
   readHaltClass?: (slug: string) => Promise<HaltDisposition>;
+  /**
+   * Clears a retryable (`mechanical` or `legacy`) HALT at the re-dispatch
+   * boundary. The production seam archives its body to `HALT.rekicked` and
+   * appends the existing `halt_cleared` audit record; the daemon core owns
+   * only the ordering and disposition decision.
+   */
+  clearRetryableHalt?: (slug: string) => Promise<void>;
+  /**
+   * Writes the whole-feature progress baseline at the dispatch boundary.
+   * A failed stamp is diagnostic-only: the executor still receives its
+   * dispatch so a transient sidecar write cannot block feature recovery.
+   */
+  stampDispatchBaseline?: (slug: string) => Promise<void>;
   /**
    * Task 9: per-spec bound on progress-gated cross-dispatch re-kicks
    * (`isProgressReKickEligible`), mirroring `build_progress_halt.dispatch_ceiling`
@@ -850,7 +869,7 @@ export async function runDaemon(
   const progressReKickCeilingLogged = new Set<string>();
   const progressReKickOperatorActionLogged = new Set<string>();
   const progressReKickLegacyLogged = new Set<string>();
-  const isProgressReKickEligibleBounded = deps.isProgressReKickEligible
+  const isProgressReKickEligibleBounded = (deps.isProgressReKickEligible || deps.isFreshRetryableHalt)
     ? async (slug: string): Promise<boolean> => {
         if (deps.readHaltClass) {
           let disposition: HaltDisposition;
@@ -883,15 +902,27 @@ export async function runDaemon(
           }
           return false;
         }
-        let eligible = false;
-        try {
-          eligible = await deps.isProgressReKickEligible!(slug);
-        } catch (err) {
-          log(
-            `[daemon] isProgressReKickEligible(${slug}) threw (${err instanceof Error ? err.message : String(err)}); treating as not eligible`,
-          );
-          return false;
+        let fresh = false;
+        if (deps.isFreshRetryableHalt) {
+          try {
+            fresh = await deps.isFreshRetryableHalt(slug);
+          } catch (err) {
+            log(
+              `[daemon] isFreshRetryableHalt(${slug}) threw (${err instanceof Error ? err.message : String(err)}); treating as not eligible`,
+            );
+          }
         }
+        let progressed = false;
+        if (deps.isProgressReKickEligible) {
+          try {
+            progressed = await deps.isProgressReKickEligible(slug);
+          } catch (err) {
+            log(
+              `[daemon] isProgressReKickEligible(${slug}) threw (${err instanceof Error ? err.message : String(err)}); treating as not eligible`,
+            );
+          }
+        }
+        const eligible = fresh || progressed;
         if (eligible) progressReKickCounts.set(slug, count + 1);
         return eligible;
       }
@@ -1008,6 +1039,43 @@ export async function runDaemon(
     // from the previous dispatch)
     disposeWatcher(item.slug);
 
+    // A parked feature can resume only after its live retryable HALT has been
+    // cleared. Do this before constructing or invoking the executor so stack
+    // preflight never sees a mechanical/legacy HALT as an unauthorized resume.
+    // Keep the seam optional while its composition-root wiring lands; callers
+    // that do provide it get the fail-closed disposition boundary below.
+    if (isResume && deps.clearRetryableHalt && await deps.isHalted?.(item.slug)) {
+      let disposition: HaltDisposition = 'unclassified';
+      try {
+        disposition = await deps.readHaltClass?.(item.slug) ?? 'unclassified';
+      } catch {
+        // A failed class read is unclassified and therefore operator-retained.
+      }
+
+      const retained = isOperatorActionHalt(disposition)
+        || (disposition !== 'mechanical' && disposition !== 'legacy');
+      if (!retained) {
+        try {
+          await deps.clearRetryableHalt(item.slug);
+          featureLog(`re-kick ${item.slug}: cleared ${disposition} HALT before dispatch`);
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          featureLog(`re-kick ${item.slug}: HALT clear failed — ${reason}`);
+          claims.release(item.slug);
+          claims.park(item.slug);
+          registerWatcher(item.slug);
+          return false;
+        }
+      } else {
+        // Do not let an automatic path mutate or run through a retained HALT.
+        // The claim has not started an executor, so release it synchronously.
+        claims.release(item.slug);
+        claims.park(item.slug);
+        registerWatcher(item.slug);
+        return false;
+      }
+    }
+
     // Task 16: Emit resume marker for re-dispatches, start for fresh dispatches
     if (isResume) {
       featureLog(`${chalk.cyan('↻')} resume ${chalk.bold(item.slug)}`);
@@ -1027,6 +1095,12 @@ export async function runDaemon(
         deps.onExecutorSettled?.();
       }
     };
+    try {
+      await deps.stampDispatchBaseline?.(item.slug);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      log(`baseline stamp failed for ${item.slug} — ${reason}`);
+    }
     const completion: Promise<FeatureOutcome> = runFeature()
       .catch((err) => ({
         slug: item.slug,

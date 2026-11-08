@@ -129,7 +129,7 @@ import {
   BUILD_PROGRESS_HALT_DEFAULTS,
 } from './engine/config.js';
 import type { HarnessConfig } from './types/config.js';
-import { readLastResolvedCount } from './engine/task-evidence.js';
+import { readLastResolvedCount, stampDispatchBaseline } from './engine/task-evidence.js';
 import { countResolvedTasks } from './engine/task-progress.js';
 import { holdLock, readPidRecord, ownsLock, selfGuardEnv } from './engine/daemon-lock.js';
 import {
@@ -206,6 +206,7 @@ import {
   makeWorkClaimLivenessPredicate,
   makeWorktreeRemovalPredicate,
   makeWatchHaltClearedSeam,
+  appendHaltClearedRecord,
   resolveDaemonBaseSha,
 } from './engine/daemon-deps.js';
 import { encodeClaimKey, featureSlugs, InMemoryWorkClaims } from './engine/work-claims.js';
@@ -259,6 +260,7 @@ import {
   hasRebaseInProgress,
   abortRebase,
   clearMarker,
+  clearRetryableHaltMarker,
   clearHaltForResume,
   consumeResumeAuthorizations,
   readRawHaltClass,
@@ -719,6 +721,10 @@ export interface DaemonModeOptions {
   awaitDaemonOtelStop?: AwaitDaemonOtelStop;
   /** Injectable executor boundary for daemon composition tests. */
   runFeature?: (item: BacklogItem) => Promise<FeatureOutcome>;
+  /** Injectable scheduler boundary for daemon composition tests. */
+  runDaemon?: typeof runDaemon;
+  /** Injectable retryable-HALT dependency factory for daemon composition tests. */
+  buildRetryableHaltDeps?: typeof buildRetryableHaltDeps;
   /**
    * Task 3: Show completed (PROCESSED) features in the startup dashboard's
    * console output. Defaults to false/undefined — the persisted log sink
@@ -979,6 +985,47 @@ export function buildProgressReKickDeps(
         countResolvedTasks(slugRoot),
       ]);
       return liveResolvedCount > lastResolvedCount;
+    },
+  };
+}
+
+/** Production seams for retryable HALTs; intentionally independent of progress config. */
+export function buildRetryableHaltDeps(
+  worktreeBase: string,
+  recordRemote: import('./engine/halt-record.js').HaltRecordRemoteOptions | undefined,
+): {
+  clearRetryableHalt: (slug: string) => Promise<void>;
+  isFreshRetryableHalt: (slug: string) => Promise<boolean>;
+  stampDispatchBaseline: (slug: string) => Promise<void>;
+} {
+  const worktreePath = (slug: string) => join(worktreeBase, slug);
+  return {
+    clearRetryableHalt: async (slug) => {
+      const root = worktreePath(slug);
+      const cleared = await clearRetryableHaltMarker(root);
+      if (cleared) await appendHaltClearedRecord(root, 'rekick', recordRemote);
+    },
+    isFreshRetryableHalt: async (slug) => {
+      const root = worktreePath(slug);
+      let haltBody: string;
+      try {
+        haltBody = await readFile(join(root, HALT_MARKER), 'utf-8');
+      } catch {
+        return false;
+      }
+      const retention = await resolveHaltRetention(
+        () => readRawHaltClass(root),
+        { retainUnclassified: true },
+      );
+      if (retention.retained) return false;
+      try {
+        return haltBody !== await readFile(join(root, '.pipeline/HALT.rekicked'), 'utf-8');
+      } catch {
+        return true;
+      }
+    },
+    stampDispatchBaseline: async (slug) => {
+      await stampDispatchBaseline(worktreePath(slug), countResolvedTasks);
     },
   };
 }
@@ -2773,7 +2820,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // invokes these captured sanctioned call-sites at claim time.
   const repairQueue = new RepairQueue();
   let recordEngineSourceRefresh: (() => void) | undefined;
-  const result = await runDaemon(
+  const dispatchDaemon = opts.runDaemon ?? runDaemon;
+  const retryableHaltDeps = opts.buildRetryableHaltDeps ?? buildRetryableHaltDeps;
+  const result = await dispatchDaemon(
     {
       claims: workClaims,
       repairPriority: (slug) => priorityResolver.bandForSlug?.(slug),
@@ -2818,6 +2867,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // — previously constructed and fully unit-tested only at the
       // daemon.ts/pickEligible level, never reachable from this entrypoint.
       ...buildProgressReKickDeps(config, worktreeBase, log),
+      ...retryableHaltDeps(worktreeBase, { events }),
+      readHaltClass: (slug) => readHaltClass(join(worktreeBase, slug)),
       // FR-1 (Task 11): gate dispatch on the durable `.daemon/PAUSED` marker,
       // re-polled every loop iteration by runDaemon so a pause lifted mid-run
       // resumes dispatch at the next boundary (no restart required).
