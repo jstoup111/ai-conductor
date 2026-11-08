@@ -16,7 +16,33 @@ export interface UnlistedBoundaryTouchViolation {
   readonly line: number;
   readonly boundary: BoundaryName;
   readonly touchKind?: BoundaryTouch['kind'];
+  readonly entry?: never;
 }
+
+interface AllowlistEntryViolation {
+  readonly file?: never;
+  readonly line?: never;
+  readonly boundary?: never;
+  readonly touchKind?: never;
+  readonly entry: string;
+}
+
+export interface StaleBoundaryAllowlistViolation extends AllowlistEntryViolation {
+  readonly kind: 'stale-entry';
+}
+
+export interface MalformedBoundaryAllowlistViolation extends AllowlistEntryViolation {
+  readonly kind: 'malformed-entry';
+}
+
+export interface UnknownBoundaryAllowlistViolation extends AllowlistEntryViolation {
+  readonly kind: 'unknown-boundary';
+}
+
+export type BoundaryViolation = UnlistedBoundaryTouchViolation
+  | StaleBoundaryAllowlistViolation
+  | MalformedBoundaryAllowlistViolation
+  | UnknownBoundaryAllowlistViolation;
 
 export interface BoundaryRatchetInput {
   readonly files: ReadonlyMap<string, string>;
@@ -26,13 +52,14 @@ export interface BoundaryRatchetInput {
 
 export interface BoundaryRatchetResult {
   readonly touches: readonly BoundaryTouch[];
-  readonly violations: readonly UnlistedBoundaryTouchViolation[];
+  readonly violations: readonly BoundaryViolation[];
 }
 
 export function checkBoundaryRatchet({ files, allowlist, registry }: BoundaryRatchetInput): BoundaryRatchetResult {
   const touches: BoundaryTouch[] = [];
-  const violations: UnlistedBoundaryTouchViolation[] = [];
-  const allowed = new Set(allowlist);
+  const violations: BoundaryViolation[] = [];
+  const allowlistEntries = validAllowlistEntries(allowlist, registry, violations);
+  const allowed = new Set(allowlistEntries.map(({ entry }) => entry));
 
   for (const [file, source] of files) {
     const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
@@ -83,14 +110,22 @@ export function checkBoundaryRatchet({ files, allowlist, registry }: BoundaryRat
     visit(sourceFile);
   }
 
+  for (const { entry, file, boundary } of allowlistEntries) {
+    const matchingTouches = touches.filter((touch) => touch.file === file && touch.boundary === boundary);
+    if (matchingTouches.length === 0 || matchingTouches.every((touch) => isOtherwisePermitted(touch, registry))) {
+      violations.push({ kind: 'stale-entry', entry });
+    }
+  }
+
   return { touches, violations };
 }
 
 export function formatBoundaryViolations(
-  violations: readonly UnlistedBoundaryTouchViolation[],
+  violations: readonly BoundaryViolation[],
   registry: Readonly<Record<BoundaryName, BoundaryEntry>>,
 ): string {
   return violations.map((violation) => {
+    if (violation.kind !== 'unlisted-touch') return `${violation.kind} ${violation.entry}`;
     const entry = registry[violation.boundary];
     const resolution = entry.status.kind === 'pending'
       ? `pending #${entry.status.issue}`
@@ -98,6 +133,56 @@ export function formatBoundaryViolations(
     const rule = violation.touchKind === 'adapter-import' ? '; only composition roots import adapters' : '';
     return `${violation.kind} ${violation.file}:${violation.line} ${violation.boundary} (${resolution}${rule})`;
   }).join('\n');
+}
+
+interface BoundaryAllowlistEntry {
+  readonly entry: string;
+  readonly file: string;
+  readonly boundary: BoundaryName;
+}
+
+function validAllowlistEntries(
+  allowlist: readonly string[],
+  registry: Readonly<Record<BoundaryName, BoundaryEntry>>,
+  violations: BoundaryViolation[],
+): BoundaryAllowlistEntry[] {
+  const entries: BoundaryAllowlistEntry[] = [];
+  let previous: string | undefined;
+  for (const entry of allowlist) {
+    const parsed = parseAllowlistEntry(entry);
+    if (parsed === undefined || (previous !== undefined && entry <= previous)) {
+      violations.push({ kind: 'malformed-entry', entry });
+      continue;
+    }
+    previous = entry;
+    if (!isBoundaryName(parsed.boundary, registry)) {
+      violations.push({ kind: 'unknown-boundary', entry });
+      continue;
+    }
+    entries.push({ entry, file: parsed.file, boundary: parsed.boundary });
+  }
+  return entries;
+}
+
+function parseAllowlistEntry(entry: string): { readonly file: string; readonly boundary: string } | undefined {
+  const parts = entry.split(' -> ');
+  if (parts.length !== 2 || parts[0] === '' || parts[1] === '') return undefined;
+  return { file: parts[0], boundary: parts[1] };
+}
+
+function isBoundaryName(
+  boundary: string,
+  registry: Readonly<Record<BoundaryName, BoundaryEntry>>,
+): boundary is BoundaryName {
+  return Object.prototype.hasOwnProperty.call(registry, boundary);
+}
+
+function isOtherwisePermitted(
+  touch: BoundaryTouch,
+  registry: Readonly<Record<BoundaryName, BoundaryEntry>>,
+): boolean {
+  return registry[touch.boundary].adapterModules.includes(touch.file)
+    || (touch.kind === 'adapter-import' && layerFor(touch.file) === 'entry');
 }
 
 function matchingBoundaries(

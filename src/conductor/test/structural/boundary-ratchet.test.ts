@@ -349,4 +349,75 @@ describe('structural: external boundary ratchet', () => {
 
     expect(result.violations).toEqual([]);
   });
+
+  // Covers: task:6
+  it('reports a stale filesystem allowlist entry with no matching touch', () => {
+    const result = checkBoundaryRatchet({
+      files: new Map([['engine/a.ts', 'export {};']]),
+      allowlist: ['engine/a.ts -> filesystem'],
+      registry: BOUNDARY_REGISTRY,
+    });
+
+    expect(result.violations).toEqual([{ kind: 'stale-entry', entry: 'engine/a.ts -> filesystem' }]);
+    expect(formatBoundaryViolations(result.violations, BOUNDARY_REGISTRY)).toContain('stale-entry engine/a.ts -> filesystem');
+  });
+
+  // Covers: task:6
+  it('reports an allowlist entry as stale when its file is the registered adapter', () => {
+    const registry = {
+      ...BOUNDARY_REGISTRY,
+      filesystem: { ...BOUNDARY_REGISTRY.filesystem, adapterModules: ['execution/fs-adapter.ts'] },
+    };
+    const result = checkBoundaryRatchet({
+      files: new Map([['execution/fs-adapter.ts', "import { readFile } from 'node:fs';"]]),
+      allowlist: ['execution/fs-adapter.ts -> filesystem'],
+      registry,
+    });
+
+    expect(result.touches).toEqual([
+      { file: 'execution/fs-adapter.ts', line: 1, boundary: 'filesystem', kind: 'specifier-import' },
+    ]);
+    expect(result.violations).toEqual([{ kind: 'stale-entry', entry: 'execution/fs-adapter.ts -> filesystem' }]);
+  });
+
+  // Covers: task:6
+  it.each([
+    ['an unsorted entry', ['engine/b.ts -> clock', 'engine/a.ts -> clock'], 'engine/a.ts -> clock'],
+    ['a duplicate entry', ['engine/a.ts -> clock', 'engine/a.ts -> clock'], 'engine/a.ts -> clock'],
+    ['a missing separator', ['engine/a.ts filesystem'], 'engine/a.ts filesystem'],
+    ['an empty file side', [' -> clock'], ' -> clock'],
+    ['an empty boundary side', ['engine/a.ts -> '], 'engine/a.ts -> '],
+  ])('reports %s as a malformed allowlist entry', (_description, allowlist, entry) => {
+    const result = checkBoundaryRatchet({
+      files: new Map(),
+      allowlist,
+      registry: BOUNDARY_REGISTRY,
+    });
+
+    expect(result.violations).toContainEqual({ kind: 'malformed-entry', entry });
+    expect(formatBoundaryViolations(result.violations, BOUNDARY_REGISTRY)).toContain(`malformed-entry ${entry}`);
+  });
+
+  // Covers: task:6
+  it('reports an allowlist entry for an unregistered boundary', () => {
+    const result = checkBoundaryRatchet({
+      files: new Map(),
+      allowlist: ['src/x.ts -> network'],
+      registry: BOUNDARY_REGISTRY,
+    });
+
+    expect(result.violations).toEqual([{ kind: 'unknown-boundary', entry: 'src/x.ts -> network' }]);
+    expect(formatBoundaryViolations(result.violations, BOUNDARY_REGISTRY)).toContain('unknown-boundary src/x.ts -> network');
+  });
+
+  // Covers: task:6
+  it('has no violations after a filesystem touch and its allowlist line are both removed', () => {
+    const result = checkBoundaryRatchet({
+      files: new Map([['engine/a.ts', 'export {};']]),
+      allowlist: [],
+      registry: BOUNDARY_REGISTRY,
+    });
+
+    expect(result).toEqual({ touches: [], violations: [] });
+  });
 });
