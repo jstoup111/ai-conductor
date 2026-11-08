@@ -913,7 +913,7 @@ engine force push finds the remote tip differs from the recorded pushed tip. `Ev
 `feature_usage_total`,
 `provider_fallback`, `session_policy`, `step_retry`, `checkpoint_reached`, `recovery_needed`,
 `gate_blocked`, `tier_skip`, `config_skip`, `navigation_back`, `rate_limit`, `provider_suppressed`, `session_reset`,
-`credentials_park`, `operator_park_boundary`, `credentials_park_progress`,
+`credentials_park`, `operator_park_boundary`, `preemption_boundary`, `credentials_park_progress`,
 `finish_publication_transition`, `finish_publication_blocked`, `finish_publication_disposition`,
 `feature_complete`, `dashboard_refresh`, `protected_artifact_rebaseline`,
 `protected_artifact_rebaseline_refused`, `auto_heal`, `remediation_sealed_artifact_redirect`,
