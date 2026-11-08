@@ -82,7 +82,7 @@ const COMPOSER_RUN_TRANSITION_EVENTS = [
 ] satisfies ConductorEvent[];
 
 // Covers: task:2
-it('registers every Composer run transition on the existing event spine', () => {
+it('registers every Composer run event as a persistent sink', () => {
   expect(COMPOSER_RUN_TRANSITION_EVENTS.map((event) => event.type)).toEqual([
     'composer_run_started',
     'composer_run_checkpointed',
