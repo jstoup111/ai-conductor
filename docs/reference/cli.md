@@ -1749,12 +1749,19 @@ again, the HALT names the stale answer.
 The command acquires the feature dispatch lease, then validates the tip against the recorded
 conflict: the feature is stacked, the live HALT names the same child and operation, the tip descends
 from the recorded new parent, contains every candidate commit subject, has no merge commits, and
-touches only paths child `<k>` owns. On success it writes
+passes the resolved-tip ownership rule: the tip may change paths child `<k>` owns and may adapt
+paths the new parent changed (old parent → new parent), but may not touch any other path
+(`unowned`) or restore an adapted path to its old-parent content (`parent-revert`). An ownership
+refusal names each path with its cause, for example
+`resolution touches unowned paths: src/a.ts (unowned), src/b.ts (parent-revert)`. On success it writes
 `refs/conductor/<slug>/restack/resolution/c<k>` (replacing any recorded `--decision` for that
 child), appends a `restack_resolution` event with
 `action: recorded` and the operator identity, clears the HALT, and exits `0`. The next restack uses
 the recorded tip for that child instead of replaying the conflicted range, emits
-`restack_resolution` with `action: consumed`, and deletes the resolution and conflict refs.
+`restack_resolution` with `action: consumed`, and deletes the resolution and conflict refs. The
+restack re-checks a consumed tip against the same ownership rule; a refusal halts
+`restack refused (replay-mismatch)` with the `path (cause)` list. Adapted paths count as the child's
+own surface for gate invalidation and appear in the `restack_applied` event's `adaptedPaths`.
 Commits that change only `.docs/halted/<slug>.md` are bookkeeping: halt-record drift in the old
 range or the new parent's tree does not make the tip stale. A tip that cannot be consumed is retired:
 the restack deletes the resolution ref and emits `restack_resolution` with `action: retired`.
