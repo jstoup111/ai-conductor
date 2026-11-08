@@ -19,12 +19,10 @@ afterEach(async () => {
 
 describe('typed PRD-audit remediation admission', () => {
   // Covers: task:7
-  // `resolveStackedRoute` is the common producer for the validation-group,
-  // PRD-audit, and as-built consumers; taskless manual-test admission uses
-  // the same fence helper. This verifies the shared producer's durable
-  // mechanical/mechanical/needs-human contract rather than letting each
-  // renderer invent a class.
-  it('persists one bounded fence stall for each shared remediation consumer attempt', async () => {
+  // `resolveStackedRoute` delegates every fence response to this producer;
+  // the response itself carries both the fence discriminator and the class
+  // consumers must use when they write their HALT marker.
+  it('returns bounded routing-fence halts through the shared producer', async () => {
     const root = await mkdtemp(join(tmpdir(), 'routing-fence-consumers-'));
     roots.push(root);
     await mkdir(join(root, '.pipeline'), { recursive: true });
@@ -39,24 +37,26 @@ describe('typed PRD-audit remediation admission', () => {
     });
     try {
       const fence = conductor as unknown as {
-        recordRoutingFenceHalt(slug: string, detail: string): Promise<{
+        boundedRoutingFenceHalt(slug: string, detail: string): Promise<{
+          kind: 'halt';
           detail: string;
           haltClass: 'mechanical' | 'needs-human';
+          routingFence: true;
         }>;
       };
       const results = [];
-      for (const consumer of ['validation-group', 'prd_audit', 'as-built', 'manual_test'] as const) {
-        void consumer; // all consumers report the same blocked fence identity.
-        results.push(await fence.recordRoutingFenceHalt('feature', 'routing fence awaiting r1'));
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        results.push(await fence.boundedRoutingFenceHalt('feature', 'routing fence awaiting r1'));
       }
 
+      expect(results.map((result) => result.routingFence)).toEqual([true, true, true]);
       expect(results.map((result) => result.haltClass)).toEqual([
-        'mechanical', 'mechanical', 'needs-human', 'needs-human',
+        'mechanical', 'mechanical', 'needs-human',
       ]);
       const stalls = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8'))
         .trim().split('\n').map((line) => JSON.parse(line))
         .filter((event) => event.type === 'routing_rounds_stalled');
-      expect(stalls.map((event) => event.attempt)).toEqual([1, 2, 3, 4]);
+      expect(stalls.map((event) => event.attempt)).toEqual([1, 2, 3]);
     } finally {
       persister.stop();
     }
