@@ -8,7 +8,7 @@ function fixture(options: { dirty?: string[]; owner?: string; provider?: string;
   const files: FileMap = new Map([
     ['.docs/track/demo.md', '# Track\n'],
   ]);
-  const calls: string[][] = [];
+  const calls: Array<readonly string[]> = [];
   const events: unknown[] = [];
   const dirty = options.dirty ?? ['?? .docs/track/demo.md'];
   const git = vi.fn(async (args: readonly string[]) => {
