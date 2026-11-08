@@ -340,12 +340,14 @@ describe('restack conflict record (real local Git)', () => {
   });
 
   // Covers: task:7
-  it('includes and deletes the flattened-tip pin through finite feature teardown names', async () => {
+  it('includes and deletes refused- and flattened-tip conflict pins through finite feature teardown names', async () => {
     const subject = await createRepo();
-    await expect(writeConflictRecord(subject.repo, 'demo', record(subject.head, { flattenedTip: subject.head }))).resolves.toEqual({ kind: 'updated' });
+    await expect(writeConflictRecord(subject.repo, 'demo', record(subject.head, { flattenedTip: subject.head }), { refusedTip: subject.head })).resolves.toEqual({ kind: 'updated' });
     expect(featureConductorRefNames('demo')).toContain(conflictFlattenedTipRefFor('demo'));
+    expect(featureConductorRefNames('demo')).toContain(refusedTipRefFor('demo'));
     await expect(deleteFeatureConductorRefs('demo', makeGitRunner(subject.repo))).resolves.toBe(true);
     await expect(makeGitRunner(subject.repo)(['rev-parse', '-q', '--verify', conflictFlattenedTipRefFor('demo')])).resolves.toMatchObject({ exitCode: 1 });
+    await expect(makeGitRunner(subject.repo)(['rev-parse', '-q', '--verify', refusedTipRefFor('demo')])).resolves.toMatchObject({ exitCode: 1 });
   });
 
   it('replaces both refs atomically and fails closed when either expected old value changes', async () => {

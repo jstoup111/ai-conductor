@@ -11,7 +11,7 @@ import { detectStackRestackResolveCommand } from '../../../src/cli.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { dispatchStackRestackResolve } from '../../../src/engine/stack-restack-resolve-cli.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
-import { conflictParentRefFor, conflictRecordRefFor, readConflictRecord, refusedTipRefFor } from '../../../src/engine/restack/restack-conflict-record.js';
+import { conflictFlattenedTipRefFor, conflictParentRefFor, conflictRecordRefFor, readConflictRecord, refusedTipRefFor } from '../../../src/engine/restack/restack-conflict-record.js';
 import { readRestackJournal } from '../../../src/engine/restack/restack-journal.js';
 import type { RestackResolver } from '../../../src/engine/restack/restack-resolver.js';
 import { parseCommitSha, type CommitSha } from '../../../src/engine/restack/restack-types.js';
@@ -43,7 +43,9 @@ async function fixture() {
   await mkdir(join(repo, 'src'), { recursive: true }); await mkdir(join(repo, 'tests'), { recursive: true }); await writeFile(join(repo, '.git', 'info', 'exclude'), '.pipeline/\n');
   await writeFile(join(repo, 'src/c.ts'), 'one\ntwo\n'); await writeFile(join(repo, 'src/other.ts'), 'old\n'); await writeFile(join(repo, 'tests/b.test.ts'), 'old parent test\n'); await commit('base', ['src/c.ts', 'src/other.ts', 'tests/b.test.ts']);
   await git(['checkout', '-qb', 'feat/c1/demo']); await writeFile(join(repo, 'c1.txt'), 'child one\n'); const c1 = await commit('C1', ['c1.txt']); await git(['update-ref', 'refs/conductor/demo/closed/c1', c1]);
-  await git(['checkout', '-qb', 'feat/c2/demo']); await writeFile(join(repo, 'src/c.ts'), 'one\nchild\n'); const c2 = await commit('C2', ['src/c.ts']); await git(['update-ref', 'refs/conductor/demo/closed/c2', c2]);
+  await git(['checkout', '-qb', 'feat/c2/demo']); await writeFile(join(repo, 'src/c.ts'), 'one\nchild\n'); await commit('C2', ['src/c.ts']);
+  await git(['checkout', '-qb', 'side-c2', 'feat/c1/demo']); await writeFile(join(repo, 'merge.txt'), 'side\n'); await commit('side C2', ['merge.txt']);
+  await git(['checkout', '-q', 'feat/c2/demo']); await git(['merge', '--no-ff', '-qm', 'merge side C2', 'side-c2']); const c2 = sha((await git(['rev-parse', 'HEAD'])).stdout); await git(['update-ref', 'refs/conductor/demo/closed/c2', c2]);
   await git(['checkout', '-qb', 'feat/daemon-demo']); await writeFile(join(repo, 'leaf.txt'), 'leaf\n'); await commit('L1', ['leaf.txt']);
   await git(['checkout', '-q', 'main']); await writeFile(join(repo, 'src/c.ts'), 'one\nmain\n'); await writeFile(join(repo, 'tests/a.test.ts'), 'parent test\n'); await writeFile(join(repo, 'tests/b.test.ts'), 'parent changed test\n'); const newDefault = await commit('main advance', ['src/c.ts', 'tests/a.test.ts', 'tests/b.test.ts']); await git(['checkout', '-q', 'feat/daemon-demo']);
   await writeSliceTopologyFixture(repo, { version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [], sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf'] }, storyOwnership: { S1: 1, S2: 2, S3: 3 } }, envelopeFilesystem);
@@ -81,9 +83,10 @@ describe('refused resolver tip (real local Git)', () => {
     ['delete', 'tests/a.test.ts (parent-revert)'],
     ['restore', 'tests/b.test.ts (parent-revert)'],
   ] as const)('pins a %s resolver tip and takes an operator-recoverable conflict halt', async (kind, refusal) => {
-    const subject = await fixture(); const events = new ConductorEventEmitter(); const observed: unknown[] = [];
+    const subject = await fixture(); const events = new ConductorEventEmitter(); const observed: unknown[] = []; const conflicts: unknown[] = [];
     const branchesBefore = (await subject.git(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads/', 'refs/conductor/demo/closed/'])).stdout;
     events.on('restack_refused', (event) => { observed.push(event); });
+    events.on('restack_conflict', (event) => { conflicts.push(event); });
     await expect(runRestack({ worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault, events, git: makeGitRunner(subject.repo), resolver: refusingResolver(kind), resolverCap: 1 })).resolves.toMatchObject({ kind: 'halted' });
     const refusedTip = sha((await subject.git(['rev-parse', refusedTipRefFor('demo')])).stdout);
     expect(refusedTip).not.toBe(subject.c2);
@@ -92,7 +95,9 @@ describe('refused resolver tip (real local Git)', () => {
     const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
     expect(halt).toContain('Restack-Conflict: 2 '); expect(halt).toContain(refusedTipRefFor('demo')); expect(halt).toContain(refusal);
     expect(halt).toContain(`git switch -c restack-resolve/demo/c2 ${refusedTip}`); expect(halt).toContain('stack restack-resolve --slug demo --child 2 --tip <sha>'); expect(halt).toContain('--decision "<answer>"');
+    await expect(subject.git(['rev-parse', '--verify', conflictFlattenedTipRefFor('demo')])).resolves.toMatchObject({ exitCode: 0 });
     expect(observed).toContainEqual(expect.objectContaining({ reason: 'replay-mismatch', child: 2, detail: expect.stringContaining(refusal) }));
+    expect(conflicts).toContainEqual(expect.objectContaining({ type: 'restack_conflict', child: 2 }));
     await expect(readRestackJournal(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'journal', journal: { state: 'aborted' } });
     expect((await subject.git(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads/', 'refs/conductor/demo/closed/'])).stdout).toBe(branchesBefore);
   });

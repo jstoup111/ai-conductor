@@ -355,8 +355,10 @@ describe('recovery consumed-resolution leaf ownership (real local Git)', () => {
     const prior = await readRestackJournal(subject.repo, 'demo', { git: subject.runner });
     await subject.git(['update-ref', journalRefFor('demo'), blob, prior.kind === 'journal' ? prior.blob : '']);
     const events: unknown[] = [];
+    const applied: unknown[] = [];
     const emitter = new ConductorEventEmitter();
     emitter.on('restack_resolution', (event) => { events.push(event); });
+    emitter.on('restack_applied', (event) => { applied.push(event); });
 
     await expect(recoverRestackJournal({
       worktree: subject.repo, slug: 'demo', git: subject.runner, events: emitter,
@@ -366,6 +368,7 @@ describe('recovery consumed-resolution leaf ownership (real local Git)', () => {
     await expect(subject.git(['show', `${rebuilt}:${haltRecordPathFor('demo')}`]))
       .resolves.toMatchObject({ stdout: 'Status: resolved\nResolved at: 2032-01-01T00:00:00Z\n' });
     expect(events).toContainEqual(expect.objectContaining({ type: 'restack_resolution', action: 'consumed', child: subject.second }));
+    expect(applied).toContainEqual(expect.objectContaining({ type: 'restack_applied', child: subject.second, adaptedPaths: ['tests/a.test.ts'] }));
   });
 
   it('refuses a dispatcher-recorded base-refresh resolution whose recorded parent tree is stale without moving refs', async () => {

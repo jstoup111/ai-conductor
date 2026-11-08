@@ -201,7 +201,7 @@ describe('applyRestackTransition', () => {
       return { exitCode: 0, stdout: '', stderr: '' };
     };
 
-    await applyRestackTransition({
+    const transition = await applyRestackTransition({
       worktree: root,
       cause: 'feature-repair',
       oldDefault: sha('b'),
@@ -220,8 +220,9 @@ describe('applyRestackTransition', () => {
 
     expect(await readVerdict(root, 'test_suite', child)).toMatchObject({ satisfied: false });
     expect(await readVerdict(root, 'build_review', child)).toMatchObject({ satisfied: false });
+    expect(transition.wouldInvalidate.get(child)).toEqual(['test_suite', 'build_review']);
     const state = await readState(join(root, '.pipeline', 'children', '2', 'conduct-state.json'));
-    expect(state).toMatchObject({ ok: true, value: { build_review: 'pending' } });
+    expect(state).toMatchObject({ ok: true, value: { test_suite: 'pending', build_review: 'pending' } });
   });
 
   it('reopens the leaf child state when the whole-stack tuple invalidates its region gate', async () => {
