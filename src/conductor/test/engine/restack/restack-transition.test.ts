@@ -58,7 +58,8 @@ describe('applyRestackTransition', () => {
     directories.push(root);
     const child = parseChildId(2)!;
     await mkdir(join(root, '.pipeline', 'children', '2'), { recursive: true });
-    await writeFile(join(root, '.pipeline', 'children', '2', 'conduct-state.json'), JSON.stringify({ build_review: 'done' }));
+    await writeFile(join(root, '.pipeline', 'children', '2', 'conduct-state.json'), JSON.stringify({ test_suite: 'done', build_review: 'done' }));
+    await writeVerdict(root, 'test_suite', { satisfied: true, checkedAt: 1, reason: 'passed' }, child);
     await writeVerdict(root, 'build_review', { satisfied: true, checkedAt: 1, reason: 'approved' }, child);
 
     const git = async (args: string[]) => {
@@ -69,7 +70,7 @@ describe('applyRestackTransition', () => {
       return { exitCode: 0, stdout: '', stderr: '' };
     };
 
-    await applyRestackTransition({
+    const transition = await applyRestackTransition({
       worktree: root,
       cause: 'base-refresh',
       oldDefault: sha('b'),
@@ -81,6 +82,8 @@ describe('applyRestackTransition', () => {
     });
 
     expect(await readVerdict(root, 'build_review', child)).toMatchObject({ satisfied: true });
+    expect(await readVerdict(root, 'test_suite', child)).toMatchObject({ satisfied: true });
+    expect(transition.wouldInvalidate.get(child)).toEqual([]);
     expect(await readVerdict(root, 'build_review')).toBeNull();
   });
 
@@ -220,10 +223,7 @@ describe('applyRestackTransition', () => {
 
     expect(await readVerdict(root, 'test_suite', child)).toMatchObject({ satisfied: false });
     expect(await readVerdict(root, 'build_review', child)).toMatchObject({ satisfied: false });
-    // `wouldInvalidate` reports retained closed-child review obligations;
-    // the active child's applied region transition is asserted through its
-    // own verdicts and state below.
-    expect(transition.wouldInvalidate.get(child)).toBeUndefined();
+    expect(transition.wouldInvalidate.get(child)).toEqual(['build_review', 'test_suite']);
     const state = await readState(join(root, '.pipeline', 'children', '2', 'conduct-state.json'));
     expect(state).toMatchObject({ ok: true, value: { test_suite: 'pending', build_review: 'pending' } });
   });

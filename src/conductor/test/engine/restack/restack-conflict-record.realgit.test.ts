@@ -288,11 +288,11 @@ describe('restack conflict record (real local Git)', () => {
   });
 
   // Covers: task:5
-  it('retires a matching resolution and its refused-tip conflict state together', async () => {
+  it('retires a matching resolution and every companion conflict pin together', async () => {
     const subject = await createRepo();
     await subject.git(['commit', '--allow-empty', '-qm', 'resolution']);
     const resolutionTip = sha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
-    await expect(writeConflictRecord(subject.repo, 'demo', record(subject.head), { refusedTip: resolutionTip }))
+    await expect(writeConflictRecord(subject.repo, 'demo', record(subject.head, { flattenedTip: resolutionTip }), { refusedTip: resolutionTip }))
       .resolves.toEqual({ kind: 'updated' });
     await subject.git(['update-ref', resolutionRefFor('demo', child(2)), resolutionTip]);
 
@@ -301,10 +301,11 @@ describe('restack conflict record (real local Git)', () => {
     });
     for (const ref of [
       resolutionRefFor('demo', child(2)), conflictRecordRefFor('demo'),
-      conflictParentRefFor('demo'), refusedTipRefFor('demo'),
+      conflictParentRefFor('demo'), conflictFlattenedTipRefFor('demo'), refusedTipRefFor('demo'),
     ]) {
       await expect(makeGitRunner(subject.repo)(['rev-parse', '-q', '--verify', ref])).resolves.toMatchObject({ exitCode: 1 });
     }
+    await expect(writeConflictRecord(subject.repo, 'demo', record(subject.head))).resolves.toEqual({ kind: 'updated' });
   });
 
   // Covers: task:7

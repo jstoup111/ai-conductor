@@ -9,7 +9,13 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
-import { readConflictRecord, refusedTipRefFor } from '../../../src/engine/restack/restack-conflict-record.js';
+import {
+  conflictFlattenedTipRefFor,
+  readConflictRecord,
+  refusedTipRefFor,
+  resolutionRefFor,
+  writeConflictRecord,
+} from '../../../src/engine/restack/restack-conflict-record.js';
 import {
   journalRefFor,
   pinStagingRef,
@@ -122,7 +128,7 @@ async function resolverRecoveryFixture() {
   };
   const blob = await writeRestackJournalBlob(repo, journal);
   await git(['update-ref', journalRefFor('demo'), blob, '']);
-  return { repo, git, c1, c2 };
+  return { repo, git, base, c1, c2, advanced };
 }
 
 async function resolverGit(projectRoot: string, environment: NodeJS.ProcessEnv, args: string[]) {
@@ -243,6 +249,48 @@ describe('recoverRestackJournal refusal paths (real local Git)', () => {
     expect((await subject.git(['rev-parse', 'feat/c1/demo'])).stdout.trim()).toBe(subject.c1);
     expect((await subject.git(['rev-parse', 'refs/conductor/demo/closed/c1'])).stdout.trim()).toBe(subject.c1);
     expect((await subject.git(['rev-parse', 'feat/c2/demo'])).stdout.trim()).toBe(subject.c2);
+  });
+
+  it('replaces a stale resolution record with a flattened-tip pin with a recoverable conflict halt', async () => {
+    const subject = await resolverRecoveryFixture();
+    const one = parseChildId(1);
+    const two = parseChildId(2);
+    if (!one || !two) throw new Error('child ids should parse');
+    const committer = { name: 'Restack recovery', email: 'restack@example.test', date: '2030-01-02T03:04:05Z' };
+    const replayedOne = await replayChildRange(
+      { child: one, oldParent: subject.base, oldTip: subject.c1, kind: 'closed' },
+      subject.advanced,
+      committer,
+      makeGitRunner(subject.repo),
+    );
+    await expect(writeConflictRecord(subject.repo, 'demo', {
+      opId: 'stale-flattened-resolution' as RestackOpId,
+      child: two,
+      oldParent: subject.c1,
+      oldTip: subject.c2,
+      newParent: replayedOne.tip,
+      // A durable, but stale, parent-tree fingerprint drives the recovery
+      // path through retirement and replacement conflict-record creation.
+      newParentTree: subject.c1,
+      candidateSubjects: ['child two conflict'],
+      commit: subject.c2,
+      paths: ['src/c.ts'],
+      flattenedTip: subject.c2,
+    })).resolves.toEqual({ kind: 'updated' });
+    await subject.git(['update-ref', resolutionRefFor('demo', two), subject.c2]);
+
+    await expect(recoverRestackJournal({
+      worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo),
+    })).resolves.toEqual({ kind: 'halted' });
+
+    await expect(readConflictRecord(subject.repo, 'demo', { git: makeGitRunner(subject.repo) }))
+      .resolves.toMatchObject({ kind: 'record', record: { child: two } });
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8'))
+      .resolves.toContain('Restack-Conflict: 2');
+    await expect(subject.git(['rev-parse', '-q', '--verify', resolutionRefFor('demo', two)]))
+      .rejects.toMatchObject({ code: 1 });
+    await expect(subject.git(['rev-parse', '-q', '--verify', conflictFlattenedTipRefFor('demo')]))
+      .rejects.toMatchObject({ code: 1 });
   });
 
   it('keeps an operator edit from a half-applied sync and rolls the refs back', async () => {

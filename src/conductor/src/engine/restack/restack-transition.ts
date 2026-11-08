@@ -491,11 +491,14 @@ export async function applyRestackTransition(options: ApplyRestackTransitionOpti
     }, adaptedPaths);
     const childState = pipelinePathFor(options.worktree, 'conduct-state.json', options.activeChild);
     if (await exists(childState)) {
+      let invalidated: readonly StepName[] = [];
       await withActiveChildProjection(options.worktree, options.activeChild, async (projectionRoot) => {
         const projectedState = pipelinePathFor(projectionRoot, 'conduct-state.json', options.activeChild);
         const verdict = await applyRebaseVerdicts(projectionRoot, activeOutcome, false, undefined, options.git, undefined, options.activeChild, options.cause);
+        invalidated = regionDecision(verdict).invalidated;
         await applyDecision(projectionRoot, projectedState, options.activeChild, activeOutcome, regionDecision(verdict), options.events, options.cause, options.opId);
       });
+      wouldInvalidate.set(options.activeChild, invalidated);
     }
   }
 

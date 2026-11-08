@@ -439,16 +439,20 @@ export async function retireRecordedResolution(
   // any new conflict state it needs.
   let transaction: readonly string[];
   if (stored.kind === 'record' && stored.record.child === child && !dependencies.preserveConflictRecord) {
-    const [parent, refusedTip] = await Promise.all([
+    const [parent, flattenedTip, refusedTip] = await Promise.all([
       refValue(git, conflictParentRefFor(slug)),
+      refValue(git, conflictFlattenedTipRefFor(slug)),
       refValue(git, refusedTipRefFor(slug)),
     ]);
-    if (parent !== stored.record.newParent || refusedTip === undefined) return { kind: 'unavailable' };
+    if (parent !== stored.record.newParent
+      || flattenedTip !== (stored.record.flattenedTip ?? ZERO_SHA)
+      || refusedTip === undefined) return { kind: 'unavailable' };
     transaction = [
       'start',
       ...conflictDeleteLines(slug, {
         child, tip, record: stored.blob, parent,
       }, refusedTip === ZERO_SHA ? undefined : refusedTip),
+      ...(flattenedTip === ZERO_SHA ? [] : [`delete ${conflictFlattenedTipRefFor(slug)} ${flattenedTip}`]),
       'prepare', 'commit', '',
     ];
   } else {
