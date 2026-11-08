@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-11-08T11:36:50.727Z
 Slug: refused-over-scope-rework-can-t-start-while-a-rout
 Class: needs-human
 Halting step: unknown
