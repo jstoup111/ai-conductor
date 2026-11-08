@@ -55,6 +55,8 @@ Terms used below:
 As a reviewer of the children above a fix, I want the fix carried into every child above its host
 once the host is green, so that no child ships without the correction beneath it.
 
+Scope: this story governs every `operator` and `revalidate` round, and `audit` rounds admitted with `stacked_prs.fold_routed_fixes` set to `false`. An `audit` round admitted with the setting on executes its hosts on the leaf and defers placement to the fold (`.docs/stories/late-gate-fixes-restack-the-whole-stack-every-repa.md` Stories 1 to 3 and 9).
+
 ### Acceptance Criteria
 
 #### Happy Path
@@ -84,6 +86,8 @@ once the host is green, so that no child ships without the correction beneath it
 
 As an operator, I want a host whose repair produced no commits to leave its round without a
 restack, so that a no-op repair never rewrites the stack.
+
+Scope: this story governs every `operator` and `revalidate` round, and `audit` rounds admitted with `stacked_prs.fold_routed_fixes` set to `false`. An `audit` round admitted with the setting on executes its hosts on the leaf and defers placement to the fold (`.docs/stories/late-gate-fixes-restack-the-whole-stack-every-repa.md` Stories 1 to 3 and 9).
 
 ### Acceptance Criteria
 
