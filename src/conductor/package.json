@@ -22,7 +22,9 @@
     "typecheck": "tsc --noEmit",
     "typecheck:test": "tsc -p tsconfig.test.json",
     "lint": "eslint --max-warnings=0 \"src/**/*.ts\" \"test/**/*.ts\"",
-    "lint:fix": "eslint --max-warnings=0 \"src/**/*.ts\" \"test/**/*.ts\" --fix"
+    "lint:fix": "eslint --max-warnings=0 \"src/**/*.ts\" \"test/**/*.ts\" --fix",
+    "format": "node scripts/format.mjs --write",
+    "format:check": "node scripts/format.mjs --check"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.0",
