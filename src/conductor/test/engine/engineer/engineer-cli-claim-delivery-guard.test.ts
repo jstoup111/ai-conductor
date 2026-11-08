@@ -88,6 +88,7 @@ function captureOut() {
 }
 
 describe('engineer claim with delivery guard (Task 8: integration of guard into CLI)', () => {
+  // Covers: task:9
   it('claim heals a delivered entry and drops its duplicate envelope (TR-1 + TR-3)', async () => {
     const ledger = createLedger(join(engineerDir, 'ledger.json'));
     const queue = createFileQueue(join(engineerDir, 'inbox'));
