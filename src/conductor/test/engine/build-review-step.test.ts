@@ -472,6 +472,10 @@ describe('build_review malformed Covers marker gate', () => {
     await writeFile(planPath, '# Plan\n\n### Task 1: fixture behavior\n', 'utf8');
     await writeFile(join(projectRoot, 'base.ts'), 'export const base = true;\n', 'utf8');
     await writeFile(join(projectRoot, 'package.json'), '{"name":"base"}\n', 'utf8');
+    await mkdir(join(projectRoot, 'old'), { recursive: true });
+    await mkdir(join(projectRoot, 'tools'), { recursive: true });
+    await writeFile(join(projectRoot, 'old', 'package.json'), '{"name":"old"}\n', 'utf8');
+    await writeFile(join(projectRoot, 'tools', 'package.json'), '{"name":"tools"}\n', 'utf8');
     await git('add', '.');
     await git('commit', '-m', 'base');
     await git('remote', 'add', 'origin', projectRoot);
@@ -529,6 +533,68 @@ describe('build_review malformed Covers marker gate', () => {
       },
       ...(coordinator ? { buildReviewCoordinator: coordinator } : {}),
     });
+  }
+
+  function createUninstalledPathTriggeredRunner(paths: readonly string[], events?: ConductorEventEmitter) {
+    const discovery = vi.fn(async () => []);
+    const capture = vi.fn();
+    const invoke = vi.fn();
+    const provider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+      invoke,
+    };
+    const runner = new DefaultStepRunner(provider, 'uninstalled-path-triggered-custom', projectRoot, {
+      planPath,
+      gitRunner: realGit(),
+      config: {
+        llm_provider: 'claude',
+        test_suite: { scoped_command: 'true' },
+        build_review: {
+          enabled: true,
+          rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
+          custom_rubrics: {
+            dependencyHygiene: {
+              enabled: true,
+              skill: 'dependency-hygiene',
+              source: 'project',
+              question: 'Review dependencies.',
+              paths,
+              llm_provider: 'claude',
+            },
+          },
+        },
+      } as HarnessConfig,
+      buildReviewInputOptions: {
+        materialization: { projectRoot },
+        inspectTestSuite: async () => ({
+          status: 'CURRENT', evidence: { provenanceHeadSha: await git('rev-parse', 'HEAD'), outcome: 'PASS' },
+        } as never),
+      },
+      providerRuntimes: new ProviderRuntimeSet([{
+        key: 'claude', provider, lifecycleCapability: provider.lifecycleCapability,
+        nativeSchemaCapability: provider.nativeSchemaCapability, policy: CLAUDE_MODEL_POLICY,
+        builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+      }]),
+      sessionStore: new ProviderSessionStore(),
+      configuredProviders: ['claude'],
+      probeReadOnlyReviewCapability: async ({ provider: key, platform }) => ({ provider: key, platform, status: 'available' as const }),
+      buildReviewPolicyCatalog: discovery,
+      buildReviewPolicyCapture: capture,
+      ...(events === undefined ? {} : { events }),
+      buildReviewEffectiveResolver: async () => ({
+        ok: true as const,
+        feature: { version: 'v1' as const, repository: projectRoot, feature: 'uninstalled-path-triggered-custom' },
+        effective: {
+          rawVerdict: 'FAIL' as const, verdict: 'FAIL' as const,
+          acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: [],
+          infrastructureFailureRubrics: ['dependencyHygiene'], uncoveredInfrastructureFailureRubrics: ['dependencyHygiene'],
+          uncoveredScopeIncompleteRubrics: [],
+        },
+      }),
+    });
+    vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue({ engineStamp: 'fixture', skillDigests: {} });
+    return { runner, discovery, capture, invoke };
   }
 
   it('fails before coordinator dispatch and publication when an introduced Covers token is malformed', async () => {
@@ -750,6 +816,73 @@ describe('build_review malformed Covers marker gate', () => {
 
     expect(invoke).toHaveBeenCalledOnce();
     expect(invoke.mock.calls[0]?.[0]).toMatchObject({ readOnlyReview: true, nativeSchema: BUILD_REVIEW_CUSTOM_V1_CONTRACT.output.jsonSchema });
+  });
+
+  // Covers: task:5
+  it('withholds an uninstalled custom policy before discovery or bundle capture when its paths are unmatched', async () => {
+    await commitTests({ 'src/a.ts': 'export const a = true;\n' });
+    const { runner, discovery, capture, invoke } = createUninstalledPathTriggeredRunner(['**/package.json']);
+
+    const result = await runner.run('build_review', state);
+
+    expect(result).toMatchObject({ success: true, output: expect.stringContaining('build_review_no_rubrics') });
+    expect(discovery).not.toHaveBeenCalled();
+    expect(capture).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  // Covers: task:5
+  it('retains the absent-policy infrastructure failure when a matching manifest participates', async () => {
+    await commitTests({ 'package.json': '{"name":"changed"}\n' });
+    const { runner, discovery, capture } = createUninstalledPathTriggeredRunner(['**/package.json']);
+
+    const result = await runner.run('build_review', state);
+
+    expect(result.success).toBe(false);
+    expect(discovery).toHaveBeenCalled();
+    expect(capture).not.toHaveBeenCalled();
+    expect(result.output).toContain('dependency-hygiene is unavailable: absent');
+  });
+
+  // Covers: task:5
+  it.each([
+    ['a renamed previous path', ['old/package.json'], async () => {
+      await mkdir(join(projectRoot, 'new'), { recursive: true });
+      await git('mv', 'old/package.json', 'new/manifest.json');
+      await git('commit', '-m', 'rename manifest');
+    }],
+    ['a deleted path', ['**/package.json'], async () => {
+      await git('rm', 'tools/package.json');
+      await git('commit', '-m', 'delete manifest');
+    }],
+  ] as const)('reaches absent-policy discovery for %s', async (_caseName, paths, applyChange) => {
+    await applyChange();
+    const { runner, discovery, capture } = createUninstalledPathTriggeredRunner(paths);
+
+    const result = await runner.run('build_review', state);
+
+    expect(result.success).toBe(false);
+    expect(discovery).toHaveBeenCalled();
+    expect(capture).not.toHaveBeenCalled();
+  });
+
+  // Covers: task:5
+  it('withholds a root-only trigger for a nested manifest exactly once without invoking a provider', async () => {
+    await commitTests({ 'src/conductor/package.json': '{"name":"nested"}\n' });
+    const events = new ConductorEventEmitter();
+    const skips: ConductorEvent[] = [];
+    events.on('build_review_rubric_skipped', (event) => { skips.push(event); });
+    const { runner, discovery, capture, invoke } = createUninstalledPathTriggeredRunner(['package.json'], events);
+
+    const result = await runner.run('build_review', state);
+
+    expect(result).toMatchObject({ success: true, output: expect.stringContaining('build_review_no_rubrics') });
+    expect(skips).toEqual([expect.objectContaining({
+      type: 'build_review_rubric_skipped', rubric: 'dependencyHygiene', reason: 'paths-unmatched',
+    })]);
+    expect(discovery).not.toHaveBeenCalled();
+    expect(capture).not.toHaveBeenCalled();
+    expect(invoke).not.toHaveBeenCalled();
   });
 });
 
