@@ -190,9 +190,6 @@ describe('child feature executor dispatch lifecycle', () => {
   it('classifies a halted dispatch with its tier, halt sidecar class and the halting step forwarded from the child', async () => {
     root = await mkdtemp(join(tmpdir(), 'child-executor-'));
     const pipeline = join(root, '.worktrees', 'feature', '.pipeline');
-    await mkdir(pipeline, { recursive: true });
-    await writeFile(join(pipeline, 'HALT'), 'halted\n');
-    await writeFile(join(pipeline, 'HALT.class'), 'needs-human\n');
     const messages = new Map<string, Array<(value?: unknown) => void>>();
     let exit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
     const child: ForkedExecutor = {
@@ -221,6 +218,9 @@ describe('child feature executor dispatch lifecycle', () => {
 
     const execution = executor.execute({ ...order, tier: 'M' });
     await vi.waitFor(() => expect(messages.get('message')?.length).toBeGreaterThan(0));
+    await mkdir(pipeline, { recursive: true });
+    await writeFile(join(pipeline, 'HALT'), 'halted\n');
+    await writeFile(join(pipeline, 'HALT.class'), 'needs-human\n');
     for (const listener of messages.get('message') ?? []) listener({ kind: 'hello', protocolVersion: 1, engineVersionId: VERSION });
     await featureEvents.emit({ type: 'loop_halt', step: 'build_review', reason: 'stuck' });
     await otherFeatureEvents.emit({ type: 'loop_halt', step: 'manual_test', reason: 'unrelated' });
@@ -229,7 +229,7 @@ describe('child feature executor dispatch lifecycle', () => {
     await execution;
 
     expect(lifecycle).toEqual([
-      expect.objectContaining({ type: 'feature_dispatch_started', kind: 'resume', tier: 'M' }),
+      expect.objectContaining({ type: 'feature_dispatch_started', kind: 'initial', tier: 'M' }),
       { type: 'feature_dispatch_ended', slug: 'feature', outcome: 'halted', tier: 'M', haltClass: 'needs-human', step: 'build_review' },
     ]);
   });
