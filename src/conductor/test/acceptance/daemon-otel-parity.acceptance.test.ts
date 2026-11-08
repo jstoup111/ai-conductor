@@ -324,7 +324,7 @@ function missingParityTypes(results: Map<ConductorEvent['type'], { interactive: 
 }
 
 describe('daemon OTel parity acceptance', () => {
-  it('exports every OTel event through daemon dispatch exactly as the interactive helper does', async () => {
+  it('exports every OTel event through the production child-runtime daemon dispatch exactly as the interactive helper does', async () => {
     const results = new Map<ConductorEvent['type'], { interactive: OtelSignals; daemon: OtelSignals }>();
     for (const type of otelEventTypes()) results.set(type, { interactive: await throughInteractive(eventSequence(type)), daemon: await throughDaemonDispatch(eventSequence(type)) });
     const missing = missingParityTypes(results);
