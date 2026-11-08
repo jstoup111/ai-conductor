@@ -229,7 +229,7 @@ describe('child feature executor dispatch lifecycle', () => {
     await execution;
 
     expect(lifecycle).toEqual([
-      expect.objectContaining({ type: 'feature_dispatch_started', kind: 'initial', tier: 'M' }),
+      expect.objectContaining({ type: 'feature_dispatch_started', kind: 'resume', tier: 'M' }),
       { type: 'feature_dispatch_ended', slug: 'feature', outcome: 'halted', tier: 'M', haltClass: 'needs-human', step: 'build_review' },
     ]);
   });
@@ -266,6 +266,40 @@ describe('child feature executor dispatch lifecycle', () => {
     expect(lifecycle).toEqual([
       expect.objectContaining({ type: 'feature_dispatch_started', kind: 'rekick', tier: 'S' }),
       expect.objectContaining({ type: 'feature_dispatch_ended', outcome: 'terminated' }),
+    ]);
+  });
+
+  it('classifies an existing worktree without REKICK as a resume dispatch', async () => {
+    root = await mkdtemp(join(tmpdir(), 'child-executor-'));
+    await mkdir(join(root, '.worktrees', 'feature'), { recursive: true });
+    const messages: Array<(value?: unknown) => void> = [];
+    let exit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+    const events = new ConductorEventEmitter();
+    const lifecycle: Array<Record<string, unknown>> = [];
+    events.on('feature_dispatch_started', (event) => { lifecycle.push(event as Record<string, unknown>); });
+    events.on('feature_dispatch_ended', (event) => { lifecycle.push(event as Record<string, unknown>); });
+    const executor = createChildProcessFeatureExecutor({
+      projectRoot: root,
+      engineDirForOrder: () => `/store/dist-versions/${VERSION}`,
+      supervisorEngineVersionId: VERSION,
+      rootEvents: events,
+      attachBroker: () => ({ events, close() {} }),
+      fork: () => ({
+        pid: 45, send() { return true; }, on(_event, listener) { messages.push(listener); return this; },
+        once(_event, listener) { exit = listener; return this; }, kill() { return true; },
+      }),
+    });
+
+    const execution = executor.execute({ ...order, tier: 'S' });
+    await vi.waitFor(() => expect(messages).not.toEqual([]));
+    messages[0]!({ kind: 'hello', protocolVersion: 1, engineVersionId: VERSION });
+    messages[0]!({ kind: 'outcome', outcome: { slug: 'feature', status: 'done' } });
+    exit?.(0, null);
+    await execution;
+
+    expect(lifecycle).toEqual([
+      expect.objectContaining({ type: 'feature_dispatch_started', kind: 'resume', tier: 'S' }),
+      expect.objectContaining({ type: 'feature_dispatch_ended', outcome: 'complete' }),
     ]);
   });
 

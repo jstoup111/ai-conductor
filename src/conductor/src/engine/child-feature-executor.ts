@@ -6,6 +6,7 @@ import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import type { ConductorEvent } from '../types/events.js';
 import { forwardedFeatureOf } from './event-persister.js';
 import { readHaltSidecarClassification } from './halt-marker.js';
+import { classifyDispatchKind } from './daemon-runner.js';
 import type { FeatureExecutionOutcome, FeatureExecutor } from './feature-executor.js';
 import type { WorkOrder } from './work-order.js';
 import { EXECUTOR_PROTOCOL_VERSION, parseExecutorMessage, type ExecutorMessage } from './executor-protocol.js';
@@ -227,9 +228,11 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
       // protocol fallback may launch twice, but the durable daemon ledger must
       // still contain exactly one start/end pair for that claim.
       const tier = order.tier === undefined ? {} : { tier: order.tier };
-      const kind = existsSync(join(deps.projectRoot, '.worktrees', order.slug, '.pipeline', 'REKICK'))
-        ? 'rekick' as const
-        : 'initial' as const;
+      const worktreePath = join(deps.projectRoot, '.worktrees', order.slug);
+      const kind = classifyDispatchKind({
+        wasExisting: existsSync(worktreePath),
+        rekickSignal: existsSync(join(worktreePath, '.pipeline', 'REKICK')),
+      });
       await deps.rootEvents.emit({
         type: 'feature_dispatch_started', slug: order.slug, kind,
         ...tier,
