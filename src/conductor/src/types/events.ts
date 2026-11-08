@@ -1354,6 +1354,48 @@ type ConductorEventBody =
       escalatedEffort?: string;
       executionContext?: ExecutionContext;
     }
+  // Composer runs write through their own same-schema sibling ledger because
+  // the interactive CLI is a separate process from the engine (ADR D10).
+  | {
+      type: 'composer_run_started';
+      slug: string;
+      worktreePath: string;
+      launchId?: string;
+      provider: string;
+      actor: string;
+    }
+  | {
+      type: 'composer_run_checkpointed';
+      slug: string;
+      step: string;
+      state: 'accepted' | 'draft';
+      published: boolean;
+      provider: string;
+      actor: string;
+    }
+  | {
+      type: 'composer_run_resumed';
+      slug: string;
+      provider: string;
+      actor: string;
+      previousProvider?: string;
+      previousActor?: string;
+      ownership: string;
+    }
+  | {
+      type: 'composer_provider_switched';
+      slug: string;
+      step: string;
+      fromProvider: string;
+      toProvider: string;
+      actor: string;
+    }
+  | {
+      type: 'composer_run_handed_off';
+      slug: string;
+      actor: string;
+      prUrl?: string;
+    }
   | {
       // #646: rerun-vs-route classification, emitted on every classifier-
       // covered completion-gate miss (verdict steps only) so the audit log

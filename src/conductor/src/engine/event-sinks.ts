@@ -166,6 +166,13 @@ export const EVENT_SINKS = {
   provider_fallback: { render: true, persist: true, audit: false, otel: false },
   session_policy: { render: true, persist: true, audit: false, otel: false },
   step_retry: { render: true, persist: true, audit: true, otel: true },
+  // Composer CLI transitions are durable in its one-writer sibling ledger;
+  // no renderer, audit, or OTel projection is owned by this task.
+  composer_run_started: { render: false, persist: true, audit: false, otel: false },
+  composer_run_checkpointed: { render: false, persist: true, audit: false, otel: false },
+  composer_run_resumed: { render: false, persist: true, audit: false, otel: false },
+  composer_provider_switched: { render: false, persist: true, audit: false, otel: false },
+  composer_run_handed_off: { render: false, persist: true, audit: false, otel: false },
   retry_decision: { render: false, persist: false, audit: false, otel: false },
   checkpoint_reached: { render: false, persist: true, audit: false, otel: false },
   recovery_needed: { render: false, persist: true, audit: false, otel: false },
