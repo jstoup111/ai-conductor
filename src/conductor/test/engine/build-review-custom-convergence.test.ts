@@ -5,6 +5,10 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { reduceBuildReviewAdjudication } from '../../src/engine/build-review-adjudication.js';
+import { coordinateBuildReviewAdjudication } from '../../src/engine/build-review-adjudication-coordinator.js';
+import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-adjudication-context.js';
+import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
+import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
 import { reconcileRemediationCases } from '../../src/engine/remediation-case-reconciler.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
 import type { RemediationCaseGraph } from '../../src/engine/remediation-case-validator.js';
@@ -28,12 +32,110 @@ import { resolveEffectiveBuildReviewVerdict } from '../../src/engine/build-revie
 
 const roots: string[] = [];
 const feature = { version: 'v1' as const, repository: 'acme/conductor', feature: 'custom-convergence' };
+const dependencyDeclaration = {
+  version: 'v1' as const,
+  rubricId: 'dependencyHygiene',
+  semanticSkill: 'dependency-hygiene',
+  question: 'Review dependency changes.',
+  source: 'project' as const,
+  resources: [],
+};
+const dependencyDescriptor = {
+  version: 'v1' as const,
+  semanticSkill: 'dependency-hygiene',
+  declaration: dependencyDeclaration,
+  installation: { source: 'project' as const },
+  effectivePolicy: { version: 'v1' as const, bundleDigest: `sha256:${'d'.repeat(64)}` },
+  reviewedInput: { version: 'v1' as const, contentDigest: `sha256:${'e'.repeat(64)}` },
+  producer: { provider: 'claude', model: 'opus', effort: 'high' as const },
+};
+const packageRegion = {
+  path: 'package.json', startLine: 1, endLine: 1,
+  contentHash: `sha256:${'f'.repeat(64)}`, display: 'dependency declaration',
+};
+
+function dependencyAggregate(lapId: string, finding: boolean, current: readonly string[]) {
+  const result = stampBuildReviewCustomJudgedResult({
+    kind: 'custom-findings', version: 'v2', findings: finding ? [{
+      concernId: 'unnecessary-dependency', summary: 'The dependency duplicates an existing module.',
+      confidence: 95, severity: 'major', evidenceLocations: ['package.json:1'], sourceRegions: [packageRegion],
+    }] : [],
+  }, {
+    rubric: 'dependencyHygiene', lapId, declaration: dependencyDeclaration,
+    policy: dependencyDescriptor.effectivePolicy, candidate: dependencyDescriptor.producer,
+    reviewedInput: dependencyDescriptor.reviewedInput,
+  }, { sourceRegions: [packageRegion] });
+  if (!result) throw new Error('fixture custom finding must stamp');
+  return joinBuildReviewRubricOutcomes({
+    lapId: lapId as never, snapshotDigest: `snapshot-${lapId}`,
+    results: { testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' } },
+    customResults: { dependencyHygiene: { descriptor: dependencyDescriptor, result } },
+    currentCustomRubrics: current,
+  } as never);
+}
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 describe('custom build-review convergence', () => {
+  // Covers: task:7
+  it('settles a withheld dependency finding as absent, then dispatches its later matching lap afresh', async () => {
+    const projectRoot = await mkdtemp(join(process.env.TMPDIR!, 'build-review-withheld-convergence-'));
+    roots.push(projectRoot);
+    const provider = { invoke: vi.fn() };
+    const lap1 = dependencyAggregate('lap-dependency-1', true, ['dependencyHygiene']);
+    const lap1Source = projectBuildReviewAggregateSources(lap1)![0]!;
+    const sourceId = buildReviewAdjudicationSourceId(lap1Source);
+
+    await provider.invoke({ lap: 1 });
+    expect(projectBuildReviewAggregateSources(lap1)).toEqual([expect.objectContaining({
+      rubric: 'dependencyHygiene', evidenceLocations: ['package.json:1'],
+    })]);
+
+    const store = new RemediationCaseStore(projectRoot, feature);
+    const seeded = await reconcileRemediationCases(store, {
+      graph: {
+        sourceOutcomes: [{ sourceId, outcome: 'acted', caseRef: 'dependency-case' }],
+        cases: [{
+          case: {
+            caseRef: 'dependency-case', disposition: 'act', priority: 'high', confidence: 'high',
+            rationale: 'The blocking dependency finding needs a repair.',
+            effect: { kind: 'action', route: 'build', tasks: [{ title: 'Remove the duplicate dependency.' }] },
+          },
+          sources: [{ sourceId, outcome: 'acted', caseRef: 'dependency-case' }],
+        }],
+      },
+      recordedAt: '2026-11-08T00:00:00.000Z', generateId: () => 'dependency-case', lapId: 'lap-dependency-1' as never,
+    });
+    expect(seeded).toMatchObject({ ok: true });
+
+    // The custom evidence remains readable, but this lap's catalog deliberately
+    // omits the member after package.json was restored.
+    const lap2 = dependencyAggregate('lap-dependency-2', true, []);
+    expect(projectBuildReviewAggregateSources(lap2)).toEqual([]);
+    const judge = vi.fn();
+    const settled = await coordinateBuildReviewAdjudication({
+      projectRoot, feature, aggregate: lap2, operatorResolvedFindingIds: new Set(), mechanical: 'healthy', judge,
+      chargeInput: { treeHash: 'tree-lap-2', resolvedCount: 0, reason: 'fixture' },
+      readPlanContract: async () => ({ path: null, pointers: [], admittedTaskContracts: [] }),
+      readTaskStatus: async () => ({ path: null, tasks: [] }),
+      generateId: () => 'unused',
+    });
+
+    expect(settled).toMatchObject({ ok: true, route: 'pass', dispatchSkipped: true });
+    expect(judge).not.toHaveBeenCalled();
+    await expect(store.read()).resolves.toMatchObject({ ok: true, state: {
+      cases: [expect.objectContaining({ id: 'dependency-case', resolution: 'resolved' })],
+    } });
+    await expect(readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+
+    const lap3 = dependencyAggregate('lap-dependency-3', false, ['dependencyHygiene']);
+    await provider.invoke({ lap: 3 });
+    expect(projectBuildReviewAggregateSources(lap3)).toEqual([]);
+    expect(provider.invoke).toHaveBeenCalledTimes(2);
+  });
+
   it('settles all read-only setup skips as a closed custom cause without launching a provider', async () => {
     const projectRoot = await mkdtemp(join(process.env.TMPDIR!, 'build-review-read-only-exhaustion-'));
     roots.push(projectRoot);
