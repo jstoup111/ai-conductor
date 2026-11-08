@@ -99,7 +99,11 @@ describe('intake-file CLI', () => {
     expect({ exitCode: result.exitCode, stdout: result.stdout, calls: result.calls }).toEqual({
       exitCode: 0,
       stdout: expect.stringContaining('[intake-file] semver=minor (given)'),
-      calls: expect.arrayContaining([expect.arrayContaining(['labels[]=semver:minor'])]),
+      calls: expect.arrayContaining([
+        expect.arrayContaining(['labels[]=priority: medium']),
+        expect.arrayContaining(['labels[]=size: M']),
+        expect.arrayContaining(['labels[]=semver:minor']),
+      ]),
     });
   });
 
@@ -109,9 +113,10 @@ describe('intake-file CLI', () => {
       args: ['--title', 'Semver', '--body', 'body', '--repo', 'acme/app', '--semver', 'MAJOR'],
     });
 
-    expect({ exitCode: result.exitCode, stdout: result.stdout }).toEqual({
+    expect({ exitCode: result.exitCode, stdout: result.stdout, calls: result.calls }).toEqual({
       exitCode: 0,
       stdout: expect.stringContaining('[intake-file] semver=major (given)'),
+      calls: expect.arrayContaining([expect.arrayContaining(['labels[]=semver:major'])]),
     });
   });
 
