@@ -332,7 +332,11 @@ describe('daemon child dispatch composition', () => {
           expect(line).not.toContain(`[${otherSlug}]`);
         }
       }
-      expect(daemonLog).toContain('[daemon] [warn] supervisor warning during child dispatch');
+      const supervisorWarning = daemonLog.split('\n').find((candidate) =>
+        candidate.includes('supervisor warning during child dispatch'),
+      );
+      expect(supervisorWarning).toContain('[daemon] [warn] supervisor warning during child dispatch');
+      expect(supervisorWarning).not.toMatch(/\[daemon\]\[[^\]]+\]/);
     } finally {
       release.splice(0).forEach((resolve) => resolve());
       await store.teardown();
