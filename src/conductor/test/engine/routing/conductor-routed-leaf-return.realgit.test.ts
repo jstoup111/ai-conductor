@@ -167,6 +167,51 @@ async function tasklessExitFixture(withCommit: boolean): Promise<{
 
 describe('Conductor routed final leaf return (real local Git)', () => {
   // Covers: task:13
+  it('resumes an ordinary active child into its pending BUILD overlay when no routing round was opened', async () => {
+    const { subject, statePath, config } = await fixture();
+    const git = makeGitRunner(subject.repo);
+    const leaf = parseChildId(2)!;
+    await git(['update-ref', '-d', routeRecordRefFor('demo', roundId)]);
+    await git(['update-ref', '-d', repairMarkerRefFor('demo')]);
+    await git(['update-ref', '-d', revalidationQueueRefFor('demo')]);
+    await writeState(statePath, {
+      ...Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])),
+      feature_desc: 'demo',
+      complexity_tier: 'M',
+    } as ConductState);
+    await writeState(pipelinePathFor(subject.repo, 'conduct-state.json', leaf), {
+      acceptance_specs: 'done', build: 'pending', test_suite: 'pending', build_review: 'pending', last_step: 'acceptance_specs',
+    });
+
+    const dispatched: StepName[] = [];
+    let parkAfterBuild = false;
+    const conductor = new Conductor({
+      projectRoot: subject.repo,
+      stateFilePath: statePath,
+      featureSlug: 'demo',
+      resume: true,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      config,
+      events: new ConductorEventEmitter(),
+      operatorParkBoundary: async () => parkAfterBuild,
+      stepRunner: {
+        run: async (step) => {
+          dispatched.push(step);
+          parkAfterBuild = step === 'build';
+          return { success: true };
+        },
+      },
+    });
+
+    await conductor.run();
+
+    expect(dispatched[0]).toBe('build');
+    expect((conductor as unknown as { activeRegionChild?: number }).activeRegionChild).toBe(leaf);
+  });
+
+  // Covers: task:13
   it('drains a sole-round leaf-return close once and leaves the leaf gates pending', async () => {
     const { subject, statePath } = await fixture();
     const git = makeGitRunner(subject.repo);

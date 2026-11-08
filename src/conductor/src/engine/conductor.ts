@@ -218,7 +218,7 @@ import { hasDurableChildState, resolveActiveChild, resolveSealedLeaf, type Activ
 import { formatStackCursorRefusal } from './stack-cursor-recovery.js';
 import { isUnroutedRepairPending, resolveExecutionChild, type ExecutionChildResolution, type ExecutionChildTargetResolution } from './routing/execution-child.js';
 import { settleRoutedBuildClaim } from './routing/prerequisite-claim.js';
-import { assertNever, emptyUnsettledReceipt, isDerivedAlreadyCompleteHost, routingEligible, type RegionGate, type RoundId } from './routing/route-types.js';
+import { assertNever, emptyUnsettledReceipt, isDerivedAlreadyCompleteHost, parseRoundId, routingEligible, type RegionGate, type RoundId } from './routing/route-types.js';
 import { chargeTasklessAtAdmission, consumeRoutedRepairCredit, reconcileReceiptLedger, rebuildLedgerFromReceipts, routedSealedAuthored, settleRoundAtDispatch, tasklessAdmissionCapacity, type ReceiptRoutingScope, type RoundSettlementResult } from './routing/round-receipt.js';
 import { loadSliceTopology } from './slice-topology.js';
 import { readAppendedRemediationTaskChildren } from './artifacts.js';
@@ -232,7 +232,7 @@ import { enterHostRegion, verifyGreenAcceptance } from './routing/host-region-en
 import { settleDerivedNoOpHost } from './routing/routed-exit.js';
 import type { requestRoutedExit } from './routing/routed-exit.js';
 import { admitQueuedRevalidation } from './routing/queue-admission.js';
-import { persistOnActiveEventSpine } from './event-persister.js';
+import { FEATURE_EVENT_LOG_PATH, persistOnActiveEventSpine } from './event-persister.js';
 import { childBranchFor, leafBranchFor } from './feature-branch-identity.js';
 import { emitRestackRefused } from './restack/restack-events.js';
 import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
@@ -3238,6 +3238,32 @@ export class Conductor {
     if (cursor.kind === 'no-child') return true;
 
     await this.haltChildRegionRefusal(await this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
+    return false;
+  }
+
+  /** True only when durable routing history proves that returnToLeaf closed a round. */
+  private async hasSettledRoutedLeafReturn(slug: string): Promise<boolean> {
+    const git = makeGitRunner(this.projectRoot);
+    const listed = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
+    if (listed.exitCode !== 0) return false;
+    const leafReturnRounds = new Set<RoundId>();
+    const lines = await readFile(join(this.projectRoot, FEATURE_EVENT_LOG_PATH), 'utf8').catch(() => '');
+    for (const line of lines.split('\n')) {
+      try {
+        const event = JSON.parse(line) as { type?: unknown; roundId?: unknown; disposition?: unknown };
+        const roundId = typeof event.roundId === 'string' ? parseRoundId(event.roundId) : undefined;
+        if (event.type === 'routing_round_superseded' && event.disposition === 'leaf-return' && roundId) {
+          leafReturnRounds.add(roundId);
+        }
+      } catch { /* Ignore malformed historical telemetry; durable records remain authoritative. */ }
+    }
+    for (const ref of listed.stdout.split('\n').filter(Boolean)) {
+      const roundId = parseRoundId(ref.split('/').at(-1) ?? '');
+      if (!roundId) return false;
+      const stored = await readRouteRecord(this.projectRoot, slug, roundId, { git });
+      if (stored.kind !== 'record') return false;
+      if (stored.record.phase === 'closed' && (stored.record.leafReturn !== undefined || leafReturnRounds.has(roundId))) return true;
+    }
     return false;
   }
 
@@ -7559,11 +7585,11 @@ export class Conductor {
         // separate writer. Refresh only clean fields before the resume path
         // computes its next transition or enters a child region.
         await this.adoptDurableState(state);
-        // With no open round, returnToLeaf's root state is authoritative.
-        // Re-entering the leaf child overlay would revive its stale BUILD
-        // region and bypass the re-pended whole-feature gates.
+        // A closed routed round alone is ordinary history. Only returnToLeaf
+        // leaves a durable leaf-return receipt whose root state is authoritative.
+        // Other stacked resumes must still enter their active child's overlay.
         const roundIsOpen = await routedRoundOpen(this.projectRoot, resumeSlug);
-        if (!roundIsOpen) {
+        if (!roundIsOpen && await this.hasSettledRoutedLeafReturn(resumeSlug)) {
           await this.restoreWholeFeatureState(state);
           resumedAtWholeFeature = true;
         }
