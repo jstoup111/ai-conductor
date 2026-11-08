@@ -37,6 +37,7 @@ export interface LedgerEntry {
   status: LedgerStatus;
   attempts: number;
   branch?: string;
+  draftPrUrl?: string;
   prUrl?: string;
   capturedAt?: string;
   lastSeenAt?: string;
@@ -80,7 +81,7 @@ export interface Ledger {
     source: string,
     sourceRef: string,
     status: LedgerStatus,
-    meta?: { branch?: string; prUrl?: string; writebackPending?: boolean },
+    meta?: { branch?: string; draftPrUrl?: string; prUrl?: string; writebackPending?: boolean },
   ): Promise<void>;
   get(source: string, sourceRef: string): Promise<LedgerEntry | undefined>;
   forget(source: string, sourceRef: string): Promise<void>;
@@ -157,6 +158,7 @@ function isLedgerEntry(value: unknown): value is LedgerEntry {
     Number.isInteger(entry.attempts) &&
     entry.attempts >= 0 &&
     (entry.branch === undefined || typeof entry.branch === 'string') &&
+    (entry.draftPrUrl === undefined || typeof entry.draftPrUrl === 'string') &&
     (entry.prUrl === undefined || typeof entry.prUrl === 'string') &&
     (entry.capturedAt === undefined || typeof entry.capturedAt === 'string') &&
     (entry.lastSeenAt === undefined || typeof entry.lastSeenAt === 'string') &&
@@ -362,7 +364,7 @@ export function createLedger(path: string, options: CreateLedgerOptions = {}): L
       source: string,
       sourceRef: string,
       status: LedgerStatus,
-      meta?: { branch?: string; prUrl?: string; writebackPending?: boolean },
+      meta?: { branch?: string; draftPrUrl?: string; prUrl?: string; writebackPending?: boolean },
     ): Promise<void> {
       await withLedgerLease(lease, async () => {
         const store = await readStore(path);
@@ -378,6 +380,7 @@ export function createLedger(path: string, options: CreateLedgerOptions = {}): L
           status,
           lastSeenAt: new Date().toISOString(),
           ...(meta?.branch !== undefined ? { branch: meta.branch } : {}),
+          ...(meta?.draftPrUrl !== undefined ? { draftPrUrl: meta.draftPrUrl } : {}),
           ...(meta?.prUrl !== undefined ? { prUrl: meta.prUrl } : {}),
         };
         if (meta?.writebackPending === true) {
