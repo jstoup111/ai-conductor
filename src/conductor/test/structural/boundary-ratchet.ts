@@ -6,7 +6,7 @@ export interface BoundaryTouch {
   readonly file: string;
   readonly line: number;
   readonly boundary: BoundaryName;
-  readonly kind: 'specifier-import';
+  readonly kind: 'specifier-import' | 'clock-read';
 }
 
 export interface UnlistedBoundaryTouchViolation {
@@ -46,6 +46,15 @@ export function checkBoundaryRatchet({ files, allowlist, registry }: BoundaryRat
           }
         }
       }
+      const clockPattern = clockPatternFor(node);
+      if (clockPattern !== undefined && registry.clock.clockCalls.includes(clockPattern)) {
+        const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
+        const touch: BoundaryTouch = { file, line, boundary: 'clock', kind: 'clock-read' };
+        touches.push(touch);
+        if (!registry.clock.adapterModules.includes(file) && !allowed.has(`${file} -> clock`)) {
+          violations.push({ kind: 'unlisted-touch', file, line, boundary: 'clock' });
+        }
+      }
       ts.forEachChild(node, visit);
     };
     visit(sourceFile);
@@ -77,6 +86,21 @@ function matchingBoundaries(
       ? normalized.startsWith(registeredSpecifier)
       : normalized === registeredSpecifier,
   ));
+}
+
+function clockPatternFor(node: ts.Node): string | undefined {
+  if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+    const { expression, name } = node.expression;
+    if (ts.isIdentifier(expression) && ts.isIdentifier(name)
+      && ((expression.text === 'Date' && name.text === 'now') || (expression.text === 'performance' && name.text === 'now'))) {
+      return `${expression.text}.${name.text}`;
+    }
+  }
+  if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'Date'
+    && (node.arguments === undefined || node.arguments.length === 0)) {
+    return 'new Date';
+  }
+  return undefined;
 }
 
 function valueSpecifier(node: ts.Node): string | undefined {

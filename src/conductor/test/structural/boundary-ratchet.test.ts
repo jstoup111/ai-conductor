@@ -96,4 +96,47 @@ describe('structural: external boundary ratchet', () => {
     expect(formattedLlm).toContain('execution/codex-provider.ts');
     expect(formattedLlm).toContain('execution/pi-provider.ts');
   });
+
+  // Covers: task:3
+  it('reports unlisted clock reads at their expression lines', () => {
+    const result = checkBoundaryRatchet({
+      files: new Map([['engine/a.ts', [
+        'Date.now();',
+        'new Date();',
+        'new Date;',
+        'performance.now();',
+      ].join('\n')]]),
+      allowlist: [],
+      registry: BOUNDARY_REGISTRY,
+    });
+
+    expect(result).toEqual({
+      touches: [
+        { file: 'engine/a.ts', line: 1, boundary: 'clock', kind: 'clock-read' },
+        { file: 'engine/a.ts', line: 2, boundary: 'clock', kind: 'clock-read' },
+        { file: 'engine/a.ts', line: 3, boundary: 'clock', kind: 'clock-read' },
+        { file: 'engine/a.ts', line: 4, boundary: 'clock', kind: 'clock-read' },
+      ],
+      violations: [
+        { kind: 'unlisted-touch', file: 'engine/a.ts', line: 1, boundary: 'clock' },
+        { kind: 'unlisted-touch', file: 'engine/a.ts', line: 2, boundary: 'clock' },
+        { kind: 'unlisted-touch', file: 'engine/a.ts', line: 3, boundary: 'clock' },
+        { kind: 'unlisted-touch', file: 'engine/a.ts', line: 4, boundary: 'clock' },
+      ],
+    });
+  });
+
+  // Covers: task:3
+  it('does not classify dated constructors as clock reads', () => {
+    const result = checkBoundaryRatchet({
+      files: new Map([['engine/a.ts', [
+        'new Date(timestamp);',
+        "new Date('2026-01-01');",
+      ].join('\n')]]),
+      allowlist: [],
+      registry: BOUNDARY_REGISTRY,
+    });
+
+    expect(result.touches.filter((touch) => touch.boundary === 'clock')).toEqual([]);
+  });
 });
