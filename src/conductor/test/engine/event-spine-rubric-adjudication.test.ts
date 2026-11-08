@@ -178,7 +178,7 @@ describe('event-spine rubric adjudication', () => {
     const config = loadYaml(await readFile(join(repoRoot, '.ai-conductor', 'config.yml'), 'utf8'));
     expect(config).toBeTypeOf('object');
     if (!config || typeof config !== 'object') return;
-    const repositoryConfig = config as { build_review?: Record<string, unknown> & { custom_rubrics?: { eventSpine?: Record<string, unknown> } } };
+    const repositoryConfig = config as { build_review?: Record<string, unknown> & { custom_rubrics?: Record<string, Record<string, unknown>> } };
     // The live repository may switch the rubric off; the rule under test is
     // about the repository's declaration when it is enabled.
     const customRubrics = repositoryConfig.build_review?.custom_rubrics;

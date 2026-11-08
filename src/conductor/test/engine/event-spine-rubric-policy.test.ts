@@ -37,7 +37,7 @@ async function eventSpineDeclaration() {
   const customRubrics = repository.config.build_review?.custom_rubrics;
   const eventSpine = customRubrics?.eventSpine;
   if (!eventSpine) throw new Error('repository must declare the eventSpine rubric');
-  const loaded = {
+  const loaded: typeof repository = {
     ...repository,
     config: {
       ...repository.config,
