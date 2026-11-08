@@ -57,8 +57,12 @@ function extractField(body: string, heading: string): string | undefined {
   return value && value !== '_No response_' ? value : undefined;
 }
 
-function formFields(body: string): { priority?: string; size?: string } {
-  return { priority: extractField(body, 'Priority'), size: extractField(body, 'Size') };
+function formFields(body: string): { priority?: string; size?: string; semver?: string } {
+  return {
+    priority: extractField(body, 'Priority'),
+    size: extractField(body, 'Size'),
+    semver: extractField(body, 'Semver'),
+  };
 }
 
 /**

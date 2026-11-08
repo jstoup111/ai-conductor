@@ -64,7 +64,10 @@ export async function runIntakeLabelSyncApply(
 
   console.log(
     `[intake-label-sync] linked: ${result.links.length}; failures: ${result.failures.length}` +
-      (result.labels ? `; labels: ${result.labels.priorityLabel}, ${result.labels.sizeLabel}` : ''),
+      (result.labels
+        ? `; labels: ${[result.labels.priorityLabel, result.labels.sizeLabel, result.labels.semverLabel]
+          .filter((label): label is string => label !== null).join(', ')}`
+        : ''),
   );
 }
 

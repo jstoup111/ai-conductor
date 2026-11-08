@@ -1,4 +1,5 @@
 // Covers: task:7
+// Covers: task:3
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for "Issue-form captures are born with priority + size +
@@ -69,6 +70,7 @@ import { afterEach, describe, it, expect } from 'vitest';
 import type { GithubOperationRequest } from '../../src/engine/github-operations.js';
 
 const LABEL_SYNC_MOD = '../../src/engine/engineer/intake/label-sync.js';
+const ISSUE_EVENT_SYNC_MOD = '../../src/engine/engineer/intake/issue-event-sync.js';
 const CONDUCTOR_ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const APPLY_SCRIPT = join(CONDUCTOR_ROOT, 'scripts', 'intake-label-sync-apply.mts');
 const TSX = join(CONDUCTOR_ROOT, 'node_modules', '.bin', 'tsx');
@@ -85,6 +87,14 @@ async function loadLabelSyncModule(): Promise<Record<string, unknown>> {
   return (await import(LABEL_SYNC_MOD)) as Record<string, unknown>;
 }
 
+async function applyIssueEvent(
+  event: { issue: { number: number; body: string }; repository: { full_name: string } },
+  deps: Record<string, unknown>,
+) {
+  const mod = await import(ISSUE_EVENT_SYNC_MOD) as { applyIssueEventSync: (event: unknown, deps: unknown) => Promise<unknown> };
+  return mod.applyIssueEventSync(event, deps);
+}
+
 function requireSyncFn(mod: Record<string, unknown>): (...a: any[]) => any {
   const fn = mod.syncIssueLabels;
   if (typeof fn !== 'function') {
@@ -95,7 +105,7 @@ function requireSyncFn(mod: Record<string, unknown>): (...a: any[]) => any {
 
 /** Fake `gh` runner: models label-create, label-apply (REST), and
  * dependencies/blocked_by GET+POST traffic, recording every call. */
-function makeFakeGh(opts: { failLabelApply?: boolean } = {}) {
+function makeFakeGh(opts: { failLabelApply?: boolean; failAppliedLabels?: string[] } = {}) {
   const calls: { args: string[] }[] = [];
   const createdLabels = new Set<string>();
   const appliedLabels: string[] = [];
@@ -161,7 +171,11 @@ function makeFakeGh(opts: { failLabelApply?: boolean } = {}) {
         createdLabels.add((request.payload as { name: string }).name);
       }
       if (request.operation === 'intake.issue.label.add') {
-        appliedLabels.push((request.payload as { label: string }).label);
+        const label = (request.payload as { label: string }).label;
+        if (opts.failAppliedLabels?.includes(label)) {
+          throw new Error(`simulated label-apply outage for ${label}`);
+        }
+        appliedLabels.push(label);
       }
       return {};
     },
@@ -242,6 +256,38 @@ describe('Story 1 — intake form is born with priority + size + linking (label-
         gh.appliedLabels.slice(0, secondApplyCount),
       );
     });
+
+    it('a submitted form Semver minor adds the exact semver label after priority and size', async () => {
+      const syncIssueLabels = requireSyncFn(await loadLabelSyncModule());
+      const gh = makeFakeGh();
+
+      const result = await syncIssueLabels(
+        { priority: 'high', size: 'M', semver: 'minor', dependsOn: [] },
+        'acme/app#209',
+        { ...labelSyncDeps(gh), cwd: '.' },
+      );
+
+      expect(result).toMatchObject({
+        priorityLabel: 'priority: high', sizeLabel: 'size: M', semverLabel: 'semver: minor',
+      });
+      expect(gh.appliedLabels).toEqual(['priority: high', 'size: M', 'semver: minor']);
+      expect(gh.createdLabels.has('semver: minor')).toBe(true);
+    });
+
+    it('rerunning minor then patch adds each semver label without removing either', async () => {
+      const syncIssueLabels = requireSyncFn(await loadLabelSyncModule());
+      const gh = makeFakeGh();
+
+      await syncIssueLabels({ priority: 'high', size: 'M', semver: 'minor' }, 'acme/app#210', {
+        ...labelSyncDeps(gh), cwd: '.',
+      });
+      await syncIssueLabels({ priority: 'high', size: 'M', semver: 'patch' }, 'acme/app#210', {
+        ...labelSyncDeps(gh), cwd: '.',
+      });
+
+      expect(gh.appliedLabels).toEqual(expect.arrayContaining(['semver: minor', 'semver: patch']));
+      expect(gh.calls.some((call) => call.args.includes('DELETE'))).toBe(false);
+    });
   });
 
   describe('Negative paths', () => {
@@ -257,6 +303,36 @@ describe('Story 1 — intake form is born with priority + size + linking (label-
         }),
       ).resolves.toBeDefined();
     });
+
+    it('a semver patch add failure logs but leaves other labels and dependency linking successful', async () => {
+      const syncIssueLabels = requireSyncFn(await loadLabelSyncModule());
+      const gh = makeFakeGh({ failAppliedLabels: ['semver: patch'] });
+      const logs: string[] = [];
+
+      await expect(syncIssueLabels(
+        { priority: 'high', size: 'M', semver: 'patch', dependsOn: ['acme/app#100'] },
+        'acme/app#211',
+        { ...labelSyncDeps(gh), cwd: '.', log: (message: string) => logs.push(message) },
+      )).resolves.toMatchObject({ semverLabel: 'semver: patch', linked: ['acme/app#100'] });
+
+      expect(gh.appliedLabels).toEqual(expect.arrayContaining(['priority: high', 'size: M']));
+      expect(logs.join('\n')).toContain('semver: patch');
+    });
+
+    it.each(['_No response_', 'Minor', 'breaking'])(
+      'does not add a semver label for %s',
+      async (semver) => {
+        const syncIssueLabels = requireSyncFn(await loadLabelSyncModule());
+        const gh = makeFakeGh();
+
+        const result = await syncIssueLabels({ priority: 'high', size: 'M', semver }, 'acme/app#212', {
+          ...labelSyncDeps(gh), cwd: '.',
+        });
+
+        expect(result.semverLabel).toBeNull();
+        expect(gh.appliedLabels).not.toContain(expect.stringMatching(/^semver:/));
+      },
+    );
 
     it('a Depends-on reference to a non-existent/malformed issue is captured and surfaced, never fatal', async () => {
       const syncIssueLabels = requireSyncFn(await loadLabelSyncModule());
@@ -345,6 +421,10 @@ const FORM_BODY = [
   '### Size',
   '',
   'M',
+  '',
+  '### Semver',
+  '',
+  'minor',
 ].join('\n');
 
 /** A body in the shape the bundled intake helper writes — plain markdown, no fields. */
@@ -401,6 +481,23 @@ describe('label-sync only defaults for issue-form submissions', () => {
       expect(isIssueFormSubmission('## Priority\n\nhigh\n')).toBe(false);
     });
 
+    it('hand-authored prose mentioning semver is not a form and adds no semver label', async () => {
+      const isIssueFormSubmission = requireFormPredicate(await loadLabelSyncModule());
+      const gh = makeFakeGh();
+      const prose = `${CLI_BODY}\n\nWe should release this as a semver patch.`;
+
+      expect(isIssueFormSubmission(prose)).toBe(false);
+      // The event-level source discriminator must skip the shared label writer,
+      // so pre-existing labels are never removed or supplemented from prose.
+      const report = await applyIssueEvent({
+        issue: { number: 213, body: prose }, repository: { full_name: 'acme/app' },
+      }, {
+        gh: gh.run, operations: gh.operations, actor: 'intake-test-operator', cwd: '.',
+      });
+      expect(report).toMatchObject({ labels: undefined });
+      expect(gh.appliedLabels).toEqual([]);
+    });
+
     it('syncIssueLabels itself is unchanged — it still defaults when handed undefined fields', async () => {
       // The skip is the CALLER's decision (the Action), not a behavior change in
       // the shared seam: bin/intake-backfill still relies on defaulting here.
@@ -421,6 +518,7 @@ type ActionFixture = {
   readonly body: string;
   readonly action: 'opened' | 'edited';
   readonly failLinks?: boolean;
+  readonly failSemverLabelApply?: boolean;
 };
 
 async function makeActionFixture(fixture: ActionFixture): Promise<{
@@ -455,6 +553,9 @@ if (joined.includes('/dependencies/blocked_by') && !joined.includes('--method PO
   process.stdout.write(JSON.stringify({ id: 1000000 + number, number }) + '\\n');
 } else if (args[0] === 'issue' && args[1] === 'view') {
   process.stdout.write(JSON.stringify({ assignees: [{ login: 'intake-bot' }] }) + '\\n');
+} else if (${fixture.failSemverLabelApply === true} && joined.includes('labels[]=semver: patch')) {
+  process.stderr.write('simulated semver label outage\\n');
+  process.exitCode = 1;
 } else if (${fixture.failLinks === true} && joined.includes('/dependencies/blocked_by') && joined.includes('--method POST')) {
   process.stderr.write('simulated link outage\\n');
   process.exitCode = 1;
@@ -509,6 +610,41 @@ function dependencyPosts(calls: readonly string[][]): readonly string[][] {
 }
 
 describe('intake label-sync Action dependency entry point', () => {
+  it('extracts a form Semver minor, applies it, names it in the summary, and exits successfully', async () => {
+    const result = await runActionFixture({ action: 'opened', body: FORM_BODY });
+
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.stdout).toContain('semver: minor');
+    expect(result.calls.join(' ')).toContain('labels[]=semver: minor');
+  });
+
+  it.each(['_No response_', 'Minor', 'breaking'])(
+    'skips non-exact form Semver value %s',
+    async (semver) => {
+      const result = await runActionFixture({
+        action: 'opened', body: FORM_BODY.replace('\nminor', `\n${semver}`),
+      });
+
+      expect(result.exitCode, result.stderr).toBe(0);
+      expect(result.stdout).not.toContain('semver:');
+      expect(result.calls.join(' ')).not.toContain('labels[]=semver:');
+    },
+  );
+
+  it('keeps the Action successful when only the semver patch add fails', async () => {
+    const result = await runActionFixture({
+      action: 'opened',
+      body: FORM_BODY.replace('\nminor', '\npatch').concat('\n\nDepends on #10.'),
+      failSemverLabelApply: true,
+    });
+
+    expect(result.exitCode, result.stderr).toBe(0);
+    expect(result.stderr).toContain('simulated semver label outage');
+    expect(result.calls.join(' ')).toContain('labels[]=priority: high');
+    expect(result.calls.join(' ')).toContain('labels[]=size: M');
+    expect(dependencyPosts(result.calls).join(' ')).toContain('issue_id=1000010');
+  });
+
   it('links prose declarations from a non-form opened event and exits successfully', async () => {
     const result = await runActionFixture({ action: 'opened', body: 'This issue is blocked by #10.' });
 
