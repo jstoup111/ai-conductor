@@ -392,9 +392,11 @@ export async function dispatchStackRoundsCommand(
     } as SupersedeRoundInput);
     if (result.kind === 'refused') return refused(print, result.detail);
     // ai-conductor:session-command-context=operator-only
-    const droppedHosts = checked.kind === 'supersedable' ? checked.droppedHosts : checked.hosts;
-    const findingIds = checked.kind === 'supersedable' ? checked.findingIds : [];
-    print(`stack rounds: closed ${roundId}; dropped hosts ${droppedHosts.join(', ') || 'none'}; finding ids ${findingIds.join(', ') || 'none'}; reason ${reason}. Clear any HALT with ai-conductor halt clear before the daemon resumes.`);
+    if (checked.kind === 'leaf-return') {
+      print(`stack rounds: leaf return closed ${roundId}; closed hosts ${checked.hosts.join(', ') || 'none'}; reason ${reason}. Clear any HALT with ai-conductor halt clear before the daemon resumes.`);
+    } else {
+      print(`stack rounds: closed ${roundId}; dropped hosts ${checked.droppedHosts.join(', ') || 'none'}; finding ids ${checked.findingIds.join(', ') || 'none'}; reason ${reason}. Clear any HALT with ai-conductor halt clear before the daemon resumes.`);
+    }
     // /ai-conductor:session-command-context
     return 0;
   } catch (error) {
