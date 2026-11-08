@@ -731,22 +731,32 @@ export async function clearMarker(worktreePath: string): Promise<void> {
  */
 export async function clearRetryableHaltMarker(worktreePath: string): Promise<boolean> {
   const haltPath = join(worktreePath, HALT_MARKER);
-  let body: string;
+  const rekickedPath = join(worktreePath, '.pipeline/HALT.rekicked');
   try {
-    body = await readFile(haltPath, 'utf-8');
+    // Establish absence before touching a malformed prior archive. The
+    // subsequent rename remains the commit point for a live marker.
+    await readFile(haltPath, 'utf-8');
   } catch {
     // A concurrent clear won the race. Do not mint any retry or audit state.
     return false;
   }
 
-  const rekickedPath = join(worktreePath, '.pipeline/HALT.rekicked');
   // A malformed marker must not turn a retryable mechanical HALT into an
   // infinite parked state. `isFreshRetryableHalt` deliberately treats an
   // unreadable archive as fresh, so replace an engine-owned directory before
-  // recording the body that this dispatch consumes.
+  // atomically recording the body this dispatch consumes.
   await rm(rekickedPath, { recursive: true, force: true });
-  await writeFile(rekickedPath, body, 'utf-8');
-  await rm(haltPath, { force: true });
+  try {
+    // `rename` is the commit point: it both preserves the exact HALT bytes
+    // and proves that this caller, rather than a concurrent clearer, removed
+    // the live marker. In particular, do not write an archive followed by a
+    // forceful rm: that sequence can claim success after another caller has
+    // already removed HALT.
+    await rename(haltPath, rekickedPath);
+  } catch {
+    return false;
+  }
+
   await rm(join(worktreePath, HALT_CLASS_MARKER), { recursive: true, force: true });
   await writeFile(join(worktreePath, REKICK_SENTINEL), `rekick\n`, 'utf-8');
   return true;

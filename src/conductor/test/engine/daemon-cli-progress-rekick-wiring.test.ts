@@ -247,6 +247,7 @@ describe('T14 — daemon-cli wires the real progress-gated re-kick predicate int
       await expect(readFile(join(pipeline, 'HALT.rekicked'), 'utf-8')).rejects.toThrow();
       await expect(readFile(join(pipeline, 'REKICK'), 'utf-8')).rejects.toThrow();
       await expect(readFile(join(pipeline, 'audit-trail', 'events.jsonl'), 'utf-8')).rejects.toThrow();
+      await expect(readFile(join(pipeline, 'HALT.class'), 'utf-8')).resolves.toBe('mechanical\n');
     } finally {
       await rm(worktreeBase, { recursive: true, force: true });
     }
