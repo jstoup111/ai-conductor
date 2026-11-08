@@ -105,6 +105,13 @@ import {
   renderFeatureManifest,
   type FeatureManifestEntry,
 } from '../feature-manifest.js';
+import {
+  classifyArtifacts,
+  digestArtifact,
+  parseRunRecord,
+  type ArtifactDigest,
+  type RunRecord,
+} from './run-record.js';
 import type { LandGateIdentifier, LandGateRejectionIdentifier } from '../../types/land.js';
 export type { LandGateIdentifier, LandGateRejectionIdentifier };
 
@@ -180,6 +187,7 @@ export function landGateError(
 
 const REASON_LIMIT = 1000;
 const TRUNCATION_MARKER = '… [truncated]';
+const COMPOSER_RUN_RECORD_DIRECTORY = '.docs/composer-runs';
 
 /** Convert any land failure into its durable, bounded event fields without mutating it. */
 export function classifyLandGateRejection(error: unknown): {
@@ -842,6 +850,32 @@ export async function landSpec(
     }
   }
 
+  // A Composer run record is the durable authority for DECIDE acceptance. It
+  // is intentionally checked only after every established land gate above has
+  // passed, so it narrows delivery without changing their rejection precedence.
+  const runRecordPath = `${COMPOSER_RUN_RECORD_DIRECTORY}/${featureSlug}.json`;
+  const runRecord = await resolveLandRunRecord(worktreePath, runRecordPath);
+  if (runRecord !== null) {
+    const currentArtifacts = await digestRunRecordArtifacts(worktreePath, ideaFiles, runRecordPath);
+    const classification = classifyArtifacts(runRecord.record, currentArtifacts);
+    if (classification.draft.length > 0 || classification.needsReconfirm.length > 0) {
+      const drafts = classification.draft
+        .map(({ path, step }) => step === undefined ? path : `${path} (${step} is draft)`)
+        .join(', ');
+      const reconfirmation = classification.needsReconfirm.length === 0
+        ? ''
+        : `; ${classification.needsReconfirm.join(', ')} ${classification.needsReconfirm.length === 1 ? 'needs' : 'need'} reconfirmation`;
+      throw landGateError(
+        'unaccepted-draft',
+        `landSpec: unaccepted Composer run artifacts: ${drafts || 'none'}${reconfirmation}. ` +
+        'Accept the draft artifacts and reconfirm dependent steps before landing.',
+      );
+    }
+    if (runRecord.current) {
+      await execFile('git', ['rm', '--', runRecordPath], { cwd: worktreePath });
+    }
+  }
+
   // 5. Commit in place on the worktree's branch. The branch already exists (it is the
   //    worktree's checked-out branch) — no `checkout -b`, no `checkout back`, and the
   //    primary working tree is never touched (FR-2). On failure we leave the worktree
@@ -923,6 +957,76 @@ export async function landSpec(
     added,
     ...(dependencySourceRef ? { dependency: { proposals: proposalResult, decision: dependencyDecision } } : {}),
   };
+}
+
+interface LandRunRecord {
+  readonly record: RunRecord;
+  /** A present record is stripped into this land commit; a historical one is read-only. */
+  readonly current: boolean;
+}
+
+/** Resolve the current record, or the parent of its most recent removal commit on a re-land. */
+async function resolveLandRunRecord(worktreePath: string, recordPath: string): Promise<LandRunRecord | null> {
+  try {
+    return { record: parseRunRecord(await readFile(join(worktreePath, recordPath), 'utf8')), current: true };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw landGateError('unaccepted-draft',
+        `landSpec: Composer run record "${recordPath}" is invalid: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  let stripCommit: string | undefined;
+  try {
+    const { stdout } = await execFile(
+      'git',
+      ['log', '--format=%H', '--diff-filter=D', '--', recordPath],
+      { cwd: worktreePath },
+    );
+    stripCommit = stdout.split('\n').find((line) => line.length > 0);
+  } catch {
+    return null;
+  }
+  if (stripCommit === undefined) return null;
+
+  try {
+    const { stdout } = await execFile('git', ['show', `${stripCommit}^:${recordPath}`], { cwd: worktreePath });
+    return { record: parseRunRecord(stdout), current: false };
+  } catch (error) {
+    throw landGateError('unaccepted-draft',
+      `landSpec: unable to read Composer run record before removal commit ${stripCommit}: ` +
+      `${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/** D3 excludes engine bookkeeping from digest acceptance; every other changed DECIDE artifact is bound. */
+async function digestRunRecordArtifacts(
+  worktreePath: string,
+  ideaFiles: Iterable<string>,
+  recordPath: string,
+): Promise<ArtifactDigest[]> {
+  const artifacts: ArtifactDigest[] = [];
+  for (const rawPath of ideaFiles) {
+    const path = rawPath.replaceAll('\\', '/');
+    if (!isRunRecordArtifactPath(path, recordPath)) continue;
+    try {
+      artifacts.push(digestArtifact(path, await readFile(join(worktreePath, path))));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      // A missing accepted path remains absent so classifyArtifacts marks it draft.
+    }
+  }
+  return artifacts;
+}
+
+function isRunRecordArtifactPath(path: string, recordPath: string): boolean {
+  return path.startsWith('.docs/') &&
+    path !== recordPath &&
+    !path.startsWith(`${COMPOSER_RUN_RECORD_DIRECTORY}/`) &&
+    !path.startsWith('.docs/intake/') &&
+    !path.startsWith('.docs/plan-review/') &&
+    path !== '.docs/coherence/.gitkeep' &&
+    !/^\.docs\/[^/]+\/manifest\.json$/.test(path);
 }
 
 /** Keep only change-set paths that are currently present. `resolveIdeaFiles` includes
