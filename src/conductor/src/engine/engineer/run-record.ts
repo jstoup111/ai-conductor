@@ -250,12 +250,18 @@ export function recordAcceptance(record: RunRecord, input: RecordAcceptanceInput
   };
 }
 
-function stepForPath(path: string): RunStepId | undefined {
+/** Maps each DECIDE-owned artifact family to the checkpoint that accepts it. */
+export function stepForArtifactPath(path: string): RunStepId | undefined {
   if (path.startsWith('.docs/track/')) return 'explore';
   if (path.startsWith('.docs/complexity/')) return 'complexity';
   if (path.startsWith('.docs/specs/')) return 'prd';
+  if (path.startsWith('.docs/architecture/')) return 'architecture_diagram';
+  if (path.startsWith('.docs/decisions/architecture-review-')) return 'architecture_review';
   if (path.startsWith('.docs/stories/')) return 'stories';
+  if (path.startsWith('.docs/conflicts/')) return 'conflict_check';
   if (path.startsWith('.docs/plans/')) return 'plan';
+  if (path.startsWith('.docs/coherence/')) return 'coherence_check';
+  if (path.startsWith('.docs/plan-review/')) return 'plan_review';
   return undefined;
 }
 
@@ -294,7 +300,7 @@ export function classifyArtifacts(record: RunRecord, currentDigests: readonly Ar
       matched.push(accepted);
       continue;
     }
-    const step = acceptedByPath.get(artifact.path) ?? stepForPath(artifact.path);
+    const step = acceptedByPath.get(artifact.path) ?? stepForArtifactPath(artifact.path);
     draft.push({ ...artifact, ...(step === undefined ? {} : { step }) });
     if (step !== undefined) draftSteps.add(step);
   }

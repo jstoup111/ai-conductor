@@ -81,8 +81,9 @@ import { reconcileStrandedClaims } from './engineer/intake/reconcile-strands.js'
 import { isStaleClaim } from './engineer/intake/stale-claim.js';
 import { resolveStaleClaimWindowMs } from './resolved-config.js';
 import { parseSourceRef } from './engineer/intake/source-ref.js';
+import { splitOwnerRepo } from './engineer/source-ref.js';
 import { createDependencyLinks, runMigration } from './engineer/issue-dep-migration.js';
-import { createGithubTrackerClient, createGuardedGithubOperationRunner, GithubTrackerOperationRefusalError, makeProductionGh, runTrackerAmbientRead, runTrackerRepositoryRead, type GhRunner, type TrackerClient } from './tracker-client.js';
+import { createGithubTrackerClient, createGuardedGithubOperationRunner, GithubTrackerOperationRefusalError, makeProductionGh, runTrackerAmbientRead, runTrackerGraphqlRead, runTrackerRepositoryRead, type GhRunner, type TrackerClient } from './tracker-client.js';
 import {
   sweepDependencyDrift,
   type DependencyDriftResult,
@@ -667,8 +668,12 @@ export interface DispatchEngineerOpts {
   git?: GitRunner;
   /** Task 3 local-checkpoint seam; production uses checkpointComposerRun. */
   checkpoint?: (request: { worktree: string; step: string; state: 'accepted' | 'draft'; notesFile?: string }) => Promise<{ slug: string; state: 'accepted' | 'draft'; committed: boolean; published: boolean; prUrl?: string }>;
+  /** Machine-owner seam for deterministic checkpoint tests; production resolves the local machine identity. */
+  resolveCheckpointOwner?: () => Promise<OwnerResolution>;
   /** Resume boundary seam. */
   resume?: (request: { target: string; provider?: string; project?: string }) => Promise<{ worktree: string; context: unknown }>;
+  /** Machine-owner seam for deterministic resume tests; production resolves the local machine identity. */
+  resolveResumeOwner?: () => Promise<OwnerResolution>;
   /** Task 16 handoff-publication seam; production derives this from current machine evidence. */
   handoffPublication?: HandoffDeps['publication'];
   /** Injected ensureRunning launch spy (for tests). */
@@ -1811,7 +1816,7 @@ export async function dispatchEngineer(
           try {
             await events.emitOrThrow({
               type: 'land_dependency_decided',
-              repository: sourceRef.split('#', 1)[0],
+              repository: parseSourceRef(sourceRef)?.repo ?? sourceRef,
               sourceRef,
               proposals: proposals.kind === 'computed' ? proposals.proposals.map((proposal) => proposal.target) : [],
               accepted: decision.kind === 'proceed' ? decision.accepted : [],
@@ -1848,7 +1853,7 @@ export async function dispatchEngineer(
                     const result = await git([...args], { cwd: worktree });
                     return { exitCode: result.exitCode ?? 0, stdout: result.stdout, stderr: '' };
                   },
-                  resolveOwner: async () => resolveDaemonOwner(await readMachineOwnerConfig(), gh, worktree),
+                  resolveOwner: opts.resolveCheckpointOwner ?? (async () => resolveDaemonOwner(await readMachineOwnerConfig(), gh, worktree)),
                   emit: async (event) => events.emitOrThrow(event),
                   provider: (opts.env ?? process.env).AI_CONDUCTOR_AUTHORING_PROVIDER,
                 },
@@ -1878,18 +1883,27 @@ export async function dispatchEngineer(
               ? `project "${dispatch.project}" is not registered; register it before resuming.`
               : 'resume requires --project when more than one project is registered.');
             const target = await resolveTargetRepo(project.path, reader);
+            const repository = dependencyRepository(project);
             const resolveBranch = async (selector: ResumeTarget) => {
               if (selector.kind === 'branch') return { branch: selector.branch };
               if (selector.kind === 'pr') {
-                const answer = await gh(['pr', 'view', String(selector.number), '--repo', project.remote ?? project.name, '--json', 'headRefName,url'], { cwd: target.canonicalPath });
-                const parsed = JSON.parse(answer.stdout || '{}') as { headRefName?: string; url?: string };
+                const stdout = await runTrackerRepositoryRead(
+                  gh, target.canonicalPath, 'pull-request.read', repository,
+                  { kind: 'pull-request', number: selector.number },
+                  ['pr', 'view', String(selector.number), '--repo', repository, '--json', 'headRefName,url'],
+                );
+                const parsed = JSON.parse(stdout || '{}') as { headRefName?: string; url?: string };
                 return parsed.headRefName?.startsWith('spec/') ? { branch: parsed.headRefName, draftPrUrl: parsed.url } : undefined;
               }
-              const answer = await gh(['pr', 'list', '--repo', selector.repository, '--state', 'open', '--json', 'headRefName,url'], { cwd: target.canonicalPath });
-              const found = (JSON.parse(answer.stdout || '[]') as Array<{ headRefName?: string; url?: string }>).find((item) => item.headRefName?.startsWith('spec/'));
+              const stdout = await runTrackerRepositoryRead(
+                gh, target.canonicalPath, 'pull-request.read', selector.repository,
+                { kind: 'repository' },
+                ['pr', 'list', '--repo', selector.repository, '--state', 'open', '--json', 'headRefName,url'],
+              );
+              const found = (JSON.parse(stdout || '[]') as Array<{ headRefName?: string; url?: string }>).find((item) => item.headRefName?.startsWith('spec/'));
               return found?.headRefName ? { branch: found.headRefName, draftPrUrl: found.url } : undefined;
             };
-            const owner = await resolveDaemonOwner(await readMachineOwnerConfig(), gh, target.canonicalPath);
+            const owner = await (opts.resolveResumeOwner ?? (async () => resolveDaemonOwner(await readMachineOwnerConfig(), gh, target.canonicalPath)))();
             const events = new ConductorEventEmitter();
             const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
             persister.start();
@@ -2191,14 +2205,17 @@ export async function dispatchEngineer(
           logger: { info: (msg) => printErr(msg) },
           config: claimConfig,
           findCrossReferencedDraft: async (sourceRef) => {
-            const match = /^([^/\s]+\/[^/\s]+)#(\d+)$/.exec(sourceRef);
-            if (!match) return undefined;
+            const parsedRef = parseSourceRef(sourceRef);
+            const repository = parsedRef && splitOwnerRepo(parsedRef.repo);
+            if (!parsedRef || !repository) return undefined;
             // GitHub's crossReferencedBy connection is the source of truth: PR
             // title/body text is neither complete nor safe to parse as routing state.
             const query = 'query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){timelineItems(first:100,itemTypes:[CROSS_REFERENCED_EVENT]){nodes{... on CrossReferencedEvent{source{... on PullRequest{url headRefName state isDraft}}}}}}}}';
-            const [owner, repo] = match[1].split('/');
-            const response = await gh(['api', 'graphql', '-f', `query=${query}`, '-F', `owner=${owner}`, '-F', `repo=${repo}`, '-F', `number=${match[2]}`], { cwd: process.cwd() });
-            const nodes = (JSON.parse(response.stdout || '{}') as any).data?.repository?.issue?.timelineItems?.nodes ?? [];
+            const stdout = await runTrackerGraphqlRead(gh, process.cwd(), {
+              query,
+              variables: { owner: repository.owner, repo: repository.repo, number: Number(parsedRef.issue) },
+            });
+            const nodes = (JSON.parse(stdout || '{}') as any).data?.repository?.issue?.timelineItems?.nodes ?? [];
             const pr = nodes.map((node: any) => node?.source).find((value: any) => value?.state === 'OPEN' && value?.isDraft === true && typeof value?.headRefName === 'string' && value.headRefName.startsWith('spec/'));
             return pr ? { branch: pr.headRefName, url: pr.url } : undefined;
           },

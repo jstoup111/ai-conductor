@@ -8,11 +8,13 @@ import {
   parseRunRecord,
   recordAcceptance,
   serializeRunRecord,
+  stepForArtifactPath,
   type RunRecord,
   type RunStepId,
   type StepNotes,
 } from './run-record.js';
 import type { OwnerResolution } from '../owner-gate/identity.js';
+import { withDaemonCoAuthorTrailer } from '../bot-co-author.js';
 import { renderRunBlock, upsertRunBlock } from './run-pr-block.js';
 
 export interface CheckpointGitResult {
@@ -157,20 +159,28 @@ export async function checkpointComposerRun(request: CheckpointRequest, deps: Ch
     actor: owner.id,
   };
 
-  // Do not manufacture a record-only commit when no authored docs await a checkpoint.
-  if (dirtyDocs.length === 0) {
-    await deps.emit(event);
-    return { slug, state: request.state, committed: false, published: false };
-  }
-
   const recordPath = join(request.worktree, '.docs', 'composer-runs', `${slug}.json`);
   let record = emptyRecord(slug);
   try { record = parseRunRecord(await fs.readFile(recordPath)); } catch (error) {
     if (!(error instanceof Error) || !error.message.startsWith('ENOENT')) throw error;
   }
+  const acceptingSavedDraft = request.state === 'accepted' && record.steps[step]?.state === 'draft';
+  // A resumed draft is already committed, so it has no dirty files. Recover its
+  // paths from the checkpoint commit before recording the explicit acceptance.
+  const draftPaths = acceptingSavedDraft && dirtyDocs.length === 0
+    ? (await deps.git(['show', '--format=', '--name-only', 'HEAD', '--', '.docs'])).stdout
+      .split('\n')
+      .map((path) => path.trim())
+      .filter((path) => stepForArtifactPath(path) === step)
+    : [];
+  // Do not manufacture a record-only commit when no authored docs await a checkpoint.
+  if (dirtyDocs.length === 0 && draftPaths.length === 0) {
+    await deps.emit(event);
+    return { slug, state: request.state, committed: false, published: false };
+  }
   const notes = await notesFor(request, fs);
   if (request.state === 'accepted') {
-    const artifacts = await Promise.all(dirtyDocs
+    const artifacts = await Promise.all((dirtyDocs.length > 0 ? dirtyDocs : draftPaths)
       .filter((path) => !path.startsWith('.docs/composer-runs/') && !path.startsWith('.docs/intake/'))
       .map(async (path) => digestArtifact(path, Buffer.from(await fs.readFile(join(request.worktree, path))))));
     record = recordAcceptance(record, { step, actor: owner.id, provider, at: (deps.now ?? (() => new Date().toISOString()))(), artifacts, ...notes });
@@ -193,7 +203,7 @@ export async function checkpointComposerRun(request: CheckpointRequest, deps: Ch
   const committed = staged.exitCode === 1;
   if (staged.exitCode !== 0 && staged.exitCode !== 1) throw new Error(`compose checkpoint: could not inspect staged changes: ${staged.stderr}`);
   if (committed) {
-    const commit = await deps.git(['commit', '-m', `composer checkpoint: ${slug} ${step}`]);
+    const commit = await deps.git(['commit', '-m', withDaemonCoAuthorTrailer(`composer checkpoint: ${slug} ${step}`)]);
     if (commit.exitCode !== 0) throw new Error(`compose checkpoint: local commit failed: ${commit.stderr}`);
   }
   if (!committed || !deps.publication) {

@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { RUN_STEP_ORDER, parseRunRecord, type RunRecord, type RunStepId } from './run-record.js';
+import { strictSlugGithubRef } from './source-ref.js';
 
 export type ResumeTarget =
   | { kind: 'pr'; number: number }
@@ -59,8 +60,8 @@ export function parseResumeTarget(value: string): ResumeTarget {
   const url = /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)$/.exec(value);
   if (url) return { kind: 'pr', number: Number(url[1]) };
   if (/^spec\/[a-z0-9][a-z0-9-]*$/.test(value)) return { kind: 'branch', branch: value };
-  const intake = /^([^/\s]+\/[^/\s]+)#(\d+)$/.exec(value);
-  if (intake) return { kind: 'intake', repository: intake[1], number: Number(intake[2]) };
+  const intake = strictSlugGithubRef(value);
+  if (intake) return { kind: 'intake', repository: intake.repo, number: Number(intake.number) };
   throw new Error(`compose resume: cannot find a Composer run for "${value}" (searched PR, spec branch, and intake reference)`);
 }
 
