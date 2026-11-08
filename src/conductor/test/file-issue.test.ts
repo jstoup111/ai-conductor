@@ -14,6 +14,7 @@ import type { GhRunner } from '../src/engine/tracker-client.js';
 function makeFakeGh(opts: {
   failIssueCreate?: boolean;
   failLabelApply?: boolean;
+  failSemverLabel?: boolean;
   failDependencyPostFor?: number;
   failDependencyReadFor?: number;
 } = {}) {
@@ -27,6 +28,9 @@ function makeFakeGh(opts: {
     }
     if (args.some((arg) => arg.endsWith('/labels'))) {
       if (opts.failLabelApply) throw new Error('simulated label-apply outage');
+      if (opts.failSemverLabel && args.includes('labels[]=semver: patch')) {
+        throw new Error('simulated semver-label outage');
+      }
       return { stdout: '{}' };
     }
     if (args.some((arg) => arg.includes('/dependencies/blocked_by'))) {
@@ -94,6 +98,87 @@ describe('fileIntakeIssue — creation-scoped terminal adapter', () => {
     expect(gh.calls.filter((args) => args.some((arg) => arg.endsWith('/labels')))).toEqual([
       expect.arrayContaining(['repos/acme/app/issues/300/labels', 'labels[]=priority: medium']),
       expect.arrayContaining(['repos/acme/app/issues/300/labels', 'labels[]=size: M']),
+    ]);
+  });
+
+  // Covers: task:1
+  it('applies an explicitly given semver label after priority and size', async () => {
+    const gh = makeFakeGh();
+
+    const result = await fileIntakeIssue({
+      title: 'Explicit semver', body: 'body', size: 'M', priority: 'medium', semver: 'minor',
+    }, { creation: creation(gh.run) });
+
+    expect(result).toMatchObject({ semver: 'minor', semverSource: 'given' });
+    expect(gh.calls.filter((args) => args.some((arg) => arg.endsWith('/labels')))).toEqual([
+      expect.arrayContaining(['labels[]=priority: medium']),
+      expect.arrayContaining(['labels[]=size: M']),
+      expect.arrayContaining(['labels[]=semver: minor']),
+    ]);
+  });
+
+  // Covers: task:1
+  it('uses a valid interactive semver response and records its prompted source', async () => {
+    const gh = makeFakeGh();
+    const prompts: string[] = [];
+
+    const result = await fileIntakeIssue({
+      title: 'Prompted semver', body: 'body', size: 'S', priority: 'low', interactive: true,
+    }, {
+      creation: creation(gh.run),
+      prompt: async (question) => {
+        prompts.push(question);
+        return ' Patch ';
+      },
+    });
+
+    expect(result).toMatchObject({ semver: 'patch', semverSource: 'prompted' });
+    expect(prompts).toEqual(['What semver tier is this? (major/minor/patch, Enter to skip)']);
+  });
+
+  // Covers: task:1
+  it.each(['', 'breaking'])('skips blank or invalid interactive semver %j', async (answer) => {
+    const gh = makeFakeGh();
+
+    const result = await fileIntakeIssue({
+      title: 'Skipped semver', body: 'body', size: 'S', priority: 'low', interactive: true,
+    }, {
+      creation: creation(gh.run),
+      prompt: async () => answer,
+    });
+
+    expect(result).toMatchObject({ ok: true, semver: null, semverSource: null });
+    expect(gh.calls.some((args) => args.includes('labels[]=semver: patch'))).toBe(false);
+    expect(gh.calls.some((args) => args.some((arg) => arg.startsWith('labels[]=semver:')))).toBe(false);
+  });
+
+  // Covers: task:1
+  it('never infers semver from a noninteractive breaking-fix body', async () => {
+    const gh = makeFakeGh();
+    const prompt = async () => 'major';
+
+    const result = await fileIntakeIssue({
+      title: 'Breaking fix', body: 'A breaking fix for an API regression.', size: 'S', priority: 'low',
+    }, { creation: creation(gh.run), prompt });
+
+    expect(result).toMatchObject({ ok: true, semver: null, semverSource: null });
+    expect(gh.calls.some((args) => args.some((arg) => arg.startsWith('labels[]=semver:')))).toBe(false);
+  });
+
+  // Covers: task:1
+  it('warns but succeeds when only the semver label fails, after priority and size', async () => {
+    const gh = makeFakeGh({ failSemverLabel: true });
+
+    const result = await fileIntakeIssue({
+      title: 'Partial semver metadata', body: 'body', size: 'S', priority: 'low', semver: 'patch',
+    }, { creation: creation(gh.run) });
+
+    expect(result).toMatchObject({ ok: true, semver: 'patch', semverSource: 'given' });
+    expect(result.warnings).toEqual([expect.stringContaining('simulated semver-label outage')]);
+    expect(gh.calls.filter((args) => args.some((arg) => arg.endsWith('/labels')))).toEqual([
+      expect.arrayContaining(['labels[]=priority: low']),
+      expect.arrayContaining(['labels[]=size: S']),
+      expect.arrayContaining(['labels[]=semver: patch']),
     ]);
   });
 

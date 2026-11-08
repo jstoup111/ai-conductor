@@ -3,7 +3,7 @@
 // The bundled `skills/intake/scripts/intake-file` helper delegates to
 // `fileIntakeIssue` here: create the GitHub
 // issue, resolve size/priority (prompt ▸ infer ▸ default), apply the
-// `priority:`/`size:` labels, and record a `--depends-on` link (or an
+// `priority:`/`size:`/`semver:` labels, and record a `--depends-on` link (or an
 // explicit "no dependencies" acknowledgement) — all as ONE atomic filing
 // operation. A label-apply failure after a successful issue create is a
 // warning, never a filing failure (exit 0).
@@ -36,6 +36,7 @@ export interface FileIntakeIssueOpts {
   body: string;
   size?: 'S' | 'M' | 'L';
   priority?: 'critical' | 'high' | 'medium' | 'low';
+  semver?: 'major' | 'minor' | 'patch';
   dependsOn?: string[];
   interactive?: boolean;
   repo?: string;
@@ -59,8 +60,10 @@ export interface FileIntakeIssueResult {
   issueUrl: string;
   size: 'S' | 'M' | 'L';
   priority: 'critical' | 'high' | 'medium' | 'low';
+  semver: 'major' | 'minor' | 'patch' | null;
   sizeSource: 'given' | 'prompted' | 'inferred' | 'default';
   prioritySource: 'given' | 'prompted' | 'inferred' | 'default';
+  semverSource: 'given' | 'prompted' | null;
   dependsOnDecision: 'none' | 'linked';
   linked: string[];
   unlinked: Array<{ ref: string; reason: string }>;
@@ -275,6 +278,19 @@ export async function fileIntakeIssue(
     }
   }
 
+  // ── Resolve semver ───────────────────────────────────────────────────────
+  // Semver is intentionally never inferred from the issue text: terms such as
+  // "breaking" describe an observation, not necessarily a release decision.
+  let semver = opts.semver ?? null;
+  let semverSource: FileIntakeIssueResult['semverSource'] = opts.semver ? 'given' : null;
+  if (!semver && opts.interactive && deps.prompt) {
+    const answer = (await deps.prompt('What semver tier is this? (major/minor/patch, Enter to skip)')).trim().toLowerCase();
+    if (answer === 'major' || answer === 'minor' || answer === 'patch') {
+      semver = answer;
+      semverSource = 'prompted';
+    }
+  }
+
   // ── Sanitize before publication ──────────────────────────────────────────
   // Filing publishes this text to a tracker that may be public and is in any
   // case off the operator's machine, so the scrub runs HERE — at the single
@@ -290,8 +306,10 @@ export async function fileIntakeIssue(
     issueUrl: '',
     size,
     priority,
+    semver,
     sizeSource,
     prioritySource,
+    semverSource,
     dependsOnDecision: 'none',
     linked: [],
     unlinked: [],
@@ -381,6 +399,12 @@ export async function fileIntakeIssue(
               context: { actor: authority.actor }, payload: { label: `size: ${size}` },
             },
           },
+          ...(semver ? [{
+            request: {
+              operation: 'issue.label.add' as const, access: 'feature-write' as const, target: created,
+              context: { actor: authority.actor }, payload: { label: `semver: ${semver}` },
+            },
+          }] : []),
           ...validDependencies.map((dependency) => ({
             request: {
               operation: 'issue.dependency.add' as const, access: 'feature-write' as const, target: created,
