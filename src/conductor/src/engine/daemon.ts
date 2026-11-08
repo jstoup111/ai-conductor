@@ -27,6 +27,7 @@ import { timeMaintenancePhase, type MaintenancePhaseInput } from './maintenance-
 import type { RepairQueue, RepairRequest } from './repair-queue.js';
 import type { FeatureTerminalEffects } from './feature-executor.js';
 import { isOperatorActionHalt, type HaltDisposition } from './halt-marker.js';
+import { selectPreemptionVictim, type PriorityBand } from './backlog-priority.js';
 
 type FastForwardOutcome = import('./daemon-backlog.js').FastForwardOutcome;
 
@@ -189,7 +190,7 @@ export async function pickEligible(
   return undefined;
 }
 
-export type FeatureStatus = 'done' | 'halted' | 'error' | 'parked';
+export type FeatureStatus = 'done' | 'halted' | 'error' | 'parked' | 'preempted';
 
 export interface FeatureOutcome {
   slug: string;
@@ -243,6 +244,8 @@ export interface DaemonDeps {
    *  halts — return `{status:'halted'}` — but a thrown error is caught and
    *  recorded as `{status:'error'}` so the pool survives. */
   runFeature: (item: BacklogItem) => Promise<FeatureOutcome>;
+  /** Ask a child executor to yield at its next conductor scheduling boundary. */
+  requestYield?: (slug: string) => boolean;
   /**
    * Dispatcher/executor seam. Both sides travel together so an order builder
    * can never be configured without an executor (or vice versa).
@@ -679,7 +682,7 @@ type RepairWorkerCompletion = { readonly kind: 'repair-complete' };
 
 /** A pooled worker's completion is tied to its kind, so repairs cannot become features. */
 type Worker =
-  | { readonly kind: 'feature'; readonly slug: string; readonly completion: Promise<FeatureOutcome> }
+  | { readonly kind: 'feature'; readonly slug: string; readonly completion: Promise<FeatureOutcome>; readonly dispatchSequence: number }
   | { readonly kind: 'repair'; readonly request: RepairRequest; readonly completion: Promise<RepairWorkerCompletion> };
 
 /**
@@ -940,6 +943,8 @@ export async function runDaemon(
     options.concurrency,
   );
   const workers: Worker[] = [];
+  let dispatchSequence = 0;
+  let preemptionOutstanding: { victim: string; cause: string } | undefined;
   const isFeatureInFlight = (slug: string): boolean => featureSlugs(claims).includes(slug);
   // Keep one completion observer for the current worker set. A busy poll must
   // not race every timer tick directly against live workers: every losing race
@@ -1028,7 +1033,7 @@ export async function runDaemon(
         status: 'error' as const,
         reason: err instanceof Error ? err.message : String(err),
       }));
-    workers.push({ kind: 'feature', slug: item.slug, completion });
+    workers.push({ kind: 'feature', slug: item.slug, completion, dispatchSequence: ++dispatchSequence });
     observeWorkerSet();
     return true;
   };
@@ -1118,6 +1123,17 @@ export async function runDaemon(
     const { slug } = worker;
     const outcome = await worker.completion;
     claims.release(slug);
+    const preemption = preemptionOutstanding?.victim === slug ? preemptionOutstanding : undefined;
+    if (preemption) preemptionOutstanding = undefined;
+    // A yield is deliberately not a terminal lifecycle outcome: leave both
+    // durable state and operator-facing markers untouched so backlog order can
+    // resume this kept worktree normally.
+    if (outcome.status === 'preempted') {
+      if (preemption) (deps.featureLog?.(slug) ?? log)(
+        `${chalk.yellow('■')} preempted ${chalk.bold(slug)}: yielded to ${chalk.bold(preemption.cause)}`,
+      );
+      return;
+    }
     await deps.onFeatureTerminalEffects?.(outcome);
     // A terminal collection is a maintenance trigger, not an inline sweep:
     // a slow reconciler must never hold the slot-release path hostage.
@@ -2013,10 +2029,36 @@ export async function runDaemon(
       }
     }
 
-    if (inFlight.size >= concurrency && deps.onTick) {
+    if (inFlight.size >= concurrency && (deps.onTick || deps.requestYield)) {
       // A busy pool still discovers once per pass so the snapshot is current,
       // rather than replaying the last free-slot discovery with a stale age.
-      await deps.discoverBacklog({ refresh: false });
+      const items = await deps.discoverBacklog({ refresh: false });
+      if (!preemptionOutstanding && deps.requestYield) {
+        const next = await pickEligible({ items }, {
+          claims,
+          isHalted: deps.isHalted,
+          isParked: deps.isParked,
+          isProgressReKickEligible: isProgressReKickEligibleBounded,
+        });
+        if (next?.resolutionMode === 'banded') {
+          const victim = selectPreemptionVictim({
+            slug: next.slug,
+            band: next.band as PriorityBand | undefined,
+            backlogIndex: items.indexOf(next),
+          }, workers.flatMap((worker) => {
+            if (worker.kind !== 'feature') return [];
+            const running = items.findIndex((item) => item.slug === worker.slug);
+            const item = running >= 0 ? items[running] : undefined;
+            return item?.resolutionMode === 'banded' ? [{
+              slug: worker.slug,
+              band: item.band as PriorityBand | undefined,
+              backlogIndex: running,
+              dispatchSequence: worker.dispatchSequence,
+            }] : [];
+          }));
+          if (victim && deps.requestYield(victim)) preemptionOutstanding = { victim, cause: next.slug };
+        }
+      }
       paused = maintenance.isDraining() || (await checkPaused());
       buildAuthMissing = await checkBuildAuthMissing();
       ghVersionBlocked = await checkGhVersionFloor();

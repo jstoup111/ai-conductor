@@ -11,6 +11,7 @@
     "MAX_RECOVERY_RETRIES",
     "NavigableStep",
     "OperatorParkedTermination",
+    "PreemptedTermination",
     "PrdAuditOverScopeRoute",
     "PrdAuditPlanGapRoute",
     "RecordedAsBuiltRemediationFinding",

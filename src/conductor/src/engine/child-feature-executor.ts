@@ -49,7 +49,7 @@ function errorOutcome(order: WorkOrder, reason: string): FeatureExecutionOutcome
  * Process-isolated executor adapter. The supervisor owns root events, durable
  * executor references and all terminal effects; the child owns its worktree.
  */
-export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps): FeatureExecutor & { stopAll(): Promise<void> } {
+export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps): FeatureExecutor & { stopAll(): Promise<void>; requestYield(slug: string): boolean } {
   const fork = deps.fork ?? ((modulePath, args, options) => nodeFork(modulePath, args, options) as unknown as ForkedExecutor);
   const running = new Set<RunningChild>();
   const startTimeoutMs = deps.dispatchStartTimeoutMs ?? 30_000;
@@ -253,7 +253,11 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
       } finally {
         deps.rootEvents.off('loop_halt', onLoopHalt);
       }
-      const outcome = result.status === 'done' ? 'complete' : result.status === 'halted' || result.status === 'parked' ? 'halted' : 'terminated';
+      const outcome = result.status === 'done'
+        ? 'complete'
+        : result.status === 'halted' || result.status === 'parked'
+          ? 'halted'
+          : 'terminated';
       await deps.rootEvents.emit({
         type: 'feature_dispatch_ended', slug: order.slug, outcome, ...tier,
         ...(outcome === 'halted'
@@ -264,6 +268,10 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
           : {}),
       });
       return result;
+    },
+    requestYield(slug) {
+      const entry = [...running].find((candidate) => candidate.order.slug === slug);
+      return entry?.child.send({ kind: 'yield' }) ?? false;
     },
     async stopAll() {
       if (stopAllPromise) return stopAllPromise;

@@ -946,6 +946,36 @@ A typo'd sub-verb — anything outside `status`, `logs`, `park`, `unpark`, `reco
 `start`, `stop`, `restart`, `connect`, `debug`, `pause`, `resume` — prints `conduct daemon: unknown
 subcommand '<token>'.` followed by the daemon help, and exits 1.
 
+## Priority preemption
+
+When every pool slot is busy, each busy poll checks whether the next eligible backlog item outranks
+a running feature. If it does, the daemon asks one running feature to yield its slot.
+
+Preemption ranks priority bands as follows: `critical` > `high` > `medium` = `unlabeled` =
+no-issue > `low`. It applies only while priority resolution is banded. During a priority-read outage
+the backlog falls back to input order and nothing is preempted. Preemption also requires the
+default [`executor_isolation: child`](../reference/configuration.md#executor_isolation); the
+`in-process` executor never yields.
+
+A running feature is a candidate only when its rank is strictly lower than the arrival's and it sits
+later in the current backlog. The lowest-ranked candidate yields first. Among equal ranks, the most
+recently dispatched feature yields. Only one yield request is outstanding at a time.
+
+The feature yields at its next scheduling boundary, the same boundary an
+[operator park](#park-a-feature-before-you-touch-its-git-state) uses. The current provider attempt
+finishes, and later attempts are declined. A parallel group's started members drain, and their
+retries are declined. The yield surfaces at the group join. The feature log shows:
+
+```text
+■ preempted[<slug>]: <boundary>
+■ preempted <slug>: yielded to <arrival-slug>
+```
+
+A yield is not a terminal outcome. The run writes a `preemption_boundary` event to the feature's
+`.pipeline/events.jsonl`. The daemon releases the feature's claim and keeps its worktree. It
+creates no HALT or park marker and runs no terminal effects. The yielded feature resumes from its
+kept worktree when backlog order dispatches it again.
+
 ## Dispatch-first maintenance
 
 At startup the daemon runs one backlog refresh and then claims its first eligible feature. It does

@@ -7,6 +7,7 @@ import { setImmediate as waitForImmediate } from 'node:timers/promises';
 import {
   runDaemon,
   guardedDispatchWith,
+  pickEligible,
   type BacklogItem,
   type DaemonDeps,
   type FeatureOutcome,
@@ -72,6 +73,65 @@ async function applyTerminalEffects(projectRoot: string, outcome: FeatureOutcome
 }
 
 describe('engine/daemon — runDaemon', () => {
+  // Covers: task:9
+  it('re-admits a released preempted slug by backlog order, except while operator-parked', async () => {
+    const claims = new InMemoryWorkClaims();
+    expect(claims.claim('preempted')).toBe(true);
+    claims.release('preempted');
+    let operatorParked = false;
+    const backlog = { items: [{ slug: 'preempted' }, { slug: 'later' }] };
+    const context = { claims, isParked: async (slug: string) => slug === 'preempted' && operatorParked };
+
+    expect((await pickEligible(backlog, context))?.slug).toBe('preempted');
+    operatorParked = true;
+    expect((await pickEligible(backlog, context))?.slug).toBe('later');
+    operatorParked = false;
+    expect((await pickEligible(backlog, context))?.slug).toBe('preempted');
+  });
+
+  // Covers: task:7
+  it('asks the lowest-priority running feature to yield for an earlier critical arrival', async () => {
+    let discovery = 0;
+    let resolveLow!: (outcome: FeatureOutcome) => void;
+    let resolveMedium!: (outcome: FeatureOutcome) => void;
+    let requestObserved!: () => void;
+    const requested = new Promise<void>((resolve) => { requestObserved = resolve; });
+    const requests: string[] = [];
+    let stop = false;
+    const daemon = runDaemon({
+      discoverBacklog: async () => discovery++ < 2
+        ? [
+            { slug: 'low', band: 'low', resolutionMode: 'banded' },
+            { slug: 'medium', band: 'medium', resolutionMode: 'banded' },
+          ]
+        : [
+            { slug: 'critical', band: 'critical', resolutionMode: 'banded' },
+            { slug: 'low', band: 'low', resolutionMode: 'banded' },
+            { slug: 'medium', band: 'medium', resolutionMode: 'banded' },
+          ],
+      runFeature: async (item) => new Promise<FeatureOutcome>((resolve) => {
+        if (item.slug === 'low') resolveLow = resolve;
+        else if (item.slug === 'medium') resolveMedium = resolve;
+        else resolve({ slug: item.slug, status: 'done' });
+      }),
+      requestYield: (slug) => {
+        requests.push(slug);
+        stop = true;
+        requestObserved();
+        return true;
+      },
+      sleep: async () => {},
+      shouldStop: () => stop,
+    }, { concurrency: 2, once: false, idlePollMs: 0 });
+
+    await requested;
+    resolveLow({ slug: 'low', status: 'preempted' });
+    resolveMedium({ slug: 'medium', status: 'done' });
+    await daemon;
+
+    expect(requests).toEqual(['low']);
+  });
+
   it('refreshes the snapshot and all dispatch gates on a full-pool pass', async () => {
     let release: ((outcome: FeatureOutcome) => void) | undefined;
     let stop = false;
@@ -445,6 +505,44 @@ describe('engine/daemon — runDaemon', () => {
       parkedLog: expect.stringMatching(/f0:.*parked.*intentional operator stop/),
     });
     expect(parked?.reason).toBeUndefined();
+  });
+
+  // Covers: task:6
+  it('releases a preempted outcome without parking, completion, markers, or operator-stop narration', async () => {
+    const claims = new InMemoryWorkClaims();
+    const watchHaltCleared = vi.fn(() => vi.fn());
+    const onHaltWritten = vi.fn(async () => {});
+    const terminalEffects = vi.fn(async () => {});
+    const logs: string[] = [];
+    let stop = false;
+    const result = await runDaemon({
+      discoverBacklog: staticBacklog([{ slug: 'yielded' }]),
+      runFeature: async () => {
+        stop = true;
+        return { slug: 'yielded', status: 'preempted' as const };
+      },
+      claims,
+      watchHaltCleared,
+      onHaltWritten,
+      onFeatureTerminalEffects: terminalEffects,
+      featureLog: (slug) => (message) => logs.push(`${slug}:${message}`),
+      shouldStop: () => stop,
+    }, { concurrency: 1, once: false });
+
+    expect({
+      processed: result.processed,
+      claims: claims.list(),
+      parked: claims.listParked(),
+      completed: claims.isCompleted('yielded'),
+      watchRegistrations: watchHaltCleared.mock.calls.length,
+      haltStamps: onHaltWritten.mock.calls.length,
+      terminalEffects: terminalEffects.mock.calls.length,
+      operatorStopLogs: logs.filter((line) => line.includes('intentional operator stop')),
+      completionLogs: logs.filter((line) => line.includes('done yielded')),
+    }).toEqual({
+      processed: [], claims: [], parked: [], completed: false, watchRegistrations: 0,
+      haltStamps: 0, terminalEffects: 0, operatorStopLogs: [], completionLogs: [],
+    });
   });
 
   it('keeps the pool running when a declined attempt returns an operator-parked termination', async () => {

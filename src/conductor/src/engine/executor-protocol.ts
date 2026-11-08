@@ -47,6 +47,9 @@ export type ExecutorMessage =
       reason: string;
     }
   | {
+      kind: 'yield';
+    }
+  | {
       kind: 'outcome';
       outcome: FeatureExecutionOutcome;
     };
@@ -147,6 +150,8 @@ export function parseExecutorMessage(raw: unknown): ParsedExecutorMessage {
       if (reason === undefined) return malformed('stop reason must be a string');
       return { kind: 'ok', message: { kind, reason } };
     }
+    case 'yield':
+      return { kind: 'ok', message: { kind } };
     case 'outcome':
       if (!isRecord(raw.outcome)) return malformed('outcome must be an object');
       return { kind: 'ok', message: { kind, outcome: raw.outcome as unknown as FeatureExecutionOutcome } };

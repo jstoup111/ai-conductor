@@ -94,7 +94,9 @@ Two lookups that are easy to get wrong:
   `engine/artifacts.ts:1122-1219`.
 - The daemon's ship-eligibility guard has no module of its own. It is inline in
   `engine/daemon-runner.ts` — `isVerifiedShip` at `:219` and `failureReasonForFalseShip` at `:228`.
-- Backlog priority resolution is `createPriorityResolver` in `engine/backlog-priority.ts:114`.
+- Backlog priority resolution is `createPriorityResolver` in `engine/backlog-priority.ts:182`. Daemon
+  preemption ranking and victim choice are `preemptionRank` and `selectPreemptionVictim` in the same file;
+  `runDaemon` in `engine/daemon.ts` requests the yield.
 - Priority, size, and blocker facts come from the backend-neutral `createOrderingSource` in
   `engine/ordering-source.ts`; the daemon shares one source per run via
   `engine/daemon-ordering-readers.ts`. Do not add direct `gh` priority or blocker reads elsewhere.

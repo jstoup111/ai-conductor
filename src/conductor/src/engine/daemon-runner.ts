@@ -30,7 +30,7 @@ import {
 import { currentCommitSha } from './project-prelude.js';
 import { readHaltSidecarClassification, writeHaltMarker } from './halt-marker.js';
 import { deferredAutoParkHaltPresentation } from './auto-park-halt.js';
-import type { OperatorParkedTermination } from './conductor-options.js';
+import type { OperatorParkedTermination, PreemptedTermination } from './conductor-options.js';
 import { computeTimingRollup } from './timing-rollup.js';
 import { readState } from './state.js';
 import type { GithubOperationRunner } from './github-operations.js';
@@ -131,7 +131,7 @@ export interface FeatureRunnerDeps {
     events?: ConductorEventEmitter,
     log?: (message: string) => void,
     sessionId?: string,
-  ) => Promise<void | OperatorParkedTermination>;
+  ) => Promise<void | OperatorParkedTermination | PreemptedTermination>;
   /** Read the loop outcome from the worktree's markers. */
   readOutcome: (worktree: FeatureWorktree) => Promise<WorktreeOutcome>;
   /**
@@ -592,6 +592,10 @@ export function makeRunFeature(
           slug: item.slug,
           status: 'parked',
         };
+      }
+      if (conductorTermination?.kind === 'preempted') {
+        await endDispatch('terminated');
+        return { slug: item.slug, status: 'preempted' };
       }
       const outcome = await deps.readOutcome(worktree);
 
