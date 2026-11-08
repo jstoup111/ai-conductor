@@ -139,4 +139,114 @@ describe('structural: external boundary ratchet', () => {
 
     expect(result.touches.filter((touch) => touch.boundary === 'clock')).toEqual([]);
   });
+
+  // Covers: task:4
+  it('attributes an execa git spawn to git and process', () => {
+    const result = checkBoundaryRatchet({
+      files: new Map([['engine/a.ts', [
+        "import { execa } from 'execa';",
+        "execa('git', ['status']);",
+      ].join('\n')]]),
+      allowlist: [],
+      registry: BOUNDARY_REGISTRY,
+    });
+
+    expect(result.touches).toEqual([
+      { file: 'engine/a.ts', line: 1, boundary: 'process', kind: 'specifier-import' },
+      { file: 'engine/a.ts', line: 2, boundary: 'git', kind: 'command-literal' },
+    ]);
+    expect(result.violations).toEqual([
+      { kind: 'unlisted-touch', file: 'engine/a.ts', line: 1, boundary: 'process' },
+      { kind: 'unlisted-touch', file: 'engine/a.ts', line: 2, boundary: 'git' },
+    ]);
+  });
+
+  // Covers: task:4
+  it('attributes a child process namespace gh spawn to gh and process', () => {
+    const result = checkBoundaryRatchet({
+      files: new Map([['engine/a.ts', [
+        "import * as cp from 'node:child_process';",
+        "cp.execFile('gh', []);",
+      ].join('\n')]]),
+      allowlist: [],
+      registry: BOUNDARY_REGISTRY,
+    });
+
+    expect(result.touches.map((touch) => [touch.line, touch.boundary, touch.kind])).toEqual([
+      [1, 'process', 'specifier-import'],
+      [2, 'gh', 'command-literal'],
+    ]);
+    expect(result.violations.map((violation) => [violation.line, violation.boundary])).toEqual([
+      [1, 'process'],
+      [2, 'gh'],
+    ]);
+  });
+
+  // Covers: task:4
+  it('attributes a named child process tmux spawn to tmux and process', () => {
+    const result = checkBoundaryRatchet({
+      files: new Map([['engine/a.ts', [
+        "import { spawnSync } from 'child_process';",
+        "spawnSync('tmux', []);",
+      ].join('\n')]]),
+      allowlist: [],
+      registry: BOUNDARY_REGISTRY,
+    });
+
+    expect(result.touches.map((touch) => [touch.line, touch.boundary, touch.kind])).toEqual([
+      [1, 'process', 'specifier-import'],
+      [2, 'tmux', 'command-literal'],
+    ]);
+    expect(result.violations.map((violation) => [violation.line, violation.boundary])).toEqual([
+      [1, 'process'],
+      [2, 'tmux'],
+    ]);
+  });
+
+  // Covers: task:4
+  it('does not attribute a local execa function to git', () => {
+    const result = checkBoundaryRatchet({
+      files: new Map([['engine/a.ts', "function execa(command: string) {}\nexeca('git');"]]),
+      allowlist: [],
+      registry: BOUNDARY_REGISTRY,
+    });
+
+    expect(result.touches).toEqual([]);
+  });
+
+  // Covers: task:4
+  it('reports only the process import for a nonliteral command', () => {
+    const result = checkBoundaryRatchet({
+      files: new Map([['engine/a.ts', "import { execa } from 'execa';\nexeca(command);"]]),
+      allowlist: [],
+      registry: BOUNDARY_REGISTRY,
+    });
+
+    expect(result.touches).toEqual([
+      { file: 'engine/a.ts', line: 1, boundary: 'process', kind: 'specifier-import' },
+    ]);
+  });
+
+  // Covers: task:4
+  it('attributes a top-level process adapter call to git', () => {
+    const registry = {
+      ...BOUNDARY_REGISTRY,
+      process: { ...BOUNDARY_REGISTRY.process, adapterModules: ['execution/proc.ts'] },
+    };
+    const result = checkBoundaryRatchet({
+      files: new Map([
+        ['cli.ts', "import { run } from './execution/proc.js';\nrun('git', []);"],
+        ['execution/proc.ts', 'export const run = undefined;'],
+      ]),
+      allowlist: [],
+      registry,
+    });
+
+    expect(result.touches).toEqual([
+      { file: 'cli.ts', line: 2, boundary: 'git', kind: 'command-literal' },
+    ]);
+    expect(result.violations).toEqual([
+      { kind: 'unlisted-touch', file: 'cli.ts', line: 2, boundary: 'git' },
+    ]);
+  });
 });
