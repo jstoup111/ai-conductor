@@ -4,6 +4,19 @@ spec_hash: a1a902efc416f17389a46ea47a290b86cc59e98bca8665a7d961064c03e80709
 pr: https://github.com/jstoup111/ai-conductor/pull/3667
 shipped: 2026-11-08
 engine_version: 20261108T201635Z-b61312cff5e3
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "This repairs a test-isolation issue in an unrelated integration test that blocked this feature's test_suite gate (the halt record shows test_suite failing repeatedly). Production is unchanged when the optional dependency is absent, so this counts as a failing-test repair."
+    accepted: false
+    authority: engine
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-2
+    summary: "A structural-suite allowlist repair for pre-existing code, unrelated to restack stories. It changes no runtime behavior and was needed to get the suite green, so it counts as a failing-test repair."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
