@@ -135,11 +135,10 @@ import {
   createFeatureDaemonLogger,
   createOwnershipAwareDaemonLogger,
   formatDaemonConsoleTeeLine,
-  withDaemonLogFeatureOwnership,
   type DaemonLogSink,
 } from './engine/daemon-log.js';
 import type { ConductorEvent } from './types/index.js';
-import { runDaemon, type BacklogItem, type DaemonResult, type FeatureOutcome } from './engine/daemon.js';
+import { runDaemon, type BacklogItem, type DaemonResult } from './engine/daemon.js';
 import { createDaemonTeardown, type DaemonTeardown, type DaemonTeardownOptions } from './engine/daemon-teardown.js';
 import { discoverBacklog, fastForwardRoot, gitTreeSource, type DiscoveryLogger } from './engine/daemon-backlog.js';
 import { createRefreshThrottle, createStalenessWarner, probeStampedShaBehindOrigin } from './engine/engine-refresh.js';
@@ -166,10 +165,9 @@ import {
   formatDaemonConcurrencyWarning,
   resolveDaemonCommandConcurrency,
 } from './engine/daemon-command.js';
-import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js';
+import { type FeatureWorktree } from './engine/daemon-runner.js';
 import { hasDurableChildState } from './engine/child-cursor.js';
 import { acquireFeatureDispatchLease } from './engine/feature-dispatch-lease.js';
-import { createInProcessFeatureExecutor } from './engine/feature-executor.js';
 import { createChildProcessFeatureExecutor, type ChildFeatureExecutorDeps } from './engine/child-feature-executor.js';
 import { createExecutorBroker } from './engine/executor-broker.js';
 import { sweepExecutorRecordsOnBoot } from './engine/executor-records.js';
@@ -666,13 +664,11 @@ export interface DaemonModeOptions {
   processAdapter?: DaemonProcessAdapter;
   /** Injectable bounded wait seam; production uses the OTel export timeout. */
   awaitDaemonOtelStop?: AwaitDaemonOtelStop;
-  /** Injectable executor boundary for daemon composition tests. */
-  runFeature?: (item: BacklogItem) => Promise<FeatureOutcome>;
   /** Injectable scheduler boundary for daemon composition tests. */
   runDaemon?: typeof runDaemon;
   /** Injectable retryable-HALT dependency factory for daemon composition tests. */
   buildRetryableHaltDeps?: typeof buildRetryableHaltDeps;
-  /** Injectable child-process fork boundary for daemon lifecycle tests. */
+  /** Injectable process boundary for child-executor composition tests. */
   executorFork?: ChildFeatureExecutorDeps['fork'];
   /**
    * Task 3: Show completed (PROCESSED) features in the startup dashboard's
@@ -975,7 +971,7 @@ export function buildRetryableHaltDeps(
  * (verifyArtifacts + the engine's unconditional fresh-session-per-step),
  * opening a PR on finish, and tearing
  * the worktree down on success. Unattended; ceilings + supervision live in
- * runDaemon / makeRunFeature.
+ * runDaemon's child executor.
  */
 /** Construct the production daemon sweep input, including its event-spine binding. */
 export function createDaemonSweepBinding(
@@ -1445,14 +1441,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // can abort, close ledgers, and coordinate the drain.
   const allWaitSignals = new Set<AbortController>();
   const activeConductors = new Set<Conductor>();
-  // The in-process path contributes a conductor to this set, while the
-  // injectable composition-test executor deliberately does not. Count the
-  // runDaemon executor boundary instead so the scaled drain budget covers
-  // every live worker through the one dispatch seam.
+  // Count the runDaemon executor boundary so the scaled drain budget covers
+  // every live child through the one dispatch seam.
   let activeExecutorCount = 0;
   let shutdownRequested = false;
-  // Assigned when child isolation is selected below.  Keep the signal handler
-  // independent from adapter construction order while still stopping children
+  // Assigned when the child executor is composed below. Keep the signal
+  // handler independent from construction order while still stopping children
   // before the scheduler begins its drain and before the daemon lock releases.
   let stopChildExecutors: (() => Promise<void>) | undefined;
   let abortChildBroker: (() => void) | undefined;
@@ -2042,20 +2036,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       workOrderGit,
     );
   };
-  const inProcessExecutor = createInProcessFeatureExecutor({
-    withFeatureOwnership: withDaemonLogFeatureOwnership,
-    run: async (order) => {
-      const item = workOrderToBacklogItem(order);
-      return makeRunFeature({
-        ...deps,
-        deferTerminalEffects: true,
-        runSetupTriage: (error, worktree, item, providerExecution, featureLog, featureEvents) =>
-          runSetupTriage(error, worktree, item, providerExecution, featureLog, featureEvents, order.baseSha),
-        createWorktree: (slug) => deps.createWorktree(slug, order),
-        prepareWorktree: (wt, log, events) => deps.prepareWorktree!(wt, log, events, order),
-      })(item);
-    },
-  });
   const engineStoreRoot = resolveEngineStoreRoot({ conductorRoot: engineRoot.conductorRoot });
   let protocolMismatchPending = false;
   const executorBroker = createExecutorBroker({
@@ -2088,21 +2068,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     log,
     ...(opts.executorFork === undefined ? {} : { fork: opts.executorFork }),
   });
-  const childMode = (config?.executor_isolation ?? 'child') === 'child';
-  const executor = childMode ? childExecutor : inProcessExecutor;
-  if (childMode) {
-    stopChildExecutors = () => childExecutor.stopAll();
-    abortChildBroker = () => executorBroker.abortAll();
-  } else {
-    log('[daemon] executor isolation: in-process; per-dispatch engine pinning is disabled');
-  }
+  const executor = childExecutor;
+  stopChildExecutors = () => childExecutor.stopAll();
+  abortChildBroker = () => executorBroker.abortAll();
   // Reap a predecessor's durable child references before the scheduler can
   // claim work. This makes successor takeover deterministic rather than
   // allowing a new claim to overlap a still-running old executor.
   await sweepExecutorRecordsOnBoot(projectRoot);
-  const executeFeature = opts.runFeature ?? makeRunFeature(deps);
-  const runFeature = (item: BacklogItem): Promise<FeatureOutcome> => executeFeature(item);
-
   const continuous = opts.continuous ?? false;
   // Continuous with no ceiling at all runs unbounded — surface that loudly
   // rather than silently looping forever (Phase 7 "hard ceilings" intent).
@@ -2517,10 +2489,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         void events.emit({ type: 'daemon_backlog_snapshot', ...snapshot });
       },
       getDiscoverySnapshot: async (parkedSlugs) => workSource.snapshot?.(parkedSlugs),
-      // Only child executors have a separately running conductor to yield.
-      // The rollback in-process executor deliberately receives no preemption
-      // signal, preserving its existing single-process scheduling semantics.
-      ...(childMode ? { requestYield: (slug: string) => childExecutor.requestYield(slug) } : {}),
+      // The child executor has a separately running conductor to yield.
+      requestYield: (slug: string) => childExecutor.requestYield(slug),
       onExecutorStarted: () => {
         activeExecutorCount += 1;
       },
@@ -2590,11 +2560,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         }
         if (effects.markProcessed) await deps.markProcessed(outcome.slug, effects.markProcessed.prUrl);
       },
-      // An explicit runFeature is the composition-test executor boundary. The
-      // normal production path continues through the WorkOrder executor.
-      ...(opts.runFeature
-        ? { runFeature }
-        : { featureExecution: { createWorkOrder, executor } }),
+      featureExecution: { createWorkOrder, executor },
       featureLog: featureLogFor,
       log: daemonCoreLog,
       staleEngineChecker,

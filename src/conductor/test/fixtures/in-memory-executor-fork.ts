@@ -32,6 +32,8 @@ export interface InMemoryExecutorForkOptions {
    * when a test specifically exercises the child console forwarding boundary.
    */
   readonly captureConsole?: boolean;
+  /** Observes supervisor-to-child protocol messages for lifecycle assertions. */
+  readonly onSupervisorMessage?: (message: unknown) => void;
 }
 
 type Listener = (value?: unknown) => void;
@@ -83,9 +85,11 @@ class InMemoryForkedExecutor implements ForkedExecutor {
   constructor(
     private readonly consoleSinks: Map<string, string[]> | undefined,
     private readonly onHello: ((hello: { readonly engineVersionId: string }) => void) | undefined,
+    private readonly onSupervisorMessage: ((message: unknown) => void) | undefined,
   ) {}
 
   send(message: unknown, callback?: (error: Error | null) => void): boolean {
+    this.onSupervisorMessage?.(message);
     if (isWorkOrder(message)) this.slug = message.order.slug;
     this.deliver(this.childListeners, 'message', message);
     callback?.(null);
@@ -154,6 +158,7 @@ export function createInMemoryExecutorFork({
   onHello,
   consoleSinks,
   captureConsole = false,
+  onSupervisorMessage,
 }: InMemoryExecutorForkOptions): NonNullable<ChildFeatureExecutorDeps['fork']> {
   // A real child installs these process-global services at process start. The
   // test host owns them once and children therefore inherit rather than
@@ -161,7 +166,7 @@ export function createInMemoryExecutorFork({
   const runtime = createExecutorChildRuntime({ projectRoot, processServices: 'inherited' });
 
   return (modulePath) => {
-    const child = new InMemoryForkedExecutor(consoleSinks, onHello);
+    const child = new InMemoryForkedExecutor(consoleSinks, onHello, onSupervisorMessage);
     if (handshake === 'normal') {
       queueMicrotask(() => {
         void runExecutorChild(child.port, withExecutorBrokerProxies(child.port, {
