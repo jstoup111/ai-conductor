@@ -172,7 +172,11 @@ export async function syncIssueLabels(
           context: { actor: deps.actor }, payload: { label: semverLabel },
         }, deps.labelOperations);
         if (semverResult.kind !== 'executed') {
-          const reason = 'error' in semverResult ? semverResult.error : semverResult.reason;
+          const reason = semverResult.kind === 'failed'
+            ? semverResult.error
+            : semverResult.kind === 'partial'
+              ? semverResult.metadataFailures.map((failure) => failure.error).join('; ')
+              : semverResult.reason;
           log(`[label-sync] syncIssueLabels: could not apply ${semverLabel}: ${reason}`);
         }
       }
