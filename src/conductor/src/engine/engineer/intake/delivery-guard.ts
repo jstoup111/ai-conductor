@@ -56,12 +56,12 @@ export async function getIssueState(gh: GhRunner, repo: string, issue: string): 
 export type GhRunner = (args: string[], opts: { cwd: string }) => Promise<{ stdout: string }>;
 
 /** Discriminated PR state from verifyPrState probe. */
-export type PrState = 'open' | 'merged' | 'closed-unmerged' | 'unknown';
+export type PrState = 'open' | 'open-draft' | 'merged' | 'closed-unmerged' | 'unknown';
 
 /**
  * Probe GitHub PR state via gh runner.
  *
- * Calls `gh pr view <url> --json state,mergedAt` and maps the response to a
+ * Calls `gh pr view <url> --json state,mergedAt,isDraft` and maps the response to a
  * discriminated state. Handles errors gracefully — if gh throws or stdout
  * is unparseable JSON, returns 'unknown' instead of crashing.
  *
@@ -72,14 +72,14 @@ export type PrState = 'open' | 'merged' | 'closed-unmerged' | 'unknown';
 export async function verifyPrState(gh: GhRunner, url: string): Promise<PrState> {
   try {
     // Shell out to gh pr view with JSON output for state and mergedAt.
-    const stdout = await runTrackerUrlRead(gh, process.cwd(), 'pull-request', url, ['pr', 'view', url, '--json', 'state,mergedAt']);
+    const stdout = await runTrackerUrlRead(gh, process.cwd(), 'pull-request', url, ['pr', 'view', url, '--json', 'state,mergedAt,isDraft']);
 
     // Parse the JSON response.
-    const pr = JSON.parse(stdout || '{}') as { state?: string; mergedAt?: string | null };
+    const pr = JSON.parse(stdout || '{}') as { state?: string; mergedAt?: string | null; isDraft?: boolean };
 
     // Map state to PrState.
     if (pr.state === 'OPEN') {
-      return 'open';
+      return pr.isDraft === true ? 'open-draft' : 'open';
     }
 
     if (pr.state === 'MERGED') {
@@ -303,11 +303,127 @@ export function createDeliveryGuardedQueue(
         return innerClaim();
       }
 
+      // A draft spec PR records an in-flight DECIDE run, not delivery evidence.
+      // Unlike a regular prUrl, an open draft must remain deciding until it is
+      // readied or merged. Its queue envelope is a duplicate claim and can be
+      // dropped safely while the ledger remains untouched.
+      if (entry.draftPrUrl && !entry.prUrl) {
+        const prState = await verifyPrState(deps.gh, entry.draftPrUrl);
+
+        if (prState === 'open-draft') {
+          try {
+            await queue.ack(candidate);
+          } catch (err) {
+            const isEnoent =
+              err instanceof Error &&
+              (('code' in err && (err as any).code === 'ENOENT') ||
+                err.message.includes('ENOENT'));
+            if (!isEnoent) {
+              process.stderr.write(
+                `[delivery-guard] Failed to drop in-flight draft duplicate ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
+              );
+              held.push(candidate);
+              return innerClaim();
+            }
+            logger.info(`Benign race: failed to ack ${sourceRef} (file already deleted)`);
+          }
+          logger.info(
+            `Duplicate envelope for in-flight draft ${sourceRef}, dropping (recovery: engineer forget ${sourceRef})`,
+          );
+          return innerClaim();
+        }
+
+        if (prState === 'open' || prState === 'merged') {
+          try {
+            await ledger.transition(source, sourceRef, 'done', {
+              prUrl: entry.draftPrUrl,
+              branch: entry.branch,
+            });
+          } catch (err) {
+            process.stderr.write(
+              `[delivery-guard] Failed to heal entry ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
+            );
+            held.push(candidate);
+            return innerClaim();
+          }
+
+          try {
+            await queue.ack(candidate);
+          } catch (err) {
+            const isEnoent =
+              err instanceof Error &&
+              (('code' in err && (err as any).code === 'ENOENT') ||
+                err.message.includes('ENOENT'));
+            if (!isEnoent) {
+              process.stderr.write(
+                `[delivery-guard] Failed to ack delivered entry ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
+              );
+              held.push(candidate);
+              return innerClaim();
+            }
+            logger.info(`Benign race: failed to ack ${sourceRef} (file already deleted)`);
+          }
+          logger.info(`Healed stale entry ${sourceRef}: ${entry.status} → done`);
+          return innerClaim();
+        }
+
+        if (prState === 'unknown') {
+          logger.info(`PR state unknown for ${sourceRef}, holding`);
+          held.push(candidate);
+          return innerClaim();
+        }
+
+        if (prState === 'closed-unmerged') {
+          if ((entry.attempts ?? 0) < REOPEN_ATTEMPTS_CAP) {
+            try {
+              await ledger.reopen(source, sourceRef);
+              logger.info(`Reopening ${sourceRef}`);
+            } catch (err) {
+              process.stderr.write(
+                `[delivery-guard] Failed to reopen entry ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
+              );
+            }
+            held.push(candidate);
+            return innerClaim();
+          }
+
+          try {
+            await ledger.transition(source, sourceRef, 'needs-manual', {
+              prUrl: entry.draftPrUrl,
+            });
+          } catch (err) {
+            process.stderr.write(
+              `[delivery-guard] Failed to park entry ${sourceRef} as needs-manual: ${err instanceof Error ? err.message : String(err)}\n`,
+            );
+            held.push(candidate);
+            return innerClaim();
+          }
+          try {
+            await queue.ack(candidate);
+          } catch (err) {
+            const isEnoent =
+              err instanceof Error &&
+              (('code' in err && (err as any).code === 'ENOENT') ||
+                err.message.includes('ENOENT'));
+            if (!isEnoent) {
+              process.stderr.write(
+                `[delivery-guard] Failed to ack parked entry ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
+              );
+              held.push(candidate);
+              return innerClaim();
+            }
+            logger.info(`Benign race: failed to ack ${sourceRef} (file already deleted)`);
+          }
+          logger.info(`Parking ${sourceRef} as needs-manual (attempts cap reached)`);
+          return innerClaim();
+        }
+      }
+
       // Task 3 & 4: Check if entry can be auto-healed (has prUrl and PR is open/merged)
       if (entry.prUrl) {
         const prState = await verifyPrState(deps.gh, entry.prUrl);
 
-        if (prState === 'open' || prState === 'merged') {
+        if (prState === 'open' || prState === 'open-draft' || prState === 'merged') {
           // PR is delivered — heal the entry to 'done' with metadata preserved
           const priorStatus = entry.status;
 
