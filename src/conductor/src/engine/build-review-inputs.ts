@@ -55,7 +55,7 @@ import {
   type BuildReviewMaterializationMember,
   type BuildReviewMaterializationOptions,
 } from './build-review-materialization.js';
-import type { ChangedFileReference } from './build-review-projections.js';
+import { deriveChangedFileReferences, type ChangedFileReference } from './build-review-projections.js';
 import type { ResolvedBuildReviewCatalogEntry } from './resolved-config.js';
 
 // ── Grader input assembly (build_review) ────────────────────────────────────
@@ -130,6 +130,8 @@ export interface BuildReviewFrozenInputs extends BuildReviewInputs {
   readonly securitySourceSnapshot?: BuildReviewSourceSnapshot;
   /** Present only for a lap that includes an enabled custom policy member. */
   readonly sourceMaterialization?: BuildReviewLapMaterialization;
+  /** The one path-triggered custom-policy decision for this lap. */
+  readonly participation?: BuildReviewLapParticipation;
 }
 
 /** The effective custom-rubric catalog for one lap and members withheld by their path trigger. */
@@ -299,6 +301,8 @@ export interface BuildReviewInputOptions {
   readonly analyzeTestScope?: (input: BuildReviewTestScopeInput) => BuildReviewTestScope;
   /** Enabled members for the lap being prepared; omitted preserves legacy built-in preparation. */
   readonly lapMembers?: readonly BuildReviewMaterializationMember[];
+  /** Resolved catalog whose path-triggered members are decided during assembly. */
+  readonly catalog?: readonly ResolvedBuildReviewCatalogEntry[];
   /** Private source-view placement, supplied by the review execution owner. */
   readonly materialization?: BuildReviewMaterializationOptions;
   /** Active child identity for a child-local review; omitted preserves flat review behavior. */
@@ -1080,12 +1084,18 @@ export async function assembleBuildReviewInputs(
     digest: snapshotDigest(snapshotWithoutDigest),
     contentDigest: contentSnapshotDigest(snapshotWithoutDigest),
   });
-  const sourceMaterialization = options.lapMembers === undefined
+  const participation = options.catalog === undefined
+    ? undefined
+    : resolveBuildReviewLapParticipation(options.catalog, deriveChangedFileReferences(diffResult.stdout));
+  const lapMembers = participation === undefined
+    ? options.lapMembers
+    : participation.participating.map((entry) => ({ id: entry.id, kind: entry.kind }));
+  const sourceMaterialization = lapMembers === undefined
     ? undefined
     : await materializeBuildReviewLap(
         git,
         sourceSnapshot,
-        options.lapMembers,
+        lapMembers,
         options.materialization ?? { projectRoot },
       );
 
@@ -1105,6 +1115,7 @@ export async function assembleBuildReviewInputs(
     testSuiteProof: inspection.evidence,
     sourceSnapshot,
     malformedCoversMarkers: typedTestScope.malformedCoversMarkers,
+    ...(participation === undefined ? {} : { participation }),
     ...(sourceMaterialization === undefined ? {} : { sourceMaterialization }),
     patchEquivalentExclusion: equivalentExclusion,
   };

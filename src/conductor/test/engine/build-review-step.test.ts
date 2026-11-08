@@ -593,6 +593,47 @@ describe('build_review malformed Covers marker gate', () => {
     expect(result.buildReviewMalformedCovers).toBeUndefined();
     expect(coordinator).toHaveBeenCalledOnce();
   });
+
+  // Covers: task:4
+  it('withholds an unmatched path-triggered custom member before the coordinator boundary', async () => {
+    await commitTests({ 'src/a.ts': 'export const a = true;\n' });
+    const provider = { invoke: vi.fn() };
+    const coordinator = vi.fn(async () => ({ success: true, output: 'coordinator result' }));
+    const runner = new DefaultStepRunner(provider, 'path-triggered-custom', projectRoot, {
+      planPath,
+      gitRunner: realGit(),
+      config: {
+        test_suite: { scoped_command: 'true' },
+        build_review: {
+          enabled: true,
+          rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
+          custom_rubrics: {
+            dependencyHygiene: {
+              enabled: true, skill: 'dependency-hygiene', source: 'project', question: 'Review dependencies.',
+              paths: ['**/package.json'],
+            },
+          },
+        },
+      } as HarnessConfig,
+      buildReviewInputOptions: {
+        materialization: { projectRoot },
+        inspectTestSuite: async () => ({
+          status: 'CURRENT', evidence: { provenanceHeadSha: await git('rev-parse', 'HEAD'), outcome: 'PASS' },
+        } as never),
+      },
+      buildReviewCoordinator: coordinator,
+    });
+
+    const result = await runner.run('build_review', state);
+
+    expect(result).toMatchObject({ success: true, output: 'coordinator result' });
+    expect(provider.invoke).not.toHaveBeenCalled();
+    expect(coordinator).toHaveBeenCalledOnce();
+    const [inputs, config] = coordinator.mock.calls[0]!;
+    expect(inputs.participation).toEqual(expect.objectContaining({ withheld: ['dependencyHygiene'] }));
+    expect(inputs.sourceMaterialization).toBeUndefined();
+    expect(config.catalog).toEqual([]);
+  });
 });
 
 describe('build_review structured rubric dispatch', () => {
