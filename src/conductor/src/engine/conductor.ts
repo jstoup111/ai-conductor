@@ -6523,7 +6523,7 @@ export class Conductor {
     if (admission.kind === 'admitted') {
       const cursor = await this.resolveActiveChild(this.projectRoot, slug);
       const execution = resolveExecutionChild(cursor, slug);
-      if (execution.source === 'routed-host' || execution.source === 'revalidating' || execution.source === 'cursor') {
+      if (execution.source === 'routed-host' || execution.source === 'revalidating') {
         await this.activateChildRegionState(state, execution.target.child, execution.target.isLeaf);
         return { index: indexOf('acceptance_specs'), activeChild: execution.target };
       }
@@ -6531,7 +6531,7 @@ export class Conductor {
     if (admission.kind === 'continue' || admission.kind === 'busy') {
       const cursor = await this.resolveActiveChild(this.projectRoot, slug);
       const execution = resolveExecutionChild(cursor, slug);
-      if (execution.source === 'routed-host' || execution.source === 'revalidating' || execution.source === 'cursor') {
+      if (execution.source === 'routed-host' || execution.source === 'revalidating') {
         await this.activateChildRegionState(state, execution.target.child, execution.target.isLeaf);
         return { index: indexOf('acceptance_specs'), activeChild: execution.target };
       }
@@ -13746,10 +13746,6 @@ export class Conductor {
                 completion.missing,
                 join(this.projectRoot, '.pipeline'),
               );
-              // A completed review has no new runner input to consume on a
-              // retry. Its aggregate is consumed once by the post-join
-              // adjudication/failure boundary below.
-              if (step.name === 'build_review') break;
               if (
                 step.name === 'build' &&
                 attempt < stepMaxRetries &&
@@ -17169,7 +17165,7 @@ export class Conductor {
             case 'exhausted':
             case 'halted': {
               const reason = routedAdmission.reason;
-              await this.writeHaltMarker(reason + '\n', routedAdmission.haltClass ?? 'needs-human');
+              await this.writeHaltMarker(reason + '\n', (routedAdmission.kind === 'halted' ? routedAdmission.haltClass : undefined) ?? 'needs-human');
               const prUrl = await this.surfaceRemediationPr(reason);
               await this.emitLoopHalt(reason, prUrl);
               return 'halt';
@@ -17346,8 +17342,8 @@ export class Conductor {
           this.projectRoot,
           step.name,
           verdict,
-          step.name === 'build' ? this.activeRegionChild : undefined,
-          { routedRound: step.name === 'build' ? await this.routedRoundForActiveChild(state) : undefined },
+          step.name === 'build' || step.name === 'build_review' ? this.activeRegionChild : undefined,
+          { routedRound: step.name === 'build' || step.name === 'build_review' ? await this.routedRoundForActiveChild(state) : undefined },
         );
       }
       await this.events.emit(this.stampGateTier(this.withActiveRegionChild({

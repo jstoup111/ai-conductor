@@ -662,6 +662,8 @@ async function advanceR2AfterBuildReview(options: {
   });
   const starts: StepName[] = [];
   const events = new ConductorEventEmitter();
+  const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
+  persister.start();
   events.on('step_started', (event) => { if (event.type === 'step_started') starts.push(event.step); });
   let lookup = 0;
   const raw = options.adjudicated ? aggregate('judged') : passAggregate();
@@ -707,6 +709,7 @@ async function advanceR2AfterBuildReview(options: {
   await conductor.run().catch((error: unknown) => {
     if (!(error instanceof Error) || !error.message.startsWith('stop after routed r2 selection:')) throw error;
   });
+  persister.stop();
 
   const route = await git(['rev-parse', routeRecordRefFor('demo', parseRoundId('r2')!)]);
   const marker = await git(['rev-parse', repairMarkerRefFor('demo')]);
@@ -767,7 +770,7 @@ async function settledLeafReachesWholeFeature(topology: 'n1' | 'no-routes' | 'cl
       const record = {
         roundId, kind: 'audit' as const, phase: 'closed' as const,
         items: [{ findingId: 'closed-finding', kind: 'audit', owner: c1, host: c1, reason: 'already settled', fallback: [] }],
-        allocation: { [c1]: { remTaskIds: ['closed-remediation'], blockBodies: ['### Task closed-remediation\n'] } },
+        allocation: { [c1]: { remTaskIds: ['rem-1'], blockBodies: ['### Task rem-1\n'] } },
         hosts: { [c1]: 'restacked' as const }, currentHostIndex: 0,
         receipt: emptyUnsettledReceipt(), outbox: [],
       };
@@ -1859,6 +1862,13 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     const run = await fixture({
       stacked: true,
       infrastructure: 'covered',
+      buildReviewChild: first.child,
+      seedPipeline: async (root) => {
+        await mkdir(join(root, '.pipeline', 'children', '1'), { recursive: true });
+        await writeState(join(root, '.pipeline', 'children', '1', 'conduct-state.json'), {
+          feature_desc: 'adjudicated-feature', acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'pending',
+        } as never);
+      },
       childRegionLifecycle: {
         resolveActiveChild: async () => {
           calls += 1;
@@ -1875,16 +1885,20 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
   });
 
   // Covers: task:2
-  it('keeps the routed r2 durable handoff byte-identical after clean PASS and adjudication settlement', async () => {
-    const afterCleanPass = await advanceR2AfterBuildReview({ adjudicated: false });
-    const afterAdjudicationSettlement = await advanceR2AfterBuildReview({ adjudicated: true });
+  it('keeps the routed r2 durable handoff identical after clean PASS and adjudication settlement', async () => {
+    // Each run builds its own repository, so ref SHAs and outbox ids differ;
+    // parity is the host states, marker host, cursor, and dispatched steps.
+    const handoff = ({ route: _route, marker: _marker, halt: _halt, ...rest }: Awaited<ReturnType<typeof advanceR2AfterBuildReview>>) => rest;
+    const afterCleanPass = handoff(await advanceR2AfterBuildReview({ adjudicated: false }));
+    const afterAdjudicationSettlement = handoff(await advanceR2AfterBuildReview({ adjudicated: true }));
 
     expect(afterCleanPass.r1Host).toBe('restacked');
     expect(afterAdjudicationSettlement.r1Host).toBe('restacked');
     expect(afterCleanPass.markerHost).toBe(2);
     expect(afterAdjudicationSettlement.markerHost).toBe(2);
     expect(afterAdjudicationSettlement).toEqual(afterCleanPass);
-    expect(afterCleanPass.next).toEqual({ kind: 'repair-pending', child: 2, roundId: 'r2' });
+    expect(afterCleanPass.next).toEqual({ kind: 'active' });
+    expect(afterCleanPass.starts).toEqual(['build_review', 'acceptance_specs']);
     expect(afterCleanPass.starts.filter((step) => ['manual_test', 'prd_audit', 'architecture_review_as_built'].includes(step))).toEqual([]);
   });
 
