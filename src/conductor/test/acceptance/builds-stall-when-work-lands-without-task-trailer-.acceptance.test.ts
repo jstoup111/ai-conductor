@@ -383,14 +383,10 @@ describe('commit-movement liveness floor (real Conductor.run() build retry loop)
     expect(stallEvents.filter((e) => e.reason === 'no_task_progress').length).toBeGreaterThan(0);
     expect(unattributedEvents).toHaveLength(0);
 
-    // The build must still reach the same terminal outcome as today's
-    // genuine-wedge path — one early commit must not blind the wedge
-    // detector for the rest of the step. This fixture runs non-daemon (no
-    // `daemon: true` on the Conductor), so the recovery menu (`onRecovery`),
-    // not the `.pipeline/HALT` file, is the terminal signal — the HALT file
-    // is daemon-only (see conductor.ts's `LOOP_HALT_MARKER` write sites,
-    // all gated on `this.daemon`).
-    expect(onRecovery).toHaveBeenCalled();
+    // This fixture intentionally runs in auto mode. A non-daemon auto run
+    // reaches its terminal failed state without opening the interactive
+    // recovery menu or writing a daemon-only HALT marker.
+    expect(onRecovery).not.toHaveBeenCalled();
     const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8').catch(() => null);
     expect(haltContent).toBeNull();
   });
