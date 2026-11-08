@@ -1,4 +1,4 @@
-// Covers: task:8
+// Covers: task:8, task:rem-prd-audit-R1
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, mkdtemp, readdir, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
