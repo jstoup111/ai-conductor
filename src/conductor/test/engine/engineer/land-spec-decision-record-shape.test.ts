@@ -29,6 +29,17 @@ async function git(args: string[], cwd = repoPath): Promise<string> {
   return (await execFile('git', args, { cwd })).stdout.trim();
 }
 
+async function createFixtureRepo(): Promise<string> {
+  const path = await mkdtemp(join(tmpdir(), 'land-spec-decision-record-shape-'));
+  await execFile('git', ['init', '-b', 'main', '-q'], { cwd: path });
+  await execFile('git', ['config', 'user.email', 'test@example.test'], { cwd: path });
+  await execFile('git', ['config', 'user.name', 'Test'], { cwd: path });
+  await writeFile(join(path, 'README.md'), '# repo\n');
+  await execFile('git', ['add', 'README.md'], { cwd: path });
+  await execFile('git', ['commit', '-m', 'init'], { cwd: path });
+  return path;
+}
+
 function options() {
   return {
     ownerConfig: { spec_owner: 'test-owner' },
@@ -104,24 +115,37 @@ async function land(worktreePath: string) {
 }
 
 beforeEach(async () => {
-  repoPath = await mkdtemp(join(tmpdir(), 'land-spec-decision-record-shape-'));
-  await git(['init', '-b', 'main', '-q']);
-  await git(['config', 'user.email', 'test@example.test']);
-  await git(['config', 'user.name', 'Test']);
-  await writeFile(join(repoPath, 'README.md'), '# repo\n');
-  await git(['add', 'README.md']);
-  await git(['commit', '-m', 'init']);
+  repoPath = await createFixtureRepo();
 });
 
 afterEach(async () => { await rm(repoPath, { recursive: true, force: true }); });
 
 describe('landSpec decision record shape gate', () => {
-  it('lands canonical ADR and architecture-review additions', async () => {
+  it('lands canonical ADR and architecture-review additions while rejecting an added corpus file', async () => {
     const worktreePath = await seedWorktree();
     await addDecision(worktreePath, 'adr-2026-11-07-x.md', approvedAdr());
     await addDecision(worktreePath, 'architecture-review-2026-11-07-x.md');
 
     await expect(land(worktreePath)).resolves.toMatchObject({ slug: 'shape-landing' });
+    const landedPaths = await git(['show', '--name-only', '--format=', 'HEAD'], worktreePath);
+    expect(landedPaths).toContain('.docs/decisions/adr-2026-11-07-x.md');
+    expect(landedPaths).toContain('.docs/decisions/architecture-review-2026-11-07-x.md');
+
+    const firstRepoPath = repoPath;
+    repoPath = await createFixtureRepo();
+    try {
+      const invalidWorktreePath = await seedWorktree();
+      await addDecision(invalidWorktreePath, 'adr-2026-11-07-x.md', approvedAdr());
+      await addDecision(invalidWorktreePath, 'architecture-review-2026-11-07-x.md');
+      await addDecision(invalidWorktreePath, 'notes.md');
+
+      const error = await land(invalidWorktreePath).catch((reason: unknown) => reason);
+      expect(error).toBeInstanceOf(LandGateError);
+      expect(error).toMatchObject({ gate: 'decision-record-shape' });
+    } finally {
+      await rm(repoPath, { recursive: true, force: true });
+      repoPath = firstRepoPath;
+    }
   });
 
   it.each(['styleguide.md', 'api-response-contract.md'])('lands recognized consumer record %s', async (name) => {
