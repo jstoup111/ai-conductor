@@ -21,11 +21,14 @@
 // source-regex check.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { readFile, mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
+import { buildRetryableHaltDeps, runDaemonMode } from '../../src/daemon-cli.js';
+import type { DaemonDeps } from '../../src/engine/daemon.js';
+import { allInstalledProviderDiscoveryRunner } from './boot-test-helpers.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DAEMON_CLI_SRC = join(__dirname, '../../src/daemon-cli.ts');
@@ -52,28 +55,47 @@ describe('T14 — daemon-cli wires the real progress-gated re-kick predicate int
   });
 
   it('runDaemon deps use the production halt classifier, even when progress re-kicks are disabled', async () => {
-    const source = await readFile(DAEMON_CLI_SRC, 'utf-8');
-    expect(source).toMatch(
-      /\.\.\.buildRetryableHaltDeps\(worktreeBase, \{ events \}\),\s*\n\s*readHaltClass:\s*\(slug\)\s*=>\s*readHaltClass\(join\(worktreeBase, slug\)\)/,
-    );
-
-    const { buildProgressReKickDeps } = await import('../../src/daemon-cli.js');
-    const { readHaltClass } = await import('../../src/engine/halt-marker.js');
-    const worktreeBase = await mkdtemp(join(tmpdir(), 'retryable-halt-class-wiring-'));
+    const projectRoot = await mkdtemp(join(tmpdir(), 'retryable-halt-class-wiring-'));
+    const worktreeBase = join(projectRoot, '.worktrees');
     try {
-      const slug = 'retryable-progress-disabled';
-      const pipeline = join(worktreeBase, slug, '.pipeline');
-      await mkdir(pipeline, { recursive: true });
-      await writeFile(join(pipeline, 'HALT.class'), 'mechanical\n');
+      await mkdir(join(projectRoot, '.ai-conductor'), { recursive: true });
+      await writeFile(join(projectRoot, '.ai-conductor', 'config.yml'), 'build_progress_halt:\n  enabled: false\n');
+      for (const [slug, haltClass] of [['mechanical-halt', 'mechanical'], ['human-halt', 'needs-human']] as const) {
+        const pipeline = join(worktreeBase, slug, '.pipeline');
+        await mkdir(pipeline, { recursive: true });
+        await writeFile(join(pipeline, 'HALT.class'), `${haltClass}\n`);
+      }
 
-      const progress = buildProgressReKickDeps(
-        { build_progress_halt: { enabled: false } } as any,
-        worktreeBase,
-      );
-      expect(progress.isProgressReKickEligible).toBeUndefined();
-      expect(await readHaltClass(join(worktreeBase, slug))).toBe('mechanical');
+      const retryable = buildRetryableHaltDeps(worktreeBase, undefined);
+      const retryableFactory = vi.fn(() => retryable);
+      let captured: DaemonDeps | undefined;
+      await runDaemonMode({
+        projectRoot,
+        concurrency: 1,
+        baseBranch: 'main',
+        ensureFresh: async () => {},
+        probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+        providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
+        runHaltClassMigration: async () => worktreeBase,
+        workSource: { discover: async () => [] },
+        watch: false,
+        buildRetryableHaltDeps: retryableFactory,
+        runDaemon: async (deps) => {
+          captured = deps;
+          return { processed: [], stoppedReason: 'backlog_drained' };
+        },
+      });
+
+      expect(captured).toBeDefined();
+      expect(captured!.isProgressReKickEligible).toBeUndefined();
+      expect(await captured!.readHaltClass!('mechanical-halt')).toBe('mechanical');
+      expect(await captured!.readHaltClass!('human-halt')).toBe('needs-human');
+      expect(captured!.clearRetryableHalt).toBe(retryable.clearRetryableHalt);
+      expect(captured!.isFreshRetryableHalt).toBe(retryable.isFreshRetryableHalt);
+      expect(captured!.stampDispatchBaseline).toBe(retryable.stampDispatchBaseline);
+      expect(retryableFactory).toHaveBeenCalledOnce();
     } finally {
-      await rm(worktreeBase, { recursive: true, force: true });
+      await rm(projectRoot, { recursive: true, force: true });
     }
   });
 

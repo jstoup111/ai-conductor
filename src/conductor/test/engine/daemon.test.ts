@@ -845,36 +845,61 @@ describe('engine/daemon — runDaemon', () => {
   });
 
   it('re-dispatches a halted feature after its HALT marker is cleared', async () => {
-    const halted = new Set<string>();
-    const featureLines: string[] = [];
-    let dispatches = 0;
-    let slept = 0;
-    const deps: DaemonDeps = {
-      discoverBacklog: staticBacklog(items(1)),
-      isHalted: async (slug) => halted.has(slug),
-      runFeature: async (it) => {
-        dispatches++;
-        if (dispatches === 1) {
-          halted.add(it.slug); // first attempt parks
-          return { slug: it.slug, status: 'halted', reason: 'needs human' };
-        }
-        return { slug: it.slug, status: 'done' }; // resumes and finishes on retry
-      },
-      sleep: async () => {
-        slept++;
-        if (slept === 2) halted.delete('f0'); // human removes .pipeline/HALT
-      },
-      featureLog: (slug) => (message) => featureLines.push(`[${slug}] ${message}`),
-    };
-    const res = await runDaemon(deps, { concurrency: 1, once: false, maxIdlePolls: 6 });
-    expect(dispatches).toBe(2); // parked, then re-dispatched after the clear
-    expect(res.processed.filter((o) => o.slug === 'f0' && o.status === 'done')).toHaveLength(1);
-    expect(featureLines).toEqual([
-      '[f0] ▶ start f0',
-      '[f0] ■ done f0: halted — needs human',
-      '[f0] ↻ resume f0',
-      '[f0] ■ done f0: done',
-    ]);
+    const worktreeBase = await mkdtemp(join(tmpdir(), 'daemon-retryable-halt-order-'));
+    const slug = 'f0';
+    const pipeline = join(worktreeBase, slug, '.pipeline');
+    const order: string[] = [];
+    const snapshots: Array<{ halt: boolean; haltClass: boolean }> = [];
+    const claims = new InMemoryWorkClaims();
+    claims.park(slug);
+    await mkdir(pipeline, { recursive: true });
+    await writeFile(join(pipeline, 'HALT'), 'retryable prerequisite\n');
+    await writeFile(join(pipeline, 'HALT.class'), 'mechanical\n');
+
+    try {
+      const clearRetryableHalt = vi.fn(async () => {
+        order.push('clearRetryableHalt');
+        await rm(join(pipeline, 'HALT'));
+        await rm(join(pipeline, 'HALT.class'));
+      });
+      const stampDispatchBaseline = vi.fn(async () => {
+        order.push('stampDispatchBaseline');
+      });
+      const deps: DaemonDeps = {
+        claims,
+        discoverBacklog: staticBacklog([{ slug }]),
+        isHalted: async () => exists(join(pipeline, 'HALT')),
+        isFreshRetryableHalt: async () => true,
+        readHaltClass: async () => 'mechanical',
+        clearRetryableHalt,
+        stampDispatchBaseline,
+        runFeature: async () => {
+          throw new Error('featureExecution executor should own this dispatch');
+        },
+        featureExecution: {
+          createWorkOrder: async () => ({ slug } as WorkOrder),
+          executor: {
+            execute: async () => {
+              order.push('executor');
+              snapshots.push({
+                halt: await exists(join(pipeline, 'HALT')),
+                haltClass: await exists(join(pipeline, 'HALT.class')),
+              });
+              return { slug, status: 'done' };
+            },
+          },
+        },
+        sleep: async () => {},
+      };
+
+      const res = await runDaemon(deps, { concurrency: 1, once: true });
+      expect(clearRetryableHalt).toHaveBeenCalledOnce();
+      expect(snapshots).toEqual([{ halt: false, haltClass: false }]);
+      expect(order).toEqual(['clearRetryableHalt', 'stampDispatchBaseline', 'executor']);
+      expect(res.processed).toContainEqual({ slug, status: 'done' });
+    } finally {
+      await rm(worktreeBase, { recursive: true, force: true });
+    }
   });
 
   it('re-parks a feature that halts again until cleared (no tight re-dispatch loop)', async () => {

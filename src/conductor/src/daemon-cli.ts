@@ -721,6 +721,10 @@ export interface DaemonModeOptions {
   awaitDaemonOtelStop?: AwaitDaemonOtelStop;
   /** Injectable executor boundary for daemon composition tests. */
   runFeature?: (item: BacklogItem) => Promise<FeatureOutcome>;
+  /** Injectable scheduler boundary for daemon composition tests. */
+  runDaemon?: typeof runDaemon;
+  /** Injectable retryable-HALT dependency factory for daemon composition tests. */
+  buildRetryableHaltDeps?: typeof buildRetryableHaltDeps;
   /**
    * Task 3: Show completed (PROCESSED) features in the startup dashboard's
    * console output. Defaults to false/undefined — the persisted log sink
@@ -2816,7 +2820,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // invokes these captured sanctioned call-sites at claim time.
   const repairQueue = new RepairQueue();
   let recordEngineSourceRefresh: (() => void) | undefined;
-  const result = await runDaemon(
+  const dispatchDaemon = opts.runDaemon ?? runDaemon;
+  const retryableHaltDeps = opts.buildRetryableHaltDeps ?? buildRetryableHaltDeps;
+  const result = await dispatchDaemon(
     {
       claims: workClaims,
       repairPriority: (slug) => priorityResolver.bandForSlug?.(slug),
@@ -2861,7 +2867,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // — previously constructed and fully unit-tested only at the
       // daemon.ts/pickEligible level, never reachable from this entrypoint.
       ...buildProgressReKickDeps(config, worktreeBase, log),
-      ...buildRetryableHaltDeps(worktreeBase, { events }),
+      ...retryableHaltDeps(worktreeBase, { events }),
       readHaltClass: (slug) => readHaltClass(join(worktreeBase, slug)),
       // FR-1 (Task 11): gate dispatch on the durable `.daemon/PAUSED` marker,
       // re-polled every loop iteration by runDaemon so a pause lifted mid-run
