@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "slug": "external-boundaries-have-no-swappable-seams-rerout",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/external-boundaries-have-no-swappable-seams-rerout.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/external-boundaries-have-no-swappable-seams-rerout.md"
+    },
+    {
+      "kind": "coherence-waiver",
+      "path": ".docs/coherence-waivers/external-boundaries-have-no-swappable-seams-rerout.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/external-boundaries-have-no-swappable-seams-rerout.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/2026-11-07-external-boundaries-have-no-swappable-seams-rerout.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-11-07-external-boundary-ports-registry-and-ratchet.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/external-boundaries-have-no-swappable-seams-rerout.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/external-boundaries-have-no-swappable-seams-rerout.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/external-boundaries-have-no-swappable-seams-rerout.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/external-boundaries-have-no-swappable-seams-rerout.md"
+    }
+  ]
+}
