@@ -13713,6 +13713,11 @@ export class Conductor {
             }
 
             if (!completion.done) {
+              // A build-review runner can succeed while its authoritative
+              // aggregate remains non-green.  Route that terminal condition
+              // through the adjudication/failure boundary instead of treating
+              // the provider success as a completed gate after retries end.
+              if (step.name === 'build_review') succeeded = false;
               lastError = `Step '${step.name}' completed but completion check failed: ${completion.reason ?? 'unknown'}`;
               if (
                 step.name === 'build_review' &&
