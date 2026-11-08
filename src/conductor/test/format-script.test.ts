@@ -1,6 +1,6 @@
 // Covers: task:2
 import { execFileSync, spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -182,5 +182,48 @@ describe('format script errors', () => {
     const explicit = runFormat(repository, '--check', '--base', 'no-such-ref');
     expect(explicit.status).toBe(1);
     expect(explicit.stderr).toContain('format: cannot resolve base reference "no-such-ref"');
+  });
+});
+
+describe('format script write mode', () => {
+  it('rewrites changed files, leaves untouched files alone, and is idempotent', () => {
+    const repository = createRepository();
+    git(repository, 'checkout', 'main');
+    write(repository, 'src/conductor/src/untouched.ts', 'export const untouched="not canonical"\n');
+    commit(repository, 'untouched file');
+    git(repository, 'checkout', 'feature');
+    git(repository, 'merge', '--no-ff', 'main', '-m', 'merge main');
+    const untouched = readFileSync(join(repository, 'src/conductor/src/untouched.ts'), 'utf8');
+    write(repository, 'src/conductor/src/a.ts', 'export const a="not canonical"\n');
+    write(repository, 'test/x.sh', 'if true;then echo x;fi\n');
+
+    expect(runFormat(repository, '--write', '--base', 'main').status).toBe(0);
+    expect(format(repository).status).toBe(0);
+    expect(readFileSync(join(repository, 'src/conductor/src/untouched.ts'), 'utf8')).toBe(untouched);
+    const first = readFileSync(join(repository, 'src/conductor/src/a.ts'), 'utf8');
+    expect(first).toContain("'not canonical'");
+    expect(first).toContain(';');
+    expect(runFormat(repository, '--write', '--base', 'main').status).toBe(0);
+    expect(readFileSync(join(repository, 'src/conductor/src/a.ts'), 'utf8')).toBe(first);
+  });
+
+  it('formats all in-scope files but never rewrites ignored or unsafe files', () => {
+    const repository = createRepository();
+    write(repository, 'src/conductor/src/a.ts', 'export const a="not canonical"\n');
+    write(repository, 'src/conductor/src/bad.ts', 'const = ;\n');
+    write(repository, 'src/conductor/test/fixtures/f.ts', 'export const f="not canonical"\n');
+    write(repository, 'README.md', '# not canonical\n');
+    git(repository, 'add', '.');
+    const ignored = readFileSync(join(repository, 'src/conductor/test/fixtures/f.ts'), 'utf8');
+    const readme = readFileSync(join(repository, 'README.md'), 'utf8');
+
+    const result = runFormat(repository, '--write', '--all');
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('syntax error: src/conductor/src/bad.ts:');
+    expect(readFileSync(join(repository, 'src/conductor/src/bad.ts'), 'utf8')).toBe('const = ;\n');
+    expect(readFileSync(join(repository, 'src/conductor/test/fixtures/f.ts'), 'utf8')).toBe(ignored);
+    expect(readFileSync(join(repository, 'README.md'), 'utf8')).toBe(readme);
+    expect(runFormat(repository, '--check', '--all').status).toBe(1);
   });
 });
