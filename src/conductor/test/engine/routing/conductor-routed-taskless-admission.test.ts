@@ -5,6 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { makeGitRunner } from '../../../src/engine/rebase.js';
+import { childBranchFor, leafBranchFor } from '../../../src/engine/feature-branch-identity.js';
+import { parseChildId, type ChildId } from '../../../src/engine/child-context.js';
+import { closureRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { writeSliceTopologyFixture } from '../slice-topology-fixture.js';
 
 const seams = vi.hoisted(() => ({
@@ -115,6 +118,15 @@ async function subject(judgedChild = 1) {
     slug: 'demo',
     sliceMembership: { taskSlices: { T1: 1, T2: 2 }, titles: ['First', 'Second'] },
   });
+  await git(['checkout', '-qb', 'feat/c1/demo']);
+  await writeFile(join(root, 'child-1.txt'), 'child 1\n');
+  await git(['add', 'child-1.txt']);
+  await git(['commit', '-qm', 'child 1']);
+  await git(['update-ref', closureRefFor('demo', child(1)), 'HEAD']);
+  await git(['checkout', '-qb', leafBranchFor('demo')]);
+  await writeFile(join(root, 'child-2.txt'), 'child 2\n');
+  await git(['add', 'child-2.txt']);
+  await git(['commit', '-qm', 'child 2']);
   const events = new ConductorEventEmitter();
   const runner: StepRunner = {
     run: vi.fn(async () => ({ success: true })),
@@ -133,6 +145,7 @@ async function subject(judgedChild = 1) {
     projectRoot: root,
     stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
     events,
+    git,
     stepRunner: runner,
     config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } } as never,
     childRegionLifecycle: {
@@ -144,7 +157,131 @@ async function subject(judgedChild = 1) {
   return { conductor, events, root };
 }
 
+function child(position: number): ChildId {
+  const parsed = parseChildId(position);
+  if (parsed === undefined) throw new Error(`invalid fixture child ${position}`);
+  return parsed;
+}
+
+async function fiveChildSubject(judgeOutput?: (prompt: string) => string) {
+  const root = await mkdtemp(join(tmpdir(), 'routed-taskless-manifest-'));
+  roots.push(root);
+  const git = makeGitRunner(root);
+  await git(['init', '-q', '-b', 'main']);
+  await git(['config', 'user.email', 'taskless@example.test']);
+  await git(['config', 'user.name', 'Taskless']);
+  await writeFile(join(root, 'base.txt'), 'base\n');
+  await git(['add', 'base.txt']);
+  await git(['commit', '-qm', 'base']);
+  await mkdir(join(root, '.pipeline', 'children', '1'), { recursive: true });
+  await writeSliceTopologyFixture(root, {
+    slug: 'demo',
+    sliceMembership: {
+      taskSlices: { T1: 1, T2: 2, T3: 3, T4: 4, T5: 5 },
+      titles: ['One', 'Two', 'Three', 'Four', 'Five'],
+    },
+  });
+
+  const changes: ReadonlyArray<readonly [ChildId, readonly string[]]> = [
+    [child(1), ['src/core/model.ts']],
+    [child(2), ['src/client/network/request.ts']],
+    [child(3), ['src/client/state/store.ts']],
+    [child(4), ['src/client/input/touch.ts', 'src/client/ui/hud.ts']],
+    [child(5), ['src/client/art/manifest.ts']],
+  ];
+  for (const [position, paths] of changes) {
+    const branch = position === child(5) ? leafBranchFor('demo') : childBranchFor('demo', position).branch;
+    if (branch === undefined) throw new Error(`missing fixture branch for child ${position}`);
+    await git(['checkout', '-qb', branch]);
+    for (const path of paths) {
+      await mkdir(join(root, path, '..'), { recursive: true });
+      await writeFile(join(root, path), `export const child${position} = true;\n`);
+    }
+    await git(['add', '--', ...paths]);
+    await git(['commit', '-qm', `child ${position}`]);
+    if (position !== child(5)) await git(['update-ref', closureRefFor('demo', position), 'HEAD']);
+  }
+
+  const dispatchResidueRoutingJudgement = vi.fn(async (prompt: string) => ({
+    success: true,
+    output: judgeOutput?.(prompt) ?? JSON.stringify({ version: 'v2', items: [{
+      itemId: 'manual-test-fail', child: 4, candidates: [4], rationale: 'touch controls',
+    }] }),
+  }));
+  const conductor = new Conductor({
+    projectRoot: root,
+    stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+    events: new ConductorEventEmitter(),
+    git,
+    stepRunner: { run: vi.fn(async () => ({ success: true })), dispatchResidueRoutingJudgement },
+    config: { stacked_prs: { enabled: true, max_slices: 5, route_whole_feature_fixes: true } } as never,
+    childRegionLifecycle: {
+      resolveActiveChild: async () => ({
+        kind: 'active', child: 5, position: 5, isLeaf: true, branch: leafBranchFor('demo'),
+      }) as never,
+    },
+  });
+  return { conductor, dispatchResidueRoutingJudgement, git, root };
+}
+
 describe('routed taskless admission failures', () => {
+  // Covers: task:7
+  it('sends every manual-test FAIL row and each position manifest to the residue judge', async () => {
+    const { conductor, dispatchResidueRoutingJudgement } = await fiveChildSubject();
+    const evidence = [
+      'FAIL: touch target is obscured by the HUD',
+      'FAIL: touch controls do not respond after rotation',
+    ].join('\n');
+
+    await expect((conductor as any).admitRoutedManualTestKickback({ feature_desc: 'demo' }, evidence))
+      .resolves.toEqual({ kind: 'admitted' });
+
+    expect(dispatchResidueRoutingJudgement).toHaveBeenCalledOnce();
+    const prompt = dispatchResidueRoutingJudgement.mock.calls[0]![0];
+    const item = JSON.parse(prompt.split('\n\n').at(-1)!).items[0];
+    expect(item).toMatchObject({
+      itemId: 'manual-test-fail',
+      evidence,
+      changedPaths: {
+        4: ['src/client/input/touch.ts', 'src/client/ui/hud.ts'],
+        5: ['src/client/art/manifest.ts'],
+      },
+    });
+    expect(Object.keys(item.changedPaths).map(Number).sort()).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  // Covers: task:7
+  it('halts before judgement or record creation when a closure ref is unreadable', async () => {
+    const { conductor, dispatchResidueRoutingJudgement, git } = await fiveChildSubject();
+    const routes = await import('../../../src/engine/routing/route-record-store.js');
+    vi.mocked(routes.createRouteRecord).mockClear();
+    await git(['update-ref', '-d', closureRefFor('demo', child(3))]);
+
+    await expect((conductor as any).admitRoutedManualTestKickback({ feature_desc: 'demo' }, 'FAIL: touch control'))
+      .resolves.toMatchObject({ kind: 'halted', reason: expect.stringContaining('child 3') });
+
+    expect(dispatchResidueRoutingJudgement).not.toHaveBeenCalled();
+    expect(routes.createRouteRecord).not.toHaveBeenCalled();
+    await expect(git(['rev-parse', '-q', '--verify', routeRecordRefFor('demo', 'r1')])).resolves.toMatchObject({ exitCode: 1 });
+  });
+
+  // Covers: task:7
+  it('halts without a route record after two undeclared residue answers', async () => {
+    const { conductor, dispatchResidueRoutingJudgement, git } = await fiveChildSubject((prompt) => {
+      const itemId = JSON.parse(prompt.split('\n\n').at(-1)!).items[0].itemId;
+      return JSON.stringify({ version: 'v2', items: [{ itemId, child: 9, candidates: [9], rationale: 'bad position' }] });
+    });
+    const routes = await import('../../../src/engine/routing/route-record-store.js');
+    vi.mocked(routes.createRouteRecord).mockClear();
+
+    await expect((conductor as any).admitRoutedManualTestKickback({ feature_desc: 'demo' }, 'FAIL: touch control'))
+      .resolves.toMatchObject({ kind: 'halted', reason: expect.stringContaining('manual-test-fail') });
+
+    expect(dispatchResidueRoutingJudgement).toHaveBeenCalledTimes(2);
+    expect(routes.createRouteRecord).not.toHaveBeenCalled();
+    await expect(git(['rev-parse', '-q', '--verify', routeRecordRefFor('demo', 'r1')])).resolves.toMatchObject({ exitCode: 1 });
+  });
+
   // Covers: task:2
   it('dispatches BUILD on child 4 for a taskless manual-test host with every stored FAIL row', async () => {
     const { root } = await subject();

@@ -226,6 +226,7 @@ import { createRouteRecord, nextRoundId, readRepairMarker, readRevalidationQueue
 import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from './routing/routing-refs.js';
 import { routeAdmittedRound } from './routing/round-router.js';
 import { resolveResidueOwner, runResidueRoutingCall } from './routing/residue-routing-call.js';
+import { changedPathsByPosition } from './routing/cannot-host.js';
 import { admitRound, checkRoundAdmissionFence, diagnoseAffectedRounds, exitRoutedHostAndReconcile, recordRoundStall, reconcileRounds, routedRoundOpen } from './routing/round-admission.js';
 import { enterHostRegion, verifyGreenAcceptance } from './routing/host-region-entry.js';
 import { settleDerivedNoOpHost } from './routing/routed-exit.js';
@@ -16697,15 +16698,30 @@ export class Conductor {
     if (declaredPositions.length === 0) {
       return { kind: 'halted', reason: 'taskless routing cannot resolve the sealed plan slice topology' };
     }
+    const changedPaths = await changedPathsByPosition({
+      slug,
+      positions: declaredPositions,
+      leafTip: leafBranchFor(slug),
+      baseRef: this.baseBranch ?? 'main',
+      git: (args) => this.git(args, { cwd: this.projectRoot }),
+    });
+    if ('kind' in changedPaths) {
+      return { kind: 'halted', reason: `taskless routing manifest failed: ${changedPaths.detail}` };
+    }
     const judged = await runResidueRoutingCall({
-      items: [{ itemId: input.findingId(execution.target.child), rationale: input.reason }],
+      items: [{
+        itemId: input.findingId(execution.target.child),
+        rationale: input.reason,
+        ...(input.retryHint === undefined ? {} : { evidence: input.retryHint }),
+        changedPaths,
+      }],
       declaredPositions,
       judge: this.stepRunner.dispatchResidueRoutingJudgement === undefined
         ? undefined
         : (prompt) => this.stepRunner.dispatchResidueRoutingJudgement!(prompt),
     });
     if (judged.kind === 'halt') {
-      return { kind: 'halted', reason: `taskless routing judgement failed: ${judged.detail}` };
+      return { kind: 'halted', reason: `taskless routing judgement failed for ${judged.itemId}: ${judged.detail}` };
     }
     const host = resolveResidueOwner(judged.answers[0]!).owner as ChildId;
     let sealedAuthored: number | undefined;
