@@ -89,7 +89,7 @@ describe('daemon-mode feature log integration', () => {
           // controlled output needed to exercise supervisor log forwarding.
           run: async ({ order, events, log }) => {
             log?.('setup complete');
-            await events.emit({ type: 'step_started', step: 'build' });
+            await events.emit({ type: 'step_started', step: 'build', index: 0 });
             await events.emit({
               type: 'preemption_boundary',
               featureSlug: order.slug,
