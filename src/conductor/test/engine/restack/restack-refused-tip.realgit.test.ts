@@ -7,9 +7,11 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
+import { detectStackRestackResolveCommand } from '../../../src/cli.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
+import { dispatchStackRestackResolve } from '../../../src/engine/stack-restack-resolve-cli.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
-import { conflictParentRefFor, readConflictRecord, refusedTipRefFor } from '../../../src/engine/restack/restack-conflict-record.js';
+import { conflictParentRefFor, conflictRecordRefFor, readConflictRecord, refusedTipRefFor } from '../../../src/engine/restack/restack-conflict-record.js';
 import { readRestackJournal } from '../../../src/engine/restack/restack-journal.js';
 import type { RestackResolver } from '../../../src/engine/restack/restack-resolver.js';
 import { parseCommitSha, type CommitSha } from '../../../src/engine/restack/restack-types.js';
@@ -57,6 +59,22 @@ function refusingResolver(kind: 'unowned' | 'delete' | 'restore'): RestackResolv
   await git(['add', '-A']); await git(['rebase', '--continue']); return { resolved: true };
 }; }
 
+function resolveCommand(tip: string) {
+  const command = detectStackRestackResolveCommand(['node', 'ai-conductor', 'stack', 'restack-resolve', '--slug', 'demo', '--child', '2', '--tip', tip]);
+  if (!command) throw new Error('restack-resolve command did not parse');
+  return command;
+}
+
+function resolveDeps(repo: string) {
+  return {
+    resolveMainRoot: async () => repo,
+    resolveWorktree: async () => repo,
+    acquireLease: async () => ({ kind: 'acquired' as const, lease: { release: async () => ({ ok: true as const }) } }),
+    resolveOperator: async () => 'operator@example.test',
+    print: () => undefined,
+  };
+}
+
 describe('refused resolver tip (real local Git)', () => {
   it.each([
     ['unowned', 'src/other.ts (unowned)'],
@@ -77,6 +95,32 @@ describe('refused resolver tip (real local Git)', () => {
     expect(observed).toContainEqual(expect.objectContaining({ reason: 'replay-mismatch', child: 2, detail: expect.stringContaining(refusal) }));
     await expect(readRestackJournal(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'journal', journal: { state: 'aborted' } });
     expect((await subject.git(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads/', 'refs/conductor/demo/closed/'])).stdout).toBe(branchesBefore);
+  });
+
+  it('consumes an operator tip rebuilt from the refused resolver tip after its unowned change is dropped', async () => {
+    const subject = await fixture();
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
+      git: makeGitRunner(subject.repo), resolver: refusingResolver('unowned'), resolverCap: 1,
+    })).resolves.toMatchObject({ kind: 'halted' });
+    const refused = sha((await subject.git(['rev-parse', refusedTipRefFor('demo')])).stdout);
+
+    await subject.git(['checkout', '-qb', 'operator-resolution', refused]);
+    await subject.git(['checkout', subject.newDefault, '--', 'src/other.ts']);
+    await subject.git(['add', 'src/other.ts']);
+    await subject.git(['commit', '--amend', '--no-edit']);
+    const operatorTip = sha((await subject.git(['rev-parse', 'HEAD'])).stdout);
+    await subject.git(['checkout', '-q', 'feat/daemon-demo']);
+
+    await expect(dispatchStackRestackResolve(resolveCommand(operatorTip), resolveDeps(subject.repo))).resolves.toBe(0);
+    await expect(runRestack({
+      worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
+      git: makeGitRunner(subject.repo),
+    })).resolves.toMatchObject({ kind: 'applied' });
+
+    for (const name of [refusedTipRefFor('demo'), conflictRecordRefFor('demo'), conflictParentRefFor('demo')]) {
+      await expect(subject.git(['rev-parse', '-q', '--verify', name])).rejects.toMatchObject({ code: 1 });
+    }
   });
 
   // Covers: task:7

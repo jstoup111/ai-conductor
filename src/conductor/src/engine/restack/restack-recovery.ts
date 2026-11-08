@@ -527,8 +527,15 @@ async function resumePlanned(
       });
       if (recorded.kind === 'stale') return { kind: 'resolution-stale', journal: current, child: range.child, field: recorded.field, newParent: parent };
       if (recorded.kind === 'consumed') {
-        const ownership = await checkPathOwnership(range, parent, recorded.tip, git);
-        if (ownership.kind === 'refused') return { kind: 'ownership-refused', journal: current, child: range.child, paths: ownership.paths };
+        const ownership = await checkResolvedTipOwnership(range, parent, recorded.tip, git, {
+          normaliseInheritedRemBlocks: current.journal.routed !== undefined,
+        });
+        if (ownership.kind === 'refused') {
+          return {
+            kind: 'ownership-refused', journal: current, child: range.child,
+            paths: ownership.paths.map(({ path }) => path), refusedPaths: ownership.paths,
+          };
+        }
         const updated = await updateRestackChildStatus(worktree, current.slug, current, range.child, 'resolved', recorded.tip, recorded.rewrites, {
           git, consumedResolution: recorded.resolution,
         });

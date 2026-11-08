@@ -807,10 +807,15 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
           }
         }
         if (recorded.kind === 'consumed') {
-          const ownership = await checkPathOwnership(range, parent, recorded.tip, git);
+          const ownership = await checkResolvedTipOwnership(range, parent, recorded.tip, git, {
+            normaliseInheritedRemBlocks: options.routed !== undefined,
+          });
           if (ownership.kind === 'refused') {
             await abortJournal(options.worktree, journal, git, moves);
-            await haltRestack(options.worktree, 'replay-mismatch', options.events, { child: range.child, detail: ownership.paths.join(', ') });
+            await haltRestack(options.worktree, 'replay-mismatch', options.events, {
+              child: range.child,
+              detail: ownership.paths.map(({ path, cause }) => `${path} (${cause})`).join(', '),
+            });
             terminal = true;
             return haltedResult(options.worktree);
           }
