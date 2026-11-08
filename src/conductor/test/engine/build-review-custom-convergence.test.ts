@@ -12,6 +12,7 @@ import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-revie
 import { reconcileRemediationCases } from '../../src/engine/remediation-case-reconciler.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
 import type { RemediationCaseGraph } from '../../src/engine/remediation-case-validator.js';
+import { markBuildReviewWorkOrderAttempted, publishBuildReviewWorkOrder } from '../../src/engine/build-review-work-order.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
@@ -106,9 +107,17 @@ describe('custom build-review convergence', () => {
           sources: [{ sourceId, outcome: 'acted', caseRef: 'dependency-case' }],
         }],
       },
-      recordedAt: '2026-11-08T00:00:00.000Z', generateId: () => 'dependency-case', lapId: 'lap-dependency-1' as never,
+      recordedAt: '2026-11-08T00:00:00.000Z', generateId: (() => {
+        const ids = ['dependency-case', 'dependency-effect'];
+        return () => ids.shift()!;
+      })(), lapId: 'lap-dependency-1' as never,
     });
     expect(seeded).toMatchObject({ ok: true });
+    await publishBuildReviewWorkOrder(projectRoot, {
+      version: 'v1', domain: 'build_review', feature, effectId: 'dependency-effect',
+      cases: [{ caseId: 'dependency-case', priority: 'high', tasks: [{ title: 'Remove the duplicate dependency.' }] }],
+    });
+    await markBuildReviewWorkOrderAttempted(projectRoot, feature);
 
     // The custom evidence remains readable, but this lap's catalog deliberately
     // omits the member after package.json was restored.

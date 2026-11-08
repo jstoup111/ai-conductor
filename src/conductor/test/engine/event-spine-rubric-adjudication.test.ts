@@ -187,7 +187,11 @@ describe('event-spine rubric adjudication', () => {
       ...repositoryConfig,
       build_review: {
         ...repositoryConfig.build_review,
-        custom_rubrics: { ...customRubrics, eventSpine: { ...customRubrics?.eventSpine, enabled: true } },
+        custom_rubrics: {
+          ...customRubrics,
+          dependencyHygiene: { ...customRubrics?.dependencyHygiene, enabled: false },
+          eventSpine: { ...customRubrics?.eventSpine, enabled: true },
+        },
         adjudication: { enabled: false },
       },
     });

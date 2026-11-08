@@ -100,6 +100,10 @@ describe('repository-local event-spine policy settlement', () => {
       build_review: {
         ...loaded.config.build_review,
         rubrics: { ...loaded.config.build_review?.rubrics, testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
+        custom_rubrics: {
+          ...loaded.config.build_review?.custom_rubrics,
+          dependencyHygiene: { ...loaded.config.build_review?.custom_rubrics?.dependencyHygiene, enabled: false },
+        },
       },
     };
     const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: '{}' }));
