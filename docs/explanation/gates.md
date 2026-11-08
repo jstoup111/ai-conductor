@@ -191,6 +191,7 @@ from specs that would waste a build.
 | draft/stub reject | any artifact still marked draft, or a known stub string |
 | stories approval | stories without the explicit acceptance marker — not being draft is not enough |
 | ADR status | any ADR under `.docs/decisions/` whose first line-anchored `Status:` declaration is not `APPROVED` or `SUPERSEDED`, or that declares no status at all — fenced code-block examples of rejected statuses are excluded from matching |
+| decision record shape | a file newly added to, or renamed into, `.docs/decisions/` by the spec whose filename matches none of `adr-*`, `architecture-review-*`, `review-*`, `technical-assessment-*`, `api-response-contract.md`, or `styleguide.md` (gate id `decision-record-shape`); modified, deleted, and already-landed records are not checked — list the corpus with [`ai-conductor decisions`](../reference/cli.md#ai-conductor-decisions) |
 | tier agreement | a declared complexity tier that disagrees with the artifacts present |
 | coherence | a traceability record that does not connect outcomes, requirements, accepted ADRs, stories, and tasks, or stories that do not tie out to the PRD |
 | plan review | at tiers M and L, a missing, tampered, or stale plan review, or one with an unaccepted `blocking` finding — see [plan-review gate](#plan-review-gate) |

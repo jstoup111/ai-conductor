@@ -1377,6 +1377,44 @@ Absent paths are still compared against sibling branches.
 Advisory by contract: it always exits 0. Even an unexpected error prints `overlap-scan: unable to
 complete scan (<msg>)` and still returns 0. Reads git and queries `gh`; writes nothing.
 
+## `ai-conductor decisions`
+
+```bash
+ai-conductor decisions [term] [--kind <kind>] [--status <status>] [--json]
+```
+
+Lists every `*.md` record in the project's decision corpus (`.docs/decisions/`), sorted by filename.
+Read-only: it writes nothing and needs no provider.
+
+| Argument / flag | Accepted values | Effect |
+| --- | --- | --- |
+| `term` | any string | Keeps rows whose title or summary contains it, case-insensitive. Only the first positional argument is used. |
+| `--kind <kind>` | `decision`, `review`, `assessment`, `reference`, `unclassified` | Keeps rows of that kind. |
+| `--status <status>` | `approved`, `superseded`, `other`, `undeclared` | Keeps rows with that disposition. |
+| `--json` | — | Prints one JSON array of row objects instead of text lines. |
+
+Filters combine; a row must match all of them.
+
+Each row carries:
+
+| Field | Derivation |
+| --- | --- |
+| `kind` | From the filename: `adr-*` → `decision`; `architecture-review-*`, `review-*` → `review`; `technical-assessment-*` → `assessment`; `api-response-contract.md`, `styleguide.md` → `reference`. Any other name falls back to content: an ADR `Status:` declaration → `decision`, a `Verdict:` declaration → `review`, otherwise `unclassified`. |
+| `disposition` | `approved` or `superseded` from an accepted `Status:` declaration; `other` for any other status or for a `Verdict:` declaration; `undeclared` when the record declares neither. |
+| `declared` | The raw declared status or verdict text, or `null`. JSON only. |
+| `date` | The `**Date:**` line, else the first `YYYY-MM-DD` in the filename, else empty. |
+| `title` | The first `# ` heading, else the filename stem. |
+| `summary` | The first paragraph line of the `## Decision` section, else the first paragraph line after the title; truncated to 160 characters. |
+| `path` | Repository-relative record path. JSON only. |
+
+Text output prints one tab-separated line per row: `kind`, `disposition`, `date`, `title`, `summary`.
+
+| Exit code | Meaning |
+| --- | --- |
+| 0 | Every record was read; matching rows printed (possibly none). A project with no corpus directory prints nothing. |
+| 1 | One or more records could not be read. Readable rows are still printed; each failure goes to stderr as `Unable to read decision record <path>: <error>`. |
+| 2 | `--kind` or `--status` is not an accepted value; stderr names the accepted values. |
+
 ## `ai-conductor plan-protected-targets`
 
 ```bash
