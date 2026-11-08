@@ -6521,6 +6521,17 @@ export class Conductor {
       reconciled,
     });
     if (
+      admission.kind === 'none' &&
+      reconciled.kind === 'leaf-returned' &&
+      !await routedRoundOpen(this.projectRoot, slug)
+    ) {
+      // Reconciliation can close the final markerless round before this
+      // guard selects a host. Restore the same root state that a live routed
+      // exit uses, then let whole-feature validation resume normally.
+      await this.restoreWholeFeatureState(state);
+      return { index: indexOf('manual_test') };
+    }
+    if (
       admission.kind === 'admitted' ||
       admission.kind === 'continue' ||
       admission.kind === 'busy'
