@@ -14832,7 +14832,12 @@ export class Conductor {
                   // acceptance, suppression, or advisory policy.  It has no
                   // actionable graph to adjudicate; settle durable case state
                   // and enter the ordinary PASS tail directly.
-                  if (effective.effective.verdict === 'PASS') {
+                  if (
+                    effective.effective.verdict === 'PASS' ||
+                    (effective.effective.unresolvedFindingIds.length === 0 &&
+                      effective.effective.uncoveredInfrastructureFailureRubrics.length === 0 &&
+                      (effective.effective.uncoveredScopeIncompleteRubrics?.length ?? 0) === 0)
+                  ) {
                     const settlement = await this.settleRemediationCasesOnCleanBuildReview();
                     if (settlement.kind === 'invalid') {
                       await this.haltSerialExecution({
