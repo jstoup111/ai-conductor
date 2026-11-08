@@ -16,10 +16,12 @@
  * SINGLE LIVE PATH for memory initialisation.
  */
 
-import { lstat, readdir, readlink, rmdir } from 'fs/promises';
+import { appendFile, lstat, mkdir, readdir, readFile, readlink, rmdir } from 'fs/promises';
 import { join, isAbsolute, resolve as resolvePath } from 'path';
 import { existsSync } from 'fs';
 import { homedir } from 'os';
+import { execFile as execFileCb } from 'child_process';
+import { promisify } from 'util';
 import { ensureMemoryStore, projectKey } from './memory-store.js';
 import { migrateMemory } from './memory-migrate.js';
 import type { ConductorEventEmitter } from './conductor-event-emitter.js';
@@ -57,6 +59,33 @@ async function memoryPathState(projectDir: string): Promise<MemoryPathState> {
 
 export type MemorySetupBranch = 'migrated' | 'ensured';
 
+const execFile = promisify(execFileCb);
+
+/**
+ * `.memory` is a machine-local symlink into the operator's home (or legacy
+ * local notes), so it must never be committed. Bootstrap's `.gitignore` step
+ * only helps projects that ran bootstrap; this rule is written by the single
+ * live setup path instead, into the repository's shared `info/exclude` so every
+ * worktree honours it without dirtying a tracked file. No trailing slash: a
+ * `.memory/` pattern matches directories only, not a symlink to one.
+ */
+async function ensureMemoryIgnored(projectDir: string): Promise<void> {
+  let commonDir: string;
+  try {
+    const { stdout } = await execFile('git', ['rev-parse', '--path-format=absolute', '--git-common-dir'], { cwd: projectDir });
+    commonDir = stdout.trim();
+  } catch {
+    return; // Not a git repository: nothing can commit `.memory`.
+  }
+  const infoDir = join(commonDir, 'info');
+  const excludePath = join(infoDir, 'exclude');
+  const existing = await readFile(excludePath, 'utf8').catch(() => '');
+  if (existing.split('\n').some((line) => line.trim() === '.memory')) return;
+  await mkdir(infoDir, { recursive: true });
+  const separator = existing && !existing.endsWith('\n') ? '\n' : '';
+  await appendFile(excludePath, `${separator}# ai-conductor: machine-local memory store\n.memory\n`, 'utf8');
+}
+
 /**
  * Runs the idempotent setup branch without CLI output or exit-code mapping.
  *
@@ -72,6 +101,8 @@ export async function setupMemoryStore(
   if (!existsSync(projectDir)) {
     throw new Error(`directory does not exist: ${projectDir}`);
   }
+
+  await ensureMemoryIgnored(projectDir);
 
   if (await memoryPathState(projectDir) === 'directory') {
     const memoryPath = join(projectDir, '.memory');
