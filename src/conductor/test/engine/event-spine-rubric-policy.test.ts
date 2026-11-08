@@ -95,6 +95,8 @@ describe('repository-local event-spine policy settlement', () => {
     const { loaded } = await eventSpineDeclaration();
     const root = await mkdtemp(join(process.env.TMPDIR!, 'event-spine-policy-'));
     roots.push(root);
+    const dependencyHygiene = loaded.config.build_review?.custom_rubrics?.dependencyHygiene;
+    if (!dependencyHygiene) throw new Error('repository must declare the dependencyHygiene rubric');
     const config: HarnessConfig = {
       ...loaded.config,
       build_review: {
@@ -102,7 +104,7 @@ describe('repository-local event-spine policy settlement', () => {
         rubrics: { ...loaded.config.build_review?.rubrics, testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
         custom_rubrics: {
           ...loaded.config.build_review?.custom_rubrics,
-          dependencyHygiene: { ...loaded.config.build_review?.custom_rubrics?.dependencyHygiene, enabled: false },
+          dependencyHygiene: { ...dependencyHygiene, enabled: false },
         },
       },
     };
