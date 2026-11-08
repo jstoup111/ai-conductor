@@ -256,6 +256,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - build_review no longer halts a test-only diff, such as a routed repair that only fixes tests, on a testQuality `no-production-changes` infrastructure fault; the changed tests are judged instead. ([implementation PR #3623](https://github.com/jstoup111/ai-conductor/pull/3623)).
 - Plan validation now rejects dependencies that reference missing task declarations. ([implementation PR #3616](https://github.com/jstoup111/ai-conductor/pull/3616)).
 - Stacked restack conflicts over merge-bearing child ranges now provide a recoverable flattened hand-off. ([implementation PR #3615](https://github.com/jstoup111/ai-conductor/pull/3615)).
+- Stacked builds now route manual-test failures to the child that can repair them. ([implementation PR #3655](https://github.com/jstoup111/ai-conductor/pull/3655)).
 
 ## Migration
 
