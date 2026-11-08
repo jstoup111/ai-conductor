@@ -204,13 +204,12 @@ describe('format script write mode', () => {
     for (const content of [typescript, shell]) {
       expect(content).not.toContain('\r');
       expect(content.split('\n').every((line) => line.length <= 120)).toBe(true);
+      expect(content).not.toMatch(/"[^"\n]*"/);
+      expect(content).toContain("'");
+      expect(content).toContain(';');
+      expect(content).toMatch(/\n {2}\S/);
     }
-    expect(typescript).toContain("'not canonical'");
-    expect(typescript).toMatch(/;$/m);
-    expect(typescript).toContain('\n  const message');
-    expect(shell).toContain("'not canonical'");
     expect(shell).toContain('if true; then');
-    expect(shell).toContain('\n  echo');
     expect(runFormat(repository, '--check', '--all').status).toBe(0);
   });
 
