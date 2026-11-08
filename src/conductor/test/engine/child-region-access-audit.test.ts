@@ -25,7 +25,7 @@ const EXPECTED_ACCESS_COUNTS: Readonly<Record<string, number>> = {
   'engine/conductor.ts:readKickbackLedger': 11,
   'engine/conductor.ts:readVerdict': 5,
   'engine/conductor.ts:updateKickbackLedger': 5,
-  'engine/conductor.ts:writeVerdict': 2,
+  'engine/conductor.ts:writeVerdict': 3,
   'engine/daemon-observe-cli.ts:readKickbackLedger': 1,
   'engine/daemon-rekick.ts:readKickbackLedger': 3,
   'engine/finish-publication-production.ts:readAllVerdicts': 1,
@@ -65,6 +65,7 @@ const EXPECTED_ACCESS_COUNTS: Readonly<Record<string, number>> = {
  */
 const CONDUCTOR_WRITE_VERDICT_CLASSIFICATIONS: Readonly<Record<string, Classification>> = {
   prd_audit: 'whole-feature-only',
+  build_review: 'child-aware',
   'current-step': 'child-aware',
 };
 
@@ -152,6 +153,7 @@ function accessKey(site: string): string {
 function conductorWriteVerdictIdentity(args: readonly string[]): string | undefined {
   const step = args[1]?.replace(/\s+/g, '');
   if (step === "'prd_audit'" || step === '"prd_audit"') return 'prd_audit';
+  if (step === "'build_review'" || step === '"build_review"') return 'build_review';
   if (step === 'step.name') return 'current-step';
   return undefined;
 }

@@ -366,6 +366,7 @@ describe('tmpdir-leak-guard: diffTmpdirEntries', () => {
       'self-host-daemon-home',
       'ai-conductor-claude-system-prompt-AbCdEf',
       'claude-1000',
+      'gem-miner-shared-cells-AbCdEf',
       'moshi-codex-rl.json.tmp',
       '.X11-unix',
     ]);
@@ -378,6 +379,7 @@ describe('tmpdir-leak-guard: diffTmpdirEntries', () => {
       'self-host-daemon-home',
       'ai-conductor-claude-system-prompt-AbCdEf',
       'claude-1000',
+      'gem-miner-shared-cells-AbCdEf',
       'moshi-codex-rl.json.tmp',
       '.X11-unix',
     ]);
