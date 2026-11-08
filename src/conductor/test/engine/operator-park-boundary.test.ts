@@ -1672,7 +1672,9 @@ describe('operator park boundary contract', () => {
     events.on('parallel_failure', (event) => { terminalEvents.push(event); });
     events.on('step_failed', (event) => { terminalEvents.push(event); });
     events.on('step_retry', (event) => { retries.push(event); });
-    events.on('group_member_step', (event) => { memberOutcomes.push(event); });
+    events.on('group_member_step', (event) => {
+      if (event.type === 'group_member_step') memberOutcomes.push(event);
+    });
     const run = vi.fn<StepRunner['run']>(async (step) => {
       if (step === ('yielded-member' as StepName)) {
         yielded = true;
