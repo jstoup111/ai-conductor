@@ -178,6 +178,13 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   feature_cost_snapshot: 'not-audited-by-design',
   provider_fallback: 'not-audited-by-design',
   session_policy: 'not-audited-by-design',
+  // Composer CLI transitions persist in the event spine but are outside the
+  // audit-trail friction vocabulary (EVENT_SINKS declares audit: false).
+  composer_run_started: 'not-audited-by-design',
+  composer_run_checkpointed: 'not-audited-by-design',
+  composer_run_resumed: 'not-audited-by-design',
+  composer_provider_switched: 'not-audited-by-design',
+  composer_run_handed_off: 'not-audited-by-design',
   step_retry: 'friction-mapped',
   retry_decision: 'not-audited-by-design',
   checkpoint_reached: 'not-audited-by-design',
@@ -687,6 +694,26 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     step: 'build',
     provider: toProviderId('codex'),
     reason: 'session resume unsupported',
+  },
+  composer_run_started: {
+    type: 'composer_run_started', slug: 'composer-demo', worktreePath: '/tmp/composer-demo',
+    provider: 'codex', actor: 'operator', launchId: 'launch-1',
+  },
+  composer_run_checkpointed: {
+    type: 'composer_run_checkpointed', slug: 'composer-demo', step: 'explore', state: 'accepted',
+    published: true, provider: 'codex', actor: 'operator',
+  },
+  composer_run_resumed: {
+    type: 'composer_run_resumed', slug: 'composer-demo', provider: 'codex', actor: 'operator',
+    ownership: 'retained', previousProvider: 'claude', previousActor: 'previous-operator', launchId: 'launch-2',
+  },
+  composer_provider_switched: {
+    type: 'composer_provider_switched', slug: 'composer-demo', step: 'plan',
+    fromProvider: 'claude', toProvider: 'codex', actor: 'operator',
+  },
+  composer_run_handed_off: {
+    type: 'composer_run_handed_off', slug: 'composer-demo', actor: 'operator',
+    prUrl: 'https://github.com/acme/conductor/pull/1',
   },
   step_retry: { type: 'step_retry', step: 'build', attempt: 2, maxAttempts: 3, reason: 'tests failed' },
   retry_decision: { type: 'retry_decision', step: 'build', attempt: 2, decision: 'rerun' },

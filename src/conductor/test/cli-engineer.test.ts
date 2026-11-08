@@ -143,6 +143,8 @@ describe('detectEngineerCommand — argv detection', () => {
     phase: ['--worktree', '/tmp/worktree', '--phase', 'stories'],
     land: ['--project', 'project', '--idea', 'idea', '--worktree', '/tmp/worktree'],
     handoff: ['--project', 'project', '--branch', 'spec/idea', '--worktree', '/tmp/worktree'],
+    checkpoint: ['--worktree', '/tmp/worktree', '--step', 'explore', '--accept'],
+    resume: ['spec/resume-demo', '--project', 'project'],
     poll: [],
     claim: [],
     forget: ['owner/repo#1'],

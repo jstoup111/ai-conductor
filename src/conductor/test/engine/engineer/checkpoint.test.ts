@@ -11,7 +11,7 @@ function fixture(options: { dirty?: string[]; owner?: string; provider?: string;
   const calls: string[][] = [];
   const events: unknown[] = [];
   const dirty = options.dirty ?? ['?? .docs/track/demo.md'];
-  const git = vi.fn(async (args: string[]) => {
+  const git = vi.fn(async (args: readonly string[]) => {
     calls.push(args);
     if (args[0] === 'branch') return { exitCode: 0, stdout: options.branch ?? 'spec/demo\n', stderr: '' };
     if (args[0] === 'status') return { exitCode: 0, stdout: dirty.join('\n'), stderr: '' };

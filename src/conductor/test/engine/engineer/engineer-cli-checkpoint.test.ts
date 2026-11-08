@@ -16,7 +16,7 @@ describe('compose checkpoint CLI', () => {
     const output: string[] = [];
     const code = await dispatchEngineer(
       { kind: 'checkpoint', worktree: '/w', step: 'explore', state: 'accepted' },
-      { checkpoint, print: (line) => output.push(line), probeGhVersion: async () => ({ kind: 'ok' }) },
+      { checkpoint, print: (line) => output.push(line), probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }) },
     );
     expect(code).toBe(0);
     expect(checkpoint).toHaveBeenCalledWith(expect.objectContaining({ worktree: '/w', step: 'explore', state: 'accepted' }));
