@@ -3362,10 +3362,6 @@ export class DefaultStepRunner implements StepRunner {
   ): Promise<StepRunResult> {
     const lapId = parseBuildReviewLapId(`lap-${inputs.sourceSnapshot.headSha}`);
     if (!lapId) return { success: false, output: 'build_review could not create a valid rubric lap identity' };
-    await Promise.all((inputs.participation?.withheld ?? []).map((rubric) =>
-      this.events?.emit({ type: 'build_review_rubric_skipped', rubric, lapId, reason: 'paths-unmatched' }),
-    ));
-
     // A prior lap's aggregate cannot represent this lap. Invalidate it before
     // dispatch so a mechanical early return leaves no stale semantic FAIL for
     // the conductor to route back to build.
@@ -5834,6 +5830,12 @@ export class DefaultStepRunner implements StepRunner {
     const effectiveBuildReviewConfig = inputs.participation === undefined
       ? buildReviewConfig
       : { ...buildReviewConfig, catalog: inputs.participation.participating };
+    const participationLapId = parseBuildReviewLapId(`lap-${inputs.sourceSnapshot.headSha}`);
+    if (participationLapId !== undefined) {
+      await Promise.all((inputs.participation?.withheld ?? []).map((rubric) =>
+        this.events?.emit({ type: 'build_review_rubric_skipped', rubric, lapId: participationLapId, reason: 'paths-unmatched' }),
+      ));
+    }
 
     // Containment telemetry is non-blocking: it never changes `success` or
     // triggers a kickback. Guard it so an observability failure cannot fail

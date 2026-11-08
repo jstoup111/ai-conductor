@@ -695,6 +695,9 @@ describe('build_review malformed Covers marker gate', () => {
       await commitTests({ [changedPath]: content });
     }
     const coordinator = vi.fn(async () => ({ success: true, output: 'coordinator result' }));
+    const events = new ConductorEventEmitter();
+    const skips: ConductorEvent[] = [];
+    events.on('build_review_rubric_skipped', (event) => { skips.push(event); });
     const runner = new DefaultStepRunner({ invoke: vi.fn() }, 'path-triggered-control', projectRoot, {
       planPath, gitRunner: realGit(),
       config: {
@@ -706,6 +709,7 @@ describe('build_review malformed Covers marker gate', () => {
       } as HarnessConfig,
       buildReviewInputOptions: { materialization: { projectRoot }, inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: await git('rev-parse', 'HEAD'), outcome: 'PASS' } } as never) },
       buildReviewCoordinator: coordinator,
+      events,
     });
 
     await runner.run('build_review', state);
@@ -715,6 +719,37 @@ describe('build_review malformed Covers marker gate', () => {
     expect(inputs.participation?.withheld).toEqual(restored ? ['dependencyHygiene'] : []);
     expect(config.catalog.map((entry) => entry.id)).toEqual(restored ? [] : ['dependencyHygiene']);
     expect(inputs.sourceMaterialization === undefined).toBe(restored);
+    expect(skips).toEqual(restored ? [expect.objectContaining({ type: 'build_review_rubric_skipped', rubric: 'dependencyHygiene', reason: 'paths-unmatched' })] : []);
+  });
+
+  // Covers: task:4
+  it('reaches the custom provider boundary when a matching package manifest participates', async () => {
+    await commitTests({ 'src/conductor/package.json': '{"name":"fixture"}\n' });
+    const policyRoot = join(projectRoot, 'policy');
+    await mkdir(policyRoot, { recursive: true });
+    await writeFile(join(policyRoot, 'SKILL.md'), '# Fixture policy\n', 'utf8');
+    const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: 'fixture', finalStructuredResult: { kind: 'custom-findings', version: 'v2', findings: [] } }));
+    const provider: LLMProvider = { lifecycleCapability: { synchronousSpawnPermit: true }, nativeSchemaCapability: { nativeOutputSchema: true }, invoke };
+    const runner = new DefaultStepRunner(provider, 'matching-custom-provider', projectRoot, {
+      planPath, gitRunner: realGit(),
+      config: { llm_provider: 'claude', test_suite: { scoped_command: 'true' }, build_review: {
+        enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
+        custom_rubrics: { dependencyHygiene: { enabled: true, skill: 'dependency-hygiene', source: 'project', question: 'Review dependencies.', paths: ['**/package.json'], llm_provider: 'claude' } },
+      } } as HarnessConfig,
+      buildReviewInputOptions: { materialization: { projectRoot }, inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: await git('rev-parse', 'HEAD'), outcome: 'PASS' } } as never) },
+      providerRuntimes: new ProviderRuntimeSet([{ key: 'claude', provider, lifecycleCapability: provider.lifecycleCapability, nativeSchemaCapability: provider.nativeSchemaCapability, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }]),
+      sessionStore: new ProviderSessionStore(), configuredProviders: ['claude'],
+      probeReadOnlyReviewCapability: async ({ provider: key, platform }) => ({ provider: key, platform, status: 'available' as const }),
+      buildReviewPolicyCatalog: async ({ skill }) => [{ semanticName: skill, source: 'project' as const, installationOrigin: policyRoot, canonicalSkillPath: join(policyRoot, 'SKILL.md'), packageRoot: policyRoot, declaredDependencies: [], availability: 'available' as const }],
+      buildReviewPolicyCapture: async (policy) => ({ policy, materialPath: policyRoot, definitionPath: join(policyRoot, 'SKILL.md'), manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Fixture policy\n') }], metadata: { version: 1 as const, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] }, digest: `sha256:${'a'.repeat(64)}` }),
+      buildReviewEffectiveResolver: async () => ({ ok: true as const, feature: { version: 'v1' as const, repository: projectRoot, feature: 'matching-custom-provider' }, effective: { rawVerdict: 'PASS' as const, verdict: 'PASS' as const, acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [] } }),
+    });
+    vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue({ engineStamp: 'fixture', skillDigests: {} });
+
+    await runner.run('build_review', state);
+
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(invoke.mock.calls[0]?.[0]).toMatchObject({ readOnlyReview: true, nativeSchema: BUILD_REVIEW_CUSTOM_V1_CONTRACT.output.jsonSchema });
   });
 });
 
