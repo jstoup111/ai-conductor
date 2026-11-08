@@ -1,4 +1,3 @@
-// Covers: S4.1
 import { readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +19,7 @@ function concern(policy: string, id: string): string {
 }
 
 describe('global dependency-hygiene build-review policy', () => {
+  // Covers: S4.1, S4.2, S4.3, S4.4
   it('publishes the dependency concerns, evidence, and ecosystem inputs', async () => {
     const policy = await readFile(skillPath, 'utf8');
 
@@ -56,6 +56,20 @@ describe('global dependency-hygiene build-review policy', () => {
     expect(policy).toMatch(/Gradle[\s\S]*\*\*\/build\.gradle\*[\s\S]*\*\*\/gradle\.lockfile/i);
   });
 
+  // Covers: S4.5, S4.6, S4.7, S4.8
+  it('bounds non-findings and excludes claims outside its vocabulary', async () => {
+    const policy = await readFile(skillPath, 'utf8');
+    const nonFindings = policy.match(/## Non-findings([\s\S]*?)(?=\n## |$)/i);
+
+    expect(nonFindings, 'missing non-findings section').not.toBeNull();
+    const section = nonFindings![1];
+    expect(section).toMatch(/no\s+finding[\s\S]*no\s+existing\s+equivalent[\s\S]*bounded\s+specifier[\s\S]*matching\s+committed\s+lockfile\s+update[\s\S]*compatible\s+license/i);
+    expect(section).toMatch(/no\s+finding[\s\S]*lockfile[\s\S]*integrity\s+or\s+resolution\s+metadata[\s\S]*no\s+added,?\s+removed,?\s+or\s+version-changed\s+dependency/i);
+    expect(section).toMatch(/no\s+`?pinning`?\s+finding[\s\S]*caret\s+range[\s\S]*(peer|runtime)\s+dependency[\s\S]*library\s+convention[\s\S]*no\s+lockfile\s+change/i);
+    expect(section).toMatch(/vulnerability,?\s+CVE,?\s+and\s+maintenance-activity\s+claims[\s\S]*outside\s+(its|this)\s+vocabulary[\s\S]*never\s+reported/i);
+  });
+
+  // Covers: S4.9
   it('resolves exactly one global installation from a Claude user skill root', async () => {
     const policies = await discoverClaudeReviewPolicies({
       candidate: {

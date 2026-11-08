@@ -30,6 +30,19 @@ it. Use on-disk evidence only for dependency and license facts.
   can determine the dependency license, report a `license` finding with severity `nit` that states
   the license is unverifiable.
 
+## Non-findings
+
+Report no finding when an added dependency has no existing equivalent, uses a bounded specifier,
+has a matching committed lockfile update, and has a compatible license. Report no finding for a
+lockfile-only change limited to integrity or resolution metadata, with no added, removed, or
+version-changed dependency.
+
+Report no `pinning` finding for a library manifest's caret range on a peer or runtime dependency
+when that ecosystem's library convention requires no lockfile change.
+
+Vulnerability, CVE, and maintenance-activity claims are outside its vocabulary and are
+never reported.
+
 ## Recommended paths
 
 Configure manifest and lockfile paths appropriate to the project's ecosystems:
