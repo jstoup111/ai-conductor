@@ -1,4 +1,4 @@
-// Covers: task:2
+// Covers: task:2, S2.3, task:rem-prd-audit-5-r1
 import { execFileSync, spawnSync } from 'node:child_process';
 import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
