@@ -1178,6 +1178,72 @@ describe('Task 3: SIGTERM drains then releases lock; bounded force-release', () 
     );
   });
 
+  it('drains two child executors after SIGTERM before releasing the lock and exiting once', async () => {
+    const started: string[] = [];
+    const settledOnAbort: string[] = [];
+    const exits: Array<{ code: number; lockPresent: boolean }> = [];
+    await prepareChildDispatchProject(['first', 'second']);
+    const store = await useTempEngineStore();
+    await mkdir(join(root, '.ai-conductor'), { recursive: true });
+    await writeFile(
+      join(root, '.ai-conductor', 'config.yml'),
+      'daemon_concurrency: 2\nteardown_timeout_seconds: 0.001\nharness_self_host:\n  build_auth:\n    mode: api-key\n',
+    );
+    let discoveryPass = 0;
+
+    const daemon = runDaemonMode({
+      projectRoot: root,
+      engineRoot: store.engineRoot,
+      concurrency: 2,
+      continuous: true,
+      idlePollSeconds: 0.01,
+      baseBranch: 'main',
+      ensureFresh: async () => {},
+      providerDiscoveryRunner,
+      probeGhVersion: supportedGhVersion,
+      runHaltClassMigration: async () => join(root, '.worktrees'),
+      // Keep the daemon at an idle boundary until SIGTERM's child-first
+      // shutdown finishes; a one-shot fixture can otherwise refill during
+      // stopAll's grace wait, before the handler arms the drain flag.
+      workSource: {
+        discover: async () => discoveryPass++ < 2 ? [{ slug: 'first' }, { slug: 'second' }] : [],
+      },
+      watch: false,
+      executorFork: createInMemoryExecutorFork({
+        projectRoot: root,
+        run: async ({ order, signal }) => {
+          started.push(order.slug);
+          await new Promise<void>((resolve) => {
+            signal.addEventListener('abort', () => {
+              settledOnAbort.push(order.slug);
+              resolve();
+            }, { once: true });
+          });
+          return { slug: order.slug, status: 'parked', reason: 'supervisor shutdown' };
+        },
+      }),
+      exitProcess: (code) => {
+        exits.push({ code, lockPresent: existsSync(getPidfilePath(root)) });
+      },
+    });
+
+    try {
+      await vi.waitFor(() => expect(started).toHaveLength(2), { timeout: 1_000 });
+      process.emit('SIGTERM');
+      await daemon;
+
+      expect(settledOnAbort).toHaveLength(2);
+      expect(new Set(settledOnAbort)).toEqual(new Set(['first', 'second']));
+      expect(exits).toEqual([{ code: 0, lockPresent: false }]);
+      await expect(readFile(join(root, '.daemon', 'daemon.log'), 'utf8')).resolves.not.toContain(
+        'teardown force-release',
+      );
+    } finally {
+      await daemon;
+      await store.teardown();
+    }
+  });
+
   it('normal-completion path cancels the teardown controller before/around releasing the lock', () => {
     const src = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8');
 
