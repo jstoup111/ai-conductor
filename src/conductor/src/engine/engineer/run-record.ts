@@ -1,0 +1,313 @@
+import { createHash } from 'node:crypto';
+
+export const RUN_RECORD_SCHEMA_VERSION = 1;
+
+/** DECIDE steps in their dependency order. */
+export const RUN_STEP_ORDER = [
+  'explore',
+  'complexity',
+  'prd',
+  'architecture_diagram',
+  'architecture_review',
+  'stories',
+  'conflict_check',
+  'plan',
+  'coherence_check',
+  'plan_review',
+] as const;
+
+export type RunStepId = (typeof RUN_STEP_ORDER)[number];
+
+/** A digest binds accepted status to one precise artifact revision. */
+export interface ArtifactDigest {
+  readonly path: string;
+  readonly sha256: string;
+}
+
+export interface AcceptedRunStep {
+  readonly state: 'accepted';
+  readonly actor: string;
+  readonly provider: string;
+  readonly at: string;
+  readonly artifacts: readonly ArtifactDigest[];
+}
+
+export interface DraftRunStep {
+  readonly state: 'draft';
+}
+
+export type RunStep = AcceptedRunStep | DraftRunStep;
+
+export interface StepNotes {
+  readonly decisions: readonly string[];
+  readonly openQuestions: readonly string[];
+}
+
+export interface OwnerHistoryEntry {
+  readonly actor: string;
+  readonly at: string;
+}
+
+/** Engine-owned state committed to `.docs/composer-runs/<slug>.json`. */
+export interface RunRecord {
+  readonly schemaVersion: typeof RUN_RECORD_SCHEMA_VERSION;
+  readonly slug: string;
+  readonly sourceRef?: string;
+  readonly steps: Readonly<Partial<Record<RunStepId, RunStep>>>;
+  readonly needsReconfirm: readonly RunStepId[];
+  readonly ownerHistory: readonly OwnerHistoryEntry[];
+  readonly notes: Readonly<Partial<Record<RunStepId, StepNotes>>>;
+}
+
+export interface RecordAcceptanceInput {
+  readonly step: RunStepId;
+  readonly actor: string;
+  readonly provider: string;
+  readonly at: string;
+  readonly artifacts: readonly ArtifactDigest[];
+  readonly decisions: readonly string[];
+  readonly openQuestions: readonly string[];
+}
+
+export interface ClassifiedArtifact extends ArtifactDigest {
+  readonly step?: RunStepId;
+}
+
+export interface ArtifactClassification {
+  readonly accepted: readonly ClassifiedArtifact[];
+  readonly draft: readonly ClassifiedArtifact[];
+  readonly needsReconfirm: readonly RunStepId[];
+}
+
+const RUN_STEP_IDS = new Set<string>(RUN_STEP_ORDER);
+const SHA256_HEX = /^[a-f0-9]{64}$/;
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isStepId(value: unknown): value is RunStepId {
+  return typeof value === 'string' && RUN_STEP_IDS.has(value);
+}
+
+function requiredString(value: unknown, field: string): string {
+  if (typeof value !== 'string' || value.length === 0) throw new Error(`Run record ${field} must be a non-empty string`);
+  return value;
+}
+
+function parseArtifact(value: unknown): ArtifactDigest {
+  if (!isObject(value)) throw new Error('Run record artifact must be an object');
+  const path = requiredString(value.path, 'artifact path');
+  const sha256 = requiredString(value.sha256, 'artifact sha256');
+  if (!SHA256_HEX.test(sha256)) throw new Error('Run record artifact sha256 must be a lowercase SHA-256 hex digest');
+  if (Object.keys(value).some((key) => key !== 'path' && key !== 'sha256')) throw new Error('Run record artifact has unknown fields');
+  return { path, sha256 };
+}
+
+function parseTextList(value: unknown, field: string): readonly string[] {
+  if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string')) {
+    throw new Error(`Run record ${field} must be an array of strings`);
+  }
+  return [...value] as readonly string[];
+}
+
+function parseStep(value: unknown): RunStep {
+  if (!isObject(value)) throw new Error('Run record step must be an object');
+  if (value.state === 'draft') {
+    if (Object.keys(value).some((key) => key !== 'state')) throw new Error('Run record draft step has unknown fields');
+    return { state: 'draft' };
+  }
+  if (value.state !== 'accepted') throw new Error('Run record step state must be accepted or draft');
+  if (Object.keys(value).some((key) => !['state', 'actor', 'provider', 'at', 'artifacts'].includes(key))) {
+    throw new Error('Run record accepted step has unknown fields');
+  }
+  const at = requiredString(value.at, 'step acceptance time');
+  if (Number.isNaN(Date.parse(at))) throw new Error('Run record step acceptance time must be a timestamp');
+  if (!Array.isArray(value.artifacts)) throw new Error('Run record accepted step artifacts must be an array');
+  return {
+    state: 'accepted',
+    actor: requiredString(value.actor, 'step actor'),
+    provider: requiredString(value.provider, 'step provider'),
+    at,
+    artifacts: value.artifacts.map(parseArtifact),
+  };
+}
+
+function parseSteps(value: unknown): Readonly<Partial<Record<RunStepId, RunStep>>> {
+  if (!isObject(value)) throw new Error('Run record steps must be an object');
+  const steps: Partial<Record<RunStepId, RunStep>> = {};
+  for (const [step, entry] of Object.entries(value)) {
+    if (!isStepId(step)) throw new Error(`Run record has unknown step ${step}`);
+    steps[step] = parseStep(entry);
+  }
+  return steps;
+}
+
+function parseNotes(value: unknown): Readonly<Partial<Record<RunStepId, StepNotes>>> {
+  if (!isObject(value)) throw new Error('Run record notes must be an object');
+  const notes: Partial<Record<RunStepId, StepNotes>> = {};
+  for (const [step, entry] of Object.entries(value)) {
+    if (!isStepId(step) || !isObject(entry) || Object.keys(entry).some((key) => key !== 'decisions' && key !== 'openQuestions')) {
+      throw new Error('Run record notes must be keyed by a known step');
+    }
+    notes[step] = {
+      decisions: parseTextList(entry.decisions, 'note decisions'),
+      openQuestions: parseTextList(entry.openQuestions, 'note openQuestions'),
+    };
+  }
+  return notes;
+}
+
+function parseOwnerHistory(value: unknown): readonly OwnerHistoryEntry[] {
+  if (!Array.isArray(value)) throw new Error('Run record ownerHistory must be an array');
+  return value.map((entry) => {
+    if (!isObject(entry) || Object.keys(entry).some((key) => key !== 'actor' && key !== 'at')) {
+      throw new Error('Run record ownerHistory entry must contain actor and at');
+    }
+    const at = requiredString(entry.at, 'owner history time');
+    if (Number.isNaN(Date.parse(at))) throw new Error('Run record owner history time must be a timestamp');
+    return { actor: requiredString(entry.actor, 'owner history actor'), at };
+  });
+}
+
+/** Parse the sole supported run-record schema, failing closed on unknown state. */
+export function parseRunRecord(serialized: string): RunRecord {
+  let value: unknown;
+  try {
+    value = JSON.parse(serialized);
+  } catch (error) {
+    throw new Error(`Run record is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!isObject(value)) throw new Error('Run record must be an object');
+  if (value.schemaVersion !== RUN_RECORD_SCHEMA_VERSION) throw new Error(`Unsupported run record schemaVersion ${String(value.schemaVersion)}`);
+  if (Object.keys(value).some((key) => !['schemaVersion', 'slug', 'sourceRef', 'steps', 'needsReconfirm', 'ownerHistory', 'notes'].includes(key))) {
+    throw new Error('Run record has unknown fields');
+  }
+  if (value.sourceRef !== undefined && typeof value.sourceRef !== 'string') throw new Error('Run record sourceRef must be a string');
+  const needsReconfirm = parseTextList(value.needsReconfirm, 'needsReconfirm');
+  if (needsReconfirm.some((step) => !isStepId(step))) throw new Error('Run record needsReconfirm must name known steps');
+  return {
+    schemaVersion: RUN_RECORD_SCHEMA_VERSION,
+    slug: requiredString(value.slug, 'slug'),
+    ...(value.sourceRef === undefined ? {} : { sourceRef: value.sourceRef }),
+    steps: parseSteps(value.steps),
+    needsReconfirm: [...new Set(needsReconfirm)] as readonly RunStepId[],
+    ownerHistory: parseOwnerHistory(value.ownerHistory),
+    notes: parseNotes(value.notes),
+  };
+}
+
+/** Serialize durable state as JSON; owner provenance remains in its separate intake marker. */
+export function serializeRunRecord(record: RunRecord): string {
+  return `${JSON.stringify(record, null, 2)}\n`;
+}
+
+/** Compute the canonical digest used to bind acceptance to artifact content. */
+export function digestArtifact(path: string, bytes: Uint8Array): ArtifactDigest {
+  if (path.length === 0) throw new Error('Artifact path must be non-empty');
+  return { path, sha256: createHash('sha256').update(bytes).digest('hex') };
+}
+
+function sameArtifacts(left: readonly ArtifactDigest[], right: readonly ArtifactDigest[]): boolean {
+  return left.length === right.length && left.every((artifact, index) =>
+    artifact.path === right[index]?.path && artifact.sha256 === right[index]?.sha256,
+  );
+}
+
+function laterAcceptedSteps(record: RunRecord, step: RunStepId): RunStepId[] {
+  const start = RUN_STEP_ORDER.indexOf(step);
+  return RUN_STEP_ORDER.slice(start + 1).filter((candidate) => record.steps[candidate]?.state === 'accepted');
+}
+
+/** Record one explicit operator acceptance without mutating the prior durable state. */
+export function recordAcceptance(record: RunRecord, input: RecordAcceptanceInput): RunRecord {
+  const previous = record.steps[input.step];
+  const changed = previous?.state === 'accepted' && !sameArtifacts(previous.artifacts, input.artifacts);
+  const needsReconfirm = new Set(record.needsReconfirm);
+  needsReconfirm.delete(input.step);
+  if (changed) for (const later of laterAcceptedSteps(record, input.step)) needsReconfirm.add(later);
+
+  return {
+    ...record,
+    steps: {
+      ...record.steps,
+      [input.step]: {
+        state: 'accepted',
+        actor: input.actor,
+        provider: input.provider,
+        at: input.at,
+        artifacts: input.artifacts.map((artifact) => ({ ...artifact })),
+      },
+    },
+    needsReconfirm: RUN_STEP_ORDER.filter((step) => needsReconfirm.has(step)),
+    notes: {
+      ...record.notes,
+      [input.step]: {
+        decisions: [...input.decisions],
+        openQuestions: [...input.openQuestions],
+      },
+    },
+  };
+}
+
+function stepForPath(path: string): RunStepId | undefined {
+  if (path.startsWith('.docs/track/')) return 'explore';
+  if (path.startsWith('.docs/complexity/')) return 'complexity';
+  if (path.startsWith('.docs/specs/')) return 'prd';
+  if (path.startsWith('.docs/stories/')) return 'stories';
+  if (path.startsWith('.docs/plans/')) return 'plan';
+  return undefined;
+}
+
+function acceptedArtifacts(record: RunRecord): readonly (ArtifactDigest & { readonly step: RunStepId })[] {
+  return RUN_STEP_ORDER.flatMap((step) => {
+    const recordStep = record.steps[step];
+    return recordStep?.state === 'accepted'
+      ? recordStep.artifacts.map((artifact) => ({ ...artifact, step }))
+      : [];
+  });
+}
+
+/**
+ * Classify the current change-set against recorded acceptance. A changed accepted
+ * step invalidates all later accepted steps until they are explicitly reconfirmed.
+ */
+export function classifyArtifacts(record: RunRecord, currentDigests: readonly ArtifactDigest[]): ArtifactClassification {
+  const acceptedByDigest = acceptedArtifacts(record);
+  const acceptedByPath = new Map<string, RunStepId>();
+  for (const artifact of acceptedByDigest) acceptedByPath.set(artifact.path, artifact.step);
+  const currentPaths = new Set(currentDigests.map((artifact) => artifact.path));
+  const draft: ClassifiedArtifact[] = [];
+  const draftSteps = new Set<RunStepId>();
+
+  for (const artifact of acceptedByDigest) {
+    if (!currentPaths.has(artifact.path)) {
+      draft.push(artifact);
+      draftSteps.add(artifact.step);
+    }
+  }
+
+  const matched: (ArtifactDigest & { readonly step: RunStepId })[] = [];
+  for (const artifact of currentDigests) {
+    const accepted = acceptedByDigest.find((candidate) => candidate.path === artifact.path && candidate.sha256 === artifact.sha256);
+    if (accepted !== undefined) {
+      matched.push(accepted);
+      continue;
+    }
+    const step = acceptedByPath.get(artifact.path) ?? stepForPath(artifact.path);
+    draft.push({ ...artifact, ...(step === undefined ? {} : { step }) });
+    if (step !== undefined) draftSteps.add(step);
+  }
+
+  const needsReconfirm = new Set(record.needsReconfirm);
+  for (const step of draftSteps) for (const later of laterAcceptedSteps(record, step)) needsReconfirm.add(later);
+  for (const step of draftSteps) needsReconfirm.delete(step);
+
+  const orderedNeedsReconfirm = RUN_STEP_ORDER.filter((step) => needsReconfirm.has(step));
+  const reconfirmSet = new Set(orderedNeedsReconfirm);
+  return {
+    accepted: matched.filter((artifact) => !draftSteps.has(artifact.step) && !reconfirmSet.has(artifact.step)),
+    draft,
+    needsReconfirm: orderedNeedsReconfirm,
+  };
+}
