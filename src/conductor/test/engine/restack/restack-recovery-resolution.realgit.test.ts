@@ -104,7 +104,7 @@ async function baseRefreshConflictFixture() {
   await writeFile(join(repo, 'shared.txt'), 'resolved\n');
   await writeFile(join(repo, 'tests/a.test.ts'), 'adapted parent test\n');
   await git(['add', 'shared.txt', 'tests/a.test.ts']);
-  await git(['commit', '-qm', 'child two adapts parent test']);
+  await git(['commit', '-qm', 'child two']);
   const resolutionTip = sha((await git(['rev-parse', 'HEAD'])).stdout.trim());
   await git(['checkout', '-q', 'feat/daemon-demo']);
   await expect(dispatchStackRestackResolve(
