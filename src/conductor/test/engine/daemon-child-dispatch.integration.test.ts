@@ -1,4 +1,4 @@
-// Covers: task:28
+// Covers: task:28, task:29, task:33, task:36
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -126,15 +126,20 @@ describe('daemon child dispatch composition', () => {
     }
   });
 
-  it('does not log an executor-isolation mode or disabled pinning', async () => {
+  it('rejects the retired executor-isolation key before it can claim or fork', async () => {
     const { root } = await project();
     const store = await useTempEngineStore();
+    const executorFork = vi.fn(createInMemoryExecutorFork({ projectRoot: root }));
     try {
       await mkdir(join(root, '.ai-conductor'), { recursive: true });
       await writeFile(join(root, '.ai-conductor', 'config.yml'), 'executor_isolation: in-process\n');
-      await runDaemonMode(daemonOptions(root, store.engineRoot, { discover: async () => [] }, createInMemoryExecutorFork({ projectRoot: root })));
-      const startupLog = await readFile(join(root, '.daemon', 'daemon.log'), 'utf8');
-      expect(startupLog).not.toMatch(/executor isolation|per-dispatch engine pinning is disabled/);
+      await expect(runDaemonMode(daemonOptions(
+        root,
+        store.engineRoot,
+        { discover: async () => [] },
+        executorFork,
+      ))).rejects.toThrow('Unknown top-level key: "executor_isolation"');
+      expect(executorFork).not.toHaveBeenCalled();
     } finally {
       await store.teardown();
     }
@@ -171,6 +176,85 @@ describe('daemon child dispatch composition', () => {
     }
   });
 
+  it('ends a silent child dispatch without relaunching or running a feature step', async () => {
+    const { root, baseSha } = await project();
+    const store = await useTempEngineStore();
+    const supervisorMessages: unknown[] = [];
+    const featureSteps: string[] = [];
+    const executorFork = vi.fn(createInMemoryExecutorFork({
+      projectRoot: root,
+      handshake: 'silent',
+      onSupervisorMessage: (message) => supervisorMessages.push(message),
+      run: async ({ order }) => {
+        featureSteps.push(order.slug);
+        return { slug: order.slug, status: 'done' };
+      },
+    }));
+
+    try {
+      await mkdir(join(root, '.ai-conductor'), { recursive: true });
+      await writeFile(join(root, '.ai-conductor', 'config.yml'), 'dispatch_start_timeout_seconds: 0.01\n');
+
+      const result = await runDaemonMode(daemonOptions(
+        root,
+        store.engineRoot,
+        { discover: async () => [{ slug: 'feature', baseSha }] },
+        executorFork,
+      ));
+
+      expect(result).toMatchObject({
+        stoppedReason: 'max_items',
+        processed: [{ slug: 'feature', status: 'error', reason: 'executor missing startup handshake' }],
+      });
+      expect(executorFork).toHaveBeenCalledOnce();
+      expect(supervisorMessages.filter(
+        (message) => (message as { kind?: string }).kind === 'work-order',
+      )).toEqual([]);
+      expect(featureSteps).toEqual([]);
+    } finally {
+      await store.teardown();
+    }
+  });
+
+  it('terminates a protocol-mismatched child before relaunching with the supervisor engine', async () => {
+    const { root, baseSha } = await project();
+    const store = await useTempEngineStore();
+    const childKills: NodeJS.Signals[] = [];
+    const featureSteps: string[] = [];
+    const executorFork = vi.fn(createInMemoryExecutorFork({
+      projectRoot: root,
+      protocolVersions: [2, 1],
+      onChildKill: (signal) => childKills.push(signal),
+      run: async ({ order }) => {
+        featureSteps.push(order.slug);
+        return { slug: order.slug, status: 'done' };
+      },
+    }));
+
+    try {
+      const daemon = runDaemonMode(daemonOptions(
+        root,
+        store.engineRoot,
+        { discover: async () => [{ slug: 'feature', baseSha }] },
+        executorFork,
+      ));
+
+      await vi.waitFor(() => expect(executorFork).toHaveBeenCalledTimes(2));
+      expect(childKills).toEqual(['SIGTERM']);
+      expect(executorFork).toHaveBeenNthCalledWith(
+        2,
+        join(store.engineRoot.ownEngineDir, 'index.js'),
+        ['executor-child'],
+        { silent: true },
+      );
+      await vi.waitFor(() => expect(featureSteps).toEqual(['feature']));
+      process.emit('SIGTERM');
+      await daemon;
+    } finally {
+      await store.teardown();
+    }
+  });
+
   it('stops every child and aborts broker coordination before SIGTERM resolves', async () => {
     const { root, baseSha } = await project();
     const store = await useTempEngineStore();
@@ -201,6 +285,54 @@ describe('daemon child dispatch composition', () => {
       expect(stops).toEqual(['stop', 'stop']);
       expect(seams.abortAll).toHaveBeenCalledOnce();
     } finally {
+      await store.teardown();
+    }
+  });
+
+  it('keeps concurrent child logs attributed to their feature while supervisor warnings stay untagged', async () => {
+    const { root, baseSha } = await project();
+    const store = await useTempEngineStore();
+    const entered = new Set<string>();
+    const release: Array<() => void> = [];
+    let supervisorWarned = false;
+    const executorFork = createInMemoryExecutorFork({
+      projectRoot: root,
+      onFork: () => {
+        if (!supervisorWarned) {
+          supervisorWarned = true;
+          console.warn('supervisor warning during child dispatch');
+        }
+      },
+      run: async ({ order, log }) => {
+        log?.(`feature log ${order.slug}`);
+        entered.add(order.slug);
+        await new Promise<void>((resolve) => release.push(resolve));
+        return { slug: order.slug, status: 'done' };
+      },
+    });
+
+    try {
+      await mkdir(join(root, '.ai-conductor'), { recursive: true });
+      await writeFile(join(root, '.ai-conductor', 'config.yml'), 'daemon_concurrency: 2\n');
+      const daemon = runDaemonMode(daemonOptions(
+        root,
+        store.engineRoot,
+        { discover: async () => [{ slug: 'first', baseSha }, { slug: 'second', baseSha }] },
+        executorFork,
+        2,
+      ));
+      await vi.waitFor(() => expect(entered).toEqual(new Set(['first', 'second'])));
+      release.splice(0).forEach((resolve) => resolve());
+      await daemon;
+
+      const daemonLog = await readFile(join(root, '.daemon', 'daemon.log'), 'utf8');
+      for (const slug of ['first', 'second']) {
+        expect(daemonLog).toContain(`[daemon][${slug}] [executor:info] feature log ${slug}`);
+        expect(daemonLog).not.toContain(`[daemon][${slug}] [executor:info] feature log ${slug === 'first' ? 'second' : 'first'}`);
+      }
+      expect(daemonLog).toContain('[daemon] [warn] supervisor warning during child dispatch');
+    } finally {
+      release.splice(0).forEach((resolve) => resolve());
       await store.teardown();
     }
   });

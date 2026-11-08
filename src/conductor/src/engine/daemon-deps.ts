@@ -67,7 +67,7 @@ export interface RealDepsConfig {
   /** Branch the worktrees fork from (e.g. 'main'). */
   baseBranch: string;
   /** Run the gate loop in a worktree to DONE/HALT (assembled by the CLI). */
-  runConductorInWorktree: (
+  runConductorInWorktree?: (
     worktree: FeatureWorktree,
     item: BacklogItem,
     providerExecution?: ProviderExecutionContext,
@@ -222,8 +222,12 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): DaemonFeatureRunnerD
       });
     },
 
-    runConductor: (wt, item, providerExecution, featureEvents, log, sessionId) =>
-      cfg.runConductorInWorktree(wt, item, providerExecution, featureEvents, log, sessionId),
+    runConductor: (wt, item, providerExecution, featureEvents, log, sessionId) => {
+      if (!cfg.runConductorInWorktree) {
+        throw new Error('in-process daemon feature execution is not configured');
+      }
+      return cfg.runConductorInWorktree(wt, item, providerExecution, featureEvents, log, sessionId);
+    },
 
     readOutcome: (wt) => readWorktreeOutcome(wt.path),
 

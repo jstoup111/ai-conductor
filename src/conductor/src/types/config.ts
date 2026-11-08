@@ -727,11 +727,6 @@ export interface HarnessConfig {
    */
   daemon_concurrency?: number;
   /**
-   * Process boundary for daemon feature execution. Absent defaults to `child`;
-   * `in-process` remains an operator rollback mode.
-   */
-  executor_isolation?: 'child' | 'in-process';
-  /**
    * Maximum age in hours of a stale supervisor before it stops claiming and
    * drains for restart. Absent or invalid values resolve to 24 with a warning.
    */

@@ -117,8 +117,6 @@ describe('daemon skipped-to-stale refusal event wiring', () => {
     directories.push(projectRoot);
     fixture.worktreePath = join(projectRoot, '.worktrees', 'feature-a');
     await mkdir(join(fixture.worktreePath, '.pipeline'), { recursive: true });
-    await mkdir(join(projectRoot, '.ai-conductor'), { recursive: true });
-    await writeFile(join(projectRoot, '.ai-conductor', 'config.yml'), 'executor_isolation: in-process\n');
     await writeState(
       join(fixture.worktreePath, '.pipeline', 'conduct-state.json'),
       { manual_test: 'skipped' },

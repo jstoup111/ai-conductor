@@ -207,7 +207,7 @@ afterEach(async () => {
 
 async function dispatchWithSessionId(
   sessionId?: string | 'unreadable',
-  config: HarnessConfig = { otel: { exporter: 'file' }, executor_isolation: 'in-process' },
+  config: HarnessConfig = { otel: { exporter: 'file' } },
   sourceRef?: string,
 ): Promise<{ repo: string; pipelineDir: string }> {
   const repo = await mkdtemp(join(tmpdir(), 'daemon-otel-wiring-'));
@@ -217,7 +217,7 @@ async function dispatchWithSessionId(
   await mkdir(pipelineDir, { recursive: true });
   loadMergedConfig.mockResolvedValue({
     ok: true,
-    config: { ...config, executor_isolation: config.executor_isolation ?? 'in-process' },
+    config,
     warnings: [],
     deprecatedKeys: [],
   });

@@ -14,7 +14,6 @@
 import { createWriteStream } from 'node:fs';
 import { mkdir, stat, rename, readFile, open } from 'node:fs/promises';
 import { join } from 'node:path';
-import { AsyncLocalStorage } from 'node:async_hooks';
 import { daemonDir } from './daemon-lock.js';
 import { composeDaemonLineBodies } from './daemon-line-shape.js';
 
@@ -23,8 +22,6 @@ const ROTATED_LOG_NAME = 'daemon.log.1';
 /** Single-file rotation cap (~1 MB). On open, an oversized log is moved aside once. */
 const ROTATE_SIZE_BYTES = 1_000_000;
 const FEATURE_TAG_DISPLAY_LENGTH = 24;
-const featureOwnership = new AsyncLocalStorage<string>();
-
 type DaemonActivityLogger = (message: string, featureOwned?: boolean) => void;
 
 /** Render a feature slug for a daemon log tag, bounded for readable live output. */
@@ -47,43 +44,16 @@ export function formatDaemonActivityLine(message: string, featureOwned = false):
   return `[daemon] ${message}`;
 }
 
-/**
- * Establish central log ownership for one executor's async scope. Process-level
- * diagnostic sinks query this context instead of accepting feature slugs at
- * every call site.
- */
-export function withDaemonLogFeatureOwnership<T>(
-  featureSlug: string,
-  run: () => Promise<T>,
-): Promise<T> {
-  return featureOwnership.run(featureSlug, run);
-}
-
-/** Format a process-level console diagnostic with the current executor's tag. */
+/** Format a supervisor console diagnostic without feature ownership. */
 export function formatDaemonConsoleTeeLine(level: string, message: string): string {
-  const slug = featureOwnership.getStore();
-  if (!slug) return formatDaemonActivityLine(`[${level}] ${message}`);
-  return formatDaemonActivityLine(
-    `${formatDaemonFeatureTag(slug)} [${level}] ${message}`,
-    true,
-  );
+  return formatDaemonActivityLine(`[${level}] ${message}`);
 }
 
-/**
- * Adapt the daemon-wide event subscriber to the executor ownership context.
- * Global events outside an executor retain the ordinary bare daemon logger.
- */
+/** Adapt daemon-wide events to the unowned daemon logger. */
 export function createOwnershipAwareDaemonLogger(
   baseLog: DaemonActivityLogger,
 ): (message: string) => void {
-  return (message) => {
-    const slug = featureOwnership.getStore();
-    if (!slug) {
-      baseLog(message);
-      return;
-    }
-    baseLog(`${formatDaemonFeatureTag(slug)} ${message}`, true);
-  };
+  return (message) => baseLog(message);
 }
 
 /**

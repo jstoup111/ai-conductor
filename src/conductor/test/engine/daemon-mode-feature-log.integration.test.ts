@@ -97,8 +97,6 @@ describe('daemon-mode feature log integration', () => {
     dirs.push(repo);
     fixture.worktreePath = join(repo, '.worktrees', 'feature-a');
     await mkdir(fixture.worktreePath, { recursive: true });
-    await mkdir(join(repo, '.ai-conductor'), { recursive: true });
-    await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'executor_isolation: in-process\n');
 
     const consoleLines: string[] = [];
     const originalConsoleLog = console.log;

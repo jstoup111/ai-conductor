@@ -10,6 +10,7 @@ const originalUserConfigDir = process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
 import {
   loadConfig,
   loadMergedConfig,
+  emitDeprecatedConfigKeyEvents,
   validateConfig,
   DEPRECATED_BUILD_REVIEW_RUBRIC_IDS,
   disabledStepNames,
@@ -18,6 +19,7 @@ import {
   resolveMemoryProvider,
   resolveValidationConcurrency,
 } from '../../src/engine/config.js';
+import { ConductorEventEmitter } from '../../src/engine/conductor-event-emitter.js';
 import {
   DEFAULT_TEST_QUALITY_MAX_PROJECTION_BYTES,
   resolveBuildReviewConfig,
@@ -3060,31 +3062,34 @@ steps:
     });
   });
 
-  describe('executor_isolation and supervisor_max_stale_hours config fields', () => {
-    it('defaults executor_isolation to child without a warning', () => {
+  describe('executor_isolation removal and supervisor_max_stale_hours config fields', () => {
+    it('omits the retired key without a warning or deprecated-key event', async () => {
       const result = validateConfig({});
       expect(result.ok).toBe(true);
       if (!result.ok) return;
-      expect(result.config.executor_isolation).toBe('child');
+      expect(result.config).not.toHaveProperty('executor_isolation');
       expect(result.warnings).toHaveLength(0);
+      const events = new ConductorEventEmitter();
+      const emitted: unknown[] = [];
+      events.on('config_deprecated_key', (event) => emitted.push(event));
+      await emitDeprecatedConfigKeyEvents(result, events);
+      expect(emitted).toEqual([]);
     });
 
-    it.each(['child', 'in-process'] as const)('accepts executor_isolation %s', (executor_isolation) => {
-      const result = validateConfig({ executor_isolation });
-      expect(result.ok).toBe(true);
-      if (!result.ok) return;
-      expect(result.config.executor_isolation).toBe(executor_isolation);
-      expect(result.warnings).toHaveLength(0);
-    });
-
-    it.each(['thread', true, 1, null])('rejects invalid executor_isolation %#', (executor_isolation) => {
+    it.each(['in-process', 'child', 'thread', '', true, 1, null, {}])(
+      'rejects executor_isolation %# as an unknown top-level key',
+      async (executor_isolation) => {
       const result = validateConfig({ executor_isolation });
       expect(result.ok).toBe(false);
       if (result.ok) return;
-      expect(result.error.message).toMatch(/executor_isolation/);
-      expect(result.error.message).toMatch(/child/);
-      expect(result.error.message).toMatch(/in-process/);
-    });
+      expect(result.error.message).toBe('Unknown top-level key: "executor_isolation"');
+      const events = new ConductorEventEmitter();
+      const emitted: unknown[] = [];
+      events.on('config_deprecated_key', (event) => emitted.push(event));
+      await emitDeprecatedConfigKeyEvents(result, events);
+      expect(emitted).toEqual([]);
+      },
+    );
 
     it('defaults supervisor_max_stale_hours to 24 without a warning', () => {
       const result = validateConfig({});

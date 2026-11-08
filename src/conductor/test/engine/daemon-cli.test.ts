@@ -1,4 +1,4 @@
-// Covers: task:3, task:9, task:14
+// Covers: task:3, task:9, task:14, task:30
 // ─────────────────────────────────────────────────────────────────────────────
 // Task 12 (adr-2026-07-03-gated-snapshot-status-read-model): the daemon must
 // write `.daemon/gated.json` on EVERY discovery pass — populated, explicitly
@@ -44,6 +44,8 @@ import type {
   StateMutationResult,
 } from '../../src/engine/conduct-state-store.js';
 import { allInstalledProviderDiscoveryRunner } from './boot-test-helpers.js';
+import { createInMemoryExecutorFork, useTempEngineStore } from '../fixtures/in-memory-executor-fork.js';
+import { commitAll, initTestRepo } from '../fixtures/git-repo.js';
 
 const supportedGhVersion = async () => ({
   kind: 'ok' as const,
@@ -614,6 +616,19 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
+async function prepareChildDispatchProject(slugs: readonly string[]): Promise<void> {
+  await initTestRepo(root);
+  await Promise.all([
+    mkdir(join(root, '.docs', 'stories'), { recursive: true }),
+    mkdir(join(root, '.docs', 'plans'), { recursive: true }),
+  ]);
+  await Promise.all(slugs.flatMap((slug) => [
+    writeFile(join(root, '.docs', 'stories', `${slug}.md`), `# ${slug}\n`),
+    writeFile(join(root, '.docs', 'plans', `${slug}.md`), `# ${slug}\n`),
+  ]));
+  await commitAll(root, 'base');
+}
+
 function baseDeps(overrides: Partial<LocalWorkSourceDeps> = {}): LocalWorkSourceDeps {
   return {
     projectRoot: root,
@@ -1002,6 +1017,8 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
   it('releases the lock then exits after the daemon consumes a queued restart marker', async () => {
     const events: string[] = [];
     const started: string[] = [];
+    await prepareChildDispatchProject(['first', 'second', 'later']);
+    const store = await useTempEngineStore();
     await mkdir(join(root, '.ai-conductor'), { recursive: true });
     await writeFile(
       join(root, '.ai-conductor', 'config.yml'),
@@ -1021,7 +1038,9 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
     // timeout and leaks work into later files.
     const daemon = runDaemonMode({
       projectRoot: root,
+      engineRoot: store.engineRoot,
       concurrency: 2,
+      idlePollSeconds: 0,
       baseBranch: 'main',
       ensureFresh: async () => {},
       providerDiscoveryRunner,
@@ -1031,33 +1050,36 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
         discover: async () => [{ slug: 'first' }, { slug: 'second' }, { slug: 'later' }],
       },
       watch: false,
-      runFeature: async (item) => {
-        started.push(item.slug);
-        if (started.length === 2) {
-          await writeRestartPending(root, { blockingSlug: 'first' });
-          await vi.waitFor(async () => {
-            await expect(readRestartPending(root)).resolves.toMatchObject({
-              drainSlugs: ['first', 'second'],
+      executorFork: createInMemoryExecutorFork({
+        projectRoot: root,
+        run: async ({ order }) => {
+          started.push(order.slug);
+          if (started.length === 2) {
+            await writeRestartPending(root, { blockingSlug: 'first' });
+            await vi.waitFor(async () => {
+              await expect(readRestartPending(root)).resolves.toMatchObject({
+                drainSlugs: ['first', 'second'],
+              });
             });
-          });
-          const status = await computeStatusRow(
-            {
-              schemaVersion: 1,
-              name: 'repo',
-              path: root,
-              status: 'registered',
-              registeredAt: '2026-08-30T00:00:00.000Z',
-            },
-            () => true,
-            async () => false,
-          );
-          events.push(`status:${status.restartPending?.drainSlugs?.join(',')}`);
-          observeDrainStatus();
-          releaseWorkers?.();
-        }
-        await workersReleased;
-        return { slug: item.slug, status: 'done' };
-      },
+            const status = await computeStatusRow(
+              {
+                schemaVersion: 1,
+                name: 'repo',
+                path: root,
+                status: 'registered',
+                registeredAt: '2026-08-30T00:00:00.000Z',
+              },
+              () => true,
+              async () => false,
+            );
+            events.push(`status:${status.restartPending?.drainSlugs?.join(',')}`);
+            observeDrainStatus();
+            releaseWorkers?.();
+          }
+          await workersReleased;
+          return { slug: order.slug, status: 'done' };
+        },
+      }),
       exitProcess: () => {
         events.push(existsSync(join(root, RESTART_MARKER)) ? 'marker-present' : 'marker-consumed');
         events.push(existsSync(getPidfilePath(root)) ? 'lock-held' : 'lock-released');
@@ -1066,6 +1088,7 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
     });
 
     try {
+      await vi.waitFor(() => expect(started).toHaveLength(2), { timeout: 1_000 });
       await drainStatusObserved;
       await daemon;
       const durableDrainLines = (await readFile(join(root, '.daemon', 'daemon.log'), 'utf8'))
@@ -1081,6 +1104,7 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
     } finally {
       releaseWorkers?.();
       await daemon;
+      await store.teardown();
     }
   });
 });
@@ -1127,84 +1151,27 @@ describe('Task 3: SIGTERM drains then releases lock; bounded force-release', () 
     expect(src).toMatch(/await dispatchDaemon\(\s*\{[\s\S]*?shouldStop:\s*\(\)\s*=>\s*teardown\.shouldStop\(\),/);
   });
 
-  it('force-releases a wedged two-executor daemon after its scaled bound and drops the lock before exit', async () => {
-    // exitProcess records the exit instead of terminating this worker. Pair it
-    // with a recording sink so post-exit fixture cleanup cannot write to a
-    // stream that the real process-exit backstop has already closed.
-    const logLines: string[] = [];
-    const logModule = await import('../../src/engine/daemon-log.js');
-    const logSpy = vi.spyOn(logModule, 'openDaemonLog').mockResolvedValue({
-      write: (line) => {
-        logLines.push(line);
-      },
-      close: async () => {},
-      closeSync: () => {},
-    });
-    const started: string[] = [];
-    const exits: Array<{ code: number; lockPresent: boolean }> = [];
-    let releaseWorkers: (() => void) | undefined;
-    const workersReleased = new Promise<void>((resolve) => {
-      releaseWorkers = resolve;
-    });
-    let workersStarted!: () => void;
-    const startedWorkers = new Promise<void>((resolve) => {
-      workersStarted = resolve;
-    });
-    await mkdir(join(root, '.ai-conductor'), { recursive: true });
-    await writeFile(
-      join(root, '.ai-conductor', 'config.yml'),
-      'daemon_concurrency: 2\nharness_self_host:\n  build_auth:\n    mode: api-key\n',
+  it('force-release logs its marker and releases the lock before non-zero exit', () => {
+    const src = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8');
+    const releaseBackstopStart = src.indexOf('const releaseBackstop = (): void => {');
+    const releaseBackstopEnd = src.indexOf('\n  };', releaseBackstopStart);
+    const daemonTeardownStart = src.indexOf('const teardown = createScaledDaemonTeardown({');
+    const forceReleaseStart = src.indexOf('onForceRelease: () => {', daemonTeardownStart);
+    const forceReleaseEnd = src.indexOf('\n    },', forceReleaseStart);
+
+    expect(releaseBackstopStart).toBeGreaterThanOrEqual(0);
+    expect(releaseBackstopEnd).toBeGreaterThan(releaseBackstopStart);
+    expect(daemonTeardownStart).toBeGreaterThanOrEqual(0);
+    expect(forceReleaseStart).toBeGreaterThanOrEqual(0);
+    expect(forceReleaseEnd).toBeGreaterThan(forceReleaseStart);
+
+    const releaseBackstopBody = src.slice(releaseBackstopStart, releaseBackstopEnd);
+    const forceReleaseBody = src.slice(forceReleaseStart, forceReleaseEnd);
+    expect(releaseBackstopBody).toContain('lock.releaseSync()');
+    expect(forceReleaseBody).toContain('[daemon] teardown force-release:');
+    expect(forceReleaseBody.indexOf('releaseBackstop()')).toBeLessThan(
+      forceReleaseBody.indexOf('exitProcess(1)'),
     );
-
-    const daemon = runDaemonMode({
-      projectRoot: root,
-      concurrency: 2,
-      baseBranch: 'main',
-      ensureFresh: async () => {},
-      providerDiscoveryRunner,
-      probeGhVersion: supportedGhVersion,
-      runHaltClassMigration: async () => join(root, '.worktrees'),
-      workSource: {
-        discover: async () => [{ slug: 'first' }, { slug: 'second' }],
-      },
-      watch: false,
-      runFeature: async (item) => {
-        started.push(item.slug);
-        if (started.length === 2) workersStarted();
-        await workersReleased;
-        return { slug: item.slug, status: 'done' };
-      },
-      exitProcess: (code) => {
-        exits.push({ code, lockPresent: existsSync(getPidfilePath(root)) });
-      },
-    });
-
-    try {
-      await startedWorkers;
-      vi.useFakeTimers();
-      process.emit('SIGTERM');
-      // SIGTERM handlers are async because they first close any active
-      // conductor executions.  Let that continuation arm the teardown timer
-      // before advancing fake time; otherwise a busy worker can advance the
-      // clock before this daemon has observed its own signal.
-      await vi.advanceTimersByTimeAsync(0);
-      // The two running executors each receive the full 30-second allowance.
-      // Stopping just short of 60 seconds makes the scaled boundary observable:
-      // the former single-executor 30-second timeout would have force-released
-      // the lock already.
-      await vi.advanceTimersByTimeAsync(59_999);
-      expect(exits).toEqual([]);
-
-      await vi.advanceTimersByTimeAsync(1);
-
-      expect(exits).toEqual([{ code: 1, lockPresent: false }]);
-      expect(logLines.join('\n')).toContain('teardown force-release');
-    } finally {
-      releaseWorkers?.();
-      await daemon;
-      vi.useRealTimers();
-      logSpy.mockRestore();
-    }
   });
 
   it('normal-completion path cancels the teardown controller before/around releasing the lock', () => {

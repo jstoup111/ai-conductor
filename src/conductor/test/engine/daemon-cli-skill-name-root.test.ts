@@ -67,7 +67,6 @@ async function dispatch(selfHost: boolean): Promise<void> {
   fixture.worktreePath = join(projectRoot, '.worktrees', 'feature');
   await mkdir(join(fixture.worktreePath, '.pipeline'), { recursive: true });
   await mkdir(join(projectRoot, '.ai-conductor'), { recursive: true });
-  await writeFile(join(projectRoot, '.ai-conductor', 'config.yml'), 'executor_isolation: in-process\n');
   await runDaemonMode({
     projectRoot,
     concurrency: 1,

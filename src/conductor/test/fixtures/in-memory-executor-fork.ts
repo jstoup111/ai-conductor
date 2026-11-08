@@ -4,7 +4,10 @@ import { dirname, join } from 'node:path';
 import { runExecutorChild, withExecutorBrokerProxies } from '../../src/engine/executor-child.js';
 import { createExecutorChildRuntime } from '../../src/engine/executor-child-runtime.js';
 import type { ChildFeatureExecutorDeps, ForkedExecutor } from '../../src/engine/child-feature-executor.js';
+import type { ExecutorChildRunInput } from '../../src/engine/executor-child.js';
+import type { FeatureExecutionOutcome } from '../../src/engine/feature-executor.js';
 import type { ExecutorIpcPort } from '../../src/engine/executor-proxies.js';
+import { EXECUTOR_PROTOCOL_VERSION } from '../../src/engine/executor-protocol.js';
 
 export const ENGINE_STORE_ENV_VAR = 'AI_CONDUCTOR_ENGINE_STORE';
 
@@ -34,6 +37,17 @@ export interface InMemoryExecutorForkOptions {
   readonly captureConsole?: boolean;
   /** Observes supervisor-to-child protocol messages for lifecycle assertions. */
   readonly onSupervisorMessage?: (message: unknown) => void;
+  /**
+   * Replaces only the child feature runner after production child composition
+   * has admitted the work order and created its worktree.
+   */
+  readonly run?: (input: ExecutorChildRunInput) => Promise<FeatureExecutionOutcome>;
+  /** Hello protocol versions emitted by successive in-memory children. */
+  readonly protocolVersions?: readonly number[];
+  /** Observes a supervisor-issued child termination signal. */
+  readonly onChildKill?: (signal: NodeJS.Signals) => void;
+  /** Runs in the supervisor immediately before each child endpoint starts. */
+  readonly onFork?: () => void;
 }
 
 type Listener = (value?: unknown) => void;
@@ -52,16 +66,48 @@ class InMemoryForkedExecutor implements ForkedExecutor {
   private exitListener: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
   private exited = false;
   private slug: string | undefined;
+  private readonly supervisorConsole = {
+    log: console.log,
+    warn: console.warn,
+    error: console.error,
+  };
 
   readonly port: ExecutorIpcPort = {
     send: (message, callback) => {
-      if (isLog(message) && this.slug !== undefined) {
-        const sink = this.consoleSinks?.get(this.slug) ?? [];
-        sink.push(message.message);
-        this.consoleSinks?.set(this.slug, sink);
+      const emitted = isHello(message)
+        ? { ...message, protocolVersion: this.protocolVersion }
+        : message;
+      if (isLog(emitted)) {
+        if (this.slug !== undefined && this.consoleSinks !== undefined) {
+          const sink = this.consoleSinks?.get(this.slug) ?? [];
+          sink.push(emitted.message);
+          this.consoleSinks?.set(this.slug, sink);
+          // In-memory children share the host's global console. A fixture
+          // explicitly collecting child console output substitutes for the
+          // process boundary and must not re-enter the daemon logger.
+          callback?.(null);
+          return true;
+        }
+        // Restore the supervisor console while dispatching synchronously. A
+        // real child cannot inherit the supervisor's console proxy; without
+        // this boundary substitute, broker logging recursively re-enters the
+        // current in-memory child's proxy.
+        const childConsole = { log: console.log, warn: console.warn, error: console.error };
+        console.log = this.supervisorConsole.log;
+        console.warn = this.supervisorConsole.warn;
+        console.error = this.supervisorConsole.error;
+        try {
+          this.deliver(this.supervisorListeners, 'message', emitted);
+        } finally {
+          console.log = childConsole.log;
+          console.warn = childConsole.warn;
+          console.error = childConsole.error;
+        }
+        callback?.(null);
+        return true;
       }
-      if (isHello(message)) this.onHello?.({ engineVersionId: message.engineVersionId });
-      this.deliver(this.supervisorListeners, 'message', message);
+      if (isHello(emitted)) this.onHello?.({ engineVersionId: emitted.engineVersionId });
+      this.deliver(this.supervisorListeners, 'message', emitted);
       // Node runs this callback after the message is accepted by IPC.  The
       // child waits for it before disconnecting, so an in-memory outcome is
       // never lost to a premature synthetic exit.
@@ -86,6 +132,8 @@ class InMemoryForkedExecutor implements ForkedExecutor {
     private readonly consoleSinks: Map<string, string[]> | undefined,
     private readonly onHello: ((hello: { readonly engineVersionId: string }) => void) | undefined,
     private readonly onSupervisorMessage: ((message: unknown) => void) | undefined,
+    private readonly protocolVersion: number,
+    private readonly onChildKill: ((signal: NodeJS.Signals) => void) | undefined,
   ) {}
 
   send(message: unknown, callback?: (error: Error | null) => void): boolean {
@@ -107,6 +155,7 @@ class InMemoryForkedExecutor implements ForkedExecutor {
   }
 
   kill(signal: NodeJS.Signals = 'SIGTERM'): boolean {
+    this.onChildKill?.(signal);
     this.exit(null, signal);
     return true;
   }
@@ -159,21 +208,29 @@ export function createInMemoryExecutorFork({
   consoleSinks,
   captureConsole = false,
   onSupervisorMessage,
+  run,
+  protocolVersions = [EXECUTOR_PROTOCOL_VERSION],
+  onChildKill,
+  onFork,
 }: InMemoryExecutorForkOptions): NonNullable<ChildFeatureExecutorDeps['fork']> {
   // A real child installs these process-global services at process start. The
   // test host owns them once and children therefore inherit rather than
   // replacing a resolver while concurrent in-memory executions are active.
   const runtime = createExecutorChildRuntime({ projectRoot, processServices: 'inherited' });
+  let childCount = 0;
 
   return (modulePath) => {
-    const child = new InMemoryForkedExecutor(consoleSinks, onHello, onSupervisorMessage);
+    onFork?.();
+    const protocolVersion = protocolVersions[Math.min(childCount++, protocolVersions.length - 1)] ?? EXECUTOR_PROTOCOL_VERSION;
+    const child = new InMemoryForkedExecutor(consoleSinks, onHello, onSupervisorMessage, protocolVersion, onChildKill);
     if (handshake === 'normal') {
       queueMicrotask(() => {
         void runExecutorChild(child.port, withExecutorBrokerProxies(child.port, {
           moduleDir: dirname(modulePath),
           admitDispatch: runtime.admitDispatch,
           createWorktree: runtime.createWorktree,
-          run: runtime.run,
+          run: run ?? runtime.run,
+          log: (message) => child.port.send({ kind: 'log', level: 'info', message }),
           waitForSupervisorVisualizerClose: true,
           forwardConsole: captureConsole,
           exit: () => child.exit(),
