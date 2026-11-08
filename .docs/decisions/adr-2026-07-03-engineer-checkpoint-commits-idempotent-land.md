@@ -61,6 +61,13 @@ Option A, with these contract clarifications:
    to today's create path — the terminal publish is always load-bearing.
 4. **Worktree lifecycle is unchanged**: remove-on-success, keep-on-failure, strict-abort.
 
+> **Amended 2026-11-07 by #2050:** Decision items 1–3 now apply to every Composer run, unconditionally.
+> They are no longer limited to "early-draft only", and the "finish mode (default),
+> byte-identical" path no longer exists for the Composer flow
+> (`adr-2026-11-07-composer-run-checkpoint-resume-handoff` D1, D4, D7). When the handoff is a
+> mark-ready, it still returns the existing `pr-opened` result. Item 4 (worktree lifecycle) is
+> unchanged.
+
 ## Consequences
 
 ### Positive
