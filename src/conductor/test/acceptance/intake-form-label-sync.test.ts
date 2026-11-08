@@ -268,10 +268,10 @@ describe('Story 1 — intake form is born with priority + size + linking (label-
       );
 
       expect(result).toMatchObject({
-        priorityLabel: 'priority: high', sizeLabel: 'size: M', semverLabel: 'semver: minor',
+        priorityLabel: 'priority: high', sizeLabel: 'size: M', semverLabel: 'semver:minor',
       });
-      expect(gh.appliedLabels).toEqual(['priority: high', 'size: M', 'semver: minor']);
-      expect(gh.createdLabels.has('semver: minor')).toBe(true);
+      expect(gh.appliedLabels).toEqual(['priority: high', 'size: M', 'semver:minor']);
+      expect(gh.createdLabels.has('semver:minor')).toBe(true);
     });
 
     it('rerunning minor then patch adds each semver label without removing either', async () => {
@@ -285,7 +285,7 @@ describe('Story 1 — intake form is born with priority + size + linking (label-
         ...labelSyncDeps(gh), cwd: '.',
       });
 
-      expect(gh.appliedLabels).toEqual(expect.arrayContaining(['semver: minor', 'semver: patch']));
+      expect(gh.appliedLabels).toEqual(expect.arrayContaining(['semver:minor', 'semver:patch']));
       expect(gh.calls.some((call) => call.args.includes('DELETE'))).toBe(false);
     });
   });
@@ -306,17 +306,17 @@ describe('Story 1 — intake form is born with priority + size + linking (label-
 
     it('a semver patch add failure logs but leaves other labels and dependency linking successful', async () => {
       const syncIssueLabels = requireSyncFn(await loadLabelSyncModule());
-      const gh = makeFakeGh({ failAppliedLabels: ['semver: patch'] });
+      const gh = makeFakeGh({ failAppliedLabels: ['semver:patch'] });
       const logs: string[] = [];
 
       await expect(syncIssueLabels(
         { priority: 'high', size: 'M', semver: 'patch', dependsOn: ['acme/app#100'] },
         'acme/app#211',
         { ...labelSyncDeps(gh), cwd: '.', log: (message: string) => logs.push(message) },
-      )).resolves.toMatchObject({ semverLabel: 'semver: patch', linked: ['acme/app#100'] });
+      )).resolves.toMatchObject({ semverLabel: 'semver:patch', linked: ['acme/app#100'] });
 
       expect(gh.appliedLabels).toEqual(expect.arrayContaining(['priority: high', 'size: M']));
-      expect(logs.join('\n')).toContain('semver: patch');
+      expect(logs.join('\n')).toContain('semver:patch');
     });
 
     it.each(['_No response_', 'Minor', 'breaking'])(
@@ -553,7 +553,7 @@ if (joined.includes('/dependencies/blocked_by') && !joined.includes('--method PO
   process.stdout.write(JSON.stringify({ id: 1000000 + number, number }) + '\\n');
 } else if (args[0] === 'issue' && args[1] === 'view') {
   process.stdout.write(JSON.stringify({ assignees: [{ login: 'intake-bot' }] }) + '\\n');
-} else if (${fixture.failSemverLabelApply === true} && joined.includes('labels[]=semver: patch')) {
+} else if (${fixture.failSemverLabelApply === true} && joined.includes('labels[]=semver:patch')) {
   process.stderr.write('simulated semver label outage\\n');
   process.exitCode = 1;
 } else if (${fixture.failLinks === true} && joined.includes('/dependencies/blocked_by') && joined.includes('--method POST')) {
@@ -614,8 +614,8 @@ describe('intake label-sync Action dependency entry point', () => {
     const result = await runActionFixture({ action: 'opened', body: FORM_BODY });
 
     expect(result.exitCode, result.stderr).toBe(0);
-    expect(result.stdout).toContain('semver: minor');
-    expect(result.calls.join(' ')).toContain('labels[]=semver: minor');
+    expect(result.stdout).toContain('semver:minor');
+    expect(result.calls.join(' ')).toContain('labels[]=semver:minor');
   });
 
   it.each(['_No response_', 'Minor', 'breaking'])(

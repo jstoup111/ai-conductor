@@ -128,7 +128,7 @@ export async function syncIssueLabels(
   const priorityLabel = `priority: ${priority}`;
   const sizeLabel = `size: ${size}`;
   const semver = SEMVER_VALUES.has(fields.semver ?? '') ? fields.semver as string : undefined;
-  const semverLabel = semver ? `semver: ${semver}` : null;
+  const semverLabel = semver ? `semver:${semver}` : null;
 
   const badRefs: string[] = [];
   const linked: string[] = [];
