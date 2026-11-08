@@ -1583,8 +1583,8 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(await run.haltMarker()).toContain('build_review adjudication halted:');
   });
 
-  it('lets an exactly covered infrastructure branch settle instead of pinning the mechanical lane', async () => {
-    const covered = await fixture({ infrastructure: 'covered' });
+  it('runs settled adjudication through the clean-PASS completion tail', async () => {
+    const covered = await fixture({ infrastructure: 'covered', persistEvents: true });
 
     // Done-when 6: covered infrastructure is not uncovered infrastructure. With
     // no unresolved content source the lap settles; it never fabricates PASS
@@ -1592,6 +1592,9 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(covered.dispatched).not.toContain('build');
     expect(await covered.haltMarker()).toBe('');
     expect(covered.remediateDispatches()).toBe(0);
+    expect(await covered.events()).toContainEqual(expect.objectContaining({
+      type: 'step_completed', step: 'build_review', status: 'done',
+    }));
   });
 
   // Covers: S9.5, task:rem-prd-audit-rem-prd-audit-R17d

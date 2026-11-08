@@ -14329,6 +14329,11 @@ export class Conductor {
           }
         }
 
+        // An adjudication-settled build_review is a clean PASS for the rest of
+        // the loop.  Keep that fact through the shared success tail so it
+        // emits the same completion event and closes any active child region.
+        let buildReviewAdjudicationSettled = false;
+        settledBuildReviewFailure: {
         if (!succeeded) {
           if (failedStepResult?.refusal) {
             const { kind, reason } = failedStepResult.refusal;
@@ -14893,9 +14898,9 @@ export class Conductor {
                       });
                       return;
                     }
-                    await this.saveConductorStepStatus(state, step.name, 'done');
+                    buildReviewAdjudicationSettled = true;
                     this.log?.(outcome.trace);
-                    continue;
+                    break settledBuildReviewFailure;
                   }
                   if (outcome.kind === 'repair') {
                     const ledger = await readKickbackLedger(this.projectRoot, this.activeRegionChild);
@@ -15895,6 +15900,7 @@ export class Conductor {
           process.off('SIGTERM', sigterm);
           return;
         }
+        }
 
         // Success path ------------------------------------------------------
         {
@@ -16065,7 +16071,7 @@ export class Conductor {
           // A clean build_review lap settles its durable remediation cases
           // before the PASS becomes terminal, so no repaired work order stays
           // BUILD-eligible for a later lap to replay.
-          if (step.name === 'build_review') {
+          if (step.name === 'build_review' && !buildReviewAdjudicationSettled) {
             const settlement = await this.settleRemediationCasesOnCleanBuildReview();
             if (settlement.kind === 'invalid') {
               // adr-2026-08-11 decision 1: a halt reaches the operator through
