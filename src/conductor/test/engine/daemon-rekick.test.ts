@@ -1386,7 +1386,7 @@ describe('engine/daemon-rekick — real primitives (isolated repo)', () => {
     await writeFile(join(p, 'HALT.class'), 'mechanical\n', 'utf-8');
     await writeFile(join(p, 'HALT.cleared'), operatorDecision, 'utf-8');
 
-    await clearRetryableHaltMarker(dir);
+    await expect(clearRetryableHaltMarker(dir)).resolves.toBe(true);
 
     await expect(readFile(join(p, 'HALT.rekicked'), 'utf-8')).resolves.toBe(haltBody);
     await expect(access(join(p, 'HALT'))).rejects.toThrow();
@@ -1399,7 +1399,7 @@ describe('engine/daemon-rekick — real primitives (isolated repo)', () => {
     const p = join(dir, '.pipeline');
     await mkdir(p, { recursive: true });
 
-    await clearRetryableHaltMarker(dir);
+    await expect(clearRetryableHaltMarker(dir)).resolves.toBe(false);
 
     await expect(access(join(p, 'HALT.rekicked'))).rejects.toThrow();
     await expect(access(join(p, 'REKICK'))).rejects.toThrow();

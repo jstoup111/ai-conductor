@@ -998,14 +998,8 @@ export function buildRetryableHaltDeps(
   return {
     clearRetryableHalt: async (slug) => {
       const root = worktreePath(slug);
-      let hadHalt = true;
-      try {
-        await readFile(join(root, HALT_MARKER), 'utf-8');
-      } catch {
-        hadHalt = false;
-      }
-      await clearRetryableHaltMarker(root);
-      if (hadHalt) await appendHaltClearedRecord(root, 'rekick', recordRemote);
+      const cleared = await clearRetryableHaltMarker(root);
+      if (cleared) await appendHaltClearedRecord(root, 'rekick', recordRemote);
     },
     isFreshRetryableHalt: async (slug) => {
       const root = worktreePath(slug);
@@ -2868,6 +2862,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // daemon.ts/pickEligible level, never reachable from this entrypoint.
       ...buildProgressReKickDeps(config, worktreeBase, log),
       ...buildRetryableHaltDeps(worktreeBase, { events }),
+      readHaltClass: (slug) => readHaltClass(join(worktreeBase, slug)),
       // FR-1 (Task 11): gate dispatch on the durable `.daemon/PAUSED` marker,
       // re-polled every loop iteration by runDaemon so a pause lifted mid-run
       // resumes dispatch at the next boundary (no restart required).

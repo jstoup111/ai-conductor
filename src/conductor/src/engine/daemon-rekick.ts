@@ -729,14 +729,14 @@ export async function clearMarker(worktreePath: string): Promise<void> {
  * unlike sweep clears, a prompt re-dispatch must retain it verbatim. The
  * separate `.rekicked` marker records exactly the body this boundary cleared.
  */
-export async function clearRetryableHaltMarker(worktreePath: string): Promise<void> {
+export async function clearRetryableHaltMarker(worktreePath: string): Promise<boolean> {
   const haltPath = join(worktreePath, HALT_MARKER);
   let body: string;
   try {
     body = await readFile(haltPath, 'utf-8');
   } catch {
     // A concurrent clear won the race. Do not mint any retry or audit state.
-    return;
+    return false;
   }
 
   const rekickedPath = join(worktreePath, '.pipeline/HALT.rekicked');
@@ -749,6 +749,7 @@ export async function clearRetryableHaltMarker(worktreePath: string): Promise<vo
   await rm(haltPath, { force: true });
   await rm(join(worktreePath, HALT_CLASS_MARKER), { recursive: true, force: true });
   await writeFile(join(worktreePath, REKICK_SENTINEL), `rekick\n`, 'utf-8');
+  return true;
 }
 
 // ── FR-12: resume rebase-first (play-forward) ────────────────────────────────

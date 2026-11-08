@@ -51,6 +51,32 @@ describe('T14 — daemon-cli wires the real progress-gated re-kick predicate int
     expect(source).toMatch(/progressReKickDispatchCeiling\s*:/);
   });
 
+  it('runDaemon deps use the production halt classifier, even when progress re-kicks are disabled', async () => {
+    const source = await readFile(DAEMON_CLI_SRC, 'utf-8');
+    expect(source).toMatch(
+      /\.\.\.buildRetryableHaltDeps\(worktreeBase, \{ events \}\),\s*\n\s*readHaltClass:\s*\(slug\)\s*=>\s*readHaltClass\(join\(worktreeBase, slug\)\)/,
+    );
+
+    const { buildProgressReKickDeps } = await import('../../src/daemon-cli.js');
+    const { readHaltClass } = await import('../../src/engine/halt-marker.js');
+    const worktreeBase = await mkdtemp(join(tmpdir(), 'retryable-halt-class-wiring-'));
+    try {
+      const slug = 'retryable-progress-disabled';
+      const pipeline = join(worktreeBase, slug, '.pipeline');
+      await mkdir(pipeline, { recursive: true });
+      await writeFile(join(pipeline, 'HALT.class'), 'mechanical\n');
+
+      const progress = buildProgressReKickDeps(
+        { build_progress_halt: { enabled: false } } as any,
+        worktreeBase,
+      );
+      expect(progress.isProgressReKickEligible).toBeUndefined();
+      expect(await readHaltClass(join(worktreeBase, slug))).toBe('mechanical');
+    } finally {
+      await rm(worktreeBase, { recursive: true, force: true });
+    }
+  });
+
   it('the progress re-kick predicate consults the raw halt class before comparing task progress', async () => {
     const source = await readFile(DAEMON_CLI_SRC, 'utf-8');
 
@@ -197,6 +223,30 @@ describe('T14 — daemon-cli wires the real progress-gated re-kick predicate int
       const audit = await readFile(join(pipeline, 'audit-trail', 'events.jsonl'), 'utf-8');
       expect(audit.trim().split('\n')).toHaveLength(1);
       expect(JSON.parse(audit).cause).toBe('rekick');
+    } finally {
+      await rm(worktreeBase, { recursive: true, force: true });
+    }
+  });
+
+  it('buildRetryableHaltDeps does not audit when HALT races away before its marker clear', async () => {
+    const { buildRetryableHaltDeps } = await import('../../src/daemon-cli.js');
+    const worktreeBase = await mkdtemp(join(tmpdir(), 'retryable-halt-race-'));
+    try {
+      const slug = 'retryable';
+      const pipeline = join(worktreeBase, slug, '.pipeline');
+      await mkdir(pipeline, { recursive: true });
+      // This represents a competing clear removing HALT after eligibility was
+      // checked but before the dispatch-boundary marker clear reads it.
+      await writeFile(join(pipeline, 'HALT'), 'mechanical prerequisite\n');
+      await writeFile(join(pipeline, 'HALT.class'), 'mechanical\n');
+      await rm(join(pipeline, 'HALT'));
+
+      const deps = buildRetryableHaltDeps(worktreeBase, undefined);
+      await deps.clearRetryableHalt(slug);
+
+      await expect(readFile(join(pipeline, 'HALT.rekicked'), 'utf-8')).rejects.toThrow();
+      await expect(readFile(join(pipeline, 'REKICK'), 'utf-8')).rejects.toThrow();
+      await expect(readFile(join(pipeline, 'audit-trail', 'events.jsonl'), 'utf-8')).rejects.toThrow();
     } finally {
       await rm(worktreeBase, { recursive: true, force: true });
     }
