@@ -1,13 +1,17 @@
-// Covers: task:rem-prd-audit-rem-prd-audit-rem-vg6-s6-1, task:rem-as-built-rem-prd-audit-rem-vg6-asbuilt-47c9-1
+// Covers: task:3, task:rem-prd-audit-rem-prd-audit-rem-vg6-s6-1, task:rem-as-built-rem-prd-audit-rem-vg6-asbuilt-47c9-1
 import { afterEach, describe, expect, it } from 'vitest';
+import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { checkStepCompletion } from '../../../src/engine/artifacts.js';
 import { parseChildId, pipelinePathFor } from '../../../src/engine/child-context.js';
 import { Conductor } from '../../../src/engine/conductor.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { readVerdict, writeVerdict } from '../../../src/engine/gate-verdicts.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
+import { readRouteRecord } from '../../../src/engine/routing/route-record-store.js';
 import { closureRefFor, repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
+import { advanceRound, requestRoutedExit } from '../../../src/engine/routing/routed-exit.js';
 import { emptyUnsettledReceipt, parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { readState, writeState } from '../../../src/engine/state.js';
 import { ALL_STEPS } from '../../../src/engine/steps.js';
@@ -104,7 +108,96 @@ async function fixture(): Promise<{ readonly subject: SweepRepository; readonly 
   };
 }
 
+async function tasklessExitFixture(withCommit: boolean): Promise<{
+  readonly subject: SweepRepository;
+  readonly git: GitRunner;
+  readonly host: ReturnType<typeof parseChildId>;
+  readonly leafHead: string;
+  readonly repair?: string;
+}> {
+  const subject = await createSweepRepository('conductor-routed-taskless-exit-', cleanup);
+  await subject.write('.ai-conductor/config.yml', 'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: true\n');
+  await subject.git(['add', '.ai-conductor/config.yml']);
+  await subject.git(['commit', '-qm', 'configure routed taskless exit']);
+  await subject.commit('base', 'base.txt', 'base\n');
+
+  let closure = '';
+  for (const position of [1, 2, 3, 4]) {
+    await subject.git(['checkout', '-qb', `feat/c${position}/demo`]);
+    closure = await subject.commit(`closed child ${position}`, `child-${position}.txt`, `${position}\n`);
+    await subject.git(['update-ref', closureRefFor('demo', parseChildId(position)!), closure]);
+  }
+  await subject.git(['checkout', '-qb', 'feat/daemon-demo']);
+  const leafHead = await subject.commit('leaf', 'leaf.txt', 'leaf\n');
+  await sealStack(subject.repo, [1, 2, 3, 4, 5]);
+  await subject.git(['checkout', '-q', 'feat/c4/demo']);
+  const repair = withCommit ? await subject.commit('taskless fix', 'taskless-fix.txt', 'fixed\n') : undefined;
+
+  const git = makeGitRunner(subject.repo);
+  const host = parseChildId(4)!;
+  const entryTree = (await git(['rev-parse', `${closure}^{tree}`])).stdout.trim();
+  const record: RouteRecord = {
+    roundId,
+    kind: 'audit',
+    phase: 'open',
+    items: [{ findingId: 'manual-test-fail', kind: 'audit', owner: host, host, reason: 'manual-test', fallback: [] }],
+    allocation: { [host]: { remTaskIds: [], blockBodies: [], retryHint: '| Story 1 | FAIL | taskless repair |' } },
+    hosts: { [host]: 'repairing' },
+    currentHostIndex: 0,
+    receipt: { ...emptyUnsettledReceipt(), taskless: { manual_test: 1 } },
+    outbox: [],
+    entry: { host, pinnedBase: closure as never, tree: entryTree as never },
+  };
+  await git(['update-ref', routeRecordRefFor('demo', roundId), await writeBlob(git, record)]);
+  await git(['update-ref', repairMarkerRefFor('demo'), await writeBlob(git, { host, roundId })]);
+  await git(['update-ref', revalidationQueueRefFor('demo'), await writeBlob(git, { generation: 1, entries: [], outbox: [] })]);
+  await writeState(join(subject.repo, '.pipeline', 'conduct-state.json'), Object.fromEntries(
+    ALL_STEPS.map((step) => [step.name, 'done']),
+  ) as ConductState);
+  return { subject, git, host, leafHead, ...(repair === undefined ? {} : { repair }) };
+}
+
 describe('Conductor routed final leaf return (real local Git)', () => {
+  it('restacks a committed taskless host and returns the settled round to the leaf', async () => {
+    const { subject, git, host: tasklessHost, repair } = await tasklessExitFixture(true);
+    if (repair === undefined) throw new Error('fixture did not create the routed repair commit');
+
+    await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host: tasklessHost, git }))
+      .resolves.toEqual({ kind: 'restacked' });
+    await expect(readRouteRecord(subject.repo, 'demo', roundId, { git })).resolves.toMatchObject({
+      kind: 'record', record: { hosts: { 4: 'restacked' } },
+    });
+    await expect(git(['merge-base', '--is-ancestor', repair, 'feat/daemon-demo'])).resolves.toMatchObject({ exitCode: 0 });
+
+    const stored = await readRouteRecord(subject.repo, 'demo', roundId, { git });
+    if (stored.kind !== 'record') throw new Error('taskless route record is unavailable');
+    await expect(advanceRound(subject.repo, 'demo', stored, { git })).resolves.toEqual({ kind: 'leaf-returned' });
+  });
+
+  it('takes the taskless no-commit exit without moving the leaf, then refuses a same-HEAD manual-test PASS', async () => {
+    const { subject, git, host: tasklessHost, leafHead } = await tasklessExitFixture(false);
+
+    await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host: tasklessHost, git }))
+      .resolves.toEqual({ kind: 'no-commit-done' });
+    await expect(readRouteRecord(subject.repo, 'demo', roundId, { git })).resolves.toMatchObject({
+      kind: 'record', record: { hosts: { 4: 'done' } },
+    });
+    await expect(git(['rev-parse', 'feat/daemon-demo'])).resolves.toMatchObject({ stdout: leafHead });
+
+    await subject.git(['checkout', '-q', 'feat/daemon-demo']);
+    const sessionStartedAt = Date.now() - 1_000;
+    const context = { getHeadSha: async () => leafHead, sessionStartedAt };
+    const resultPath = join(subject.repo, '.pipeline', 'manual-test-results.md');
+    await writeFile(resultPath, '| Story | Result |\n|---|---|\n| Story 1 | FAIL |\n');
+    await expect(checkStepCompletion(subject.repo, 'manual_test', context)).resolves.toMatchObject({
+      done: false, reason: expect.stringContaining('contains FAIL rows'),
+    });
+    await writeFile(resultPath, '| Story | Result |\n|---|---|\n| Story 1 | PASS |\n');
+    await expect(checkStepCompletion(subject.repo, 'manual_test', context)).resolves.toMatchObject({
+      done: false, reason: expect.stringContaining('whitewash guard'),
+    });
+  });
+
   it('returns to whole-feature validation with the root state store and baseline reloaded', async () => {
     const { subject, statePath, config } = await fixture();
     const dispatched: StepName[] = [];
