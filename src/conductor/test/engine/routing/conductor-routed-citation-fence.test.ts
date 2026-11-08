@@ -162,6 +162,7 @@ describe('conductor routed citation admission fence', () => {
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 
+  // Covers: task:7
   it('creates and admits the resolved leaf host after the old round is closed', async () => {
     const { repo, git } = await fixture();
     try {
@@ -173,6 +174,10 @@ describe('conductor routed citation admission fence', () => {
         ]) },
       });
       await expect(readRepairMarker(repo, 'demo', { git })).resolves.toMatchObject({ kind: 'marker', marker: { roundId: r2, host: c3 } });
+      const events = (await readFile(join(repo, '.pipeline', 'events.jsonl'), 'utf8'))
+        .trim().split('\n').map((line) => JSON.parse(line));
+      expect(events.filter((event) => event.type === 'remediation_routed')).toHaveLength(1);
+      expect(events.filter((event) => event.type === 'routing_rounds_stalled')).toHaveLength(0);
     } finally { await rm(repo, { recursive: true, force: true }); }
   });
 

@@ -311,7 +311,7 @@ describe('routed-round admission (real local Git)', () => {
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
   });
 
-  // Covers: task:1
+  // Covers: task:7
   it('refuses an unreadable open record at the fence', async () => {
     const subject = await fixture();
     try {
