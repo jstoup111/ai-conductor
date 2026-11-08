@@ -642,7 +642,7 @@ async function advanceR2AfterBuildReview(options: {
   const git = makeGitRunner(subject.repo);
   const tree = (await git(['rev-parse', `${closedOne}^{tree}`])).stdout.trim() as never;
   const created = await createRouteRecord(subject.repo, 'demo', {
-    roundId: r1, kind: 'audit', items: [{ findingId: 'finding-1', kind: 'audit', owner: c1, host: c1, reason: 'repair', fallback: [] }],
+    roundId: r1, sealedAuthored: 1, kind: 'audit', items: [{ findingId: 'finding-1', kind: 'audit', owner: c1, host: c1, reason: 'repair', fallback: [] }],
     allocation: { [c1]: { remTaskIds: ['rem-1'], blockBodies: ['### Task rem-1\n'] } },
   }, { git });
   if (created.kind !== 'created') throw new Error(`could not create r1: ${created.kind}`);
@@ -685,7 +685,7 @@ async function advanceR2AfterBuildReview(options: {
     },
     buildReviewEffectiveResolver: resolver,
     stepRunner: {
-      run: async (step) => {
+      run: async (step: StepName) => {
         if (step === 'build_review') {
           await writeFile(pipelinePathFor(subject.repo, 'build-review.json', c1), JSON.stringify(raw));
           return { success: true };
@@ -701,7 +701,7 @@ async function advanceR2AfterBuildReview(options: {
         return { kind: 'repair-pending' as const, child: c2, position: c2, isLeaf: true, branch: 'feat/daemon-demo', repairChildren: [c2], revalidating: { child: c2, generation: 1 } };
       },
       enterChildRegion: async () => ({ kind: 'completed' as const }),
-      requestRoutedExit: options.routedExit ?? ((input) => requestRoutedExit({ ...input, git })),
+      requestRoutedExit: options.routedExit ?? ((input: Parameters<typeof requestRoutedExit>[0]) => requestRoutedExit({ ...input, git })),
     },
   } as never);
   await conductor.run().catch((error: unknown) => {
@@ -811,7 +811,7 @@ async function settledLeafReachesWholeFeature(topology: 'n1' | 'no-routes' | 'cl
       build_review: { adjudication: { enabled: true }, rubrics: { testQuality: { enabled: true, min_confidence: 70 } } },
     }, buildReviewEffectiveResolver: resolver,
     stepRunner: {
-      run: async (step) => {
+      run: async (step: StepName) => {
         if (step === 'build_review') {
           await writeFile(pipelinePathFor(subject.repo, 'build-review.json', child), JSON.stringify(raw), 'utf8');
           return { success: false };
