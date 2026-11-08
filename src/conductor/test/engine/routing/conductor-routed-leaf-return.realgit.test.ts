@@ -1,5 +1,5 @@
 // Covers: task:3, task:rem-prd-audit-rem-prd-audit-rem-vg6-s6-1, task:rem-as-built-rem-prd-audit-rem-vg6-asbuilt-47c9-1
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -207,11 +207,9 @@ describe('Conductor routed final leaf return (real local Git)', () => {
       // routing fence cannot obscure this resume-boundary assertion.
       stepRunner: { run: async () => { parkAfterDispatch = true; return { success: true }; } },
     });
-    // The history check sits immediately before this overlay activation.
-    // Stop there, before later whole-feature completion fences have cause to
-    // read routing state for their own independent decisions.
+    // Stop immediately after the history guard: later whole-feature fences
+    // legitimately inspect routing state for their own decisions.
     (conductor as unknown as { activateChildRegionStateForResume: () => Promise<boolean> }).activateChildRegionStateForResume = async () => false;
-
     const gitArgv = await withGitArgvShim(subject.repo, async () => { await conductor.run(); });
     const routingArgs = gitArgv.filter((args) => args.some((argument) => argument.includes('refs/conductor/demo/routes/') || argument.includes('refs/conductor/demo/revalidate')));
     expect(routingArgs).toEqual([]);
@@ -255,9 +253,15 @@ describe('Conductor routed final leaf return (real local Git)', () => {
         },
       },
     });
+    const originalActivate = (conductor as unknown as {
+      activateChildRegionStateForResume(state: ConductState): Promise<boolean>;
+    }).activateChildRegionStateForResume.bind(conductor);
+    const activateSpy = vi.fn((state: ConductState) => originalActivate(state));
+    (conductor as unknown as { activateChildRegionStateForResume: typeof activateSpy }).activateChildRegionStateForResume = activateSpy;
 
     await conductor.run();
 
+    expect(activateSpy).toHaveBeenCalledTimes(1);
     expect(dispatched[0]).toBe('build');
     expect((conductor as unknown as { activeRegionChild?: number }).activeRegionChild).toBe(leaf);
   });
@@ -482,9 +486,15 @@ describe('Conductor routed final leaf return (real local Git)', () => {
         },
       },
     });
+    const originalLeafReturnCheck = (conductor as unknown as {
+      hasSettledRoutedLeafReturn(slug: string): Promise<boolean>;
+    }).hasSettledRoutedLeafReturn.bind(conductor);
+    const leafReturnCheckSpy = vi.fn((slug: string) => originalLeafReturnCheck(slug));
+    (conductor as unknown as { hasSettledRoutedLeafReturn: typeof leafReturnCheckSpy }).hasSettledRoutedLeafReturn = leafReturnCheckSpy;
 
+    let gitArgv: string[][];
     try {
-      await conductor.run();
+      gitArgv = await withGitArgvShim(subject.repo, async () => { await conductor.run(); });
     } finally {
       persister.stop();
     }
@@ -492,6 +502,9 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     const onDisk = await readState(statePath);
     if (!onDisk.ok) throw new Error('leaf conduct state is unreadable');
     expect(preflightCalls).toBe(1);
+    expect(leafReturnCheckSpy).toHaveBeenCalledWith('demo');
+    expect(gitArgv!).toContainEqual(['for-each-ref', '--format=%(refname)', 'refs/conductor/demo/routes/']);
+    expect(gitArgv!).toContainEqual(['rev-parse', 'HEAD']);
     expect(dispatched).toContain('manual_test');
     const persisted = await readFile(join(subject.repo, '.pipeline', 'events.jsonl'), 'utf8');
     const closes = persisted.split('\n').filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>)
