@@ -4414,6 +4414,21 @@ export class Conductor {
     return { detail: stall.detail, haltClass: stall.haltClass ?? 'needs-human' };
   }
 
+  /**
+   * The sole routed-admission fence result.  Keeping the fence marker and
+   * bounded-stall receipt together prevents a new consumer from restoring a
+   * fixed mechanical class (and therefore an unbounded retry loop).
+   */
+  private async boundedRoutingFenceHalt(slug: string, detail: string): Promise<{
+    kind: 'halt';
+    detail: string;
+    haltClass: 'mechanical' | 'needs-human';
+    routingFence: true;
+  }> {
+    const stall = await this.recordRoutingFenceHalt(slug, detail);
+    return { kind: 'halt', detail: stall.detail, haltClass: stall.haltClass, routingFence: true };
+  }
+
   /** A refused admission fence defers routing; it does not reopen scope. */
   private async writeRoutingFenceRefusalHalt(
     detail: string,
@@ -5486,15 +5501,7 @@ export class Conductor {
     // new one can be admitted.  Record that stop at its shared producer so
     // every consumer receives the same bounded mechanical escalation instead
     // of each rendering a permanently-mechanical halt of its own.
-    const routingFenceHalt = async (detail: string) => {
-      const stall = await this.recordRoutingFenceHalt(this.featureSlug!, detail);
-      return {
-        kind: 'halt' as const,
-        detail: stall.detail,
-        haltClass: stall.haltClass,
-        routingFence: true as const,
-      };
-    };
+    const routingFenceHalt = (detail: string) => this.boundedRoutingFenceHalt(this.featureSlug!, detail);
     // A mixed or unresolvable work order belongs to the ordinary remediation
     // path, which owns its existing halt detail. Do not admit a routed round
     // for only the resolvable subset.
