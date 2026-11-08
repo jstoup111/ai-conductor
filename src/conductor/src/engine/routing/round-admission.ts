@@ -24,6 +24,72 @@ import { childBranchFor } from '../feature-branch-identity.js';
 
 export type AdmitRoundResult = { readonly kind: 'admitted'; readonly record: RouteRecord } | { readonly kind: 'refused'; readonly detail: string; readonly fence?: true };
 
+/**
+ * The durable routing state that prevents whole-feature gate selection.
+ * This is deliberately a read-only classification: reconciliation remains
+ * responsible for making the named work runnable.
+ */
+export type RoutedWorkOutstanding =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'child'; readonly child: ChildId }
+  | { readonly kind: 'leaf-host' }
+  | { readonly kind: 'queue' }
+  | { readonly kind: 'open-round'; readonly roundId: RoundId }
+  | { readonly kind: 'unreadable'; readonly subject: 'marker' | 'queue' | RoundId };
+
+/**
+ * Reports routing work that must be reconciled before a whole-feature gate
+ * starts. Marker precedence preserves the active host over the queue and
+ * historical route records.
+ */
+export async function routedWorkOutstanding(
+  worktree: string,
+  slug: string,
+  input: {
+    readonly routingEnabled: boolean;
+    readonly sealedLeaf: ChildId | undefined;
+    readonly git?: RouteRecordStoreDependencies['git'];
+  },
+): Promise<RoutedWorkOutstanding> {
+  // Avoid every routing ref read for flat/N=1 features and disabled routing.
+  if (!input.routingEnabled || input.sealedLeaf === undefined || input.sealedLeaf <= 1) {
+    return { kind: 'none' };
+  }
+
+  const git = input.git ?? makeGitRunner(worktree);
+  const marker = await readRepairMarker(worktree, slug, { git });
+  if (marker.kind === 'unreadable') return { kind: 'unreadable', subject: 'marker' };
+  if (marker.kind === 'marker') {
+    return marker.marker.host === input.sealedLeaf
+      ? { kind: 'leaf-host' }
+      : { kind: 'child', child: marker.marker.host };
+  }
+
+  const queue = await readRevalidationQueue(worktree, slug, { git });
+  if (queue.kind === 'unreadable') return { kind: 'unreadable', subject: 'queue' };
+  if (queue.kind === 'queue' && queue.queue.entries.length > 0) return { kind: 'queue' };
+
+  let refs: string[];
+  try {
+    const listed = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
+    // The only safe selector result for an uninspectable round namespace is
+    // parking until preflight can produce its bounded routing diagnostic.
+    if (listed.exitCode !== 0) return { kind: 'queue' };
+    refs = listed.stdout.split('\n').filter(Boolean);
+  } catch {
+    return { kind: 'queue' };
+  }
+  for (const ref of refs) {
+    const roundId = parseRoundId(ref.split('/').at(-1) ?? '');
+    // A malformed route ref cannot be treated as closed history.
+    if (roundId === undefined) return { kind: 'queue' };
+    const stored = await readRouteRecord(worktree, slug, roundId, { git });
+    if (stored.kind !== 'record') return { kind: 'unreadable', subject: roundId };
+    if (stored.record.phase !== 'closed') return { kind: 'open-round', roundId };
+  }
+  return { kind: 'none' };
+}
+
 /** Admission may deliver its durable route occurrences only after its marker transaction commits. */
 export type AdmitRoundDependencies = RouteRecordStoreDependencies & {
   readonly persist?: PersistOutboxEvent;

@@ -227,7 +227,7 @@ import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '
 import { routeAdmittedRound } from './routing/round-router.js';
 import { resolveResidueOwner, runResidueRoutingCall } from './routing/residue-routing-call.js';
 import { changedPathsByPosition, resolveCitedPaths, selectHost } from './routing/cannot-host.js';
-import { admitRound, checkRoundAdmissionFence, diagnoseAffectedRounds, exitRoutedHostAndReconcile, recordRoundStall, reconcileRounds, routedRoundOpen } from './routing/round-admission.js';
+import { admitRound, checkRoundAdmissionFence, diagnoseAffectedRounds, exitRoutedHostAndReconcile, recordRoundStall, reconcileRounds, routedRoundOpen, routedWorkOutstanding } from './routing/round-admission.js';
 import { enterHostRegion, verifyGreenAcceptance } from './routing/host-region-entry.js';
 import { settleDerivedNoOpHost } from './routing/routed-exit.js';
 import type { requestRoutedExit } from './routing/routed-exit.js';
@@ -17295,20 +17295,29 @@ export class Conductor {
     // Do not probe routing refs for flat/N=1 features.  The sealed leaf is a
     // local durable fact and is enough to reject that whole class before any
     // marker or queue read.
-    if (parkingSlug && this.config.stacked_prs?.route_whole_feature_fixes === true) {
-      const leaf = await resolveSealedLeaf(this.projectRoot);
-      if (leaf !== undefined && leaf > 1) {
-        const marker = await readRepairMarker(this.projectRoot, parkingSlug);
-        if (marker.kind === 'marker') {
-          routedParking = marker.marker.host === leaf
-            ? { kind: 'leaf-host' }
-            : { kind: 'child', child: marker.marker.host };
-        } else {
-          const queue = await readRevalidationQueue(this.projectRoot, parkingSlug);
-          if (queue.kind === 'unreadable' || (queue.kind === 'queue' && queue.queue.entries.length > 0)) {
-            routedParking = { kind: 'queue' };
-          }
-        }
+    if (parkingSlug) {
+      const outstanding = await routedWorkOutstanding(this.projectRoot, parkingSlug, {
+        routingEnabled: this.config.stacked_prs?.route_whole_feature_fixes === true,
+        sealedLeaf: await resolveSealedLeaf(this.projectRoot),
+      });
+      switch (outstanding.kind) {
+        case 'none':
+          break;
+        case 'child':
+          routedParking = { kind: 'child', child: outstanding.child };
+          break;
+        case 'leaf-host':
+          routedParking = { kind: 'leaf-host' };
+          break;
+        // A queue, unreadable routing data, or an open record with no marker
+        // all need preflight reconciliation before a whole-feature gate runs.
+        case 'queue':
+        case 'open-round':
+        case 'unreadable':
+          routedParking = { kind: 'queue' };
+          break;
+        default:
+          assertNever(outstanding);
       }
     }
     const decision = selectNextGate({
