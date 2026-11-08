@@ -338,7 +338,7 @@ function valueSpecifier(statement: ts.Statement): string | undefined {
   return undefined;
 }
 
-function isValueImport(statement: ts.ImportDeclaration): boolean {
+export function isValueImport(statement: ts.ImportDeclaration): boolean {
   const clause = statement.importClause;
   if (clause === undefined) return true;
   if (clause.isTypeOnly || clause.name !== undefined) return !clause.isTypeOnly;
@@ -347,7 +347,7 @@ function isValueImport(statement: ts.ImportDeclaration): boolean {
   return bindings.length === 0 || bindings.some((binding) => !binding.isTypeOnly);
 }
 
-function isValueExport(statement: ts.ExportDeclaration): boolean {
+export function isValueExport(statement: ts.ExportDeclaration): boolean {
   if (statement.isTypeOnly || statement.exportClause === undefined || ts.isNamespaceExport(statement.exportClause)) {
     return !statement.isTypeOnly;
   }

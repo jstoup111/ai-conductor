@@ -1,7 +1,7 @@
 import ts from 'typescript';
 
 import type { BoundaryEntry, BoundaryName } from './boundary-registry.js';
-import { layerFor, resolveSpecifier } from './layer-ratchet.js';
+import { isValueExport, isValueImport, layerFor, resolveSpecifier } from './layer-ratchet.js';
 
 export interface BoundaryTouch {
   readonly file: string;
@@ -300,21 +300,4 @@ function valueSpecifier(node: ts.Node): string | undefined {
     return node.arguments[0].text;
   }
   return undefined;
-}
-
-function isValueImport(statement: ts.ImportDeclaration): boolean {
-  const clause = statement.importClause;
-  if (clause === undefined) return true;
-  if (clause.isTypeOnly || clause.name !== undefined) return !clause.isTypeOnly;
-  if (clause.namedBindings === undefined || ts.isNamespaceImport(clause.namedBindings)) return true;
-  const bindings = clause.namedBindings.elements;
-  return bindings.length === 0 || bindings.some((binding) => !binding.isTypeOnly);
-}
-
-function isValueExport(statement: ts.ExportDeclaration): boolean {
-  if (statement.isTypeOnly || statement.exportClause === undefined || ts.isNamespaceExport(statement.exportClause)) {
-    return !statement.isTypeOnly;
-  }
-  const bindings = statement.exportClause.elements;
-  return bindings.length === 0 || bindings.some((binding) => !binding.isTypeOnly);
 }
