@@ -1906,3 +1906,107 @@ describe('Task 9: createDeliveryGuardedQueue — probe scoped to parseable githu
     expect(logMessages.some((m) => m.includes('not-a-valid-ref'))).toBe(true);
   });
 });
+
+describe('Task 9: createDeliveryGuardedQueue — draft spec PR delivery guard', () => {
+  // Covers: task:9
+  it('open draft deciding entry is held in flight and its duplicate envelope is dropped', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const draftCandidate = makeEnvelope('draft-spec');
+    const healthyCandidate = makeEnvelope('healthy');
+    const { queue, releasedEnvelopes } = makeFakeQueueWithEnvelopes([
+      draftCandidate,
+      healthyCandidate,
+    ]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    const draftPrUrl = 'https://github.com/owner/repo/pull/9';
+    (ledger as any).get = async (_source: string, sourceRef: string) => sourceRef === 'draft-spec'
+      ? {
+          source: draftCandidate.source,
+          sourceRef,
+          status: 'deciding',
+          branch: 'spec/draft-spec',
+          draftPrUrl,
+          attempts: 0,
+        }
+      : undefined;
+    const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'OPEN', isDraft: true }));
+
+    const claimed = await createDeliveryGuardedQueue(queue as any, ledger as any, { gh }).claim();
+
+    expect({
+      claimed,
+      dropped: releasedEnvelopes,
+      doneTransitions: transitionCalls.filter((call) => call[2] === 'done'),
+    }).toEqual({
+      claimed: healthyCandidate,
+      dropped: [draftCandidate],
+      doneTransitions: [],
+    });
+  });
+
+  // Covers: task:9
+  it.each([
+    ['OPEN', null],
+    ['MERGED', '2026-11-08T00:00:00.000Z'],
+  ])('ready or merged draft PR (%s) heals to done and records delivery evidence', async (state, mergedAt) => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const draftCandidate = makeEnvelope(`draft-${state}`);
+    const healthyCandidate = makeEnvelope(`healthy-${state}`);
+    const { queue } = makeFakeQueueWithEnvelopes([draftCandidate, healthyCandidate]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    const draftPrUrl = `https://github.com/owner/repo/pull/${state}`;
+    (ledger as any).get = async (_source: string, sourceRef: string) => sourceRef === draftCandidate.sourceRef
+      ? {
+          source: draftCandidate.source,
+          sourceRef,
+          status: 'deciding',
+          branch: 'spec/draft',
+          draftPrUrl,
+          attempts: 0,
+        }
+      : undefined;
+    const { runner: gh } = makeFakeGh(JSON.stringify({ state, mergedAt, isDraft: false }));
+
+    const claimed = await createDeliveryGuardedQueue(queue as any, ledger as any, { gh }).claim();
+
+    expect({ claimed, transition: transitionCalls[0] }).toEqual({
+      claimed: healthyCandidate,
+      transition: [
+        draftCandidate.source,
+        draftCandidate.sourceRef,
+        'done',
+        { branch: 'spec/draft', prUrl: draftPrUrl },
+      ],
+    });
+  });
+
+  // Covers: task:9
+  it('closed-unmerged draft PR reopens the deciding entry below the existing cap', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const draftCandidate = makeEnvelope('closed-draft');
+    const healthyCandidate = makeEnvelope('healthy');
+    const { queue } = makeFakeQueueWithEnvelopes([draftCandidate, healthyCandidate]);
+    const { ledger } = makeFakeLedger();
+    const reopenCalls: Array<[string, string]> = [];
+    (ledger as any).get = async (_source: string, sourceRef: string) => sourceRef === 'closed-draft'
+      ? {
+          source: draftCandidate.source,
+          sourceRef,
+          status: 'deciding',
+          draftPrUrl: 'https://github.com/owner/repo/pull/closed',
+          attempts: 0,
+        }
+      : undefined;
+    (ledger as any).reopen = async (source: string, sourceRef: string) => {
+      reopenCalls.push([source, sourceRef]);
+    };
+    const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'CLOSED', mergedAt: null }));
+
+    const claimed = await createDeliveryGuardedQueue(queue as any, ledger as any, { gh }).claim();
+
+    expect({ claimed, reopenCalls }).toEqual({
+      claimed: healthyCandidate,
+      reopenCalls: [[draftCandidate.source, draftCandidate.sourceRef]],
+    });
+  });
+});

@@ -687,6 +687,30 @@ describe('transition() writebackPending marker (#290)', () => {
     expect(entry?.branch).toBe('feat/x');
     expect(entry?.prUrl).toBe('https://x/pr/1');
   });
+
+  // Covers: task:9
+  it('persists draftPrUrl without treating it as delivery evidence', async () => {
+    const l = createLedger(join(dir, 'ledger.json'));
+    await l.record({ source: 'github-issues', sourceRef: 'o/a#1' });
+
+    await l.transition('github-issues', 'o/a#1', 'deciding', {
+      branch: 'spec/o-a-1',
+      draftPrUrl: 'https://github.com/o/a/pull/1',
+    });
+
+    const entry = await l.get('github-issues', 'o/a#1');
+    expect({
+      status: entry?.status,
+      branch: entry?.branch,
+      draftPrUrl: entry?.draftPrUrl,
+      prUrl: entry?.prUrl,
+    }).toEqual({
+      status: 'deciding',
+      branch: 'spec/o-a-1',
+      draftPrUrl: 'https://github.com/o/a/pull/1',
+      prUrl: undefined,
+    });
+  });
 });
 
 describe('Jira ref dedup (Story 3/5) — ledger key is opaque to ref shape', () => {
