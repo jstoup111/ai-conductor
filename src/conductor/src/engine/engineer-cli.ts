@@ -1902,7 +1902,7 @@ export async function dispatchEngineer(
               const r = await gh(args, { cwd });
               return { stdout: r.stdout, stderr: '' };
             },
-            publication.repository,
+            publication!.repository,
             branch,
             worktree,
           ),
