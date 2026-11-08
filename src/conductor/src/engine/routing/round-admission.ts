@@ -128,7 +128,9 @@ export async function checkRoundAdmissionFence(
     if (other.kind !== 'record') {
       return {
         kind: 'refused',
+        // ai-conductor:session-command-context=operator-only
         detail: `routing round ${id} is unreadable; inspect with ai-conductor stack rounds --slug ${slug}`,
+        // /ai-conductor:session-command-context
         fence: true,
       };
     }
@@ -144,7 +146,9 @@ export async function checkRoundAdmissionFence(
     const roundDetail = hostState === undefined
       ? `routing round ${id} is ${other.record.phase}`
       : `routing round ${id} is ${other.record.phase}; host ${openHost} is ${hostState}`;
+    // ai-conductor:session-command-context=operator-only
     const recovery = `inspect with ai-conductor stack rounds --slug ${slug}`;
+    // /ai-conductor:session-command-context
     if (record.kind === 'audit') {
       return { kind: 'refused', detail: `${roundDetail}; cannot admit ${record.roundId}; ${recovery}`, fence: true };
     }
