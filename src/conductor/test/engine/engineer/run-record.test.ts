@@ -7,6 +7,7 @@ import {
   parseRunRecord,
   recordAcceptance,
   serializeRunRecord,
+  stepForArtifactPath,
   type RunRecord,
 } from '../../../src/engine/engineer/run-record.js';
 
@@ -20,6 +21,16 @@ const emptyRecord = (): RunRecord => ({
 });
 
 describe('composer run records', () => {
+  it.each([
+    ['.docs/architecture/composer-run.md', 'architecture_diagram'],
+    ['.docs/decisions/architecture-review-composer-run.md', 'architecture_review'],
+    ['.docs/conflicts/composer-run.md', 'conflict_check'],
+    ['.docs/coherence/composer-run.md', 'coherence_check'],
+    ['.docs/plan-review/composer-run.md', 'plan_review'],
+  ] as const)('maps %s to its DECIDE checkpoint', (path, step) => {
+    expect(stepForArtifactPath(path)).toBe(step);
+  });
+
   it('records accepted artifacts, actor, provider, time, and notes through a lossless round trip', () => {
     const artifacts = [
       digestArtifact('.docs/track/composer-run.md', Buffer.from('product')),
