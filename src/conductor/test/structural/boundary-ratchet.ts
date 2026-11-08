@@ -274,13 +274,15 @@ function commandBoundaryFor(
   bindings: ProcessBindings,
   registry: Readonly<Record<BoundaryName, BoundaryEntry>>,
 ): BoundaryName | undefined {
-  if (!ts.isCallExpression(node) || node.arguments.length === 0 || !ts.isStringLiteral(node.arguments[0])) return undefined;
+  if (!ts.isCallExpression(node) || node.arguments.length === 0) return undefined;
+  const command = node.arguments[0];
+  if (!ts.isStringLiteral(command)) return undefined;
   const isBoundCall = ts.isIdentifier(node.expression) && bindings.calls.has(node.expression.text);
   const isBoundNamespaceCall = ts.isPropertyAccessExpression(node.expression)
     && ts.isIdentifier(node.expression.expression) && bindings.namespaces.has(node.expression.expression.text);
   if (!isBoundCall && !isBoundNamespaceCall) return undefined;
   return (Object.keys(registry) as BoundaryName[]).find(
-    (boundary) => registry[boundary].commandLiterals.includes(node.arguments[0].text),
+    (boundary) => registry[boundary].commandLiterals.includes(command.text),
   );
 }
 
