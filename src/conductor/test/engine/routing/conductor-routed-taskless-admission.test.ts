@@ -191,9 +191,14 @@ async function fiveChildSubject(judgeOutput?: (prompt: string) => string) {
     [child(5), ['src/client/art/manifest.ts']],
   ];
   for (const [position, paths] of changes) {
-    const childBranch = position === child(5) ? undefined : childBranchFor('demo', position);
-    if (childBranch !== undefined && !childBranch.ok) throw new Error(childBranch.reason);
-    const branch = position === child(5) ? leafBranchFor('demo') : childBranch.branch;
+    let branch: string;
+    if (position === child(5)) {
+      branch = leafBranchFor('demo');
+    } else {
+      const childBranch = childBranchFor('demo', position);
+      if (!childBranch.ok) throw new Error(childBranch.reason);
+      branch = childBranch.branch;
+    }
     await git(['checkout', '-qb', branch]);
     for (const path of paths) {
       await mkdir(join(root, path, '..'), { recursive: true });

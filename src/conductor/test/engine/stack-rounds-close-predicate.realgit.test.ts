@@ -149,7 +149,7 @@ describe('stack rounds close predicate (real local Git)', () => {
 
     await expect(dispatchStackRoundsCommand({ kind: 'stack-rounds-close', slug, roundId: r2, reason: 'leaf return' }, {
       ...closeCommandDeps(subject, output),
-      readRouteRecord: async (worktree: string, feature: string, id: RoundId, dependencies) => id === r2
+      readRouteRecord: async (worktree: string, feature: string, id: RoundId, dependencies: Parameters<typeof readRouteRecord>[3]) => id === r2
         ? { ...stored, record: { ...stored.record, hosts: { [c1]: 'reroute-moved' } } }
         : readRouteRecord(worktree, feature, id, dependencies),
     } as never)).resolves.toBe(1);
@@ -205,7 +205,7 @@ describe('stack rounds close predicate (real local Git)', () => {
 
     await expect(dispatchStackRoundsCommand({ kind: 'stack-rounds-close', slug, roundId: r4, reason: 'newer round' }, {
       ...closeCommandDeps(subject, output),
-      readRouteRecord: async (worktree: string, feature: string, id: RoundId, dependencies) => id === r4
+      readRouteRecord: async (worktree: string, feature: string, id: RoundId, dependencies: Parameters<typeof readRouteRecord>[3]) => id === r4
         ? { ...stored, record: { ...stored.record, hosts: { [c1]: 'restacked', [c2]: 'admitted' } } }
         : readRouteRecord(worktree, feature, id, dependencies),
     } as never)).resolves.toBe(1);
