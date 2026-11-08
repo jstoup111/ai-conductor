@@ -37,7 +37,7 @@ As the conductor, I want to verify immediately after a verdict dispatch settles 
 - Given any terminal dispatch outcome (success, error, halt), when the step concludes, then the handshake observation is recorded — not only on the success path
 
 #### Negative Paths
-- Given a manual_test dispatch settles ✓ but wrote neither report nor marker, when the handshake runs, then the attempt is scored failed with a reason naming each missing artifact, the expected run identity, and the found identity/mtime of whatever is on disk
+- Given a manual_test dispatch settles ✓ but wrote neither report nor marker, when the handshake runs, then the attempt is scored failed with a reason stating that no results were written this attempt and naming each artifact not produced, with the last-write time of whatever is on disk, and the expected and found run identities only when they differ
 - Given a manual_test dispatch settles ✓ but only the report (not the marker) was rewritten, when the handshake runs, then the reason names specifically the artifact that was not produced
 - Given the handshake's own read throws (unreadable file, corrupt sidecar), when it evaluates, then the attempt is treated as not-verified (fail-closed for the verdict) while the engine itself does not crash
 - Given a prd_audit or architecture_review_as_built dispatch whose terminal structured result is missing or unusable, when the handshake runs, then it names the step, expected attempt and output, explicitly states this dispatch produced no verdict, and scores the attempt absent without using older findings
