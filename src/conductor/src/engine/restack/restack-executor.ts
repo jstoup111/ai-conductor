@@ -485,7 +485,17 @@ async function abortJournal(worktree: string, journal: StoredRestackJournal, git
     return;
   }
   if (journal.journal.state === 'planned' || journal.journal.state === 'ready') {
-    await transitionState(worktree, journal, 'aborted', git);
+    try {
+      await transitionState(worktree, journal, 'aborted', git);
+    } catch (error) {
+      // A caller can have already committed the abort before a later durable
+      // conflict-record write fails. The finally cleanup still holds the
+      // pre-abort journal snapshot; treat that exact completed abort as
+      // idempotent rather than replacing the operator-facing halt with a CAS
+      // error from a second abort attempt.
+      const current = await readRestackJournal(worktree, journal.slug, { git });
+      if (current.kind !== 'journal' || current.journal.state !== 'aborted') throw error;
+    }
   }
 }
 

@@ -220,7 +220,10 @@ describe('applyRestackTransition', () => {
 
     expect(await readVerdict(root, 'test_suite', child)).toMatchObject({ satisfied: false });
     expect(await readVerdict(root, 'build_review', child)).toMatchObject({ satisfied: false });
-    expect(transition.wouldInvalidate.get(child)).toEqual(['test_suite', 'build_review']);
+    // `wouldInvalidate` reports retained closed-child review obligations;
+    // the active child's applied region transition is asserted through its
+    // own verdicts and state below.
+    expect(transition.wouldInvalidate.get(child)).toBeUndefined();
     const state = await readState(join(root, '.pipeline', 'children', '2', 'conduct-state.json'));
     expect(state).toMatchObject({ ok: true, value: { test_suite: 'pending', build_review: 'pending' } });
   });

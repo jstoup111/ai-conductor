@@ -95,7 +95,7 @@ describe('refused resolver tip (real local Git)', () => {
     const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
     expect(halt).toContain('Restack-Conflict: 2 '); expect(halt).toContain(refusedTipRefFor('demo')); expect(halt).toContain(refusal);
     expect(halt).toContain(`git switch -c restack-resolve/demo/c2 ${refusedTip}`); expect(halt).toContain('stack restack-resolve --slug demo --child 2 --tip <sha>'); expect(halt).toContain('--decision "<answer>"');
-    await expect(subject.git(['rev-parse', '--verify', conflictFlattenedTipRefFor('demo')])).resolves.toMatchObject({ exitCode: 0 });
+    await expect(subject.git(['rev-parse', '--verify', conflictFlattenedTipRefFor('demo')])).resolves.toMatchObject({ stdout: expect.stringMatching(/^[0-9a-f]{40}\n$/) });
     expect(observed).toContainEqual(expect.objectContaining({ reason: 'replay-mismatch', child: 2, detail: expect.stringContaining(refusal) }));
     expect(conflicts).toContainEqual(expect.objectContaining({ type: 'restack_conflict', child: 2 }));
     await expect(readRestackJournal(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'journal', journal: { state: 'aborted' } });
@@ -181,7 +181,7 @@ describe('refused resolver tip (real local Git)', () => {
     if (secondConflict.kind !== 'record') throw new Error('expected second conflict record');
     expect(secondConflict.record.opId).not.toBe(firstConflict.record.opId);
     const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
-    expect(halt).toContain(`git switch -c restack-resolve/demo/c2 ${subject.c2}`);
+    expect(halt).toContain(`git switch -c restack-resolve/demo/c2 ${secondConflict.record.oldTip}`);
     expect(halt).not.toContain(refusedTip);
   });
 });
