@@ -736,9 +736,12 @@ export async function clearRetryableHaltMarker(worktreePath: string): Promise<bo
     // Establish absence before touching a malformed prior archive. The
     // subsequent rename remains the commit point for a live marker.
     await readFile(haltPath, 'utf-8');
-  } catch {
-    // A concurrent clear won the race. Do not mint any retry or audit state.
-    return false;
+  } catch (error) {
+    // Only a confirmed concurrent removal is a no-op. Permission, I/O, and
+    // path-type failures must reach the daemon so it can retain and park the
+    // live HALT rather than dispatch through it.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
   }
 
   // A malformed marker must not turn a retryable mechanical HALT into an
@@ -753,8 +756,11 @@ export async function clearRetryableHaltMarker(worktreePath: string): Promise<bo
     // forceful rm: that sequence can claim success after another caller has
     // already removed HALT.
     await rename(haltPath, rekickedPath);
-  } catch {
-    return false;
+  } catch (error) {
+    // As above, another clearer winning the race is harmless; every other
+    // failure leaves the marker live and must fail the dispatch boundary.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
   }
 
   await rm(join(worktreePath, HALT_CLASS_MARKER), { recursive: true, force: true });
