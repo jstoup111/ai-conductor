@@ -2482,6 +2482,25 @@ export class Conductor {
   }
 
   /**
+   * An adjudicated FAIL is a durable PASS before any routed exit is allowed to
+   * run.  Exit/refusal paths may stop the process, so leaving this write to
+   * advanceTail made a settled host look unsatisfied after resume.
+   */
+  private async persistAdjudicatedBuildReviewSettlement(state: ConductState): Promise<void> {
+    await writeVerdict(
+      this.projectRoot,
+      'build_review',
+      {
+        satisfied: true,
+        reason: 'build_review FAIL settled by post-join adjudication',
+        checkedAt: Date.now(),
+      },
+      this.activeRegionChild,
+      { routedRound: await this.routedRoundForActiveChild(state) },
+    );
+  }
+
+  /**
    * Make a declared project-owned region available before its author runs.
    * The template bytes are the floor, while a later capture is authoritative.
    */
@@ -6540,14 +6559,30 @@ export class Conductor {
       const execution = resolveExecutionChild(cursor, slug);
       if (execution.source === 'routed-host' || execution.source === 'revalidating') {
         await this.activateChildRegionState(state, execution.target.child, execution.target.isLeaf);
-        return { index: indexOf('acceptance_specs'), activeChild: execution.target };
+        // A repaired host can have a later region gate invalidated while its
+        // earlier evidence remains current.  Re-enter at the first actual
+        // unsatisfied gate, not the hard-coded start of the region.
+        const verdicts = await this.readGateVerdictOverlay();
+        const firstUnsatisfied = CHILD_REGION_STEPS.find((step) =>
+          !gateSatisfied(step, state, verdicts),
+        );
+        return {
+          index: indexOf(firstUnsatisfied ?? 'acceptance_specs'),
+          activeChild: execution.target,
+        };
       }
     }
 
     const subject = outstanding.kind === 'unreadable' ? `unreadable ${outstanding.subject}` : outstanding.kind;
+    const admissionDetail = admission.kind === 'stalled' || admission.kind === 'unavailable' || admission.kind === 'busy'
+      ? admission.detail
+      : undefined;
+    const reconciliationDetail = reconciled.kind === 'stalled' || reconciled.kind === 'unavailable'
+      ? reconciled.detail
+      : undefined;
     await this.stopParkedForRouting({
       kind: 'parked',
-      reason: `routed work cannot advance (${subject})`,
+      reason: `routed work cannot advance (${subject}): ${admissionDetail ?? reconciliationDetail ?? 'no routing transition was available'}`,
     }, state);
     return 'halt';
   }
@@ -14892,6 +14927,7 @@ export class Conductor {
                       });
                       return;
                     }
+                    await this.persistAdjudicatedBuildReviewSettlement(state);
                     buildReviewAdjudicationSettled = true;
                     succeeded = true;
                     break settledBuildReviewFailure;
@@ -15107,6 +15143,7 @@ export class Conductor {
                       });
                       return;
                     }
+                    await this.persistAdjudicatedBuildReviewSettlement(state);
                     buildReviewAdjudicationSettled = true;
                     // A settled raw failure continues through the normal
                     // success tail, rather than selecting this lap again.
