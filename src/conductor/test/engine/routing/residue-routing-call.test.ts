@@ -6,6 +6,7 @@ import {
   RESIDUE_ROUTING_CALL_SCHEMA,
   RESIDUE_ROUTING_MAX_ATTEMPTS,
   parseResidueRoutingAnswer,
+  renderResidueRoutingPrompt,
   resolveResidueOwner,
   runResidueRoutingCall,
 } from '../../../src/engine/routing/residue-routing-call.js';
@@ -91,14 +92,100 @@ describe('residue routing call', () => {
   });
 
   it('retains the judgement rationale for direct and default residue ownership', () => {
-    expect(resolveResidueOwner({ itemId: 'finding-1', child: 2, candidates: [2], rationale: 'implements D2' }))
+    expect(resolveResidueOwner({ itemId: 'finding-1', child: 2, candidates: [2], rationale: 'implements D2', implicatedPaths: [] }))
       .toEqual({ owner: 2, reason: 'residue-judged', rationale: 'implements D2' });
-    expect(resolveResidueOwner({ itemId: 'finding-1', child: 2, candidates: [1, 2], rationale: 'ambiguous ownership' }))
+    expect(resolveResidueOwner({ itemId: 'finding-1', child: 2, candidates: [1, 2], rationale: 'ambiguous ownership', implicatedPaths: [] }))
       .toEqual({ owner: 1, reason: 'residue-default', rationale: 'ambiguous ownership' });
   });
 
   it('halts without a judge and preserves the independent routing-call budget', async () => {
     await expect(runResidueRoutingCall({ items: [items[0]!], declaredPositions }))
       .resolves.toEqual({ kind: 'halt', itemId: 'finding-1', detail: 'no residue routing judge available' });
+  });
+
+  // Covers: task:5
+  it('returns v2 implicated paths from a routed residue answer', async () => {
+    const judge = vi.fn<(prompt: string) => Promise<{ success: boolean; output: string }>>(async () => ({
+      success: true,
+      output: JSON.stringify({
+        version: 'v2',
+        items: [
+          { itemId: 'finding-1', child: 1, candidates: [1], rationale: 'The first child owns it.', implicatedPaths: ['src/a.ts'] },
+          { itemId: 'finding-2', child: 3, candidates: [3], rationale: 'The leaf owns it.', implicatedPaths: [] },
+        ],
+      }),
+    }));
+
+    await expect(runResidueRoutingCall({ items, declaredPositions, judge })).resolves.toMatchObject({
+      kind: 'routed',
+      answers: [
+        { itemId: 'finding-1', implicatedPaths: ['src/a.ts'] },
+        { itemId: 'finding-2', implicatedPaths: [] },
+      ],
+    });
+  });
+
+  // Covers: task:5
+  it('defaults omitted v2 implicated paths to an empty array', async () => {
+    const judge = vi.fn<(prompt: string) => Promise<{ success: boolean; output: string }>>(async () => ({
+      success: true,
+      output: JSON.stringify({
+        version: 'v2',
+        items: [
+          { itemId: 'finding-1', child: 1, candidates: [1], rationale: 'The first child owns it.' },
+          { itemId: 'finding-2', child: 3, candidates: [3], rationale: 'The leaf owns it.' },
+        ],
+      }),
+    }));
+
+    await expect(runResidueRoutingCall({ items, declaredPositions, judge })).resolves.toMatchObject({
+      kind: 'routed',
+      answers: [
+        { itemId: 'finding-1', implicatedPaths: [] },
+        { itemId: 'finding-2', implicatedPaths: [] },
+      ],
+    });
+  });
+
+  // Covers: task:5
+  it.each([
+    ['an empty path', ['']],
+    ['a non-array path field', 'src/a.ts'],
+  ])('halts after two calls for %s in v2 implicated paths', async (_label, implicatedPaths) => {
+    const judge = vi.fn<(prompt: string) => Promise<{ success: boolean; output: string }>>(async () => ({
+      success: true,
+      output: JSON.stringify({
+        version: 'v2',
+        items: [
+          { itemId: 'finding-1', child: 1, candidates: [1], rationale: 'The first child owns it.', implicatedPaths },
+          { itemId: 'finding-2', child: 3, candidates: [3], rationale: 'The leaf owns it.', implicatedPaths: [] },
+        ],
+      }),
+    }));
+
+    await expect(runResidueRoutingCall({ items, declaredPositions, judge })).resolves.toMatchObject({
+      kind: 'halt', itemId: 'finding-1',
+    });
+    expect(judge).toHaveBeenCalledTimes(RESIDUE_ROUTING_MAX_ATTEMPTS);
+  });
+
+  // Covers: task:5
+  it('rejects v1 answers after two calls and renders the v2 contract', async () => {
+    const judge = vi.fn<(prompt: string) => Promise<{ success: boolean; output: string }>>(async () => ({
+      success: true,
+      output: JSON.stringify({
+        version: 'v1',
+        items: [
+          { itemId: 'finding-1', child: 1, candidates: [1], rationale: 'The first child owns it.' },
+          { itemId: 'finding-2', child: 3, candidates: [3], rationale: 'The leaf owns it.' },
+        ],
+      }),
+    }));
+
+    await expect(runResidueRoutingCall({ items, declaredPositions, judge })).resolves.toMatchObject({
+      kind: 'halt', itemId: 'finding-1',
+    });
+    expect(judge).toHaveBeenCalledTimes(RESIDUE_ROUTING_MAX_ATTEMPTS);
+    expect(renderResidueRoutingPrompt(items, declaredPositions)).toContain('"const":"v2"');
   });
 });
