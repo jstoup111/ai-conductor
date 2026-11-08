@@ -8,7 +8,7 @@ import { parseChildId, type ChildId } from '../../../src/engine/child-context.js
 import { childBranchFor, leafBranchFor } from '../../../src/engine/feature-branch-identity.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { closureRefFor } from '../../../src/engine/routing/routing-refs.js';
-import { resolveCitedPaths, selectHost } from '../../../src/engine/routing/cannot-host.js';
+import { changedPathsByPosition, resolveCitedPaths, selectHost } from '../../../src/engine/routing/cannot-host.js';
 import { initTestRepo } from '../../fixtures/git-repo.js';
 
 const roots: string[] = [];
@@ -75,7 +75,73 @@ async function threeChildStack() {
   return { repo, git, calls };
 }
 
+async function fiveChildStack() {
+  const repo = await mkdtemp(join(tmpdir(), 'cannot-host-five-'));
+  roots.push(repo);
+  await initTestRepo(repo);
+  const git = makeGitRunner(repo);
+
+  await writeFile(join(repo, 'README.md'), 'base\n');
+  await mustSucceed(git, ['add', 'README.md']);
+  await mustSucceed(git, ['commit', '-qm', 'base']);
+
+  const changes: ReadonlyArray<readonly [ChildId, readonly string[]]> = [
+    [child(1), ['src/core/model.ts']],
+    [child(2), ['src/client/network/request.ts']],
+    [child(3), ['src/client/state/store.ts']],
+    [child(4), ['src/client/input/touch.ts', 'src/client/ui/hud.ts']],
+    [child(5), ['src/client/art/manifest.ts']],
+  ];
+
+  for (const [position, paths] of changes) {
+    const branch = position === child(5) ? leafBranchFor('demo') : childBranch('demo', position);
+    await mustSucceed(git, ['checkout', '-qb', branch]);
+    for (const path of paths) {
+      await mkdir(join(repo, path, '..'), { recursive: true });
+      await writeFile(join(repo, path), `export const child${position} = true;\n`);
+    }
+    await mustSucceed(git, ['add', '.']);
+    await mustSucceed(git, ['commit', '-qm', `child ${position}`]);
+    if (position !== child(5)) await mustSucceed(git, ['update-ref', closureRefFor('demo', position), 'HEAD']);
+  }
+
+  return { git };
+}
+
 describe('cannot-host (real local Git)', () => {
+  // Covers: task:6
+  it('derives each declared position\'s paths from consecutive closed stack refs', async () => {
+    const stack = await fiveChildStack();
+    const positions = [child(1), child(2), child(3), child(4), child(5)];
+    const changed = await changedPathsByPosition({
+      slug: 'demo', positions, leafTip: leafBranchFor('demo'), baseRef: 'main', git: stack.git,
+    });
+    if ('kind' in changed) throw new Error(changed.detail);
+
+    const mergeBase = await mustSucceed(stack.git, ['merge-base', 'main', closureRefFor('demo', child(1))]);
+    const firstPosition = await mustSucceed(stack.git, ['diff', '--name-only', mergeBase, closureRefFor('demo', child(1))]);
+
+    expect(changed[child(1)]).toEqual(firstPosition.split('\n').filter(Boolean));
+    expect(changed).toEqual({
+      [child(1)]: ['src/core/model.ts'],
+      [child(2)]: ['src/client/network/request.ts'],
+      [child(3)]: ['src/client/state/store.ts'],
+      [child(4)]: ['src/client/input/touch.ts', 'src/client/ui/hud.ts'],
+      [child(5)]: ['src/client/art/manifest.ts'],
+    });
+  });
+
+  // Covers: task:6
+  it('halts and names the unreadable closed child ref', async () => {
+    const stack = await fiveChildStack();
+    await mustSucceed(stack.git, ['update-ref', '-d', closureRefFor('demo', child(3))]);
+
+    await expect(changedPathsByPosition({
+      slug: 'demo', positions: [child(1), child(2), child(3), child(4), child(5)],
+      leafTip: leafBranchFor('demo'), baseRef: 'main', git: stack.git,
+    })).resolves.toMatchObject({ kind: 'halt', detail: expect.stringContaining('3') });
+  });
+
   it('resolves exact and unique suffix citations from one leaf listing', async () => {
     const stack = await threeChildStack();
     const leafTip = leafBranchFor('demo');
