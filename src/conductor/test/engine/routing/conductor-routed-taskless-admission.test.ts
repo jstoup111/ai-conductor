@@ -225,6 +225,69 @@ async function fiveChildSubject(judgeOutput?: (prompt: string) => string) {
 }
 
 describe('routed taskless admission failures', () => {
+  // Covers: task:8
+  it.each([
+    [
+      'keeps the judged owner when it contains the implicated path',
+      { child: 4, candidates: [4], implicatedPaths: ['src/client/input/touch.ts'] },
+      { owner: 4, host: 4, reason: 'residue-judged' },
+    ],
+    [
+      'moves an early owner to the first child containing its implicated path',
+      { child: 1, candidates: [1], implicatedPaths: ['src/client/ui/hud.ts'] },
+      { owner: 1, host: 4, reason: 'prerequisite-paths' },
+    ],
+    [
+      'moves an owner to the leaf when its kept paths span the leaf',
+      { child: 4, candidates: [4], implicatedPaths: ['src/client/input/touch.ts', 'src/client/art/manifest.ts'] },
+      { owner: 4, host: 5, reason: 'prerequisite-paths' },
+    ],
+    [
+      'uses the leaf when all implicated paths are absent from it',
+      { child: 2, candidates: [2], implicatedPaths: ['src/removed.ts'] },
+      { owner: 2, host: 5, reason: 'prerequisite-paths' },
+    ],
+    [
+      'uses the leaf for a residue-default answer with no implicated paths',
+      { child: 1, candidates: [1, 2], implicatedPaths: [] },
+      { owner: 1, host: 5, reason: 'prerequisite-paths' },
+    ],
+  ])('places a taskless manual-test obligation: %s', async (_label, answer, expected) => {
+    const { conductor } = await fiveChildSubject((prompt) => {
+      const itemId = JSON.parse(prompt.split('\n\n').at(-1)!).items[0].itemId;
+      return JSON.stringify({ version: 'v2', items: [{ itemId, rationale: 'fixture', ...answer }] });
+    });
+    const routes = await import('../../../src/engine/routing/route-record-store.js');
+    vi.mocked(routes.createRouteRecord).mockClear();
+
+    await expect((conductor as any).admitRoutedManualTestKickback({ feature_desc: 'demo' }, 'FAIL: touch control'))
+      .resolves.toEqual({ kind: 'admitted' });
+
+    expect(routes.createRouteRecord).toHaveBeenCalledWith(expect.any(String), 'demo', expect.objectContaining({
+      items: [expect.objectContaining({ findingId: 'manual-test-fail', ...expected })],
+      allocation: expect.objectContaining({ [expected.host]: expect.anything() }),
+    }));
+  });
+
+  // Covers: task:8
+  it('places a no-evidence custom-step obligation on the leaf without sending evidence to the judge', async () => {
+    const { conductor, dispatchResidueRoutingJudgement } = await fiveChildSubject((prompt) => {
+      const itemId = JSON.parse(prompt.split('\n\n').at(-1)!).items[0].itemId;
+      return JSON.stringify({ version: 'v2', items: [{ itemId, child: 2, candidates: [2], rationale: 'fixture' }] });
+    });
+    const routes = await import('../../../src/engine/routing/route-record-store.js');
+    vi.mocked(routes.createRouteRecord).mockClear();
+
+    await expect((conductor as any).admitRoutedCustomStepKickback({ feature_desc: 'demo' }, 'lint-docs', 1))
+      .resolves.toEqual({ kind: 'admitted' });
+
+    const promptItem = JSON.parse(dispatchResidueRoutingJudgement.mock.calls[0]![0].split('\n\n').at(-1)!).items[0];
+    expect(promptItem).not.toHaveProperty('evidence');
+    expect(routes.createRouteRecord).toHaveBeenCalledWith(expect.any(String), 'demo', expect.objectContaining({
+      items: [expect.objectContaining({ findingId: 'custom-lint-docs', owner: 2, host: 5, reason: 'prerequisite-paths' })],
+    }));
+  });
+
   // Covers: task:7
   it('sends every manual-test FAIL row and each position manifest to the residue judge', async () => {
     const { conductor, dispatchResidueRoutingJudgement } = await fiveChildSubject();
@@ -471,7 +534,7 @@ describe('routed taskless admission failures', () => {
   });
 
   // Covers: task:rem-prd-audit-rem-prd-audit-S5-3-2
-  it('routes a first-round lint-docs kickback to child 1 and echoes its ledger charge', async () => {
+  it('routes a first-round lint-docs kickback to the leaf and echoes its ledger charge', async () => {
     const { conductor, root } = await subject(1);
     const routes = await import('../../../src/engine/routing/route-record-store.js');
     const ledger = await import('../../../src/engine/kickback-ledger.js');
@@ -490,7 +553,7 @@ describe('routed taskless admission failures', () => {
     expect(ledger.bumpKickbackGateInLedger).toHaveBeenCalledWith(root, 'build', expect.anything(), undefined);
     expect(routes.createRouteRecord).toHaveBeenCalledWith(expect.any(String), 'demo', expect.objectContaining({
       sealedAuthored: 2,
-      items: [expect.objectContaining({ host: 1, owner: 1, findingId: 'custom-lint-docs' })],
+      items: [expect.objectContaining({ host: 2, owner: 1, findingId: 'custom-lint-docs', reason: 'prerequisite-paths' })],
     }));
     expect(seams.createdRecord.receipt).toEqual({
       laps: {}, growth: 0, taskless: {}, echo: { 'lint-docs': 1 }, acks: {},

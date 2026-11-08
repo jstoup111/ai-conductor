@@ -226,7 +226,7 @@ import { createRouteRecord, nextRoundId, readRepairMarker, readRevalidationQueue
 import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from './routing/routing-refs.js';
 import { routeAdmittedRound } from './routing/round-router.js';
 import { resolveResidueOwner, runResidueRoutingCall } from './routing/residue-routing-call.js';
-import { changedPathsByPosition } from './routing/cannot-host.js';
+import { changedPathsByPosition, resolveCitedPaths, selectHost } from './routing/cannot-host.js';
 import { admitRound, checkRoundAdmissionFence, diagnoseAffectedRounds, exitRoutedHostAndReconcile, recordRoundStall, reconcileRounds, routedRoundOpen } from './routing/round-admission.js';
 import { enterHostRegion, verifyGreenAcceptance } from './routing/host-region-entry.js';
 import { settleDerivedNoOpHost } from './routing/routed-exit.js';
@@ -16723,7 +16723,26 @@ export class Conductor {
     if (judged.kind === 'halt') {
       return { kind: 'halted', reason: `taskless routing judgement failed for ${judged.itemId}: ${judged.detail}` };
     }
-    const host = resolveResidueOwner(judged.answers[0]!).owner as ChildId;
+    const answer = judged.answers[0]!;
+    const ownership = resolveResidueOwner(answer);
+    const paths = await resolveCitedPaths(answer.implicatedPaths, leafBranchFor(slug), (args) => this.git(args, { cwd: this.projectRoot }));
+    if ('kind' in paths) {
+      return { kind: 'halted', reason: `taskless routing implicated-path resolution failed: ${paths.detail}` };
+    }
+    const placement = paths.inputs.length === 0
+      ? { host: declaredPositions.at(-1)!, reason: 'prerequisite-paths' as const }
+      : await selectHost({
+        owner: ownership.owner as ChildId,
+        inputs: paths.inputs,
+        positions: declaredPositions,
+        leafTip: leafBranchFor(slug),
+        git: (args) => this.git(args, { cwd: this.projectRoot }),
+      });
+    if ('kind' in placement) {
+      return { kind: 'halted', reason: `taskless routing host selection failed: ${placement.detail}` };
+    }
+    const host = placement.host;
+    const reason = placement.reason === 'prerequisite-paths' ? placement.reason : ownership.reason;
     let sealedAuthored: number | undefined;
     try {
       sealedAuthored = await routedSealedAuthored(this.projectRoot, slug, { cursor, config: this.config });
@@ -16746,7 +16765,7 @@ export class Conductor {
     const created = await createRouteRecord(this.projectRoot, slug, {
       roundId,
       kind: 'audit',
-      items: [{ findingId: input.findingId(host), kind: 'audit', owner: host, host, reason: input.reason, fallback: [] }],
+      items: [{ findingId: input.findingId(host), kind: 'audit', owner: ownership.owner as ChildId, host, reason, fallback: [] }],
       allocation: { [host]: { remTaskIds: [], blockBodies: [], ...(input.retryHint === undefined ? {} : { retryHint: input.retryHint }) } },
       sealedAuthored,
     });
