@@ -113,11 +113,15 @@ describe('config consumer registry', () => {
     });
   });
 
-  it('declares min_severity for built-in and custom build-review rubrics', () => {
+  it('declares paths and min_severity for custom build-review rubrics', () => {
     expect(CONFIG_CONSUMER_KEY_SETS['build_review.rubrics']).toContain('min_severity');
     expect(CONFIG_CONSUMER_KEY_SETS['build_review.custom_rubrics']).toContain('min_severity');
+    expect(CONFIG_CONSUMER_KEY_SETS['build_review.custom_rubrics']).toContain('paths');
     expect(configConsumerRegistry).toMatchObject({
       'build_review.rubrics.min_severity': {
+        consumer: 'src/conductor/src/engine/resolved-config.ts',
+      },
+      'build_review.custom_rubrics.paths': {
         consumer: 'src/conductor/src/engine/resolved-config.ts',
       },
       'build_review.custom_rubrics.min_severity': {
