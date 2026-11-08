@@ -818,6 +818,97 @@ describe('build_review malformed Covers marker gate', () => {
     expect(invoke.mock.calls[0]?.[0]).toMatchObject({ readOnlyReview: true, nativeSchema: BUILD_REVIEW_CUSTOM_V1_CONTRACT.output.jsonSchema });
   });
 
+  function createCachedPathTriggeredRunner(input: {
+    readonly paths?: readonly string[];
+    readonly question: string;
+    readonly invoke: ReturnType<typeof vi.fn>;
+    readonly events: ConductorEventEmitter;
+  }) {
+    const policyRoot = join(projectRoot, 'cached-policy');
+    const provider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+      invoke: input.invoke,
+    };
+    const runner = new DefaultStepRunner(provider, 'cached-path-triggered-custom', projectRoot, {
+      planPath, gitRunner: realGit(), events: input.events,
+      config: { llm_provider: 'claude', test_suite: { scoped_command: 'true' }, build_review: {
+        enabled: true,
+        rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
+        custom_rubrics: {
+          dependencyHygiene: {
+            enabled: true, skill: 'dependency-hygiene', source: 'project', question: input.question,
+            ...(input.paths === undefined ? {} : { paths: input.paths }), llm_provider: 'claude',
+          },
+        },
+      } } as HarnessConfig,
+      buildReviewInputOptions: {
+        materialization: { projectRoot },
+        inspectTestSuite: async () => ({
+          status: 'CURRENT', evidence: { provenanceHeadSha: await git('rev-parse', 'HEAD'), outcome: 'PASS' },
+        } as never),
+      },
+      providerRuntimes: new ProviderRuntimeSet([{
+        key: 'claude', provider, lifecycleCapability: provider.lifecycleCapability,
+        nativeSchemaCapability: provider.nativeSchemaCapability, policy: CLAUDE_MODEL_POLICY,
+        builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+      }]),
+      sessionStore: new ProviderSessionStore(), configuredProviders: ['claude'],
+      probeReadOnlyReviewCapability: async ({ provider: key, platform }) => ({ provider: key, platform, status: 'available' as const }),
+      buildReviewPolicyCatalog: async ({ skill }) => [{
+        semanticName: skill, source: 'project' as const, installationOrigin: policyRoot,
+        canonicalSkillPath: join(policyRoot, 'SKILL.md'), packageRoot: policyRoot, declaredDependencies: [], availability: 'available' as const,
+      }],
+      buildReviewPolicyCapture: async (policy) => ({
+        policy, materialPath: policyRoot, definitionPath: join(policyRoot, 'SKILL.md'),
+        manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Fixture policy\n') }],
+        metadata: { version: 1 as const, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+        digest: `sha256:${'a'.repeat(64)}`,
+      }),
+      buildReviewEffectiveResolver: async () => ({
+        ok: true as const,
+        feature: { version: 'v1' as const, repository: projectRoot, feature: 'cached-path-triggered-custom' },
+        effective: { rawVerdict: 'PASS' as const, verdict: 'PASS' as const, acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [] },
+      }),
+    });
+    vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue({ engineStamp: 'fixture', skillDigests: {} });
+    return runner;
+  }
+
+  // Covers: task:6
+  it('reuses a matching custom policy judgment after adding its matching paths trigger', async () => {
+    await commitTests({ 'package.json': '{"name":"changed"}\n' });
+    const invoke = vi.fn(async () => ({
+      success: true, exitCode: 0, output: 'fixture', finalStructuredResult: { kind: 'custom-findings', version: 'v2', findings: [] },
+    }));
+    const events = new ConductorEventEmitter();
+    const hits: ConductorEvent[] = [];
+    events.on('build_review_cache_hit', (event) => { hits.push(event); });
+
+    await createCachedPathTriggeredRunner({ question: 'Review dependencies.', invoke, events }).run('build_review', state);
+    await createCachedPathTriggeredRunner({ paths: ['**/package.json'], question: 'Review dependencies.', invoke, events }).run('build_review', state);
+
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(hits).toEqual([expect.objectContaining({ type: 'build_review_cache_hit', rubric: 'dependencyHygiene' })]);
+  });
+
+  // Covers: task:6
+  it('rejudges when a custom policy question changes after adding its matching paths trigger', async () => {
+    await commitTests({ 'package.json': '{"name":"changed"}\n' });
+    const invoke = vi.fn(async () => ({
+      success: true, exitCode: 0, output: 'fixture', finalStructuredResult: { kind: 'custom-findings', version: 'v2', findings: [] },
+    }));
+    const events = new ConductorEventEmitter();
+    const hits: ConductorEvent[] = [];
+    events.on('build_review_cache_hit', (event) => { hits.push(event); });
+
+    await createCachedPathTriggeredRunner({ question: 'Review dependencies.', invoke, events }).run('build_review', state);
+    await createCachedPathTriggeredRunner({ paths: ['**/package.json'], question: 'Review dependency pinning.', invoke, events }).run('build_review', state);
+
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(hits).toEqual([]);
+  });
+
   // Covers: task:5
   it('withholds an uninstalled custom policy before discovery or bundle capture when its paths are unmatched', async () => {
     await commitTests({ 'src/a.ts': 'export const a = true;\n' });
