@@ -2477,6 +2477,31 @@ describe('executeProviderCandidates', () => {
     })]);
   });
 
+  // Covers: task:2
+  it('emits provider_fallback without a Composer provider-switch event', async () => {
+    const emitted: Array<{ type: string }> = [];
+    const callbacks = providerExecutionEventCallbacks({
+      emit: async (event) => { emitted.push(event); },
+    });
+
+    await callbacks.warn?.('falling back', {
+      type: 'provider_fallback',
+      step: 'build',
+      failedProvider: 'codex',
+      reason: 'codex unavailable',
+      nextProvider: 'claude',
+    });
+
+    expect(emitted).toEqual([{
+      type: 'provider_fallback',
+      step: 'build',
+      failedProvider: 'codex',
+      reason: 'codex unavailable',
+      nextProvider: 'claude',
+    }]);
+    expect(emitted).not.toContainEqual(expect.objectContaining({ type: 'composer_provider_switched' }));
+  });
+
   it('reports a known interactive candidate synchronously before invoking it without a stream observer', async () => {
     const events: string[] = [];
     const starts: Array<{ step: string; payload: unknown }> = [];
