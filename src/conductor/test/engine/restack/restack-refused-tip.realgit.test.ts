@@ -1,4 +1,4 @@
-// Covers: task:6
+// Covers: task:6, task:9
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
