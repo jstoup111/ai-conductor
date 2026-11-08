@@ -3915,7 +3915,12 @@ export class DefaultStepRunner implements StepRunner {
         });
       }
     }
-    const coordination = joinedCoordination!;
+    // Withholding every custom member can leave a lap with no built-ins and
+    // no custom policy.  Preserve the existing no-rubrics pass boundary.
+    if (joinedCoordination === undefined) {
+      return this.publishBuildReviewPass('build_review_no_rubrics', child);
+    }
+    const coordination = joinedCoordination;
 
     if (coordination.kind === 'gate-disabled') {
       return { success: true, output: 'build_review disabled' };

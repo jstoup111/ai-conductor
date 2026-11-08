@@ -471,6 +471,7 @@ describe('build_review malformed Covers marker gate', () => {
     await git('config', 'user.name', 'Test');
     await writeFile(planPath, '# Plan\n\n### Task 1: fixture behavior\n', 'utf8');
     await writeFile(join(projectRoot, 'base.ts'), 'export const base = true;\n', 'utf8');
+    await writeFile(join(projectRoot, 'package.json'), '{"name":"base"}\n', 'utf8');
     await git('add', '.');
     await git('commit', '-m', 'base');
     await git('remote', 'add', 'origin', projectRoot);
@@ -595,10 +596,13 @@ describe('build_review malformed Covers marker gate', () => {
   });
 
   // Covers: task:4
-  it('withholds an unmatched path-triggered custom member before the coordinator boundary', async () => {
+  it('emits the exact paths-unmatched skip and keeps an all-disabled lap on the no-rubrics boundary', async () => {
+    vi.mocked(coordinateBuildReviewRubrics).mockReset();
     await commitTests({ 'src/a.ts': 'export const a = true;\n' });
     const provider = { invoke: vi.fn() };
-    const coordinator = vi.fn(async () => ({ success: true, output: 'coordinator result' }));
+    const events = new ConductorEventEmitter();
+    const skips: ConductorEvent[] = [];
+    events.on('build_review_rubric_skipped', (event) => { skips.push(event); });
     const runner = new DefaultStepRunner(provider, 'path-triggered-custom', projectRoot, {
       planPath,
       gitRunner: realGit(),
@@ -621,18 +625,52 @@ describe('build_review malformed Covers marker gate', () => {
           status: 'CURRENT', evidence: { provenanceHeadSha: await git('rev-parse', 'HEAD'), outcome: 'PASS' },
         } as never),
       },
-      buildReviewCoordinator: coordinator,
+      events,
     });
 
     const result = await runner.run('build_review', state);
 
-    expect(result).toMatchObject({ success: true, output: 'coordinator result' });
+    expect(result).toMatchObject({ success: true, output: expect.stringContaining('build_review_no_rubrics') });
     expect(provider.invoke).not.toHaveBeenCalled();
-    expect(coordinator).toHaveBeenCalledOnce();
+    expect(skips).toEqual([expect.objectContaining({
+      type: 'build_review_rubric_skipped', rubric: 'dependencyHygiene', reason: 'paths-unmatched',
+    })]);
+    await expect(access(join(projectRoot, '.pipeline', 'build-review', `lap-${await git('rev-parse', 'HEAD')}`, 'input-digest.json')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  // Covers: task:4
+  it.each([
+    ['a changed package manifest', 'src/conductor/package.json', '{"name":"fixture"}\n'],
+    ['a manifest restored before the feature head', 'package.json', '{"name":"base"}\n'],
+  ] as const)('keeps the custom member participating for %s only when it remains in the whole-feature diff', async (_caseName, changedPath, content) => {
+    if (_caseName.startsWith('a manifest restored')) {
+      await commitTests({ 'package.json': '{"name":"temporary"}\n' });
+      await commitTests({ 'package.json': '{"name":"base"}\n' });
+    } else {
+      await commitTests({ [changedPath]: content });
+    }
+    const coordinator = vi.fn(async () => ({ success: true, output: 'coordinator result' }));
+    const runner = new DefaultStepRunner({ invoke: vi.fn() }, 'path-triggered-control', projectRoot, {
+      planPath, gitRunner: realGit(),
+      config: {
+        test_suite: { scoped_command: 'true' },
+        build_review: {
+          enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
+          custom_rubrics: { dependencyHygiene: { enabled: true, skill: 'dependency-hygiene', source: 'project', question: 'Review dependencies.', paths: ['**/package.json'] } },
+        },
+      } as HarnessConfig,
+      buildReviewInputOptions: { materialization: { projectRoot }, inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: await git('rev-parse', 'HEAD'), outcome: 'PASS' } } as never) },
+      buildReviewCoordinator: coordinator,
+    });
+
+    await runner.run('build_review', state);
+
     const [inputs, config] = coordinator.mock.calls[0]!;
-    expect(inputs.participation).toEqual(expect.objectContaining({ withheld: ['dependencyHygiene'] }));
-    expect(inputs.sourceMaterialization).toBeUndefined();
-    expect(config.catalog).toEqual([]);
+    const restored = _caseName.startsWith('a manifest restored');
+    expect(inputs.participation?.withheld).toEqual(restored ? ['dependencyHygiene'] : []);
+    expect(config.catalog.map((entry) => entry.id)).toEqual(restored ? [] : ['dependencyHygiene']);
+    expect(inputs.sourceMaterialization === undefined).toBe(restored);
   });
 });
 
