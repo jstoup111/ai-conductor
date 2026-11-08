@@ -396,6 +396,7 @@ describe('restack conflict record (real local Git)', () => {
     }
   });
 
+  // Covers: task:5
   it('leaves conflict refs, including a refused tip, intact while cleaning an aborted journal and staging refs', async () => {
     const subject = await createRepo();
     await writeConflictRecord(subject.repo, 'demo', record(subject.head), { refusedTip: subject.head });

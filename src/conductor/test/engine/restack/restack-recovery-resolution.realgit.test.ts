@@ -277,6 +277,7 @@ describe('recovery consumed-resolution leaf ownership (real local Git)', () => {
     await expect(subject.git(['rev-parse', 'refs/conductor/demo/closed/c2'])).resolves.toMatchObject({ stdout: `${resolved}\n` });
   });
 
+  // Covers: task:9
   it('consumes a dispatcher-recorded base-refresh resolution and moves the closed child without test-written refs', async () => {
     const subject = await baseRefreshConflictFixture();
     const events = new ConductorEventEmitter();
@@ -300,6 +301,7 @@ describe('recovery consumed-resolution leaf ownership (real local Git)', () => {
       .resolves.toMatchObject({ stdout: `${childTip}\n` });
   });
 
+  // Covers: task:9
   it('consumes a recorded tip through planned-journal recovery despite parent halt-record drift', async () => {
     const subject = await baseRefreshConflictFixture();
     await subject.git(['checkout', '-qb', 'operator-halt-record', subject.resolutionTip]);
