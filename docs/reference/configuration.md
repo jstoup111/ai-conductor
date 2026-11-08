@@ -1560,8 +1560,9 @@ a routed round instead of appended to the leaf plan:
   slice position changed (each closed child against its predecessor's closure, the first against
   its merge base with the base branch, the leaf against the last closure). The judgement may return
   `implicatedPaths`; they resolve against the leaf listing as above, and the host rule above places
-  the round from the judged owner. With no resolved input the leaf hosts it. Failures halt
-  `taskless routing manifest failed:`, `taskless routing judgement failed for <item>:`,
+  the round from the judged owner. With no resolved input the leaf hosts it. An unresolvable plan slice
+  topology halts `taskless routing cannot resolve the sealed plan slice topology`. Other failures
+  halt `taskless routing manifest failed:`, `taskless routing judgement failed for <item>:`,
   `taskless routing implicated-path resolution failed:`, or
   `taskless routing host selection failed:` plus the detail.
 - **Admission.** The engine allocates the next round id `r<n>` and writes a `prepared` route record.
