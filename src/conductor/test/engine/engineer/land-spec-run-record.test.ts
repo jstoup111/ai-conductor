@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { LandGateError, landSpec } from '../../../src/engine/engineer/land-spec.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
-import { digestArtifact, serializeRunRecord, type ArtifactDigest, type RunRecord } from '../../../src/engine/engineer/run-record.js';
+import { digestArtifact, parseRunRecord, recordAcceptance, recordDraft, serializeRunRecord, type ArtifactDigest, type RunRecord } from '../../../src/engine/engineer/run-record.js';
 
 const execFile = promisify(execFileCb);
 const IDEA = 'run record landing';
@@ -61,19 +61,19 @@ function options() {
 }
 
 async function writeRecord(worktreePath: string, accepted: readonly ArtifactDigest[]): Promise<void> {
-  const record: RunRecord = {
+  const base: RunRecord = {
     schemaVersion: 1,
     slug: SLUG,
-    steps: {
-      explore: { state: 'accepted', actor: 'operator', provider: 'codex', at: '2026-11-08T12:00:00.000Z', artifacts: accepted.filter(({ path }) => path.startsWith('.docs/track/')) },
-      complexity: { state: 'accepted', actor: 'operator', provider: 'codex', at: '2026-11-08T12:01:00.000Z', artifacts: accepted.filter(({ path }) => path.startsWith('.docs/complexity/')) },
-      stories: { state: 'accepted', actor: 'operator', provider: 'codex', at: '2026-11-08T12:02:00.000Z', artifacts: accepted.filter(({ path }) => path.startsWith('.docs/stories/')) },
-      plan: { state: 'accepted', actor: 'operator', provider: 'codex', at: '2026-11-08T12:03:00.000Z', artifacts: accepted.filter(({ path }) => path.startsWith('.docs/plans/')) },
-    },
+    steps: {},
     needsReconfirm: [],
     ownerHistory: [],
     notes: {},
   };
+  const acceptance = { actor: 'operator', provider: 'codex', decisions: [], openQuestions: [] };
+  const explore = recordAcceptance(base, { ...acceptance, step: 'explore', at: '2026-11-08T12:00:00.000Z', artifacts: accepted.filter(({ path }) => path.startsWith('.docs/track/')) });
+  const complexity = recordAcceptance(explore, { ...acceptance, step: 'complexity', at: '2026-11-08T12:01:00.000Z', artifacts: accepted.filter(({ path }) => path.startsWith('.docs/complexity/')) });
+  const storiesAccepted = recordAcceptance(complexity, { ...acceptance, step: 'stories', at: '2026-11-08T12:02:00.000Z', artifacts: accepted.filter(({ path }) => path.startsWith('.docs/stories/')) });
+  const record = recordAcceptance(storiesAccepted, { ...acceptance, step: 'plan', at: '2026-11-08T12:03:00.000Z', artifacts: accepted.filter(({ path }) => path.startsWith('.docs/plans/')) });
   await mkdir(join(worktreePath, '.docs', 'composer-runs'), { recursive: true });
   await writeFile(join(worktreePath, RECORD_PATH), serializeRunRecord(record));
 }
@@ -168,6 +168,39 @@ describe('landSpec Composer run-record gate', () => {
     expect(error).toMatchObject({ gate: 'unaccepted-draft' });
     expect((error as Error).message).toContain(`.docs/stories/${SLUG}.md`);
     expect((error as Error).message).toMatch(/stories.*draft/i);
+    expect((error as Error).message).toMatch(/plan.*reconfirm/i);
+    expect((await git(['rev-parse', 'HEAD'], worktreePath)).trim()).toBe(before);
+  });
+
+  it('refuses a plan that needs reconfirmation after saved draft stories are edited and re-accepted', async () => {
+    const worktreePath = await seedWorktree();
+    await writeRecord(worktreePath, await currentDigests(worktreePath));
+    const recordPath = join(worktreePath, RECORD_PATH);
+    const accepted = parseRunRecord(await readFile(recordPath, 'utf8'));
+    const savedDraft = recordDraft(accepted, 'stories');
+    expect(savedDraft.steps.stories).toEqual({ state: 'draft' });
+
+    await writeFile(join(worktreePath, '.docs', 'stories', `${SLUG}.md`), `${stories}\nEdited before re-acceptance.\n`);
+    const editedStories = digestArtifact(`.docs/stories/${SLUG}.md`, await readFile(join(worktreePath, '.docs', 'stories', `${SLUG}.md`)));
+    const reaccepted = recordAcceptance(savedDraft, {
+      step: 'stories',
+      actor: 'operator',
+      provider: 'codex',
+      at: '2026-11-08T12:04:00.000Z',
+      artifacts: [editedStories],
+      decisions: [],
+      openQuestions: [],
+    });
+    await mkdir(join(worktreePath, '.docs', 'composer-runs'), { recursive: true });
+    await writeFile(recordPath, serializeRunRecord(reaccepted));
+    await checkpoint(worktreePath);
+    const before = (await git(['rev-parse', 'HEAD'], worktreePath)).trim();
+
+    const error = await landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, worktreePath, undefined, options())
+      .catch((reason: unknown) => reason);
+
+    expect(error).toBeInstanceOf(LandGateError);
+    expect(error).toMatchObject({ gate: 'unaccepted-draft' });
     expect((error as Error).message).toMatch(/plan.*reconfirm/i);
     expect((await git(['rev-parse', 'HEAD'], worktreePath)).trim()).toBe(before);
   });

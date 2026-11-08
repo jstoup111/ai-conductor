@@ -54,6 +54,13 @@ export interface RunRecord {
   readonly slug: string;
   readonly sourceRef?: string;
   readonly steps: Readonly<Partial<Record<RunStepId, RunStep>>>;
+  /**
+   * The artifact revision from the most recent acceptance, retained while a
+   * step is saved as a draft. Draft steps intentionally carry no acceptance
+   * provenance themselves, but a later re-acceptance must still be able to
+   * invalidate downstream approvals when the artifact changed.
+   */
+  readonly lastAcceptedArtifacts?: Readonly<Partial<Record<RunStepId, readonly ArtifactDigest[]>>>;
   readonly needsReconfirm: readonly RunStepId[];
   readonly ownerHistory: readonly OwnerHistoryEntry[];
   readonly notes: Readonly<Partial<Record<RunStepId, StepNotes>>>;
@@ -143,6 +150,16 @@ function parseSteps(value: unknown): Readonly<Partial<Record<RunStepId, RunStep>
   return steps;
 }
 
+function parseLastAcceptedArtifacts(value: unknown): Readonly<Partial<Record<RunStepId, readonly ArtifactDigest[]>>> {
+  if (!isObject(value)) throw new Error('Run record lastAcceptedArtifacts must be an object');
+  const artifacts: Partial<Record<RunStepId, readonly ArtifactDigest[]>> = {};
+  for (const [step, entry] of Object.entries(value)) {
+    if (!isStepId(step) || !Array.isArray(entry)) throw new Error('Run record lastAcceptedArtifacts must be keyed by a known step');
+    artifacts[step] = entry.map(parseArtifact);
+  }
+  return artifacts;
+}
+
 function parseNotes(value: unknown): Readonly<Partial<Record<RunStepId, StepNotes>>> {
   if (!isObject(value)) throw new Error('Run record notes must be an object');
   const notes: Partial<Record<RunStepId, StepNotes>> = {};
@@ -180,7 +197,7 @@ export function parseRunRecord(serialized: string): RunRecord {
   }
   if (!isObject(value)) throw new Error('Run record must be an object');
   if (value.schemaVersion !== RUN_RECORD_SCHEMA_VERSION) throw new Error(`Unsupported run record schemaVersion ${String(value.schemaVersion)}`);
-  if (Object.keys(value).some((key) => !['schemaVersion', 'slug', 'sourceRef', 'steps', 'needsReconfirm', 'ownerHistory', 'notes'].includes(key))) {
+  if (Object.keys(value).some((key) => !['schemaVersion', 'slug', 'sourceRef', 'steps', 'lastAcceptedArtifacts', 'needsReconfirm', 'ownerHistory', 'notes'].includes(key))) {
     throw new Error('Run record has unknown fields');
   }
   if (value.sourceRef !== undefined && typeof value.sourceRef !== 'string') throw new Error('Run record sourceRef must be a string');
@@ -191,6 +208,7 @@ export function parseRunRecord(serialized: string): RunRecord {
     slug: requiredString(value.slug, 'slug'),
     ...(value.sourceRef === undefined ? {} : { sourceRef: value.sourceRef }),
     steps: parseSteps(value.steps),
+    ...(value.lastAcceptedArtifacts === undefined ? {} : { lastAcceptedArtifacts: parseLastAcceptedArtifacts(value.lastAcceptedArtifacts) }),
     needsReconfirm: [...new Set(needsReconfirm)] as readonly RunStepId[],
     ownerHistory: parseOwnerHistory(value.ownerHistory),
     notes: parseNotes(value.notes),
@@ -222,7 +240,9 @@ function laterAcceptedSteps(record: RunRecord, step: RunStepId): RunStepId[] {
 /** Record one explicit operator acceptance without mutating the prior durable state. */
 export function recordAcceptance(record: RunRecord, input: RecordAcceptanceInput): RunRecord {
   const previous = record.steps[input.step];
-  const changed = previous?.state === 'accepted' && !sameArtifacts(previous.artifacts, input.artifacts);
+  const lastAccepted = record.lastAcceptedArtifacts?.[input.step]
+    ?? (previous?.state === 'accepted' ? previous.artifacts : undefined);
+  const changed = lastAccepted !== undefined && !sameArtifacts(lastAccepted, input.artifacts);
   const needsReconfirm = new Set(record.needsReconfirm);
   needsReconfirm.delete(input.step);
   if (changed) for (const later of laterAcceptedSteps(record, input.step)) needsReconfirm.add(later);
@@ -239,6 +259,10 @@ export function recordAcceptance(record: RunRecord, input: RecordAcceptanceInput
         artifacts: input.artifacts.map((artifact) => ({ ...artifact })),
       },
     },
+    lastAcceptedArtifacts: {
+      ...record.lastAcceptedArtifacts,
+      [input.step]: input.artifacts.map((artifact) => ({ ...artifact })),
+    },
     needsReconfirm: RUN_STEP_ORDER.filter((step) => needsReconfirm.has(step)),
     notes: {
       ...record.notes,
@@ -247,6 +271,18 @@ export function recordAcceptance(record: RunRecord, input: RecordAcceptanceInput
         openQuestions: [...input.openQuestions],
       },
     },
+  };
+}
+
+/**
+ * Save a step as draft without retaining actor or accepted artifacts on that
+ * draft step. The last accepted revision remains in the record for a later
+ * explicit acceptance comparison.
+ */
+export function recordDraft(record: RunRecord, step: RunStepId): RunRecord {
+  return {
+    ...record,
+    steps: { ...record.steps, [step]: { state: 'draft' } },
   };
 }
 

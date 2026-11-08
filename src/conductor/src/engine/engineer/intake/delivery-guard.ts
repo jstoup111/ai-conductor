@@ -206,6 +206,88 @@ export function createDeliveryGuardedQueue(
     }
   }
 
+  function isBenignEnoent(error: unknown): boolean {
+    return error instanceof Error
+      && (('code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') || error.message.includes('ENOENT'));
+  }
+
+  /** Acknowledge a discarded envelope, retaining it for release only on a real failure. */
+  async function acknowledge(candidate: Envelope, sourceRef: string, failure: string): Promise<boolean> {
+    try {
+      await queue.ack(candidate);
+      return true;
+    } catch (error) {
+      if (isBenignEnoent(error)) {
+        logger.info(`Benign race: failed to ack ${sourceRef} (file already deleted)`);
+        return true;
+      }
+      process.stderr.write(`[delivery-guard] ${failure}: ${error instanceof Error ? error.message : String(error)}\n`);
+      held.push(candidate);
+      return false;
+    }
+  }
+
+  /** Reconcile either delivery PR URL through the shared terminal PR lifecycle. */
+  async function reconcilePrLifecycle(
+    candidate: Envelope,
+    source: string,
+    sourceRef: string,
+    entry: any,
+    url: string,
+    isDraftUrl: boolean,
+  ): Promise<void> {
+    const prState = await verifyPrState(deps.gh, url);
+
+    // This is the sole draft-specific disposition: an open draft remains an
+    // in-flight DECIDE run, so only its duplicate envelope is discarded.
+    if (isDraftUrl && prState === 'open-draft') {
+      if (!await acknowledge(candidate, sourceRef, `Failed to drop in-flight draft duplicate ${sourceRef}`)) return;
+      logger.info(`Duplicate envelope for in-flight draft ${sourceRef}, dropping (recovery: engineer forget ${sourceRef})`);
+      return;
+    }
+
+    const delivered = prState === 'open' || prState === 'merged' || (!isDraftUrl && prState === 'open-draft');
+    if (delivered) {
+      try {
+        await ledger.transition(source, sourceRef, 'done', { prUrl: url, branch: entry.branch });
+      } catch (error) {
+        process.stderr.write(`[delivery-guard] Failed to heal entry ${sourceRef}: ${error instanceof Error ? error.message : String(error)}\n`);
+        held.push(candidate);
+        return;
+      }
+      if (!await acknowledge(candidate, sourceRef, `Failed to ack delivered entry ${sourceRef}`)) return;
+      logger.info(`Healed stale entry ${sourceRef}: ${entry.status} → done`);
+      return;
+    }
+
+    if (prState === 'unknown') {
+      logger.info(`PR state unknown for ${sourceRef}, holding`);
+      held.push(candidate);
+      return;
+    }
+
+    if ((entry.attempts ?? 0) < REOPEN_ATTEMPTS_CAP) {
+      try {
+        await ledger.reopen(source, sourceRef);
+        logger.info(`Reopening ${sourceRef}`);
+      } catch (error) {
+        process.stderr.write(`[delivery-guard] Failed to reopen entry ${sourceRef}: ${error instanceof Error ? error.message : String(error)}\n`);
+      }
+      held.push(candidate);
+      return;
+    }
+
+    try {
+      await ledger.transition(source, sourceRef, 'needs-manual', { prUrl: url });
+    } catch (error) {
+      process.stderr.write(`[delivery-guard] Failed to park entry ${sourceRef} as needs-manual: ${error instanceof Error ? error.message : String(error)}\n`);
+      held.push(candidate);
+      return;
+    }
+    if (!await acknowledge(candidate, sourceRef, `Failed to ack parked entry ${sourceRef}`)) return;
+    logger.info(`Parking ${sourceRef} as needs-manual (attempts cap reached)`);
+  }
+
   async function innerClaim(): Promise<Envelope | null> {
     const candidate = await queue.claim();
       if (!candidate) {
@@ -233,7 +315,7 @@ export function createDeliveryGuardedQueue(
           if (inFlight) {
             await ledger.record({ source, sourceRef });
             await ledger.transition(source, sourceRef, 'deciding', { branch: inFlight.branch, draftPrUrl: inFlight.url });
-            await queue.ack(candidate);
+            if (!await acknowledge(candidate, sourceRef, `Failed to drop cross-referenced draft duplicate ${sourceRef}`)) return innerClaim();
             return innerClaim();
           }
         } catch {
@@ -259,23 +341,7 @@ export function createDeliveryGuardedQueue(
               // then continue scanning for the next one.
               await ledger.forget(source, sourceRef);
 
-              try {
-                await queue.ack(candidate);
-              } catch (err) {
-                const isEnoent =
-                  err instanceof Error &&
-                  (('code' in err && (err as any).code === 'ENOENT') ||
-                    err.message.includes('ENOENT'));
-
-                if (!isEnoent) {
-                  process.stderr.write(
-                    `[delivery-guard] Failed to ack closed-issue candidate ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
-                  );
-                  held.push(candidate);
-                  return innerClaim();
-                }
-                logger.info(`Benign race: failed to ack ${sourceRef} (file already deleted)`);
-              }
+              if (!await acknowledge(candidate, sourceRef, `Failed to ack closed-issue candidate ${sourceRef}`)) return innerClaim();
 
               logger.info(`Dropped closed issue ${sourceRef}`);
               return innerClaim();
@@ -293,27 +359,7 @@ export function createDeliveryGuardedQueue(
       // dropped without mutating the ledger entry.
       if (entry.status === 'claimed' && !entry.prUrl) {
         // This is an in-flight duplicate — drop it
-        try {
-          await queue.ack(candidate);
-        } catch (err) {
-          // Check if error is ENOENT (benign race — file was already deleted)
-          const isEnoent =
-            err instanceof Error &&
-            (('code' in err && (err as any).code === 'ENOENT') ||
-              err.message.includes('ENOENT'));
-
-          if (!isEnoent) {
-            // Non-ENOENT error — treat as a real failure, hold the candidate
-            process.stderr.write(
-              `[delivery-guard] Failed to drop in-flight duplicate ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
-            );
-            held.push(candidate);
-            // Continue scanning for the next candidate
-            return innerClaim();
-          }
-          // ENOENT is benign — file was already deleted by concurrent process
-          logger.info(`Benign race: failed to ack ${sourceRef} (file already deleted)`);
-        }
+        if (!await acknowledge(candidate, sourceRef, `Failed to drop in-flight duplicate ${sourceRef}`)) return innerClaim();
 
         // Log the duplicate drop with recovery path
         logger.info(
@@ -329,250 +375,14 @@ export function createDeliveryGuardedQueue(
       // readied or merged. Its queue envelope is a duplicate claim and can be
       // dropped safely while the ledger remains untouched.
       if (entry.draftPrUrl && !entry.prUrl) {
-        const prState = await verifyPrState(deps.gh, entry.draftPrUrl);
-
-        if (prState === 'open-draft') {
-          try {
-            await queue.ack(candidate);
-          } catch (err) {
-            const isEnoent =
-              err instanceof Error &&
-              (('code' in err && (err as any).code === 'ENOENT') ||
-                err.message.includes('ENOENT'));
-            if (!isEnoent) {
-              process.stderr.write(
-                `[delivery-guard] Failed to drop in-flight draft duplicate ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
-              );
-              held.push(candidate);
-              return innerClaim();
-            }
-            logger.info(`Benign race: failed to ack ${sourceRef} (file already deleted)`);
-          }
-          logger.info(
-            `Duplicate envelope for in-flight draft ${sourceRef}, dropping (recovery: engineer forget ${sourceRef})`,
-          );
-          return innerClaim();
-        }
-
-        if (prState === 'open' || prState === 'merged') {
-          try {
-            await ledger.transition(source, sourceRef, 'done', {
-              prUrl: entry.draftPrUrl,
-              branch: entry.branch,
-            });
-          } catch (err) {
-            process.stderr.write(
-              `[delivery-guard] Failed to heal entry ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
-            );
-            held.push(candidate);
-            return innerClaim();
-          }
-
-          try {
-            await queue.ack(candidate);
-          } catch (err) {
-            const isEnoent =
-              err instanceof Error &&
-              (('code' in err && (err as any).code === 'ENOENT') ||
-                err.message.includes('ENOENT'));
-            if (!isEnoent) {
-              process.stderr.write(
-                `[delivery-guard] Failed to ack delivered entry ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
-              );
-              held.push(candidate);
-              return innerClaim();
-            }
-            logger.info(`Benign race: failed to ack ${sourceRef} (file already deleted)`);
-          }
-          logger.info(`Healed stale entry ${sourceRef}: ${entry.status} → done`);
-          return innerClaim();
-        }
-
-        if (prState === 'unknown') {
-          logger.info(`PR state unknown for ${sourceRef}, holding`);
-          held.push(candidate);
-          return innerClaim();
-        }
-
-        if (prState === 'closed-unmerged') {
-          if ((entry.attempts ?? 0) < REOPEN_ATTEMPTS_CAP) {
-            try {
-              await ledger.reopen(source, sourceRef);
-              logger.info(`Reopening ${sourceRef}`);
-            } catch (err) {
-              process.stderr.write(
-                `[delivery-guard] Failed to reopen entry ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
-              );
-            }
-            held.push(candidate);
-            return innerClaim();
-          }
-
-          try {
-            await ledger.transition(source, sourceRef, 'needs-manual', {
-              prUrl: entry.draftPrUrl,
-            });
-          } catch (err) {
-            process.stderr.write(
-              `[delivery-guard] Failed to park entry ${sourceRef} as needs-manual: ${err instanceof Error ? err.message : String(err)}\n`,
-            );
-            held.push(candidate);
-            return innerClaim();
-          }
-          try {
-            await queue.ack(candidate);
-          } catch (err) {
-            const isEnoent =
-              err instanceof Error &&
-              (('code' in err && (err as any).code === 'ENOENT') ||
-                err.message.includes('ENOENT'));
-            if (!isEnoent) {
-              process.stderr.write(
-                `[delivery-guard] Failed to ack parked entry ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
-              );
-              held.push(candidate);
-              return innerClaim();
-            }
-            logger.info(`Benign race: failed to ack ${sourceRef} (file already deleted)`);
-          }
-          logger.info(`Parking ${sourceRef} as needs-manual (attempts cap reached)`);
-          return innerClaim();
-        }
+        await reconcilePrLifecycle(candidate, source, sourceRef, entry, entry.draftPrUrl, true);
+        return innerClaim();
       }
 
       // Task 3 & 4: Check if entry can be auto-healed (has prUrl and PR is open/merged)
       if (entry.prUrl) {
-        const prState = await verifyPrState(deps.gh, entry.prUrl);
-
-        if (prState === 'open' || prState === 'open-draft' || prState === 'merged') {
-          // PR is delivered — heal the entry to 'done' with metadata preserved
-          const priorStatus = entry.status;
-
-          // Task 4: Wrap ledger.transition in try/catch
-          try {
-            await ledger.transition(source, sourceRef, 'done', {
-              prUrl: entry.prUrl,
-              branch: entry.branch,
-            });
-          } catch (err) {
-            // Ledger write failed — candidate cannot be served
-            // Log error to stderr for operator visibility
-            process.stderr.write(
-              `[delivery-guard] Failed to heal entry ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
-            );
-            // Add candidate to held list (not yet served)
-            held.push(candidate);
-            // Continue scanning for the next candidate
-            return innerClaim();
-          }
-
-          // Task 4: Wrap queue.ack in try/catch for ENOENT handling
-          try {
-            // Ack the intake envelope (remove it from queue)
-            await queue.ack(candidate);
-          } catch (err) {
-            // Check if error is ENOENT (benign race — file was already deleted)
-            const isEnoent =
-              err instanceof Error &&
-              (('code' in err && (err as any).code === 'ENOENT') ||
-                err.message.includes('ENOENT'));
-
-            if (!isEnoent) {
-              // Non-ENOENT error — treat as a real failure, hold the candidate
-              process.stderr.write(
-                `[delivery-guard] Failed to ack delivered entry ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
-              );
-              held.push(candidate);
-              // Continue scanning for the next candidate
-              return innerClaim();
-            }
-            // ENOENT is benign — file was already deleted by concurrent process
-            // Log at debug level and continue
-            logger.info(`Benign race: failed to ack ${sourceRef} (file already deleted)`);
-          }
-
-          // Log audit trail
-          logger.info(`Healed stale entry ${sourceRef}: ${priorStatus} → done`);
-
-          // Continue scanning for the next candidate
-          return innerClaim();
-        }
-
-        // Task 6: unknown PR state — fail safe with no sticky state
-        if (prState === 'unknown') {
-          // PR state lookup failed (gh threw or unparseable output)
-          // Hold the candidate but don't serve or mutate ledger
-          // Log for audit trail
-          logger.info(`PR state unknown for ${sourceRef}, holding`);
-          held.push(candidate);
-          // Continue scanning for the next candidate
-          return innerClaim();
-        }
-
-        // Task 5: closed-unmerged reopen semantics (FR-39/40)
-        if (prState === 'closed-unmerged') {
-          const attempts = entry.attempts ?? 0;
-
-          if (attempts < REOPEN_ATTEMPTS_CAP) {
-            // Below cap — reopen for another attempt
-            try {
-              await ledger.reopen(source, sourceRef);
-              logger.info(`Reopening ${sourceRef}`);
-              // Hold the candidate (will be released when queue is exhausted)
-              held.push(candidate);
-            } catch (err) {
-              // Reopen failed — log error, hold, and continue
-              process.stderr.write(
-                `[delivery-guard] Failed to reopen entry ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
-              );
-              held.push(candidate);
-            }
-            // Continue scanning for the next candidate
-            return innerClaim();
-          } else {
-            // At or past cap — park as needs-manual
-            try {
-              await ledger.transition(source, sourceRef, 'needs-manual', {
-                prUrl: entry.prUrl,
-              });
-            } catch (err) {
-              // Transition failed — log error and hold
-              process.stderr.write(
-                `[delivery-guard] Failed to park entry ${sourceRef} as needs-manual: ${err instanceof Error ? err.message : String(err)}\n`,
-              );
-              held.push(candidate);
-              // Continue scanning for the next candidate
-              return innerClaim();
-            }
-
-            // Ack the envelope
-            try {
-              await queue.ack(candidate);
-            } catch (err) {
-              // Check if error is ENOENT (benign race)
-              const isEnoent =
-                err instanceof Error &&
-                (('code' in err && (err as any).code === 'ENOENT') ||
-                  err.message.includes('ENOENT'));
-
-              if (!isEnoent) {
-                // Non-ENOENT error — treat as a real failure, hold the candidate
-                process.stderr.write(
-                  `[delivery-guard] Failed to ack parked entry ${sourceRef}: ${err instanceof Error ? err.message : String(err)}\n`,
-                );
-                held.push(candidate);
-                // Continue scanning for the next candidate
-                return innerClaim();
-              }
-              // ENOENT is benign
-              logger.info(`Benign race: failed to ack ${sourceRef} (file already deleted)`);
-            }
-
-            logger.info(`Parking ${sourceRef} as needs-manual (attempts cap reached)`);
-            // Continue scanning for the next candidate
-            return innerClaim();
-          }
-        }
+        await reconcilePrLifecycle(candidate, source, sourceRef, entry, entry.prUrl, false);
+        return innerClaim();
       }
 
       // Not healable — hold it for later release pattern

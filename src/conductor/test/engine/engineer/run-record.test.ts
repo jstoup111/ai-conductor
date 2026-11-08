@@ -6,6 +6,7 @@ import {
   digestArtifact,
   parseRunRecord,
   recordAcceptance,
+  recordDraft,
   serializeRunRecord,
   stepForArtifactPath,
   type RunRecord,
@@ -113,6 +114,32 @@ describe('composer run records', () => {
     ]);
     expect(classification.needsReconfirm).toEqual(['plan']);
     expect(classification.accepted).not.toContainEqual(expect.objectContaining({ step: 'plan' }));
+  });
+
+  it('keeps the prior acceptance when a stories draft is re-accepted, so an edited draft reconfirms plan', () => {
+    const stories = digestArtifact('.docs/stories/composer-run.md', Buffer.from('accepted stories'));
+    const editedStories = digestArtifact('.docs/stories/composer-run.md', Buffer.from('edited stories'));
+    const plan = digestArtifact('.docs/plans/composer-run.md', Buffer.from('accepted plan'));
+    const accept = (record: RunRecord, step: 'stories' | 'plan', artifacts: readonly typeof stories[]) => recordAcceptance(record, {
+      step,
+      actor: 'operator-7',
+      provider: 'codex',
+      at: '2026-11-08T14:12:00.000Z',
+      artifacts,
+      decisions: [],
+      openQuestions: [],
+    });
+
+    const accepted = accept(accept(emptyRecord(), 'stories', [stories]), 'plan', [plan]);
+    const savedDraft = recordDraft(accepted, 'stories');
+    expect(savedDraft.steps.stories).toEqual({ state: 'draft' });
+    expect(savedDraft.lastAcceptedArtifacts?.stories).toEqual([stories]);
+
+    const reaccepted = accept(savedDraft, 'stories', [editedStories]);
+    const classification = classifyArtifacts(reaccepted, [editedStories, plan]);
+
+    expect(classification.needsReconfirm).toEqual(['plan']);
+    expect(parseRunRecord(serializeRunRecord(reaccepted))).toEqual(reaccepted);
   });
 
   it('rejects unknown schema versions and step states, and never serializes an owner marker', () => {

@@ -7,6 +7,7 @@ import {
   digestArtifact,
   parseRunRecord,
   recordAcceptance,
+  recordDraft,
   serializeRunRecord,
   stepForArtifactPath,
   type RunRecord,
@@ -185,7 +186,7 @@ export async function checkpointComposerRun(request: CheckpointRequest, deps: Ch
       .map(async (path) => digestArtifact(path, Buffer.from(await fs.readFile(join(request.worktree, path))))));
     record = recordAcceptance(record, { step, actor: owner.id, provider, at: (deps.now ?? (() => new Date().toISOString()))(), artifacts, ...notes });
   } else {
-    record = { ...record, steps: { ...record.steps, [step]: { state: 'draft' } }, notes: { ...record.notes, [step]: notes } };
+    record = { ...recordDraft(record, step), notes: { ...record.notes, [step]: notes } };
   }
 
   if (!record.ownerHistory.some((entry) => entry.actor === owner.id)) {
