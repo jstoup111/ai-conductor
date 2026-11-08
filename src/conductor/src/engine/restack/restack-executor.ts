@@ -33,7 +33,7 @@ import {
   type RestackMoveRef,
 } from './restack-move.js';
 import { planRestackRanges } from './restack-plan.js';
-import { checkPathOwnership, checkResolvedTipOwnership, parentOverlapPaths } from './restack-ownership.js';
+import { adaptedPathsFor, checkPathOwnership, checkResolvedTipOwnership, parentOverlapPaths } from './restack-ownership.js';
 import { replayChildRange, RemBlockBodyMismatchError, type CommitterStamp } from './restack-replay.js';
 import { haltRecordedRestackConflict, replayCandidateSubjects, resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
 import { conflictDeleteLines, conflictFlattenedTipRefFor, conflictParentRefFor, conflictRecordRefFor, consumeRecordedResolution, decisionDeleteLines, readConflictRecord, refusedTipRefFor, retireRecordedResolution } from './restack-conflict-record.js';
@@ -687,6 +687,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     const newStackCommits = comparison;
     const mergeAudit = { flattenedMerges: [] as string[], ancestryOnlyMerges: [] as string[], sideLineageCount: 0 };
     const overlaps = new Map<number, string[]>();
+    const replayParents = new Map<ChildId, CommitSha>();
     const exactRewrites = new Map<ChildId, ReadonlyMap<CommitSha, CommitSha>>();
     // `consumeRecordedResolution` deliberately omits ambiguous duplicate
     // subjects from its durable rewrite map. Keep the range-tip correspondence
@@ -699,6 +700,7 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       ? Math.max(-1, ...plan.ranges.map((range, index) => originating.includes(range.child) ? index : -1))
       : -1;
     for (const [rangeIndex, range] of plan.ranges.entries()) {
+      replayParents.set(range.child, parent);
       if (range.kind === 'leaf-unentered') {
         const resolution = await resolveUnenteredLeafOwner(
           git, range.oldTip, exactRewrites, [...consumedTipCorrespondences.values()],
@@ -1007,9 +1009,12 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
     for (const range of plan.ranges) {
       const move = moves.find((entry) => entry.child === range.child);
       if (!move) throw new Error(`missing move for child ${range.child}`);
+      const newParent = replayParents.get(range.child);
+      if (!newParent) throw new Error(`missing replay parent for child ${range.child}`);
       await options.events?.emit({
         type: 'restack_applied', opId: draft.opId, cause: draft.cause, child: range.child,
         oldTip: range.oldTip, newTip: move.newSha, wouldInvalidate: [...(transition.wouldInvalidate.get(range.child) ?? [])], parentOverlapPaths: overlaps.get(range.child) ?? [],
+        adaptedPaths: await adaptedPathsFor(range, newParent, move.newSha, git),
       });
     }
     if (mergeAudit.flattenedMerges.length > 0 || mergeAudit.ancestryOnlyMerges.length > 0 || mergeAudit.sideLineageCount > 0) {

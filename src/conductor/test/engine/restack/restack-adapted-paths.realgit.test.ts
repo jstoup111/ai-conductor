@@ -136,7 +136,13 @@ describe('resolved restack tip ownership (real local Git)', () => {
   });
 });
 
-async function restackFixture({ addThenRevert = false }: { readonly addThenRevert?: boolean } = {}) {
+async function restackFixture({
+  addThenRevert = false,
+  cleanReplay = false,
+}: {
+  readonly addThenRevert?: boolean;
+  readonly cleanReplay?: boolean;
+} = {}) {
   const repo = await mkdtemp(join(tmpdir(), 'restack-adapted-executor-'));
   repositories.push(repo);
   const git = (args: string[], env?: NodeJS.ProcessEnv) => execFile('git', args, {
@@ -173,6 +179,9 @@ async function restackFixture({ addThenRevert = false }: { readonly addThenRever
     await commit('C2 add parent line');
     await write('tests/b.test.ts', 'base test\n');
     await commit('C3 revert parent line');
+  } else if (cleanReplay) {
+    await write('src/main.ts', 'child main\n');
+    await commit('C2 clean replay');
   } else {
     await write('src/c.ts', 'one\nchild\n');
     await commit('C2 conflict');
@@ -199,6 +208,16 @@ async function restackFixture({ addThenRevert = false }: { readonly addThenRever
   return { repo, git, write, tip };
 }
 
+async function persistedAppliedPaths(repo: string): Promise<Map<number, string[]>> {
+  const records = (await readFile(join(repo, '.pipeline', 'events.jsonl'), 'utf8'))
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as { type: string; child?: number; adaptedPaths?: string[] });
+  return new Map(records
+    .filter((record): record is { type: 'restack_applied'; child: number; adaptedPaths: string[] } => record.type === 'restack_applied' && record.child !== undefined)
+    .map((record) => [record.child, record.adaptedPaths]));
+}
+
 describe('runRestack resolved-tip and clean-replay ownership (real local Git)', () => {
   it('accepts an adapting resolver tip, records child 2 as resolved, and replays child 3 onto it', async () => {
     const subject = await restackFixture();
@@ -221,14 +240,90 @@ describe('runRestack resolved-tip and clean-replay ownership (real local Git)', 
       return { resolved: true };
     };
 
-    await expect(runRestack({
-      worktree: subject.repo, slug: 'demo', cause: 'feature-repair', git, resolver, resolverCap: 1,
-    })).resolves.toMatchObject({ kind: 'applied' });
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    try {
+      await expect(runRestack({
+        worktree: subject.repo, slug: 'demo', cause: 'feature-repair', events, git, resolver, resolverCap: 1,
+      })).resolves.toMatchObject({ kind: 'applied' });
+    } finally {
+      persister.stop();
+    }
 
     expect(journalChildren).toContainEqual(expect.arrayContaining([expect.objectContaining({ child: 2, status: 'resolved' })]));
+    expect(journalChildren.flat()).not.toContainEqual(expect.objectContaining({ adaptedPaths: expect.anything() }));
+    const appliedPaths = await persistedAppliedPaths(subject.repo);
+    expect(appliedPaths.get(2)).toEqual(['tests/a.test.ts']);
+    expect(appliedPaths.get(3)).toEqual([]);
     const resolvedChild = await subject.tip('feat/c2/demo');
     expect(await subject.git(['show', 'feat/c2/demo:tests/a.test.ts'])).toMatchObject({ stdout: 'adapted parent test\n' });
     expect(await subject.git(['merge-base', '--is-ancestor', resolvedChild, 'feat/daemon-demo'])).toMatchObject({ stdout: '' });
+  });
+
+  it('persists the resolved child\'s changed parent test as an adapted path', async () => {
+    const subject = await restackFixture();
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    const resolver: RestackResolver = async ({ projectRoot, environment }) => {
+      const resolverGit = (args: string[]) => execFile('git', args, { cwd: projectRoot, env: { ...process.env, ...environment } });
+      await writeFile(join(projectRoot, 'src/c.ts'), 'one\nresolved child\n');
+      await writeFile(join(projectRoot, 'tests/b.test.ts'), 'adapted changed test\n');
+      await resolverGit(['add', 'src/c.ts', 'tests/b.test.ts']);
+      await resolverGit(['rebase', '--continue']);
+      return { resolved: true };
+    };
+    try {
+      await expect(runRestack({
+        worktree: subject.repo, slug: 'demo', cause: 'feature-repair', events,
+        git: makeGitRunner(subject.repo), resolver, resolverCap: 1,
+      })).resolves.toMatchObject({ kind: 'applied' });
+    } finally {
+      persister.stop();
+    }
+
+    expect((await persistedAppliedPaths(subject.repo)).get(2)).toEqual(['tests/b.test.ts']);
+  });
+
+  it('persists no adapted paths for a conflict-free replay', async () => {
+    const subject = await restackFixture({ cleanReplay: true });
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    try {
+      await expect(runRestack({
+        worktree: subject.repo, slug: 'demo', cause: 'feature-repair', events, git: makeGitRunner(subject.repo),
+      })).resolves.toMatchObject({ kind: 'applied' });
+    } finally {
+      persister.stop();
+    }
+
+    expect((await persistedAppliedPaths(subject.repo)).get(2)).toEqual([]);
+  });
+
+  it('persists no adapted paths when a resolved tip changes only owned paths', async () => {
+    const subject = await restackFixture();
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    const resolver: RestackResolver = async ({ projectRoot, environment }) => {
+      const resolverGit = (args: string[]) => execFile('git', args, { cwd: projectRoot, env: { ...process.env, ...environment } });
+      await writeFile(join(projectRoot, 'src/c.ts'), 'one\nresolved child\n');
+      await resolverGit(['add', 'src/c.ts']);
+      await resolverGit(['rebase', '--continue']);
+      return { resolved: true };
+    };
+    try {
+      await expect(runRestack({
+        worktree: subject.repo, slug: 'demo', cause: 'feature-repair', events,
+        git: makeGitRunner(subject.repo), resolver, resolverCap: 1,
+      })).resolves.toMatchObject({ kind: 'applied' });
+    } finally {
+      persister.stop();
+    }
+
+    expect((await persistedAppliedPaths(subject.repo)).get(2)).toEqual([]);
   });
 
   it('keeps a clean add-then-revert replay strict when the repaired parent adds the reverted line', async () => {

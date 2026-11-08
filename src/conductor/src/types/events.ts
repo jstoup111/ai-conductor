@@ -2286,6 +2286,7 @@ type ConductorEventBody =
       newTip: CommitSha;
       wouldInvalidate: StepName[];
       parentOverlapPaths: string[];
+      adaptedPaths: string[];
     }
   | {
       type: 'restack_conflict';
