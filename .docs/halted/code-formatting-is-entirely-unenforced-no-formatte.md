@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-11-08T11:21:00.771Z
 Slug: code-formatting-is-entirely-unenforced-no-formatte
 Class: needs-human
 Halting step: unknown
