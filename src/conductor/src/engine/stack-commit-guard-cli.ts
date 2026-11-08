@@ -116,6 +116,7 @@ export async function runStackCommitGuard(deps: StackCommitGuardDependencies): P
     ? identity.kind === 'leaf'
     : identity.kind === 'child' && identity.child === marker.marker.host;
   if (!isHost) {
+    // ai-conductor:session-command-context=operator-only
     const recoveryCommand = (() => {
       switch (stored.record.kind) {
         case 'audit':
@@ -125,11 +126,10 @@ export async function runStackCommitGuard(deps: StackCommitGuardDependencies): P
       }
       return assertNever(stored.record.kind);
     })();
+    // /ai-conductor:session-command-context
     return refuse(
       print,
-      // ai-conductor:session-command-context=operator-only
       `refusing tracked-file commit on ${branch}; ${stored.record.kind} round ${marker.marker.roundId} is hosted on ${hostBranch}. Commit on ${hostBranch} or run ${recoveryCommand}.`,
-      // /ai-conductor:session-command-context
     );
   }
 
