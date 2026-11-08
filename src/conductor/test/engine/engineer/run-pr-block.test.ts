@@ -1,3 +1,4 @@
+// Covers: task:6
 import { describe, expect, it } from 'vitest';
 import { renderRunBlock, upsertRunBlock } from '../../../src/engine/engineer/run-pr-block.js';
 import type { RunRecord } from '../../../src/engine/engineer/run-record.js';

@@ -1,3 +1,5 @@
+// Covers: task:12
+// Covers: task:15
 import { describe, expect, it } from 'vitest';
 import { contextForRun, parseResumeTarget, resumeComposerRun } from '../../../src/engine/engineer/resume.js';
 import type { RunRecord } from '../../../src/engine/engineer/run-record.js';

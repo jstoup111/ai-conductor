@@ -1,3 +1,5 @@
+// Covers: task:4
+// Covers: task:5
 import { describe, expect, it, vi } from 'vitest';
 import { checkpointComposerRun } from '../../../src/engine/engineer/checkpoint.js';
 
