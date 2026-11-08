@@ -1163,6 +1163,139 @@ describe('engine/daemon — runDaemon', () => {
         await rm(root, { recursive: true, force: true });
       }
     });
+
+    it('promptly re-dispatches one fresh mechanical HALT without task progress', async () => {
+      const claims = new InMemoryWorkClaims();
+      claims.park(slug);
+      const execute = vi.fn(async () => ({ slug, status: 'done' as const }));
+
+      await runDaemon({
+        claims,
+        discoverBacklog: staticBacklog([{ slug }]),
+        isHalted: async () => true,
+        isFreshRetryableHalt: async () => true,
+        isProgressReKickEligible: async () => false,
+        readHaltClass: async () => 'mechanical',
+        clearRetryableHalt: async () => {},
+        featureExecution: {
+          createWorkOrder: async () => ({ slug } as WorkOrder),
+          executor: { execute },
+        },
+        runFeature: async () => {
+          throw new Error('featureExecution executor must be used');
+        },
+      }, { concurrency: 1, once: true });
+
+      expect(execute).toHaveBeenCalledTimes(1);
+    });
+
+    it('skips an identical HALT across ten idle ticks when neither re-kick predicate admits it', async () => {
+      const claims = new InMemoryWorkClaims();
+      claims.park(slug);
+      const execute = vi.fn(async () => ({ slug, status: 'done' as const }));
+      let sleeps = 0;
+
+      const result = await runDaemon({
+        claims,
+        discoverBacklog: staticBacklog([{ slug }]),
+        isHalted: async () => true,
+        isFreshRetryableHalt: async () => false,
+        isProgressReKickEligible: async () => false,
+        readHaltClass: async () => 'mechanical',
+        clearRetryableHalt: async () => {},
+        featureExecution: {
+          createWorkOrder: async () => ({ slug } as WorkOrder),
+          executor: { execute },
+        },
+        runFeature: async () => {
+          throw new Error('featureExecution executor must be used');
+        },
+        sleep: async () => { sleeps += 1; },
+      }, { concurrency: 1, once: false, maxIdlePolls: 10 });
+
+      expect({ dispatches: execute.mock.calls.length, sleeps, stoppedReason: result.stoppedReason }).toEqual({
+        dispatches: 0,
+        sleeps: 10,
+        stoppedReason: 'idle_timeout',
+      });
+    });
+
+    it.each([
+      ['needs-human', true],
+      ['unclassified', false],
+      ['stack-tip-diverged', true],
+      ['unknown-future-class', true],
+    ] as const)('does not admit retained %s HALTs even when both re-kick predicates say yes', async (disposition, hasClassSidecar) => {
+      const root = await mkdtemp(join(tmpdir(), 'daemon-prompt-retained-halt-'));
+      const pipeline = join(root, '.pipeline');
+      const haltBody = `retained prompt halt (${disposition})\n`;
+      await mkdir(pipeline, { recursive: true });
+      await writeFile(join(pipeline, 'HALT'), haltBody);
+      if (hasClassSidecar) await writeFile(join(pipeline, 'HALT.class'), disposition);
+      const claims = new InMemoryWorkClaims();
+      claims.park(slug);
+      const execute = vi.fn(async () => ({ slug, status: 'done' as const }));
+
+      try {
+        await runDaemon({
+          claims,
+          discoverBacklog: staticBacklog([{ slug }]),
+          isHalted: async () => true,
+          isFreshRetryableHalt: async () => true,
+          isProgressReKickEligible: async () => true,
+          readHaltClass: async () => disposition as never,
+          clearRetryableHalt: async () => {},
+          featureExecution: {
+            createWorkOrder: async () => ({ slug } as WorkOrder),
+            executor: { execute },
+          },
+          runFeature: async () => {
+            throw new Error('featureExecution executor must be used');
+          },
+          sleep: async () => {},
+        }, { concurrency: 1, once: false, maxIdlePolls: 1 });
+
+        expect(execute).not.toHaveBeenCalled();
+        await expect(readFile(join(pipeline, 'HALT'), 'utf-8')).resolves.toBe(haltBody);
+        if (hasClassSidecar) {
+          await expect(readFile(join(pipeline, 'HALT.class'), 'utf-8')).resolves.toBe(disposition);
+        } else {
+          await expect(exists(join(pipeline, 'HALT.class'))).resolves.toBe(false);
+        }
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it('shares the re-kick ceiling with fresh retryable HALT admissions', async () => {
+      const claims = new InMemoryWorkClaims();
+      claims.park(slug);
+      const logs: string[] = [];
+      const execute = vi.fn(async () => ({ slug, status: 'halted' as const }));
+
+      await runDaemon({
+        claims,
+        discoverBacklog: staticBacklog([{ slug }]),
+        isHalted: async () => true,
+        isFreshRetryableHalt: async () => true,
+        isProgressReKickEligible: async () => false,
+        readHaltClass: async () => 'mechanical',
+        clearRetryableHalt: async () => {},
+        progressReKickDispatchCeiling: 3,
+        log: (line) => logs.push(line),
+        featureExecution: {
+          createWorkOrder: async () => ({ slug } as WorkOrder),
+          executor: { execute },
+        },
+        runFeature: async () => {
+          throw new Error('featureExecution executor must be used');
+        },
+        sleep: async () => {},
+      }, { concurrency: 1, once: false, maxIdlePolls: 1 });
+
+      expect(execute).toHaveBeenCalledTimes(3);
+      expect(logs.filter((line) => line.includes('dispatch ceiling (3) reached'))).toHaveLength(1);
+    });
   });
 
   it('stops at the wall-clock ceiling (injected clock)', async () => {

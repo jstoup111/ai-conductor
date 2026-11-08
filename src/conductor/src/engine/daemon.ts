@@ -135,6 +135,12 @@ export interface PickEligibleCtx {
    * operator un-parks it.
    */
   isProgressReKickEligible?: (slug: string) => Promise<boolean>;
+  /**
+   * True when the live retryable HALT body differs from the body this dispatch
+   * boundary last cleared. A distinct mechanical/legacy HALT earns one prompt
+   * re-dispatch, charged against the same bounded counter as progress re-kicks.
+   */
+  isFreshRetryableHalt?: (slug: string) => Promise<boolean>;
 }
 
 /**
@@ -854,7 +860,7 @@ export async function runDaemon(
   const progressReKickCeilingLogged = new Set<string>();
   const progressReKickOperatorActionLogged = new Set<string>();
   const progressReKickLegacyLogged = new Set<string>();
-  const isProgressReKickEligibleBounded = deps.isProgressReKickEligible
+  const isProgressReKickEligibleBounded = (deps.isProgressReKickEligible || deps.isFreshRetryableHalt)
     ? async (slug: string): Promise<boolean> => {
         if (deps.readHaltClass) {
           let disposition: HaltDisposition;
@@ -887,15 +893,27 @@ export async function runDaemon(
           }
           return false;
         }
-        let eligible = false;
-        try {
-          eligible = await deps.isProgressReKickEligible!(slug);
-        } catch (err) {
-          log(
-            `[daemon] isProgressReKickEligible(${slug}) threw (${err instanceof Error ? err.message : String(err)}); treating as not eligible`,
-          );
-          return false;
+        let fresh = false;
+        if (deps.isFreshRetryableHalt) {
+          try {
+            fresh = await deps.isFreshRetryableHalt(slug);
+          } catch (err) {
+            log(
+              `[daemon] isFreshRetryableHalt(${slug}) threw (${err instanceof Error ? err.message : String(err)}); treating as not eligible`,
+            );
+          }
         }
+        let progressed = false;
+        if (deps.isProgressReKickEligible) {
+          try {
+            progressed = await deps.isProgressReKickEligible(slug);
+          } catch (err) {
+            log(
+              `[daemon] isProgressReKickEligible(${slug}) threw (${err instanceof Error ? err.message : String(err)}); treating as not eligible`,
+            );
+          }
+        }
+        const eligible = fresh || progressed;
         if (eligible) progressReKickCounts.set(slug, count + 1);
         return eligible;
       }
