@@ -1,0 +1,10 @@
+src/conductor/test/fixtures/
+src/conductor/test/types/fixtures/
+test/fixtures/
+examples/fixtures/
+node_modules/
+src/conductor/dist*/
+*.md
+*.json
+*.yml
+*.yaml
