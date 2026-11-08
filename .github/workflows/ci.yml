@@ -277,15 +277,31 @@ jobs:
   #
   # Leaving it ungated also means the guarantee does not depend on how `docs_only`
   # is defined tomorrow — widen the predicate to cover `docs/` and this job keeps
-  # running. It is cheap enough to always run: no npm install and no network,
-  # roughly six seconds.
+  # running. It is cheap enough to always run: no npm install and roughly six
+  # seconds after Lychee's release binary is fetched.
   links:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: lycheeverse/lychee-action@v2
+      # The action downloads its release binary with one non-retrying curl. A
+      # short GitHub release-asset failure must not turn an otherwise offline
+      # documentation check into a permanent CI failure. Keep the retry at the
+      # action boundary so a real Lychee failure still fails this job.
+      - name: Run Lychee
+        id: lychee
+        uses: lycheeverse/lychee-action@v2
+        continue-on-error: true
         with:
           # Settings (offline-only, CHANGELOG.md excluded) live in lychee.toml.
+          args: --config lychee.toml docs README.md AGENT_INSTRUCTIONS.md src/conductor/README.md
+          fail: true
+      - name: Wait before retrying Lychee download
+        if: ${{ steps.lychee.outcome == 'failure' }}
+        run: sleep 5
+      - name: Retry Lychee
+        if: ${{ steps.lychee.outcome == 'failure' }}
+        uses: lycheeverse/lychee-action@v2
+        with:
           args: --config lychee.toml docs README.md AGENT_INSTRUCTIONS.md src/conductor/README.md
           fail: true
 
