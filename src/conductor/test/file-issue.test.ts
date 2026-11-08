@@ -28,7 +28,7 @@ function makeFakeGh(opts: {
     }
     if (args.some((arg) => arg.endsWith('/labels'))) {
       if (opts.failLabelApply) throw new Error('simulated label-apply outage');
-      if (opts.failSemverLabel && args.includes('labels[]=semver: patch')) {
+      if (opts.failSemverLabel && args.includes('labels[]=semver: minor')) {
         throw new Error('simulated semver-label outage');
       }
       return { stdout: '{}' };
@@ -170,15 +170,15 @@ describe('fileIntakeIssue — creation-scoped terminal adapter', () => {
     const gh = makeFakeGh({ failSemverLabel: true });
 
     const result = await fileIntakeIssue({
-      title: 'Partial semver metadata', body: 'body', size: 'S', priority: 'low', semver: 'patch',
+      title: 'Partial semver metadata', body: 'body', size: 'S', priority: 'low', semver: 'minor',
     }, { creation: creation(gh.run) });
 
-    expect(result).toMatchObject({ ok: true, semver: 'patch', semverSource: 'given' });
+    expect(result).toMatchObject({ ok: true, semver: 'minor', semverSource: 'given' });
     expect(result.warnings).toEqual([expect.stringContaining('simulated semver-label outage')]);
     expect(gh.calls.filter((args) => args.some((arg) => arg.endsWith('/labels')))).toEqual([
       expect.arrayContaining(['labels[]=priority: low']),
       expect.arrayContaining(['labels[]=size: S']),
-      expect.arrayContaining(['labels[]=semver: patch']),
+      expect.arrayContaining(['labels[]=semver: minor']),
     ]);
   });
 
