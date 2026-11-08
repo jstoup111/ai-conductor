@@ -1035,6 +1035,134 @@ describe('engine/daemon — runDaemon', () => {
         await rm(root, { recursive: true, force: true });
       }
     });
+
+    it('re-parks and re-registers its watcher when clearing a retryable HALT fails', async () => {
+      const claims = new InMemoryWorkClaims();
+      claims.park(slug);
+      const logs: string[] = [];
+      const execute = vi.fn(async () => ({ slug, status: 'done' as const }));
+      const watchHaltCleared = vi.fn(() => vi.fn());
+      let progressChecks = 0;
+
+      await runDaemon({
+        claims,
+        discoverBacklog: staticBacklog([{ slug }]),
+        isHalted: async () => true,
+        // Admit the one dispatch under test; subsequent polling is deliberately
+        // ineligible so it cannot turn this failure-boundary assertion into a
+        // retry-loop test (owned by the later loop task).
+        isProgressReKickEligible: async () => ++progressChecks === 1,
+        readHaltClass: async () => 'mechanical',
+        clearRetryableHalt: async () => {
+          throw new Error('REKICK is read-only');
+        },
+        watchHaltCleared,
+        featureLog: () => (line) => logs.push(line),
+        featureExecution: {
+          createWorkOrder: async () => ({ slug } as WorkOrder),
+          executor: { execute },
+        },
+        runFeature: async () => {
+          throw new Error('featureExecution executor must be used');
+        },
+        sleep: async () => {},
+      }, { concurrency: 1, once: false, maxIdlePolls: 1 });
+
+      expect(execute).not.toHaveBeenCalled();
+      expect(claims.isParked(slug)).toBe(true);
+      expect(watchHaltCleared).toHaveBeenCalledTimes(1);
+      expect(logs.filter((line) => line.includes('HALT clear failed'))).toEqual([
+        expect.stringContaining(`${slug}: HALT clear failed — REKICK is read-only`),
+      ]);
+    });
+
+    it('runs when a retryable HALT disappears after selection and before the clear', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'daemon-raced-halt-clear-'));
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline, { recursive: true });
+      await writeFile(join(pipeline, 'HALT'), 'raced halt\n');
+      await writeFile(join(pipeline, 'HALT.class'), 'mechanical');
+      const claims = new InMemoryWorkClaims();
+      claims.park(slug);
+      let haltedChecks = 0;
+      const execute = vi.fn(async () => ({ slug, status: 'done' as const }));
+      const productionClearRetryableHalt = vi.fn(async (): Promise<void> => {
+        // The production clear treats a concurrently absent marker as a no-op:
+        // do not manufacture archive, sentinel, or audit artifacts.
+        if (!await exists(join(pipeline, 'HALT'))) return;
+        throw new Error('fixture requires HALT to vanish before the clear');
+      });
+
+      try {
+        await runDaemon({
+          claims,
+          discoverBacklog: staticBacklog([{ slug }]),
+          isHalted: async () => {
+            haltedChecks += 1;
+            if (haltedChecks === 2) {
+              await rm(join(pipeline, 'HALT'));
+              await rm(join(pipeline, 'HALT.class'));
+            }
+            return true;
+          },
+          isProgressReKickEligible: async () => true,
+          readHaltClass: async () => 'mechanical',
+          clearRetryableHalt: productionClearRetryableHalt,
+          featureExecution: {
+            createWorkOrder: async () => ({ slug } as WorkOrder),
+            executor: { execute },
+          },
+          runFeature: async () => {
+            throw new Error('featureExecution executor must be used');
+          },
+        }, { concurrency: 1, once: true });
+
+        expect(productionClearRetryableHalt).toHaveBeenCalledTimes(1);
+        expect(execute).toHaveBeenCalledTimes(1);
+        await expect(exists(join(pipeline, 'HALT.rekicked'))).resolves.toBe(false);
+        await expect(exists(join(pipeline, 'REKICK'))).resolves.toBe(false);
+        await expect(exists(join(pipeline, 'audit-trail', 'events.jsonl'))).resolves.toBe(false);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it('honors an operator park before it can clear or execute a mechanical HALT', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'daemon-operator-park-halt-'));
+      const pipeline = join(root, '.pipeline');
+      const haltBody = 'operator parked mechanical halt\n';
+      await mkdir(pipeline, { recursive: true });
+      await writeFile(join(pipeline, 'HALT'), haltBody);
+      await writeFile(join(pipeline, 'HALT.class'), 'mechanical');
+      const clearRetryableHalt = vi.fn(async () => {});
+      const execute = vi.fn(async () => ({ slug, status: 'done' as const }));
+
+      try {
+        await runDaemon({
+          discoverBacklog: staticBacklog([{ slug }]),
+          isParked: async () => true,
+          isHalted: async () => true,
+          isProgressReKickEligible: async () => true,
+          readHaltClass: async () => 'mechanical',
+          clearRetryableHalt,
+          featureExecution: {
+            createWorkOrder: async () => ({ slug } as WorkOrder),
+            executor: { execute },
+          },
+          runFeature: async () => {
+            throw new Error('featureExecution executor must be used');
+          },
+          sleep: async () => {},
+        }, { concurrency: 1, once: false, maxIdlePolls: 1 });
+
+        expect(clearRetryableHalt).not.toHaveBeenCalled();
+        expect(execute).not.toHaveBeenCalled();
+        await expect(readFile(join(pipeline, 'HALT'), 'utf-8')).resolves.toBe(haltBody);
+        await expect(readFile(join(pipeline, 'HALT.class'), 'utf-8')).resolves.toBe('mechanical');
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
   });
 
   it('stops at the wall-clock ceiling (injected clock)', async () => {

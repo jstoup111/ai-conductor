@@ -1026,8 +1026,17 @@ export async function runDaemon(
       const retained = isOperatorActionHalt(disposition)
         || (disposition !== 'mechanical' && disposition !== 'legacy');
       if (!retained) {
-        await deps.clearRetryableHalt(item.slug);
-        featureLog(`re-kick ${item.slug}: cleared ${disposition} HALT before dispatch`);
+        try {
+          await deps.clearRetryableHalt(item.slug);
+          featureLog(`re-kick ${item.slug}: cleared ${disposition} HALT before dispatch`);
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          featureLog(`re-kick ${item.slug}: HALT clear failed — ${reason}`);
+          claims.release(item.slug);
+          claims.park(item.slug);
+          registerWatcher(item.slug);
+          return false;
+        }
       } else {
         // Do not let an automatic path mutate or run through a retained HALT.
         // The claim has not started an executor, so release it synchronously.
