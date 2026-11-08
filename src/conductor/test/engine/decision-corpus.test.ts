@@ -67,12 +67,16 @@ describe('decision corpus known shapes', () => {
     ]);
   });
 
-  it('recognizes status- and verdict-bearing legacy records as known shapes', () => {
+  it('rejects off-shape names despite status- or verdict-bearing content', () => {
     expect([
-      matchesKnownShape('legacy-decision.md', '**Status:** Accepted'),
-      matchesKnownShape('legacy-review.md', '**Verdict:** APPROVED'),
-      matchesKnownShape('notes.md', '# Notes'),
-    ]).toEqual([true, true, false]);
+      matchesKnownShape('legacy-decision.md'),
+      matchesKnownShape('legacy-review.md'),
+      matchesKnownShape('notes.md'),
+    ]).toEqual([false, false, false]);
+    expect([
+      classifyKind('legacy-decision.md', '**Status:** Accepted'),
+      classifyKind('legacy-review.md', '**Verdict:** APPROVED'),
+    ]).toEqual(['decision', 'review']);
   });
 
   it('classifies and retains an inline-bold declared verdict on a legacy record', () => {

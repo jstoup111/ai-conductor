@@ -86,7 +86,7 @@ async function seed(
   await writeFile(join(worktreePath, '.docs', 'complexity', `${stem}.md`), 'Tier: M\n');
   await writeFile(join(worktreePath, '.docs', 'conflicts', `${stem}.md`), '# Conflicts\n\nNone.\n');
   await writeFile(join(worktreePath, '.docs', 'architecture', `${stem}.md`), '# Architecture\n\n```mermaid\nflowchart TD\n  A --> B\n```\n');
-  await writeFile(join(worktreePath, '.docs', 'decisions', `${stem}.md`), '# Architecture review\n\n**Verdict:** APPROVED\n');
+  await writeFile(join(worktreePath, '.docs', 'decisions', `architecture-review-${stem}.md`), '# Architecture review\n\n**Verdict:** APPROVED\n');
   if (useRepositoryConfig) {
     await writeFile(join(worktreePath, '.docs', 'track', `${stem}.md`), 'Track: technical\nChange class: dependency upgrade\n');
   }

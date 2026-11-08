@@ -186,9 +186,12 @@ describe('landSpec decision record shape gate', () => {
     await expect(land(worktreePath)).resolves.toMatchObject({ slug: 'shape-landing' });
   });
 
-  it('refuses an added off-shape corpus file without committing', async () => {
+  it.each([
+    ['**Status:** Proposed'],
+    ['**Verdict:** APPROVED'],
+  ])('refuses an added off-shape corpus file with %s without committing', async (content) => {
     const worktreePath = await seedWorktree();
-    await addDecision(worktreePath, 'notes.md');
+    await addDecision(worktreePath, 'notes.md', content);
     const head = await git(['rev-parse', 'HEAD'], worktreePath);
 
     const error = await land(worktreePath).catch((reason: unknown) => reason);
