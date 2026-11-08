@@ -114,12 +114,14 @@ describe("build-review semantic cache", () => {
   it("excludes path triggers, but not questions, from custom policy cache identity", () => {
     const policy = {
       enabled: true,
-      llm_provider: ["claude"],
+      max_projection_bytes: 1_048_576,
+      llm_provider: "claude",
       model: "sonnet",
       effort: "medium",
       model_fallback_ladder: ["sonnet"],
       max_retries: 1,
       escalate: false,
+      min_confidence: 0,
     } as const;
     const declaration = {
       rubric: "dependencyHygiene",

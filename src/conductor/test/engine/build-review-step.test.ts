@@ -538,7 +538,7 @@ describe('build_review malformed Covers marker gate', () => {
   function createUninstalledPathTriggeredRunner(paths: readonly string[], events?: ConductorEventEmitter) {
     const discovery = vi.fn(async () => []);
     const capture = vi.fn();
-    const invoke = vi.fn();
+    const invoke = vi.fn<LLMProvider['invoke']>();
     const provider: LLMProvider = {
       lifecycleCapability: { synchronousSpawnPermit: true },
       nativeSchemaCapability: { nativeOutputSchema: true },
@@ -559,7 +559,7 @@ describe('build_review malformed Covers marker gate', () => {
               skill: 'dependency-hygiene',
               source: 'project',
               question: 'Review dependencies.',
-              paths,
+              paths: [...paths],
               llm_provider: 'claude',
             },
           },
@@ -588,7 +588,7 @@ describe('build_review malformed Covers marker gate', () => {
         effective: {
           rawVerdict: 'FAIL' as const, verdict: 'FAIL' as const,
           acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: [],
-          infrastructureFailureRubrics: ['dependencyHygiene'], uncoveredInfrastructureFailureRubrics: ['dependencyHygiene'],
+          infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
           uncoveredScopeIncompleteRubrics: [],
         },
       }),
@@ -653,7 +653,7 @@ describe('build_review malformed Covers marker gate', () => {
   it('dispatches enabled built-ins and publishes an aggregate without custom-lap work for an unmatched member', async () => {
     await commitTests({ 'src/a.ts': 'export const a = true;\n' });
     vi.mocked(coordinateBuildReviewRubrics).mockReset();
-    vi.mocked(coordinateBuildReviewRubrics).mockImplementation(async ({ inputs, lapId }) => ({
+    vi.mocked(coordinateBuildReviewRubrics).mockImplementation(async ({ inputs }) => ({
       kind: 'ready',
       branches: [{ kind: 'dispatched', rubric: 'testQuality', result: { snapshotDigest: inputs.sourceSnapshot.digest } }],
     } as never));
@@ -760,7 +760,7 @@ describe('build_review malformed Covers marker gate', () => {
     } else {
       await commitTests({ [changedPath]: content });
     }
-    const coordinator = vi.fn(async () => ({ success: true, output: 'coordinator result' }));
+    const coordinator = vi.fn<NonNullable<StepRunnerOptions['buildReviewCoordinator']>>(async () => ({ success: true, output: 'coordinator result' }));
     const events = new ConductorEventEmitter();
     const skips: ConductorEvent[] = [];
     events.on('build_review_rubric_skipped', (event) => { skips.push(event); });
@@ -794,7 +794,7 @@ describe('build_review malformed Covers marker gate', () => {
     const policyRoot = join(projectRoot, 'policy');
     await mkdir(policyRoot, { recursive: true });
     await writeFile(join(policyRoot, 'SKILL.md'), '# Fixture policy\n', 'utf8');
-    const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: 'fixture', finalStructuredResult: { kind: 'custom-findings', version: 'v2', findings: [] } }));
+    const invoke = vi.fn<LLMProvider['invoke']>(async () => ({ success: true, exitCode: 0, output: 'fixture', finalStructuredResult: { kind: 'custom-findings', version: 'v2', findings: [] } }));
     const provider: LLMProvider = { lifecycleCapability: { synchronousSpawnPermit: true }, nativeSchemaCapability: { nativeOutputSchema: true }, invoke };
     const runner = new DefaultStepRunner(provider, 'matching-custom-provider', projectRoot, {
       planPath, gitRunner: realGit(),
@@ -821,7 +821,7 @@ describe('build_review malformed Covers marker gate', () => {
   function createCachedPathTriggeredRunner(input: {
     readonly paths?: readonly string[];
     readonly question: string;
-    readonly invoke: ReturnType<typeof vi.fn>;
+    readonly invoke: LLMProvider['invoke'];
     readonly events: ConductorEventEmitter;
   }) {
     const policyRoot = join(projectRoot, 'cached-policy');
@@ -838,7 +838,7 @@ describe('build_review malformed Covers marker gate', () => {
         custom_rubrics: {
           dependencyHygiene: {
             enabled: true, skill: 'dependency-hygiene', source: 'project', question: input.question,
-            ...(input.paths === undefined ? {} : { paths: input.paths }), llm_provider: 'claude',
+            ...(input.paths === undefined ? {} : { paths: [...input.paths] }), llm_provider: 'claude',
           },
         },
       } } as HarnessConfig,

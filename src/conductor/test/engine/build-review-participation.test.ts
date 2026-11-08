@@ -3,25 +3,25 @@ import { describe, expect, it } from 'vitest';
 
 import { resolveBuildReviewLapParticipation } from '../../src/engine/build-review-inputs.js';
 import type { ChangedFileReference } from '../../src/engine/build-review-projections.js';
-import type { ResolvedBuildReviewCatalogEntry } from '../../src/engine/resolved-config.js';
+import type { ResolvedBuildReviewCatalogEntry, ResolvedBuildReviewCustomCatalogEntry, ResolvedBuildReviewRubricPolicy } from '../../src/engine/resolved-config.js';
 
 const policy = {
   enabled: true,
   max_projection_bytes: 1,
-  llm_provider: { primary: 'codex', fallbacks: [] },
+  llm_provider: 'codex',
   model: 'gpt-5',
   effort: 'low',
   model_fallback_ladder: [],
   max_retries: 0,
   escalate: false,
   min_confidence: 0,
-} as const;
+} as const satisfies ResolvedBuildReviewRubricPolicy;
 
 function builtin(id: 'security' | 'implementationQuality'): ResolvedBuildReviewCatalogEntry {
   return { id, kind: 'builtin', policy };
 }
 
-function custom(id: string, paths?: readonly string[]): ResolvedBuildReviewCatalogEntry {
+function custom(id: string, paths?: readonly string[]): ResolvedBuildReviewCustomCatalogEntry {
   return {
     id,
     kind: 'custom',
@@ -30,8 +30,8 @@ function custom(id: string, paths?: readonly string[]): ResolvedBuildReviewCatal
     resources: [],
     ...(paths === undefined ? {} : { paths }),
     policy,
-    contract: {} as ResolvedBuildReviewCatalogEntry['contract'],
-  } as ResolvedBuildReviewCatalogEntry;
+    contract: {} as ResolvedBuildReviewCustomCatalogEntry['contract'],
+  };
 }
 
 function changed(path: string, patch: Partial<ChangedFileReference> = {}): ChangedFileReference {

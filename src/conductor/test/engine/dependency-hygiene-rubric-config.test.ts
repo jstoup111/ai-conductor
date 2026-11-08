@@ -231,9 +231,11 @@ describe('repository dependency-hygiene build-review rubric', () => {
     expect(repository.ok).toBe(true);
     if (!repository.ok) return;
     const config = resolveBuildReviewConfig(repository.config);
+    const entry = config.catalog.find((candidate): candidate is Extract<typeof candidate, { kind: 'custom' }> => candidate.id === 'dependencyHygiene');
+    if (!entry) throw new Error('dependency hygiene configuration must resolve as a custom rubric');
     const declaration = {
       version: 'v1' as const, rubricId: 'dependencyHygiene', semanticSkill: 'build-review-dependency-hygiene',
-      question: config.catalog.find((entry) => entry.id === 'dependencyHygiene')!.question, source: 'global' as const, resources: [],
+      question: entry.question, source: 'global' as const, resources: [],
     };
     const sourceRegion = {
       path: 'src/conductor/package.json', startLine: 1, endLine: 1,
