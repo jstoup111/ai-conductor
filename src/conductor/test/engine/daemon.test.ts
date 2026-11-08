@@ -20,6 +20,7 @@ import { preflightBuildAuthCheck } from '../../src/engine/self-host/build-auth-p
 import { buildAuthRemediationMessage } from '../../src/engine/self-host/build-auth-message.js';
 import { SetupFailureError } from '../../src/engine/worktree-prepare.js';
 import { InMemoryWorkClaims } from '../../src/engine/work-claims.js';
+import type { WorkOrder } from '../../src/engine/work-order.js';
 
 function items(n: number): BacklogItem[] {
   return Array.from({ length: n }, (_, i) => ({
@@ -30,6 +31,15 @@ function items(n: number): BacklogItem[] {
 /** Backlog that returns the full list every poll; the daemon filters started. */
 function staticBacklog(list: BacklogItem[]) {
   return async () => list;
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await readFile(path);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function makeSetupTriageParkingRunner(
@@ -889,6 +899,142 @@ describe('engine/daemon — runDaemon', () => {
     // gate were missing this would re-dispatch on every poll (≫ 2).
     expect(dispatches).toBe(2);
     expect(res.stoppedReason).toBe('idle_timeout');
+  });
+
+  describe('retryable HALT dispatch boundary (Task 1)', () => {
+    const slug = 'retryable-halt';
+
+    async function runRetryableDispatch(
+      haltClass: 'mechanical' | 'legacy',
+      opts: { haltCleared?: string } = {},
+    ) {
+      const root = await mkdtemp(join(tmpdir(), 'daemon-retryable-halt-'));
+      const pipeline = join(root, '.pipeline');
+      const haltBody = `blocked prerequisite (${haltClass})\n`;
+      const priorCleared = opts.haltCleared;
+      await mkdir(pipeline, { recursive: true });
+      await writeFile(join(pipeline, 'HALT'), haltBody);
+      await writeFile(join(pipeline, 'HALT.class'), haltClass);
+      if (priorCleared !== undefined) await writeFile(join(pipeline, 'HALT.cleared'), priorCleared);
+
+      const claims = new InMemoryWorkClaims();
+      claims.park(slug);
+      const logs: string[] = [];
+      const clearRetryableHalt = vi.fn(async () => {
+        await writeFile(join(pipeline, 'HALT.rekicked'), await readFile(join(pipeline, 'HALT'), 'utf-8'));
+        await rm(join(pipeline, 'HALT'));
+        await rm(join(pipeline, 'HALT.class'));
+      });
+      let observed: Record<string, string | undefined> | undefined;
+
+      try {
+        await runDaemon({
+          claims,
+          discoverBacklog: staticBacklog([{ slug }]),
+          isHalted: async () => true,
+          isProgressReKickEligible: async () => true,
+          readHaltClass: async () => haltClass,
+          clearRetryableHalt,
+          featureLog: () => (line) => logs.push(line),
+          featureExecution: {
+            createWorkOrder: async () => ({ slug } as WorkOrder),
+            executor: {
+              execute: async () => {
+                observed = {};
+                for (const name of ['HALT', 'HALT.class', 'HALT.rekicked', 'HALT.cleared']) {
+                  const path = join(pipeline, name);
+                  observed[name] = await exists(path) ? await readFile(path, 'utf-8') : undefined;
+                }
+                return { slug, status: 'done' };
+              },
+            },
+          },
+          runFeature: async () => {
+            throw new Error('featureExecution executor must be used');
+          },
+        }, { concurrency: 1, once: true });
+
+        return { clearRetryableHalt, haltBody, logs, observed };
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    }
+
+    it.each([
+      ['mechanical', 'operator over-scope decision\n'],
+      ['legacy', undefined],
+    ] as const)('clears a resumed %s HALT before the injected executor observes the worktree', async (haltClass, haltCleared) => {
+      const result = await runRetryableDispatch(haltClass, { haltCleared });
+
+      expect(result.clearRetryableHalt).toHaveBeenCalledTimes(1);
+      expect(result.observed).toEqual({
+        HALT: undefined,
+        'HALT.class': undefined,
+        'HALT.rekicked': result.haltBody,
+        'HALT.cleared': haltCleared,
+      });
+    });
+
+    it('logs the mechanical class exactly once when clearing before a resumed dispatch', async () => {
+      const result = await runRetryableDispatch('mechanical');
+
+      expect(result.logs.filter((line) => line.includes('cleared mechanical HALT before dispatch'))).toEqual([
+        expect.stringContaining(slug),
+      ]);
+    });
+
+    it.each([
+      ['needs-human', true],
+      ['unclassified', true],
+      ['stack-tip-diverged', true],
+      ['unknown-future-class', true],
+      ['unclassified', false],
+    ] as const)('retains a %s HALT and never invokes its executor', async (disposition, hasClassSidecar) => {
+      const root = await mkdtemp(join(tmpdir(), 'daemon-retained-halt-'));
+      const pipeline = join(root, '.pipeline');
+      const haltBody = `retained (${disposition})\n`;
+      await mkdir(pipeline, { recursive: true });
+      await writeFile(join(pipeline, 'HALT'), haltBody);
+      if (hasClassSidecar) await writeFile(join(pipeline, 'HALT.class'), disposition);
+      const claims = new InMemoryWorkClaims();
+      claims.park(slug);
+      const clearRetryableHalt = vi.fn(async () => {});
+      const execute = vi.fn(async () => ({ slug, status: 'done' as const }));
+      let reads = 0;
+
+      try {
+        await runDaemon({
+          claims,
+          discoverBacklog: staticBacklog([{ slug }]),
+          isHalted: async () => true,
+          isProgressReKickEligible: async () => true,
+          // The selection-time progress guard is independently fail-closed for
+          // retained classes. Return mechanical once to reach dispatch, then
+          // prove the dispatch boundary itself retains the live marker.
+          readHaltClass: async () => (++reads === 1 ? 'mechanical' : disposition) as never,
+          clearRetryableHalt,
+          featureExecution: {
+            createWorkOrder: async () => ({ slug } as WorkOrder),
+            executor: { execute },
+          },
+          runFeature: async () => {
+            throw new Error('featureExecution executor must be used');
+          },
+          sleep: async () => {},
+        }, { concurrency: 1, once: false, maxIdlePolls: 1 });
+
+        expect(clearRetryableHalt).not.toHaveBeenCalled();
+        expect(execute).not.toHaveBeenCalled();
+        await expect(readFile(join(pipeline, 'HALT'), 'utf-8')).resolves.toBe(haltBody);
+        if (hasClassSidecar) {
+          await expect(readFile(join(pipeline, 'HALT.class'), 'utf-8')).resolves.toBe(disposition);
+        } else {
+          await expect(exists(join(pipeline, 'HALT.class'))).resolves.toBe(false);
+        }
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
   });
 
   it('stops at the wall-clock ceiling (injected clock)', async () => {

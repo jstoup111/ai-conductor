@@ -291,6 +291,13 @@ export interface DaemonDeps {
    */
   readHaltClass?: (slug: string) => Promise<HaltDisposition>;
   /**
+   * Clears a retryable (`mechanical` or `legacy`) HALT at the re-dispatch
+   * boundary. The production seam archives its body to `HALT.rekicked` and
+   * appends the existing `halt_cleared` audit record; the daemon core owns
+   * only the ordering and disposition decision.
+   */
+  clearRetryableHalt?: (slug: string) => Promise<void>;
+  /**
    * Task 9: per-spec bound on progress-gated cross-dispatch re-kicks
    * (`isProgressReKickEligible`), mirroring `build_progress_halt.dispatch_ceiling`
    * (resolved config default: 20 — see `config.ts` `BUILD_PROGRESS_HALT_DEFAULTS`).
@@ -1002,6 +1009,34 @@ export async function runDaemon(
     // Dispose any existing watcher before re-dispatching (to avoid stale watchers
     // from the previous dispatch)
     disposeWatcher(item.slug);
+
+    // A parked feature can resume only after its live retryable HALT has been
+    // cleared. Do this before constructing or invoking the executor so stack
+    // preflight never sees a mechanical/legacy HALT as an unauthorized resume.
+    // Keep the seam optional while its composition-root wiring lands; callers
+    // that do provide it get the fail-closed disposition boundary below.
+    if (isResume && deps.clearRetryableHalt && await deps.isHalted?.(item.slug)) {
+      let disposition: HaltDisposition = 'unclassified';
+      try {
+        disposition = await deps.readHaltClass?.(item.slug) ?? 'unclassified';
+      } catch {
+        // A failed class read is unclassified and therefore operator-retained.
+      }
+
+      const retained = isOperatorActionHalt(disposition)
+        || (disposition !== 'mechanical' && disposition !== 'legacy');
+      if (!retained) {
+        await deps.clearRetryableHalt(item.slug);
+        featureLog(`re-kick ${item.slug}: cleared ${disposition} HALT before dispatch`);
+      } else {
+        // Do not let an automatic path mutate or run through a retained HALT.
+        // The claim has not started an executor, so release it synchronously.
+        claims.release(item.slug);
+        claims.park(item.slug);
+        registerWatcher(item.slug);
+        return false;
+      }
+    }
 
     // Task 16: Emit resume marker for re-dispatches, start for fresh dispatches
     if (isResume) {
