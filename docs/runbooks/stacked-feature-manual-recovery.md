@@ -204,8 +204,9 @@ ai-conductor stack rounds --slug <slug> --close r3 --reason "<why r3 is supersed
 ```
 
 The output names the dropped hosts and finding ids, and `.pipeline/events.jsonl` records
-`routing_round_superseded`. A refusal names the blocking state, such as an active host, the marker
-holding this round, or no other non-closed round. Resolve that state and rerun; see the
+`routing_round_superseded`. A refusal names the blocking state, such as an active host or the
+marker holding this round. If the other round already closed, the command performs a leaf return
+instead of a supersede. Resolve that state and rerun; see the
 [refusal list](../reference/cli.md#routed-rounds). A contested or failed write is also refused;
 rerun after the competing write settles.
 

@@ -15,7 +15,10 @@ import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { persistFixtureProjectedRemediationPlan } from './remediation-plan-fixtures.js';
 import { parseChildId } from '../../src/engine/child-context.js';
+import { leafBranchFor } from '../../src/engine/feature-branch-identity.js';
+import { makeGitRunner } from '../../src/engine/rebase.js';
 import { readRouteRecord } from '../../src/engine/routing/route-record-store.js';
+import { closureRefFor } from '../../src/engine/routing/routing-refs.js';
 import { parseRoundId } from '../../src/engine/routing/route-types.js';
 import { writeSliceTopologyFixture } from './slice-topology-fixture.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
@@ -97,6 +100,8 @@ async function seedRoutedTasklessFixture(dir: string): Promise<void> {
   await writeFile(join(dir, 'README.md'), '# fixture\n');
   await execa('git', ['add', 'README.md'], { cwd: dir });
   await execa('git', ['commit', '-q', '-m', 'fixture: initialize'], { cwd: dir });
+  await execa('git', ['branch', leafBranchFor('validation-group-handshake-retry')], { cwd: dir });
+  await execa('git', ['update-ref', closureRefFor('validation-group-handshake-retry', parseChildId(1)!), 'HEAD'], { cwd: dir });
   await Promise.all([
     mkdir(join(dir, '.pipeline', 'children', '1'), { recursive: true }),
     mkdir(join(dir, '.ai-conductor'), { recursive: true }),
@@ -138,7 +143,7 @@ describe('validation-group dispatch handshake retries', () => {
         return {
           success: true,
           output: JSON.stringify({
-            version: 'v1',
+            version: 'v2',
             items: [{ itemId, child: 2, candidates: [2], rationale: 'fixture routes to host 2' }],
           }),
         };
@@ -147,6 +152,7 @@ describe('validation-group dispatch handshake retries', () => {
     const conductor = new Conductor({
       projectRoot: dir,
       stateFilePath: statePath,
+      git: makeGitRunner(dir),
       stepRunner: runner,
       events: new ConductorEventEmitter(),
       fromStep: 'manual_test',

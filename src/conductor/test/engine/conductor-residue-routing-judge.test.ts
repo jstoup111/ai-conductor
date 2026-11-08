@@ -232,7 +232,7 @@ class ContextBoundResidueRunner implements StepRunner {
     return {
       success: true,
       output: JSON.stringify({
-        version: 'v1',
+        version: 'v2',
         items: request.items.map(({ itemId }) => ({
           itemId, child: 1, candidates: [1], rationale: 'The first slice owns this residue.',
         })),
@@ -370,7 +370,7 @@ class AsBuiltResidueRunner implements StepRunner {
     return {
       success: true,
       output: JSON.stringify({
-        version: 'v1',
+        version: 'v2',
         items: request.items.map(({ itemId }) => ({
           itemId, child: 1, candidates: [1], rationale: 'The ADR applies to the first slice.',
         })),

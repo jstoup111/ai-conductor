@@ -4,7 +4,8 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { parseChildId } from '../../src/engine/child-context.js';
 import type { GitResult, GitRunner } from '../../src/engine/rebase.js';
 import { checkRoundSupersession, dispatchStackRoundsCommand, supersedeRound } from '../../src/engine/stack-rounds-cli.js';
-import { createRouteRecord, readRouteRecord, writeRoutingTransaction } from '../../src/engine/routing/route-record-store.js';
+import { createRouteRecord, readRepairMarker, readRouteRecord, writeRoutingTransaction } from '../../src/engine/routing/route-record-store.js';
+import { repairMarkerRefFor } from '../../src/engine/routing/routing-refs.js';
 import { parseRoundId, type RouteRecord } from '../../src/engine/routing/route-types.js';
 import { createSweepRepository, removeAll } from './restack/restack-sweepG2-fixture.js';
 
@@ -12,6 +13,7 @@ const cleanup: string[] = [];
 const slug = 'demo';
 const c1 = parseChildId(1)!;
 const c2 = parseChildId(2)!;
+const r2 = parseRoundId('r2')!;
 const r4 = parseRoundId('r4')!;
 const r5 = parseRoundId('r5')!;
 
@@ -34,6 +36,85 @@ async function openAudit(
   }])).toEqual({ kind: 'updated' });
 }
 
+async function pointRefAtBlobText(
+  subject: Awaited<ReturnType<typeof createSweepRepository>>,
+  ref: string,
+  text: string,
+): Promise<void> {
+  await subject.write('routing-blob.json', text);
+  const blob = (await subject.git(['hash-object', '-w', 'routing-blob.json'])).stdout.trim();
+  await subject.git(['update-ref', ref, blob]);
+}
+
+// Covers: task:11
+it('closes a sole audit round and deletes its matching marker in one transaction', async () => {
+  const subject = await createSweepRepository('stack-rounds-close-leaf-return-', cleanup);
+  await subject.git(['commit', '-qm', 'initial']);
+  await subject.git(['checkout', '-qb', 'feat/daemon-demo']);
+  await openAudit(subject, r2, { [c1]: 'admitted' }, []);
+  await pointRefAtBlobText(subject, repairMarkerRefFor(slug), JSON.stringify({ host: c1, roundId: r2 }));
+  const checked = await checkRoundSupersession(subject.repo, slug, r2);
+  if (checked.kind !== 'leaf-return') throw new Error('expected leaf return');
+
+  const transaction = vi.fn(writeRoutingTransaction);
+  await expect(supersedeRound({
+    worktree: subject.repo, slug, checked, reason: '  return to leaf  ', operator: 'operator', writeRoutingTransaction: transaction,
+  }))
+    .resolves.toMatchObject({ kind: 'superseded', event: { roundId: r2, disposition: 'leaf-return', reason: 'return to leaf', operator: 'operator' } });
+  expect(transaction).toHaveBeenCalledTimes(1);
+  expect(transaction).toHaveBeenCalledWith(subject.repo, slug, [
+    expect.objectContaining({ kind: 'update-record', previous: checked.stored, record: expect.objectContaining({ phase: 'closed', hosts: { [c1]: 'done' } }) }),
+    expect.objectContaining({ kind: 'delete-marker', old: checked.marker?.blob }),
+  ], {});
+  await expect(readRouteRecord(subject.repo, slug, r2)).resolves.toMatchObject({
+    kind: 'record', record: { phase: 'closed', hosts: { [c1]: 'done' }, outbox: [{
+      event: { type: 'routing_round_superseded', roundId: r2, disposition: 'leaf-return', reason: 'return to leaf', operator: 'operator' },
+    }], leafReturn: { branch: 'feat/daemon-demo', head: (await subject.git(['rev-parse', 'HEAD'])).stdout.trim() } },
+  });
+  await expect(readRepairMarker(subject.repo, slug)).resolves.toEqual({ kind: 'absent' });
+});
+
+// Covers: task:11
+it('refuses a leaf-return close when the leaf branch cannot resolve to an immutable tip', async () => {
+  const subject = await createSweepRepository('stack-rounds-close-unresolved-leaf-', cleanup);
+  await subject.git(['commit', '-qm', 'initial']);
+  await subject.git(['checkout', '-qb', 'feat/daemon-demo']);
+  await openAudit(subject, r2, { [c1]: 'admitted' }, []);
+  await pointRefAtBlobText(subject, repairMarkerRefFor(slug), JSON.stringify({ host: c1, roundId: r2 }));
+  const checked = await checkRoundSupersession(subject.repo, slug, r2);
+  if (checked.kind !== 'leaf-return') throw new Error('expected leaf return');
+  const git: GitRunner = vi.fn(async () => ({ exitCode: 1, stdout: '', stderr: 'missing ref' }));
+
+  await expect(supersedeRound({ worktree: subject.repo, slug, checked, reason: 'return to leaf', operator: 'operator', git }))
+    .resolves.toEqual({ kind: 'refused', detail: 'cannot resolve leaf return head for routing round r2' });
+  expect(git).toHaveBeenCalledWith(['rev-parse', '-q', '--verify', 'feat/daemon-demo']);
+  const after = await readRouteRecord(subject.repo, slug, r2);
+  expect(after).toMatchObject({ kind: 'record', blob: checked.stored.blob, record: { phase: 'open' } });
+  if (after.kind !== 'record') throw new Error('missing route record');
+  expect(after.record.leafReturn).toBeUndefined();
+});
+
+// Covers: task:11
+it('refuses a leaf-return close when its checked marker was moved', async () => {
+  const subject = await createSweepRepository('stack-rounds-close-leaf-return-race-', cleanup);
+  await subject.git(['commit', '-qm', 'initial']);
+  await subject.git(['checkout', '-qb', 'feat/daemon-demo']);
+  await openAudit(subject, r2, { [c1]: 'admitted' }, []);
+  await pointRefAtBlobText(subject, repairMarkerRefFor(slug), JSON.stringify({ host: c1, roundId: r2 }));
+  const checked = await checkRoundSupersession(subject.repo, slug, r2);
+  if (checked.kind !== 'leaf-return') throw new Error('expected leaf return');
+  const before = await readRouteRecord(subject.repo, slug, r2);
+  if (before.kind !== 'record') throw new Error('missing r2');
+  await pointRefAtBlobText(subject, repairMarkerRefFor(slug), JSON.stringify({ host: c2, roundId: r2 }));
+  const moved = (await subject.git(['rev-parse', repairMarkerRefFor(slug)])).stdout.trim();
+
+  await expect(supersedeRound({ worktree: subject.repo, slug, checked, reason: 'return to leaf', operator: 'operator' }))
+    .resolves.toEqual({ kind: 'refused', detail: 'contested write for routing round r2' });
+  await expect(readRouteRecord(subject.repo, slug, r2)).resolves.toMatchObject({ kind: 'record', blob: before.blob, record: { phase: 'open' } });
+  await expect(subject.git(['rev-parse', repairMarkerRefFor(slug)])).resolves.toMatchObject({ stdout: expect.stringContaining(moved) });
+});
+
+// Covers: task:11
 it('closes pending hosts and appends the supersession event in the one record update', async () => {
   const subject = await createSweepRepository('stack-rounds-close-write-', cleanup);
   await subject.git(['commit', '-qm', 'initial']);
@@ -42,10 +123,10 @@ it('closes pending hosts and appends the supersession event in the one record up
   ]);
   await openAudit(subject, r5, { [c1]: 'repairing' }, []);
   const checked = await checkRoundSupersession(subject.repo, slug, r4);
-  if (checked.kind !== 'supersedable') throw new Error(checked.detail);
+  if (checked.kind !== 'supersedable') throw new Error('expected supersedable round');
 
   await expect(supersedeRound({ worktree: subject.repo, slug, checked, reason: '  newer round  ', operator: 'operator' }))
-    .resolves.toMatchObject({ kind: 'superseded', event: { roundId: r4, supersededBy: r5, droppedHosts: [c2], findingIds: ['host-2'], reason: 'newer round', operator: 'operator' } });
+    .resolves.toMatchObject({ kind: 'superseded', event: { roundId: r4, disposition: 'superseded', supersededBy: r5, droppedHosts: [c2], findingIds: ['host-2'], reason: 'newer round', operator: 'operator' } });
   await expect(readRouteRecord(subject.repo, slug, r4)).resolves.toMatchObject({
     kind: 'record', record: { phase: 'closed', hosts: { [c1]: 'restacked', [c2]: 'done' }, outbox: [
       { event: { type: 'routing_round_superseded', roundId: r4 } },
@@ -59,7 +140,7 @@ it('reports a failed write, rather than contention, when update-ref fails withou
   await openAudit(subject, r4, { [c1]: 'restacked', [c2]: 'pending' }, []);
   await openAudit(subject, r5, { [c1]: 'repairing' }, []);
   const checked = await checkRoundSupersession(subject.repo, slug, r4);
-  if (checked.kind !== 'supersedable') throw new Error(checked.detail);
+  if (checked.kind !== 'supersedable') throw new Error('expected supersedable round');
   const git: GitRunner = async (args, options) => {
     if (args[0] === 'update-ref' && args[1] === '--stdin') return { exitCode: 1, stdout: '', stderr: 'disk write failed' };
     const result = await subject.git(args, options?.env);
@@ -79,7 +160,7 @@ it('keeps the target open without an event when its checked survivor closes befo
   await openAudit(subject, r4, { [c1]: 'restacked', [c2]: 'pending' }, []);
   await openAudit(subject, r5, { [c1]: 'repairing' }, []);
   const checked = await checkRoundSupersession(subject.repo, slug, r4);
-  if (checked.kind !== 'supersedable') throw new Error(checked.detail);
+  if (checked.kind !== 'supersedable') throw new Error('expected supersedable round');
   expect(await writeRoutingTransaction(subject.repo, slug, [{
     kind: 'update-record', previous: checked.survivor, record: { ...checked.survivor.record, phase: 'closed', hosts: { [c1]: 'done' } },
   }])).toEqual({ kind: 'updated' });

@@ -1,4 +1,4 @@
-// Covers: task:4, task:38
+// Covers: task:4, task:5, task:38
 import { execFile as execFileCallback } from 'node:child_process';
 import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -95,6 +95,7 @@ describe('deleteFeatureConductorRefs (real local Git)', () => {
     const expected = [
       'refs/conductor/demo/restack/conflict/record',
       'refs/conductor/demo/restack/conflict/parent',
+      'refs/conductor/demo/restack/conflict/refused-tip',
       ...Array.from({ length: MAX_CHILD_ID }, (_unused, index) => `refs/conductor/demo/restack/resolution/c${index + 1}`),
       ...Array.from({ length: MAX_CHILD_ID }, (_unused, index) => `refs/conductor/demo/restack/decision/c${index + 1}`),
     ];

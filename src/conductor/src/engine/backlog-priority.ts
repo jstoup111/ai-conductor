@@ -12,6 +12,74 @@ import type { OrderingSource } from './ordering-source.js';
  */
 export type PriorityBand = 'no-issue' | 'critical' | 'high' | 'medium' | 'low' | 'unlabeled';
 
+/** The next eligible arrival considered during a full-pool preemption pass. */
+export interface PreemptionArrival {
+  slug: string;
+  band?: PriorityBand;
+  backlogIndex: number;
+}
+
+/** A feature worker that can yield to a higher-ranked backlog arrival. */
+export interface PreemptionCandidate extends PreemptionArrival {
+  dispatchSequence: number;
+}
+
+/**
+ * Rank a resolver priority band for preemption.
+ *
+ * This intentionally differs from dispatch ordering: unlabeled and no-issue
+ * both share the medium rank, while an unbanded item cannot preempt or yield.
+ */
+export function preemptionRank(band: PriorityBand | undefined): number | undefined {
+  switch (band) {
+    case 'critical': return 3;
+    case 'high': return 2;
+    case 'medium':
+    case 'unlabeled':
+    case 'no-issue': return 1;
+    case 'low': return 0;
+    case undefined: return undefined;
+  }
+}
+
+/**
+ * Select the running feature that should yield to the next backlog arrival.
+ *
+ * A candidate must be strictly lower rank and occur later in the current
+ * backlog. Among candidates, the lowest rank yields first; equal ranks choose
+ * the most recently dispatched worker.
+ */
+export function selectPreemptionVictim(
+  next: PreemptionArrival,
+  running: readonly PreemptionCandidate[],
+): string | undefined {
+  const nextRank = preemptionRank(next.band);
+  if (nextRank === undefined) return undefined;
+
+  let victim: PreemptionCandidate | undefined;
+  let victimRank = Number.POSITIVE_INFINITY;
+
+  for (const candidate of running) {
+    const candidateRank = preemptionRank(candidate.band);
+    if (
+      candidateRank === undefined
+      || nextRank <= candidateRank
+      || next.backlogIndex >= candidate.backlogIndex
+    ) continue;
+
+    if (
+      victim === undefined
+      || candidateRank < victimRank
+      || (candidateRank === victimRank && candidate.dispatchSequence > victim.dispatchSequence)
+    ) {
+      victim = candidate;
+      victimRank = candidateRank;
+    }
+  }
+
+  return victim?.slug;
+}
+
 /**
  * Resolution mode for priority-driven backlog ordering.
  *

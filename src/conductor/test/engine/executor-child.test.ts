@@ -459,6 +459,74 @@ describe('executor child entrypoint', () => {
     ]);
   });
 
+  // Covers: task:2
+  it('carries a yield as an in-memory preemption request without aborting the running attempt', async () => {
+    root = await mkdtemp(join(tmpdir(), 'executor-child-yield-'));
+    const port = new FakePort();
+    let runStarted!: () => void;
+    const started = new Promise<void>((resolve) => { runStarted = resolve; });
+    let finishRun!: () => void;
+    const finish = new Promise<void>((resolve) => { finishRun = resolve; });
+    let preemptionRequested: (() => boolean) | undefined;
+    let signal: AbortSignal | undefined;
+    const done = runExecutorChild(port, {
+      moduleDir: CHILD_MODULE_DIR,
+      createWorktree: async () => ({ path: root! }),
+      run: async (input) => {
+        preemptionRequested = input.preemptionRequested;
+        signal = input.signal;
+        runStarted();
+        await finish;
+        return { slug: input.order.slug, status: 'done' };
+      },
+    });
+
+    port.dispatch({ kind: 'work-order', order });
+    await started;
+    port.dispatch({ kind: 'yield' });
+
+    expect(preemptionRequested?.()).toBe(true);
+    expect(signal?.aborted).toBe(false);
+    finishRun();
+    await done;
+  });
+
+  // Covers: task:2
+  it('ignores an unknown or malformed yield message and preserves the resolved outcome', async () => {
+    root = await mkdtemp(join(tmpdir(), 'executor-child-unknown-yield-'));
+    const port = new FakePort();
+    let runStarted!: () => void;
+    const started = new Promise<void>((resolve) => { runStarted = resolve; });
+    let finishRun!: () => void;
+    const finish = new Promise<void>((resolve) => { finishRun = resolve; });
+    let signal: AbortSignal | undefined;
+    const outcome = { slug: order.slug, status: 'halted' as const, reason: 'natural halt' };
+    const done = runExecutorChild(port, {
+      moduleDir: CHILD_MODULE_DIR,
+      createWorktree: async () => ({ path: root! }),
+      run: async (input) => {
+        signal = input.signal;
+        runStarted();
+        await finish;
+        return outcome;
+      },
+    });
+
+    port.dispatch({ kind: 'work-order', order });
+    await started;
+    port.dispatch({ kind: 'yield-from-newer-supervisor' });
+    port.dispatch({ kind: 42 });
+
+    expect(signal?.aborted).toBe(false);
+    expect(port.sent.filter((message) => (message as { kind?: string }).kind === 'outcome')).toEqual([]);
+    finishRun();
+    await done;
+
+    expect(port.sent.filter((message) => (message as { kind?: string }).kind === 'outcome')).toEqual([
+      { kind: 'outcome', outcome },
+    ]);
+  });
+
   it('flushes the outcome to the supervisor before disconnecting and exiting', async () => {
     root = await mkdtemp(join(tmpdir(), 'executor-child-'));
     const port = new FakePort();

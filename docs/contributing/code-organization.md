@@ -94,7 +94,9 @@ Two lookups that are easy to get wrong:
   `engine/artifacts.ts:1122-1219`.
 - The daemon's ship-eligibility guard has no module of its own. It is inline in
   `engine/daemon-runner.ts` — `isVerifiedShip` at `:219` and `failureReasonForFalseShip` at `:228`.
-- Backlog priority resolution is `createPriorityResolver` in `engine/backlog-priority.ts:114`.
+- Backlog priority resolution is `createPriorityResolver` in `engine/backlog-priority.ts:182`. Daemon
+  preemption ranking and victim choice are `preemptionRank` and `selectPreemptionVictim` in the same file;
+  `runDaemon` in `engine/daemon.ts` requests the yield.
 - Priority, size, and blocker facts come from the backend-neutral `createOrderingSource` in
   `engine/ordering-source.ts`; the daemon shares one source per run via
   `engine/daemon-ordering-readers.ts`. Do not add direct `gh` priority or blocker reads elsewhere.
@@ -243,6 +245,17 @@ entry whose edge disappears or stops violating fails the test as stale.
 | --- | --- | --- |
 | engine → engine (cycle) | 225 | `engine/slice-topology.ts` → `engine/plan-slices.ts` |
 | execution → execution (cycle) | 9 | `execution/provider-catalog.ts` ↔ provider adapters |
+
+## External boundaries
+
+Production code reaches eight external boundaries: `llm`, `git`, `gh`, `tmux`, `process`, `clock`,
+`otel`, and `filesystem`. `test/structural/boundary-registry.ts` records each one's port, adapter
+modules, and status. Only `llm` is ported, behind `LLMProvider`; the rest are pending a port.
+
+New code reaches a boundary through an injected dependency, not a direct `fs`, `child_process`,
+`execa`, `@opentelemetry/`, or clock call. Only entry points at the `src/` root import adapter modules.
+`test/structural/boundary-ratchet.test.ts` enforces this against the shrink-only
+`test/structural/boundary-allowlist.txt`; see [external boundary ratchet](testing.md#external-boundary-ratchet).
 
 ## Build output
 

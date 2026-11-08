@@ -70,6 +70,7 @@ async function baseRefreshConflictFixture() {
   await git(['config', 'user.email', 'restack@example.test']);
   await git(['config', 'user.name', 'Restack resolution']);
   await writeFile(join(repo, '.git', 'info', 'exclude'), '.pipeline/\n');
+  await mkdir(join(repo, 'tests'), { recursive: true });
   await commit('base', 'shared.txt', 'base\n');
   const first = parseChildId(1);
   const second = parseChildId(2);
@@ -83,7 +84,8 @@ async function baseRefreshConflictFixture() {
   await git(['checkout', '-qb', 'feat/daemon-demo']);
   const leafTip = await commit('leaf', 'leaf.txt', 'leaf\n');
   await git(['checkout', '-q', 'main']);
-  const newDefault = await commit('default changes shared', 'shared.txt', 'default\n');
+  await commit('default changes shared', 'shared.txt', 'default\n');
+  const newDefault = await commit('default adds test', 'tests/a.test.ts', 'parent test\n');
   await writeSliceTopologyFixture(repo, {
     version: 1, slug: 'demo', runId: 'run-1', status: 'done', entries: [],
     sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child one', 'Child two', 'Leaf'] },
@@ -99,7 +101,11 @@ async function baseRefreshConflictFixture() {
   const record = await readConflictRecord(repo, 'demo', { git: runner });
   if (record.kind !== 'record') throw new Error('expected base-refresh conflict record');
   await git(['checkout', '-qb', 'operator-resolution', record.record.newParent]);
-  const resolutionTip = await commit('child two', 'shared.txt', 'resolved\n');
+  await writeFile(join(repo, 'shared.txt'), 'resolved\n');
+  await writeFile(join(repo, 'tests/a.test.ts'), 'adapted parent test\n');
+  await git(['add', 'shared.txt', 'tests/a.test.ts']);
+  await git(['commit', '-qm', 'child two']);
+  const resolutionTip = sha((await git(['rev-parse', 'HEAD'])).stdout.trim());
   await git(['checkout', '-q', 'feat/daemon-demo']);
   await expect(dispatchStackRestackResolve(
     resolveCommand('--slug', 'demo', '--child', '2', '--tip', resolutionTip), resolveDeps(repo),
@@ -271,13 +277,16 @@ describe('recovery consumed-resolution leaf ownership (real local Git)', () => {
     await expect(subject.git(['rev-parse', 'refs/conductor/demo/closed/c2'])).resolves.toMatchObject({ stdout: `${resolved}\n` });
   });
 
+  // Covers: task:9
   it('consumes a dispatcher-recorded base-refresh resolution and moves the closed child without test-written refs', async () => {
     const subject = await baseRefreshConflictFixture();
     const events = new ConductorEventEmitter();
     const consumed: string[] = [];
+    const applied: unknown[] = [];
     events.on('restack_resolution', (event) => {
       if (event.type === 'restack_resolution' && event.action === 'consumed') consumed.push(event.tip);
     });
+    events.on('restack_applied', (event) => { if (event.type === 'restack_applied') applied.push(event); });
 
     const result = await runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
@@ -287,10 +296,12 @@ describe('recovery consumed-resolution leaf ownership (real local Git)', () => {
 
     const childTip = (await subject.git(['rev-parse', 'feat/c2/demo'])).stdout.trim();
     expect(consumed).toEqual([childTip]);
+    expect(applied).toContainEqual(expect.objectContaining({ child: subject.second, adaptedPaths: ['tests/a.test.ts'] }));
     await expect(subject.git(['rev-parse', 'refs/conductor/demo/closed/c2']))
       .resolves.toMatchObject({ stdout: `${childTip}\n` });
   });
 
+  // Covers: task:9
   it('consumes a recorded tip through planned-journal recovery despite parent halt-record drift', async () => {
     const subject = await baseRefreshConflictFixture();
     await subject.git(['checkout', '-qb', 'operator-halt-record', subject.resolutionTip]);
@@ -346,8 +357,10 @@ describe('recovery consumed-resolution leaf ownership (real local Git)', () => {
     const prior = await readRestackJournal(subject.repo, 'demo', { git: subject.runner });
     await subject.git(['update-ref', journalRefFor('demo'), blob, prior.kind === 'journal' ? prior.blob : '']);
     const events: unknown[] = [];
+    const applied: unknown[] = [];
     const emitter = new ConductorEventEmitter();
     emitter.on('restack_resolution', (event) => { events.push(event); });
+    emitter.on('restack_applied', (event) => { applied.push(event); });
 
     await expect(recoverRestackJournal({
       worktree: subject.repo, slug: 'demo', git: subject.runner, events: emitter,
@@ -357,6 +370,7 @@ describe('recovery consumed-resolution leaf ownership (real local Git)', () => {
     await expect(subject.git(['show', `${rebuilt}:${haltRecordPathFor('demo')}`]))
       .resolves.toMatchObject({ stdout: 'Status: resolved\nResolved at: 2032-01-01T00:00:00Z\n' });
     expect(events).toContainEqual(expect.objectContaining({ type: 'restack_resolution', action: 'consumed', child: subject.second }));
+    expect(applied).toContainEqual(expect.objectContaining({ type: 'restack_applied', child: subject.second, adaptedPaths: ['tests/a.test.ts'] }));
   });
 
   it('refuses a dispatcher-recorded base-refresh resolution whose recorded parent tree is stale without moving refs', async () => {

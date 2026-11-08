@@ -62,6 +62,22 @@ export interface MakeExecutorChildRunOptions {
   readonly githubBoundary?: Pick<DaemonProcessServicesOptions, 'runner' | 'readCredential' | 'readToken'>;
 }
 
+/** The supervisor owns both boundary signals; the child only relays them to its conductor. */
+export function buildExecutorChildConductorBoundaryOptions({
+  projectRoot,
+  slug,
+  preemptionRequested,
+}: {
+  projectRoot: string;
+  slug: string;
+  preemptionRequested: () => boolean;
+}): Pick<ConstructorParameters<typeof Conductor>[0], 'operatorParkBoundary' | 'preemptionRequested'> {
+  return {
+    operatorParkBoundary: () => isOperatorParked(projectRoot, slug),
+    preemptionRequested,
+  };
+}
+
 /**
  * Claim the root-owned stacked-feature lease before an isolated child creates
  * or reuses its worktree. The child process runs with the supervisor's root as
@@ -301,7 +317,11 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
     // Child isolation changes process ownership, not operator-park semantics:
     // consult the same root marker at each existing conductor admission
     // boundary and leave the feature state intact for a later unpark/retry.
-    operatorParkBoundary: () => isOperatorParked(projectRoot, order.slug),
+    ...buildExecutorChildConductorBoundaryOptions({
+      projectRoot,
+      slug: order.slug,
+      preemptionRequested: input.preemptionRequested,
+    }),
     registerAbortController: (controller) => {
       waitControllers.add(controller);
       controller.signal.addEventListener('abort', () => waitControllers.delete(controller), { once: true });

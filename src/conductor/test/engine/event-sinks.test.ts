@@ -165,7 +165,6 @@ type RestackRefusalReasonIsClosed = Assert<Equal<
   | 'replay-mismatch'
   | 'range-not-ancestor'
   | 'closed-child-rewritten'
-  | 'flatten_refused'
   | 'restack-outstanding'
   | 'journal-live-owner'
   | 'published-stack'
@@ -371,6 +370,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'rebase_untracked_quarantined',
   'repair_boundary_translated',
   'operator_rewind',
+  'preemption_boundary',
   'setup_repair',
   'project_setup',
   'memory_setup',
@@ -698,6 +698,7 @@ const routingEvents = [
     occurredAt: '2026-10-12T00:00:05.000Z',
     roundId: routingRoundId,
     child: routingChild,
+    disposition: 'superseded',
     supersededBy: parseRoundId('r2')!,
     droppedHosts: [routingChild],
     findingIds: ['finding-1'],
@@ -793,6 +794,7 @@ describe('event sink subscriptions', () => {
         newTip: sha('b'),
         wouldInvalidate: ['build_review'],
         parentOverlapPaths: ['src/conductor/src/engine/restack/restack-events.ts'],
+        adaptedPaths: [],
       },
       {
         type: 'restack_conflict',
@@ -1860,6 +1862,7 @@ describe('event sink subscriptions', () => {
       'halt_record_write_failed',
       'halt_record_push_failed',
       'shipment_evidence_refused',
+      'preemption_boundary',
       'step_in_flight',
       'step_inapplicable',
       'step_inapplicable_ignored',

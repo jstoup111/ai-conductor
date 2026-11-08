@@ -47,6 +47,8 @@ export interface ExecutorChildBaseRunInput {
   effectiveConcurrency?: number;
   events: ConductorEventEmitter;
   signal: AbortSignal;
+  /** Memory-only supervisor request to stop at the next conductor boundary. */
+  preemptionRequested: () => boolean;
   /** Feature-scoped logger forwarded to the supervisor-owned daemon sink. */
   log?: (line: string) => void;
 }
@@ -121,6 +123,7 @@ export async function runExecutorChild(port: ExecutorIpcPort, deps: ExecutorChil
   const controller = new AbortController();
   let started = false;
   let complete = false;
+  let yieldRequested = false;
   let finishWaitingForOrder: (() => void) | undefined;
   // The child disconnects and exits right after its outcome, so the send
   // must be flushed first: an unflushed outcome is dropped and the supervisor
@@ -148,6 +151,7 @@ export async function runExecutorChild(port: ExecutorIpcPort, deps: ExecutorChil
   port.on('message', (raw?: unknown) => {
     const parsed = parseExecutorMessage(raw);
     if (parsed.kind === 'ok' && parsed.message.kind === 'stop') stop(parsed.message.reason);
+    if (parsed.kind === 'ok' && parsed.message.kind === 'yield') yieldRequested = true;
   });
   port.send({ kind: 'hello', protocolVersion: EXECUTOR_PROTOCOL_VERSION, engineVersionId });
   await new Promise<void>((resolve) => {
@@ -186,7 +190,14 @@ export async function runExecutorChild(port: ExecutorIpcPort, deps: ExecutorChil
             });
             const outcome = controller.signal.aborted
               ? { slug: order.slug, status: 'parked' as const, reason: String(controller.signal.reason ?? 'stopped') }
-              : await deps.run({ order, engineVersionId, effectiveConcurrency, events, signal: controller.signal });
+              : await deps.run({
+                order,
+                engineVersionId,
+                effectiveConcurrency,
+                events,
+                signal: controller.signal,
+                preemptionRequested: () => yieldRequested,
+              });
             persister.stop();
             await sendOutcome(outcome);
           } finally {

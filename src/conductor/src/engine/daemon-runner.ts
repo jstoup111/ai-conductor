@@ -30,7 +30,7 @@ import {
 import { currentCommitSha } from './project-prelude.js';
 import { readHaltSidecarClassification, writeHaltMarker } from './halt-marker.js';
 import { deferredAutoParkHaltPresentation } from './auto-park-halt.js';
-import type { OperatorParkedTermination } from './conductor-options.js';
+import type { OperatorParkedTermination, PreemptedTermination } from './conductor-options.js';
 import { computeTimingRollup } from './timing-rollup.js';
 import { readState } from './state.js';
 import type { GithubOperationRunner } from './github-operations.js';
@@ -131,7 +131,7 @@ export interface FeatureRunnerDeps {
     events?: ConductorEventEmitter,
     log?: (message: string) => void,
     sessionId?: string,
-  ) => Promise<void | OperatorParkedTermination>;
+  ) => Promise<void | OperatorParkedTermination | PreemptedTermination>;
   /** Read the loop outcome from the worktree's markers. */
   readOutcome: (worktree: FeatureWorktree) => Promise<WorktreeOutcome>;
   /**
@@ -147,6 +147,8 @@ export interface FeatureRunnerDeps {
   markProcessed: (slug: string, prUrl?: string) => Promise<void>;
   /** Daemon mode. When true, emit a structured engineer signal on completion. */
   daemon: boolean;
+  /** Optional engineer-store location; production resolves it from the environment. */
+  engineerDir?: string;
   /** Optional provider adapter retained for completion-emission compatibility. */
   provider?: LLMProvider;
   /** Fresh provider routing state allocated once for each feature run. */
@@ -364,7 +366,7 @@ export function makeRunFeature(
       // Non-deferred (legacy composition) path: perform the engineer-store
       // signal here. Best-effort inside emitEngineerSignal — never throws.
       await emitEngineerSignal({
-        engineerDir: resolveEngineerDir(),
+        engineerDir: deps.engineerDir ?? resolveEngineerDir(),
         eventsContent: effects.engineerSignal.eventsContent,
         outcome: effects.engineerSignal.outcome,
         project: deps.project,
@@ -592,6 +594,10 @@ export function makeRunFeature(
           slug: item.slug,
           status: 'parked',
         };
+      }
+      if (conductorTermination?.kind === 'preempted') {
+        await endDispatch('terminated');
+        return { slug: item.slug, status: 'preempted' };
       }
       const outcome = await deps.readOutcome(worktree);
 

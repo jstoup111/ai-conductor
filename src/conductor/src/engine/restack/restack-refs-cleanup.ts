@@ -5,7 +5,7 @@ import type { GitRunner } from '../rebase.js';
 import { routingTeardownRefNames } from '../routing/routing-refs.js';
 import { journalRefFor, readRestackJournal, stagingRefFor } from './restack-journal.js';
 import { cascadesRefFor } from './cascade-cap.js';
-import { conflictParentRefFor, conflictRecordRefFor, decisionRefFor, resolutionRefFor } from './restack-conflict-record.js';
+import { conflictFlattenedTipRefFor, conflictParentRefFor, conflictRecordRefFor, decisionRefFor, refusedTipRefFor, resolutionRefFor } from './restack-conflict-record.js';
 import { haltRecordRefFor } from '../halt-record-ref.js';
 
 /**
@@ -23,6 +23,8 @@ export function featureConductorRefNames(slug: string): readonly string[] {
     journalRefFor(slug),
     conflictRecordRefFor(slug),
     conflictParentRefFor(slug),
+    conflictFlattenedTipRefFor(slug),
+    refusedTipRefFor(slug),
   ];
   for (let id = 1; id <= MAX_CHILD_ID; id += 1) {
     const child = childBranchFor(slug, id);

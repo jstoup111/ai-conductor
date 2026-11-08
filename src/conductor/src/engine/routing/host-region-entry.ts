@@ -430,6 +430,16 @@ async function reconcileHostObligations(
   return { kind: 'reconciled' };
 }
 
+/** A hosted, taskless audit obligation must enter BUILD even after task completion. */
+export function hostCarriesTasklessObligation(record: RouteRecord, host: ChildId): boolean {
+  const allocation = record.allocation[host];
+  const hostedItems = record.items.filter((item) => item.host === host);
+  return allocation !== undefined
+    && allocation.remTaskIds.length === 0
+    && hostedItems.length > 0
+    && hostedItems.every((item) => item.taskIds === undefined);
+}
+
 /**
  * Pins and enters the selected routed host exactly once before its BUILD
  * region can run.  Frozen blocks are committed before the host becomes
@@ -536,6 +546,7 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
   const auditAlreadyComplete = await (async (): Promise<boolean> => {
     switch (stored.record.kind) {
       case 'audit':
+        if (hostCarriesTasklessObligation(stored.record, input.host)) return false;
         return (await (input.checkCompletion ?? checkStepCompletion)(input.worktree, 'build', {
           ...input.completionContext,
           projectRoot: input.worktree,

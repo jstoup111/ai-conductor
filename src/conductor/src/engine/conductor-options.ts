@@ -38,6 +38,10 @@ export interface OperatorParkedTermination {
   kind: 'operator-parked';
   boundary: SchedulingUnitRef;
 }
+export interface PreemptedTermination {
+  kind: 'preempted';
+  boundary: SchedulingUnitRef;
+}
 export interface NavigableStep {
   name: StepName;
   label: string;
@@ -95,6 +99,8 @@ export interface ConductorOptions {
   /** Test seam for the two real resume/finish stack-preflight dispatches. */
   stackPreflight?: typeof runStackPreflight;
   operatorParkBoundary?: () => Promise<boolean>;
+  /** Daemon-only in-memory yield signal, checked through the park boundary. */
+  preemptionRequested?: () => boolean;
   resume?: boolean;
   fromStep?: StepName;
   mode?: RunMode;

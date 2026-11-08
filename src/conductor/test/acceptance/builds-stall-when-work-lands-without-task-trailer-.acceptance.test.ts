@@ -219,6 +219,11 @@ describe('commit-movement liveness floor (real Conductor.run() build retry loop)
       stepRunner: runner,
       events,
       projectRoot: dir,
+      // These fixtures observe the automated build retry loop. Keeping the
+      // conductor in auto mode avoids an interactive handoff after a
+      // deliberately seeded stall marker, which is outside the assertion and
+      // can outlive Vitest's test timeout under suite contention.
+      mode: 'auto',
       verifyArtifacts: true,
       maxRetries,
       onRecovery,
@@ -378,16 +383,12 @@ describe('commit-movement liveness floor (real Conductor.run() build retry loop)
     expect(stallEvents.filter((e) => e.reason === 'no_task_progress').length).toBeGreaterThan(0);
     expect(unattributedEvents).toHaveLength(0);
 
-    // The build must still reach the same terminal outcome as today's
-    // genuine-wedge path — one early commit must not blind the wedge
-    // detector for the rest of the step. This fixture runs non-daemon (no
-    // `daemon: true` on the Conductor), so the recovery menu (`onRecovery`),
-    // not the `.pipeline/HALT` file, is the terminal signal — the HALT file
-    // is daemon-only (see conductor.ts's `LOOP_HALT_MARKER` write sites,
-    // all gated on `this.daemon`).
-    expect(onRecovery).toHaveBeenCalled();
+    // This fixture intentionally runs in auto mode. It does not open the
+    // interactive recovery menu, but its exhausted gating step writes the
+    // durable HALT marker used by unattended runs.
+    expect(onRecovery).not.toHaveBeenCalled();
     const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8').catch(() => null);
-    expect(haltContent).toBeNull();
+    expect(haltContent).toMatch(/build stalled: no task progress/i);
   });
 
   it('Story 1 negative path 3 — SHA read fails (returns null) on one side of the comparison, count pinned → still classifies no_task_progress (fail-closed, never fabricates liveness from missing data)', async () => {

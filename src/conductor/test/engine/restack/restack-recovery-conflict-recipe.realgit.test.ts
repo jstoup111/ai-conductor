@@ -1,4 +1,4 @@
-// Covers: task:4
+// Covers: task:4, task:8
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -127,7 +127,12 @@ describe('planned feature-repair conflict recovery recipe (real local Git)', () 
     const firstBeforeRepair = await commit('child 1 original', 'child-one.txt', 'one\n');
     const rewrittenFirst = await commit('child 1 repair', 'shared.txt', 'repair\n');
     await git(['checkout', '-qb', 'feat/c2/demo', firstBeforeRepair]);
-    const secondTip = await commit('child 2 conflicts', 'shared.txt', 'child two\n');
+    const conflictedCommit = await commit('child 2 conflicts', 'shared.txt', 'child two\n');
+    await git(['checkout', '-qb', 'side-lineage', firstBeforeRepair]);
+    await commit('side lineage', 'side.txt', 'side\n');
+    await git(['checkout', '-q', 'feat/c2/demo']);
+    await git(['merge', '--no-ff', '-m', 'merge side lineage', 'side-lineage']);
+    const secondTip = sha((await git(['rev-parse', 'HEAD'])).stdout.trim());
 
     const journal: RestackJournal = {
       opId: 'recovery-conflict-recipe' as RestackOpId,
@@ -161,18 +166,20 @@ describe('planned feature-repair conflict recovery recipe (real local Git)', () 
 
     const record = await readConflictRecord(repo, 'demo', { git: makeGitRunner(repo) });
     const rewrittenTree = sha((await git(['rev-parse', `${rewrittenFirst}^{tree}`])).stdout.trim());
-    expect(record).toMatchObject({
-      kind: 'record',
-      record: {
-        opId: 'recovery-conflict-recipe', child: 2, oldParent: firstBeforeRepair, oldTip: secondTip,
-        newParent: rewrittenFirst, newParentTree: rewrittenTree,
-        candidateSubjects: ['child 2 conflicts'], commit: secondTip, paths: ['shared.txt'],
-      },
+    if (record.kind !== 'record') throw new Error(JSON.stringify(record));
+    expect(record.record).toMatchObject({
+      opId: 'recovery-conflict-recipe', child: 2, oldParent: firstBeforeRepair, oldTip: secondTip,
+      newParent: rewrittenFirst, newParentTree: rewrittenTree, commit: conflictedCommit, paths: ['shared.txt'],
     });
     await expect(readFile(join(repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
-    await expect(readFile(join(repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
-      `Restack-Conflict: 2 recovery-conflict-recipe\ngit switch -c restack-resolve/demo/c2 ${secondTip}\ngit rebase --onto ${rewrittenFirst} ${firstBeforeRepair}\nai-conductor stack restack-resolve --slug demo --child 2 --tip <sha>\nai-conductor stack restack-resolve --slug demo --child 2 --decision "<answer>"`,
-    );
+    if (record.kind !== 'record' || record.record.flattenedTip === undefined) throw new Error('expected flattened recovery hand-off');
+    expect(record.record.candidateSubjects).toContain('child 2 conflicts');
+    expect(record.record.candidateSubjects).not.toContain('side lineage');
+    const halt = await readFile(join(repo, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain(`Restack-Conflict: 2 recovery-conflict-recipe`);
+    expect(halt).toContain(`git switch -c restack-resolve/demo/c2 ${record.record.flattenedTip}`);
+    expect(halt).toContain(`git rebase --onto ${rewrittenFirst} ${firstBeforeRepair}`);
+    expect(halt).not.toContain(`git switch -c restack-resolve/demo/c2 ${secondTip}`);
     expect(await readRestackJournal(repo, 'demo')).toMatchObject({ kind: 'journal', journal: { state: 'aborted' } });
     await expect(git(['rev-parse', 'feat/c1/demo'])).resolves.toMatchObject({ stdout: `${rewrittenFirst}\n` });
     await expect(git(['rev-parse', 'feat/c2/demo'])).resolves.toMatchObject({ stdout: `${secondTip}\n` });

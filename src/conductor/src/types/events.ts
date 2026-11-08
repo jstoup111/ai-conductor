@@ -1393,6 +1393,11 @@ type ConductorEventBody =
       featureSlug: string;
       boundary: SchedulingUnitRef;
     }
+  | {
+      type: 'preemption_boundary';
+      featureSlug: string;
+      boundary: SchedulingUnitRef;
+    }
   /** A sanitized recovery update; `credentials_park` remains the lifecycle start. */
   | CredentialParkProgressEvent
   | FinishPublicationEvent
@@ -2281,6 +2286,7 @@ type ConductorEventBody =
       newTip: CommitSha;
       wouldInvalidate: StepName[];
       parentOverlapPaths: string[];
+      adaptedPaths: string[];
     }
   | {
       type: 'restack_conflict';
@@ -2387,7 +2393,21 @@ type ConductorEventBody =
       occurredAt: string;
       roundId: RoundId;
       child: ChildId;
+      disposition: 'superseded';
       supersededBy: RoundId;
+      droppedHosts: readonly ChildId[];
+      findingIds: readonly string[];
+      reason: string;
+      operator: string;
+    }
+  | {
+      /** An operator closed the sole audit round and returned control to the leaf. */
+      type: 'routing_round_superseded';
+      eventId: string;
+      occurredAt: string;
+      roundId: RoundId;
+      child: ChildId;
+      disposition: 'leaf-return';
       droppedHosts: readonly ChildId[];
       findingIds: readonly string[];
       reason: string;

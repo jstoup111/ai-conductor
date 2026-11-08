@@ -22,6 +22,8 @@ export interface RestackConflictRecord {
   readonly candidateSubjects: readonly string[];
   readonly commit: CommitSha;
   readonly paths: readonly string[];
+  /** Flattened hand-off tip retained until its conflict resolution is consumed. */
+  readonly flattenedTip?: CommitSha;
 }
 
 export interface StoredConflictRecord {
@@ -79,6 +81,11 @@ export interface ConflictRecordDependencies {
   readonly git?: GitRunner;
 }
 
+/** Optional companion pin written atomically with a conflict record. */
+export interface WriteConflictRecordOptions extends ConflictRecordDependencies {
+  readonly refusedTip?: CommitSha;
+}
+
 /** Exact old values needed when a consuming restack removes conflict state. */
 export interface ConsumedConflictRefs {
   readonly child: ChildId;
@@ -133,6 +140,15 @@ export function conflictParentRefFor(slug: string): RefName {
   return `refs/conductor/${slug}/restack/conflict/parent` as RefName;
 }
 
+export function conflictFlattenedTipRefFor(slug: string): RefName {
+  return `refs/conductor/${slug}/restack/conflict/flattened-tip` as RefName;
+}
+
+/** A resolver tip refused by ownership checks, retained for operator recovery. */
+export function refusedTipRefFor(slug: string): RefName {
+  return `refs/conductor/${slug}/restack/conflict/refused-tip` as RefName;
+}
+
 export function resolutionRefFor(slug: string, child: ChildId): RefName {
   return `refs/conductor/${slug}/restack/resolution/c${child}` as RefName;
 }
@@ -175,9 +191,12 @@ function parseConflictRecord(value: unknown): RestackConflictRecord | undefined 
   const newParent = parseCommitSha(value.newParent);
   const newParentTree = parseCommitSha(value.newParentTree);
   const commit = parseCommitSha(value.commit);
+  const hasFlattenedTip = value.flattenedTip !== undefined;
+  const flattenedTip = typeof value.flattenedTip === 'string' ? parseCommitSha(value.flattenedTip) : undefined;
   const candidateSubjects = parseStringArray(value.candidateSubjects);
   const paths = parseStringArray(value.paths);
-  if (!child || !oldParent || !oldTip || !newParent || !newParentTree || !commit || !candidateSubjects || !paths) return undefined;
+  if (!child || !oldParent || !oldTip || !newParent || !newParentTree || !commit || !candidateSubjects || !paths
+    || (hasFlattenedTip && !flattenedTip)) return undefined;
   return {
     opId: value.opId as RestackOpId,
     child,
@@ -188,6 +207,7 @@ function parseConflictRecord(value: unknown): RestackConflictRecord | undefined 
     candidateSubjects,
     commit,
     paths,
+    ...(flattenedTip === undefined ? {} : { flattenedTip }),
   };
 }
 
@@ -332,26 +352,29 @@ export async function readConflictRecord(
 
 /**
  * Store the record blob and its reachable replay parent in one compare-and-
- * swap transaction. Both refs carry an explicit old value, including creates.
+ * swap transaction. Every ref carries an explicit old value, including creates.
  */
 export async function writeConflictRecord(
   worktree: string,
   slug: string,
   input: RestackConflictRecord,
-  dependencies: ConflictRecordDependencies = {},
+  options: WriteConflictRecordOptions = {},
 ): Promise<WriteConflictRecordResult> {
   const serialized = JSON.stringify(input);
   if (!parseConflictRecord(JSON.parse(serialized))) return { kind: 'unavailable' };
-  const git = dependencies.git ?? makeGitRunner(worktree);
+  const git = options.git ?? makeGitRunner(worktree);
   const previous = await readConflictRecord(worktree, slug, { git });
   if (previous.kind === 'unreadable') return { kind: 'unavailable' };
   const oldRecord = previous.kind === 'record' ? previous.blob : ZERO_SHA;
   const oldParent = await refValue(git, conflictParentRefFor(slug));
-  if (oldParent === undefined) return { kind: 'unavailable' };
+  const oldFlattenedTip = await refValue(git, conflictFlattenedTipRefFor(slug));
+  const oldRefusedTip = await refValue(git, refusedTipRefFor(slug));
+  if (oldParent === undefined || oldFlattenedTip === undefined || oldRefusedTip === undefined) return { kind: 'unavailable' };
   // Existing record and parent must describe one coherent durable hand-off;
   // replacing a partially-written or externally-corrupted pair would hide it.
   if ((previous.kind === 'record' && oldParent !== previous.record.newParent)
-    || (previous.kind === 'missing' && oldParent !== ZERO_SHA)) return { kind: 'unavailable' };
+    || (previous.kind === 'record' && oldFlattenedTip !== (previous.record.flattenedTip ?? ZERO_SHA))
+    || (previous.kind === 'missing' && (oldParent !== ZERO_SHA || oldFlattenedTip !== ZERO_SHA || oldRefusedTip !== ZERO_SHA))) return { kind: 'unavailable' };
   const written = await runGit(git, ['hash-object', '-w', '--stdin'], serialized);
   const blob = written?.exitCode === 0 ? parseCommitSha(written.stdout.trim()) : undefined;
   if (!blob) return { kind: 'unavailable' };
@@ -359,6 +382,16 @@ export async function writeConflictRecord(
     'start',
     `update ${conflictRecordRefFor(slug)} ${blob} ${oldRecord}`,
     `update ${conflictParentRefFor(slug)} ${input.newParent} ${oldParent}`,
+    input.flattenedTip === undefined
+      ? (oldFlattenedTip === ZERO_SHA
+        ? `verify ${conflictFlattenedTipRefFor(slug)} ${ZERO_SHA}`
+        : `delete ${conflictFlattenedTipRefFor(slug)} ${oldFlattenedTip}`)
+      : `update ${conflictFlattenedTipRefFor(slug)} ${input.flattenedTip} ${oldFlattenedTip}`,
+    options.refusedTip === undefined
+      ? (oldRefusedTip === ZERO_SHA
+        ? `verify ${refusedTipRefFor(slug)} ${ZERO_SHA}`
+        : `delete ${refusedTipRefFor(slug)} ${oldRefusedTip}`)
+      : `update ${refusedTipRefFor(slug)} ${options.refusedTip} ${oldRefusedTip}`,
     'prepare',
     'commit',
     '',
@@ -369,11 +402,16 @@ export async function writeConflictRecord(
 }
 
 /** Delete all state consumed by a successful restack with explicit old values. */
-export function conflictDeleteLines(slug: string, refs: ConsumedConflictRefs): readonly string[] {
+export function conflictDeleteLines(
+  slug: string,
+  refs: ConsumedConflictRefs,
+  refusedTip?: CommitSha,
+): readonly string[] {
   return [
     `delete ${resolutionRefFor(slug, refs.child)} ${refs.tip}`,
     `delete ${conflictRecordRefFor(slug)} ${refs.record}`,
     `delete ${conflictParentRefFor(slug)} ${refs.parent}`,
+    ...(refusedTip === undefined ? [] : [`delete ${refusedTipRefFor(slug)} ${refusedTip}`]),
   ];
 }
 
@@ -387,7 +425,7 @@ export async function retireRecordedResolution(
   worktree: string,
   slug: string,
   child: ChildId,
-  dependencies: ConflictRecordDependencies = {},
+  dependencies: ConflictRecordDependencies & { readonly preserveConflictRecord?: boolean } = {},
 ): Promise<RetireRecordedResolutionResult> {
   const git = dependencies.git ?? makeGitRunner(worktree);
   const ref = resolutionRefFor(slug, child);
@@ -399,7 +437,28 @@ export async function retireRecordedResolution(
   // An unreadable record cannot authorize a resolution.  Preserve its bytes
   // for diagnosis, but retire the orphaned tip and let ordinary replay create
   // any new conflict state it needs.
-  const deleted = await runGit(git, ['update-ref', '-d', ref, tip]);
+  let transaction: readonly string[];
+  if (stored.kind === 'record' && stored.record.child === child && !dependencies.preserveConflictRecord) {
+    const [parent, flattenedTip, refusedTip] = await Promise.all([
+      refValue(git, conflictParentRefFor(slug)),
+      refValue(git, conflictFlattenedTipRefFor(slug)),
+      refValue(git, refusedTipRefFor(slug)),
+    ]);
+    if (parent !== stored.record.newParent
+      || flattenedTip !== (stored.record.flattenedTip ?? ZERO_SHA)
+      || refusedTip === undefined) return { kind: 'unavailable' };
+    transaction = [
+      'start',
+      ...conflictDeleteLines(slug, {
+        child, tip, record: stored.blob, parent,
+      }, refusedTip === ZERO_SHA ? undefined : refusedTip),
+      ...(flattenedTip === ZERO_SHA ? [] : [`delete ${conflictFlattenedTipRefFor(slug)} ${flattenedTip}`]),
+      'prepare', 'commit', '',
+    ];
+  } else {
+    transaction = ['start', `delete ${ref} ${tip}`, 'prepare', 'commit', ''];
+  }
+  const deleted = await runGit(git, ['update-ref', '--stdin'], transaction.join('\n'));
   if (deleted?.exitCode === 0) {
     return {
       kind: 'retired', tip,

@@ -873,7 +873,7 @@ it. Stacked builds also persist `child_started`, `child_closed` (with the closur
 `child_switched`, each carrying the position and branch; `story_reowned` (`story`, `from`, `to`)
 when a reseal changes a story's owner without moving a task; and the restack events
 `restack_planned` (`opId`, `cause`, `children`), `restack_applied` (per child: `oldTip`, `newTip`,
-`wouldInvalidate`, `parentOverlapPaths`), `restack_conflict` (`commit`, `paths`), `restack_refused`
+`wouldInvalidate`, `parentOverlapPaths`, `adaptedPaths`), `restack_conflict` (`commit`, `paths`), `restack_refused`
 (`reason`, optional `detail`), `restack_recovered` (`opId`, `fromState`), `restack_resolution`
 (`opId`, `child`, `action` of `recorded`, `consumed`, or `retired`, `tip`, optional `operator`), and
 `restack_decision` (`child`, `action` of `recorded`, `applied`, or `stale`, `commit`, `paths`, optional
@@ -881,8 +881,9 @@ when a reseal changes a story's owner without moving a task; and the restack eve
 `remediation_routed` (`roundId`, `kind`, `items` of `findingId`/`owner`/`host`/`reason`),
 `remediation_rerouted` (`roundId`, `from`, `to`, `evidence`), `routed_repair_phase` (`roundId`, `host`,
 `phase`, `credit`, optional `reason` of `derived-already-complete`), `routing_rounds_stalled` (`rounds` of `roundId`/`readable`/`unsettledHosts`, `detail`,
-`attempt`), `routing_round_superseded` (`roundId`, `supersededBy`, `droppedHosts`, `findingIds`,
-`reason`, `operator`) when `stack rounds --close` closes a stale audit round, and `child_revalidated` (`generation`, `closureSha`, `outcome` of `passed` or `fixed`). Stacked
+`attempt`), `routing_round_superseded` (`roundId`, `disposition` of `superseded` with `supersededBy`, or
+`leaf-return` with empty `findingIds`; `droppedHosts`, `findingIds`, `reason`, `operator`) when
+`stack rounds --close` closes an audit round, and `child_revalidated` (`generation`, `closureSha`, `outcome` of `passed` or `fixed`). Stacked
 publication adds `stack_member_published` and `stack_member_redrafted` (`child`, `pr`),
 `stack_assembled` (`prs`), `stack_member_lifecycle` (`child`, `pr`, `state` of
 `merged`/`closed`/`reverted`, de-duplicated by `eventId`), `stack_members_unreachable` (`child`,
@@ -913,7 +914,7 @@ engine force push finds the remote tip differs from the recorded pushed tip. `Ev
 `feature_usage_total`,
 `provider_fallback`, `session_policy`, `step_retry`, `checkpoint_reached`, `recovery_needed`,
 `gate_blocked`, `tier_skip`, `config_skip`, `navigation_back`, `rate_limit`, `provider_suppressed`, `session_reset`,
-`credentials_park`, `operator_park_boundary`, `credentials_park_progress`,
+`credentials_park`, `operator_park_boundary`, `preemption_boundary`, `credentials_park_progress`,
 `finish_publication_transition`, `finish_publication_blocked`, `finish_publication_disposition`,
 `feature_complete`, `dashboard_refresh`, `protected_artifact_rebaseline`,
 `protected_artifact_rebaseline_refused`, `auto_heal`, `remediation_sealed_artifact_redirect`,
@@ -959,7 +960,7 @@ the real `gh` resolved from the inherited `PATH`. If no executable `gh` resolves
 cannot be written, the candidate fails provider setup with capability `managed-gh-observation` and
 the recovery action names both fixes. Operator shells and other engine subprocesses are unaffected.
 
-`rebase_merge_audit` records a flattened replay of a merge-bearing feature branch: the shas of
+`rebase_merge_audit` records a flattened replay of a merge-bearing feature branch or stacked child range: the shas of
 flattened merges, the shas of dropped ancestry-only merges, and the count of side-lineage commits not
 replayed individually. When a flattened merge blocks the replay, `rebase_conflict_halt` carries an
 optional `mergeAudit` field naming that merge, its parents, its flattened sha, and the conflicting

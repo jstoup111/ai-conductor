@@ -2930,6 +2930,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       },
       getDiscoverySnapshot: async (parkedSlugs) => workSource.snapshot?.(parkedSlugs),
       runFeature,
+      // Only child executors have a separately running conductor to yield.
+      // The rollback in-process executor deliberately receives no preemption
+      // signal, preserving its existing single-process scheduling semantics.
+      ...(childMode ? { requestYield: (slug: string) => childExecutor.requestYield(slug) } : {}),
       onExecutorStarted: () => {
         activeExecutorCount += 1;
       },
@@ -4085,6 +4089,18 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       log(
         `${dot} ${chalk.cyan('⏸')} ${chalk.cyan(`operator park[${event.featureSlug}]: ${boundary}`)}`,
       );
+      break;
+    }
+    case 'preemption_boundary': {
+      const boundary =
+        event.boundary.kind === 'pre-first-unit'
+          ? 'before first scheduling unit'
+          : event.boundary.kind === 'attempt'
+            ? event.boundary.member === undefined
+              ? `after attempt ${event.boundary.attempt} for step ${event.boundary.step}`
+              : `after attempt ${event.boundary.attempt} for group step ${event.boundary.step} member ${event.boundary.member}`
+            : `after ${event.boundary.kind} ${event.boundary.name}`;
+      log(`${dot} ${chalk.yellow('■')} ${chalk.yellow(`preempted[${event.featureSlug}]: ${boundary}`)}`);
       break;
     }
     case 'verdict_freshness': {

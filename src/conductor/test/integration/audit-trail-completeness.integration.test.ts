@@ -254,6 +254,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   rebase_resolution_exhausted: 'not-audited-by-design',
   auto_park: 'not-audited-by-design',
   operator_park_boundary: 'not-audited-by-design',
+  preemption_boundary: 'not-audited-by-design',
   auto_park_contradiction: 'not-audited-by-design',
   zero_work_product: 'not-audited-by-design',
   unattributed_dispatch: 'not-audited-by-design',
@@ -428,7 +429,7 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   restack_applied: {
     type: 'restack_applied', opId: 'restack-1' as RestackOpId, cause: 'base-refresh', child: parseChildId(1)!,
     oldTip: parseCommitSha('a'.repeat(40))!, newTip: parseCommitSha('b'.repeat(40))!,
-    wouldInvalidate: ['build_review'], parentOverlapPaths: ['src/feature.ts'],
+    wouldInvalidate: ['build_review'], parentOverlapPaths: ['src/feature.ts'], adaptedPaths: [],
   },
   restack_conflict: {
     type: 'restack_conflict', opId: 'restack-1' as RestackOpId, child: parseChildId(1)!,
@@ -946,6 +947,11 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     featureSlug: 'my-feature',
     boundary: { kind: 'pre-first-unit' },
   },
+  preemption_boundary: {
+    type: 'preemption_boundary',
+    featureSlug: 'my-feature',
+    boundary: { kind: 'pre-first-unit' },
+  },
   auto_park_contradiction: {
     type: 'auto_park_contradiction',
     slug: 'my-feature',
@@ -1047,7 +1053,7 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   },
   routing_round_superseded: {
     type: 'routing_round_superseded', eventId: 'route-6', occurredAt: '2030-01-01T00:00:00.000Z',
-    roundId: parseRoundId('r1')!, child: parseChildId(1)!, supersededBy: parseRoundId('r2')!,
+    roundId: parseRoundId('r1')!, child: parseChildId(1)!, disposition: 'superseded', supersededBy: parseRoundId('r2')!,
     droppedHosts: [parseChildId(1)!], findingIds: ['finding-1'], reason: 'test', operator: 'operator@example.test',
   },
   child_revalidated: {
