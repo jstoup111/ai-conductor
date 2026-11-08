@@ -8,6 +8,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   routedExit: undefined as undefined | ((...args: readonly unknown[]) => Promise<unknown>),
+  reconcileRounds: undefined as undefined | ((...args: readonly unknown[]) => Promise<unknown>),
+  routedRoundOpen: undefined as undefined | ((...args: readonly unknown[]) => Promise<unknown>),
   consumeQueued: undefined as undefined | (() => Promise<unknown>),
   queueAdmission: undefined as undefined | ((...args: readonly unknown[]) => Promise<unknown>),
 }));
@@ -18,6 +20,10 @@ vi.mock('../../../src/engine/routing/round-admission.js', async (importOriginal)
     ...actual,
     exitRoutedHostAndReconcile: (...args: Parameters<typeof actual.exitRoutedHostAndReconcile>) =>
       mocks.routedExit === undefined ? actual.exitRoutedHostAndReconcile(...args) : mocks.routedExit(...args),
+    reconcileRounds: (...args: Parameters<typeof actual.reconcileRounds>) =>
+      mocks.reconcileRounds === undefined ? actual.reconcileRounds(...args) : mocks.reconcileRounds(...args),
+    routedRoundOpen: (...args: Parameters<typeof actual.routedRoundOpen>) =>
+      mocks.routedRoundOpen === undefined ? actual.routedRoundOpen(...args) : mocks.routedRoundOpen(...args),
   };
 });
 vi.mock('../../../src/engine/routing/revalidation-queue.js', async (importOriginal) => {
@@ -42,6 +48,7 @@ import { Conductor } from '../../../src/engine/conductor.js';
 import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord, readRepairMarker, readRouteRecord, transitionHost, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
+import { routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { parseRoundId } from '../../../src/engine/routing/route-types.js';
 import { advanceRound } from '../../../src/engine/routing/routed-exit.js';
 import { readState, writeState } from '../../../src/engine/state.js';
@@ -60,6 +67,8 @@ const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
 
 afterEach(async () => {
   mocks.routedExit = undefined;
+  mocks.reconcileRounds = undefined;
+  mocks.routedRoundOpen = undefined;
   mocks.consumeQueued = undefined;
   mocks.queueAdmission = undefined;
   await Promise.all(repositories.splice(0).map((path) => rm(path, { recursive: true, force: true })));
@@ -356,6 +365,70 @@ describe('routed round conductor resume', () => {
     await expect(access(join(subject.repo, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(access(join(subject.repo, '.pipeline', 'HALT.class'))).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(access(join(subject.repo, '.pipeline', 'kickback-ledger.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  // Covers: task:4, task:5
+  it('reconciles a settled markerless round before resuming the next whole-feature gate', async () => {
+    const subject = await fixture();
+    const child = parseChildId(1)!;
+    const leaf = parseChildId(2)!;
+    const roundId = parseRoundId('r7')!;
+    const statePath = join(subject.repo, '.pipeline', 'conduct-state.json');
+    await writeState(statePath, doneThrough('manual_test'));
+    const created = await createRouteRecord(subject.repo, 'demo', {
+      roundId,
+      sealedAuthored: 1,
+      kind: 'audit',
+      items: [],
+      allocation: {
+        [child]: { remTaskIds: [], blockBodies: [] },
+        [leaf]: { remTaskIds: [], blockBodies: [] },
+      },
+    });
+    if (created.kind !== 'created') throw new Error(`could not create r7: ${created.kind}`);
+    const settledRecord = {
+      ...created.record,
+      phase: 'open' as const,
+      hosts: { [child]: 'restacked' as const, [leaf]: 'restacked' as const },
+      currentHostIndex: 1,
+    };
+    const blob = (await subject.git(['hash-object', '-w', '--stdin'], {
+      input: JSON.stringify(settledRecord),
+    })).stdout.trim();
+    await subject.git(['update-ref', routeRecordRefFor('demo', roundId), blob]);
+
+    const conductor = new Conductor({
+      projectRoot: subject.repo,
+      stateFilePath: statePath,
+      featureSlug: 'demo',
+      resume: true,
+      verifyArtifacts: false,
+      events: new ConductorEventEmitter(),
+      stepRunner: { run: vi.fn() },
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+    }) as unknown as {
+      guardOutstandingRoutedWork: (state: ConductState, indexOf: (step: StepName) => number) => Promise<unknown>;
+    };
+
+    const state = await readState(statePath);
+    if (!state.ok) throw state.error;
+    mocks.reconcileRounds = async () => {
+      const open = await readRouteRecord(subject.repo, 'demo', roundId);
+      if (open.kind !== 'record') throw new Error('missing r7 record');
+      await writeRoutingTransaction(subject.repo, 'demo', [{
+        kind: 'update-record', previous: open, record: { ...open.record, phase: 'closed' },
+      }]);
+      return { kind: 'leaf-returned', roundId };
+    };
+    mocks.routedRoundOpen = async () => false;
+    await expect(conductor.guardOutstandingRoutedWork(
+      state.value,
+      (step) => ALL_STEPS.findIndex((candidate) => candidate.name === step),
+    )).resolves.toEqual({ index: ALL_STEPS.findIndex((step) => step.name === 'manual_test') });
+
+    await expect(access(join(subject.repo, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readRouteRecord(subject.repo, 'demo', roundId))
+      .resolves.toMatchObject({ kind: 'record', record: { phase: 'closed' } });
   });
 
   it('re-navigates a post-marker crash to build without re-admitting the round', async () => {
