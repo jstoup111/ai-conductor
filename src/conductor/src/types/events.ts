@@ -1378,6 +1378,7 @@ type ConductorEventBody =
       slug: string;
       provider: string;
       actor: string;
+      launchId?: string;
       previousProvider?: string;
       previousActor?: string;
       ownership: string;
