@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-11-08T20:37:25.555Z
 Slug: new-dependencies-enter-the-tree-with-no-review-of-
 Class: needs-human
 Halting step: unknown
