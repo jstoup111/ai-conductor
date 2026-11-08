@@ -4400,24 +4400,32 @@ export class Conductor {
     return reason;
   }
 
+  /** Persist the bounded escalation shared by every routed admission fence. */
+  private async recordRoutingFenceHalt(slug: string, detail: string): Promise<{
+    detail: string;
+    haltClass: 'mechanical' | 'needs-human';
+  }> {
+    const affected = await diagnoseAffectedRounds(this.projectRoot, slug);
+    const stall = await recordRoundStall(this.projectRoot, slug, {
+      kind: 'stalled',
+      detail,
+      rounds: affected.kind === 'affected' ? affected.rounds : [],
+    }, this.events);
+    return { detail: stall.detail, haltClass: stall.haltClass ?? 'needs-human' };
+  }
+
   /** A refused admission fence defers routing; it does not reopen scope. */
   private async writeRoutingFenceRefusalHalt(
-    slug: string | undefined,
     detail: string,
+    haltClass: string | undefined,
     refused: readonly OverScopeRenderableFinding[],
   ): Promise<string> {
-    let reason = detail;
-    if (slug !== undefined) {
-      const affected = await diagnoseAffectedRounds(this.projectRoot, slug);
-      const stall = await recordRoundStall(this.projectRoot, slug, {
-        kind: 'stalled', detail, rounds: affected.kind === 'affected' ? affected.rounds : [],
-      }, this.events);
-      reason = stall.detail;
-      await this.writeHaltMarker(`${reason}\nFindings: ${[...new Set(refused.map((finding) => finding.criterion))].join(', ')}\n`, stall.haltClass ?? 'needs-human');
-      return `${reason}\nFindings: ${[...new Set(refused.map((finding) => finding.criterion))].join(', ')}`;
-    }
-    await this.writeHaltMarker(`${reason}\nFindings: ${[...new Set(refused.map((finding) => finding.criterion))].join(', ')}\n`, 'needs-human');
-    return `${reason}\nFindings: ${[...new Set(refused.map((finding) => finding.criterion))].join(', ')}`;
+    const reason = `${detail}\nFindings: ${[...new Set(refused.map((finding) => finding.criterion))].join(', ')}`;
+    await this.writeHaltMarker(
+      `${reason}\n`,
+      haltClass === 'mechanical' || haltClass === 'needs-human' ? haltClass : 'needs-human',
+    );
+    return reason;
   }
 
   /**
@@ -5469,9 +5477,24 @@ export class Conductor {
         kind: 'halt';
         detail: string;
         haltClass?: KickbackCapHaltClass | 'mechanical' | 'needs-human';
+        /** The caller must render this as a routing stop, not a scope refusal. */
+        routingFence?: true;
       }
       | undefined
     > {
+    // A fence says an already-open routed round must make progress before a
+    // new one can be admitted.  Record that stop at its shared producer so
+    // every consumer receives the same bounded mechanical escalation instead
+    // of each rendering a permanently-mechanical halt of its own.
+    const routingFenceHalt = async (detail: string) => {
+      const stall = await this.recordRoutingFenceHalt(this.featureSlug!, detail);
+      return {
+        kind: 'halt' as const,
+        detail: stall.detail,
+        haltClass: stall.haltClass,
+        routingFence: true as const,
+      };
+    };
     // A mixed or unresolvable work order belongs to the ordinary remediation
     // path, which owns its existing halt detail. Do not admit a routed round
     // for only the resolvable subset.
@@ -5586,12 +5609,9 @@ export class Conductor {
             });
             if (routed.kind === 'halt') {
               const routingFence = 'fence' in routed && routed.fence === true;
-              return {
-                kind: 'halt',
-                haltClass: routingFence ? 'mechanical' : 'needs-human',
-                detail: routed.detail,
-                ...(routingFence ? { routingFence: true as const } : {}),
-              };
+              return routingFence
+                ? routingFenceHalt(routed.detail)
+                : { kind: 'halt', haltClass: 'needs-human', detail: routed.detail };
             }
             const lapSources = new Set(routedFixes.map((gap) => (gap as CriterionBoundRemediationGap).gateSource));
             const receipt = {
@@ -5605,7 +5625,11 @@ export class Conductor {
             const priorSealed = await routedSealedAuthored(this.projectRoot, this.featureSlug, { cursor, config: this.config });
             const sealedAuthored = priorSealed ?? countAuthoredTaskHeadings(planText);
             const fence = await checkRoundAdmissionFence(this.projectRoot, this.featureSlug, { roundId, kind: 'audit' });
-            if (fence !== undefined) return { kind: 'halt', haltClass: fence.fence ? 'mechanical' : 'needs-human', detail: fence.detail, ...(fence.fence ? { routingFence: true as const } : {}) };
+            if (fence !== undefined) {
+              return fence.fence
+                ? routingFenceHalt(fence.detail)
+                : { kind: 'halt', haltClass: 'needs-human', detail: fence.detail };
+            }
             const created = await createRouteRecord(this.projectRoot, this.featureSlug, {
               roundId, kind: 'audit', items: routed.items, allocation: routed.allocation, receipt, sealedAuthored,
               pendingAsBuiltFindings: [...this.pendingAsBuiltRemediationFindings.values()],
@@ -5619,7 +5643,11 @@ export class Conductor {
                 return 'persisted';
               },
             });
-            if (admission.kind !== 'admitted') return { kind: 'halt', haltClass: admission.fence ? 'mechanical' : 'needs-human', detail: admission.detail, ...(admission.fence ? { routingFence: true as const } : {}) };
+            if (admission.kind !== 'admitted') {
+              return admission.fence
+                ? routingFenceHalt(admission.detail)
+                : { kind: 'halt', haltClass: 'needs-human', detail: admission.detail };
+            }
             return { kind: 'route', target: 'build', hint: routed.hostHints[firstHost] ?? buildRemediationHint(routedFixes, hintSource.source, ''), evidence: `routed round ${roundId}` };
           }
         }
@@ -10250,8 +10278,8 @@ export class Conductor {
               if (prdAuditRoute?.kind !== 'over-scope-refusal-rework') return false;
               if (outcome?.kind === 'halt' && outcome.routingFence) {
                 const reason = await this.writeRoutingFenceRefusalHalt(
-                  state.feature_desc,
                   outcome.detail,
+                  outcome.haltClass,
                   prdAuditRoute.route.refused,
                 );
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
@@ -13687,8 +13715,8 @@ export class Conductor {
                   }
                   if (outcome?.kind === 'halt' && outcome.routingFence) {
                     const reason = await this.writeRoutingFenceRefusalHalt(
-                      state.feature_desc,
                       outcome.detail,
+                      outcome.haltClass,
                       refusalRoute.refused,
                     );
                     await this.persistPendingStateChanges(state, 'persist conductor transition');
@@ -16016,7 +16044,7 @@ export class Conductor {
                     kickback_outcome: outcome.kickbackOutcome,
                   });
                 }
-                await this.writeHaltMarker(reason + '\n', 'needs-human');
+                await this.writeHaltMarker(reason + '\n', outcome.haltClass ?? 'needs-human');
                 const prUrl = await this.surfaceRemediationPr(reason);
                 await this.emitLoopHalt(reason, prUrl);
                 process.off('SIGINT', sigintHandler);
@@ -17075,13 +17103,11 @@ export class Conductor {
     } catch (error) {
       return { kind: 'halted', reason: `routing round ${roundId} admission failed: ${error instanceof Error ? error.message : String(error)}` };
     }
-    return admitted.kind === 'admitted'
-      ? { kind: 'admitted' }
-      : {
-        kind: 'halted',
-        reason: `routing round ${roundId} admission failed: ${admitted.detail}`,
-        ...(admitted.fence ? { haltClass: 'mechanical' as const } : {}),
-      };
+    if (admitted.kind === 'admitted') return { kind: 'admitted' };
+    const admissionReason = `routing round ${roundId} admission failed: ${admitted.detail}`;
+    if (!admitted.fence) return { kind: 'halted', reason: admissionReason };
+    const stall = await this.recordRoutingFenceHalt(slug, admissionReason);
+    return { kind: 'halted', reason: stall.detail, haltClass: stall.haltClass };
   }
 
   /** Records the taskless routed receipt for a manual-test kickback. */
