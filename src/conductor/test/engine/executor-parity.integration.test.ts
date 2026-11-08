@@ -75,7 +75,7 @@ async function runChildProcess(root: string, episode: RateLimitEpisode, run: (in
   return executor.execute(ORDER);
 }
 
-describe('child executor lifecycle with literal clean, rate-limited, and halted outcomes', () => {
+describe('child executor lifecycle with literal clean, rate-limited, and halted outcomes plus a type-only feature-executor import', () => {
   // FeatureExecutionOutcome is imported above with `import type`; these child
   // cases use only literal expectations for their ledger and terminal values.
   it('records ordered clean-run steps, ledger events, outcome, and terminal effects', async () => {

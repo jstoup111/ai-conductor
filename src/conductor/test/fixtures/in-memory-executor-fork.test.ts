@@ -200,7 +200,7 @@ describe('in-memory executor fork', () => {
     expect(identities).toEqual([VERSION]);
   });
 
-  it('rejects a stale executor-isolation fixture before forking, then dispatches the same fixture once through its injected fork after key removal', async () => {
+  it('rejects a stale executor-isolation fixture before forking, then dispatches the same fixture once through its injected fork after key removal proves the key alone caused the load failure', async () => {
     const fixture = await fixtureOrder('retired-fixture-key');
     await Promise.all([
       mkdir(join(fixture.root, '.docs', 'stories'), { recursive: true }),
