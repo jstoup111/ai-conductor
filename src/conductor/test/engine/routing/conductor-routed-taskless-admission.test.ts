@@ -1,4 +1,4 @@
-// Covers: tasks:33,65
+// Covers: tasks:2,33,65
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -80,6 +80,7 @@ vi.mock('../../../src/engine/routing/round-receipt.js', async (importOriginal) =
 });
 
 import { Conductor, type StepRunner } from '../../../src/engine/conductor.js';
+import { ALL_STEPS } from '../../../src/engine/steps.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const roots: string[] = [];
@@ -121,7 +122,10 @@ async function subject(judgedChild = 1) {
       const itemId = JSON.parse(prompt.split('\n\n').at(-1)!).items[0].itemId;
       return {
         success: true,
-        output: JSON.stringify({ version: 'v1', items: [{ itemId, child: judgedChild, candidates: [judgedChild], rationale: 'fixture' }] }),
+        output: JSON.stringify({ version: 'v2', items: [{
+          itemId, child: judgedChild, candidates: [judgedChild], rationale: 'fixture',
+          implicatedPaths: judgedChild === 2 ? ['child-2.txt'] : [],
+        }] }),
       };
     }),
   };
@@ -141,6 +145,124 @@ async function subject(judgedChild = 1) {
 }
 
 describe('routed taskless admission failures', () => {
+  // Covers: task:2
+  it('dispatches BUILD on child 4 for a taskless manual-test host with every stored FAIL row', async () => {
+    const { root } = await subject();
+    const failRows = [
+      'FAIL: touch target is obscured by the HUD',
+      'FAIL: touch controls do not respond after rotation',
+    ];
+    const parentState = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done']));
+    await mkdir(join(root, '.pipeline', 'children', '4'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'conduct-state.json'), JSON.stringify({
+      ...parentState, build: 'pending', feature_desc: 'demo',
+    }));
+    await writeFile(join(root, '.pipeline', 'children', '4', 'conduct-state.json'), JSON.stringify({
+      acceptance_specs: 'done', build: 'pending', test_suite: 'skipped', build_review: 'skipped',
+    }));
+    seams.createdRecord = {
+      roundId: 'r1', kind: 'audit', phase: 'open', sealedAuthored: 2,
+      items: [{ findingId: 'manual-test-fail', kind: 'audit', owner: 4, host: 4, reason: 'manual-test', fallback: [] }],
+      allocation: { 4: { remTaskIds: [], blockBodies: [], retryHint: failRows.join('\n') } },
+      hosts: { 4: 'admitted' }, currentHostIndex: 0,
+      receipt: { laps: {}, growth: 0, taskless: { manual_test: 1 }, echo: {}, acks: {} }, outbox: [],
+    };
+    const runner = { run: vi.fn(async (step: string) => {
+      if (step === 'build') parked = true;
+      return { success: true };
+    }) };
+    let parked = false;
+    const events = new ConductorEventEmitter();
+    const loopHalts: unknown[] = [];
+    events.on('loop_halt', (event) => loopHalts.push(event));
+    const conductor = new Conductor({
+      projectRoot: root,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo', fromStep: 'build', mode: 'auto', daemon: true, verifyArtifacts: false,
+      events, stepRunner: runner,
+      config: { stacked_prs: { enabled: true, max_slices: 4, route_whole_feature_fixes: true } } as never,
+      operatorParkBoundary: async () => parked,
+      childRegionLifecycle: {
+        resolveActiveChild: async () => ({
+          kind: 'repair-pending', child: 4, position: 4, isLeaf: true, branch: 'feat/daemon-demo',
+          repairChildren: [4], routedRepair: { child: 4, roundId: 'r1' },
+        }) as never,
+        enterHostRegion: async () => {
+          seams.createdRecord = { ...seams.createdRecord, hosts: { 4: 'repairing' } };
+          return { kind: 'entered' } as never;
+        },
+        enterChildRegion: async () => ({ kind: 'completed' }) as never,
+      },
+    });
+
+    await conductor.run();
+
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(runner.run).toHaveBeenCalledWith('build', expect.anything(), expect.objectContaining({
+      retryReason: expect.stringContaining(failRows[0]),
+    }));
+    expect(runner.run).toHaveBeenCalledWith('build', expect.anything(), expect.objectContaining({
+      retryReason: expect.stringContaining(failRows[1]),
+    }));
+    expect(seams.createdRecord.hosts[4]).toBe('repairing');
+    expect(loopHalts).not.toContainEqual(expect.objectContaining({ reason: expect.stringContaining('derived-already-complete') }));
+  });
+
+  // Covers: task:2
+  it('admits a post-region custom-step kickback on child 2 and dispatches its taskless BUILD', async () => {
+    const { conductor: admittingConductor, root } = await subject(2);
+    await expect((admittingConductor as any).admitRoutedCustomStepKickback(
+      { feature_desc: 'demo' }, 'lint-docs', 1,
+    )).resolves.toEqual({ kind: 'admitted' });
+    expect(seams.createdRecord).toMatchObject({
+      items: [expect.objectContaining({ host: 2, owner: 2, findingId: 'custom-lint-docs' })],
+      allocation: { 2: { remTaskIds: [] } },
+    });
+    seams.createdRecord = { ...seams.createdRecord, phase: 'open', hosts: { 2: 'admitted' } };
+    const parentState = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done']));
+    await mkdir(join(root, '.pipeline', 'children', '2'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'conduct-state.json'), JSON.stringify({
+      ...parentState, build: 'pending', feature_desc: 'demo',
+    }));
+    await writeFile(join(root, '.pipeline', 'children', '2', 'conduct-state.json'), JSON.stringify({
+      acceptance_specs: 'done', build: 'pending', test_suite: 'skipped', build_review: 'skipped',
+    }));
+    let parked = false;
+    const runner = { run: vi.fn(async (step: string) => {
+      if (step === 'build') parked = true;
+      return { success: true };
+    }) };
+    const events = new ConductorEventEmitter();
+    const loopHalts: unknown[] = [];
+    events.on('loop_halt', (event) => loopHalts.push(event));
+    const conductor = new Conductor({
+      projectRoot: root,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo', fromStep: 'build', mode: 'auto', daemon: true, verifyArtifacts: false,
+      events, stepRunner: runner,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } } as never,
+      operatorParkBoundary: async () => parked,
+      childRegionLifecycle: {
+        resolveActiveChild: async () => ({
+          kind: 'repair-pending', child: 2, position: 2, isLeaf: true, branch: 'feat/daemon-demo',
+          repairChildren: [2], routedRepair: { child: 2, roundId: 'r1' },
+        }) as never,
+        enterHostRegion: async () => {
+          seams.createdRecord = { ...seams.createdRecord, hosts: { 2: 'repairing' } };
+          return { kind: 'entered' } as never;
+        },
+        enterChildRegion: async () => ({ kind: 'completed' }) as never,
+      },
+    });
+
+    await conductor.run();
+
+    expect(runner.run).toHaveBeenCalledWith('build', expect.anything(), expect.objectContaining({ retryReason: undefined }));
+    expect(seams.createdRecord.hosts[2]).toBe('repairing');
+    await expect(readFile(join(root, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(loopHalts).not.toContainEqual(expect.objectContaining({ reason: expect.stringContaining('derived-already-complete') }));
+  });
+
   it.each([
     ['receipt CAS', async () => { throw new Error('CAS refused'); }, /round r1.*receipt mutation failed.*CAS refused/],
     ['record reread', async () => ({ kind: 'charged' as const }), /round r1.*record reread failed: reread seam/],

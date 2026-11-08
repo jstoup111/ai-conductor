@@ -11331,7 +11331,7 @@ export class Conductor {
             const execution = resolveExecutionChild(await this.resolveActiveChild(this.projectRoot, slug), slug);
             if (execution.source === 'routed-host' && execution.roundId !== undefined) {
               const route = await readRouteRecord(this.projectRoot, slug, execution.roundId);
-              const workOrder = route.kind === 'record' && route.record.kind === 'operator'
+              const workOrder = route.kind === 'record'
                 ? route.record.allocation[execution.target.child]?.retryHint
                 : undefined;
               if (workOrder && !retryHint?.includes(workOrder)) retryHint = [retryHint, workOrder].filter(Boolean).join('\n\n');
