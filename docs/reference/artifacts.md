@@ -880,8 +880,9 @@ when a reseal changes a story's owner without moving a task; and the restack eve
 `remediation_routed` (`roundId`, `kind`, `items` of `findingId`/`owner`/`host`/`reason`),
 `remediation_rerouted` (`roundId`, `from`, `to`, `evidence`), `routed_repair_phase` (`roundId`, `host`,
 `phase`, `credit`, optional `reason` of `derived-already-complete`), `routing_rounds_stalled` (`rounds` of `roundId`/`readable`/`unsettledHosts`, `detail`,
-`attempt`), `routing_round_superseded` (`roundId`, `supersededBy`, `droppedHosts`, `findingIds`,
-`reason`, `operator`) when `stack rounds --close` closes a stale audit round, and `child_revalidated` (`generation`, `closureSha`, `outcome` of `passed` or `fixed`). Stacked
+`attempt`), `routing_round_superseded` (`roundId`, `disposition` of `superseded` with `supersededBy`, or
+`leaf-return` with empty `findingIds`; `droppedHosts`, `findingIds`, `reason`, `operator`) when
+`stack rounds --close` closes an audit round, and `child_revalidated` (`generation`, `closureSha`, `outcome` of `passed` or `fixed`). Stacked
 publication adds `stack_member_published` and `stack_member_redrafted` (`child`, `pr`),
 `stack_assembled` (`prs`), `stack_member_lifecycle` (`child`, `pr`, `state` of
 `merged`/`closed`/`reverted`, de-duplicated by `eventId`), `stack_members_unreachable` (`child`,

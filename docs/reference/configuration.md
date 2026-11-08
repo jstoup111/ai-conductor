@@ -1555,6 +1555,15 @@ a routed round instead of appended to the leaf plan:
   host is the owner when its closure holds every input, else the first closed child above it that
   does, else the leaf. An unreadable leaf listing halts `needs-human` with
   `cannot read leaf branch <ref>`.
+- **Taskless placement.** A taskless audit kickback, such as a `manual_test` FAIL with no tasks,
+  goes to the residue judgement with its rationale, its retry hint as evidence, and the paths each
+  slice position changed (each closed child against its predecessor's closure, the first against
+  its merge base with the base branch, the leaf against the last closure). The judgement may return
+  `implicatedPaths`; they resolve against the leaf listing as above, and the host rule above places
+  the round from the judged owner. With no resolved input the leaf hosts it. Failures halt
+  `taskless routing manifest failed:`, `taskless routing judgement failed for <item>:`,
+  `taskless routing implicated-path resolution failed:`, or
+  `taskless routing host selection failed:` plus the detail.
 - **Admission.** The engine allocates the next round id `r<n>` and writes a `prepared` route record.
   One transaction, fenced on the restack journal, then opens the round and writes the `repairing`
   marker. The engine persists `remediation_routed` and `routed_repair_phase`, records one kickback,
@@ -1573,7 +1582,11 @@ a routed round instead of appended to the leaf plan:
   and the ordinary routed exit runs. A restart in that window resumes the exit instead of re-entering
   the host. With no other host left to advance, the entry halts `needs-human` with
   `routed host <k> entry derived already complete`. Other failures halt with
-  `routed host <k> entry halted:` or `entry refused:` plus the detail.
+  `routed host <k> entry halted:` or `entry refused:` plus the detail. A host whose items all
+  carry no tasks always enters BUILD, even when its plan's tasks are complete, and the host's
+  BUILD dispatch receives the round's recorded retry hint as its work order. When the host cannot
+  do the work, close the round with
+  [`stack rounds --close`](cli.md#routed-rounds) to return it to the leaf.
 - **Membership.** `prepare-commit-msg` stamps `Round: r<n>` on commits made on the current host
   (hidden `ai-conductor round-stamp`). `ai-conductor task` and `task-membership-check` accept the
   round's routed task ids on its host; task status stays feature-wide.
@@ -1657,7 +1670,9 @@ a routed round instead of appended to the leaf plan:
   [two routed rounds open at once](../runbooks/stacked-feature-manual-recovery.md#3-two-routed-rounds-open-at-once).
 - **Recovery.** After journal recovery and the outbox drain, the stack preflight deletes a
   `prepared` record that no marker names. For an admitted round, conductor resume rewinds the leaf
-  region to `build` without re-admitting.
+  region to `build` without re-admitting. After an operator leaf return closes the last open round,
+  the preflight drains its event and resume restores whole-feature state instead of entering a
+  child region.
 - **Base refresh.** While any route record is not `closed` or the `revalidate` queue exists, the
   stack preflight, the daemon re-kick rebase, and the finish-time `rebase` step defer the base
   refresh and emit `restack_refused` with reason `deferred-base-refresh`. The stack preflight then
