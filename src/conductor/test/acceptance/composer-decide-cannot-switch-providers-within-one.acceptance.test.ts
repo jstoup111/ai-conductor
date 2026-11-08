@@ -17,7 +17,10 @@ import {
 } from '../../src/engine/engineer-cli.js';
 
 const SLUG = 'provider-handoff';
-const NOTES = 'Decision: retain human acceptance. Open question: diagram detail?';
+const NOTES = {
+  decisions: ['retain human acceptance'],
+  openQuestions: ['diagram detail?'],
+};
 const sha256 = (text: string): string => createHash('sha256').update(text).digest('hex');
 
 describe('Composer checkpoint → another provider → checkpoint', () => {
@@ -47,7 +50,7 @@ describe('Composer checkpoint → another provider → checkpoint', () => {
       schemaVersion: 1, name: 'project', path: project,
       status: 'registered', registeredAt: '2026-11-08T00:00:00.000Z',
     }]));
-    await writeFile(notesPath, NOTES);
+    await writeFile(notesPath, JSON.stringify(NOTES));
     // Provider executable selection reads these overrides from process.env.
     vi.stubEnv('CLAUDE_EXECUTABLE', 'claude');
     vi.stubEnv('CODEX_EXECUTABLE', 'codex');
@@ -81,6 +84,8 @@ describe('Composer checkpoint → another provider → checkpoint', () => {
       registryPath, engineerDir: join(root, 'engineer'),
       skillNameRoot: null, print, printErr, git, gh, spawnHost,
       env: { AI_CONDUCTOR_AUTHORING_PROVIDER: provider },
+      resolveCheckpointOwner: async () => ({ resolved: true, id: 'operator-a' }),
+      resolveResumeOwner: async () => ({ resolved: true, id: 'operator-a' }),
       intakeResolveActor: async () => ({ resolved: true, id: 'operator-a' }),
       probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
       loadLaunchConfig: async () => ({ ok: true, config: {}, warnings: [] }),
@@ -103,7 +108,7 @@ describe('Composer checkpoint → another provider → checkpoint', () => {
 
     const exploration = 'Track: product\nApproach: checkpoint then resume.\n';
     await artifact('track', exploration);
-    expect(await checkpoint('explore', '--accept', from)).toBe(0);
+    expect(await checkpoint('explore', '--accept', from), printErr.mock.calls.flat().join('\n')).toBe(0);
     expect(existsSync(recordPath), 'compose checkpoint must persist its run record before a different provider can resume').toBe(true);
     expect(spawnHost, 'checkpoint is a deterministic command, not a new host session').not.toHaveBeenCalled();
     expect(await committedRecord()).toContain(sha256(exploration));
@@ -117,7 +122,7 @@ describe('Composer checkpoint → another provider → checkpoint', () => {
     expect(prdCheckpoint).toContain(from);
     const diagram = '# Architecture draft awaiting operator acceptance\n';
     await artifact('architecture', diagram);
-    expect(await checkpoint('architecture-diagram', '--draft', from)).toBe(0);
+    expect(await checkpoint('architecture_diagram', '--draft', from), printErr.mock.calls.flat().join('\n')).toBe(0);
     const beforeResume = await readFile(recordPath, 'utf8');
     expect(await committedRecord()).toBe(beforeResume.trimEnd());
 
@@ -131,7 +136,7 @@ describe('Composer checkpoint → another provider → checkpoint', () => {
     expect(argv.join(' ')).toMatch(/resume/i);
     expect(argv.join(' ')).toContain(worktree);
     const resumeContext = [argv.join(' '), ...print.mock.calls.flat()].join('\n');
-    expect(resumeContext).toContain('architecture-diagram');
+    expect(resumeContext).toContain('architecture_diagram');
     expect(resumeContext).toMatch(/draft|unaccepted/i);
     expect(await readFile(join(worktree, '.docs', 'architecture', `${SLUG}.md`), 'utf8')).toBe(diagram);
 
@@ -142,12 +147,13 @@ describe('Composer checkpoint → another provider → checkpoint', () => {
     expect(resumedRecord).toContain(sha256(prd));
     expect(resumedRecord).toContain('draft');
     expect(resumedRecord).not.toContain(sha256(diagram));
-    expect(await checkpoint('architecture-diagram', '--accept', to)).toBe(0);
+    expect(await checkpoint('architecture_diagram', '--accept', to), printErr.mock.calls.flat().join('\n')).toBe(0);
     const afterAcceptance = await committedRecord();
     expect(afterAcceptance).toContain(sha256(exploration));
     expect(afterAcceptance).toContain(sha256(prd));
     expect(afterAcceptance).toContain(sha256(diagram));
-    expect(afterAcceptance).toContain(NOTES);
+    expect(afterAcceptance).toContain(NOTES.decisions[0]);
+    expect(afterAcceptance).toContain(NOTES.openQuestions[0]);
     expect(afterAcceptance).toContain(from);
     expect(afterAcceptance).toContain(to);
     expect(gh).not.toHaveBeenCalled();
