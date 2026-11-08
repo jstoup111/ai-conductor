@@ -853,3 +853,13 @@ Slice 2
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic, and no slice-1 task depends on a slice-2 task
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-as-built-rem-as-built-d4-dispatch-kind-resume: src/conductor/src/engine/child-feature-executor.ts: in execute(), replace the inline REKICK-only ternary with classifyDispatchKind({ wasExisting: existsSync(join(projectRoot, '.worktrees', slug)), rekickSignal: existsSync(<worktree>/.pipeline/REKICK) }) imported from daemon-runner.ts, so an existing worktree without REKICK emits feature_dispatch_started kind 'resume'. RED first: in src/conductor/test/engine/child-feature-executor.test.ts, add an in-memory-fork case where a feature worktree exists without .pipeline/REKICK and assert kind 'resume' plus the order's tier. Keep the existing rekick, initial, halted haltClass/step and parked→terminated cases unchanged. Run the touched files GREEN and commit under Task 24.
+**Gate:** as-built
+**Rationale:** Verified: src/conductor/src/engine/child-feature-executor.ts execute() derives kind only from .pipeline/REKICK existence ('rekick' else 'initial'). That emits 'initial' for an existing worktree without REKICK. ADR D4 (amended by #3333) requires classification from both worktree existence and REKICK existence. The plan's Technical Approach (Supervisor telemetry, Tasks 24/25) says the executor classifies with classifyDispatchKind before the fork, and that helper (daemon-runner.ts) returns 'resume' for this case. The architecture is clear and authoritative, so this is conforming implementation drift. Plan Task 24 (child-feature-executor.ts dispatch classification) admits the repair. Its existing rekick/initial test cases and the halt-class/step/terminated coverage must survive unchanged. Add a resume case and replace the inline ternary with classifyDispatchKind. No sibling classification site exists per the finding.
+**Governing clause:** adr-2026-10-15-per-dispatch-engine-pinned-executor decision 4
+**Done when:**
+- adr-2026-10-15-per-dispatch-engine-pinned-executor decision 4 is satisfied by this task.
+- The repair for task rem-as-built-rem-as-built-d4-dispatch-kind-resume is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r2
