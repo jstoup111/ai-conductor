@@ -309,7 +309,7 @@ describe('Conductor routed acceptance verify-green path', () => {
   });
 
   // Covers: task:5, task:rem-prd-audit-S2.1, task:rem-prd-audit-S2.3
-  it('runs fresh validation after an unchanged routed repair build and renders its persisted running lines in order', async () => {
+  it('guard re-enters unfinished routed work before whole-feature validation and renders its persisted running lines in order', async () => {
     const { root } = await routedFixture();
     const host = parseChildId(1)!;
     const gates = join(root, '.pipeline', 'children', '1', 'gates');
@@ -342,7 +342,7 @@ describe('Conductor routed acceptance verify-green path', () => {
   });
 
   // Covers: task:8
-  it('escalates the third identical parked r5 stall, and resets after either routing progress event', async () => {
+  it('guard bounds the third identical unadvanceable routed-work stall and resets after routing progress', async () => {
     const { root } = await routedFixture();
     const events = new ConductorEventEmitter();
     const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
