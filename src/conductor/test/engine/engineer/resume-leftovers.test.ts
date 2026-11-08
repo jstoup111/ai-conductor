@@ -1,3 +1,4 @@
+// Covers: task:13
 import { describe, expect, it } from 'vitest';
 import { chooseResumeLocalState } from '../../../src/engine/engineer/resume.js';
 

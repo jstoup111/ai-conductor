@@ -1,3 +1,4 @@
+// Covers: task:10
 import { describe, expect, it } from 'vitest';
 import { createDeliveryGuardedQueue } from '../../../src/engine/engineer/intake/delivery-guard.js';
 

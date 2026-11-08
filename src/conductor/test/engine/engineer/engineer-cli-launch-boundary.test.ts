@@ -1,3 +1,5 @@
+// Covers: task:16
+// Covers: task:17
 import { describe, expect, it } from 'vitest';
 import { resolveBoundaryProvider } from '../../../src/engine/engineer/launch-boundary.js';
 
