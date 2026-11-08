@@ -67,7 +67,7 @@ function deps(input: {
   return {
     publication: {
       ...ops,
-      presentation: (url) => ({
+      presentation: (_url) => ({
         run: async (request) => {
           input.calls.push({ operation: request.operation, payload: request.payload });
           if (request.operation === 'pull-request.ready' && input.failReady) {
