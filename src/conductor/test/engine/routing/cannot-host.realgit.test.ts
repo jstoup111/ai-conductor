@@ -110,7 +110,7 @@ async function fiveChildStack() {
 
 describe('cannot-host (real local Git)', () => {
   // Covers: task:6
-  it('derives each declared position\'s paths from consecutive closed stack refs', async () => {
+  it('derives paths for every declared position from consecutive closed stack refs', async () => {
     const stack = await fiveChildStack();
     const positions = [child(1), child(2), child(3), child(4), child(5)];
     const changed = await changedPathsByPosition({
