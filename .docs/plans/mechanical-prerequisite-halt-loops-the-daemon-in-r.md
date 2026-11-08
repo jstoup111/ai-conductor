@@ -316,3 +316,19 @@ Task 9 (Story 4 verify-only): none
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-as-built-R1: src/conductor/src/daemon-cli.ts: add readHaltClass: (slug) => readHaltClass(join(worktreeBase, slug)), the existing production classifier, to the runDaemon deps, so a live mechanical/retryable HALT reaches the dispatch-boundary clear. Add a failing-first test in src/conductor/test/engine/daemon-cli-progress-rekick-wiring.test.ts asserting that the runDaemon deps carry a readHaltClass that returns the on-disk HALT.class disposition, including when build_progress_halt.enabled is false.
+**Gate:** as-built
+**Rationale:** Verified: in daemon-cli.ts, the runDaemon deps near line 2825 spread buildProgressReKickDeps and buildRetryableHaltDeps but never supply readHaltClass. The only readHaltClass bindings are on the rekick sweep (line 2780) and episode recovery (line 2919). Without it, daemon.ts defaults to unclassified and refuses every live retryable HALT, so the clear at dispatch never runs. ADR decision 1 stays authoritative and plan Task 8 ('Production wiring clears, records and judges retryable HALTs') already covers this wiring, so it is conforming implementation drift that belongs in BUILD.
+**Governing clause:** adr-2026-11-07-retryable-halt-cleared-at-dispatch-boundary decision 1
+**Done when:**
+- adr-2026-11-07-retryable-halt-cleared-at-dispatch-boundary decision 1 is satisfied by this task.
+- The repair for task rem-as-built-R1 is committed and its targeted tests pass.
+
+### Task rem-as-built-R2: src/conductor/src/engine/daemon-rekick.ts: change clearRetryableHaltMarker to return Promise<boolean>, true only when it actually archived and removed HALT and false on the raced/absent path. In src/conductor/src/daemon-cli.ts clearRetryableHalt, drop the separate pre-read of HALT and call appendHaltClearedRecord only when the helper returns true. Add failing-first tests: in src/conductor/test/engine/daemon-rekick.test.ts, the helper returns false and writes nothing when HALT is absent; in src/conductor/test/engine/daemon-cli-progress-rekick-wiring.test.ts, HALT is removed after any caller-side check but before the helper's read (simulated by stubbing or removing HALT before the clear) and no halt_cleared record is appended. Keep the existing single-record and byte-preservation assertions from Task 8.
+**Gate:** as-built
+**Rationale:** Verified: clearRetryableHalt in daemon-cli.ts reads HALT to set hadHalt, then calls clearRetryableHaltMarker, which reads HALT a second time (daemon-rekick.ts:736) and returns silently if it is gone. hadHalt still drives appendHaltClearedRecord, so a concurrent removal writes a false halt_cleared record. That breaks the Task 2 Done-when ('no ... halt_cleared audit-trail record is written by the clear') and ADR decision 5. The ADR is authoritative and Tasks 2 and 8 cover the fix, so this belongs in BUILD.
+**Governing clause:** adr-2026-11-07-retryable-halt-cleared-at-dispatch-boundary decision 5
+**Done when:**
+- adr-2026-11-07-retryable-halt-cleared-at-dispatch-boundary decision 5 is satisfied by this task.
+- The repair for task rem-as-built-R2 is committed and its targeted tests pass.
