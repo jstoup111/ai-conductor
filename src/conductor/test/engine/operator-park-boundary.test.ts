@@ -243,6 +243,19 @@ describe('operator park boundary contract', () => {
       unreviewedDispatches: [],
     });
 
+    // A group member's initial dispatch is protected by the owning group
+    // admission gate, but each of its retries calls this injected predicate
+    // directly.  Audit every injection rather than only the configured-group
+    // one: the raw predicate intentionally belongs only to the owner-boundary
+    // classifier, where it gives an operator park precedence over a yield.
+    const groupBranchInjections = [...conductorSource.matchAll(
+      /return(?: await)? runGroupBranch\(member, state, \{[\s\S]*?operatorParkBoundary:\s*this\.daemon && this\.featureSlug !== undefined\s*\?\s*(this\.(?:rawOperatorParkBoundary|operatorParkBoundary))\s*:\s*undefined,/g,
+    )].map((match) => match[1]);
+    expect(groupBranchInjections).toEqual([
+      'this.operatorParkBoundary',
+      'this.operatorParkBoundary',
+    ]);
+
     const unguardedRemediateDispatch = "const judgement = await this.stepRunner.run('remediate', state, { retryReason: 'unguarded reconciliation dispatch' });";
     const unguardedSource = conductorSource.replace(
       prdWideningReconciliationDispatch,
@@ -1649,15 +1662,17 @@ describe('operator park boundary contract', () => {
   });
 
   // Covers: task:5
-  it('declines a configured-member retry on yield and preempts at its joined group boundary', async () => {
+  it('declines a configured-member retry on yield without consuming its budget, then preempts at the joined group boundary', async () => {
     await writeState(statePath, stateWithPending('memory', 'explore'));
     let yielded = false;
     const terminalEvents: ConductorEvent[] = [];
     const retries: ConductorEvent[] = [];
+    const memberOutcomes: Array<Extract<ConductorEvent, { type: 'group_member_step' }>> = [];
     const events = new ConductorEventEmitter();
     events.on('parallel_failure', (event) => { terminalEvents.push(event); });
     events.on('step_failed', (event) => { terminalEvents.push(event); });
     events.on('step_retry', (event) => { retries.push(event); });
+    events.on('group_member_step', (event) => { memberOutcomes.push(event); });
     const run = vi.fn<StepRunner['run']>(async (step) => {
       if (step === ('yielded-member' as StepName)) {
         yielded = true;
@@ -1691,6 +1706,9 @@ describe('operator park boundary contract', () => {
       dispatchedAttempts: run.mock.calls.map(([step, , options]) => ({ step, attempt: options?.attempt })),
       terminalEvents,
       retries,
+      memberOutcomes: memberOutcomes
+        .map(({ member, outcome }) => ({ member, outcome }))
+        .sort((left, right) => left.member.localeCompare(right.member)),
       state: persisted.ok ? {
         group: persisted.value.memory,
         yielded: (persisted.value as Record<string, unknown>)['memory__yielded-member'],
@@ -1706,6 +1724,10 @@ describe('operator park boundary contract', () => {
       ],
       terminalEvents: [],
       retries: [],
+      memberOutcomes: [
+        { member: 'drained-member', outcome: 'verdict:pass' },
+        { member: 'yielded-member', outcome: 'parked' },
+      ],
       state: { group: 'in_progress', yielded: 'in_progress', drained: 'done', later: 'pending' },
       terminalMarkers: [],
     });
