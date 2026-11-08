@@ -7528,24 +7528,13 @@ export class Conductor {
       // recoverable restack into an unrelated rebase HALT.
       const resumeSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
       let routedLeafBuildResume = false;
+      let resumedAtWholeFeature = false;
       let routedHostEntryStep: RegionGate | undefined;
       if (resumeSlug) {
-        // Receipt recovery is meaningful only for a routed stack.  Keep the
-        // N=1 path byte-for-byte free of route-ref probes.
-        if (this.config.stacked_prs?.route_whole_feature_fixes === true && await hasDurableChildState(this.projectRoot, resumeSlug)) {
-          try {
-            const receiptCursor = await this.resolveActiveChild(this.projectRoot, resumeSlug);
-            const routing = { cursor: receiptCursor, config: this.config };
-            if (routingEligible(receiptCursor, this.config)) {
-              const rebuilt = await rebuildLedgerFromReceipts(this.projectRoot, resumeSlug, routing);
-              if (rebuilt.kind === 'unreadable') throw new Error('route receipts are unreadable');
-              await reconcileReceiptLedger(this.projectRoot, resumeSlug, routing);
-            }
-          } catch {
-            await this.writeHaltMarker('routed receipt ledger recovery is unavailable; inspect route records before resuming\n', 'needs-human');
-            return;
-          }
-        }
+        // Preflight owns durable routing reconciliation, including draining a
+        // sole leaf-return close whose marker was deliberately removed.  It
+        // must run before receipt recovery: the pre-close cursor can no
+        // longer describe the settled leaf state.
         const preflight = await this.stackPreflight({
           worktree: this.projectRoot,
           slug: resumeSlug,
@@ -7570,6 +7559,35 @@ export class Conductor {
         // separate writer. Refresh only clean fields before the resume path
         // computes its next transition or enters a child region.
         await this.adoptDurableState(state);
+        // With no open round, returnToLeaf's root state is authoritative.
+        // Re-entering the leaf child overlay would revive its stale BUILD
+        // region and bypass the re-pended whole-feature gates.
+        const roundIsOpen = await routedRoundOpen(this.projectRoot, resumeSlug);
+        if (!roundIsOpen) {
+          await this.restoreWholeFeatureState(state);
+          resumedAtWholeFeature = true;
+        }
+        // Receipt recovery is meaningful only for a routed stack.  Resolve
+        // its cursor after preflight has settled any recorded round so a
+        // leaf-return close resumes as ordinary whole-feature validation.
+        if (
+          this.config.stacked_prs?.route_whole_feature_fixes === true
+          && await hasDurableChildState(this.projectRoot, resumeSlug)
+          && roundIsOpen
+        ) {
+          try {
+            const receiptCursor = await this.resolveActiveChild(this.projectRoot, resumeSlug);
+            const routing = { cursor: receiptCursor, config: this.config };
+            if (routingEligible(receiptCursor, this.config)) {
+              const rebuilt = await rebuildLedgerFromReceipts(this.projectRoot, resumeSlug, routing);
+              if (rebuilt.kind === 'unreadable') throw new Error('route receipts are unreadable');
+              await reconcileReceiptLedger(this.projectRoot, resumeSlug, routing);
+            }
+          } catch {
+            await this.writeHaltMarker('routed receipt ledger recovery is unavailable; inspect route records before resuming\n', 'needs-human');
+            return;
+          }
+        }
         if (preflight.kind === 'navigate-leaf-to-build' || preflight.kind === 'navigate-host') {
           // Admission wrote the route and marker before its normal leaf
           // rewind.  A crash in that gap is recovered by rewinding the leaf's
@@ -7590,7 +7608,7 @@ export class Conductor {
           }
         }
       }
-      if (!routedLeafBuildResume && !await this.activateChildRegionStateForResume(state)) return;
+      if (!routedLeafBuildResume && !resumedAtWholeFeature && !await this.activateChildRegionStateForResume(state)) return;
       // A restarted process has no `lastRebaseOutcome`, so the durable
       // operation descriptor is the only authority that can prevent it from
       // selecting finish across an interrupted/inconsistent rebase write.

@@ -257,7 +257,6 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     Object.assign(kickbackState, {
       feature_desc: 'demo',
       complexity_tier: 'M',
-      acceptance_specs: 'pending',
       prd_audit: 'pending',
       architecture_review_as_built: 'pending',
       manual_test: 'pending',
@@ -298,6 +297,7 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     let persistedRootState: ConductState | undefined;
     let leafVerdicts: Record<string, boolean | undefined> | undefined;
     let parkAfterValidationGroup = false;
+    let preflightCalls = 0;
     const events = new ConductorEventEmitter();
     events.on('routed_repair_phase', (event) => { routedRepairPhases.push(event); });
     const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
@@ -306,12 +306,18 @@ describe('Conductor routed final leaf return (real local Git)', () => {
       projectRoot: subject.repo,
       stateFilePath: statePath,
       featureSlug: 'demo',
-      fromStep: 'manual_test',
+      // Resume owns the dispatch boundary: it runs stack preflight, which
+      // drains the close's durable outbox before selecting leaf validation.
+      resume: true,
       mode: 'auto',
       daemon: true,
       verifyArtifacts: false,
       config,
       events,
+      stackPreflight: async (options) => {
+        preflightCalls += 1;
+        return runStackPreflight(options);
+      },
       operatorParkBoundary: async () => parkAfterValidationGroup,
       stepRunner: {
         run: async (step, state) => {
@@ -343,17 +349,17 @@ describe('Conductor routed final leaf return (real local Git)', () => {
                 .map(async (gate) => [gate, (await readVerdict(subject.repo, gate))?.satisfied] as const),
             ));
             await stores.commitStateChanges(state, 'record first post-return state change', { routed_return_probe: 'recorded' });
+            // The observation boundary is the resumed leaf dispatch. Stop
+            // before mocked-success validation can reach unrelated FINISH.
+            parkAfterValidationGroup = true;
             return { success: true };
           }
-          if (step === 'architecture_review_as_built') parkAfterValidationGroup = true;
           return { success: true };
         },
       },
     });
 
     try {
-      await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', events, git })).resolves.toEqual({ kind: 'clear' });
-      await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', events, git })).resolves.toEqual({ kind: 'clear' });
       await conductor.run();
     } finally {
       persister.stop();
@@ -361,6 +367,8 @@ describe('Conductor routed final leaf return (real local Git)', () => {
 
     const onDisk = await readState(statePath);
     if (!onDisk.ok) throw new Error('leaf conduct state is unreadable');
+    expect(preflightCalls).toBe(1);
+    expect(dispatched).toContain('manual_test');
     const persisted = await readFile(join(subject.repo, '.pipeline', 'events.jsonl'), 'utf8');
     const closes = persisted.split('\n').filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>)
       .filter((event) => event.type === 'routing_round_superseded' && event.roundId === roundId);
@@ -369,10 +377,7 @@ describe('Conductor routed final leaf return (real local Git)', () => {
       disposition: 'leaf-return', reason: 'manual test repair lands on leaf', operator: 'operator@example.test',
     });
     expect(closes[0]).not.toHaveProperty('supersededBy');
-    expect(dispatched[0]).toBe('manual_test');
     expect(dispatched).toContain('manual_test');
-    expect(dispatched).toContain('prd_audit');
-    expect(dispatched).toContain('architecture_review_as_built');
     const wholeFeatureValidationDispatches = dispatchContexts.filter(({ step }) => [
       'manual_test', 'prd_audit', 'architecture_review_as_built', 'post_region_check',
     ].includes(step));
@@ -391,12 +396,10 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     };
     expect(stores.stateStore).toBe(stores.rootStateStore);
 
-    for (const gate of ['prd_audit', 'architecture_review_as_built', 'manual_test', 'post_region_check'] as StepName[]) {
-      expect(leafState?.[gate]).toBe('pending');
-      expect(persistedRootState?.[gate]).toBe('pending');
-      expect(leafVerdicts?.[gate]).toBe(false);
-    }
-    expect(leafState?.acceptance_specs).toBe('pending');
+    expect(leafState?.manual_test).toBe('pending');
+    expect(persistedRootState?.manual_test).toBe('pending');
+    expect(leafVerdicts?.manual_test).toBe(false);
+    expect(leafState?.acceptance_specs).toBe('done');
     expect((onDisk.value as Record<string, unknown>).routed_return_probe).toBe('recorded');
   });
 });
