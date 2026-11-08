@@ -1,4 +1,4 @@
-// Covers: task:rem-prd-audit-W10, task:1, task:2
+// Covers: task:rem-prd-audit-W10, task:1, task:2, task:11
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
@@ -37,6 +37,24 @@ function routingEventLiteralViolations(files: readonly SourceFile[]): string[] {
 }
 
 describe('routing event constructors', () => {
+  // Covers: task:11
+  it('records a leaf-return disposition without a superseding round', () => {
+    const event = routingRoundSupersededEvent(
+      { roundId: parseRoundId('r2')!, hosts: { [parseChildId(1)!]: 'admitted' }, currentHostIndex: 0 } as RouteRecord,
+      { disposition: 'leaf-return' },
+      [parseChildId(1)!],
+      [],
+      'return to leaf',
+      'operator@example.test',
+    );
+
+    expect(event).toMatchObject({
+      type: 'routing_round_superseded', roundId: 'r2', disposition: 'leaf-return', droppedHosts: [1],
+      reason: 'return to leaf', operator: 'operator@example.test',
+    });
+    expect(event).not.toHaveProperty('supersededBy');
+  });
+
   it('carries a derived-already-complete reason only when supplied for a routed repair phase', () => {
     const withReason = routedRepairPhaseEvent(
       parseRoundId('r2')!,
@@ -57,7 +75,7 @@ describe('routing event constructors', () => {
   it('creates an identified supersession occurrence for the lowest dropped host', () => {
     const event = routingRoundSupersededEvent(
       { roundId: parseRoundId('r4')! } as RouteRecord,
-      parseRoundId('r5')!,
+      { disposition: 'superseded', supersededBy: parseRoundId('r5')! },
       [parseChildId(2)!],
       ['finding-2'],
       'stale audit round',
@@ -65,7 +83,7 @@ describe('routing event constructors', () => {
     );
 
     expect(event).toMatchObject({
-      type: 'routing_round_superseded', roundId: 'r4', supersededBy: 'r5',
+      type: 'routing_round_superseded', roundId: 'r4', disposition: 'superseded', supersededBy: 'r5',
       droppedHosts: [2], child: 2, findingIds: ['finding-2'],
       reason: 'stale audit round', operator: 'operator@example.test',
     });
@@ -87,7 +105,7 @@ describe('routing event constructors', () => {
 
     const noDrops = routingRoundSupersededEvent(
       record,
-      parseRoundId('r3')!,
+      { disposition: 'superseded', supersededBy: parseRoundId('r3')! },
       [],
       [],
       'already restacked',
@@ -95,7 +113,7 @@ describe('routing event constructors', () => {
     );
     const dropped = routingRoundSupersededEvent(
       record,
-      parseRoundId('r3')!,
+      { disposition: 'superseded', supersededBy: parseRoundId('r3')! },
       [parseChildId(2)!, parseChildId(3)!],
       [],
       'pending hosts',
@@ -110,7 +128,7 @@ describe('routing event constructors', () => {
     const droppedHosts = [parseChildId(3)!, parseChildId(2)!, parseChildId(4)!];
     const event = routingRoundSupersededEvent(
       { roundId: parseRoundId('r4')! } as RouteRecord,
-      parseRoundId('r5')!,
+      { disposition: 'superseded', supersededBy: parseRoundId('r5')! },
       droppedHosts,
       ['finding-3', 'finding-2', 'finding-4'],
       'stale audit round',

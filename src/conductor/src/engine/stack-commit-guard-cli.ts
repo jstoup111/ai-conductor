@@ -7,7 +7,7 @@ import { loadConfig } from './config.js';
 import { childBranchFor, leafBranchFor, parseFeatureBranch } from './feature-branch-identity.js';
 import { hasDurableChildState, loadSliceTopology, type SliceTopology } from './slice-topology.js';
 import { readRepairMarker, readRouteRecord, type ReadRepairMarkerResult, type ReadRouteRecordResult } from './routing/route-record-store.js';
-import { routingSettingOn, type RoundId } from './routing/route-types.js';
+import { assertNever, routingSettingOn, type RoundId } from './routing/route-types.js';
 
 export interface StackCommitGuardDependencies {
   readonly projectRoot: string;
@@ -116,11 +116,20 @@ export async function runStackCommitGuard(deps: StackCommitGuardDependencies): P
     ? identity.kind === 'leaf'
     : identity.kind === 'child' && identity.child === marker.marker.host;
   if (!isHost) {
+    // ai-conductor:session-command-context=operator-only
+    const recoveryCommand = (() => {
+      switch (stored.record.kind) {
+        case 'audit':
+          return `ai-conductor stack rounds --slug ${identity.slug} --close ${marker.marker.roundId} --reason <text>`;
+        case 'operator':
+          return `ai-conductor stack land --slug ${identity.slug} --abandon`;
+      }
+      return assertNever(stored.record.kind);
+    })();
+    // /ai-conductor:session-command-context
     return refuse(
       print,
-      // ai-conductor:session-command-context=operator-only
-      `refusing tracked-file commit on ${branch}; ${stored.record.kind} round ${marker.marker.roundId} is hosted on ${hostBranch}. Commit on ${hostBranch} or run ai-conductor stack land --abandon.`,
-      // /ai-conductor:session-command-context
+      `refusing tracked-file commit on ${branch}; ${stored.record.kind} round ${marker.marker.roundId} is hosted on ${hostBranch}. Commit on ${hostBranch} or run ${recoveryCommand}.`,
     );
   }
 

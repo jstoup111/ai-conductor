@@ -1047,7 +1047,7 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   },
   routing_round_superseded: {
     type: 'routing_round_superseded', eventId: 'route-6', occurredAt: '2030-01-01T00:00:00.000Z',
-    roundId: parseRoundId('r1')!, child: parseChildId(1)!, supersededBy: parseRoundId('r2')!,
+    roundId: parseRoundId('r1')!, child: parseChildId(1)!, disposition: 'superseded', supersededBy: parseRoundId('r2')!,
     droppedHosts: [parseChildId(1)!], findingIds: ['finding-1'], reason: 'test', operator: 'operator@example.test',
   },
   child_revalidated: {

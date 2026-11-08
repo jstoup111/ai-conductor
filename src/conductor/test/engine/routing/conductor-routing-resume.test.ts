@@ -405,6 +405,98 @@ describe('routed round conductor resume', () => {
     expect(refs.filter((ref) => ref.endsWith('/repairing'))).toHaveLength(1);
   });
 
+  // Covers: task:4
+  it('keeps the derived-already-complete halt for a sole task-bound host', async () => {
+    const subject = await fixture();
+    const host = parseChildId(1)!;
+    const roundId = parseRoundId('r3')!;
+    const created = await createRouteRecord(subject.repo, 'demo', {
+      roundId,
+      sealedAuthored: 1,
+      kind: 'audit',
+      items: [{ findingId: 'rem-1', kind: 'audit', owner: host, host, reason: 'task-bound', existingTask: true, taskIds: ['rem-1'], restage: false, fallback: [] }],
+      allocation: { [host]: { remTaskIds: ['rem-1'], blockBodies: ['### Task rem-1\n'] } },
+    });
+    if (created.kind !== 'created') throw new Error(created.kind);
+    await expect(admitRound(subject.repo, 'demo', created.record, host)).resolves.toMatchObject({ kind: 'admitted' });
+    const routed = {
+      kind: 'repair-pending' as const, child: host, position: host, isLeaf: true,
+      branch: 'feat/daemon-demo', repairChildren: [host], routedRepair: { child: host, roundId },
+    };
+    const runner = vi.fn(async () => ({ success: true }));
+    const conductor = new Conductor({
+      projectRoot: subject.repo, stateFilePath: join(subject.repo, '.pipeline', 'conduct-state.json'),
+      featureSlug: 'demo', verifyArtifacts: false, events: new ConductorEventEmitter(), stepRunner: { run: runner },
+      childRegionLifecycle: {
+        resolveActiveChild: async () => routed,
+        enterHostRegion: async () => ({ kind: 'derived-already-complete', detail: 'every routed task is already evidence-complete' }) as never,
+      },
+    }) as unknown as {
+      enterRoutedHostRegion: (execution: unknown, slug: string, state: ConductState, cursor: unknown) => Promise<unknown>;
+    };
+
+    await expect(conductor.enterRoutedHostRegion(
+      { source: 'routed-host', target: { child: host, isLeaf: true }, roundId }, 'demo', { feature_desc: 'demo' }, routed,
+    )).resolves.toBe(false);
+    expect(runner).not.toHaveBeenCalled();
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/Outcome: derived-already-complete\n$/);
+  });
+
+  // Covers: task:4
+  it('resumes an interrupted taskless routed BUILD with its durable retry hint', async () => {
+    const subject = await fixture();
+    const host = parseChildId(4)!;
+    const roundId = parseRoundId('r4')!;
+    const retryHint = 'manual_test: FAIL touch controls overlap';
+    const created = await createRouteRecord(subject.repo, 'demo', {
+      roundId,
+      sealedAuthored: 1,
+      kind: 'audit',
+      items: [{ findingId: 'manual-test-fail', kind: 'audit', owner: host, host, reason: 'manual-test', fallback: [] }],
+      allocation: { [host]: { remTaskIds: [], blockBodies: [], retryHint } },
+    });
+    if (created.kind !== 'created') throw new Error(created.kind);
+    await expect(admitRound(subject.repo, 'demo', created.record, host)).resolves.toMatchObject({ kind: 'admitted' });
+    const admitted = await readRouteRecord(subject.repo, 'demo', roundId);
+    if (admitted.kind !== 'record') throw new Error('missing r4 record');
+    const repairing = transitionHost(admitted, host, 'repairing', { credit: true });
+    if (repairing.kind !== 'updated') throw new Error('could not enter repairing');
+    await expect(writeRoutingTransaction(subject.repo, 'demo', [{ kind: 'update-record', previous: admitted, record: repairing.record }]))
+      .resolves.toMatchObject({ kind: 'updated' });
+
+    const statePath = join(subject.repo, '.pipeline', 'conduct-state.json');
+    await writeState(statePath, doneThrough('prd_audit'));
+    await writeState(pipelinePathFor(subject.repo, 'conduct-state.json', host), {
+      feature_desc: 'demo', complexity_tier: 'M', acceptance_specs: 'done', build: 'pending',
+    });
+    const dispatched: Array<{ step: StepName; retryReason: string | undefined }> = [];
+    const routed = {
+      kind: 'repair-pending' as const, child: host, position: host, isLeaf: true,
+      branch: 'feat/daemon-demo', repairChildren: [host], routedRepair: { child: host, roundId },
+    };
+    const conductor = new Conductor({
+      projectRoot: subject.repo, stateFilePath: statePath, featureSlug: 'demo', resume: true, verifyArtifacts: false,
+      events: new ConductorEventEmitter(),
+      stepRunner: {
+        run: async (step, _state, options) => {
+          dispatched.push({ step, retryReason: options?.retryReason });
+          throw new Error('stop after resumed taskless build dispatch');
+        },
+      },
+      childRegionLifecycle: {
+        resolveActiveChild: async () => routed,
+        enterHostRegion: async () => ({ kind: 'resume', pinnedBase: 'a'.repeat(40) }) as never,
+        enterChildRegion: async () => ({ kind: 'completed' }),
+      },
+    });
+
+    await conductor.run();
+
+    expect(dispatched).toEqual(expect.arrayContaining([{ step: 'build', retryReason: retryHint }]));
+    expect((conductor as unknown as { activeRegionChild: typeof host }).activeRegionChild).toBe(host);
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.not.toContain('derived-already-complete');
+  });
+
   // Covers: task:6, task:rem-prd-audit-S1.4
   it('heals the #3455 markerless needs-human halt without editing stale verdicts, preserving region dispatch order', async () => {
     const subject = await fixture();

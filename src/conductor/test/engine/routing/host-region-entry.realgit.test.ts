@@ -9,7 +9,7 @@ import { leafBranchFor } from '../../../src/engine/feature-branch-identity.js';
 import { readKickbackLedger } from '../../../src/engine/kickback-ledger.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { writeFrozenBlocks } from '../../../src/engine/remediation-append.js';
-import { enterHostRegion } from '../../../src/engine/routing/host-region-entry.js';
+import { enterHostRegion, hostCarriesTasklessObligation } from '../../../src/engine/routing/host-region-entry.js';
 import { completeRerouteSync, rerouteRound } from '../../../src/engine/routing/prerequisite-claim.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord, readRouteRecord, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
@@ -23,13 +23,18 @@ import { ConductorEventEmitter } from '../../../src/ui/events.js';
 
 const child = parseChildId(1)!;
 const child2 = parseChildId(2)!;
+const child4 = parseChildId(4)!;
 const roundId = parseRoundId('r1')!;
 const planPath = '.docs/plans/demo.md';
 const roots: string[] = [];
 
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
-async function fixture(kind: RouteRecord['kind'] = 'audit') {
+async function fixture(
+  kind: RouteRecord['kind'] = 'audit',
+  options: { readonly host?: typeof child; readonly taskless?: boolean; readonly retryHint?: string } = {},
+) {
+  const host = options.host ?? child;
   const repo = await mkdtemp(join(tmpdir(), 'host-region-entry-'));
   roots.push(repo);
   const git = makeGitRunner(repo);
@@ -52,41 +57,113 @@ async function fixture(kind: RouteRecord['kind'] = 'audit') {
   await git(['commit', '-qm', 'closed child']);
   const closure = (await git(['rev-parse', 'HEAD'])).stdout.trim();
   await git(['update-ref', closureRefFor('demo', child), closure]);
+  if (host !== child) {
+    await git(['checkout', '-qb', `feat/c${host}/demo`, closure]);
+    await writeFile(join(repo, `child-${host}.txt`), `closed child ${host}\n`);
+    await git(['add', `child-${host}.txt`]);
+    await git(['commit', '-qm', `closed child ${host}`]);
+    const hostClosure = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+    await git(['update-ref', closureRefFor('demo', host), hostClosure]);
+  }
   await git(['checkout', '-qb', leafBranchFor('demo')]);
   await writeFile(join(repo, 'leaf.txt'), 'leaf\n');
   await git(['add', 'leaf.txt']);
   await git(['commit', '-qm', 'leaf']);
-  await mkdir(join(repo, '.pipeline', 'children', '1'), { recursive: true });
+  await mkdir(join(repo, '.pipeline', 'children', String(host)), { recursive: true });
   await writeFile(join(repo, '.pipeline', 'conduct-state.json'), JSON.stringify({ feature_desc: 'demo' }));
-  await writeFile(join(repo, '.pipeline', 'children', '1', 'conduct-state.json'), JSON.stringify({
+  await writeFile(join(repo, '.pipeline', 'children', String(host), 'conduct-state.json'), JSON.stringify({
     acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
   }));
   const created = await createRouteRecord(repo, 'demo', {
     roundId, ...(kind === 'revalidate' ? { kind } : { kind, sealedAuthored: 1 }),
-    items: [{ findingId: 'finding', kind, owner: child, host: child, reason: 'task-slice', fallback: [] }],
-    allocation: { [child]: {
-      remTaskIds: ['rem-prd-audit-T1'],
-      blockBodies: [
+    items: [{ findingId: options.taskless ? 'manual-test-fail' : 'finding', kind, owner: host, host, reason: 'task-slice', fallback: [] }],
+    allocation: { [host]: {
+      remTaskIds: options.taskless ? [] : ['rem-prd-audit-T1'],
+      blockBodies: options.taskless ? [] : [
         '### Task rem-prd-audit-T1: Repair routed task\n' +
         '**Child:** 1\n' +
         '**Round:** r1\n',
       ],
+      ...(options.retryHint === undefined ? {} : { retryHint: options.retryHint }),
     } },
   });
   if (created.kind !== 'created') throw new Error(`create route record: ${created.kind}`);
-  const admitted = await admitRound(repo, 'demo', created.record, child, { git });
+  const admitted = await admitRound(repo, 'demo', created.record, host, { git });
   if (admitted.kind !== 'admitted') throw new Error(`admit route record: ${admitted.detail}`);
-  return { repo, git, closure };
+  return { repo, git, closure, host };
 }
 
 function entered(subject: Awaited<ReturnType<typeof fixture>>, git: GitRunner = subject.git) {
   return enterHostRegion({
-    worktree: subject.repo, slug: 'demo', roundId, host: child,
+    worktree: subject.repo, slug: 'demo', roundId, host: subject.host,
     emitter: new ConductorEventEmitter(), git, planPath,
   });
 }
 
 describe('routed host region entry (real local Git)', () => {
+  // Covers: task:1
+  it('enters taskless manual-test and custom-step obligations despite complete authored BUILD work', async () => {
+    const manualTest = await fixture('audit', { host: child4, taskless: true, retryHint: 'FAIL: screenshot differs' });
+    const customStep = await fixture('audit', { host: child2, taskless: true });
+    const complete = vi.fn(async () => ({ done: true }));
+
+    await expect(enterHostRegion({
+      worktree: manualTest.repo, slug: 'demo', roundId, host: child4,
+      emitter: new ConductorEventEmitter(), git: manualTest.git, planPath, checkCompletion: complete,
+    })).resolves.toMatchObject({ kind: 'entered' });
+    await expect(readRouteRecord(manualTest.repo, 'demo', roundId)).resolves.toMatchObject({
+      kind: 'record', record: { hosts: { 4: 'repairing' } },
+    });
+
+    await expect(enterHostRegion({
+      worktree: customStep.repo, slug: 'demo', roundId, host: child2,
+      emitter: new ConductorEventEmitter(), git: customStep.git, planPath, checkCompletion: complete,
+    })).resolves.toMatchObject({ kind: 'entered' });
+    await expect(readRouteRecord(customStep.repo, 'demo', roundId)).resolves.toMatchObject({
+      kind: 'record', record: { hosts: { 2: 'repairing' } },
+    });
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  // Covers: task:1
+  it('keeps the completion-derived no-op for an admitted host without a hosted item', async () => {
+    const subject = await fixture('audit', { host: child4, taskless: true, retryHint: 'FAIL: stale evidence' });
+    const stored = await readRouteRecord(subject.repo, 'demo', roundId);
+    if (stored.kind !== 'record') throw new Error('missing record');
+    const withoutHostedItem: RouteRecord = {
+      ...stored.record,
+      items: [{ ...stored.record.items[0]!, host: child }],
+    };
+    await expect(writeRoutingTransaction(subject.repo, 'demo', [{ kind: 'update-record', previous: stored, record: withoutHostedItem }]))
+      .resolves.toEqual({ kind: 'updated' });
+
+    await expect(enterHostRegion({
+      worktree: subject.repo, slug: 'demo', roundId, host: child4,
+      emitter: new ConductorEventEmitter(), git: subject.git, planPath,
+      checkCompletion: async () => ({ done: true }),
+    })).resolves.toMatchObject({
+      kind: 'derived-already-complete', detail: expect.stringContaining('has no dispatchable BUILD work'),
+    });
+    await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
+      kind: 'record', record: { hosts: { 4: 'admitted' } },
+    });
+  });
+
+  // Covers: task:1
+  it('does not treat task-bound hosts as taskless obligations even with a retry hint', async () => {
+    const subject = await fixture('audit', { host: child4, taskless: true, retryHint: 'FAIL: stale evidence' });
+    const stored = await readRouteRecord(subject.repo, 'demo', roundId);
+    if (stored.kind !== 'record') throw new Error('missing record');
+    expect(hostCarriesTasklessObligation({
+      ...stored.record,
+      allocation: { [child4]: { ...stored.record.allocation[child4]!, remTaskIds: ['rem-prd-audit-T1'] } },
+    }, child4)).toBe(false);
+    expect(hostCarriesTasklessObligation({
+      ...stored.record,
+      items: [{ ...stored.record.items[0]!, existingTask: true, taskIds: ['T1'] }],
+    }, child4)).toBe(false);
+  });
+
   // Covers: task:48
   it('pins the closed host base before switching and restages only its region', async () => {
     const subject = await fixture();

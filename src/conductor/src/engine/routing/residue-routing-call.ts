@@ -3,7 +3,7 @@
  * contract. It places already-admitted residue; it never admits new work.
  */
 
-export const RESIDUE_ROUTING_CALL_CONTRACT_VERSION = 'v1' as const;
+export const RESIDUE_ROUTING_CALL_CONTRACT_VERSION = 'v2' as const;
 export const RESIDUE_ROUTING_MAX_ATTEMPTS = 2;
 export const RESIDUE_ROUTING_CALL_MEMBER = 'residue-routing-call';
 
@@ -24,6 +24,7 @@ export const RESIDUE_ROUTING_CALL_SCHEMA = Object.freeze({
           child: { type: 'integer', minimum: 1 },
           candidates: { type: 'array', minItems: 1, items: { type: 'integer', minimum: 1 } },
           rationale: { type: 'string', minLength: 1 },
+          implicatedPaths: { type: 'array', items: { type: 'string', minLength: 1 } },
         },
       },
     },
@@ -40,6 +41,8 @@ export interface ResidueRoutingAnswer {
   readonly child: number;
   readonly candidates: readonly number[];
   readonly rationale: string;
+  /** Present only when the judge supplied path evidence for this item. */
+  readonly implicatedPaths?: readonly string[];
 }
 
 export type ParsedResidueRoutingItem =
@@ -102,11 +105,12 @@ export function parseResidueRoutingAnswer(
   for (const row of rows) {
     if (typeof row !== 'object' || row === null || Array.isArray(row)) return malformed(items, 'routing judgement item is not an object');
     const item = row as Record<string, unknown>;
-    const allowed = new Set(['itemId', 'child', 'candidates', 'rationale']);
+    const allowed = new Set(['itemId', 'child', 'candidates', 'rationale', 'implicatedPaths']);
     if (Object.keys(item).some((key) => !allowed.has(key)) || typeof item.itemId !== 'string' ||
         !expectedIds.has(item.itemId) || byId.has(item.itemId) || !isPositivePosition(item.child) ||
         !Array.isArray(item.candidates) || item.candidates.length === 0 || !item.candidates.every(isPositivePosition) ||
-        new Set(item.candidates).size !== item.candidates.length || typeof item.rationale !== 'string' || item.rationale.trim() === '') {
+        new Set(item.candidates).size !== item.candidates.length || typeof item.rationale !== 'string' || item.rationale.trim() === '' ||
+        (item.implicatedPaths !== undefined && (!Array.isArray(item.implicatedPaths) || !item.implicatedPaths.every((path) => typeof path === 'string' && path !== '')))) {
       return malformed(items, 'routing judgement item does not match the residue routing contract');
     }
     byId.set(item.itemId, item);
@@ -121,7 +125,14 @@ export function parseResidueRoutingAnswer(
     if (undeclared.length > 0) {
       return { kind: 'invalid-position', itemId: item.itemId, detail: `undeclared slice position ${undeclared[0]}` };
     }
-    return { kind: 'valid', itemId: item.itemId, child, candidates, rationale: row.rationale as string };
+    return {
+      kind: 'valid',
+      itemId: item.itemId,
+      child,
+      candidates,
+      rationale: row.rationale as string,
+      ...(row.implicatedPaths === undefined ? {} : { implicatedPaths: row.implicatedPaths as string[] }),
+    };
   });
 }
 
