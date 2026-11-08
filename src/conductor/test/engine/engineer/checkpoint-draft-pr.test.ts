@@ -26,4 +26,32 @@ describe('draft publication checkpoint', () => {
     expect(create.mock.calls[0][0].body).toContain('Refs acme/demo#12');
     expect(published).toHaveBeenCalledWith({ slug: 'demo', branch: 'spec/demo', prUrl: 'https://github.com/acme/demo/pull/8' });
   });
+
+  it('Covers: Task 4 retries publication of an already committed checkpoint without a second commit', async () => {
+    const files = new Map<string, string>([['.docs/track/demo.md', '# demo\n']]);
+    let dirty = true;
+    const pushes = vi.fn(async () => {});
+    const git = vi.fn(async (args: readonly string[]) => {
+      if (args[0] === 'branch') return { exitCode: 0, stdout: 'spec/demo\n', stderr: '' };
+      if (args[0] === 'status') return { exitCode: 0, stdout: dirty ? '?? .docs/track/demo.md' : '', stderr: '' };
+      if (args[0] === 'diff') return { exitCode: 1, stdout: '', stderr: '' };
+      return { exitCode: 0, stdout: '', stderr: '' };
+    });
+    const fs = {
+      readFile: async (path: string) => { const value = files.get(path.replace('/worktree/', '')); if (value === undefined) throw new Error(`ENOENT ${path}`); return value; },
+      writeFile: async (path: string, value: string) => { files.set(path.replace('/worktree/', ''), value); },
+      mkdir: async () => {},
+    };
+    const publication = {
+      push: pushes,
+      findOpenPullRequest: async () => ({ url: 'https://github.com/acme/demo/pull/8', body: '' }),
+      createDraftPullRequest: async () => ({ url: 'https://github.com/acme/demo/pull/8', body: '' }),
+    };
+    const deps = { git, resolveOwner: async () => ({ resolved: true as const, id: 'A' }), fs, writeMarker: async () => {}, emit: async () => {}, publication };
+    await checkpointComposerRun({ worktree: '/worktree', step: 'explore', state: 'accepted' }, deps);
+    dirty = false;
+    await checkpointComposerRun({ worktree: '/worktree', step: 'explore', state: 'accepted' }, deps);
+    expect(pushes).toHaveBeenCalledTimes(2);
+    expect(git.mock.calls.filter(([args]) => args[0] === 'commit')).toHaveLength(1);
+  });
 });
