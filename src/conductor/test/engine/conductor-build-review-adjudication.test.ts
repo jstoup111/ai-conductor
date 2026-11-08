@@ -1610,6 +1610,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     let calls = 0;
     const run = await fixture({
       stacked: true,
+      infrastructure: 'covered',
       childRegionLifecycle: {
         resolveActiveChild: async () => {
           calls += 1;
