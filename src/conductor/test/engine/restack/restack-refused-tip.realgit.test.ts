@@ -181,7 +181,9 @@ describe('refused resolver tip (real local Git)', () => {
     if (secondConflict.kind !== 'record') throw new Error('expected second conflict record');
     expect(secondConflict.record.opId).not.toBe(firstConflict.record.opId);
     const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
-    expect(halt).toContain(`git switch -c restack-resolve/demo/c2 ${secondConflict.record.oldTip}`);
+    expect(halt).toContain(
+      `git switch -c restack-resolve/demo/c2 ${secondConflict.record.flattenedTip ?? secondConflict.record.oldTip}`,
+    );
     expect(halt).not.toContain(refusedTip);
   });
 });
