@@ -894,6 +894,8 @@ export interface BuildReviewCustomRubricConfig extends BuildReviewRubricConfig {
   source?: string;
   /** Optional supplementary resources supplied to the custom rubric skill. */
   resources?: string[];
+  /** Optional path globs that trigger this custom rubric. */
+  paths?: string[];
 }
 
 /** Per-rubric settings keyed by the closed {@link BuildReviewRubricId} set. */
