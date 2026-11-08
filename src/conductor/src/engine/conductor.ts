@@ -6520,15 +6520,11 @@ export class Conductor {
       slug,
       reconciled,
     });
-    if (admission.kind === 'admitted') {
-      const cursor = await this.resolveActiveChild(this.projectRoot, slug);
-      const execution = resolveExecutionChild(cursor, slug);
-      if (execution.source === 'routed-host' || execution.source === 'revalidating') {
-        await this.activateChildRegionState(state, execution.target.child, execution.target.isLeaf);
-        return { index: indexOf('acceptance_specs'), activeChild: execution.target };
-      }
-    }
-    if (admission.kind === 'continue' || admission.kind === 'busy') {
+    if (
+      admission.kind === 'admitted' ||
+      admission.kind === 'continue' ||
+      admission.kind === 'busy'
+    ) {
       const cursor = await this.resolveActiveChild(this.projectRoot, slug);
       const execution = resolveExecutionChild(cursor, slug);
       if (execution.source === 'routed-host' || execution.source === 'revalidating') {
