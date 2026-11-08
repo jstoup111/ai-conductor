@@ -39,6 +39,7 @@ import type { GitRunner } from '../../src/engine/rebase.js';
 import type { ChildId } from '../../src/engine/child-context.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { BuildReviewLapGate } from '../../src/engine/build-review-lap-gate.js';
 
 const buildReviewPublication = vi.hoisted(() => ({ count: 0 }));
 const buildReviewRegistryOverride = vi.hoisted(() => ({ descriptor: undefined as unknown }));
@@ -139,7 +140,6 @@ describe('build_review oversized projection step', () => {
     const runner = createRunner('projection-oversized: measured=1346093 bytes limit=1048576 bytes', 'projection-oversized', 'none', undefined, child);
 
     await runner.run('build_review', state);
-
     await expect(readFile(join(projectRoot, '.pipeline', 'children', '1', 'build-review.json'), 'utf8')).resolves.toContain('testQuality');
     await expect(access(join(projectRoot, '.pipeline', 'build-review.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
@@ -581,6 +581,50 @@ describe('build_review malformed Covers marker gate', () => {
       expect(receivedInputs?.sourceSnapshot.testQuality?.unresolvedMarkers)
         .toEqual(expect.arrayContaining([expect.objectContaining({ reference: 'task:99' })]));
     }
+  });
+
+  // Covers: task:4
+  it('dispatches enabled built-ins and publishes an aggregate without custom-lap work for an unmatched member', async () => {
+    await commitTests({ 'src/a.ts': 'export const a = true;\n' });
+    vi.mocked(coordinateBuildReviewRubrics).mockReset();
+    vi.mocked(coordinateBuildReviewRubrics).mockImplementation(async ({ inputs, lapId }) => ({
+      kind: 'ready',
+      branches: [{ kind: 'dispatched', rubric: 'testQuality', result: { snapshotDigest: inputs.sourceSnapshot.digest } }],
+    } as never));
+    const begin = vi.spyOn(BuildReviewLapGate, 'begin');
+    const runner = new DefaultStepRunner({ invoke: vi.fn() }, 'builtins-withheld-custom', projectRoot, {
+      planPath, gitRunner: realGit(),
+      config: {
+        test_suite: { scoped_command: 'true' },
+        build_review: {
+          enabled: true,
+          rubrics: { testQuality: { enabled: true }, security: { enabled: false }, implementationQuality: { enabled: false } },
+          custom_rubrics: { dependencyHygiene: { enabled: true, skill: 'dependency-hygiene', source: 'project', question: 'Review dependencies.', paths: ['**/package.json'] } },
+        },
+      } as HarnessConfig,
+      buildReviewInputOptions: { materialization: { projectRoot }, inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: await git('rev-parse', 'HEAD'), outcome: 'PASS' } } as never) },
+      buildReviewEffectiveResolver: async () => ({
+        ok: true as const,
+        feature: { version: 'v1' as const, repository: projectRoot, feature: 'builtins-withheld-custom' },
+        effective: { rawVerdict: 'PASS' as const, verdict: 'PASS' as const, acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [] },
+      }),
+      buildReviewArtifactReader: async (_root, rubric, lapId, snapshotDigest) => ({
+        version: 1, rubric, lapId, snapshotDigest,
+        result: { kind: 'judged', rubric, lapId, snapshotDigest, contractVersion: 'v3', findings: [], verdict: 'PASS' },
+      } as never),
+    });
+
+    const result = await runner.run('build_review', state);
+
+    expect(result).toMatchObject({ success: true });
+    expect(vi.mocked(coordinateBuildReviewRubrics)).toHaveBeenCalledOnce();
+    expect(begin).not.toHaveBeenCalled();
+    const aggregate = JSON.parse(await readFile(join(projectRoot, '.pipeline', 'build-review.json'), 'utf8'));
+    expect(aggregate.results.testQuality).toMatchObject({ kind: 'judged', verdict: 'PASS' });
+    expect(aggregate.currentCustomRubrics ?? []).not.toContain('dependencyHygiene');
+    await expect(access(join(projectRoot, '.pipeline', 'build-review', `lap-${await git('rev-parse', 'HEAD')}`, 'input-digest.json')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+    begin.mockRestore();
   });
 
   it('leaves malformed markers to the coordinator when testQuality is disabled', async () => {
