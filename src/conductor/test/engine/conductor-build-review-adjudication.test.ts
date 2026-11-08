@@ -383,6 +383,8 @@ interface FixtureOptions {
   /** Optional stacked-child loop seam for settlement-tail regressions. */
   readonly childRegionLifecycle?: ConstructorParameters<typeof Conductor>[0]['childRegionLifecycle'];
   readonly stacked?: boolean;
+  /** Forces the durable clean-PASS settlement boundary for its caller test. */
+  readonly cleanPassSettlement?: { readonly kind: 'settled' } | { readonly kind: 'invalid'; readonly reason: string };
 }
 
 async function fixture(options: FixtureOptions = {}) {
@@ -506,12 +508,14 @@ async function fixture(options: FixtureOptions = {}) {
   const kickbackEvidence: string[] = [];
   const gateVerdicts: Array<{ step: StepName; satisfied: boolean }> = [];
   const lifecycle: ConductorEvent[] = [];
+  const stepStarts: ConductorEvent[] = [];
   const loopHalts: ConductorEvent[] = [];
   events.on('kickback', (event) => { if (event.type === 'kickback') { kickbacks.push({ from: event.from, to: event.to }); kickbackEvidence.push(event.evidence ?? ''); } });
   events.on('gate_verdict', (event) => {
     if (event.type === 'gate_verdict') gateVerdicts.push({ step: event.step, satisfied: event.satisfied });
   });
   events.on('loop_halt', (event) => { loopHalts.push(event); });
+  events.on('step_started', (event) => { stepStarts.push(event); });
   for (const type of [
     'remediation_adjudication_started', 'remediation_adjudication_completed', 'remediation_adjudication_failed',
     'remediation_effect_applied', 'remediation_case_reconciled', 'remediation_case_operator_resolved',
@@ -560,6 +564,11 @@ async function fixture(options: FixtureOptions = {}) {
     gh,
     ...(options.childRegionLifecycle === undefined ? {} : { childRegionLifecycle: options.childRegionLifecycle }),
   } as never);
+  const cleanPassSettlement = options.cleanPassSettlement === undefined
+    ? undefined
+    : vi.spyOn(conductor as unknown as {
+      settleRemediationCasesOnCleanBuildReview: () => Promise<FixtureOptions['cleanPassSettlement']>;
+    }, 'settleRemediationCasesOnCleanBuildReview').mockResolvedValue(options.cleanPassSettlement);
   const git = options.frozenDiff === undefined
     ? undefined
     : vi.spyOn(conductor as unknown as { git: GitRunner }, 'git').mockResolvedValue({ stdout: options.frozenDiff });
@@ -572,13 +581,14 @@ async function fixture(options: FixtureOptions = {}) {
       if (!(error instanceof Error) || !error.message.startsWith('stop after')) throw error;
     });
   } finally {
+    cleanPassSettlement?.mockRestore();
     persister?.stop();
     git?.mockRestore();
   }
 
   return {
     projectRoot, feature, dispatched, retryReasons, kickbacks, kickbackEvidence, gateVerdicts, lifecycle, loopHalts, ghCalls, resolver,
-    remediateDispatches: () => remediateDispatches, artifactMtimes,
+    remediateDispatches: () => remediateDispatches, artifactMtimes, stepStarts,
     readJson: async (relative: string): Promise<unknown> =>
       JSON.parse(await readFile(join(projectRoot, relative), 'utf8')) as unknown,
     state: async (): Promise<ConductState> =>
@@ -1624,6 +1634,20 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(advance).toHaveBeenCalledWith(run.projectRoot, 'adjudicated-feature', first, expect.anything());
     expect(run.dispatched).toContain('acceptance_specs');
     expect(run.dispatched).not.toContain('manual_test');
+  });
+
+  // Covers: task:2
+  it('halts an adjudication settlement that cannot durably settle before either child exit path', async () => {
+    const run = await fixture({
+      infrastructure: 'covered',
+      cleanPassSettlement: { kind: 'invalid', reason: 'case store malformed-state' },
+    });
+
+    expect(await run.haltMarker()).toContain('build_review clean-PASS durable settlement halted: case store malformed-state');
+    await expect(readFile(join(run.projectRoot, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    expect(run.dispatched).not.toContain('manual_test');
+    expect(run.stepStarts.filter((event) => event.type === 'step_started' &&
+      ['manual_test', 'prd_audit', 'architecture_review_as_built'].includes(event.step))).toEqual([]);
   });
 
   // Covers: S9.5, task:rem-prd-audit-rem-prd-audit-R17d
