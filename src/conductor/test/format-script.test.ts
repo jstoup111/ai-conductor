@@ -1,6 +1,6 @@
-// Covers: task:2, S2.3, task:rem-prd-audit-5-r1
+// Covers: task:2, S2.3, task:rem-prd-audit-5-r1, task:rem-prd-audit-rem-prd-audit-5-r2
 import { execFileSync, spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -186,6 +186,27 @@ describe('format script errors', () => {
 });
 
 describe('format script write mode', () => {
+  it('skips tracked directory symlinks while formatting all regular files', () => {
+    const repository = createRepository();
+    write(repository, 'dir/.keep', 'fixture\n');
+    write(repository, 'src/conductor/src/a.ts', 'export const a="not canonical"\n');
+    mkdirSync(join(repository, '.claude', 'skills'), { recursive: true });
+    symlinkSync('../../dir', join(repository, '.claude', 'skills', 'x'));
+    git(repository, 'add', '.');
+    commit(repository, 'tracked directory symlink and source file');
+
+    const writeResult = runFormat(repository, '--write', '--all');
+
+    expect(writeResult.status).toBe(0);
+    expect(writeResult.stdout).not.toContain('EISDIR');
+    expect(writeResult.stderr).not.toContain('EISDIR');
+    expect(readFileSync(join(repository, 'src/conductor/src/a.ts'), 'utf8')).toBe(
+      "export const a = 'not canonical';\n",
+    );
+    expect(lstatSync(join(repository, '.claude', 'skills', 'x')).isSymbolicLink()).toBe(true);
+    expect(runFormat(repository, '--check', '--all').status).toBe(0);
+  });
+
   it('formats every parseable in-scope tracked file with --all', () => {
     const repository = createRepository();
     write(

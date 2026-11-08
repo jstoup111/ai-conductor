@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { lstatSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve, relative } from 'node:path';
 
 import * as prettier from 'prettier';
@@ -63,6 +63,8 @@ async function main() {
   let failed = false;
 
   for (const path of (await candidates(root)).sort()) {
+    if (!lstatSync(resolve(root, path)).isFile()) continue;
+
     const parser = parserFor(root, path);
     if (!parser || (await prettier.getFileInfo(resolve(root, path), { ignorePath })).ignored) continue;
 
