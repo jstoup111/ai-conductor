@@ -84,12 +84,10 @@ describe('custom build-review convergence', () => {
   it('settles a withheld dependency finding as absent, then dispatches its later matching lap afresh', async () => {
     const projectRoot = await mkdtemp(join(process.env.TMPDIR!, 'build-review-withheld-convergence-'));
     roots.push(projectRoot);
-    const provider = { invoke: vi.fn() };
     const lap1 = dependencyAggregate('lap-dependency-1', true, ['dependencyHygiene']);
     const lap1Source = projectBuildReviewAggregateSources(lap1)![0]!;
     const sourceId = buildReviewAdjudicationSourceId(lap1Source);
 
-    await provider.invoke({ lap: 1 });
     expect(projectBuildReviewAggregateSources(lap1)).toEqual([expect.objectContaining({
       rubric: 'dependencyHygiene', evidenceLocations: ['package.json:1'],
     })]);
@@ -139,10 +137,81 @@ describe('custom build-review convergence', () => {
     } });
     await expect(readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
 
-    const lap3 = dependencyAggregate('lap-dependency-3', false, ['dependencyHygiene']);
-    await provider.invoke({ lap: 3 });
-    expect(projectBuildReviewAggregateSources(lap3)).toEqual([]);
-    expect(provider.invoke).toHaveBeenCalledTimes(2);
+    // Lap 3 changes package.json again. Drive it through the runner boundary:
+    // the provider call, cache decision, and published aggregate must all be
+    // consequences of the engine dispatch rather than test setup.
+    const invoke = vi.fn<LLMProvider['invoke']>(async () => ({
+      success: true, exitCode: 0, output: 'fixture',
+      finalStructuredResult: { kind: 'custom-findings', version: 'v2', findings: [] },
+    }));
+    const provider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+      invoke,
+    };
+    const events = new ConductorEventEmitter();
+    const cacheHits: unknown[] = [];
+    events.on('build_review_cache_hit', (event) => { cacheHits.push(event); });
+    const policyRoot = join(projectRoot, 'dependency-policy');
+    const lap3SnapshotDigest = `sha256:${'3'.repeat(64)}`;
+    const lap3ContentDigest = `sha256:${'4'.repeat(64)}`;
+    const source = {
+      identity: { snapshotDigest: lap3SnapshotDigest, contentDigest: lap3ContentDigest, mergeBase: 'base', headSha: 'dependency-3' },
+      baselinePath: join(projectRoot, 'lap-3-baseline'), headPath: join(projectRoot, 'lap-3-head'),
+    };
+    await Promise.all([mkdir(policyRoot, { recursive: true }), mkdir(source.baselinePath, { recursive: true }), mkdir(source.headPath, { recursive: true })]);
+    let lap3Aggregate: unknown;
+    const config = { llm_provider: 'claude', build_review: {
+      enabled: true,
+      rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
+      custom_rubrics: { dependencyHygiene: { enabled: true, skill: 'dependency-hygiene', question: 'Review dependency changes.', source: 'project', paths: ['**/package.json'], llm_provider: 'claude' } },
+    } } as HarnessConfig;
+    const runner = new DefaultStepRunner(provider, 'custom-convergence', projectRoot, {
+      config, events,
+      providerRuntimes: new ProviderRuntimeSet([{
+        key: 'claude', provider, lifecycleCapability: provider.lifecycleCapability,
+        nativeSchemaCapability: provider.nativeSchemaCapability, policy: CLAUDE_MODEL_POLICY,
+        builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+      }]),
+      sessionStore: new ProviderSessionStore(), configuredProviders: ['claude'],
+      probeReadOnlyReviewCapability: async ({ provider: key, platform }) => ({ provider: key, platform, status: 'available' as const }),
+      buildReviewPolicyCatalog: async ({ skill }) => [{
+        semanticName: skill, source: 'project' as const, installationOrigin: policyRoot,
+        canonicalSkillPath: join(policyRoot, 'SKILL.md'), packageRoot: policyRoot, declaredDependencies: [], availability: 'available' as const,
+      }],
+      buildReviewPolicyCapture: async (policy) => ({
+        policy, materialPath: policyRoot, definitionPath: join(policyRoot, 'SKILL.md'),
+        manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Fixture policy\n') }],
+        metadata: { version: 1 as const, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+        digest: `sha256:${'a'.repeat(64)}`,
+      }),
+      buildReviewEffectiveResolver: async (_root, aggregate) => {
+        lap3Aggregate = aggregate;
+        return { ok: true as const, feature, effective: {
+          rawVerdict: 'PASS' as const, verdict: 'PASS' as const, acceptedFindingIds: [], unresolvedFindingIds: [],
+          suppressedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [],
+        } };
+      },
+    });
+    vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue({ engineStamp: 'fixture', skillDigests: {} });
+    const lap3 = await (runner as unknown as {
+      runRubricBuildReview(inputs: unknown, resolved: unknown, tier: 'M'): Promise<{ success: boolean }>;
+    }).runRubricBuildReview({
+      sourceSnapshot: {
+        digest: lap3SnapshotDigest, contentDigest: lap3ContentDigest, mergeBase: 'base', headSha: 'dependency-3',
+        diff: 'diff --git a/package.json b/package.json\nindex 1..2 100644\n--- a/package.json\n+++ b/package.json\n@@ -1 +1 @@\n-{}\n+{"dependencies":{"new":"1.0.0"}}\n',
+        sourceChanges: [{ kind: 'M', path: 'package.json' }],
+      },
+      sourceMaterialization: { source, contextFor: (memberId: string) => ({ memberId, source }), settle: async () => {} },
+    }, resolveBuildReviewConfig(config, CLAUDE_MODEL_POLICY), 'M');
+
+    expect(lap3).toMatchObject({ success: true });
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(cacheHits).not.toContainEqual(expect.objectContaining({ rubric: 'dependencyHygiene' }));
+    expect(lap3Aggregate).toMatchObject({
+      lapId: 'lap-dependency-3', verdict: 'PASS', currentCustomRubrics: ['dependencyHygiene'],
+      customResults: { dependencyHygiene: { result: { kind: 'judged', findings: [] } } },
+    });
   });
 
   it('settles all read-only setup skips as a closed custom cause without launching a provider', async () => {
