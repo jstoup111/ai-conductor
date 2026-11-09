@@ -724,6 +724,16 @@ const MAX_GATE_SELECTIONS = 6;
 const DONE_MARKER = '.pipeline/DONE';
 const LOOP_HALT_MARKER = HALT_MARKER;
 
+function manualTestBlockerClause(dispatchOutput: string | undefined): string {
+  const normalized = dispatchOutput?.trim().replace(/\s+/g, ' ');
+  if (!normalized) return '; the agent gave no final message';
+
+  const excerpt = normalized.length > 600
+    ? `…${normalized.slice(-600)}`
+    : normalized;
+  return `; agent reported: "${excerpt}"`;
+}
+
 /**
  * Render the operator-facing recovery for a terminal mechanical review fault.
  * The aggregate is the current-lap authority for the rubric and closed cause;
@@ -2318,9 +2328,9 @@ export class Conductor {
                 },
               }
             : {}),
-          reason: identityMismatch
+          reason: (identityMismatch
             ? `${noResultsReason}; expected run id ${expectedRunId ?? 'none'}; found run id ${foundRunId}`
-            : noResultsReason,
+            : noResultsReason) + manualTestBlockerClause(dispatchOutput),
         };
       }
 

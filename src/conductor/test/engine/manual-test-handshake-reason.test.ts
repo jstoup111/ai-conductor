@@ -1,4 +1,5 @@
 // Covers: task:5
+// Covers: task:6
 import { mkdir, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -29,6 +30,7 @@ function handshakeFor(projectRoot: string) {
       step: StepName,
       runId: string,
       startedAt: number,
+      dispatchOutput?: string,
     ) => Promise<{
       done: false;
       routeClass: 'absent';
@@ -80,6 +82,41 @@ describe('manual_test current-output handshake reason', () => {
     expect(result?.reason).toContain('.pipeline/manual-test-results.md is missing');
   });
 
+  it('appends a whitespace-normalized agent blocker when no results were written', async () => {
+    const dir = await fixtureDir();
+    await writeRunStamp(dir, 'current-run');
+
+    const result = await handshakeFor(dir)(
+      'manual_test',
+      'current-run',
+      Date.now(),
+      'Manual testing is blocked:\n\n  the app   would not start',
+    );
+
+    expect(result?.reason).toContain(
+      'agent reported: "Manual testing is blocked: the app would not start"',
+    );
+  });
+
+  it('appends only the last 600 characters of a long agent blocker', async () => {
+    const dir = await fixtureDir();
+    const dispatchOutput = Array.from({ length: 2_000 }, (_, index) => String(index % 10)).join('');
+    await writeRunStamp(dir, 'current-run');
+
+    const result = await handshakeFor(dir)('manual_test', 'current-run', Date.now(), dispatchOutput);
+
+    expect(result?.reason).toMatch(new RegExp(`agent reported: "…${dispatchOutput.slice(-600)}"$`));
+  });
+
+  it.each([undefined, '   '])('reports no final message when no results were written (%j)', async (dispatchOutput) => {
+    const dir = await fixtureDir();
+    await writeRunStamp(dir, 'current-run');
+
+    const result = await handshakeFor(dir)('manual_test', 'current-run', Date.now(), dispatchOutput);
+
+    expect(result?.reason).toContain('the agent gave no final message');
+  });
+
   it('retains identity mismatch facets when stale results belong to another run', async () => {
     const dir = await fixtureDir();
     const resultsPath = join(dir, '.pipeline', 'manual-test-results.md');
@@ -109,5 +146,25 @@ describe('manual_test current-output handshake reason', () => {
     await writeRunStamp(dir, 'current-run');
 
     await expect(handshakeFor(dir)('manual_test', 'current-run', dispatchStartedAt)).resolves.toBeUndefined();
+  });
+
+  it('does not append an agent blocker when fresh this-run FAIL results were written', async () => {
+    const dir = await fixtureDir();
+    const dispatchStartedAt = Date.now();
+    await writeFile(
+      join(dir, '.pipeline', 'manual-test-results.md'),
+      '| Criterion | Result | Evidence |\n| --- | --- | --- |\n| App launches | FAIL | blocked |\n',
+      'utf8',
+    );
+    await writeRunStamp(dir, 'current-run');
+
+    await expect(
+      handshakeFor(dir)(
+        'manual_test',
+        'current-run',
+        dispatchStartedAt,
+        'Manual testing is blocked: the app would not start',
+      ),
+    ).resolves.toBeUndefined();
   });
 });
