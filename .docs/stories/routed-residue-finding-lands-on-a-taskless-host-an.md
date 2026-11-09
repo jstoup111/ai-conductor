@@ -38,6 +38,8 @@ repaired on the child that owns that task, so that it is never placed on a child
 As an operator, I want a routed host whose work is already complete to step aside, so that the real
 repairs routed to the other hosts in the round still run.
 
+Scope: this story governs every `operator` and `revalidate` round, and `audit` rounds admitted with `stacked_prs.fold_routed_fixes` set to `false`. An `audit` round admitted with the setting on executes its hosts on the leaf and defers placement to the fold (`.docs/stories/late-gate-fixes-restack-the-whole-stack-every-repa.md` Stories 1 to 3 and 9).
+
 ### Acceptance Criteria
 
 #### Happy Path
