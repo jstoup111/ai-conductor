@@ -46,10 +46,11 @@ function branchHostsMarker(
   identity: ReturnType<typeof parseFeatureBranch>,
   cursor: Awaited<ReturnType<typeof resolveActiveChildForCurrentFeature>>,
   host: number,
+  execution?: 'leaf',
 ): boolean {
   if (identity.kind === 'child') return identity.child === host;
   return identity.kind === 'leaf' && (cursor.kind === 'active' || cursor.kind === 'repair-pending') &&
-    cursor.isLeaf && cursor.child === host;
+    cursor.isLeaf && (execution === 'leaf' || cursor.child === host);
 }
 
 /**
@@ -70,7 +71,7 @@ export async function runRoundStamp(deps: RoundStampDependencies): Promise<numbe
   if (!routingEligible(cursor, config)) return 0;
 
   const marker = await readRepairMarker(deps.projectRoot, identity.slug);
-  if (marker.kind !== 'marker' || !branchHostsMarker(identity, cursor, marker.marker.host)) return 0;
+  if (marker.kind !== 'marker' || !branchHostsMarker(identity, cursor, marker.marker.host, marker.marker.execution)) return 0;
 
   let message: string;
   try {

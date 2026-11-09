@@ -61,19 +61,20 @@ function withoutGuardValve(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return rest;
 }
 
-async function writeRepairMarker(root: string, host: number, roundId: string): Promise<void> {
+async function writeRepairMarker(root: string, host: number, roundId: string, execution?: 'leaf'): Promise<void> {
   const parsedRoundId = parseRoundId(roundId);
   if (parsedRoundId === undefined) throw new Error(`invalid round id: ${roundId}`);
   const route = await createRouteRecord(root, 'demo', {
     roundId: parsedRoundId,
     sealedAuthored: 0,
     kind: 'audit',
+    ...(execution === undefined ? {} : { execution }),
     items: [],
     allocation: { [host]: { remTaskIds: [], blockBodies: [] } },
   });
   if (route.kind !== 'created') throw new Error(`could not create route: ${route.kind}`);
   const markerPath = join(root, '.pipeline', 'repair-marker.json');
-  await writeFile(markerPath, JSON.stringify({ host, roundId }));
+  await writeFile(markerPath, JSON.stringify({ host, roundId, ...(execution === undefined ? {} : { execution }) }));
   const blob = await git(root, ['hash-object', '-w', markerPath]);
   await git(root, ['update-ref', repairMarkerRefFor('demo'), blob]);
 }
@@ -85,7 +86,7 @@ async function commit(root: string, file: string, message: string): Promise<stri
   return git(root, ['log', '-1', '--format=%B']);
 }
 
-async function routedFixture(options: { readonly failRoundStamp?: boolean } = {}): Promise<string> {
+async function routedFixture(options: { readonly failRoundStamp?: boolean; readonly leafPosition?: 2 | 3 } = {}): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'round-stamp-hook-'));
   roots.push(root);
   await git(root, ['init', '-q', '-b', 'main']);
@@ -93,15 +94,16 @@ async function routedFixture(options: { readonly failRoundStamp?: boolean } = {}
   await git(root, ['config', 'user.name', 'Round stamp']);
   await mkdir(join(root, '.ai-conductor'), { recursive: true });
   await writeFile(join(root, '.gitignore'), '.pipeline/\n');
-  await writeFile(join(root, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 2\n  route_whole_feature_fixes: true\n');
+  const leafPosition = options.leafPosition ?? 2;
+  await writeFile(join(root, '.ai-conductor', 'config.yml'), `stacked_prs:\n  enabled: true\n  max_slices: ${leafPosition}\n  route_whole_feature_fixes: true\n`);
   await git(root, ['add', '.gitignore', '.ai-conductor/config.yml']);
   await git(root, ['commit', '-qm', 'base']);
-  await writeSliceTopologyFixture(root, {
-    version: 1,
-    slug: 'demo',
-    runId: 'round-stamp',
-    status: 'done',
-    entries: [],
+  await writeSliceTopologyFixture(root, leafPosition === 3 ? {
+    version: 1, slug: 'demo', runId: 'round-stamp', status: 'done', entries: [],
+    sliceMembership: { taskSlices: { T1: 1, T2: 2, T3: 3 }, titles: ['child', 'middle', 'leaf'] },
+    storyOwnership: { S1: 1, S2: 2, S3: 3 },
+  } : {
+    version: 1, slug: 'demo', runId: 'round-stamp', status: 'done', entries: [],
     sliceMembership: { taskSlices: { T1: 1, T2: 2 }, titles: ['child', 'leaf'] },
     storyOwnership: { S1: 1, S2: 2 },
   }, envelopeFilesystem);
@@ -110,6 +112,11 @@ async function routedFixture(options: { readonly failRoundStamp?: boolean } = {}
   await git(root, ['add', 'child.txt']);
   await git(root, ['commit', '-qm', 'child']);
   await git(root, ['update-ref', 'refs/conductor/demo/closed/c1', 'HEAD']);
+  if (leafPosition === 3) {
+    await git(root, ['checkout', '-qb', 'feat/c2/demo']);
+    await git(root, ['commit', '--allow-empty', '-qm', 'middle']);
+    await git(root, ['update-ref', 'refs/conductor/demo/closed/c2', 'HEAD']);
+  }
   await git(root, ['checkout', '-qb', 'feat/daemon-demo']);
   await git(root, ['commit', '--allow-empty', '-qm', 'leaf']);
   await git(root, ['checkout', '-q', 'feat/c1/demo']);
@@ -139,6 +146,32 @@ describe('prepare-commit-msg round stamp (real local Git)', () => {
     await git(root, ['checkout', '-q', 'feat/c1/demo']);
     const duplicate = await commit(root, 'duplicate.txt', 'feat: same round\n\nRound: r1');
     expect(duplicate.match(/^Round:/gm)).toHaveLength(1);
+  });
+
+  it('stamps a leaf c3 commit for a leaf-executed c1 host and replaces builder trailers', async () => {
+    const root = await routedFixture({ leafPosition: 3 });
+    await writeRepairMarker(root, 1, 'r1', 'leaf');
+    await git(root, ['checkout', '-q', 'feat/daemon-demo']);
+
+    const message = await commit(root, 'leaf-c3.txt', 'feat: leaf repair\n\nRound: r9\nOwner: c3');
+    expect(message.match(/^Round:.*$/gm)).toEqual(['Round: r1']);
+    expect(message.match(/^Owner:.*$/gm)).toEqual(['Owner: c1']);
+  });
+
+  it('rejects a leaf c3 commit when a repository hook strips c1 ownership', async () => {
+    const root = await routedFixture({ leafPosition: 3 });
+    await writeRepairMarker(root, 1, 'r1', 'leaf');
+    await git(root, ['checkout', '-q', 'feat/daemon-demo']);
+    const commonDir = await git(root, ['rev-parse', '--git-common-dir']);
+    const hookPath = join(root, commonDir, 'hooks', 'commit-msg');
+    await writeFile(hookPath, '#!/bin/sh\nsed -i "/^Owner:/d" "$1"\n');
+    await chmod(hookPath, 0o755);
+
+    const before = await git(root, ['rev-parse', 'HEAD']);
+    await expect(commit(root, 'stripped-owner.txt', 'feat: leaf repair')).rejects.toThrow(
+      'leaf routed commit is missing its Round:/Owner: trailers',
+    );
+    await expect(git(root, ['rev-parse', 'HEAD'])).resolves.toBe(before);
   });
 
   it('stamps the round on a commit made inside a daemon-managed maker session', async () => {

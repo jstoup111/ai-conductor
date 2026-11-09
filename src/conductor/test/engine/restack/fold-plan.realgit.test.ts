@@ -1,6 +1,6 @@
 // Covers: task:13, task:14
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -158,6 +158,7 @@ describe('placeFoldCommits (real local Git)', () => {
     const subject = await fixture();
     await subject.git(['checkout', '-qb', 'feat/c1/demo']);
     await subject.commit('src/server/identity.ts', 'export function startPlaying(name: string) {}\n', 'identity');
+    await subject.commit('scripts/executable.sh', '#!/bin/sh\necho hi\n', 'executable');
     await subject.git(['checkout', '-qb', 'feat/c2/demo']);
     await subject.git(['checkout', '-qb', 'feat/c3/demo']);
     await subject.commit('tests/load/ten-players.ts', "import { startPlaying } from '../../src/server/identity.js';\nstartPlaying('one');\n", 'ten players');
@@ -219,6 +220,34 @@ describe('placeFoldCommits (real local Git)', () => {
         roundId: 'r1',
         owner: hostOne,
         parts: [{ kind: 'whole', child: hostOne, paths: [], reason: 'owner' }],
+      }],
+    });
+  });
+
+  it('places binary, mode-only, and empty-file path changes on their accepting child', async () => {
+    const subject = await placementFixture();
+    await writeFile(join(subject.repo, 'binary.bin'), Buffer.from([0, 1, 2, 3]));
+    await chmod(join(subject.repo, 'scripts', 'executable.sh'), 0o755);
+    await writeFile(join(subject.repo, 'new-empty.txt'), '');
+    await subject.git(['add', 'binary.bin', 'scripts/executable.sh', 'new-empty.txt']);
+    await subject.git(['commit', '-qm', `hunkless changes${trailers('r1', 'c1')}`]);
+    const hunkless = await subject.head();
+
+    await expect(placeFoldCommits({
+      worktree: subject.repo,
+      slug,
+      commits: [{ sha: hunkless as never, roundId: parseRoundId('r1')!, owner: hostOne }],
+      git: makeGitRunner(subject.repo),
+    })).resolves.toEqual({
+      kind: 'planned',
+      commits: [{
+        sha: hunkless,
+        roundId: 'r1',
+        owner: hostOne,
+        parts: [{
+          kind: 'hunks', child: hostOne,
+          paths: ['binary.bin', 'new-empty.txt', 'scripts/executable.sh'], reason: 'owner',
+        }],
       }],
     });
   });

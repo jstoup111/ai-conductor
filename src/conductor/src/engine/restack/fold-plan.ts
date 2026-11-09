@@ -46,10 +46,9 @@ export interface FoldCommitPlan extends FoldSourceCommit {
 }
 
 /** The durable source-to-placement correspondence recorded before fold replay. */
-export interface FoldPlan {
-  readonly kind: 'planned';
-  readonly commits: readonly FoldCommitPlan[];
-}
+export type FoldPlan =
+  | { readonly kind: 'planned'; readonly commits: readonly FoldCommitPlan[] }
+  | { readonly kind: 'refused'; readonly reason: 'fold-unplaced-path'; readonly commit: CommitSha; readonly paths: readonly string[] };
 
 export interface PlaceFoldCommitsInput {
   readonly worktree: string;
@@ -174,18 +173,21 @@ export async function collectFoldSet(input: CollectFoldSetInput): Promise<Collec
   return { kind: 'collected', commits };
 }
 
-type DiffHunk = { readonly path: string; readonly patch: string };
+type DiffHunk = { readonly path: string; readonly patch: string; readonly wholeFile: boolean };
 
 function hunkPatches(path: string, diff: string): DiffHunk[] {
   const lines = diff.split('\n');
   const firstHunk = lines.findIndex((line) => line.startsWith('@@ '));
-  if (firstHunk === -1) return [];
+  // A mode-only change, an empty-file add/delete, and a binary patch have no
+  // text hunk.  They still represent one atomic path change and must travel
+  // through the same materialize-and-probe path as an ordinary hunk.
+  if (firstHunk === -1) return [{ path, patch: diff, wholeFile: true }];
   const header = lines.slice(0, firstHunk);
   const hunks: DiffHunk[] = [];
   for (let start = firstHunk; start < lines.length;) {
     let end = start + 1;
     while (end < lines.length && !lines[end]!.startsWith('@@ ')) end += 1;
-    hunks.push({ path, patch: `${[...header, ...lines.slice(start, end)].join('\n').trimEnd()}\n` });
+    hunks.push({ path, patch: `${[...header, ...lines.slice(start, end)].join('\n').trimEnd()}\n`, wholeFile: false });
     start = end;
   }
   return hunks;
@@ -239,14 +241,25 @@ async function childTips(input: PlaceFoldCommitsInput, owner: ChildId): Promise<
 async function materializeHunk(
   git: GitRunner,
   parent: CommitSha,
+  source: CommitSha,
+  path: string,
   patch: string,
+  wholeFile: boolean,
   index: string,
 ): Promise<CommitSha> {
   const env = { GIT_INDEX_FILE: index };
   const seeded = await git(['read-tree', parent], { env });
   if (seeded.exitCode !== 0) throw new Error(`cannot seed fold hunk index: ${seeded.stderr}`);
-  const applied = await git(['apply', '--cached', '--whitespace=nowarn'], { env, input: patch });
-  if (applied.exitCode !== 0) throw new Error(`cannot materialize fold hunk: ${applied.stderr}`);
+  if (wholeFile) {
+    const exists = await git(['cat-file', '-e', `${source}:${path}`], { env });
+    const materialized = exists.exitCode === 0
+      ? await git(['restore', '--source', source, '--staged', '--', path], { env })
+      : await git(['rm', '--cached', '--ignore-unmatch', '--', path], { env });
+    if (materialized.exitCode !== 0) throw new Error(`cannot materialize fold whole-file path: ${materialized.stderr}`);
+  } else {
+    const applied = await git(['apply', '--cached', '--binary', '--whitespace=nowarn'], { env, input: patch });
+    if (applied.exitCode !== 0) throw new Error(`cannot materialize fold hunk: ${applied.stderr}`);
+  }
   const tree = await git(['write-tree'], { env });
   const treeSha = tree.exitCode === 0 ? parseCommitSha(tree.stdout.trim()) : undefined;
   if (treeSha === undefined) throw new Error(`cannot write fold hunk tree: ${tree.stderr}`);
@@ -303,10 +316,10 @@ export async function placeFoldCommits(input: PlaceFoldCommitsInput): Promise<Fo
     const indexDirectory = await mkdtemp(join(tmpdir(), 'fold-plan-index-'));
     try {
       for (const path of paths) {
-        const diff = await input.git(['diff', '--no-ext-diff', '--no-renames', '--unified=0', parent, source.sha, '--', path]);
+        const diff = await input.git(['diff', '--binary', '--no-ext-diff', '--no-renames', '--unified=0', parent, source.sha, '--', path]);
         if (diff.exitCode !== 0) throw new Error(`cannot read fold hunks for ${source.sha}:${path}`);
         for (const [ordinal, hunk] of hunkPatches(path, diff.stdout).entries()) {
-          const probe = await materializeHunk(input.git, parent, hunk.patch, join(indexDirectory, `${path.replace(/[^A-Za-z0-9_.-]/g, '-')}-${ordinal}.index`));
+          const probe = await materializeHunk(input.git, parent, source.sha, hunk.path, hunk.patch, hunk.wholeFile, join(indexDirectory, `${path.replace(/[^A-Za-z0-9_.-]/g, '-')}-${ordinal}.index`));
           const child = await lowestAcceptingChild(input, parent, probe, candidates);
           const reason: FoldPartReason = child === source.owner ? 'owner' : 'introduced-above-owner';
           const key = `${child}:${reason}`;
@@ -317,6 +330,11 @@ export async function placeFoldCommits(input: PlaceFoldCommitsInput): Promise<Fo
       }
     } finally {
       await rm(indexDirectory, { recursive: true, force: true });
+    }
+    const placedPaths = new Set([...parts.values()].flatMap((part) => [...part.paths]));
+    const unplacedPaths = paths.filter((path) => !placedPaths.has(path));
+    if (unplacedPaths.length > 0) {
+      return { kind: 'refused', reason: 'fold-unplaced-path', commit: source.sha, paths: unplacedPaths };
     }
     planned.push({
       ...source,
