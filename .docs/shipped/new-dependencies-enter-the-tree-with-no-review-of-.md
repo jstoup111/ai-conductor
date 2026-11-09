@@ -4,6 +4,25 @@ spec_hash: 3b8c642d493446ee78a6cd764d02b34705d7788b034c59a9b3704105d805d3f0
 pr: https://github.com/jstoup111/ai-conductor/pull/3668
 shipped: 2026-11-09
 engine_version: 20261108T223413Z-285176be7b1f
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "This is unplanned but serves Story 4. The new shipped skill must be registered in the model table, which CI checks for drift against source, so the row is required plumbing for shipping the policy."
+    accepted: false
+    authority: engine
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-2
+    summary: "This widens the structural boundary ratchet for an unrelated module. It probably keeps the structural test green against the merged base, but the diff does not show why. It is a test-only allowlist and changes no operator-visible output, CLI result, or persisted state. Whether it was needed is unverified; confidence is about 60%."
+    accepted: false
+    authority: engine
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-3
+    summary: "This repairs a flaky test so the suite gate could pass. Repairs to failing tests count as within intent, and production behavior is unchanged."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
