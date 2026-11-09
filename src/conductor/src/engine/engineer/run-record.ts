@@ -48,6 +48,26 @@ export interface OwnerHistoryEntry {
   readonly at: string;
 }
 
+export interface AcceptedRunStepSummary extends AcceptedRunStep {
+  readonly step: RunStepId;
+}
+
+/**
+ * The shared read model for every Composer handoff surface.  A run record is
+ * sparse because some DECIDE steps are optional, so an absent step is not a
+ * pending one; the first recorded draft or reconfirmation is the next step.
+ */
+export interface RunSummary {
+  readonly nextStep: RunStepId | 'delivery';
+  readonly acceptedSteps: readonly AcceptedRunStepSummary[];
+  readonly lastAcceptedStep?: AcceptedRunStepSummary;
+  readonly lastActor?: string;
+  readonly lastAt?: string;
+  readonly decisions: readonly string[];
+  readonly openQuestions: readonly string[];
+  readonly drafts: readonly RunStepId[];
+}
+
 /** Engine-owned state committed to `.docs/composer-runs/<slug>.json`. */
 export interface RunRecord {
   readonly schemaVersion: typeof RUN_RECORD_SCHEMA_VERSION;
@@ -64,6 +84,28 @@ export interface RunRecord {
   readonly needsReconfirm: readonly RunStepId[];
   readonly ownerHistory: readonly OwnerHistoryEntry[];
   readonly notes: Readonly<Partial<Record<RunStepId, StepNotes>>>;
+}
+
+/** Derive the one authoritative handoff summary from durable Composer state. */
+export function summarizeRun(record: RunRecord): RunSummary {
+  const acceptedSteps = RUN_STEP_ORDER.flatMap((step) => {
+    const value = record.steps[step];
+    return value?.state === 'accepted' ? [{ step, ...value }] : [];
+  });
+  const lastAcceptedStep = acceptedSteps.at(-1);
+  const lastActivity = record.ownerHistory.at(-1) ?? lastAcceptedStep;
+  const nextStep = RUN_STEP_ORDER.find((step) =>
+    record.needsReconfirm.includes(step) || record.steps[step]?.state === 'draft',
+  ) ?? 'delivery';
+  return {
+    nextStep,
+    acceptedSteps,
+    ...(lastAcceptedStep ? { lastAcceptedStep } : {}),
+    ...(lastActivity ? { lastActor: lastActivity.actor, lastAt: lastActivity.at } : {}),
+    decisions: RUN_STEP_ORDER.flatMap((step) => record.notes[step]?.decisions ?? []),
+    openQuestions: RUN_STEP_ORDER.flatMap((step) => record.notes[step]?.openQuestions ?? []),
+    drafts: RUN_STEP_ORDER.filter((step) => record.steps[step]?.state === 'draft' || record.needsReconfirm.includes(step)),
+  };
 }
 
 export interface RecordAcceptanceInput {
