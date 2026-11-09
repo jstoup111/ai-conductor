@@ -2173,7 +2173,9 @@ describe('engine/conductor', () => {
       events.on('step_retry', (event) => {
         if (event.type === 'step_retry') retryOrHaltReasons.push(event.reason);
       });
-      events.on('loop_halt', (event) => retryOrHaltReasons.push(event.reason));
+      events.on('loop_halt', (event) => {
+        if (event.type === 'loop_halt') retryOrHaltReasons.push(event.reason);
+      });
 
       const conductor = new Conductor({
         stateFilePath: statePath,
