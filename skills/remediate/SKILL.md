@@ -43,6 +43,8 @@ as-built finding disposition must include its engine-owned `reconciliation`. Jud
 supplied evidence, not wording alone: use `same` for the same unresolved case,
 `recurrence` when an earlier repair recurred, `materially-changed` when the prior case
 is relevant but the failure is materially different, and `new` when no prior case fits.
+A prior-case source without a `summary` is still pending: read its text from the
+`pendingAsBuiltFindings` entry whose `finding` equals that source's `findingId`.
 
 `same` and `recurrence` name the supplied `priorCaseId`. They may only use
 `existing-task` (binding at least one repair task from that case, plus a cited owner
