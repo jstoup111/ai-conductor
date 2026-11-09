@@ -121,10 +121,12 @@ async function routedFixture(options: { readonly failRoundStamp?: boolean } = {}
 }
 
 describe('prepare-commit-msg round stamp (real local Git)', () => {
-  it('keeps unrelated task commits permitted when round stamping is unavailable', async () => {
+  it('rejects a leaf-executed commit when round stamping is unavailable', async () => {
     const root = await routedFixture({ failRoundStamp: true });
 
-    await expect(commit(root, 'member.txt', 'feat: permitted child task')).resolves.toContain('Task: T1');
+    await expect(commit(root, 'member.txt', 'feat: permitted child task')).rejects.toThrow(
+      'leaf routed commit is missing its Round:/Owner: trailers',
+    );
   });
 
   it('adds one Task and Round trailer for the marker host and refuses a non-host commit', async () => {

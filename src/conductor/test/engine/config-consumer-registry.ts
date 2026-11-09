@@ -236,6 +236,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
     STEP_RUNNERS,
   ]),
   'stacked_prs.route_whole_feature_fixes': consumer(ROUTE_TYPES),
+  'stacked_prs.fold_routed_fixes': consumer(CONDUCTOR),
   'stacked_prs.max_restack_cascades': consumer(CASCADE_ALLOWANCE),
 
   // ── build_review ──────────────────────────────────────────────────────────
