@@ -271,6 +271,7 @@ import { changedPathsByPosition, resolveCitedPaths, selectHost } from './routing
 import {
   admitRound,
   checkRoundAdmissionFence,
+  deferredPlacementsExist,
   diagnoseAffectedRounds,
   exitRoutedHostAndReconcile,
   recordRoundStall,
@@ -6759,7 +6760,7 @@ export class Conductor {
       this.config.stacked_prs?.route_whole_feature_fixes === true &&
       leaf !== undefined &&
       leaf > 1 &&
-      (await routedRoundOpen(this.projectRoot, slug))
+      ((await routedRoundOpen(this.projectRoot, slug)) || (await deferredPlacementsExist(this.projectRoot, slug)))
     ) {
       // A route marker, open round, unreadable queue, or queued child is
       // durable unfinished work.  Never mint terminal state around it.
@@ -18839,7 +18840,7 @@ export class Conductor {
           await recordRebaseStepCompletion(this.stateFilePath, outcome);
           return { success: true };
         }
-        if (await routedRoundOpen(this.projectRoot, stackSlug, { git })) {
+        if (await routedRoundOpen(this.projectRoot, stackSlug, { git }) || await deferredPlacementsExist(this.projectRoot, stackSlug, { git })) {
           await this.events.emit(emitRestackRefused({ reason: 'deferred-base-refresh' }));
           return { success: false, output: 'stack base refresh deferred: routed round open' };
         }

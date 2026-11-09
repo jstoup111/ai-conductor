@@ -166,8 +166,11 @@ export async function resolveChildBase(
   // or non-routed child retains the existing no-routing-ref path.
   if (positions.length > 1) {
     const config = await loadConfig(worktree);
-    if (routingSettingOn(config.ok ? config.config : undefined)) {
-      const marker = await readRepairMarker(worktree, slug, { git });
+    const marker = await readRepairMarker(worktree, slug, { git });
+    // A leaf execution mode is immutable round state.  It remains readable
+    // after an operator turns the admission setting off, because its review
+    // base is the leaf boundary rather than the host closure.
+    if (routingSettingOn(config.ok ? config.config : undefined) || marker.kind === 'marker') {
       if (marker.kind === 'marker' && marker.marker.host === child) {
         const route = await readRouteRecord(worktree, slug, marker.marker.roundId, { git });
         if (route.kind === 'record') {
@@ -183,6 +186,10 @@ export async function resolveChildBase(
               }
               case 'audit':
               case 'operator':
+                if (route.record.execution === 'leaf') {
+                  const placement = route.record.placements?.[child];
+                  return placement === undefined ? undefined : { kind: 'routed-repair', child, sha: placement.leafEntryTip };
+                }
                 return route.record.hosts[child] === 'repairing' && route.record.entry?.host === child
                   ? { kind: 'routed-repair', child, sha: route.record.entry.pinnedBase }
                   : undefined;

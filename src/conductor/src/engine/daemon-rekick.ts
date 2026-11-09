@@ -39,7 +39,7 @@ import { checkStepCompletion, resolveFeaturePlanPath } from './artifacts.js';
 import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
 import { applyRebaseTransition } from './rebase-transition.js';
 import { runRestack } from './restack/restack-executor.js';
-import { routedRoundOpen } from './routing/round-admission.js';
+import { deferredPlacementsExist, routedRoundOpen } from './routing/round-admission.js';
 import { emitRestackRefused } from './restack/restack-events.js';
 import { publishedStackRefusal } from './stack-publication.js';
 import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-verifier.js';
@@ -925,7 +925,7 @@ export async function resumeRebaseFirst(opts: {
 
   // An open routed round owns the stack.  Keep the sentinel so its eventual
   // close can perform the deferred refresh instead of silently losing it.
-  if (opts.slug && await routedRoundOpen(opts.worktreePath, opts.slug)) {
+  if (opts.slug && (await routedRoundOpen(opts.worktreePath, opts.slug) || await deferredPlacementsExist(opts.worktreePath, opts.slug))) {
     await opts.events.emit(emitRestackRefused({ reason: 'deferred-base-refresh' }));
     return 'skipped';
   }
