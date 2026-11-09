@@ -1,4 +1,4 @@
-// Covers: task:2, task:7, task:8, task:57, task:58, task:59, task:206
+// Covers: task:2, task:7, task:8, task:9, task:57, task:58, task:59, task:206
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -556,6 +556,29 @@ describe('verified prerequisite reroute (real local Git)', () => {
     } finally {
       await rm(subject.repo, { recursive: true, force: true });
     }
+  });
+
+  // Covers: task:9
+  it('treats a leaf-executed host prerequisite claim as an ordinary failed attempt', async () => {
+    const subject = await fixture();
+    try {
+      const stored = await readRouteRecord(subject.repo, 'demo', roundId);
+      if (stored.kind !== 'record') throw new Error('missing routed work order');
+      await expect(writeRoutingTransaction(subject.repo, 'demo', [{
+        kind: 'update-record', previous: stored, record: { ...stored.record, execution: 'leaf' },
+      }], { git: subject.git })).resolves.toEqual({ kind: 'updated' });
+
+      prerequisiteMocks.rerouteRound.mockClear();
+      await expect(settleRoutedBuildClaim({
+        structuredResult: { outcome: 'blocked-by-prerequisite', child: 3, symbols: ['parseB'] },
+        worktree: subject.repo, slug: 'demo', roundId, host: c1, leaf: c3, git: subject.git,
+      })).resolves.toMatchObject({ kind: 'failed' });
+
+      expect(prerequisiteMocks.rerouteRound).not.toHaveBeenCalled();
+      await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
+        kind: 'record', record: { hosts: { 1: 'repairing' }, items: [{ fallback: [] }] },
+      });
+    } finally { await rm(subject.repo, { recursive: true, force: true }); }
   });
 
   it('refuses a BUILD claim when its admitted destination prerequisite path is absent', async () => {
