@@ -2,6 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { withDaemonCoAuthorTrailer } from '../bot-co-author.js';
 import { type ChildId } from '../child-context.js';
 import { childBranchFor, leafBranchFor } from '../feature-branch-identity.js';
 import { type GitRunner } from '../rebase.js';
@@ -249,7 +250,9 @@ async function materializeHunk(
   const tree = await git(['write-tree'], { env });
   const treeSha = tree.exitCode === 0 ? parseCommitSha(tree.stdout.trim()) : undefined;
   if (treeSha === undefined) throw new Error(`cannot write fold hunk tree: ${tree.stderr}`);
-  const commit = await git(['commit-tree', treeSha, '-p', parent], { input: 'fold placement probe\n' });
+  const commit = await git(['commit-tree', treeSha, '-p', parent], {
+    input: withDaemonCoAuthorTrailer('fold placement probe\n'),
+  });
   const commitSha = commit.exitCode === 0 ? parseCommitSha(commit.stdout.trim()) : undefined;
   if (commitSha === undefined) throw new Error(`cannot write fold hunk probe: ${commit.stderr}`);
   return commitSha;

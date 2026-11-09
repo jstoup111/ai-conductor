@@ -331,6 +331,7 @@ engine/report-renderer.ts -> filesystem
 engine/reseal-cli.ts -> filesystem
 engine/reseal-cli.ts -> git
 engine/reseal-cli.ts -> process
+engine/restack/fold-plan.ts -> filesystem
 engine/restack/halt-record-bookkeeping.ts -> filesystem
 engine/restack/restack-conflict-record.ts -> git
 engine/restack/restack-conflict-record.ts -> process
