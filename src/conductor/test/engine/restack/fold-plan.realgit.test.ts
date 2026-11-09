@@ -185,7 +185,7 @@ describe('placeFoldCommits (real local Git)', () => {
     await expect(placeFoldCommits({
       worktree: subject.repo,
       slug,
-      commits: [{ sha: folded as never, roundId: 'r1', owner: hostOne }],
+      commits: [{ sha: folded as never, roundId: parseRoundId('r1')!, owner: hostOne }],
       git: makeGitRunner(subject.repo),
     })).resolves.toEqual({
       kind: 'planned',
@@ -210,7 +210,7 @@ describe('placeFoldCommits (real local Git)', () => {
     await expect(placeFoldCommits({
       worktree: subject.repo,
       slug,
-      commits: [{ sha: empty as never, roundId: 'r1', owner: hostOne }],
+      commits: [{ sha: empty as never, roundId: parseRoundId('r1')!, owner: hostOne }],
       git: makeGitRunner(subject.repo),
     })).resolves.toEqual({
       kind: 'planned',
@@ -242,7 +242,7 @@ describe('placeFoldCommits (real local Git)', () => {
     await expect(placeFoldCommits({
       worktree: subject.repo,
       slug,
-      commits: [{ sha: frozen as never, roundId: 'r2', owner: hostOne }],
+      commits: [{ sha: frozen as never, roundId: parseRoundId('r2')!, owner: hostOne }],
       git: makeGitRunner(subject.repo),
     })).resolves.toEqual({
       kind: 'planned',
