@@ -26,6 +26,18 @@ describe('engine/manual-test-record-cli', () => {
       ).toEqual({ kind: 'results', resultsPath: 'p', pipelineDir: '/abs/d' });
     });
 
+    it('detects `manual-test-record --skip --reason <r>` without a pipeline directory', () => {
+      expect(
+        detectManualTestRecordCommand(argv('manual-test-record', '--skip', '--reason', 'r')),
+      ).toEqual({ kind: 'skip', reason: 'r', pipelineDir: undefined });
+    });
+
+    it('detects `manual-test-record --results <p>` without a pipeline directory', () => {
+      expect(
+        detectManualTestRecordCommand(argv('manual-test-record', '--results', 'p')),
+      ).toEqual({ kind: 'results', resultsPath: 'p', pipelineDir: undefined });
+    });
+
     it('returns {kind:"guide"} when --pipeline-dir is relative (skip mode)', () => {
       expect(
         detectManualTestRecordCommand(
@@ -50,9 +62,6 @@ describe('engine/manual-test-record-cli', () => {
       expect(detectManualTestRecordCommand(argv('manual-test-record', '--skip'))).toEqual({
         kind: 'guide',
       });
-      expect(
-        detectManualTestRecordCommand(argv('manual-test-record', '--results', 'p')),
-      ).toEqual({ kind: 'guide' });
     });
 
     it('returns {kind:"guide"} when both --skip and --results are present', () => {
@@ -100,6 +109,8 @@ describe('engine/manual-test-record-cli', () => {
         rm: vi.fn(async (path: string) => {
           files.delete(path);
         }),
+        resolveToplevel: vi.fn(async () => '/abs'),
+        isDirectory: vi.fn(async () => true),
         readStdin: vi.fn(async () => ''),
       };
       return { runners, files };
@@ -233,6 +244,8 @@ describe('engine/manual-test-record-cli', () => {
         rm: vi.fn(async (path: string) => {
           files.delete(path);
         }),
+        resolveToplevel: vi.fn(async () => '/abs'),
+        isDirectory: vi.fn(async () => true),
         readStdin: vi.fn(async () => ''),
       };
       return { runners, files };
@@ -380,6 +393,8 @@ describe('engine/manual-test-record-cli', () => {
         writeFile: vi.fn(),
         rename: vi.fn(),
         rm: vi.fn(),
+        resolveToplevel: vi.fn(),
+        isDirectory: vi.fn(),
         readStdin: vi.fn(),
       };
       const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
