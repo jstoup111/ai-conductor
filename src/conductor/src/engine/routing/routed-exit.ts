@@ -182,7 +182,11 @@ export async function advanceRound(
   const record = { ...admitted.record, currentHostIndex: next.index, entry: undefined };
   const wrote = await writeRoutingTransaction(worktree, slug, [
     { kind: 'update-record', previous: stored, record },
-    { kind: 'create-marker', marker: { host: next.host, roundId: stored.record.roundId } },
+    { kind: 'create-marker', marker: {
+      host: next.host,
+      roundId: stored.record.roundId,
+      ...(stored.record.execution === 'leaf' ? { execution: 'leaf' as const } : {}),
+    } },
   ], { git });
   return wrote.kind === 'updated'
     ? { kind: 'admitted', host: next.host }
@@ -372,6 +376,28 @@ export async function requestRoutedExit(input: RequestRoutedExitInput): Promise<
   const marker = await readRepairMarker(input.worktree, input.slug, { git });
   if (marker.kind !== 'marker' || marker.marker.host !== input.host || marker.marker.roundId !== input.roundId) {
     return halted(`routed exit host ${input.host}: repair marker is unavailable or belongs to another round`);
+  }
+
+  // Fold-mode audit hosts execute on the leaf.  Their work is deliberately
+  // left there until FINISH folds the recorded boundary range back onto its
+  // owner; a normal feature-repair restack here would defeat that invariant.
+  if (stored.record.execution === 'leaf') {
+    const placement = stored.record.placements?.[input.host];
+    const head = await resolveGitRef(git, 'HEAD');
+    if (typeof head !== 'string') return halted(`routed exit host ${input.host}: cannot resolve leaf exit tip`);
+    const unchanged = placement === undefined || placement.leafEntryTip === head;
+    const done = transitionHost(stored, input.host, 'done', { credit: false });
+    if (done.kind !== 'updated') return halted(`routed exit host ${input.host}: cannot mark leaf-executed host done`);
+    const record = unchanged || placement === undefined
+      ? { ...done.record, placements: Object.fromEntries(Object.entries(done.record.placements ?? {}).filter(([key]) => key !== String(input.host))) }
+      : { ...done.record, placements: { ...done.record.placements, [input.host]: { ...placement, state: 'deferred' as const, exitTip: head } } };
+    const wrote = await writeRoutingTransaction(input.worktree, input.slug, [
+      { kind: 'update-record', previous: stored, record },
+      { kind: 'delete-marker', old: marker.blob },
+    ], { git });
+    return wrote.kind === 'updated'
+      ? { kind: 'no-commit-done' }
+      : halted(`routed exit host ${input.host}: leaf deferred compare-and-swap ${wrote.kind}`);
   }
 
   // The leaf is already the whole-feature branch.  Its successful BUILD
