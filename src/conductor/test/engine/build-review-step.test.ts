@@ -475,7 +475,9 @@ describe('build_review malformed Covers marker gate', () => {
     await mkdir(join(projectRoot, 'old'), { recursive: true });
     await mkdir(join(projectRoot, 'tools'), { recursive: true });
     await writeFile(join(projectRoot, 'old', 'package.json'), '{"name":"old"}\n', 'utf8');
+    await writeFile(join(projectRoot, 'old', 'manifest.json'), '{"name":"old-control"}\n', 'utf8');
     await writeFile(join(projectRoot, 'tools', 'package.json'), '{"name":"tools"}\n', 'utf8');
+    await writeFile(join(projectRoot, 'tools', 'manifest.json'), '{"name":"tools-control"}\n', 'utf8');
     await git('add', '.');
     await git('commit', '-m', 'base');
     await git('remote', 'add', 'origin', projectRoot);
@@ -948,12 +950,44 @@ describe('build_review malformed Covers marker gate', () => {
     }],
   ] as const)('reaches absent-policy discovery for %s', async (_caseName, paths, applyChange) => {
     await applyChange();
-    const { runner, discovery, capture } = createUninstalledPathTriggeredRunner(paths);
+    const events = new ConductorEventEmitter();
+    const skips: ConductorEvent[] = [];
+    events.on('build_review_rubric_skipped', (event) => { skips.push(event); });
+    const { runner, discovery, capture } = createUninstalledPathTriggeredRunner(paths, events);
 
     const result = await runner.run('build_review', state);
 
     expect(result.success).toBe(false);
     expect(discovery).toHaveBeenCalled();
+    expect(capture).not.toHaveBeenCalled();
+    expect(skips.filter((event) => event.rubric === 'dependencyHygiene' && event.reason === 'paths-unmatched')).toEqual([]);
+  });
+
+  // Covers: task:5
+  it.each([
+    ['a renamed previous path', ['old/package.json'], async () => {
+      await mkdir(join(projectRoot, 'new'), { recursive: true });
+      await git('mv', 'old/manifest.json', 'new/manifest.json');
+      await git('commit', '-m', 'rename non-matching manifest');
+    }],
+    ['a deleted path', ['**/package.json'], async () => {
+      await git('rm', 'tools/manifest.json');
+      await git('commit', '-m', 'delete non-matching manifest');
+    }],
+  ] as const)('withholds absent-policy discovery for a non-matching %s control diff', async (_caseName, paths, applyChange) => {
+    await applyChange();
+    const events = new ConductorEventEmitter();
+    const skips: ConductorEvent[] = [];
+    events.on('build_review_rubric_skipped', (event) => { skips.push(event); });
+    const { runner, discovery, capture } = createUninstalledPathTriggeredRunner(paths, events);
+
+    const result = await runner.run('build_review', state);
+
+    expect(result).toMatchObject({ success: true, output: expect.stringContaining('build_review_no_rubrics') });
+    expect(skips).toEqual([expect.objectContaining({
+      type: 'build_review_rubric_skipped', rubric: 'dependencyHygiene', reason: 'paths-unmatched',
+    })]);
+    expect(discovery).not.toHaveBeenCalled();
     expect(capture).not.toHaveBeenCalled();
   });
 
