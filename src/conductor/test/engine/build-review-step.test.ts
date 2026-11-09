@@ -960,7 +960,7 @@ describe('build_review malformed Covers marker gate', () => {
     expect(result.success).toBe(false);
     expect(discovery).toHaveBeenCalled();
     expect(capture).not.toHaveBeenCalled();
-    expect(skips.filter((event) => event.rubric === 'dependencyHygiene' && event.reason === 'paths-unmatched')).toEqual([]);
+    expect(skips).toEqual([]);
   });
 
   // Covers: task:5
