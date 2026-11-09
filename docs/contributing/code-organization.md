@@ -39,6 +39,8 @@ Static-analysis configuration sits at two levels. Anything needing the TypeScrip
 | `src/conductor/tsconfig.json` | `npm run typecheck` — `src/` only; `test/` is excluded. |
 | `src/conductor/tsconfig.test.json` | `npm run typecheck:test` — extends the above and adds `test/`. |
 | `test/lint_shell.sh` | The ShellCheck file set and severity. Single source of truth for both CI's `shellcheck` job and integrity check 1b. |
+| `.prettierrc.json`, `.prettierignore` | Prettier style and exclusions for `npm run format` and `format:check`, driven by `src/conductor/scripts/format.mjs`. At the root because Prettier resolves ignore patterns relative to the ignore file. See [Formatter](testing.md#formatter). |
+| `.editorconfig` | Editor defaults: LF, final newline, two-space indent for `*.ts`, `*.mts`, and `*.sh`. |
 | `lychee.toml` | Documentation link checking. At the root because its inputs span `docs/`, the root READMEs, and `src/conductor/README.md`. |
 
 ## Layers
