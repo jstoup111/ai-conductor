@@ -861,6 +861,8 @@ export interface StackedPrsConfig {
   max_restack_cascades?: number | Partial<Record<'S' | 'M' | 'L', number>>;
   /** Opt in to routed whole-feature remediation; absent remains dark. */
   route_whole_feature_fixes?: boolean;
+  /** Fold routed audit fixes onto their owning child before publication. Default: true. */
+  fold_routed_fixes?: boolean;
 }
 
 /** The closed set of independently-executed build-review rubric branches. */
