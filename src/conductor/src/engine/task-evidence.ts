@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, rename, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /**
@@ -223,4 +223,27 @@ export async function readNoEvidenceAttempts(projectRoot: string): Promise<numbe
 export async function readLastResolvedCount(projectRoot: string): Promise<number> {
   const evidence = await createTaskEvidence(projectRoot);
   return evidence.lastResolvedCount;
+}
+
+/**
+ * Stamp the resolved-task baseline immediately before a daemon dispatch.
+ *
+ * The baseline is deliberately whole-feature scoped: a later progress check
+ * compares it with the same unscoped count, so child-local completion cannot
+ * make an otherwise idle dispatch look like progress.
+ */
+export async function stampDispatchBaseline(
+  worktreePath: string,
+  countResolvedTasks: (projectRoot: string) => Promise<number>,
+): Promise<'stamped' | 'no-worktree'> {
+  try {
+    if (!(await stat(worktreePath)).isDirectory()) return 'no-worktree';
+  } catch {
+    return 'no-worktree';
+  }
+
+  const evidence = await createTaskEvidence(worktreePath);
+  evidence.lastResolvedCount = await countResolvedTasks(worktreePath);
+  await evidence.write();
+  return 'stamped';
 }

@@ -27,6 +27,7 @@ import { timeMaintenancePhase, type MaintenancePhaseInput } from './maintenance-
 import type { RepairQueue, RepairRequest } from './repair-queue.js';
 import type { FeatureTerminalEffects } from './feature-executor.js';
 import { isOperatorActionHalt, type HaltDisposition } from './halt-marker.js';
+import { selectPreemptionVictim, type PriorityBand } from './backlog-priority.js';
 
 type FastForwardOutcome = import('./daemon-backlog.js').FastForwardOutcome;
 
@@ -189,7 +190,7 @@ export async function pickEligible(
   return undefined;
 }
 
-export type FeatureStatus = 'done' | 'halted' | 'error' | 'parked';
+export type FeatureStatus = 'done' | 'halted' | 'error' | 'parked' | 'preempted';
 
 export interface FeatureOutcome {
   slug: string;
@@ -243,6 +244,8 @@ export interface DaemonDeps {
    *  halts — return `{status:'halted'}` — but a thrown error is caught and
    *  recorded as `{status:'error'}` so the pool survives. */
   runFeature: (item: BacklogItem) => Promise<FeatureOutcome>;
+  /** Ask a child executor to yield at its next conductor scheduling boundary. */
+  requestYield?: (slug: string) => boolean;
   /**
    * Dispatcher/executor seam. Both sides travel together so an order builder
    * can never be configured without an executor (or vice versa).
@@ -285,11 +288,30 @@ export interface DaemonDeps {
    */
   isProgressReKickEligible?: (slug: string) => Promise<boolean>;
   /**
+   * True when the live retryable HALT body differs from the body this dispatch
+   * boundary last cleared. A distinct mechanical/legacy HALT earns one prompt
+   * re-dispatch, charged against the same bounded counter as progress re-kicks.
+   */
+  isFreshRetryableHalt?: (slug: string) => Promise<boolean>;
+  /**
    * Optional, slug-keyed HALT disposition reader for the progress-gated
    * re-kick path. A failed read is treated as `unclassified` and therefore
    * requires operator action. Absent preserves prior behavior.
    */
   readHaltClass?: (slug: string) => Promise<HaltDisposition>;
+  /**
+   * Clears a retryable (`mechanical` or `legacy`) HALT at the re-dispatch
+   * boundary. The production seam archives its body to `HALT.rekicked` and
+   * appends the existing `halt_cleared` audit record; the daemon core owns
+   * only the ordering and disposition decision.
+   */
+  clearRetryableHalt?: (slug: string) => Promise<void>;
+  /**
+   * Writes the whole-feature progress baseline at the dispatch boundary.
+   * A failed stamp is diagnostic-only: the executor still receives its
+   * dispatch so a transient sidecar write cannot block feature recovery.
+   */
+  stampDispatchBaseline?: (slug: string) => Promise<void>;
   /**
    * Task 9: per-spec bound on progress-gated cross-dispatch re-kicks
    * (`isProgressReKickEligible`), mirroring `build_progress_halt.dispatch_ceiling`
@@ -679,7 +701,7 @@ type RepairWorkerCompletion = { readonly kind: 'repair-complete' };
 
 /** A pooled worker's completion is tied to its kind, so repairs cannot become features. */
 type Worker =
-  | { readonly kind: 'feature'; readonly slug: string; readonly completion: Promise<FeatureOutcome> }
+  | { readonly kind: 'feature'; readonly slug: string; readonly completion: Promise<FeatureOutcome>; readonly dispatchSequence: number }
   | { readonly kind: 'repair'; readonly request: RepairRequest; readonly completion: Promise<RepairWorkerCompletion> };
 
 /**
@@ -847,7 +869,7 @@ export async function runDaemon(
   const progressReKickCeilingLogged = new Set<string>();
   const progressReKickOperatorActionLogged = new Set<string>();
   const progressReKickLegacyLogged = new Set<string>();
-  const isProgressReKickEligibleBounded = deps.isProgressReKickEligible
+  const isProgressReKickEligibleBounded = (deps.isProgressReKickEligible || deps.isFreshRetryableHalt)
     ? async (slug: string): Promise<boolean> => {
         if (deps.readHaltClass) {
           let disposition: HaltDisposition;
@@ -880,15 +902,27 @@ export async function runDaemon(
           }
           return false;
         }
-        let eligible = false;
-        try {
-          eligible = await deps.isProgressReKickEligible!(slug);
-        } catch (err) {
-          log(
-            `[daemon] isProgressReKickEligible(${slug}) threw (${err instanceof Error ? err.message : String(err)}); treating as not eligible`,
-          );
-          return false;
+        let fresh = false;
+        if (deps.isFreshRetryableHalt) {
+          try {
+            fresh = await deps.isFreshRetryableHalt(slug);
+          } catch (err) {
+            log(
+              `[daemon] isFreshRetryableHalt(${slug}) threw (${err instanceof Error ? err.message : String(err)}); treating as not eligible`,
+            );
+          }
         }
+        let progressed = false;
+        if (deps.isProgressReKickEligible) {
+          try {
+            progressed = await deps.isProgressReKickEligible(slug);
+          } catch (err) {
+            log(
+              `[daemon] isProgressReKickEligible(${slug}) threw (${err instanceof Error ? err.message : String(err)}); treating as not eligible`,
+            );
+          }
+        }
+        const eligible = fresh || progressed;
         if (eligible) progressReKickCounts.set(slug, count + 1);
         return eligible;
       }
@@ -940,6 +974,8 @@ export async function runDaemon(
     options.concurrency,
   );
   const workers: Worker[] = [];
+  let dispatchSequence = 0;
+  let preemptionOutstanding: { victim: string; cause: string } | undefined;
   const isFeatureInFlight = (slug: string): boolean => featureSlugs(claims).includes(slug);
   // Keep one completion observer for the current worker set. A busy poll must
   // not race every timer tick directly against live workers: every losing race
@@ -1003,6 +1039,43 @@ export async function runDaemon(
     // from the previous dispatch)
     disposeWatcher(item.slug);
 
+    // A parked feature can resume only after its live retryable HALT has been
+    // cleared. Do this before constructing or invoking the executor so stack
+    // preflight never sees a mechanical/legacy HALT as an unauthorized resume.
+    // Keep the seam optional while its composition-root wiring lands; callers
+    // that do provide it get the fail-closed disposition boundary below.
+    if (isResume && deps.clearRetryableHalt && await deps.isHalted?.(item.slug)) {
+      let disposition: HaltDisposition = 'unclassified';
+      try {
+        disposition = await deps.readHaltClass?.(item.slug) ?? 'unclassified';
+      } catch {
+        // A failed class read is unclassified and therefore operator-retained.
+      }
+
+      const retained = isOperatorActionHalt(disposition)
+        || (disposition !== 'mechanical' && disposition !== 'legacy');
+      if (!retained) {
+        try {
+          await deps.clearRetryableHalt(item.slug);
+          featureLog(`re-kick ${item.slug}: cleared ${disposition} HALT before dispatch`);
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : String(error);
+          featureLog(`re-kick ${item.slug}: HALT clear failed — ${reason}`);
+          claims.release(item.slug);
+          claims.park(item.slug);
+          registerWatcher(item.slug);
+          return false;
+        }
+      } else {
+        // Do not let an automatic path mutate or run through a retained HALT.
+        // The claim has not started an executor, so release it synchronously.
+        claims.release(item.slug);
+        claims.park(item.slug);
+        registerWatcher(item.slug);
+        return false;
+      }
+    }
+
     // Task 16: Emit resume marker for re-dispatches, start for fresh dispatches
     if (isResume) {
       featureLog(`${chalk.cyan('↻')} resume ${chalk.bold(item.slug)}`);
@@ -1022,13 +1095,19 @@ export async function runDaemon(
         deps.onExecutorSettled?.();
       }
     };
+    try {
+      await deps.stampDispatchBaseline?.(item.slug);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      log(`baseline stamp failed for ${item.slug} — ${reason}`);
+    }
     const completion: Promise<FeatureOutcome> = runFeature()
       .catch((err) => ({
         slug: item.slug,
         status: 'error' as const,
         reason: err instanceof Error ? err.message : String(err),
       }));
-    workers.push({ kind: 'feature', slug: item.slug, completion });
+    workers.push({ kind: 'feature', slug: item.slug, completion, dispatchSequence: ++dispatchSequence });
     observeWorkerSet();
     return true;
   };
@@ -1118,6 +1197,17 @@ export async function runDaemon(
     const { slug } = worker;
     const outcome = await worker.completion;
     claims.release(slug);
+    const preemption = preemptionOutstanding?.victim === slug ? preemptionOutstanding : undefined;
+    if (preemption) preemptionOutstanding = undefined;
+    // A yield is deliberately not a terminal lifecycle outcome: leave both
+    // durable state and operator-facing markers untouched so backlog order can
+    // resume this kept worktree normally.
+    if (outcome.status === 'preempted') {
+      if (preemption) (deps.featureLog?.(slug) ?? log)(
+        `${chalk.yellow('■')} preempted ${chalk.bold(slug)}: yielded to ${chalk.bold(preemption.cause)}`,
+      );
+      return;
+    }
     await deps.onFeatureTerminalEffects?.(outcome);
     // A terminal collection is a maintenance trigger, not an inline sweep:
     // a slow reconciler must never hold the slot-release path hostage.
@@ -2013,10 +2103,36 @@ export async function runDaemon(
       }
     }
 
-    if (inFlight.size >= concurrency && deps.onTick) {
+    if (inFlight.size >= concurrency && (deps.onTick || deps.requestYield)) {
       // A busy pool still discovers once per pass so the snapshot is current,
       // rather than replaying the last free-slot discovery with a stale age.
-      await deps.discoverBacklog({ refresh: false });
+      const items = await deps.discoverBacklog({ refresh: false });
+      if (!preemptionOutstanding && deps.requestYield) {
+        const next = await pickEligible({ items }, {
+          claims,
+          isHalted: deps.isHalted,
+          isParked: deps.isParked,
+          isProgressReKickEligible: isProgressReKickEligibleBounded,
+        });
+        if (next?.resolutionMode === 'banded') {
+          const victim = selectPreemptionVictim({
+            slug: next.slug,
+            band: next.band as PriorityBand | undefined,
+            backlogIndex: items.indexOf(next),
+          }, workers.flatMap((worker) => {
+            if (worker.kind !== 'feature') return [];
+            const running = items.findIndex((item) => item.slug === worker.slug);
+            const item = running >= 0 ? items[running] : undefined;
+            return item?.resolutionMode === 'banded' ? [{
+              slug: worker.slug,
+              band: item.band as PriorityBand | undefined,
+              backlogIndex: running,
+              dispatchSequence: worker.dispatchSequence,
+            }] : [];
+          }));
+          if (victim && deps.requestYield(victim)) preemptionOutstanding = { victim, cause: next.slug };
+        }
+      }
       paused = maintenance.isDraining() || (await checkPaused());
       buildAuthMissing = await checkBuildAuthMissing();
       ghVersionBlocked = await checkGhVersionFloor();

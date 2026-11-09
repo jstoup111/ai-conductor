@@ -1,5 +1,10 @@
-import { posix } from 'node:path';
+import { readFile, readdir } from 'node:fs/promises';
+import { dirname, join, posix, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
+
+const structuralDirectory = dirname(fileURLToPath(import.meta.url));
+const sourceDirectory = join(structuralDirectory, '../../src');
 
 export interface LayerRatchetEdge {
   file: string;
@@ -67,6 +72,19 @@ export interface LayerRatchetInput {
   files: ReadonlyMap<string, string>;
   /** Allowlist entries, one `from -> to` line each, as returned by `readAllowlistEntries`. */
   allowlist: readonly string[];
+}
+
+/** Reads every TypeScript source file beneath src/conductor/src into source-relative paths. */
+export async function readSourceTree(directory = sourceDirectory): Promise<Map<string, string>> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const nested = await Promise.all(entries.map(async (entry) => {
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) return readSourceTree(path);
+    return entry.isFile() && entry.name.endsWith('.ts')
+      ? new Map([[relative(sourceDirectory, path), await readFile(path, 'utf8')]])
+      : new Map<string, string>();
+  }));
+  return new Map(nested.flatMap((files) => [...files]));
 }
 
 type Layer = 'types' | 'execution' | 'engine' | 'ui' | 'tools' | 'entry';
@@ -320,7 +338,7 @@ function valueSpecifier(statement: ts.Statement): string | undefined {
   return undefined;
 }
 
-function isValueImport(statement: ts.ImportDeclaration): boolean {
+export function isValueImport(statement: ts.ImportDeclaration): boolean {
   const clause = statement.importClause;
   if (clause === undefined) return true;
   if (clause.isTypeOnly || clause.name !== undefined) return !clause.isTypeOnly;
@@ -329,7 +347,7 @@ function isValueImport(statement: ts.ImportDeclaration): boolean {
   return bindings.length === 0 || bindings.some((binding) => !binding.isTypeOnly);
 }
 
-function isValueExport(statement: ts.ExportDeclaration): boolean {
+export function isValueExport(statement: ts.ExportDeclaration): boolean {
   if (statement.isTypeOnly || statement.exportClause === undefined || ts.isNamespaceExport(statement.exportClause)) {
     return !statement.isTypeOnly;
   }
@@ -337,7 +355,7 @@ function isValueExport(statement: ts.ExportDeclaration): boolean {
   return bindings.length === 0 || bindings.some((binding) => !binding.isTypeOnly);
 }
 
-function layerFor(file: string): Layer | undefined {
+export function layerFor(file: string): Layer | undefined {
   const [firstSegment, ...remainingSegments] = file.split('/');
   if (remainingSegments.length === 0) return 'entry';
   return LAYERS.has(firstSegment as Layer) ? firstSegment as Layer : undefined;
@@ -357,7 +375,7 @@ function isForbiddenEdge(from: Layer, to: Layer): boolean {
   return LAYER_RANK[to] > LAYER_RANK[from];
 }
 
-function resolveSpecifier(
+export function resolveSpecifier(
   file: string,
   specifier: string,
   files: ReadonlyMap<string, string>,

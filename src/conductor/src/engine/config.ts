@@ -137,7 +137,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   'steps.by_tier': ['model', 'effort', 'max_retries'],
   'build_review.adjudication': ['enabled'],
   'build_review.rubrics': ['timeout_seconds', 'enabled', 'max_projection_bytes', 'llm_provider', 'model', 'effort', 'model_fallback_ladder', 'max_retries', 'escalate', 'min_confidence', 'min_severity'],
-  'build_review.custom_rubrics': ['timeout_seconds', 'skill', 'question', 'source', 'resources', 'enabled', 'llm_provider', 'model', 'effort', 'model_fallback_ladder', 'max_retries', 'escalate', 'min_confidence', 'min_severity'],
+  'build_review.custom_rubrics': ['timeout_seconds', 'skill', 'question', 'source', 'resources', 'paths', 'enabled', 'llm_provider', 'model', 'effort', 'model_fallback_ladder', 'max_retries', 'escalate', 'min_confidence', 'min_severity'],
   build_review: ['enabled', 'perTaskFloor', 'scopeContainmentEnforced', 'maxParallel', 'adjudication', 'rubrics', 'custom_rubrics'],
   ci_watch: ['enabled', 'cooldownMinutes'],
   kickback_escalation: ['enabled'],

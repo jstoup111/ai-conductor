@@ -254,10 +254,10 @@ describe('restack cascade cap sweep (real local Git)', () => {
   // Covers: task:22
   it('keeps cascade counts across a recreated worktree and renders the restack budget in inspect and the cap-halt body', async () => {
     const subject = await stack();
-    for (const file of ['one.txt', 'two.txt', 'three.txt']) {
-      await subject.repair(1, file);
-      await expect(repairOnce(subject.repo)).resolves.toMatchObject({ kind: 'applied' });
-    }
+    // The preceding test owns the applied-restack increment. Seed that durable
+    // state here so this rendering and worktree-recreation test reaches its
+    // boundary with one real restack rather than four serial replays.
+    await writeCascadeBlob(subject.repo, JSON.stringify({ version: 1, counts: { 1: 3 } }));
     await subject.repair(1, 'four.txt');
     await expect(repairOnce(subject.repo)).resolves.toMatchObject({ kind: 'halted' });
 
