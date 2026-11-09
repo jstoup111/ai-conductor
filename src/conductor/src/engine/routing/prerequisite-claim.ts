@@ -405,6 +405,12 @@ export async function settleRoutedBuildClaim(input: SettleRoutedBuildClaimInput)
   const leaf = input.leaf ?? await resolveSealedLeaf(input.worktree);
   const stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
   if (stored.kind !== 'record') return { kind: 'needs-human', detail: `routed prerequisite claim work order is ${stored.kind}` };
+  // Leaf-executed audit work already runs at the stack's highest available
+  // prerequisite context. A builder cannot move that host farther upward, so
+  // its claim is an ordinary failed attempt rather than a reroute request.
+  if (stored.record.execution === 'leaf') {
+    return { kind: 'failed', detail: 'routed prerequisite claim cannot reroute a leaf-executed host' };
+  }
   const prerequisitePaths = [...new Set(
     stored.record.items
       .filter((item) => item.host === input.host)
