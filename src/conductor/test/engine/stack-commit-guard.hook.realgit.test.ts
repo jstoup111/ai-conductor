@@ -105,7 +105,7 @@ async function commit(root: string, file: string): Promise<void> {
   await git(root, ['commit', '-qm', `feat: ${file}`]);
 }
 
-async function openSoleAuditRound(root: string): Promise<void> {
+async function openSoleAuditRound(root: string, execution?: 'leaf'): Promise<void> {
   const created = await createRouteRecord(root, 'demo', {
     roundId: leafReturnRoundId,
     kind: 'audit',
@@ -119,7 +119,11 @@ async function openSoleAuditRound(root: string): Promise<void> {
   const record: RouteRecord = { ...stored.record, phase: 'open', hosts: { [child]: 'admitted' } };
   const updated = await writeRoutingTransaction(root, 'demo', [{ kind: 'update-record', previous: stored, record }]);
   if (updated.kind !== 'updated') throw new Error(`could not open ${leafReturnRoundId}: ${updated.kind}`);
-  await writeFile(join(root, 'marker.json'), JSON.stringify({ host: child, roundId: leafReturnRoundId }));
+  await writeFile(join(root, 'marker.json'), JSON.stringify({
+    host: child,
+    roundId: leafReturnRoundId,
+    ...(execution === undefined ? {} : { execution }),
+  }));
   const blob = await git(root, ['hash-object', '-w', 'marker.json']);
   await git(root, ['update-ref', repairMarkerRefFor('demo'), blob]);
 }
@@ -188,6 +192,49 @@ describe('stack commit guard pre-commit hook (real local Git)', () => {
 
       await git(root, ['checkout', '-q', leafBranchFor('demo')]);
       await expect(commit(root, 'leaf-fix.txt')).resolves.toBeUndefined();
+    });
+  });
+
+  // Covers: task:8
+  it('allows a tracked leaf commit when the active marker selects leaf execution', async () => {
+    const root = await fixture();
+
+    await withHookModules(root, async ({ writeGitHooksAndWire }) => {
+      await writeGitHooksAndWire(root);
+      await openSoleAuditRound(root, 'leaf');
+      await git(root, ['checkout', '-q', leafBranchFor('demo')]);
+
+      await expect(commit(root, 'leaf-execution.txt')).resolves.toBeUndefined();
+      await expect(git(root, ['rev-parse', '--verify', 'HEAD'])).resolves.toMatch(/^[0-9a-f]{40}$/);
+    });
+  });
+
+  // Covers: task:8
+  it('refuses a host tracked commit when the active marker selects leaf execution', async () => {
+    const root = await fixture();
+
+    await withHookModules(root, async ({ writeGitHooksAndWire }) => {
+      await writeGitHooksAndWire(root);
+      await openSoleAuditRound(root, 'leaf');
+
+      await expect(commit(root, 'host-execution.txt')).rejects.toMatchObject({
+        stderr: expect.stringContaining(`Commit on ${leafBranchFor('demo')}`),
+      });
+    });
+  });
+
+  // Covers: task:8
+  it('preserves owner-branch execution when the active marker omits execution', async () => {
+    const root = await fixture();
+
+    await withHookModules(root, async ({ writeGitHooksAndWire }) => {
+      await writeGitHooksAndWire(root);
+      await openSoleAuditRound(root);
+      await git(root, ['checkout', '-q', leafBranchFor('demo')]);
+
+      await expect(commit(root, 'legacy-leaf.txt')).rejects.toMatchObject({
+        stderr: expect.stringContaining('Commit on feat/c1/demo'),
+      });
     });
   });
 });

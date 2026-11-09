@@ -107,12 +107,13 @@ export async function runStackCommitGuard(deps: StackCommitGuardDependencies): P
   }
   if (stored.record.kind !== 'operator' && stored.record.kind !== 'audit') return 0;
 
-  // The top position is built on the leaf branch, so a round hosted there
-  // commits on the leaf rather than on a child branch.
+  // The marker may explicitly execute on the leaf. Otherwise, preserve the
+  // legacy top-position behavior, where that position is built on the leaf.
   const hostIsLeaf = marker.marker.host === topology.positions[topology.positions.length - 1];
+  const executionIsLeaf = marker.marker.execution === 'leaf' || hostIsLeaf;
   const host = childBranchFor(identity.slug, marker.marker.host);
-  const hostBranch = hostIsLeaf ? leafBranchFor(identity.slug) : host.ok ? host.branch : `child ${marker.marker.host}`;
-  const isHost = hostIsLeaf
+  const hostBranch = executionIsLeaf ? leafBranchFor(identity.slug) : host.ok ? host.branch : `child ${marker.marker.host}`;
+  const isHost = executionIsLeaf
     ? identity.kind === 'leaf'
     : identity.kind === 'child' && identity.child === marker.marker.host;
   if (!isHost) {
