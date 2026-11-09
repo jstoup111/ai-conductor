@@ -13,7 +13,7 @@ import { enterHostRegion, hostCarriesTasklessObligation } from '../../../src/eng
 import { completeRerouteSync, rerouteRound } from '../../../src/engine/routing/prerequisite-claim.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord, readRouteRecord, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
-import { closureRefFor } from '../../../src/engine/routing/routing-refs.js';
+import { closureRefFor, revalidationQueueRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { writeRestackJournalBlob, type RestackJournal } from '../../../src/engine/restack/restack-journal.js';
 import type { RestackOpId } from '../../../src/engine/restack/restack-types.js';
@@ -32,7 +32,7 @@ afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root,
 
 async function fixture(
   kind: RouteRecord['kind'] = 'audit',
-  options: { readonly host?: typeof child; readonly taskless?: boolean; readonly retryHint?: string } = {},
+  options: { readonly host?: typeof child; readonly taskless?: boolean; readonly retryHint?: string; readonly execution?: 'leaf' } = {},
 ) {
   const host = options.host ?? child;
   const repo = await mkdtemp(join(tmpdir(), 'host-region-entry-'));
@@ -76,6 +76,7 @@ async function fixture(
   }));
   const created = await createRouteRecord(repo, 'demo', {
     roundId, ...(kind === 'revalidate' ? { kind } : { kind, sealedAuthored: 1 }),
+    ...(options.execution === undefined ? {} : { execution: options.execution }),
     items: [{ findingId: options.taskless ? 'manual-test-fail' : 'finding', kind, owner: host, host, reason: 'task-slice', fallback: [] }],
     allocation: { [host]: {
       remTaskIds: options.taskless ? [] : ['rem-prd-audit-T1'],
@@ -185,6 +186,91 @@ describe('routed host region entry (real local Git)', () => {
     expect(pin).toBeGreaterThanOrEqual(0);
     expect(switchCall).toBeGreaterThan(pin);
     expect(calls.some((call) => call.args[0] === 'commit')).toBe(false);
+  });
+
+  // Covers: task:4
+  it('uses the recorded leaf execution after configuration turns it off, while restaging child 1 and recording its placement', async () => {
+    const subject = await fixture('audit', { execution: 'leaf' });
+    const leafEntryTip = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
+    await mkdir(join(subject.repo, '.ai-conductor'), { recursive: true });
+    await writeFile(join(subject.repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  fold_routed_fixes: false\n');
+
+    await expect(entered(subject)).resolves.toMatchObject({ kind: 'entered', pinnedBase: subject.closure });
+    await expect(subject.git(['symbolic-ref', '--short', 'HEAD']))
+      .resolves.toMatchObject({ stdout: leafBranchFor('demo') });
+    await expect(readFile(join(subject.repo, planPath), 'utf8'))
+      .resolves.toContain('### Task rem-prd-audit-T1: Repair routed task');
+    await expect(readFile(join(subject.repo, '.pipeline', 'children', '1', 'conduct-state.json'), 'utf8').then(JSON.parse))
+      .resolves.toMatchObject({ acceptance_specs: 'pending', build: 'pending', test_suite: 'pending', build_review: 'pending' });
+    await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
+      kind: 'record', record: {
+        hosts: { 1: 'repairing' },
+        placements: { 1: { state: 'deferred', leafEntryTip } },
+        entry: { pinnedBase: subject.closure },
+      },
+    });
+  });
+
+  // Covers: task:4
+  it('resumes a leaf-executed host without a second frozen block or branch switch', async () => {
+    const subject = await fixture('audit', { execution: 'leaf' });
+    await expect(entered(subject)).resolves.toMatchObject({ kind: 'entered' });
+    const beforeHead = (await subject.git(['rev-parse', 'HEAD'])).stdout;
+    const beforePlan = await readFile(join(subject.repo, planPath), 'utf8');
+    const switches: string[] = [];
+    const traced: GitRunner = async (args, options) => {
+      if (args[0] === 'switch') switches.push(args.join(' '));
+      return subject.git(args, options);
+    };
+
+    await expect(entered(subject, traced)).resolves.toMatchObject({ kind: 'resume', pinnedBase: subject.closure });
+
+    expect(switches).toEqual([]);
+    await expect(subject.git(['symbolic-ref', '--short', 'HEAD']))
+      .resolves.toMatchObject({ stdout: leafBranchFor('demo') });
+    await expect(subject.git(['rev-parse', 'HEAD'])).resolves.toMatchObject({ stdout: beforeHead });
+    await expect(readFile(join(subject.repo, planPath), 'utf8')).resolves.toBe(beforePlan);
+  });
+
+  // Covers: task:4
+  it('keeps ordinary operator and revalidate entries on child 1 without leaf placements', async () => {
+    const operator = await fixture();
+    const operatorRecord = await readRouteRecord(operator.repo, 'demo', roundId);
+    if (operatorRecord.kind !== 'record') throw new Error('missing operator record');
+    const tip = parseCommitSha((await operator.git(['rev-parse', 'HEAD'])).stdout.trim());
+    if (!tip) throw new Error('invalid operator tip');
+    await expect(writeRoutingTransaction(operator.repo, 'demo', [{
+      kind: 'update-record', previous: operatorRecord, record: {
+        ...operatorRecord.record,
+        kind: 'operator',
+        operator: {
+          origin: 'land', reason: 'reviewer request', operator: 'operator@example.test', entryStep: 'acceptance_specs',
+          carried: [], otherTips: { 'feat/daemon-demo': tip },
+          priorRegion: { statuses: { acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' }, verdicts: {} },
+          declaration: { tip, at: '2026-11-09T00:00:00.000Z' },
+        },
+      },
+    }])).resolves.toEqual({ kind: 'updated' });
+    await expect(entered(operator)).resolves.toMatchObject({ kind: 'entered', pinnedBase: operator.closure });
+    await expect(operator.git(['symbolic-ref', '--short', 'HEAD'])).resolves.toMatchObject({ stdout: 'feat/c1/demo' });
+    const storedOperator = await readRouteRecord(operator.repo, 'demo', roundId);
+    expect(storedOperator).toMatchObject({ kind: 'record' });
+    if (storedOperator.kind !== 'record') throw new Error('missing operator record after entry');
+    expect(storedOperator.record).not.toHaveProperty('placements');
+
+    const revalidate = await fixture('revalidate');
+    const queueBlob = (await revalidate.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify({
+      generation: 1,
+      entries: [{ child, position: child, closureSha: revalidate.closure, gates: ['test_suite'], replay: { oldParent: revalidate.closure, newParent: revalidate.closure }, state: 'queued' }],
+      outbox: [],
+    }) })).stdout.trim();
+    await revalidate.git(['update-ref', revalidationQueueRefFor('demo'), queueBlob]);
+    await expect(entered(revalidate)).resolves.toMatchObject({ kind: 'entered', pinnedBase: revalidate.closure });
+    await expect(revalidate.git(['symbolic-ref', '--short', 'HEAD'])).resolves.toMatchObject({ stdout: 'feat/c1/demo' });
+    const storedRevalidate = await readRouteRecord(revalidate.repo, 'demo', roundId);
+    expect(storedRevalidate).toMatchObject({ kind: 'record' });
+    if (storedRevalidate.kind !== 'record') throw new Error('missing revalidate record after entry');
+    expect(storedRevalidate.record).not.toHaveProperty('placements');
   });
 
   // Covers: task:48

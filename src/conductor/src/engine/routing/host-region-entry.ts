@@ -190,6 +190,7 @@ export async function resolveHostEntryTarget(
   git: GitRunner,
   slug: string,
   host: ChildId,
+  record: Pick<RouteRecord, 'execution'>,
 ): Promise<{ readonly target: ChildLifecycleTarget; readonly pinnedBase: CommitSha; readonly tree: CommitSha } | { readonly detail: string }> {
   let closure: CommitSha | undefined;
   try {
@@ -210,7 +211,9 @@ export async function resolveHostEntryTarget(
   const resolvedTree = await resolveGitRef(git, `${pinnedBase}^{tree}`);
   if (typeof resolvedTree !== 'string') return { detail: `cannot resolve tree for host ${host} base ${pinnedBase}` };
   const tree = resolvedTree;
-  if (isLeaf) return { target: { child: host, position: host, branch: leafBranchFor(slug) }, pinnedBase, tree };
+  if (isLeaf || record.execution === 'leaf') {
+    return { target: { child: host, position: host, branch: leafBranchFor(slug) }, pinnedBase, tree };
+  }
   const branch = childBranchFor(slug, host);
   if (!branch.ok) return { detail: branch.reason };
   return { target: { child: host, position: host, branch: branch.branch }, pinnedBase, tree };
@@ -318,7 +321,7 @@ export async function pinHostEntry(
   host: ChildId,
   git: GitRunner,
 ): Promise<PinHostEntryResult> {
-  const resolved = await resolveHostEntryTarget(git, slug, host);
+  const resolved = await resolveHostEntryTarget(git, slug, host, stored.record);
   if ('detail' in resolved) return { kind: 'refused', detail: resolved.detail };
   let current = stored;
   let pinnedBase = current.record.entry?.host === host ? current.record.entry.pinnedBase : undefined;
@@ -574,8 +577,17 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
   const recordWithBindings = { ...stored, record: bound.record };
   const repairing = transitionHost(recordWithBindings, input.host, 'repairing', { credit: true });
   if (repairing.kind !== 'updated') return { kind: 'refused', detail: `routing round ${input.roundId} host ${input.host} cannot enter repairing` };
+  const record = stored.record.execution === 'leaf'
+    ? {
+      ...repairing.record,
+      placements: {
+        ...repairing.record.placements,
+        [input.host]: { state: 'deferred' as const, leafEntryTip: entryHead },
+      },
+    }
+    : repairing.record;
   const transitioned = await writeRoutingTransaction(input.worktree, input.slug, [
-    { kind: 'update-record', previous: stored, record: repairing.record },
+    { kind: 'update-record', previous: stored, record },
   ], { git });
   if (transitioned.kind !== 'updated') return { kind: 'refused', detail: `cannot enter repairing: ${transitioned.kind}` };
   const credit = await grantRoutedRepairCredit({
