@@ -1,5 +1,6 @@
 // Covers: task:37, task:14
-import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -30,6 +31,7 @@ import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { dispatchBuildReviewRecordReducedCoverage } from '../../src/engine/build-review-cli.js';
 import { resolveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-effective.js';
+import { commitAll, initTestRepo } from '../fixtures/git-repo.js';
 
 const roots: string[] = [];
 const feature = { version: 'v1' as const, repository: 'acme/conductor', feature: 'custom-convergence' };
@@ -84,6 +86,18 @@ describe('custom build-review convergence', () => {
   it('settles a withheld dependency finding as absent, then dispatches its later matching lap afresh', async () => {
     const projectRoot = await mkdtemp(join(process.env.TMPDIR!, 'build-review-withheld-convergence-'));
     roots.push(projectRoot);
+    // Lap 3 must enter through the public build_review dispatch, which derives
+    // participation from the feature diff.  A real local Git boundary keeps
+    // the member's fresh engine-owned invocation distinguishable from fixture
+    // setup and from the withheld lap.
+    await initTestRepo(projectRoot);
+    await writeFile(join(projectRoot, 'package.json'), '{}\n');
+    await writeFile(join(projectRoot, 'plan.md'), '# Fixture plan\n');
+    await commitAll(projectRoot, 'base package manifest');
+    execFileSync('git', ['remote', 'add', 'origin', projectRoot], { cwd: projectRoot });
+    execFileSync('git', ['update-ref', 'refs/remotes/origin/main', 'refs/heads/main'], { cwd: projectRoot });
+    execFileSync('git', ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main'], { cwd: projectRoot });
+    execFileSync('git', ['checkout', '-b', 'dependency-review'], { cwd: projectRoot });
     const lap1 = dependencyAggregate('lap-dependency-1', true, ['dependencyHygiene']);
     const lap1Source = projectBuildReviewAggregateSources(lap1)![0]!;
     const sourceId = buildReviewAdjudicationSourceId(lap1Source);
@@ -151,23 +165,28 @@ describe('custom build-review convergence', () => {
     };
     const events = new ConductorEventEmitter();
     const cacheHits: unknown[] = [];
+    const skipped: unknown[] = [];
     events.on('build_review_cache_hit', (event) => { cacheHits.push(event); });
+    events.on('build_review_rubric_skipped', (event) => { skipped.push(event); });
     const policyRoot = join(projectRoot, 'dependency-policy');
-    const lap3SnapshotDigest = `sha256:${'3'.repeat(64)}`;
-    const lap3ContentDigest = `sha256:${'4'.repeat(64)}`;
-    const source = {
-      identity: { snapshotDigest: lap3SnapshotDigest, contentDigest: lap3ContentDigest, mergeBase: 'base', headSha: 'dependency-3' },
-      baselinePath: join(projectRoot, 'lap-3-baseline'), headPath: join(projectRoot, 'lap-3-head'),
-    };
-    await Promise.all([mkdir(policyRoot, { recursive: true }), mkdir(source.baselinePath, { recursive: true }), mkdir(source.headPath, { recursive: true })]);
+    await Promise.all([mkdir(policyRoot, { recursive: true })]);
+    await writeFile(join(policyRoot, 'SKILL.md'), '# Fixture policy\n');
+    await writeFile(join(projectRoot, 'package.json'), '{"dependencies":{"new":"1.0.0"}}\n');
+    await commitAll(projectRoot, 'add dependency under review');
     let lap3Aggregate: unknown;
     const config = { llm_provider: 'claude', build_review: {
       enabled: true,
       rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
-      custom_rubrics: { dependencyHygiene: { enabled: true, skill: 'dependency-hygiene', question: 'Review dependency changes.', source: 'project', paths: ['**/package.json'], llm_provider: 'claude' } },
+      custom_rubrics: { dependencyHygiene: { enabled: true, skill: 'dependency-hygiene', question: 'Review dependency changes.', source: 'project', paths: ['package.json'], llm_provider: 'claude' } },
     } } as HarnessConfig;
     const runner = new DefaultStepRunner(provider, 'custom-convergence', projectRoot, {
-      config, events,
+      config, events, planPath: join(projectRoot, 'plan.md'),
+      buildReviewInputOptions: {
+        materialization: { projectRoot },
+        inspectTestSuite: async () => ({
+          status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
+        } as never),
+      },
       providerRuntimes: new ProviderRuntimeSet([{
         key: 'claude', provider, lifecycleCapability: provider.lifecycleCapability,
         nativeSchemaCapability: provider.nativeSchemaCapability, policy: CLAUDE_MODEL_POLICY,
@@ -187,25 +206,25 @@ describe('custom build-review convergence', () => {
       }),
       buildReviewEffectiveResolver: async (_root, aggregate) => {
         lap3Aggregate = aggregate;
+        const judged = (aggregate as { customResults?: Record<string, { result?: { verdict?: string; findings?: unknown[] } }> })
+          .customResults?.dependencyHygiene?.result;
         return { ok: true as const, feature, effective: {
-          rawVerdict: 'PASS' as const, verdict: 'PASS' as const, acceptedFindingIds: [], unresolvedFindingIds: [],
+          // The resolver accepts this lap only when the engine-published lap-3
+          // result is the provider's no-finding judgement. A stale lap-1
+          // finding, cache reuse, or skipped member would make this FAIL.
+          rawVerdict: judged?.verdict === 'PASS' && judged.findings?.length === 0 ? 'PASS' as const : 'FAIL' as const,
+          verdict: judged?.verdict === 'PASS' && judged.findings?.length === 0 ? 'PASS' as const : 'FAIL' as const,
+          acceptedFindingIds: [], unresolvedFindingIds: [],
           suppressedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [],
         } };
       },
     });
     vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue({ engineStamp: 'fixture', skillDigests: {} });
-    const lap3 = await (runner as unknown as {
-      runRubricBuildReview(inputs: unknown, resolved: unknown, tier: 'M'): Promise<{ success: boolean }>;
-    }).runRubricBuildReview({
-      sourceSnapshot: {
-        digest: lap3SnapshotDigest, contentDigest: lap3ContentDigest, mergeBase: 'base', headSha: 'dependency-3',
-        diff: 'diff --git a/package.json b/package.json\nindex 1..2 100644\n--- a/package.json\n+++ b/package.json\n@@ -1 +1 @@\n-{}\n+{"dependencies":{"new":"1.0.0"}}\n',
-        sourceChanges: [{ kind: 'M', path: 'package.json' }],
-      },
-      sourceMaterialization: { source, contextFor: (memberId: string) => ({ memberId, source }), settle: async () => {} },
-    }, resolveBuildReviewConfig(config, CLAUDE_MODEL_POLICY), 'M');
+    const lap3 = await runner.run('build_review', { complexity_tier: 'M' });
 
     expect(lap3).toMatchObject({ success: true });
+    expect(skipped).toEqual([]);
+    expect(cacheHits).toEqual([]);
     // This is the member's engine-owned provider boundary, rather than a
     // fixture-side invocation. A fresh candidate must be dispatched for the
     // reintroduced custom member on lap 3.
@@ -214,16 +233,12 @@ describe('custom build-review convergence', () => {
       prompt: expect.stringContaining('Declared review question: Review dependency changes.'),
       readOnlyReview: true,
     }));
-    expect(cacheHits).not.toContainEqual(expect.objectContaining({
-      rubric: 'dependencyHygiene',
-      customReuse: expect.objectContaining({ originalLapId: 'lap-dependency-1' }),
-    }));
     expect(lap3Aggregate).toMatchObject({
-      lapId: 'lap-dependency-3', verdict: 'PASS', currentCustomRubrics: ['dependencyHygiene'],
+      verdict: 'PASS', currentCustomRubrics: ['dependencyHygiene'],
       // The member verdict is stamped from the lap-3 provider response; it
       // cannot be inherited from the withheld lap-1 member.
       customResults: { dependencyHygiene: { result: {
-        kind: 'judged', rubric: 'dependencyHygiene', lapId: 'lap-dependency-3', verdict: 'PASS', findings: [],
+        kind: 'judged', rubric: 'dependencyHygiene', verdict: 'PASS', findings: [],
       } } },
     });
   });
