@@ -25,6 +25,18 @@ export interface SelectHostOptions {
   readonly git: GitRunner;
 }
 
+export type ChangedPathsByPosition = {
+  readonly [position: number]: readonly string[];
+} | { readonly kind: 'halt'; readonly detail: string };
+
+export interface ChangedPathsByPositionOptions {
+  readonly slug: string;
+  readonly positions: readonly ChildId[];
+  readonly leafTip: string;
+  readonly baseRef: string;
+  readonly git: GitRunner;
+}
+
 async function hasPath(git: GitRunner, tree: string, path: string): Promise<boolean | undefined> {
   const result = await git(['ls-tree', tree, '--', path]);
   if (result.exitCode !== 0) return undefined;
@@ -43,6 +55,34 @@ async function containsEveryPath(git: GitRunner, tree: string, paths: readonly s
 function slugForLeafTip(leafTip: string): string | undefined {
   const identity = parseFeatureBranch(leafTip);
   return identity.kind === 'leaf' ? identity.slug : undefined;
+}
+
+/** Derives each stack position's contribution from its closed predecessor. */
+export async function changedPathsByPosition(options: ChangedPathsByPositionOptions): Promise<ChangedPathsByPosition> {
+  const { slug, positions, leafTip, baseRef, git } = options;
+  const changed: Record<number, readonly string[]> = {};
+  let previous = baseRef;
+
+  for (let index = 0; index < positions.length; index += 1) {
+    const position = positions[index]!;
+    const isLeaf = index === positions.length - 1;
+    const current = isLeaf ? leafTip : closureRefFor(slug, position);
+
+    if (index === 0 && !isLeaf) {
+      const mergeBase = await git(['merge-base', baseRef, current]);
+      if (mergeBase.exitCode !== 0 || !mergeBase.stdout.trim()) {
+        return { kind: 'halt', detail: `cannot read closure tree for child ${position}` };
+      }
+      previous = mergeBase.stdout.trim();
+    }
+
+    const diff = await git(['diff', '--name-only', previous, current]);
+    if (diff.exitCode !== 0) return { kind: 'halt', detail: `cannot read closure tree for child ${position}` };
+    changed[position] = diff.stdout.split('\n').map((path) => path.trim()).filter(Boolean);
+    previous = current;
+  }
+
+  return changed;
 }
 
 /** Resolves citations against one recursive listing of the leaf's files. */

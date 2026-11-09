@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "slug": "composer-decide-cannot-switch-providers-within-one",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/composer-decide-cannot-switch-providers-within-one.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/composer-decide-cannot-switch-providers-within-one.md"
+    },
+    {
+      "kind": "coherence-waiver",
+      "path": ".docs/coherence-waivers/composer-decide-cannot-switch-providers-within-one.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/composer-decide-cannot-switch-providers-within-one.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/composer-decide-cannot-switch-providers-within-one.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-07-03-engineer-checkpoint-commits-idempotent-land.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-07-03-pr-timing-config-key.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-09-11-github-operation-ownership.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-11-07-composer-run-checkpoint-resume-handoff.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/composer-decide-cannot-switch-providers-within-one.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/composer-decide-cannot-switch-providers-within-one.md"
+    },
+    {
+      "kind": "prd",
+      "path": ".docs/specs/composer-decide-cannot-switch-providers-within-one.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/composer-decide-cannot-switch-providers-within-one.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/composer-decide-cannot-switch-providers-within-one.md"
+    }
+  ]
+}

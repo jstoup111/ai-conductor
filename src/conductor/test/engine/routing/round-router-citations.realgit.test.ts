@@ -79,7 +79,7 @@ function residueJudge() {
   return async () => ({
     success: true,
     output: JSON.stringify({
-      version: 'v1',
+      version: 'v2',
       items: [{ itemId: 'citation-repair', child: 1, candidates: [1], rationale: 'Child one owns this repair.' }],
     }),
   });

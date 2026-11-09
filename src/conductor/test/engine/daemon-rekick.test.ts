@@ -1,4 +1,4 @@
-// Covers: task:12, task:29
+// Covers: task:8, task:9, task:12, task:29
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, access, chmod } from 'node:fs/promises';
 import { basename, join } from 'node:path';
@@ -14,6 +14,7 @@ import {
   hasRebaseInProgress,
   abortRebase,
   clearMarker,
+  clearRetryableHaltMarker,
   listHaltedWorktrees,
   readHaltReason,
   type RekickSweepDeps,
@@ -40,6 +41,34 @@ import { FullSuiteVerifier } from '../../src/engine/full-suite-verifier.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import { persistFixtureProjectedRemediationPlan } from './remediation-plan-fixtures.js';
+
+const fsFailures = vi.hoisted(() => ({
+  readError: undefined as Error | undefined,
+  renameError: undefined as Error | undefined,
+}));
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    readFile: async (...args: Parameters<typeof actual.readFile>) => {
+      const error = fsFailures.readError;
+      if (error) {
+        fsFailures.readError = undefined;
+        throw error;
+      }
+      return actual.readFile(...args);
+    },
+    rename: async (...args: Parameters<typeof actual.rename>) => {
+      const error = fsFailures.renameError;
+      if (error) {
+        fsFailures.renameError = undefined;
+        throw error;
+      }
+      return actual.rename(...args);
+    },
+  };
+});
 
 const execFileAsync = promisify(execFileCb);
 const SHA_B = 'b'.repeat(40);
@@ -1374,6 +1403,70 @@ describe('engine/daemon-rekick — real primitives (isolated repo)', () => {
 
     expect(await fileExists(join(p, 'HALT'))).toBe(false);
     expect(await fileExists(join(p, 'REKICK'))).toBe(true);
+  });
+
+  it('clearRetryableHaltMarker archives only the retry body and preserves an operator decision carrier', async () => {
+    const p = join(dir, '.pipeline');
+    const haltBody = 'mechanical prerequisite is pending\n';
+    const operatorDecision = '```json\n[{"decision":"accept"}]\n```\n';
+    await mkdir(p, { recursive: true });
+    await writeFile(join(p, 'HALT'), haltBody, 'utf-8');
+    await writeFile(join(p, 'HALT.class'), 'mechanical\n', 'utf-8');
+    await writeFile(join(p, 'HALT.cleared'), operatorDecision, 'utf-8');
+
+    await expect(clearRetryableHaltMarker(dir)).resolves.toBe(true);
+
+    await expect(readFile(join(p, 'HALT.rekicked'), 'utf-8')).resolves.toBe(haltBody);
+    await expect(access(join(p, 'HALT'))).rejects.toThrow();
+    await expect(access(join(p, 'HALT.class'))).rejects.toThrow();
+    await expect(readFile(join(p, 'REKICK'), 'utf-8')).resolves.toBe('rekick\n');
+    await expect(readFile(join(p, 'HALT.cleared'), 'utf-8')).resolves.toBe(operatorDecision);
+  });
+
+  it('clearRetryableHaltMarker is a complete no-op when HALT raced away', async () => {
+    const p = join(dir, '.pipeline');
+    await mkdir(p, { recursive: true });
+    await writeFile(join(p, 'HALT.class'), 'mechanical\n', 'utf-8');
+    await writeFile(join(p, 'HALT.cleared'), 'operator decision\n', 'utf-8');
+
+    await expect(clearRetryableHaltMarker(dir)).resolves.toBe(false);
+
+    await expect(access(join(p, 'HALT.rekicked'))).rejects.toThrow();
+    await expect(access(join(p, 'REKICK'))).rejects.toThrow();
+    await expect(readFile(join(p, 'HALT.class'), 'utf-8')).resolves.toBe('mechanical\n');
+    await expect(readFile(join(p, 'HALT.cleared'), 'utf-8')).resolves.toBe('operator decision\n');
+  });
+
+  it('clearRetryableHaltMarker rethrows a non-absence rename failure without writing retry state', async () => {
+    const p = join(dir, '.pipeline');
+    const haltBody = 'mechanical prerequisite is pending\n';
+    await mkdir(p, { recursive: true });
+    await writeFile(join(p, 'HALT'), haltBody, 'utf-8');
+    await writeFile(join(p, 'HALT.class'), 'mechanical\n', 'utf-8');
+    const error = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    fsFailures.renameError = error;
+
+    await expect(clearRetryableHaltMarker(dir)).rejects.toBe(error);
+
+    await expect(readFile(join(p, 'HALT'), 'utf-8')).resolves.toBe(haltBody);
+    await expect(access(join(p, 'HALT.rekicked'))).rejects.toThrow();
+    await expect(access(join(p, 'REKICK'))).rejects.toThrow();
+  });
+
+  it('clearRetryableHaltMarker rethrows a non-absence pre-read failure without writing retry state', async () => {
+    const p = join(dir, '.pipeline');
+    const haltBody = 'mechanical prerequisite is pending\n';
+    await mkdir(p, { recursive: true });
+    await writeFile(join(p, 'HALT'), haltBody, 'utf-8');
+    await writeFile(join(p, 'HALT.class'), 'mechanical\n', 'utf-8');
+    const error = Object.assign(new Error('I/O error'), { code: 'EIO' });
+    fsFailures.readError = error;
+
+    await expect(clearRetryableHaltMarker(dir)).rejects.toBe(error);
+
+    await expect(readFile(join(p, 'HALT'), 'utf-8')).resolves.toBe(haltBody);
+    await expect(access(join(p, 'HALT.rekicked'))).rejects.toThrow();
+    await expect(access(join(p, 'REKICK'))).rejects.toThrow();
   });
 });
 

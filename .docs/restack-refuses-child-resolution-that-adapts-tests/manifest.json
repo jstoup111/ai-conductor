@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "slug": "restack-refuses-child-resolution-that-adapts-tests",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/restack-refuses-child-resolution-that-adapts-tests.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/restack-refuses-child-resolution-that-adapts-tests.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/restack-refuses-child-resolution-that-adapts-tests.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/2026-11-07-restack-refuses-child-resolution-that-adapts-tests.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-10-stacked-restack-journaled-replay.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-25-operator-recorded-restack-conflict-resolution.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/restack-refuses-child-resolution-that-adapts-tests.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/restack-refuses-child-resolution-that-adapts-tests.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/restack-refuses-child-resolution-that-adapts-tests.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/restack-refuses-child-resolution-that-adapts-tests.md"
+    }
+  ]
+}

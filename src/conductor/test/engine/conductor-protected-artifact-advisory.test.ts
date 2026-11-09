@@ -384,7 +384,7 @@ describe('conductor protected-artifact self-amendment advisory', () => {
     });
   });
 
-  it('stamps lastResolvedCount on the protected-artifact halt so the halted build earns no progress re-kick', async () => {
+  it('leaves the dispatch-owned lastResolvedCount unchanged on a protected-artifact halt', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'conductor-protected-artifact-advisory-'));
     temporaryDirectories.push(projectRoot);
     const statePath = join(projectRoot, 'conduct-state.json');
@@ -402,6 +402,11 @@ describe('conductor protected-artifact self-amendment advisory', () => {
           { id: '3', name: 'three', status: 'pending' },
         ],
       }),
+      'utf8',
+    );
+    await writeFile(
+      join(projectRoot, '.pipeline', 'task-evidence.json'),
+      JSON.stringify({ evidenceStamps: {}, noEvidenceAttempts: 0, migrationGrandfather: [], lastResolvedCount: 73 }),
       'utf8',
     );
 
@@ -433,6 +438,6 @@ describe('conductor protected-artifact self-amendment advisory', () => {
     expect({
       lastResolvedCount: await readLastResolvedCount(projectRoot),
       liveResolvedCount: await countResolvedTasks(projectRoot),
-    }).toEqual({ lastResolvedCount: 2, liveResolvedCount: 2 });
+    }).toEqual({ lastResolvedCount: 73, liveResolvedCount: 2 });
   });
 });

@@ -100,6 +100,7 @@ Option B.
    The halt never tells the operator to rebase the child's own branch.
 
 > **Amended 2026-10-31 by #3478:** The halt also prints the `stack restack-resolve --decision` recipe beside the `--tip` recipe, for either restack cause (adr-2026-10-31-operator-decision-for-stacked-restack-conflicts decision 1).
+> **Amended 2026-11-07 by #3598:** A resolver result refused by path ownership no longer takes a bare `replay-mismatch` halt or discards the resolver's work. Its tip is pinned at `refs/conductor/<slug>/restack/conflict/refused-tip`, the conflict record and parent pin are written as for any unresolved conflict, and `restack_refused` is still emitted with reason `replay-mismatch`. The halt carries `Restack-Conflict:` and both recipes. Its detail names the refused-tip ref and each refused path with its cause, and its `--tip` recipe starts from the refused tip, so the operator can amend or reuse it. The refused-tip ref has the same lifecycle as the parent pin under decision 5.
 3. **`ai-conductor stack restack-resolve --slug <slug> --child <k> --tip <sha>` validates and
    records the resolution.**
    - **Refused up front, each refusal naming its cause:**
@@ -129,6 +130,7 @@ Option B.
      path.
 
 > **Amended 2026-10-31 by #3478:** The command also accepts `--decision "<answer>"` instead of `--tip`; the two are mutually exclusive. With the same refusals, it pins the answer and the conflict identity at `refs/conductor/<slug>/restack/decision/c<k>`, appends `restack_decision` `recorded`, and clears the HALT. The next restack hands that decision to the resolver. Recording either answer deletes the other kind's ref for the same child in the same compare-and-swap transaction, so the latest answer wins (adr-2026-10-31-operator-decision-for-stacked-restack-conflicts decisions 2 and 3).
+> **Amended 2026-11-07 by #3598:** Path ownership for the operator's tip is the resolved-tip rule of the restack ADR decision 3: owned paths, plus adapted paths in the new parent's delta that do not restore `oldParent` content. A refusal names each refused path and whether it is unowned or a parent revert.
 4. **The next restack consumes a matching resolution as the child's resolver output.**
    - **Where.** In `runRestack` and in recovery's `resumePlanned`, for a `feature-repair` journal,
      before a replayed range of child `k` is replayed.

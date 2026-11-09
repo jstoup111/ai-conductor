@@ -60,7 +60,7 @@ describe('routeAdmittedRound', () => {
     const judge = vi.fn(async (prompt: string) => {
       const request = JSON.parse(prompt.slice(prompt.indexOf('{'))) as { items: Array<{ itemId: string }> };
       expect(request.items.map(({ itemId }) => itemId)).toEqual(['unbound-adr']);
-      return { success: true, output: JSON.stringify({ version: 'v1', items: [{ itemId: 'unbound-adr', child: 3, candidates: [3], rationale: 'owns D2' }] }) };
+      return { success: true, output: JSON.stringify({ version: 'v2', items: [{ itemId: 'unbound-adr', child: 3, candidates: [3], rationale: 'owns D2' }] }) };
     });
     const routed = await routeAdmittedRound({
       ...task25Input([
@@ -80,7 +80,7 @@ describe('routeAdmittedRound', () => {
     const routeResidue = async (answer: { readonly candidates: readonly number[]; readonly rationale: string }) => {
       const judge = vi.fn(async () => ({
         success: true,
-        output: JSON.stringify({ version: 'v1', items: [{ itemId: 'unbound-adr', child: 3, ...answer }] }),
+        output: JSON.stringify({ version: 'v2', items: [{ itemId: 'unbound-adr', child: 3, ...answer }] }),
       }));
       return routeAdmittedRound({
         ...task25Input([{
@@ -188,6 +188,27 @@ describe('routeAdmittedRound', () => {
     ]));
   });
 
+  // Covers: task:9
+  it('places mixed-round FAIL rows on the task-bound host without a residue routing call', async () => {
+    const judge = vi.fn();
+    const failRows = ['manual_test: FAIL row one', 'manual_test: FAIL row two'];
+    const routed = await routeAdmittedRound({
+      ...input([{
+        id: 'two', gap: gap('two', 'T2'), gateSource: 'prd-audit',
+        ownerTaskIds: ['T2'], citedPaths: [], provenance: { kind: 'task-bound' },
+      }]),
+      judge, consolidatedManualTestFail: failRows,
+    });
+
+    if (routed.kind !== 'routed') throw new Error(routed.detail);
+    expect(judge).not.toHaveBeenCalled();
+    expect(routed.items).toEqual(expect.arrayContaining([
+      expect.objectContaining({ findingId: 'manual-test-fail', host: 2, reason: 'mixed-round' }),
+    ]));
+    expect(routed.allocation[c2]?.retryHint).toContain(failRows[0]);
+    expect(routed.allocation[c2]?.retryHint).toContain(failRows[1]);
+  });
+
   it('halts before allocation when task ownership or a tree is unavailable', async () => {
     const missingBinding = await routeAdmittedRound({
       ...input([{ id: 'unbound', gap: gap('unbound', 'T1'), gateSource: 'prd-audit', citedPaths: [], provenance: { kind: 'task-bound' } }]),
@@ -249,7 +270,7 @@ describe('routeAdmittedRound', () => {
     const judge = vi.fn(async () => ({
       success: true,
       output: JSON.stringify({
-        version: 'v1',
+        version: 'v2',
         items: [{ itemId: 'adr-d1', child: 1, candidates: [1], rationale: 'The ADR applies to child one.' }],
       }),
     }));
@@ -292,7 +313,7 @@ describe('routeAdmittedRound', () => {
       return {
         success: true,
         output: JSON.stringify({
-          version: 'v1',
+          version: 'v2',
           items: [{ itemId: 'refusal-dec-1', child: 2, candidates: [2], rationale: 'Child two owns the refused behavior.' }],
         }),
       };
@@ -330,7 +351,7 @@ describe('routeAdmittedRound', () => {
       return {
         success: true,
         output: JSON.stringify({
-          version: 'v1',
+          version: 'v2',
           items: [{ itemId: 'as-built-1', child: 2, candidates: [2], rationale: 'The ADR governs child two.' }],
         }),
       };

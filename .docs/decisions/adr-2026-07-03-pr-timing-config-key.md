@@ -79,6 +79,13 @@ runs only over merged specs. Early publishing cannot confuse another operator's 
 > **D6** — All publish operations route through the `pr-labels.ts` seam, where a new `pushBranch` primitive joins; no raw `execFile` publishes. (above: "**All publish operations route through the `pr-labels.ts` seam**")
 > **D7** — Draft PRs are invisible to every existing scan (verified, no code change needed), so early publishing cannot confuse another operator's daemon. (above: "Dedup/intake safety (verified, no code change needed)")
 
+> **Amended 2026-11-07 by #2050:** The `pr_timing` key was never implemented: PR #267 closed unmerged
+> and #199 is closed. The Composer (engineer) spec-authoring flow no longer reads it. Composer runs
+> checkpoint and publish a draft spec PR unconditionally, as decided in
+> `adr-2026-11-07-composer-run-checkpoint-resume-handoff` D1. So the "absent key, `finish`,
+> byte-identical" behavior in D1 and D3 no longer describes the engineer flow. If the key is ever
+> built, it governs only the daemon build flow.
+
 ## Consequences
 
 ### Positive

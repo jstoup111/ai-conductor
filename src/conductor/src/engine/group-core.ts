@@ -701,6 +701,12 @@ async function runGroupBranchInner(
   let dispatchedOnce = false;
   const accumulatedObservedIntervals = () =>
     observedIntervals.length > 0 ? observedIntervals : undefined;
+  const declineRedispatchAtBoundary = async (attempt: number): Promise<BranchOutcome | undefined> => {
+    if (dispatchedOnce && await deps.operatorParkBoundary?.().catch(() => true)) {
+      return makeParkedOutcome(attempt);
+    }
+    return undefined;
+  };
 
   // Pre-dispatch setup above can yield. Abort once more before admitting the
   // logical execution so queue/pre-admission cancellation never manufactures
@@ -725,9 +731,8 @@ async function runGroupBranchInner(
     // The group entry gate covers initial fan-out. Re-read park state before
     // each member attempt so a member already running can drain, while a
     // retry after the park is declined without becoming a branch failure.
-    if (dispatchedOnce && await deps.operatorParkBoundary?.().catch(() => true)) {
-      return makeParkedOutcome(attempt);
-    }
+    const parkedBeforeDispatch = await declineRedispatchAtBoundary(attempt);
+    if (parkedBeforeDispatch) return parkedBeforeDispatch;
 
     await deps.onMemberEvent?.({
       type: "group_member_step",
@@ -779,6 +784,8 @@ async function runGroupBranchInner(
         error: lastOutput,
       });
       if (attempt < maxRetries) {
+        const parkedBeforeRetry = await declineRedispatchAtBoundary(attempt + 1);
+        if (parkedBeforeRetry) return parkedBeforeRetry;
         await deps.lifecycleObserver.onRetry({
           member: member.name,
           skill: member.skill,
@@ -825,6 +832,8 @@ async function runGroupBranchInner(
       if (verificationFailure !== undefined) {
         lastOutput = verificationFailure;
         if (attempt < maxRetries) {
+          const parkedBeforeRetry = await declineRedispatchAtBoundary(attempt + 1);
+          if (parkedBeforeRetry) return parkedBeforeRetry;
           await deps.lifecycleObserver.onRetry({
             member: member.name,
             skill: member.skill,
@@ -915,6 +924,8 @@ async function runGroupBranchInner(
     // rate-limit episode and session recovery both continue above with the
     // same attempt number, so neither becomes a policy-retry observation.
     if (attempt < maxRetries) {
+      const parkedBeforeRetry = await declineRedispatchAtBoundary(attempt + 1);
+      if (parkedBeforeRetry) return parkedBeforeRetry;
       await deps.lifecycleObserver.onRetry({
         member: member.name,
         skill: member.skill,

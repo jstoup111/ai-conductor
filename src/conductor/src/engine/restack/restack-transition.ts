@@ -59,6 +59,19 @@ interface RestackTuple {
   readonly head: CommitSha;
 }
 
+// `restack-ownership` reaches the rebase family, which already reaches this
+// transition. Load this resolved-tip-only helper after module initialization so
+// adapting paths remain part of the transition without creating that cycle.
+async function adaptedPathsFor(
+  range: ChildRange,
+  newParent: CommitSha,
+  tip: CommitSha,
+  git: GitRunner,
+): Promise<string[]> {
+  const ownership = await import('./restack-ownership.js');
+  return ownership.adaptedPathsFor(range, newParent, tip, git);
+}
+
 async function exists(path: string): Promise<boolean> {
   try {
     await access(path);
@@ -177,12 +190,16 @@ async function normalizedReplayComparison(
   git: GitRunner,
   tuple: RestackTuple,
   replay: ReplayIdentity,
+  adaptedPaths: readonly string[] = [],
 ): Promise<NormalizedReplayComparison> {
   // A restacked child owns only its old range. The new parent's changes are
   // inherited inputs, not evidence that this child changed its replay.
   // Normalize rem blocks on both sides before using this fallback so a union
   // resolution does not turn the parent's appended block into child work.
-  const childOwned = await changedPaths(git, tuple.base, tuple.previous);
+  const childOwned = [...new Set([
+    ...await changedPaths(git, tuple.base, tuple.previous),
+    ...adaptedPaths,
+  ])];
   const relevant = await normalizeInheritedRemPaths(git, tuple, childOwned);
   // Replay proof answers whether the child's contribution is unchanged. Gate
   // invalidation must still see independent runtime changes inherited from
@@ -228,12 +245,20 @@ async function mergeBase(git: GitRunner, left: CommitSha, right: CommitSha): Pro
   return value as CommitSha;
 }
 
-async function outcomeFor(worktree: string, git: GitRunner, tuple: RestackTuple): Promise<RebaseOutcome> {
+async function outcomeFor(
+  worktree: string,
+  git: GitRunner,
+  tuple: RestackTuple,
+  adaptedPaths: readonly string[] = [],
+): Promise<RebaseOutcome> {
   const delta = await normalizeInheritedRemPaths(git, tuple, await changedPaths(git, tuple.previous, tuple.head));
   if (delta.length === 0) {
     return { kind: 'noop', baseSha: tuple.onto, allChangedPaths: [] };
   }
-  const featureSurface = await changedPaths(git, tuple.base, tuple.previous);
+  const featureSurface = [...new Set([
+    ...await changedPaths(git, tuple.base, tuple.previous),
+    ...adaptedPaths,
+  ])];
   return {
     kind: 'changed',
     baseSha: tuple.onto,
@@ -265,17 +290,18 @@ export async function queueInvalidation(
   isRegionGateFresh: (gate: RegionGate, child: ChildId) => Promise<boolean> = async (gate, child) =>
     (await checkGateCompletion(worktree, gate, { activeChild: child })).done,
 ): Promise<RevalidationQueueEntry | undefined> {
+  const adaptedPaths = await adaptedPathsFor(range, newParent, move.newSha, git);
   const outcome = await outcomeFor(worktree, git, {
     previous: range.oldTip,
     base: range.oldParent,
     onto: newParent,
     head: move.newSha,
-  });
+  }, adaptedPaths);
   if (outcome.kind !== 'changed' || outcome.replay === undefined) return undefined;
 
   const normalized = await normalizedReplayComparison(git, {
     previous: range.oldTip, base: range.oldParent, onto: newParent, head: move.newSha,
-  }, outcome.replay);
+  }, outcome.replay, adaptedPaths);
   const projection = classifyReplayGateInvalidation(
     normalized.fallbackPaths ?? outcome.allChangedPaths ?? outcome.changedCodePaths,
     outcome.featureSurface ?? [],
@@ -456,19 +482,23 @@ export async function applyRestackTransition(options: ApplyRestackTransitionOpti
     );
   }
   if (activeRange && activeRange.kind !== 'closed' && activeMove) {
+    const adaptedPaths = await adaptedPathsFor(activeRange, newParentFor(activeRange), activeMove.newSha, options.git);
     const activeOutcome = await outcomeFor(options.worktree, options.git, {
       previous: activeRange.oldTip,
       base: activeRange.oldParent,
       onto: newParentFor(activeRange),
       head: activeMove.newSha,
-    });
+    }, adaptedPaths);
     const childState = pipelinePathFor(options.worktree, 'conduct-state.json', options.activeChild);
     if (await exists(childState)) {
+      let invalidated: readonly StepName[] = [];
       await withActiveChildProjection(options.worktree, options.activeChild, async (projectionRoot) => {
         const projectedState = pipelinePathFor(projectionRoot, 'conduct-state.json', options.activeChild);
         const verdict = await applyRebaseVerdicts(projectionRoot, activeOutcome, false, undefined, options.git, undefined, options.activeChild, options.cause);
+        invalidated = regionDecision(verdict).invalidated;
         await applyDecision(projectionRoot, projectedState, options.activeChild, activeOutcome, regionDecision(verdict), options.events, options.cause, options.opId);
       });
+      wouldInvalidate.set(options.activeChild, invalidated);
     }
   }
 
@@ -479,12 +509,13 @@ export async function applyRestackTransition(options: ApplyRestackTransitionOpti
     const leafMove = leaf === undefined ? undefined : moveByChild.get(leaf.child);
     const featureState = join(options.worktree, '.pipeline', 'conduct-state.json');
   if (first && leaf && leafMove && await exists(featureState)) {
+    const adaptedPaths = await adaptedPathsFor(leaf, newParentFor(leaf), leafMove.newSha, options.git);
     const wholeOutcome = await outcomeFor(options.worktree, options.git, {
         previous: leaf.oldTip,
         base: await mergeBase(options.git, first.oldTip, options.oldDefault),
         onto: options.newDefault,
         head: leafMove.newSha,
-      });
+      }, adaptedPaths);
       const state = await readState(featureState);
     const verdict = await applyRebaseVerdicts(
       options.worktree,
@@ -522,19 +553,21 @@ export async function applyRestackTransition(options: ApplyRestackTransitionOpti
     if (range.kind !== 'closed') continue;
     const move = moveByChild.get(range.child);
     if (!move) continue;
+    const newParent = newParentFor(range);
+    const adaptedPaths = await adaptedPathsFor(range, newParent, move.newSha, options.git);
     const outcome = await outcomeFor(options.worktree, options.git, {
       previous: range.oldTip,
       base: range.oldParent,
-      onto: newParentFor(range),
+      onto: newParent,
       head: move.newSha,
-    });
+    }, adaptedPaths);
     if (outcome.kind !== 'changed') {
       wouldInvalidate.set(range.child, []);
       continue;
     }
     const normalized = await normalizedReplayComparison(options.git, {
-      previous: range.oldTip, base: range.oldParent, onto: newParentFor(range), head: move.newSha,
-    }, outcome.replay!);
+      previous: range.oldTip, base: range.oldParent, onto: newParent, head: move.newSha,
+    }, outcome.replay!, adaptedPaths);
     const projection = classifyReplayGateInvalidation(
       normalized.fallbackPaths ?? outcome.allChangedPaths ?? outcome.changedCodePaths,
       outcome.featureSurface ?? [],
@@ -554,7 +587,7 @@ export async function applyRestackTransition(options: ApplyRestackTransitionOpti
       options.git,
       range,
       move,
-      newParentFor(range),
+      newParent,
       options.isRegionGateFresh,
     );
     if (queued) queuedInvalidations.push(queued);

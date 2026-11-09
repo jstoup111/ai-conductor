@@ -4,6 +4,7 @@ import { loadConfig } from './config.js';
 import { acquireFeatureDispatchLease, formatFeatureDispatchLeaseRefusal } from './feature-dispatch-lease.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
+import { leafBranchFor } from './feature-branch-identity.js';
 import { hasDurableChildState } from './slice-topology.js';
 import type { StackRoundsDispatch } from '../types/cli.js';
 import {
@@ -15,6 +16,7 @@ import {
   type ReadRouteRecordResult,
 } from './routing/route-record-store.js';
 import { routingRoundSupersededEvent, withOutboxEvent } from './routing/routing-events.js';
+import { resolveGitRef } from './routing/git-ref-resolver.js';
 import { assertNever, parseRoundId, routingSettingOn, type RoundId } from './routing/route-types.js';
 
 export interface DescribedRoutingRound {
@@ -43,15 +45,23 @@ export type RoundSupersessionCheck =
     readonly droppedHosts: readonly ChildId[];
     readonly findingIds: readonly string[];
   }
+  | {
+    readonly kind: 'leaf-return';
+    readonly stored: Extract<ReadRouteRecordResult, { readonly kind: 'record' }>;
+    readonly hosts: readonly ChildId[];
+    readonly marker?: Extract<ReadRepairMarkerResult, { readonly kind: 'marker' }>;
+  }
   | { readonly kind: 'refused'; readonly detail: string };
 
 export interface SupersedeRoundInput {
   readonly worktree: string;
   readonly slug: string;
-  readonly checked: Extract<RoundSupersessionCheck, { readonly kind: 'supersedable' }>;
+  readonly checked: Exclude<RoundSupersessionCheck, { readonly kind: 'refused' }>;
   readonly reason: string;
   readonly operator: string;
   readonly git?: GitRunner;
+  /** Injectable transaction boundary for the atomic-close contract. */
+  readonly writeRoutingTransaction?: typeof writeRoutingTransaction;
 }
 
 export type SupersedeRoundResult =
@@ -61,23 +71,49 @@ export type SupersedeRoundResult =
 /** Close one already-checked audit round with its durable occurrence in one CAS. */
 export async function supersedeRound(input: SupersedeRoundInput): Promise<SupersedeRoundResult> {
   const { worktree, slug, checked } = input;
+  const git = input.git ?? makeGitRunner(worktree);
+  const leafReturn = checked.kind === 'leaf-return';
+  const leafReturnBranch = leafBranchFor(slug);
+  const leafReturnHead = leafReturn ? await resolveGitRef(git, leafReturnBranch) : undefined;
+  const leafReturnRecord = leafReturn && typeof leafReturnHead === 'string'
+    ? { branch: leafReturnBranch, head: leafReturnHead }
+    : undefined;
+  if (leafReturn && leafReturnRecord === undefined) {
+    return { kind: 'refused', detail: `cannot resolve leaf return head for routing round ${checked.stored.record.roundId}` };
+  }
   const hosts = Object.fromEntries(Object.entries(checked.stored.record.hosts).map(([host, state]) => [
     host,
-    state === 'pending' ? 'done' : state,
+    state === 'pending' || (leafReturn && state === 'admitted') ? 'done' : state,
   ])) as typeof checked.stored.record.hosts;
+  const droppedHosts = leafReturn
+    ? checked.hosts.filter((host) => {
+      const state = checked.stored.record.hosts[host];
+      return state === 'pending' || state === 'admitted';
+    })
+    : checked.droppedHosts;
+  const findingIds = leafReturn ? [] : checked.findingIds;
   const event = routingRoundSupersededEvent(
     checked.stored.record,
-    checked.supersededBy,
-    checked.droppedHosts,
-    checked.findingIds,
+    leafReturn
+      ? { disposition: 'leaf-return' }
+      : { disposition: 'superseded', supersededBy: checked.supersededBy },
+    droppedHosts,
+    findingIds,
     input.reason.trim(),
     input.operator.trim(),
   );
-  const record = withOutboxEvent({ ...checked.stored.record, phase: 'closed', hosts }, event);
-  const wrote = await writeRoutingTransaction(worktree, slug, [
+  const record = withOutboxEvent({
+    ...checked.stored.record,
+    phase: 'closed',
+    hosts,
+    ...(leafReturnRecord === undefined ? {} : { leafReturn: leafReturnRecord }),
+  }, event);
+  const wrote = await (input.writeRoutingTransaction ?? writeRoutingTransaction)(worktree, slug, [
     { kind: 'update-record', previous: checked.stored, record },
-    { kind: 'verify-ref', ref: `refs/conductor/${slug}/routes/${checked.supersededBy}`, value: checked.survivor.blob },
-  ], { ...(input.git === undefined ? {} : { git: input.git }) });
+    ...(leafReturn
+      ? checked.marker === undefined ? [] : [{ kind: 'delete-marker' as const, old: checked.marker.blob }]
+      : [{ kind: 'verify-ref' as const, ref: `refs/conductor/${slug}/routes/${checked.supersededBy}`, value: checked.survivor.blob }]),
+  ], { ...(input.git === undefined ? {} : { git }) });
   if (wrote.kind === 'updated') return { kind: 'superseded', event };
   const detail = wrote.kind === 'cas-failed'
     ? `contested write for routing round ${checked.stored.record.roundId}`
@@ -159,9 +195,13 @@ export async function checkRoundSupersession(
   }
 
   const droppedHosts: ChildId[] = [];
+  const leafReturnHosts: ChildId[] = [];
+  let admittedHost: string | undefined;
+  let hostRefusal: string | undefined;
   for (const [host, state] of Object.entries(stored.record.hosts)) {
     const child = parseChildId(Number(host));
     if (child === undefined) return { kind: 'refused', detail: `routing round ${roundId} has invalid host ${host}` };
+    leafReturnHosts.push(child);
     switch (state) {
       case 'pending':
         droppedHosts.push(child);
@@ -171,12 +211,15 @@ export async function checkRoundSupersession(
       case 'rerouted':
         continue;
       case 'admitted':
+        admittedHost ??= host;
+        continue;
       case 'repairing':
       case 'reroute-moved':
       case 'built':
       case 'abandoning':
       case 'abandoned':
-        return { kind: 'refused', detail: `routing round ${roundId} host ${host} is ${state}` };
+        hostRefusal ??= `routing round ${roundId} host ${host} is ${state}`;
+        continue;
     }
     assertNever(state);
   }
@@ -184,9 +227,6 @@ export async function checkRoundSupersession(
   const marker = await readMarker(worktree, slug, { git });
   if (marker.kind === 'unreadable') {
     return { kind: 'refused', detail: `routing round ${roundId}: repair marker is unreadable` };
-  }
-  if (marker.kind === 'marker' && marker.marker.roundId === roundId) {
-    return { kind: 'refused', detail: `routing round ${roundId}: marker holds ${roundId}` };
   }
 
   const listed = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
@@ -206,7 +246,20 @@ export async function checkRoundSupersession(
     if (survivor === undefined && other.record.phase !== 'closed') survivor = other;
   }
   if (survivor === undefined) {
-    return { kind: 'refused', detail: `closing sole non-closed round ${roundId} would skip the leaf return` };
+    if (hostRefusal !== undefined) return { kind: 'refused', detail: hostRefusal };
+    if (marker.kind === 'marker' && marker.marker.roundId !== roundId) {
+      return { kind: 'refused', detail: `routing round ${roundId}: marker holds ${marker.marker.roundId}` };
+    }
+    return {
+      kind: 'leaf-return', stored, hosts: leafReturnHosts,
+      ...(marker.kind === 'marker' ? { marker } : {}),
+    };
+  }
+
+  if (hostRefusal !== undefined) return { kind: 'refused', detail: hostRefusal };
+  if (admittedHost !== undefined) return { kind: 'refused', detail: `routing round ${roundId} host ${admittedHost} is admitted` };
+  if (marker.kind === 'marker' && marker.marker.roundId === roundId) {
+    return { kind: 'refused', detail: `routing round ${roundId}: marker holds ${roundId}` };
   }
 
   droppedHosts.sort((left, right) => left - right);
@@ -354,10 +407,14 @@ export async function dispatchStackRoundsCommand(
       reason,
       operator: operator.trim(),
       ...(deps.git === undefined ? {} : { git: deps.git }),
-    });
+    } as SupersedeRoundInput);
     if (result.kind === 'refused') return refused(print, result.detail);
     // ai-conductor:session-command-context=operator-only
-    print(`stack rounds: closed ${roundId}; dropped hosts ${checked.droppedHosts.join(', ') || 'none'}; finding ids ${checked.findingIds.join(', ') || 'none'}; reason ${reason}. Clear any HALT with ai-conductor halt clear before the daemon resumes.`);
+    if (checked.kind === 'leaf-return') {
+      print(`stack rounds: leaf return closed ${roundId}; closed hosts ${checked.hosts.join(', ') || 'none'}; reason ${reason}. Clear any HALT with ai-conductor halt clear before the daemon resumes.`);
+    } else {
+      print(`stack rounds: closed ${roundId}; dropped hosts ${checked.droppedHosts.join(', ') || 'none'}; finding ids ${checked.findingIds.join(', ') || 'none'}; reason ${reason}. Clear any HALT with ai-conductor halt clear before the daemon resumes.`);
+    }
     // /ai-conductor:session-command-context
     return 0;
   } catch (error) {

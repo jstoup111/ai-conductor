@@ -13,9 +13,9 @@ const topology: SliceTopology = {
   stackEligibility: { kind: 'eligible' },
 };
 
-function route(kind: 'operator' | 'audit', declared = false): RouteRecord {
+function route(kind: 'operator' | 'audit', declared = false, roundId = 'r1'): RouteRecord {
   return {
-    roundId: 'r1' as never,
+    roundId: roundId as never,
     kind,
     phase: 'open',
     items: [],
@@ -48,6 +48,7 @@ function guard(input: {
   record?: RouteRecord;
   marker?: 'absent' | 'unreadable' | 'marker';
   host?: number;
+  roundId?: string;
   durable?: boolean | 'git-error';
   topology?: SliceTopology;
   routingOn?: boolean;
@@ -64,7 +65,12 @@ function guard(input: {
   const readMarker = vi.fn(async () => {
     if (input.marker === 'absent') return { kind: 'absent' } as const;
     if (input.marker === 'unreadable') return { kind: 'unreadable' } as const;
-    return { kind: 'marker', slug: 'demo', blob: 'b'.repeat(40) as never, marker: { host: (input.host ?? 1) as never, roundId: 'r1' as never } } as const;
+    return {
+      kind: 'marker',
+      slug: 'demo',
+      blob: 'b'.repeat(40) as never,
+      marker: { host: (input.host ?? 1) as never, roundId: (input.roundId ?? 'r1') as never },
+    } as const;
   });
   const readRoute = vi.fn(async () => input.record === undefined
     ? { kind: 'unreadable' as const }
@@ -85,6 +91,7 @@ function guard(input: {
 }
 
 describe('stack-commit-guard', () => {
+  // Covers: task:14
   it.each([
     ['feat/c2/demo', 'without a Task trailer'],
     ['feat/c2/demo', 'with Task: 4'],
@@ -94,7 +101,7 @@ describe('stack-commit-guard', () => {
 
     await expect(subject.run()).resolves.toBe(1);
     expect(subject.output.join('\n')).toContain('feat/c1/demo');
-    expect(subject.output.join('\n')).toContain('stack land --abandon');
+    expect(subject.output.join('\n')).toContain('ai-conductor stack land --slug demo --abandon');
   });
 
   it('allows the host and a leaf halt-record-only commit', async () => {
@@ -114,6 +121,71 @@ describe('stack-commit-guard', () => {
 
     await expect(subject.run()).resolves.toBe(1);
     expect(subject.output.join('\n')).toContain('feat/c1/demo');
+  });
+
+  // Covers: task:14
+  it('names the audit-round close command and not operator abandonment for a leaf commit', async () => {
+    const subject = guard({
+      branch: 'feat/daemon-demo',
+      record: route('audit', false, 'r2'),
+      roundId: 'r2',
+    });
+
+    await expect(subject.run()).resolves.toBe(1);
+    expect(subject.output.join('\n')).toContain('feat/c1/demo');
+    expect(subject.output.join('\n')).toContain('ai-conductor stack rounds --slug demo --close r2 --reason <text>');
+    expect(subject.output.join('\n')).not.toContain('stack land --abandon');
+  });
+
+  // Covers: task:14
+  it('names operator abandonment and not audit close for an operator round', async () => {
+    const subject = guard({
+      branch: 'feat/daemon-demo',
+      record: route('operator', false, 'r3'),
+      host: 2,
+      roundId: 'r3',
+    });
+
+    await expect(subject.run()).resolves.toBe(1);
+    expect(subject.output.join('\n')).toContain('feat/c2/demo');
+    expect(subject.output.join('\n')).toContain('ai-conductor stack land --slug demo --abandon');
+    expect(subject.output.join('\n')).not.toContain('stack rounds --close');
+  });
+
+  // Covers: task:14
+  it('allows an audit round host commit', async () => {
+    await expect(guard({
+      branch: 'feat/c1/demo',
+      record: route('audit', false, 'r2'),
+      roundId: 'r2',
+    }).run()).resolves.toBe(0);
+  });
+
+  // Covers: task:14
+  it.each(['feat/c1/demo', 'feat/c3/demo', 'feat/daemon-demo'])(
+    'refuses an unreadable marker on %s without suggesting recovery',
+    async (branch) => {
+      const subject = guard({ branch, marker: 'unreadable' });
+
+      await expect(subject.run()).resolves.toBe(1);
+      expect(subject.output.join('\n')).toContain('routed repair marker is unreadable');
+      expect(subject.output.join('\n')).not.toContain('stack rounds --close');
+      expect(subject.output.join('\n')).not.toContain('stack land --abandon');
+    },
+  );
+
+  // Covers: task:14
+  it('refuses an unreadable audit route record without suggesting recovery', async () => {
+    const subject = guard({
+      branch: 'feat/daemon-demo',
+      record: undefined,
+      roundId: 'r2',
+    });
+
+    await expect(subject.run()).resolves.toBe(1);
+    expect(subject.output.join('\n')).toContain('unreadable route record for active marker r2');
+    expect(subject.output.join('\n')).not.toContain('stack rounds --close');
+    expect(subject.output.join('\n')).not.toContain('stack land --abandon');
   });
 
   it('requires a daemon session for a declared operator host commit', async () => {

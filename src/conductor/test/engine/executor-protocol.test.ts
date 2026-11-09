@@ -1,6 +1,6 @@
 // Covers: task:1
 import { describe, expect, it } from 'vitest';
-import { parseExecutorMessage } from '../../src/engine/executor-protocol.js';
+import { EXECUTOR_PROTOCOL_VERSION, parseExecutorMessage } from '../../src/engine/executor-protocol.js';
 
 describe('engine/executor-protocol', () => {
   it.each([
@@ -28,6 +28,15 @@ describe('engine/executor-protocol', () => {
     const parsed = parseExecutorMessage(raw);
 
     expect(parsed).toMatchObject({ kind: 'ok', message: { kind } });
+  });
+
+  // Covers: task:2
+  it('parses a yield without changing the compatible protocol version', () => {
+    expect(parseExecutorMessage({ kind: 'yield' })).toEqual({
+      kind: 'ok',
+      message: { kind: 'yield' },
+    });
+    expect(EXECUTOR_PROTOCOL_VERSION).toBe(1);
   });
 
   it.each([

@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:5
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -13,6 +13,7 @@ import {
   conflictParentRefFor,
   conflictFlattenedTipRefFor,
   conflictRecordRefFor,
+  refusedTipRefFor,
   consumeRecordedResolution,
   decisionMatchesRange,
   decisionRefFor,
@@ -22,6 +23,7 @@ import {
   resolutionRefFor,
   type RestackDecision,
   writeConflictRecord,
+  retireRecordedResolution,
   type RestackConflictRecord,
 } from '../../../src/engine/restack/restack-conflict-record.js';
 import { deleteFeatureConductorRefs, featureConductorRefNames } from '../../../src/engine/restack/restack-refs-cleanup.js';
@@ -258,6 +260,54 @@ describe('restack conflict record (real local Git)', () => {
     });
   });
 
+  // Covers: task:5
+  it('pins a refused resolver tip with its conflict record, then clears it when a later conflict has none', async () => {
+    const subject = await createRepo();
+    await subject.git(['commit', '--allow-empty', '-qm', 'refused resolver tip']);
+    const refusedTip = sha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
+    const native = makeGitRunner(subject.repo);
+    const transactions: string[] = [];
+    const recordingGit = async (args: string[], options?: { input?: string }) => {
+      if (args[0] === 'update-ref' && args[1] === '--stdin') transactions.push(options?.input ?? '');
+      return native(args, options);
+    };
+
+    await expect(writeConflictRecord(subject.repo, 'demo', record(subject.head), { git: recordingGit, refusedTip }))
+      .resolves.toEqual({ kind: 'updated' });
+    expect(transactions).toHaveLength(1);
+    expect(transactions[0]).toContain(`update ${conflictRecordRefFor('demo')} `);
+    expect(transactions[0]).toContain(`update ${conflictParentRefFor('demo')} ${subject.head} ${'0'.repeat(40)}`);
+    expect(transactions[0]).toContain(`update ${refusedTipRefFor('demo')} ${refusedTip} ${'0'.repeat(40)}`);
+    await expect(makeGitRunner(subject.repo)(['rev-parse', '--verify', refusedTipRefFor('demo')]))
+      .resolves.toMatchObject({ exitCode: 0, stdout: refusedTip });
+
+    await expect(writeConflictRecord(subject.repo, 'demo', record(subject.head, { child: 3 })))
+      .resolves.toEqual({ kind: 'updated' });
+    await expect(makeGitRunner(subject.repo)(['rev-parse', '-q', '--verify', refusedTipRefFor('demo')]))
+      .resolves.toMatchObject({ exitCode: 1 });
+  });
+
+  // Covers: task:5
+  it('retires a matching resolution and every companion conflict pin together', async () => {
+    const subject = await createRepo();
+    await subject.git(['commit', '--allow-empty', '-qm', 'resolution']);
+    const resolutionTip = sha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim());
+    await expect(writeConflictRecord(subject.repo, 'demo', record(subject.head, { flattenedTip: resolutionTip }), { refusedTip: resolutionTip }))
+      .resolves.toEqual({ kind: 'updated' });
+    await subject.git(['update-ref', resolutionRefFor('demo', child(2)), resolutionTip]);
+
+    await expect(retireRecordedResolution(subject.repo, 'demo', child(2))).resolves.toMatchObject({
+      kind: 'retired', tip: resolutionTip,
+    });
+    for (const ref of [
+      resolutionRefFor('demo', child(2)), conflictRecordRefFor('demo'),
+      conflictParentRefFor('demo'), conflictFlattenedTipRefFor('demo'), refusedTipRefFor('demo'),
+    ]) {
+      await expect(makeGitRunner(subject.repo)(['rev-parse', '-q', '--verify', ref])).resolves.toMatchObject({ exitCode: 1 });
+    }
+    await expect(writeConflictRecord(subject.repo, 'demo', record(subject.head))).resolves.toEqual({ kind: 'updated' });
+  });
+
   // Covers: task:7
   it('replaces and clears the flattened-tip pin, while accepting records written before the field existed', async () => {
     const subject = await createRepo();
@@ -301,12 +351,14 @@ describe('restack conflict record (real local Git)', () => {
   });
 
   // Covers: task:7
-  it('includes and deletes the flattened-tip pin through finite feature teardown names', async () => {
+  it('includes and deletes refused- and flattened-tip conflict pins through finite feature teardown names', async () => {
     const subject = await createRepo();
-    await expect(writeConflictRecord(subject.repo, 'demo', record(subject.head, { flattenedTip: subject.head }))).resolves.toEqual({ kind: 'updated' });
+    await expect(writeConflictRecord(subject.repo, 'demo', record(subject.head, { flattenedTip: subject.head }), { refusedTip: subject.head })).resolves.toEqual({ kind: 'updated' });
     expect(featureConductorRefNames('demo')).toContain(conflictFlattenedTipRefFor('demo'));
+    expect(featureConductorRefNames('demo')).toContain(refusedTipRefFor('demo'));
     await expect(deleteFeatureConductorRefs('demo', makeGitRunner(subject.repo))).resolves.toBe(true);
     await expect(makeGitRunner(subject.repo)(['rev-parse', '-q', '--verify', conflictFlattenedTipRefFor('demo')])).resolves.toMatchObject({ exitCode: 1 });
+    await expect(makeGitRunner(subject.repo)(['rev-parse', '-q', '--verify', refusedTipRefFor('demo')])).resolves.toMatchObject({ exitCode: 1 });
   });
 
   it('replaces both refs atomically and fails closed when either expected old value changes', async () => {
@@ -355,11 +407,13 @@ describe('restack conflict record (real local Git)', () => {
     }
   });
 
-  it('leaves conflict refs intact while cleaning an aborted journal and staging refs', async () => {
+  // Covers: task:5
+  it('leaves conflict refs, including a refused tip, intact while cleaning an aborted journal and staging refs', async () => {
     const subject = await createRepo();
-    await writeConflictRecord(subject.repo, 'demo', record(subject.head));
+    await writeConflictRecord(subject.repo, 'demo', record(subject.head), { refusedTip: subject.head });
     const recordBefore = (await subject.git(['rev-parse', conflictRecordRefFor('demo')])).stdout.trim();
     const parentBefore = (await subject.git(['rev-parse', conflictParentRefFor('demo')])).stdout.trim();
+    const refusedTipBefore = (await subject.git(['rev-parse', refusedTipRefFor('demo')])).stdout.trim();
     const draft: RestackJournalDraft = {
       opId: 'journal-op' as RestackOpId,
       cause: 'feature-repair',
@@ -382,6 +436,7 @@ describe('restack conflict record (real local Git)', () => {
     await expect(makeGitRunner(subject.repo)(['rev-parse', '-q', '--verify', 'refs/conductor/demo/restack/staging/c1'])).resolves.toMatchObject({ exitCode: 1 });
     await expect(subject.git(['rev-parse', conflictRecordRefFor('demo')])).resolves.toMatchObject({ stdout: `${recordBefore}\n` });
     await expect(subject.git(['rev-parse', conflictParentRefFor('demo')])).resolves.toMatchObject({ stdout: `${parentBefore}\n` });
+    await expect(subject.git(['rev-parse', refusedTipRefFor('demo')])).resolves.toMatchObject({ stdout: `${refusedTipBefore}\n` });
   });
 
   // Covers: task:7
