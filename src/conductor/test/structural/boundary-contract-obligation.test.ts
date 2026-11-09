@@ -1,5 +1,5 @@
 // Covers: task:3
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -70,7 +70,10 @@ function filesNamedByContracts(
 
     for (const path of paths) {
       const root = path.startsWith('execution/') ? resolve(CONDUCTOR_ROOT, 'src') : CONDUCTOR_ROOT;
-      files.set(path, readFileSync(resolve(root, path), 'utf8'));
+      const absolutePath = resolve(root, path);
+      if (existsSync(absolutePath)) {
+        files.set(path, readFileSync(absolutePath, 'utf8'));
+      }
     }
   }
 
@@ -105,6 +108,43 @@ describe('structural: boundary contract obligations', () => {
     expect(checkBoundaryContractObligations(registryWithPortedGit, files)).toEqual([
       { boundary: 'git', rule: 'ported-without-contract' },
     ]);
+  });
+
+  it.each([
+    ['contract module', 'module', 'test/contracts/missing-llm.contract.ts'],
+    ['fake module', 'fake', 'test/fixtures/missing-claude-provider-fake.ts'],
+    ['fake leg', 'fakeLeg', 'test/contracts/missing-llm.contract.test.ts'],
+    ['real leg', 'realLeg', 'test/contracts/missing-llm-claude.contract.smoke.test.ts'],
+  ] as const)('reports a typed missing-file violation when the registry names a missing %s', (_kind, field, missingPath) => {
+    const llm = BOUNDARY_REGISTRY.llm;
+    const contract = llm.contract!;
+    const firstLeg = contract.legs[0];
+    const legWithMissingPath = field === 'fake'
+      ? { ...firstLeg, fake: missingPath }
+      : field === 'fakeLeg'
+        ? { ...firstLeg, fakeLeg: missingPath }
+        : field === 'realLeg'
+          ? { ...firstLeg, realLeg: missingPath }
+          : firstLeg;
+    const registryWithMissingPath = {
+      ...BOUNDARY_REGISTRY,
+      llm: {
+        ...llm,
+        contract: {
+          ...contract,
+          module: field === 'module' ? missingPath : contract.module,
+          legs: [
+            legWithMissingPath,
+            ...contract.legs.slice(1),
+          ],
+        },
+      },
+    };
+
+    expect(checkBoundaryContractObligations(
+      registryWithMissingPath,
+      filesNamedByContracts(registryWithMissingPath),
+    )).toContainEqual({ boundary: 'llm', rule: 'missing-file', path: missingPath });
   });
 
   it('accepts complete ported and early pending contracts, while ignoring null pending contracts', () => {
