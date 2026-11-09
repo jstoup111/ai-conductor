@@ -5832,9 +5832,9 @@ export class DefaultStepRunner implements StepRunner {
       : { ...buildReviewConfig, catalog: inputs.participation.participating };
     const participationLapId = parseBuildReviewLapId(`lap-${inputs.sourceSnapshot.headSha}`);
     if (participationLapId !== undefined) {
-      await Promise.all((inputs.participation?.withheld ?? []).map((rubric) =>
-        this.events?.emit({ type: 'build_review_rubric_skipped', rubric, lapId: participationLapId, reason: 'paths-unmatched' }),
-      ));
+      for (const rubric of inputs.participation?.withheld ?? []) {
+        await this.events?.emit({ type: 'build_review_rubric_skipped', rubric, lapId: participationLapId, reason: 'paths-unmatched' });
+      }
     }
 
     // Containment telemetry is non-blocking: it never changes `success` or
