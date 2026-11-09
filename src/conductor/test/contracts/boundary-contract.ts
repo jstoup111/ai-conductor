@@ -41,16 +41,17 @@ export interface BoundaryContractRun<S> {
   readonly adapter: string;
   readonly leg: BoundaryContractLeg;
   readonly create: () => S | Promise<S>;
+  readonly timeoutMs?: number;
 }
 
 /** Registers the independently-executed cases for one adapter leg. */
-export function runBoundaryContract<S>(contract: BoundaryContract<S>, { adapter, leg, create }: BoundaryContractRun<S>): void {
+export function runBoundaryContract<S>(contract: BoundaryContract<S>, { adapter, leg, create, timeoutMs }: BoundaryContractRun<S>): void {
   describe(`${contract.boundary} contract [${adapter} ${leg}]`, () => {
     for (const expectation of contract.expectations) {
       it(expectation.name, async () => {
         const subject = await create();
         await expectation.run(subject);
-      });
+      }, timeoutMs);
     }
   });
 }

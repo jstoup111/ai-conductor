@@ -11,7 +11,12 @@ const harnessModule = fileURLToPath(new URL('./boundary-contract.ts', import.met
 
 interface ContractRun {
   readonly names: readonly string[];
-  readonly results: readonly { readonly name: string; readonly state: string | undefined; readonly errors: readonly string[] }[];
+  readonly results: readonly {
+    readonly name: string;
+    readonly state: string | undefined;
+    readonly errors: readonly string[];
+    readonly timeout: number;
+  }[];
 }
 
 function collectTests(tasks: readonly RunnerTask[]): readonly RunnerTestCase[] {
@@ -20,7 +25,7 @@ function collectTests(tasks: readonly RunnerTask[]): readonly RunnerTestCase[] {
     : task.tasks === undefined ? [] : collectTests(task.tasks));
 }
 
-async function runContractFixture(source: string): Promise<ContractRun> {
+async function runContractFixture(source: string, testTimeout = 5_000): Promise<ContractRun> {
   const root = await mkdtemp(join(tmpdir(), 'boundary-contract-'));
   const fixture = join(root, 'boundary-contract.fixture.test.ts');
   await writeFile(fixture, source);
@@ -32,6 +37,7 @@ async function runContractFixture(source: string): Promise<ContractRun> {
     environment: 'node',
     pool: 'forks',
     maxWorkers: 1,
+    testTimeout,
     silent: true,
   });
 
@@ -44,6 +50,7 @@ async function runContractFixture(source: string): Promise<ContractRun> {
         name: test.fullTestName.replace(' > ', ' › '),
         state: test.result?.state,
         errors: (test.result?.errors ?? []).map((error) => String(error.message)),
+        timeout: test.timeout,
       })),
     };
   } finally {
@@ -52,10 +59,11 @@ async function runContractFixture(source: string): Promise<ContractRun> {
   }
 }
 
-function fixtureSource({ leg = 'fake', secondExpectation = 'subject.ready === true', factory = '() => ({ ready: true })' }: {
+function fixtureSource({ leg = 'fake', secondExpectation = 'subject.ready === true', factory = '() => ({ ready: true })', timeoutMs }: {
   readonly leg?: 'fake' | 'real';
   readonly secondExpectation?: string;
   readonly factory?: string;
+  readonly timeoutMs?: number;
 } = {}): string {
   return [
     "import { expect } from 'vitest';",
@@ -65,7 +73,7 @@ function fixtureSource({ leg = 'fake', secondExpectation = 'subject.ready === tr
     "  { name: 'declares the adapter capabilities', run: (subject: { ready: boolean }) => expect(subject.ready).toBe(true) },",
     `  { name: 'completes a minimal invocation', run: (subject: { ready: boolean }) => expect(${secondExpectation}).toBe(true) },`,
     '] });',
-    `runBoundaryContract(contract, { adapter: 'claude', leg: '${leg}', create: ${factory} });`,
+    `runBoundaryContract(contract, { adapter: 'claude', leg: '${leg}', create: ${factory}${timeoutMs === undefined ? '' : `, timeoutMs: ${timeoutMs}`} });`,
   ].join('\n');
 }
 
@@ -94,6 +102,15 @@ describe('boundary contract harness', () => {
       expect.objectContaining({ name: 'llm contract [claude fake] › completes a minimal invocation', state: 'fail' }),
     ]));
     expect(run.results.filter(({ state }) => state === 'fail')).toHaveLength(1);
+  });
+
+  // Covers: task:11
+  it('registers an explicit timeout for every case and otherwise keeps the configured default', async () => {
+    const explicit = await runContractFixture(fixtureSource({ timeoutMs: 1_200_000 }), 4_321);
+    const defaulted = await runContractFixture(fixtureSource(), 4_321);
+
+    expect(explicit.results.map(({ timeout }) => timeout)).toEqual([1_200_000, 1_200_000]);
+    expect(defaulted.results.map(({ timeout }) => timeout)).toEqual([4_321, 4_321]);
   });
 
   it('rejects empty and duplicate expectation definitions with the boundary named before registering cases', async () => {

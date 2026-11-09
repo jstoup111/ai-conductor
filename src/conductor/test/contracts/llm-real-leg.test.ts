@@ -1,8 +1,11 @@
 // Covers: task:8
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { afterAll, describe, expect, it, vi } from 'vitest';
+import { createVitest, type RunnerTask, type RunnerTestCase } from 'vitest/node';
 import type { InvokeOptions, InvokeResult, LLMProvider } from '../../src/execution/llm-provider.js';
 import { createClaudeProviderFake } from '../fixtures/claude-provider-fake.js';
 import { createCodexProviderFake } from '../fixtures/codex-provider-fake.js';
@@ -21,6 +24,48 @@ const providers = {
 } as const;
 
 const meteringEmitted: string[] = [];
+
+function collectTests(tasks: readonly RunnerTask[]): readonly RunnerTestCase[] {
+  return tasks.flatMap((task) => task.type === 'test'
+    ? [task as RunnerTestCase]
+    : task.tasks === undefined ? [] : collectTests(task.tasks));
+}
+
+async function collectRealAndFakeContractCases(): Promise<readonly RunnerTestCase[]> {
+  const root = await mkdtemp(join(tmpdir(), 'llm-real-leg-timeout-'));
+  const fixture = join(root, 'llm-real-leg-timeout.fixture.test.ts');
+  const realLegModule = fileURLToPath(new URL('./llm-real-leg.ts', import.meta.url));
+  const fakeLegModule = fileURLToPath(new URL('./llm.contract.test.ts', import.meta.url));
+  const fakeModule = fileURLToPath(new URL('../fixtures/claude-provider-fake.ts', import.meta.url));
+
+  await writeFile(fixture, [
+    `import { defineLlmRealLeg } from ${JSON.stringify(realLegModule)};`,
+    `import { createClaudeProviderFake } from ${JSON.stringify(fakeModule)};`,
+    `import ${JSON.stringify(fakeLegModule)};`,
+    '',
+    "defineLlmRealLeg('claude', { createProvider: () => createClaudeProviderFake().provider });",
+  ].join('\n'));
+
+  const vitest = await createVitest('test', {
+    root,
+    config: false,
+    include: [fixture],
+    exclude: [],
+    environment: 'node',
+    pool: 'forks',
+    maxWorkers: 1,
+    testTimeout: 4_321,
+    silent: true,
+  });
+
+  try {
+    await vitest.start([fixture]);
+    return collectTests(vitest.state.getFiles());
+  } finally {
+    await vitest.close();
+    await rm(root, { recursive: true, force: true });
+  }
+}
 
 describe('llm real leg injected providers', () => {
   for (const [adapter, createFake] of Object.entries(providers)) {
@@ -87,6 +132,18 @@ afterAll(() => {
 });
 
 describe('llm real leg boundaries', () => {
+  // Covers: task:11
+  it('assigns its 20-minute timeout only to the real contract cases', async () => {
+    const cases = await collectRealAndFakeContractCases();
+    const real = cases.filter(({ fullTestName }) => fullTestName.includes('llm contract [claude real]'));
+    const fake = cases.filter(({ fullTestName }) => fullTestName.includes('llm contract [claude fake]'));
+
+    expect(real).toHaveLength(4);
+    expect(real.map(({ timeout }) => timeout)).toEqual([1_200_000, 1_200_000, 1_200_000, 1_200_000]);
+    expect(fake).toHaveLength(4);
+    expect(fake.map(({ timeout }) => timeout)).toEqual([4_321, 4_321, 4_321, 4_321]);
+  });
+
   it('uses the default descriptor factory for every adapter', () => {
     expect(createDefaultLlmRealProvider('claude').constructor.name).toBe('ClaudeProvider');
     expect(createDefaultLlmRealProvider('codex').constructor.name).toBe('CodexProvider');

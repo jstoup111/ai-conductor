@@ -7,6 +7,8 @@ import { llmContract } from './llm.contract.js';
 
 type LiveLlmAdapter = 'claude' | 'codex' | 'pi';
 
+const LLM_REAL_LEG_TIMEOUT_MS = 1_200_000;
+
 export interface MeteredLlmProvider extends LLMProvider {
   readonly totalTokens: number;
   readonly unmetered: number;
@@ -74,6 +76,7 @@ export function defineLlmRealLeg(adapter: LiveLlmAdapter, options: LlmRealLegOpt
     adapter,
     leg: 'real',
     create: () => meterLlmProvider(createProvider(), meter),
+    timeoutMs: LLM_REAL_LEG_TIMEOUT_MS,
   });
 
   afterAll(() => {
