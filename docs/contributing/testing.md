@@ -224,9 +224,9 @@ runs format identically. The check runs in CI's `format` job and leads both `tes
 
 ## Test tiers
 
-1350 `*.test.ts` files live under `src/conductor/test/`. Vitest includes `test/**/*.test.ts` and
+1806 `*.test.ts` files live under `src/conductor/test/`. Vitest includes `test/**/*.test.ts` and
 excludes `test/smoke/**`, `**/*.smoke.test.ts` and `**/*.e2e.test.ts` (`src/conductor/vitest.config.ts:17-20`),
-so a bare `npm test` discovers 1328 files and excludes the 18 opt-in smoke files and 4 e2e files.
+so a bare `npm test` discovers 1781 files and excludes the 21 opt-in smoke files and 4 e2e files.
 
 | Directory | Files | Covers | Run just this tier |
 | --- | --- | --- | --- |
@@ -236,12 +236,13 @@ so a bare `npm test` discovers 1328 files and excludes the 18 opt-in smoke files
 | `test/integration/` | 41 | Real collaboration between internal components; real temp files or local git only where git semantics are the subject. | `npm test -- test/integration` |
 | `test/ui/` | 14 | Renderers, subscribers, dashboard snapshot and text, live region, prompt host. | `npm test -- test/ui` |
 | `test/execution/` | 25 | Provider adapters, the `LLMProvider` contract, token usage, rate-limit parsing, sessions. | `npm test -- test/execution` |
-| `test/smoke/` | 4 | Real binaries and real third parties. Excluded by default; seven additional `*.smoke.test.ts` files live beside the subsystem they exercise. | See [Smoke tests](#smoke-tests). |
+| `test/smoke/` | 8 | Real binaries and real third parties. Excluded by default; thirteen additional `*.smoke.test.ts` files live beside the subsystem they exercise. | See [Smoke tests](#smoke-tests). |
 | `test/cli/` | 6 | CLI entry-point and argument behavior. | `npm test -- test/cli` |
 | `test/corpus/` | 6 | Checks whose verdict depends on the live `.docs/` corpus: ADR corpus conformance, shipped records, and projection limits that must admit the largest corpus inputs. The only tier docs-only pull requests run. | `npm test -- test/corpus/` |
 | `test/structural/` | 29 | Meta-tests that parse the suite itself. See [Structural meta-tests](#structural-meta-tests). | `npm test -- test/structural` |
 | `test/types/` | 3 | Type-level contracts. | `npm test -- test/types` |
-| `test/fixtures/` | 5 | Fixture helpers and their executable contract tests. | `npm test -- test/fixtures` |
+| `test/fixtures/` | 8 | Fixture helpers and their executable contract tests. | `npm test -- test/fixtures` |
+| `test/contracts/` | 6 | Paired fake-and-real external-boundary contracts. See [Boundary contracts](#boundary-contracts). | `npm test -- test/contracts` |
 
 Runner shape (`src/conductor/vitest.config.ts`): `pool: 'forks'` with top-level `maxWorkers: 2`,
 `testTimeout: 20000`, `hookTimeout: 30000`, `environment: 'node'`. No reporter is configured in the file
@@ -510,6 +511,66 @@ migration removes.
 cd src/conductor && npm test -- test/structural/boundary-registry.test.ts test/structural/boundary-ratchet.test.ts
 ```
 
+### Boundary contracts
+
+A boundary contract proves a fake and its real adapter satisfy the same expectations. One contract
+runs twice per adapter: a default-tier **fake leg** against the shared fake, and an opt-in **real leg**
+against the real adapter.
+
+**Harness** (`test/contracts/boundary-contract.ts`):
+
+- `defineBoundaryContract({ boundary, expectations })` returns a frozen contract. `expectations` is an
+  ordered list of `{ name, run(subject) }`. It throws, naming the boundary, when the list is empty or a
+  name repeats.
+- `runBoundaryContract(contract, { adapter, leg, create, timeoutMs? })` registers one case per
+  expectation titled `«boundary» contract [«adapter» «leg»] › «name»`, where `leg` is `fake` or `real`.
+  Each case calls `create()`; a throwing factory fails every case.
+
+**Registry field.** Each `boundary-registry.ts` entry has `contract: { module, legs } | null`. Each leg is
+`{ adapter, fake, fakeLeg, realLeg }`; `adapter` is relative to `src/conductor/src/`, every other path
+to `src/conductor/`. `llm` is the only populated contract; the seven pending boundaries are `null`.
+
+**Obligation check.** `boundary-contract-obligation.test.ts` reads the registered files and runs the pure
+checker `checkBoundaryContractObligations(registry, files)` (`boundary-contract-obligation.ts`). A contract
+is required for every `ported` boundary and checked for any boundary that declares one. Each violation
+names the boundary and its rule:
+
+| Rule | Fix |
+| --- | --- |
+| `ported-without-contract` | Add a `contract` entry for the ported boundary. |
+| `missing-leg` | Add a leg for the named adapter module. |
+| `unregistered-adapter` | Point the leg at an adapter listed in `adapterModules`, or register the adapter. |
+| `missing-file` | Create the named contract, fake, or leg file, or fix the path. |
+| `fake-leg-is-smoke` | Rename the fake leg so it does not end in `.smoke.test.ts`; it must run in the default suite. |
+| `real-leg-not-smoke` | Name the real leg `*.smoke.test.ts`. |
+| `missing-capability` | Declare `const smokeCapability = '…';` in the real leg. |
+| `missing-contract-import` | Import the contract module from the leg. |
+
+**`llm` contract.** `test/contracts/llm.contract.ts` defines four expectations against `LLMProvider`:
+`declares the adapter capabilities`, `refuses a denied spawn permit before spawning`,
+`completes a minimal invocation`, and `returns a native-schema terminal result`. None asserts model text.
+
+| Leg | File | Subject |
+| --- | --- | --- |
+| Fake (default tier) | `test/contracts/llm.contract.test.ts` | `test/fixtures/{claude,codex,pi}-provider-fake.ts` |
+| Real (smoke) | `test/contracts/llm-{claude,codex,pi}.contract.smoke.test.ts` | The real adapter from `LIVE_E2E_PROVIDERS` |
+
+Each real leg declares `credentialed:«adapter»` and calls the shared body in `test/contracts/llm-real-leg.ts`.
+The body meters `tokenUsage` (`input + output`), prints
+`llm contract [«adapter» real] tokens: N (cap C)`, and enforces `DAEMON_E2E_LIVE_TOKEN_CAP`
+(default `300000`). Run one real leg from `src/conductor`:
+
+```bash
+npm run smoke -- test/contracts/llm-claude.contract.smoke.test.ts
+```
+
+To contract a newly ported boundary, add its contract module, a fake per adapter, a fake leg, one real
+smoke leg per adapter, and the registry `contract` entry in the same change. Run the default-tier checks:
+
+```bash
+cd src/conductor && npm test -- test/contracts test/structural/boundary-contract-obligation.test.ts
+```
+
 ### Conductor facade guards
 
 Three structural tests keep `engine/conductor.ts` a thin facade (layout in
@@ -537,7 +598,7 @@ glob-discovered smoke tier from `src/conductor`:
 npm run smoke
 ```
 
-The smoke config includes `test/smoke/**` and every `*.smoke.test.ts` file. It currently discovers eighteen
+The smoke config includes `test/smoke/**` and every `*.smoke.test.ts` file. It currently discovers twenty-one
 files. Each declares exactly one required capability beside the test; the default-suite
 `test/structural/test-execution-policy.test.ts` fails when any discovered smoke file declares none or an
 unknown one:
@@ -546,9 +607,9 @@ unknown one:
 | --- | --- | --- |
 | `hermetic` | `finish-record`, `surgical-finish-retry` | No external binary or credential. |
 | `toolchain` | `publish-interrupted`, `backlog-priority`, `gh-version-floor`, `github-bot-credential`, `codex-provider`, `codex-read-only-review-policy`, `daemon-tmux` | A local toolchain or network-backed setup. |
-| `credentialed:claude` | `claude-provider`, `claude-subagent-stream`, `build-token-auth`, `daemon-e2e-live-claude`, `git-guard-claude` | `CLAUDE_CODE_OAUTH_TOKEN` and the `claude` binary. |
-| `credentialed:codex` | `daemon-e2e-live-codex`, `git-guard-codex` | `CODEX_API_KEY` and the `codex` binary. |
-| `credentialed:pi` | `daemon-e2e-live-pi`, `git-guard-pi` | `PI_API_KEY` and the `pi` binary. |
+| `credentialed:claude` | `claude-provider`, `claude-subagent-stream`, `build-token-auth`, `daemon-e2e-live-claude`, `git-guard-claude`, `llm-claude.contract` | `CLAUDE_CODE_OAUTH_TOKEN` and the `claude` binary. |
+| `credentialed:codex` | `daemon-e2e-live-codex`, `git-guard-codex`, `llm-codex.contract` | `CODEX_API_KEY` and the `codex` binary. |
+| `credentialed:pi` | `daemon-e2e-live-pi`, `git-guard-pi`, `llm-pi.contract` | `PI_API_KEY` and the `pi` binary. |
 
 `publish-interrupted.smoke.test.ts` is `toolchain`, not hermetic: it creates a worktree and runs the
 real `bin/setup`, which may install dependencies. Select one production smoke file with
