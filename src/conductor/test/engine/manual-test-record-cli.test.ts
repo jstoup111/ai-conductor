@@ -1,3 +1,4 @@
+// Covers: task:1
 import { describe, it, expect, vi } from 'vitest';
 import {
   detectManualTestRecordCommand,
