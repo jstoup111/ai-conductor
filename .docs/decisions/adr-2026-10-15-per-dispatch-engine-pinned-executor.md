@@ -135,6 +135,14 @@ The IPC channel carries two kinds of message.
 - The per-dispatch OTel visualizer reports the WorkOrder's pinned `engineVersionId` as the trace's
   engine version, not the supervisor's boot build.
 
+> **Amended 2026-11-07 by #3646:** An unknown variant is still neither rendered nor persisted by
+> the supervisor, but it no longer loses its OTel. When the child advertises and the supervisor
+> accepts the `otelProjection` capability, the child projects its own spans and metrics with its
+> pinned engine. Its span visualizer writes into the shared spool, and its `MetricsListener` records
+> through a brokered meter onto the supervisor's one `MeterProvider`. The supervisor then attaches
+> no span visualizer to that child's proxy bus. Without that acceptance, the projection stays
+> supervisor-side as decided above. See adr-2026-11-07-child-projected-dispatch-otel.
+
 **Coordination requests** are request/response calls against the dispatcher-owned services:
 - rate-limit episode `enter`, `active` and `clear`;
 - provider-availability `suppress` and lookups;

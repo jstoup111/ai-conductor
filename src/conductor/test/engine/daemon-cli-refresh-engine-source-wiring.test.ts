@@ -38,8 +38,8 @@ describe('daemon-cli wires refreshEngineSource (self-host only) into runDaemon d
   it('threads self-host install-rebuild-relink into the real runDaemon deps object', async () => {
     const source = await readFile(DAEMON_CLI_SRC, 'utf-8');
     const runDaemonDeps = source.slice(
-      source.indexOf('const result = await runDaemon('),
-      source.indexOf('// Task T30: consume restart marker', source.indexOf('const result = await runDaemon(')),
+      source.indexOf('const result = await dispatchDaemon('),
+      source.indexOf('// Task T30: consume restart marker', source.indexOf('const result = await dispatchDaemon(')),
     );
 
     // All dispatcher-side root mutations share the helper so their

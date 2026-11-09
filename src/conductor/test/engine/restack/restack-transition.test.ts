@@ -1,4 +1,4 @@
-// Covers: task:18
+// Covers: task:4, task:18
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -58,7 +58,8 @@ describe('applyRestackTransition', () => {
     directories.push(root);
     const child = parseChildId(2)!;
     await mkdir(join(root, '.pipeline', 'children', '2'), { recursive: true });
-    await writeFile(join(root, '.pipeline', 'children', '2', 'conduct-state.json'), JSON.stringify({ build_review: 'done' }));
+    await writeFile(join(root, '.pipeline', 'children', '2', 'conduct-state.json'), JSON.stringify({ test_suite: 'done', build_review: 'done' }));
+    await writeVerdict(root, 'test_suite', { satisfied: true, checkedAt: 1, reason: 'passed' }, child);
     await writeVerdict(root, 'build_review', { satisfied: true, checkedAt: 1, reason: 'approved' }, child);
 
     const git = async (args: string[]) => {
@@ -69,7 +70,7 @@ describe('applyRestackTransition', () => {
       return { exitCode: 0, stdout: '', stderr: '' };
     };
 
-    await applyRestackTransition({
+    const transition = await applyRestackTransition({
       worktree: root,
       cause: 'base-refresh',
       oldDefault: sha('b'),
@@ -81,6 +82,8 @@ describe('applyRestackTransition', () => {
     });
 
     expect(await readVerdict(root, 'build_review', child)).toMatchObject({ satisfied: true });
+    expect(await readVerdict(root, 'test_suite', child)).toMatchObject({ satisfied: true });
+    expect(transition.wouldInvalidate.get(child)).toEqual([]);
     expect(await readVerdict(root, 'build_review')).toBeNull();
   });
 
@@ -164,6 +167,65 @@ describe('applyRestackTransition', () => {
 
     expect(await readVerdict(root, 'build_review', child)).toMatchObject({ satisfied: true });
     expect(await readVerdict(root, 'build_review')).toBeNull();
+  });
+
+  it("reopens an active child's scoped reviews when its resolved tip adapts a new-parent test", async () => {
+    const root = await mkdtemp(join(tmpdir(), 'restack-transition-'));
+    directories.push(root);
+    const parent = parseChildId(1)!;
+    const child = parseChildId(2)!;
+    await mkdir(join(root, '.pipeline', 'children', '2'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'children', '2', 'conduct-state.json'), JSON.stringify({
+      test_suite: 'done',
+      build_review: 'done',
+    }));
+    await writeVerdict(root, 'test_suite', { satisfied: true, checkedAt: 1, reason: 'passed' }, child);
+    await writeVerdict(root, 'build_review', { satisfied: true, checkedAt: 1, reason: 'approved' }, child);
+
+    const git = async (args: string[]) => {
+      if (args[0] === 'diff') {
+        const range = args.slice(-2).join(' ');
+        if (range === `${sha('b')} ${sha('c')}`) return { exitCode: 0, stdout: 'src/child.ts\n', stderr: '' };
+        if (range === `${sha('b')} ${sha('d')}` || range === `${sha('c')} ${sha('e')}` || range === `${sha('d')} ${sha('e')}`) {
+          return { exitCode: 0, stdout: 'tests/a.test.ts\n', stderr: '' };
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }
+      if (args[0] === 'rev-list') return { exitCode: 0, stdout: '', stderr: '' };
+      if (args[0] === 'merge-base') return { exitCode: 0, stdout: `${sha('b')}\n`, stderr: '' };
+      if (args[0] === 'merge-tree') return { exitCode: 0, stdout: `${sha('a')}\n`, stderr: '' };
+      if (args[0] === 'rev-parse') return { exitCode: 0, stdout: `${sha('e')}\n`, stderr: '' };
+      if (args[0] === 'show') {
+        const revision = args[1]!.split(':', 1)[0]!;
+        return revision === sha('e')
+          ? { exitCode: 0, stdout: 'adapted test\n', stderr: '' }
+          : { exitCode: 1, stdout: '', stderr: '' };
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    };
+
+    const transition = await applyRestackTransition({
+      worktree: root,
+      cause: 'feature-repair',
+      oldDefault: sha('b'),
+      newDefault: sha('b'),
+      activeChild: child,
+      ranges: [
+        { child: parent, oldParent: sha('b'), oldTip: sha('b'), kind: 'closed' },
+        { child, oldParent: sha('b'), oldTip: sha('c'), kind: 'active' },
+      ],
+      moves: [
+        { ref: parseRefName(`refs/heads/stack/${parent}`)!, child: parent, oldSha: sha('b'), newSha: sha('d') },
+        { ref: parseRefName(`refs/heads/stack/${child}`)!, child, oldSha: sha('c'), newSha: sha('e') },
+      ],
+      git,
+    });
+
+    expect(await readVerdict(root, 'test_suite', child)).toMatchObject({ satisfied: false });
+    expect(await readVerdict(root, 'build_review', child)).toMatchObject({ satisfied: false });
+    expect(transition.wouldInvalidate.get(child)).toEqual(['build_review', 'test_suite']);
+    const state = await readState(join(root, '.pipeline', 'children', '2', 'conduct-state.json'));
+    expect(state).toMatchObject({ ok: true, value: { test_suite: 'pending', build_review: 'pending' } });
   });
 
   it('reopens the leaf child state when the whole-stack tuple invalidates its region gate', async () => {

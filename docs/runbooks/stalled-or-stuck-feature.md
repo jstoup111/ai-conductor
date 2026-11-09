@@ -130,9 +130,9 @@ never absent for long. Content the reader doesn't recognize still reads as `uncl
 | `kickback-cap` | A bounded `prd_audit` or as-built-review remediation allowance is exhausted. | No — except a matching, one-use `kickback-budget` authorization. |
 | `plan-gap` | A BUILD task reported a Done-when check the approved plan cannot satisfy, or `prd_audit` or the as-built review found an outcome no active plan task owns; see [the plan-gap recovery](#the-halt-is-a-plan-gap). | No — skipped on every sweep. |
 | `stack-tip-diverged` | A [published stack](../reference/configuration.md#stacked-publication) member no longer matches what the engine recorded: its remote tip moved, it was closed or merged, or its base or stack membership changed. The body names the diverged positions or PRs; see [a published stack halted on `stack-tip-diverged`](#a-published-stack-halted-on-stack-tip-diverged). | No — skipped on every sweep. |
-| `mechanical` | The daemon may safely retry it. | Yes, on a base-branch advance. |
+| `mechanical` | The daemon may safely retry it. | Yes, on a base-branch advance. A new HALT body also earns one [prompt re-dispatch](../guides/running-the-daemon.md#fresh-retryable-halts-re-dispatch-at-the-dispatch-boundary). |
 | `protected-artifact` | BUILD or SHIP found a genuine protected DECIDE-artifact violation. | No — skipped on every sweep until an operator resolves it. |
-| `legacy` | Predates total classification; stamped by the daemon's startup migration. | Yes, on a base-branch advance, same as `mechanical`. |
+| `legacy` | Predates total classification; stamped by the daemon's startup migration. | Yes, same as `mechanical`. |
 | *(absent / unrecognized)* | Treated as `unclassified`. | No — skipped on every sweep, same as `needs-human`. |
 
 A feature that errors gets a diagnostic HALT written at the deterministic
@@ -1340,6 +1340,16 @@ tip instead of `<old-tip>`: the same tree as one linear chain, with each content
 replaced by a single-parent commit carrying `Flattened-merge: <merge sha>`. The engine holds it at
 `refs/conductor/<slug>/restack/conflict/flattened-tip` until the resolution is consumed. Run the
 recipe as printed.
+
+When the resolver settled the conflict but its tip failed the
+[resolved-tip ownership rule](../reference/cli.md#restack-conflict-resolution), the HALT is still
+`restack conflict child <k>`. Its detail lines add
+`refused tip: refs/conductor/<slug>/restack/conflict/refused-tip` and one `<path> (<cause>)` line
+per refused path, where the cause is `unowned` or `parent-revert`; a `restack_refused` event with
+reason `replay-mismatch` carries the same list. The recipe's `git switch` starts from the refused
+tip, so fix only the named paths: drop the change to an `unowned` path, and keep the new parent's
+change on a `parent-revert` path. The engine deletes the refused-tip ref with the rest of the
+conflict hand-off when the conflict is consumed.
 
 For a base-refresh or feature-repair conflict — including a closed child — an operator can instead
 record a decision and let the daemon resume the replay:

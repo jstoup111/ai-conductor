@@ -30,7 +30,7 @@ export interface FeatureTerminalEffects {
 /** Result returned by a single feature executor. */
 export interface FeatureExecutionOutcome {
   slug: string;
-  status: 'done' | 'halted' | 'error' | 'parked';
+  status: 'done' | 'halted' | 'error' | 'parked' | 'preempted';
   prUrl?: string;
   reason?: string;
   costTokens?: number;

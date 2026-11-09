@@ -163,6 +163,25 @@ describe('engine/build-review-input-integrity', () => {
     await expect(diffBuildReviewInputDigests(before, after)).resolves.toEqual(['evidenceRoot:build-review/lap-old/portable.json']);
   });
 
+  it('excludes build_review transcripts captured mid-lap but not another step\'s', async () => {
+    const tree: FileTree = {
+      ...initialTree,
+      '/evidence/transcripts/build_review/lap-a3-security-claude/session.jsonl': 'transcript before',
+      '/evidence/transcripts/build/run-a1-claude/session.jsonl': 'build transcript before',
+    };
+    const excluded = { ...roots(), evidenceRootExcludes: BUILD_REVIEW_ENGINE_OWNED_LAP_WRITES };
+    const before = await captureBuildReviewInputDigest(excluded, filesystem(tree));
+    const after = await captureBuildReviewInputDigest(excluded, filesystem({
+      ...tree,
+      '/evidence/transcripts/build_review/lap-a3-security-claude/session.jsonl': 'transcript after',
+      '/evidence/transcripts/build_review/lap-a6-testQuality-claude/session.jsonl': 'new capture',
+      '/evidence/transcripts/build/run-a1-claude/session.jsonl': 'build transcript after',
+    }));
+
+    await expect(diffBuildReviewInputDigests(before, after))
+      .resolves.toEqual(['evidenceRoot:transcripts/build/run-a1-claude/session.jsonl']);
+  });
+
   it('excludes rejected reviewer output while prior-lap build-review evidence stays hashed', async () => {
     const tree: FileTree = {
       ...initialTree,

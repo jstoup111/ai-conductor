@@ -8,7 +8,7 @@ import { makeGitRunner, type GitRunner } from './rebase.js';
 import { clearHaltAtomically } from './rewind.js';
 import { missingCandidateSubjects, readConflictRecord, recordAnswer } from './restack/restack-conflict-record.js';
 import { parseCommitSha, type CommitSha } from './restack/restack-types.js';
-import { checkPathOwnership } from './restack/restack-ownership.js';
+import { checkResolvedTipOwnership } from './restack/restack-ownership.js';
 import { acquireFeatureDispatchLease, formatFeatureDispatchLeaseRefusal } from './feature-dispatch-lease.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import { ConductorEventEmitter } from './conductor-event-emitter.js';
@@ -35,8 +35,8 @@ export async function checkRestackResolution(worktree: string, slug: string, chi
   const merges = await git(['rev-list', '--min-parents=2', `${stored.record.newParent}..${tip}`]);
   if (merges.exitCode !== 0) return { kind: 'refused', detail: 'cannot inspect resolution merges' };
   if (merges.stdout.trim()) return { kind: 'refused', detail: `resolution contains merge ${merges.stdout.trim().split('\n')[0]}` };
-  const ownership = await checkPathOwnership({ child: stored.record.child, oldParent: stored.record.oldParent, oldTip: stored.record.oldTip, kind: 'active' }, stored.record.newParent, tip, git);
-  if (ownership.kind === 'refused') return { kind: 'refused', detail: `resolution touches unowned paths: ${ownership.paths.join(', ')}` };
+  const ownership = await checkResolvedTipOwnership({ child: stored.record.child, oldParent: stored.record.oldParent, oldTip: stored.record.oldTip, kind: 'active' }, stored.record.newParent, tip, git);
+  if (ownership.kind === 'refused') return { kind: 'refused', detail: `resolution touches unowned paths: ${ownership.paths.map(({ path, cause }) => `${path} (${cause})`).join(', ')}` };
   return { kind: 'ok', tip };
 }
 

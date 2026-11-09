@@ -1,24 +1,13 @@
 // Covers: task:1, task:2, task:3, task:4, task:5, task:6, task:7, task:8
-import { readFile, readdir } from 'node:fs/promises';
-import { dirname, join, relative } from 'node:path';
+import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-import { checkLayerRatchet, formatAllowlistEntry, formatRatchetViolations, isForbiddenLayerEdge, parseAllowlistEntry, readAllowlistEntries } from './layer-ratchet.js';
+import { checkLayerRatchet, formatAllowlistEntry, formatRatchetViolations, isForbiddenLayerEdge, parseAllowlistEntry, readAllowlistEntries, readSourceTree } from './layer-ratchet.js';
 
 const structuralDirectory = dirname(fileURLToPath(import.meta.url));
-const sourceDirectory = join(structuralDirectory, '../../src');
 const allowlistFile = join(structuralDirectory, 'layer-allowlist.txt');
-
-async function sourceFiles(directory = sourceDirectory): Promise<Map<string, string>> {
-  const entries = await readdir(directory, { withFileTypes: true });
-  const nested = await Promise.all(entries.map(async (entry) => {
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) return sourceFiles(path);
-    return entry.isFile() && entry.name.endsWith('.ts') ? new Map([[relative(sourceDirectory, path), await readFile(path, 'utf8')]]) : new Map();
-  }));
-  return new Map(nested.flatMap((files) => [...files]));
-}
 
 describe('structural: layer ratchet', () => {
   it('resolves .js specifiers to sibling TypeScript files', () => {
@@ -515,7 +504,7 @@ describe('structural: layer ratchet', () => {
 
   it('ratchets the real source tree against the committed allowlist', async () => {
     const entries = readAllowlistEntries(await readFile(allowlistFile, 'utf8'));
-    const result = checkLayerRatchet({ files: await sourceFiles(), allowlist: entries });
+    const result = checkLayerRatchet({ files: await readSourceTree(), allowlist: entries });
 
     expect(result.scannedFileCount).toBeGreaterThan(0);
     expect(entries.length).toBeGreaterThan(0);
