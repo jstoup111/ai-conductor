@@ -30,8 +30,15 @@ export interface CollectFoldSetInput {
 
 export type FoldPartReason = 'owner' | 'introduced-above-owner';
 
+/** One source hunk, retained in the plan so its placement can be replayed exactly. */
+export interface FoldHunk {
+  readonly path: string;
+  readonly patch: string;
+  readonly wholeFile: boolean;
+}
+
 export type FoldPart =
-  | { readonly kind: 'hunks'; readonly child: ChildId | 'leaf'; readonly paths: readonly string[]; readonly reason: FoldPartReason }
+  | { readonly kind: 'hunks'; readonly child: ChildId | 'leaf'; readonly path: string; readonly hunk: FoldHunk; readonly reason: FoldPartReason }
   | { readonly kind: 'whole'; readonly child: ChildId; readonly paths: readonly []; readonly reason: 'owner' }
   | {
     readonly kind: 'blocks';
@@ -173,9 +180,7 @@ export async function collectFoldSet(input: CollectFoldSetInput): Promise<Collec
   return { kind: 'collected', commits };
 }
 
-type DiffHunk = { readonly path: string; readonly patch: string; readonly wholeFile: boolean };
-
-function hunkPatches(path: string, diff: string): DiffHunk[] {
+function hunkPatches(path: string, diff: string): FoldHunk[] {
   const lines = diff.split('\n');
   const firstHunk = lines.findIndex((line) => line.startsWith('@@ '));
   // A mode-only change, an empty-file add/delete, and a binary patch have no
@@ -191,6 +196,13 @@ function hunkPatches(path: string, diff: string): DiffHunk[] {
     start = end;
   }
   return hunks;
+}
+
+function containsFrozenBlock(hunk: FoldHunk, blocks: readonly { readonly id: string; readonly body: string }[]): boolean {
+  const added = new Set(hunk.patch.split('\n')
+    .filter((line) => line.startsWith('+') && !line.startsWith('+++'))
+    .map((line) => line.slice(1)));
+  return blocks.some(({ body }) => body.replace(/\n$/, '').split('\n').every((line) => added.has(line)));
 }
 
 async function changedPaths(git: GitRunner, sha: CommitSha): Promise<string[]> {
@@ -299,11 +311,6 @@ export async function placeFoldCommits(input: PlaceFoldCommitsInput): Promise<Fo
   const planned: FoldCommitPlan[] = [];
   for (const source of input.commits) {
     const blocks = await frozenBlocks(input, source);
-    if (blocks !== undefined) {
-      planned.push({ ...source, parts: [{ kind: 'blocks', child: source.owner, paths: [], reason: 'owner', blocks }] });
-      continue;
-    }
-
     const paths = await changedPaths(input.git, source.sha);
     if (paths.length === 0) {
       planned.push({ ...source, parts: [{ kind: 'whole', child: source.owner, paths: [], reason: 'owner' }] });
@@ -312,33 +319,37 @@ export async function placeFoldCommits(input: PlaceFoldCommitsInput): Promise<Fo
 
     const parent = await sourceParent(input.git, source.sha);
     const candidates = await childTips(input, source.owner);
-    const parts = new Map<string, { child: ChildId | 'leaf'; reason: FoldPartReason; paths: Set<string> }>();
+    const parts: FoldPart[] = blocks === undefined
+      ? []
+      : [{ kind: 'blocks', child: source.owner, paths: [], reason: 'owner', blocks }];
+    const frozenPaths = new Set<string>();
     const indexDirectory = await mkdtemp(join(tmpdir(), 'fold-plan-index-'));
     try {
       for (const path of paths) {
         const diff = await input.git(['diff', '--binary', '--no-ext-diff', '--no-renames', '--unified=0', parent, source.sha, '--', path]);
         if (diff.exitCode !== 0) throw new Error(`cannot read fold hunks for ${source.sha}:${path}`);
         for (const [ordinal, hunk] of hunkPatches(path, diff.stdout).entries()) {
+          if (blocks !== undefined && containsFrozenBlock(hunk, blocks)) {
+            frozenPaths.add(hunk.path);
+            continue;
+          }
           const probe = await materializeHunk(input.git, parent, source.sha, hunk.path, hunk.patch, hunk.wholeFile, join(indexDirectory, `${path.replace(/[^A-Za-z0-9_.-]/g, '-')}-${ordinal}.index`));
           const child = await lowestAcceptingChild(input, parent, probe, candidates);
           const reason: FoldPartReason = child === source.owner ? 'owner' : 'introduced-above-owner';
-          const key = `${child}:${reason}`;
-          const part = parts.get(key) ?? { child, reason, paths: new Set<string>() };
-          part.paths.add(path);
-          parts.set(key, part);
+          parts.push({ kind: 'hunks', child, path: hunk.path, hunk, reason });
         }
       }
     } finally {
       await rm(indexDirectory, { recursive: true, force: true });
     }
-    const placedPaths = new Set([...parts.values()].flatMap((part) => [...part.paths]));
+    const placedPaths = new Set(parts.flatMap((part) => part.kind === 'hunks' ? [part.path] : []).concat([...frozenPaths]));
     const unplacedPaths = paths.filter((path) => !placedPaths.has(path));
     if (unplacedPaths.length > 0) {
       return { kind: 'refused', reason: 'fold-unplaced-path', commit: source.sha, paths: unplacedPaths };
     }
     planned.push({
       ...source,
-      parts: [...parts.values()].map((part) => ({ kind: 'hunks' as const, child: part.child, paths: [...part.paths], reason: part.reason })),
+      parts,
     });
   }
   return { kind: 'planned', commits: planned };

@@ -195,8 +195,14 @@ describe('placeFoldCommits (real local Git)', () => {
         roundId: 'r1',
         owner: hostOne,
         parts: [
-          { kind: 'hunks', child: hostOne, paths: ['src/server/identity.ts'], reason: 'owner' },
-          { kind: 'hunks', child: hostThree, paths: ['tests/load/ten-players.ts'], reason: 'introduced-above-owner' },
+          expect.objectContaining({
+            kind: 'hunks', child: hostOne, path: 'src/server/identity.ts', reason: 'owner',
+            hunk: expect.objectContaining({ path: 'src/server/identity.ts' }),
+          }),
+          expect.objectContaining({
+            kind: 'hunks', child: hostThree, path: 'tests/load/ten-players.ts', reason: 'introduced-above-owner',
+            hunk: expect.objectContaining({ path: 'tests/load/ten-players.ts' }),
+          }),
         ],
       }],
     });
@@ -244,12 +250,52 @@ describe('placeFoldCommits (real local Git)', () => {
         sha: hunkless,
         roundId: 'r1',
         owner: hostOne,
-        parts: [{
-          kind: 'hunks', child: hostOne,
-          paths: ['binary.bin', 'new-empty.txt', 'scripts/executable.sh'], reason: 'owner',
-        }],
+        parts: [
+          expect.objectContaining({ kind: 'hunks', child: hostOne, path: 'binary.bin', reason: 'owner', hunk: expect.objectContaining({ path: 'binary.bin' }) }),
+          expect.objectContaining({ kind: 'hunks', child: hostOne, path: 'new-empty.txt', reason: 'owner', hunk: expect.objectContaining({ path: 'new-empty.txt' }) }),
+          expect.objectContaining({ kind: 'hunks', child: hostOne, path: 'scripts/executable.sh', reason: 'owner', hunk: expect.objectContaining({ path: 'scripts/executable.sh' }) }),
+        ],
       }],
     });
+  });
+
+  it('records each hunk separately with only its source patch', async () => {
+    const subject = await placementFixture();
+    await subject.git(['checkout', '-q', 'feat/c1/demo']);
+    await writeFile(join(subject.repo, 'src/server/identity.ts'), "export const owner = 'c1';\nexport function startPlaying(name: string) {}\nexport const stable = 'initial';\n");
+    await subject.git(['add', 'src/server/identity.ts']);
+    await subject.git(['commit', '-qm', 'child one identity']);
+    await subject.git(['branch', '-f', 'feat/c2/demo', 'HEAD']);
+    await subject.git(['branch', '-f', 'feat/c3/demo', 'HEAD']);
+    await subject.git(['checkout', '-q', 'feat/c3/demo']);
+    await writeFile(join(subject.repo, 'src/server/identity.ts'), "export const owner = 'c3';\nexport function startPlaying(name: string) {}\nexport const stable = 'initial';\n");
+    await subject.git(['add', 'src/server/identity.ts']);
+    await subject.git(['commit', '-qm', 'child three identity']);
+    await subject.git(['branch', '-f', 'feat/c4/demo', 'HEAD']);
+    await subject.git(['branch', '-f', `feat/daemon-${slug}`, 'HEAD']);
+    await subject.git(['checkout', '-q', `feat/daemon-${slug}`]);
+    await writeFile(join(subject.repo, 'src/server/identity.ts'), "export const owner = 'folded';\nexport function startPlaying(name: string) {}\nexport const stable = 'changed';\n");
+    await subject.git(['add', 'src/server/identity.ts']);
+    await subject.git(['commit', '-qm', `two identity hunks${trailers('r1', 'c1')}`]);
+    const source = await subject.head();
+
+    const result = await placeFoldCommits({
+      worktree: subject.repo,
+      slug,
+      commits: [{ sha: source as never, roundId: parseRoundId('r1')!, owner: hostOne }],
+      git: makeGitRunner(subject.repo),
+    });
+
+    expect(result.kind).toBe('planned');
+    if (result.kind !== 'planned') return;
+    const parts = result.commits[0]!.parts.filter((part) => part.kind === 'hunks');
+    expect(parts).toHaveLength(2);
+    const ownerHunk = parts.find((part) => part.hunk.patch.includes("+export const owner = 'folded';"));
+    const stableHunk = parts.find((part) => part.hunk.patch.includes("+export const stable = 'changed';"));
+    expect(ownerHunk).toMatchObject({ child: hostThree, path: 'src/server/identity.ts', reason: 'introduced-above-owner' });
+    expect(ownerHunk?.hunk.patch).not.toContain("stable = 'changed'");
+    expect(stableHunk).toMatchObject({ child: hostOne, path: 'src/server/identity.ts', reason: 'owner' });
+    expect(stableHunk?.hunk.patch).not.toContain("owner = 'folded'");
   });
 
   it('re-materializes a frozen block append on its owner instead of hunk-splitting it', async () => {
@@ -257,7 +303,8 @@ describe('placeFoldCommits (real local Git)', () => {
     const block = '### Task rem-prd-audit-T1: Repair\n**Done when:**\n- fixed\n**Child:** 1\n**Round:** r1\n';
     await mkdir(join(subject.repo, '.docs', 'plans'), { recursive: true });
     await writeFile(join(subject.repo, '.docs', 'plans', 'demo.md'), `# Demo\n\n${block}`);
-    await subject.git(['add', '.docs/plans/demo.md']);
+    await writeFile(join(subject.repo, 'src/server/identity.ts'), 'export function startPlaying(name: string, secret: string) {}\n');
+    await subject.git(['add', '.docs/plans/demo.md', 'src/server/identity.ts']);
     await subject.git(['commit', '-qm', `append frozen remediation${trailers('r1', 'c1')}`]);
     const frozen = await subject.head();
     const created = await createRouteRecord(subject.repo, slug, {
@@ -279,7 +326,13 @@ describe('placeFoldCommits (real local Git)', () => {
         sha: frozen,
         roundId: 'r2',
         owner: hostOne,
-        parts: [{ kind: 'blocks', child: hostOne, paths: [], reason: 'owner', blocks: [{ id: 'rem-prd-audit-T1', body: block }] }],
+        parts: [
+          { kind: 'blocks', child: hostOne, paths: [], reason: 'owner', blocks: [{ id: 'rem-prd-audit-T1', body: block }] },
+          expect.objectContaining({
+            kind: 'hunks', child: hostOne, path: 'src/server/identity.ts', reason: 'owner',
+            hunk: expect.objectContaining({ path: 'src/server/identity.ts' }),
+          }),
+        ],
       }],
     });
   });
