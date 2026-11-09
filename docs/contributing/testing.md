@@ -26,6 +26,7 @@ Run everything from `src/conductor` unless stated otherwise.
 | Type check (`src/` only) | `cd src/conductor && npm run typecheck` |
 | Type check including `test/` | `cd src/conductor && npm run typecheck:test` |
 | Lint TypeScript | `cd src/conductor && npm run lint` (`npm run lint:fix` to autofix) |
+| Check formatting of changed files | `cd src/conductor && npm run format:check` (`npm run format` to fix) |
 | Type check a plugin | `cd plugins/<name> && npm ci && npm run typecheck` |
 | Lint a plugin | `cd plugins/<name> && ../../src/conductor/node_modules/.bin/eslint --max-warnings=0 "**/*.ts"` |
 | Lint shell scripts | `bash test/lint_shell.sh` (from the repo root) |
@@ -170,9 +171,6 @@ would, so the only rules enabled are ones `tsc` structurally cannot provide: pro
 then dropped. This is an async daemon on execa/chokidar, where a dropped promise does not throw —
 it presents as a silent stall.
 
-No formatter is configured, deliberately: Prettier or Biome across ~85k lines would produce a diff
-that buries every real change.
-
 `no-misused-promises` runs with `checksVoidReturn.arguments` disabled. With it on it fires 90 times,
 every one of them an async callback passed to a void-return API (`process.on('SIGINT', handler)`,
 commander `.action()`), where the only available fix is a `void` wrapper that changes nothing at
@@ -194,6 +192,35 @@ service fail to resolve every test file and report 599 parse errors instead of l
 `no-floating-promises` matters more in a test than in engine code: an unawaited promise in a test does
 not fail the test, it leaks async work into whichever test runs next, which is how a suite starts
 failing in groups but passing in isolation.
+
+## Formatter
+
+Prettier enforces canonical form on **changed files only**, so no change carries a whole-tree
+reformat. `src/conductor/scripts/format.mjs` backs both package scripts:
+
+| Script | Effect |
+| --- | --- |
+| `npm run format:check` | Prints `not canonical: <path>` per non-canonical file; exits 1 if any. |
+| `npm run format` | Rewrites candidates in place; canonical files are untouched. |
+
+Candidates are files changed since `git merge-base <base> HEAD` — committed, uncommitted, and
+untracked. Deleted paths and non-regular files are skipped. `<base>` defaults to `origin/main`;
+override it with `-- --base <ref>`. An unresolvable base exits 1 before any file is read. `-- --all`
+takes every tracked file instead.
+
+| In scope | Parser |
+| --- | --- |
+| `*.ts`, `*.mts` under `src/conductor/` or `plugins/` | `typescript` |
+| `*.sh` anywhere | `sh` (`prettier-plugin-sh`) |
+| Extensionless files with a `sh` or `bash` shebang | `sh` |
+
+The root `.prettierignore` excludes test fixtures, `node_modules/`, `src/conductor/dist*/`, and all
+`*.md`, `*.json`, `*.yml`, and `*.yaml` files. Style lives in the root `.prettierrc.json`: 120 columns,
+two-space indent, single quotes, trailing commas, LF. A file that fails to parse prints
+`syntax error: <path>: <message>`, keeps its bytes, and fails the run.
+
+`prettier` and `prettier-plugin-sh` are exact-pinned in `src/conductor/package.json`, so CI and local
+runs format identically. The check runs in CI's `format` job and leads both `test_suite` commands.
 
 ## Test tiers
 
@@ -605,6 +632,8 @@ from `.ai-conductor/config.yml`:
 ```yaml
 test_suite:
   commands:
+    - command: npm run format:check --silent && npm run typecheck --silent && npm run typecheck:test --silent
+      working_directory: src/conductor
     - command: npm test
       working_directory: src/conductor
     - command: test/test_harness_integrity.sh
@@ -612,7 +641,8 @@ test_suite:
   timeout_seconds: 1800
 ```
 
-The entries run in order, so the integrity suite runs only after the conductor suite passes. The
+The entries run in order: formatting and type checks, then the conductor suite, then the integrity
+suite, each only after the previous one passes. The
 `--slowTestThreshold=1800000` in the npm script matches that 1800-second budget, suppressing slow-test
 warnings that would otherwise fire on every long run.
 
@@ -636,15 +666,18 @@ For where `test_suite` sits in the flow and what happens when it fails, see
    engine's rule set.
 6. `typecheck` — `npm ci`, `npm run typecheck`, and `npm run typecheck:test` in `src/conductor`, then
    `npm ci` and `npm run typecheck` in each `plugins/*/`.
-7. `conductor` — `npm ci`, `npm run build`, then `npm test` in `src/conductor`, split by file across
+7. `format` — skipped when `docs_only` is true; `npm ci`, then
+   `npm run format:check -- --base <pull request base SHA>` in `src/conductor`. See
+   [Formatter](#formatter).
+8. `conductor` — `npm ci`, `npm run build`, then `npm test` in `src/conductor`, split by file across
    four shards (`--shard=N/4`) with a 15-minute job timeout. Each shard adds
    `--reporter=./test/reporters/ci-progress-reporter.ts`; see
    [Reading a conductor shard log](#reading-a-conductor-shard-log).
-8. `links` — **never skipped.** Checks documentation links via `lycheeverse/lychee-action`.
-9. `docs-corpus` — runs **only** when `docs_only` is true; `npm ci`, `npm run build`, then
+9. `links` — **never skipped.** Checks documentation links via `lycheeverse/lychee-action`.
+10. `docs-corpus` — runs **only** when `docs_only` is true; `npm ci`, `npm run build`, then
    `npm test -- test/corpus/` in `src/conductor`. A spec landing that grows the `.docs/` corpus past a
    shipped projection limit fails here instead of on the next code pull request.
-10. `ci-gate` — `if: always()`; fails when any of the above is `failure` or `cancelled`. This is the
+11. `ci-gate` — `if: always()`; fails when any of the above is `failure` or `cancelled`. This is the
    required-status aggregator.
 
 `links` is deliberately the one job with no `docs_only` gate. `docs_only` is true only when every

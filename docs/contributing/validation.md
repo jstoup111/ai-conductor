@@ -129,6 +129,6 @@ the first seven checks in detail and names this page as the canonical enumeratio
 | CI (shell only) | The `shellcheck` job runs `bash test/lint_shell.sh` — the same script check 1b calls, so the two enforce one file set at one severity. Also skipped on docs-only diffs. |
 | Self-host finish gate | `runIntegritySuite` in `src/conductor/src/engine/self-host/release-gate.ts` runs the same script with a 120-second budget before a PR opens. A missing script, a timeout, or any non-zero exit HALTs the build. See [releases](releases.md). |
 
-Other static checks are separate from this suite: `npm run typecheck`, `npm run typecheck:test`,
-`npm run lint`, and `npm test` in `src/conductor`, plus the `links` job's documentation link check.
+Other static checks are separate from this suite: `npm run format:check`, `npm run typecheck`,
+`npm run typecheck:test`, `npm run lint`, and `npm test` in `src/conductor`, plus the `links` job's documentation link check.
 See [testing](testing.md).

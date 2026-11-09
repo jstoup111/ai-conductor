@@ -156,7 +156,7 @@ test_suite:
     # compile would otherwise pass this gate and cost a build_review lap
     # (bb94f63b0f, 2026-10-18: TS2322 passed test_suite, caught by review).
     # typecheck:test covers test/ too, matching CI (#3411).
-    - command: npm run typecheck --silent && npm run typecheck:test --silent
+    - command: npm run format:check --silent && npm run typecheck --silent && npm run typecheck:test --silent
       working_directory: src/conductor
     - command: npm test
       working_directory: src/conductor
@@ -175,7 +175,7 @@ test_suite:
   # what they police, so `--changed` never selects them; a second run always
   # includes them (~35s) so a guard violation fails here, not first in CI (#3192).
   # Both typechecks (~10s + ~35s) lead each lap for the same reason as in `commands`.
-  changed_command: 'npm run typecheck --silent && npm run typecheck:test --silent && node scripts/run-vitest.mjs run --reporter=dot --silent --slowTestThreshold=1800000 --passWithNoTests --changed {base} && node scripts/run-vitest.mjs run --reporter=dot --silent=true test/structural/ guard.test.ts audit.test.ts drift.test.ts projection.test.ts && cd ../.. && test/test_harness_integrity.sh'
+  changed_command: 'npm run format:check --silent && npm run typecheck --silent && npm run typecheck:test --silent && node scripts/run-vitest.mjs run --reporter=dot --silent --slowTestThreshold=1800000 --passWithNoTests --changed {base} && node scripts/run-vitest.mjs run --reporter=dot --silent=true test/structural/ guard.test.ts audit.test.ts drift.test.ts projection.test.ts && cd ../.. && test/test_harness_integrity.sh'
   # Ordered aggregate entries each choose their own directory; scoped runs use
   # this shared fallback to reach the conductor package's Vitest binary.
   working_directory: src/conductor

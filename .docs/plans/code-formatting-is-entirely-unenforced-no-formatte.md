@@ -366,3 +366,21 @@ Task 1 ─▶ Task 2 ─▶ Task 3 ─▶ Task 4 ─▶ Task 5 ─▶ Task 6 ─
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-prd-audit-5-r1: Add a format-script.test.ts case that uses only parseable in-scope files in the fixture repository, including at least one non-canonical TypeScript file and one non-canonical shell file. Commit them, run `format.mjs --write --all`, and assert exit 0. Assert each in-scope file is now canonical: single quotes, semicolons, two-space indentation, LF endings, and no line over 120 columns. Assert a following `--check --all` exits 0. Use only the fixture repository, never the real one. Leave the existing ignored/unsafe --all test unchanged.
+**Gate:** prd-audit
+**Rationale:** Verified in src/conductor/test/format-script.test.ts:210-228: the only --all test includes the unparseable bad.ts, so `--write --all` exits 1 and `--check --all` is asserted to exit 1. No test checks that a.ts is canonical after `--write --all`, and none shows `--check --all` exiting 0. Task 5's done-when explicitly requires that test, so task 5 admits the repair. This is a missing test inside an existing task, which makes it BUILD work. No architecture or product decision is involved. The test must run against the temporary fixture repository from createRepository(), never the real repository (Story 6.4). The existing test that covers unsafe and ignored files stays unchanged.
+**Criterion:** S2.3
+**Parent task:** 5
+**Done when:**
+- [test] S2.3 is satisfied by this task.
+- The repair for task rem-prd-audit-5-r1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-prd-audit-5-r2: In src/conductor/scripts/format.mjs, skip every candidate path whose lstat is not a regular file (symlinks, including directory symlinks, and directories) before parserFor reads it. Add a format-script.test.ts case in the createRepository() fixture repo (never the real repo) that commits a directory symlink with no extension (e.g. `.claude/skills/x -> ../../dir`) and a non-canonical in-scope TypeScript file. Assert that `--write --all` exits 0 without EISDIR, the TypeScript file is rewritten to canonical form, the symlink is still a symlink, and a following `--check --all` exits 0. Keep the existing --all tests unchanged.
+**Gate:** prd-audit
+**Rationale:** Verified: running `node scripts/format.mjs --check --all` in the real checkout crashes with an unhandled EISDIR. There are 21 tracked mode-120000 entries, and the `.claude/skills/*` ones are directory symlinks. parserFor (format.mjs:26-27) treats them as extensionless and calls readFileSync outside the per-file try/catch, so `--all` aborts before it processes most in-scope files. S2.3 says `--write --all` puts every in-scope tracked file in canonical form, so this is an implementation defect. Task 5 already admits it: its Steps cover implementing the `--all` candidate source, and its Files list includes format.mjs and format-script.test.ts. The approved architecture is unchanged and no product decision is needed, so this is BUILD work. The earlier lap (rem-prd-audit-5-r1) added a fixture test without symlinks and could not catch this. The repair keeps every existing test, including the r1 all-files test and Task 6's ignored/unsafe --all test. It adds one guard: any tracked path that is not a regular file is skipped before it is read, which covers both symlinks and directories. Excluded sibling: the --base candidate source can also list a changed symlink. The same guard in the shared loop covers it, so no extra scope is needed.
+**Criterion:** S2.3
+**Parent task:** 5
+**Done when:**
+- [test] S2.3 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-prd-audit-5-r2 is committed and its targeted tests pass.

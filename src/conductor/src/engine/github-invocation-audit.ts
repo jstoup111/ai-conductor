@@ -50,7 +50,19 @@ const PROCESS_MODULE = /^(?:node:)?child_process$/;
 const EXECA_MODULE = /^execa(?:\/|$)/;
 const GITHUB_HTTP_MODULE = /^(?:@octokit\/|octokit(?:$|\/)|github(?:$|\/)|node-fetch$|undici$)/;
 const PROCESS_FACTORY_NAMES = new Set(['exec', 'execFile', 'spawn', 'execSync', 'execFileSync', 'spawnSync']);
-const GITHUB_MUTATIONS = new Set(['create', 'edit', 'close', 'comment', 'ready', 'merge', 'reopen', 'delete', 'add', 'remove', 'set']);
+const GITHUB_MUTATIONS = new Set([
+  'create',
+  'edit',
+  'close',
+  'comment',
+  'ready',
+  'merge',
+  'reopen',
+  'delete',
+  'add',
+  'remove',
+  'set',
+]);
 const REMOTE_GIT_WRITES = new Set(['push']);
 const REMOTE_GIT_READS = new Set(['fetch', 'clone', 'ls-remote']);
 const HTTP_MODULE = /^(?:node:)?https?$/;
@@ -60,14 +72,45 @@ const SHELL_STRING_FACTORIES = new Set(['exec', 'execSync']);
 /** Runner-value names that fail closed even when their type is not traceable in-file. */
 const CONVENTIONAL_RUNNER_NAMES = new Set(['gh', 'runGh', 'ghRunner', 'ghRun', 'productionGh']);
 /** A `gh` top-level command family: an opaque program with this argv head is treated as gh. */
-const GH_COMMAND_FAMILIES = new Set(['pr', 'issue', 'api', 'repo', 'label', 'auth', 'release', 'run', 'workflow', 'search', 'gist', 'project', 'secret', 'variable', 'ruleset', 'cache', 'codespace', 'extension', 'org', 'ssh-key', 'gpg-key', 'status', 'browse', '--version', 'version']);
+const GH_COMMAND_FAMILIES = new Set([
+  'pr',
+  'issue',
+  'api',
+  'repo',
+  'label',
+  'auth',
+  'release',
+  'run',
+  'workflow',
+  'search',
+  'gist',
+  'project',
+  'secret',
+  'variable',
+  'ruleset',
+  'cache',
+  'codespace',
+  'extension',
+  'org',
+  'ssh-key',
+  'gpg-key',
+  'status',
+  'browse',
+  '--version',
+  'version',
+]);
 /** A `gh` invocation inside a shell string, at the start or after a shell operator. */
 const SHELL_GH = /(?:^|[\s;&|(`{$])gh\s/;
 
 type MutationOperation = {
-  [Operation in GithubOperationName]: (typeof GITHUB_OPERATION_REGISTRY)[Operation]['access'] extends 'read' ? never : Operation;
+  [Operation in GithubOperationName]: (typeof GITHUB_OPERATION_REGISTRY)[Operation]['access'] extends 'read'
+    ? never
+    : Operation;
 }[GithubOperationName];
-interface OperationCallerProof { readonly adapter: 'createGuardedGithubOperationRunner' | 'executeRemoteGit'; readonly owner: string; }
+interface OperationCallerProof {
+  readonly adapter: 'createGuardedGithubOperationRunner' | 'executeRemoteGit';
+  readonly owner: string;
+}
 
 /**
  * Explicit (and exhaustively typed) inventory: a registry addition cannot pass
@@ -109,7 +152,12 @@ export const SHIPPED_MUTATION_OPERATION_CALLER_PROOFS = {
   'remote-ref.delete': { adapter: 'executeRemoteGit', owner: 'remote-git-operations.ts' },
 } as const satisfies Record<MutationOperation, OperationCallerProof>;
 
-function normalizedFile(file: string): string { return file.split(sep).join('/').replace(/^.*?\/src\//, ''); }
+function normalizedFile(file: string): string {
+  return file
+    .split(sep)
+    .join('/')
+    .replace(/^.*?\/src\//, '');
+}
 function location(sourceFile: ts.SourceFile, node: ts.Node): { line: number; column: number } {
   const value = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
   return { line: value.line + 1, column: value.character + 1 };
@@ -146,7 +194,9 @@ function ghMutation(args: readonly string[]): boolean {
   if (args[0] === 'api') return args.some((arg) => /^(?:--method=?)?(?:POST|PUT|PATCH|DELETE)$/i.test(arg));
   return (args[0] === 'issue' || args[0] === 'pr' || args[0] === 'label') && GITHUB_MUTATIONS.has(args[1] ?? '');
 }
-function sourceFile(file: string, source: string): ts.SourceFile { return ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS); }
+function sourceFile(file: string, source: string): ts.SourceFile {
+  return ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+}
 
 function typeReferenceName(node: ts.TypeNode | undefined): string | undefined {
   return node && ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName) ? node.typeName.text : undefined;
@@ -193,7 +243,8 @@ function injectedGhRunnerNames(parsed: ts.SourceFile): InjectedGhRunners {
   const isRunnerType = (type: ts.TypeNode | undefined, seen = new Set<string>()): boolean => {
     if (!type) return false;
     if (ts.isParenthesizedTypeNode(type)) return isRunnerType(type.type, seen);
-    if (ts.isUnionTypeNode(type) || ts.isIntersectionTypeNode(type)) return type.types.some((part) => isRunnerType(part, seen));
+    if (ts.isUnionTypeNode(type) || ts.isIntersectionTypeNode(type))
+      return type.types.some((part) => isRunnerType(part, seen));
     const name = typeReferenceName(type);
     if (!name) return false;
     if (runnerTypes.has(name)) return true;
@@ -201,7 +252,8 @@ function injectedGhRunnerNames(parsed: ts.SourceFile): InjectedGhRunners {
     seen.add(name);
     return isRunnerType(typeAliases.get(name), seen);
   };
-  const propertyName = (name: ts.PropertyName): string | undefined => ts.isIdentifier(name) || ts.isStringLiteralLike(name) ? name.text : undefined;
+  const propertyName = (name: ts.PropertyName): string | undefined =>
+    ts.isIdentifier(name) || ts.isStringLiteralLike(name) ? name.text : undefined;
   const propertiesWithRunner = (type: ts.TypeNode | undefined, seen = new Set<string>()): Set<string> => {
     const properties = new Set<string>();
     if (!type) return properties;
@@ -234,17 +286,17 @@ function injectedGhRunnerNames(parsed: ts.SourceFile): InjectedGhRunners {
     }
     for (const element of name.elements) {
       if (!ts.isBindingElement(element) || !ts.isIdentifier(element.name)) continue;
-      const sourceName = element.propertyName && ts.isIdentifier(element.propertyName)
-        ? element.propertyName.text
-        : element.name.text;
-      if (propertiesWithRunner(type).has(sourceName) || CONVENTIONAL_RUNNER_NAMES.has(sourceName)) runners.add(element.name.text);
+      const sourceName =
+        element.propertyName && ts.isIdentifier(element.propertyName) ? element.propertyName.text : element.name.text;
+      if (propertiesWithRunner(type).has(sourceName) || CONVENTIONAL_RUNNER_NAMES.has(sourceName))
+        runners.add(element.name.text);
     }
   };
   const propertyAlias = (initializer: ts.Expression | undefined): boolean =>
-    !!initializer
-    && ts.isPropertyAccessExpression(initializer)
-    && ts.isIdentifier(initializer.expression)
-    && runnerProperties.get(initializer.expression.text)?.has(initializer.name.text) === true;
+    !!initializer &&
+    ts.isPropertyAccessExpression(initializer) &&
+    ts.isIdentifier(initializer.expression) &&
+    runnerProperties.get(initializer.expression.text)?.has(initializer.name.text) === true;
   const destructuredAlias = (initializer: ts.Expression | undefined, property: string): boolean =>
     !!initializer && ts.isIdentifier(initializer) && runnerProperties.get(initializer.text)?.has(property) === true;
   const state: InjectedGhRunners = { names: runners, properties: runnerProperties, factories };
@@ -259,9 +311,10 @@ function injectedGhRunnerNames(parsed: ts.SourceFile): InjectedGhRunners {
         if (ts.isObjectBindingPattern(node.name)) {
           for (const element of node.name.elements) {
             if (!ts.isIdentifier(element.name)) continue;
-            const sourceName = element.propertyName && ts.isIdentifier(element.propertyName)
-              ? element.propertyName.text
-              : element.name.text;
+            const sourceName =
+              element.propertyName && ts.isIdentifier(element.propertyName)
+                ? element.propertyName.text
+                : element.name.text;
             if (destructuredAlias(node.initializer, sourceName)) runners.add(element.name.text);
           }
         }
@@ -280,25 +333,38 @@ function injectedGhRunnerNames(parsed: ts.SourceFile): InjectedGhRunners {
  */
 function isRunnerExpression(node: ts.Expression | undefined, runners: InjectedGhRunners): boolean {
   if (!node) return false;
-  if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isNonNullExpression(node)
-    || ts.isTypeAssertionExpression(node) || ts.isAwaitExpression(node) || ts.isSatisfiesExpression(node)) {
+  if (
+    ts.isParenthesizedExpression(node) ||
+    ts.isAsExpression(node) ||
+    ts.isNonNullExpression(node) ||
+    ts.isTypeAssertionExpression(node) ||
+    ts.isAwaitExpression(node) ||
+    ts.isSatisfiesExpression(node)
+  ) {
     return isRunnerExpression(node.expression, runners);
   }
   if (ts.isIdentifier(node)) return runners.names.has(node.text);
   if (ts.isPropertyAccessExpression(node)) {
     if (node.expression.kind === ts.SyntaxKind.ThisKeyword) return runners.names.has(node.name.text);
     if (CONVENTIONAL_RUNNER_NAMES.has(node.name.text)) return true;
-    return ts.isIdentifier(node.expression) && runners.properties.get(node.expression.text)?.has(node.name.text) === true;
+    return (
+      ts.isIdentifier(node.expression) && runners.properties.get(node.expression.text)?.has(node.name.text) === true
+    );
   }
   if (ts.isCallExpression(node)) return ts.isIdentifier(node.expression) && runners.factories.has(node.expression.text);
   if (ts.isBinaryExpression(node)) {
     const operator = node.operatorToken.kind;
-    if (operator === ts.SyntaxKind.QuestionQuestionToken || operator === ts.SyntaxKind.BarBarToken || operator === ts.SyntaxKind.AmpersandAmpersandToken) {
+    if (
+      operator === ts.SyntaxKind.QuestionQuestionToken ||
+      operator === ts.SyntaxKind.BarBarToken ||
+      operator === ts.SyntaxKind.AmpersandAmpersandToken
+    ) {
       return isRunnerExpression(node.left, runners) || isRunnerExpression(node.right, runners);
     }
     return false;
   }
-  if (ts.isConditionalExpression(node)) return isRunnerExpression(node.whenTrue, runners) || isRunnerExpression(node.whenFalse, runners);
+  if (ts.isConditionalExpression(node))
+    return isRunnerExpression(node.whenTrue, runners) || isRunnerExpression(node.whenFalse, runners);
   return false;
 }
 
@@ -313,41 +379,63 @@ function enclosingFunction(node: ts.Node): ts.FunctionDeclaration | undefined {
   return undefined;
 }
 
-function enclosingFunctionName(node: ts.Node): string | undefined { return enclosingFunction(node)?.name?.text; }
+function enclosingFunctionName(node: ts.Node): string | undefined {
+  return enclosingFunction(node)?.name?.text;
+}
 
 function isPropertyAccess(node: ts.Node | undefined, object: string, property: string): boolean {
-  return !!node
-    && ts.isPropertyAccessExpression(node)
-    && ts.isIdentifier(node.expression)
-    && node.expression.text === object
-    && node.name.text === property;
+  return (
+    !!node &&
+    ts.isPropertyAccessExpression(node) &&
+    ts.isIdentifier(node.expression) &&
+    node.expression.text === object &&
+    node.name.text === property
+  );
 }
 
 function isCanonicalGuardedAdapterTransportCall(file: string, node: ts.CallExpression): boolean {
   const owner = enclosingFunction(node);
-  if (normalizedFile(file) !== 'engine/tracker-client.ts'
-    || owner?.name?.text !== 'createGuardedGithubOperationRunner'
-    || owner.parameters.length !== 2) return false;
+  if (
+    normalizedFile(file) !== 'engine/tracker-client.ts' ||
+    owner?.name?.text !== 'createGuardedGithubOperationRunner' ||
+    owner.parameters.length !== 2
+  )
+    return false;
   const [transport, options] = owner.parameters;
-  if (!ts.isIdentifier(transport.name) || transport.name.text !== 'transport'
-    || typeReferenceName(transport.type) !== 'GhRunner'
-    || !ts.isIdentifier(options.name) || options.name.text !== 'options'
-    || !ts.isIdentifier(node.expression) || node.expression.text !== 'transport'
-    || node.arguments.length !== 2) return false;
+  if (
+    !ts.isIdentifier(transport.name) ||
+    transport.name.text !== 'transport' ||
+    typeReferenceName(transport.type) !== 'GhRunner' ||
+    !ts.isIdentifier(options.name) ||
+    options.name.text !== 'options' ||
+    !ts.isIdentifier(node.expression) ||
+    node.expression.text !== 'transport' ||
+    node.arguments.length !== 2
+  )
+    return false;
   const [command, executionOptions] = node.arguments;
-  if (!ts.isCallExpression(command) || !ts.isIdentifier(command.expression)
-    || command.expression.text !== 'ghArgsFor' || command.arguments.length !== 1
-    || !ts.isIdentifier(command.arguments[0]) || command.arguments[0].text !== 'request'
-    || !ts.isObjectLiteralExpression(executionOptions) || executionOptions.properties.length !== 2) return false;
+  if (
+    !ts.isCallExpression(command) ||
+    !ts.isIdentifier(command.expression) ||
+    command.expression.text !== 'ghArgsFor' ||
+    command.arguments.length !== 1 ||
+    !ts.isIdentifier(command.arguments[0]) ||
+    command.arguments[0].text !== 'request' ||
+    !ts.isObjectLiteralExpression(executionOptions) ||
+    executionOptions.properties.length !== 2
+  )
+    return false;
   const [cwd, credential] = executionOptions.properties;
-  return ts.isPropertyAssignment(cwd)
-    && cwd.name.getText() === 'cwd'
-    && isPropertyAccess(cwd.initializer, 'options', 'cwd')
-    && (ts.isShorthandPropertyAssignment(credential)
+  return (
+    ts.isPropertyAssignment(cwd) &&
+    cwd.name.getText() === 'cwd' &&
+    isPropertyAccess(cwd.initializer, 'options', 'cwd') &&
+    (ts.isShorthandPropertyAssignment(credential)
       ? credential.name.text === 'credential'
-      : ts.isPropertyAssignment(credential)
-        && credential.name.getText() === 'credential'
-        && text(credential.initializer) === 'operator');
+      : ts.isPropertyAssignment(credential) &&
+        credential.name.getText() === 'credential' &&
+        text(credential.initializer) === 'operator')
+  );
 }
 
 /**
@@ -361,10 +449,17 @@ function guardedMutationRunnerCall(file: string, node: ts.CallExpression): boole
 }
 
 /** Every dynamic GhRunner forwarding exemption is bound to its real owner. */
-const GUARDED_DYNAMIC_RUNNER_FORWARDER_OWNERS: Readonly<Record<
-  'runTrackerRead' | 'runTrackerAmbientRead' | 'runBotIdentityRead' | 'runTrackerGraphqlRead' | 'runTrackerIssueOperation' | 'guardedPrRunner',
-  readonly string[]
->> = {
+const GUARDED_DYNAMIC_RUNNER_FORWARDER_OWNERS: Readonly<
+  Record<
+    | 'runTrackerRead'
+    | 'runTrackerAmbientRead'
+    | 'runBotIdentityRead'
+    | 'runTrackerGraphqlRead'
+    | 'runTrackerIssueOperation'
+    | 'guardedPrRunner',
+    readonly string[]
+  >
+> = {
   runTrackerRead: ['engine/tracker-client.ts'],
   runTrackerAmbientRead: ['engine/tracker-client.ts'],
   runBotIdentityRead: ['engine/tracker-client.ts'],
@@ -377,16 +472,24 @@ const GUARDED_DYNAMIC_RUNNER_FORWARDER_OWNERS: Readonly<Record<
 function guardedDynamicRunnerForwarding(file: string, node: ts.CallExpression): boolean {
   const owner = enclosingFunctionName(node);
   if (isCanonicalGuardedAdapterTransportCall(file, node)) return true;
-  if (owner === 'runTrackerRead' || owner === 'runTrackerAmbientRead' || owner === 'runBotIdentityRead' || owner === 'runTrackerGraphqlRead' || owner === 'runTrackerIssueOperation') {
+  if (
+    owner === 'runTrackerRead' ||
+    owner === 'runTrackerAmbientRead' ||
+    owner === 'runBotIdentityRead' ||
+    owner === 'runTrackerGraphqlRead' ||
+    owner === 'runTrackerIssueOperation'
+  ) {
     return GUARDED_DYNAMIC_RUNNER_FORWARDER_OWNERS[owner].includes(normalizedFile(file));
   }
   if (owner !== 'guardedPrRunner') return false;
   if (!GUARDED_DYNAMIC_RUNNER_FORWARDER_OWNERS.guardedPrRunner.includes(normalizedFile(file))) return false;
   const declaration = node.parent.parent;
-  return ts.isVariableDeclaration(declaration)
-    && ts.isIdentifier(declaration.name)
-    && declaration.name.text === 'read'
-    && declaration.type !== undefined;
+  return (
+    ts.isVariableDeclaration(declaration) &&
+    ts.isIdentifier(declaration.name) &&
+    declaration.name.text === 'read' &&
+    declaration.type !== undefined
+  );
 }
 
 /**
@@ -398,19 +501,23 @@ function guardedDynamicRunnerForwarding(file: string, node: ts.CallExpression): 
  */
 function productionGhTransportCall(file: string, node: ts.CallExpression): boolean {
   const executable = node.arguments[0];
-  return normalizedFile(file) === 'engine/tracker-client.ts'
-    && enclosingFunctionName(node) === 'makeProductionGh'
-    && privateGhObserverPassthroughCall(executable)
-    && ts.isIdentifier(node.arguments[1])
-    && node.arguments[1].text === 'args';
+  return (
+    normalizedFile(file) === 'engine/tracker-client.ts' &&
+    enclosingFunctionName(node) === 'makeProductionGh' &&
+    privateGhObserverPassthroughCall(executable) &&
+    ts.isIdentifier(node.arguments[1]) &&
+    node.arguments[1].text === 'args'
+  );
 }
 
 function privateGhObserverPassthroughCall(node: ts.Expression | undefined): boolean {
-  return node !== undefined
-    && ts.isCallExpression(node)
-    && ts.isIdentifier(node.expression)
-    && node.expression.text === 'resolvePrivateGhObserverPassthrough'
-    && node.arguments.length === 0;
+  return (
+    node !== undefined &&
+    ts.isCallExpression(node) &&
+    ts.isIdentifier(node.expression) &&
+    node.expression.text === 'resolvePrivateGhObserverPassthrough' &&
+    node.arguments.length === 0
+  );
 }
 
 function remoteGitRunnerInvocation(node: ts.CallExpression): boolean {
@@ -420,21 +527,26 @@ function remoteGitRunnerInvocation(node: ts.CallExpression): boolean {
 /** The remote adapter's transport call must forward precisely its guarded argv. */
 function guardedRemoteGitRunnerCall(file: string, node: ts.CallExpression): boolean {
   const args = node.arguments[0];
-  if (normalizedFile(file) !== 'engine/remote-git-operations.ts'
-    || !remoteGitRunnerInvocation(node)
-    || !ts.isArrayLiteralExpression(args)
-    || args.elements.length !== 1
-    || !ts.isSpreadElement(args.elements[0])) return false;
+  if (
+    normalizedFile(file) !== 'engine/remote-git-operations.ts' ||
+    !remoteGitRunnerInvocation(node) ||
+    !ts.isArrayLiteralExpression(args) ||
+    args.elements.length !== 1 ||
+    !ts.isSpreadElement(args.elements[0])
+  )
+    return false;
   const source = args.elements[0].expression;
   if (enclosingFunctionName(node) === 'guardPublishedStackPushes') {
     return ts.isIdentifier(source) && source.text === 'lsArgs';
   }
-  return enclosingFunctionName(node) === 'executeRemoteGit'
-    && ((ts.isIdentifier(source) && source.text === 'args')
-      || (ts.isPropertyAccessExpression(source)
-        && ts.isIdentifier(source.expression)
-        && source.expression.text === 'guarded'
-        && source.name.text === 'args'));
+  return (
+    enclosingFunctionName(node) === 'executeRemoteGit' &&
+    ((ts.isIdentifier(source) && source.text === 'args') ||
+      (ts.isPropertyAccessExpression(source) &&
+        ts.isIdentifier(source.expression) &&
+        source.expression.text === 'guarded' &&
+        source.name.text === 'args'))
+  );
 }
 
 /**
@@ -455,13 +567,21 @@ function guardedRemoteGitRunnerCall(file: string, node: ts.CallExpression): bool
  */
 function runnerAdapterForwarding(node: ts.CallExpression): boolean {
   const callback = node.parent;
-  if ((ts.isArrowFunction(callback) || ts.isFunctionExpression(callback))
-    && ts.isPropertyAssignment(callback.parent)
-    && callback.parent.name.getText() === 'run') return false;
+  if (
+    (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) &&
+    ts.isPropertyAssignment(callback.parent) &&
+    callback.parent.name.getText() === 'run'
+  )
+    return false;
   const argument = node.arguments[0];
   if (!argument || !ts.isIdentifier(argument)) return false;
   for (let current: ts.Node | undefined = node.parent; current; current = current.parent) {
-    if (ts.isArrowFunction(current) || ts.isFunctionExpression(current) || ts.isFunctionDeclaration(current) || ts.isMethodDeclaration(current)) {
+    if (
+      ts.isArrowFunction(current) ||
+      ts.isFunctionExpression(current) ||
+      ts.isFunctionDeclaration(current) ||
+      ts.isMethodDeclaration(current)
+    ) {
       const first = current.parameters[0];
       return !!first && ts.isIdentifier(first.name) && first.name.text === argument.text;
     }
@@ -477,7 +597,11 @@ function readOnlyRunnerForwarding(node: ts.CallExpression, readOnlyFactories: Re
   const options = property.parent;
   if (!ts.isObjectLiteralExpression(options)) return false;
   const factory = options.parent;
-  return ts.isCallExpression(factory) && ts.isIdentifier(factory.expression) && readOnlyFactories.has(factory.expression.text);
+  return (
+    ts.isCallExpression(factory) &&
+    ts.isIdentifier(factory.expression) &&
+    readOnlyFactories.has(factory.expression.text)
+  );
 }
 
 /**
@@ -499,12 +623,13 @@ interface ProcessBindings {
 }
 
 function processFactoryReference(node: ts.Expression | undefined, bindings: ProcessBindings): boolean {
-  return !!node && (
-    (ts.isIdentifier(node) && bindings.aliases.has(node.text))
-    || (ts.isPropertyAccessExpression(node)
-      && ts.isIdentifier(node.expression)
-      && bindings.namespaces.has(node.expression.text)
-      && PROCESS_FACTORY_NAMES.has(node.name.text))
+  return (
+    !!node &&
+    ((ts.isIdentifier(node) && bindings.aliases.has(node.text)) ||
+      (ts.isPropertyAccessExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        bindings.namespaces.has(node.expression.text) &&
+        PROCESS_FACTORY_NAMES.has(node.name.text)))
   );
 }
 
@@ -516,24 +641,34 @@ function processFactoryName(node: ts.Expression, bindings: ProcessBindings): str
 }
 
 function isImportCall(node: ts.Expression, test: RegExp): boolean {
-  return ts.isCallExpression(node)
-    && node.expression.kind === ts.SyntaxKind.ImportKeyword
-    && text(node.arguments[0]) !== undefined
-    && test.test(text(node.arguments[0])!);
+  return (
+    ts.isCallExpression(node) &&
+    node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+    text(node.arguments[0]) !== undefined &&
+    test.test(text(node.arguments[0])!)
+  );
 }
 
 function isRequireCall(node: ts.Expression, test: RegExp): boolean {
-  return ts.isCallExpression(node)
-    && ts.isIdentifier(node.expression)
-    && node.expression.text === 'require'
-    && text(node.arguments[0]) !== undefined
-    && test.test(text(node.arguments[0])!);
+  return (
+    ts.isCallExpression(node) &&
+    ts.isIdentifier(node.expression) &&
+    node.expression.text === 'require' &&
+    text(node.arguments[0]) !== undefined &&
+    test.test(text(node.arguments[0])!)
+  );
 }
 
 function unwrapExpression(node: ts.Expression): ts.Expression {
   let current = node;
-  while (ts.isParenthesizedExpression(current) || ts.isAwaitExpression(current) || ts.isAsExpression(current)
-    || ts.isNonNullExpression(current) || ts.isTypeAssertionExpression(current) || ts.isSatisfiesExpression(current)) {
+  while (
+    ts.isParenthesizedExpression(current) ||
+    ts.isAwaitExpression(current) ||
+    ts.isAsExpression(current) ||
+    ts.isNonNullExpression(current) ||
+    ts.isTypeAssertionExpression(current) ||
+    ts.isSatisfiesExpression(current)
+  ) {
     current = current.expression;
   }
   return current;
@@ -543,7 +678,8 @@ function bindPatternFactories(name: ts.BindingName, aliases: Set<string>): void 
   if (!ts.isObjectBindingPattern(name)) return;
   for (const element of name.elements) {
     if (!ts.isIdentifier(element.name)) continue;
-    const sourceName = element.propertyName && ts.isIdentifier(element.propertyName) ? element.propertyName.text : element.name.text;
+    const sourceName =
+      element.propertyName && ts.isIdentifier(element.propertyName) ? element.propertyName.text : element.name.text;
     if (PROCESS_FACTORY_NAMES.has(sourceName)) aliases.add(element.name.text);
   }
 }
@@ -565,59 +701,90 @@ function collectProcessBindings(parsed: ts.SourceFile): ProcessBindings {
     if (PROCESS_MODULE.test(module)) {
       if (statement.importClause?.name) namespaces.add(statement.importClause.name.text);
       if (bindings && ts.isNamespaceImport(bindings)) namespaces.add(bindings.name.text);
-      if (bindings && ts.isNamedImports(bindings)) for (const item of bindings.elements) {
-        if (PROCESS_FACTORY_NAMES.has(item.propertyName?.text ?? item.name.text)) aliases.add(item.name.text);
-      }
+      if (bindings && ts.isNamedImports(bindings))
+        for (const item of bindings.elements) {
+          if (PROCESS_FACTORY_NAMES.has(item.propertyName?.text ?? item.name.text)) aliases.add(item.name.text);
+        }
     }
     if (EXECA_MODULE.test(module)) {
       if (statement.importClause?.name) aliases.add(statement.importClause.name.text);
       if (bindings && ts.isNamespaceImport(bindings)) namespaces.add(bindings.name.text);
-      if (bindings && ts.isNamedImports(bindings)) for (const item of bindings.elements) {
-        if (/^(?:execa|execaSync|execaCommand|execaCommandSync|\$)$/.test(item.propertyName?.text ?? item.name.text)) aliases.add(item.name.text);
-      }
+      if (bindings && ts.isNamedImports(bindings))
+        for (const item of bindings.elements) {
+          if (/^(?:execa|execaSync|execaCommand|execaCommandSync|\$)$/.test(item.propertyName?.text ?? item.name.text))
+            aliases.add(item.name.text);
+        }
     }
     if (HTTP_MODULE.test(module)) {
       if (statement.importClause?.name) httpNamespaces.add(statement.importClause.name.text);
       if (bindings && ts.isNamespaceImport(bindings)) httpNamespaces.add(bindings.name.text);
-      if (bindings && ts.isNamedImports(bindings)) for (const item of bindings.elements) {
-        if (HTTP_REQUEST_NAMES.has(item.propertyName?.text ?? item.name.text)) httpRequests.add(item.name.text);
-      }
+      if (bindings && ts.isNamedImports(bindings))
+        for (const item of bindings.elements) {
+          if (HTTP_REQUEST_NAMES.has(item.propertyName?.text ?? item.name.text)) httpRequests.add(item.name.text);
+        }
     }
     if (GITHUB_HTTP_MODULE.test(module)) {
       if (!statement.importClause?.isTypeOnly) rawGithubImportNodes.push(statement);
       if (bindings && ts.isNamespaceImport(bindings)) rawGithubImports.add(bindings.name.text);
-      if (bindings && ts.isNamedImports(bindings)) for (const item of bindings.elements) rawGithubImports.add(item.name.text);
+      if (bindings && ts.isNamedImports(bindings))
+        for (const item of bindings.elements) rawGithubImports.add(item.name.text);
       if (statement.importClause?.name) rawGithubImports.add(statement.importClause.name.text);
     }
-    if ((module.endsWith('/blocker-resolver.js') || module.endsWith('/ordering-source.js')) && bindings && ts.isNamedImports(bindings)) {
+    if (
+      (module.endsWith('/blocker-resolver.js') || module.endsWith('/ordering-source.js')) &&
+      bindings &&
+      ts.isNamedImports(bindings)
+    ) {
       for (const item of bindings.elements) {
         const imported = item.propertyName?.text ?? item.name.text;
-        if ((module.endsWith('/blocker-resolver.js') && imported === 'createBlockerResolver')
-          || (module.endsWith('/ordering-source.js') && imported === 'createOrderingSource')) readOnlyFactories.add(item.name.text);
+        if (
+          (module.endsWith('/blocker-resolver.js') && imported === 'createBlockerResolver') ||
+          (module.endsWith('/ordering-source.js') && imported === 'createOrderingSource')
+        )
+          readOnlyFactories.add(item.name.text);
       }
     }
   }
-  const state: ProcessBindings = { aliases, namespaces, constants, wrappers, httpNamespaces, httpRequests, rawGithubImports, rawGithubImportNodes, readOnlyFactories };
+  const state: ProcessBindings = {
+    aliases,
+    namespaces,
+    constants,
+    wrappers,
+    httpNamespaces,
+    httpRequests,
+    rawGithubImports,
+    rawGithubImportNodes,
+    readOnlyFactories,
+  };
   const visit = (node: ts.Node): void => {
     if (ts.isVariableDeclaration(node) && node.initializer) {
       const initializer = unwrapExpression(node.initializer);
       if (ts.isIdentifier(node.name)) {
         const literal = text(initializer);
         if (literal !== undefined) constants.set(node.name.text, literal);
-        if (ts.isCallExpression(initializer)
-          && (processFactoryReference(initializer.arguments[0], state) || processFactoryReference(initializer.expression, state))) {
+        if (
+          ts.isCallExpression(initializer) &&
+          (processFactoryReference(initializer.arguments[0], state) ||
+            processFactoryReference(initializer.expression, state))
+        ) {
           aliases.add(node.name.text);
         }
         if (processFactoryReference(initializer, state)) aliases.add(node.name.text);
-        if (isImportCall(initializer, PROCESS_MODULE) || isRequireCall(initializer, PROCESS_MODULE)) namespaces.add(node.name.text);
-        if (isImportCall(initializer, HTTP_MODULE) || isRequireCall(initializer, HTTP_MODULE)) httpNamespaces.add(node.name.text);
+        if (isImportCall(initializer, PROCESS_MODULE) || isRequireCall(initializer, PROCESS_MODULE))
+          namespaces.add(node.name.text);
+        if (isImportCall(initializer, HTTP_MODULE) || isRequireCall(initializer, HTTP_MODULE))
+          httpNamespaces.add(node.name.text);
       } else if (isImportCall(initializer, PROCESS_MODULE) || isRequireCall(initializer, PROCESS_MODULE)) {
         bindPatternFactories(node.name, aliases);
       }
     }
     // `import('node:child_process').then(({ spawn }) => ...)`
-    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'then'
-      && isImportCall(unwrapExpression(node.expression.expression), PROCESS_MODULE)) {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === 'then' &&
+      isImportCall(unwrapExpression(node.expression.expression), PROCESS_MODULE)
+    ) {
       const callback = node.arguments[0];
       if (callback && (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback))) {
         const first = callback.parameters[0];
@@ -632,12 +799,22 @@ function collectProcessBindings(parsed: ts.SourceFile): ProcessBindings {
   visit(parsed);
   // Wrapper helpers: a function whose parameter is forwarded as a program name.
   const wrapperVisit = (node: ts.Node): void => {
-    const fn = ts.isFunctionDeclaration(node) ? node
-      : ts.isVariableDeclaration(node) && node.initializer && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer)) ? node.initializer
+    const fn = ts.isFunctionDeclaration(node)
+      ? node
+      : ts.isVariableDeclaration(node) &&
+          node.initializer &&
+          (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))
+        ? node.initializer
         : undefined;
-    const name = ts.isFunctionDeclaration(node) ? node.name?.text : ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) ? node.name.text : undefined;
+    const name = ts.isFunctionDeclaration(node)
+      ? node.name?.text
+      : ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)
+        ? node.name.text
+        : undefined;
     if (fn && name && fn.body) {
-      const parameters = fn.parameters.map((parameter) => (ts.isIdentifier(parameter.name) ? parameter.name.text : undefined));
+      const parameters = fn.parameters.map((parameter) =>
+        ts.isIdentifier(parameter.name) ? parameter.name.text : undefined,
+      );
       const search = (inner: ts.Node): void => {
         if (ts.isCallExpression(inner) && processFactoryReference(inner.expression, state)) {
           const program = inner.arguments[0] ? unwrapExpression(inner.arguments[0]) : undefined;
@@ -652,11 +829,14 @@ function collectProcessBindings(parsed: ts.SourceFile): ProcessBindings {
     }
     ts.forEachChild(node, wrapperVisit);
   };
-  wrapperVisit(parsed);
+  // Without a process alias or namespace no call can be a process factory
+  // reference, so the per-function body search cannot register a wrapper.
+  if (aliases.size > 0 || namespaces.size > 0) wrapperVisit(parsed);
   return state;
 }
 
-type Program = { readonly kind: 'literal'; readonly value: string } | { readonly kind: 'path' } | { readonly kind: 'unresolvable' };
+type Program =
+  { readonly kind: 'literal'; readonly value: string } | { readonly kind: 'path' } | { readonly kind: 'unresolvable' };
 
 /** Resolve a program-name expression as far as this file allows. */
 function resolveProgram(node: ts.Expression | undefined, bindings: ProcessBindings): Program {
@@ -671,15 +851,27 @@ function resolveProgram(node: ts.Expression | undefined, bindings: ProcessBindin
   }
   if (ts.isCallExpression(expression)) {
     const callee = expression.expression;
-    const name = ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) ? callee.name.text : undefined;
+    const name = ts.isIdentifier(callee)
+      ? callee.text
+      : ts.isPropertyAccessExpression(callee)
+        ? callee.name.text
+        : undefined;
     if (name === 'join' || name === 'resolve') return { kind: 'path' };
   }
   return { kind: 'unresolvable' };
 }
 
 function shellOptionPresent(node: ts.Expression | undefined): boolean {
-  return !!node && ts.isObjectLiteralExpression(node) && node.properties.some((property) =>
-    ts.isPropertyAssignment(property) && property.name.getText() === 'shell' && property.initializer.kind === ts.SyntaxKind.TrueKeyword);
+  return (
+    !!node &&
+    ts.isObjectLiteralExpression(node) &&
+    node.properties.some(
+      (property) =>
+        ts.isPropertyAssignment(property) &&
+        property.name.getText() === 'shell' &&
+        property.initializer.kind === ts.SyntaxKind.TrueKeyword,
+    )
+  );
 }
 
 function shellBlockText(node: ts.Expression | undefined): string | undefined {
@@ -692,10 +884,12 @@ function shellBlockText(node: ts.Expression | undefined): string | undefined {
 
 function globalFetchCall(node: ts.CallExpression): boolean {
   if (ts.isIdentifier(node.expression)) return node.expression.text === 'fetch';
-  return ts.isPropertyAccessExpression(node.expression)
-    && ts.isIdentifier(node.expression.expression)
-    && (node.expression.expression.text === 'globalThis' || node.expression.expression.text === 'global')
-    && node.expression.name.text === 'fetch';
+  return (
+    ts.isPropertyAccessExpression(node.expression) &&
+    ts.isIdentifier(node.expression.expression) &&
+    (node.expression.expression.text === 'globalThis' || node.expression.expression.text === 'global') &&
+    node.expression.name.text === 'fetch'
+  );
 }
 
 const GITHUB_URL = /^https?:\/\/(?:[^/]*\.)?github\.com(?:[/:]|$)/i;
@@ -706,7 +900,11 @@ function githubHttpUrl(node: ts.Expression | undefined): boolean {
   const url = text(expression);
   if (url !== undefined) return GITHUB_URL.test(url);
   if (ts.isTemplateExpression(expression)) return GITHUB_URL.test(expression.head.text);
-  if (ts.isNewExpression(expression) && ts.isIdentifier(expression.expression) && expression.expression.text === 'URL') {
+  if (
+    ts.isNewExpression(expression) &&
+    ts.isIdentifier(expression.expression) &&
+    expression.expression.text === 'URL'
+  ) {
     return (expression.arguments ?? []).some((argument) => githubHttpUrl(argument));
   }
   return false;
@@ -714,10 +912,12 @@ function githubHttpUrl(node: ts.Expression | undefined): boolean {
 
 function httpRequestCall(node: ts.CallExpression, bindings: ProcessBindings): boolean {
   if (ts.isIdentifier(node.expression)) return bindings.httpRequests.has(node.expression.text);
-  return ts.isPropertyAccessExpression(node.expression)
-    && ts.isIdentifier(node.expression.expression)
-    && bindings.httpNamespaces.has(node.expression.expression.text)
-    && HTTP_REQUEST_NAMES.has(node.expression.name.text);
+  return (
+    ts.isPropertyAccessExpression(node.expression) &&
+    ts.isIdentifier(node.expression.expression) &&
+    bindings.httpNamespaces.has(node.expression.expression.text) &&
+    HTTP_REQUEST_NAMES.has(node.expression.name.text)
+  );
 }
 
 /** Every process-factory-shaped site, with its program and argv resolved as far as this file allows. */
@@ -731,15 +931,33 @@ interface ExecutableSite {
 
 function executableSite(node: ts.CallExpression, bindings: ProcessBindings): ExecutableSite | undefined {
   if (processFactoryReference(node.expression, bindings)) {
-    return { node, program: resolveProgram(node.arguments[0], bindings), argvNode: node.arguments[1], optionsNode: node.arguments[2] ?? node.arguments[1], factory: processFactoryName(node.expression, bindings) };
+    return {
+      node,
+      program: resolveProgram(node.arguments[0], bindings),
+      argvNode: node.arguments[1],
+      optionsNode: node.arguments[2] ?? node.arguments[1],
+      factory: processFactoryName(node.expression, bindings),
+    };
   }
   const wrapper = ts.isIdentifier(node.expression) ? bindings.wrappers.get(node.expression.text) : undefined;
   if (wrapper !== undefined) {
-    return { node, program: resolveProgram(node.arguments[wrapper], bindings), argvNode: node.arguments[wrapper + 1], optionsNode: undefined, factory: undefined };
+    return {
+      node,
+      program: resolveProgram(node.arguments[wrapper], bindings),
+      argvNode: node.arguments[wrapper + 1],
+      optionsNode: undefined,
+      factory: undefined,
+    };
   }
   // Callee-agnostic fail-closed rule: a literal program name of `gh` with an argv.
   if (node.arguments.length >= 2 && text(node.arguments[0]) === 'gh') {
-    return { node, program: { kind: 'literal', value: 'gh' }, argvNode: node.arguments[1], optionsNode: node.arguments[2], factory: undefined };
+    return {
+      node,
+      program: { kind: 'literal', value: 'gh' },
+      argvNode: node.arguments[1],
+      optionsNode: node.arguments[2],
+      factory: undefined,
+    };
   }
   return undefined;
 }
@@ -747,13 +965,24 @@ function executableSite(node: ts.CallExpression, bindings: ProcessBindings): Exe
 /** Scan one executable TypeScript source file, resolving child-process aliases. */
 export function auditGithubInvocationSource(file: string, source: string): GithubInvocationAuditFinding[] {
   const parsed = sourceFile(file, source);
+  return auditParsedGithubInvocationSource(file, parsed, collectProcessBindings(parsed));
+}
+
+function auditParsedGithubInvocationSource(
+  file: string,
+  parsed: ts.SourceFile,
+  bindings: ProcessBindings,
+): GithubInvocationAuditFinding[] {
   const findings: GithubInvocationAuditFinding[] = [];
-  const bindings = collectProcessBindings(parsed);
   const injectedRunners = injectedGhRunnerNames(parsed);
   const HTTP_MESSAGE = 'unapproved raw GitHub HTTP client invocation outside guarded adapter';
   for (const statement of bindings.rawGithubImportNodes) findings.push(report(parsed, file, statement, HTTP_MESSAGE));
   const visit = (node: ts.Node): void => {
-    if (ts.isNewExpression(node) && ts.isIdentifier(node.expression) && bindings.rawGithubImports.has(node.expression.text)) {
+    if (
+      ts.isNewExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      bindings.rawGithubImports.has(node.expression.text)
+    ) {
       findings.push(report(parsed, file, node, HTTP_MESSAGE));
     }
     if (ts.isCallExpression(node)) {
@@ -764,7 +993,9 @@ export function auditGithubInvocationSource(file: string, source: string): Githu
         if (remoteHead?.[0] === 'push' && !guardedRemoteGitRunnerCall(file, node)) {
           findings.push(report(parsed, file, node, 'direct remote Git mutation outside executeRemoteGit'));
         } else if (!remoteArgs && !remoteHead && !guardedRemoteGitRunnerCall(file, node)) {
-          findings.push(report(parsed, file, node, 'unresolvable mutable remote Git command forwarding outside executeRemoteGit'));
+          findings.push(
+            report(parsed, file, node, 'unresolvable mutable remote Git command forwarding outside executeRemoteGit'),
+          );
         }
       }
       const site = executableSite(node, bindings);
@@ -777,11 +1008,16 @@ export function auditGithubInvocationSource(file: string, source: string): Githu
           findings.push(report(parsed, file, node, 'direct injected GitHub mutation outside guarded adapter'));
         } else if (directHead && !guardedMutationRunnerCall(file, node)) {
           findings.push(report(parsed, file, node, 'direct injected GitHub read outside guarded adapter'));
-        } else if (!directArgs && !directHead
-          && !readOnlyRunnerForwarding(node, bindings.readOnlyFactories)
-          && !runnerAdapterForwarding(node)
-          && !guardedDynamicRunnerForwarding(file, node)) {
-          findings.push(report(parsed, file, node, 'unresolvable mutable GitHub command forwarding outside guarded adapter'));
+        } else if (
+          !directArgs &&
+          !directHead &&
+          !readOnlyRunnerForwarding(node, bindings.readOnlyFactories) &&
+          !runnerAdapterForwarding(node) &&
+          !guardedDynamicRunnerForwarding(file, node)
+        ) {
+          findings.push(
+            report(parsed, file, node, 'unresolvable mutable GitHub command forwarding outside guarded adapter'),
+          );
         }
       }
       if (called && bindings.rawGithubImports.has(called)) findings.push(report(parsed, file, node, HTTP_MESSAGE));
@@ -795,7 +1031,12 @@ export function auditGithubInvocationSource(file: string, source: string): Githu
   return findings;
 }
 
-function auditExecutableSite(parsed: ts.SourceFile, file: string, site: ExecutableSite, _bindings: ProcessBindings): GithubInvocationAuditFinding[] {
+function auditExecutableSite(
+  parsed: ts.SourceFile,
+  file: string,
+  site: ExecutableSite,
+  _bindings: ProcessBindings,
+): GithubInvocationAuditFinding[] {
   const { node, program } = site;
   const args = argv(site.argvNode);
   const command = argvHead(site.argvNode);
@@ -808,28 +1049,48 @@ function auditExecutableSite(parsed: ts.SourceFile, file: string, site: Executab
     if (value === 'gh') {
       if (productionGhTransportCall(file, node)) return [];
       if (!args && !command) return [report(parsed, file, node, 'unresolvable executable command construction for gh')];
-      return [report(parsed, file, node, command && ghMutation(command) ? 'direct GitHub mutation outside guarded adapter' : 'direct GitHub read outside guarded adapter')];
+      return [
+        report(
+          parsed,
+          file,
+          node,
+          command && ghMutation(command)
+            ? 'direct GitHub mutation outside guarded adapter'
+            : 'direct GitHub read outside guarded adapter',
+        ),
+      ];
     }
     if (value === 'git') {
       // A generic local-Git runner is not itself a remote invocation site.
       // Literal remote pushes are, and cannot be hidden behind that runner.
-      return command?.[0] === 'push' ? [report(parsed, file, node, 'direct remote Git mutation outside executeRemoteGit')] : [];
+      return command?.[0] === 'push'
+        ? [report(parsed, file, node, 'direct remote Git mutation outside executeRemoteGit')]
+        : [];
     }
     if (SHELL_PROGRAMS.has(value)) {
       const flag = args?.[0] ?? command?.[0];
-      const block = site.argvNode && ts.isArrayLiteralExpression(site.argvNode) && flag && /^-[a-z]*c[a-z]*$/.test(flag)
-        ? shellBlockText(site.argvNode.elements[1] as ts.Expression | undefined) : undefined;
-      return block !== undefined && (SHELL_GH.test(block) || /\bgit\s+push\b/.test(block)) ? [report(parsed, file, node, shellMessage)] : [];
+      const block =
+        site.argvNode && ts.isArrayLiteralExpression(site.argvNode) && flag && /^-[a-z]*c[a-z]*$/.test(flag)
+          ? shellBlockText(site.argvNode.elements[1] as ts.Expression | undefined)
+          : undefined;
+      return block !== undefined && (SHELL_GH.test(block) || /\bgit\s+push\b/.test(block))
+        ? [report(parsed, file, node, shellMessage)]
+        : [];
     }
     // A shell string: `exec('gh ...')`, `execSync(\`gh ...\`)`, `spawn('gh ...', [], { shell: true })`, `execa('gh ...', { shell: true })`.
-    const shellString = (site.factory !== undefined && SHELL_STRING_FACTORIES.has(site.factory))
-      || shellOptionPresent(site.optionsNode) || shellOptionPresent(site.argvNode);
-    if (shellString && (SHELL_GH.test(value) || /\bgit\s+push\b/.test(value))) return [report(parsed, file, node, shellMessage)];
+    const shellString =
+      (site.factory !== undefined && SHELL_STRING_FACTORIES.has(site.factory)) ||
+      shellOptionPresent(site.optionsNode) ||
+      shellOptionPresent(site.argvNode);
+    if (shellString && (SHELL_GH.test(value) || /\bgit\s+push\b/.test(value)))
+      return [report(parsed, file, node, shellMessage)];
     return [];
   }
   if (program.kind === 'path') return [];
   // Unresolvable program: fail closed only when the argv itself is gh-shaped (D7: not a process sandbox).
-  return command && GH_COMMAND_FAMILIES.has(command[0]) ? [report(parsed, file, node, 'unresolvable executable command construction for gh')] : [];
+  return command && GH_COMMAND_FAMILIES.has(command[0])
+    ? [report(parsed, file, node, 'unresolvable executable command construction for gh')]
+    : [];
 }
 
 /** Enumerate runtime only: historical docs, examples, generated output, and tests never enter. */
@@ -839,7 +1100,12 @@ export function shippedRuntimeTypescriptFiles(conductorRoot: string): string[] {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const path = join(directory, entry.name);
       if (entry.isDirectory()) walk(path);
-      else if (entry.isFile() && (entry.name.endsWith('.ts') || entry.name.endsWith('.mts')) && !entry.name.endsWith('.d.ts')) files.push(path);
+      else if (
+        entry.isFile() &&
+        (entry.name.endsWith('.ts') || entry.name.endsWith('.mts')) &&
+        !entry.name.endsWith('.d.ts')
+      )
+        files.push(path);
     }
   };
   for (const runtimeRoot of ['src', 'scripts']) {
@@ -853,8 +1119,16 @@ export function shippedRuntimeTypescriptFiles(conductorRoot: string): string[] {
 export function auditShippedGithubInvocationBoundary(conductorRoot: string): GithubInvocationAuditFinding[] {
   const findings: GithubInvocationAuditFinding[] = [];
   for (const operation of Object.keys(GITHUB_OPERATION_REGISTRY) as GithubOperationName[]) {
-    if (GITHUB_OPERATION_REGISTRY[operation].access !== 'read' && !(operation in SHIPPED_MUTATION_OPERATION_CALLER_PROOFS)) {
-      findings.push({ file: 'engine/github-operations.ts', line: 1, column: 1, message: `unclassified registered mutation '${operation}'` });
+    if (
+      GITHUB_OPERATION_REGISTRY[operation].access !== 'read' &&
+      !(operation in SHIPPED_MUTATION_OPERATION_CALLER_PROOFS)
+    ) {
+      findings.push({
+        file: 'engine/github-operations.ts',
+        line: 1,
+        column: 1,
+        message: `unclassified registered mutation '${operation}'`,
+      });
     }
   }
   for (const file of shippedRuntimeTypescriptFiles(conductorRoot)) {
@@ -863,11 +1137,20 @@ export function auditShippedGithubInvocationBoundary(conductorRoot: string): Git
     const source = readFileSync(file, 'utf8');
     // Every runtime file is audited in full: there is no file-level inventory
     // or exemption, so a new executable site is classified where it appears.
-    const sites = findGithubInvocationSites(auditFile, source);
-    findings.push(...auditGithubInvocationSource(auditFile, source));
+    // Parse and bind once: both scanners read the same immutable syntax tree
+    // and process bindings, so repeating that work per scanner only adds cost.
+    const parsed = sourceFile(auditFile, source);
+    const bindings = collectProcessBindings(parsed);
+    const sites = findParsedGithubInvocationSites(auditFile, parsed, bindings);
+    findings.push(...auditParsedGithubInvocationSource(auditFile, parsed, bindings));
     for (const site of sites) {
       if (site.classification === 'remote-write') {
-        findings.push({ file: site.file, line: site.line, column: 1, message: 'unclassified executable GitHub invocation site' });
+        findings.push({
+          file: site.file,
+          line: site.line,
+          column: 1,
+          message: 'unclassified executable GitHub invocation site',
+        });
       }
     }
   }
@@ -889,38 +1172,50 @@ export function auditShippedGithubInvocationBoundary(conductorRoot: string): Git
   }
   const repositoryRoots = [join(conductorRoot, '..', '..'), conductorRoot];
   const scanned = new Set<string>();
-  for (const repositoryRoot of repositoryRoots) for (const directory of [join(repositoryRoot, 'skills'), join(repositoryRoot, 'bin')]) {
-    if (!existsSync(directory)) continue;
-    const stack = [directory];
-    while (stack.length > 0) {
-      const current = stack.pop()!;
-      for (const entry of readdirSync(current, { withFileTypes: true })) {
-        const file = join(current, entry.name);
-        if (entry.isDirectory()) { stack.push(file); continue; }
-        if (!entry.isFile() || !(entry.name === 'SKILL.md' || !entry.name.includes('.'))) continue;
-        if (scanned.has(file)) continue;
-        scanned.add(file);
-        const source = readFileSync(file, 'utf8');
-        const relativeFile = relative(repositoryRoot, file).split(sep).join('/');
-        const blocks = entry.name === 'SKILL.md'
-          ? [...source.matchAll(/```bash\s*\n([\s\S]*?)```/g)].map((match) => ({ offset: match.index ?? 0, text: match[1] }))
-          : [{ offset: 0, text: source }];
-        for (const block of blocks) {
-          const raw = /\bgh\s+(?:repo\s+create|pr\s+(?:create|edit|ready|comment|close|merge)|issue\s+(?:create|edit|close|comment)|api\b)|\bgit\s+push\b|\bgit\s+push\s+.*--delete\b/.exec(block.text);
-          if (!raw) continue;
-          const line = source.slice(0, block.offset + raw.index).split('\n').length;
-          // ai-conductor:session-command-context=operator-only
-          findings.push({
-            file: relativeFile,
-            line,
-            column: 1,
-            message: 'raw GitHub or remote-Git write in executable publication block; use ai-conductor github-operation',
-          });
-          // /ai-conductor:session-command-context
+  for (const repositoryRoot of repositoryRoots)
+    for (const directory of [join(repositoryRoot, 'skills'), join(repositoryRoot, 'bin')]) {
+      if (!existsSync(directory)) continue;
+      const stack = [directory];
+      while (stack.length > 0) {
+        const current = stack.pop()!;
+        for (const entry of readdirSync(current, { withFileTypes: true })) {
+          const file = join(current, entry.name);
+          if (entry.isDirectory()) {
+            stack.push(file);
+            continue;
+          }
+          if (!entry.isFile() || !(entry.name === 'SKILL.md' || !entry.name.includes('.'))) continue;
+          if (scanned.has(file)) continue;
+          scanned.add(file);
+          const source = readFileSync(file, 'utf8');
+          const relativeFile = relative(repositoryRoot, file).split(sep).join('/');
+          const blocks =
+            entry.name === 'SKILL.md'
+              ? [...source.matchAll(/```bash\s*\n([\s\S]*?)```/g)].map((match) => ({
+                  offset: match.index ?? 0,
+                  text: match[1],
+                }))
+              : [{ offset: 0, text: source }];
+          for (const block of blocks) {
+            const raw =
+              /\bgh\s+(?:repo\s+create|pr\s+(?:create|edit|ready|comment|close|merge)|issue\s+(?:create|edit|close|comment)|api\b)|\bgit\s+push\b|\bgit\s+push\s+.*--delete\b/.exec(
+                block.text,
+              );
+            if (!raw) continue;
+            const line = source.slice(0, block.offset + raw.index).split('\n').length;
+            // ai-conductor:session-command-context=operator-only
+            findings.push({
+              file: relativeFile,
+              line,
+              column: 1,
+              message:
+                'raw GitHub or remote-Git write in executable publication block; use ai-conductor github-operation',
+            });
+            // /ai-conductor:session-command-context
+          }
         }
       }
     }
-  }
   return findings;
 }
 
@@ -941,7 +1236,14 @@ function repositoryRootForSessionInstructionAudit(conductorRoot: string): string
 /** Boundary-site inventory for diagnostics and fixture assertions. */
 export function findGithubInvocationSites(file: string, source: string): GithubInvocationAuditSite[] {
   const parsed = sourceFile(file, source);
-  const bindings = collectProcessBindings(parsed);
+  return findParsedGithubInvocationSites(file, parsed, collectProcessBindings(parsed));
+}
+
+function findParsedGithubInvocationSites(
+  file: string,
+  parsed: ts.SourceFile,
+  bindings: ProcessBindings,
+): GithubInvocationAuditSite[] {
   const sites: GithubInvocationAuditSite[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node)) {
@@ -951,11 +1253,24 @@ export function findGithubInvocationSites(file: string, source: string): GithubI
         const args = argv(site.argvNode);
         const line = location(parsed, node).line;
         if (command === 'gh') {
-          const classification = productionGhTransportCall(file, node) ? 'approved-adapter' : !!args && ghMutation(args) ? 'remote-write' : 'github-read';
+          const classification = productionGhTransportCall(file, node)
+            ? 'approved-adapter'
+            : !!args && ghMutation(args)
+              ? 'remote-write'
+              : 'github-read';
           sites.push({ file, line, command, classification });
         } else {
           const head = args?.[0] ?? '';
-          sites.push({ file, line, command, classification: REMOTE_GIT_WRITES.has(head) ? 'remote-write' : REMOTE_GIT_READS.has(head) ? 'remote-read' : 'local-git' });
+          sites.push({
+            file,
+            line,
+            command,
+            classification: REMOTE_GIT_WRITES.has(head)
+              ? 'remote-write'
+              : REMOTE_GIT_READS.has(head)
+                ? 'remote-read'
+                : 'local-git',
+          });
         }
       }
     }
