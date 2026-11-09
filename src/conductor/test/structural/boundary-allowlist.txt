@@ -109,6 +109,7 @@ engine/daemon-tmux.ts -> process
 engine/daemon-tmux.ts -> tmux
 engine/daemon.ts -> clock
 engine/decide-entry-policy.ts -> filesystem
+engine/decision-corpus.ts -> filesystem
 engine/docs-prune-cli.ts -> clock
 engine/docs-prune.ts -> filesystem
 engine/documentation-delivery.ts -> filesystem
