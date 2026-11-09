@@ -100,7 +100,13 @@ export interface RemediationProjectionPriorAsBuiltCase {
   readonly id: string;
   readonly status: RemediationCaseAsBuiltRecord['status'];
   readonly recurrenceCount: number;
-  readonly sources: readonly Pick<RemediationCaseAsBuiltRecord['sources'][number], 'summary' | 'reference' | 'relation' | 'reason'>[];
+  /**
+   * `summary` is omitted when the source finding is still pending: the same text is
+   * already in `pendingAsBuiltFindings` under that `findingId`.
+   */
+  readonly sources: readonly (
+    Pick<RemediationCaseAsBuiltRecord['sources'][number], 'findingId' | 'reference' | 'relation'> & { readonly summary?: string }
+  )[];
   readonly repairTasks: readonly { readonly id: string; readonly resolution: string }[];
 }
 
@@ -163,7 +169,7 @@ export const REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES = {
   tasksBytes: 82_308,
   pendingAsBuiltFindingsBytes: 9_989,
   priorLapsBytes: 111,
-  priorAsBuiltCasesBytes: 0,
+  priorAsBuiltCasesBytes: 8_929,
   refusalsBytes: 0,
 } as const;
 
@@ -208,10 +214,11 @@ const REMEDIATION_PROJECTION_COMPONENT_LIMITS = {
     REMEDIATION_PROJECTION_OPTIONAL_CONTEXT_FLOOR_BYTES,
     REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.refusalsBytes,
   )),
-  // No prior as-built cases exist in the pre-feature corpus; reserve the
-  // standard optional-history floor and grow it from future corpus evidence.
+  // `.pipeline/remediation-cases.json` asBuiltCases: 8,929 B projected for 11 open
+  // cases (#3677). Each case carries its source summaries, so the optional-history
+  // floor faulted any as-built lap with roughly five or more open cases; D7.2 floor → 262,144 B.
   priorAsBuiltCasesBytes: roundUpPowerOfTwo(Math.max(
-    REMEDIATION_PROJECTION_OPTIONAL_CONTEXT_FLOOR_BYTES,
+    REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
     REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.priorAsBuiltCasesBytes,
   )),
 } as const;
@@ -457,7 +464,7 @@ async function projectPriorAsBuiltCases(
       id: record.id,
       status: record.status,
       recurrenceCount: record.recurrenceCount,
-      sources: record.sources.map(({ summary, reference, relation, reason }) => ({ summary, reference, relation, reason })),
+      sources: record.sources.map(({ findingId, summary, reference, relation }) => ({ findingId, summary, reference, relation })),
       repairTasks: record.repairTaskIds.map((id) => ({ id, resolution: resolutions.get(id) ?? 'unknown' })),
     };
   });
@@ -579,18 +586,27 @@ export async function buildRemediationProjection(
     );
   }
 
+  // Pre-v2 provider ids remain in the ledger for historical shipment
+  // records, but are not planning context or remediation obligations.
+  const pendingAsBuiltFindings = pending.findings.filter((finding) =>
+    isEngineStampedAsBuiltFindingId(finding.finding),
+  );
+  const pendingFindingIds = new Set(pendingAsBuiltFindings.map((finding) => finding.finding));
+
   const projection: RemediationProjection = {
     version: REMEDIATION_PROJECTION_VERSION,
     source: request.source,
     requiredReferences,
     evidence: evidence.evidence,
     tasks: taskContext.tasks,
-    // Pre-v2 provider ids remain in the ledger for historical shipment
-    // records, but are not planning context or remediation obligations.
-    pendingAsBuiltFindings: pending.findings.filter((finding) =>
-      isEngineStampedAsBuiltFindingId(finding.finding),
-    ),
-    ...(priorCases === undefined ? {} : { priorAsBuiltCases: priorCases.cases }),
+    pendingAsBuiltFindings,
+    ...(priorCases === undefined ? {} : {
+      priorAsBuiltCases: priorCases.cases.map((record) => ({
+        ...record,
+        sources: record.sources.map(({ summary, ...source }) =>
+          pendingFindingIds.has(source.findingId) ? source : { ...source, summary }),
+      })),
+    }),
     priorLaps: ledger.kind === 'ok' ? projectPriorLaps(ledger.ledger.gates) : [],
     refusals,
     vocabulary: {

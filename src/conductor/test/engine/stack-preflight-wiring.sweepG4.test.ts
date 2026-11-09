@@ -406,7 +406,7 @@ describe('stack preflight through the real daemon dispatch', () => {
 
     expect(captured.trace[0]).toBe('recovery:recovered');
     expect(captured.trace.filter((entry) => entry.startsWith('restack:'))).toEqual([]);
-    expect(seen.map((event) => event.type)).toEqual(['restack_recovered']);
+    expect(seen.map((event) => event.type)).toEqual(['restack_applied', 'restack_applied', 'restack_applied', 'restack_recovered']);
     // No second re-kick: resumeRebaseFirst found no REKICK and skipped.
     expect(captured.rekickAtResume).toEqual([false]);
     expect(captured.resumeResults).toEqual(['skipped']);

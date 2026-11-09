@@ -33,7 +33,7 @@ import { surfaceQuarantine } from './setup-triage.js';
 import { verifyWorkOrder, type WorkOrder, type WorkOrderGitRunner } from './work-order.js';
 import type { SetupFailureError } from './worktree-prepare.js';
 import type { TriageOutcome } from './setup-triage.js';
-import type { OperatorParkedTermination } from './conductor-options.js';
+import type { OperatorParkedTermination, PreemptedTermination } from './conductor-options.js';
 import type { WorkClaims } from './work-claims.js';
 
 /** Read-only liveness view of the daemon's active work-claim registry. */
@@ -79,7 +79,7 @@ export interface RealDepsConfig {
     featureEvents?: ConductorEventEmitter,
     log?: (message: string) => void,
     sessionId?: string,
-  ) => Promise<void | OperatorParkedTermination>;
+  ) => Promise<void | OperatorParkedTermination | PreemptedTermination>;
   /** Legacy narrative provider when provider-aware feature execution is absent. */
   provider?: LLMProvider;
   providerExecution?: () => ProviderExecutionContext;
@@ -500,7 +500,7 @@ async function exists(p: string): Promise<boolean> {
  * teardown race) — that must never crash the daemon process, so failures are
  * caught, logged loudly to stderr, and swallowed (never rethrown).
  */
-async function appendHaltClearedRecord(
+export async function appendHaltClearedRecord(
   worktreePath: string,
   cause: 'operator' | 'rekick',
   recordRemote?: HaltRecordRemoteOptions,

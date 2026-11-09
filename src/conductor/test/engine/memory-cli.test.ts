@@ -195,6 +195,52 @@ describe('dispatchMemorySetup — .memory symlink creation (A14 live path)', () 
   });
 });
 
+describe('setupMemoryStore — keeps .memory out of git', () => {
+  it('ignores .memory in a fresh repo so the symlink is never committed', async () => {
+    const repo = await makeRepo('alpha', tmpDir);
+
+    await setupMemoryStore(repo);
+
+    expect(await git(['status', '--porcelain', '--untracked-files=all'], repo)).toBe('');
+    expect(await git(['check-ignore', '.memory'], repo)).toBe('.memory');
+    expect(await readFile(join(repo, '.gitignore'), 'utf8').catch(() => undefined)).toBeUndefined();
+  });
+
+  it('adds the ignore rule once across repeated setups', async () => {
+    const repo = await makeRepo('alpha', tmpDir);
+
+    await setupMemoryStore(repo);
+    await setupMemoryStore(repo);
+
+    const exclude = await readFile(join(repo, '.git', 'info', 'exclude'), 'utf8');
+    expect(exclude.split('\n').filter((line) => line === '.memory')).toHaveLength(1);
+  });
+
+  it('ignores .memory for the main checkout when setup runs in a linked worktree', async () => {
+    const repo = await makeRepo('alpha', tmpDir);
+    await writeFile(join(repo, 'README.md'), 'x\n', 'utf8');
+    await git(['add', 'README.md'], repo);
+    await git(['commit', '-q', '-m', 'init'], repo);
+    const worktree = join(tmpDir, 'alpha-wt');
+    await git(['worktree', 'add', '-q', '-b', 'feat/x', worktree], repo);
+
+    await setupMemoryStore(worktree);
+
+    expect(await git(['status', '--porcelain', '--untracked-files=all'], worktree)).toBe('');
+    await mkdir(join(repo, '.memory'), { recursive: true });
+    await writeFile(join(repo, '.memory', 'index.md'), '# Memory Index\n', 'utf8');
+    expect(await git(['status', '--porcelain', '--untracked-files=all'], repo)).toBe('');
+  });
+
+  it('still sets up memory in a directory that is not a git repository', async () => {
+    const dir = join(tmpDir, 'plain');
+    await mkdir(dir, { recursive: true });
+
+    await expect(setupMemoryStore(dir)).resolves.toBe('ensured');
+    expect((await lstat(join(dir, '.memory'))).isSymbolicLink()).toBe(true);
+  });
+});
+
 describe('observeMemorySetup', () => {
   it('emits the observed state and canonical verdict for absent, symlink, and directory paths', async () => {
     const absent = await makeRepo('absent', tmpDir);

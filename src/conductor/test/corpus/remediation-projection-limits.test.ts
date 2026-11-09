@@ -53,9 +53,13 @@ describe('remediation projection corpus limits', () => {
       REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
       REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.pendingAsBuiltFindingsBytes,
     )));
+    expect(limits.priorAsBuiltCasesBytes).toBe(roundUpPowerOfTwo(Math.max(
+      REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
+      REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.priorAsBuiltCasesBytes,
+    )));
+    expect(limits.priorAsBuiltCasesBytes).toBeGreaterThan(8_929);
     for (const [limit, measured] of [
       [limits.priorLapsBytes, REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.priorLapsBytes],
-      [limits.priorAsBuiltCasesBytes, REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.priorAsBuiltCasesBytes],
       [limits.refusalsBytes, REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.refusalsBytes],
     ] as const) {
       expect(limit).toBe(roundUpPowerOfTwo(Math.max(REMEDIATION_PROJECTION_OPTIONAL_CONTEXT_FLOOR_BYTES, measured)));

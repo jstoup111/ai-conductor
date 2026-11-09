@@ -722,6 +722,52 @@ export async function clearMarker(worktreePath: string): Promise<void> {
   await writeFile(join(worktreePath, REKICK_SENTINEL), `rekick\n`, 'utf-8');
 }
 
+/**
+ * Clear the retryable-HALT boundary without touching `HALT.cleared`.
+ *
+ * `HALT.cleared` is also the operator's pending prd-audit decision carrier;
+ * unlike sweep clears, a prompt re-dispatch must retain it verbatim. The
+ * separate `.rekicked` marker records exactly the body this boundary cleared.
+ */
+export async function clearRetryableHaltMarker(worktreePath: string): Promise<boolean> {
+  const haltPath = join(worktreePath, HALT_MARKER);
+  const rekickedPath = join(worktreePath, '.pipeline/HALT.rekicked');
+  try {
+    // Establish absence before touching a malformed prior archive. The
+    // subsequent rename remains the commit point for a live marker.
+    await readFile(haltPath, 'utf-8');
+  } catch (error) {
+    // Only a confirmed concurrent removal is a no-op. Permission, I/O, and
+    // path-type failures must reach the daemon so it can retain and park the
+    // live HALT rather than dispatch through it.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+
+  // A malformed marker must not turn a retryable mechanical HALT into an
+  // infinite parked state. `isFreshRetryableHalt` deliberately treats an
+  // unreadable archive as fresh, so replace an engine-owned directory before
+  // atomically recording the body this dispatch consumes.
+  await rm(rekickedPath, { recursive: true, force: true });
+  try {
+    // `rename` is the commit point: it both preserves the exact HALT bytes
+    // and proves that this caller, rather than a concurrent clearer, removed
+    // the live marker. In particular, do not write an archive followed by a
+    // forceful rm: that sequence can claim success after another caller has
+    // already removed HALT.
+    await rename(haltPath, rekickedPath);
+  } catch (error) {
+    // As above, another clearer winning the race is harmless; every other
+    // failure leaves the marker live and must fail the dispatch boundary.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+
+  await rm(join(worktreePath, HALT_CLASS_MARKER), { recursive: true, force: true });
+  await writeFile(join(worktreePath, REKICK_SENTINEL), `rekick\n`, 'utf-8');
+  return true;
+}
+
 // ── FR-12: resume rebase-first (play-forward) ────────────────────────────────
 
 export type RekickResumeResult = 'skipped' | 'rebased' | 'halted' | 'already_shipped';

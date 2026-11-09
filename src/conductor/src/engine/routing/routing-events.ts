@@ -48,7 +48,7 @@ export function operatorRoundEvent(
 /** Creates the durable occurrence paired with closing a stale audit round. */
 export function routingRoundSupersededEvent(
   record: RouteRecord,
-  supersededBy: RoundId,
+  disposition: { readonly disposition: 'superseded'; readonly supersededBy: RoundId } | { readonly disposition: 'leaf-return' },
   droppedHosts: readonly ChildId[],
   findingIds: readonly string[],
   reason: string,
@@ -56,7 +56,7 @@ export function routingRoundSupersededEvent(
 ): Extract<ConductorEvent, { type: 'routing_round_superseded' }> {
   return {
     type: 'routing_round_superseded', ...occurrence(), roundId: record.roundId,
-    supersededBy, droppedHosts, findingIds, reason, operator,
+    ...disposition, droppedHosts, findingIds, reason, operator,
     child: droppedHosts.reduce<ChildId | undefined>(
       (lowest, host) => lowest === undefined || host < lowest ? host : lowest,
       undefined,

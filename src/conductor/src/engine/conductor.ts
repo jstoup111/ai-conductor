@@ -218,7 +218,7 @@ import { hasDurableChildState, resolveActiveChild, resolveSealedLeaf, type Activ
 import { formatStackCursorRefusal } from './stack-cursor-recovery.js';
 import { isUnroutedRepairPending, resolveExecutionChild, type ExecutionChildResolution, type ExecutionChildTargetResolution } from './routing/execution-child.js';
 import { settleRoutedBuildClaim } from './routing/prerequisite-claim.js';
-import { assertNever, emptyUnsettledReceipt, isDerivedAlreadyCompleteHost, routingEligible, type RegionGate, type RoundId } from './routing/route-types.js';
+import { assertNever, emptyUnsettledReceipt, isDerivedAlreadyCompleteHost, parseRoundId, routingEligible, type RegionGate, type RoundId } from './routing/route-types.js';
 import { chargeTasklessAtAdmission, consumeRoutedRepairCredit, reconcileReceiptLedger, rebuildLedgerFromReceipts, routedSealedAuthored, settleRoundAtDispatch, tasklessAdmissionCapacity, type ReceiptRoutingScope, type RoundSettlementResult } from './routing/round-receipt.js';
 import { loadSliceTopology } from './slice-topology.js';
 import { readAppendedRemediationTaskChildren } from './artifacts.js';
@@ -226,6 +226,7 @@ import { createRouteRecord, nextRoundId, readRepairMarker, readRevalidationQueue
 import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from './routing/routing-refs.js';
 import { routeAdmittedRound } from './routing/round-router.js';
 import { resolveResidueOwner, runResidueRoutingCall } from './routing/residue-routing-call.js';
+import { changedPathsByPosition, resolveCitedPaths, selectHost } from './routing/cannot-host.js';
 import { admitRound, checkRoundAdmissionFence, diagnoseAffectedRounds, exitRoutedHostAndReconcile, recordRoundStall, reconcileRounds, routedRoundOpen } from './routing/round-admission.js';
 import { enterHostRegion, verifyGreenAcceptance } from './routing/host-region-entry.js';
 import { settleDerivedNoOpHost } from './routing/routed-exit.js';
@@ -579,6 +580,7 @@ import type {
   FinishPublicationCoordinator,
   NavigableStep,
   OperatorParkedTermination,
+  PreemptedTermination,
 } from "./conductor-options.js";
 import {
   clampToRunnablePrerequisite,
@@ -600,7 +602,7 @@ import {
 } from './step-completion.js';
 export { buildOutcomeRung, graderDispatchBackoffMs, toSpotAuditVerifierResult } from "./step-runner-types.js";
 export type { ComplexityAssessment, SpotAuditDispatchResult, StepRunOptions, StepRunResult, StepRunner } from "./step-runner-types.js";
-export type { ArtifactReviewResult, CheckpointResponse, ConductorOptions, FinishPublicationCoordinator, NavigableStep, OperatorParkedTermination } from "./conductor-options.js";
+export type { ArtifactReviewResult, CheckpointResponse, ConductorOptions, FinishPublicationCoordinator, NavigableStep, OperatorParkedTermination, PreemptedTermination } from "./conductor-options.js";
 export {
   clampToRunnablePrerequisite,
   earliestResolvablePrerequisiteIndex,
@@ -1345,7 +1347,9 @@ export class Conductor {
   }
 
   private featureSlug?: string;
+  private rawOperatorParkBoundary?: () => Promise<boolean>;
   private operatorParkBoundary?: () => Promise<boolean>;
+  private preemptionRequested?: () => boolean;
   private resume: boolean;
   private fromStep?: StepName;
   private mode: RunMode;
@@ -2993,7 +2997,11 @@ export class Conductor {
       },
     });
     this.featureSlug = opts.featureSlug;
-    this.operatorParkBoundary = opts.operatorParkBoundary;
+    this.rawOperatorParkBoundary = opts.operatorParkBoundary;
+    this.preemptionRequested = opts.preemptionRequested;
+    this.operatorParkBoundary = opts.preemptionRequested === undefined
+      ? opts.operatorParkBoundary
+      : async () => Boolean(await opts.operatorParkBoundary?.()) || opts.preemptionRequested!();
     this.resume = opts.resume ?? false;
     this.fromStep = opts.fromStep;
     this.mode = opts.mode ?? 'default';
@@ -3237,6 +3245,21 @@ export class Conductor {
     if (cursor.kind === 'no-child') return true;
 
     await this.haltChildRegionRefusal(await this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
+    return false;
+  }
+
+  /** True only when durable routing history proves that returnToLeaf closed a round. */
+  private async hasSettledRoutedLeafReturn(slug: string): Promise<boolean> {
+    const git = makeGitRunner(this.projectRoot);
+    const listed = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
+    if (listed.exitCode !== 0) return false;
+    for (const ref of listed.stdout.split('\n').filter(Boolean)) {
+      const roundId = parseRoundId(ref.split('/').at(-1) ?? '');
+      if (!roundId) return false;
+      const stored = await readRouteRecord(this.projectRoot, slug, roundId, { git });
+      if (stored.kind !== 'record') return false;
+      if (stored.record.phase === 'closed' && stored.record.leafReturn !== undefined) return true;
+    }
     return false;
   }
 
@@ -7461,7 +7484,7 @@ export class Conductor {
     return checkStepCompletion(this.projectRoot, 'build', { ...ctx, unverifiedDoneWhenNudgeSpent: true });
   }
 
-  async run(): Promise<OperatorParkedTermination | undefined> {
+  async run(): Promise<OperatorParkedTermination | PreemptedTermination | undefined> {
     this.shutdownRequested = false;
     await this.transcriptRetention.ready();
     // #788 regression guard: the phase-active marker creates `.pipeline/`
@@ -7527,24 +7550,13 @@ export class Conductor {
       // recoverable restack into an unrelated rebase HALT.
       const resumeSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
       let routedLeafBuildResume = false;
+      let resumedAtWholeFeature = false;
       let routedHostEntryStep: RegionGate | undefined;
       if (resumeSlug) {
-        // Receipt recovery is meaningful only for a routed stack.  Keep the
-        // N=1 path byte-for-byte free of route-ref probes.
-        if (this.config.stacked_prs?.route_whole_feature_fixes === true && await hasDurableChildState(this.projectRoot, resumeSlug)) {
-          try {
-            const receiptCursor = await this.resolveActiveChild(this.projectRoot, resumeSlug);
-            const routing = { cursor: receiptCursor, config: this.config };
-            if (routingEligible(receiptCursor, this.config)) {
-              const rebuilt = await rebuildLedgerFromReceipts(this.projectRoot, resumeSlug, routing);
-              if (rebuilt.kind === 'unreadable') throw new Error('route receipts are unreadable');
-              await reconcileReceiptLedger(this.projectRoot, resumeSlug, routing);
-            }
-          } catch {
-            await this.writeHaltMarker('routed receipt ledger recovery is unavailable; inspect route records before resuming\n', 'needs-human');
-            return;
-          }
-        }
+        // Preflight owns durable routing reconciliation, including draining a
+        // sole leaf-return close whose marker was deliberately removed.  It
+        // must run before receipt recovery: the pre-close cursor can no
+        // longer describe the settled leaf state.
         const preflight = await this.stackPreflight({
           worktree: this.projectRoot,
           slug: resumeSlug,
@@ -7569,6 +7581,36 @@ export class Conductor {
         // separate writer. Refresh only clean fields before the resume path
         // computes its next transition or enters a child region.
         await this.adoptDurableState(state);
+        // A closed routed round alone is ordinary history. Only returnToLeaf
+        // leaves a durable leaf-return receipt whose root state is authoritative.
+        // Other stacked resumes must still enter their active child's overlay.
+        const routingEnabled = this.config.stacked_prs?.route_whole_feature_fixes === true;
+        const hasChildren = routingEnabled && await hasDurableChildState(this.projectRoot, resumeSlug);
+        const roundIsOpen = hasChildren ? await routedRoundOpen(this.projectRoot, resumeSlug) : false;
+        if (hasChildren && !roundIsOpen && await this.hasSettledRoutedLeafReturn(resumeSlug)) {
+          await this.restoreWholeFeatureState(state);
+          resumedAtWholeFeature = true;
+        }
+        // Receipt recovery is meaningful only for a routed stack.  Resolve
+        // its cursor after preflight has settled any recorded round so a
+        // leaf-return close resumes as ordinary whole-feature validation.
+        if (
+          hasChildren
+          && roundIsOpen
+        ) {
+          try {
+            const receiptCursor = await this.resolveActiveChild(this.projectRoot, resumeSlug);
+            const routing = { cursor: receiptCursor, config: this.config };
+            if (routingEligible(receiptCursor, this.config)) {
+              const rebuilt = await rebuildLedgerFromReceipts(this.projectRoot, resumeSlug, routing);
+              if (rebuilt.kind === 'unreadable') throw new Error('route receipts are unreadable');
+              await reconcileReceiptLedger(this.projectRoot, resumeSlug, routing);
+            }
+          } catch {
+            await this.writeHaltMarker('routed receipt ledger recovery is unavailable; inspect route records before resuming\n', 'needs-human');
+            return;
+          }
+        }
         if (preflight.kind === 'navigate-leaf-to-build' || preflight.kind === 'navigate-host') {
           // Admission wrote the route and marker before its normal leaf
           // rewind.  A crash in that gap is recovered by rewinding the leaf's
@@ -7589,7 +7631,7 @@ export class Conductor {
           }
         }
       }
-      if (!routedLeafBuildResume && !await this.activateChildRegionStateForResume(state)) return;
+      if (!routedLeafBuildResume && !resumedAtWholeFeature && !await this.activateChildRegionStateForResume(state)) return;
       // A restarted process has no `lastRebaseOutcome`, so the durable
       // operation descriptor is the only authority that can prevent it from
       // selecting finish across an interrupted/inconsistent rebase write.
@@ -8372,14 +8414,16 @@ export class Conductor {
     // completion must continue through the tail without trying to close again.
     let activeChildRequiresClosure = false;
     let parkedAtOperatorBoundary = false;
+    let preemptedAtBoundary = false;
     // Routing has durable work but no runnable whole-feature gate.  This is a
     // resumable parking boundary, not loop convergence and not a failure.
     let parkedForRouting = false;
     const stopAtOperatorParkBoundary =
       async (
-        alreadyObserved = false,
+        _alreadyObserved = false,
         observedBoundary?: SchedulingUnitRef,
-      ): Promise<OperatorParkedTermination | undefined> => {
+        preemptionBoundary?: SchedulingUnitRef,
+      ): Promise<OperatorParkedTermination | PreemptedTermination | undefined> => {
         if (
           !this.daemon ||
           this.featureSlug === undefined ||
@@ -8388,27 +8432,37 @@ export class Conductor {
           return undefined;
         }
 
-        const operatorParkRequested = alreadyObserved || await this.operatorParkBoundary().catch(() => true);
-        if (!operatorParkRequested) {
-          return undefined;
-        }
-
         const boundary: SchedulingUnitRef = observedBoundary ?? lastSettledUnit ?? { kind: 'pre-first-unit' };
+        const operatorParkRequested = await this.rawOperatorParkBoundary?.().catch(() => true) ?? false;
         // A declined attempt leaves the owning step in_progress, but the
         // admitted execution window still needs its truthful interruption
         // terminal. Close it before announcing the operator boundary so the
         // boundary is the event-stream terminal, rather than letting finally
         // append step_interrupted after it.
+        if (operatorParkRequested || (_alreadyObserved && !this.preemptionRequested?.())) {
+          await this.closeOpenExecutions();
+          await emitTracked({
+            type: 'operator_park_boundary',
+            featureSlug: this.featureSlug,
+            boundary,
+          });
+          process.off('SIGINT', sigintHandler);
+          process.off('SIGTERM', sigterm);
+          parkedAtOperatorBoundary = true;
+          return { kind: 'operator-parked', boundary };
+        }
+
+        if (!this.preemptionRequested?.()) return undefined;
         await this.closeOpenExecutions();
         await emitTracked({
-          type: 'operator_park_boundary',
+          type: 'preemption_boundary',
           featureSlug: this.featureSlug,
-          boundary,
+          boundary: preemptionBoundary ?? boundary,
         });
         process.off('SIGINT', sigintHandler);
         process.off('SIGTERM', sigterm);
-        parkedAtOperatorBoundary = true;
-        return { kind: 'operator-parked', boundary };
+        preemptedAtBoundary = true;
+        return { kind: 'preempted', boundary: preemptionBoundary ?? boundary };
       };
     // Late declarations cannot reopen existing work, but their refusal must be
     // visible even when resume/settled-state short circuits skip the step loop.
@@ -9026,7 +9080,7 @@ export class Conductor {
           if (parkedMember) {
             const parked = await stopAtOperatorParkBoundary(true, {
               kind: 'attempt', step: step.name, attempt: parkedMember.attempt ?? 1, member: parkedMember.name,
-            });
+            }, { kind: 'group', name: step.name });
             if (parked) return parked;
           }
           // State keys are already written inside runParallelGroupViaCore.
@@ -11331,7 +11385,7 @@ export class Conductor {
             const execution = resolveExecutionChild(await this.resolveActiveChild(this.projectRoot, slug), slug);
             if (execution.source === 'routed-host' && execution.roundId !== undefined) {
               const route = await readRouteRecord(this.projectRoot, slug, execution.roundId);
-              const workOrder = route.kind === 'record' && route.record.kind === 'operator'
+              const workOrder = route.kind === 'record'
                 ? route.record.allocation[execution.target.child]?.retryHint
                 : undefined;
               if (workOrder && !retryHint?.includes(workOrder)) retryHint = [retryHint, workOrder].filter(Boolean).join('\n\n');
@@ -11914,27 +11968,6 @@ export class Conductor {
                 PROTECTED_ARTIFACT_HALT_CLASS,
               );
             }
-            // T7 invariant: EVERY build-step exit path records
-            // `lastResolvedCount`. This exit short-circuits before any build
-            // dispatch, so none of the T7 stamp sites further below are
-            // reached — and without a stamp here the sidecar keeps whatever
-            // stale (typically 0) count it had while the live count still
-            // counts `Task:`-trailered commits already on the branch. That
-            // makes daemon-cli's `isProgressReKickEligible`
-            // (`liveResolvedCount > lastResolvedCount`) permanently true for
-            // a feature halted at the seal, so the daemon re-dispatches it
-            // forever — a tight spin bounded only by the IN-MEMORY per-run
-            // progress-re-kick dispatch ceiling, which resets on every daemon
-            // restart. Recording the count on this exit is the honest reading
-            // of the predicate's own contract: this dispatch ended without
-            // making forward progress, so it must not earn a re-kick.
-            if (step.name === 'build') {
-              // Re-read fresh from disk rather than writing the possibly-
-              // stale in-memory snapshot — same reason as the other T7 stamps.
-              const freshEvidence = await createTaskEvidence(this.projectRoot);
-              freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot, this.activeRegionChild);
-              await freshEvidence.write();
-            }
           } else
           try {
             const dispatchIdentityArmed =
@@ -12150,12 +12183,6 @@ export class Conductor {
           // Settlement owns its HALT marker and loop-halt event. Preserve the
           // pre-existing terminal routing without retry or failure accounting.
           if (result.pendingRepairSettlementHalt) return;
-
-          if (step.name === 'build') {
-            const freshEvidence = await createTaskEvidence(this.projectRoot);
-            freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot, this.activeRegionChild);
-            await freshEvidence.write();
-          }
 
           // A routed BUILD owns the terminal claim boundary.  No parser or
           // provider output gets to move a ref: parsing, immutable-tree
@@ -13789,16 +13816,6 @@ export class Conductor {
                 }
 
                 if (bpCeilingHit) {
-                  // T7: stamp the ending resolved count on this park exit too
-                  // — every build-step exit path records lastResolvedCount,
-                  // not just success. Re-read fresh from disk (see the
-                  // success-exit comment above) so this doesn't clobber
-                  // stamps written directly to the sidecar elsewhere.
-                  if (step.name === 'build') {
-                    const freshEvidence = await createTaskEvidence(this.projectRoot);
-                    freshEvidence.lastResolvedCount = resolvedTasksAfter;
-                    await freshEvidence.write();
-                  }
                   const reason = `build progressing but hit absolute attempt ceiling ${bpCeilingValue}`;
                   state[step.name] = 'failed';
                   await this.haltSerialExecution({
@@ -13871,17 +13888,6 @@ export class Conductor {
                       })
                     : { parked: false };
                   if (parkResult.parked) {
-                    // T7: stamp the ending resolved count on this park exit
-                    // too — every build-step exit path records
-                    // lastResolvedCount, not just success. Re-read fresh
-                    // from disk (see the success-exit comment above) so this
-                    // doesn't clobber stamps written directly to the
-                    // sidecar elsewhere.
-                    if (step.name === 'build') {
-                      const freshEvidence = await createTaskEvidence(this.projectRoot);
-                      freshEvidence.lastResolvedCount = resolvedTasksAfter;
-                      await freshEvidence.write();
-                    }
                     const reason =
                       `auto-parked: empty/missing plan` +
                       ` — unpark with \`conduct daemon unpark ${slug}\``;
@@ -14239,21 +14245,6 @@ export class Conductor {
                 }
                 continue;
               }
-              // T7: stamp the ending resolved count on this exit too — the
-              // fixed-budget-exhausted / non-daemon-park failure exit is
-              // still a build-step dispatch end, so lastResolvedCount must
-              // be recorded here even though nothing "succeeded".
-              if (step.name === 'build') {
-                // Re-read fresh from disk rather than writing the possibly-
-                // stale in-memory `this.taskEvidence` snapshot — stamps can
-                // be written directly to the sidecar by other pathways
-                // (task-cli / trailer-stamping telemetry paths) between this
-                // Conductor's start and this exit, and blindly writing the
-                // stale snapshot would clobber them.
-                const freshEvidence = await createTaskEvidence(this.projectRoot);
-                freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot, this.activeRegionChild);
-                await freshEvidence.write();
-              }
               // Task 8 (builds-stall-when-work-lands-without-task-trailer-):
               // budget exhausted with NO attempt ever satisfying the
               // completion gate would normally fall straight into the
@@ -14298,11 +14289,6 @@ export class Conductor {
                 // from whatever is already persisted, not from this `state`
                 // object.
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
-                if (step.name === 'build') {
-                  const freshEvidence = await createTaskEvidence(this.projectRoot);
-                  freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot, this.activeRegionChild);
-                  await freshEvidence.write();
-                }
                 succeeded = true;
                 buildRoutedForward = true;
                 successOutput = result.output;
@@ -14319,18 +14305,6 @@ export class Conductor {
           }
 
           if (this.verifyArtifacts && stepHasCompletionCheck(step.name, this.config) && !succeeded) break;
-
-          // T7: stamp the ending resolved count on the success/completing
-          // exit — every build-step exit path (success, park, ceiling)
-          // records lastResolvedCount, not just the park paths above.
-          if (step.name === 'build') {
-            // Re-read fresh from disk — see comment at the fixed-budget-
-            // exhausted exit above for why this must not write the stale
-            // in-memory `this.taskEvidence` snapshot.
-            const freshEvidence = await createTaskEvidence(this.projectRoot);
-            freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot, this.activeRegionChild);
-            await freshEvidence.write();
-          }
 
           succeeded = true;
           successOutput = result.output;
@@ -16479,6 +16453,7 @@ export class Conductor {
       if (
         this.daemon &&
         !parkedAtOperatorBoundary &&
+        !preemptedAtBoundary &&
         !parkedForRouting &&
         !(await this.markerExists(DONE_MARKER)) &&
         !(await this.markerExists(LOOP_HALT_MARKER))
@@ -16644,6 +16619,30 @@ export class Conductor {
       (rows.length > 1 ? ` (+${rows.length - 1} more FAIL row(s))` : '');
   }
 
+  /**
+   * Adapt the conductor's injected PR-operation Git seam to routing helpers,
+   * which require a complete result even when the underlying command fails.
+   */
+  private tasklessRoutingGit(): RebaseGitRunner {
+    return async (args) => {
+      try {
+        const result = await this.git(args, { cwd: this.projectRoot });
+        const observed = result as { stdout: string; stderr?: string; exitCode?: number };
+        return {
+          exitCode: observed.exitCode ?? 0,
+          stdout: observed.stdout,
+          stderr: observed.stderr ?? '',
+        };
+      } catch (error) {
+        return {
+          exitCode: 1,
+          stdout: '',
+          stderr: error instanceof Error ? error.message : String(error),
+        };
+      }
+    };
+  }
+
   /** Creates and admits one taskless round after its receipt-specific charge is durable. */
   private async admitRoutedTasklessKickback(
     state: ConductState,
@@ -16697,17 +16696,51 @@ export class Conductor {
     if (declaredPositions.length === 0) {
       return { kind: 'halted', reason: 'taskless routing cannot resolve the sealed plan slice topology' };
     }
+    const changedPaths = await changedPathsByPosition({
+      slug,
+      positions: declaredPositions,
+      leafTip: leafBranchFor(slug),
+      baseRef: this.baseBranch ?? 'main',
+      git: this.tasklessRoutingGit(),
+    });
+    if ('kind' in changedPaths) {
+      return { kind: 'halted', reason: `taskless routing manifest failed: ${changedPaths.detail}` };
+    }
     const judged = await runResidueRoutingCall({
-      items: [{ itemId: input.findingId(execution.target.child), rationale: input.reason }],
+      items: [{
+        itemId: input.findingId(execution.target.child),
+        rationale: input.reason,
+        ...(input.retryHint === undefined ? {} : { evidence: input.retryHint }),
+        changedPaths,
+      }],
       declaredPositions,
       judge: this.stepRunner.dispatchResidueRoutingJudgement === undefined
         ? undefined
         : (prompt) => this.stepRunner.dispatchResidueRoutingJudgement!(prompt),
     });
     if (judged.kind === 'halt') {
-      return { kind: 'halted', reason: `taskless routing judgement failed: ${judged.detail}` };
+      return { kind: 'halted', reason: `taskless routing judgement failed for ${judged.itemId}: ${judged.detail}` };
     }
-    const host = resolveResidueOwner(judged.answers[0]!).owner as ChildId;
+    const answer = judged.answers[0]!;
+    const ownership = resolveResidueOwner(answer);
+    const paths = await resolveCitedPaths(answer.implicatedPaths ?? [], leafBranchFor(slug), this.tasklessRoutingGit());
+    if ('kind' in paths) {
+      return { kind: 'halted', reason: `taskless routing implicated-path resolution failed: ${paths.detail}` };
+    }
+    const placement = paths.inputs.length === 0
+      ? { host: declaredPositions.at(-1)!, reason: 'prerequisite-paths' as const }
+      : await selectHost({
+        owner: ownership.owner as ChildId,
+        inputs: paths.inputs,
+        positions: declaredPositions,
+        leafTip: leafBranchFor(slug),
+        git: this.tasklessRoutingGit(),
+      });
+    if ('kind' in placement) {
+      return { kind: 'halted', reason: `taskless routing host selection failed: ${placement.detail}` };
+    }
+    const host = placement.host;
+    const reason = placement.reason === 'prerequisite-paths' ? placement.reason : ownership.reason;
     let sealedAuthored: number | undefined;
     try {
       sealedAuthored = await routedSealedAuthored(this.projectRoot, slug, { cursor, config: this.config });
@@ -16730,7 +16763,7 @@ export class Conductor {
     const created = await createRouteRecord(this.projectRoot, slug, {
       roundId,
       kind: 'audit',
-      items: [{ findingId: input.findingId(host), kind: 'audit', owner: host, host, reason: input.reason, fallback: [] }],
+      items: [{ findingId: input.findingId(host), kind: 'audit', owner: ownership.owner as ChildId, host, reason, fallback: [] }],
       allocation: { [host]: { remTaskIds: [], blockBodies: [], ...(input.retryHint === undefined ? {} : { retryHint: input.retryHint }) } },
       sealedAuthored,
     });
@@ -17405,6 +17438,9 @@ export class Conductor {
           providerAvailability: this.providerExecution?.providerAvailability,
           onProviderSuppressed: this.providerExecution?.onProviderSuppressed,
           executionContext,
+          // A configured group's members must drain once admitted. Its retry
+          // gate still observes the composed park+yield predicate: a yield
+          // declines only a redispatch, then surfaces at the owning join.
           operatorParkBoundary: this.daemon && this.featureSlug !== undefined
             ? this.operatorParkBoundary
             : undefined,

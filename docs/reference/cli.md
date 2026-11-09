@@ -1707,7 +1707,8 @@ Each round prints one line: id, kind, phase, `host:state` pairs, current host, r
 holds a different round, a `wedge:` line names the round and the close command to run. Exit `0`; exit
 `1` when the ref listing, any round, or the marker is unreadable.
 
-Close a stale audit round that a later round supersedes:
+Close an audit round, either because a later round supersedes it or to return its work to the
+leaf:
 
 ```bash
 ai-conductor stack rounds --slug <slug> --close r<N> --reason "<why>"
@@ -1715,15 +1716,31 @@ ai-conductor stack rounds --slug <slug> --close r<N> --reason "<why>"
 
 All checks run read-only before the feature dispatch lease is taken. The command refuses, naming the
 cause, when the round is missing, unreadable, or not `open`; its kind is not `audit` (an operator round
-points to `stack land --abandon`); it has an in-progress reroute; any host is `admitted`, `repairing`,
-`reroute-moved`, `built`, `abandoning`, or `abandoned`; the repair marker is unreadable or holds this
-round; or no other non-closed round exists to supersede it. The lowest-numbered other non-closed round
-becomes `supersededBy`. One compare-and-swap closes the round, marks each `pending` host `done`,
-verifies the survivor round is unchanged, and queues a `routing_round_superseded` event naming the
-dropped hosts, their finding ids, the reason, and the operator. On success it prints the closed round,
-dropped hosts, and finding ids. It does not clear a halt; run [`halt clear`](#ai-conductor-halt-clear)
-before the daemon resumes. `--close` requires an approved operator identity and a non-empty
-`--reason`.
+points to `stack land --abandon`); it has an in-progress reroute; any host is `repairing`,
+`reroute-moved`, `built`, `abandoning`, or `abandoned`; or the repair marker is unreadable.
+
+- **Supersede.** When another round is not `closed`, the lowest-numbered such round becomes
+  `supersededBy`. The command also refuses when any host is `admitted` or the marker holds this
+  round. One compare-and-swap closes the round, marks each `pending` host `done`, verifies the
+  survivor round is unchanged, and queues a `routing_round_superseded` event (`disposition:
+  superseded`) naming the dropped hosts, their finding ids, the reason, and the operator. On success
+  it prints the closed round, dropped hosts, and finding ids.
+- **Leaf return.** When this is the only round that is not `closed`, the command also refuses when
+  the marker holds a different round. One compare-and-swap closes the round, marks each `pending`
+  and `admitted` host `done`, records the leaf branch and its head as the round's leaf return,
+  deletes a marker holding this round, and queues a `routing_round_superseded` event (`disposition:
+  leaf-return`, empty `findingIds`). It prints `stack rounds: leaf return closed r<N>; closed hosts
+  <hosts>; reason <reason>.` The next resume continues from whole-feature state on the leaf instead
+  of re-entering a child. An unresolvable leaf branch refuses with `cannot resolve leaf return head
+  for routing round r<N>`.
+
+A contested or failed write refuses. The command does not clear a halt; run
+[`halt clear`](#ai-conductor-halt-clear) before the daemon resumes. `--close` requires an approved
+operator identity and a non-empty `--reason`.
+
+A tracked-file commit on a branch other than the recorded host is refused by the commit guard. For
+an `audit` round the refusal names `ai-conductor stack rounds --slug <slug> --close r<N> --reason
+<text>`; for an `operator` round it names `ai-conductor stack land --slug <slug> --abandon`.
 
 To rewind a closed child, use the declared operator-round form rather than the open-child rewind:
 
@@ -1770,12 +1787,19 @@ again, the HALT names the stale answer.
 The command acquires the feature dispatch lease, then validates the tip against the recorded
 conflict: the feature is stacked, the live HALT names the same child and operation, the tip descends
 from the recorded new parent, contains every candidate commit subject, has no merge commits, and
-touches only paths child `<k>` owns. On success it writes
+passes the resolved-tip ownership rule: the tip may change paths child `<k>` owns and may adapt
+paths the new parent changed (old parent → new parent), but may not touch any other path
+(`unowned`) or restore an adapted path to its old-parent content (`parent-revert`). An ownership
+refusal names each path with its cause, for example
+`resolution touches unowned paths: src/a.ts (unowned), src/b.ts (parent-revert)`. On success it writes
 `refs/conductor/<slug>/restack/resolution/c<k>` (replacing any recorded `--decision` for that
 child), appends a `restack_resolution` event with
 `action: recorded` and the operator identity, clears the HALT, and exits `0`. The next restack uses
 the recorded tip for that child instead of replaying the conflicted range, emits
-`restack_resolution` with `action: consumed`, and deletes the resolution and conflict refs.
+`restack_resolution` with `action: consumed`, and deletes the resolution and conflict refs. The
+restack re-checks a consumed tip against the same ownership rule; a refusal halts
+`restack refused (replay-mismatch)` with the `path (cause)` list. Adapted paths count as the child's
+own surface for gate invalidation and appear in the `restack_applied` event's `adaptedPaths`.
 Commits that change only `.docs/halted/<slug>.md` are bookkeeping: halt-record drift in the old
 range or the new parent's tree does not make the tip stale. A tip that cannot be consumed is retired:
 the restack deletes the resolution ref and emits `restack_resolution` with `action: retired`.

@@ -186,13 +186,14 @@ recoverable.
 - Given child 2's commit `C2` conflicts on `src/c.ts` and the resolver exhausts its budget, when the restack ends, then: it halts needs-human, naming child 2, `C2` and `src/c.ts`; `restack_conflict` is persisted; no child branch or closure ref moved; the journal (`aborted`) and child 2's staging ref remain until that halt is cleared.
 - Given a resolver result missing one of child 2's own commit subjects, when acceptance is checked, then it is rejected, and the run halts as the unresolved conflict above.
 - Given a resolver result not based on the new `closed/c1`, when acceptance is checked, then it is rejected, and the run halts as the unresolved conflict above.
-- Given a resolver result changing a path child 2 never owned, when acceptance is checked, then it is rejected with reason `replay-mismatch`.
+- Given a resolver result changing a path that is in neither child 2's owned paths nor its new parent's changes, when acceptance is checked, then it is rejected with reason `replay-mismatch`.
 - Given a conflict touching `.docs/halted/demo.md` and `src/c.ts` together, when child 2 is replayed, then `src/c.ts` goes to the resolver, and `.docs/halted/demo.md` is never handed to the resolver: it keeps the side being rebuilt.
 
 ### Done When
 - [ ] Only the conflicting child is handed off, and its replay list equals the clean replay's.
 - [ ] Resolver results are accepted only when based on the new parent, with every own commit present
-      and every changed path owned.
+      and every changed path either owned or an adaptation of the new parent's changes that does not restore
+      the old parent's content.
 - [ ] A conflict halt names the child, the commit and the paths, and leaves every ref unmoved.
 
 ## Story 7: An interrupted restack is completed or rolled back from refs alone

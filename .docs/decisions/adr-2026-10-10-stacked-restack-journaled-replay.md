@@ -245,6 +245,10 @@ Operator decisions (2026-10-10):
 > own contribution when its path ownership is checked (`adr-2026-10-12-routed-whole-feature-repair`
 > decision 9).
 
+> **Amended 2026-11-07 by #3598:** The subset rule above still governs a clean plumbing replay. A *resolved* tip (the resolver's result, a recorded operator `--tip`, or either consumed by recovery) may also change paths in its new parent's delta (`diff --no-renames --name-only oldParent newParent`) that are not owned. These are its *adapted paths*: `(newParent..newTip) ∩ (oldParent..newParent) − owned`. An adapted path is refused as a parent revert when the tip's content at that path equals `oldParent`'s, including the path's absence when the parent added it. A path in neither the owned set nor the parent delta still halts `replay-mismatch`. The stated limit carries over: a partial revert inside an adapted file is not caught by this rule. Instead, adapted paths are emitted as `adaptedPaths` on `restack_applied`, and the restack transition counts them as part of the child's contribution, recomputed from the same formula, when it compares the replay. The child's feature-scoped reviews therefore re-open and judge each adaptation. A refused resolution is not discarded: its tip is pinned with the conflict record and halts as an operator-recoverable conflict (adr-2026-10-25-operator-recorded-restack-conflict-resolution decision 2).
+
+> **Amended 2026-11-08 by #3653:** In a `fold` restack, each target child's owned paths also include the paths placed into it. The fold is accepted only when the new leaf tree equals the pre-fold leaf tree; otherwise nothing moves (`adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish` decisions 8 and 9).
+
 4. **The restack journal is durable, ref-backed, and moves in the same transaction as the refs.**
    - **Storage.** The journal is a blob behind `refs/conductor/<slug>/restack/journal`.
      - It is created by compare-and-swap, create-only, so at most one restack is outstanding. A
@@ -609,6 +613,8 @@ Operator decisions (2026-10-10):
 
 > **Amended 2026-10-24 by #3203:** With routing eligible, the automatic repair in the stack preflight is retired. A `repair-pending` cursor with no marker halts needs-human with reason `unlanded-closed-child-commits`, naming the command that carries the commits into an operator round. With routing off it runs as written. The closed-child `rewind` refusal is lifted; it opens an operator round (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decisions 8 and 11).
 
+> **Amended 2026-11-08 by #3653:** The FINISH `rebase` step on a stacked feature runs a `fold` restack before the base refresh whenever leaf-executed audit fixes await placement (`adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish` decision 6).
+
 10. **Cause scopes refunds. A per-child cap bounds repair cascades.**
     - **Cause.** Every stacked restack, and the rebase operation record it writes, carries
       `cause: 'feature-repair' | 'base-refresh'`. N=1 records omit the field, and an absent cause
@@ -674,6 +680,8 @@ Operator decisions (2026-10-10):
 > cites `MAX_RESTACK_CASCADES_PER_CHILD` as a bound (for example the re-validation bound in
 > `adr-2026-10-12-routed-whole-feature-repair`), it now means this resolved per-child allowance,
 > which is still finite.
+
+    > **Amended 2026-11-08 by #3653:** `cause` gains `'fold'`. A fold never refunds, and it charges one cascade to each child it places fixes into (`adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish` decision 8).
 
 11. **Force pushes lease against the remote tip the engine expects.**
     - **Recording.** `executeRemoteGit` is the single chokepoint for engine pushes. On every

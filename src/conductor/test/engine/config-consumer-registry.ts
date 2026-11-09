@@ -282,6 +282,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'build_review.custom_rubrics.question': consumer(RESOLVED_CONFIG),
   'build_review.custom_rubrics.source': consumer(RESOLVED_CONFIG),
   'build_review.custom_rubrics.resources': consumer(RESOLVED_CONFIG),
+  'build_review.custom_rubrics.paths': consumer(RESOLVED_CONFIG),
   'build_review.custom_rubrics.enabled': consumer(RESOLVED_CONFIG),
   'build_review.custom_rubrics.llm_provider': consumer(RESOLVED_CONFIG),
   'build_review.custom_rubrics.model': consumer(RESOLVED_CONFIG),

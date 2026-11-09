@@ -40,7 +40,7 @@ async function fileWithFailedDependency(acceptedByOverlap: boolean): Promise<Fil
 
 describe('declined overlap output', () => {
   it('reports linked and declined suggestions without changing dependency output', () => {
-    const result: FileIntakeIssueResult = { ok: true, issueUrl: 'https://github.com/acme/app/issues/1', size: 'S', priority: 'low', sizeSource: 'given', prioritySource: 'given', dependsOnDecision: 'none', linked: [acceptedRef], unlinked: [], badRefs: [], warnings: [], metadataFailures: [], redactions: [], overlap: { kind: 'proceed', accepted: [acceptedRef], declined: ['acme/app#1487'], advisory: [], skipNotes: [], omittedCount: 3 } };
+    const result: FileIntakeIssueResult = { ok: true, issueUrl: 'https://github.com/acme/app/issues/1', size: 'S', priority: 'low', semver: null, sizeSource: 'given', prioritySource: 'given', semverSource: null, dependsOnDecision: 'none', linked: [acceptedRef], unlinked: [], badRefs: [], warnings: [], metadataFailures: [], redactions: [], overlap: { kind: 'proceed', accepted: [acceptedRef], declined: ['acme/app#1487'], advisory: [], skipNotes: [], omittedCount: 3 } };
     expect(renderIntakeFileOutput(result).stdout).toContain(`[intake-file] overlap: linked ${acceptedRef}`);
     expect(renderIntakeFileOutput(result).stdout).toContain('[intake-file] overlap: declined acme/app#1487');
     expect(renderIntakeFileOutput(result).stdout).toContain('[intake-file] overlap: 3 more suggestion(s) omitted');

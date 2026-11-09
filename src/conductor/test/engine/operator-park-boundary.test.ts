@@ -11,6 +11,7 @@ import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { resolveGroupMembership } from '../../src/engine/conductor.js';
 import { isOperatorParked } from '../../src/engine/park-marker.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
+import { EVENT_SINKS } from '../../src/engine/event-sinks.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
 import type {
@@ -242,6 +243,19 @@ describe('operator park boundary contract', () => {
       unreviewedDispatches: [],
     });
 
+    // A group member's initial dispatch is protected by the owning group
+    // admission gate, but each of its retries calls this injected predicate
+    // directly.  Audit every injection rather than only the configured-group
+    // one: the raw predicate intentionally belongs only to the owner-boundary
+    // classifier, where it gives an operator park precedence over a yield.
+    const groupBranchInjections = [...conductorSource.matchAll(
+      /return(?: await)? runGroupBranch\(member, state, \{[\s\S]*?operatorParkBoundary:\s*this\.daemon && this\.featureSlug !== undefined\s*\?\s*(this\.(?:rawOperatorParkBoundary|operatorParkBoundary))\s*:\s*undefined,/g,
+    )].map((match) => match[1]);
+    expect(groupBranchInjections).toEqual([
+      'this.operatorParkBoundary',
+      'this.operatorParkBoundary',
+    ]);
+
     const unguardedRemediateDispatch = "const judgement = await this.stepRunner.run('remediate', state, { retryReason: 'unguarded reconciliation dispatch' });";
     const unguardedSource = conductorSource.replace(
       prdWideningReconciliationDispatch,
@@ -284,6 +298,108 @@ describe('operator park boundary contract', () => {
       runnerCalls: [],
       terminalMarkers: [],
     });
+
+  });
+
+  // Covers: task:4
+  it('preempts at the next serial-unit boundary after the last settled unit', async () => {
+    await writeState(statePath, stateWithPending('memory', 'explore'));
+    const events = new ConductorEventEmitter();
+    const eventsPath = join(projectRoot, '.pipeline', 'events.jsonl');
+    const persister = new EventPersister(eventsPath, events);
+    persister.start();
+    const run = vi.fn<StepRunner['run']>(async () => ({ success: true }));
+    const conductor = new Conductor({
+      projectRoot, stateFilePath: statePath, stepRunner: { run }, events,
+      fromStep: 'memory', mode: 'auto', daemon: true, verifyArtifacts: false,
+      featureSlug: 'preempted-feature', operatorParkBoundary: async () => false,
+      preemptionRequested: () => run.mock.calls.length === 1,
+    });
+
+    const result = await conductor.run();
+    persister.stop();
+    const persistedEvents = (await readFile(eventsPath, 'utf8')).trim().split('\n').map((text) => JSON.parse(text));
+
+    expect({ result, steps: run.mock.calls.map(([step]) => step), persistedEvents }).toEqual({
+      result: { kind: 'preempted', boundary: { kind: 'step', name: 'memory' } },
+      steps: ['memory'],
+      persistedEvents: expect.arrayContaining([
+        expect.objectContaining({
+          type: 'preemption_boundary', featureSlug: 'preempted-feature',
+          boundary: { kind: 'step', name: 'memory' },
+        }),
+      ]),
+    });
+    expect(persistedEvents.filter((event: ConductorEvent) => event.type === 'preemption_boundary')).toHaveLength(1);
+    expect(persistedEvents.some((event: ConductorEvent) => event.type === 'operator_park_boundary')).toBe(false);
+  });
+
+  // Covers: task:4
+  it('gives an active or unreadable operator park precedence over a yield', async () => {
+    const runCase = async (operatorParkBoundary: NonNullable<ConductorOptions['operatorParkBoundary']>) => {
+      const root = await mkdtemp(join(tmpdir(), 'operator-park-wins-'));
+      const path = join(root, 'conduct-state.json');
+      await writeState(path, stateWithPending('memory'));
+      const events = new ConductorEventEmitter();
+      const seen: ConductorEvent[] = [];
+      events.on('operator_park_boundary', (event) => { seen.push(event); });
+      events.on('preemption_boundary', (event) => { seen.push(event); });
+      const result = await new Conductor({
+        projectRoot: root, stateFilePath: path, stepRunner: { run: async () => ({ success: true }) }, events,
+        fromStep: 'memory', mode: 'auto', daemon: true, verifyArtifacts: false,
+        featureSlug: 'park-wins', operatorParkBoundary, preemptionRequested: () => true,
+      }).run();
+      await rm(root, { recursive: true, force: true });
+      return { result, seen };
+    };
+
+    await expect(runCase(async () => true)).resolves.toEqual({
+      result: { kind: 'operator-parked', boundary: { kind: 'pre-first-unit' } },
+      seen: [expect.objectContaining({ type: 'operator_park_boundary' })],
+    });
+    await expect(runCase(async () => { throw new Error('unreadable'); })).resolves.toEqual({
+      result: { kind: 'operator-parked', boundary: { kind: 'pre-first-unit' } },
+      seen: [expect.objectContaining({ type: 'operator_park_boundary' })],
+    });
+  });
+
+  // Covers: task:4
+  it('keeps ordinary park events unchanged and ignores preemption in interactive runs', async () => {
+    await writeState(statePath, stateWithPending('memory'));
+    const parkEvents: ConductorEvent[] = [];
+    const parkEmitter = new ConductorEventEmitter();
+    parkEmitter.on('operator_park_boundary', (event) => { parkEvents.push(event); });
+    const parkResult = await new Conductor({
+      projectRoot, stateFilePath: statePath, stepRunner: { run: async () => ({ success: true }) }, events: parkEmitter,
+      fromStep: 'memory', mode: 'auto', daemon: true, verifyArtifacts: false,
+      featureSlug: 'ordinary-park', operatorParkBoundary: async () => true,
+    }).run();
+
+    const interactiveRoot = await mkdtemp(join(tmpdir(), 'interactive-preemption-'));
+    const interactiveStatePath = join(interactiveRoot, 'conduct-state.json');
+    await writeState(interactiveStatePath, stateWithPending('memory'));
+    const preemptionRequested = vi.fn(() => true);
+    const interactiveRun = vi.fn<StepRunner['run']>(async () => ({ success: true }));
+    const interactiveResult = await new Conductor({
+      projectRoot: interactiveRoot, stateFilePath: interactiveStatePath, stepRunner: { run: interactiveRun }, events: new ConductorEventEmitter(),
+      fromStep: 'memory', mode: 'interactive', daemon: false, verifyArtifacts: false,
+      featureSlug: 'interactive-preemption', preemptionRequested,
+    }).run();
+    await rm(interactiveRoot, { recursive: true, force: true });
+
+    expect({ parkResult, parkEvents, interactiveResult, interactiveSteps: interactiveRun.mock.calls.length, preemptionCalls: preemptionRequested.mock.calls.length })
+      .toEqual({
+        parkResult: { kind: 'operator-parked', boundary: { kind: 'pre-first-unit' } },
+        parkEvents: [expect.objectContaining({ type: 'operator_park_boundary' })],
+        interactiveResult: undefined,
+        interactiveSteps: 1,
+        preemptionCalls: 0,
+      });
+  });
+
+  // Covers: task:4
+  it('declares preemption boundaries renderable and persistent only', () => {
+    expect(EVENT_SINKS.preemption_boundary).toEqual({ render: true, persist: true, audit: false, otel: false });
   });
 
   it('parks before the first pending serial unit when the boundary reader rejects', async () => {
@@ -312,6 +428,7 @@ describe('operator park boundary contract', () => {
       runnerCalls: [],
       terminalMarkers: [],
     });
+
   });
 
   it('declines an ordinary-path retry after a park lands during attempt one', async () => {
@@ -344,6 +461,99 @@ describe('operator park boundary contract', () => {
       },
       runnerCalls: 1,
     });
+  });
+
+  // Covers: task:5
+  it('drains a yielded first serial attempt, then resumes its kept state without spending accounting', async () => {
+    await writeState(statePath, stateWithPending('memory'));
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    const taskStatusPath = join(projectRoot, '.pipeline', 'task-status.json');
+    const evidencePath = join(projectRoot, '.pipeline', 'task-evidence.json');
+    const taskStatuses = {
+      tasks: [
+        { id: '1', name: 'completed task', status: 'completed' },
+        { id: '2', name: 'active task', status: 'in_progress' },
+      ],
+    };
+    const evidence = {
+      evidenceStamps: {},
+      noEvidenceAttempts: 7,
+      noEvidenceReasons: ['zero_work_product'],
+      migrationGrandfather: [],
+      lastResolvedCount: 0,
+    };
+    await writeFile(taskStatusPath, JSON.stringify(taskStatuses));
+    await writeFile(evidencePath, JSON.stringify(evidence));
+    const started = deferred();
+    const release = deferred<{ success: false; output: string }>();
+    let yielded = false;
+    const run = vi.fn<StepRunner['run']>(async () => {
+      started.resolve();
+      return release.promise;
+    });
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events: new ConductorEventEmitter(),
+      fromStep: 'memory',
+      mode: 'auto',
+      daemon: true,
+      maxRetries: 3,
+      verifyArtifacts: false,
+      featureSlug: 'preempted-feature',
+      operatorParkBoundary: async () => false,
+      preemptionRequested: () => yielded,
+    });
+
+    const resultPromise = conductor.run();
+    await started.promise;
+    yielded = true;
+    release.resolve({ success: false, output: 'first attempt drained normally' });
+    const result = await resultPromise;
+    const persisted = await readState(statePath);
+
+    expect({
+      result,
+      dispatchedAttempts: run.mock.calls.map(([, , options]) => ({
+        attempt: options?.attempt,
+        aborted: options?.abortSignal?.aborted ?? false,
+      })),
+      state: persisted.ok ? persisted.value.memory : persisted,
+      taskStatuses: JSON.parse(await readFile(taskStatusPath, 'utf8')),
+      evidence: JSON.parse(await readFile(evidencePath, 'utf8')),
+      terminalMarkers: await terminalMarkerNames(projectRoot),
+    }).toEqual({
+      result: { kind: 'preempted', boundary: { kind: 'attempt', step: 'memory', attempt: 2 } },
+      dispatchedAttempts: [{ attempt: 1, aborted: false }],
+      state: 'in_progress',
+      taskStatuses,
+      evidence,
+      terminalMarkers: [],
+    });
+
+    const resumedRun = vi.fn<StepRunner['run']>(async () => ({ success: false, output: 'yield again after resume' }));
+    const resumed = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run: resumedRun },
+      events: new ConductorEventEmitter(),
+      resume: true,
+      mode: 'auto',
+      daemon: true,
+      maxRetries: 3,
+      verifyArtifacts: false,
+      featureSlug: 'preempted-feature',
+      operatorParkBoundary: async () => resumedRun.mock.calls.length > 0,
+    });
+    await expect(resumed.run()).resolves.toEqual({
+      kind: 'operator-parked',
+      boundary: { kind: 'attempt', step: 'memory', attempt: 2 },
+    });
+    expect({
+      resumedSteps: resumedRun.mock.calls.map(([step]) => step),
+      taskStatuses: JSON.parse(await readFile(taskStatusPath, 'utf8')),
+    }).toEqual({ resumedSteps: ['memory'], taskStatuses });
   });
 
   it('routes a self-host admission cancellation to the operator-park terminal before retry accounting', async () => {
@@ -640,7 +850,7 @@ describe('operator park boundary contract', () => {
       terminalMarkers: await terminalMarkerNames(projectRoot), eventTail: boundaries.at(-1) }).toEqual({
       result: { kind: 'operator-parked', boundary: { kind: 'attempt', step: 'test_suite', attempt: 1 } },
       suiteDispatches: 1,
-      boundaryCalls: 3,
+      boundaryCalls: 4,
       terminalMarkers: [],
       eventTail: boundaries.at(-1),
     });
@@ -663,7 +873,7 @@ describe('operator park boundary contract', () => {
     expect({ result, runnerCalls: run.mock.calls.length, boundaryCalls: boundary.mock.calls.length }).toEqual({
       result: { kind: 'operator-parked', boundary: { kind: 'attempt', step: 'memory', attempt: 1 } },
       runnerCalls: 1,
-      boundaryCalls: 3,
+      boundaryCalls: 4,
     });
   });
 
@@ -685,7 +895,7 @@ describe('operator park boundary contract', () => {
       result: { kind: 'operator-parked', boundary: { kind: 'attempt', step: 'memory', attempt: 1 } },
       runnerCalls: 1,
       refreshCalls: 1,
-      boundaryCalls: 3,
+      boundaryCalls: 4,
     });
   });
 
@@ -714,7 +924,7 @@ describe('operator park boundary contract', () => {
     expect({ result, runnerCalls: run.mock.calls.length, boundaryCalls: boundary.mock.calls.length }).toEqual({
       result: { kind: 'operator-parked', boundary: { kind: 'attempt', step: 'build_review', attempt: 2 } },
       runnerCalls: 1,
-      boundaryCalls: 3,
+      boundaryCalls: 4,
     });
   });
 
@@ -743,7 +953,7 @@ describe('operator park boundary contract', () => {
     expect({ result, runnerCalls: run.mock.calls.length, boundaryCalls: boundary.mock.calls.length, retries, timeline, memory: persisted.ok ? persisted.value.memory : persisted }).toEqual({
       result: { kind: 'operator-parked', boundary: { kind: 'attempt', step: 'memory', attempt: 2 } },
       runnerCalls: 1,
-      boundaryCalls: 3,
+      boundaryCalls: 4,
       retries: [expect.objectContaining({ step: 'memory', attempt: 2 })],
       timeline: ['retry', 'park'],
       memory: 'in_progress',
@@ -834,7 +1044,8 @@ describe('operator park boundary contract', () => {
     parked = true;
     expect(run).toHaveBeenCalledTimes(1);
     release.resolve({ success: false, output: 'drained failure output' });
-    const [result, persisted] = await Promise.all([resultPromise, readState(statePath)]);
+    const result = await resultPromise;
+    const persisted = await readState(statePath);
 
     expect({
       result,
@@ -1375,6 +1586,152 @@ describe('operator park boundary contract', () => {
       },
       laterSerialDispatches: 0,
       settledMembers: 2,
+    });
+  });
+
+  // Covers: task:5
+  it('drains every yielded parallel member and preempts only after their group join', async () => {
+    await writeState(statePath, stateWithPending('memory', 'explore'));
+    const alphaStarted = deferred();
+    const betaStarted = deferred();
+    const releaseAlpha = deferred();
+    const releaseBeta = deferred();
+    let yielded = false;
+    const terminalEvents: ConductorEvent[] = [];
+    const events = new ConductorEventEmitter();
+    events.on('parallel_failure', (event) => { terminalEvents.push(event); });
+    events.on('step_failed', (event) => { terminalEvents.push(event); });
+    const run = vi.fn<StepRunner['run']>(async (step) => {
+      if (step === ('alpha' as StepName)) {
+        alphaStarted.resolve();
+        await releaseAlpha.promise;
+      }
+      if (step === ('beta' as StepName)) {
+        betaStarted.resolve();
+        await releaseBeta.promise;
+      }
+      return { success: true };
+    });
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events,
+      config: { steps: { memory: { max_retries: 3, parallel: [
+        { name: 'alpha', skill: 'skills/memory/SKILL.md' },
+        { name: 'beta', skill: 'skills/memory/SKILL.md' },
+      ] } } },
+      fromStep: 'memory',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      featureSlug: 'preempted-feature',
+      operatorParkBoundary: async () => false,
+      preemptionRequested: () => yielded,
+    });
+
+    const resultPromise = conductor.run();
+    await Promise.all([alphaStarted.promise, betaStarted.promise]);
+    yielded = true;
+    releaseAlpha.resolve();
+    releaseBeta.resolve();
+    const result = await resultPromise;
+    const persisted = await readState(statePath);
+
+    expect({
+      result,
+      dispatchedMembers: run.mock.calls.map(([step, , options]) => ({ step, attempt: options?.attempt })),
+      terminalEvents,
+      state: persisted.ok ? {
+        group: persisted.value.memory,
+        alpha: (persisted.value as Record<string, unknown>)['memory__alpha'],
+        beta: (persisted.value as Record<string, unknown>)['memory__beta'],
+        later: persisted.value.explore,
+      } : persisted,
+      terminalMarkers: await terminalMarkerNames(projectRoot),
+    }).toEqual({
+      result: { kind: 'preempted', boundary: { kind: 'group', name: 'memory' } },
+      dispatchedMembers: [
+        { step: 'alpha', attempt: 1 },
+        { step: 'beta', attempt: 1 },
+      ],
+      terminalEvents: [],
+      state: { group: 'done', alpha: 'done', beta: 'done', later: 'pending' },
+      terminalMarkers: [],
+    });
+  });
+
+  // Covers: task:5
+  it('declines a configured-member retry on yield without consuming its budget, then preempts at the joined group boundary', async () => {
+    await writeState(statePath, stateWithPending('memory', 'explore'));
+    let yielded = false;
+    const terminalEvents: ConductorEvent[] = [];
+    const retries: ConductorEvent[] = [];
+    const memberOutcomes: Array<Extract<ConductorEvent, { type: 'group_member_step' }>> = [];
+    const events = new ConductorEventEmitter();
+    events.on('parallel_failure', (event) => { terminalEvents.push(event); });
+    events.on('step_failed', (event) => { terminalEvents.push(event); });
+    events.on('step_retry', (event) => { retries.push(event); });
+    events.on('group_member_step', (event) => {
+      if (event.type === 'group_member_step') memberOutcomes.push(event);
+    });
+    const run = vi.fn<StepRunner['run']>(async (step) => {
+      if (step === ('yielded-member' as StepName)) {
+        yielded = true;
+        return { success: false, output: 'retry after yield' };
+      }
+      return { success: true };
+    });
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events,
+      config: { steps: { memory: { max_retries: 3, parallel: [
+        { name: 'yielded-member', skill: 'skills/memory/SKILL.md' },
+        { name: 'drained-member', skill: 'skills/memory/SKILL.md' },
+      ] } } },
+      fromStep: 'memory',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      featureSlug: 'preempted-feature',
+      operatorParkBoundary: async () => false,
+      preemptionRequested: () => yielded,
+    });
+
+    const result = await conductor.run();
+    const persisted = await readState(statePath);
+
+    expect({
+      result,
+      dispatchedAttempts: run.mock.calls.map(([step, , options]) => ({ step, attempt: options?.attempt })),
+      terminalEvents,
+      retries,
+      memberOutcomes: memberOutcomes
+        .map(({ member, outcome }) => ({ member, outcome }))
+        .sort((left, right) => left.member.localeCompare(right.member)),
+      state: persisted.ok ? {
+        group: persisted.value.memory,
+        yielded: (persisted.value as Record<string, unknown>)['memory__yielded-member'],
+        drained: (persisted.value as Record<string, unknown>)['memory__drained-member'],
+        later: persisted.value.explore,
+      } : persisted,
+      terminalMarkers: await terminalMarkerNames(projectRoot),
+    }).toEqual({
+      result: { kind: 'preempted', boundary: { kind: 'group', name: 'memory' } },
+      dispatchedAttempts: [
+        { step: 'yielded-member', attempt: 1 },
+        { step: 'drained-member', attempt: 1 },
+      ],
+      terminalEvents: [],
+      retries: [],
+      memberOutcomes: [
+        { member: 'drained-member', outcome: 'verdict:pass' },
+        { member: 'yielded-member', outcome: 'parked' },
+      ],
+      state: { group: 'in_progress', yielded: 'in_progress', drained: 'done', later: 'pending' },
+      terminalMarkers: [],
     });
   });
 

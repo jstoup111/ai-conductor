@@ -6,6 +6,12 @@ export type PathOwnershipResult =
   | { readonly kind: 'accepted' }
   | { readonly kind: 'refused'; readonly paths: readonly string[] };
 
+export type ResolvedTipRefusalCause = 'unowned' | 'parent-revert';
+
+export type ResolvedTipOwnershipResult =
+  | { readonly kind: 'accepted'; readonly adaptedPaths: readonly string[] }
+  | { readonly kind: 'refused'; readonly paths: readonly { readonly path: string; readonly cause: ResolvedTipRefusalCause }[] };
+
 function pathSet(output: string): Set<string> {
   return new Set(output.split('\n').map((path) => path.trim()).filter(Boolean));
 }
@@ -74,6 +80,58 @@ export async function checkPathOwnership(
     : new Set<string>();
   const unowned = sorted([...replayed].filter((path) => !owned.has(path) && !inheritedPlans.has(path)));
   return unowned.length === 0 ? { kind: 'accepted' } : { kind: 'refused', paths: unowned };
+}
+
+/** Paths a resolved tip adapts from its new parent's delta rather than its own old range. */
+export async function adaptedPathsFor(
+  range: ChildRange,
+  newParent: CommitSha,
+  tip: CommitSha,
+  git: GitRunner,
+): Promise<string[]> {
+  const [owned, replayed, parentDelta] = await Promise.all([
+    ownedPaths(range, newParent, git),
+    changedPaths(git, newParent, tip),
+    changedPaths(git, range.oldParent, newParent),
+  ]);
+  return sorted([...replayed].filter((path) => parentDelta.has(path) && !owned.has(path)));
+}
+
+/**
+ * A settled resolution may adapt the new parent's changes, but may not restore
+ * them to their old-parent content. Clean plumbing replays stay on the stricter
+ * checkPathOwnership rule above.
+ */
+export async function checkResolvedTipOwnership(
+  range: ChildRange,
+  newParent: CommitSha,
+  tip: CommitSha,
+  git: GitRunner,
+  options: { readonly normaliseInheritedRemBlocks?: boolean } = {},
+): Promise<ResolvedTipOwnershipResult> {
+  const [owned, replayed, parentDelta] = await Promise.all([
+    ownedPaths(range, newParent, git),
+    changedPaths(git, newParent, tip),
+    changedPaths(git, range.oldParent, newParent),
+  ]);
+  const inheritedPlans = options.normaliseInheritedRemBlocks
+    ? await inheritedRemPlan(range, newParent, tip, git)
+    : new Set<string>();
+  const refused: Array<{ readonly path: string; readonly cause: ResolvedTipRefusalCause }> = [];
+  for (const path of sorted(replayed)) {
+    if (owned.has(path) || inheritedPlans.has(path)) continue;
+    if (!parentDelta.has(path)) {
+      refused.push({ path, cause: 'unowned' });
+      continue;
+    }
+    const [oldParentContent, tipContent] = await Promise.all([
+      fileAt(git, range.oldParent, path),
+      fileAt(git, tip, path),
+    ]);
+    if (tipContent === oldParentContent) refused.push({ path, cause: 'parent-revert' });
+  }
+  if (refused.length > 0) return { kind: 'refused', paths: refused };
+  return { kind: 'accepted', adaptedPaths: sorted([...replayed].filter((path) => parentDelta.has(path) && !owned.has(path))) };
 }
 
 async function fileAt(git: GitRunner, revision: CommitSha, path: string): Promise<string | undefined> {
