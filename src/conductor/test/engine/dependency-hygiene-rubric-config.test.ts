@@ -102,6 +102,7 @@ describe('repository dependency-hygiene build-review rubric', () => {
           sourceRegions: [{
             path: 'src/conductor/package.json', startLine: 1, endLine: 1,
             contentHash: `sha256:${createHash('sha256').update(manifest).digest('hex')}`,
+            display: 'fixture manifest',
           }],
         }],
       } : { findings: [] },
@@ -109,6 +110,21 @@ describe('repository dependency-hygiene build-review rubric', () => {
     const provider: LLMProvider = {
       lifecycleCapability: { synchronousSpawnPermit: true }, nativeSchemaCapability: { nativeOutputSchema: true }, invoke,
     };
+    const buildReviewEffectiveResolver = vi.fn(async (_projectRoot, aggregate) => {
+      const necessity = projectBuildReviewAggregateSources(aggregate)?.find((source) =>
+        source.rubric === 'dependencyHygiene' && source.concernKind === 'necessity',
+      );
+      if (!necessity) throw new Error('dependency-hygiene necessity finding must reach the effective resolver');
+      return {
+        ok: true as const,
+        feature: { version: 'v1' as const, repository: root, feature: 'dependency-hygiene-config' },
+        effective: {
+          rawVerdict: 'FAIL' as const, verdict: 'FAIL' as const, acceptedFindingIds: [],
+          unresolvedFindingIds: [necessity.findingId], suppressedFindingIds: [], skippedRubrics: [],
+          infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [],
+        },
+      };
+    });
     const runner = new DefaultStepRunner(provider, 'dependency-hygiene-config', root, {
       planPath,
       gitRunner: async (args: string[]) => git(root, ...args),
@@ -158,7 +174,7 @@ describe('repository dependency-hygiene build-review rubric', () => {
             }
           : { kind: 'judged', rubric, lapId, snapshotDigest, contractVersion: 'v3', findings: [], verdict: 'PASS' },
       } as never),
-      buildReviewEffectiveResolver: async () => ({ ok: true as const, feature: { version: 'v1' as const, repository: root, feature: 'dependency-hygiene-config' }, effective: { rawVerdict: 'PASS' as const, verdict: 'PASS' as const, acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [] } }),
+      buildReviewEffectiveResolver,
     });
     vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue({ engineStamp: 'fixture', skillDigests: {} });
 
@@ -167,7 +183,14 @@ describe('repository dependency-hygiene build-review rubric', () => {
     expect(invoke).toHaveBeenCalled();
     expect(invoke.mock.calls.some(([options]) => options.prompt.includes('$build-review-dependency-hygiene'))).toBe(true);
     const aggregate = JSON.parse(await readFile(join(root, '.pipeline', 'build-review.json'), 'utf8'));
-    expect(projectBuildReviewAggregateSources(aggregate)?.map((source) => source.rubric)).toContain('security');
+    expect(projectBuildReviewAggregateSources(aggregate)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ rubric: 'security' }),
+      expect.objectContaining({
+        rubric: 'dependencyHygiene', concernKind: 'necessity',
+        summary: 'The fixture dependency lacks necessity evidence.', severity: 'major',
+      }),
+    ]));
+    expect(buildReviewEffectiveResolver).toHaveBeenCalledTimes(1);
   });
 
   // Covers: S5.3
