@@ -665,7 +665,9 @@ describe('structural: smoke test entry point', () => {
         const defaultFiles = new Set((await defaultVitest.globTestSpecifications())
           .map(({ moduleId }) => relative(conductorRoot, moduleId).replaceAll('\\', '/')));
         expect(defaultFiles).toContain('test/contracts/llm.contract.test.ts');
-        expect(llmRealLegs.map(({ file }) => file).filter((file) => defaultFiles.has(file))).toEqual([]);
+        expect(defaultFiles).not.toContain('test/contracts/llm-claude.contract.smoke.test.ts');
+        expect(defaultFiles).not.toContain('test/contracts/llm-codex.contract.smoke.test.ts');
+        expect(defaultFiles).not.toContain('test/contracts/llm-pi.contract.smoke.test.ts');
       } finally {
         await defaultVitest.close();
       }
