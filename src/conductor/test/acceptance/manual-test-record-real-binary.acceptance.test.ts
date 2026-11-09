@@ -36,6 +36,7 @@ afterEach(async () => {
 });
 
 describe('conduct-ts manual-test-record — real-binary acceptance smoke', () => {
+  // Covers: task:1
   it(
     '--results - from the git root derives its pipeline directory and records the piped table',
     async () => {
@@ -54,6 +55,7 @@ describe('conduct-ts manual-test-record — real-binary acceptance smoke', () =>
     30_000,
   );
 
+  // Covers: task:1
   it(
     '--skip --reason <r> from the git root derives its pipeline directory',
     async () => {
@@ -70,6 +72,7 @@ describe('conduct-ts manual-test-record — real-binary acceptance smoke', () =>
     30_000,
   );
 
+  // Covers: task:1
   it(
     '--results - from a nested directory records in the git-root pipeline directory',
     async () => {
@@ -93,6 +96,7 @@ describe('conduct-ts manual-test-record — real-binary acceptance smoke', () =>
     30_000,
   );
 
+  // Covers: task:1
   it(
     'an explicit absolute --pipeline-dir works from an unrelated directory',
     async () => {

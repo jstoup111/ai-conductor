@@ -2256,6 +2256,7 @@ export class Conductor {
           ? identities.runId
           : 'unstamped';
       const failures: string[] = [];
+      const artifactMtimes: number[] = [];
 
       if (files.length === 0) {
         failures.push(`${(STEP_ARTIFACT_GLOBS[step] ?? []).join(', ') || step} is missing`);
@@ -2269,6 +2270,7 @@ export class Conductor {
           failures.push(`${relative(this.projectRoot, file)} is missing`);
           continue;
         }
+        artifactMtimes.push(mtimeMs);
         // Match the established per-attempt freshness tolerance: common
         // filesystems round an immediate write down slightly, but a prior
         // lap remains far outside this narrow window.
@@ -2280,6 +2282,46 @@ export class Conductor {
             `${relative(this.projectRoot, file)} is stale (found mtime ${new Date(mtimeMs).toISOString()})`,
           );
         }
+      }
+
+      // A manual-test report can carry the current run stamp even when the
+      // agent did not write results during this dispatch (the engine stamps
+      // its sidecar at settle). Describe that absence directly instead of
+      // misclassifying the old report as an identity failure. Preserve the
+      // identity facets only when the sidecar actually names another run.
+      const identityMismatch =
+        identities.state === 'stale-run-identity' ||
+        identities.state === 'invalidated-code-stamp';
+      const everyArtifactPredatesDispatch =
+        dispatchStartedAt !== undefined &&
+        artifactMtimes.length === files.length &&
+        artifactMtimes.length > 0 &&
+        artifactMtimes.every(
+          (mtimeMs) => mtimeMs < dispatchStartedAt - VERDICT_FRESHNESS_FS_TOLERANCE_MS,
+        );
+      if (step === 'manual_test' && (files.length === 0 || everyArtifactPredatesDispatch)) {
+        const noResultsReason = files.length === 0
+          ? 'no results written this attempt: .pipeline/manual-test-results.md is missing'
+          : 'no results written this attempt: .pipeline/manual-test-results.md last written ' +
+            `${new Date(Math.max(...artifactMtimes)).toISOString()}, before this attempt started`;
+        return {
+          done: false,
+          routeClass: 'absent',
+          ...(identityMismatch
+            ? {
+                retrySignal: 'stale-run-identity' as const,
+                verdictFreshness: {
+                  artifact: files[0] ?? marker,
+                  floorSource: 'run-identity' as const,
+                  outcome: 'stale_invalidated' as const,
+                  fresh: false,
+                },
+              }
+            : {}),
+          reason: identityMismatch
+            ? `${noResultsReason}; expected run id ${expectedRunId ?? 'none'}; found run id ${foundRunId}`
+            : noResultsReason,
+        };
       }
 
       if (
