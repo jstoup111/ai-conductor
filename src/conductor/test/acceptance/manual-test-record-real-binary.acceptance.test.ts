@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execa } from 'execa';
-import { mkdtemp, mkdir, rm, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -110,6 +110,66 @@ describe('conduct-ts manual-test-record — real-binary acceptance smoke', () =>
       expect(result.exitCode).toBe(0);
       const contents = await readFile(join(pipelineDir, 'manual-test-results.md'), 'utf-8');
       expect(contents).toMatch(/SKIPPED — override/);
+    },
+    30_000,
+  );
+
+  // Covers: task:2
+  it(
+    'without --pipeline-dir outside a git work tree refuses with the override and leaves the directory unchanged',
+    async () => {
+      const unrelatedCwd = await mkdtemp(join(scratchParent, 'unrelated-'));
+      const before = await readdir(unrelatedCwd);
+      const result = await execa(
+        REAL_CONDUCT_TS,
+        ['manual-test-record', '--results', '-'],
+        { cwd: unrelatedCwd, input: '| Story | Result |\n| --- | --- |\n| S1 | PASS |\n', reject: false },
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('could not determine the pipeline directory');
+      expect(result.stderr).toContain('--pipeline-dir');
+      expect(await readdir(unrelatedCwd)).toEqual(before);
+    },
+    30_000,
+  );
+
+  // Covers: task:2
+  it(
+    'without --pipeline-dir refuses when the git toplevel has no pipeline directory and creates nothing',
+    async () => {
+      await rm(pipelineDir, { recursive: true, force: true });
+      const result = await execa(
+        REAL_CONDUCT_TS,
+        ['manual-test-record', '--results', '-'],
+        { cwd, input: '| Story | Result |\n| --- | --- |\n| S1 | PASS |\n', reject: false },
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain(`${cwd}/.pipeline`);
+      await expect(readdir(cwd)).resolves.not.toContain('.pipeline');
+      await expect(readFile(join(pipelineDir, 'manual-test-results.md'), 'utf-8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+    },
+    30_000,
+  );
+
+  // Covers: task:2
+  it(
+    'a relative --pipeline-dir is refused with usage text and writes no results file',
+    async () => {
+      const result = await execa(
+        REAL_CONDUCT_TS,
+        ['manual-test-record', '--skip', '--reason', 'relative override', '--pipeline-dir', 'relative/dir'],
+        { cwd, reject: false },
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/usage|pipeline-dir/i);
+      await expect(readFile(join(pipelineDir, 'manual-test-results.md'), 'utf-8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
     },
     30_000,
   );
