@@ -154,13 +154,18 @@ describe("resolveSpoolDir", () => {
     const directory = await mkdtemp(join(tmpdir(), "spool-wiring-rotated-env-"));
     temporaryDirectories.push(directory);
     const received: string[] = [];
+    let firstDelivery!: () => void;
+    const firstDeliveryComplete = new Promise<void>((resolve) => { firstDelivery = resolve; });
     let arrive!: () => void;
     const secondRequest = new Promise<void>((resolve) => { arrive = resolve; });
     const collector = createServer(async (request, response) => {
       received.push(String(request.headers.authorization));
+      const requestNumber = received.length;
       for await (const _chunk of request) { /* consume */ }
-      response.writeHead(200).end();
-      if (received.length === 2) arrive();
+      response.writeHead(200).end(() => {
+        if (requestNumber === 1) firstDelivery();
+        if (requestNumber === 2) arrive();
+      });
     });
     // Config validation reads the ambient environment once, while the runtime
     // gets its own live environment object. Keep the validation-only key
@@ -177,16 +182,21 @@ describe("resolveSpoolDir", () => {
       const runtime = createSpoolRuntime(directory, config, undefined, { environment });
       await runtime.store.write("traces", Buffer.from("first"));
       const draining = runtime.drainer.drainUntilStopped();
-      await new Promise<void>((resolve, reject) => {
-        const deadline = setTimeout(() => reject(new Error("first delivery did not arrive")), 5_000);
-        const poll = () => received.length === 1 ? (clearTimeout(deadline), resolve()) : setImmediate(poll);
-        poll();
-      });
-      environment[credentialVariable] = "rotated";
-      await runtime.store.write("traces", Buffer.from("second"));
-      await secondRequest;
-      await runtime.drainer.stop();
-      await draining;
+      try {
+        await Promise.race([
+          firstDeliveryComplete,
+          new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("first delivery did not complete")), 5_000)),
+        ]);
+        environment[credentialVariable] = "rotated";
+        await runtime.store.write("traces", Buffer.from("second"));
+        await Promise.race([
+          secondRequest,
+          new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("second delivery did not arrive")), 5_000)),
+        ]);
+      } finally {
+        await runtime.drainer.stop();
+        await draining;
+      }
     } finally { if (previous === undefined) delete process.env[credentialVariable]; else process.env[credentialVariable] = previous; }
 
     expect(received).toEqual(["first", "rotated"]);

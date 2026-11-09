@@ -16,6 +16,8 @@ custom-step kickback, which appends no task.
 
 As an operator, I want a routed `manual_test` FAIL to be built on its host even though every authored task there is already complete, so that the failure is repaired instead of halting as "already complete".
 
+Scope: this story governs every `operator` and `revalidate` round, and `audit` rounds admitted with `stacked_prs.fold_routed_fixes` set to `false`. An `audit` round admitted with the setting on executes its hosts on the leaf and defers placement to the fold (`.docs/stories/late-gate-fixes-restack-the-whole-stack-every-repa.md` Stories 1 to 3 and 9).
+
 ### Acceptance Criteria
 
 #### Happy Path
@@ -100,11 +102,11 @@ As an operator, I want a refused commit to suggest only commands that can work f
 ### Acceptance Criteria
 
 #### Happy Path
-- Given the marker names audit round r2 hosted on child 1, when the operator commits a tracked file on `feat/daemon-demo`, then the refusal names `feat/c1/demo` and `ai-conductor stack rounds --slug demo --close r2 --reason <text>`, and does not contain `stack land --abandon`.
+- Given the marker names audit round r2 hosted on child 1 and executing on child 1's own branch, when the operator commits a tracked file on `feat/daemon-demo`, then the refusal names `feat/c1/demo` and `ai-conductor stack rounds --slug demo --close r2 --reason <text>`, and does not contain `stack land --abandon`.
 - Given the marker names operator round r3 hosted on child 2, when the operator commits a tracked file on `feat/daemon-demo`, then the refusal names `feat/c2/demo` and `ai-conductor stack land --slug demo --abandon`, and does not contain `stack rounds --close`.
 
 #### Negative Paths
-- Given the marker names audit round r2 hosted on child 1, when the operator commits on `feat/c1/demo`, then the guard allows the commit.
+- Given the marker names audit round r2 hosted on child 1 and executing on child 1's own branch, when the operator commits on `feat/c1/demo`, then the guard allows the commit.
 - Given an unreadable repair marker, when the operator commits a tracked file on any stack branch, then the guard refuses with `routed repair marker is unreadable` and names no recovery command.
 - Given the marker names an audit round whose route record is unreadable, when the operator commits on a non-host branch, then the guard refuses naming the unreadable record and names no recovery command.
 

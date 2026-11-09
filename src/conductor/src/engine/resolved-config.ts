@@ -764,6 +764,7 @@ export interface ResolvedBuildReviewCustomCatalogEntry {
   readonly question: string;
   readonly source?: string;
   readonly resources: readonly string[];
+  readonly paths?: readonly string[];
   readonly policy: ResolvedBuildReviewRubricPolicy;
   readonly contract: RubricContractDescriptor<
     BuildReviewFrozenInputScope,
@@ -955,6 +956,7 @@ export function resolveBuildReviewConfig(
               question: declaration.question,
               ...(declaration.source === undefined ? {} : { source: declaration.source }),
               resources: Object.freeze([...(declaration.resources ?? [])]),
+              ...(declaration.paths === undefined ? {} : { paths: Object.freeze([...declaration.paths]) }),
               policy,
             })]
           : [];

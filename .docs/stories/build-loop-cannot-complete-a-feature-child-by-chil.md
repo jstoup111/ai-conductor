@@ -503,12 +503,12 @@ inside a later child.
 
 #### Happy Path
 - Given a three-child baseline with child 2 active and the default branch advanced, when a halt is
-  cleared and the re-kick runs with no routing round open, then a `base-refresh` restack moves child 1 onto the new default tip
+  cleared and the re-kick runs with no routing round open and no routed host awaiting a fold, then a `base-refresh` restack moves child 1 onto the new default tip
   and restacks child 2, no `rebase_skipped_for_stack` event is emitted, and the run resumes at child
   2's next step.
 - Given a three-child baseline with child 2 active, when the default branch advances and the
   base-advance sweep re-kicks the feature with no routing round open, then the whole stack is refreshed the same way.
-- Given a two-child baseline with the leaf active, when a re-kick runs with no routing round open, then a `base-refresh` restack
+- Given a two-child baseline with the leaf active, when a re-kick runs with no routing round open and no routed host awaiting a fold, then a `base-refresh` restack
   moves child 1 and the leaf.
 
 #### Negative Paths

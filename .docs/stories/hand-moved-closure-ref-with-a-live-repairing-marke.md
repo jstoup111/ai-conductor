@@ -14,7 +14,7 @@ As an operator, I want a dispatch to stop when a routed host's closure no longer
 ### Acceptance Criteria
 
 #### Happy Path
-- Given an open routed round whose marker names an admitted or repairing host and whose recorded entry pinned that host at a commit, when `refs/conductor/<slug>/closed/c<host>` resolves to a different commit and the stack preflight runs, then it halts needs-human before reconciling the round, leaves every `refs/conductor/<slug>/*` ref unchanged, and its HALT names the closure ref and value, the pinned value, the round, and the repair marker ref and blob.
+- Given an open routed round whose marker names an admitted or repairing host and whose recorded entry pinned that host's closure at a commit, when `refs/conductor/<slug>/closed/c<host>` resolves to a different commit and the stack preflight runs, then it halts needs-human before reconciling the round, leaves every `refs/conductor/<slug>/*` ref unchanged, and its HALT names the closure ref and value, the pinned value, the round, and the repair marker ref and blob.
 - Given that halt, when the operator runs its printed `git update-ref` compare-and-swap and clears the halt, then the next stack preflight continues the round into the host with no HALT.
 
 #### Negative Paths

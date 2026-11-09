@@ -737,7 +737,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         await input.emit?.({
           type: 'remediation_adjudication_completed', domain: 'build_review', lapId: input.aggregate.lapId,
           caseIds: settledCases.map((record) => record.id),
-          effectIds: options.dispatchSkipped === true ? [] : settledCases.flatMap((record) => record.effect.kind === 'none' ? [] : [record.effect.id]),
+          effectIds: settledCases.flatMap((record) => record.effect.kind === 'none' ? [] : [record.effect.id]),
           ...(durable.decisionStops.length === 0 ? {} : { decisionStops: durable.decisionStops }),
         });
       }
@@ -838,7 +838,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // be open with a live work order. Settle durable state and route from what
   // survives, rather than reporting a route no one checked.
   if (allOperatorResolved(resolved)) {
-    return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: resolved, settleAbsentAttempted: true });
+    return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: resolved, settleAbsentAttempted: true, dispatchSkipped: true });
   }
   let currentSources = sources.filter((source) => !resolved.has(source.findingId) && !nonActionable(source.findingId));
   const prior = await store.read();
@@ -920,7 +920,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // the provider see an obsolete source.
   try { resolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
   if (allOperatorResolved(resolved)) {
-    return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: resolved, settleAbsentAttempted: true });
+    return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: resolved, settleAbsentAttempted: true, dispatchSkipped: true });
   }
   // A decision stop has no settled semantic answer: its source must remain
   // eligible for a later judgement to converge on that owner, or to surface a

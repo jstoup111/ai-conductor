@@ -11,6 +11,17 @@ import {
 import type { HarnessConfig } from '../src/types/config.js';
 import { BUILD_REVIEW_RUBRIC_IDS } from '../src/engine/build-review-registry.js';
 
+async function loadConfigContents(contents: string) {
+  const projectRoot = await mkdtemp(join(tmpdir(), 'config-validation-'));
+  try {
+    await mkdir(join(projectRoot, '.ai-conductor'));
+    await writeFile(join(projectRoot, '.ai-conductor', 'config.yml'), contents, 'utf-8');
+    return await loadConfig(projectRoot);
+  } finally {
+    await rm(projectRoot, { recursive: true, force: true });
+  }
+}
+
 describe('project config load errors', () => {
   it.each([
     {
@@ -543,6 +554,77 @@ describe('build_review rubric validation', () => {
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }
+  });
+});
+
+describe('custom build-review rubric paths configuration', () => {
+  const customRubric = (paths: string) => [
+    'build_review:',
+    '  custom_rubrics:',
+    '    dependencyHygiene:',
+    '      skill: build-review-dependency-hygiene',
+    '      question: Review dependency changes.',
+    paths,
+  ].join('\n');
+
+  // Covers: S1.3
+  it('rejects an empty custom rubric paths array at config load', async () => {
+    const result = await loadConfigContents(customRubric('      paths: []'));
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        type: 'validation_error',
+        message: expect.stringMatching(/build_review\.custom_rubrics\.dependencyHygiene\.paths.*non-empty array/i),
+      },
+    });
+  });
+
+  // Covers: S1.4
+  it.each([
+    ['an empty string', '      paths: ["**/package.json", ""]'],
+    ['a non-string value', '      paths: ["**/package.json", 3]'],
+  ])('rejects custom rubric paths containing %s at index 1', async (_name, paths) => {
+    const result = await loadConfigContents(customRubric(paths));
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        type: 'validation_error',
+        message: expect.stringMatching(/build_review\.custom_rubrics\.dependencyHygiene\.paths\[1\]/i),
+      },
+    });
+  });
+
+  // Covers: S1.5
+  it('rejects a string custom rubric paths value without producing a catalog', async () => {
+    const result = await loadConfigContents(customRubric('      paths: "**/package.json"'));
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        type: 'validation_error',
+        message: expect.stringMatching(/build_review\.custom_rubrics\.dependencyHygiene\.paths/i),
+      },
+    });
+  });
+
+  // Covers: S1.6
+  it('rejects paths as an unknown key on the built-in security rubric at config load', async () => {
+    const result = await loadConfigContents([
+      'build_review:',
+      '  rubrics:',
+      '    security:',
+      '      paths: ["**/package.json"]',
+    ].join('\n'));
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        type: 'validation_error',
+        message: 'Unknown key in build_review.rubrics.security: "paths"',
+      },
+    });
   });
 });
 

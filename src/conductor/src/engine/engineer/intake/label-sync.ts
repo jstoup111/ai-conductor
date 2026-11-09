@@ -30,6 +30,7 @@ export type { GhRunner } from '../../pr-labels.js';
 export interface SyncIssueLabelsFields {
   priority?: string;
   size?: string;
+  semver?: string;
   dependsOn?: string[];
 }
 
@@ -48,6 +49,8 @@ export interface SyncIssueLabelsDeps {
 export interface SyncIssueLabelsResult {
   priorityLabel: string;
   sizeLabel: string;
+  /** Exact form Semver selection, when one was supplied. */
+  semverLabel: string | null;
   priorityDefaulted: boolean;
   sizeDefaulted: boolean;
   /** Depends-on refs successfully linked (created or already-present). */
@@ -58,6 +61,7 @@ export interface SyncIssueLabelsResult {
 
 const PRIORITY_VALUES = new Set(['critical', 'high', 'medium', 'low']);
 const SIZE_VALUES = new Set(['S', 'M', 'L']);
+const SEMVER_VALUES = new Set(['major', 'minor', 'patch']);
 
 /**
  * True when an issue body is an issue-form submission — i.e. GitHub rendered
@@ -96,6 +100,11 @@ const SIZE_COLORS: Record<string, string> = {
   M: 'bfd4f2',
   L: 'a2c4e0',
 };
+const SEMVER_COLORS: Record<string, string> = {
+  major: 'b60205',
+  minor: '1d76db',
+  patch: '0e8a16',
+};
 
 /**
  * Sync an intake issue's priority/size labels and Depends-on links to GitHub.
@@ -118,6 +127,8 @@ export async function syncIssueLabels(
 
   const priorityLabel = `priority: ${priority}`;
   const sizeLabel = `size: ${size}`;
+  const semver = SEMVER_VALUES.has(fields.semver ?? '') ? fields.semver as string : undefined;
+  const semverLabel = semver ? `semver:${semver}` : null;
 
   const badRefs: string[] = [];
   const linked: string[] = [];
@@ -128,6 +139,7 @@ export async function syncIssueLabels(
     return {
       priorityLabel,
       sizeLabel,
+      semverLabel,
       priorityDefaulted,
       sizeDefaulted,
       linked,
@@ -142,6 +154,9 @@ export async function syncIssueLabels(
       const guarded = guardedPrRunner(gh, deps.labelOperations);
       await ensureLabel(guarded, cwd, priorityLabel, PRIORITY_COLORS[priority], log, { repository: ref.repo });
       await ensureLabel(guarded, cwd, sizeLabel, SIZE_COLORS[size], log, { repository: ref.repo });
+      if (semver && semverLabel) {
+        await ensureLabel(guarded, cwd, semverLabel, SEMVER_COLORS[semver], log, { repository: ref.repo });
+      }
       const target = { repository: ref.repo, kind: 'issue' as const, number: Number(ref.number) };
       await executeGithubOperation({
         operation: 'intake.issue.label.add', repository: ref.repo, resource: target,
@@ -151,6 +166,20 @@ export async function syncIssueLabels(
         operation: 'intake.issue.label.add', repository: ref.repo, resource: target,
         context: { actor: deps.actor }, payload: { label: sizeLabel },
       }, deps.labelOperations);
+      if (semverLabel) {
+        const semverResult = await executeGithubOperation({
+          operation: 'intake.issue.label.add', repository: ref.repo, resource: target,
+          context: { actor: deps.actor }, payload: { label: semverLabel },
+        }, deps.labelOperations);
+        if (semverResult.kind !== 'executed') {
+          const reason = semverResult.kind === 'failed'
+            ? semverResult.error
+            : semverResult.kind === 'partial'
+              ? semverResult.metadataFailures.map((failure) => failure.error).join('; ')
+              : semverResult.reason;
+          log(`[label-sync] syncIssueLabels: could not apply ${semverLabel}: ${reason}`);
+        }
+      }
     }
   } catch (err) {
     // ensureLabel/addLabel already swallow their own errors; this is a
@@ -175,7 +204,7 @@ export async function syncIssueLabels(
     if (!deps.dependencyOperations || !deps.actor) {
       log('[label-sync] syncIssueLabels: dependency links refused without guarded operation authorization');
       badRefs.push(...edges.map((edge) => edge.target));
-      return { priorityLabel, sizeLabel, priorityDefaulted, sizeDefaulted, linked, badRefs };
+      return { priorityLabel, sizeLabel, semverLabel, priorityDefaulted, sizeDefaulted, linked, badRefs };
     }
     try {
       const results = await createDependencyLinks(edges, {
@@ -198,5 +227,5 @@ export async function syncIssueLabels(
     }
   }
 
-  return { priorityLabel, sizeLabel, priorityDefaulted, sizeDefaulted, linked, badRefs };
+  return { priorityLabel, sizeLabel, semverLabel, priorityDefaulted, sizeDefaulted, linked, badRefs };
 }

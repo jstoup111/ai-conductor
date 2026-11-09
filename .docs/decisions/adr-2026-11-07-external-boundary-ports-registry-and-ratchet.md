@@ -164,6 +164,48 @@ Adopt **Option A**.
    - The issues are independent of one another, and every one is blocked by #1989. #3043 is
      also blocked by #1989.
 
+> **Amended 2026-11-08 by #1990:** Decisions 3 and 6 gain one obligation, recorded as D7. A
+> boundary is not complete at `ported` until its faithful fake is proven against its real adapter.
+> Each per-boundary migration (#3043, #3633 through #3639) therefore also delivers that boundary's
+> paired contract. Decisions 1 to 6 are otherwise unchanged.
+>
+> **D7 — Every ported boundary carries a paired fake-and-real contract, enforced from the registry.**
+>
+> - **Contract.** A boundary's contract is one module,
+>   `src/conductor/test/contracts/«boundary».contract.ts`. It defines its expectations once,
+>   against the boundary's port, through the shared harness
+>   `src/conductor/test/contracts/boundary-contract.ts`. Each expectation has a stable name.
+> - **Two legs per adapter.** Every registered adapter module of the boundary has exactly one leg
+>   pair:
+>   - a **fake leg** in the default Vitest tier, which runs the contract against that adapter's
+>     shared faithful fake under `src/conductor/test/fixtures/`;
+>   - a **real leg**, a `*.smoke.test.ts` file that declares a `smokeCapability` and runs the same
+>     contract against the real adapter. It runs only under `npm run smoke`, and the smoke ledger
+>     records it as skipped when its capability is unmet.
+> - **Divergence report.** The harness titles every case
+>   `«boundary» contract [«adapter» «leg»] › «expectation»`, so a failing real leg names the
+>   boundary, the adapter, and the expectation that diverged.
+> - **Registry field.** Each registry entry (decision 3) gains a `contract` field. The field is
+>   either `null` or it names the contract module and, for each adapter module, its fake module,
+>   its fake-leg file, and its real-leg file.
+> - **Obligation check.** A default-tier structural test,
+>   `src/conductor/test/structural/boundary-contract-obligation.test.ts`, reads the registry. It
+>   fails, naming the boundary and the violated rule, in these cases:
+>   - a `ported` boundary has a `null` contract;
+>   - an adapter module has no leg, or a leg names an unregistered adapter;
+>   - a named file does not exist;
+>   - a fake leg is a smoke file, or a real leg is not one;
+>   - a real leg declares no smoke capability;
+>   - either leg does not import the boundary's one contract module.
+>
+>   A `pending` boundary may declare its contract early, and the same checks then apply.
+> - **First contract.** #1990 ships the harness, the registry field, the obligation check, and the
+>   `llm` contract. That contract covers `ClaudeProvider`, `CodexProvider` and `PiProvider`. Their
+>   fakes are the existing `test/fixtures/codex-provider-fake.ts` and new shared Claude and Pi fakes.
+>   Existing ad-hoc test doubles are not migrated onto the new fakes.
+> - **Migrations inherit it.** When a pending boundary's migration sets it `ported`, the
+>   obligation check fails until that migration also lands the boundary's contract.
+
 ## Assumptions
 
 | # | Assumption | Basis | Confidence | Load-bearing | Impact if wrong | Approval |
@@ -172,6 +214,9 @@ Adopt **Option A**.
 | A2 | The seed allowlist is about 450 lines and fits the D5 sorted-text-file format without new tooling. | inferred | 85% | no | A larger file, with the same mechanism. | — |
 | A3 | Placing the registry in `test/structural/` satisfies #1989's "enumerable in one place" outcome. | inferred | 90% | yes | If the operator wants a runtime-readable registry, it moves to `types/` with the first migration that has a production reader. | APPROVED by operator 2026-11-07 |
 | A4 | The 2026-11-07 counts above (264 fs, 91 clock, 54 execa, 31 child_process, 9 OTel files) describe the current tree. | verified | 95% | no | The seed differs in size only. | — |
+| A5 | (#1990, D7) No CI job runs the llm real legs. The release complete smoke tier force-skips `credentialed:claude` and `credentialed:codex` and installs no Pi binary. The provider matrix names only the `daemon-e2e-live-*` files. | inferred | 85% | yes | A release run spends provider tokens on contract legs, which breaks #1990's opt-in outcome. | APPROVED by operator 2026-11-08 |
+| A6 | (#1990, D7) Only expectations that invoke a model spend tokens. They use a minimal prompt and stay within the existing live-e2e token cap (`resolveLiveE2ETokenCap`). | inferred | 80% | yes | A real-leg run costs more than an opt-in check should, and needs its own cap. | APPROVED by operator 2026-11-08 |
+| A7 | (#1990, D7) The llm contract can be phrased entirely in behavior that fake and real adapters both expose: capability declarations, spawn-permit refusal before spawn, the `InvokeResult` shape of a minimal invocation, and the native-schema terminal result. Model text is never asserted. | inferred | 85% | yes | Real legs flake on nondeterministic output, or the fakes cannot model an expectation. | APPROVED by operator 2026-11-08 |
 
 ## Consequences
 

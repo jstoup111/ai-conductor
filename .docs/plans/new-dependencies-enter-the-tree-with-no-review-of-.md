@@ -387,3 +387,12 @@ Task 8 ─────────────────────── Tas
 - [ ] Every task has a `Done when:` block of falsifiable checks; no unbounded quality word is left without its closed enumeration or named mechanism (3c)
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-prd-audit-7-R1: Drive lap 3 of the withheld-member convergence test through the engine build_review path in src/conductor/test/engine/build-review-custom-convergence.test.ts. Remove the test's direct provider.invoke({ lap: 3 }) call. Assert that the engine invoked the member's provider on lap 3, that no build_review_cache_hit event reuses a withheld lap for that member, and that lap 3's judged result alone decides the member's verdict. Keep the lap-1/lap-2 PASS and no-HALT assertions. If the strengthened test fails, fix stale-case or cache reuse in src/conductor/src/engine/build-review-adjudication-coordinator.ts.
+**Gate:** prd-audit
+**Rationale:** The test is too weak, and no architecture decision is needed. Task 7's second Done-when criterion requires that, on a lap 3 whose diff changes package.json again, the engine itself invokes the member's provider, no build_review_cache_hit reuses a withheld lap, and lap 3's judged result alone decides the member's verdict. The current test 'settles a withheld dependency finding as absent, then dispatches its later matching lap afresh' (src/conductor/test/engine/build-review-custom-convergence.test.ts:84) calls provider.invoke({ lap: 3 }) directly and counts its own calls, so it proves nothing about engine dispatch. Task 7's Steps, Files list and approved design ('Withheld equals absent') already cover this repair. It is BUILD work under Task 7's RED/GREEN steps: drive lap 3 through the real build_review engine path and assert on engine-made provider calls and emitted events. If that exposes a stale-case or cache-reuse defect, fix it in build-review-adjudication-coordinator.ts, which Task 7 also covers. Task 7's existing lap-1/lap-2 assertions (no unresolved member finding, PASS, no HALT) must be kept.
+**Criterion:** S3.4
+**Parent task:** 7
+**Done when:**
+- [test] S3.4 is satisfied by this task.
+- The repair for task rem-prd-audit-7-R1 is committed and its targeted tests pass.

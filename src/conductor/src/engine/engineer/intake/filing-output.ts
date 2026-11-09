@@ -18,6 +18,8 @@ export function renderIntakeFileOutput(result: FileIntakeIssueResult): {
   else stderr.push('[intake-file] filing did not return a canonical issue URL');
   stdout.push(`[intake-file] size=${result.size} (${result.sizeSource})`);
   stdout.push(`[intake-file] priority=${result.priority} (${result.prioritySource})`);
+  if (result.semver) stdout.push(`[intake-file] semver=${result.semver} (${result.semverSource})`);
+  else stdout.push('[intake-file] semver=unset');
   if (result.dependsOnDecision === 'linked') {
     stdout.push(`[intake-file] depends-on: ${result.linked.join(', ') || '(none linked)'}`);
   } else {

@@ -513,6 +513,7 @@ describe('engine-managed auxiliary rows', () => {
     'build-review-test-quality',
     'build-review-security',
     'build-review-implementation-quality',
+    'build-review-dependency-hygiene',
     'rebase-regrade',
   ];
 
@@ -547,6 +548,15 @@ describe('engine-managed auxiliary rows', () => {
           },
         }),
         expect.objectContaining({
+          name: 'build-review-dependency-hygiene',
+          executionPath: 'engine-managed auxiliary rubric',
+          providerCells: {
+            claude: { model: 'inherits resolved rubric policy', effort: 'inherits resolved rubric policy' },
+            codex: { model: 'inherits resolved rubric policy', effort: 'inherits resolved rubric policy' },
+            pi: { model: 'inherits resolved rubric policy', effort: 'inherits resolved rubric policy' },
+          },
+        }),
+        expect.objectContaining({
           name: 'rebase-regrade',
           executionPath: 'engine-managed auxiliary judge',
           providerCells: {
@@ -567,6 +577,7 @@ describe('engine-managed auxiliary rows', () => {
     expect(rendered).toContain('| build-review-test-quality | engine-managed auxiliary rubric |');
     expect(rendered).toContain('| build-review-security | engine-managed auxiliary rubric |');
     expect(rendered).toContain('| build-review-implementation-quality | engine-managed auxiliary rubric |');
+    expect(rendered).toContain('| build-review-dependency-hygiene | engine-managed auxiliary rubric |');
     expect(rendered).toContain('| rebase-regrade | engine-managed auxiliary judge |');
   });
 });

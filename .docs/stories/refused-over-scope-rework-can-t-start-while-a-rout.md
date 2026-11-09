@@ -16,6 +16,8 @@ A round-admission fence refusal is a routing deferral: the refused work waits fo
 
 As the operator of a stacked feature, I want a child whose `build_review` settles through remediation adjudication to leave its BUILD region exactly as a clean `build_review` PASS does, so that a routed round is never left open behind a whole-feature gate.
 
+Scope: this story governs every `operator` and `revalidate` round, and `audit` rounds admitted with `stacked_prs.fold_routed_fixes` set to `false`. An `audit` round admitted with the setting on executes its hosts on the leaf and defers placement to the fold (`.docs/stories/late-gate-fixes-restack-the-whole-stack-every-repa.md` Stories 1 to 3 and 9).
+
 ### Acceptance Criteria
 
 #### Happy Path

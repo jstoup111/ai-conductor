@@ -311,7 +311,7 @@ require_absent_pattern 'composer contains no legacy conduct-ts engineer CLI exam
 
 # build_review output shape is engine-owned. These rules stop the shipped
 # rubric skills from reintroducing a competing prose payload contract.
-for build_review_skill in build-review-test-quality build-review-security build-review-implementation-quality; do
+for build_review_skill in build-review-test-quality build-review-security build-review-implementation-quality build-review-dependency-hygiene; do
   build_review_skill_file="$HARNESS_DIR/skills/${build_review_skill}/SKILL.md"
   require_absent_pattern "${build_review_skill} forbids ^## Result contract" \
     '^## Result contract' "$build_review_skill_file"
