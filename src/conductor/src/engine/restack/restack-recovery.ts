@@ -45,7 +45,7 @@ import { haltRecordPathFor } from './halt-record-bookkeeping.js';
 import { readHaltRecordRef } from '../halt-record-ref.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
 import { publishedStackRefusal } from '../stack-publication.js';
-import { routedRoundOpen } from '../routing/round-admission.js';
+import { deferredPlacementsExist, routedRoundOpen } from '../routing/round-admission.js';
 import { emitRestackRefused } from './restack-events.js';
 import {
   isLegalJournalTransition,
@@ -741,7 +741,7 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
             ? { kind: 'cleaned' }
             : { kind: 'unavailable', detail: 'cannot remove applied restack journal' };
         }
-        if (journal.journal.followOnCause === 'base-refresh' && await routedRoundOpen(options.worktree, options.slug, { git })) {
+        if (journal.journal.followOnCause === 'base-refresh' && (await routedRoundOpen(options.worktree, options.slug, { git }) || await deferredPlacementsExist(options.worktree, options.slug, { git }))) {
           await options.rearmRekick?.();
           await options.events?.emit(emitRestackRefused({ reason: 'deferred-base-refresh' }));
           return await cleanJournal(options.worktree, journal, git)

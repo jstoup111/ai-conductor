@@ -696,6 +696,10 @@ export function buildCommitMsgHook(launcher = resolveCanonicalLauncher()): strin
   '  "$CHAINED_HOOK" "$COMMIT_MSG_FILE" "$@" || exit $?',
   'fi',
   '',
+  '# Leaf-executed routed work has mandatory attribution trailers.  The verifier',
+  '# deliberately runs after the repository hook so stripping them is rejected.',
+  `CONDUCT_ROUND_STAMP_PROJECT_ROOT="$WORKTREE_ROOT" ${shellQuote(resolveCanonicalLauncher())} round-stamp --verify "$COMMIT_MSG_FILE" || { echo "commit-msg: rejected — leaf routed commit is missing its Round:/Owner: trailers" >&2; exit 1; }`,
+  '',
   'exit 0',
   ].join('\n');
 }

@@ -33,6 +33,25 @@ export type AdmitRoundDependencies = RouteRecordStoreDependencies & {
 
 export type RoundAdmissionFenceResult = Extract<AdmitRoundResult, { readonly kind: 'refused' }> & { readonly fence: true };
 
+/** Closed rounds with unfurled leaf ranges still own the stack until fold. */
+export async function deferredPlacementsExist(
+  worktree: string,
+  slug: string,
+  dependencies: RouteRecordStoreDependencies = {},
+): Promise<boolean> {
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  const listed = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
+  if (listed.exitCode !== 0) return true;
+  for (const ref of listed.stdout.split('\n').filter(Boolean)) {
+    const id = parseRoundId(ref.split('/').at(-1) ?? '');
+    if (!id) return true;
+    const stored = await readRouteRecord(worktree, slug, id, { git });
+    if (stored.kind !== 'record') return true;
+    if (Object.values(stored.record.placements ?? {}).some((placement) => placement.state === 'deferred')) return true;
+  }
+  return false;
+}
+
 /**
  * Reject a new admission while another active round could still make progress.
  * Revalidation is the sole exception: it may proceed only after every active

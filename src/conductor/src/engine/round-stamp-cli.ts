@@ -12,17 +12,22 @@ import { routingEligible } from './routing/route-types.js';
 
 export interface RoundStampCommand {
   readonly commitMessagePath: string;
+  readonly verify: boolean;
 }
 
 /** Recognize the hook-only `ai-conductor round-stamp <commit-message>` command. */
 export function detectRoundStampCommand(argv: string[]): RoundStampCommand | null {
-  if (argv[2] !== 'round-stamp' || !argv[3]) return null;
-  return { commitMessagePath: argv[3] };
+  if (argv[2] !== 'round-stamp') return null;
+  const verify = argv[3] === '--verify';
+  const commitMessagePath = verify ? argv[4] : argv[3];
+  if (!commitMessagePath) return null;
+  return { commitMessagePath, verify };
 }
 
 export interface RoundStampDependencies {
   readonly projectRoot: string;
   readonly commitMessagePath: string;
+  readonly verify?: boolean;
 }
 
 async function currentBranch(projectRoot: string): Promise<string | undefined> {
@@ -71,15 +76,36 @@ export async function runRoundStamp(deps: RoundStampDependencies): Promise<numbe
   try {
     message = await readFile(deps.commitMessagePath, 'utf8');
   } catch {
-    return 0;
+    return deps.verify ? 1 : 0;
   }
+  const leafExecution = marker.marker.execution === 'leaf' && identity.kind === 'leaf';
+  const owner = identity.kind === 'leaf' && (cursor.kind === 'active' || cursor.kind === 'repair-pending') && cursor.isLeaf && cursor.child === marker.marker.host
+    ? 'leaf'
+    : `c${marker.marker.host}`;
+  if (deps.verify && !leafExecution) return 0;
   try {
     const parsed = await execa('git', ['interpret-trailers', '--parse'], {
       cwd: deps.projectRoot,
       input: message,
       reject: false,
     });
-    if (parsed.exitCode !== 0 || /^Round:/m.test(parsed.stdout)) return 0;
+    if (parsed.exitCode !== 0) return deps.verify ? 1 : 0;
+    const trailers = parsed.stdout.split('\n').filter(Boolean);
+    if (deps.verify) {
+      const rounds = trailers.filter((trailer) => /^Round:\s*/.test(trailer));
+      const owners = trailers.filter((trailer) => /^Owner:\s*/.test(trailer));
+      return rounds.length === 1 && owners.length === 1 &&
+        rounds[0] === `Round: ${marker.marker.roundId}` && owners[0] === `Owner: ${owner}` ? 0 : 1;
+    }
+    if (leafExecution) {
+      await execa('git', [
+        'interpret-trailers', '--in-place', '--if-exists', 'replace',
+        '--trailer', `Round: ${marker.marker.roundId}`,
+        '--trailer', `Owner: ${owner}`, deps.commitMessagePath,
+      ], { cwd: deps.projectRoot, reject: false });
+      return 0;
+    }
+    if (/^Round:/m.test(parsed.stdout)) return 0;
     await execa('git', [
       'interpret-trailers', '--in-place', '--if-exists', 'addIfDifferent',
       '--trailer', `Round: ${marker.marker.roundId}`, deps.commitMessagePath,
