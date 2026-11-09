@@ -819,15 +819,12 @@ describe('routed round conductor resume', () => {
   });
 
   // Covers: task:8, S3.3
-  it('resumes a cleared NC-4 over-scope halt through routed repair progress without re-requesting a decision', async () => {
+  it('resumes a cleared NC-4 over-scope halt through the real routed exit without re-requesting a decision', async () => {
     const subject = await fixture();
     const host = parseChildId(1)!;
     const roundId = parseRoundId('r2')!;
     const statePath = join(subject.repo, '.pipeline', 'conduct-state.json');
-    const state: ConductState = {
-      feature_desc: 'demo', complexity_tier: 'M',
-      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
-    };
+    const state = doneThrough('manual_test');
     await writeState(statePath, state);
     await mkdir(join(subject.repo, '.pipeline'), { recursive: true });
     // This is the durable output of `halt clear`: all NC-4 decisions have
@@ -841,36 +838,35 @@ describe('routed round conductor resume', () => {
     const created = await createRouteRecord(subject.repo, 'demo', {
       roundId, sealedAuthored: 1, kind: 'audit',
       items: [{ findingId: 'NC-4', kind: 'audit', owner: host, host, reason: 'refusal-rework', fallback: [] }],
-      allocation: { [host]: { remTaskIds: ['rem-prd-audit-NC-4'], blockBodies: ['### Task rem-prd-audit-NC-4\\n'] } },
+      // Host 2 is the leaf, so its production exit takes the no-commit
+      // completion path.  This keeps the run bounded without replacing the
+      // routed-exit implementation under test.
+      allocation: { [parseChildId(2)!]: { remTaskIds: ['rem-prd-audit-NC-4'], blockBodies: ['### Task rem-prd-audit-NC-4\\n'] } },
     });
     if (created.kind !== 'created') throw new Error(`could not create r2: ${created.kind}`);
-    await expect(admitRound(subject.repo, 'demo', created.record, host)).resolves.toMatchObject({ kind: 'admitted' });
+    const leaf = parseChildId(2)!;
+    await expect(admitRound(subject.repo, 'demo', created.record, leaf)).resolves.toMatchObject({ kind: 'admitted' });
     const admitted = await readRouteRecord(subject.repo, 'demo', roundId);
     if (admitted.kind !== 'record') throw new Error('r2 was not admitted');
-    const repairing = transitionHost(admitted, host, 'repairing', { credit: true });
+    const repairing = transitionHost(admitted, leaf, 'repairing', { credit: true });
     if (repairing.kind !== 'updated') throw new Error('could not stage r2 host');
     await writeRoutingTransaction(subject.repo, 'demo', [{ kind: 'update-record', previous: admitted, record: repairing.record }]);
 
     const events = new ConductorEventEmitter();
-    const progress: unknown[] = [];
-    events.on('routed_repair_phase', (event) => progress.push(event));
-    mocks.routedExit = async (input) => {
-      const route = await readRouteRecord((input as { worktree: string }).worktree, 'demo', roundId);
-      if (route.kind !== 'record') throw new Error('r2 missing at exit');
-      // The event is the observable routing-progress seam; the production
-      // exit normally persists this occurrence with its transaction.
-      await events.emit({ type: 'routed_repair_phase', roundId, host, phase: 'restacked', credit: false });
-      return { kind: 'continued', next: { kind: 'none' } };
-    };
     const conductor = new Conductor({
-      projectRoot: subject.repo, stateFilePath: statePath, featureSlug: 'demo', resume: true, verifyArtifacts: false, events,
-      stepRunner: { run: vi.fn() },
-      childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'repair-pending' as const, child: host, position: host, isLeaf: true, branch: 'feat/daemon-demo', repairChildren: [host], routedRepair: { child: host, roundId } }) },
-    }) as unknown as { activeRegionChild: typeof host; continueRoutedHostExit: (candidate: ConductState, indexOf: (step: StepName) => number, requireSatisfiedRegion: boolean) => Promise<unknown> };
-    conductor.activeRegionChild = host;
-    await expect(conductor.continueRoutedHostExit(state, (step) => ALL_STEPS.findIndex((candidate) => candidate.name === step), true)).resolves.toBeDefined();
+      projectRoot: subject.repo, stateFilePath: statePath, featureSlug: 'demo', fromStep: 'manual_test', resume: true, verifyArtifacts: false, events,
+      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
+      stepRunner: { run: async (step) => { throw new Error(`stop after routed exit: ${step}`); } },
+      childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'repair-pending' as const, child: leaf, position: leaf, isLeaf: true, branch: 'feat/daemon-demo', repairChildren: [leaf], routedRepair: { child: leaf, roundId } }) },
+    });
+    const resumed = conductor as unknown as {
+      activeRegionChild: typeof leaf;
+      continueRoutedHostExit: (candidate: ConductState, indexOf: (step: StepName) => number, requireSatisfiedRegion: boolean) => Promise<unknown>;
+    };
+    resumed.activeRegionChild = leaf;
+    await expect(resumed.continueRoutedHostExit(state, (step) => ALL_STEPS.findIndex((candidate) => candidate.name === step), true)).resolves.toBeDefined();
 
-    expect(progress).toEqual([expect.objectContaining({ type: 'routed_repair_phase', roundId: 'r2', host, phase: 'restacked' })]);
-    await expect(access(join(subject.repo, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({ kind: 'record', record: { hosts: { 2: 'done' } } });
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.not.toContain('revise-decision');
   });
 });
