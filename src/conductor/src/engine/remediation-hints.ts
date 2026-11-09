@@ -368,9 +368,9 @@ export function buildRetryHint(
       return (
         `Previous attempt did not satisfy the completion check: ${r}. ` +
         'Record manual-test results now via:\n' +
-        '  ai-conductor manual-test-record --results <path> --pipeline-dir <dir>\n' +
+        '  ai-conductor manual-test-record --results <path>\n' +
         'or, if this is an automated/headless run with no human tester available:\n' +
-        '  ai-conductor manual-test-record --skip --reason <r> --pipeline-dir <dir>'
+        '  ai-conductor manual-test-record --skip --reason <r>'
       );
     }
     return `Previous attempt did not satisfy the completion check: ${r}. Finish the work now.`;
