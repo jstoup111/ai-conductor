@@ -4,6 +4,13 @@ spec_hash: af5ade76de63a21e6fde05e869b4e743372c02790f497fec3ff838d00278253b
 pr: https://github.com/jstoup111/ai-conductor/pull/3680
 shipped: 2026-11-09
 engine_version: 20261109T141237Z-60702f2beb31
+findings:
+  - gate: architecture_review_as_built
+    finding: "as-built:67b681d3-c624-476a-8479-20c3c7526f9a:1"
+    class: REMEDIABLE
+    governing_clause: "adr-2026-11-07-external-boundary-ports-registry-and-ratchet decision 7"
+    outcome: remediated
+    summary: "Verified, 95% confidence: src/conductor/test/structural/boundary-contract-obligation.test.ts:73 unconditionally reads every registered path before invoking the checker at line 94. A missing contract, fake, fake-leg, or real-leg file therefore throws ENOENT without the boundary and violated rule required by D7. This also prevents collecting subsequent violations. Preserve missing paths as absent map entries so the checker produces its missing-file diagnostics."
 ---
 
 ## Cost
