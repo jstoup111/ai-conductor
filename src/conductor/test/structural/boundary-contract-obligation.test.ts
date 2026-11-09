@@ -4,10 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-import {
-  checkBoundaryContractObligations,
-  type BoundaryContractViolation,
-} from './boundary-contract-obligation.js';
+import { checkBoundaryContractObligations, type BoundaryContractViolation } from './boundary-contract-obligation.js';
 import { BOUNDARY_REGISTRY, type BoundaryEntry } from './boundary-registry.js';
 
 const CONDUCTOR_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -18,9 +15,7 @@ const fake = 'test/fixtures/provider-fake.ts';
 const fakeLeg = 'test/contracts/provider.contract.test.ts';
 const realLeg = 'test/contracts/provider-provider.contract.smoke.test.ts';
 
-function boundary(
-  overrides: Partial<BoundaryEntry> = {},
-): BoundaryEntry {
+function boundary(overrides: Partial<BoundaryEntry> = {}): BoundaryEntry {
   return {
     name: 'llm',
     port: 'Provider',
@@ -55,9 +50,7 @@ function check(entry: BoundaryEntry, files = completeFiles()): BoundaryContractV
   return checkBoundaryContractObligations(registry(entry), files);
 }
 
-function filesNamedByContracts(
-  entries: Readonly<Record<string, BoundaryEntry>>,
-): ReadonlyMap<string, string> {
+function filesNamedByContracts(entries: Readonly<Record<string, BoundaryEntry>>): ReadonlyMap<string, string> {
   const files = new Map<string, string>();
 
   for (const entry of Object.values(entries)) {
@@ -115,37 +108,37 @@ describe('structural: boundary contract obligations', () => {
     ['fake module', 'fake', 'test/fixtures/missing-claude-provider-fake.ts'],
     ['fake leg', 'fakeLeg', 'test/contracts/missing-llm.contract.test.ts'],
     ['real leg', 'realLeg', 'test/contracts/missing-llm-claude.contract.smoke.test.ts'],
-  ] as const)('reports a typed missing-file violation when the registry names a missing %s', (_kind, field, missingPath) => {
-    const llm = BOUNDARY_REGISTRY.llm;
-    const contract = llm.contract!;
-    const firstLeg = contract.legs[0];
-    const legWithMissingPath = field === 'fake'
-      ? { ...firstLeg, fake: missingPath }
-      : field === 'fakeLeg'
-        ? { ...firstLeg, fakeLeg: missingPath }
-        : field === 'realLeg'
-          ? { ...firstLeg, realLeg: missingPath }
-          : firstLeg;
-    const registryWithMissingPath = {
-      ...BOUNDARY_REGISTRY,
-      llm: {
-        ...llm,
-        contract: {
-          ...contract,
-          module: field === 'module' ? missingPath : contract.module,
-          legs: [
-            legWithMissingPath,
-            ...contract.legs.slice(1),
-          ],
+  ] as const)(
+    'reports a typed missing-file violation when the registry names a missing %s',
+    (_kind, field, missingPath) => {
+      const llm = BOUNDARY_REGISTRY.llm;
+      const contract = llm.contract!;
+      const firstLeg = contract.legs[0];
+      const legWithMissingPath =
+        field === 'fake'
+          ? { ...firstLeg, fake: missingPath }
+          : field === 'fakeLeg'
+            ? { ...firstLeg, fakeLeg: missingPath }
+            : field === 'realLeg'
+              ? { ...firstLeg, realLeg: missingPath }
+              : firstLeg;
+      const registryWithMissingPath = {
+        ...BOUNDARY_REGISTRY,
+        llm: {
+          ...llm,
+          contract: {
+            ...contract,
+            module: field === 'module' ? missingPath : contract.module,
+            legs: [legWithMissingPath, ...contract.legs.slice(1)],
+          },
         },
-      },
-    };
+      };
 
-    expect(checkBoundaryContractObligations(
-      registryWithMissingPath,
-      filesNamedByContracts(registryWithMissingPath),
-    )).toContainEqual({ boundary: 'llm', rule: 'missing-file', path: missingPath });
-  });
+      expect(
+        checkBoundaryContractObligations(registryWithMissingPath, filesNamedByContracts(registryWithMissingPath)),
+      ).toContainEqual({ boundary: 'llm', rule: 'missing-file', path: missingPath });
+    },
+  );
 
   it('accepts complete ported and early pending contracts, while ignoring null pending contracts', () => {
     const early = boundary({ name: 'gh', status: { kind: 'pending', issue: 1 } });
@@ -155,17 +148,20 @@ describe('structural: boundary contract obligations', () => {
       status: { kind: 'pending', issue: 2 },
     });
 
-    expect(checkBoundaryContractObligations({
-      llm: boundary(),
-      git: pendingWithoutContract,
-      gh: early,
-    }, completeFiles())).toEqual([]);
+    expect(
+      checkBoundaryContractObligations(
+        {
+          llm: boundary(),
+          git: pendingWithoutContract,
+          gh: early,
+        },
+        completeFiles(),
+      ),
+    ).toEqual([]);
   });
 
   it('reports a ported boundary without a contract', () => {
-    expect(check(boundary({ contract: null }))).toEqual([
-      { boundary: 'llm', rule: 'ported-without-contract' },
-    ]);
+    expect(check(boundary({ contract: null }))).toEqual([{ boundary: 'llm', rule: 'ported-without-contract' }]);
   });
 
   it('applies missing-leg checks to ported and early pending contracts', () => {
@@ -197,9 +193,7 @@ describe('structural: boundary contract obligations', () => {
     const files = completeFiles();
     const withoutPath = new Map(files);
     withoutPath.delete(path);
-    expectForPortedAndEarlyContract(boundary(), [
-      { boundary: 'llm', rule: 'missing-file', path },
-    ], withoutPath);
+    expectForPortedAndEarlyContract(boundary(), [{ boundary: 'llm', rule: 'missing-file', path }], withoutPath);
   });
 
   it('applies fake-leg smoke checks to ported and early pending contracts', () => {
@@ -210,9 +204,7 @@ describe('structural: boundary contract obligations', () => {
     const files = new Map(completeFiles());
     files.delete(fakeLeg);
     files.set(smokeFakeLeg, `import '${contractModule}';`);
-    expectForPortedAndEarlyContract(entry, [
-      { boundary: 'llm', rule: 'fake-leg-is-smoke', path: smokeFakeLeg },
-    ], files);
+    expectForPortedAndEarlyContract(entry, [{ boundary: 'llm', rule: 'fake-leg-is-smoke', path: smokeFakeLeg }], files);
   });
 
   it('applies real-leg smoke checks to ported and early pending contracts', () => {
@@ -223,17 +215,21 @@ describe('structural: boundary contract obligations', () => {
     const files = new Map(completeFiles());
     files.delete(realLeg);
     files.set(defaultRealLeg, `import '${contractModule}';\nexport const smokeCapability = {};`);
-    expectForPortedAndEarlyContract(entry, [
-      { boundary: 'llm', rule: 'real-leg-not-smoke', path: defaultRealLeg },
-    ], files);
+    expectForPortedAndEarlyContract(
+      entry,
+      [{ boundary: 'llm', rule: 'real-leg-not-smoke', path: defaultRealLeg }],
+      files,
+    );
   });
 
   it('applies smoke-capability checks to ported and early pending contracts', () => {
     const files = new Map(completeFiles());
     files.set(realLeg, `import '${contractModule}';`);
-    expectForPortedAndEarlyContract(boundary(), [
-      { boundary: 'llm', rule: 'missing-capability', path: realLeg },
-    ], files);
+    expectForPortedAndEarlyContract(
+      boundary(),
+      [{ boundary: 'llm', rule: 'missing-capability', path: realLeg }],
+      files,
+    );
   });
 
   it.each([
@@ -242,9 +238,11 @@ describe('structural: boundary contract obligations', () => {
   ])('applies contract-import checks for a %s to ported and early pending contracts', (_kind, path) => {
     const files = new Map(completeFiles());
     files.set(path, path === realLeg ? 'export const smokeCapability = {};' : 'export const fakeLeg = {};');
-    expectForPortedAndEarlyContract(boundary(), [
-      { boundary: 'llm', rule: 'missing-contract-import', path, module: contractModule },
-    ], files);
+    expectForPortedAndEarlyContract(
+      boundary(),
+      [{ boundary: 'llm', rule: 'missing-contract-import', path, module: contractModule }],
+      files,
+    );
   });
 
   it('aggregates violations across boundaries', () => {
@@ -254,10 +252,15 @@ describe('structural: boundary contract obligations', () => {
       contract: { module: contractModule, legs: [{ adapter, fake, fakeLeg, realLeg: fakeLeg }] },
     });
 
-    expect(checkBoundaryContractObligations({
-      llm: boundary({ contract: null }),
-      git,
-    }, completeFiles())).toEqual([
+    expect(
+      checkBoundaryContractObligations(
+        {
+          llm: boundary({ contract: null }),
+          git,
+        },
+        completeFiles(),
+      ),
+    ).toEqual([
       { boundary: 'llm', rule: 'ported-without-contract' },
       { boundary: 'git', rule: 'real-leg-not-smoke', path: fakeLeg },
       { boundary: 'git', rule: 'missing-capability', path: fakeLeg },

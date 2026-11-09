@@ -27,9 +27,9 @@ const expectationNames = [
 ] as const;
 
 function collectTests(tasks: readonly RunnerTask[]): readonly RunnerTestCase[] {
-  return tasks.flatMap((task) => task.type === 'test'
-    ? [task as RunnerTestCase]
-    : task.tasks === undefined ? [] : collectTests(task.tasks));
+  return tasks.flatMap((task) =>
+    task.type === 'test' ? [task as RunnerTestCase] : task.tasks === undefined ? [] : collectTests(task.tasks),
+  );
 }
 
 async function registeredFakeLegCases(): Promise<readonly string[]> {
@@ -41,17 +41,20 @@ async function registeredFakeLegCases(): Promise<readonly string[]> {
   const codexFakeModule = fileURLToPath(new URL('../fixtures/codex-provider-fake.ts', import.meta.url));
   const piFakeModule = fileURLToPath(new URL('../fixtures/pi-provider-fake.ts', import.meta.url));
 
-  await writeFile(fixture, [
-    `import { llmContract } from ${JSON.stringify(contractModule)};`,
-    `import { runBoundaryContract } from ${JSON.stringify(boundaryModule)};`,
-    `import { createClaudeProviderFake } from ${JSON.stringify(claudeFakeModule)};`,
-    `import { createCodexProviderFake } from ${JSON.stringify(codexFakeModule)};`,
-    `import { createPiProviderFake } from ${JSON.stringify(piFakeModule)};`,
-    '',
-    'for (const [adapter, createFake] of Object.entries({ claude: createClaudeProviderFake, codex: createCodexProviderFake, pi: createPiProviderFake })) {',
-    "  runBoundaryContract(llmContract, { adapter, leg: 'fake', create: () => createFake().provider });",
-    '}',
-  ].join('\n'));
+  await writeFile(
+    fixture,
+    [
+      `import { llmContract } from ${JSON.stringify(contractModule)};`,
+      `import { runBoundaryContract } from ${JSON.stringify(boundaryModule)};`,
+      `import { createClaudeProviderFake } from ${JSON.stringify(claudeFakeModule)};`,
+      `import { createCodexProviderFake } from ${JSON.stringify(codexFakeModule)};`,
+      `import { createPiProviderFake } from ${JSON.stringify(piFakeModule)};`,
+      '',
+      'for (const [adapter, createFake] of Object.entries({ claude: createClaudeProviderFake, codex: createCodexProviderFake, pi: createPiProviderFake })) {',
+      "  runBoundaryContract(llmContract, { adapter, leg: 'fake', create: () => createFake().provider });",
+      '}',
+    ].join('\n'),
+  );
 
   const vitest = await createVitest('test', {
     root,
@@ -93,8 +96,9 @@ describe('llm contract fake leg', () => {
 describe('llm contract expectation sensitivity', () => {
   it('defines the source contract and registers all twelve fake-leg cases', async () => {
     const source = await readFile(fileURLToPath(new URL('./llm.contract.ts', import.meta.url)), 'utf8');
-    const expectedCases = Object.keys(fakeProviders).flatMap((adapter) => expectationNames
-      .map((expectation) => `llm contract [${adapter} fake] › ${expectation}`));
+    const expectedCases = Object.keys(fakeProviders).flatMap((adapter) =>
+      expectationNames.map((expectation) => `llm contract [${adapter} fake] › ${expectation}`),
+    );
 
     expect(source).toMatch(/import\s*\{\s*defineBoundaryContract\s*\}\s*from\s*['"]\.\/boundary-contract\.js['"]/);
     for (const expectation of expectationNames) expect(source).toContain(`name: '${expectation}'`);
@@ -114,7 +118,9 @@ describe('llm contract expectation sensitivity', () => {
   });
 
   it('requires denied permits to reject before an observer and name the reason', async () => {
-    const denial = llmContract.expectations.find(({ name }) => name === 'refuses a denied spawn permit before spawning')!;
+    const denial = llmContract.expectations.find(
+      ({ name }) => name === 'refuses a denied spawn permit before spawning',
+    )!;
     const pi = createPiProviderFake().provider;
     const resolvesDenied: LLMProvider = {
       ...pi,
@@ -129,7 +135,9 @@ describe('llm contract expectation sensitivity', () => {
     };
     const omitsReason: LLMProvider = {
       ...pi,
-      invoke: async () => { throw new Error('spawn denied'); },
+      invoke: async () => {
+        throw new Error('spawn denied');
+      },
     };
 
     await expect(denial.run(resolvesDenied)).rejects.toThrow();
@@ -154,7 +162,9 @@ describe('llm contract expectation sensitivity', () => {
   });
 
   it('supplies a confined scratch home to native-schema invocations and removes it afterwards', async () => {
-    const nativeSchema = llmContract.expectations.find(({ name }) => name === 'returns a native-schema terminal result')!;
+    const nativeSchema = llmContract.expectations.find(
+      ({ name }) => name === 'returns a native-schema terminal result',
+    )!;
     let observedRoot: string | undefined;
     let observedHome: string | undefined;
     const recording: LLMProvider = {
@@ -176,7 +186,9 @@ describe('llm contract expectation sensitivity', () => {
     };
 
     await expect(nativeSchema.run(recording)).resolves.toBeUndefined();
-    expect(observedHome).toMatch(new RegExp(`${observedRoot!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/\\.daemon/scratch/`));
+    expect(observedHome).toMatch(
+      new RegExp(`${observedRoot!.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/\\.daemon/scratch/`),
+    );
     await expect(access(observedRoot!)).rejects.toThrow();
   });
 });

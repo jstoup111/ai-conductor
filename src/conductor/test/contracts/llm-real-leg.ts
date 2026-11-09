@@ -35,7 +35,10 @@ export function createDefaultLlmRealProvider(adapter: LiveLlmAdapter): LLMProvid
 }
 
 /** Adds input/output token accounting without changing the provider boundary contract. */
-export function meterLlmProvider(provider: LLMProvider, meter: LlmMeter = { totalTokens: 0, unmetered: 0 }): MeteredLlmProvider {
+export function meterLlmProvider(
+  provider: LLMProvider,
+  meter: LlmMeter = { totalTokens: 0, unmetered: 0 },
+): MeteredLlmProvider {
   return {
     supportsSessionResume: provider.supportsSessionResume,
     lifecycleCapability: provider.lifecycleCapability,

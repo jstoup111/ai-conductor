@@ -5,8 +5,17 @@ import type { BoundaryEntry } from './boundary-registry.js';
 export type BoundaryContractViolation =
   | { readonly boundary: string; readonly rule: 'ported-without-contract' }
   | { readonly boundary: string; readonly rule: 'missing-leg' | 'unregistered-adapter'; readonly adapter: string }
-  | { readonly boundary: string; readonly rule: 'missing-file' | 'fake-leg-is-smoke' | 'real-leg-not-smoke' | 'missing-capability'; readonly path: string }
-  | { readonly boundary: string; readonly rule: 'missing-contract-import'; readonly path: string; readonly module: string };
+  | {
+      readonly boundary: string;
+      readonly rule: 'missing-file' | 'fake-leg-is-smoke' | 'real-leg-not-smoke' | 'missing-capability';
+      readonly path: string;
+    }
+  | {
+      readonly boundary: string;
+      readonly rule: 'missing-contract-import';
+      readonly path: string;
+      readonly module: string;
+    };
 
 function importsModule(source: string, importer: string, module: string): boolean {
   const modulePath = posix.resolve('/', module);
@@ -17,8 +26,7 @@ function importsModule(source: string, importer: string, module: string): boolea
     if (specifier === module) return true;
     if (!specifier.startsWith('.')) continue;
 
-    const resolved = posix.resolve('/', posix.dirname(importer), specifier)
-      .replace(/\.js$/, '.ts');
+    const resolved = posix.resolve('/', posix.dirname(importer), specifier).replace(/\.js$/, '.ts');
     if (resolved === modulePath) return true;
   }
 

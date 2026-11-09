@@ -10,11 +10,7 @@ import type { InvokeOptions, InvokeResult } from '../../src/execution/llm-provid
 import { createClaudeProviderFake } from '../fixtures/claude-provider-fake.js';
 import { createCodexProviderFake } from '../fixtures/codex-provider-fake.js';
 import { createPiProviderFake } from '../fixtures/pi-provider-fake.js';
-import {
-  createDefaultLlmRealProvider,
-  defineLlmRealLeg,
-  meterLlmProvider,
-} from './llm-real-leg.js';
+import { createDefaultLlmRealProvider, defineLlmRealLeg, meterLlmProvider } from './llm-real-leg.js';
 import { assertTokenCap } from '../fixtures/live-e2e-run-body.js';
 
 const providers = {
@@ -26,9 +22,9 @@ const providers = {
 const meteringEmitted: string[] = [];
 
 function collectTests(tasks: readonly RunnerTask[]): readonly RunnerTestCase[] {
-  return tasks.flatMap((task) => task.type === 'test'
-    ? [task as RunnerTestCase]
-    : task.tasks === undefined ? [] : collectTests(task.tasks));
+  return tasks.flatMap((task) =>
+    task.type === 'test' ? [task as RunnerTestCase] : task.tasks === undefined ? [] : collectTests(task.tasks),
+  );
 }
 
 async function collectRealAndFakeContractCases(): Promise<readonly RunnerTestCase[]> {
@@ -38,13 +34,16 @@ async function collectRealAndFakeContractCases(): Promise<readonly RunnerTestCas
   const fakeLegModule = fileURLToPath(new URL('./llm.contract.test.ts', import.meta.url));
   const fakeModule = fileURLToPath(new URL('../fixtures/claude-provider-fake.ts', import.meta.url));
 
-  await writeFile(fixture, [
-    `import { defineLlmRealLeg } from ${JSON.stringify(realLegModule)};`,
-    `import { createClaudeProviderFake } from ${JSON.stringify(fakeModule)};`,
-    `import ${JSON.stringify(fakeLegModule)};`,
-    '',
-    "defineLlmRealLeg('claude', { createProvider: () => createClaudeProviderFake().provider });",
-  ].join('\n'));
+  await writeFile(
+    fixture,
+    [
+      `import { defineLlmRealLeg } from ${JSON.stringify(realLegModule)};`,
+      `import { createClaudeProviderFake } from ${JSON.stringify(fakeModule)};`,
+      `import ${JSON.stringify(fakeLegModule)};`,
+      '',
+      "defineLlmRealLeg('claude', { createProvider: () => createClaudeProviderFake().provider });",
+    ].join('\n'),
+  );
 
   const vitest = await createVitest('test', {
     root,
@@ -85,20 +84,25 @@ async function runInjectedRealLegFixture(divergeOnDeniedPermit = false): Promise
   const codexFakeModule = fileURLToPath(new URL('../fixtures/codex-provider-fake.ts', import.meta.url));
   const piFakeModule = fileURLToPath(new URL('../fixtures/pi-provider-fake.ts', import.meta.url));
 
-  await writeFile(fixture, [
-    `import { defineLlmRealLeg } from ${JSON.stringify(realLegModule)};`,
-    `import { createClaudeProviderFake } from ${JSON.stringify(claudeFakeModule)};`,
-    `import { createCodexProviderFake } from ${JSON.stringify(codexFakeModule)};`,
-    `import { createPiProviderFake } from ${JSON.stringify(piFakeModule)};`,
-    `import ${JSON.stringify(fakeLegModule)};`,
-    '',
-    'const claude = createClaudeProviderFake().provider;',
-    "defineLlmRealLeg('claude', { createProvider: () => " + (divergeOnDeniedPermit
-      ? "({ ...claude, invoke: async (options) => options.spawnPermit?.().permitted === false ? { success: true, output: 'x', exitCode: 0 } : claude.invoke(options) })"
-      : 'claude') + ' });',
-    "defineLlmRealLeg('codex', { createProvider: () => createCodexProviderFake().provider });",
-    "defineLlmRealLeg('pi', { createProvider: () => createPiProviderFake().provider });",
-  ].join('\n'));
+  await writeFile(
+    fixture,
+    [
+      `import { defineLlmRealLeg } from ${JSON.stringify(realLegModule)};`,
+      `import { createClaudeProviderFake } from ${JSON.stringify(claudeFakeModule)};`,
+      `import { createCodexProviderFake } from ${JSON.stringify(codexFakeModule)};`,
+      `import { createPiProviderFake } from ${JSON.stringify(piFakeModule)};`,
+      `import ${JSON.stringify(fakeLegModule)};`,
+      '',
+      'const claude = createClaudeProviderFake().provider;',
+      "defineLlmRealLeg('claude', { createProvider: () => " +
+        (divergeOnDeniedPermit
+          ? "({ ...claude, invoke: async (options) => options.spawnPermit?.().permitted === false ? { success: true, output: 'x', exitCode: 0 } : claude.invoke(options) })"
+          : 'claude') +
+        ' });',
+      "defineLlmRealLeg('codex', { createProvider: () => createCodexProviderFake().provider });",
+      "defineLlmRealLeg('pi', { createProvider: () => createPiProviderFake().provider });",
+    ].join('\n'),
+  );
 
   const vitest = await createVitest('test', {
     root,
@@ -151,9 +155,13 @@ describe('llm real leg injected providers', () => {
         expectationNames.map((expectation) => `llm contract [${adapter} real] › ${expectation}`),
       );
       expect(real.map(({ state }) => state)).toEqual(['pass', 'pass', 'pass', 'pass']);
-      expect(fake.map(({ name }) => name.slice(name.indexOf(`llm contract [${adapter} fake]`))
-        .replace(`llm contract [${adapter} fake]`, `llm contract [${adapter} real]`)))
-        .toEqual(real.map(({ name }) => name));
+      expect(
+        fake.map(({ name }) =>
+          name
+            .slice(name.indexOf(`llm contract [${adapter} fake]`))
+            .replace(`llm contract [${adapter} fake]`, `llm contract [${adapter} real]`),
+        ),
+      ).toEqual(real.map(({ name }) => name));
     }
   });
 
@@ -163,20 +171,24 @@ describe('llm real leg injected providers', () => {
     const deniedPermit = 'llm contract [claude real] › refuses a denied spawn permit before spawning';
 
     expect(cases.find(({ name }) => name === deniedPermit)).toEqual({ name: deniedPermit, state: 'fail' });
-    expect(cases.filter(({ name }) => name.startsWith('llm contract [claude real] › ') && name !== deniedPermit)
-      .map(({ state }) => state)).toEqual(['pass', 'pass', 'pass']);
+    expect(
+      cases
+        .filter(({ name }) => name.startsWith('llm contract [claude real] › ') && name !== deniedPermit)
+        .map(({ state }) => state),
+    ).toEqual(['pass', 'pass', 'pass']);
   });
 });
 
 describe('llm real leg metering', () => {
   defineLlmRealLeg('claude', {
-    createProvider: () => createClaudeProviderFake(() => ({
-      success: true,
-      output: 'metered',
-      exitCode: 0,
-      tokenUsage: { input: 200, output: 200 },
-      finalStructuredResult: {},
-    })).provider,
+    createProvider: () =>
+      createClaudeProviderFake(() => ({
+        success: true,
+        output: 'metered',
+        exitCode: 0,
+        tokenUsage: { input: 200, output: 200 },
+        finalStructuredResult: {},
+      })).provider,
     environment: { DAEMON_E2E_LIVE_TOKEN_CAP: '900' },
     emit: (message) => meteringEmitted.push(message),
   });
@@ -193,13 +205,15 @@ describe('llm real leg metering', () => {
       },
     });
 
-    await expect(provider.invoke({
-      prompt: 'one line',
-      sessionId: 'metering-test',
-      resume: false,
-      onSpawn,
-      spawnPermit: () => ({ permitted: false, reason: 'revoked' }),
-    })).rejects.toThrow('revoked');
+    await expect(
+      provider.invoke({
+        prompt: 'one line',
+        sessionId: 'metering-test',
+        resume: false,
+        onSpawn,
+        spawnPermit: () => ({ permitted: false, reason: 'revoked' }),
+      }),
+    ).rejects.toThrow('revoked');
     expect(onSpawn).not.toHaveBeenCalled();
     expect(provider.totalTokens).toBe(0);
   });
@@ -217,8 +231,9 @@ describe('llm real leg metering', () => {
 
     await provider.invoke({ prompt: 'one line', sessionId: 'metering-test', resume: false });
     expect(provider.totalTokens).toBe(900);
-    expect(() => assertTokenCap(provider.totalTokens, provider.unmetered, 500))
-      .toThrow('Token cap 500 exceeded: observed 900');
+    expect(() => assertTokenCap(provider.totalTokens, provider.unmetered, 500)).toThrow(
+      'Token cap 500 exceeded: observed 900',
+    );
   });
 });
 

@@ -27,11 +27,13 @@ export const llmContract = defineBoundaryContract<LLMProvider>({
       run: async (provider) => {
         const onSpawn = vi.fn();
 
-        await expect(provider.invoke({
-          ...invokeOptions('one line'),
-          onSpawn,
-          spawnPermit: () => ({ permitted: false, reason: 'revoked' }),
-        })).rejects.toThrow('revoked');
+        await expect(
+          provider.invoke({
+            ...invokeOptions('one line'),
+            onSpawn,
+            spawnPermit: () => ({ permitted: false, reason: 'revoked' }),
+          }),
+        ).rejects.toThrow('revoked');
         expect(onSpawn).not.toHaveBeenCalled();
       },
     },

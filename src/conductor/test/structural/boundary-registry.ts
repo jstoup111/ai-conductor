@@ -1,16 +1,6 @@
-export type BoundaryName =
-  | 'llm'
-  | 'git'
-  | 'gh'
-  | 'tmux'
-  | 'process'
-  | 'clock'
-  | 'otel'
-  | 'filesystem';
+export type BoundaryName = 'llm' | 'git' | 'gh' | 'tmux' | 'process' | 'clock' | 'otel' | 'filesystem';
 
-export type BoundaryStatus =
-  | { readonly kind: 'ported' }
-  | { readonly kind: 'pending'; readonly issue: number };
+export type BoundaryStatus = { readonly kind: 'ported' } | { readonly kind: 'pending'; readonly issue: number };
 
 export interface BoundaryContractEntry {
   readonly module: string;
@@ -43,27 +33,14 @@ export interface MissingAdapterPath {
   readonly path: string;
 }
 
-const BOUNDARY_NAMES: readonly BoundaryName[] = [
-  'llm',
-  'git',
-  'gh',
-  'tmux',
-  'process',
-  'clock',
-  'otel',
-  'filesystem',
-];
+const BOUNDARY_NAMES: readonly BoundaryName[] = ['llm', 'git', 'gh', 'tmux', 'process', 'clock', 'otel', 'filesystem'];
 const BOUNDARY_NAME_SET = new Set<string>(BOUNDARY_NAMES);
 
 export const BOUNDARY_REGISTRY: Readonly<Record<BoundaryName, BoundaryEntry>> = {
   llm: {
     name: 'llm',
     port: 'LLMProvider',
-    adapterModules: [
-      'execution/claude-provider.ts',
-      'execution/codex-provider.ts',
-      'execution/pi-provider.ts',
-    ],
+    adapterModules: ['execution/claude-provider.ts', 'execution/codex-provider.ts', 'execution/pi-provider.ts'],
     specifiers: [],
     clockCalls: [],
     commandLiterals: [],
@@ -164,9 +141,7 @@ export const BOUNDARY_REGISTRY: Readonly<Record<BoundaryName, BoundaryEntry>> = 
   },
 };
 
-export function expectedBoundaryNames(
-  registry: Readonly<Record<string, BoundaryEntry>>,
-): BoundaryNameDifferences {
+export function expectedBoundaryNames(registry: Readonly<Record<string, BoundaryEntry>>): BoundaryNameDifferences {
   const names = new Set(Object.keys(registry));
   return {
     missing: BOUNDARY_NAMES.filter((name) => !names.has(name)),

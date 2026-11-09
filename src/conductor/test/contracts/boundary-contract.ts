@@ -18,7 +18,10 @@ export interface BoundaryContractDefinition<S> {
 }
 
 /** Defines an immutable, ordered set of assertions shared by fake and real adapter legs. */
-export function defineBoundaryContract<S>({ boundary, expectations }: BoundaryContractDefinition<S>): BoundaryContract<S> {
+export function defineBoundaryContract<S>({
+  boundary,
+  expectations,
+}: BoundaryContractDefinition<S>): BoundaryContract<S> {
   if (expectations.length === 0) {
     throw new Error(`Boundary contract ${boundary} is empty`);
   }
@@ -45,13 +48,20 @@ export interface BoundaryContractRun<S> {
 }
 
 /** Registers the independently-executed cases for one adapter leg. */
-export function runBoundaryContract<S>(contract: BoundaryContract<S>, { adapter, leg, create, timeoutMs }: BoundaryContractRun<S>): void {
+export function runBoundaryContract<S>(
+  contract: BoundaryContract<S>,
+  { adapter, leg, create, timeoutMs }: BoundaryContractRun<S>,
+): void {
   describe(`${contract.boundary} contract [${adapter} ${leg}]`, () => {
     for (const expectation of contract.expectations) {
-      it(expectation.name, async () => {
-        const subject = await create();
-        await expectation.run(subject);
-      }, timeoutMs);
+      it(
+        expectation.name,
+        async () => {
+          const subject = await create();
+          await expectation.run(subject);
+        },
+        timeoutMs,
+      );
     }
   });
 }

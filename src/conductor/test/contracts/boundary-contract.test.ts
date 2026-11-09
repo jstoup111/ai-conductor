@@ -20,9 +20,9 @@ interface ContractRun {
 }
 
 function collectTests(tasks: readonly RunnerTask[]): readonly RunnerTestCase[] {
-  return tasks.flatMap((task) => task.type === 'test'
-    ? [task as RunnerTestCase]
-    : task.tasks === undefined ? [] : collectTests(task.tasks));
+  return tasks.flatMap((task) =>
+    task.type === 'test' ? [task as RunnerTestCase] : task.tasks === undefined ? [] : collectTests(task.tasks),
+  );
 }
 
 async function runContractFixture(source: string, testTimeout = 5_000): Promise<ContractRun> {
@@ -63,7 +63,12 @@ async function runContractFixture(source: string, testTimeout = 5_000): Promise<
   }
 }
 
-function fixtureSource({ leg = 'fake', secondExpectation = 'subject.ready === true', factory = '() => ({ ready: true })', timeoutMs }: {
+function fixtureSource({
+  leg = 'fake',
+  secondExpectation = 'subject.ready === true',
+  factory = '() => ({ ready: true })',
+  timeoutMs,
+}: {
   readonly leg?: 'fake' | 'real';
   readonly secondExpectation?: string;
   readonly factory?: string;
@@ -101,10 +106,15 @@ describe('boundary contract harness', () => {
   it('reports one independently failed expectation while the other case passes', async () => {
     const run = await runContractFixture(fixtureSource({ secondExpectation: 'subject.ready === false' }));
 
-    expect(run.results).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: 'llm contract [claude fake] › declares the adapter capabilities', state: 'pass' }),
-      expect.objectContaining({ name: 'llm contract [claude fake] › completes a minimal invocation', state: 'fail' }),
-    ]));
+    expect(run.results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: 'llm contract [claude fake] › declares the adapter capabilities',
+          state: 'pass',
+        }),
+        expect.objectContaining({ name: 'llm contract [claude fake] › completes a minimal invocation', state: 'fail' }),
+      ]),
+    );
     expect(run.results.filter(({ state }) => state === 'fail')).toHaveLength(1);
   });
 
@@ -131,13 +141,15 @@ describe('boundary contract harness', () => {
     expect(Object.isFrozen(contract.expectations)).toBe(true);
     expect(contract.expectations.map(({ name }) => name)).toEqual(['first', 'second']);
     expect(() => defineBoundaryContract({ boundary: 'llm', expectations: [] })).toThrow(/llm.*empty/i);
-    expect(() => defineBoundaryContract({
-      boundary: 'llm',
-      expectations: [
-        { name: 'duplicate', run: () => undefined },
-        { name: 'duplicate', run: () => undefined },
-      ],
-    })).toThrow(/llm.*duplicate/i);
+    expect(() =>
+      defineBoundaryContract({
+        boundary: 'llm',
+        expectations: [
+          { name: 'duplicate', run: () => undefined },
+          { name: 'duplicate', run: () => undefined },
+        ],
+      }),
+    ).toThrow(/llm.*duplicate/i);
   });
 
   it('makes every case fail with the factory error rather than passing without assertions', async () => {
