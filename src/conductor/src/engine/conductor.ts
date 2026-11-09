@@ -172,6 +172,7 @@ import {
   resolveBuildProgressConfig,
   resolveGateCodeValidityConfig,
   BUILD_PROGRESS_HALT_DEFAULTS,
+  foldRoutedFixesOn,
   resolveValidationConcurrency,
   RETRY_ROUTING_DEFAULTS,
 } from './config.js';
@@ -5557,9 +5558,11 @@ export class Conductor {
             const sealedAuthored = priorSealed ?? countAuthoredTaskHeadings(planText);
             const fence = await checkRoundAdmissionFence(this.projectRoot, this.featureSlug, { roundId, kind: 'audit' });
             if (fence !== undefined) return { kind: 'halt', haltClass: fence.fence ? 'mechanical' : 'needs-human', detail: fence.detail };
+            const execution = foldRoutedFixesOn(this.config) ? 'leaf' as const : undefined;
             const created = await createRouteRecord(this.projectRoot, this.featureSlug, {
               roundId, kind: 'audit', items: routed.items, allocation: routed.allocation, receipt, sealedAuthored,
               pendingAsBuiltFindings: [...this.pendingAsBuiltRemediationFindings.values()],
+              ...(execution === undefined ? {} : { execution }),
             });
             if (created.kind !== 'created') return { kind: 'halt', haltClass: 'needs-human', detail: `routing record creation failed: ${created.kind}` };
             const firstHost = routed.hosts[0];
@@ -5569,6 +5572,7 @@ export class Conductor {
                 await this.events.emitOrThrow(event);
                 return 'persisted';
               },
+              ...(execution === undefined ? {} : { execution }),
             });
             if (admission.kind !== 'admitted') return { kind: 'halt', haltClass: admission.fence ? 'mechanical' : 'needs-human', detail: admission.detail };
             return { kind: 'route', target: 'build', hint: routed.hostHints[firstHost] ?? buildRemediationHint(routedFixes, hintSource.source, ''), evidence: `routed round ${roundId}` };
