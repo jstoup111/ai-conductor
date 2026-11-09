@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { RUN_STEP_ORDER, parseRunRecord, type RunRecord, type RunStepId } from './run-record.js';
+import { parseRunRecord, summarizeRun, type RunRecord, type RunStepId, type RunSummary } from './run-record.js';
 import { strictSlugGithubRef } from './source-ref.js';
 
 export type ResumeTarget =
@@ -65,27 +65,16 @@ export function parseResumeTarget(value: string): ResumeTarget {
   throw new Error(`compose resume: cannot find a Composer run for "${value}" (searched PR, spec branch, and intake reference)`);
 }
 
-export function contextForRun(record: RunRecord): ResumeContext {
-  // A run record is sparse: track selection can intentionally omit DECIDE
-  // steps.  Therefore the first *recorded* draft/reconfirmation is next, not
-  // the first optional step absent from the record.
-  const nextStep = RUN_STEP_ORDER.find((step) =>
-    record.needsReconfirm.includes(step) || record.steps[step]?.state === 'draft',
-  ) ?? 'delivery';
-  const accepted = RUN_STEP_ORDER.flatMap((step) => {
-    const value = record.steps[step];
-    return value?.state === 'accepted' ? [value] : [];
-  });
-  const last = record.ownerHistory.at(-1) ?? accepted.at(-1);
+export function contextForRun(record: RunRecord, summary: RunSummary = summarizeRun(record)): ResumeContext {
   return {
     slug: record.slug,
     branch: `spec/${record.slug}`,
-    nextStep,
-    acceptedArtifacts: accepted.flatMap((step) => step.artifacts.map((artifact) => artifact.path)),
-    decisions: RUN_STEP_ORDER.flatMap((step) => record.notes[step]?.decisions ?? []),
-    openQuestions: RUN_STEP_ORDER.flatMap((step) => record.notes[step]?.openQuestions ?? []),
-    drafts: RUN_STEP_ORDER.filter((step) => record.steps[step]?.state === 'draft' || record.needsReconfirm.includes(step)),
-    ...(last ? { lastActor: last.actor, lastAt: last.at } : {}),
+    nextStep: summary.nextStep,
+    acceptedArtifacts: summary.acceptedSteps.flatMap((step) => step.artifacts.map((artifact) => artifact.path)),
+    decisions: summary.decisions,
+    openQuestions: summary.openQuestions,
+    drafts: summary.drafts,
+    ...(summary.lastActor ? { lastActor: summary.lastActor, lastAt: summary.lastAt } : {}),
   };
 }
 
@@ -108,9 +97,10 @@ export async function resumeComposerRun(value: string, deps: ResumeDeps): Promis
   const slug = resolved.branch.slice('spec/'.length);
   const raw = await (deps.readRunRecord ?? ((worktree, name) => readFile(join(worktree, '.docs', 'composer-runs', `${name}.json`), 'utf8')))(attached.worktree, slug);
   const record = parseRunRecord(raw);
-  const context = contextForRun(record);
+  const summary = summarizeRun(record);
+  const context = contextForRun(record, summary);
   await deps.recordDeciding?.({ branch: resolved.branch, draftPrUrl: resolved.draftPrUrl });
-  const previous = [...RUN_STEP_ORDER].reverse().map((step) => record.steps[step]).find((step) => step?.state === 'accepted');
-  await deps.emit?.({ slug, worktreePath: attached.worktree, ownership: 'unchanged', ...(previous?.state === 'accepted' ? { previousActor: previous.actor, previousProvider: previous.provider } : {}) });
+  const previous = summary.lastAcceptedStep;
+  await deps.emit?.({ slug, worktreePath: attached.worktree, ownership: 'unchanged', ...(previous ? { previousActor: previous.actor, previousProvider: previous.provider } : {}) });
   return { worktree: attached.worktree, context };
 }

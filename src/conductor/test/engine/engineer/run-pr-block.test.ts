@@ -9,12 +9,12 @@ const record: RunRecord = { schemaVersion: 1, slug: 'demo', steps: { explore: { 
 describe('Composer PR run block', () => {
   it('Covers: Task 6 renders every Composer summary field from the durable record', () => {
     const rendered = renderRunBlock(record);
-    expect(rendered).toContain('Current step: complexity');
+    expect(rendered).toContain('Current step: prd');
     expect(rendered).toContain('Active provider: codex');
     expect(rendered).toContain('Last actor: A at 2026-11-08T00:00:00.000Z');
     expect(rendered).toContain('explore: accepted by A via codex at 2026-11-08T00:00:00.000Z');
     expect(rendered).toContain('Which API?');
-    expect(rendered).toContain('Next step: complexity');
+    expect(rendered).toContain('Next step: prd');
   });
   it('replaces only the marker-delimited region', () => {
     const body = 'Intro\n\n## Release metadata\n\nRelease-Disposition: no-note\n\nRefs o/r#1';
