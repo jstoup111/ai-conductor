@@ -251,6 +251,7 @@ export const IGNORED_TMPDIR_PREFIXES: readonly string[] = [
   'self-host-', // live provider homes owned by the running daemon
   'ai-conductor-claude-system-prompt-', // live daemon's in-flight Claude prompt files
   'claude-', // active Claude Code session scratchpads
+  'gem-miner-', // concurrent Gem Miner game fixtures, outside this test process
   'moshi-codex-rl.json', // active Codex rate-limit state
   'cc-daemon-', // daemon tmux session scratch
   'systemd-', // systemd-private-*, systemd-*.service-*
