@@ -2083,6 +2083,97 @@ describe('engine/conductor', () => {
       expect(halt).toMatch(/kickback-to-build no-op/);
     });
 
+    // Covers: task:7
+    it.each([
+      ['Manual testing is blocked: the app could not start', true],
+      ['All criteria PASS', false],
+    ])(
+      'retries a manual_test that writes no results instead of accepting its %s output',
+      async (output, reportsBlocker) => {
+        await seedToManualTest();
+        await writeFile(join(dir, '.pipeline/manual-test-results.md'), '# Results from an earlier attempt\n');
+        const staleAt = Date.now() - 60_000;
+        await utimes(
+          join(dir, '.pipeline/manual-test-results.md'),
+          new Date(staleAt),
+          new Date(staleAt),
+        );
+        await stampGateRunIdentity(dir, 'manual_test', 'prior-attempt-in-this-run');
+
+        const retries: Array<{ reason: string }> = [];
+        events.on('step_retry', (event) => {
+          if (event.type === 'step_retry' && event.step === 'manual_test') {
+            retries.push({ reason: event.reason });
+          }
+        });
+        const conductor = new Conductor({
+          stateFilePath: statePath,
+          stepRunner: createMockStepRunner({ success: true, output }),
+          events,
+          projectRoot: dir,
+          mode: 'auto',
+          daemon: true,
+          verifyArtifacts: true,
+          maxRetries: 2,
+          fromStep: 'manual_test',
+        });
+
+        await conductor.run();
+
+        expect(retries).not.toHaveLength(0);
+        for (const retry of retries) {
+          expect(retry.reason).toContain('no results written this attempt');
+          if (reportsBlocker) {
+            expect(retry.reason).toContain(
+              'agent reported: "Manual testing is blocked: the app could not start"',
+            );
+          }
+        }
+        const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
+        expect(halt).toContain('no results written this attempt');
+        if (reportsBlocker) {
+          expect(halt).toContain(
+            'agent reported: "Manual testing is blocked: the app could not start"',
+          );
+        }
+        const state = await readState(statePath);
+        expect(state.ok && state.value.manual_test).not.toBe('done');
+      },
+    );
+
+    // Covers: task:7
+    it('routes freshly written manual_test FAIL results back to build without a reported-blocker diagnostic', async () => {
+      await seedToManualTest();
+      const { runner } = failingManualTestRunner();
+      const kickbacks: Array<{ from: string; to: string }> = [];
+      const retryOrHaltReasons: string[] = [];
+      events.on('kickback', (event) => {
+        if (event.type === 'kickback') kickbacks.push({ from: event.from, to: event.to });
+      });
+      events.on('step_retry', (event) => {
+        if (event.type === 'step_retry') retryOrHaltReasons.push(event.reason);
+      });
+      events.on('loop_halt', (event) => retryOrHaltReasons.push(event.reason));
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 1,
+        fromStep: 'manual_test',
+      });
+
+      await conductor.run();
+
+      expect(kickbacks).toContainEqual({ from: 'manual_test', to: 'build' });
+      expect(retryOrHaltReasons.join('\n')).not.toContain('agent reported');
+    },
+  );
+
     // REGRESSION PIN: when the intervening build cycle makes real forward
     // progress each round (so D2's no-op guard never fires) but manual_test
     // keeps FAILing, the gate-loop budget (MAX_KICKBACKS_PER_GATE) is what
