@@ -44,7 +44,8 @@ describe('structural: external boundary registry', () => {
     expect(expectedBoundaryNames(withNetwork)).toEqual({ missing: [], extra: ['network'] });
   });
 
-  it('records llm as the ported LLMProvider boundary with its production adapters', () => {
+  // Covers: task:2
+  it('records llm as the ported LLMProvider boundary with its production adapters and contract', () => {
     expect(BOUNDARY_REGISTRY.llm).toEqual({
       name: 'llm',
       port: 'LLMProvider',
@@ -56,43 +57,82 @@ describe('structural: external boundary registry', () => {
       specifiers: [],
       clockCalls: [],
       commandLiterals: [],
+      contract: {
+        module: 'test/contracts/llm.contract.ts',
+        legs: [
+          {
+            adapter: 'execution/claude-provider.ts',
+            fake: 'test/fixtures/claude-provider-fake.ts',
+            fakeLeg: 'test/contracts/llm.contract.test.ts',
+            realLeg: 'test/contracts/llm-claude.contract.smoke.test.ts',
+          },
+          {
+            adapter: 'execution/codex-provider.ts',
+            fake: 'test/fixtures/codex-provider-fake.ts',
+            fakeLeg: 'test/contracts/llm.contract.test.ts',
+            realLeg: 'test/contracts/llm-codex.contract.smoke.test.ts',
+          },
+          {
+            adapter: 'execution/pi-provider.ts',
+            fake: 'test/fixtures/pi-provider-fake.ts',
+            fakeLeg: 'test/contracts/llm.contract.test.ts',
+            realLeg: 'test/contracts/llm-pi.contract.smoke.test.ts',
+          },
+        ],
+      },
       status: { kind: 'ported' },
     });
   });
 
-  it('records the pending boundary issues and every D1 membership', () => {
+  // Covers: task:2
+  it('records the pending boundary issues and every D1 membership with no contract', () => {
     expect(BOUNDARY_REGISTRY).toEqual({
       llm: {
         name: 'llm', port: 'LLMProvider',
         adapterModules: ['execution/claude-provider.ts', 'execution/codex-provider.ts', 'execution/pi-provider.ts'],
         specifiers: [], clockCalls: [], commandLiterals: [], status: { kind: 'ported' },
+        contract: {
+          module: 'test/contracts/llm.contract.ts',
+          legs: [
+            { adapter: 'execution/claude-provider.ts', fake: 'test/fixtures/claude-provider-fake.ts', fakeLeg: 'test/contracts/llm.contract.test.ts', realLeg: 'test/contracts/llm-claude.contract.smoke.test.ts' },
+            { adapter: 'execution/codex-provider.ts', fake: 'test/fixtures/codex-provider-fake.ts', fakeLeg: 'test/contracts/llm.contract.test.ts', realLeg: 'test/contracts/llm-codex.contract.smoke.test.ts' },
+            { adapter: 'execution/pi-provider.ts', fake: 'test/fixtures/pi-provider-fake.ts', fakeLeg: 'test/contracts/llm.contract.test.ts', realLeg: 'test/contracts/llm-pi.contract.smoke.test.ts' },
+          ],
+        },
       },
       git: {
         name: 'git', port: null, adapterModules: [], specifiers: [], clockCalls: [], commandLiterals: ['git'],
+        contract: null,
         status: { kind: 'pending', issue: 3043 },
       },
       gh: {
         name: 'gh', port: null, adapterModules: [], specifiers: [], clockCalls: [], commandLiterals: ['gh'],
+        contract: null,
         status: { kind: 'pending', issue: 3637 },
       },
       tmux: {
         name: 'tmux', port: null, adapterModules: [], specifiers: [], clockCalls: [], commandLiterals: ['tmux'],
+        contract: null,
         status: { kind: 'pending', issue: 3639 },
       },
       process: {
         name: 'process', port: null, adapterModules: [], specifiers: ['child_process', 'execa'], clockCalls: [], commandLiterals: [],
+        contract: null,
         status: { kind: 'pending', issue: 3634 },
       },
       clock: {
         name: 'clock', port: null, adapterModules: [], specifiers: [], clockCalls: ['Date.now', 'new Date', 'performance.now'], commandLiterals: [],
+        contract: null,
         status: { kind: 'pending', issue: 3638 },
       },
       otel: {
         name: 'otel', port: null, adapterModules: [], specifiers: ['@opentelemetry/'], clockCalls: [], commandLiterals: [],
+        contract: null,
         status: { kind: 'pending', issue: 3635 },
       },
       filesystem: {
         name: 'filesystem', port: null, adapterModules: [], specifiers: ['fs', 'fs/promises', 'chokidar'], clockCalls: [], commandLiterals: [],
+        contract: null,
         status: { kind: 'pending', issue: 3636 },
       },
     });
