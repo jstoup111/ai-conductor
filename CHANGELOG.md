@@ -71,6 +71,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Intake filers can mark the desired release impact with an optional Semver label. ([implementation PR #3662](https://github.com/jstoup111/ai-conductor/pull/3662)).
 - Readers gain dependency-hygiene review for changed dependency manifests and lockfiles. ([implementation PR #3668](https://github.com/jstoup111/ai-conductor/pull/3668)).
 - Readers can query and filter the local decision corpus from the CLI. ([implementation PR #3627](https://github.com/jstoup111/ai-conductor/pull/3627)).
+- Contributors receive automated formatting checks for changed source files. ([implementation PR #3673](https://github.com/jstoup111/ai-conductor/pull/3673)).
 
 ### Changed
 
