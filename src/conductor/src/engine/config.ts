@@ -409,6 +409,24 @@ function validateBuildReviewCustomRubrics(
         message: `${path}.resources must be an array of non-empty strings`,
       };
     }
+    if (
+      declaration.paths !== undefined
+      && (!Array.isArray(declaration.paths) || declaration.paths.length === 0)
+    ) {
+      return {
+        type: 'validation_error',
+        message: `${path}.paths must be a non-empty array`,
+      };
+    }
+    const invalidPathIndex = Array.isArray(declaration.paths)
+      ? declaration.paths.findIndex((value) => typeof value !== 'string' || value === '')
+      : -1;
+    if (invalidPathIndex !== -1) {
+      return {
+        type: 'validation_error',
+        message: `${path}.paths[${invalidPathIndex}] must be a non-empty string`,
+      };
+    }
     if (declaration.enabled !== undefined && typeof declaration.enabled !== 'boolean') {
       return { type: 'validation_error', message: `${path}.enabled must be a boolean` };
     }

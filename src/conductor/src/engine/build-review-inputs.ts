@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { basename, dirname, relative } from 'node:path';
+import { basename, dirname, matchesGlob, relative } from 'node:path';
 import { resolveFreshBase, type GitRunner } from './rebase.js';
 import { resolveChildBase } from './child-cursor.js';
 import type { ChildId } from './child-context.js';
@@ -55,6 +55,8 @@ import {
   type BuildReviewMaterializationMember,
   type BuildReviewMaterializationOptions,
 } from './build-review-materialization.js';
+import { deriveChangedFileReferences, type ChangedFileReference } from './build-review-projections.js';
+import type { ResolvedBuildReviewCatalogEntry } from './resolved-config.js';
 
 // ── Grader input assembly (build_review) ────────────────────────────────────
 //
@@ -128,6 +130,43 @@ export interface BuildReviewFrozenInputs extends BuildReviewInputs {
   readonly securitySourceSnapshot?: BuildReviewSourceSnapshot;
   /** Present only for a lap that includes an enabled custom policy member. */
   readonly sourceMaterialization?: BuildReviewLapMaterialization;
+  /** The one path-triggered custom-policy decision for this lap. */
+  readonly participation?: BuildReviewLapParticipation;
+}
+
+/** The effective custom-rubric catalog for one lap and members withheld by their path trigger. */
+export interface BuildReviewLapParticipation {
+  readonly participating: readonly ResolvedBuildReviewCatalogEntry[];
+  readonly withheld: readonly string[];
+}
+
+/**
+ * Partition a configured catalog using the whole-feature changed-file inventory.
+ * A custom member with no `paths` trigger preserves its always-participating
+ * behavior; renamed files are considered under both their current and prior
+ * repository-relative paths.
+ */
+export function resolveBuildReviewLapParticipation(
+  catalog: readonly ResolvedBuildReviewCatalogEntry[],
+  changedFiles: readonly ChangedFileReference[],
+): BuildReviewLapParticipation {
+  const changedPaths = changedFiles.flatMap((file) =>
+    file.previousPath === undefined ? [file.path] : [file.path, file.previousPath]);
+  const participating: ResolvedBuildReviewCatalogEntry[] = [];
+  const withheld: string[] = [];
+
+  for (const entry of catalog) {
+    const matched = entry.kind !== 'custom'
+      || entry.paths === undefined
+      || entry.paths.some((glob) => changedPaths.some((path) => matchesGlob(path, glob)));
+    if (matched) participating.push(entry);
+    else withheld.push(entry.id);
+  }
+
+  return Object.freeze({
+    participating: Object.freeze(participating),
+    withheld: Object.freeze(withheld),
+  });
 }
 
 /** One frozen source view. Rubric branches receive projections of this value, never live reads. */
@@ -262,6 +301,8 @@ export interface BuildReviewInputOptions {
   readonly analyzeTestScope?: (input: BuildReviewTestScopeInput) => BuildReviewTestScope;
   /** Enabled members for the lap being prepared; omitted preserves legacy built-in preparation. */
   readonly lapMembers?: readonly BuildReviewMaterializationMember[];
+  /** Resolved catalog whose path-triggered members are decided during assembly. */
+  readonly catalog?: readonly ResolvedBuildReviewCatalogEntry[];
   /** Private source-view placement, supplied by the review execution owner. */
   readonly materialization?: BuildReviewMaterializationOptions;
   /** Active child identity for a child-local review; omitted preserves flat review behavior. */
@@ -1043,12 +1084,18 @@ export async function assembleBuildReviewInputs(
     digest: snapshotDigest(snapshotWithoutDigest),
     contentDigest: contentSnapshotDigest(snapshotWithoutDigest),
   });
-  const sourceMaterialization = options.lapMembers === undefined
+  const participation = options.catalog === undefined
+    ? undefined
+    : resolveBuildReviewLapParticipation(options.catalog, deriveChangedFileReferences(diffResult.stdout));
+  const lapMembers = participation === undefined
+    ? options.lapMembers
+    : participation.participating.map((entry) => ({ id: entry.id, kind: entry.kind }));
+  const sourceMaterialization = lapMembers === undefined
     ? undefined
     : await materializeBuildReviewLap(
         git,
         sourceSnapshot,
-        options.lapMembers,
+        lapMembers,
         options.materialization ?? { projectRoot },
       );
 
@@ -1068,6 +1115,7 @@ export async function assembleBuildReviewInputs(
     testSuiteProof: inspection.evidence,
     sourceSnapshot,
     malformedCoversMarkers: typedTestScope.malformedCoversMarkers,
+    ...(participation === undefined ? {} : { participation }),
     ...(sourceMaterialization === undefined ? {} : { sourceMaterialization }),
     patchEquivalentExclusion: equivalentExclusion,
   };

@@ -298,6 +298,7 @@ describe('AUXILIARY_MODEL_TABLE_ROWS auxiliary-judge registration', () => {
       'build-review-test-quality',
       'build-review-security',
       'build-review-implementation-quality',
+      'build-review-dependency-hygiene',
       'rebase-regrade',
     ]);
     expect(Object.keys(STEP_RATIONALE)).not.toEqual(expect.arrayContaining(names));
@@ -312,6 +313,13 @@ describe('AUXILIARY_MODEL_TABLE_ROWS auxiliary-judge registration', () => {
       providerCells: {
         claude: { model: 'opus', effort: 'medium' },
         codex: { model: 'gpt-5.6-sol', effort: 'medium' },
+      },
+    });
+    expect(AUXILIARY_MODEL_TABLE_ROWS.find((row) => row.name === 'build-review-dependency-hygiene')).toMatchObject({
+      executionPath: 'engine-managed auxiliary rubric',
+      providerCells: {
+        claude: { model: expect.stringMatching(/inherits resolved rubric policy/i) },
+        codex: { model: expect.stringMatching(/inherits resolved rubric policy/i) },
       },
     });
     expect(STEP_RATIONALE.build_review).toMatch(/default-on implementation-quality rubric/i);

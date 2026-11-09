@@ -20,6 +20,7 @@ import { stampBuildReviewCustomJudgedResult } from "../../src/engine/build-revie
 import type { BuildReviewFrozenInputs } from "../../src/engine/build-review-inputs.js";
 import { deriveBuildReviewRubricProjections } from "../../src/engine/build-review-projections.js";
 import { fingerprintBuildReviewPolicyDeclaration } from "../../src/engine/build-review-policy.js";
+import { fingerprintBuildReviewRubricPolicy } from "../../src/engine/build-review-registry.js";
 
 function entry(snapshotDigest = "snapshot-a"): BuildReviewCacheEntry {
   return {
@@ -109,6 +110,38 @@ function memoryFilesystem(files: Record<string, string> = {}): BuildReviewCacheF
 }
 
 describe("build-review semantic cache", () => {
+  // Covers: task:6
+  it("excludes path triggers, but not questions, from custom policy cache identity", () => {
+    const policy = {
+      enabled: true,
+      max_projection_bytes: 1_048_576,
+      llm_provider: "claude",
+      model: "sonnet",
+      effort: "medium",
+      model_fallback_ladder: ["sonnet"],
+      max_retries: 1,
+      escalate: false,
+      min_confidence: 0,
+    } as const;
+    const declaration = {
+      rubric: "dependencyHygiene",
+      skill: "build-review-dependency-hygiene",
+      question: "Are dependency changes necessary?",
+      source: "global" as const,
+      resources: [],
+    };
+    const withPaths = { ...declaration, paths: ["**/package.json"] };
+    const changedQuestion = { ...withPaths, question: "Are dependency changes pinned?" };
+
+    const cacheIdentity = (value: typeof declaration | typeof withPaths | typeof changedQuestion) => JSON.stringify({
+      declarationFingerprint: fingerprintBuildReviewPolicyDeclaration(value),
+      executionPolicyFingerprint: fingerprintBuildReviewRubricPolicy(policy),
+    });
+
+    expect(cacheIdentity(withPaths)).toBe(cacheIdentity(declaration));
+    expect(cacheIdentity(changedQuestion)).not.toBe(cacheIdentity(declaration));
+  });
+
   it("uses every semantic policy component while keeping producing provenance incidental", () => {
     const declaration = {
       rubric: "kotlin-review",

@@ -1937,9 +1937,33 @@ Both behaviors follow `adr-2026-08-22-build-review-opt-in-rubric-container`.
 Each key is a stable custom rubric id: 1-64 ASCII characters, beginning with an ASCII letter (upper- or
 lowercase), followed by letters, digits, `_`, or `-`. A built-in rubric id (`testQuality`, `security`,
 `implementationQuality`) is reserved and rejected as a custom id. A build may declare at most 32 custom rubrics. A declaration requires `skill` and `question`;
-it may set `source` (`project`, `global`, or `plugin`), `resources`, the normal provider/model/retry
+it may set `source` (`project`, `global`, or `plugin`), `resources`, `paths`, the normal provider/model/retry
 fields, and the same `min_confidence` and `min_severity` thresholds as a built-in rubric. Custom policies are disabled unless their declaration sets `enabled: true`, and they require
 `build_review.adjudication.enabled` so their findings pass through the shared decision and repair path.
+
+`paths` is an optional non-empty array of non-empty glob strings (Node `path.matchesGlob` syntax) that
+triggers the rubric. Omitted, the rubric participates in every lap. Set, the rubric participates only
+when a glob matches a path in the whole-feature changed-file inventory; a renamed file matches under
+both its current and prior path. An unmatched rubric is withheld before any source view is
+materialized, contributes no findings, and emits `build_review_rubric_skipped` with reason
+`paths-unmatched`. A lap left with no enabled built-in rubric and no participating custom rubric passes as
+`build_review_no_rubrics`.
+
+```yaml
+build_review:
+  custom_rubrics:
+    dependencyHygiene:
+      enabled: true
+      skill: build-review-dependency-hygiene
+      source: global
+      question: "Does the diff add dependencies that lack necessity, bounded pinning, or compatible license evidence?"
+      paths:
+        - "**/package.json"
+        - "**/package-lock.json"
+```
+
+This repository enables `dependencyHygiene` with exactly these triggers. Its
+`build-review-dependency-hygiene` skill judges necessity, pinning, and on-disk license evidence.
 
 The selected skill must be installed for the actual provider candidate. Omitting `source` is accepted
 only when discovery finds one unambiguous installation; otherwise select the project, global, or

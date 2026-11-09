@@ -3333,15 +3333,18 @@ export class DefaultStepRunner implements StepRunner {
     readOnlyReviewCapabilities?: Readonly<Record<string, ReadOnlyReviewCapability>>,
     child?: import('./child-context.js').ChildId,
   ): Promise<StepRunResult> {
+    const effectiveConfig = inputs.participation === undefined
+      ? config
+      : { ...config, catalog: inputs.participation.participating };
     try {
-      return await this.runRubricBuildReviewInner(inputs, config, tier, planPath, executionContext, readOnlyReviewCapabilities, child);
+      return await this.runRubricBuildReviewInner(inputs, effectiveConfig, tier, planPath, executionContext, readOnlyReviewCapabilities, child);
     } finally {
       // A custom lap owns one source view for every catalog member. Some
       // built-in paths settle before dispatch (for example a deterministic
       // preflight refusal), so its own candidate callback never runs. Close
       // every member here after the complete lap outcome is known; repeated
       // member settlement is deliberately idempotent in the materialization.
-      await Promise.all(config.catalog.map(async (entry) => {
+      await Promise.all(effectiveConfig.catalog.map(async (entry) => {
         await inputs.sourceMaterialization?.settle(entry.id);
       }));
       await inputs.sourceMaterialization?.finish?.();
@@ -3359,7 +3362,6 @@ export class DefaultStepRunner implements StepRunner {
   ): Promise<StepRunResult> {
     const lapId = parseBuildReviewLapId(`lap-${inputs.sourceSnapshot.headSha}`);
     if (!lapId) return { success: false, output: 'build_review could not create a valid rubric lap identity' };
-
     // A prior lap's aggregate cannot represent this lap. Invalidate it before
     // dispatch so a mechanical early return leaves no stale semantic FAIL for
     // the conductor to route back to build.
@@ -3909,7 +3911,12 @@ export class DefaultStepRunner implements StepRunner {
         });
       }
     }
-    const coordination = joinedCoordination!;
+    // Withholding every custom member can leave a lap with no built-ins and
+    // no custom policy.  Preserve the existing no-rubrics pass boundary.
+    if (joinedCoordination === undefined) {
+      return this.publishBuildReviewPass('build_review_no_rubrics', child);
+    }
+    const coordination = joinedCoordination;
 
     if (coordination.kind === 'gate-disabled') {
       return { success: true, output: 'build_review disabled' };
@@ -5764,16 +5771,6 @@ export class DefaultStepRunner implements StepRunner {
         // status is unknown, but its evidence must still remain child-local.
         activeSuiteChild = { child: activeChildBase.child, isLeaf: true };
       }
-      // A custom member changes the lap's source authority from by-reference
-      // to a detached, immutable view shared by every member in the lap.
-      const lapMembers = this.usesInjectedBuildReviewGit && this.buildReviewInputOptions?.materialization === undefined
-        ? undefined
-        : buildReviewConfig.catalog.some((entry) => entry.kind === 'custom')
-          ? buildReviewConfig.catalog.map((entry) => ({
-              id: entry.id,
-              kind: entry.kind,
-            })) as BuildReviewInputOptions['lapMembers']
-          : undefined;
       inputs = {
         ...await assembleBuildReviewInputs(this.gitRunner, planPath, {
           ...this.buildReviewInputOptions,
@@ -5781,7 +5778,11 @@ export class DefaultStepRunner implements StepRunner {
           ...(activeChildBase === undefined ? {} : { securityScope: activeChildIsLeaf ? 'leaf' as const : 'non-leaf' as const }),
           ...(activeSuiteChild === undefined ? {} : { activeChild: activeSuiteChild }),
           ...(operatorWorkOrder === undefined ? {} : { operatorWorkOrder }),
-          lapMembers,
+          // The input assembler decides participation after it freezes the
+          // whole-feature diff, before any custom source-view work begins.
+          ...(this.usesInjectedBuildReviewGit && this.buildReviewInputOptions?.materialization === undefined
+            ? {}
+            : { catalog: buildReviewConfig.catalog }),
           materialization: this.buildReviewInputOptions?.materialization ?? { projectRoot: this.projectDir },
         }),
       };
@@ -5823,6 +5824,18 @@ export class DefaultStepRunner implements StepRunner {
       const withFreshness = baseFreshness ? { ...r, baseFreshness } : r;
       return repairProvenance ? { ...withFreshness, repairProvenance } : withFreshness;
     };
+    // Input assembly is the one owner of path-trigger participation.  Every
+    // downstream consumer, including the injectable coordinator seam, sees
+    // only this effective catalog.
+    const effectiveBuildReviewConfig = inputs.participation === undefined
+      ? buildReviewConfig
+      : { ...buildReviewConfig, catalog: inputs.participation.participating };
+    const participationLapId = parseBuildReviewLapId(`lap-${inputs.sourceSnapshot.headSha}`);
+    if (participationLapId !== undefined) {
+      for (const rubric of inputs.participation?.withheld ?? []) {
+        await this.events?.emit({ type: 'build_review_rubric_skipped', rubric, lapId: participationLapId, reason: 'paths-unmatched' });
+      }
+    }
 
     // Containment telemetry is non-blocking: it never changes `success` or
     // triggers a kickback. Guard it so an observability failure cannot fail
@@ -5929,14 +5942,14 @@ export class DefaultStepRunner implements StepRunner {
     });
     if (this.buildReviewCoordinator) {
       return withBaseFreshness(withContainmentAdvisory(
-        await this.buildReviewCoordinator(inputs, buildReviewConfig),
+        await this.buildReviewCoordinator(inputs, effectiveBuildReviewConfig),
       ));
     }
 
     return withBaseFreshness(withContainmentAdvisory(
       await this.runRubricBuildReview(
         inputs,
-        buildReviewConfig,
+        effectiveBuildReviewConfig,
         tier,
         planPath,
         executionContext,
