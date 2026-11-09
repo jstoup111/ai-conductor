@@ -80,7 +80,7 @@ afterEach(async () => {
 });
 
 describe('custom build-review convergence', () => {
-  // Covers: task:7
+  // Covers: task:7, task:rem-prd-audit-7-R1
   it('settles a withheld dependency finding as absent, then dispatches its later matching lap afresh', async () => {
     const projectRoot = await mkdtemp(join(process.env.TMPDIR!, 'build-review-withheld-convergence-'));
     roots.push(projectRoot);
@@ -206,11 +206,25 @@ describe('custom build-review convergence', () => {
     }, resolveBuildReviewConfig(config, CLAUDE_MODEL_POLICY), 'M');
 
     expect(lap3).toMatchObject({ success: true });
+    // This is the member's engine-owned provider boundary, rather than a
+    // fixture-side invocation. A fresh candidate must be dispatched for the
+    // reintroduced custom member on lap 3.
     expect(invoke).toHaveBeenCalledOnce();
-    expect(cacheHits).not.toContainEqual(expect.objectContaining({ rubric: 'dependencyHygiene' }));
+    expect(invoke).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: expect.stringContaining('Declared review question: Review dependency changes.'),
+      readOnlyReview: true,
+    }));
+    expect(cacheHits).not.toContainEqual(expect.objectContaining({
+      rubric: 'dependencyHygiene',
+      customReuse: expect.objectContaining({ originalLapId: 'lap-dependency-1' }),
+    }));
     expect(lap3Aggregate).toMatchObject({
       lapId: 'lap-dependency-3', verdict: 'PASS', currentCustomRubrics: ['dependencyHygiene'],
-      customResults: { dependencyHygiene: { result: { kind: 'judged', findings: [] } } },
+      // The member verdict is stamped from the lap-3 provider response; it
+      // cannot be inherited from the withheld lap-1 member.
+      customResults: { dependencyHygiene: { result: {
+        kind: 'judged', rubric: 'dependencyHygiene', lapId: 'lap-dependency-3', verdict: 'PASS', findings: [],
+      } } },
     });
   });
 
