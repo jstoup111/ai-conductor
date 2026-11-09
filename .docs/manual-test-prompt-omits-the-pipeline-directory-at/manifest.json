@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "slug": "manual-test-prompt-omits-the-pipeline-directory-at",
+  "artifacts": [
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/manual-test-prompt-omits-the-pipeline-directory-at.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/manual-test-prompt-omits-the-pipeline-directory-at.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/manual-test-prompt-omits-the-pipeline-directory-at.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/manual-test-prompt-omits-the-pipeline-directory-at.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/manual-test-prompt-omits-the-pipeline-directory-at.md"
+    }
+  ]
+}
