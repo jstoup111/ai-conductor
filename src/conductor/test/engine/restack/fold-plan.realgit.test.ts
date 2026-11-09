@@ -1,6 +1,6 @@
-// Covers: task:13
+// Covers: task:13, task:14
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
-import { collectFoldSet } from '../../../src/engine/restack/fold-plan.js';
+import { collectFoldSet, placeFoldCommits } from '../../../src/engine/restack/fold-plan.js';
 import { createRouteRecord } from '../../../src/engine/routing/route-record-store.js';
 import { closureRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { parseRoundId, type HostPlacement } from '../../../src/engine/routing/route-types.js';
@@ -44,6 +44,7 @@ async function fixture() {
   await git(['checkout', '-qb', `feat/daemon-${slug}`]);
 
   const commit = async (path: string, content: string, message: string) => {
+    await mkdir(join(repo, path, '..'), { recursive: true });
     await writeFile(join(repo, path), content);
     await git(['add', path]);
     await git(['commit', '-qm', message]);
@@ -148,6 +149,109 @@ describe('collectFoldSet (real local Git)', () => {
 
     await expect(collectFoldSet({ worktree: subject.repo, slug, git: makeGitRunner(subject.repo) })).resolves.toEqual({
       kind: 'collected', commits: [{ sha: operator, roundId: 'r1', owner: hostOne }],
+    });
+  });
+});
+
+describe('placeFoldCommits (real local Git)', () => {
+  async function placementFixture() {
+    const subject = await fixture();
+    await subject.git(['checkout', '-qb', 'feat/c1/demo']);
+    await subject.commit('src/server/identity.ts', 'export function startPlaying(name: string) {}\n', 'identity');
+    await subject.git(['checkout', '-qb', 'feat/c2/demo']);
+    await subject.git(['checkout', '-qb', 'feat/c3/demo']);
+    await subject.commit('tests/load/ten-players.ts', "import { startPlaying } from '../../src/server/identity.js';\nstartPlaying('one');\n", 'ten players');
+    await subject.git(['checkout', '-qb', 'feat/c4/demo']);
+    await subject.git(['branch', '-f', `feat/daemon-${slug}`, 'HEAD']);
+    await subject.git(['checkout', '-q', `feat/daemon-${slug}`]);
+    return subject;
+  }
+
+  it('places each path on the lowest accepting child at or above its owner', async () => {
+    const subject = await placementFixture();
+    const source = await subject.commit(
+      'src/server/identity.ts',
+      'export function startPlaying(name: string, secret: string) {}\n',
+      `thread secret${trailers('r1', 'c1')}`,
+    );
+    await writeFile(join(subject.repo, 'tests/load/ten-players.ts'), "import { startPlaying } from '../../src/server/identity.js';\nstartPlaying('one', 'secret');\n");
+    await subject.git(['add', 'tests/load/ten-players.ts']);
+    await subject.git(['commit', '-qm', `update players${trailers('r1', 'c1')}`]);
+    const combined = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
+    await subject.git(['reset', '--soft', `${source}^`]);
+    await subject.git(['commit', '-qm', `thread secret${trailers('r1', 'c1')}`]);
+    const folded = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
+
+    await expect(placeFoldCommits({
+      worktree: subject.repo,
+      slug,
+      commits: [{ sha: folded as never, roundId: 'r1', owner: hostOne }],
+      git: makeGitRunner(subject.repo),
+    })).resolves.toEqual({
+      kind: 'planned',
+      commits: [{
+        sha: folded,
+        roundId: 'r1',
+        owner: hostOne,
+        parts: [
+          { kind: 'hunks', child: hostOne, paths: ['src/server/identity.ts'], reason: 'owner' },
+          { kind: 'hunks', child: hostThree, paths: ['tests/load/ten-players.ts'], reason: 'introduced-above-owner' },
+        ],
+      }],
+    });
+    expect(combined).not.toBe(folded);
+  });
+
+  it('places an empty tdd evidence commit whole on its owner', async () => {
+    const subject = await placementFixture();
+    await subject.git(['commit', '--allow-empty', '-qm', `tdd evidence${trailers('r1', 'c1')}`]);
+    const empty = await subject.head();
+
+    await expect(placeFoldCommits({
+      worktree: subject.repo,
+      slug,
+      commits: [{ sha: empty as never, roundId: 'r1', owner: hostOne }],
+      git: makeGitRunner(subject.repo),
+    })).resolves.toEqual({
+      kind: 'planned',
+      commits: [{
+        sha: empty,
+        roundId: 'r1',
+        owner: hostOne,
+        parts: [{ kind: 'whole', child: hostOne, paths: [], reason: 'owner' }],
+      }],
+    });
+  });
+
+  it('re-materializes a frozen block append on its owner instead of hunk-splitting it', async () => {
+    const subject = await placementFixture();
+    const block = '### Task rem-prd-audit-T1: Repair\n**Done when:**\n- fixed\n**Child:** 1\n**Round:** r1\n';
+    await mkdir(join(subject.repo, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(subject.repo, '.docs', 'plans', 'demo.md'), `# Demo\n\n${block}`);
+    await subject.git(['add', '.docs/plans/demo.md']);
+    await subject.git(['commit', '-qm', `append frozen remediation${trailers('r1', 'c1')}`]);
+    const frozen = await subject.head();
+    const created = await createRouteRecord(subject.repo, slug, {
+      roundId: parseRoundId('r2')!, kind: 'audit', sealedAuthored: 1, execution: 'leaf',
+      items: [{ findingId: 'frozen', kind: 'audit', owner: hostOne, host: hostOne, reason: 'repair', fallback: [] }],
+      allocation: { [hostOne]: { remTaskIds: ['rem-prd-audit-T1'], blockBodies: [block] } },
+      placements: { [hostOne]: { state: 'deferred', leafEntryTip: frozen as never, exitTip: frozen as never } },
+    }, { git: makeGitRunner(subject.repo) });
+    if (created.kind !== 'created') throw new Error('could not create frozen allocation');
+
+    await expect(placeFoldCommits({
+      worktree: subject.repo,
+      slug,
+      commits: [{ sha: frozen as never, roundId: 'r2', owner: hostOne }],
+      git: makeGitRunner(subject.repo),
+    })).resolves.toEqual({
+      kind: 'planned',
+      commits: [{
+        sha: frozen,
+        roundId: 'r2',
+        owner: hostOne,
+        parts: [{ kind: 'blocks', child: hostOne, paths: [], reason: 'owner', blocks: [{ id: 'rem-prd-audit-T1', body: block }] }],
+      }],
     });
   });
 });
