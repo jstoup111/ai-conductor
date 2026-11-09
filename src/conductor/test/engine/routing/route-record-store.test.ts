@@ -260,6 +260,83 @@ describe('ref-backed route record store', () => {
     }
   });
 
+  it('round-trips leaf execution and a deferred host placement through the route store', async () => {
+    const fixture = await createRepo();
+    try {
+      const leafEntryTip = sha('d'.repeat(40));
+      const leafRecord: RouteRecord = {
+        ...routeRecord,
+        execution: 'leaf' as const,
+        placements: { [c1]: { state: 'deferred' as const, leafEntryTip } },
+      };
+      const created = await routeRecordStore.writeRoutingTransaction(
+        fixture.repo,
+        'demo',
+        [{ kind: 'create-record', record: leafRecord }],
+      );
+
+      expect(created).toEqual({ kind: 'updated' });
+      expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toMatchObject({
+        kind: 'record',
+        record: leafRecord,
+      });
+    } finally {
+      await rm(fixture.repo, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses leaf execution outside audit routes and placements outside hosts', async () => {
+    const fixture = await createRepo();
+    try {
+      const leafEntryTip = 'd'.repeat(40);
+      const operator = {
+        ...routeRecord,
+        kind: 'operator',
+        execution: 'leaf',
+        operator: {
+          origin: 'land', reason: 'operator route', operator: 'operator', entryStep: 'acceptance_specs',
+          carried: [], otherTips: { 'feat/daemon-demo': leafEntryTip },
+          priorRegion: {
+            statuses: { acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' },
+            verdicts: {},
+          },
+        },
+      };
+      const revalidate = { ...routeRecord, kind: 'revalidate', execution: 'leaf' };
+      const unknownPlacement = {
+        ...routeRecord,
+        execution: 'leaf',
+        placements: { 2: { state: 'deferred', leafEntryTip } },
+      };
+
+      await writeRef(fixture, routeRecordRefFor('demo', roundId), operator);
+      expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toEqual(expect.objectContaining({ kind: 'unreadable' }));
+      await writeRef(fixture, routeRecordRefFor('demo', roundId), revalidate);
+      expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toEqual(expect.objectContaining({ kind: 'unreadable' }));
+      await writeRef(fixture, routeRecordRefFor('demo', roundId), unknownPlacement);
+      expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toEqual(expect.objectContaining({ kind: 'unreadable' }));
+    } finally {
+      await rm(fixture.repo, { recursive: true, force: true });
+    }
+  });
+
+  it('preserves leaf execution markers and accepts owner-mode markers without it', async () => {
+    const fixture = await createRepo();
+    try {
+      await writeRef(fixture, repairMarkerRefFor('demo'), { host: c1, roundId, execution: 'leaf' });
+      expect(await readRepairMarker(fixture.repo, 'demo')).toMatchObject({
+        kind: 'marker', marker: { host: c1, roundId, execution: 'leaf' },
+      });
+
+      await writeRef(fixture, repairMarkerRefFor('demo'), { host: c1, roundId });
+      const oldMarker = await readRepairMarker(fixture.repo, 'demo');
+      expect(oldMarker).toMatchObject({ kind: 'marker', marker: { host: c1, roundId } });
+      expect(oldMarker.kind === 'marker' ? oldMarker.marker.execution : undefined).toBeUndefined();
+    } finally {
+      await rm(fixture.repo, { recursive: true, force: true });
+    }
+  });
+
   it('updates an existing record through a fenced update-ref transaction with the stored blob as its CAS old value', async () => {
     const fixture = await createRepo();
     try {

@@ -305,9 +305,13 @@ export interface RouteRecord {
   readonly roundId: RoundId;
   readonly kind: RouteKind;
   readonly phase: RoundPhase;
+  /** Audit rounds may execute their routed work on the leaf instead of their owner. */
+  readonly execution?: 'leaf';
   readonly items: readonly RoutedItem[];
   readonly allocation: FrozenAllocation;
   readonly hosts: Readonly<Record<ChildId, HostState>>;
+  /** Per-host fold state for audit work that executed on the leaf. */
+  readonly placements?: Readonly<Record<ChildId, HostPlacement>>;
   /** Reason attached to a host's current lifecycle state, when recovery needs it. */
   readonly hostReasons?: Readonly<Partial<Record<ChildId, 'derived-already-complete'>>>;
   readonly currentHostIndex: number;
@@ -327,6 +331,13 @@ export interface RouteRecord {
   /** The leaf branch and tip durably recorded before the round is closed. */
   readonly leafReturn?: { readonly branch: string; readonly head: CommitSha };
   readonly outbox: readonly OutboxEntry[];
+}
+
+/** The durable position of a leaf-executed host's work before and after folding. */
+export interface HostPlacement {
+  readonly state: 'deferred' | 'placed';
+  readonly leafEntryTip: CommitSha;
+  readonly exitTip?: CommitSha;
 }
 
 export interface PendingAsBuiltRouteFinding {
@@ -355,6 +366,8 @@ export function validatedReroute(record: RouteRecord): ValidatedReroute | undefi
 export interface RepairMarker {
   readonly host: ChildId;
   readonly roundId: RoundId;
+  /** Absent markers preserve the existing owner-branch execution behavior. */
+  readonly execution?: 'leaf';
 }
 
 export interface RevalidationQueueEntry {
@@ -753,6 +766,32 @@ function parseHosts(value: unknown): Readonly<Record<ChildId, HostState>> | unde
   return hosts;
 }
 
+function parseHostPlacements(
+  value: unknown,
+  hosts: Readonly<Record<ChildId, HostState>>,
+): Readonly<Record<ChildId, HostPlacement>> | undefined {
+  if (!isRecord(value)) return undefined;
+  const placements: Record<ChildId, HostPlacement> = {} as Record<ChildId, HostPlacement>;
+  for (const [rawChild, rawPlacement] of Object.entries(value)) {
+    const child = parseChildId(rawChild);
+    if (!child || hosts[child] === undefined || !isRecord(rawPlacement)) return undefined;
+    const leafEntryTip = typeof rawPlacement.leafEntryTip === 'string'
+      ? parseCommitSha(rawPlacement.leafEntryTip)
+      : undefined;
+    const exitTip = rawPlacement.exitTip === undefined
+      ? undefined
+      : typeof rawPlacement.exitTip === 'string' ? parseCommitSha(rawPlacement.exitTip) : undefined;
+    if ((rawPlacement.state !== 'deferred' && rawPlacement.state !== 'placed') || !leafEntryTip
+      || (rawPlacement.exitTip !== undefined && !exitTip)) return undefined;
+    placements[child] = {
+      state: rawPlacement.state,
+      leafEntryTip,
+      ...(exitTip === undefined ? {} : { exitTip }),
+    };
+  }
+  return placements;
+}
+
 function parseHostReasons(
   value: unknown,
   hosts: Readonly<Record<ChildId, HostState>>,
@@ -887,6 +926,10 @@ export function parseRouteRecord(blob: string): RouteRecord | undefined {
   const phase = parseRoundPhase(value.phase);
   const allocation = parseAllocation(value.allocation);
   const hosts = parseHosts(value.hosts);
+  const execution = value.execution === undefined ? undefined : value.execution === 'leaf' ? 'leaf' : undefined;
+  const placements = value.placements === undefined || hosts === undefined
+    ? undefined
+    : parseHostPlacements(value.placements, hosts);
   const hostReasons = value.hostReasons === undefined || hosts === undefined ? undefined : parseHostReasons(value.hostReasons, hosts);
   const outbox = parseOutbox(value.outbox);
   const receipt = parseReceipt(value.receipt);
@@ -909,6 +952,10 @@ export function parseRouteRecord(blob: string): RouteRecord | undefined {
     || (value.pendingAsBuiltFindings !== undefined && pendingAsBuiltFindings === undefined)
     || (value.leafReturn !== undefined && leafReturn === undefined)
     || (value.operator !== undefined && operator === undefined)
+    || (value.execution !== undefined && execution === undefined)
+    || (value.placements !== undefined && placements === undefined)
+    || (execution !== undefined && kind !== 'audit')
+    || (placements !== undefined && execution !== 'leaf')
     || (value.hostReasons !== undefined && hostReasons === undefined)
     || (kind === 'operator' && (operator === undefined || Object.keys(hosts).length !== 1))
     || (kind !== 'operator' && operator !== undefined)) return undefined;
@@ -921,9 +968,11 @@ export function parseRouteRecord(blob: string): RouteRecord | undefined {
     roundId,
     kind,
     phase,
+    ...(execution === undefined ? {} : { execution }),
     items: items as RoutedItem[],
     allocation,
     hosts,
+    ...(placements === undefined ? {} : { placements }),
     ...(hostReasons === undefined ? {} : { hostReasons }),
     currentHostIndex,
     receipt,
@@ -946,7 +995,10 @@ export function parseRepairMarker(blob: string): RepairMarker | undefined {
   if (!value) return undefined;
   const host = parseChild(value.host);
   const roundId = typeof value.roundId === 'string' ? parseRoundId(value.roundId) : undefined;
-  return host && roundId ? { host, roundId } : undefined;
+  const execution = value.execution === undefined ? undefined : value.execution === 'leaf' ? 'leaf' : undefined;
+  return host && roundId && (value.execution === undefined || execution !== undefined)
+    ? { host, roundId, ...(execution === undefined ? {} : { execution }) }
+    : undefined;
 }
 
 /** Parses the durable revalidation queue and its at-least-once event outbox. */
