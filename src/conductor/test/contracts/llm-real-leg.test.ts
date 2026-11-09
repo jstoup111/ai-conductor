@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { createVitest, type RunnerTask, type RunnerTestCase } from 'vitest/node';
-import type { InvokeOptions, InvokeResult, LLMProvider } from '../../src/execution/llm-provider.js';
+import type { InvokeOptions, InvokeResult } from '../../src/execution/llm-provider.js';
 import { createClaudeProviderFake } from '../fixtures/claude-provider-fake.js';
 import { createCodexProviderFake } from '../fixtures/codex-provider-fake.js';
 import { createPiProviderFake } from '../fixtures/pi-provider-fake.js';
@@ -120,7 +120,8 @@ async function runInjectedRealLegFixture(divergeOnDeniedPermit = false): Promise
 }
 
 describe('llm real leg injected providers', () => {
-  for (const [adapter, createFake] of Object.entries(providers)) {
+  for (const adapter of ['claude', 'codex', 'pi'] as const) {
+    const createFake = providers[adapter];
     defineLlmRealLeg(adapter, { createProvider: () => createFake().provider });
   }
 

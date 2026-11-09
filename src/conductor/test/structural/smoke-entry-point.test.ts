@@ -441,7 +441,7 @@ describe('structural: smoke test entry point', () => {
     const legs = await discoverLlmRealLegs();
     const [claude, codex, pi] = llmRealLegs;
 
-    const missingCodexRunVitest = vi.fn(async () => ({ executedAssertions: true, output: '' }));
+    const missingCodexRunVitest = vi.fn(async (_file: string) => ({ executedAssertions: true, output: '' }));
     const missingCodexEmit = vi.fn();
     await runSmokeCli('vitest.smoke.config.ts', {
       discover: async () => legs,
@@ -456,7 +456,7 @@ describe('structural: smoke test entry point', () => {
       `smoke ledger: ${codex.file} [${codex.capability}] skipped (unmet: ${codex.credential})`,
     );
 
-    const missingPiRunVitest = vi.fn(async () => ({ executedAssertions: true, output: '' }));
+    const missingPiRunVitest = vi.fn(async (_file: string) => ({ executedAssertions: true, output: '' }));
     const missingPiEmit = vi.fn();
     await runSmokeCli('vitest.smoke.config.ts', {
       discover: async () => legs,
