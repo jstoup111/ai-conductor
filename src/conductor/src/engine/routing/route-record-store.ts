@@ -75,7 +75,7 @@ export interface RouteRecordStoreDependencies { readonly git?: GitRunner }
  */
 export type CreateRouteRecordInput = Pick<
   RouteRecord,
-  'roundId' | 'items' | 'allocation' | 'pendingAsBuiltFindings' | 'operator'
+  'roundId' | 'items' | 'allocation' | 'execution' | 'placements' | 'pendingAsBuiltFindings' | 'operator'
 > & { readonly receipt?: RouteRecord['receipt'] } & (
   | { readonly kind: 'audit'; readonly sealedAuthored: number }
   | { readonly kind: 'revalidate'; readonly sealedAuthored?: never }
