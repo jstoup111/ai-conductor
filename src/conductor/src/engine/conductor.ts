@@ -183,6 +183,7 @@ import {
   resolveBuildProgressConfig,
   resolveGateCodeValidityConfig,
   BUILD_PROGRESS_HALT_DEFAULTS,
+  foldRoutedFixesOn,
   resolveValidationConcurrency,
   RETRY_ROUTING_DEFAULTS,
 } from './config.js';
@@ -5966,6 +5967,7 @@ export class Conductor {
                   ? routingFenceHalt(fence.detail)
                   : { kind: 'halt', haltClass: 'needs-human', detail: fence.detail };
               }
+              const execution = foldRoutedFixesOn(this.config) ? ('leaf' as const) : undefined;
               const created = await createRouteRecord(this.projectRoot, this.featureSlug, {
                 roundId,
                 kind: 'audit',
@@ -5974,6 +5976,7 @@ export class Conductor {
                 receipt,
                 sealedAuthored,
                 pendingAsBuiltFindings: [...this.pendingAsBuiltRemediationFindings.values()],
+                ...(execution === undefined ? {} : { execution }),
               });
               if (created.kind !== 'created')
                 return {
@@ -5989,6 +5992,7 @@ export class Conductor {
                   await this.events.emitOrThrow(event);
                   return 'persisted';
                 },
+                ...(execution === undefined ? {} : { execution }),
               });
               if (admission.kind !== 'admitted') {
                 return admission.fence

@@ -103,6 +103,8 @@ export async function routedWorkOutstanding(
 /** Admission may deliver its durable route occurrences only after its marker transaction commits. */
 export type AdmitRoundDependencies = RouteRecordStoreDependencies & {
   readonly persist?: PersistOutboxEvent;
+  /** Audit-only execution mode frozen at admission by the remediation setting. */
+  readonly execution?: 'leaf';
 };
 
 export type RoundAdmissionFenceResult = Extract<AdmitRoundResult, { readonly kind: 'refused' }> & {
@@ -217,7 +219,11 @@ export async function admitRound(
   if (hostTransition.kind !== 'updated' || !isLegalRoundPhaseTransition(stored.record.phase, 'open')) {
     return { kind: 'refused', detail: `routing round ${record.roundId} is not prepared for host ${firstHost}` };
   }
-  let next: RouteRecord = { ...hostTransition.record, phase: 'open' };
+  let next: RouteRecord = {
+    ...hostTransition.record,
+    phase: 'open',
+    ...(stored.record.kind === 'audit' && dependencies.execution === 'leaf' ? { execution: 'leaf' as const } : {}),
+  };
   if (next.kind === 'operator' && next.operator !== undefined) {
     next = withOutboxEvent(next, operatorRoundEvent(next.roundId, next.operator, firstHost, 'opened'));
   }
@@ -227,7 +233,10 @@ export async function admitRound(
     slug,
     [
       { kind: 'update-record', previous: stored, record: next },
-      { kind: 'create-marker', marker: { host: firstHost, roundId: record.roundId } },
+      {
+        kind: 'create-marker',
+        marker: { host: firstHost, roundId: record.roundId, ...(next.execution === 'leaf' ? { execution: 'leaf' as const } : {}) },
+      },
     ],
     dependencies,
   );
