@@ -8,6 +8,7 @@ import {
   stat,
 } from 'node:fs/promises';
 import { registerSighupPersistence } from './sighup-persistence.js';
+import { manualTestBlockerClause } from './manual-test-blocker.js';
 import { withGateTier } from './gate-event-tier.js';
 import { existsSync, readdirSync, rmdirSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
@@ -723,16 +724,6 @@ const PUBLICATION_REDISPATCH_BUDGET = 1;
 const MAX_GATE_SELECTIONS = 6;
 const DONE_MARKER = '.pipeline/DONE';
 const LOOP_HALT_MARKER = HALT_MARKER;
-
-function manualTestBlockerClause(dispatchOutput: string | undefined): string {
-  const normalized = dispatchOutput?.trim().replace(/\s+/g, ' ');
-  if (!normalized) return '; the agent gave no final message';
-
-  const excerpt = normalized.length > 600
-    ? `…${normalized.slice(-600)}`
-    : normalized;
-  return `; agent reported: "${excerpt}"`;
-}
 
 /**
  * Render the operator-facing recovery for a terminal mechanical review fault.

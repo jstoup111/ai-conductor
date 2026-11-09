@@ -231,6 +231,8 @@ engine/kickback-ledger.ts -> clock
 engine/kickback-ledger.ts -> filesystem
 engine/kpi-report.ts -> filesystem
 engine/manual-test-record-cli.ts -> filesystem
+engine/manual-test-record-cli.ts -> git
+engine/manual-test-record-cli.ts -> process
 engine/memory-cli.ts -> filesystem
 engine/memory-cli.ts -> process
 engine/memory-migrate.ts -> filesystem

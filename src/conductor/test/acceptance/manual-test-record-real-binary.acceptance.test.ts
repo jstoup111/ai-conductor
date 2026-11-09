@@ -27,7 +27,7 @@ beforeEach(async () => {
   scratchParent = await mkdtemp(join(tmpdir(), 'manual-test-record-real-binary-'));
   cwd = await mkdtemp(join(scratchParent, 'repo-'));
   pipelineDir = join(cwd, '.pipeline');
-  await execa('git', ['init'], { cwd });
+  await execa('git', ['init', '-b', 'main'], { cwd });
   await mkdir(pipelineDir);
 });
 
