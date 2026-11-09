@@ -2083,63 +2083,83 @@ describe('engine/conductor', () => {
       expect(halt).toMatch(/kickback-to-build no-op/);
     });
 
+    async function runNoWriteManualTest(output: string): Promise<{
+      retries: Array<{ reason: string }>;
+      halt: string;
+      manualTestState: ConductState['manual_test'];
+    }> {
+      await seedToManualTest();
+      await writeFile(join(dir, '.pipeline/manual-test-results.md'), '# Results from an earlier attempt\n');
+      const staleAt = Date.now() - 60_000;
+      await utimes(
+        join(dir, '.pipeline/manual-test-results.md'),
+        new Date(staleAt),
+        new Date(staleAt),
+      );
+      await stampGateRunIdentity(dir, 'manual_test', 'prior-attempt-in-this-run');
+
+      const retries: Array<{ reason: string }> = [];
+      events.on('step_retry', (event) => {
+        if (event.type === 'step_retry' && event.step === 'manual_test') {
+          retries.push({ reason: event.reason });
+        }
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner({ success: true, output }),
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 2,
+        fromStep: 'manual_test',
+      });
+
+      await conductor.run();
+
+      const state = await readState(statePath);
+      return {
+        retries,
+        halt: await readFile(join(dir, '.pipeline/HALT'), 'utf8'),
+        manualTestState: state.ok ? state.value.manual_test : undefined,
+      };
+    }
+
     // Covers: task:7
-    it.each([
-      ['Manual testing is blocked: the app could not start', true],
-      ['All criteria PASS', false],
-    ])(
-      'retries a manual_test that writes no results instead of accepting its %s output',
-      async (output, reportsBlocker) => {
-        await seedToManualTest();
-        await writeFile(join(dir, '.pipeline/manual-test-results.md'), '# Results from an earlier attempt\n');
-        const staleAt = Date.now() - 60_000;
-        await utimes(
-          join(dir, '.pipeline/manual-test-results.md'),
-          new Date(staleAt),
-          new Date(staleAt),
+    it('retries and halts a no-write manual_test with its reported blocker', async () => {
+      const result = await runNoWriteManualTest('Manual testing is blocked: the app could not start');
+
+      expect(result.retries).not.toHaveLength(0);
+      for (const retry of result.retries) {
+        expect(retry.reason).toContain('no results written this attempt');
+        expect(retry.reason).toContain(
+          'agent reported: "Manual testing is blocked: the app could not start"',
         );
-        await stampGateRunIdentity(dir, 'manual_test', 'prior-attempt-in-this-run');
+      }
+      expect(result.halt).toContain('no results written this attempt');
+      expect(result.halt).toContain(
+        'agent reported: "Manual testing is blocked: the app could not start"',
+      );
+    });
 
-        const retries: Array<{ reason: string }> = [];
-        events.on('step_retry', (event) => {
-          if (event.type === 'step_retry' && event.step === 'manual_test') {
-            retries.push({ reason: event.reason });
-          }
-        });
-        const conductor = new Conductor({
-          stateFilePath: statePath,
-          stepRunner: createMockStepRunner({ success: true, output }),
-          events,
-          projectRoot: dir,
-          mode: 'auto',
-          daemon: true,
-          verifyArtifacts: true,
-          maxRetries: 2,
-          fromStep: 'manual_test',
-        });
+    // Covers: task:7
+    it('does not mark a blocked no-write manual_test done', async () => {
+      const result = await runNoWriteManualTest('Manual testing is blocked: the app could not start');
 
-        await conductor.run();
+      expect(result.manualTestState).not.toBe('done');
+    });
 
-        expect(retries).not.toHaveLength(0);
-        for (const retry of retries) {
-          expect(retry.reason).toContain('no results written this attempt');
-          if (reportsBlocker) {
-            expect(retry.reason).toContain(
-              'agent reported: "Manual testing is blocked: the app could not start"',
-            );
-          }
-        }
-        const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
-        expect(halt).toContain('no results written this attempt');
-        if (reportsBlocker) {
-          expect(halt).toContain(
-            'agent reported: "Manual testing is blocked: the app could not start"',
-          );
-        }
-        const state = await readState(statePath);
-        expect(state.ok && state.value.manual_test).not.toBe('done');
-      },
-    );
+    // Covers: task:7
+    it('retries an All criteria PASS manual_test that writes no results and never marks it done', async () => {
+      const result = await runNoWriteManualTest('All criteria PASS');
+
+      expect(result.retries).not.toHaveLength(0);
+      for (const retry of result.retries) {
+        expect(retry.reason).toContain('no results written this attempt');
+      }
+      expect(result.manualTestState).not.toBe('done');
+    });
 
     // Covers: task:7
     it('routes freshly written manual_test FAIL results back to build without a reported-blocker diagnostic', async () => {
