@@ -1,4 +1,4 @@
-// Covers: task:5, task:6
+// Covers: task:5, task:6, task:9
 import { existsSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -24,6 +24,9 @@ const liveProviderSmokeCapabilities: Readonly<Record<string, SmokeCapability>> =
 );
 const smokeCapabilities: Readonly<Record<string, SmokeCapability>> = {
   'test/backlog-priority.smoke.test.ts': 'toolchain',
+  'test/contracts/llm-claude.contract.smoke.test.ts': 'credentialed:claude',
+  'test/contracts/llm-codex.contract.smoke.test.ts': 'credentialed:codex',
+  'test/contracts/llm-pi.contract.smoke.test.ts': 'credentialed:pi',
   'test/engine/build-token-auth.smoke.test.ts': 'credentialed:claude',
   ...liveProviderSmokeCapabilities,
   'test/engine/daemon-tmux.smoke.test.ts': 'toolchain',
@@ -40,6 +43,34 @@ const smokeCapabilities: Readonly<Record<string, SmokeCapability>> = {
   'test/smoke/publish-interrupted.smoke.test.ts': 'toolchain',
   'test/smoke/surgical-finish-retry.smoke.test.ts': 'hermetic',
 };
+
+const llmRealLegs = [
+  {
+    file: 'test/contracts/llm-claude.contract.smoke.test.ts',
+    capability: 'credentialed:claude' as const,
+    credential: 'CLAUDE_CODE_OAUTH_TOKEN',
+    binary: 'claude',
+  },
+  {
+    file: 'test/contracts/llm-codex.contract.smoke.test.ts',
+    capability: 'credentialed:codex' as const,
+    credential: 'CODEX_API_KEY',
+    binary: 'codex',
+  },
+  {
+    file: 'test/contracts/llm-pi.contract.smoke.test.ts',
+    capability: 'credentialed:pi' as const,
+    credential: 'PI_API_KEY',
+    binary: 'pi',
+  },
+] as const;
+
+async function discoverLlmRealLegs() {
+  return Promise.all(llmRealLegs.map(async ({ file }) => ({
+    file,
+    source: await readFile(join(conductorRoot, file), 'utf8'),
+  })));
+}
 
 async function allTestFiles(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -385,6 +416,109 @@ describe('structural: smoke test entry point', () => {
     ]));
   });
 
+  it('runs each real LLM contract leg with its credentialed capability in advisory mode', async () => {
+    const legs = await discoverLlmRealLegs();
+
+    for (const { file, capability, credential, binary } of llmRealLegs) {
+      const runVitest = vi.fn(async () => ({ executedAssertions: true, output: '' }));
+      const emit = vi.fn();
+
+      await runSmokeCli('vitest.smoke.config.ts', {
+        discover: async () => legs,
+        runVitest,
+        mode: 'advisory',
+        hasCommand: (command) => command === binary,
+        environment: { [credential]: 'test-credential' },
+        emit,
+      });
+
+      expect(runVitest).toHaveBeenCalledWith(file);
+      expect(emit).toHaveBeenCalledWith(`smoke ledger: ${file} [${capability}] ran`);
+    }
+  });
+
+  it('keeps available real LLM contract legs running when another capability is unmet in advisory mode', async () => {
+    const legs = await discoverLlmRealLegs();
+    const [claude, codex, pi] = llmRealLegs;
+
+    const missingCodexRunVitest = vi.fn(async () => ({ executedAssertions: true, output: '' }));
+    const missingCodexEmit = vi.fn();
+    await runSmokeCli('vitest.smoke.config.ts', {
+      discover: async () => legs,
+      runVitest: missingCodexRunVitest,
+      mode: 'advisory',
+      hasCommand: () => true,
+      environment: { [claude.credential]: 'claude-token', [pi.credential]: 'pi-token' },
+      emit: missingCodexEmit,
+    });
+    expect(missingCodexRunVitest.mock.calls.map(([file]) => file)).toEqual([claude.file, pi.file]);
+    expect(missingCodexEmit).toHaveBeenCalledWith(
+      `smoke ledger: ${codex.file} [${codex.capability}] skipped (unmet: ${codex.credential})`,
+    );
+
+    const missingPiRunVitest = vi.fn(async () => ({ executedAssertions: true, output: '' }));
+    const missingPiEmit = vi.fn();
+    await runSmokeCli('vitest.smoke.config.ts', {
+      discover: async () => legs,
+      runVitest: missingPiRunVitest,
+      mode: 'advisory',
+      hasCommand: (command) => command !== pi.binary,
+      environment: {
+        [claude.credential]: 'claude-token',
+        [codex.credential]: 'codex-token',
+        [pi.credential]: 'pi-token',
+      },
+      emit: missingPiEmit,
+    });
+    expect(missingPiRunVitest.mock.calls.map(([file]) => file)).toEqual([claude.file, codex.file]);
+    expect(missingPiEmit).toHaveBeenCalledWith(
+      `smoke ledger: ${pi.file} [${pi.capability}] skipped (unmet: ${pi.binary})`,
+    );
+  });
+
+  it('fails gate-mode real LLM contract legs that cannot execute and preserves failed case titles', async () => {
+    const [claude, codex] = llmRealLegs;
+    const claudeLeg = (await discoverLlmRealLegs()).filter(({ file }) => file === claude.file);
+    const missingCredentialEmit = vi.fn();
+
+    await expect(runSmokeCli('vitest.smoke.config.ts', {
+      discover: async () => claudeLeg,
+      runVitest: vi.fn(),
+      mode: 'gate',
+      hasCommand: () => true,
+      environment: {},
+      emit: missingCredentialEmit,
+    })).rejects.toThrow('Gate-mode smoke run executed no credentialed test files');
+    expect(missingCredentialEmit).toHaveBeenCalledWith(
+      `smoke ledger: ${claude.file} [${claude.capability}] skipped (unmet: ${claude.credential})`,
+    );
+
+    const missingBinaryEmit = vi.fn();
+    await expect(runSmokeCli('vitest.smoke.config.ts', {
+      discover: async () => claudeLeg,
+      runVitest: vi.fn(),
+      mode: 'gate',
+      hasCommand: () => false,
+      environment: { [claude.credential]: 'claude-token' },
+      emit: missingBinaryEmit,
+    })).rejects.toThrow(`Smoke gate unmet for ${claude.file}: ${claude.binary}`);
+    expect(missingBinaryEmit).toHaveBeenCalledWith(
+      `smoke ledger: ${claude.file} [${claude.capability}] failed (evidence: ${claude.binary})`,
+    );
+
+    const failedCaseTitle = 'llm contract [codex real] › returns a native-schema terminal result';
+    const failedCaseEmit = vi.fn();
+    await expect(runSmokeCli('vitest.smoke.config.ts', {
+      discover: async () => (await discoverLlmRealLegs()).filter(({ file }) => file === codex.file),
+      runVitest: async () => { throw new Error(failedCaseTitle); },
+      mode: 'advisory',
+      hasCommand: () => true,
+      environment: { [codex.credential]: 'codex-token' },
+      emit: failedCaseEmit,
+    })).rejects.toThrow(failedCaseTitle);
+    expect(failedCaseEmit).toHaveBeenCalledWith(failedCaseTitle);
+  });
+
   it(
     'executes both hermetic smoke files through real discovery and child-process dispatch',
     async () => {
@@ -504,6 +638,9 @@ describe('structural: smoke test entry point', () => {
 
       expect(discovered).toEqual([
         'test/backlog-priority.smoke.test.ts',
+        'test/contracts/llm-claude.contract.smoke.test.ts',
+        'test/contracts/llm-codex.contract.smoke.test.ts',
+        'test/contracts/llm-pi.contract.smoke.test.ts',
         'test/engine/build-token-auth.smoke.test.ts',
         'test/engine/daemon-e2e-live-claude.smoke.test.ts',
         'test/engine/daemon-e2e-live-codex.smoke.test.ts',
@@ -522,6 +659,16 @@ describe('structural: smoke test entry point', () => {
         'test/smoke/publish-interrupted.smoke.test.ts',
         'test/smoke/surgical-finish-retry.smoke.test.ts',
       ]);
+
+      const defaultVitest = await createVitest('test', { root: conductorRoot });
+      try {
+        const defaultFiles = new Set((await defaultVitest.globTestSpecifications())
+          .map(({ moduleId }) => relative(conductorRoot, moduleId).replaceAll('\\', '/')));
+        expect(defaultFiles).toContain('test/contracts/llm.contract.test.ts');
+        expect(llmRealLegs.map(({ file }) => file).filter((file) => defaultFiles.has(file))).toEqual([]);
+      } finally {
+        await defaultVitest.close();
+      }
     } finally {
       await vitest.close();
       await rm(fixtureDirectory, { recursive: true, force: true });
