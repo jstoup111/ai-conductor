@@ -127,6 +127,7 @@ describe('legacy engineer CLI alias — process dispatch boundary', () => {
     expect(spawnHost).toHaveBeenCalledOnce();
     expect(spawnHost).toHaveBeenCalledWith('codex', ['$composer'], process.cwd(), {
       AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex',
+      AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String),
     });
     expect(vi.mocked(discoverInstalledProviders)).not.toHaveBeenCalled();
   });
