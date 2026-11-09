@@ -755,6 +755,12 @@ export function createProgram(): Command {
     .command('refresh')
     .description('Fetch upstream model prices, prune to the models this project routes to, and rewrite the card with a fresh as_of')
     .option('--model <id>', 'Also price this model id (repeatable)');
+  program
+    .command('decisions [term]')
+    .description('Query the local decision corpus')
+    .option('--kind <kind>', 'Filter by record kind')
+    .option('--status <status>', 'Filter by disposition')
+    .option('--json', 'Print rows as JSON');
   rateCard
     .command('show')
     .description('Print the committed rate card: as_of, source, and each model rate');

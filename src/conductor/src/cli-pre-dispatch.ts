@@ -19,6 +19,7 @@ export interface PreDispatchCommand {
 export const PRE_DISPATCH_COMMANDS = [
   { detector: 'detectRenderCommand', commandPath: ['render-diagrams'], helpOwner: 'router' },
   { detector: 'detectRateCardCommand', commandPath: ['rate-card'], helpOwner: 'router' },
+  { detector: 'detectDecisionsCommand', commandPath: ['decisions'], helpOwner: 'router' },
   { detector: 'detectOverlapScanCommand', commandPath: ['overlap-scan'], helpOwner: 'router' },
   { detector: 'detectVersionCommand', commandPath: ['version'], helpOwner: 'router' },
   { detector: 'detectUpdateCommand', commandPath: ['update'], helpOwner: 'passthrough' },

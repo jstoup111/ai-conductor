@@ -101,10 +101,12 @@ import { evaluateAdrAssumptionLedgers } from '../adr-assumption-ledger-scope.js'
 import {
   buildFeatureManifest,
   featureManifestPath,
+  MANIFEST_KIND_LOCATIONS,
   parseFeatureManifest,
   renderFeatureManifest,
   type FeatureManifestEntry,
 } from '../feature-manifest.js';
+import { DECISION_RECORD_SHAPES, matchesKnownShape } from '../decision-corpus.js';
 import type { LandGateIdentifier, LandGateRejectionIdentifier } from '../../types/land.js';
 export type { LandGateIdentifier, LandGateRejectionIdentifier };
 
@@ -492,7 +494,7 @@ export async function landSpec(
   //     engineer CLAIMED (the tier) matches what it produced, so a non-Small
   //     spec can never reach the daemon missing conflict-check or architecture.
   const complexityDir = join(worktreePath, '.docs', 'complexity');
-  const decisionsDir = join(worktreePath, '.docs', 'decisions');
+  const decisionsDir = join(worktreePath, MANIFEST_KIND_LOCATIONS.decision.directory);
   const complexityFile = await pickIdeaFile(complexityDir, featureFiles);
   const tier = complexityFile
     ? parseComplexityTier(await readFile(complexityFile, 'utf-8'))
@@ -725,6 +727,20 @@ export async function landSpec(
     throw landGateError('adr-assumption-ledger',
       `landSpec: ADR assumption ledgers are invalid: ${offenders}. ` +
       'Repair each ADR using the template\'s ## Assumptions section before landing.',
+    );
+  }
+  const addedDecisionRecords = await collectAddedDecisionCorpusPaths(
+    worktreePath,
+    mergeBase,
+    MANIFEST_KIND_LOCATIONS.decision.directory,
+  );
+  const offShapeRecords = addedDecisionRecords.filter((path) => !matchesKnownShape(basename(path)));
+  if (offShapeRecords.length > 0) {
+    const acceptedShapes = DECISION_RECORD_SHAPES.map((shape) =>
+      'prefix' in shape ? `${shape.prefix}*` : shape.filename).join(', ');
+    throw landGateError('decision-record-shape',
+      `landSpec: newly added decision records have unknown shapes: ${offShapeRecords.join('; ')}. ` +
+      `Accepted shapes: ${acceptedShapes}.`,
     );
   }
   // 4e2. Coherence gate (DECIDE artifact coherence check): the traceability
@@ -1152,6 +1168,44 @@ async function collectChangedDocsMarkdown(worktreePath: string): Promise<string[
     }
   }
   return [...out].sort();
+}
+
+/** Collect only additions, untracked files, and rename targets under the decision corpus. */
+async function collectAddedDecisionCorpusPaths(
+  worktreePath: string,
+  mergeBase: string,
+  corpusDirectory: string,
+): Promise<string[]> {
+  const directory = corpusDirectory.replace(/\/$/, '');
+  const added = new Set<string>();
+  const { stdout: committed } = await execFile(
+    'git',
+    ['diff', '--name-status', '-M', mergeBase, 'HEAD', '--', directory],
+    { cwd: worktreePath },
+  );
+  for (const line of committed.split('\n')) {
+    if (line === '') continue;
+    const [status, ...paths] = line.split('\t');
+    if (status === 'A' && paths[0]) added.add(paths[0]);
+    if (status?.startsWith('R') && paths[1]) added.add(paths[1]);
+  }
+  const { stdout: porcelain } = await execFile(
+    'git',
+    ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', directory],
+    { cwd: worktreePath },
+  );
+  const entries = porcelain.split('\0');
+  for (let index = 0; index < entries.length; index += 1) {
+    const entry = entries[index]!;
+    if (entry === '') continue;
+    const status = entry.slice(0, 2);
+    const path = entry.slice(3).replaceAll('\\', '/');
+    if (status === '??' || status.includes('A') || status.includes('R')) added.add(path);
+    if (status.includes('R')) {
+      index += 1;
+    }
+  }
+  return [...added].sort();
 }
 
 /**

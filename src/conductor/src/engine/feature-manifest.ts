@@ -16,7 +16,7 @@ export interface ManifestKindLocation {
  * closed kind set as the key makes a new kind impossible to add without first
  * declaring how it maps back to the pre-manifest layout.
  */
-export const MANIFEST_KIND_LOCATIONS = {
+export const MANIFEST_KIND_LOCATIONS: Readonly<Record<ArtifactKind, ManifestKindLocation>> = {
   plan: { directory: '.docs/plans/', identity: 'plan-stem', filePattern: /\.md$/i },
   stories: { directory: '.docs/stories/', identity: 'normalized-stem', filePattern: /\.md$/i },
   prd: { directory: '.docs/specs/', identity: 'normalized-stem', filePattern: /\.md$/i },
@@ -29,7 +29,7 @@ export const MANIFEST_KIND_LOCATIONS = {
   intake: { directory: '.docs/intake/', identity: 'plan-stem', filePattern: /\.md$/i },
   applicability: { directory: '.docs/applicability/', identity: 'plan-stem', filePattern: /\.md$/i },
   decision: { directory: '.docs/decisions/', identity: 'repository', filePattern: /^adr-.*\.md$/i },
-} as const satisfies Record<ArtifactKind, ManifestKindLocation>;
+};
 
 declare const featureSlugBrand: unique symbol;
 export type FeatureSlug = string & { readonly [featureSlugBrand]: 'FeatureSlug' };

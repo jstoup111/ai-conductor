@@ -254,6 +254,8 @@ Before committing, `land` refuses on any of:
 - an added or changed approved ADR with no citable decision in its `## Decision` section,
 - an invalid assumptions ledger (`adr-assumption-ledger`) in an added ADR, or in a changed ADR that
   has an `## Assumptions` section,
+- a file added or renamed into `.docs/decisions/` whose filename matches no known record shape
+  (`decision-record-shape`); the refusal lists the accepted shapes,
 - an empty or stub artifact,
 - at tiers M and L, a plan review (`plan-review`) that is missing, unparseable, integrity-mismatched,
   or stale against the plan, stories, in-scope ADR decisions, or coherence artifact, or that has a
