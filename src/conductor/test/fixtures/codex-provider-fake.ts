@@ -28,11 +28,7 @@ export function createCodexProviderFake(script?: CodexFakeScript): CodexProvider
   const invoke = async (options: InvokeOptions): Promise<InvokeResult> => {
     const permit = options.spawnPermit?.();
     if (permit && !permit.permitted) {
-      return {
-        success: false,
-        output: `Codex fake spawn denied: ${permit.reason}`,
-        exitCode: 1,
-      };
+      throw new Error(`Codex fake process spawn denied: ${permit.reason}`);
     }
     const call = {
       ...options,
@@ -54,6 +50,7 @@ export function createCodexProviderFake(script?: CodexFakeScript): CodexProvider
       success: true,
       output: 'Codex fake completed.',
       exitCode: 0,
+      ...(call.nativeSchema === undefined ? {} : { finalStructuredResult: {} }),
     };
   };
 
@@ -61,6 +58,8 @@ export function createCodexProviderFake(script?: CodexFakeScript): CodexProvider
     provider: {
       supportsSessionResume: false,
       lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+      systemPromptCapability: { deliversSystemPrompt: true },
       invoke,
     },
     calls,
