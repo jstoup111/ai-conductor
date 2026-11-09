@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.7.0] - 2026-11-08
+## [1.7.0] - 2026-11-09
 
 ### Added
 
@@ -68,6 +68,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Repository-local skills remain discoverable from both supported hosts. ([implementation PR #3554](https://github.com/jstoup111/ai-conductor/pull/3554)).
 - Operators can record restack-conflict decisions and resume stacked restacks safely. ([implementation PR #3556](https://github.com/jstoup111/ai-conductor/pull/3556)).
 - Daemon operators can let higher-priority queued work preempt lower-priority feature runs at safe boundaries. ([implementation PR #3647](https://github.com/jstoup111/ai-conductor/pull/3647)).
+- Intake filers can mark the desired release impact with an optional Semver label. ([implementation PR #3662](https://github.com/jstoup111/ai-conductor/pull/3662)).
 
 ### Changed
 
