@@ -163,7 +163,7 @@ export const REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES = {
   tasksBytes: 82_308,
   pendingAsBuiltFindingsBytes: 9_989,
   priorLapsBytes: 111,
-  priorAsBuiltCasesBytes: 0,
+  priorAsBuiltCasesBytes: 8_929,
   refusalsBytes: 0,
 } as const;
 
@@ -208,10 +208,11 @@ const REMEDIATION_PROJECTION_COMPONENT_LIMITS = {
     REMEDIATION_PROJECTION_OPTIONAL_CONTEXT_FLOOR_BYTES,
     REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.refusalsBytes,
   )),
-  // No prior as-built cases exist in the pre-feature corpus; reserve the
-  // standard optional-history floor and grow it from future corpus evidence.
+  // `.pipeline/remediation-cases.json` asBuiltCases: 8,929 B projected for 11 open
+  // cases (#3677). Each case carries its source summaries, so the optional-history
+  // floor faulted any as-built lap with roughly five or more open cases; D7.2 floor → 262,144 B.
   priorAsBuiltCasesBytes: roundUpPowerOfTwo(Math.max(
-    REMEDIATION_PROJECTION_OPTIONAL_CONTEXT_FLOOR_BYTES,
+    REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
     REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.priorAsBuiltCasesBytes,
   )),
 } as const;
