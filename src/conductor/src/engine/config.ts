@@ -56,6 +56,11 @@ export type ConfigResult =
     }
   | { ok: false; error: ConfigError };
 
+/** Routed audit fixes fold onto their owning child unless explicitly disabled. */
+export function foldRoutedFixesOn(config: HarnessConfig): boolean {
+  return config.stacked_prs?.fold_routed_fixes !== false;
+}
+
 /** Emit each deprecated-key occurrence once after the event persister subscribes. */
 export async function emitDeprecatedConfigKeyEvents(
   result: ConfigResult,
@@ -188,7 +193,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   ],
   harness_self_host_build_auth: ['mode', 'token_path'],
   mergeable_autoresolve: ['enabled', 'cooldownMinutes', 'suiteCommand'],
-  stacked_prs: ['enabled', 'max_slices', 'route_whole_feature_fixes', 'max_restack_cascades'],
+  stacked_prs: ['enabled', 'max_slices', 'route_whole_feature_fixes', 'fold_routed_fixes', 'max_restack_cascades'],
   'steps.parallel': ['name', 'skill', 'model', 'effort', 'advisory'],
   'steps.by_tier': ['model', 'effort', 'max_retries'],
   'build_review.adjudication': ['enabled'],
@@ -3054,6 +3059,12 @@ function validateStackedPrsBlock(raw: unknown): ConfigError | null {
     return {
       type: 'validation_error',
       message: 'stacked_prs.route_whole_feature_fixes must be a boolean',
+    };
+  }
+  if (obj.fold_routed_fixes !== undefined && typeof obj.fold_routed_fixes !== 'boolean') {
+    return {
+      type: 'validation_error',
+      message: 'stacked_prs.fold_routed_fixes must be a boolean',
     };
   }
   if (
