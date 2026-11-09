@@ -1,11 +1,16 @@
 // Covers: task:3
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 import {
   checkBoundaryContractObligations,
   type BoundaryContractViolation,
 } from './boundary-contract-obligation.js';
-import type { BoundaryEntry } from './boundary-registry.js';
+import { BOUNDARY_REGISTRY, type BoundaryEntry } from './boundary-registry.js';
+
+const CONDUCTOR_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 
 const adapter = 'execution/provider.ts';
 const contractModule = 'test/contracts/provider.contract.ts';
@@ -50,6 +55,28 @@ function check(entry: BoundaryEntry, files = completeFiles()): BoundaryContractV
   return checkBoundaryContractObligations(registry(entry), files);
 }
 
+function filesNamedByContracts(
+  entries: Readonly<Record<string, BoundaryEntry>>,
+): ReadonlyMap<string, string> {
+  const files = new Map<string, string>();
+
+  for (const entry of Object.values(entries)) {
+    if (entry.contract === null) continue;
+
+    const paths = [entry.contract.module];
+    for (const leg of entry.contract.legs) {
+      paths.push(leg.adapter, leg.fake, leg.fakeLeg, leg.realLeg);
+    }
+
+    for (const path of paths) {
+      const root = path.startsWith('execution/') ? resolve(CONDUCTOR_ROOT, 'src') : CONDUCTOR_ROOT;
+      files.set(path, readFileSync(resolve(root, path), 'utf8'));
+    }
+  }
+
+  return files;
+}
+
 function expectForPortedAndEarlyContract(
   entry: BoundaryEntry,
   expected: readonly BoundaryContractViolation[],
@@ -60,6 +87,26 @@ function expectForPortedAndEarlyContract(
 }
 
 describe('structural: boundary contract obligations', () => {
+  // Covers: task:10
+  it('accepts the real registry and rejects a ported git boundary without a contract', () => {
+    const files = filesNamedByContracts(BOUNDARY_REGISTRY);
+
+    expect(checkBoundaryContractObligations(BOUNDARY_REGISTRY, files)).toEqual([]);
+
+    const registryWithPortedGit = {
+      ...BOUNDARY_REGISTRY,
+      git: {
+        ...BOUNDARY_REGISTRY.git,
+        contract: null,
+        status: { kind: 'ported' as const },
+      },
+    };
+
+    expect(checkBoundaryContractObligations(registryWithPortedGit, files)).toEqual([
+      { boundary: 'git', rule: 'ported-without-contract' },
+    ]);
+  });
+
   it('accepts complete ported and early pending contracts, while ignoring null pending contracts', () => {
     const early = boundary({ name: 'gh', status: { kind: 'pending', issue: 1 } });
     const pendingWithoutContract = boundary({

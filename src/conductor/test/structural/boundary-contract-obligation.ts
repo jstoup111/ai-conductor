@@ -1,3 +1,5 @@
+import { posix } from 'node:path';
+
 import type { BoundaryEntry } from './boundary-registry.js';
 
 export type BoundaryContractViolation =
@@ -6,9 +8,21 @@ export type BoundaryContractViolation =
   | { readonly boundary: string; readonly rule: 'missing-file' | 'fake-leg-is-smoke' | 'real-leg-not-smoke' | 'missing-capability'; readonly path: string }
   | { readonly boundary: string; readonly rule: 'missing-contract-import'; readonly path: string; readonly module: string };
 
-function importsModule(source: string, module: string): boolean {
-  const escapedModule = module.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`\\bimport\\s*(?:[^'\"]*?\\s+from\\s*)?['\"]${escapedModule}['\"]`).test(source);
+function importsModule(source: string, importer: string, module: string): boolean {
+  const modulePath = posix.resolve('/', module);
+  const importPattern = /\bimport\s*(?:[^'\"]*?\s+from\s*)?['\"]([^'\"]+)['\"]/g;
+
+  for (const match of source.matchAll(importPattern)) {
+    const specifier = match[1];
+    if (specifier === module) return true;
+    if (!specifier.startsWith('.')) continue;
+
+    const resolved = posix.resolve('/', posix.dirname(importer), specifier)
+      .replace(/\.js$/, '.ts');
+    if (resolved === modulePath) return true;
+  }
+
+  return false;
 }
 
 export function checkBoundaryContractObligations(
@@ -59,7 +73,7 @@ export function checkBoundaryContractObligations(
 
       for (const path of [leg.fakeLeg, leg.realLeg]) {
         const source = files.get(path);
-        if (source !== undefined && !importsModule(source, contract.module)) {
+        if (source !== undefined && !importsModule(source, path, contract.module)) {
           violations.push({
             boundary: entry.name,
             rule: 'missing-contract-import',
