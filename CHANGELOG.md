@@ -69,6 +69,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Operators can record restack-conflict decisions and resume stacked restacks safely. ([implementation PR #3556](https://github.com/jstoup111/ai-conductor/pull/3556)).
 - Daemon operators can let higher-priority queued work preempt lower-priority feature runs at safe boundaries. ([implementation PR #3647](https://github.com/jstoup111/ai-conductor/pull/3647)).
 - Intake filers can mark the desired release impact with an optional Semver label. ([implementation PR #3662](https://github.com/jstoup111/ai-conductor/pull/3662)).
+- Readers gain dependency-hygiene review for changed dependency manifests and lockfiles. ([implementation PR #3668](https://github.com/jstoup111/ai-conductor/pull/3668)).
 
 ### Changed
 
