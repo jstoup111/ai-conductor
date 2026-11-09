@@ -67,10 +67,96 @@ async function collectRealAndFakeContractCases(): Promise<readonly RunnerTestCas
   }
 }
 
+interface ContractCaseResult {
+  readonly name: string;
+  readonly state: string | undefined;
+}
+
+async function runInjectedRealLegFixture(divergeOnDeniedPermit = false): Promise<readonly ContractCaseResult[]> {
+  const root = await mkdtemp(join(tmpdir(), 'llm-real-leg-contract-'));
+  const fixture = join(root, 'llm-real-leg-contract.fixture.test.ts');
+  const realLegModule = fileURLToPath(new URL('./llm-real-leg.ts', import.meta.url));
+  const fakeLegModule = fileURLToPath(new URL('./llm.contract.test.ts', import.meta.url));
+  const claudeFakeModule = fileURLToPath(new URL('../fixtures/claude-provider-fake.ts', import.meta.url));
+  const codexFakeModule = fileURLToPath(new URL('../fixtures/codex-provider-fake.ts', import.meta.url));
+  const piFakeModule = fileURLToPath(new URL('../fixtures/pi-provider-fake.ts', import.meta.url));
+
+  await writeFile(fixture, [
+    `import { defineLlmRealLeg } from ${JSON.stringify(realLegModule)};`,
+    `import { createClaudeProviderFake } from ${JSON.stringify(claudeFakeModule)};`,
+    `import { createCodexProviderFake } from ${JSON.stringify(codexFakeModule)};`,
+    `import { createPiProviderFake } from ${JSON.stringify(piFakeModule)};`,
+    `import ${JSON.stringify(fakeLegModule)};`,
+    '',
+    'const claude = createClaudeProviderFake().provider;',
+    "defineLlmRealLeg('claude', { createProvider: () => " + (divergeOnDeniedPermit
+      ? "({ ...claude, invoke: async (options) => options.spawnPermit?.().permitted === false ? { success: true, output: 'x', exitCode: 0 } : claude.invoke(options) })"
+      : 'claude') + ' });',
+    "defineLlmRealLeg('codex', { createProvider: () => createCodexProviderFake().provider });",
+    "defineLlmRealLeg('pi', { createProvider: () => createPiProviderFake().provider });",
+  ].join('\n'));
+
+  const vitest = await createVitest('test', {
+    root,
+    config: false,
+    include: [fixture],
+    exclude: [],
+    environment: 'node',
+    pool: 'forks',
+    maxWorkers: 1,
+    silent: true,
+  });
+
+  try {
+    await vitest.start([fixture]);
+    return collectTests(vitest.state.getFiles()).map((test) => ({
+      name: test.fullTestName.replaceAll(' > ', ' › '),
+      state: test.result?.state,
+    }));
+  } finally {
+    await vitest.close();
+    await rm(root, { recursive: true, force: true });
+  }
+}
+
 describe('llm real leg injected providers', () => {
   for (const [adapter, createFake] of Object.entries(providers)) {
     defineLlmRealLeg(adapter, { createProvider: () => createFake().provider });
   }
+
+  // Covers: task:8
+  it('runs the same four passing contract cases for every injected real adapter', async () => {
+    const cases = await runInjectedRealLegFixture();
+    const expectationNames = [
+      'declares the adapter capabilities',
+      'refuses a denied spawn permit before spawning',
+      'completes a minimal invocation',
+      'returns a native-schema terminal result',
+    ];
+
+    for (const adapter of Object.keys(providers)) {
+      const real = cases.filter(({ name }) => name.startsWith(`llm contract [${adapter} real] › `));
+      const fake = cases.filter(({ name }) => name.includes(`llm contract [${adapter} fake] › `));
+
+      expect(real.map(({ name }) => name)).toEqual(
+        expectationNames.map((expectation) => `llm contract [${adapter} real] › ${expectation}`),
+      );
+      expect(real.map(({ state }) => state)).toEqual(['pass', 'pass', 'pass', 'pass']);
+      expect(fake.map(({ name }) => name.slice(name.indexOf(`llm contract [${adapter} fake]`))
+        .replace(`llm contract [${adapter} fake]`, `llm contract [${adapter} real]`)))
+        .toEqual(real.map(({ name }) => name));
+    }
+  });
+
+  // Covers: task:8
+  it('fails only the Claude real denied-permit case when its provider resolves instead', async () => {
+    const cases = await runInjectedRealLegFixture(true);
+    const deniedPermit = 'llm contract [claude real] › refuses a denied spawn permit before spawning';
+
+    expect(cases.find(({ name }) => name === deniedPermit)).toEqual({ name: deniedPermit, state: 'fail' });
+    expect(cases.filter(({ name }) => name.startsWith('llm contract [claude real] › ') && name !== deniedPermit)
+      .map(({ state }) => state)).toEqual(['pass', 'pass', 'pass']);
+  });
 });
 
 describe('llm real leg metering', () => {
