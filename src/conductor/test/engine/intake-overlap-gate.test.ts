@@ -40,6 +40,9 @@ function filing(overlap?: FileIntakeIssueDeps['overlap'], onPrompt?: () => void)
       body: 'See src/review/rubric.ts',
       size: 'S',
       priority: 'low',
+      // Keep this fixture focused on the overlap prompt boundary. Semver is
+      // deliberately interactive when absent, so declare it here instead.
+      semver: 'patch',
       interactive,
     }, deps),
   };

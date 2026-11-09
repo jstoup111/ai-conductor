@@ -34,6 +34,8 @@ Filing from the GitHub web or mobile UI works too: the issue form at
 The two routes are labelled by different owners, and only one of them defaults. A form submission
 arrives with no labels, so the `intake-label-sync` Action reads its Priority and Size fields and
 stamps them — falling back to `priority: medium` / `size: M` when a field is blank or unparsable.
+The optional Semver field (`major`, `minor`, or `patch`) is stamped as `semver:<tier>` only when
+selected; it has no default, so a blank field leaves the issue without a semver label.
 An issue filed with the bundled intake helper is already labelled by the command itself, so the Action
 recognises it as a non-form body and skips it. Without that skip the Action's defaults would be
 *added* alongside the filer's choice rather than replacing it, leaving the issue carrying two
@@ -238,6 +240,7 @@ EOF
 )" \
   --size M \
   --priority high \
+  --semver minor \
   --depends-on <owner/repo#123>
 ```
 
@@ -247,6 +250,7 @@ EOF
 | `--body` | yes | |
 | `--size S\|M\|L` | no | Omitted: prompts on a TTY, otherwise infers from body wording, otherwise defaults to `M`. Always reported as `size=<value> (<source>)`. An invalid value errors. |
 | `--priority critical\|high\|medium\|low` | no | Same prompt, infer, default resolution; reported as `priority=<value> (<source>)`. |
+| `--semver major\|minor\|patch` | no | Applies the `semver:<tier>` label. Omitted: prompts on a TTY (Enter skips); never inferred or defaulted. Reported as `semver=<tier> (<source>)` or `semver=unset`. An invalid value errors. |
 | `--depends-on <owner/repo#N>` | no | Repeatable. Omitting it records an explicit `dependencies: none` rather than skipping the question. |
 | `--decline-overlap <owner/repo#N>` | no | Repeatable. Declines one overlap suggestion from the current run. A ref that is not a current suggestion, or is also passed to `--depends-on`, refuses the filing. |
 | `--repo <owner/repo>` | no | Target a repo other than the harness repo. Required whenever the issue belongs to your project. |

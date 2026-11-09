@@ -56,6 +56,17 @@ body:
         - L
     validations:
       required: true
+  - type: dropdown
+    id: semver
+    attributes:
+      label: Semver
+      description: "Optional: is the desired change breaking (major), additive (minor), or a fix (patch)?"
+      options:
+        - major
+        - minor
+        - patch
+    validations:
+      required: false
   - type: textarea
     id: depends-on
     attributes:

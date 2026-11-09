@@ -11,6 +11,7 @@
 // Usage:
 //   intake-file --title <t> --body <b> [--size S|M|L]
 //               [--priority critical|high|medium|low]
+//               [--semver major|minor|patch]
 //               [--depends-on owner/repo#N ...] [--repo owner/repo]
 
 import { createInterface, type Interface } from 'node:readline/promises';
@@ -76,6 +77,14 @@ function parseArgs(argv: string[]): FileIntakeIssueOpts | null {
         opts.priority = v;
         break;
       }
+      case '--semver': {
+        const v = next().toLowerCase();
+        if (v !== 'major' && v !== 'minor' && v !== 'patch') {
+          throw new Error(`invalid --semver "${v}" (major|minor|patch)`);
+        }
+        opts.semver = v;
+        break;
+      }
       case '--depends-on':
         opts.dependsOn.push(next());
         break;
@@ -127,7 +136,7 @@ async function main(): Promise<void> {
   if (!opts) {
     console.error(
           'Usage: intake-file --title <t> --body <b> [--size S|M|L] ' +
-        '[--priority critical|high|medium|low] [--depends-on owner/repo#N ...] [--decline-overlap owner/repo#N ...] [--repo owner/repo]',
+        '[--priority critical|high|medium|low] [--semver major|minor|patch] [--depends-on owner/repo#N ...] [--decline-overlap owner/repo#N ...] [--repo owner/repo]',
     );
     process.exitCode = 1;
     return;
