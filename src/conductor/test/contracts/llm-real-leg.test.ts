@@ -58,10 +58,14 @@ async function collectRealAndFakeContractCases(): Promise<readonly RunnerTestCas
     silent: true,
   });
 
+  const priorExitCode = process.exitCode;
   try {
     await vitest.start([fixture]);
     return collectTests(vitest.state.getFiles());
   } finally {
+    // This fixture registers an intentionally failing case to inspect it.
+    // Do not let the nested runner's status leak to the parent worker.
+    process.exitCode = priorExitCode;
     await vitest.close();
     await rm(root, { recursive: true, force: true });
   }
@@ -107,6 +111,7 @@ async function runInjectedRealLegFixture(divergeOnDeniedPermit = false): Promise
     silent: true,
   });
 
+  const priorExitCode = process.exitCode;
   try {
     await vitest.start([fixture]);
     return collectTests(vitest.state.getFiles()).map((test) => ({
@@ -114,6 +119,9 @@ async function runInjectedRealLegFixture(divergeOnDeniedPermit = false): Promise
       state: test.result?.state,
     }));
   } finally {
+    // The divergent fixture is expected to fail one case; its result is data
+    // for this test rather than a failure of this parent Vitest process.
+    process.exitCode = priorExitCode;
     await vitest.close();
     await rm(root, { recursive: true, force: true });
   }

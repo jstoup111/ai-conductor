@@ -41,6 +41,7 @@ async function runContractFixture(source: string, testTimeout = 5_000): Promise<
     silent: true,
   });
 
+  const priorExitCode = process.exitCode;
   try {
     await vitest.start([fixture]);
     const tests = collectTests(vitest.state.getFiles());
@@ -54,6 +55,9 @@ async function runContractFixture(source: string, testTimeout = 5_000): Promise<
       })),
     };
   } finally {
+    // Child fixtures deliberately contain failed cases. Vitest records those
+    // correctly in its state, but also marks this parent worker as failed.
+    process.exitCode = priorExitCode;
     await vitest.close();
     await rm(root, { recursive: true, force: true });
   }
