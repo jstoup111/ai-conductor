@@ -277,6 +277,7 @@ EOF
 )" \
   --size M \
   --priority high \
+  --semver minor \
   --depends-on owner/repo#123
 ```
 
@@ -290,6 +291,10 @@ For Codex, it is the directory of the listed `SKILL.md` path.
   was taken. Never write the size as prose in the body; let the flag/inference own it.
 - **`--priority critical|high|medium|low`** (optional): same prompt ▸ infer ▸
   default resolution as size, reported as `priority=<value> (<source>)`.
+- **`--semver major|minor|patch`** (optional): if omitted, the script prompts when
+  attached to a TTY (Enter skips it). It is never inferred or defaulted, and is
+  reported as `semver=<tier> (<source>)` or `semver=unset`. Pass it only when you
+  know the desired outcome is breaking, additive, or a fix.
 - **`--depends-on owner/repo#N`** (repeatable, optional): links a blocking issue.
   Omitting it entirely is fine — the script records an explicit
   `dependencies: none` rather than silently skipping the question, so "no
@@ -351,5 +356,5 @@ filer's design. DECIDE has nothing to weigh and everything to anchor on.
 - [ ] Title states the symptom or outcome, not a solution
 - [ ] Draft scrubbed per §7; any `[intake-file] redacted before filing:` line was read and the
       filed issue checked for over-redaction
-- [ ] Filed via `<this skill's directory>/scripts/intake-file`; `size=` reported in its output; `priority=` applied if warranted; `--depends-on` given or an explicit `dependencies: none` accepted
+- [ ] Filed via `<this skill's directory>/scripts/intake-file`; `size=` and `semver=` reported in its output; `priority=` applied if warranted; `--depends-on` given or an explicit `dependencies: none` accepted
 - [ ] Issue URL reported to the operator

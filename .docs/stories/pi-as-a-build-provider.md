@@ -137,11 +137,11 @@ As an operator, I want Pi failures classified the same way as other providers so
 #### Negative Paths
 - Given the Pi executable disappears after boot, when a step spawns Pi, then ENOENT or exit 127 maps to provider-unavailable with run scope.
 - Given Pi exits non-zero with stderr matching no confirmed signature, when the adapter classifies it, then the result is an ordinary step failure with no provider signal set.
-- Given Pi exits non-zero with auth-failure or rate-limit output, when the adapter classifies it, then the result is an ordinary step failure with no auth-failure or rate-limited signal set, because no Pi auth or rate-limit signature is anchored in this feature.
+- Given Pi fails with output matching none of the auth-failure, rate-limit, or usage-exhaustion signatures anchored by #2718, when the adapter classifies it, then the result is an ordinary step failure with no auth-failure or rate-limited signal set.
 
 ### Done When
 - [ ] Classification tests cover ENOENT, exit 127, the verified unknown-model signature, and an unmatched non-zero exit.
-- [ ] The Pi adapter anchors no auth-failure or rate-limit signature; classifying those is left to a follow-up intake.
+- [ ] The Pi adapter anchors only the auth-failure, rate-limit, and usage-exhaustion signatures that #2718 verified against captured Pi output.
 - [ ] A fallback test with ladder pi then claude shows claude invoked after a Pi provider-unavailable result.
 
 ## Story 7: Live provider coverage enumerates the whole catalog

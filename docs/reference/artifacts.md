@@ -51,7 +51,7 @@ Twenty-two entries. Alphabetized; the four with no code reference are marked.
 | `complexity/` | `<slug>.md`, with an [undated-stem fallback](#the-undated-stem-fallback) | `complexity` step, composer loop | `parseComplexityTier` reads a `Tier: <S\|M\|L>` line; an optional `Stacked-Delivery: approved` line records operator sign-off for [stacked delivery](configuration.md#stacked_prs). Missing tier ⇒ the daemon defaults to `M`; other paths differ — see [where the tier comes from](steps.md#where-the-tier-comes-from). The land gate enforces tier agreement |
 | `conflicts/` | `YYYY-MM-DD-<slug>.md` | `conflict-check` skill | `conflict_check` completion glob |
 | `decisions/` | New ADRs: `adr-YYYY-MM-DD-lowercase-hyphenated-slug.md` with a real calendar date. Existing legacy `adr-<topic>.md` and `NNN-<topic>.md` files remain valid; also `architecture-review-*.md`, `technical-assessment-*.md` | `architecture-review`, `assess`, `bootstrap`, `prd`, `simplify`, `debugging`, `finish` | `architecture_review` and `assess` completion globs; the land gate requires every newly added ADR to use the canonical date-prefixed name, while legacy ADRs already on the default branch are exempt. The land gate and daemon discovery both scan every `adr-*.md` and reject one whose first declared status is not `APPROVED` or `SUPERSEDED` |
-| `halted/` | `<slug>.md` | the halt-marker writer | An operator-readable halt record on the feature branch. It records status, slug, halt class, halting step, phase, branch, HEAD SHA, UTC halt time, the full HALT body, and whether the record may be ahead of the remote. It is written and committed for an operator-actionable (`needs-human`, `plan-gap`, or `protected-artifact`) halt off the default branch, then pushed best-effort with `--force-with-lease`; `mechanical` halts produce no record. Clearing the halt changes the record's status to resolved while retaining its original details. |
+| `halted/` | `<slug>.md` | the halt-marker writer | An operator-readable halt record on the feature branch. It records status, slug, halt class, halting step, phase, branch, HEAD SHA, UTC halt time, the full HALT body, and whether the record may be ahead of the remote. It is written and committed for an operator-actionable (`needs-human`, `plan-gap`, or `protected-artifact`) halt off the default branch, then pushed best-effort with `--force-with-lease`; `mechanical` halts produce no record. A feature with durable stacked child state does not commit this file; its record lives at the local ref `refs/conductor/<slug>/halt-record` (see [worktree and branch names](#worktree-and-branch-names)). Clearing the halt changes the record's status to resolved while retaining its original details. |
 | `intake/` | `<plan-stem>.md` | `intake` skill | `parseIntakeSourceRef` reads `Source-Ref: owner/repo#N`; `Owner: <id>` drives the daemon owner gate |
 | `manual-test-results.md` | loose file | legacy | **no code reference** — superseded by `.pipeline/manual-test-results.md` |
 | `observation/` | free-form | manual | **no code reference** |
@@ -455,7 +455,7 @@ worktree removal.
 | File | Shape | Writer | Lifecycle | If lost |
 | --- | --- | --- | --- | --- |
 | `conduct-state.json` | Backward-compatible `ConductState` formatted as 2-space JSON with a trailing newline; it includes per-step status plus `feature_desc`, `complexity_tier`, `track`, `bootstrap_mode`, `run_started_at`, `session_started_at`, `last_step`, `step_reasons` (why a step was fast-forwarded or skipped, keyed by step), `pr_url`, `rebase_base_sha`, `worktree_dir`, `worktree_branch`, `feature_status`, and `artifact_approvals`. | `filesystem-conduct-state-store.ts` | Created on the first state mutation. Mutations and invariant batches run under a worktree-local lease and persist by atomic replacement; ordinary mutations preserve unowned and omitted fields. Full replacement is reserved for reset/start-over. Missing ⇒ `{}`; **empty or invalid ⇒ hard `corrupted` error**. A legacy `brainstorm` status is migrated forward onto `explore` + `prd` on every load | The feature restarts from step zero and every gate re-runs. `pr_url`, `worktree_branch`, and `session_started_at` are gone, so SHIP-tail freshness gates (which compare artifact mtimes to `session_started_at`) fail open |
-| `task-evidence.json` | `{ evidenceStamps: Record<string, EvidenceStamp>, noEvidenceAttempts, noEvidenceReasons?, migrationGrandfather, lastResolvedCount? }`; each stamp is `{ sha, form, citedShas?, verdictAnchor?, testEvidence? }` with `form` ∈ `commit`, `trailer`, `evidence:satisfied-by`, `semantic-verified` | `task-evidence.ts` | Read-modify-write per gate evaluation, written atomically via a same-directory temp file plus `rename(2)`. Missing or corrupt ⇒ empty state, logged, never throws | `lastResolvedCount` reads 0, so the progress delta degrades to "no progress" rather than crashing the tick; the no-evidence retry budget resets; completed tasks may be re-attempted |
+| `task-evidence.json` | `{ evidenceStamps: Record<string, EvidenceStamp>, noEvidenceAttempts, noEvidenceReasons?, migrationGrandfather, lastResolvedCount? }`; each stamp is `{ sha, form, citedShas?, verdictAnchor?, testEvidence? }` with `form` ∈ `commit`, `trailer`, `evidence:satisfied-by`, `semantic-verified` | `task-evidence.ts` | Read-modify-write per gate evaluation; the daemon is the sole writer of `lastResolvedCount`, stamping the whole-feature resolved count immediately before each dispatch. Written atomically via a same-directory temp file plus `rename(2)`. Missing or corrupt ⇒ empty state, logged, never throws | `lastResolvedCount` reads 0, so the progress delta degrades to "no progress" rather than crashing the tick; the no-evidence retry budget resets; completed tasks may be re-attempted |
 | `task-status.json` | `{ plan_ref?, tasks: [{ id, name?, status?, … }] }`. Duplicate rows merge by status rank: `completed`/`skipped` 3, `in_progress` 2, `pending` 1. A row restored from git evidence also carries `commit` and `restored_from: "task-trailer"`. A started row carries `startHead`, the commit at its first `task start`, kept across re-seed, repair restaging, and rebase translation. A closed row's `doneWhen` records each check's `source`: `verified`, `reported`, `verify-only`, `unverified`, `pending-judgement`, `judged` (with `verdict`), or `operator-accepted`; any other value fails the reader closed | `task-seed.ts::seedTaskStatus` | Re-seeded from the plan on **every** build-gate evaluation and at the build preflight. Written atomically (same-directory temp plus `rename(2)`) and re-read afterwards — a reconstruction that does not land throws rather than reporting success | Self-heals from the plan on the next evaluation, **with completions intact**: see reconstruction below |
 | `engine-state.json` | `{ activePlanPath?: string, repairObligations?: { version: 1, records, currentByPlan, admissionsByPlan, citationRefusals?, citationRefusalAdmissions? }, taskDigests?: { version: 1, byPlan: { <plan identity>: { <task id>: "v1:sha256:…" } } }, … }`. Each repair record binds its active plan, owning task ids, finding/authority/instruction, admission commit/tree/progress baseline, settlement state, and per-task open or resolved state. `citationRefusals` counts Done-when citation refusals per task, check number, and check-text digest; `citationRefusalAdmissions` marks admissions already counted, so a replay never counts a refusal twice. `remediationClosure` (`{ version: 1, plans: { <plan identity>: { tasks: { <task id>: { reopenCount, verdicts: { <close identity>: { verdict, rationale, disposition, applied } } } } } } }`) records each [remediation closure judgement](../explanation/gates.md#remediation-closure-judgement); `applied` marks a completed reopen, and a malformed section fails closed. | `task-seed.ts`, `conductor.ts`, `repair-obligations.ts`, `remediation-closure-state.ts` (serialized atomic updates) | Written when the active plan is resolved, when each re-seed records plan task digests, and when existing-task remediation is admitted, settled, or closed. A completed `Done when:` close resolves every live open obligation on that task, not only the newest. An older same-authority obligation superseded by the newer current obligation is not live: it no longer holds its task open, reopens it on re-seed, or accepts a close. An open obligation with no current entry fails closed: `repair state is unavailable: task <id> has an open repair obligation but no current obligation is recorded for it`. `activePlanPath` is recorded only by the interactive plan step, so a daemon-dispatched feature that enters at `build` has none; repair-scoped reads therefore resolve the plan through the full ladder (recorded path, then the slug-scoped convention) instead of keying on that field. An admitted open repair keeps its owner unresolved until current closure evidence or post-admission matching task evidence is accepted. | Resolution falls back to stem match, then to a single plan on disk. With several plans and no match it returns nothing and the build gate **fails closed** rather than guessing. A malformed or incompatible present repair section also fails closed; it is never treated as legacy absence. So does an unresolvable plan while obligations exist — present obligations are never read as legacy absence. |
 | `kickback-ledger.json` | `{ version: 1, gates: Record<gate, { count, cumulative, laps?, treeHash, lastReason, priorVerdict, resolvedBefore, mechanicalFaults?, suiteInfrastructureRetries?, effectiveLimit?, effectiveLapCap?, adjustments?, pendingAdjustment?, capEvidence?, resumeAuthorization? }>, pendingRepair? }`. `pendingRepair` (`{ receiptId, charges: { prd_audit?, architecture_review_as_built?: { laps, growth } }, taskIds, prdAuditCriteria? }`) is an appended remediation repair whose lap and growth are charged only when `build` dispatches; a malformed record makes the `prd_audit`, as-built, and growth allowances read as exhausted. `build_review`'s `mechanicalFaults` counts its infrastructure-failure allowance (cap `MAX_MECHANICAL_FAULTS_BUILD_REVIEW`, 3); `effectiveLimit`/`effectiveLapCap`, adjustment history, cap evidence, and a one-use resume authorization record a human-approved budget recovery. | `kickback-ledger.ts` | Every read-modify-write takes the feature-local `kickback-ledger` lease, then atomically replaces the file. A gate's count survives daemon re-dispatch and advances toward its cap; an approved recovery changes only its named gate. Cleared entirely on a fresh feature session. | A missing ledger is the empty base case. An unreadable ledger, or an unreadable gate entry, fails closed: the affected recovery or enforcement path refuses rather than inventing fresh allowance; healthy sibling gates remain readable when only one entry is malformed. |
@@ -546,8 +546,14 @@ interface GateVerdict {
   reason?: string;
   checkedAt: number;                              // epoch ms
   kickback?: { from: StepName; evidence: string };
+  routedRound?: string;                           // child-region verdicts only, e.g. "r2"
 }
 ```
+
+With [routed repair](configuration.md#stacked_prs) on, a child-region verdict written while that child
+hosts a routed round carries the round id from the repair marker. While the child hosts the round, a
+satisfied verdict without the current round id does not count, so the gate re-runs. A failed verdict
+always counts.
 
 The loop owns objective verdicts — it recomputes them from on-disk evidence after each step rather than
 trusting an agent's self-report. The only agent-authored writes are kickback invalidations, and those
@@ -588,8 +594,8 @@ Agent-authored, engine-validated. Alphabetized.
 | `rebase-residue.json` | `[{ sha, citingTaskIds[], reason }]` — citations a rebase could not translate | `rebase-translate.ts` |
 | `rebase-rewrites.json` | Pre-to-post rebase sha map, merged transitively; atomic temp plus rename | `rebase-translate.ts` |
 | `remediation.json` | Post-join `build_review` adjudication output only, in the strict `{ mode: 'case-v1', domain: 'build_review', sourceOutcomes, cases }` form; the engine validates it before any case or effect state changes. Gap plans use `remediation-plan.json`. Its source outcomes include `refuted`; a `refute` case binds an existing attempted action case, has high confidence, and carries a claim plus assertion verdicts with path/excerpt evidence. | `remediate` skill |
-| `remediation-plan.json` | Gap-plan authority: `{ version: 'v1', attemptId, source, requiredReferenceDigest, dispositions[] }`. The engine checks the planner's native structured result against its bounded input projection, then writes it. Each disposition answers one `reference` with `disposition`, `targetStep`, a halt `category` or `null`, `rationale`, new `tasks[]`, and active-plan `boundTaskIds[]`. Every projected PRD criterion, as-built finding, and refusal must be answered exactly once. `source` is `validation-group`, `prd-audit`, `as-built`, `build-stall`, or `finish-verification`. A plan from another attempt reads as absent, and a malformed envelope reads as invalid. Written atomically. | engine (`remediate` step) |
-| `remediation-cases.json` | Version 3 feature-local case state; versions 1 and 2 remain readable and upgrade to version 3 on the first write that queues an event. It retains the version-one `build_review` cases, effects, and suppressions, and the version-two `prd_widening` collection with engine-stamped case IDs, immutable original source snapshots, current source links, and validated relationships. PRD records carry no autonomous action/effect or operator authority. A resolved build-review `refute` case retains its refutation record and any residual deferral effect. A build-review `advisory` case carries `adjudicatedSeverity` and effect `none`. Each suppression entry has `kind` `confidence` or `severity` (a below-`min_severity` advisory finding); an entry without `kind` reads as `confidence`. Version 3 adds engine-written operator state: a case's `operatorAcceptance.origins` (each `{ sourceId, lapId }` where an exact operator acceptance was first recorded on that case), a case's `operatorResolution` (`operator`, `rationale`, `resolvedAt`, written only by `build-review resolve-case`), the source outcome `carried`, and an `outbox` of `{ eventId, occurredAt, event }` entries written in the same mutation as the state change and drained onto `.pipeline/events.jsonl` once per `eventId`. A build-review case may carry `recurrenceOf` (prior case IDs it recurs from) and `distinctFrom` (`{ caseId, reason }` entries the judgement declared distinct); `remediation_case_reconciled` repeats both for an opened case. A child BUILD keeps its own case store, selected with `--child`. Reads and writes validate the feature identity and replace atomically under the conductor lease; malformed or unsupported history remains intact and halts with named recovery. | build-review adjudication coordinator |
+| `remediation-plan.json` | Gap-plan authority: `{ version: 'v1', attemptId, source, requiredReferenceDigest, dispositions[] }`. The engine checks the planner's native structured result against its bounded input projection, then writes it. Each disposition answers one `reference` with `disposition`, `targetStep`, a halt `category` or `null`, `rationale`, new `tasks[]`, and active-plan `boundTaskIds[]`. Every projected PRD criterion, as-built finding, and refusal must be answered exactly once. An as-built finding's disposition also requires `reconciliation` (`{ relation, priorCaseId?, reason }`, relation `same`\|`recurrence`\|`materially-changed`\|`new`); any other reference must omit it. See [as-built case reconciliation](../explanation/gates.md#as-built-case-reconciliation). `source` is `validation-group`, `prd-audit`, `as-built`, `build-stall`, or `finish-verification`. A plan from another attempt reads as absent, and a malformed envelope reads as invalid. Written atomically. | engine (`remediate` step) |
+| `remediation-cases.json` | Version 4 feature-local case state; versions 1–3 remain readable; an as-built case write upgrades the store to version 4. Version 4 adds `asBuiltCases[]`: each `{ id, domain: 'as_built', sources[], status, repairTaskIds[], changedFrom?, recurrenceCount }`, where `id` is engine-stamped `as-built-case:<uuid>`, `status` is `open`\|`resolved`\|`needs-human`, and each source records `findingId`, `attemptId`, `class`, optional governing `reference`, `summary`, `relation` (`same`\|`recurrence`\|`materially-changed`\|`new`\|`needs-human`), `reason`, and optional `priorCaseId` ([as-built case reconciliation](../explanation/gates.md#as-built-case-reconciliation)). Versions 1 and 2 upgrade to version 3 on the first other write that queues an event. It retains the version-one `build_review` cases, effects, and suppressions, and the version-two `prd_widening` collection with engine-stamped case IDs, immutable original source snapshots, current source links, and validated relationships. PRD records carry no autonomous action/effect or operator authority. A resolved build-review `refute` case retains its refutation record and any residual deferral effect. A build-review `advisory` case carries `adjudicatedSeverity` and effect `none`. Each suppression entry has `kind` `confidence` or `severity` (a below-`min_severity` advisory finding); an entry without `kind` reads as `confidence`. Version 3 adds engine-written operator state: a case's `operatorAcceptance.origins` (each `{ sourceId, lapId }` where an exact operator acceptance was first recorded on that case), a case's `operatorResolution` (`operator`, `rationale`, `resolvedAt`, written only by `build-review resolve-case`), the source outcome `carried`, and an `outbox` of `{ eventId, occurredAt, event }` entries written in the same mutation as the state change and drained onto `.pipeline/events.jsonl` once per `eventId`. A build-review case may carry `recurrenceOf` (prior case IDs it recurs from) and `distinctFrom` (`{ caseId, reason }` entries the judgement declared distinct); `remediation_case_reconciled` repeats both for an opened case. A child BUILD keeps its own case store, selected with `--child`. Reads and writes validate the feature identity and replace atomically under the conductor lease; malformed or unsupported history remains intact and halts with named recovery. | build-review adjudication coordinator |
 | `summary.json` | At least `{ tasks_completed: number }`; read tolerantly — missing or corrupt reads as 0 | `pipeline` skill |
 | `test-failures.md` | Failure detail consumed by the remediation flow | remediate flow |
 | `test-suite-environment.key` | Environment fingerprint for suite evidence | `full-suite-fingerprint.ts` |
@@ -613,12 +619,14 @@ Existence is the signal. Alphabetized.
 | `HALT` | `halt-marker.ts::writeHaltMarker`, best-effort — write failures are swallowed | The daemon treats it as a full stop: it never advances, opens a PR, or merges past it. The first non-empty body line is the reason the dashboard shows |
 | `HALT.class` | the same writer, always, plus the daemon's startup migration for halts predating it | `needs-human`, `kickback-cap`, `mechanical`, `legacy`, `protected-artifact`, or `over-scope`. A matching one-use `kickback-budget` authorization is the only automatic path that clears an eligible `needs-human` or `kickback-cap` budget halt. An `over-scope` halt contains an operator-authored fenced `over-scope-decisions` block; its `pending` entries are inert until explicitly changed to `accept` or `refuse` with a rationale, and a refusal is retained as an explicit revision target rather than erased. `protected-artifact` identifies a genuine protected DECIDE-artifact violation; `legacy` is stamped once by the daemon's startup migration for a HALT it finds still unclassified; missing or unrecognized content reads as `unclassified` and never throws. Written atomically (temp file plus rename) after removing any stale sidecar, so a reader never observes a class from a prior HALT paired with a newer body |
 | `HALT.cleared` | the re-kick sweep | Records halt lifecycle closure; pairs with the `halt_cleared` event |
+| `HALT.rekicked` | the daemon dispatch boundary | Exact body of the last `mechanical` or `legacy` HALT cleared before a re-dispatch; pairs with a `halt_cleared` event. A live HALT whose body differs, or a missing or unreadable `HALT.rekicked`, earns one prompt re-dispatch; see [fresh retryable halts](../guides/running-the-daemon.md#fresh-retryable-halts-re-dispatch-at-the-dispatch-boundary) |
 | `accepted-widenings.json` | conductor | Version 2 durable operator authority: immutable source/case/offer references, engine decision ID, `accept` or `refuse`, rationale, resolved operator, and engine-ordered revision/supersession. Valid legacy rows are preserved as attributed source snapshots in original order; malformed or unsupported history never reads as an empty decision set. |
 | `QUARANTINE` | setup triage | The feature is quarantined from dispatch |
-| `REKICK` | the re-kick sweep | Body is literally `rekick` |
+| `REKICK` | the re-kick sweep or the daemon dispatch boundary | Body is literally `rekick` |
 | `conduct-session-id` | step runners | Durable conductor run identity. It survives daemon restart and redispatch; provider attempts use separate fresh IDs and do not rewrite it |
 | `current-task` | `ai-conductor task` | Per-task stamp; the source of the `prepare-commit-msg` auto-stamp. Stale stamps are cleared during seeding |
 | `dispatch-count` | `pre-dispatch.sh` | One line per dispatch. Crossing the unattributed threshold emits `unattributed_dispatch` |
+| `finish-pr-prose.json` | FINISH `author_pr_prose` pass | `{ "version": 1, "title": string, "body": string }` — the authored PR title and body. The engine deletes it before each authoring dispatch, then reads it, restores every `ai-conductor:step` region from the retained PR, rejects placeholder prose or a dropped `Closes` reference, and performs the `pull-request.edit` itself. Missing ⇒ `prose_not_returned`; malformed or rejected ⇒ `prose_invalid`; both are retried with the failure carried into the next authoring prompt |
 | `finish-choice` | FINISH publication coordinator through `ai-conductor finish-record` | Final publication outcome; subject to the session freshness check. Interactive intent is acquired before this marker exists |
 | `halt-user-input-required` | `pipeline` skill on a user-requested exit | The build predicate returns not-done while it exists |
 | `phase-active` | `phase-marker.ts::writePhaseMarker` | Line-oriented on purpose so bash hooks can read it without a parser: `step: <name>`, `phase: <BUILD\|SHIP>`, `written: <ISO-8601>`, then zero or more `allow: <prefix>` lines. Removed idempotently on step exit |
@@ -715,7 +723,12 @@ outside `refs/heads` in the shared `.git`, so they survive worktree recreation:
 [restack](configuration.md#restack) adds `refs/conductor/<slug>/restack/journal` (the in-flight
 operation's journal), `refs/conductor/<slug>/restack/staging/c<k>` (replayed tips before the move),
 `refs/conductor/<slug>/cascades` (per-originating-child repair counts and raised limits), and
-`refs/conductor/<slug>/leaf-moved` (the leaf has been moved onto the last closure). Under
+`refs/conductor/<slug>/leaf-moved` (the leaf has been moved onto the last closure). An
+operator-actionable halt on a feature with durable child state appends a commit to
+`refs/conductor/<slug>/halt-record` instead of committing `.docs/halted/<slug>.md` on a branch. Each
+commit's tree holds only `.docs/halted/<slug>.md`, its parent is the previous record, and every
+update is a compare-and-swap, so the chain is the halt audit trail. Readers use the ref first and
+fall back to `HEAD:.docs/halted/<slug>.md` for a record committed before the ref existed. Under
 [`route_whole_feature_fixes`](configuration.md#stacked_prs), routing state lives at
 `refs/conductor/<slug>/routes/r<n>` (route records), `rejected/r<n>/<m>`, `repairing` (the repair-host
 marker), `revalidate` (the revalidation queue), and `red/c<k>`; teardown deletes them only for a
@@ -860,11 +873,17 @@ it. Stacked builds also persist `child_started`, `child_closed` (with the closur
 `child_switched`, each carrying the position and branch; `story_reowned` (`story`, `from`, `to`)
 when a reseal changes a story's owner without moving a task; and the restack events
 `restack_planned` (`opId`, `cause`, `children`), `restack_applied` (per child: `oldTip`, `newTip`,
-`wouldInvalidate`, `parentOverlapPaths`), `restack_conflict` (`commit`, `paths`), `restack_refused`
-(`reason`, optional `detail`), and `restack_recovered` (`opId`, `fromState`). Routed repair adds
+`wouldInvalidate`, `parentOverlapPaths`, `adaptedPaths`), `restack_conflict` (`commit`, `paths`), `restack_refused`
+(`reason`, optional `detail`), `restack_recovered` (`opId`, `fromState`), `restack_resolution`
+(`opId`, `child`, `action` of `recorded`, `consumed`, or `retired`, `tip`, optional `operator`), and
+`restack_decision` (`child`, `action` of `recorded`, `applied`, or `stale`, `commit`, `paths`, optional
+`operator`, optional `opId`). Routed repair adds
 `remediation_routed` (`roundId`, `kind`, `items` of `findingId`/`owner`/`host`/`reason`),
 `remediation_rerouted` (`roundId`, `from`, `to`, `evidence`), `routed_repair_phase` (`roundId`, `host`,
-`phase`, `credit`), and `child_revalidated` (`generation`, `closureSha`, `outcome` of `passed` or `fixed`). Stacked
+`phase`, `credit`, optional `reason` of `derived-already-complete`), `routing_rounds_stalled` (`rounds` of `roundId`/`readable`/`unsettledHosts`, `detail`,
+`attempt`), `routing_round_superseded` (`roundId`, `disposition` of `superseded` with `supersededBy`, or
+`leaf-return` with empty `findingIds`; `droppedHosts`, `findingIds`, `reason`, `operator`) when
+`stack rounds --close` closes an audit round, and `child_revalidated` (`generation`, `closureSha`, `outcome` of `passed` or `fixed`). Stacked
 publication adds `stack_member_published` and `stack_member_redrafted` (`child`, `pr`),
 `stack_assembled` (`prs`), `stack_member_lifecycle` (`child`, `pr`, `state` of
 `merged`/`closed`/`reverted`, de-duplicated by `eventId`), `stack_members_unreachable` (`child`,
@@ -884,7 +903,7 @@ engine force push finds the remote tip differs from the recorded pushed tip. `Ev
 `build_review_stale_aggregate`,
 `build_review_disposition_version_invalidated`, `build_review_mechanical_allowance_exhausted`,
 `remediation_adjudication_started`, `remediation_adjudication_completed`, `remediation_adjudication_failed`,
-`remediation_case_reconciled`, `remediation_case_refuted`, `remediation_case_operator_resolved`,
+`remediation_case_reconciled`, `remediation_case_refuted`, `remediation_case_operator_resolved`, `as_built_finding_reconciled`,
 `build_review_acceptance_carried`, `remediation_effect_reserved`, `remediation_effect_applied`,
 `remediation_effect_failed`, `remediation_semantic_repeat_halt`,
 `step_started`, `deprecated_step`, `step_completed`, `step_failed`, `step_refused`, `provider_discovery`, `provider_attempt`,
@@ -895,7 +914,7 @@ engine force push finds the remote tip differs from the recorded pushed tip. `Ev
 `feature_usage_total`,
 `provider_fallback`, `session_policy`, `step_retry`, `checkpoint_reached`, `recovery_needed`,
 `gate_blocked`, `tier_skip`, `config_skip`, `navigation_back`, `rate_limit`, `provider_suppressed`, `session_reset`,
-`credentials_park`, `operator_park_boundary`, `credentials_park_progress`,
+`credentials_park`, `operator_park_boundary`, `preemption_boundary`, `credentials_park_progress`,
 `finish_publication_transition`, `finish_publication_blocked`, `finish_publication_disposition`,
 `feature_complete`, `dashboard_refresh`, `protected_artifact_rebaseline`,
 `protected_artifact_rebaseline_refused`, `auto_heal`, `remediation_sealed_artifact_redirect`,
@@ -941,7 +960,7 @@ the real `gh` resolved from the inherited `PATH`. If no executable `gh` resolves
 cannot be written, the candidate fails provider setup with capability `managed-gh-observation` and
 the recovery action names both fixes. Operator shells and other engine subprocesses are unaffected.
 
-`rebase_merge_audit` records a flattened replay of a merge-bearing feature branch: the shas of
+`rebase_merge_audit` records a flattened replay of a merge-bearing feature branch or stacked child range: the shas of
 flattened merges, the shas of dropped ancestry-only merges, and the count of side-lineage commits not
 replayed individually. When a flattened merge blocks the replay, `rebase_conflict_halt` carries an
 optional `mergeAudit` field naming that merge, its parents, its flattened sha, and the conflicting
@@ -1159,13 +1178,6 @@ observable; the tail emits one `pipeline_tail_diagnostic` instead of replaying o
 `readMergedFeatureEvents` (used by [`ai-conductor build-tail`](cli.md#ai-conductor-build-tail))
 merges this ledger with `events.jsonl` by `ts`.
 
-FINISH PR-prose authoring also reads this ledger. It flushes the tail before dispatching an
-authoring pass to fix a boundary, then flushes again after the pass. A `github_operation_failed`
-for `pull-request.edit` on the same pull request inside that window halts FINISH with
-`publication_operation_failed`, unless re-observation shows the prose changed anyway. If the first
-flush fails, the pass attributes no failures, so an earlier pass's failure is never reported as
-this one's.
-
 ### `.pipeline/audit-trail/events.jsonl`
 
 A separate ledger with a different shape. Do not confuse it with the run event log.
@@ -1219,6 +1231,19 @@ immediately after, with no space between the two:
 The slug is bounded to 24 display characters: a longer one is cut to 23 and closed with `…`. A
 multi-line message is split first, so every physical line gets its own prefix, tag, and timestamp
 rather than only the first.
+
+The message body after the prefix and tag has one shape:
+
+| Part | Shape |
+| --- | --- |
+| First line | Leading whitespace stripped; a rendered loop event adds its depth marker first |
+| Depth marker | Depth 0: none. Depth 1: `· `. Depth 2: `·   ` |
+| Continuation line | Same depth marker, then `│ ` and the original content unchanged; a blank line becomes `│` |
+| Trailing newline | Dropped |
+
+Each rendered event type has one fixed depth, declared in `DAEMON_EVENT_DEPTH`
+(`src/conductor/src/engine/daemon-line-shape.ts`). Daemon lines, feature lines, and the
+`[warn]`/`[error]` console tee use depth 0.
 
 Feature-owned tagging is attribution, not routing — both shapes land in the same file and on the same
 console. Untagged lines are the ones emitted directly on the daemon-wide bus; an event forwarded from a

@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "slug": "no-repo-wide-diagnostic-for-plans-whose-stories-re",
+  "artifacts": [
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/no-repo-wide-diagnostic-for-plans-whose-stories-re.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/no-repo-wide-diagnostic-for-plans-whose-stories-re.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/no-repo-wide-diagnostic-for-plans-whose-stories-re.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/no-repo-wide-diagnostic-for-plans-whose-stories-re.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/no-repo-wide-diagnostic-for-plans-whose-stories-re.md"
+    }
+  ]
+}

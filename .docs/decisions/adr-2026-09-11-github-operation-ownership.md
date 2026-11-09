@@ -53,6 +53,16 @@ A source issue is a separate mutation target: an owned feature does not authoriz
 
 > **Amended 2026-10-17 by #2945:** For FINISH stack publication only, the engine pushes a named child ref from the leaf's worktree, so a push target need not be the checked-out branch. `conduct github-operation` still binds to the checked-out branch, and it refuses any push to, or PR bind of, a child branch whose member the publication record does not list (`adr-2026-10-17-stacked-feature-publication-as-native-stack` decisions 4, 13).
 
+> **Amended 2026-11-07 by #2050:** Composer runs can be taken over: a pre-merge spec branch's committed
+> intake owner may change, but only through an operator-run `compose resume` outside every
+> engine-dispatched session (no `CONDUCT_DAEMON_SESSION` marker), and only after an interactive
+> take-over confirmation. The re-stamp commit's push is authorized by one exact, one-request
+> interactive explicit approval bound to that remote ref and operation. After that, ordinary
+> committed-owner checks apply to the new owner. A daemon or engine session never changes an owner. An
+> operator who declines the take-over gets no remote write to that branch or its PR, so their saves
+> stay local-only. Every other part of this decision is unchanged
+> (`adr-2026-11-07-composer-run-checkpoint-resume-handoff` D11).
+
 ### D3 — Pre-spec intake and creation
 
 Approved policy: an existing intake issue without committed feature provenance is actionable when assigned exclusively to the resolved operator. Multiple distinct assignees, another assignee, or no assignment requires explicit operator authorization for that exact issue and operation. Never reassign an existing issue to manufacture permission.

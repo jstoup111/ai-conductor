@@ -73,7 +73,7 @@ async function cascadeCapHalt() {
   await git(['update-ref', cascadesRefFor('demo'), blob]);
 
   await expect(runRestack({ worktree: repo, slug: 'demo', cause: 'feature-repair', git: makeGitRunner(repo) }))
-    .resolves.toEqual({ kind: 'halted' });
+    .resolves.toMatchObject({ kind: 'halted' });
   await expect(readFile(join(repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
   return { root, repo, git, closed, repair };
 }

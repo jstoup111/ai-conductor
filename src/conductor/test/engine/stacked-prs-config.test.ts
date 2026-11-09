@@ -80,7 +80,7 @@ describe('stacked_prs config block', () => {
     expect(result.error.message).toMatch(/stacked_prs\.route_whole_feature_fixes.*boolean/i);
   });
 
-  it('declares enabled, max_slices and the routing flag as consumer keys', () => {
-    expect(CONFIG_CONSUMER_KEY_SETS.stacked_prs).toEqual(['enabled', 'max_slices', 'route_whole_feature_fixes']);
+  it('declares enabled, max_slices, routing, and restack cascade keys as consumer keys', () => {
+    expect(CONFIG_CONSUMER_KEY_SETS.stacked_prs).toEqual(['enabled', 'max_slices', 'route_whole_feature_fixes', 'max_restack_cascades']);
   });
 });

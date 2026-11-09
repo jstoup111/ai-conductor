@@ -58,6 +58,16 @@ it('declares one persistent sink row for each stack event', () => {
   }
 });
 
+it('declares restack decisions as durable, unaudited event-spine records', () => {
+  expect(EVENT_SINKS.restack_decision).toEqual({
+    render: false,
+    persist: true,
+    audit: false,
+    otel: false,
+  });
+  expect(persistedEventTypes()).toContain('restack_decision');
+});
+
 it('declares remediation-closure judgements as durable, unaudited event-spine records', () => {
   expect(EVENT_SINKS.remediation_closure_judged).toEqual({
     render: false,
@@ -155,11 +165,11 @@ type RestackRefusalReasonIsClosed = Assert<Equal<
   | 'replay-mismatch'
   | 'range-not-ancestor'
   | 'closed-child-rewritten'
-  | 'flatten_refused'
   | 'restack-outstanding'
   | 'journal-live-owner'
   | 'published-stack'
   | 'deferred-base-refresh'
+  | 'restack-resolution-stale'
 >>;
 const restackRefusalReasonContract: RestackRefusalReasonIsClosed = true;
 void restackRefusalReasonContract;
@@ -256,6 +266,8 @@ const ROUTING_EVENT_TYPES = [
   'remediation_rerouted',
   'operator_round',
   'routed_repair_phase',
+  'routing_rounds_stalled',
+  'routing_round_superseded',
   'child_revalidated',
 ] satisfies Array<ConductorEvent['type']>;
 
@@ -358,6 +370,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'rebase_untracked_quarantined',
   'repair_boundary_translated',
   'operator_rewind',
+  'preemption_boundary',
   'setup_repair',
   'project_setup',
   'memory_setup',
@@ -384,6 +397,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   ...REMEDIATION_CASE_LIFECYCLE_EVENT_TYPES,
   'remediation_case_refuted',
   'prd_widening_reconciled',
+  'as_built_finding_reconciled',
   'build_review_scope_summary',
   'build_review_review_scope',
   'build_review_scope_incomplete',
@@ -411,6 +425,8 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'restack_planned',
   'restack_applied',
   'restack_conflict',
+  'restack_resolution',
+  'restack_decision',
   'restack_refused',
   'restack_recovered',
   'push_lease_refused',
@@ -670,6 +686,25 @@ const routingEvents = [
     closureSha: routingClosureSha,
     outcome: 'passed',
   },
+  {
+    type: 'routing_rounds_stalled',
+    rounds: [{ roundId: routingRoundId, readable: true, unsettledHosts: { [routingChild]: 'pending' } }],
+    detail: 'routing rounds stalled: r1 (1: pending); test refusal',
+    attempt: 1,
+  },
+  {
+    type: 'routing_round_superseded',
+    eventId: 'routing-6',
+    occurredAt: '2026-10-12T00:00:05.000Z',
+    roundId: routingRoundId,
+    child: routingChild,
+    disposition: 'superseded',
+    supersededBy: parseRoundId('r2')!,
+    droppedHosts: [routingChild],
+    findingIds: ['finding-1'],
+    reason: 'superseded by r2',
+    operator: 'operator@example.test',
+  },
 ] as const satisfies readonly ConductorEvent[];
 
 // @ts-expect-error -- routing occurrences always retain their execution child.
@@ -728,6 +763,8 @@ describe('event sink subscriptions', () => {
         remediation_rerouted: { render: false, persist: true, audit: false, otel: false },
         operator_round: { render: false, persist: true, audit: false, otel: false },
         routed_repair_phase: { render: false, persist: true, audit: false, otel: false },
+        routing_rounds_stalled: { render: false, persist: true, audit: false, otel: false },
+        routing_round_superseded: { render: false, persist: true, audit: false, otel: false },
         child_revalidated: { render: false, persist: true, audit: false, otel: false },
       });
     } finally {
@@ -757,6 +794,7 @@ describe('event sink subscriptions', () => {
         newTip: sha('b'),
         wouldInvalidate: ['build_review'],
         parentOverlapPaths: ['src/conductor/src/engine/restack/restack-events.ts'],
+        adaptedPaths: [],
       },
       {
         type: 'restack_conflict',
@@ -1369,6 +1407,24 @@ describe('event sink subscriptions', () => {
     ));
   });
 
+  it('keeps remediation re-raise telemetry on the registered lifecycle sinks', () => {
+    const reconciled: ConductorEvent = {
+      type: 'remediation_case_reconciled', domain: 'build_review', lapId: 'lap-1' as never,
+      caseId: 'N', resolution: 'open', recurrenceOf: ['case-R'], reRaiseKind: 'residual-gap', boundCaseId: 'case-R',
+    };
+    const halted: ConductorEvent = {
+      type: 'remediation_semantic_repeat_halt', domain: 'build_review', lapId: 'lap-1' as never,
+      caseId: 'case-R', reason: 'recurrence-limit', reRaiseKind: 'undeclared', lineageCaseIds: ['case-R'], appliedAttempts: 3,
+    };
+    expect(REMEDIATION_CASE_LIFECYCLE_EVENT_TYPES).toEqual([
+      'remediation_adjudication_started', 'remediation_adjudication_completed', 'remediation_adjudication_failed',
+      'build_review_acceptance_carried', 'remediation_case_operator_resolved', 'remediation_case_reconciled',
+      'remediation_effect_reserved', 'remediation_effect_applied', 'remediation_effect_failed', 'remediation_semantic_repeat_halt',
+    ]);
+    expect(EVENT_SINKS[reconciled.type]).toEqual({ render: false, persist: true, audit: false, otel: false });
+    expect(EVENT_SINKS[halted.type]).toEqual({ render: false, persist: true, audit: false, otel: false });
+  });
+
   it('renders, persists, and audits a refuted remediation case without exporting it to OpenTelemetry', () => {
     expect(EVENT_SINKS.remediation_case_refuted).toEqual({
       render: true,
@@ -1806,6 +1862,7 @@ describe('event sink subscriptions', () => {
       'halt_record_write_failed',
       'halt_record_push_failed',
       'shipment_evidence_refused',
+      'preemption_boundary',
       'step_in_flight',
       'step_inapplicable',
       'step_inapplicable_ignored',

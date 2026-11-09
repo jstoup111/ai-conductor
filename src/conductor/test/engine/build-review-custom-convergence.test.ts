@@ -1,13 +1,19 @@
 // Covers: task:37, task:14
-import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { reduceBuildReviewAdjudication } from '../../src/engine/build-review-adjudication.js';
+import { coordinateBuildReviewAdjudication } from '../../src/engine/build-review-adjudication-coordinator.js';
+import { buildReviewAdjudicationSourceId } from '../../src/engine/build-review-adjudication-context.js';
+import { joinBuildReviewRubricOutcomes, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
+import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
 import { reconcileRemediationCases } from '../../src/engine/remediation-case-reconciler.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
 import type { RemediationCaseGraph } from '../../src/engine/remediation-case-validator.js';
+import { markBuildReviewWorkOrderAttempted, publishBuildReviewWorkOrder } from '../../src/engine/build-review-work-order.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
@@ -25,15 +31,218 @@ import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { dispatchBuildReviewRecordReducedCoverage } from '../../src/engine/build-review-cli.js';
 import { resolveEffectiveBuildReviewVerdict } from '../../src/engine/build-review-effective.js';
+import { commitAll, initTestRepo } from '../fixtures/git-repo.js';
 
 const roots: string[] = [];
 const feature = { version: 'v1' as const, repository: 'acme/conductor', feature: 'custom-convergence' };
+const dependencyDeclaration = {
+  version: 'v1' as const,
+  rubricId: 'dependencyHygiene',
+  semanticSkill: 'dependency-hygiene',
+  question: 'Review dependency changes.',
+  source: 'project' as const,
+  resources: [],
+};
+const dependencyDescriptor = {
+  version: 'v1' as const,
+  semanticSkill: 'dependency-hygiene',
+  declaration: dependencyDeclaration,
+  installation: { source: 'project' as const },
+  effectivePolicy: { version: 'v1' as const, bundleDigest: `sha256:${'d'.repeat(64)}` },
+  reviewedInput: { version: 'v1' as const, contentDigest: `sha256:${'e'.repeat(64)}` },
+  producer: { provider: 'claude', model: 'opus', effort: 'high' as const },
+};
+const packageRegion = {
+  path: 'package.json', startLine: 1, endLine: 1,
+  contentHash: `sha256:${'f'.repeat(64)}`, display: 'dependency declaration',
+};
+
+function dependencyAggregate(lapId: string, finding: boolean, current: readonly string[]) {
+  const result = stampBuildReviewCustomJudgedResult({
+    kind: 'custom-findings', version: 'v2', findings: finding ? [{
+      concernId: 'unnecessary-dependency', summary: 'The dependency duplicates an existing module.',
+      confidence: 95, severity: 'major', evidenceLocations: ['package.json:1'], sourceRegions: [packageRegion],
+    }] : [],
+  }, {
+    rubric: 'dependencyHygiene', lapId, declaration: dependencyDeclaration,
+    policy: dependencyDescriptor.effectivePolicy, candidate: dependencyDescriptor.producer,
+    reviewedInput: dependencyDescriptor.reviewedInput,
+  }, { sourceRegions: [packageRegion] });
+  if (!result) throw new Error('fixture custom finding must stamp');
+  return joinBuildReviewRubricOutcomes({
+    lapId: lapId as never, snapshotDigest: `snapshot-${lapId}`,
+    results: { testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' } },
+    customResults: { dependencyHygiene: { descriptor: dependencyDescriptor, result } },
+    currentCustomRubrics: current,
+  } as never);
+}
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 describe('custom build-review convergence', () => {
+  // Covers: task:7, task:rem-prd-audit-7-R1
+  it('settles a withheld dependency finding as absent, then dispatches its later matching lap afresh', async () => {
+    const projectRoot = await mkdtemp(join(process.env.TMPDIR!, 'build-review-withheld-convergence-'));
+    roots.push(projectRoot);
+    // Lap 3 must enter through the public build_review dispatch, which derives
+    // participation from the feature diff.  A real local Git boundary keeps
+    // the member's fresh engine-owned invocation distinguishable from fixture
+    // setup and from the withheld lap.
+    await initTestRepo(projectRoot);
+    await writeFile(join(projectRoot, 'package.json'), '{}\n');
+    await writeFile(join(projectRoot, 'plan.md'), '# Fixture plan\n');
+    await commitAll(projectRoot, 'base package manifest');
+    execFileSync('git', ['remote', 'add', 'origin', projectRoot], { cwd: projectRoot });
+    execFileSync('git', ['update-ref', 'refs/remotes/origin/main', 'refs/heads/main'], { cwd: projectRoot });
+    execFileSync('git', ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main'], { cwd: projectRoot });
+    execFileSync('git', ['checkout', '-b', 'dependency-review'], { cwd: projectRoot });
+    const lap1 = dependencyAggregate('lap-dependency-1', true, ['dependencyHygiene']);
+    const lap1Source = projectBuildReviewAggregateSources(lap1)![0]!;
+    const sourceId = buildReviewAdjudicationSourceId(lap1Source);
+
+    expect(projectBuildReviewAggregateSources(lap1)).toEqual([expect.objectContaining({
+      rubric: 'dependencyHygiene', evidenceLocations: ['package.json:1'],
+    })]);
+
+    const store = new RemediationCaseStore(projectRoot, feature);
+    const seeded = await reconcileRemediationCases(store, {
+      graph: {
+        sourceOutcomes: [{ sourceId, outcome: 'acted', caseRef: 'dependency-case' }],
+        cases: [{
+          case: {
+            caseRef: 'dependency-case', disposition: 'act', priority: 'high', confidence: 'high',
+            rationale: 'The blocking dependency finding needs a repair.',
+            effect: { kind: 'action', route: 'build', tasks: [{ title: 'Remove the duplicate dependency.' }] },
+          },
+          sources: [{ sourceId, outcome: 'acted', caseRef: 'dependency-case' }],
+        }],
+      },
+      recordedAt: '2026-11-08T00:00:00.000Z', generateId: (() => {
+        const ids = ['dependency-case', 'dependency-effect'];
+        return () => ids.shift()!;
+      })(), lapId: 'lap-dependency-1' as never,
+    });
+    expect(seeded).toMatchObject({ ok: true });
+    await publishBuildReviewWorkOrder(projectRoot, {
+      version: 'v1', domain: 'build_review', feature, effectId: 'dependency-effect',
+      cases: [{ caseId: 'dependency-case', priority: 'high', tasks: [{ title: 'Remove the duplicate dependency.' }] }],
+    });
+    await markBuildReviewWorkOrderAttempted(projectRoot, feature);
+
+    // The custom evidence remains readable, but this lap's catalog deliberately
+    // omits the member after package.json was restored.
+    const lap2 = dependencyAggregate('lap-dependency-2', true, []);
+    expect(projectBuildReviewAggregateSources(lap2)).toEqual([]);
+    const judge = vi.fn();
+    const settled = await coordinateBuildReviewAdjudication({
+      projectRoot, feature, aggregate: lap2, operatorResolvedFindingIds: new Set(), mechanical: 'healthy', judge,
+      chargeInput: { treeHash: 'tree-lap-2', resolvedCount: 0, reason: 'fixture' },
+      readPlanContract: async () => ({ path: null, pointers: [], admittedTaskContracts: [] }),
+      readTaskStatus: async () => ({ path: null, tasks: [] }),
+      generateId: () => 'unused',
+    });
+
+    expect(settled).toMatchObject({ ok: true, route: 'pass', dispatchSkipped: true });
+    expect(judge).not.toHaveBeenCalled();
+    await expect(store.read()).resolves.toMatchObject({ ok: true, state: {
+      cases: [expect.objectContaining({ id: 'dependency-case', resolution: 'resolved' })],
+    } });
+    await expect(readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+
+    // Lap 3 changes package.json again. Drive it through the runner boundary:
+    // the provider call, cache decision, and published aggregate must all be
+    // consequences of the engine dispatch rather than test setup.
+    const invoke = vi.fn<LLMProvider['invoke']>(async () => ({
+      success: true, exitCode: 0, output: 'fixture',
+      finalStructuredResult: { kind: 'custom-findings', version: 'v2', findings: [] },
+    }));
+    const provider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      nativeSchemaCapability: { nativeOutputSchema: true },
+      invoke,
+    };
+    const events = new ConductorEventEmitter();
+    const cacheHits: unknown[] = [];
+    const skipped: unknown[] = [];
+    events.on('build_review_cache_hit', (event) => { cacheHits.push(event); });
+    events.on('build_review_rubric_skipped', (event) => { skipped.push(event); });
+    const policyRoot = join(projectRoot, 'dependency-policy');
+    await Promise.all([mkdir(policyRoot, { recursive: true })]);
+    await writeFile(join(policyRoot, 'SKILL.md'), '# Fixture policy\n');
+    await writeFile(join(projectRoot, 'package.json'), '{"dependencies":{"new":"1.0.0"}}\n');
+    await commitAll(projectRoot, 'add dependency under review');
+    let lap3Aggregate: unknown;
+    const config = { llm_provider: 'claude', build_review: {
+      enabled: true,
+      rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
+      custom_rubrics: { dependencyHygiene: { enabled: true, skill: 'dependency-hygiene', question: 'Review dependency changes.', source: 'project', paths: ['package.json'], llm_provider: 'claude' } },
+    } } as HarnessConfig;
+    const runner = new DefaultStepRunner(provider, 'custom-convergence', projectRoot, {
+      config, events, planPath: join(projectRoot, 'plan.md'),
+      buildReviewInputOptions: {
+        materialization: { projectRoot },
+        inspectTestSuite: async () => ({
+          status: 'CURRENT', evidence: { provenanceHeadSha: 'fixture-head', outcome: 'PASS' },
+        } as never),
+      },
+      providerRuntimes: new ProviderRuntimeSet([{
+        key: 'claude', provider, lifecycleCapability: provider.lifecycleCapability,
+        nativeSchemaCapability: provider.nativeSchemaCapability, policy: CLAUDE_MODEL_POLICY,
+        builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+      }]),
+      sessionStore: new ProviderSessionStore(), configuredProviders: ['claude'],
+      probeReadOnlyReviewCapability: async ({ provider: key, platform }) => ({ provider: key, platform, status: 'available' as const }),
+      buildReviewPolicyCatalog: async ({ skill }) => [{
+        semanticName: skill, source: 'project' as const, installationOrigin: policyRoot,
+        canonicalSkillPath: join(policyRoot, 'SKILL.md'), packageRoot: policyRoot, declaredDependencies: [], availability: 'available' as const,
+      }],
+      buildReviewPolicyCapture: async (policy) => ({
+        policy, materialPath: policyRoot, definitionPath: join(policyRoot, 'SKILL.md'),
+        manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Fixture policy\n') }],
+        metadata: { version: 1 as const, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+        digest: `sha256:${'a'.repeat(64)}`,
+      }),
+      buildReviewEffectiveResolver: async (_root, aggregate) => {
+        lap3Aggregate = aggregate;
+        const judged = (aggregate as { customResults?: Record<string, { result?: { verdict?: string; findings?: unknown[] } }> })
+          .customResults?.dependencyHygiene?.result;
+        return { ok: true as const, feature, effective: {
+          // The resolver accepts this lap only when the engine-published lap-3
+          // result is the provider's no-finding judgement. A stale lap-1
+          // finding, cache reuse, or skipped member would make this FAIL.
+          rawVerdict: judged?.verdict === 'PASS' && judged.findings?.length === 0 ? 'PASS' as const : 'FAIL' as const,
+          verdict: judged?.verdict === 'PASS' && judged.findings?.length === 0 ? 'PASS' as const : 'FAIL' as const,
+          acceptedFindingIds: [], unresolvedFindingIds: [],
+          suppressedFindingIds: [], skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [],
+        } };
+      },
+    });
+    vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue({ engineStamp: 'fixture', skillDigests: {} });
+    const lap3 = await runner.run('build_review', { complexity_tier: 'M' });
+
+    expect(lap3).toMatchObject({ success: true });
+    expect(skipped).toEqual([]);
+    expect(cacheHits).toEqual([]);
+    // This is the member's engine-owned provider boundary, rather than a
+    // fixture-side invocation. A fresh candidate must be dispatched for the
+    // reintroduced custom member on lap 3.
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: expect.stringContaining('Declared review question: Review dependency changes.'),
+      readOnlyReview: true,
+    }));
+    expect(lap3Aggregate).toMatchObject({
+      verdict: 'PASS', currentCustomRubrics: ['dependencyHygiene'],
+      // The member verdict is stamped from the lap-3 provider response; it
+      // cannot be inherited from the withheld lap-1 member.
+      customResults: { dependencyHygiene: { result: {
+        kind: 'judged', rubric: 'dependencyHygiene', verdict: 'PASS', findings: [],
+      } } },
+    });
+  });
+
   it('settles all read-only setup skips as a closed custom cause without launching a provider', async () => {
     const projectRoot = await mkdtemp(join(process.env.TMPDIR!, 'build-review-read-only-exhaustion-'));
     roots.push(projectRoot);

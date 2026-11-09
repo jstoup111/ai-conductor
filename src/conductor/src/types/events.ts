@@ -946,6 +946,8 @@ type ConductorEventBody =
       lapId: string;
       /** The index-only task bodies added for the bounded second adjudication round. */
       expansionTaskIds?: readonly string[];
+      /** Case ids whose refused bindings caused this one correction round. */
+      bindingCorrectionCaseIds?: readonly string[];
     }
   | {
       /** A valid remediation judgement was fully reconciled for one build-review lap. */
@@ -1000,6 +1002,19 @@ type ConductorEventBody =
       resolution: 'open' | 'resolved';
       recurrenceOf?: readonly string[];
       distinctFrom?: readonly { readonly caseId: string; readonly reason: string }[];
+      reRaiseKind?: 'residual-gap' | 'undeclared';
+      boundCaseId?: string;
+    }
+  | {
+      /** One as-built finding was durably reconciled with its case history. */
+      type: 'as_built_finding_reconciled';
+      eventId: string;
+      findingId: string;
+      caseId: string;
+      attemptId: string;
+      outcome: 'same' | 'recurrence' | 'materially-changed' | 'new' | 'needs-human';
+      priorCaseId?: string;
+      reason: string;
     }
   | {
       /** One attempted remediation case was refuted against the current lap. */
@@ -1055,6 +1070,8 @@ type ConductorEventBody =
       effectId?: string;
       reason: 'already-attempted' | 'regressed' | 'recurrence-limit';
       lineageCaseIds?: readonly string[];
+      reRaiseKind?: 'residual-gap' | 'undeclared' | 'repeat';
+      appliedAttempts?: number;
     }
   | { type: 'build_review_stale_aggregate'; storedLapId: string; currentLapId: string }
   | {
@@ -1373,6 +1390,11 @@ type ConductorEventBody =
   | { type: 'credentials_park'; reason: string }
   | {
       type: 'operator_park_boundary';
+      featureSlug: string;
+      boundary: SchedulingUnitRef;
+    }
+  | {
+      type: 'preemption_boundary';
       featureSlug: string;
       boundary: SchedulingUnitRef;
     }
@@ -2264,6 +2286,7 @@ type ConductorEventBody =
       newTip: CommitSha;
       wouldInvalidate: StepName[];
       parentOverlapPaths: string[];
+      adaptedPaths: string[];
     }
   | {
       type: 'restack_conflict';
@@ -2271,6 +2294,23 @@ type ConductorEventBody =
       child: ChildId;
       commit: CommitSha;
       paths: string[];
+    }
+  | {
+      type: 'restack_resolution';
+      opId: RestackOpId;
+      child: ChildId;
+      action: 'recorded' | 'consumed' | 'retired';
+      tip: CommitSha;
+      operator?: string;
+    }
+  | {
+      type: 'restack_decision';
+      child: ChildId;
+      action: 'recorded' | 'applied' | 'stale';
+      commit: CommitSha;
+      paths: string[];
+      operator?: string;
+      opId?: RestackOpId;
     }
   | {
       type: 'restack_refused';
@@ -2322,7 +2362,18 @@ type ConductorEventBody =
       host: ChildId;
       phase: HostState;
       credit: boolean;
+      reason?: 'derived-already-complete';
       child: ChildId;
+    }
+  | {
+      /** A reconciliation could not safely advance a durable routing round. */
+      type: 'routing_rounds_stalled';
+      rounds: readonly (
+        | { readonly roundId: RoundId; readonly readable: false }
+        | { readonly roundId: RoundId; readonly readable: true; readonly unsettledHosts: Readonly<Record<ChildId, HostState>> }
+      )[];
+      detail: string;
+      attempt: number;
     }
   /** Lifecycle of an operator-owned landing, delivered from the route outbox. */
   | {
@@ -2334,6 +2385,33 @@ type ConductorEventBody =
       origin: 'land' | 'rewind';
       reason: string;
       action: 'opened' | 'declared' | 'abandoned';
+    }
+  | {
+      /** An operator closed a stale audit round without dispatching its pending hosts. */
+      type: 'routing_round_superseded';
+      eventId: string;
+      occurredAt: string;
+      roundId: RoundId;
+      child: ChildId;
+      disposition: 'superseded';
+      supersededBy: RoundId;
+      droppedHosts: readonly ChildId[];
+      findingIds: readonly string[];
+      reason: string;
+      operator: string;
+    }
+  | {
+      /** An operator closed the sole audit round and returned control to the leaf. */
+      type: 'routing_round_superseded';
+      eventId: string;
+      occurredAt: string;
+      roundId: RoundId;
+      child: ChildId;
+      disposition: 'leaf-return';
+      droppedHosts: readonly ChildId[];
+      findingIds: readonly string[];
+      reason: string;
+      operator: string;
     }
   | {
       type: 'child_revalidated';

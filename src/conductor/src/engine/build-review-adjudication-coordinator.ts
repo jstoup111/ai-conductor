@@ -19,12 +19,12 @@ import { planContractPointers, readActivePlanPath } from './remediation-context-
 import { parsePlanTaskBodies, parsePlanTaskPaths, parsePlanTaskTitles } from './plan-task-parse.js';
 import { parsePlanDependencyGraph } from './plan-dependencies.js';
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
-import { authorizeBuildReviewRemediationActionEffects, orderBuildReviewActionCases, reduceBuildReviewAdjudication, renderBuildReviewAdjudicationTrace, type BuildReviewMechanicalState } from './build-review-adjudication.js';
+import { authorizeBuildReviewRemediationActionEffects, formatBuildReviewResolveCaseCommand, orderBuildReviewActionCases, reduceBuildReviewAdjudication, renderBuildReviewAdjudicationTrace, type BuildReviewMechanicalState } from './build-review-adjudication.js';
 import { projectBuildReviewAggregateSources, type BuildReviewAggregate, type BuildReviewRawSourceProjection } from './build-review-aggregate.js';
 import { persistBuildReviewSuppressions } from './build-review-suppression-history.js';
 import { applyBuildReviewActionEffects, applyBuildReviewDeferralEffect, hasReservedOrFailedRemediationEffect, isBuildEligibleActionCase, isBuildReviewDecisionStop, persistBuildReviewDecisionStop, settleStrandedBuildReviewActionReservations, settleStrandedBuildReviewDeferralReservations, resolveAbsentFailedBuildReviewCases, STRANDED_ACTION_RESERVATION_DIAGNOSTIC, STRANDED_DEFERRAL_RESERVATION_DIAGNOSTIC } from './remediation-case-effects.js';
 import type { RemediationCaseJudgement } from './remediation-case-artifact.js';
-import { classifyRemediationCaseReuse, reconcileRemediationCases, retireOpenBuildReviewCase, retiresOpenBuildReviewCase } from './remediation-case-reconciler.js';
+import { bindableDispositions, classifyRemediationCaseReuse, reconcileRemediationCases, retireOpenBuildReviewCase, retiresOpenBuildReviewCase } from './remediation-case-reconciler.js';
 import { resolveRefutationEvidence } from './remediation-refutation-evidence.js';
 import { classifyBuildReviewDurableRead, publishBuildReviewWorkOrder, readBuildReviewWorkOrder, readBuildReviewWorkOrderAttemptedCaseIds, type BuildReviewWorkOrderTask } from './build-review-work-order.js';
 import { buildReviewProvenanceCandidates, type BuildReviewFindingHunkTarget, type BuildReviewProvenanceArtifact } from './build-review-review-frontier.js';
@@ -305,9 +305,18 @@ function buildRouteRepairCaseIds(cases: readonly RemediationCaseRecord[], curren
 
 function describeInvalidRemediationJudgement(
   reason: string,
-  rejection?: { readonly indexOnlyTaskIds: readonly string[]; readonly absentTaskIds: readonly string[] },
+  rejection?: { readonly indexOnlyTaskIds: readonly string[]; readonly absentTaskIds: readonly string[] }
+    | { readonly bindings: readonly { readonly existingCaseId: string; readonly disposition: string; readonly bindableDispositions: readonly string[] }[] },
 ): string {
-  if (reason !== 'unknown-admission-task' || rejection === undefined) {
+  if (reason === 'inadmissible-case-binding' && rejection !== undefined && 'bindings' in rejection) {
+    const bindings = rejection.bindings.map((binding) =>
+      `case ${binding.existingCaseId} bound as ${binding.disposition}; bindable: ${binding.bindableDispositions.join(', ')}`,
+    );
+    return bindings.length === 0
+      ? `invalid remediation judgement ${reason}`
+      : `invalid remediation judgement ${reason} (${bindings.join('; ')})`;
+  }
+  if (reason !== 'unknown-admission-task' || rejection === undefined || !('indexOnlyTaskIds' in rejection)) {
     return `invalid remediation judgement ${reason}`;
   }
   const details = [
@@ -728,7 +737,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         await input.emit?.({
           type: 'remediation_adjudication_completed', domain: 'build_review', lapId: input.aggregate.lapId,
           caseIds: settledCases.map((record) => record.id),
-          effectIds: options.dispatchSkipped === true ? [] : settledCases.flatMap((record) => record.effect.kind === 'none' ? [] : [record.effect.id]),
+          effectIds: settledCases.flatMap((record) => record.effect.kind === 'none' ? [] : [record.effect.id]),
           ...(durable.decisionStops.length === 0 ? {} : { decisionStops: durable.decisionStops }),
         });
       }
@@ -755,6 +764,25 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     exitResolved = new Set([...exitResolved, ...latest]);
     }
   };
+  /**
+   * A reuse halt names its recovery. A repeated case is still open, so the
+   * operator resolves it; a regressed case is already resolved and refuses
+   * resolve-case, so only accepting the re-raised finding (or fixing it) helps.
+   */
+  // ai-conductor:session-command-context=operator-only
+  const semanticReuseHaltDetail = (reuse: 'halt-repeat' | 'halt-regression', caseId: string, sourceIds: readonly string[]): string => {
+    const feature = input.feature.feature;
+    if (reuse === 'halt-repeat') {
+      return `semantic remediation case repeat ${caseId}; resolve with ${formatBuildReviewResolveCaseCommand({ feature, child: input.child, caseId })}`;
+    }
+    if (input.child !== undefined) {
+      return `semantic remediation case regression ${caseId}; fix the finding on child ${input.child} (build-review accept has no --child yet)`;
+    }
+    const accepts = sources.filter((source) => sourceIds.includes(buildReviewAdjudicationSourceId(source))).map((source) =>
+      `ai-conductor build-review accept --feature ${feature} --lap ${input.aggregate.lapId} --finding ${source.findingId} --rationale "<why>"`);
+    return `semantic remediation case regression ${caseId}; accept with ${accepts.join('; ')}, or fix the finding in the feature worktree`;
+  };
+  // /ai-conductor:session-command-context
   /**
    * A content-specific failure that follows awaited work. The work may have
    * outlasted an exact operator acceptance, in which case the failure's HALT
@@ -810,7 +838,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // be open with a live work order. Settle durable state and route from what
   // survives, rather than reporting a route no one checked.
   if (allOperatorResolved(resolved)) {
-    return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: resolved, settleAbsentAttempted: true });
+    return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: resolved, settleAbsentAttempted: true, dispatchSkipped: true });
   }
   let currentSources = sources.filter((source) => !resolved.has(source.findingId) && !nonActionable(source.findingId));
   const prior = await store.read();
@@ -892,7 +920,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // the provider see an obsolete source.
   try { resolved = await operatorResolvedFindingIds(); } catch { return fail('operator disposition state is unavailable'); }
   if (allOperatorResolved(resolved)) {
-    return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: resolved, settleAbsentAttempted: true });
+    return finalize({ tasksByCaseId: new Map(), republishWorkOrder: false, resolvedAtEntry: resolved, settleAbsentAttempted: true, dispatchSkipped: true });
   }
   // A decision stop has no settled semantic answer: its source must remain
   // eligible for a later judgement to converge on that owner, or to surface a
@@ -934,31 +962,53 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const dispatchSourceIds = dispatchSources.map(buildReviewAdjudicationSourceId);
   liveSourceIdsFor = (accepted: ReadonlySet<string>): ReadonlySet<string> =>
     retainScopeEmptySources(new Set(dispatchSources.filter((source) => !accepted.has(source.findingId)).map(buildReviewAdjudicationSourceId)));
-  const freshContext = assembleBuildReviewAdjudicationContext({
+  // Each adjudication round must carry this exact shared projection. Only the
+  // admitted expansion task bodies and binding correction change by round.
+  const dispatchContextInput = {
     aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions,
     operatorResolvedFindingIds: resolved, carryInput, declaredSeverityThresholds: input.declaredSeverityThresholds, excludedSourceIds: new Set([...settledSourceIds, ...sources.filter((source) => nonActionable(source.findingId)).map(buildReviewAdjudicationSourceId)]),
-    planContract: await scopedPlanContract(input.projectRoot, planContract, input.aggregate, dispatchSources, openCaseAdmittedTaskIds), taskStatus, attemptedCaseIds,
+    taskStatus, attemptedCaseIds,
     priorFindingDigests: input.priorFindingDigests,
+  };
+  const buildDispatchContext = async ({
+    expansionTaskIds = [],
+    bindingCorrections,
+  }: {
+    readonly expansionTaskIds?: readonly string[];
+    readonly bindingCorrections?: Parameters<typeof assembleBuildReviewAdjudicationContext>[0]['bindingCorrections'];
+  } = {}) => assembleBuildReviewAdjudicationContext({
+    ...dispatchContextInput,
+    planContract: await scopedPlanContract(
+      input.projectRoot, planContract, input.aggregate, dispatchSources, openCaseAdmittedTaskIds, expansionTaskIds,
+    ),
+    ...(bindingCorrections === undefined ? {} : { bindingCorrections }),
   });
+  const freshContext = await buildDispatchContext();
   if (!freshContext.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(freshContext.stop)}`, { settleAbsentAttempted: true });
   let dispatchContext = freshContext.context;
   let expansionTaskIds: readonly string[] | undefined;
+  let bindingCorrections: Parameters<typeof assembleBuildReviewAdjudicationContext>[0]['bindingCorrections'];
   let accepted: {
     readonly judgement: RemediationCaseJudgement;
     readonly validation: { readonly ok: true; readonly graph: RemediationCaseGraph };
     readonly provenanceCandidatesByCaseRef: ReadonlyMap<string, readonly RemediationCaseRecord[]>;
   } | undefined;
-  for (let round = 0; round < 2; round += 1) {
+  let dispatchPurpose: 'initial' | 'expansion' | 'correction' = 'initial';
+  for (let round = 0; round < 3; round += 1) {
     await input.emit?.({
       type: 'remediation_adjudication_started', domain: 'build_review', lapId: input.aggregate.lapId,
       ...(expansionTaskIds === undefined ? {} : { expansionTaskIds }),
+      ...(bindingCorrections === undefined ? {} : {
+        bindingCorrectionCaseIds: [...new Set(bindingCorrections.map((correction) => correction.existingCaseId))]
+          .sort((left, right) => left.localeCompare(right)),
+      }),
     });
     let judgement: RemediationCaseJudgement;
     try {
       judgement = await input.judge(dispatchContext);
     } catch (error) {
       const detail = error instanceof RemediateDispatchError
-        ? `remediate judgement failed: ${formatProviderExitFacts(error.provider, error.exitFacts ?? {})}${round === 1 ? ' (expansion round)' : ''}`
+        ? `remediate judgement failed: ${formatProviderExitFacts(error.provider, error.exitFacts ?? {})}${dispatchPurpose === 'initial' ? '' : ` (${dispatchPurpose} round)`}`
         : `remediate judgement failed: ${error instanceof Error ? error.message : String(error)}`;
       return failUnlessAccepted(detail, { settleAbsentAttempted: true });
     }
@@ -994,6 +1044,14 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       )),
       declaredSeverityThresholds: input.declaredSeverityThresholds,
       allowedDistinctFromCaseIdsByCaseRef,
+      reRaiseEligibleCaseIds: prior.state.cases.filter((record) =>
+        record.disposition === 'act' && record.resolution === 'resolved' &&
+        record.effect.kind === 'action' && record.effect.status === 'applied',
+      ).map((record) => record.id),
+      bindableDispositionsByCaseId: Object.fromEntries(prior.state.cases.map((record) => [
+        record.id,
+        bindableDispositions(record, attempted, carryInput),
+      ])),
     };
     const graph = validateRemediationCaseGraph(dispatchSourceIds, judgement, validationReferences);
     if (graph.ok) {
@@ -1003,21 +1061,28 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
     const classification = dispatchContext.mode === 'case-v2' && graph.reason === 'unknown-admission-task'
       ? classifyIndexOnlyAdmission(dispatchSourceIds, judgement, validationReferences, graph)
       : undefined;
-    if (round === 0 && classification?.kind === 'index-only') {
+    // Expansion is only a retry of the original judgement. Once a binding
+    // correction has been issued, its correction context is authoritative and
+    // an index-only response must fail closed instead of replacing it.
+    if (bindingCorrections === undefined && expansionTaskIds === undefined && classification?.kind === 'index-only') {
       expansionTaskIds = [...classification.taskIds].sort((left, right) => left.localeCompare(right));
-      const expandedContext = assembleBuildReviewAdjudicationContext({
-        aggregate: input.aggregate, priorCases: prior.state.cases, suppressions: suppressionHistory.state.suppressions,
-        operatorResolvedFindingIds: resolved, carryInput, declaredSeverityThresholds: input.declaredSeverityThresholds, excludedSourceIds: new Set([...settledSourceIds, ...sources.filter((source) => nonActionable(source.findingId)).map(buildReviewAdjudicationSourceId)]),
-        planContract: await scopedPlanContract(input.projectRoot, planContract, input.aggregate, dispatchSources, openCaseAdmittedTaskIds, expansionTaskIds), taskStatus, attemptedCaseIds,
-        priorFindingDigests: input.priorFindingDigests,
-      });
+      const expandedContext = await buildDispatchContext({ expansionTaskIds });
       if (!expandedContext.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(expandedContext.stop)}`, { settleAbsentAttempted: true });
       dispatchContext = expandedContext.context;
+      dispatchPurpose = 'expansion';
+      continue;
+    }
+    if (bindingCorrections === undefined && graph.reason === 'inadmissible-case-binding') {
+      bindingCorrections = graph.bindings;
+      const correctedContext = await buildDispatchContext({ expansionTaskIds, bindingCorrections });
+      if (!correctedContext.ok) return failUnlessAccepted(`adjudication context ${describeBuildReviewAdjudicationContextStop(correctedContext.stop)}`, { settleAbsentAttempted: true });
+      dispatchContext = correctedContext.context;
+      dispatchPurpose = 'correction';
       continue;
     }
     return failUnlessAccepted(describeInvalidRemediationJudgement(
       classification?.kind === 'other' ? classification.reason : graph.reason,
-      graph.reason === 'unknown-admission-task' ? graph : undefined,
+      graph.reason === 'unknown-admission-task' || graph.reason === 'inadmissible-case-binding' ? graph : undefined,
     ), { settleAbsentAttempted: true });
   }
   if (!accepted) return failUnlessAccepted('invalid remediation judgement unknown-admission-task', { settleAbsentAttempted: true });
@@ -1103,14 +1168,38 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const admitted = liveProposals.filter((proposed) =>
     carriedCaseRefs.has(proposed.case.caseRef) || proposed.case.disposition !== 'act' || authorizedActionRefs.has(proposed.case.caseRef),
   );
+  // A resolved, successfully applied action case can be explicitly re-raised.
+  // `repeat` is a regression; a residual declaration (or no declaration) is a
+  // fresh unbound recurrence whose durable predecessor remains explicit.
+  const recurrenceOwnersByCaseRef = new Map<string, string>();
+  const reRaiseMetadataByCaseRef = new Map<string, { kind: 'residual-gap' | 'undeclared'; boundCaseId: string }>();
+  const residualRebindRefs = new Set<string>();
+  for (const proposed of admitted) {
+    const boundId = proposed.case.existingCaseId;
+    const bound = boundId === undefined ? undefined : priorCasesBeforeReconcile.get(boundId);
+    if (proposed.case.disposition !== 'act' || !bound ||
+      classifyRemediationCaseReuse(bound, attempted, carryInput) !== 'halt-regression' ||
+      bound.effect.kind !== 'action' || bound.effect.status !== 'applied' ||
+      proposed.case.reRaise?.kind === 'repeat') continue;
+    residualRebindRefs.add(proposed.case.caseRef);
+    recurrenceOwnersByCaseRef.set(proposed.case.caseRef, bound.id);
+    reRaiseMetadataByCaseRef.set(proposed.case.caseRef, {
+      kind: proposed.case.reRaise?.kind === 'residual-gap' ? 'residual-gap' : 'undeclared',
+      boundCaseId: bound.id,
+    });
+  }
+  const recurrenceProposal = (proposed: typeof admitted[number]): typeof admitted[number] => residualRebindRefs.has(proposed.case.caseRef)
+    ? { ...proposed, case: (() => { const { existingCaseId: _bound, ...unbound } = proposed.case; return unbound as typeof proposed.case; })() }
+    : proposed;
+  const recurrenceAdmitted = admitted.map(recurrenceProposal);
   for (const proposed of admitted) {
     if (carriedCaseRefs.has(proposed.case.caseRef) || proposed.case.disposition !== 'refute') continue;
     const evidence = await resolveRefutationEvidence({ projectRoot: input.projectRoot, refutation: proposed.case.refutation! });
     if (!evidence.ok) return failUnlessAccepted(evidence.reason, { settleAbsentAttempted: true });
   }
-  const ordinaryCases = admitted.filter((proposed) =>
+  const ordinaryCases = recurrenceAdmitted.filter((proposed) =>
     proposed.case.disposition !== 'escalate' || carriedCaseRefs.has(proposed.case.caseRef));
-  const escalationCases = admitted.filter((proposed) =>
+  const escalationCases = recurrenceAdmitted.filter((proposed) =>
     proposed.case.disposition === 'escalate' && !carriedCaseRefs.has(proposed.case.caseRef));
   // A reuse halt is still durable evidence: the newly bound source must be
   // attached to the named case so an operator can accept that precise halt and
@@ -1137,7 +1226,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // however, still owns the finite number of BUILD attempts. Bind the source
   // back to its authoritative owner before reporting the halt so a later
   // operator acceptance can address this exact occurrence.
-  for (const proposed of admitted) {
+  for (const proposed of recurrenceAdmitted) {
     if (proposed.case.existingCaseId !== undefined || proposed.case.disposition !== 'act') continue;
     if (proposed.sources.every((source) => !liveSourceIds.has(source.sourceId))) continue;
     const exactRecurrence = classifyBuildReviewRecurrence(
@@ -1154,7 +1243,10 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       : undefined;
     const declaredDistinctFromProvenance = provenance !== undefined &&
       proposed.case.distinctFrom?.some((entry) => entry.caseId === provenance.selectedCaseId) === true;
-    const recurrenceOf = exactRecurrence.recurrenceOf.length > 0
+    const explicitOwner = recurrenceOwnersByCaseRef.get(proposed.case.caseRef);
+    const recurrenceOf = explicitOwner !== undefined
+      ? [...new Set([...exactRecurrence.recurrenceOf, explicitOwner])]
+      : exactRecurrence.recurrenceOf.length > 0
       ? exactRecurrence.recurrenceOf
       : provenance !== undefined && !declaredDistinctFromProvenance
         ? [provenance.selectedCaseId]
@@ -1173,6 +1265,9 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       type: 'remediation_semantic_repeat_halt', domain: 'build_review', lapId: input.aggregate.lapId,
       caseId, ...(owner.effect.kind === 'none' ? {} : { effectId: owner.effect.id }),
       reason: 'recurrence-limit', lineageCaseIds: [...lineage.caseIds],
+      ...(reRaiseMetadataByCaseRef.get(proposed.case.caseRef) === undefined
+        ? {}
+        : { reRaiseKind: reRaiseMetadataByCaseRef.get(proposed.case.caseRef)!.kind }),
     });
     return failUnlessAccepted(
       `semantic remediation case recurrence limit ${caseId}: lineage ${lineage.caseIds.join(', ')} has ${lineage.appliedAttempts} applied attempts (limit ${BUILD_REVIEW_RECURRENCE_ATTEMPT_LIMIT})`,
@@ -1199,7 +1294,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // to reach a regression; a converged repeat is still caught after reconciling.
   // Only an `act` proposal repeats an action: any other disposition transforms
   // the reused case (a refutation settles it) and reconciliation owns that.
-  for (const proposed of admitted) {
+  for (const proposed of recurrenceAdmitted) {
     if (proposed.case.disposition !== 'act') continue;
     if (proposed.sources.every((source) => !liveSourceIds.has(source.sourceId))) continue;
     const record = proposed.case.existingCaseId ? priorCasesBeforeReconcile.get(proposed.case.existingCaseId) : undefined;
@@ -1212,10 +1307,15 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         type: 'remediation_semantic_repeat_halt', domain: 'build_review', lapId: input.aggregate.lapId,
         caseId: record.id, ...(record.effect.kind === 'none' ? {} : { effectId: record.effect.id }),
         reason: reuse === 'halt-repeat' ? 'already-attempted' : 'regressed',
+        ...(reuse === 'halt-regression' && proposed.case.reRaise?.kind === 'repeat'
+          ? (() => { const lineage = buildReviewRecurrenceLineage(prior.state.cases, [record.id]); return { reRaiseKind: 'repeat' as const, lineageCaseIds: [...lineage.caseIds], appliedAttempts: lineage.appliedAttempts }; })()
+          : {}),
       });
-      return failUnlessAccepted(reuse === 'halt-repeat'
-        ? `semantic remediation case repeat ${record.id}`
-        : `semantic remediation case regression ${record.id}`, {
+      const semanticDetail = semanticReuseHaltDetail(reuse, record.id, proposed.sources.map((source) => source.sourceId));
+      const repeatDetail = reuse === 'halt-regression' && proposed.case.reRaise?.kind === 'repeat'
+        ? (() => { const lineage = buildReviewRecurrenceLineage(prior.state.cases, [record.id]); return `; declared repeat; lineage ${lineage.caseIds.join(', ')} has ${lineage.appliedAttempts} applied attempts`; })()
+        : '';
+      return failUnlessAccepted(repeatDetail === '' ? semanticDetail : semanticDetail.replace(';', `${repeatDetail};`), {
           settleAbsentAttempted: false,
           // A reused case's own sources belong to the lap that resolved it and
           // are not live now, so only the reusing proposal's sources can show
@@ -1229,6 +1329,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   const reconciled = await reconcileRemediationCases(store, {
     graph: { ...graph.graph, cases: ordinaryCases }, recordedAt, generateId,
     ...(provenanceByCaseRef.size === 0 ? {} : { provenanceByCaseRef }),
+    ...(recurrenceOwnersByCaseRef.size === 0 ? {} : { recurrenceOwnersByCaseRef }),
     attemptedCaseIds,
     lapId: input.aggregate.lapId,
     ...(carriedCaseRefs.size === 0 ? {} : { carry: { caseRefs: [...carriedCaseRefs], lapId: input.aggregate.lapId } }),
@@ -1305,7 +1406,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
   // Reconciler retirement entries are appended in its mutation and delivered
   // by the drain above.  Do not emit a second, non-idempotent lifecycle event
   // from this read-side projection.
-  for (const caseId of caseIdsByRef.values()) {
+  for (const [caseRef, caseId] of caseIdsByRef) {
     const record = reconciledCasesById.get(caseId);
     if (!record) return fail(`reconciled case ${caseId} is unavailable`);
     // Opening a case is the coordinator's existing lifecycle signal. Resolved
@@ -1316,6 +1417,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
       caseId, resolution: 'open',
       ...(record.recurrenceOf === undefined ? {} : { recurrenceOf: record.recurrenceOf }),
       ...(record.distinctFrom === undefined ? {} : { distinctFrom: record.distinctFrom }),
+      ...(reRaiseMetadataByCaseRef.get(caseRef) === undefined ? {} : { reRaiseKind: reRaiseMetadataByCaseRef.get(caseRef)!.kind, boundCaseId: reRaiseMetadataByCaseRef.get(caseRef)!.boundCaseId }),
     });
     const priorEffect = priorCasesById.get(caseId)?.effect;
     const wasReserved = priorEffect?.kind !== 'none' && priorEffect?.status === 'reserved';
@@ -1365,9 +1467,7 @@ export async function coordinateBuildReviewAdjudication(input: BuildReviewAdjudi
         reason: reuse === 'halt-repeat' ? 'already-attempted' : 'regressed',
       });
       // The emission was awaited; the HALT decision reads authority after it.
-      return failUnlessAccepted(reuse === 'halt-repeat'
-        ? `semantic remediation case repeat ${caseId}`
-        : `semantic remediation case regression ${caseId}`, {
+      return failUnlessAccepted(semanticReuseHaltDetail(reuse, caseId, proposed.sources.map((source) => source.sourceId)), {
           settleAbsentAttempted: false,
           // A reused case's own sources belong to the lap that resolved it and
           // are not live now, so only the reusing proposal's sources can show

@@ -2,12 +2,13 @@ import {
   parsePlanTaskBodies,
   resolvePlanTaskReference,
 } from './plan-task-parse.js';
+import { isEngineAppendedRemediationTaskId } from './remediation-task-id.js';
 
 const DEPENDENCIES_LINE = /^\s*\*\*Dependencies:\*\*\s*(.*?)\s*$/;
 const FENCE_LINE = /^\s*(`{3,}|~{3,})(.*)$/;
 
 export interface PlanDependencyViolation {
-  code: 'dependencies-line' | 'malformed-dependencies' | 'unknown-dependency';
+  code: 'dependencies-line' | 'malformed-dependencies' | 'unknown-dependency' | 'dependency-cycle';
   message: string;
   taskId: string;
 }
@@ -94,6 +95,75 @@ export function parsePlanDependencyGraph(planText: string): PlanDependencyGraph 
   }
 
   return { dependenciesByTaskId, violations };
+}
+
+/** Returns strongly connected dependency components, including self-dependencies. */
+export function findDependencyCycles(
+  dependenciesByTaskId: ReadonlyMap<string, readonly string[]>,
+): string[][] {
+  const taskIds = [...dependenciesByTaskId.keys()];
+  const taskIdSet = new Set(taskIds);
+  const indexes = new Map<string, number>();
+  const lowLinks = new Map<string, number>();
+  const stack: string[] = [];
+  const onStack = new Set<string>();
+  const cycles: string[][] = [];
+  let nextIndex = 0;
+
+  const visit = (taskId: string): void => {
+    indexes.set(taskId, nextIndex);
+    lowLinks.set(taskId, nextIndex);
+    nextIndex += 1;
+    stack.push(taskId);
+    onStack.add(taskId);
+
+    for (const dependencyId of dependenciesByTaskId.get(taskId) ?? []) {
+      if (!taskIdSet.has(dependencyId)) continue;
+      if (!indexes.has(dependencyId)) {
+        visit(dependencyId);
+        lowLinks.set(taskId, Math.min(lowLinks.get(taskId)!, lowLinks.get(dependencyId)!));
+      } else if (onStack.has(dependencyId)) {
+        lowLinks.set(taskId, Math.min(lowLinks.get(taskId)!, indexes.get(dependencyId)!));
+      }
+    }
+
+    if (lowLinks.get(taskId) !== indexes.get(taskId)) return;
+
+    const component = new Set<string>();
+    let member: string;
+    do {
+      member = stack.pop()!;
+      onStack.delete(member);
+      component.add(member);
+    } while (member !== taskId);
+
+    if (component.size > 1 || (dependenciesByTaskId.get(taskId) ?? []).includes(taskId)) {
+      cycles.push(taskIds.filter((id) => component.has(id)));
+    }
+  };
+
+  for (const taskId of taskIds) {
+    if (!indexes.has(taskId)) visit(taskId);
+  }
+  return cycles;
+}
+
+/** Validates authored plan dependency declarations and rejects dependency cycles. */
+export function validatePlanDependencies(planText: string): PlanDependencyViolation[] {
+  const dependencyGraph = parsePlanDependencyGraph(planText);
+  const violations = dependencyGraph.violations.filter(
+    (violation) => !isEngineAppendedRemediationTaskId(violation.taskId),
+  );
+
+  for (const cycle of findDependencyCycles(dependencyGraph.dependenciesByTaskId)) {
+    violations.push({
+      code: 'dependency-cycle',
+      taskId: cycle[0],
+      message: `Tasks ${cycle.join(', ')} form a dependency cycle and cannot be ordered`,
+    });
+  }
+
+  return violations;
 }
 
 /** Returns every direct or indirect prerequisite for one task. */

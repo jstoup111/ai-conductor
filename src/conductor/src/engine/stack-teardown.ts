@@ -1,6 +1,9 @@
 import { parseChildId, type ChildId } from './child-context.js';
 import { childBranchFor } from './feature-branch-identity.js';
+import { pushedTipRef } from './push-lease.js';
 import type { GitRunner } from './rebase.js';
+import { isHaltRecordOnlyCommit } from './restack/halt-record-bookkeeping.js';
+import type { CommitSha } from './restack/restack-types.js';
 import { runTrackerRepositoryRead, type GhRunner } from './tracker-client.js';
 import type { PublicationRecord } from './stack-publication-record.js';
 import { deleteFeatureConductorRefs } from './restack/restack-refs-cleanup.js';
@@ -14,6 +17,54 @@ export interface StackTeardownDependencies {
   readonly git: GitRunner;
   readonly gh: GhRunner;
   readonly repository: string;
+}
+
+export type ChildCommitAccountingResult =
+  | { readonly kind: 'accounted' }
+  | { readonly kind: 'unaccounted' }
+  | { readonly kind: 'failed' };
+
+/**
+ * Determines whether each local child commit reached either the recorded
+ * pushed tip, the merged pull-request head, or is an engine halt-record
+ * bookkeeping commit for this feature.
+ */
+export async function accountForChildCommits(input: {
+  readonly slug: string;
+  readonly branch: string;
+  readonly localTip: string;
+  readonly mergedHead: string;
+  readonly git: GitRunner;
+}): Promise<ChildCommitAccountingResult> {
+  if (input.localTip === input.mergedHead) return { kind: 'accounted' };
+
+  try {
+    const mergedHead = await input.git(['cat-file', '-e', `${input.mergedHead}^{commit}`]);
+    if (mergedHead.exitCode !== 0) {
+      const fetched = await input.git(['fetch', 'origin', input.mergedHead]);
+      if (fetched.exitCode !== 0) return { kind: 'failed' };
+    }
+
+    const pushed = await input.git(['rev-parse', '--quiet', '--verify', pushedTipRef(input.slug, input.branch)]);
+    if (pushed.exitCode !== 0 && pushed.exitCode !== 1) return { kind: 'failed' };
+
+    const pushedTip = pushed.exitCode === 0 ? pushed.stdout.trim() : undefined;
+    const listed = await input.git([
+      'rev-list', input.localTip, '--not',
+      ...(pushedTip === undefined ? [] : [pushedTip]),
+      input.mergedHead,
+    ]);
+    if (listed.exitCode !== 0) return { kind: 'failed' };
+
+    for (const commit of listed.stdout.split('\n').filter(Boolean)) {
+      if (!await isHaltRecordOnlyCommit(commit as CommitSha, input.slug, input.git)) {
+        return { kind: 'unaccounted' };
+      }
+    }
+    return { kind: 'accounted' };
+  } catch {
+    return { kind: 'failed' };
+  }
 }
 
 async function sealedChildren(slug: string, git: GitRunner): Promise<readonly ChildId[] | undefined> {
@@ -91,11 +142,20 @@ export async function deleteStackChildren(
       }
       // A missing local branch is an already-completed member deletion.
       if (local.exitCode === 1) continue;
-      if (local.stdout.trim() !== head) {
+      const localTip = local.stdout.trim();
+      const accounting = await accountForChildCommits({
+        slug,
+        branch: branch.branch,
+        localTip,
+        mergedHead: head,
+        git: dependencies.git,
+      });
+      if (accounting.kind === 'failed') return { kind: 'failed' };
+      if (accounting.kind === 'unaccounted') {
         kept = true;
         continue;
       }
-      const deleted = await dependencies.git(['update-ref', '-d', `refs/heads/${branch.branch}`, head]);
+      const deleted = await dependencies.git(['update-ref', '-d', `refs/heads/${branch.branch}`, localTip]);
       // This is the authority-changing compare-and-swap. A nonzero result is
       // never a completed deletion, including a disappeared ref race.
       if (deleted.exitCode !== 0) return { kind: 'failed' };

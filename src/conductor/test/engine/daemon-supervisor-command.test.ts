@@ -1,3 +1,4 @@
+// Covers: task:6
 import { describe, it, expect } from 'vitest';
 import { detectDaemonCommand } from '../../src/engine/daemon-command.js';
 
@@ -196,7 +197,7 @@ describe('detectDaemonSupervisorCommand: returns null for non-management invocat
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// detectDaemonCommand: must yield null for all 5 management verbs so they are
+// detectDaemonCommand: must yield null for management and observability verbs so they are
 // never dispatched as daemon RUN launches.  These tests are intentionally RED
 // until daemon-command.ts is updated to exclude the management verbs.
 // ═════════════════════════════════════════════════════════════════════════════
@@ -206,6 +207,10 @@ describe('detectDaemonCommand: yields null for management verbs (never launch a 
       expect(detectDaemonCommand(argv('daemon', verb))).toBeNull();
     });
   }
+
+  it('returns null for "daemon stories-refs" (observability verb, not a launch)', () => {
+    expect(detectDaemonCommand(argv('daemon', 'stories-refs'))).toBeNull();
+  });
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -221,7 +226,7 @@ describe('detectUnknownDaemonSubcommand', () => {
 
   it('returns null for every known sub-verb (observe + management)', async () => {
     const detect = requireFn(await load(), 'detectUnknownDaemonSubcommand');
-    for (const verb of ['status', 'logs', ...MANAGEMENT_VERBS]) {
+    for (const verb of ['status', 'logs', 'stories-refs', ...MANAGEMENT_VERBS]) {
       expect(detect(argv('daemon', verb))).toBeNull();
     }
   });

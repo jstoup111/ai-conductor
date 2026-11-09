@@ -56,6 +56,7 @@ import {
   type ProviderVersionProbeRunner,
 } from './engine/provider-discovery.js';
 import {
+  resolveProviderModelTiers,
   validateConfiguredProviderModels,
   type ProviderModelProbeRunner,
 } from './engine/provider-model-probe.js';
@@ -89,7 +90,10 @@ import {
   detectHaltClearCommand,
   detectKickbackBudgetCommand,
   detectStackLandCommand,
+  detectStackRoundsCommand,
+  dispatchStackRoundsIfDetected,
   detectStackOwnersCommand,
+  detectStackRestackResolveCommand,
   detectPlanProtectedTargetsCommand,
   planProtectedTargetsCommand,
   createProgram,
@@ -104,7 +108,9 @@ import {
 import { routeSubcommandHelp } from './cli-pre-dispatch.js';
 import { dispatchKickbackBudgetCommand } from './engine/kickback-budget-cli.js';
 import { dispatchStackLandCommand } from './engine/stack-land-cli.js';
+import * as stackRoundsCli from './engine/stack-rounds-cli.js';
 import { dispatchStackOwnersCommand } from './engine/stack-owners-cli.js';
+import { dispatchStackRestackResolve } from './engine/stack-restack-resolve-cli.js';
 import { dispatchHaltClearCommand } from './engine/halt-clear-cli.js';
 import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage, dispatchBuildReviewResolveCase } from './engine/build-review-cli.js';
 import { dispatchDoneWhenAccept } from './engine/done-when-accept-cli.js';
@@ -572,6 +578,11 @@ export async function bootDispatchingCliProviders(options: {
     discovery,
     ...(options.providerModelProbeRunner ? { runner: options.providerModelProbeRunner } : {}),
   });
+  await resolveProviderModelTiers({
+    discovery,
+    projectRoot: options.rendererOpts.projectRoot,
+    ...(options.providerModelProbeRunner ? { runner: options.providerModelProbeRunner } : {}),
+  });
   validateRegisteredProviderSelections({
     config: options.config ?? {},
     registeredProviders: options.registry.list('llm_provider'),
@@ -855,6 +866,16 @@ export async function dispatchCliEntry(input: {
 
 // --- Main ---
 
+export async function dispatchStackRoundsCliEntry(
+  argv: readonly string[],
+  dispatch: typeof stackRoundsCli.dispatchStackRoundsCommand = stackRoundsCli.dispatchStackRoundsCommand,
+): Promise<boolean> {
+  const stackRoundsCode = await dispatchStackRoundsIfDetected(detectStackRoundsCommand(argv), dispatch);
+  if (stackRoundsCode === null) return false;
+  process.exitCode = stackRoundsCode;
+  return true;
+}
+
 async function dispatchCliCommand(): Promise<void> {
   // Private child entrypoint. It intentionally is not registered in the
   // public CLI program: only ChildProcessFeatureExecutor invokes it, so its
@@ -987,9 +1008,17 @@ async function dispatchCliCommand(): Promise<void> {
     return;
   }
 
+  if (await dispatchStackRoundsCliEntry(process.argv)) return;
+
   const stackOwnersCmd = detectStackOwnersCommand(process.argv);
   if (stackOwnersCmd) {
     process.exitCode = await dispatchStackOwnersCommand(stackOwnersCmd);
+    return;
+  }
+
+  const stackRestackResolveCmd = detectStackRestackResolveCommand(process.argv);
+  if (stackRestackResolveCmd) {
+    process.exitCode = await dispatchStackRestackResolve(stackRestackResolveCmd);
     return;
   }
 

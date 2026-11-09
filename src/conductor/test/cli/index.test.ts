@@ -125,9 +125,20 @@ describe('CLI', () => {
     expect(detectBuildReviewFindingsCommand(['node', 'conduct', 'build-review', 'findings'])).toBeNull();
   });
   it('requires exact accept identity inputs and never accepts an operator override', () => {
+    // Covers: task:5
     expect(detectBuildReviewAcceptCommand(['node', 'conduct', 'build-review', 'accept', '--feature', 'review-rubrics', '--lap', 'lap-current', '--finding', 'sha256:abc', '--rationale', 'known risk']))
       .toEqual({ kind: 'accept', feature: 'review-rubrics', lapId: 'lap-current', findingId: 'sha256:abc', rationale: 'known risk' });
+    expect(detectBuildReviewAcceptCommand(['node', 'conduct', 'build-review', 'accept', '--feature', 'review-rubrics', '--child', '2', '--lap', 'lap-current', '--finding', 'sha256:abc', '--rationale', 'known-risk']))
+      .toEqual({ kind: 'accept', feature: 'review-rubrics', child: '2', lapId: 'lap-current', findingId: 'sha256:abc', rationale: 'known-risk' });
     expect(detectBuildReviewAcceptCommand(['node', 'conduct', 'build-review', 'accept', '--feature', 'review-rubrics', '--lap', 'lap-current', '--finding', 'sha256:abc', '--rationale', 'risk', '--operator', 'forged'])).toBeNull();
+    expect(detectBuildReviewAcceptCommand(['node', 'conduct', 'build-review', 'accept', '--feature', 'review-rubrics', '--lap', 'lap-current', '--child', '2', '--finding', 'sha256:abc', '--rationale', 'risk'])).toBeNull();
+    expect(detectBuildReviewAcceptCommand(['node', 'conduct', 'build-review', 'accept', '--feature', 'review-rubrics', '--child', '2', '--child', '3', '--lap', 'lap-current', '--finding', 'sha256:abc', '--rationale', 'risk'])).toBeNull();
+  });
+  it('documents the child scope on build-review accept', () => {
+    // Covers: task:5
+    const buildReview = createProgram().commands.find((command) => command.name() === 'build-review');
+    const accept = buildReview?.commands.find((command) => command.name() === 'accept');
+    expect(accept?.helpInformation()).toContain('--child <child>');
   });
   it('requires the closed reduced-coverage command grammar without a caller-supplied cause', () => {
     expect(detectBuildReviewRecordReducedCoverageCommand([
@@ -139,6 +150,24 @@ describe('CLI', () => {
     expect(detectBuildReviewRecordReducedCoverageCommand([
       'node', 'conduct', 'build-review', 'record-reduced-coverage', '--feature', 'review-rubrics', '--lap', 'lap-current', '--rubric', 'unknown', '--rationale', 'risk',
     ])).toMatchObject({ kind: 'record-reduced-coverage', rubric: 'unknown' });
+  });
+  it('accepts --child only between --feature and --lap for reduced coverage', () => {
+    // Covers: task:1
+    expect(detectBuildReviewRecordReducedCoverageCommand([
+      'node', 'conduct', 'build-review', 'record-reduced-coverage', '--feature', 'review-rubrics', '--child', '2', '--lap', 'lap-current', '--rubric', 'testQuality', '--rationale', 'risk',
+    ])).toEqual({ kind: 'record-reduced-coverage', feature: 'review-rubrics', child: '2', lapId: 'lap-current', rubric: 'testQuality', rationale: 'risk' });
+    expect(detectBuildReviewRecordReducedCoverageCommand([
+      'node', 'conduct', 'build-review', 'record-reduced-coverage', '--feature', 'review-rubrics', '--lap', 'lap-current', '--child', '2', '--rubric', 'testQuality', '--rationale', 'risk',
+    ])).toBeNull();
+    expect(detectBuildReviewRecordReducedCoverageCommand([
+      'node', 'conduct', 'build-review', 'record-reduced-coverage', '--feature', 'review-rubrics', '--child', '2', '--child', '3', '--lap', 'lap-current', '--rubric', 'testQuality', '--rationale', 'risk',
+    ])).toBeNull();
+  });
+  it('documents the child scope on build-review reduced coverage', () => {
+    // Covers: task:1
+    const buildReview = createProgram().commands.find((command) => command.name() === 'build-review');
+    const reducedCoverage = buildReview?.commands.find((command) => command.name() === 'record-reduced-coverage');
+    expect(reducedCoverage?.helpInformation()).toContain('--child <child>');
   });
   it('accepts the child-scoped resolve-case command rendered in build-review halts', () => {
     expect(detectBuildReviewResolveCaseCommand([

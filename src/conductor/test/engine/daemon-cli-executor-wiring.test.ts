@@ -38,10 +38,11 @@ const originalConsoleLog = console.log;
 const originalConsoleWarn = console.warn;
 const originalConsoleError = console.error;
 
-function executor(): FeatureExecutor & { stopAll(): Promise<void> } {
+function executor(): FeatureExecutor & { stopAll(): Promise<void>; requestYield(slug: string): boolean } {
   return {
     execute: vi.fn(async (order: WorkOrder) => ({ slug: order.slug, status: 'done' as const })),
     stopAll: vi.fn(async () => {}),
+    requestYield: vi.fn(() => true),
   };
 }
 
@@ -95,6 +96,8 @@ describe('daemon executor-isolation composition', () => {
     vi.spyOn(daemon, 'runDaemon').mockImplementation(async (deps) => {
       calls.push('runDaemon');
       expect(deps.featureExecution?.executor).toBe(child);
+      expect(deps.requestYield?.('running-child')).toBe(true);
+      expect(child.requestYield).toHaveBeenCalledWith('running-child');
       return { processed: [], stoppedReason: 'backlog_drained' };
     });
 
@@ -128,6 +131,7 @@ describe('daemon executor-isolation composition', () => {
     const daemon = await import('../../src/engine/daemon.js');
     vi.spyOn(daemon, 'runDaemon').mockImplementation(async (deps) => {
       expect(deps.featureExecution?.executor).toBe(inProcess);
+      expect(deps.requestYield).toBeUndefined();
       return { processed: [], stoppedReason: 'backlog_drained' };
     });
 

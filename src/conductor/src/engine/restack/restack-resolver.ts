@@ -2,6 +2,7 @@ import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises
 import { join } from 'node:path';
 
 import {
+  classifyReplayMerge,
   conflictedFiles,
   makeGitRunner,
   resolveRebaseConflicts,
@@ -13,6 +14,99 @@ import {
 import type { ChildRange, CommitSha } from './restack-types.js';
 import { parseCommitSha } from './restack-types.js';
 import type { CommitterStamp } from './restack-replay.js';
+import {
+  carryNewestHaltRecord,
+  mapOmittedHaltRecordCommits,
+} from './halt-record-bookkeeping.js';
+import { selectReplayCandidates } from './restack-replay-candidates.js';
+import { missingCandidateSubjects, rewritesByUniqueSubject, writeConflictRecord } from './restack-conflict-record.js';
+import type { StoredRestackJournal } from './restack-journal.js';
+import {
+  buildFlattenedHandoff as buildFlattenedHandoffImpl,
+  replayCandidateSubjects,
+  type FlattenedHandoff,
+} from './restack-flattened-handoff.js';
+import { refusedTipPinFailureDetail } from './restack-conflict-halt.js';
+export { replayCandidateSubjects } from './restack-flattened-handoff.js';
+export type { FlattenedHandoff } from './restack-flattened-handoff.js';
+
+export async function buildFlattenedHandoff(
+  range: ChildRange,
+  newParent: CommitSha,
+  git: GitRunner,
+  options: Omit<import('./restack-flattened-handoff.js').BuildFlattenedHandoffOptions, 'classifyMerge'> = {},
+): Promise<FlattenedHandoff> {
+  return buildFlattenedHandoffImpl(range, newParent, git, { ...options, classifyMerge: classifyReplayMerge });
+}
+
+interface HaltRecordedRestackConflictOptions {
+  readonly worktree: string;
+  readonly slug: string;
+  readonly journal: StoredRestackJournal;
+  readonly range: ChildRange;
+  readonly replayParent: CommitSha;
+  /** Journaled candidates already present on the target parent. */
+  readonly comparisonCommits?: readonly CommitSha[];
+  /** The feature halt-record path excluded from candidate selection. */
+  readonly haltRecordSlug?: string;
+  readonly candidateSubjects: readonly string[];
+  readonly commit: CommitSha;
+  readonly paths: readonly string[];
+  /** A rejected resolver tip retained for the operator's next attempt. */
+  readonly refusedTip?: CommitSha;
+  readonly detail: string;
+  readonly events?: import('../conductor-event-emitter.js').ConductorEventEmitter;
+  readonly git: GitRunner;
+  readonly writeHalt: (worktree: string, child: ChildRange['child'], detail: string, events?: import('../conductor-event-emitter.js').ConductorEventEmitter, recipe?: {
+    readonly slug: string; readonly opId: string; readonly oldTip: CommitSha; readonly newParent: CommitSha; readonly oldParent: CommitSha; readonly startingTip?: CommitSha;
+  }) => Promise<unknown>;
+}
+
+async function rangeHasMerge(git: GitRunner, range: ChildRange): Promise<boolean> {
+  const result = await git(['rev-list', '--min-parents=2', `${range.oldParent}..${range.oldTip}`]);
+  if (result.exitCode !== 0) throw new Error(`could not inspect restack range for merges: ${result.stderr}`);
+  return result.stdout.trim() !== '';
+}
+
+/** Persist the conflict context before writing its matching operator halt. */
+export async function haltRecordedRestackConflict(options: HaltRecordedRestackConflictOptions): Promise<void> {
+  const { journal, range } = options;
+  // `range` belongs to a journal object that later cleanup may replace. Keep
+  // the recipe tied to the same durable hand-off fields that we write below.
+  const recipeOldTip = range.oldTip;
+  let recordFailure = '';
+  let flattenedTip: CommitSha | undefined;
+  try {
+    let candidateSubjects = options.candidateSubjects;
+    if (await rangeHasMerge(options.git, range)) {
+      const handoff = await buildFlattenedHandoff(range, options.replayParent, options.git, {
+        comparisonCommits: options.comparisonCommits,
+        haltRecordSlug: options.haltRecordSlug,
+      });
+      candidateSubjects = await replayCandidateSubjects(options.git, handoff.candidates);
+      flattenedTip = handoff.tip;
+    }
+    const tree = await options.git(['rev-parse', '--verify', `${options.replayParent}^{tree}`]);
+    const replayParentTree = tree.exitCode === 0 ? parseCommitSha(tree.stdout.trim()) : undefined;
+    if (!replayParentTree) throw new Error('cannot read replay parent tree');
+    const written = await writeConflictRecord(options.worktree, options.slug, {
+      opId: journal.journal.opId, child: range.child, oldParent: range.oldParent, oldTip: range.oldTip,
+      newParent: options.replayParent, newParentTree: replayParentTree, candidateSubjects,
+      commit: options.commit, paths: options.paths, ...(flattenedTip === undefined ? {} : { flattenedTip }),
+    }, { git: options.git, ...(options.refusedTip === undefined ? {} : { refusedTip: options.refusedTip }) });
+    if (written.kind !== 'updated') {
+      const failure = `\nconflict record write failed: ${written.kind}`;
+      recordFailure = options.refusedTip === undefined ? failure : refusedTipPinFailureDetail(failure);
+    }
+  } catch (error) {
+    const failure = `\nconflict record write failed: ${error instanceof Error ? error.message : String(error)}`;
+    recordFailure = options.refusedTip === undefined ? failure : refusedTipPinFailureDetail(failure);
+  }
+  await options.writeHalt(options.worktree, range.child, `${options.detail}${recordFailure}`, options.events, {
+    slug: options.slug, opId: journal.journal.opId, oldTip: recipeOldTip, newParent: options.replayParent, oldParent: range.oldParent,
+    ...((options.refusedTip ?? flattenedTip) === undefined ? {} : { startingTip: options.refusedTip ?? flattenedTip }),
+  });
+}
 
 /** Resolver dispatch receives the same immutable identity as every Git child. */
 export interface RestackResolutionContext extends ResolutionContext {
@@ -29,10 +123,18 @@ export interface ResolveRestackConflictOptions {
   readonly stamp: CommitterStamp;
   /** Commits introduced by the advance; patch-equivalent candidates are omitted. */
   readonly comparisonCommits?: readonly CommitSha[];
+  /** Enables deterministic handling of this feature's halt-record bookkeeping. */
+  readonly haltRecordSlug?: string;
+  /** Whether the range owns this feature's halt record after carried-merge normalization. */
+  readonly haltRecordOwned?: boolean;
+  /** An operator answer recorded for this child range, when it still matches. */
+  readonly operatorDecision?: { answer: string; commit: string; paths: readonly string[] };
   readonly resolver: RestackResolver;
   readonly cap: number;
   /** Rooted at the feature worktree; used only for the add/remove/prune operations. */
   readonly git?: GitRunner;
+  /** Test seam for the Git runner rooted at the detached resolver checkout. */
+  readonly temporaryGit?: (worktree: string) => GitRunner;
 }
 
 export interface RestackConflictResolution {
@@ -43,12 +145,8 @@ export interface RestackConflictResolution {
   readonly rewrites: ReadonlyMap<CommitSha, CommitSha>;
   /** The engine-written todo's pick candidates, in replay order. */
   readonly candidates: readonly CommitSha[];
-}
-
-function requiredSha(raw: string, context: string): CommitSha {
-  const sha = parseCommitSha(raw.trim());
-  if (!sha) throw new Error(`${context} did not return a full Git object name`);
-  return sha;
+  /** Merge decisions made while constructing a flattened resolver hand-off. */
+  readonly audit?: FlattenedHandoff['audit'];
 }
 
 function committerEnvironment(stamp: CommitterStamp): NodeJS.ProcessEnv {
@@ -61,36 +159,6 @@ function committerEnvironment(stamp: CommitterStamp): NodeJS.ProcessEnv {
 
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
-async function patchId(git: GitRunner, commit: CommitSha): Promise<string | undefined> {
-  const patch = await git(['show', '--format=', '--no-ext-diff', commit]);
-  if (patch.exitCode !== 0) throw new Error(`could not read patch for ${commit}: ${patch.stderr}`);
-  const result = await git(['patch-id', '--stable'], { input: patch.stdout });
-  if (result.exitCode !== 0) throw new Error(`could not compute patch-id for ${commit}: ${result.stderr}`);
-  return result.stdout.trim().split('\n').find(Boolean)?.split(/\s+/, 1)[0];
-}
-
-/** The non-merge candidate selection shared semantically with plumbing replay. */
-async function replayCandidates(
-  git: GitRunner,
-  range: ChildRange,
-  comparisonCommits: readonly CommitSha[],
-): Promise<CommitSha[]> {
-  const compared = new Set<string>();
-  for (const commit of comparisonCommits) {
-    const id = await patchId(git, commit);
-    if (id !== undefined) compared.add(id);
-  }
-  const listed = await git(['rev-list', '--first-parent', '--reverse', `${range.oldParent}..${range.oldTip}`]);
-  if (listed.exitCode !== 0) throw new Error(`could not list restack range: ${listed.stderr}`);
-  const candidates: CommitSha[] = [];
-  for (const raw of listed.stdout.split('\n').filter(Boolean)) {
-    const commit = requiredSha(raw, 'restack replay candidate');
-    // Empty commits have no patch-id and deliberately remain candidates.
-    if (!compared.has(await patchId(git, commit) ?? '')) candidates.push(commit);
-  }
-  return candidates;
 }
 
 async function readRewrites(path: string): Promise<Map<CommitSha, CommitSha>> {
@@ -111,17 +179,18 @@ async function readRewrites(path: string): Promise<Map<CommitSha, CommitSha>> {
   return rewrites;
 }
 
-async function candidateSubjects(git: GitRunner, candidates: readonly CommitSha[]): Promise<string[]> {
-  const subjects: string[] = [];
-  for (const candidate of candidates) {
-    const result = await git(['show', '-s', '--format=%s', candidate]);
-    if (result.exitCode !== 0 || result.stdout.trim() === '') {
-      throw new Error(`could not read restack replay subject for ${candidate}`);
-    }
-    subjects.push(result.stdout.trim());
+function translateFlattenedRewrites(
+  rewrites: ReadonlyMap<CommitSha, CommitSha>,
+  flattenedMergesByCommit: ReadonlyMap<CommitSha, CommitSha>,
+  flattenedOrdinaryCommitsByCommit: ReadonlyMap<CommitSha, CommitSha>,
+): Map<CommitSha, CommitSha> {
+  const translated = new Map<CommitSha, CommitSha>();
+  for (const [original, replacement] of rewrites) {
+    translated.set(flattenedMergesByCommit.get(original) ?? flattenedOrdinaryCommitsByCommit.get(original) ?? original, replacement);
   }
-  return subjects;
+  return translated;
 }
+
 
 /**
  * Resolve one restack child's conflict off-worktree. No branch or conductor ref
@@ -142,15 +211,35 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
   const sequenceEditorPath = join(helpers, 'sequence-editor');
   const rewritePath = join(helpers, 'rewritten-list');
   const hooksPath = join(helpers, 'hooks');
+  const attributesPath = join(helpers, 'attributes');
   let added = false;
 
   try {
-    const candidates = await replayCandidates(runGit, options.range, options.comparisonCommits ?? []);
-    const addedResult = await runGit(['worktree', 'add', '--detach', temporaryWorktree, options.range.oldTip], { env: identity });
+    const handoff = await rangeHasMerge(runGit, options.range)
+      ? await buildFlattenedHandoff(options.range, options.newParent, runGit, {
+        comparisonCommits: options.comparisonCommits,
+        haltRecordSlug: options.haltRecordSlug,
+      })
+      : undefined;
+    const candidates = handoff?.candidates ?? await selectReplayCandidates(runGit, options.range, options.comparisonCommits, options.haltRecordSlug);
+    // An empty engine-authored todo has no resolver work to settle. Its only
+    // valid result is the supplied replay parent; never ask Git to run an
+    // empty interactive rebase, which reports a synthetic failure.
+    if (candidates.length === 0) {
+      const rewrites = new Map<CommitSha, CommitSha>();
+      let tip = options.newParent;
+      if (options.haltRecordSlug !== undefined) {
+        const carried = await carryNewestHaltRecord(options.range, options.newParent, options.haltRecordSlug, tip, options.stamp, options.haltRecordOwned, runGit);
+        tip = carried.tip;
+        await mapOmittedHaltRecordCommits(options.range, options.haltRecordSlug, options.newParent, tip, rewrites, runGit);
+      }
+      return { outcome: { kind: 'noop' }, tip, rewrites, candidates, ...(handoff === undefined ? {} : { audit: handoff.audit }) };
+    }
+    const addedResult = await runGit(['worktree', 'add', '--detach', temporaryWorktree, handoff?.tip ?? options.range.oldTip], { env: identity });
     if (addedResult.exitCode !== 0) throw new Error(`could not add restack resolver worktree: ${addedResult.stderr}`);
     added = true;
 
-    const todo = candidates.map((commit) => `pick ${commit}\n`).join('');
+    const todo = (handoff?.todo ?? candidates).map((commit) => `pick ${commit}\n`).join('');
     await writeFile(todoPath, todo);
     await writeFile(sequenceEditorPath, `#!/bin/sh\ncp ${shellQuote(todoPath)} "$1"\n`);
     await chmod(sequenceEditorPath, 0o700);
@@ -158,30 +247,95 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
     await writeFile(join(hooksPath, 'post-rewrite'), `#!/bin/sh\ncat > ${shellQuote(rewritePath)}\n`);
     await chmod(join(hooksPath, 'post-rewrite'), 0o700);
 
+    if (options.haltRecordSlug !== undefined) {
+      await writeFile(attributesPath, `${`.docs/halted/${options.haltRecordSlug}.md`} merge=conductor-halt-record\n`);
+    }
     const environment: NodeJS.ProcessEnv = {
       ...identity,
       GIT_SEQUENCE_EDITOR: sequenceEditorPath,
       GIT_EDITOR: 'true',
       // A resolver-specific hook captures Git's rewritten list without adding
       // non-pick instructions to the engine-owned todo.
-      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_COUNT: options.haltRecordSlug === undefined ? '1' : '3',
       GIT_CONFIG_KEY_0: 'core.hooksPath',
       GIT_CONFIG_VALUE_0: hooksPath,
+      ...(options.haltRecordSlug === undefined ? {} : {
+        GIT_CONFIG_KEY_1: 'core.attributesFile',
+        GIT_CONFIG_VALUE_1: attributesPath,
+        GIT_CONFIG_KEY_2: 'merge.conductor-halt-record.driver',
+        GIT_CONFIG_VALUE_2: 'true',
+      }),
     };
-    const nativeTemporaryGit = makeGitRunner(temporaryWorktree);
+    const nativeTemporaryGit = options.temporaryGit?.(temporaryWorktree) ?? makeGitRunner(temporaryWorktree);
     // Every call rooted in the detached checkout, including rebase-state
     // inspection around a resolver's --continue, carries the journal stamp.
     const tempGit: GitRunner = (args, opts) => nativeTemporaryGit(args, {
       ...opts,
       env: { ...environment, ...opts?.env },
     });
+    const resolved = async (
+      outcome: RebaseOutcome,
+      capturedTip: CommitSha | undefined = undefined,
+    ): Promise<RestackConflictResolution> => {
+      let rewrites = await readRewrites(rewritePath);
+      // The settled checkout is the same authority FR-8 and FR-9 inspected.
+      // The hook list survives a lost checkout, but never overrides its HEAD.
+      const head = capturedTip === undefined ? await tempGit(['rev-parse', 'HEAD']) : undefined;
+      const settledTip = capturedTip ?? (head?.exitCode === 0 ? parseCommitSha(head.stdout.trim()) : undefined);
+      const rewrittenTip = [...rewrites.values()].at(-1);
+      if (settledTip === undefined && rewrittenTip === undefined && candidates.length > 0) {
+        return {
+          outcome: {
+            kind: 'conflict_halt',
+            conflicts: [],
+            reason: `restack resolver finished child ${options.range.child} without a readable settled tip`,
+          },
+          tip: undefined,
+          rewrites: translateFlattenedRewrites(rewrites, handoff?.flattenedMergesByCommit ?? new Map(), handoff?.flattenedOrdinaryCommitsByCommit ?? new Map()),
+          candidates,
+          ...(handoff === undefined ? {} : { audit: handoff.audit }),
+        };
+      }
+      let tip = settledTip ?? rewrittenTip ?? options.newParent;
+      const candidateSubjects = await replayCandidateSubjects(runGit, candidates);
+      const missingSubjects = await missingCandidateSubjects(runGit, options.newParent, tip, candidateSubjects);
+      if (missingSubjects.length > 0) {
+        return {
+          outcome: {
+            kind: 'conflict_halt',
+            conflicts: [],
+            reason: `restack resolver finished child ${options.range.child} without candidate subjects: ${missingSubjects.join(', ')}`,
+          },
+          tip: undefined,
+          rewrites: translateFlattenedRewrites(rewrites, handoff?.flattenedMergesByCommit ?? new Map(), handoff?.flattenedOrdinaryCommitsByCommit ?? new Map()),
+          candidates,
+          ...(handoff === undefined ? {} : { audit: handoff.audit }),
+        };
+      }
+      if (rewrites.size === 0 && candidates.length > 0) {
+        const rebuilt = await rewritesByUniqueSubject(
+          runGit,
+          `${options.range.oldParent}..${handoff?.tip ?? options.range.oldTip}`,
+          `${options.newParent}..${tip}`,
+          candidateSubjects,
+        );
+        for (const [original, replacement] of rebuilt) rewrites.set(original, replacement);
+      }
+      if (options.haltRecordSlug !== undefined) {
+        const carried = await carryNewestHaltRecord(options.range, options.newParent, options.haltRecordSlug, tip, options.stamp, options.haltRecordOwned, runGit);
+        tip = carried.tip;
+        await mapOmittedHaltRecordCommits(options.range, options.haltRecordSlug, options.newParent, tip, rewrites, runGit);
+      }
+      rewrites = translateFlattenedRewrites(rewrites, handoff?.flattenedMergesByCommit ?? new Map(), handoff?.flattenedOrdinaryCommitsByCommit ?? new Map());
+      return { outcome, tip, rewrites, candidates, ...(handoff === undefined ? {} : { audit: handoff.audit }) };
+    };
     const started = await tempGit(['rebase', '-i', '--onto', options.newParent, options.range.oldParent], { env: environment });
     if (started.exitCode === 0) {
-      const tip = requiredSha((await tempGit(['rev-parse', 'HEAD'], { env: environment })).stdout, 'resolved restack tip');
-      return { outcome: { kind: 'noop' }, tip, rewrites: await readRewrites(rewritePath), candidates };
+      return resolved({ kind: 'noop' });
     }
 
     const conflicts = await conflictedFiles(tempGit);
+    let resolverSettledTip: CommitSha | undefined;
     const outcome = await resolveRebaseConflicts(
       tempGit,
       temporaryWorktree,
@@ -189,15 +343,30 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
         kind: 'conflict_halt',
         conflicts,
         reason: started.stderr || 'restack resolver rebase failed',
-        expectedSubjects: await candidateSubjects(tempGit, candidates),
+        expectedSubjects: await replayCandidateSubjects(tempGit, candidates),
       },
-      async (context) => options.resolver({ ...context, environment }),
+      async (context) => {
+        const result = await options.resolver({
+          ...context,
+          environment,
+          ...(options.operatorDecision === undefined ? {} : { operatorDecision: options.operatorDecision }),
+        });
+        if (result.resolved) {
+          const head = await tempGit(['rev-parse', 'HEAD']);
+          resolverSettledTip = head.exitCode === 0 ? parseCommitSha(head.stdout.trim()) : undefined;
+        }
+        return result;
+      },
       options.cap,
     );
-    const tip = outcome.kind === 'changed' || outcome.kind === 'noop'
-      ? requiredSha((await tempGit(['rev-parse', 'HEAD'], { env: environment })).stdout, 'resolved restack tip')
-      : undefined;
-    return { outcome, tip, rewrites: await readRewrites(rewritePath), candidates };
+    if (outcome.kind === 'changed' || outcome.kind === 'noop') return resolved(outcome, resolverSettledTip);
+    return {
+      outcome,
+      tip: undefined,
+      rewrites: translateFlattenedRewrites(await readRewrites(rewritePath), handoff?.flattenedMergesByCommit ?? new Map(), handoff?.flattenedOrdinaryCommitsByCommit ?? new Map()),
+      candidates,
+      ...(handoff === undefined ? {} : { audit: handoff.audit }),
+    };
   } finally {
     try {
       if (added) {

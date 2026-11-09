@@ -92,7 +92,7 @@ function validLooseReference(value: unknown): boolean {
 function validDisposition(value: unknown): value is AcceptedRemediationPlanDisposition {
   if (!isRecord(value)) return false;
   const keys = Object.keys(value);
-  const allowed = ['reference', 'requiredReference', 'disposition', 'targetStep', 'category', 'rationale', 'tasks', 'boundTaskIds'];
+  const allowed = ['reference', 'requiredReference', 'disposition', 'targetStep', 'category', 'rationale', 'tasks', 'boundTaskIds', 'reconciliation'];
   if (!keys.every((key) => allowed.includes(key)) || !keys.includes('reference') || !keys.includes('disposition') ||
     !keys.includes('targetStep') || !keys.includes('category') || !keys.includes('rationale') ||
     !keys.includes('tasks') || !keys.includes('boundTaskIds')) return false;
@@ -102,7 +102,12 @@ function validDisposition(value: unknown): value is AcceptedRemediationPlanDispo
     (value.category === null || nonEmptyText(value.category)) && nonEmptyText(value.rationale) &&
     Array.isArray(value.tasks) && value.tasks.every((task) => isRecord(task) && exactKeys(task, ['id', 'title']) &&
       nonEmptyText(task.id) && nonEmptyText(task.title)) &&
-    Array.isArray(value.boundTaskIds) && value.boundTaskIds.every(nonEmptyText);
+    Array.isArray(value.boundTaskIds) && value.boundTaskIds.every(nonEmptyText) &&
+    (value.reconciliation === undefined || (isRecord(value.reconciliation) &&
+      Object.keys(value.reconciliation).every((key) => ['relation', 'priorCaseId', 'reason'].includes(key)) &&
+      ['same', 'recurrence', 'materially-changed', 'new'].includes(value.reconciliation.relation as string) &&
+      nonEmptyText(value.reconciliation.reason) &&
+      (value.reconciliation.priorCaseId === undefined || nonEmptyText(value.reconciliation.priorCaseId))));
 }
 
 function validPersistedPlan(value: unknown): value is PersistedRemediationPlan {

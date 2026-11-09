@@ -106,10 +106,13 @@ import {
   readPrdAuditVerdict,
   type PersistedPrdAuditVerdict,
 } from './prd-audit-verdict-store.js';
-import { evaluateAdrAssumptionLedgers } from './adr-assumption-ledger-scope.js';
+import {
+  artifactPresenceAtMergeBase,
+  evaluateAdrAssumptionLedgers,
+} from './adr-assumption-ledger-scope.js';
 
 export { splitStoryBlocks, type StoryBlock } from './story-criteria.js';
-import { loadSliceTopology } from './slice-topology.js';
+import { loadSliceTopology, validatePlanDependencies } from './slice-topology.js';
 import { parseChildId, pipelinePathFor, type ChildId } from './child-context.js';
 
 export type ArtifactLifecycleScope = 'feature' | 'repository' | 'run';
@@ -1426,6 +1429,8 @@ export interface CompletionContext {
    * region; absent preserves the legacy feature-root evidence paths.
    */
   activeChild?: ChildId;
+  /** Routed repair round currently executing for the active child. */
+  routedRound?: string;
   /** Routed verify-green has already captured the exact host tip; this keeps the predicate process-free. */
   routedVerifyGreen?: { readonly roundId: string; readonly host: ChildId; readonly headSha: string };
   /**
@@ -4511,14 +4516,37 @@ export const GATE_ONLY_PREDICATES: Partial<
         reason: `plan does not cover: ${shown}${more} — add task(s) referencing these story paths`,
       };
     }
-    // The plan must declare a task dependency tree so `build` (pipeline) can
-    // order the work topologically. See skills/plan/SKILL.md (Task Dependency
-    // Graph) + skills/pipeline/SKILL.md which consumes it.
-    if (!planHasDependencyTree(planText)) {
+    // Inherited plans keep the original presence-only check so legacy merged
+    // plans remain dispatchable. Plans authored on this feature branch must
+    // instead have a fully resolvable, acyclic dependency graph.
+    const dependencyTreeMissing = (): CompletionResult | undefined => {
+      if (planHasDependencyTree(planText)) return undefined;
       return {
         done: false,
         reason:
           'plan has no task dependency tree — add a "## Task Dependency Graph" section or per-task "**Dependencies:**" lines',
+      };
+    };
+    const presence = await artifactPresenceAtMergeBase(
+      dir,
+      relative(dir, scopedPlan).replaceAll('\\', '/'),
+    );
+    if (presence.kind === 'absent') {
+      const violations = validatePlanDependencies(planText);
+      if (violations.length > 0) {
+        return {
+          done: false,
+          reason: `plan dependency validation failed: ${violations.map(({ message }) => message).join('; ')}`,
+        };
+      }
+      return { done: true };
+    }
+    const missingDependencyTree = dependencyTreeMissing();
+    if (missingDependencyTree) return missingDependencyTree;
+    if (presence.kind === 'merge-base-unresolved') {
+      return {
+        done: true,
+        reason: `strict dependency validation skipped because the merge-base was unresolved: ${presence.detail}`,
       };
     }
     return { done: true };

@@ -21,7 +21,7 @@ import { readRevalidationQueue, readRouteRecord, routingFenceOpen, transitionHos
 import { closureRefFor } from './routing-refs.js';
 import { redRefFor } from './routing-refs.js';
 import { parseRoutedAcceptanceRunContract, parseRoutedRedRecord, type RoutedAcceptanceRunContract } from './red-record.js';
-import { assertNever, type RouteRecord, type RoutedObligation, type RoundId } from './route-types.js';
+import { assertNever, isDerivedAlreadyCompleteHost, type RouteRecord, type RoutedObligation, type RoundId } from './route-types.js';
 import type { ConductState } from '../../types/state.js';
 
 export type EnterHostRegionResult =
@@ -430,6 +430,16 @@ async function reconcileHostObligations(
   return { kind: 'reconciled' };
 }
 
+/** A hosted, taskless audit obligation must enter BUILD even after task completion. */
+export function hostCarriesTasklessObligation(record: RouteRecord, host: ChildId): boolean {
+  const allocation = record.allocation[host];
+  const hostedItems = record.items.filter((item) => item.host === host);
+  return allocation !== undefined
+    && allocation.remTaskIds.length === 0
+    && hostedItems.length > 0
+    && hostedItems.every((item) => item.taskIds === undefined);
+}
+
 /**
  * Pins and enters the selected routed host exactly once before its BUILD
  * region can run.  Frozen blocks are committed before the host becomes
@@ -458,6 +468,12 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
   const hostState = stored.record.hosts[input.host];
   if (hostState !== 'admitted' && hostState !== 'repairing') {
     return { kind: 'refused', detail: `routing round ${input.roundId} host ${input.host} is not admitted` };
+  }
+  // This state is written before an ordinary exit begins.  It must bypass all
+  // repairing-entry effects (including task seeding and repair credit) after a
+  // crash, even once its outbox event has been drained.
+  if (isDerivedAlreadyCompleteHost(stored.record, input.host)) {
+    return { kind: 'derived-already-complete', detail: 'persisted derived-already-complete settle' };
   }
 
   const pinned = await pinHostEntry(input.worktree, input.slug, stored, input.host, git);
@@ -530,6 +546,7 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
   const auditAlreadyComplete = await (async (): Promise<boolean> => {
     switch (stored.record.kind) {
       case 'audit':
+        if (hostCarriesTasklessObligation(stored.record, input.host)) return false;
         return (await (input.checkCompletion ?? checkStepCompletion)(input.worktree, 'build', {
           ...input.completionContext,
           projectRoot: input.worktree,

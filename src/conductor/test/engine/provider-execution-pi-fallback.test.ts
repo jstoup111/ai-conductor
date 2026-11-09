@@ -1,8 +1,8 @@
 import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
 
-// Covers: task:10, task:19
+// Covers: task:10, task:11, task:12, task:19
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { InvokeResult, LLMProvider } from '../../src/execution/llm-provider.js';
 import { PiProvider } from '../../src/execution/pi-provider.js';
@@ -17,6 +17,7 @@ import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import { ProviderSessionScope, ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { createProviderAvailability } from '../../src/engine/provider-availability.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { Conductor } from '../test-conductor.js';
 import type { ConductorEvent } from '../../src/types/events.js';
@@ -95,6 +96,33 @@ describe.each(['pi', 'codex'] as const)('provider fallback from %s', (firstProvi
     });
     expect(first.invoke).toHaveBeenCalledOnce();
     expect(claude.invoke).toHaveBeenCalledOnce();
+  });
+});
+
+describe('Pi classified failures hold the provider walk', () => {
+  const environment = {
+    stat: async () => ({ isFile: () => true, isDirectory: () => false }), access: async () => {},
+    env: {}, homeDir: () => '/home/agent', cwd: () => '/workspace',
+  };
+
+  it.each([
+    ['pi-1.0.0-e2-invalid-key-deepseek.jsonl', 'authFailure'],
+    ['pi-1.0.0-e6-rate-limit.jsonl', 'rateLimited'],
+  ] as const)('does not advance to Claude after %s', async (fixture, recovery) => {
+    const stdout = await readFile(new URL(`../fixtures/pi/${fixture}`, import.meta.url), 'utf8');
+    const spawn = vi.fn(async () => ({ stdout, stderr: '', exitCode: 0 }));
+    const pi = new PiProvider(dispatchGitGuard, 'pi', spawn as never, environment);
+    const claude = fakeProvider({ success: true, output: 'must not run', exitCode: 0 });
+
+    const result = await executeProviderCandidates({
+      step: 'build', configuredProviders: ['pi', 'claude'], preferredProvider: ['pi', 'claude'],
+      runtimes: new ProviderRuntimeSet([runtime('pi', pi), runtime('claude', claude)]),
+      sessions: new ProviderSessionScope(vi.fn()), options: { prompt: 'Build.', cwd: '/workspace' },
+    });
+
+    expect(result).toMatchObject({ actualProvider: 'pi', [recovery]: true });
+    expect(spawn).toHaveBeenCalledOnce();
+    expect(claude.invoke).not.toHaveBeenCalled();
   });
 });
 
@@ -607,5 +635,128 @@ describe('preferred Pi escalation and fallback isolation', () => {
 
     expect(result).toMatchObject({ success: true, actualProvider: 'pi' });
     expect(vi.mocked(pi.invoke).mock.calls.map(([options]) => options.model)).toEqual([firstPi, secondPi]);
+  });
+});
+
+describe('Pi rate limits in the serial loop with a pi then claude ladder', () => {
+  const environment = {
+    stat: async () => ({ isFile: () => true, isDirectory: () => false }), access: async () => {},
+    env: {}, homeDir: () => '/home/agent', cwd: () => '/workspace',
+  };
+  const successStream = [
+    JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: 'Plan written.', stopReason: 'stop' } }),
+    JSON.stringify({ type: 'agent_end' }),
+  ].join('\n');
+  const piFixture = (name: string) => readFile(new URL(`../fixtures/pi/${name}`, import.meta.url), 'utf8');
+
+  /**
+   * One serial `plan` dispatch through the real DefaultStepRunner and candidate walk. Every later
+   * step returns a sentinel failure so the run ends at the step under observation.
+   */
+  async function runSerialPlan(input: {
+    piStreams: string[];
+    providerAvailability?: ReturnType<typeof createProviderAvailability>;
+  }) {
+    const projectRoot = await mkdtemp(join(process.env.TMPDIR ?? '/tmp', 'pi-serial-rate-limit-'));
+    directories.push(projectRoot);
+    const streams = [...input.piStreams];
+    const spawn = vi.fn(async () => ({ stdout: streams.shift() ?? successStream, stderr: '', exitCode: 0 }));
+    const pi = new PiProvider(dispatchGitGuard, 'pi', spawn as never, environment);
+    const claude = fakeProvider({ success: true, output: 'Claude completed', exitCode: 0 });
+    const config: HarnessConfig = { llm_provider: ['pi', 'claude'] };
+    const providerRunner = new DefaultStepRunner(pi, 'pi-serial-rate-limit', projectRoot, {
+      config,
+      providerExecution: {
+        configuredProviders: ['pi', 'claude'],
+        runtimes: new ProviderRuntimeSet([runtime('pi', pi), runtime('claude', claude)]),
+        sessions: new ProviderSessionStore(),
+        ...(input.providerAvailability ? { providerAvailability: input.providerAvailability } : {}),
+      },
+    });
+    const events = new ConductorEventEmitter();
+    const rateLimits: ConductorEvent[] = [];
+    events.on('rate_limit', (event) => { rateLimits.push(event); });
+    const planAttempts: Array<number | undefined> = [];
+    const planResults: Array<Awaited<ReturnType<DefaultStepRunner['run']>>> = [];
+    const sleeps: number[] = [];
+    await writeFile(join(projectRoot, 'conduct-state.json'), JSON.stringify({ complexity_tier: 'M', conflict_check: 'done', plan: 'pending' }));
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: join(projectRoot, 'conduct-state.json'),
+      events,
+      fromStep: 'plan',
+      maxRetries: 2,
+      sleepFn: vi.fn(async (ms: number) => { sleeps.push(ms); }),
+      ...(input.providerAvailability ? {
+        providerExecution: {
+          configuredProviders: ['pi', 'claude'],
+          runtimes: new ProviderRuntimeSet([runtime('pi', pi), runtime('claude', claude)]),
+          sessions: new ProviderSessionStore(),
+          providerAvailability: input.providerAvailability,
+        },
+      } : {}),
+      stepRunner: {
+        run: async (step, state, options) => {
+          if (step !== 'plan') return { success: false, output: 'tail barrier' };
+          planAttempts.push(options?.attempt);
+          const result = await providerRunner.run(step, state, options);
+          planResults.push(result);
+          return result;
+        },
+      },
+    });
+
+    await conductor.run();
+    const finalState = JSON.parse(await readFile(join(projectRoot, 'conduct-state.json'), 'utf8')) as Record<string, unknown>;
+    return { spawn, claude, rateLimits, planAttempts, planResults, sleeps, finalState };
+  }
+
+  it('waits 300 seconds and retries Pi without consuming retry budget or invoking claude', async () => {
+    const run = await runSerialPlan({ piStreams: [await piFixture('pi-1.0.0-e6-rate-limit.jsonl'), successStream] });
+
+    expect(run.rateLimits).toHaveLength(1);
+    expect(run.rateLimits[0]).toMatchObject({ type: 'rate_limit', waitSeconds: 300, provider: 'pi' });
+    expect(run.rateLimits[0]).not.toHaveProperty('reason');
+    expect(run.sleeps).toEqual([300_000]);
+    expect(run.spawn).toHaveBeenCalledTimes(2);
+    expect(run.claude.invoke).not.toHaveBeenCalled();
+    expect(run.planResults.map(({ success, actualProvider }) => ({ success, actualProvider }))).toEqual([
+      { success: false, actualProvider: 'pi' },
+      { success: true, actualProvider: 'pi' },
+    ]);
+    // The rate-limited dispatch consumed no retry budget: the completing dispatch is still attempt 1.
+    expect(run.planAttempts).toEqual([1, 1]);
+    expect(run.finalState.plan).toBe('done');
+  });
+
+  it('suppresses Pi on usage exhaustion so a later candidate walk in the window falls back to claude', async () => {
+    const providerAvailability = createProviderAvailability({ now: () => Date.now() });
+    const run = await runSerialPlan({
+      piStreams: [await piFixture('pi-1.0.0-e7-usage-exhausted.jsonl')],
+      providerAvailability,
+    });
+
+    expect(providerAvailability.isAvailable('pi')).toBe(false);
+    expect(run.rateLimits).toEqual([
+      expect.objectContaining({ type: 'rate_limit', reason: 'usage-exhausted', provider: 'pi', waitSeconds: 3600 }),
+    ]);
+    expect(run.spawn).toHaveBeenCalledOnce();
+
+    const claude = fakeProvider({ success: true, output: 'Claude completed', exitCode: 0 });
+    const spawn = vi.fn(async () => ({ stdout: successStream, stderr: '', exitCode: 0 }));
+    const pi = new PiProvider(dispatchGitGuard, 'pi', spawn as never, environment);
+    const attempts: Array<Record<string, unknown>> = [];
+    const result = await executeProviderCandidates({
+      step: 'build', configuredProviders: ['pi', 'claude'], preferredProvider: ['pi', 'claude'],
+      runtimes: new ProviderRuntimeSet([runtime('pi', pi), runtime('claude', claude)]),
+      sessions: new ProviderSessionScope(vi.fn()), providerAvailability,
+      onAttempt: async (_step, attempt) => { attempts.push(attempt as unknown as Record<string, unknown>); },
+      options: { prompt: 'Build.', cwd: '/workspace' },
+    });
+
+    expect(attempts[0]).toMatchObject({ provider: 'pi', invoked: false, reason: 'provider-suppressed' });
+    expect(result).toMatchObject({ success: true, actualProvider: 'claude' });
+    expect(spawn).not.toHaveBeenCalled();
+    expect(claude.invoke).toHaveBeenCalledOnce();
   });
 });

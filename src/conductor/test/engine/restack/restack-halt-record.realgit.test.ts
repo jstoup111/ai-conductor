@@ -1,6 +1,6 @@
-// Covers: task:16
+// Covers: task:3
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -30,9 +30,13 @@ interface HaltRecordFixture {
   readonly childOne: ChildRange;
   readonly childTwo: ChildRange;
   readonly newParent: CommitSha;
+  readonly lowerHalt: CommitSha;
+  readonly upperHalt: CommitSha;
 }
 
-async function createFixture(mixed = false): Promise<HaltRecordFixture> {
+async function createFixture(mode: 'normal' | 'mixed' | 'pin' = 'normal'): Promise<HaltRecordFixture> {
+  const mixed = mode === 'mixed';
+  const pin = mode === 'pin';
   const repo = await mkdtemp(join(tmpdir(), 'restack-halt-record-'));
   const git = (args: string[], env?: NodeJS.ProcessEnv) => execFile('git', args, { cwd: repo, env });
   const commit = async (message: string) => {
@@ -64,21 +68,27 @@ async function createFixture(mixed = false): Promise<HaltRecordFixture> {
     await git(['checkout', '-qb', 'child-2']);
     await mkdir(join(repo, '.docs', 'halted'), { recursive: true });
     await writeFile(join(repo, '.docs', 'halted', 'demo.md'), 'upper child record\n');
-    if (mixed) {
+    if (mixed || pin) {
       await mkdir(join(repo, 'src'), { recursive: true });
-      await writeFile(join(repo, 'src', 'c.ts'), 'upper child source\n');
+      await writeFile(join(repo, 'src', pin ? 'b.ts' : 'c.ts'), 'upper child source\n');
     }
     await commit('upper child halt record');
+    const upperHalt = sha((await git(['rev-parse', 'HEAD'])).stdout);
+    if (!mixed && !pin) {
+      await writeFile(join(repo, 'child-2.txt'), 'work\n');
+      await commit('child 2 work');
+    }
     const childTwoTip = sha((await git(['rev-parse', 'HEAD'])).stdout);
 
     await git(['checkout', '-q', 'child-1']);
     await mkdir(join(repo, '.docs', 'halted'), { recursive: true });
     await writeFile(join(repo, '.docs', 'halted', 'demo.md'), 'lower child record\n');
-    if (mixed) {
+    if (mixed || pin) {
       await mkdir(join(repo, 'src'), { recursive: true });
-      await writeFile(join(repo, 'src', 'c.ts'), 'lower child source\n');
+      await writeFile(join(repo, 'src', pin ? 'a.ts' : 'c.ts'), 'lower child source\n');
     }
     await commit('lower child halt record');
+    const lowerHalt = sha((await git(['rev-parse', 'HEAD'])).stdout);
     const childOneTip = sha((await git(['rev-parse', 'HEAD'])).stdout);
 
     await git(['checkout', '-qb', 'new-parent', base]);
@@ -94,6 +104,8 @@ async function createFixture(mixed = false): Promise<HaltRecordFixture> {
       childOne: { child: childOne, oldParent: base, oldTip: childOneTip, kind: 'closed' },
       childTwo: { child: childTwo, oldParent: childOneClosure, oldTip: childTwoTip, kind: 'active' },
       newParent,
+      lowerHalt,
+      upperHalt,
     };
   } catch (error) {
     await rm(repo, { recursive: true, force: true });
@@ -102,34 +114,46 @@ async function createFixture(mixed = false): Promise<HaltRecordFixture> {
 }
 
 async function replayFirstChild(fixture: HaltRecordFixture) {
-  return replayChildRange(fixture.childOne, fixture.newParent, stamp, makeGitRunner(fixture.repo));
+  return replayChildRange(fixture.childOne, fixture.newParent, stamp, makeGitRunner(fixture.repo), { haltRecordSlug: 'demo' });
 }
 
 describe('replayChildRange halt-record conflicts (real local Git)', () => {
-  it('keeps the upper child halt record when the conflict is confined to that record', async () => {
+  it('omits halt-record-only commits and maps their rewrites to the replay tip', async () => {
     const fixture = await createFixture();
     try {
       const replayedOne = await replayFirstChild(fixture);
-      const replayedTwo = await replayChildRange(fixture.childTwo, replayedOne.tip, stamp, makeGitRunner(fixture.repo));
-      const inspect = join(fixture.repo, 'inspect');
+      const replayedTwo = await replayChildRange(fixture.childTwo, replayedOne.tip, stamp, makeGitRunner(fixture.repo), { haltRecordSlug: 'demo' });
       const git = (args: string[]) => execFile('git', args, { cwd: fixture.repo });
-      await git(['worktree', 'add', '--detach', inspect, replayedTwo.tip]);
-      try {
-        await expect(readFile(join(inspect, '.docs', 'halted', 'demo.md'), 'utf8')).resolves.toBe('upper child record\n');
-      } finally {
-        await git(['worktree', 'remove', '--force', inspect]);
-      }
+      await expect(git(['log', '--format=%s', `${fixture.newParent}..${replayedTwo.tip}`])).resolves.toMatchObject({ stdout: 'child 2 work\nhalt record: demo\nchild 1 closure\n' });
+      expect(replayedOne.rewrites.size).toBe(2);
+      expect(replayedTwo.rewrites.size).toBe(2);
+      expect(replayedOne.rewrites.get(fixture.lowerHalt)).toBe(replayedOne.tip);
+      expect(replayedTwo.rewrites.get(fixture.upperHalt)).toBe(replayedOne.tip);
     } finally {
       await rm(fixture.repo, { recursive: true, force: true });
     }
   });
 
   it('leaves a mixed halt-record and source conflict for the resolver hand-off', async () => {
-    const fixture = await createFixture(true);
+    const fixture = await createFixture('mixed');
     try {
       const replayedOne = await replayFirstChild(fixture);
-      await expect(replayChildRange(fixture.childTwo, replayedOne.tip, stamp, makeGitRunner(fixture.repo)))
+      await expect(replayChildRange(fixture.childTwo, replayedOne.tip, stamp, makeGitRunner(fixture.repo), { haltRecordSlug: 'demo' }))
         .rejects.toThrow(/^merge-tree failed for [0-9a-f]{40}:/);
+    } finally {
+      await rm(fixture.repo, { recursive: true, force: true });
+    }
+  });
+
+  it('pins the halt path while replaying the kept source change with its original message', async () => {
+    const fixture = await createFixture('pin');
+    try {
+      const replayedOne = await replayFirstChild(fixture);
+      const replayedTwo = await replayChildRange(fixture.childTwo, replayedOne.tip, stamp, makeGitRunner(fixture.repo), { haltRecordSlug: 'demo' });
+      const git = (args: string[]) => execFile('git', args, { cwd: fixture.repo });
+      await expect(git(['show', `${replayedTwo.tip}:src/b.ts`])).resolves.toMatchObject({ stdout: 'upper child source\n' });
+      await expect(git(['show', `${replayedTwo.tip}:.docs/halted/demo.md`])).resolves.toMatchObject({ stdout: 'lower child record\n' });
+      await expect(git(['show', '-s', '--format=%B', replayedTwo.tip])).resolves.toMatchObject({ stdout: 'upper child halt record\n\n' });
     } finally {
       await rm(fixture.repo, { recursive: true, force: true });
     }

@@ -1,7 +1,6 @@
 // Covers: task:28
-import { execFile as execFileCallback, spawn } from 'node:child_process';
-import { watch } from 'node:fs';
-import { chmod, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { execFile as execFileCallback } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -10,7 +9,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parseChildId, type ChildId } from '../../../src/engine/child-context.js';
 import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
 import { writeHaltMarker } from '../../../src/engine/halt-marker.js';
-import { renderHaltRecord } from '../../../src/engine/halt-record.js';
+import { renderHaltRecord, supersedeHaltRecord } from '../../../src/engine/halt-record.js';
+import { haltRecordRefFor, readHaltRecordRef } from '../../../src/engine/halt-record-ref.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import {
@@ -137,16 +137,6 @@ async function liveOwner() {
   return { host: hostname(), pid: process.pid, processStartTime: start };
 }
 
-async function haltRecordCommits(git: SingleChild['git'], since: string): Promise<string[]> {
-  const listed = (await git(['rev-list', `${since}..HEAD`])).stdout.split('\n').filter(Boolean);
-  const records: string[] = [];
-  for (const commit of listed) {
-    const changed = (await git(['diff-tree', '--no-commit-id', '--name-only', '-r', commit])).stdout.trim();
-    if (changed === '.docs/halted/demo.md') records.push(commit);
-  }
-  return records;
-}
-
 /**
  * Leaf over two closed children, as the executor's own sync tests build it,
  * checked out in a linked worktree named `demo` so its halt is recordable.
@@ -192,22 +182,6 @@ async function stackFixture() {
   return { repo, git, c1, c2, leaf, advancedDefault };
 }
 
-function waitForPath(path: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const watcher = watch(join(path, '..'), (_event, name) => {
-      if (name === path.slice(path.lastIndexOf('/') + 1)) {
-        clearTimeout(timeout);
-        watcher.close();
-        resolve();
-      }
-    });
-    const timeout = setTimeout(() => {
-      watcher.close();
-      reject(new Error(`timed out waiting for ${path}`));
-    }, 10_000);
-  });
-}
-
 async function commitHaltRecord(subject: SingleChild): Promise<CommitSha> {
   await mkdir(join(subject.repo, '.docs', 'halted'), { recursive: true });
   await writeFile(join(subject.repo, '.docs', 'halted', 'demo.md'), renderHaltRecord({
@@ -217,40 +191,6 @@ async function commitHaltRecord(subject: SingleChild): Promise<CommitSha> {
   await subject.git(['add', '.docs/halted/demo.md']);
   await subject.git(['commit', '-qm', 'halt record: demo']);
   return sha((await subject.git(['rev-parse', 'HEAD'])).stdout);
-}
-
-/**
- * Start `supersedeHaltRecord` in a separate `node` process. It reads HEAD,
- * then blocks inside `prepare-commit-msg` until `release` exists.
- */
-async function startSupersede(subject: SingleChild, run: number) {
-  const started = join(subject.root, `supersede-started-${run}`);
-  const release = join(subject.root, `supersede-release-${run}`);
-  const hooks = join(subject.root, 'race-hooks');
-  await mkdir(hooks, { recursive: true });
-  const prepare = join(hooks, 'prepare-commit-msg');
-  await writeFile(prepare, `#!/bin/sh\nprintf '' > '${started}'\nwhile [ ! -f '${release}' ]; do sleep 0.01; done\nexit 0\n`);
-  await chmod(prepare, 0o755);
-  await subject.git(['config', 'core.hooksPath', hooks]);
-  const module = new URL('../../../src/engine/halt-record.ts', import.meta.url).pathname;
-  const program = [
-    'const { supersedeHaltRecord } = await import(process.argv[1]);',
-    'const result = await supersedeHaltRecord(process.argv[2], "demo", "race");',
-    'process.stdout.write(JSON.stringify(result));',
-  ].join(' ');
-  const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', program, module, subject.repo], {
-    cwd: subject.repo, stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  let stdout = '';
-  let stderr = '';
-  child.stdout.on('data', (chunk: Buffer) => { stdout += chunk; });
-  child.stderr.on('data', (chunk: Buffer) => { stderr += chunk; });
-  const complete = new Promise<unknown>((resolve, reject) => {
-    child.once('error', reject);
-    child.once('exit', (code) => code === 0 ? resolve(JSON.parse(stdout) as unknown) : reject(new Error(`child exited ${code}: ${stderr}`)));
-  });
-  await waitForPath(started);
-  return { release: () => writeFile(release, 'go\n'), complete };
 }
 
 /** The restack's ready → moved → synced steps, planned from `expected` as the live branch tip. */
@@ -273,7 +213,7 @@ async function restackBranch(subject: SingleChild, expected: CommitSha): Promise
 
 describe('restack halt seam, sweep (real local Git)', () => {
   // Covers: task:28
-  it('runRestack halting on a failed post-move verification first rolls its moved journal to aborted, then commits the halt record on the rolled-back HEAD', async () => {
+  it('runRestack halting on a failed post-move verification first rolls its moved journal to aborted, then appends the halt record ref without moving the rolled-back HEAD', async () => {
     const subject = await stackFixture();
     const raw = makeGitRunner(subject.repo);
     let perturbed = false;
@@ -292,13 +232,13 @@ describe('restack halt seam, sweep (real local Git)', () => {
     const refusals: string[] = [];
     const atRecord: { state?: string; head?: string }[] = [];
     events.on('restack_refused', (event) => { if (event.type === 'restack_refused') refusals.push(event.reason); });
-    // The leaf branch has no remote here, so the committed record reports a
-    // failed publish; either event follows the record commit.
+    // The record is isolated from the stacked leaf, so observing it must not
+    // infer a parent commit from HEAD.
     const observeRecord = async () => {
       const journal = await readRestackJournal(subject.repo, 'demo');
       atRecord.push({
         state: journal.kind === 'journal' ? journal.journal.state : journal.kind,
-        head: (await subject.git(['rev-parse', 'HEAD^'])).stdout.trim(),
+        head: (await subject.git(['rev-parse', 'HEAD'])).stdout.trim(),
       });
     };
     events.on('halt_record_written', observeRecord);
@@ -307,20 +247,20 @@ describe('restack halt seam, sweep (real local Git)', () => {
     const result = await runRestack({ worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.advancedDefault, git, events });
 
     expect(perturbed).toBe(true);
-    expect(result).toEqual({ kind: 'halted' });
+    expect(result).toMatchObject({ kind: 'halted' });
     expect(refusals).toEqual(['verification-failed']);
-    // The journal had already left `moved` when the halt record was committed,
-    // and the record's parent is the rolled-back leaf tip.
+    // The journal had already left `moved` when the isolated record was appended.
     expect(atRecord).toEqual([{ state: 'aborted', head: subject.leaf }]);
     expect((await subject.git(['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim()).toBe('feat/daemon-demo');
-    expect(await haltRecordCommits(subject.git, subject.leaf)).toHaveLength(1);
-    await expect(readFile(join(subject.repo, '.docs', 'halted', 'demo.md'), 'utf8')).resolves.toContain(`Head SHA: ${subject.leaf}`);
+    await expect(readHaltRecordRef(subject.repo, 'demo')).resolves.toMatchObject({
+      kind: 'record', source: 'ref', text: expect.stringContaining(`Head SHA: ${subject.leaf}`),
+    });
     expect((await subject.git(['rev-parse', 'refs/heads/feat/c1/demo'])).stdout.trim()).toBe(subject.c1);
     expect((await subject.git(['rev-parse', 'refs/heads/feat/c2/demo'])).stdout.trim()).toBe(subject.c2);
   });
 
   // Covers: task:28
-  it("writeHaltMarker at a dead owner's moved journal recovers with target synced before committing the record at the post-recovery HEAD, and leaves a live owner's journal untouched", async () => {
+  it("writeHaltMarker at a dead owner's moved journal recovers with target synced before appending the record ref at the post-recovery HEAD, and leaves a live owner's journal untouched", async () => {
     const subject = await singleChildFixture();
     const { newTip } = await crashAtMoved(subject);
     const events = new ConductorEventEmitter();
@@ -335,22 +275,24 @@ describe('restack halt seam, sweep (real local Git)', () => {
     expect(recoverSpy).toHaveBeenCalledWith(expect.objectContaining({ worktree: subject.repo, slug: 'demo', target: 'synced' }));
     expect(order).toEqual(['recovered:halt-seam-sweep:moved', 'record']);
     expect(await readRestackJournal(subject.repo, 'demo')).toMatchObject({ kind: 'journal', journal: { state: 'synced' } });
-    const records = await haltRecordCommits(subject.git, newTip);
-    expect(records).toHaveLength(1);
-    expect((await subject.git(['rev-parse', `${records[0]}^`])).stdout.trim()).toBe(newTip);
-    await expect(readFile(join(subject.repo, '.docs', 'halted', 'demo.md'), 'utf8')).resolves.toContain(`Head SHA: ${newTip}`);
+    expect((await subject.git(['rev-parse', 'HEAD'])).stdout.trim()).toBe(newTip);
+    await expect(readHaltRecordRef(subject.repo, 'demo')).resolves.toMatchObject({
+      kind: 'record', source: 'ref', text: expect.stringContaining(`Head SHA: ${newTip}`),
+    });
     await expect(readFile(join(subject.repo, 'base.txt'), 'utf8')).resolves.toBe('advanced\n');
 
     // While the journal's owner is alive, the seam does not recover it.
     recoverSpy.mockClear();
     const alive = await singleChildFixture();
     await crashAtMoved(alive, await liveOwner());
-    const before = (await alive.git(['for-each-ref', '--format=%(refname) %(objectname)'])).stdout;
+    const before = (await alive.git(['for-each-ref', '--format=%(refname) %(objectname)'])).stdout
+      .split('\n').filter((line) => !line.startsWith(haltRecordRefFor('demo'))).join('\n');
 
     await expect(writeHaltMarker(alive.repo, 'operator decision required\n', 'needs-human')).resolves.toEqual({ status: 'written' });
 
     expect(recoverSpy).not.toHaveBeenCalled();
-    expect((await alive.git(['for-each-ref', '--format=%(refname) %(objectname)'])).stdout).toBe(before);
+    expect((await alive.git(['for-each-ref', '--format=%(refname) %(objectname)'])).stdout
+      .split('\n').filter((line) => !line.startsWith(haltRecordRefFor('demo'))).join('\n')).toBe(before);
     expect(await readRestackJournal(alive.repo, 'demo')).toMatchObject({ kind: 'journal', journal: { state: 'moved' } });
   });
 
@@ -372,44 +314,38 @@ describe('restack halt seam, sweep (real local Git)', () => {
     await expect(recoverSpy.mock.results[0]!.value).resolves.toMatchObject({ kind: 'unavailable' });
     expect(await readRestackJournal(subject.repo, 'demo')).toMatchObject({ kind: 'journal', journal: { state: 'aborted' } });
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toBe('operator decision required\n');
-    expect(written).toEqual(['.docs/halted/demo.md']);
+    expect(written).toEqual([haltRecordRefFor('demo')]);
     expect(refused).toEqual([]);
-    expect(await haltRecordCommits(subject.git, subject.oldTip)).toHaveLength(1);
-    expect((await subject.git(['rev-parse', 'refs/heads/feat/c1/demo^'])).stdout.trim()).toBe(subject.oldTip);
+    expect((await subject.git(['rev-parse', 'HEAD'])).stdout.trim()).toBe(subject.oldTip);
+    await expect(readHaltRecordRef(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'record', source: 'ref' });
   });
 
   // Covers: task:28
-  it('across repeated two-process runs in both orders, a node supersede and a restack move never revert each other', { timeout: 120_000 }, async () => {
+  it('across repeated runs in both orders, an isolated supersede and a restack move never revert each other', async () => {
     for (let run = 0; run < 3; run += 1) {
-      // Supersede reads HEAD, then the restack moves the branch, then the supersede commits.
+      // A legacy committed record can be upgraded after its branch was moved.
       const late = await singleChildFixture();
       const lateRecord = await commitHaltRecord(late);
-      const lateSupersede = await startSupersede(late, run);
       const restacked = await restackBranch(late, lateRecord);
-      await lateSupersede.release();
 
-      await expect(lateSupersede.complete).resolves.toMatchObject({ kind: 'failed' });
+      await expect(supersedeHaltRecord(late.repo, 'demo', `race-${run}`)).resolves.toEqual({ kind: 'written', path: haltRecordRefFor('demo') });
       expect((await late.git(['rev-parse', 'refs/heads/feat/c1/demo'])).stdout.trim()).toBe(restacked);
       expect((await late.git(['rev-parse', 'HEAD^{tree}'])).stdout.trim())
         .toBe((await late.git(['rev-parse', `${restacked}^{tree}`])).stdout.trim());
       await expect(late.git(['show', 'HEAD:base.txt'])).resolves.toMatchObject({ stdout: 'advanced\n' });
-      await expect(late.git(['show', 'HEAD:.docs/halted/demo.md'])).resolves.toMatchObject({ stdout: expect.stringContaining('Status: halted') });
+      await expect(readHaltRecordRef(late.repo, 'demo')).resolves.toMatchObject({ kind: 'record', source: 'ref', text: expect.stringContaining('Status: resolved\n') });
 
-      // Supersede commits first; the restack then plans from, and keeps, that commit.
+      // A ref-backed supersede before restack leaves the branch's old record
+      // untouched while the restack moves the branch safely.
       const early = await singleChildFixture();
       const earlyRecord = await commitHaltRecord(early);
-      const earlySupersede = await startSupersede(early, run);
-      await earlySupersede.release();
-      await expect(earlySupersede.complete).resolves.toEqual({ kind: 'written' });
-      const superseded = sha((await early.git(['rev-parse', 'HEAD'])).stdout);
-      expect(superseded).not.toBe(earlyRecord);
-      const supersededRecord = (await early.git(['show', `${superseded}:.docs/halted/demo.md`])).stdout;
-      expect(supersededRecord).not.toContain('Status: halted\n');
+      await expect(supersedeHaltRecord(early.repo, 'demo', `race-${run}`)).resolves.toEqual({ kind: 'written', path: haltRecordRefFor('demo') });
+      expect(sha((await early.git(['rev-parse', 'HEAD'])).stdout)).toBe(earlyRecord);
 
-      const moved = await restackBranch(early, superseded);
+      const moved = await restackBranch(early, earlyRecord);
 
       expect((await early.git(['rev-parse', 'refs/heads/feat/c1/demo'])).stdout.trim()).toBe(moved);
-      await expect(early.git(['show', 'HEAD:.docs/halted/demo.md'])).resolves.toMatchObject({ stdout: supersededRecord });
+      await expect(readHaltRecordRef(early.repo, 'demo')).resolves.toMatchObject({ kind: 'record', source: 'ref', text: expect.stringContaining('Status: resolved\n') });
       await expect(early.git(['show', 'HEAD:base.txt'])).resolves.toMatchObject({ stdout: 'advanced\n' });
     }
   });

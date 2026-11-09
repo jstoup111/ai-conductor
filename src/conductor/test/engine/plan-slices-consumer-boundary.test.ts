@@ -173,12 +173,15 @@ describe('plan-slices consumer boundary', () => {
         join('engine', 'config.ts'),
       join('engine', 'engineer', 'land-spec.ts'),
       join('engine', 'plan-slices.ts'),
+      join('engine', 'restack', 'cascade-allowance.ts'),
       join('engine', 'routing', 'operator-round.ts'),
       join('engine', 'routing', 'round-receipt.ts'),
       join('engine', 'routing', 'route-types.ts'),
       join('engine', 'slice-topology.ts'),
       join('engine', 'stack-land-cli.ts'),
       join('engine', 'stack-owners-cli.ts'),
+      join('engine', 'stack-restack-resolve-cli.ts'),
+      join('engine', 'stack-rounds-cli.ts'),
       join('types', 'config.ts'),
       ]);
   });

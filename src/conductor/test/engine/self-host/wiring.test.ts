@@ -776,7 +776,7 @@ describe('self-host wired path — non-autonomy (TR-12, ADR-005/ADR-010)', () =>
     // Scope to the self-build region (helpers added in Phase 6).
     const start = text.indexOf('runSelfBuildDispatch');
     const end = text.indexOf(
-      'async run(): Promise<OperatorParkedTermination | undefined>',
+      'async run(): Promise<OperatorParkedTermination | PreemptedTermination | undefined>',
     );
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);

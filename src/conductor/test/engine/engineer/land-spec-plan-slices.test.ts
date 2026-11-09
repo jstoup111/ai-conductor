@@ -138,15 +138,22 @@ afterEach(async () => {
 });
 
 describe('plan-slices land rung', () => {
-  it.each([false, true])('lands unsliced free-form Dependencies with stacked_prs.enabled=%s', async (enabled) => {
+  async function expectUnslicedFreeFormDependenciesToReachTheDependencyGate(enabled: boolean): Promise<void> {
     const planText = planWithTasks([task(1, 'Tasks 1–9 all passing')]);
     const worktreePath = await seed(planText);
 
     await expect(landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, worktreePath, undefined, options(enabled)))
-      .resolves.toMatchObject({ branch: 'spec/plan-slices' });
+      .rejects.toMatchObject({ gate: 'plan-dependencies' });
     expect(planSlices.validatePlanSlices).toHaveBeenCalledWith(planText);
     expect(planSlices.validatePlanSlices).toHaveLastReturnedWith({ kind: 'unsliced' });
-    expect((await git(['rev-parse', 'spec/plan-slices'])).trim()).toMatch(/^[0-9a-f]{40}$/);
+  }
+
+  it('rejects unsliced free-form Dependencies with stacked_prs.enabled=false', async () => {
+    await expectUnslicedFreeFormDependenciesToReachTheDependencyGate(false);
+  });
+
+  it('rejects unsliced free-form Dependencies with stacked_prs.enabled=true', async () => {
+    await expectUnslicedFreeFormDependenciesToReachTheDependencyGate(true);
   });
 
   it('lands an unsliced plan with only a Task Dependency Graph', async () => {

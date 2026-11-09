@@ -1321,6 +1321,74 @@ describe('Conductor FINISH publication routing', () => {
     );
   });
 
+  // Covers: task:8
+  it('carries the last publication retry detail into the exhausted FINISH halt', async () => {
+    const dispositions: string[] = [];
+    const events = new ConductorEventEmitter();
+    events.on('finish_publication_disposition', (event) => {
+      if (event.type === 'finish_publication_disposition') dispositions.push(event.disposition);
+    });
+    const advance = vi.fn(async (): Promise<PublicationDisposition> => {
+      const attempt = advance.mock.calls.length;
+      return {
+        kind: 'publication_retry',
+        transition: 'author_pr_prose',
+        reason: 'prose_invalid',
+        detail: attempt === 3 ? 'last failed check: title is blank' : `failed check on attempt ${attempt}`,
+      };
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      finishPublication: { advance },
+      events,
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'auto',
+      maxRetries: 3,
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+    });
+
+    await conductor.run();
+
+    expect(advance).toHaveBeenCalledTimes(3);
+    expect(dispositions).toEqual(['retry_finish', 'retry_finish', 'retry_finish']);
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
+      'FINISH publication retry exhausted: prose_invalid Detail: last failed check: title is blank',
+    );
+  });
+
+  // Covers: task:8
+  it('keeps the exhausted FINISH halt unchanged when the retry has no detail', async () => {
+    const advance = vi.fn(async (): Promise<PublicationDisposition> => ({
+      kind: 'publication_retry',
+      transition: 'author_pr_prose',
+      reason: 'prose_not_returned',
+    }));
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      finishPublication: { advance },
+      events: new ConductorEventEmitter(),
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'auto',
+      maxRetries: 3,
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+    });
+
+    await conductor.run();
+
+    expect(advance).toHaveBeenCalledTimes(3);
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toBe(
+      'FINISH publication retry exhausted: prose_not_returned\n',
+    );
+  });
+
   it.each([
     {
       name: 'repeated ready_pr progress',
@@ -1486,12 +1554,14 @@ describe('Conductor FINISH publication routing', () => {
     state.architecture_review = 'skipped';
     await writeState(productionStatePath, state as ConductState);
     const runner: StepRunner = {
-      run: vi.fn(async () => {
-        pullRequest = {
-          ...pullRequest,
-          title: 'feat: publish coherent finish',
-          body: 'Reader-facing summary of the completed change.',
-        };
+      run: vi.fn(async (_step, _state, options) => {
+        if (options.finishProsePass === 'author') {
+          await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({
+            version: 1,
+            title: 'feat: publish coherent finish',
+            body: 'Reader-facing summary of the completed change.',
+          }));
+        }
         return { success: true, publicationDisposition: { kind: 'accepted' } };
       }),
     };
@@ -1553,8 +1623,8 @@ describe('Conductor FINISH publication routing', () => {
 
     await conductor.run();
 
-    // Placeholder prose requires authoring. Its resulting retained-PR
-    // title/body is accepted by the GitHub observation without another pass.
+    // Placeholder prose requires authoring; the authenticated engine handoff
+    // marks its newly published revision accepted without a second pass.
     expect(runner.run).toHaveBeenCalledTimes(1);
     expect(recordFinish).toHaveBeenCalledOnce();
     await expect(readFile(join(pipeline, 'finish-choice'), 'utf8')).resolves.toBe('pr\n');
@@ -1598,7 +1668,14 @@ describe('Conductor FINISH publication routing', () => {
       type: 'github_operation_failed'; operation: 'pull-request.edit';
       target: { kind: 'pull-request'; repository: string; number: number }; error: string; ts: string;
     }> = [];
-    const runner: StepRunner = { run: vi.fn(async () => {
+    const runner: StepRunner = { run: vi.fn(async (_step, _state, options) => {
+      if (options.finishProsePass === 'author') {
+        await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({
+          version: 1,
+          title: 'feat: publish coherent finish',
+          body: 'Reader-facing summary of the completed change.',
+        }));
+      }
       if (writeFailures) {
         queuedPublishFailures.push(
           { type: 'github_operation_failed', operation: 'pull-request.edit', target: { kind: 'pull-request', repository: 'acme/repo', number: 17 }, error: 'first missing-scope error', ts: '2026-10-25T00:00:00.000Z' },
@@ -1625,7 +1702,13 @@ describe('Conductor FINISH publication routing', () => {
         if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify(pullRequest) };
         throw new Error(`unexpected gh command: ${args.join(' ')}`);
       },
-      operations: { run: async () => ({}) }, observeReleaseReadiness: async () => 'present',
+      operations: {
+        run: async () => {
+          if (writeFailures) throw new Error(missingScope);
+          return {};
+        },
+      },
+      observeReleaseReadiness: async () => 'present',
       events,
       flushSessionEvents: async () => {
         for (const event of queuedPublishFailures) await events.emit(event);
@@ -1640,13 +1723,13 @@ describe('Conductor FINISH publication routing', () => {
     await conductor.run();
 
     const halt = await readFile(join(pipeline, 'HALT'), 'utf8');
-    expect(runner.run).toHaveBeenCalledOnce();
+    expect(runner.run).toHaveBeenCalledTimes(1);
     if (writeFailures) {
       expect(halt).toContain('A FINISH pull-request publish failed');
       expect(halt).toContain(missingScope);
       expect(halt).not.toContain('left pr.prose unchanged at placeholder');
       expect(dispositions).toEqual([expect.objectContaining({
-        reason: 'publication_operation_failed', detail: `pull-request.edit failed: ${missingScope}`,
+        reason: 'publication_operation_failed', detail: `pull-request.edit failed: guarded pull-request.edit failed: ${missingScope}`,
       })]);
       expect(loopHalts).toEqual([
         expect.stringContaining('A FINISH pull-request publish failed'),

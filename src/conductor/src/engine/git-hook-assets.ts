@@ -292,8 +292,6 @@ const protectedArtifactPathCase = `    ${PROTECTED_ARTIFACT_DIRECTORIES
   .flatMap((directory) => [directory, `${directory}/*`])
   .join('|')})`;
 
-const stackCommitGuard = `${shellQuote(resolveCanonicalLauncher())} stack-commit-guard`;
-
 /**
  * pre-commit hook
  *
@@ -301,7 +299,9 @@ const stackCommitGuard = `${shellQuote(resolveCanonicalLauncher())} stack-commit
  * Bash remains self-contained while its protected-path cases are derived from
  * the engine's shared protected artifact definition.
  */
-export const PRE_COMMIT_HOOK = [
+export function buildPreCommitHook(launcher = resolveCanonicalLauncher()): string {
+  const stackCommitGuard = `${shellQuote(launcher)} stack-commit-guard`;
+  return [
   '#!/bin/bash',
   'set -e',
   '',
@@ -364,7 +364,10 @@ export const PRE_COMMIT_HOOK = [
   '[[ ! -x "$CHAINED_HOOK" ]] || "$CHAINED_HOOK" "$@"',
   '',
   'exit 0',
-].join('\n');
+  ].join('\n');
+}
+
+export const PRE_COMMIT_HOOK = buildPreCommitHook();
 
 /**
  * reference-transaction hook.

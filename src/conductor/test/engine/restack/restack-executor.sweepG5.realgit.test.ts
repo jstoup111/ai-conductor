@@ -68,8 +68,8 @@ async function repository(prefix: string) {
 }
 
 describe('runRestack sweep G5 (real local Git)', () => {
-  // Covers: S1.10, task:rem-prd-audit-R15
-  it('moves an unentered pre-region halt-record leaf to its rewrite in the same base-refresh move, writes no leaf-moved ref, and later moves the leaf cleanly when child 2 closes', async () => {
+  // Covers: S1.10, task:7, task:rem-prd-audit-R15
+  it('moves an unentered pre-region halt-record leaf to the advanced default in the same base-refresh move, writes no leaf-moved ref, and later moves the leaf cleanly when child 2 closes', async () => {
     const subject = await repository('restack-sweep-g5-unentered-leaf-');
     const base = await subject.commit('base', 'base.txt', 'base\n');
     // The leaf received a pre-region halt record H; child 1 was created from it.
@@ -100,14 +100,10 @@ describe('runRestack sweep G5 (real local Git)', () => {
       worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: advanced, events, git: makeGitRunner(subject.repo),
     })).resolves.toMatchObject({ kind: 'applied' });
 
-    // H' is the rewrite of H inside the new child 1, on the advanced default.
-    const rewrittenHalt = (await subject.bySubject(`${advanced}..refs/conductor/demo/closed/c1`)).get('halt record');
-    expect(rewrittenHalt).toBeDefined();
-    expect(rewrittenHalt).not.toBe(haltRecord);
-    expect((await subject.git(['rev-parse', `${rewrittenHalt}^`])).trim()).toBe(advanced);
-    expect(await subject.tip('feat/daemon-demo')).toBe(rewrittenHalt);
+    // H maps to the advanced default because no kept commit precedes it.
+    expect(await subject.tip('feat/daemon-demo')).toBe(advanced);
     // Same move: the leaf moved in the one restack operation that moved child 1.
-    expect(applied.find((event) => event.child === 3)).toMatchObject({ oldTip: haltRecord, newTip: rewrittenHalt });
+    expect(applied.find((event) => event.child === 3)).toMatchObject({ oldTip: haltRecord, newTip: advanced });
     expect(new Set(applied.map((event) => event.opId)).size).toBe(1);
     // An unentered leaf's move never writes the leaf-moved marker.
     await expect(subject.git(['show-ref', '--verify', '--quiet', 'refs/conductor/demo/leaf-moved'])).rejects.toBeDefined();

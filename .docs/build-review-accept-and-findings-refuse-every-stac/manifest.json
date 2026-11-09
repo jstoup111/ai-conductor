@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "slug": "build-review-accept-and-findings-refuse-every-stac",
+  "artifacts": [
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/build-review-accept-and-findings-refuse-every-stac.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/build-review-accept-and-findings-refuse-every-stac.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/build-review-accept-and-findings-refuse-every-stac.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/build-review-accept-and-findings-refuse-every-stac.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/build-review-accept-and-findings-refuse-every-stac.md"
+    }
+  ]
+}

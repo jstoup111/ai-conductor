@@ -53,6 +53,38 @@ async function resolveMergeBase(
   return { kind: 'resolved', sha };
 }
 
+export type ArtifactPresenceAtMergeBaseResult =
+  | { kind: 'present' }
+  | { kind: 'absent' }
+  | { kind: 'merge-base-unresolved'; detail: string };
+
+/**
+ * Reports whether a repository-relative artifact existed when this feature
+ * diverged from its origin-first comparison base. This deliberately asks Git
+ * for the merge-base tree rather than inspecting the working tree, so feature
+ * edits cannot turn inherited artifacts into newly authored ones.
+ */
+export async function artifactPresenceAtMergeBase(
+  worktreePath: string,
+  repoRelPath: string,
+): Promise<ArtifactPresenceAtMergeBaseResult> {
+  try {
+    const resolved = await resolveMergeBase(worktreePath, undefined, undefined);
+    if (resolved.kind === 'unresolved') {
+      return { kind: 'merge-base-unresolved', detail: resolved.detail };
+    }
+
+    const git = makeGitRunner(worktreePath);
+    const artifact = await git(['cat-file', '-e', `${resolved.sha}:${repoRelPath}`]);
+    return artifact.exitCode === 0 ? { kind: 'present' } : { kind: 'absent' };
+  } catch {
+    return {
+      kind: 'merge-base-unresolved',
+      detail: 'Artifact merge base could not be resolved.',
+    };
+  }
+}
+
 async function workingTreeAdrPaths(worktreePath: string): Promise<string[]> {
   try {
     const names = await readdir(join(worktreePath, '.docs', 'decisions'));

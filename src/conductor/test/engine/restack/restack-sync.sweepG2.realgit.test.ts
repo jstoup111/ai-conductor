@@ -72,7 +72,7 @@ describe('restack seal rotation sweep (real local Git)', () => {
     const refsBefore = await stackRefs(tampered);
     await writeFile(join(tampered.repo, '.docs', 'plans', 'demo.md'), 'tampered\n');
 
-    await expect(restack(tampered)).resolves.toEqual({ kind: 'halted' });
+    await expect(restack(tampered)).resolves.toMatchObject({ kind: 'halted' });
     expect(await stackRefs(tampered)).toBe(refsBefore);
     await expect(readFile(join(tampered.repo, '.pipeline', 'protected-artifact-seal.json'), 'utf8')).resolves.toBe(sealBefore);
     await expect(readFile(join(tampered.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('protected-artifact seal');

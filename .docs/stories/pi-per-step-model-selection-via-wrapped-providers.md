@@ -192,14 +192,14 @@ As an operator, I want a Pi run that ended in an error to fail its step, so that
 ### Acceptance Criteria
 
 #### Happy Path
-- Given Pi exits 0 and its terminal assistant message has `stopReason: "error"` and `errorMessage: "No API key for provider: cline"`, when the adapter parses the stream, then the invocation result is a failure whose error text contains `No API key for provider: cline`.
+- Given Pi exits 0 and its terminal assistant message has `stopReason: "error"` and `errorMessage: "No API key for provider: cline"`, when the adapter parses the stream, then the invocation result is a failure carrying the auth-failure signal that #2718 anchors for this message.
 - Given Pi exits 0 and its terminal assistant message has a normal stop reason with text content, when the adapter parses the stream, then the invocation succeeds with that text as output, as before.
 
 #### Negative Paths
-- Given Pi exits 0 with `stopReason: "error"`, when the result is classified, then it sets none of `authFailure`, `rateLimited`, or `modelUnavailable`, and the step fails as an ordinary step failure.
+- Given Pi exits 0 with `stopReason: "error"` and an `errorMessage` matching none of the signatures #2718 anchors, when the result is classified, then it sets none of `authFailure`, `rateLimited`, or `modelUnavailable`, and the step fails as an ordinary step failure carrying the error message.
 - Given Pi exits 0 with `stopReason: "error"` and no `errorMessage`, when the adapter parses the stream, then the invocation fails with a message stating that Pi reported an error stop with no message.
 - Given a Pi stream whose last line is malformed JSON after an error-stop message, when the adapter parses it, then the error-stop message still determines a failed result.
 
 ### Done When
-- [ ] A fixture of the exit-0 error stream captured from pi 0.84.3 on 2026-09-29 produces a failed invocation carrying the error message.
+- [ ] A fixture of the exit-0 error stream captured from pi 0.84.3 on 2026-09-29 produces a failed invocation.
 - [ ] Existing Pi success-stream fixture tests pass unchanged.

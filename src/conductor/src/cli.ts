@@ -155,6 +155,7 @@ export type BuildReviewFindingsDispatch = {
 export type BuildReviewAcceptDispatch = {
   readonly kind: 'accept';
   readonly feature: string;
+  readonly child?: string;
   readonly lapId: string;
   readonly findingId: string;
   readonly rationale: string;
@@ -171,6 +172,7 @@ export type BuildReviewResolveCaseDispatch = {
 export type BuildReviewRecordReducedCoverageDispatch = {
   readonly kind: 'record-reduced-coverage';
   readonly feature: string;
+  readonly child?: string;
   readonly lapId: string;
   readonly rubric: string;
   readonly rationale: string;
@@ -199,13 +201,14 @@ export function detectBuildReviewAcceptCommand(argv: string[]): BuildReviewAccep
     return index >= 0 ? args[index + 1] : undefined;
   };
   const feature = read('--feature');
+  const child = read('--child');
   const lapId = read('--lap');
   const findingId = read('--finding');
   const rationale = read('--rationale');
-  const expected = ['--feature', feature, '--lap', lapId, '--finding', findingId, '--rationale', rationale];
+  const expected = ['--feature', feature, ...(child === undefined ? [] : ['--child', child]), '--lap', lapId, '--finding', findingId, '--rationale', rationale];
   if (args.length !== expected.length || expected.some((value, index) => args[index] !== value) || !feature || !lapId || !findingId || !rationale ||
     !/^[a-z0-9][a-z0-9-]*$/.test(feature)) return null;
-  return { kind: 'accept', feature, lapId, findingId, rationale };
+  return { kind: 'accept', feature, ...(child === undefined ? {} : { child }), lapId, findingId, rationale };
 }
 
 /** Detect only the fully bound, operator-only case-resolution grammar. */
@@ -235,13 +238,14 @@ export function detectBuildReviewRecordReducedCoverageCommand(argv: string[]): B
     return index >= 0 ? args[index + 1] : undefined;
   };
   const feature = read('--feature');
+  const child = read('--child');
   const lapId = read('--lap');
   const rubric = read('--rubric');
   const rationale = read('--rationale');
-  const expected = ['--feature', feature, '--lap', lapId, '--rubric', rubric, '--rationale', rationale];
+  const expected = ['--feature', feature, ...(child === undefined ? [] : ['--child', child]), '--lap', lapId, '--rubric', rubric, '--rationale', rationale];
   if (args.length !== expected.length || expected.some((value, index) => args[index] !== value) || !feature || !lapId || !rubric || !rationale ||
     !/^[a-z0-9][a-z0-9-]*$/.test(feature)) return null;
-  return { kind: 'record-reduced-coverage', feature, lapId, rubric, rationale };
+  return { kind: 'record-reduced-coverage', feature, ...(child === undefined ? {} : { child }), lapId, rubric, rationale };
 }
 
 /** Detect `conduct config read <dotted.path>` without starting the pipeline. */
@@ -433,8 +437,17 @@ export interface DecideGrantDispatch {
   reason: string;
 }
 
-export type { StackLandAbandonDispatch, StackLandDispatch, StackLandDoneDispatch, StackLandOpenDispatch, StackOwnersDispatch } from './types/cli.js';
-import type { StackLandDispatch, StackOwnersDispatch } from './types/cli.js';
+export type {
+  StackLandAbandonDispatch,
+  StackLandDispatch,
+  StackLandDoneDispatch,
+  StackLandOpenDispatch,
+  StackOwnersDispatch,
+  StackRoundsCloseDispatch,
+  StackRoundsDispatch,
+  StackRoundsInspectDispatch,
+} from './types/cli.js';
+import type { StackLandDispatch, StackOwnersDispatch, StackRoundsDispatch } from './types/cli.js';
 
 /** Parse the read-only ownership evidence grammar. */
 export function detectStackOwnersCommand(argv: readonly string[]): StackOwnersDispatch | null {
@@ -453,6 +466,30 @@ export function detectStackOwnersCommand(argv: readonly string[]): StackOwnersDi
   }
   if (!slug || slug.includes('/') || slug === '.' || slug === '..' || (paths.length === 0) === (diff === undefined)) return null;
   return { kind: 'stack-owners', slug, paths, ...(diff === undefined ? {} : { diff }) };
+}
+
+export interface StackRestackResolveDispatch {
+  kind: 'stack-restack-resolve';
+  slug: string;
+  child: string;
+  tip?: string;
+  decision?: string;
+}
+export function detectStackRestackResolveCommand(argv: readonly string[]): StackRestackResolveDispatch | null {
+  if (argv[2] !== 'stack' || argv[3] !== 'restack-resolve') return null;
+  const values = new Map<string, string>();
+  for (let index = 4; index < argv.length; index += 2) {
+    const flag = argv[index]; const value = argv[index + 1];
+    if (!flag || value === undefined || !['--slug', '--child', '--tip', '--decision'].includes(flag) || values.has(flag)) return null;
+    values.set(flag, value);
+  }
+  const slug = values.get('--slug'); const child = values.get('--child');
+  const tip = values.get('--tip'); const decision = values.get('--decision');
+  // Preserve a well-formed command with an invalid answer shape so the
+  // dispatcher can issue its durable, side-effect-free refusal rather than
+  // falling through to the foreground pipeline.
+  if (!slug || !child || values.size < 2 || slug.includes('/') || slug === '.' || slug === '..') return null;
+  return { kind: 'stack-restack-resolve', slug, child, ...(tip === undefined ? {} : { tip }), ...(decision === undefined ? {} : { decision }) };
 }
 
 /** Parse the open, declaration, and abandon grammars. */
@@ -481,6 +518,38 @@ export function detectStackLandCommand(argv: readonly string[]): StackLandDispat
   const reason = values.get('--reason');
   if (!slug || !child || reason === undefined || values.size !== 3 || slug.includes('/') || slug === '.' || slug === '..') return null;
   return { kind: 'stack-land', slug, child, carry, reason };
+}
+
+/** Parse the routed-round inspection and close grammars. */
+export function detectStackRoundsCommand(argv: readonly string[]): StackRoundsDispatch | null {
+  if (argv[2] !== 'stack' || argv[3] !== 'rounds') return null;
+  const values = new Map<string, string>();
+  for (let index = 4; index < argv.length; index += 2) {
+    const flag = argv[index];
+    const value = argv[index + 1];
+    if (!flag || value === undefined || !['--slug', '--close', '--reason'].includes(flag) || values.has(flag)) return null;
+    values.set(flag, value);
+  }
+  const slug = values.get('--slug');
+  if (!slug || slug.includes('/') || slug === '.' || slug === '..') return null;
+  const roundId = values.get('--close');
+  const reason = values.get('--reason');
+  if (roundId === undefined && reason === undefined && values.size === 1) {
+    return { kind: 'stack-rounds-inspect', slug };
+  }
+  if (roundId === undefined || reason === undefined || values.size !== 3) return null;
+  return { kind: 'stack-rounds-close', slug, roundId, reason };
+}
+
+/**
+ * Isolate detector fallthrough from the eventual CLI entry-point wiring.
+ * A rejected vector must never reach a stack-rounds dispatcher.
+ */
+export async function dispatchStackRoundsIfDetected(
+  command: StackRoundsDispatch | null,
+  dispatch: (command: StackRoundsDispatch) => Promise<number> | number,
+): Promise<number | null> {
+  return command === null ? null : dispatch(command);
 }
 
 export type { HaltClearDispatch } from './types/cli.js';
@@ -893,6 +962,19 @@ export function createProgram(): Command {
     .requiredOption('--slug <slug>', 'Feature worktree slug')
     .option('--path <path>', 'Path to inspect (repeatable)')
     .option('--diff <range>', 'Git range whose changed paths to inspect');
+  stack
+    .command('rounds')
+    .description('Inspect routed rounds or close a superseded audit round')
+    .requiredOption('--slug <slug>', 'Feature worktree slug')
+    .option('--close <round>', 'Superseded audit round to close')
+    .option('--reason <text>', 'Operator reason required with --close');
+  stack
+    .command('restack-resolve')
+    .description('Record an operator-resolved restack conflict and resume the stack')
+    .requiredOption('--slug <slug>', 'Feature worktree slug')
+    .requiredOption('--child <n>', 'Conflicted stack child')
+    .option('--tip <sha>', 'Resolved linear commit tip')
+    .option('--decision <answer>', 'Operator decision for the resolver');
 
   const buildReview = program
     .command('build-review')
@@ -901,12 +983,13 @@ export function createProgram(): Command {
     .command('findings')
     .description('Render current findings for a feature worktree')
     .requiredOption('--feature <slug>', 'Feature worktree slug')
-    .option('--child <child>', 'Child case-store scope')
+    .option('--child <child>', 'Child review-state scope')
     .option('--json', 'Render machine-readable JSON');
   buildReview
     .command('accept')
     .description('Accept one exact current finding from an interactive terminal')
     .requiredOption('--feature <slug>', 'Feature worktree slug')
+    .option('--child <child>', 'Child review-state scope')
     .requiredOption('--lap <lap>', 'Current inspected lap identity')
     .requiredOption('--finding <id>', 'Exact canonical finding identifier')
     .requiredOption('--rationale <text>', 'Non-empty operator rationale');
@@ -921,6 +1004,7 @@ export function createProgram(): Command {
     .command('record-reduced-coverage')
     .description('Record an operator reduced-coverage decision from an interactive terminal')
     .requiredOption('--feature <slug>', 'Feature worktree slug')
+    .option('--child <child>', 'Stacked child whose current lap and allowance are checked')
     .requiredOption('--lap <lap>', 'Current inspected lap identity')
     .requiredOption('--rubric <rubric>', 'Mechanically failed rubric')
     .requiredOption('--rationale <text>', 'Non-empty operator rationale');
@@ -989,7 +1073,7 @@ export function createProgram(): Command {
 
   // Daemon subcommand (Phase 6; promoted from the `--daemon` flag). NON-INTERACTIVE:
   // dispatched by index.ts before the pipeline boots. The bare `daemon` RUNS the
-  // daemon (detectDaemonCommand); `daemon status` / `daemon logs` are read-only
+  // daemon (detectDaemonCommand); `daemon status` / `daemon logs` / `daemon stories-refs` are read-only
   // observability sub-subcommands (detectDaemonObserveCommand). Declared here so
   // `--help` lists them and their options alongside the other subcommands.
   const daemon = program
@@ -1016,6 +1100,10 @@ export function createProgram(): Command {
     .option('-f, --follow', 'Stream new log lines (tail -f); single repo only')
     .option('-n, --lines <n>', 'Show the last n log lines')
     .option('--all', 'Show logs for every registered repo');
+  daemon
+    .command('stories-refs')
+    .description('Report committed plans whose Stories references cannot resolve')
+    .option('--repo <path>', 'Target repo (default: current directory; also accepts --repo=<path>)');
   // Filesystem-direct, pre-boot park/unpark verbs (detectDaemonParkCommand) —
   // no daemon/supervisor startup required. Declared here ONLY so `--help`
   // documents them; commander never actually dispatches them (index.ts checks

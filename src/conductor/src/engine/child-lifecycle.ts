@@ -3,13 +3,15 @@ import { mkdir, readFile, rm } from 'node:fs/promises';
 import { parseChildId, pipelinePathFor, type ChildId } from './child-context.js';
 import { loadConfig } from './config.js';
 import { childBranchFor, leafBranchFor } from './feature-branch-identity.js';
-import { makeGitRunner, originDefaultBranch, type GitRunner } from './rebase.js';
+import { discoverOriginDefaultBranch, makeGitRunner, type GitRunner } from './rebase.js';
 import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { resolveActiveChild } from './child-cursor.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import { redRefFor } from './routing/routing-refs.js';
 import { parseRoutedAcceptanceRunContract, parseRoutedRedRecord, serializeRoutedRedRecord } from './routing/red-record.js';
 import { routingSettingOn } from './routing/route-types.js';
+import { isHaltRecordOnlyCommit } from './restack/halt-record-bookkeeping.js';
+import type { CommitSha } from './restack/restack-types.js';
 import { loadSliceTopology } from './slice-topology.js';
 
 export type StartChildGitRunner = GitRunner;
@@ -293,20 +295,29 @@ export async function moveLeaf(
   if (!old || old.exitCode !== 0 || !oldTip) return refused(`cannot resolve leaf branch ${branch}`);
   let defaultBranch: string | null;
   try {
-    defaultBranch = await originDefaultBranch(git);
+    defaultBranch = await discoverOriginDefaultBranch(git);
   } catch {
-    return refused(`cannot determine origin default branch while moving leaf ${branch}`);
+    defaultBranch = null;
   }
-  if (!defaultBranch) return refused(`cannot determine origin default branch while moving leaf ${branch}`);
-  const stray = await runGit(git, [
+  const strayArgs = [
     'rev-list',
     `refs/heads/${branch}`,
     `^${tip}`,
-    `^origin/${defaultBranch}`,
-  ]);
+  ];
+  if (defaultBranch) {
+    const defaultRef = `refs/remotes/origin/${defaultBranch}`;
+    const resolvedDefault = await runGit(git, ['rev-parse', '--verify', '--quiet', `${defaultRef}^{commit}`]);
+    if (resolvedDefault?.exitCode === 0 && resolvedDefault.stdout.trim()) {
+      strayArgs.push(`^origin/${defaultBranch}`);
+    }
+  }
+  const stray = await runGit(git, strayArgs);
   if (!stray || stray.exitCode !== 0) return refused(`cannot inspect leaf branch ${branch}`);
-  const strayTip = stray.stdout.split('\n').find(Boolean);
-  if (strayTip) return refused(`cannot move leaf branch ${branch}; unrelated commit ${strayTip}`);
+  for (const strayTip of stray.stdout.split('\n').filter(Boolean)) {
+    if (!await isHaltRecordOnlyCommit(strayTip as CommitSha, slug, git)) {
+      return refused(`cannot move leaf branch ${branch}; unrelated commit ${strayTip}`);
+    }
+  }
   const moved = await runGit(git, ['update-ref', `refs/heads/${branch}`, tip, oldTip]);
   if (!moved || moved.exitCode !== 0) return refused(`cannot move leaf branch ${branch}; concurrent update refused`);
   return { kind: 'completed' };

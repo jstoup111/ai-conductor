@@ -307,6 +307,20 @@ describe('reduceBuildReviewAdjudication', () => {
       .toMatchObject({ route: 'halt', reason: 'remediation effect is not finalized' });
   });
 
+  it.each(['reserved', 'failed'] as const)('names the open %s deferral case and its operator-resolution command', (status) => {
+    // A deferral whose intake was never filed has no engine path to `applied`;
+    // the halt must carry the command that resolves it.
+    const deferral: RemediationCaseRecord = {
+      id: 'case-deferral', domain: 'build_review', disposition: 'defer', priority: 'medium', rationale: 'out of scope',
+      confidence: 'high', resolution: 'open', sources: [{ sourceId: 'finding-1', outcome: 'deferred', recordedAt: '2026-11-01T00:00:00.000Z' }],
+      effect: { id: 'effect-deferral', kind: 'deferral', status, ...(status === 'failed' ? { diagnostic: 'intake failed' } : {}) },
+    } as RemediationCaseRecord;
+    expect(reduceBuildReviewAdjudication(reducerInput({ feature: 'operator-acceptance', child: 2 as never, cases: [deferral] }))).toMatchObject({
+      route: 'halt',
+      reason: 'remediation effect is not finalized for case case-deferral; resolve with ai-conductor build-review resolve-case --feature operator-acceptance --child 2 --case case-deferral --rationale "<why>"',
+    });
+  });
+
   // Covers: task:rem-prd-audit-rem-prd-audit-R17c
   it.each([
     { feature: 'operator-acceptance', child: undefined, command: 'ai-conductor build-review resolve-case --feature operator-acceptance --case case-action --rationale "<why>"' },

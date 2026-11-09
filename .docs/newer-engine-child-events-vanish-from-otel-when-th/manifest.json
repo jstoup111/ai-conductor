@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "slug": "newer-engine-child-events-vanish-from-otel-when-th",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/newer-engine-child-events-vanish-from-otel-when-th.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/newer-engine-child-events-vanish-from-otel-when-th.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/newer-engine-child-events-vanish-from-otel-when-th.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/2026-11-07-newer-engine-child-events-vanish-from-otel-when-th.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-014-otel-observability-exporter.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-15-per-dispatch-engine-pinned-executor.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-11-07-child-projected-dispatch-otel.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/newer-engine-child-events-vanish-from-otel-when-th.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/newer-engine-child-events-vanish-from-otel-when-th.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/newer-engine-child-events-vanish-from-otel-when-th.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/newer-engine-child-events-vanish-from-otel-when-th.md"
+    }
+  ]
+}

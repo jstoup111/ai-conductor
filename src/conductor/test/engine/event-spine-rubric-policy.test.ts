@@ -37,7 +37,7 @@ async function eventSpineDeclaration() {
   const customRubrics = repository.config.build_review?.custom_rubrics;
   const eventSpine = customRubrics?.eventSpine;
   if (!eventSpine) throw new Error('repository must declare the eventSpine rubric');
-  const loaded = {
+  const loaded: typeof repository = {
     ...repository,
     config: {
       ...repository.config,
@@ -95,11 +95,17 @@ describe('repository-local event-spine policy settlement', () => {
     const { loaded } = await eventSpineDeclaration();
     const root = await mkdtemp(join(process.env.TMPDIR!, 'event-spine-policy-'));
     roots.push(root);
+    const dependencyHygiene = loaded.config.build_review?.custom_rubrics?.dependencyHygiene;
+    if (!dependencyHygiene) throw new Error('repository must declare the dependencyHygiene rubric');
     const config: HarnessConfig = {
       ...loaded.config,
       build_review: {
         ...loaded.config.build_review,
         rubrics: { ...loaded.config.build_review?.rubrics, testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
+        custom_rubrics: {
+          ...loaded.config.build_review?.custom_rubrics,
+          dependencyHygiene: { ...dependencyHygiene, enabled: false },
+        },
       },
     };
     const invoke = vi.fn(async () => ({ success: true, exitCode: 0, output: '{}' }));

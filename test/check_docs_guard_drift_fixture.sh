@@ -14,7 +14,14 @@ HARNESS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 HOOK="${HARNESS_DIR}/hooks/claude/docs-guard.sh"
 GENERATOR="${HARNESS_INTEGRITY_DOCS_GUARD_GENERATOR:-${HARNESS_DIR}/bin/generate-docs-guard-hook}"
 
-if [ -z "${TMPDIR:-}" ] && [ -n "${AI_CONDUCTOR_TEST_TMP_ROOT:-}" ]; then
+# A nested Vitest child can restore TMPDIR to the original system directory
+# while retaining the semantic run-root marker.  Treat that combination the
+# same as an unset TMPDIR so this fixture cannot escape the run-scoped root.
+# Do not replace another explicit TMPDIR: callers use that to nest this
+# checker beneath their own disposable fixture.
+if [ -n "${AI_CONDUCTOR_TEST_TMP_ROOT:-}" ] && {
+  [ -z "${TMPDIR:-}" ] || [ "${TMPDIR:-}" = "${AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR:-}" ];
+}; then
   export TMPDIR="$AI_CONDUCTOR_TEST_TMP_ROOT"
 fi
 if [ -n "${TMPDIR:-}" ]; then

@@ -846,9 +846,11 @@ the aggregate gate. Scoped success alone never satisfies that gate.
   additionally reads the feature branch's full diff against its base and the feature's spec, plan, and
   story artifacts. Deterministic BUILD, SHIP, release-readiness, push, shipped-record, and outcome
   evidence stays engine-owned.
-- **Outputs** — a rewritten reader-facing PR title/body (authoring), or an accepted verdict or bounded
-  repair (judgment). Neither is trusted on self-report: the coordinator re-reads the PR and a body that
-  still classifies as a placeholder is a failed pass. The coordinator separately persists
+- **Outputs** — authoring writes the `.pipeline/finish-pr-prose.json`
+  [handoff](artifacts.md#pipeline--run-state) (`version`, `title`, `body`); the engine validates it and
+  performs the PR title/body edit itself. Judgment returns only a bounded verdict and never edits the
+  PR. Neither is trusted on self-report: the coordinator re-reads the PR and a body that still
+  classifies as a placeholder is a failed pass. The coordinator separately persists
   `state.pr_url`, commits `.docs/shipped/<slug>.md`, and writes `.pipeline/finish-choice` through
   `ai-conductor finish-record` after verification.
 - **Gate role** — blocking. Missing or invalid deterministic evidence stops before this skill is
@@ -877,7 +879,9 @@ the aggregate gate. Scoped success alone never satisfies that gate.
 ## Repository-local skills
 
 These live under `.agents/skills/` rather than `skills/`, declare only `name` and `description`, and
-apply to this repository. See [self-hosting](../guides/self-hosting.md).
+apply to this repository. Each is symlinked from `.claude/skills/<name>` for Claude discovery; Codex
+reads `.agents/skills/` natively. Integrity check 2b enforces the symlinks. See
+[self-hosting](../guides/self-hosting.md).
 
 ### event-spine
 
@@ -960,6 +964,7 @@ apply to this repository. See [self-hosting](../guides/self-hosting.md).
 - **Frontmatter** — `name` and `description` only. It is the only skill in the repository with no
   `enforcement` field.
 - **Engine step** — none. It is unwired: no step definition, no custom config step, no engine reference.
+  Symlinked from `.claude/skills/write-tests` so both supported hosts discover the same file.
 - **Inputs** — the test under authorship plus repository conventions.
 - **Outputs** — none. It produces test files and prescribes commands.
 - **Gate role** — neither. No verdict, no marker file, no downstream HALT. Its rules are stated as MUST

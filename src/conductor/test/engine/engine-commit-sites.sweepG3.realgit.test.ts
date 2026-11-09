@@ -59,6 +59,7 @@ const { ConductorEventEmitter } = await import('../../src/ui/events.js');
 const { PREPARE_COMMIT_MSG_HOOK } = await import('../../src/engine/git-hook-assets.js');
 const { createRestackJournal, journalRefFor, writeRestackJournalBlob } = await import('../../src/engine/restack/restack-journal.js');
 const { persistFixtureTestRemediationPlan } = await import('./remediation-plan-fixtures.js');
+const { haltRecordRefFor, readHaltRecordRef } = await import('../../src/engine/halt-record-ref.js');
 import type { HaltRecordInput } from '../../src/engine/halt-record.js';
 import type { GitRunner as TriageGitRunner } from '../../src/engine/setup-triage.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
@@ -332,56 +333,47 @@ const SITES: readonly CommitSite[] = [
 
 describe('engine commit sites sweep (real local Git)', () => {
   // Covers: task:27
-  it("recordHalt in a stacked worktree commits only its record through the guard with today's co-author and Task trailers, a verifiable signature and only prepare-commit-msg", async () => {
-    const trailersBySite: Record<'stacked' | 'flat', string> = { stacked: '', flat: '' };
-    for (const shape of ['stacked', 'flat'] as const) {
-      const { root, worktree } = await featureRepo(shape === 'stacked');
-      // Real engine prepare-commit-msg (co-author + Task: stamping), wrapped with a run log.
-      const hooks = join(root, 'hooks');
-      const log = join(root, 'hooks.log');
-      await mkdir(hooks, { recursive: true });
-      const [shebang, ...body] = PREPARE_COMMIT_MSG_HOOK.split('\n');
-      await writeFile(join(hooks, 'prepare-commit-msg'), [shebang, `echo prepare-commit-msg >> '${log}'`, ...body].join('\n'));
-      for (const name of ['pre-commit', 'commit-msg']) {
-        await writeFile(join(hooks, name), `#!/bin/sh\necho ${name} >> '${log}'\nexit 0\n`);
-        await chmod(join(hooks, name), 0o755);
-      }
-      await chmod(join(hooks, 'prepare-commit-msg'), 0o755);
-      await git(worktree, ['config', 'core.hooksPath', hooks]);
-      // SSH commit signing, verifiable locally.
-      const key = join(root, 'signing-key');
-      await execa('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-C', 'sweep', '-f', key]);
-      await writeFile(join(root, 'allowed-signers'), `sites@example.invalid ${(await readFile(`${key}.pub`, 'utf8')).trim()}\n`);
-      await git(worktree, ['config', 'gpg.format', 'ssh']);
-      await git(worktree, ['config', 'user.signingkey', key]);
-      await git(worktree, ['config', 'gpg.ssh.allowedSignersFile', join(root, 'allowed-signers')]);
-      await git(worktree, ['config', 'commit.gpgSign', 'true']);
-      await mkdir(join(worktree, '.pipeline'), { recursive: true });
-      await writeFile(join(worktree, '.pipeline', 'co-author'), 'Co-authored-by: sweep-bot <1+sweep-bot@users.noreply.github.com>\n');
-      await writeFile(join(worktree, '.pipeline', 'current-task'), '27\n');
-      await writeFile(join(worktree, 'stray.txt'), 'unrelated\n');
-      const before = await git(worktree, ['rev-parse', 'HEAD']);
-      gitCalls.length = 0;
-
-      await expect(recordHalt(worktree, haltInput())).resolves.toEqual({ kind: 'written' });
-
-      const head = await git(worktree, ['rev-parse', 'HEAD']);
-      expect(await git(worktree, ['rev-parse', 'HEAD^'])).toBe(before);
-      expect(await git(worktree, ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'])).toBe('.docs/halted/demo.md');
-      await expect(execa('git', ['verify-commit', head], { cwd: worktree })).resolves.toMatchObject({ exitCode: 0 });
-      expect((await readFile(log, 'utf8')).split('\n').filter(Boolean)).toEqual(['prepare-commit-msg']);
-      trailersBySite[shape] = await git(worktree, ['log', '-1', '--format=%(trailers:only,unfold)']);
-      if (shape === 'stacked') {
-        // The stacked path is the guarded helper, never a `git commit`.
-        expect(commitArgv()).toEqual([]);
-        expect(gitCalls.some((call) => call.args[0] === 'commit-tree')).toBe(true);
-      } else {
-        expect(commitArgv()).toEqual([['commit', '--no-verify', '-m', 'halt record: demo']]);
-      }
+  it("recordHalt on an unstacked feature commits only its record with today's co-author and Task trailers, a verifiable signature and only prepare-commit-msg", async () => {
+    let trailers = '';
+    const { root, worktree } = await featureRepo(false);
+    // Real engine prepare-commit-msg (co-author + Task: stamping), wrapped with a run log.
+    const hooks = join(root, 'hooks');
+    const log = join(root, 'hooks.log');
+    await mkdir(hooks, { recursive: true });
+    const [shebang, ...body] = PREPARE_COMMIT_MSG_HOOK.split('\n');
+    await writeFile(join(hooks, 'prepare-commit-msg'), [shebang, `echo prepare-commit-msg >> '${log}'`, ...body].join('\n'));
+    for (const name of ['pre-commit', 'commit-msg']) {
+      await writeFile(join(hooks, name), `#!/bin/sh\necho ${name} >> '${log}'\nexit 0\n`);
+      await chmod(join(hooks, name), 0o755);
     }
-    expect(trailersBySite.stacked).toContain('Co-authored-by: sweep-bot <1+sweep-bot@users.noreply.github.com>');
-    expect(trailersBySite.stacked).toContain('Task: 27');
-    expect(trailersBySite.stacked).toBe(trailersBySite.flat);
+    await chmod(join(hooks, 'prepare-commit-msg'), 0o755);
+    await git(worktree, ['config', 'core.hooksPath', hooks]);
+    // SSH commit signing, verifiable locally.
+    const key = join(root, 'signing-key');
+    await execa('ssh-keygen', ['-q', '-t', 'ed25519', '-N', '', '-C', 'sweep', '-f', key]);
+    await writeFile(join(root, 'allowed-signers'), `sites@example.invalid ${(await readFile(`${key}.pub`, 'utf8')).trim()}\n`);
+    await git(worktree, ['config', 'gpg.format', 'ssh']);
+    await git(worktree, ['config', 'user.signingkey', key]);
+    await git(worktree, ['config', 'gpg.ssh.allowedSignersFile', join(root, 'allowed-signers')]);
+    await git(worktree, ['config', 'commit.gpgSign', 'true']);
+    await mkdir(join(worktree, '.pipeline'), { recursive: true });
+    await writeFile(join(worktree, '.pipeline', 'co-author'), 'Co-authored-by: sweep-bot <1+sweep-bot@users.noreply.github.com>\n');
+    await writeFile(join(worktree, '.pipeline', 'current-task'), '27\n');
+    await writeFile(join(worktree, 'stray.txt'), 'unrelated\n');
+    const before = await git(worktree, ['rev-parse', 'HEAD']);
+    gitCalls.length = 0;
+
+    await expect(recordHalt(worktree, haltInput())).resolves.toEqual({ kind: 'written' });
+
+    const head = await git(worktree, ['rev-parse', 'HEAD']);
+    expect(await git(worktree, ['rev-parse', 'HEAD^'])).toBe(before);
+    expect(await git(worktree, ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'])).toBe('.docs/halted/demo.md');
+    await expect(execa('git', ['verify-commit', head], { cwd: worktree })).resolves.toMatchObject({ exitCode: 0 });
+    expect((await readFile(log, 'utf8')).split('\n').filter(Boolean)).toEqual(['prepare-commit-msg']);
+    trailers = await git(worktree, ['log', '-1', '--format=%(trailers:only,unfold)']);
+    expect(commitArgv()).toEqual([['commit', '--no-verify', '-m', 'halt record: demo']]);
+    expect(trailers).toContain('Co-authored-by: sweep-bot <1+sweep-bot@users.noreply.github.com>');
+    expect(trailers).toContain('Task: 27');
   });
 
   // Covers: task:27
@@ -401,22 +393,23 @@ describe('engine commit sites sweep (real local Git)', () => {
     expect(await git(worktree, ['rev-parse', 'HEAD^'])).toBe(before);
     expect((await git(worktree, ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'])).split('\n').sort()).toEqual(['a.txt', 'b/c.txt']);
 
-    await expect(recordHalt(worktree, haltInput())).resolves.toEqual({ kind: 'written' });
+    await expect(recordHalt(worktree, haltInput())).resolves.toEqual({ kind: 'written', path: haltRecordRefFor('demo') });
     await writeFile(join(worktree, 'staged-elsewhere.txt'), 'unrelated staged\n');
     await git(worktree, ['add', 'staged-elsewhere.txt']);
     const recorded = await git(worktree, ['rev-parse', 'HEAD']);
 
-    await expect(supersedeHaltRecord(worktree, 'demo', 'fixed')).resolves.toEqual({ kind: 'written' });
+    await expect(supersedeHaltRecord(worktree, 'demo', 'fixed')).resolves.toEqual({ kind: 'written', path: haltRecordRefFor('demo') });
 
-    expect(await git(worktree, ['rev-parse', 'HEAD^'])).toBe(recorded);
-    expect(await git(worktree, ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'])).toBe('.docs/halted/demo.md');
-    expect(await git(worktree, ['show', 'HEAD:.docs/halted/demo.md'])).toMatch(/Status: (superseded|resolved)/i);
+    expect(await git(worktree, ['rev-parse', 'HEAD'])).toBe(recorded);
+    await expect(readHaltRecordRef(worktree, 'demo')).resolves.toMatchObject({
+      kind: 'record', source: 'ref', text: expect.stringMatching(/Status: (superseded|resolved)/i),
+    });
     expect(await git(worktree, ['diff', '--cached', '--name-only'])).toBe('staged-elsewhere.txt');
     expect(await git(worktree, ['cat-file', '-e', 'HEAD:staged-elsewhere.txt']).catch(() => 'absent')).toBe('absent');
   });
 
   // Covers: task:27
-  it.each(SITES)("$name keeps today's git commit argv without durable child state, commits through the guarded helper with it, and is refused without moving HEAD in each fenced journal state", async (site) => {
+  it.each(SITES.filter((site) => site.name !== 'halt-record (recordHalt and supersedeHaltRecord)'))("$name keeps today's git commit argv without durable child state, commits through the guarded helper with it, and is refused without moving HEAD in each fenced journal state", async (site) => {
       // Flat feature: today's argv, unchanged.
       const flat = await featureRepo(false);
       gitCalls.length = 0;

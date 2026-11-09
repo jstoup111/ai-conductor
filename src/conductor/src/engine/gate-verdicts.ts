@@ -145,6 +145,8 @@ export function validRebaseOperationRecord(operation: RebaseOperationRecord | un
 
 export interface GateVerdict {
   satisfied: boolean;
+  /** Routed repair round that produced this child-region verdict. */
+  routedRound?: string;
   /**
    * A typed successful resolution for an acceptance gate whose active child
    * owns no story criteria.  Kept on the child verdict rather than inferred
@@ -203,6 +205,7 @@ export async function computeAndWriteVerdict(
     satisfied: result.done,
     reason: result.reason,
     checkedAt: Date.now(),
+    ...(child !== undefined && ctx.routedRound !== undefined ? { routedRound: ctx.routedRound } : {}),
     ...(result.acceptanceOutcome === undefined ? {} : { outcome: result.acceptanceOutcome }),
     // A validation-group join may re-check a preserved sibling without
     // dispatching a new judge. Keep its replay-bound authority while the
@@ -212,7 +215,7 @@ export async function computeAndWriteVerdict(
       ? { preservation: prior.preservation }
       : {}),
   };
-  await writeVerdict(dir, step, verdict, child);
+  await writeVerdict(dir, step, verdict, child, { routedRound: ctx.routedRound });
   return verdict;
 }
 
@@ -222,6 +225,7 @@ export async function writeVerdict(
   step: StepName,
   verdict: GateVerdict,
   child?: ChildId,
+  options: { routedRound?: string } = {},
 ): Promise<void> {
   const path = verdictPathFor(dir, step, child);
   await mkdir(dirname(path), { recursive: true });
@@ -233,7 +237,10 @@ export async function writeVerdict(
   const persistedVerdict =
     verdict.rebaseOperation === undefined && prior?.rebaseOperation !== undefined
       ? { ...verdict, rebaseOperation: prior.rebaseOperation }
-      : verdict;
+      : { ...verdict };
+  if (child !== undefined && isRegionStep(step) && options.routedRound !== undefined) {
+    persistedVerdict.routedRound = options.routedRound;
+  }
   // A transition spans gate records and state, so it cannot be one transaction.
   // Replacing each individual record atomically prevents a reader from seeing
   // truncated evidence and mistaking it for a legacy record.

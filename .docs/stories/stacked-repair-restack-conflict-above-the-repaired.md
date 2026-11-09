@@ -42,8 +42,8 @@ As an operator facing a restack conflict the engine could not resolve, I want th
 
 #### Negative Paths
 - Given the same halt, when the operator reads its text, then it contains neither an instruction to rebase or commit on `feat/c2/demo` or `feat/daemon-demo` nor an instruction to move any `refs/conductor/demo/closed/*` ref.
-- Given a base-refresh restack that halts on an unresolved conflict, when the halt is written, then no `restack/conflict/*` ref is created and the halt text is byte-identical to today's.
-- Given the repaired stack whose child 2 range contains a merge commit, when the routed exit restack conflicts on child 2, then it halts with the shipped `flatten_refused` reason and text, and no `restack/conflict/*` ref is created.
+- Given a base-refresh restack that halts on an unresolved conflict, when the halt is written, then it writes the same conflict record, parent pin and `Restack-Conflict` line as a feature-repair conflict halt, and moves no branch or closure ref.
+- Given the repaired stack whose child 2 range contains a merge commit, when the routed exit restack conflicts on child 2, then it reaches the resolver and, when unsettled, takes this story's conflict halt with its `--tip` recipe starting from the pinned flattened tip.
 - Given the repaired stack whose replay of child 2 halts on a `rem-*` block body mismatch, when the halt is written, then the conflict record is written as for any unresolved conflict, and no branch or closure ref has moved.
 - Given a conflict record from an earlier halt, when a later conflict halt is written on child 3, then the record names child 3 and the earlier record is replaced in one compare-and-swap.
 - Given the conflict record cannot be written because its ref changed concurrently, when the conflict halt is raised, then the needs-human HALT is still written, it names the record write failure, and no branch or closure ref has moved.
@@ -52,7 +52,7 @@ As an operator facing a restack conflict the engine could not resolve, I want th
 - [ ] A real-git test drives a routed repair restack into an unresolved conflict on child 2 and asserts the record's fields and both conflict refs.
 - [ ] A test asserts the halt text contains the reason line and the three commands with concrete shas, and contains no command touching `feat/` branches or closure refs.
 - [ ] A test asserts both conflict refs survive `cleanJournal`.
-- [ ] A test asserts a base-refresh conflict halt writes no conflict ref and keeps today's text.
+- [ ] A test asserts a base-refresh conflict halt writes the conflict record and parent pin and moves no branch or closure ref.
 
 ## Story 2: The operator records a validated resolution and clears only its own halt
 
@@ -71,7 +71,7 @@ As an operator who has resolved the conflict, I want one command to check my res
 #### Negative Paths
 - Given the conflict halt on child 2 and a tip that does not descend from the recorded parent, when the operator runs the command, then it exits non-zero naming the recorded parent sha as the missing ancestor, no `restack/resolution/c2` ref exists, and the HALT is unchanged.
 - Given the conflict halt on child 2 and a tip from which one of child 2's commit subjects is missing, when the operator runs the command, then it exits non-zero listing the missing subject, writes no resolution ref, and leaves the HALT in place.
-- Given the conflict halt on child 2 and a tip that also changes `src/other.ts`, which child 2's range never touched, when the operator runs the command, then it exits non-zero naming `src/other.ts` as unowned, writes no resolution ref, and leaves the HALT in place.
+- Given the conflict halt on child 2 and a tip that also changes `src/other.ts`, which neither child 2's range nor its recorded parent's changes touched, when the operator runs the command, then it exits non-zero naming `src/other.ts` as unowned, writes no resolution ref, and leaves the HALT in place.
 - Given the conflict halt on child 2 and a tip whose range from the recorded parent contains a merge commit, when the operator runs the command, then it exits non-zero naming the merge commit, writes no resolution ref, and leaves the HALT in place.
 - Given the conflict halt on child 2, when the operator runs the command with `--child 3`, then it exits non-zero stating the conflict record names child 2, and writes nothing.
 - Given the repaired stack with no conflict record, when the operator runs the command, then it exits non-zero stating no restack conflict is recorded for `demo`, and writes nothing.
@@ -104,15 +104,15 @@ As an operator who recorded a resolution, I want the next dispatch to carry it i
 - Given a recorded resolution, when the restack is driven by journal recovery resuming a planned journal instead of a fresh executor run, then the resolution is consumed with the same result.
 
 #### Negative Paths
-- Given a recorded resolution, when another change moved `closed/c1` before the next dispatch so that the parent being built has a different tree from the recorded one, then the restack moves no ref, halts needs-human with reason `restack-resolution-stale` naming the parent tree mismatch, emits `restack_refused` with that reason, and keeps both the resolution and the conflict record.
-- Given a recorded resolution, when child 2's journaled range differs from the record's old parent or old tip at the next dispatch, then the restack halts `restack-resolution-stale` naming the range mismatch, and moves no ref.
+- Given a recorded resolution, when another change moved `closed/c1` before the next dispatch so that the parent being built has a different tree from the recorded one, then the restack moves no branch or closure ref, emits `restack_refused` with reason `restack-resolution-stale` naming the parent tree mismatch, deletes the resolution, writes a fresh conflict record for the live parent, and halts needs-human with the reason, a `Restack-Conflict` line and both recipes.
+- Given a recorded resolution, when child 2's journaled range differs from the record's old parent or old tip at the next dispatch, then the restack moves no branch or closure ref, deletes the resolution, writes a fresh conflict record for the live range, and halts `restack-resolution-stale` naming the range mismatch with a `Restack-Conflict` line and both recipes.
 - Given a recorded resolution, when the rebuilt result fails the path-ownership check at consumption, then the restack halts needs-human naming the unowned paths and moves no ref.
-- Given a resolution ref for child 2 but no conflict record, when the next dispatch reaches child 2, then the restack halts `restack-resolution-stale` naming the missing record, and moves no ref.
+- Given a resolution ref for child 2 but no conflict record, when the next dispatch reaches child 2, then the restack deletes the orphan resolution, emits `restack_resolution` with action `retired`, and runs the ordinary replay of child 2.
 
 ### Done When
 - [ ] A real-git test runs halt → `stack restack-resolve` → second restack and asserts the applied refs, child 2's tree, a single occurrence of each repair commit in the child 2 and leaf histories, and the `resolved` journal status.
 - [ ] A real-git test with two replayed children above the origin proves tree-matched consumption when the lower child's commit id changes.
-- [ ] Real-git tests for each stale and ownership case assert the halt reason, the named field, unmoved refs, and retained resolution refs.
+- [ ] Real-git tests for each stale and ownership case assert the halt reason, the named field, unmoved branch and closure refs, and the deleted resolution.
 - [ ] A recovery test asserts `resumePlanned` consumes the resolution the same way.
 
 ## Story 4: An operator-resolved restack keeps every post-restack guarantee
@@ -150,7 +150,7 @@ As an operator, I want my recorded resolution kept until it is used and then cle
 - Given a feature carrying a recorded resolution and a conflict record, when the feature is torn down by the single-slug reclaim, then all of those refs are deleted by name.
 
 #### Negative Paths
-- Given a recorded resolution, when the next restack aborts for any reason before applying, then the resolution ref and both conflict refs are unchanged and still name the same objects.
+- Given a recorded resolution that still matches its record, when the next restack aborts for a reason other than that resolution being stale, then the resolution ref and both conflict refs are unchanged and still name the same objects.
 - Given a recorded resolution consumed by a restack, when one of the resolution or conflict refs changes before the ref move, then the move's compare-and-swap fails, the restack does not apply, it halts `stack-ref-changed` naming the changed ref, and no branch or closure ref has moved.
 - Given a teardown of another feature whose slug is a prefix of `demo`, when it runs, then none of `demo`'s resolution or conflict refs is deleted.
 

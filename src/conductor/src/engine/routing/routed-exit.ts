@@ -46,6 +46,47 @@ export type AdvanceRoundResult =
   | { readonly kind: 'leaf-returned' }
   | { readonly kind: 'unavailable'; readonly detail: string };
 
+export type SettleDerivedNoOpHostResult =
+  | { readonly kind: 'settled' }
+  | { readonly kind: 'halt' }
+  | { readonly kind: 'refused' };
+
+export interface SettleDerivedNoOpHostInput {
+  readonly worktree: string;
+  readonly slug: string;
+  readonly roundId: RoundId;
+  readonly host: ChildId;
+  readonly git?: GitRunner;
+}
+
+/**
+ * Starts the ordinary routed exit for a host whose admitted work is already
+ * complete.  A no-op may only settle while there is another host whose work
+ * could still advance the round; otherwise the caller preserves the existing
+ * needs-human halt.
+ */
+export async function settleDerivedNoOpHost(input: SettleDerivedNoOpHostInput): Promise<SettleDerivedNoOpHostResult> {
+  const git = input.git ?? makeGitRunner(input.worktree);
+  const stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
+  if (stored.kind !== 'record' || stored.record.kind !== 'audit' || stored.record.hosts[input.host] !== 'admitted') {
+    return { kind: 'refused' };
+  }
+
+  const canAdvanceAnotherHost = Object.entries(stored.record.hosts).some(([rawHost, state]) =>
+    Number(rawHost) !== input.host && (state === 'pending' || state === 'restacked' || state === 'rerouted'));
+  if (!canAdvanceAnotherHost) return { kind: 'halt' };
+
+  const repairing = transitionHost(stored, input.host, 'repairing', {
+    credit: false,
+    reason: 'derived-already-complete',
+  });
+  if (repairing.kind !== 'updated') return { kind: 'refused' };
+  const wrote = await writeRoutingTransaction(input.worktree, input.slug, [
+    { kind: 'update-record', previous: stored, record: repairing.record },
+  ], { git });
+  return wrote.kind === 'updated' ? { kind: 'settled' } : { kind: 'refused' };
+}
+
 function pendingHost(state: HostState): boolean {
   switch (state) {
     case 'pending':
@@ -454,5 +495,9 @@ export async function requestRoutedExit(input: RequestRoutedExitInput): Promise<
 }
 
 function restackDetail(result: Exclude<RunRestackResult, { readonly kind: 'applied' }>): string {
-  return result.kind === 'unavailable' ? result.detail : result.kind === 'refused' ? result.reason : result.kind;
+  return result.kind === 'halted' || result.kind === 'unavailable'
+    ? result.detail
+    : result.kind === 'refused'
+      ? result.reason
+      : result.kind;
 }

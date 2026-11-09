@@ -279,7 +279,7 @@ describe('restack queue production (real local Git)', () => {
       cause: 'base-refresh',
       newDefault: subject.advanced,
       git: racing,
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
 
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(revalidationQueueRefFor('demo'));
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
@@ -291,7 +291,7 @@ describe('restack queue production (real local Git)', () => {
     }, { git: subject.git });
     await subject.git(['update-ref', journalRefFor('demo'), dead, journal.blob]);
 
-    await expect(recoverRestackJournal({ worktree: subject.repo, slug: 'demo', git: subject.git })).resolves.toEqual({ kind: 'halted' });
+    await expect(recoverRestackJournal({ worktree: subject.repo, slug: 'demo', git: subject.git })).resolves.toMatchObject({ kind: 'halted' });
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(revalidationQueueRefFor('demo'));
   });
 });

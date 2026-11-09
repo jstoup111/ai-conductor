@@ -76,7 +76,3 @@ A `stayed-green` result is not automatically a concern: read the test and cite t
 stub-passable assertion before finding it insensitive. An infrastructure failure is not a finding;
 do not invent evidence, downgrade it to a pass, or turn it into content criticism. Tests outside the
 supplied in-scope set are not this rubric's concern.
-
-Every reported finding requires `severity`: use `critical` for security exposure, data loss, or
-wrong results; `major` for a real defect or broken invariant; `minor` for a real low-impact quality
-issue; and `nit` only for cosmetic naming or style.

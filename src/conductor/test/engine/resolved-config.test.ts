@@ -53,6 +53,10 @@ type EffectiveReviewCatalogMember = {
 };
 
 describe('engine/resolved-config', () => {
+  it('retains Astra as the cap of the default Codex escalation policy', () => {
+    expect(resolveProviderModelPolicy('codex').modelEscalationOrder.at(-1)).toBe('gpt-6-astra');
+  });
+
   describe('Pi provider model policy resolution', () => {
     const piConfig = {
       llm_providers: {
@@ -499,7 +503,8 @@ describe('engine/resolved-config', () => {
       });
     });
 
-    it('publishes enabled custom declarations as immutable tagged catalog members with inherited policy', () => {
+    // Covers: S1.1
+    it('publishes ordered paths triggers on enabled custom declarations', () => {
       const resolved = resolveBuildReviewConfig({
         llm_provider: ['claude', 'codex'],
         defaults: { model: 'haiku', effort: 'low', max_retries: 1, escalate: false },
@@ -513,6 +518,7 @@ describe('engine/resolved-config', () => {
               question: 'Does this change preserve Kotlin API compatibility?',
               source: 'project',
               resources: ['references/compatibility.md'],
+              paths: ['**/package.json', '**/package-lock.json'],
               enabled: true,
               min_confidence: 0.8,
             },
@@ -547,6 +553,7 @@ describe('engine/resolved-config', () => {
         question: 'Does this change preserve Kotlin API compatibility?',
         source: 'project',
         resources: ['references/compatibility.md'],
+        paths: ['**/package.json', '**/package-lock.json'],
         policy: {
           enabled: true,
           llm_provider: ['claude', 'codex'],
@@ -569,6 +576,25 @@ describe('engine/resolved-config', () => {
       expect(Object.isFrozen(kotlinPolicy?.policy.llm_provider)).toBe(true);
       expect(Object.isFrozen(kotlinPolicy?.policy.model_fallback_ladder)).toBe(true);
       expect(Object.isFrozen(kotlinPolicy?.kind === 'custom' ? kotlinPolicy.resources : undefined)).toBe(true);
+    });
+
+    // Covers: S1.2
+    it('keeps path-less custom declarations without a paths trigger', () => {
+      const resolved = resolveBuildReviewConfig({
+        build_review: {
+          custom_rubrics: {
+            kotlinPolicy: {
+              skill: 'kotlin-review',
+              question: 'Does this change preserve Kotlin API compatibility?',
+              enabled: true,
+            },
+          },
+        },
+      } as HarnessConfig);
+
+      const kotlinPolicy = resolved.catalog.find(({ id }) => id === 'kotlinPolicy');
+
+      expect(kotlinPolicy).not.toHaveProperty('paths');
     });
 
     it('omits disabled custom declarations and every rubric when the public gate is disabled', () => {

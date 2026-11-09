@@ -173,9 +173,26 @@ loading.
    ```
 
 **Observable outcome:** each Pi step spawns `pi` with `--provider`, `--model`, and `--thinking <effort>`.
-A Pi run that exits `0` but ends with an error stop — for example `No API key for provider: cline` —
-fails the step with that message instead of passing. Keys, precedence, and every validation error are
-in the [configuration reference](../reference/configuration.md#llm_providers).
+A Pi run that exits `0` but ends with an error stop fails the step with that message instead of
+passing. Keys, precedence, and every validation error are in the
+[configuration reference](../reference/configuration.md#llm_providers).
+
+### Pi auth, rate-limit, and usage failures
+
+The engine classifies these Pi failures from the terminal error stop, or from stderr on a non-zero
+exit. A classified failure reports a fixed message and never echoes Pi's text:
+
+| A Pi output line starts with | Classified as | Engine behavior |
+| --- | --- | --- |
+| `No API key found for `, `No API key for provider: ` | auth, credential missing | park on Pi's `auth.json` |
+| `Authentication failed for "`, `OAuth refresh failed for `, `401` | auth, credential rejected | park on Pi's `auth.json` |
+| `429` plus a quota term (for example `insufficient_quota`, `Monthly usage limit reached`, `billing`) | usage exhausted | suppress Pi for 3600 seconds; later walks use the next candidate |
+| `429` without a quota term | rate limited | wait and retry Pi without consuming retry budget |
+
+An auth park watches `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`). Run Pi's
+`/login` to rewrite it with a valid JSON object; the step resumes at the same attempt. Recovery steps
+are in [auth parks](../runbooks/stalled-or-stuck-feature.md#auth-parks). Any other Pi failure stays an
+ordinary step failure.
 
 ## Usage-exhaustion recovery
 

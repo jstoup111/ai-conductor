@@ -89,12 +89,6 @@ them **verbatim** in each subagent brief; a subagent that never received them is
    subagent it spawned has not returned. Collect every digest before grading; if a subagent is slow,
    wait for it — do not summarize partial results and do not report progress in place of a verdict.
 
-**Why.** Both rules exist to prevent a daemon halt class. Running project code from a validator
-mutates the worktree the SHIP gates fingerprint; and ending the turn with subagents outstanding ends
-the session in print mode, so the host's background-wait ceiling kills the pending subagents, no
-verdict artifact is written, and the engine's freshness handshake HALTs the feature
-(`post-dispatch verdict write handshake failed ... is stale`).
-
 ## Judge each criterion
 
 For every supplied story criterion, return one criterion judgment. In standalone review, address
@@ -111,8 +105,10 @@ each available story criterion in the advisory judgment.
   committed coherence waiver: do not grade it, associate it with a criterion, or make it a PLAN_GAP.
 - **OVER_SCOPE** — shipped behavior goes beyond the planned implementation. Judge it against intent:
   PRD Goals/Non-Goals and In/Out Scope when available, otherwise the stories plus the plan outcome.
-  State whether the widening is within intent, outside intent but not user-visible, or outside intent
-  and user-visible. Include any `Scope:` trailer rationale and operator-reseal rationale in the
+  Set the intent relation: `within` when the change serves a story, the plan outcome, or an ADR
+  (fail-closed hardening and repairs to failing tests count); `outside-harmless` when it changes no
+  operator-visible output, CLI result, or persisted state; otherwise `outside-visible`. Code that
+  contradicts story text leaves that criterion unmet: grade it FIXABLE under its owner task. Include any `Scope:` trailer rationale and operator-reseal rationale in the
   evidence. A reseal rationale that does not justify the protected-artifact change is an OVER_SCOPE
   finding; a rationale that does justify it is evidence for no finding.
   **An unplanned change usually owns no story criterion.** Associate it with the criterion whose
@@ -122,9 +118,8 @@ each available story criterion in the advisory judgment.
   **Use durable history as judgment context, never report text.** Before authoring a no-owner
   observation, inspect the engine-rendered original decision history when present, then state the
   current evidence in your own words. Do not copy a stored summary, rationale, or presentation
-  ordinal into the judgment. Give the current finding an accurate current description. The engine binds
-  prior authority only after it reconciles immutable original evidence, current evidence, and case
-  identity; a reviewer must never claim that wording alone proves the same behavior. If the relation
+  ordinal into the judgment. Give the current finding an accurate current description; never claim
+  that wording alone proves the same behavior. If the relation
   is uncertain, describe the uncertainty and leave it unresolved.
 
 **Sweep every unplanned change in one pass.** Enumerate every OVER_SCOPE site in the reviewed diff

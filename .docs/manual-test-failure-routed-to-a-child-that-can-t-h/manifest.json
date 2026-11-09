@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "slug": "manual-test-failure-routed-to-a-child-that-can-t-h",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/manual-test-failure-routed-to-a-child-that-can-t-h.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/manual-test-failure-routed-to-a-child-that-can-t-h.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/manual-test-failure-routed-to-a-child-that-can-t-h.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/2026-11-07-manual-test-failure-routed-to-a-child-that-can-t-h.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-07-13-kickback-build-no-op-escalation.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-12-routed-whole-feature-repair.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/manual-test-failure-routed-to-a-child-that-can-t-h.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/manual-test-failure-routed-to-a-child-that-can-t-h.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/manual-test-failure-routed-to-a-child-that-can-t-h.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/manual-test-failure-routed-to-a-child-that-can-t-h.md"
+    }
+  ]
+}

@@ -1,9 +1,10 @@
-// Covers: task:6, task:7, task:11, task:24
+// Covers: task:6, task:7, task:8, task:11, task:24
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import cp from 'node:child_process';
+import { promisify } from 'node:util';
 import { acquire, readPidRecord, type KillProbe } from '../../src/engine/daemon-lock.js';
 import { openDaemonLog } from '../../src/engine/daemon-log.js';
 import {
@@ -11,7 +12,9 @@ import {
   renderExecutorVersionsSection,
   runDaemonStatus,
   runDaemonLogs,
+  runDaemonStoriesRefs,
   detectDaemonObserveCommand,
+  dispatchDaemonObserve,
 } from '../../src/engine/daemon-observe-cli.js';
 import { writeExecutorRecord } from '../../src/engine/executor-records.js';
 import { renderDashboard, scanInheritedState } from '../../src/engine/daemon-dashboard.js';
@@ -25,6 +28,7 @@ vi.mock('../../src/engine/engine-store.js', async (importOriginal) => ({
 
 const ENGINE_V1 = '20261019T120000Z-aaaaaaaaaaaa';
 const ENGINE_V2 = '20261020T120000Z-bbbbbbbbbbbb';
+const execFile = promisify(cp.execFile);
 
 // Liveness probes: ALIVE = no throw; DEAD = throw ESRCH.
 const ALIVE: KillProbe = () => {};
@@ -1169,6 +1173,38 @@ describe('engine/daemon-observe-cli', () => {
       }
 
       // Covers: task:7
+      it('derives plan growth status caps from the main checkout config', async () => {
+        const repo = join(root, 'repo-main-growth-cap');
+        const slug = 'main-growth-cap-feature';
+        const featureRoot = await writeDaemonPlan(repo, slug, tasks('', 26));
+        await mkdir(join(repo, '.ai-conductor'), { recursive: true });
+        await mkdir(join(featureRoot, '.ai-conductor'), { recursive: true });
+        await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_appended_tasks: 8\n  max_appended_ratio: 0.8\n', 'utf8');
+        await writeFile(join(featureRoot, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_appended_tasks: 10\n  max_appended_ratio: 1\n', 'utf8');
+        await writeFile(join(featureRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+          version: 1,
+          gates: {},
+          growth: { authored: 20, added: 6, byGate: { prd_audit: 6 } },
+        }), 'utf8');
+        const out: string[] = [];
+
+        await runDaemonStatus({ registryPath: await registry([record('repo-main-growth-cap', repo)]), out: (line) => out.push(line) });
+
+        expect(out.find((line) => line.startsWith(`  PLAN GROWTH [${slug}]`))).toContain('remaining 2/8');
+
+        await writeFile(join(featureRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
+          version: 1,
+          effectiveGrowthCap: 9,
+          gates: {},
+          growth: { authored: 20, added: 6, byGate: { prd_audit: 6 } },
+        }), 'utf8');
+        const raisedOut: string[] = [];
+        await runDaemonStatus({ registryPath: await registry([record('repo-main-growth-cap', repo)]), out: (line) => raisedOut.push(line) });
+
+        expect(raisedOut.find((line) => line.startsWith(`  PLAN GROWTH [${slug}]`))).toContain('remaining 3/9');
+      });
+
+      // Covers: task:7
       it('resolves a daemon feature plan without an activePlanPath', async () => {
         const repo = join(root, 'repo-daemon-plan');
         const slug = 'daemon-feature';
@@ -1244,8 +1280,8 @@ describe('engine/daemon-observe-cli', () => {
         const repo = join(root, 'repo-pending-growth');
         const slug = 'pending-growth-feature';
         const featureRoot = await writeDaemonPlan(repo, slug, [tasks('', 40), tasks('rem-', 11)].join('\n'));
-        await mkdir(join(featureRoot, '.ai-conductor'), { recursive: true });
-        await writeFile(join(featureRoot, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_appended_tasks: 10\n  max_appended_ratio: 1\n', 'utf8');
+        await mkdir(join(repo, '.ai-conductor'), { recursive: true });
+        await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_appended_tasks: 10\n  max_appended_ratio: 1\n', 'utf8');
         await writeFile(join(featureRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
           version: 1,
           gates: {},
@@ -1273,8 +1309,6 @@ describe('engine/daemon-observe-cli', () => {
         const repo = join(root, 'repo-status-growth-variants');
         const pendingRoot = await writeDaemonPlan(repo, 'partial-pending', [tasks('', 40), tasks('rem-', 3)].join('\n'));
         const baseLedger = { version: 1, gates: {}, growth: { authored: 40, added: 2, byGate: { prd_audit: 2 } } };
-        await mkdir(join(pendingRoot, '.ai-conductor'), { recursive: true });
-        await writeFile(join(pendingRoot, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_appended_tasks: 10\n  max_appended_ratio: 1\n', 'utf8');
         await writeFile(join(pendingRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
           ...baseLedger,
           pendingRepair: {
@@ -1297,7 +1331,7 @@ describe('engine/daemon-observe-cli', () => {
 
         await runDaemonStatus({ registryPath: await registry([record('repo-status-growth-variants', repo)]), out: (line) => out.push(line) });
 
-        expect(out).toContain('  PLAN GROWTH [partial-pending]: authored 40; added 2 (prd_audit: 2); remaining 5/10; pending 3 (prd_audit 3)');
+        expect(out).toContain('  PLAN GROWTH [partial-pending]: authored 40; added 2 (prd_audit: 2); remaining 0/5; pending 3 (prd_audit 3)');
         expect(out.find((line) => line.startsWith('  PLAN GROWTH [partial-pending]:'))).not.toContain('minimum raise');
         expect(out).toContain('  PLAN GROWTH [laps-only]: authored 39; added 2 (prd_audit: 2); remaining 3/5');
         expect(out).toContain('  PLAN GROWTH [ordinary]: authored 40; added 2 (prd_audit: 2); remaining 3/5');
@@ -1310,8 +1344,8 @@ describe('engine/daemon-observe-cli', () => {
         const featureRoot = await writeDaemonPlan(repo, slug, [tasks('', 24), tasks('rem-', 9)].join('\n'), {
           otherPlan: { name: 'other.md', content: tasks('', 5) },
         });
-        await mkdir(join(featureRoot, '.ai-conductor'), { recursive: true });
-        await writeFile(join(featureRoot, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_appended_tasks: 30\n  max_appended_ratio: 0.5\n', 'utf8');
+        await mkdir(join(repo, '.ai-conductor'), { recursive: true });
+        await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_appended_tasks: 30\n  max_appended_ratio: 0.5\n', 'utf8');
         const ledgerPath = join(featureRoot, '.pipeline', 'kickback-ledger.json');
         const growth = { authored: 0, added: 9, byGate: { prd_audit: 5, architecture_review_as_built: 4 } };
         await writeFile(ledgerPath, JSON.stringify({ version: 1, gates: {}, growth }), 'utf8');
@@ -1736,6 +1770,51 @@ describe('engine/daemon-observe-cli', () => {
   describe('detectDaemonObserveCommand', () => {
     const argv = (...rest: string[]) => ['node', 'conduct', ...rest];
 
+    async function commitStoriesRefsFixture(files: Record<string, string>): Promise<string> {
+      await execFile('git', ['init', '--initial-branch=main', '--quiet'], { cwd: root });
+      await execFile('git', ['config', 'user.email', 'fixture@example.test'], { cwd: root });
+      await execFile('git', ['config', 'user.name', 'Stories refs fixture'], { cwd: root });
+      for (const [path, content] of Object.entries(files)) {
+        const target = join(root, path);
+        await mkdir(dirname(target), { recursive: true });
+        await writeFile(target, content, 'utf8');
+      }
+      await execFile('git', ['add', '.'], { cwd: root });
+      await execFile('git', ['commit', '--quiet', '-m', 'fixture'], { cwd: root });
+      return (await execFile('git', ['rev-parse', 'HEAD'], { cwd: root })).stdout.trim();
+    }
+
+    async function dispatchStoriesRefs(repo: string): Promise<{ code: number; output: string }> {
+      const command = detectDaemonObserveCommand(argv('daemon', 'stories-refs', '--repo', repo));
+      expect(command).toEqual({ kind: 'stories-refs', repo });
+      const lines: string[] = [];
+      const stdout = vi.spyOn(console, 'log').mockImplementation((line: string) => {
+        lines.push(line);
+      });
+      try {
+        return { code: await dispatchDaemonObserve(command!), output: `${lines.join('\n')}\n` };
+      } finally {
+        stdout.mockRestore();
+      }
+    }
+
+    async function dispatchStoriesRefsWithStreams(
+      repo: string,
+    ): Promise<{ code: number; stdout: string[]; stderr: string[] }> {
+      const command = detectDaemonObserveCommand(argv('daemon', 'stories-refs', '--repo', repo));
+      expect(command).toEqual({ kind: 'stories-refs', repo });
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+      const out = vi.spyOn(console, 'log').mockImplementation((line: string) => { stdout.push(line); });
+      const err = vi.spyOn(console, 'error').mockImplementation((line: string) => { stderr.push(line); });
+      try {
+        return { code: await dispatchDaemonObserve(command!), stdout, stderr };
+      } finally {
+        out.mockRestore();
+        err.mockRestore();
+      }
+    }
+
     it('detects `daemon status`', () => {
       expect(detectDaemonObserveCommand(argv('daemon', 'status'))).toEqual({ kind: 'status' });
     });
@@ -1768,6 +1847,121 @@ describe('engine/daemon-observe-cli', () => {
         repo: '/y',
         follow: false,
         all: false,
+      });
+    });
+
+    it('detects stories-refs with --repo <path> and --repo=<path>', () => {
+      expect(detectDaemonObserveCommand(argv('daemon', 'stories-refs', '--repo', '/x')))
+        .toEqual({ kind: 'stories-refs', repo: '/x' });
+      expect(detectDaemonObserveCommand(argv('daemon', 'stories-refs', '--repo=/y')))
+        .toEqual({ kind: 'stories-refs', repo: '/y' });
+    });
+
+    it('dispatches a clean stories-refs report with its scanned ref, abbreviated commit, and spec count', async () => {
+      const sha = await commitStoriesRefsFixture({
+        '.docs/plans/clean.md': '# Plan\n**Stories:** .docs/stories/clean.md\n',
+        '.docs/stories/clean.md': '# Stories\n',
+      });
+
+      const { code, output } = await dispatchStoriesRefs(root);
+
+      expect(code).toBe(0);
+      expect(output).toBe(
+        `stories-refs: scanned 1 specs at main (${sha.slice(0, 9)})\n`
+        + 'stories-refs: clean — no spec has an unresolvable Stories reference\n',
+      );
+    });
+
+    it('dispatches findings and a summary, without a clean line, for broken stories references', async () => {
+      const sha = await commitStoriesRefsFixture({
+        '.docs/plans/broken.md': '# Plan\n**Stories:** .docs/stories/missing.md\n',
+      });
+
+      const { code, output } = await dispatchStoriesRefs(root);
+
+      expect(code).toBe(0);
+      expect(output).toContain(`stories-refs: scanned 1 specs at main (${sha.slice(0, 9)})`);
+      expect(output).toContain(
+        '  • .docs/plans/broken.md — actionable — missing — reference: .docs/stories/missing.md — attempted: .docs/stories/missing.md',
+      );
+      expect(output).toContain('stories-refs: 1 broken (actionable 1, halted 0, parked 0, shipped 0, processed 0)');
+      expect(output).not.toContain('stories-refs: clean');
+    });
+
+    it('reports from an already-fetched origin ref after origin becomes unreachable', async () => {
+      const sha = await commitStoriesRefsFixture({
+        '.docs/plans/broken.md': '# Plan\n**Stories:** .docs/stories/missing.md\n',
+      });
+      const origin = await mkdtemp(join(tmpdir(), 'daemon-observe-origin-'));
+      try {
+        await execFile('git', ['init', '--bare', '--initial-branch=main', '--quiet', origin]);
+        await execFile('git', ['remote', 'add', 'origin', origin], { cwd: root });
+        await execFile('git', ['push', '--quiet', '-u', 'origin', 'main'], { cwd: root });
+        await execFile('git', ['fetch', '--quiet', 'origin', 'main'], { cwd: root });
+        await execFile('git', ['remote', 'set-url', 'origin', join(origin, 'unreachable')], { cwd: root });
+
+        const { code, output } = await dispatchStoriesRefs(root);
+
+        expect({ code, output }).toMatchObject({
+          code: 0,
+          output: expect.stringContaining(`stories-refs: scanned 1 specs at origin/main (${sha.slice(0, 9)})`),
+        });
+      } finally {
+        await rm(origin, { recursive: true, force: true });
+      }
+    });
+
+    it('dispatches a zero-spec header for a committed corpus with no plans or manifests', async () => {
+      const sha = await commitStoriesRefsFixture({ 'README.md': '# Empty fixture\n' });
+
+      const { code, output } = await dispatchStoriesRefs(root);
+
+      expect(code).toBe(0);
+      expect(output).toBe(
+        `stories-refs: scanned 0 specs at main (${sha.slice(0, 9)})\n`
+        + 'stories-refs: clean — no spec has an unresolvable Stories reference\n',
+      );
+    });
+
+    it('reports a non-Git repository scan failure only on stderr', async () => {
+      const result = await dispatchStoriesRefsWithStreams(root);
+
+      expect(result).toEqual({
+        code: 1,
+        stdout: [],
+        stderr: [`stories-refs: scan failed — ${root} is not inside a Git repository`],
+      });
+    });
+
+    it('reports an unresolvable base for a repository with no commits only on stderr', async () => {
+      await execFile('git', ['init', '--initial-branch=main', '--quiet'], { cwd: root });
+
+      const result = await dispatchStoriesRefsWithStreams(root);
+
+      expect(result).toEqual({
+        code: 1,
+        stdout: [],
+        stderr: ['stories-refs: scan failed — could not resolve base origin/main or main'],
+      });
+    });
+
+    it('maps a thrown scan to one stderr failure line without reporting clean', async () => {
+      const out: string[] = [];
+      const err: string[] = [];
+
+      const code = await runDaemonStoriesRefs(
+        { repo: root },
+        {
+          out: (line) => out.push(line),
+          err: (line) => err.push(line),
+          scan: async () => { throw new Error('fixture scan exploded'); },
+        },
+      );
+
+      expect({ code, out, err }).toEqual({
+        code: 1,
+        out: [],
+        err: ['stories-refs: scan failed — fixture scan exploded'],
       });
     });
 

@@ -30,8 +30,8 @@ git diff <batch-start-commit>..HEAD --name-only
 
 Keep non-test analysis limited to these files. For each changed or added test, additionally
 inspect existing tests at the same production seam; do not scan unrelated code or tests.
-The batch-start commit is available from `.pipeline/audit-trail/batch-N/` or from the
-pipeline's progress log.
+Derive the batch-start commit from the last batch entry in `.pipeline/progress.log` (the commit
+before that batch's first task commit).
 
 ### 2. Duplication Check
 
@@ -43,8 +43,8 @@ Look for duplicated **business logic** across batch-changed files. Distinguish b
 | Duplicated shape | Two serializers with similar structure | Leave alone |
 | Copy-paste with tweaks | Same method with 1-2 param differences | Extract with parameters — except a declared replication's exact mapped source/target pair alone is not an extract-with-parameters finding. Still flag undeclared duplication or similarity outside the declared target set; with no declaration, apply this row unchanged. A declared pair may retain an extraction finding when rationale beyond the declared replication merits it. |
 
-Flag when 3+ similar blocks exist across different files. Two similar blocks in the same
-file are a judgment call — flag only if the logic is non-trivial.
+Flag the second copy of non-trivial behavior, and any changed block that reimplements an existing
+repository helper; implementationQuality flags both.
 
 Before recommending extraction, inlining, or a competing abstraction, consult the applicable
 focused pattern basis (for example, the approved plan, architecture decision, or declared
@@ -130,7 +130,7 @@ cover two kinds. Check batch-changed code for the other five:
 
 | Kind | Must-fix when the batch... | Not a finding |
 |------|----------------------------|---------------|
-| `representable-invalid-state` | adds a state shape that can hold a contradictory or meaningless combination (two fields that can disagree, independently optional fields that must appear together) | invalid combinations are impossible at construction |
+| `representable-invalid-state` | adds a state shape that can hold a contradictory or meaningless combination (two fields that can disagree, independently optional fields that must appear together) | invalid combinations are impossible at construction, or every writer and reader passes through one validating parser |
 | `non-exhaustive-domain-match` | adds a branch over a closed domain (union, enum, event kind) that silently drops a meaningful case | an exhaustive match, or an explicit default that preserves the remaining cases |
 | `primitive-obsession` | encodes a domain concept with invariants (an identity, a path component, a slug, a count with a unit) as a bare primitive that callers can confuse or misuse | the primitive's range and meaning are enforced where it is used |
 | `obscured-intent` | hides the domain operation it performs (a hidden second return value, a computed value that is discarded and recomputed) | a local detail with a clear name and boundary |
@@ -159,57 +159,12 @@ references to each new symbol.
 
 ### 9. Output
 
-Write findings to `.pipeline/audit-trail/batch-N-simplification.md`:
-
-```markdown
-# Simplification Check: Batch N
-
-**Date:** YYYY-MM-DD
-**Files analyzed:** [count]
-**Batch commits:** <start-commit>..<end-commit>
-
-## Findings
-
-### Duplication
-| # | Description | Files | Severity |
-|---|-------------|-------|----------|
-| 1 | [description] | [file1:line, file2:line] | must-fix / advisory |
-
-### Complexity
-| # | Method | File:Line | Issue | Metric |
-|---|--------|-----------|-------|--------|
-| 1 | [method_name] | [file:line] | [too many branches / too long / too nested] | [value] |
-
-### Extract-Worthy Patterns
-| # | Pattern | Occurrences | Suggested Extraction |
-|---|---------|-------------|---------------------|
-| 1 | [description] | [file1:line, file2:line, file3:line] | [extract to where] |
-
-### Over-Engineering
-| # | Abstraction | File:Line | Callers | Recommendation |
-|---|-------------|-----------|---------|----------------|
-| 1 | [class/method] | [file:line] | [count] | [inline / remove / keep with justification] |
-
-### Domain Modelling
-| # | Kind | File:Line | Defect | Severity |
-|---|------|-----------|--------|----------|
-| 1 | [representable-invalid-state / non-exhaustive-domain-match / ...] | [file:line] | [the invalid state, dropped case, or confused value] | must-fix / advisory (reason) |
-
-### Dead Code
-| # | Symbol | File:Line | Reason Unused |
-|---|--------|-----------|---------------|
-| 1 | [symbol] | [file:line] | [no callers / unreachable branch] |
-
-### Test and Implementation Value
-| # | Test/Implementation | File:Line | Value Violation | Severity |
-|---|---------------------|-----------|-----------------|----------|
-| 1 | [name] | [file:line] | [duplicate/no-signal/no outcome trace] | must-fix |
-
-## Verdict: CLEAN | SIMPLIFY_REQUIRED
-
-**Must-fix items:** [count]
-**Advisory items:** [count]
-```
+Write findings to `.pipeline/audit-trail/batch-N-simplification.md`: the batch commit range, one
+table of findings (`# | Category | Kind | Description | File:Line | Fix | Severity`, where Category is
+one of duplication, complexity, extract-worthy, over-engineering, domain-modelling, dead-code, or
+test-value; Kind is the domain-modelling kind or complexity metric; Fix is the recommendation or
+extraction target; and Severity is `must-fix` or `advisory (reason)`), then
+`## Verdict: CLEAN | SIMPLIFY_REQUIRED` with must-fix and advisory counts.
 
 ### 10. Verdict and Gating
 
@@ -221,27 +176,10 @@ Write findings to `.pipeline/audit-trail/batch-N-simplification.md`:
 Advisory items are noted but do not block.
 
 Rework from simplification counts toward the pipeline rework budget (3 cycles per task).
-If the rework budget is exhausted, escalate to user.
 
 ## Verification
 
-- [ ] Non-test analysis limited to current batch files (not the full codebase)
-- [ ] Duplication checked across batch-changed files (behavior, not shape)
-- [ ] Applicable focused accepted basis consulted before extraction, inlining, or a competing abstraction; only material unapproved departures flagged
-- [ ] Allowed variations, no-fit decisions, and authorized departures accepted; declared exact-replication and business-behavior-vs-shape distinctions retained
-- [ ] Complexity thresholds applied (>4 branches, >25 lines, >3 nesting, >4 params)
-- [ ] Extract-worthy patterns identified (3+ similar blocks)
-- [ ] Over-engineering flagged (single-caller abstractions, unnecessary indirection)
-- [ ] ADR exceptions respected (documented abstractions not flagged)
-- [ ] Domain-modelling check run on batch-changed code for the five kinds in §7; concrete defects marked must-fix
-- [ ] Earlier batches' simplification records read; fixed or advisory findings not re-raised unless their code changed again
-- [ ] Dead code in batch detected
-- [ ] Changed/added tests compared only with existing tests at the same production seam, including outside the batch when needed
-- [ ] Distinct failure boundaries stated for any intentionally overlapping tests
-- [ ] Tests can plausibly fail on production regressions; no no-signal, tautology, mock-only, type-only, superseded-behavior, or documentation-wording/layout assertions
-- [ ] Production-file mirroring is not treated as an independent reason to retain a test
-- [ ] Apparent coverage gaps checked against the current governing contract, not preserved from superseded artifacts
-- [ ] Implementations trace to an operator outcome or acceptance criterion
-- [ ] Test and Implementation Value findings included; violations marked must-fix
-- [ ] Output written to `.pipeline/audit-trail/batch-N-simplification.md`
-- [ ] Verdict issued (CLEAN or SIMPLIFY_REQUIRED)
+- [ ] Analysis limited to batch files (plus same-seam tests for changed tests)
+- [ ] Applicable pattern basis consulted before recommending extraction or inlining
+- [ ] Earlier batches' simplification records read; settled findings not re-raised
+- [ ] Output written to `.pipeline/audit-trail/batch-N-simplification.md` with a verdict

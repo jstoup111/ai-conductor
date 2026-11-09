@@ -75,7 +75,7 @@ async function seed(
   ].join('\n'));
   await writeFile(join(worktreePath, '.docs', 'plans', `${stem}.md`), [
     '# Implementation Plan', '', `**Stories:** .docs/stories/${stem}.md`, '',
-    '### Task 1: Land', '**Story:** Story 1', '', '**Done when:**',
+    '### Task 1: Land', '**Story:** Story 1', '**Dependencies:** none', '', '**Done when:**',
     '- Given a marker, when land runs, then it commits.',
     '- Given an invalid marker, when land runs, then it refuses.', '',
     '## Coverage Check', '', '| Criterion | Task ids | Quote | Disposition |',

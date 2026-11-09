@@ -866,8 +866,9 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
     // Verify wiring to Conductor
     expect(src).toContain('rateLimitEpisode,');
     expect(src).toMatch(/new Conductor\({[\s\S]*?rateLimitEpisode,/);
-    // Verify wiring to runDaemon deps (should appear in the deps object)
-    expect(src).toMatch(/await runDaemon\(\s*\{[\s\S]*?rateLimitEpisode,/);
+    // Verify wiring to the daemon executor deps (the injectable production
+    // seam defaults to runDaemon).
+    expect(src).toMatch(/await dispatchDaemon\(\s*\{[\s\S]*?rateLimitEpisode,/);
   });
 
   it('persists each CLI-created provider scratch cleanup decision to its feature ledger', async () => {
@@ -938,6 +939,10 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
     const workersReleased = new Promise<void>((resolve) => {
       releaseWorkers = resolve;
     });
+    let observeDrainStatus!: () => void;
+    const drainStatusObserved = new Promise<void>((resolve) => {
+      observeDrainStatus = resolve;
+    });
     // Keep the daemon promise under test control.  If the drain-set assertion
     // fails, the workers must still be released and the daemon awaited; leaving
     // them blocked turns a useful assertion failure into Vitest's 20-second
@@ -979,6 +984,7 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
               async () => false,
             );
             events.push(`status:${status.restartPending?.drainSlugs?.join(',')}`);
+            observeDrainStatus();
             releaseWorkers?.();
           }
           await workersReleased;
@@ -992,9 +998,7 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
     });
 
     try {
-      await vi.waitFor(() => {
-        expect(events).toContain('status:first,second');
-      });
+      await drainStatusObserved;
       await daemon;
       const durableDrainLines = (await readFile(join(root, '.daemon', 'daemon.log'), 'utf8'))
         .split('\n')
@@ -1056,7 +1060,7 @@ describe('Task 3: SIGTERM drains then releases lock; bounded force-release', () 
   it('runDaemon is invoked with a shouldStop dep wired to the teardown controller', () => {
     const src = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8');
 
-    expect(src).toMatch(/await runDaemon\(\s*\{[\s\S]*?shouldStop:\s*\(\)\s*=>\s*teardown\.shouldStop\(\),/);
+    expect(src).toMatch(/await dispatchDaemon\(\s*\{[\s\S]*?shouldStop:\s*\(\)\s*=>\s*teardown\.shouldStop\(\),/);
   });
 
   it('force-releases a wedged two-executor daemon after its scaled bound and drops the lock before exit', async () => {

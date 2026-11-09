@@ -21,9 +21,6 @@ stage the fixes, and run `git rebase --continue` to advance — repeating for an
 additional conflict hunks — until the rebase completes cleanly or a hunk is
 judged unsafe to resolve automatically.
 
-The conductor retries this skill up to a configured cap (default 3) before
-issuing a HALT. Each invocation is **one bounded attempt**.
-
 ## Practices
 
 ### 1. Confirm Rebase State
@@ -34,11 +31,6 @@ Verify a rebase is actually in progress before touching anything:
 git status
 test -d "$(git rev-parse --git-path rebase-merge)" || test -d "$(git rev-parse --git-path rebase-apply)"
 ```
-
-(`--git-path` resolves the state dir correctly in linked worktrees, where `.git`
-is a file and `ls .git/rebase-merge/` always fails. Note that `rev-parse
---git-path` prints the path unconditionally — only `test -d` on it proves a
-rebase is in progress.)
 
 If no rebase is in progress, emit `{"resolved": false, "reason": "no rebase in progress"}` and stop.
 
@@ -160,13 +152,8 @@ intent and the necessary upstream adaptation before continuing.
 
 The complete-replay attribution judgment is the acceptance boundary:
 
-- Do not use a file allowlist as the acceptance boundary.
-- Do not use a hunk-only restriction as the acceptance boundary.
-- Do not use whole-patch equality as the acceptance boundary.
-- Do not use a deterministic resolver as the acceptance boundary.
-
-Those mechanical restrictions reject valid semantic adaptations; they do not
-establish whether the staged replay preserves its intent.
+Do not use a file allowlist, hunk-only restriction, whole-patch equality, or deterministic resolver
+as the acceptance boundary; those reject valid semantic adaptations.
 
 ### 6. Continue and Validate the Resulting Replay Commit
 
@@ -221,21 +208,11 @@ reached, still within this single invocation.
 ### 7. Safety Rules (Non-Negotiable)
 
 - **NEVER run `git rebase --abort`** — this drops the in-progress commit work.
-  The conductor's engine guards (FR-8 not-current / FR-9 dropped-commit) will
-  reject it, but do not attempt it in the first place.
 - **NEVER run `git rebase --skip`** — this discards the conflicting commit
   entirely, causing data loss. The sole exception is a declared-superseded commit
   under **Sweep Test-Only Judgement** below.
 - **NEVER run `git push --force` or any destructive branch operation** during
   rebase resolution.
-- **NEVER invoke this skill mid-build** — only the conductor's finish-time rebase
-  step, the engine-dispatched mergeable sweep
-  (adr-2026-07-04-widen-rebase-resolution-dispatch-to-sweep), or an operator
-  `/rebase` invocation is sanctioned. Implementation agents
-  running during BUILD must not call this skill; doing so violates the
-  harness "no ad-hoc rebase mid-build" rule.
-
-### 8. Result Contract
 
 ### Sweep Test-Only Judgement
 
@@ -255,9 +232,7 @@ On a successful sweep-judgement resolution, the final JSON line is:
 If no safe choice can be made, return the ordinary unresolved result with the
 specific competing intents and missing decision.
 
-The conductor's `DefaultStepRunner` parses the last JSON object emitted to
-stdout. This contract is **load-bearing** — the conductor decides whether to
-retry or HALT based on it.
+### 8. Result Contract
 
 In sweep judgement mode (the dispatch prompt says the exception is in force),
 a successful resolution ends with the verdict line above, and an unresolved one
@@ -290,25 +265,7 @@ output; the runner takes the **last** JSON line.
 
 ## Verification
 
-- [ ] `git status` confirmed an in-progress rebase before proceeding
-- [ ] Replay source commit and parent captured before edits
-- [ ] Source parent/diff and relevant upstream context read before resolving
-- [ ] Conflict-marker removal was not treated as correctness evidence
-- [ ] All conflicted files identified via `git diff --name-only --diff-filter=U`
-- [ ] Both sides of every conflict hunk read and understood before editing
-- [ ] No conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`) remain in any file
-- [ ] Complete staged diff, summary, and whitespace errors reviewed before continue
-- [ ] Every staged change attributed to source intent or necessary upstream adaptation
-- [ ] Every coordinated edit outside a conflicted hunk/file explained and validated
-- [ ] Unexplained staged and cross-file changes halted rather than continued
-- [ ] No file allowlist, hunk-only restriction, whole-patch equality, or deterministic resolver used as the acceptance boundary
-- [ ] `git add` run on every resolved file and intended supporting edit before staged replay review and `git rebase --continue`
-- [ ] Pre-continue replay identity and validated intent retained before every continue
-- [ ] Newly created replay commit inspected after every continue before advancing
-- [ ] Each resulting replay reconciled with its validated intent before another conflict or success
-- [ ] A post-continue mismatch emitted `{"resolved": false}` and never `{"resolved": true}`
-- [ ] A subsequent conflict started a fresh source-intent and staged-replay validation cycle
-- [ ] Final replay commit inspected and reconciled before reporting `{"resolved": true}`
-- [ ] `git rebase --abort` was NOT used; `git rebase --skip` was NOT used, except (sweep judgement mode only) for the one declared-superseded commit
-- [ ] Final line of stdout is exactly `{"resolved": true}` or `{"resolved": false, "reason": "..."}`, or in sweep judgement mode the verdict line
-- [ ] If `{"resolved": true}`: `git status` shows clean working tree on rebased branch
+- [ ] Replay intent captured before edits; every staged change attributed before continue
+- [ ] Newly created replay commit inspected after every continue; a post-continue mismatch emitted `{"resolved": false}`
+- [ ] `git rebase --abort` not used; `--skip` only for the declared-superseded sweep commit
+- [ ] Final line of stdout is exactly one accepted result line

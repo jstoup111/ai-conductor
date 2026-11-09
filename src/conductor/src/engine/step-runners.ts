@@ -147,7 +147,11 @@ import {
   resolveInstalledReviewPolicyCatalog,
   ReviewPolicyCatalogError,
 } from './build-review-policy-resolver.js';
-import { renderRubricContractShape, type RubricContractDescriptor } from './build-review-contract.js';
+import {
+  renderBuildReviewSeverityDefinitions,
+  renderRubricContractShape,
+  type RubricContractDescriptor,
+} from './build-review-contract.js';
 import { captureInstalledReviewPolicyBundle, resolveReviewPolicyPackageReference, type CapturedReviewPolicyBundle } from './build-review-policy-bundle.js';
 import {
   evaluateBuildReviewPolicyPreflight,
@@ -2988,6 +2992,9 @@ export class DefaultStepRunner implements StepRunner {
       'captured source intent and upstream intent before continuing. At the first semantic ' +
       'ambiguity, HALT this attempt and return a false result with the missing decision; ' +
       'do not replace that workflow with a condensed procedure.\n' +
+      (ctx.operatorDecision
+        ? `Operator decision for commit ${ctx.operatorDecision.commit} on ${ctx.operatorDecision.paths.join(', ')}: ${ctx.operatorDecision.answer}. Apply this decision; do not escalate the same question again.\n`
+        : '') +
       (ctx.supersessionJudgement
         ? 'Sweep Test-Only Judgement is in force. A successful final JSON must include verdict: { choice: "superseded" | "merged" | "source", rationale: string, superseded: string[] }.\n'
         : '') +
@@ -3006,6 +3013,7 @@ export class DefaultStepRunner implements StepRunner {
         dangerouslySkipPermissions: true,
         systemPrompt,
         cwd: ctx.projectRoot,
+        ...(ctx.environment === undefined ? {} : { environmentOverlay: ctx.environment }),
       },
     );
     if (providerResult) {
@@ -3033,6 +3041,7 @@ export class DefaultStepRunner implements StepRunner {
       model: this.modelAvailability.effectiveModel(resolved.model).model,
       effort: resolved.effort,
       cwd: ctx.projectRoot,
+      ...(ctx.environment === undefined ? {} : { environmentOverlay: ctx.environment }),
     }, async () => ({ sessionId: uuidv4(), resume: false }));
 
     return parseRebaseResolutionOutput(result.output);
@@ -3324,15 +3333,18 @@ export class DefaultStepRunner implements StepRunner {
     readOnlyReviewCapabilities?: Readonly<Record<string, ReadOnlyReviewCapability>>,
     child?: import('./child-context.js').ChildId,
   ): Promise<StepRunResult> {
+    const effectiveConfig = inputs.participation === undefined
+      ? config
+      : { ...config, catalog: inputs.participation.participating };
     try {
-      return await this.runRubricBuildReviewInner(inputs, config, tier, planPath, executionContext, readOnlyReviewCapabilities, child);
+      return await this.runRubricBuildReviewInner(inputs, effectiveConfig, tier, planPath, executionContext, readOnlyReviewCapabilities, child);
     } finally {
       // A custom lap owns one source view for every catalog member. Some
       // built-in paths settle before dispatch (for example a deterministic
       // preflight refusal), so its own candidate callback never runs. Close
       // every member here after the complete lap outcome is known; repeated
       // member settlement is deliberately idempotent in the materialization.
-      await Promise.all(config.catalog.map(async (entry) => {
+      await Promise.all(effectiveConfig.catalog.map(async (entry) => {
         await inputs.sourceMaterialization?.settle(entry.id);
       }));
       await inputs.sourceMaterialization?.finish?.();
@@ -3350,7 +3362,6 @@ export class DefaultStepRunner implements StepRunner {
   ): Promise<StepRunResult> {
     const lapId = parseBuildReviewLapId(`lap-${inputs.sourceSnapshot.headSha}`);
     if (!lapId) return { success: false, output: 'build_review could not create a valid rubric lap identity' };
-
     // A prior lap's aggregate cannot represent this lap. Invalidate it before
     // dispatch so a mechanical early return leaves no stale semantic FAIL for
     // the conductor to route back to build.
@@ -3900,7 +3911,12 @@ export class DefaultStepRunner implements StepRunner {
         });
       }
     }
-    const coordination = joinedCoordination!;
+    // Withholding every custom member can leave a lap with no built-ins and
+    // no custom policy.  Preserve the existing no-rubrics pass boundary.
+    if (joinedCoordination === undefined) {
+      return this.publishBuildReviewPass('build_review_no_rubrics', child);
+    }
+    const coordination = joinedCoordination;
 
     if (coordination.kind === 'gate-disabled') {
       return { success: true, output: 'build_review disabled' };
@@ -4297,9 +4313,9 @@ export class DefaultStepRunner implements StepRunner {
     const controller = new AbortController();
     // Review acceptance is rubric policy; a fast test suite must not shorten a model judgment.
     const deadlineAt = Date.now() + (entry.policy.timeout_seconds ?? 300) * 1_000;
-    // The outer deadline timer is registered before discovery's own timer.
-    // Preserve its cause so that an in-flight catalog operation reports a
-    // deadline rather than a generic cancellation when this timer fires first.
+    // This is the sole deadline authority for the whole candidate, including
+    // installed-policy discovery. Preserve its cause so an in-flight catalog
+    // operation reports a deadline rather than a generic cancellation.
     const deadlineAbortReason = 'build-review-candidate-deadline';
     const timeout = setTimeout(() => controller.abort(deadlineAbortReason), Math.max(0, deadlineAt - Date.now()));
     let result: ProviderExecutionResult;
@@ -4393,8 +4409,9 @@ export class DefaultStepRunner implements StepRunner {
         try {
           if (context.abortSignal?.aborted) throw new ReviewPolicyCatalogError(catalogProvider.id, 'cancelled', 'candidate cancelled before policy catalog discovery');
           if (context.deadlineAt !== undefined && Date.now() >= context.deadlineAt) throw new ReviewPolicyCatalogError(catalogProvider.id, 'timeout', 'candidate deadline elapsed before policy catalog discovery');
-          // One discovery signal: the candidate's cancellation joined with a
-          // timer for its deadline, so an in-flight request cannot outlive it.
+          // One discovery signal: the owning candidate's cancellation. Its
+          // deadline is armed above, so a catalog request cannot outlive the
+          // candidate or race a second, nearly-identical deadline timer.
           const discovery = new AbortController();
           let deadlineElapsed = false;
           const cancelDiscovery = () => {
@@ -4402,12 +4419,7 @@ export class DefaultStepRunner implements StepRunner {
             discovery.abort();
           };
           context.abortSignal?.addEventListener('abort', cancelDiscovery, { once: true });
-          const deadlineTimer = context.deadlineAt === undefined ? undefined : setTimeout(() => {
-            deadlineElapsed = true;
-            discovery.abort();
-          }, Math.max(0, context.deadlineAt - Date.now()));
           releaseDiscoveryAuthority = () => {
-            if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
             context.abortSignal?.removeEventListener('abort', cancelDiscovery);
           };
           context.onTeardown(async () => releaseDiscoveryAuthority?.());
@@ -5126,6 +5138,7 @@ export class DefaultStepRunner implements StepRunner {
             ]
           : []),
         `Your final message MUST end with one JSON object matching this schema:\n${contractShape}`,
+        renderBuildReviewSeverityDefinitions(),
         JSON.stringify(buildReviewRubricPromptView(projection)),
       ].join('\n\n');
     // Regression visibility for prompt bloat (#projection-size): record the
@@ -5758,16 +5771,6 @@ export class DefaultStepRunner implements StepRunner {
         // status is unknown, but its evidence must still remain child-local.
         activeSuiteChild = { child: activeChildBase.child, isLeaf: true };
       }
-      // A custom member changes the lap's source authority from by-reference
-      // to a detached, immutable view shared by every member in the lap.
-      const lapMembers = this.usesInjectedBuildReviewGit && this.buildReviewInputOptions?.materialization === undefined
-        ? undefined
-        : buildReviewConfig.catalog.some((entry) => entry.kind === 'custom')
-          ? buildReviewConfig.catalog.map((entry) => ({
-              id: entry.id,
-              kind: entry.kind,
-            })) as BuildReviewInputOptions['lapMembers']
-          : undefined;
       inputs = {
         ...await assembleBuildReviewInputs(this.gitRunner, planPath, {
           ...this.buildReviewInputOptions,
@@ -5775,7 +5778,11 @@ export class DefaultStepRunner implements StepRunner {
           ...(activeChildBase === undefined ? {} : { securityScope: activeChildIsLeaf ? 'leaf' as const : 'non-leaf' as const }),
           ...(activeSuiteChild === undefined ? {} : { activeChild: activeSuiteChild }),
           ...(operatorWorkOrder === undefined ? {} : { operatorWorkOrder }),
-          lapMembers,
+          // The input assembler decides participation after it freezes the
+          // whole-feature diff, before any custom source-view work begins.
+          ...(this.usesInjectedBuildReviewGit && this.buildReviewInputOptions?.materialization === undefined
+            ? {}
+            : { catalog: buildReviewConfig.catalog }),
           materialization: this.buildReviewInputOptions?.materialization ?? { projectRoot: this.projectDir },
         }),
       };
@@ -5817,6 +5824,18 @@ export class DefaultStepRunner implements StepRunner {
       const withFreshness = baseFreshness ? { ...r, baseFreshness } : r;
       return repairProvenance ? { ...withFreshness, repairProvenance } : withFreshness;
     };
+    // Input assembly is the one owner of path-trigger participation.  Every
+    // downstream consumer, including the injectable coordinator seam, sees
+    // only this effective catalog.
+    const effectiveBuildReviewConfig = inputs.participation === undefined
+      ? buildReviewConfig
+      : { ...buildReviewConfig, catalog: inputs.participation.participating };
+    const participationLapId = parseBuildReviewLapId(`lap-${inputs.sourceSnapshot.headSha}`);
+    if (participationLapId !== undefined) {
+      for (const rubric of inputs.participation?.withheld ?? []) {
+        await this.events?.emit({ type: 'build_review_rubric_skipped', rubric, lapId: participationLapId, reason: 'paths-unmatched' });
+      }
+    }
 
     // Containment telemetry is non-blocking: it never changes `success` or
     // triggers a kickback. Guard it so an observability failure cannot fail
@@ -5923,14 +5942,14 @@ export class DefaultStepRunner implements StepRunner {
     });
     if (this.buildReviewCoordinator) {
       return withBaseFreshness(withContainmentAdvisory(
-        await this.buildReviewCoordinator(inputs, buildReviewConfig),
+        await this.buildReviewCoordinator(inputs, effectiveBuildReviewConfig),
       ));
     }
 
     return withBaseFreshness(withContainmentAdvisory(
       await this.runRubricBuildReview(
         inputs,
-        buildReviewConfig,
+        effectiveBuildReviewConfig,
         tier,
         planPath,
         executionContext,
@@ -6202,8 +6221,9 @@ export class DefaultStepRunner implements StepRunner {
       if (revisionGuidance !== undefined) {
         prompt +=
           '\n\nFINISH PR PROSE REVISION — the retained pull request needs a focused reader-facing prose revision. ' +
-          `The prior prose judge's objection is:\n> ${revisionGuidance}\n\n` +
-          'Revise the retained PR title and body in place to address that objection. ' +
+          `The prior objection is:\n> ${revisionGuidance}\n\n` +
+          'Write only `.pipeline/finish-pr-prose.json` as `{"version":1,"title":"…","body":"…"}` with a title and body that address that objection. ' +
+          'Do not edit the pull request or make a GitHub call. The engine validates and publishes that handoff. ' +
           FINISH_PROSE_DIFF_BUDGET +
           `Then follow this repository's PR authoring contract — the \`${prSkillName}\` skill (${CLAUDE_DISPLAY_NAME} Code invokes it as \`/${prSkillName}\`; ${CODEX_DISPLAY_NAME} ` +
           `invokes it as \`$${prSkillName}\`). Keep the template section shape (\`## Why\`, \`## What Changed\`, \`## Testing\`, and the ` +
@@ -6218,8 +6238,10 @@ export class DefaultStepRunner implements StepRunner {
       prompt +=
         '\n\nFINISH PR PROSE AUTHORING — the retained pull request still carries the engine-seeded ' +
         'placeholder body, so there is no prose to judge yet. Write it. ' +
+        'Write only `.pipeline/finish-pr-prose.json` as `{"version":1,"title":"…","body":"…"}` with the authored title and body. ' +
+        'Do not edit the pull request or make a GitHub call. The engine validates and publishes that handoff. ' +
         FINISH_PROSE_DIFF_BUDGET +
-        'Then rewrite the retained PR title and body in place following this repository\'s ' +
+        'Then follow this repository\'s ' +
           `PR authoring contract — the \`${prSkillName}\` skill (${CLAUDE_DISPLAY_NAME} Code invokes it as \`/${prSkillName}\`; ${CODEX_DISPLAY_NAME} invokes it as ` +
         `\`$${prSkillName}\`). Keep the template section shape (\`## Why\`, \`## What Changed\`, \`## Testing\`, and the ` +
         '`Closes` reference), replace every "not yet authored" marker and the body-floor marker with ' +
@@ -6233,13 +6255,12 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     // FINISH publication mechanics are engine-owned. The provider crosses this
-    // boundary only for one reader-facing PR-prose judgment and may repair
-    // only that retained PR's title/body; it must never create/push/merge/ready
-    // a PR or write completion state itself.
+    // boundary only for one reader-facing PR-prose judgment; it must never
+    // create/push/merge/ready a PR or write completion state itself.
     if (step === 'finish' && this.mode === 'auto') {
       prompt +=
         '\n\nUNATTENDED FINISH JUDGMENT — inspect only the retained PR title and body for reader-facing quality. ' +
-        'You may repair only that title/body, at most once, then return exactly one JSON object: ' +
+        'Return exactly one JSON object: ' +
         '{"kind":"accepted"}, {"kind":"revision_required","reason":"placeholder|halt|structurally_incomplete"}, ' +
         '{"kind":"timed_out"}, {"kind":"provider_unavailable"}, or {"kind":"refused"}. ' +
         'For every revision_required verdict, include a concrete `detail` describing what is deficient. ' +
@@ -6254,9 +6275,10 @@ export class DefaultStepRunner implements StepRunner {
     if (step === 'finish' && this.mode !== 'auto') {
       prompt +=
         '\n\nINTERACTIVE FINISH — gather the operator publication intent (PR or keep) and, when a PR is present, ' +
-        'inspect only its title/body quality. For the bounded prose judgment you may repair only that retained PR title/body once, ' +
-        'then return exactly one JSON object using accepted, revision_required (placeholder|halt|structurally_incomplete), timed_out, ' +
-        'provider_unavailable, or refused. If the body is unauthored placeholder text, return revision_required with ' +
+        'inspect only its title/body quality. For the bounded prose judgment, return exactly one JSON object: ' +
+        '{"kind":"accepted"}, {"kind":"revision_required","reason":"placeholder|halt|structurally_incomplete"}, ' +
+        '{"kind":"timed_out"}, {"kind":"provider_unavailable"}, or {"kind":"refused"}. ' +
+        'If the body is unauthored placeholder text, return revision_required with ' +
         'reason placeholder and stop — the coordinator owns a separate authoring pass for that. Do not create, push, ' +
         'merge, or ready a PR; do not alter labels, shipment evidence, ' +
         'or completion files; the publication coordinator performs every other authorized transition.';

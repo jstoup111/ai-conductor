@@ -1,0 +1,1 @@
+Inapplicable: acceptance_specs — refactor: the change trims repository-local test-authoring prose and wires an existing skill for a second host; no runtime behavior changes, and the new parity assertion lives in test/test_harness_integrity.sh, which is itself the specification run by the existing integrity suite.

@@ -44,6 +44,8 @@ const PLAN = `# Implementation Plan: manifest event
 
 ### Task 1: register entries
 
+**Dependencies:** none
+
 **Files likely touched:**
 
 - src/example.ts

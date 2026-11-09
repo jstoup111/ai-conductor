@@ -227,8 +227,9 @@ the lever.
 
 **Requirement:** TI-6
 
-As an operator, I want any dispatch that ends in a non-`done` state to leave a marker I can find
-and clear, so a feature can never be stopped with no lever.
+As an operator, I want any dispatch that ends in a non-`done` state, other than a scheduler
+preemption that resumes by backlog order, to leave a marker I can find and clear, so a feature can
+never be stopped with no lever.
 
 ### Acceptance Criteria
 

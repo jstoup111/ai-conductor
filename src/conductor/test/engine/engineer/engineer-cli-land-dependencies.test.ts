@@ -68,6 +68,7 @@ async function seedOutputFixture(): Promise<string> {
 **Stories:** .docs/stories/dependency-gate.md
 
 ### Task 1: change
+**Dependencies:** none
 **Files likely touched:**
 - src/example.ts
 

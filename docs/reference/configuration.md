@@ -1072,7 +1072,7 @@ each sample already represents the whole feature total at that moment.
 | `otel.endpoint` | string | Yes, when `exporter: otlp` | any URL | — |
 | `otel.file` | string | No | any path | `<pipelineDir>/otel.jsonl` |
 | `otel.protocol` | string | No | `http/protobuf`, `grpc` | omitted uses the exporter default |
-| `otel.headers` | mapping | No; non-empty mappings only with `exporter: otlp` and HTTP/protobuf | header name to `{ env: <non-empty variable name> }` | absent; no headers are sent |
+| `otel.headers` | mapping | No; non-empty mappings only with `exporter: otlp` and HTTP/protobuf | header name to `{ env: <non-empty variable name> }` or `{ command: [<argv>], prefix?: <string>, cache_seconds?: <positive integer> }` | absent; no headers are sent |
 | `otel.project_name` | string | No | any non-blank name | project root basename |
 | `otel.worker_name` | string | No | any non-blank name | OS hostname |
 | `otel.attributes` | mapping | No | At most 16 namespaced keys with non-empty literal string values; keys beginning `service.`, `conductor.`, or `host.` are reserved | absent; no custom attributes |
@@ -1098,8 +1098,10 @@ otel:
     issue: false
 ```
 
-`otel.headers` supplies HTTP OTLP credentials by reference, never by value. Its only supported
-credential source in this slice is the process environment, using this shape:
+`otel.headers` supplies HTTP OTLP credentials by reference, never by value. Each header uses one of
+two credential sources.
+
+**Environment variable.** `{ env: <variable name> }` with no other keys:
 
 ```yaml
 otel:
@@ -1110,22 +1112,46 @@ otel:
       env: OTEL_EXPORT_TOKEN
 ```
 
-At configuration load, the resolver reads the non-empty `OTEL_EXPORT_TOKEN` environment variable and
-uses its value for the `authorization` HTTP header. The configuration remains a header-name and
-variable-name reference; it does not contain the credential. A literal string is refused rather than
-treated as a credential in configuration.
+At configuration load, the resolver requires `OTEL_EXPORT_TOKEN` to be set and non-empty. The value is
+re-read on every delivery attempt, so a rotated variable takes effect on the next export.
 
-The same silent-disable result names these header failures: a non-mapping `headers` value; an empty
-or control-character header name; a literal credential; a reference other than exactly
-`{ env: <non-empty variable name> }`; and an unset or empty referenced environment variable. Header
-entries are also refused for gRPC and the file exporter with an error that names the configured header
-and, when the reference contains a string `env` field, its environment-variable name; it never includes
-the environment variable's value.
+**Command.** `{ command: [<program>, <args>...], prefix?, cache_seconds? }`:
 
-Other credential sources are excluded from this slice. Headers are carried only by the HTTP/protobuf
-OTLP exporters: this configuration does not provide gRPC credential or metadata carriage. With the
-[spool](#otel-spool) active, the drainer re-reads each referenced variable on every delivery attempt;
-credentials are never written to the spool.
+```yaml
+otel:
+  exporter: otlp
+  endpoint: https://collector.example.test
+  headers:
+    authorization:
+      command: [op, read, "op://vault/otel/token"]
+      prefix: "Bearer "
+      cache_seconds: 600
+```
+
+| Field | Type | Required | Default | Behavior |
+| --- | --- | --- | --- | --- |
+| `command` | array of non-empty strings | Yes | — | Program and arguments, run without a shell. A leading `~/` in an argument expands to `$HOME`. |
+| `prefix` | string | No | none | Prepended to the command output. |
+| `cache_seconds` | positive integer | No | `300` | Reuse window for a successful result. Failures are not cached. |
+
+The command is not run at configuration load. It runs at the first delivery attempt and again after
+the cache expires, with a 10 s timeout and the conductor environment minus `TMUX` and `TMUX_PANE`. Trailing
+whitespace is trimmed from stdout. A missing program, non-zero exit, timeout, empty output, or
+`AI_CONDUCTOR_NO_REAL_EXEC=1` makes the credential unavailable. The unavailable reason names the
+command's argv, so do not put secrets in `command`.
+
+**Validation.** The same silent-disable result names these header failures: a non-mapping `headers`
+value; an empty or control-character header name; a literal string credential; a reference that is
+neither form, mixes `env` and `command`, or has unknown keys; an invalid `command`, `prefix`, or
+`cache_seconds`; and an unset or empty referenced environment variable. Header entries are also refused
+for gRPC and the file exporter with an error that names the configured header and, when the reference
+contains a string `env` field, its environment-variable name. Errors never include a credential value.
+
+**Delivery.** Headers are carried only by the HTTP/protobuf OTLP exporters: this configuration does not
+provide gRPC credential or metadata carriage. Credentials are resolved immediately before each send and
+are never written to the [spool](#otel-spool). When a credential is unavailable, the attempt is not
+sent; with the spool active, the batch is kept and retried with backoff, and the drainer emits one
+`otel` `renderer_error` reading `OTLP header <name> is unavailable: <reason>`.
 
 `otel.project_name` is trimmed before use. An absent, blank, or whitespace-only value falls back to
 the basename of the absolute project root for metric data-point identity; it does not affect
@@ -1499,6 +1525,7 @@ to the owning child, carries them up the stack, and re-validates the closed chil
 | `stacked_prs.enabled` | boolean | Boolean, else hard error | `false` |
 | `stacked_prs.max_slices` | integer | Integer from 1 through 9, else hard error; a value above 5 loads with a review-size warning | `1` |
 | `stacked_prs.route_whole_feature_fixes` | boolean | Boolean, else hard error | `true` |
+| `stacked_prs.max_restack_cascades` | integer or tier map | Positive integer, or an object with only `S`, `M`, `L` keys and positive-integer values, else hard error | Tier default: `S` 3, `M` 3, `L` 8 |
 
 `stacked_prs` must be an object. Unknown sub-keys and non-object values are hard errors. When the
 block is present, an omitted `enabled` resolves to `false` and an omitted `max_slices` resolves to
@@ -1519,18 +1546,48 @@ a routed round instead of appended to the leaf plan:
   task's slice, its committed `**Child:**` line, or the child recorded for an engine-appended
   remediation task. Work with no owner task goes to a residue judgement dispatched with the
   `remediate` step's provider, at most two attempts.
-- **Host.** Cited paths already on the leaf tip are prerequisite inputs. The host is the owner when
-  its closure holds every input, else the first closed child above it that does, else the leaf.
+- **Host.** Each item's citations are its cited paths plus repository paths named in the text its
+  `rem-*` blocks carry: task titles (or the rationale when there are no tasks), rationale,
+  criterion, and governing clause. Wrapping quotes, backticks, `(`, `[`, and `<` are stripped.
+  Each citation is resolved against one recursive listing of the leaf tip: an exact listed file, or
+  the unique listed file it is a `/`-bounded suffix of, is a prerequisite input; a citation naming a
+  directory, or a suffix of two or more files, is dropped; anything else is a repair output. The
+  host is the owner when its closure holds every input, else the first closed child above it that
+  does, else the leaf. An unreadable leaf listing halts `needs-human` with
+  `cannot read leaf branch <ref>`.
+- **Taskless placement.** A taskless audit kickback, such as a `manual_test` FAIL with no tasks,
+  goes to the residue judgement with its rationale, its retry hint as evidence, and the paths each
+  slice position changed (each closed child against its predecessor's closure, the first against
+  its merge base with the base branch, the leaf against the last closure). The judgement may return
+  `implicatedPaths`; they resolve against the leaf listing as above, and the host rule above places
+  the round from the judged owner. With no resolved input the leaf hosts it. An unresolvable plan slice
+  topology halts `taskless routing cannot resolve the sealed plan slice topology`. Other failures
+  halt `taskless routing manifest failed:`, `taskless routing judgement failed for <item>:`,
+  `taskless routing implicated-path resolution failed:`, or
+  `taskless routing host selection failed:` plus the detail.
 - **Admission.** The engine allocates the next round id `r<n>` and writes a `prepared` route record.
   One transaction, fenced on the restack journal, then opens the round and writes the `repairing`
   marker. The engine persists `remediation_routed` and `routed_repair_phase`, records one kickback,
   and navigates back to `build`. No leaf plan append, budget receipt, or commit happens first.
+- **Admission fence.** Before allocating a route record, the engine checks every other `open`
+  round, plus a `prepared` one that the marker names. An `audit` round is refused while any such
+  round exists. A `revalidate` round is refused while any such round has an `admitted`,
+  `repairing`, or `built` host or is not waiting on the queue. An unreadable other record refuses
+  and names its round. A fence refusal halts `mechanical` and allocates no record.
 - **Host entry.** At BUILD-region entry the engine pins the host's base and tree, switches to the
   host branch, writes the round's frozen `rem-*` task blocks into the host's plan in one commit with
   a `Round: r<n>` trailer, binds each item's repair obligation to the host branch, and seeds task
-  status. Resume verifies that state and never re-appends. An entry with nothing left to build halts
-  `needs-human` with `routed host <k> entry derived already complete`; other failures halt with
-  `routed host <k> entry halted:` or `entry refused:` plus the detail.
+  status. Resume verifies that state and never re-appends. An `audit` round host with nothing left to
+  build settles as a no-op while another host is still `pending`, `restacked`, or `rerouted`: it moves
+  to `repairing` without credit, the route record stores `hostReasons.<k>: derived-already-complete`,
+  and the ordinary routed exit runs. A restart in that window resumes the exit instead of re-entering
+  the host. With no other host left to advance, the entry halts `needs-human` with
+  `routed host <k> entry derived already complete`. Other failures halt with
+  `routed host <k> entry halted:` or `entry refused:` plus the detail. A host whose items all
+  carry no tasks always enters BUILD, even when its plan's tasks are complete, and the host's
+  BUILD dispatch receives the round's recorded retry hint as its work order. When the host cannot
+  do the work, close the round with
+  [`stack rounds --close`](cli.md#routed-rounds) to return it to the leaf.
 - **Membership.** `prepare-commit-msg` stamps `Round: r<n>` on commits made on the current host
   (hidden `ai-conductor round-stamp`). `ai-conductor task` and `task-membership-check` accept the
   round's routed task ids on its host; task status stays feature-wide.
@@ -1541,13 +1598,21 @@ a routed round instead of appended to the leaf plan:
 - **Charging.** A round is charged exactly once, at the host's BUILD dispatch, from its route-record
   receipt under the kickback-ledger lease; a resumed dispatch never charges twice and kickback caps
   still apply. A taskless `manual_test` round is charged on its receipt at admission and keeps the
-  self-heal cap.
+  self-heal cap. A receipt that would exceed a lap or plan-growth allowance charges nothing and
+  halts `kickback-cap` naming the exhausted allowance and the round: `Routed round r<n> findings:`,
+  then `Routed round r<n> remediation tasks:` and `Routed round r<n> repairs existing tasks:` when
+  present. The cap evidence and budget view report consumption settled before the round, with the
+  round's charge as pending growth. An absent, malformed, or unreadable route record halts
+  `needs-human` with `Pending remediation findings are unavailable: route record <round-or-ref> is
+  <state>.` instead of reporting an exhausted allowance.
 - **Review.** `build_review` and testQuality grade the host against the round's pinned base. The
   round grants the host one routed-repair credit, consumed before the cumulative kickback bound
   halts.
 - **Reroute.** A routed `build` may return a prerequisite claim naming paths or exported symbols the
-  host lacks. The engine verifies it against a higher child's tree (a closed child's closure, or the
-  leaf); a verified claim preserves the rejected host tip at `rejected/r<n>/<m>`, restores the host's
+  host lacks. The engine first resolves the claimed paths and the round's recorded inputs against
+  the leaf listing the same way, so only resolved files count; a claim left with no file and no
+  symbol is unverified (`claim names no prerequisite file`). It then verifies the claim against a
+  higher child's tree (a closed child's closure, or the leaf); a verified claim preserves the rejected host tip at `rejected/r<n>/<m>`, restores the host's
   closure, moves the round to that child in one fenced transaction, and emits
   `remediation_rerouted`. A malformed or unverified claim counts as an ordinary failed build
   attempt; a failed move or worktree sync halts `needs-human`.
@@ -1556,31 +1621,64 @@ a routed round instead of appended to the leaf plan:
   Otherwise the engine marks the host `built` and runs a journaled `feature-repair`
   [restack](#restack), whose transaction marks the host `restacked` and deletes the marker. A failed
   exit halts `needs-human` with `routed exit host <k>:` plus the detail.
-- **Progression.** The round then admits its next pending child host in recorded order. After the
+- **Progression.** The in-loop exit and the resume preflight share one exit path: after the exit,
+  the engine drains the routing outboxes and reconciles. Reconciliation visits the marker's round
+  first, then the others in ref order, and continues past a round that closes, so a feature
+  holding two open rounds drains both without hand repair. A round admits its next pending child
+  host in recorded order. After the
   child hosts come queued revalidations, then the leaf host. With nothing pending, the engine
   switches to the leaf, records the return in the route record, closes the round, and re-pends
   `prd_audit`, `architecture_review_as_built`, `manual_test`, and the custom gates between
   `build_review` and `finish`. Those gates re-run under their existing caps; the return records no
   kickback.
+- **Round-scoped evidence.** A host's child-region verdicts carry the round id (`routedRound`; see
+  [gate verdicts](artifacts.md#gate-verdicts)). Satisfied verdicts from an earlier round do not
+  satisfy the current one, so each re-pended region gate re-runs before the host can exit. On
+  resume, a host whose region gates all pass for the current round exits through the same path.
 - **Revalidation.** Every restack of a feature with the setting on queues the closed children whose
   gate verdicts it invalidated, at `refs/conductor/<slug>/revalidate`. Children are re-validated
   bottom-up, one `revalidate` round per child, re-running only the child's queued gates. A pass with
   no new commits acknowledges the entry by compare-and-swap (`child_revalidated`, `outcome:
   passed`). A child that commits a fix exits through the restack (`outcome: fixed`), which can queue
-  the children above it. Leaf gates and FINISH wait until the queue is empty.
+  the children above it. Leaf gates and FINISH wait until the queue is empty. Resume preflight,
+  the routed-exit continuation, and BUILD-region entry admit queued children through one shared
+  sequence: drain the routing outboxes, reconcile, and consume the lowest queued child only when
+  reconciliation leaves nothing to continue. A child that reaches BUILD while still queued, with no
+  repair marker, is admitted into its `revalidate` round in the same run and entered as the routed
+  host. Admission refusals halt `child BUILD region refused: queued child <k>, queue generation
+  <g>; non-closed rounds: <rounds>; marker owner: <owner>; <detail>`; see
+  [recovery](../runbooks/stacked-feature-manual-recovery.md#9-queued-revalidation-refused-at-build-entry).
 - **Fallback.** A lap with any `halt` disposition, an unresolved target, or a target other than
   `build` takes the ordinary remediation path unchanged.
 - **Halts.** A routing refusal halts `needs-human` with its detail, for example
   `routing round limit r999 reached`, `routing round r<n> is already open; cannot admit r<m>`,
   `routing cannot read the sealed task-slice ownership envelope`, or
   `leaf branch <branch> is missing prerequisite paths: <paths>`.
+- **Parked routing work.** When the step selector stops with routed work awaiting admission, or
+  completion is refused because a round is still open, the run does not finish as converged. The
+  engine records a stall whose cause is
+  `parked <leaf-host|child|queue> <subject>: routed work is awaiting admission` or
+  `completion refused: a routed round remains open`, then halts under the stall counting below. A
+  completion refusal also removes the provisional `.pipeline/DONE`. An existing `.pipeline/HALT` is
+  kept.
+- **Stalls.** When reconciliation cannot advance a round (an unreadable record, a refused
+  compare-and-swap on advance, close, or leaf return, or a marker naming an unreadable round), the
+  engine emits `routing_rounds_stalled` and halts with `routing rounds stalled: r<n> (<host>:
+  <state>, …); <cause>`. The first and second consecutive identical stalls halt `mechanical`; the
+  third halts `needs-human`. A `routed_repair_phase` or `remediation_routed` event, or a stall
+  naming a different round set, restarts the count. A stall whose event cannot be persisted halts
+  `needs-human`. Recovery:
+  [two routed rounds open at once](../runbooks/stacked-feature-manual-recovery.md#3-two-routed-rounds-open-at-once).
 - **Recovery.** After journal recovery and the outbox drain, the stack preflight deletes a
   `prepared` record that no marker names. For an admitted round, conductor resume rewinds the leaf
-  region to `build` without re-admitting.
+  region to `build` without re-admitting. After an operator leaf return closes the last open round,
+  the preflight drains its event and resume restores whole-feature state instead of entering a
+  child region.
 - **Base refresh.** While any route record is not `closed` or the `revalidate` queue exists, the
   stack preflight, the daemon re-kick rebase, and the finish-time `rebase` step defer the base
-  refresh and emit `restack_refused` with reason `deferred-base-refresh`. The re-kick keeps its
-  sentinel for a later run.
+  refresh and emit `restack_refused` with reason `deferred-base-refresh`. The stack preflight then
+  still reconciles, so the open round advances in the same run. The re-kick keeps its sentinel for
+  a later run.
 
 When `enabled` is `true` and the plan declares a `## Slices` manifest, the `stacked-delivery` land
 gate at `engineer/land` refuses the plan unless all of these hold:
@@ -1694,8 +1792,12 @@ unchanged.
   feature (`skipped(published-stack)`).
 - **Teardown.** After the shipped record is on `origin/main`, the mergeable sweep removes the
   worktree, then deletes each child's local branch by name, only when its PR is merged, its merge
-  commit is on `origin/main`, and the local tip equals the merged head. Any kept member retains the
-  watch entry; see [retained worktrees](../guides/running-the-daemon.md#retained-worktrees).
+  commit is on `origin/main`, and every local commit is accounted for: it is reachable from the
+  merged PR head or the recorded pushed tip (`refs/conductor/<slug>/pushed/<branch>`), or it is an
+  engine halt-record bookkeeping commit for the feature. A merged head missing locally is fetched
+  from `origin` by SHA. A child with any other commit is kept; a failed fetch or unreadable proof
+  fails teardown retryably. Deletion compares and swaps against the local tip. Any kept member
+  retains the watch entry; see [retained worktrees](../guides/running-the-daemon.md#retained-worktrees).
 
 Publication state is recorded at `refs/conductor/<slug>/publication`; see
 [branch naming](artifacts.md#worktree-and-branch-names).
@@ -1740,7 +1842,11 @@ rebase resolver within the rebase resolution attempt budget; an unresolved confl
 `restack refused (<reason>)`. Gate verdicts invalidated by the moved history are re-judged; a
 feature repair's invalidation earns no `build_review` refund.
 
-Each originating child may cause at most 3 applied feature repairs. The next repair halts
+Each originating child may cause a bounded number of applied feature repairs. The allowance is
+`stacked_prs.max_restack_cascades` when it is an integer; for a tier map, the entry for the
+feature's complexity tier; otherwise the tier default (`S` 3, `M` 3, `L` 8). A tier missing from the
+map uses its default, and a feature with no recorded tier is treated as `M`. A child's raised limit
+takes precedence over the allowance. The repair after the limit halts
 `needs-human` with `restack refused (cascade-cap)`; recover with
 [`kickback-budget --gate restack`](cli.md#ai-conductor-kickback-budget). Restack refs are listed in
 [branch naming](artifacts.md#worktree-and-branch-names); recovery is in
@@ -1831,9 +1937,33 @@ Both behaviors follow `adr-2026-08-22-build-review-opt-in-rubric-container`.
 Each key is a stable custom rubric id: 1-64 ASCII characters, beginning with an ASCII letter (upper- or
 lowercase), followed by letters, digits, `_`, or `-`. A built-in rubric id (`testQuality`, `security`,
 `implementationQuality`) is reserved and rejected as a custom id. A build may declare at most 32 custom rubrics. A declaration requires `skill` and `question`;
-it may set `source` (`project`, `global`, or `plugin`), `resources`, the normal provider/model/retry
+it may set `source` (`project`, `global`, or `plugin`), `resources`, `paths`, the normal provider/model/retry
 fields, and the same `min_confidence` and `min_severity` thresholds as a built-in rubric. Custom policies are disabled unless their declaration sets `enabled: true`, and they require
 `build_review.adjudication.enabled` so their findings pass through the shared decision and repair path.
+
+`paths` is an optional non-empty array of non-empty glob strings (Node `path.matchesGlob` syntax) that
+triggers the rubric. Omitted, the rubric participates in every lap. Set, the rubric participates only
+when a glob matches a path in the whole-feature changed-file inventory; a renamed file matches under
+both its current and prior path. An unmatched rubric is withheld before any source view is
+materialized, contributes no findings, and emits `build_review_rubric_skipped` with reason
+`paths-unmatched`. A lap left with no enabled built-in rubric and no participating custom rubric passes as
+`build_review_no_rubrics`.
+
+```yaml
+build_review:
+  custom_rubrics:
+    dependencyHygiene:
+      enabled: true
+      skill: build-review-dependency-hygiene
+      source: global
+      question: "Does the diff add dependencies that lack necessity, bounded pinning, or compatible license evidence?"
+      paths:
+        - "**/package.json"
+        - "**/package-lock.json"
+```
+
+This repository enables `dependencyHygiene` with exactly these triggers. Its
+`build-review-dependency-hygiene` skill judges necessity, pinning, and on-disk license evidence.
 
 The selected skill must be installed for the actual provider candidate. Omitting `source` is accepted
 only when discovery finds one unambiguous installation; otherwise select the project, global, or

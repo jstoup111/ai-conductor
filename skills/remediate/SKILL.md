@@ -12,32 +12,11 @@ requires: [verify-claims]
 ## Purpose
 
 Turns a **blocking gate into action**. When `build_review` fails, or when `prd-audit`,
-`architecture-review --as-built`, or the `finish` verification reports SHIP gaps the daemon would
-otherwise HALT on, this skill reasons over each blocking gap and decides *how the daemon should
-proceed* — autonomously where it can, human-in-the-loop only where it must.
-
-**Correctness gate:** a gap's disposition and its routing target rest on a claim about the gap's
-nature. Per the `/verify-claims` protocol, ground that classification in the audit evidence with a
-confidence %, and do not auto-route on an unverified assumption about what the gap is — when the
-nature is genuinely uncertain (not just the fix), that low confidence is itself a signal to HALT
-for a human rather than to guess a route.
-
-The daemon should be autonomous. So the default is to **remediate**: translate each gap into
-concrete, file-scoped work and route it back to the right SDLC step. A **HALT** is reserved for the
-three cases a machine genuinely cannot close:
-
-1. **architectural-clarity** — an architectural gap that needs a human *decision* (ambiguous trade-off,
-   missing ADR, conflicting constraints), not just a code change.
-2. **product-scope** — functionality the **initial design never accounted for** (a real product gap),
-   which needs a human DECIDE amendment.
-3. **unanswerable** — a stall-question that cannot be answered from committed artifacts alone and
-   needs more evidence.
-
-If a gap can be turned into concrete work, it is **not** a HALT. This skill guides planning only: it
-does **not** edit code, write tests, or amend the PRD; the owning step does that.
-
-**Run when `build_review` fails, or at SHIP when a prior audit BLOCKED — dispatched by the
-conductor on the blocking path.**
+`architecture-review --as-built`, or the `finish` verification blocks at SHIP, reason over each
+blocking gap and decide how the daemon should proceed. The default is to **remediate**: translate
+each gap into concrete, file-scoped work routed to the owning SDLC step. HALT only for the three
+cases in **Gap-plan judgment guidance**. This skill plans only: it does **not** edit code, write
+tests, or amend the PRD; the owning step does that.
 
 ## Engine-selected PRD widening reconciliation mode
 
@@ -56,6 +35,24 @@ The engine owns the projection, native schema, terminal-result validation, durab
 effect. Do not create BUILD work, amend a plan, write a remediation artifact, or recover a result
 from markdown/prose. For every other mode, including `build_review` `case-v1`/`case-v2` and legacy gap
 planning, skip this branch and follow the existing instructions unchanged.
+
+## As-built gap-plan reconciliation
+
+When the engine supplies `priorAsBuiltCases` in an ordinary gap-plan projection, every
+as-built finding disposition must include its engine-owned `reconciliation`. Judge the
+supplied evidence, not wording alone: use `same` for the same unresolved case,
+`recurrence` when an earlier repair recurred, `materially-changed` when the prior case
+is relevant but the failure is materially different, and `new` when no prior case fits.
+A prior-case source without a `summary` is still pending: read its text from the
+`pendingAsBuiltFindings` entry whose `finding` equals that source's `findingId`.
+
+`same` and `recurrence` name the supplied `priorCaseId`. They may only use
+`existing-task` (binding at least one repair task from that case, plus a cited owner
+task when present) or `halt`; they never append replacement work. `materially-changed`
+names its prior case but plans a new repair under normal admission. `new` has no prior
+case id and follows normal admission. Supply a specific non-empty reason for every
+relation. The engine validates and persists these fields; do not create case ids,
+event records, or a parallel reconciliation artifact.
 
 ## Engine-selected refusal-rework mode
 
@@ -88,7 +85,7 @@ are:
 - `currentFindings`: every current operator-unresolved content finding, each with its rubric id,
   stable finding id, anchor, summary, and evidence locations.
 - `priorCases`: all feature-local prior cases, each with outcome, source links, effect status, and
-  resolution evidence.
+  resolution evidence, and `priorCases[].bindableDispositions`.
   - A prior source may carry `finding`, a bounded digest of the earlier finding: `rubric`,
     `concernKind`, a bounded `summary`, bounded `evidenceLocations`, and `lapId`.
   - Treat a supplied `finding` digest as binding context when deciding whether a current finding is
@@ -127,6 +124,11 @@ Each `cases` row has exactly `caseRef`, optional `existingCaseId`, `disposition`
 
 - `caseRef` is the provider-local reference used by source rows. `existingCaseId`, when supplied by
   the engine in `priorCases`, may bind that existing case only.
+- A non-escalation row binding an `existingCaseId` must use a disposition listed in that prior case's
+  `bindableDispositions`.
+- A refused binding is named in `bindingCorrections` for one corrected judgement. This is the single
+  correction retry; correct the named binding without changing the
+  supplied sources or inventing a new case.
 - `disposition` is closed: `act` | `defer` | `reject` | `refute` | `advisory` when the context declares severity thresholds.
 - `priority` is closed: `critical` | `high` | `medium` | `low`.
 - `rationale` is bounded, evidence-grounded prose explaining the judgement, and `confidence` is
@@ -139,6 +141,10 @@ Each `cases` row has exactly `caseRef`, optional `existingCaseId`, `disposition`
   a recurrence unless declared distinct with a reason; its lineage gets three applied attempts.
   A malformed `distinctFrom` shape rejects the artifact. An entry may name either a provenance
   candidate of the row or a resolved act owner of a row source; an entry not naming a resolved action owner of a row source is ignored unless it names a provenance candidate.
+- A bound `act` row on a resolved `act` case with an applied action effect may carry `reRaise`
+  `{ "kind": "residual-gap" | "repeat", "reason": "..." }`; its reason is non-empty.
+  `residual-gap` routes the repair to BUILD under the lineage limit of three applied attempts;
+  `repeat` halts the lap. An absent `reRaise` is treated as a residual gap.
 - A `defer` effect is exactly `{ "kind": "deferral", "title": "...", "body": "...",
   "exclusionRationale": "..." }`. Its `exclusionRationale` explains why no current plan task admits
   the work.
@@ -153,12 +159,13 @@ Each `cases` row has exactly `caseRef`, optional `existingCaseId`, `disposition`
   `upheld` verdict, and evidence entries containing only `path` and `excerpt`. Evidence proves current
   tree content: use no line numbers, hunks, commits, or SHAs. A case may be refuted once only; a later
   attempt to refute the same case is rejected for human review.
+- A re-raised finding judged no longer present on an attempted applied action receives an
+  evidence-backed `refute`, not a bound `reject`.
 
 ### Authority boundaries
 
-The provider must not mint durable case ids or effect ids. The engine validates the complete graph.
-The engine stamps durable ids, reconciles history, reserves and applies effects, publishes any work
-order, charges the kickback, and derives the effective route.
+The provider must not mint durable case ids or effect ids;
+the engine validates the graph, stamps durable ids, and applies every effect.
 
 Never omit, duplicate, or replace a supplied source outcome. A `merged` source is a trace outcome,
 not a case disposition; it still names its canonical `caseRef`. A same-substance finding may be bound
@@ -244,7 +251,7 @@ other gap should be turned into concrete work.
   must change or be clarified, or HALT for architectural clarity when a human decision is required.
 - **Coverage and planning judgment.** An implementation gap is ordinarily BUILD work; use
   `acceptance_specs` when the real miss is acceptance coverage. A baseline-passing test that needs
-  strengthening within an existing task's RED/GREEN work is BUILD work, not a planning omission. A `plan` route is for an in-scope planning omission, not an architecture or design decision: before selecting `plan`, examine the approved tasks and use `plan` only when none admits the repair. A `plan` route is terminal in a daemon run and never re-plans.
+  strengthening within an existing task's RED/GREEN work is BUILD work, not a planning omission. A `plan` route is for an in-scope planning omission, not an architecture or design decision: before selecting `plan`, examine the approved tasks and use `plan` only when none admits the repair. A file missing from an admitting task's Files list does not make it inadmissible; BUILD records it with a `Scope:` trailer. A `plan` route is terminal in a daemon run and never re-plans.
 - **Recorded RED exception.** An acceptance-spec repair may waive separate RED proof only when the
   acceptance spec and its implementation must be repaired atomically. Record a non-empty reason and
   attributable approval; report the result as waived, never as proven RED. Otherwise use the ordinary

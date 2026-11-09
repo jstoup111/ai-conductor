@@ -11,6 +11,8 @@ Markdown skills + agent personas repository … No custom runtime", and every ex
 lives under `bin/` or the engine tree. Two defects followed from a skill naming a path it does not own.
 Both were verified on main @ `7d7e6e88c`:
 
+> **Amended 2026-11-07 by #1480:** `001-harness-architecture` has been deleted. Its "no custom runtime" decision no longer described the repository, and the parts that still hold are documented in `ARCHITECTURE.md`. See `adr-2026-11-07-decision-corpus-query-and-known-record-shapes` decision 1; the original text is recoverable from git history.
+
 - `skills/intake/SKILL.md` §9 tells the agent to run `bin/intake-file`. For a while that wrapper existed
   only as `src/conductor/bin/intake-file`, until #743 added the repo-root copy. The old copy is still
   checked in, calls `fileIntakeIssue` with a dependency shape that no longer compiles, and is outside

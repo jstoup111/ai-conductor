@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 import Ajv from 'ajv';
 
 import {
+  BUILD_REVIEW_SEVERITY_DEFINITIONS,
+  renderBuildReviewSeverityDefinitions,
   renderRubricContractShape,
   resolveBuildReviewContractCatalog,
   type BuildReviewContractCatalogMember,
@@ -106,6 +108,22 @@ function schemaAccepts(schema: unknown, value: unknown): boolean {
 }
 
 describe('engine/build-review-contract', () => {
+  it('defines every build-review severity in the canonical order', () => {
+    expect(Object.keys(BUILD_REVIEW_SEVERITY_DEFINITIONS)).toEqual(['critical', 'major', 'minor', 'nit']);
+    expect(BUILD_REVIEW_SEVERITY_DEFINITIONS).toEqual({
+      critical: 'security exposure, data loss, or wrong results',
+      major: 'a real defect or broken invariant',
+      minor: 'a real, low-impact quality issue',
+      nit: 'cosmetic, such as naming or style',
+    });
+  });
+
+  it('renders the canonical build-review severity definitions', () => {
+    expect(renderBuildReviewSeverityDefinitions()).toBe(
+      'Every finding requires `severity`. Severity definitions: `critical`: security exposure, data loss, or wrong results; `major`: a real defect or broken invariant; `minor`: a real, low-impact quality issue; `nit`: cosmetic, such as naming or style.',
+    );
+  });
+
   it.each(['testQuality', 'security'] as const)(
     'gives %s an engine-owned v4 descriptor with canonical identity',
     (id) => {

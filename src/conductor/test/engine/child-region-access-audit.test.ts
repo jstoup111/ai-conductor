@@ -23,7 +23,7 @@ const EXPECTED_ACCESS_COUNTS: Readonly<Record<string, number>> = {
   'engine/conductor.ts:ConductStateStore.applyBatch': 2,
   'engine/conductor.ts:readAllVerdicts': 3,
   'engine/conductor.ts:readKickbackLedger': 11,
-  'engine/conductor.ts:readVerdict': 3,
+  'engine/conductor.ts:readVerdict': 5,
   'engine/conductor.ts:updateKickbackLedger': 5,
   'engine/conductor.ts:writeVerdict': 2,
   'engine/daemon-observe-cli.ts:readKickbackLedger': 1,

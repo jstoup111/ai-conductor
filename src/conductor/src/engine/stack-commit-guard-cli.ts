@@ -4,10 +4,10 @@
 
 import { execa } from 'execa';
 import { loadConfig } from './config.js';
-import { childBranchFor, parseFeatureBranch } from './feature-branch-identity.js';
+import { childBranchFor, leafBranchFor, parseFeatureBranch } from './feature-branch-identity.js';
 import { hasDurableChildState, loadSliceTopology, type SliceTopology } from './slice-topology.js';
 import { readRepairMarker, readRouteRecord, type ReadRepairMarkerResult, type ReadRouteRecordResult } from './routing/route-record-store.js';
-import { routingSettingOn, type RoundId } from './routing/route-types.js';
+import { assertNever, routingSettingOn, type RoundId } from './routing/route-types.js';
 
 export interface StackCommitGuardDependencies {
   readonly projectRoot: string;
@@ -107,15 +107,29 @@ export async function runStackCommitGuard(deps: StackCommitGuardDependencies): P
   }
   if (stored.record.kind !== 'operator' && stored.record.kind !== 'audit') return 0;
 
+  // The top position is built on the leaf branch, so a round hosted there
+  // commits on the leaf rather than on a child branch.
+  const hostIsLeaf = marker.marker.host === topology.positions[topology.positions.length - 1];
   const host = childBranchFor(identity.slug, marker.marker.host);
-  const hostBranch = host.ok ? host.branch : `child ${marker.marker.host}`;
-  const isHost = identity.kind === 'child' && identity.child === marker.marker.host;
+  const hostBranch = hostIsLeaf ? leafBranchFor(identity.slug) : host.ok ? host.branch : `child ${marker.marker.host}`;
+  const isHost = hostIsLeaf
+    ? identity.kind === 'leaf'
+    : identity.kind === 'child' && identity.child === marker.marker.host;
   if (!isHost) {
+    // ai-conductor:session-command-context=operator-only
+    const recoveryCommand = (() => {
+      switch (stored.record.kind) {
+        case 'audit':
+          return `ai-conductor stack rounds --slug ${identity.slug} --close ${marker.marker.roundId} --reason <text>`;
+        case 'operator':
+          return `ai-conductor stack land --slug ${identity.slug} --abandon`;
+      }
+      return assertNever(stored.record.kind);
+    })();
+    // /ai-conductor:session-command-context
     return refuse(
       print,
-      // ai-conductor:session-command-context=operator-only
-      `refusing tracked-file commit on ${branch}; ${stored.record.kind} round ${marker.marker.roundId} is hosted on ${hostBranch}. Commit on ${hostBranch} or run ai-conductor stack land --abandon.`,
-      // /ai-conductor:session-command-context
+      `refusing tracked-file commit on ${branch}; ${stored.record.kind} round ${marker.marker.roundId} is hosted on ${hostBranch}. Commit on ${hostBranch} or run ${recoveryCommand}.`,
     );
   }
 

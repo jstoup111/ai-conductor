@@ -249,6 +249,7 @@ export const IGNORED_TMPDIR_PREFIXES: readonly string[] = [
   RUN_TMP_ROOT_PREFIX,
   '.', // dotfiles/dotdirs: .X11-unix, .ICE-unix, .font-unix, …
   'self-host-', // live provider homes owned by the running daemon
+  'ai-conductor-claude-system-prompt-', // live daemon's in-flight Claude prompt files
   'claude-', // active Claude Code session scratchpads
   'moshi-codex-rl.json', // active Codex rate-limit state
   'cc-daemon-', // daemon tmux session scratch

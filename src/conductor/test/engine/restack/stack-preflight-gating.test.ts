@@ -1,4 +1,4 @@
-// Covers: task:2, task:7, task:8, task:9, task:31.1, task:rem-as-built-1-r2, task:rem-as-built-rem-as-built-r14
+// Covers: task:2, task:4, task:7, task:8, task:9, task:31.1, task:rem-as-built-1-r2, task:rem-as-built-rem-as-built-r14
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -16,6 +16,8 @@ import { ALL_STEPS } from '../../../src/engine/steps.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { drainRoutingOutboxes } from '../../../src/engine/routing/route-record-store.js';
 import { requestRoutedExit } from '../../../src/engine/routing/routed-exit.js';
+import { applyStateChanges, readState, writeState } from '../../../src/engine/state.js';
+import type { ConductState } from '../../../src/types/index.js';
 
 vi.mock('../../../src/engine/routing/route-record-store.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/engine/routing/route-record-store.js')>();
@@ -68,6 +70,10 @@ async function fixture() {
     '### Task 1: One', '**Story:** Story 1', '**Dependencies:** none', '',
     '### Task 2: Two', '**Story:** Story 2', '**Dependencies:** none', '',
   ].join('\n'));
+  // Resumed dispatches verify protected artifact provenance before entering
+  // SHIP. Keep the fixture's plan and stories committed like a real feature.
+  await git(['add', '.ai-conductor/config.yml', '.docs/stories/demo.md', '.docs/plans/demo.md']);
+  await git(['commit', '-qm', 'add feature artifacts']);
   await writeFile(join(repo, 'positions.json'), '[1,2]');
   const positionsBlob = (await git(['hash-object', '-w', 'positions.json'])).stdout.trim();
   await git(['update-ref', 'refs/conductor/demo/positions', positionsBlob]);
@@ -393,6 +399,100 @@ describe('stack preflight dispatch boundaries', () => {
     });
   });
 
+  it('adopts leaf-return re-pends before the resumed rebase completion write', async () => {
+    const subject = await fixture();
+    const state = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done']));
+    const statePath = join(subject.repo, '.pipeline', 'conduct-state.json');
+    const loaded: ConductState = {
+      ...state,
+      feature_desc: 'demo',
+      complexity_tier: 'M',
+      manual_test: 'stale',
+      prd_audit: 'stale',
+      architecture_review_as_built: 'stale',
+      rebase: 'stale',
+      finish: 'pending',
+    };
+    await mkdir(join(subject.repo, '.pipeline'), { recursive: true });
+    await writeState(statePath, loaded);
+    const loopHalts: string[] = [];
+    const events = new ConductorEventEmitter();
+    events.on('loop_halt', (event) => { if (event.type === 'loop_halt') loopHalts.push(event.reason); });
+    let repended = false;
+
+    const conductor = new Conductor({
+      projectRoot: subject.repo,
+      stateFilePath: statePath,
+      featureSlug: 'demo',
+      baseBranch: 'HEAD',
+      mode: 'auto',
+      verifyArtifacts: false,
+      sleepFn: async () => {},
+      events,
+      stackPreflight: async () => {
+        if (!repended) {
+          repended = true;
+          await applyStateChanges(statePath, loaded, {
+            manual_test: 'pending', prd_audit: 'pending',
+            architecture_review_as_built: 'pending', rebase: 'pending',
+          }, 'leaf return re-pends');
+        }
+        return { kind: 'clear' };
+      },
+      stepRunner: { run: async () => ({ success: true }) },
+    }) as unknown as {
+      persistedStateSnapshot: ConductState;
+      stackPreflight: () => Promise<{ kind: 'clear' }>;
+      adoptDurableState(value: ConductState): Promise<void>;
+      runRebaseStep(value: ConductState): Promise<{ success: boolean }>;
+    };
+    conductor.persistedStateSnapshot = { ...loaded };
+
+    await conductor.stackPreflight();
+    await conductor.adoptDurableState(loaded);
+    await conductor.runRebaseStep(loaded);
+
+    await expect(readState(statePath)).resolves.toMatchObject({ ok: true, value: { rebase: 'done' } });
+    expect(loopHalts).not.toContainEqual(expect.stringContaining('Expected rebase to match before save rebase step status'));
+  });
+
+  it('does not write state when a clear preflight has no durable re-pends', async () => {
+    const subject = await fixture();
+    const statePath = join(subject.repo, '.pipeline', 'conduct-state.json');
+    const state = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done']));
+    await mkdir(join(subject.repo, '.pipeline'), { recursive: true });
+    await writeState(statePath, {
+      ...state, feature_desc: 'demo', complexity_tier: 'M', rebase: 'pending', finish: 'pending',
+    });
+    let before = '';
+
+    const conductor = new Conductor({
+      projectRoot: subject.repo, stateFilePath: statePath, featureSlug: 'demo', baseBranch: 'HEAD',
+      mode: 'auto', verifyArtifacts: false, events: new ConductorEventEmitter(),
+      stackPreflight: async () => {
+        before = await readFile(statePath, 'utf8');
+        return { kind: 'clear' };
+      },
+      stepRunner: { run: async () => ({ success: true }) },
+    }) as unknown as {
+      persistedStateSnapshot: ConductState;
+      stackPreflight: () => Promise<{ kind: 'clear' }>;
+      adoptDurableState(value: ConductState): Promise<void>;
+      findResumeIndex(value: ConductState, steps: typeof ALL_STEPS): number;
+    };
+    const loaded = {
+      ...state, feature_desc: 'demo', complexity_tier: 'M', rebase: 'pending', finish: 'pending',
+    } as ConductState;
+    conductor.persistedStateSnapshot = { ...loaded };
+
+    await conductor.stackPreflight();
+    await conductor.adoptDurableState(loaded);
+
+    expect(before).not.toBe('');
+    expect(await readFile(statePath, 'utf8')).toBe(before);
+    expect(ALL_STEPS[conductor.findResumeIndex(loaded, ALL_STEPS)]?.name).toBe('rebase');
+  });
+
   it.each([
     ['unavailable', 'round advance cas-failed', async () => ({ kind: 'unavailable' as const, detail: 'round advance cas-failed' })],
     ['halted', 'routed exit host 2: leaf compare-and-swap cas-failed', async () => ({ kind: 'resume-exit' as const, roundId: 'round-1' as never, host: 2 as never })],
@@ -421,12 +521,15 @@ describe('stack preflight dispatch boundaries', () => {
       runRebaseStep(value: typeof state): Promise<{ success: boolean; output?: string }>;
     };
     conductor.persistedStateSnapshot = { ...state };
+    const expectedDetail = _kind === 'halted'
+      ? `routing round round-1 is unreadable after routed exit: ${detail}`
+      : detail;
 
     await expect(conductor.runRebaseStep(state)).resolves.toEqual({
       success: false,
-      output: `stack preflight ${_kind}: ${detail}`,
+      output: `stack preflight ${_kind}: ${expectedDetail}`,
     });
-    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(new RegExp(`^${detail}`));
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(new RegExp(`^${expectedDetail}`));
   });
 
   it('reports an outbox-drain refusal to the daemon re-kick outcome', async () => {

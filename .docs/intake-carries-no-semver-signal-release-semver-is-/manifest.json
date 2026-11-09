@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "slug": "intake-carries-no-semver-signal-release-semver-is-",
+  "artifacts": [
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/intake-carries-no-semver-signal-release-semver-is-.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/intake-carries-no-semver-signal-release-semver-is-.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/intake-carries-no-semver-signal-release-semver-is-.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/intake-carries-no-semver-signal-release-semver-is-.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/intake-carries-no-semver-signal-release-semver-is-.md"
+    }
+  ]
+}

@@ -472,22 +472,23 @@ publishing a branch that is not meant to be public yet.
 
 #### Happy Path
 - Given a two-child baseline with `feat/c1/demo` checked out, when a needs-human halt is written, then
-  `.docs/halted/demo.md` is committed on `feat/c1/demo` with a `Child: 1` field, and no push is
-  attempted.
+  the record is written to `refs/conductor/demo/halt-record` with a `Child: 1` field, `feat/c1/demo`
+  gains no commit, and no push is attempted.
 - Given a two-child baseline with the leaf active, when a needs-human halt is written, then the record
-  is committed on `feat/daemon-demo` with `Child: 2` and pushed as today.
+  is written to `refs/conductor/demo/halt-record` with `Child: 2`, `feat/daemon-demo` gains no commit,
+  and no push is attempted.
 
 #### Negative Paths
 - Given a two-child baseline with `feat/c1/demo` checked out, when a halt is resolved and the record is
-  superseded, then the superseding commit stays on `feat/c1/demo` and `publishHaltRecord` refuses to
-  push it, naming the child branch.
+  superseded, then `refs/conductor/demo/halt-record` holds the resolved record, `feat/c1/demo` gains
+  no commit, and nothing is pushed.
 - Given a two-child baseline with `feat/c1/demo` checked out, when build-failure escalation runs, then
   it refuses, naming the child branch, and opens no PR.
 - Given a feature with no children, when a halt is written, then the record and push behave exactly
   as today, with no `Child:` field.
 
 ### Done When
-- [ ] Halt records written on a child branch carry `Child:` and are never pushed.
+- [ ] Halt records written for a stacked child carry `Child:` and are never pushed.
 - [ ] No push of any `feat/c<k>/<slug>` ref occurs anywhere in the build loop.
 
 ## Story 14: Re-kick rebases refresh the whole stack at any active child
@@ -502,12 +503,12 @@ inside a later child.
 
 #### Happy Path
 - Given a three-child baseline with child 2 active and the default branch advanced, when a halt is
-  cleared and the re-kick runs with no routing round open, then a `base-refresh` restack moves child 1 onto the new default tip
+  cleared and the re-kick runs with no routing round open and no routed host awaiting a fold, then a `base-refresh` restack moves child 1 onto the new default tip
   and restacks child 2, no `rebase_skipped_for_stack` event is emitted, and the run resumes at child
   2's next step.
 - Given a three-child baseline with child 2 active, when the default branch advances and the
   base-advance sweep re-kicks the feature with no routing round open, then the whole stack is refreshed the same way.
-- Given a two-child baseline with the leaf active, when a re-kick runs with no routing round open, then a `base-refresh` restack
+- Given a two-child baseline with the leaf active, when a re-kick runs with no routing round open and no routed host awaiting a fold, then a `base-refresh` restack
   moves child 1 and the leaf.
 
 #### Negative Paths

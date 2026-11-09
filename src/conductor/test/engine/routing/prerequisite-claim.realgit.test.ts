@@ -60,7 +60,7 @@ describe('builder prerequisite claim verification (real local Git)', () => {
       await expect(verifyPrerequisiteClaim({
         claim: { outcome: 'blocked-by-prerequisite', child: c2, symbols: ['parseB'] },
         host: c1, slug: 'demo', git: subject.git,
-      })).resolves.toEqual({ kind: 'verified', destination: c2, ref: closureRefFor('demo', c2) });
+      })).resolves.toEqual({ kind: 'verified', destination: c2, ref: closureRefFor('demo', c2), claimedPaths: [] });
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
   });
 
@@ -88,7 +88,7 @@ describe('builder prerequisite claim verification (real local Git)', () => {
       })).resolves.toMatchObject({ kind: 'refused-not-above' });
       await expect(verifyPrerequisiteClaim({
         claim: { outcome: 'blocked-by-prerequisite', child: c2, symbols: ['parseB'] },
-        host: c1, slug: 'demo', prerequisitePaths: ['src-required.ts'], git: subject.git,
+        host: c1, slug: 'demo', prerequisitePaths: ['src-c.ts'], git: subject.git,
       })).resolves.toMatchObject({ kind: 'unverified' });
       expect(await routingRefs(subject.git)).toBe(before);
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
@@ -105,7 +105,7 @@ describe('builder prerequisite claim verification (real local Git)', () => {
       await expect(verifyPrerequisiteClaim({
         claim: { outcome: 'blocked-by-prerequisite', child: c3, paths: ['src-c.ts'] },
         host: c2, slug: 'demo', leaf: c3, git,
-      })).resolves.toEqual({ kind: 'verified', destination: c3, ref: `refs/heads/${leafBranchFor('demo')}` });
+      })).resolves.toEqual({ kind: 'verified', destination: c3, ref: `refs/heads/${leafBranchFor('demo')}`, claimedPaths: ['src-c.ts'] });
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
   });
 

@@ -137,10 +137,26 @@ async function writeTaskStatus(dir: string, completed: number, total: number): P
     if (done) stamps[String(i)] = { sha: `${'0'.repeat(38)}${String(i).padStart(2, '0')}`, form: 'trailer' };
   }
   await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
+  let lastResolvedCount: number | undefined;
+  try {
+    const previous = JSON.parse(await readFile(join(dir, '.pipeline/task-evidence.json'), 'utf8')) as {
+      lastResolvedCount?: unknown;
+    };
+    if (typeof previous.lastResolvedCount === 'number') lastResolvedCount = previous.lastResolvedCount;
+  } catch {
+    // This fixture also models the first dispatch, which has no sidecar yet.
+  }
   await writeFile(
     join(dir, '.pipeline/task-evidence.json'),
-    JSON.stringify({ evidenceStamps: stamps, noEvidenceAttempts: 0, migrationGrandfather: [] }),
+    JSON.stringify({ evidenceStamps: stamps, noEvidenceAttempts: 0, migrationGrandfather: [], ...(lastResolvedCount !== undefined && { lastResolvedCount }) }),
   );
+}
+
+async function seedDispatchBaseline(dir: string, lastResolvedCount: number): Promise<void> {
+  const path = join(dir, '.pipeline/task-evidence.json');
+  const evidence = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
+  evidence.lastResolvedCount = lastResolvedCount;
+  await writeFile(path, JSON.stringify(evidence));
 }
 
 // ── Shared daemon.ts-side fixture helper: a real worktree with a real
@@ -273,9 +289,10 @@ describe('S3: zero-progress still parks at the existing threshold (negative, no 
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('a zero-progress runner still parks via checkAndAutoPark at the unchanged threshold, and lastResolvedCount is stamped even on this pre-existing park path', async () => {
+  it('a zero-progress runner still parks via checkAndAutoPark at the unchanged threshold without replacing its dispatch baseline', async () => {
     await seedAllArtifactsExceptTaskStatus(dir);
     await writeTaskStatus(dir, 2, 5); // 2/5 resolved — never changes across attempts
+    await seedDispatchBaseline(dir, 71);
 
     const runner: StepRunner = { run: vi.fn().mockResolvedValue({ success: true }) };
 
@@ -306,14 +323,10 @@ describe('S3: zero-progress still parks at the existing threshold (negative, no 
     // wall-clock/attempt-bound no-task-progress halt.
     expect(loopHaltEvents[0].reason).toMatch(/no task progress/);
 
-    // NEW (T3/T7): lastResolvedCount must be stamped at EVERY build-step exit
-    // path, including this pre-existing zero-progress park — not just the
-    // new success/ceiling paths this feature adds. Absent from the sidecar
-    // today.
     const raw = JSON.parse(await readFile(join(dir, '.pipeline/task-evidence.json'), 'utf-8')) as {
       lastResolvedCount?: number;
     };
-    expect(raw.lastResolvedCount).toBe(2);
+    expect(raw.lastResolvedCount).toBe(71);
   });
 });
 
@@ -606,12 +619,14 @@ describe('S7: kill switch and config validation (negative, config)', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('kill switch: build_progress_halt.enabled=false reproduces the fixed max_retries halt exactly, while lastResolvedCount bookkeeping (unconditional, not part of "ceiling and re-kick") is still stamped', async () => {
+  it('kill switch: build_progress_halt.enabled=false reproduces the fixed max_retries halt exactly without replacing the dispatch baseline', async () => {
     await seedAllArtifactsExceptTaskStatus(dir);
     const TOTAL = 6;
     const MAX_RETRIES = 3;
     let progress = 0;
     let buildAttempts = 0;
+    await writeTaskStatus(dir, 0, TOTAL);
+    await seedDispatchBaseline(dir, 79);
 
     const runner: StepRunner = {
       run: vi.fn(async (step) => {
@@ -649,12 +664,10 @@ describe('S7: kill switch and config validation (negative, config)', () => {
     expect(buildAttempts).toBe(MAX_RETRIES);
     expect(failedEvents).toHaveLength(1);
 
-    // NEW (T7): the sidecar write is basic bookkeeping, not part of "the
-    // ceiling and re-kick" D3 makes inert — it must still be stamped.
     const raw = JSON.parse(await readFile(join(dir, '.pipeline/task-evidence.json'), 'utf-8')) as {
       lastResolvedCount?: number;
     };
-    expect(raw.lastResolvedCount).toBe(MAX_RETRIES);
+    expect(raw.lastResolvedCount).toBe(79);
   });
 
   it('config validation: attempt_ceiling below max_retries or non-positive is rejected with a specific message; a valid block passes', () => {

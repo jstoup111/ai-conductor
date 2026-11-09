@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "slug": "routed-residue-finding-lands-on-a-taskless-host-an",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/routed-residue-finding-lands-on-a-taskless-host-an.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/routed-residue-finding-lands-on-a-taskless-host-an.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/routed-residue-finding-lands-on-a-taskless-host-an.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/2026-11-05-routed-residue-finding-lands-on-a-taskless-host-an.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-07-13-kickback-build-no-op-escalation.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-12-routed-whole-feature-repair.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/routed-residue-finding-lands-on-a-taskless-host-an.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/routed-residue-finding-lands-on-a-taskless-host-an.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/routed-residue-finding-lands-on-a-taskless-host-an.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/routed-residue-finding-lands-on-a-taskless-host-an.md"
+    }
+  ]
+}

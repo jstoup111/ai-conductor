@@ -74,7 +74,7 @@ describe('cascade cap sweep G5', () => {
 
       const result = await runRestack({ worktree: subject.repo, slug: 'demo', cause: 'feature-repair', events, git: makeGitRunner(subject.repo) });
 
-      expect({ variant, result }).toEqual({ variant, result: { kind: 'halted' } });
+      expect({ variant, result }).toMatchObject({ variant, result: { kind: 'halted' } });
       expect({ variant, seen }).toMatchObject({ variant, seen: [{ type: 'restack_refused', reason: 'cascade-cap', child: 1 }] });
       await expect(subject.git(['rev-parse', '--verify', 'refs/conductor/demo/restack/journal'])).rejects.toBeDefined();
       expect(await readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).toBe('needs-human');

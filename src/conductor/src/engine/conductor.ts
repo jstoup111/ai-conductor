@@ -56,6 +56,7 @@ import {
   readBuildReviewWorkOrderAttemptedCaseIds,
 } from './build-review-work-order.js';
 import { appendRemediationCaseOutbox, drainRemediationCaseOutbox, prdWideningCasesForState, readRemediationCaseStoreFeature, RemediationCaseStore } from './remediation-case-store.js';
+import { recordAsBuiltNeedsHuman, recordAsBuiltReconciliation, resolveOpenAsBuiltCases, type AsBuiltCaseFinding, type AsBuiltReconciliationResult } from './as-built-case-reconciliation.js';
 import { resolveBuildReviewFeatureIdentity } from './build-review-effective.js';
 import { AcceptedWideningDecisionStore } from './accepted-widenings.js';
 import { preparePrdWideningEntry } from './prd-widening-entry.js';
@@ -66,7 +67,10 @@ import { PRD_WIDENING_RECONCILIATION_SCHEMA } from './prd-widening-contract.js';
 import {
   renderPrdAuditProjectionHalt,
   renderPrdAuditScopeHalt,
+  PRD_WIDENING_CAPTURE_DEFECT_RECOVERY,
+  PRD_WIDENING_MIGRATION_FAILURE_RECOVERY,
   renderPrdWideningRecovery,
+  type PrdWideningRecoveryReason,
 } from './prd-widening-recovery.js';
 import {
   admitRefusalReworkPlan,
@@ -82,6 +86,7 @@ import {
   type RemediationProjectionLimits,
 } from './remediation-projection.js';
 import { readTypedRemediationPlan } from './remediation-plan-store.js';
+import type { AcceptedRemediationPlanDisposition } from './remediation-plan-contract.js';
 import { createGithubTrackerClient } from './tracker-client.js';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
 import { executeGithubOperation } from './github-operations.js';
@@ -192,6 +197,7 @@ import {
   filterRestageChanges,
   extractPrUrl,
 } from './state.js';
+import { stateMutationValuesEqual } from './conduct-state-conflicts.js';
 import type {
   ConductStateStore,
   NamedAtomicStateMutationBatch,
@@ -210,20 +216,22 @@ import { activePublicationRecord } from './stack-publication-record.js';
 import { publishedStackRefusal } from './stack-publication.js';
 import { hasDurableChildState, resolveActiveChild, resolveSealedLeaf, type ActiveChildResolution } from './child-cursor.js';
 import { formatStackCursorRefusal } from './stack-cursor-recovery.js';
-import { isUnroutedRepairPending, resolveExecutionChild, type ExecutionChildResolution } from './routing/execution-child.js';
+import { isUnroutedRepairPending, resolveExecutionChild, type ExecutionChildResolution, type ExecutionChildTargetResolution } from './routing/execution-child.js';
 import { settleRoutedBuildClaim } from './routing/prerequisite-claim.js';
-import { assertNever, emptyUnsettledReceipt, routingEligible, type RegionGate, type RoundId } from './routing/route-types.js';
+import { assertNever, emptyUnsettledReceipt, isDerivedAlreadyCompleteHost, parseRoundId, routingEligible, type RegionGate, type RoundId } from './routing/route-types.js';
 import { chargeTasklessAtAdmission, consumeRoutedRepairCredit, reconcileReceiptLedger, rebuildLedgerFromReceipts, routedSealedAuthored, settleRoundAtDispatch, tasklessAdmissionCapacity, type ReceiptRoutingScope, type RoundSettlementResult } from './routing/round-receipt.js';
 import { loadSliceTopology } from './slice-topology.js';
 import { readAppendedRemediationTaskChildren } from './artifacts.js';
-import { createRouteRecord, drainRoutingOutboxes, nextRoundId, readRepairMarker, readRevalidationQueue, readRouteRecord, writeRouteRecord } from './routing/route-record-store.js';
+import { createRouteRecord, nextRoundId, readRepairMarker, readRevalidationQueue, readRouteRecord, writeRouteRecord } from './routing/route-record-store.js';
+import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from './routing/routing-refs.js';
 import { routeAdmittedRound } from './routing/round-router.js';
 import { resolveResidueOwner, runResidueRoutingCall } from './routing/residue-routing-call.js';
-import { admitRound } from './routing/round-admission.js';
-import { reconcileRounds, routedRoundOpen } from './routing/round-admission.js';
+import { changedPathsByPosition, resolveCitedPaths, selectHost } from './routing/cannot-host.js';
+import { admitRound, checkRoundAdmissionFence, diagnoseAffectedRounds, exitRoutedHostAndReconcile, recordRoundStall, reconcileRounds, routedRoundOpen } from './routing/round-admission.js';
 import { enterHostRegion, verifyGreenAcceptance } from './routing/host-region-entry.js';
-import { requestRoutedExit } from './routing/routed-exit.js';
-import { consumeLowestQueued } from './routing/revalidation-queue.js';
+import { settleDerivedNoOpHost } from './routing/routed-exit.js';
+import type { requestRoutedExit } from './routing/routed-exit.js';
+import { admitQueuedRevalidation } from './routing/queue-admission.js';
 import { persistOnActiveEventSpine } from './event-persister.js';
 import { childBranchFor, leafBranchFor } from './feature-branch-identity.js';
 import { emitRestackRefused } from './restack/restack-events.js';
@@ -402,6 +410,8 @@ import {
   resolveBuildOutcomeCategory,
   sameNoOpCycle,
   writeBuildOutcomeBestEffort,
+  type BuildOutcomeRung,
+  type BuildTerminalOutcome,
 } from './build-outcome.js';
 import type { Track } from '../types/index.js';
 import {
@@ -570,6 +580,7 @@ import type {
   FinishPublicationCoordinator,
   NavigableStep,
   OperatorParkedTermination,
+  PreemptedTermination,
 } from "./conductor-options.js";
 import {
   clampToRunnablePrerequisite,
@@ -591,7 +602,7 @@ import {
 } from './step-completion.js';
 export { buildOutcomeRung, graderDispatchBackoffMs, toSpotAuditVerifierResult } from "./step-runner-types.js";
 export type { ComplexityAssessment, SpotAuditDispatchResult, StepRunOptions, StepRunResult, StepRunner } from "./step-runner-types.js";
-export type { ArtifactReviewResult, CheckpointResponse, ConductorOptions, FinishPublicationCoordinator, NavigableStep, OperatorParkedTermination } from "./conductor-options.js";
+export type { ArtifactReviewResult, CheckpointResponse, ConductorOptions, FinishPublicationCoordinator, NavigableStep, OperatorParkedTermination, PreemptedTermination } from "./conductor-options.js";
 export {
   clampToRunnablePrerequisite,
   earliestResolvablePrerequisiteIndex,
@@ -730,7 +741,7 @@ export class Conductor {
   private readonly enterChildRegion: typeof enterChildRegion;
   private readonly enterHostRegion: typeof enterHostRegion;
   private readonly advanceChildRegion: typeof advanceChildRegion;
-  private readonly requestRoutedExit: typeof requestRoutedExit;
+  private readonly requestRoutedExit: typeof requestRoutedExit | undefined;
   /** Last state snapshot whose mutations this conductor has durably accepted. */
   private persistedStateSnapshot: ConductState | undefined;
   private stepRunner: StepRunner;
@@ -823,11 +834,168 @@ export class Conductor {
    * region has no safe child target. Keep their operator-facing recovery
    * precise and terminal before any region state or provider work can start.
    */
-  private async haltChildRegionRefusal(reason: string): Promise<void> {
+  private async haltChildRegionRefusal(reason: string, haltClass: 'needs-human' | 'mechanical' = 'needs-human'): Promise<void> {
     const body = `child BUILD region refused: ${reason}`;
-    await this.writeHaltMarker(`${body}\n`, 'needs-human');
+    await this.writeHaltMarker(`${body}\n`, haltClass);
     const prUrl = await this.surfaceRemediationPr(body);
     await this.emitLoopHalt(body, prUrl);
+  }
+
+  private async renderAdmissionRefusal(
+    slug: string,
+    execution: Extract<ExecutionChildResolution, { readonly source: 'revalidating' }>,
+    detail: string,
+  ): Promise<string> {
+    const [queue, marker, affected] = await Promise.all([
+      readRevalidationQueue(this.projectRoot, slug), readRepairMarker(this.projectRoot, slug), diagnoseAffectedRounds(this.projectRoot, slug),
+    ]);
+    const generation = queue.kind === 'queue' ? queue.queue.generation : execution.generation ?? 'unreadable';
+    const queueRefusal = queue.kind === 'unreadable' ? `; unreadable ref: ${revalidationQueueRefFor(slug)}` : '';
+    const owner = marker.kind === 'marker' ? `child ${marker.marker.host} in round ${marker.marker.roundId}` : marker.kind === 'absent' ? 'none' : `unreadable (${repairMarkerRefFor(slug)})`;
+    const rounds = affected.kind === 'affected'
+      ? affected.rounds.map((round) => round.readable
+        ? `${round.roundId} (${Object.entries(round.unsettledHosts).map(([host, status]) => `${host}: ${status}`).join(', ')})`
+        : `${round.roundId} (unreadable: ${routeRecordRefFor(slug, round.roundId)})`).join('; ') || 'none'
+      : `unreadable (${affected.detail})`;
+    return `queued child ${execution.target.child}, queue generation ${generation}; non-closed rounds: ${rounds}; marker owner: ${owner}${queueRefusal}; ${detail}`;
+  }
+
+  private async haltAdmissionStall(slug: string, execution: Extract<ExecutionChildResolution, { readonly source: 'revalidating' }>, detail: string): Promise<void> {
+    const affected = await diagnoseAffectedRounds(this.projectRoot, slug);
+    if (affected.kind !== 'affected') {
+      await this.haltChildRegionRefusal(await this.renderAdmissionRefusal(slug, execution, `${detail}; ${affected.detail}`), 'mechanical');
+      return;
+    }
+    const stall = await recordRoundStall(this.projectRoot, slug, { kind: 'stalled', detail, rounds: affected.rounds }, this.events);
+    await this.haltChildRegionRefusal(await this.renderAdmissionRefusal(slug, execution, stall.detail), stall.haltClass ?? 'needs-human');
+  }
+
+  /** Resolve a routed host or refuse admission before region entry has side effects. */
+  private async resolveRoutedHostAdmission(
+    execution: ExecutionChildResolution,
+    slug: string,
+    cursor?: ActiveChildResolution,
+  ): Promise<Extract<ExecutionChildResolution, { readonly source: 'routed-host' }> | false> {
+    if (execution.source !== 'routed-host' && execution.source !== 'revalidating') return false;
+
+    let enteredExecution: Extract<ExecutionChildResolution, { readonly source: 'routed-host' | 'revalidating' }> = execution;
+
+    // A queued child is only authority to re-enter BUILD after the queue has
+    // been consumed into its own open revalidate round.  The cursor carries a
+    // revalidating hint independently of that durable handshake, so validate
+    // the marker and record here, before either entry side effect or dispatch.
+    if (enteredExecution.source === 'revalidating') {
+      if (cursor !== undefined && !routingEligible(cursor, this.config)) {
+        await this.haltChildRegionRefusal(
+          `queued child ${enteredExecution.target.child}, queue generation ${enteredExecution.generation ?? 'unknown'}; routing is ineligible`,
+        );
+        return false;
+      }
+      const marker = await readRepairMarker(this.projectRoot, slug);
+      if (marker.kind !== 'marker') {
+        const admission = await admitQueuedRevalidation({
+          worktree: this.projectRoot,
+          slug,
+          persist: (event) => persistOnActiveEventSpine(this.events, event),
+        });
+        if (
+          admission.kind === 'admitted'
+          || (admission.kind === 'continue' && admission.reconciled.kind === 'navigate-host')
+        ) {
+          const reResolved = resolveExecutionChild(await this.resolveActiveChild(this.projectRoot, slug), slug);
+          const mismatchedAdmission = admission.kind === 'admitted' && (
+            reResolved.source !== 'routed-host' ||
+            reResolved.target.child !== admission.host ||
+            reResolved.roundId !== admission.roundId
+          );
+          if (reResolved.source !== 'routed-host' || mismatchedAdmission) {
+            const detail = admission.kind === 'admitted'
+              ? `admitted round ${admission.roundId} for child ${admission.host} re-resolved as ${reResolved.source}`
+              : 'queued child was not admitted into a revalidate round';
+            await this.haltChildRegionRefusal(await this.renderAdmissionRefusal(slug, enteredExecution, detail));
+            return false;
+          }
+          enteredExecution = reResolved;
+        } else if (admission.kind === 'busy') {
+          // A busy result may be the admission fence or a marker written by a
+          // concurrent admission. Resolve exactly once: the marker owner is
+          // safe to enter, while a still-revalidating cursor must wait for a
+          // subsequent preflight rather than trying to recover it in-loop.
+          const reResolved = resolveExecutionChild(await this.resolveActiveChild(this.projectRoot, slug), slug);
+          if (reResolved.source === 'routed-host') {
+            enteredExecution = reResolved;
+          } else {
+            const markerAfterBusy = admission.detail === undefined
+              ? await readRepairMarker(this.projectRoot, slug)
+              : undefined;
+            const detail = admission.detail
+              ?? (markerAfterBusy?.kind === 'marker'
+                ? `repair marker is owned by child ${markerAfterBusy.marker.host} in round ${markerAfterBusy.marker.roundId}`
+                : 'revalidation queue admission is busy');
+            await this.haltAdmissionStall(slug, enteredExecution, detail);
+            return false;
+          }
+        } else if (admission.kind === 'continue') {
+          await this.haltChildRegionRefusal(
+            await this.renderAdmissionRefusal(
+              slug,
+              enteredExecution,
+              `region-entry queue admission returned ${admission.reconciled.kind}; resume preflight must recover it`,
+            ),
+            'mechanical',
+          );
+          return false;
+        } else if (admission.kind === 'stalled') {
+          await this.haltAdmissionStall(slug, enteredExecution, admission.detail);
+          return false;
+        } else if (admission.kind === 'unavailable') {
+          await this.haltChildRegionRefusal(await this.renderAdmissionRefusal(slug, enteredExecution, admission.detail));
+          return false;
+        }
+      } else if (marker.marker.host !== enteredExecution.target.child) {
+        await this.haltChildRegionRefusal(await this.renderAdmissionRefusal(slug, enteredExecution, 'repair marker does not match the revalidating child'));
+        return false;
+      } else {
+        const route = await readRouteRecord(this.projectRoot, slug, marker.marker.roundId);
+        if (route.kind !== 'record') {
+          await this.haltChildRegionRefusal(await this.renderAdmissionRefusal(
+            slug,
+            enteredExecution,
+            `revalidate route record is unreadable: ${routeRecordRefFor(slug, marker.marker.roundId)}`,
+          ));
+          return false;
+        }
+        const revalidationOpen = (() => {
+          switch (route.record.kind) {
+            case 'revalidate':
+              return route.record.phase === 'open';
+            case 'audit':
+            case 'operator':
+              return false;
+          }
+          return assertNever(route.record.kind);
+        })();
+        if (!revalidationOpen) {
+          await this.haltChildRegionRefusal(await this.renderAdmissionRefusal(slug, enteredExecution, 'revalidate route record is not open'));
+          return false;
+        }
+        enteredExecution = {
+          source: 'routed-host',
+          target: enteredExecution.target,
+          roundId: marker.marker.roundId,
+        };
+      }
+    }
+
+    if (enteredExecution.source !== 'routed-host') {
+      await this.haltChildRegionRefusal(
+        await this.renderAdmissionRefusal(slug, enteredExecution, 'revalidation entry did not resolve to a routed host'),
+        'mechanical',
+      );
+      return false;
+    }
+
+    return enteredExecution;
   }
 
   /** Enter routed hosts before the shared child-region lifecycle takes over. */
@@ -835,55 +1003,67 @@ export class Conductor {
     execution: ExecutionChildResolution,
     slug: string,
     state: ConductState,
-  ): Promise<boolean> {
-    if (execution.source !== 'routed-host' && execution.source !== 'revalidating') return true;
+    cursor?: ActiveChildResolution,
+  ): Promise<ExecutionChildTargetResolution | false> {
+    if (execution.source === 'cursor') return execution;
 
-    // A queued child is only authority to re-enter BUILD after the queue has
-    // been consumed into its own open revalidate round.  The cursor carries a
-    // revalidating hint independently of that durable handshake, so validate
-    // the marker and record here, before either entry side effect or dispatch.
-    if (execution.source === 'revalidating') {
-      const marker = await readRepairMarker(this.projectRoot, slug);
-      if (marker.kind !== 'marker' || marker.marker.host !== execution.target.child || marker.marker.roundId !== execution.roundId) {
-        await this.haltChildRegionRefusal(`revalidating child ${execution.target.child} has no matching repair marker`);
-        return false;
+    const enteredExecution = await this.resolveRoutedHostAdmission(execution, slug, cursor);
+    if (enteredExecution === false) return false;
+
+    // A derived no-op writes its repairing transition before starting the
+    // ordinary routed exit.  If the process dies in that gap, the persisted
+    // reason is the only durable distinction from a normal repairing host,
+    // which must still resume its BUILD region.
+    const resumeDerivedNoOpExit = async (): Promise<ExecutionChildTargetResolution | false> => {
+      const continued = await this.continueRoutedExit(slug, enteredExecution);
+      if (continued === 'halt') return false;
+      const next = resolveExecutionChild(await this.resolveActiveChild(this.projectRoot, slug), slug);
+      if (next.source === 'routed-host' || next.source === 'revalidating' || next.source === 'cursor') {
+        return this.enterRoutedHostRegion(next, slug, state);
       }
-      const route = await readRouteRecord(this.projectRoot, slug, execution.roundId!);
-      if (route.kind !== 'record') {
-        await this.haltChildRegionRefusal(`revalidating child ${execution.target.child} has no open revalidate round`);
-        return false;
-      }
-      const revalidationOpen = (() => {
-        switch (route.record.kind) {
-          case 'revalidate':
-            return route.record.phase === 'open';
-          case 'audit':
-          case 'operator':
-            return false;
-        }
-        return assertNever(route.record.kind);
-      })();
-      if (!revalidationOpen) {
-        await this.haltChildRegionRefusal(`revalidating child ${execution.target.child} has no open revalidate round`);
-        return false;
-      }
+      await this.haltChildRegionRefusal(await this.renderChildCursorRefusal(
+        await this.resolveActiveChild(this.projectRoot, slug) as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>,
+      ));
+      return false;
+    };
+
+    const routeBeforeEntry = await readRouteRecord(this.projectRoot, slug, enteredExecution.roundId!);
+    if (routeBeforeEntry.kind === 'record' && isDerivedAlreadyCompleteHost(routeBeforeEntry.record, enteredExecution.target.child)) {
+      return resumeDerivedNoOpExit();
     }
 
     const hostEntry = await this.enterHostRegion({
       worktree: this.projectRoot,
       slug,
-      roundId: execution.roundId!,
-      host: execution.target.child,
+      roundId: enteredExecution.roundId!,
+      host: enteredExecution.target.child,
       emitter: this.events,
       completionContext: await this.completionCtx(state),
     });
     switch (hostEntry.kind) {
       case 'entered':
-      case 'resume':
-        return true;
+        return enteredExecution;
+      case 'resume': {
+        const route = await readRouteRecord(this.projectRoot, slug, enteredExecution.roundId!);
+        const derivedNoOp = route.kind === 'record' && isDerivedAlreadyCompleteHost(route.record, enteredExecution.target.child);
+        return derivedNoOp ? resumeDerivedNoOpExit() : enteredExecution;
+      }
       case 'derived-already-complete': {
+        const route = await readRouteRecord(this.projectRoot, slug, enteredExecution.roundId!);
+        if (route.kind === 'record' && isDerivedAlreadyCompleteHost(route.record, enteredExecution.target.child)) {
+          return resumeDerivedNoOpExit();
+        }
+        const settled = await settleDerivedNoOpHost({
+          worktree: this.projectRoot,
+          slug,
+          roundId: enteredExecution.roundId!,
+          host: enteredExecution.target.child,
+        });
+        if (settled.kind === 'settled') {
+          return resumeDerivedNoOpExit();
+        }
         const body =
-          `routed host ${execution.target.child} entry derived already complete: ${hostEntry.detail}\n` +
+          `routed host ${enteredExecution.target.child} entry derived already complete: ${hostEntry.detail}\n` +
           'Outcome: derived-already-complete';
         await this.writeHaltMarker(`${body}\n`, 'needs-human');
         const prUrl = await this.surfaceRemediationPr(body);
@@ -891,10 +1071,10 @@ export class Conductor {
         return false;
       }
       case 'halted':
-        await this.haltChildRegionRefusal(`routed host ${execution.target.child} entry halted: ${hostEntry.detail}`);
+        await this.haltChildRegionRefusal(`routed host ${enteredExecution.target.child} entry halted: ${hostEntry.detail}`);
         return false;
       case 'refused':
-        await this.haltChildRegionRefusal(`routed host ${execution.target.child} entry refused: ${hostEntry.detail}`);
+        await this.haltChildRegionRefusal(`routed host ${enteredExecution.target.child} entry refused: ${hostEntry.detail}`);
         return false;
     }
     return assertNever(hostEntry);
@@ -915,8 +1095,12 @@ export class Conductor {
       }
       case 'detached-head':
         return formatStackCursorRefusal(this.projectRoot, this.featureSlug ?? this.featureDesc ?? 'feature', 'detached-head', 'worktree is in detached HEAD while resolving the active child');
-      case 'git-error':
-        return formatStackCursorRefusal(this.projectRoot, this.featureSlug ?? this.featureDesc ?? 'feature', 'git-error', 'git failed while resolving the active child cursor');
+      case 'git-error': {
+        const slug = this.featureSlug ?? this.featureDesc ?? 'feature';
+        return cursor.unreadableRef === undefined
+          ? formatStackCursorRefusal(this.projectRoot, slug, 'git-error', 'git failed while resolving the active child cursor')
+          : `cannot read ${cursor.unreadableRef} while resolving the active child cursor`;
+      }
     }
   }
 
@@ -1122,8 +1306,50 @@ export class Conductor {
       error: input.reason,
     });
   }
+
+  /** Persist one terminal BUILD attempt without changing its caller-owned meaning. */
+  private async recordBuildOutcome(input: {
+    terminalOutcome: BuildTerminalOutcome;
+    reason?: string;
+    note?: string[];
+    gate: string | null;
+    rung: BuildOutcomeRung;
+    treeBefore: string | null;
+    treeAfter: string | null;
+    resolvedBefore: number;
+    resolvedAfter: number;
+    headBefore: string | null;
+    headAfter: string | null;
+    outcomeStore: Awaited<ReturnType<typeof readBuildOutcome>>;
+  }): Promise<void> {
+    await writeBuildOutcomeBestEffort(this.projectRoot, {
+      ...input.outcomeStore,
+      records: [...input.outcomeStore.records, {
+        outcome: classifyBuildSettle({
+          treeBefore: input.treeBefore,
+          treeAfter: input.treeAfter,
+          resolvedBefore: input.resolvedBefore,
+          resolvedAfter: input.resolvedAfter,
+        }),
+        terminalOutcome: input.terminalOutcome,
+        gate: input.gate,
+        verdict: input.gate === null ? null : false,
+        rung: input.rung,
+        treeBefore: input.treeBefore,
+        treeAfter: input.treeAfter,
+        headBefore: input.headBefore,
+        headAfter: input.headAfter,
+        note: input.note,
+        category: await resolveBuildOutcomeCategory(this.projectRoot, input.note),
+        ...(input.reason === undefined ? {} : { reason: input.reason }),
+      }],
+    });
+  }
+
   private featureSlug?: string;
+  private rawOperatorParkBoundary?: () => Promise<boolean>;
   private operatorParkBoundary?: () => Promise<boolean>;
+  private preemptionRequested?: () => boolean;
   private resume: boolean;
   private fromStep?: StepName;
   private mode: RunMode;
@@ -1256,6 +1482,8 @@ export class Conductor {
    * `conflict_halt` outcome here drives the loop to HALT.
    */
   private lastRebaseOutcome: RebaseOutcome | null = null;
+  /** Timestamp captured before a rebase dispatch for stale-verdict reconciliation. */
+  private rebaseDispatchStartedAtMs: number | undefined;
   private lastRebaseSealError: string | null = null;
 
   /**
@@ -1338,13 +1566,43 @@ export class Conductor {
   private async projectPendingAsBuiltRemediationFindings(): Promise<string | undefined> {
     const unreadable = await this.reloadPendingAsBuiltRemediationFindings();
     if (unreadable) return unreadable;
-    if (this.pendingAsBuiltRemediationFindings.size === 0) return undefined;
     const stored = await readAsBuiltVerdict(this.projectRoot);
     if (stored.kind !== 'present') {
+      // A runner-success-only flow (notably verification-off unit fixtures)
+      // has no authoritative as-built result to settle.  With no accepted
+      // repair awaiting projection, that is a no-op rather than a failed
+      // projection; a pending repair still fails closed below.
+      if (stored.kind === 'absent' && this.pendingAsBuiltRemediationFindings.size === 0) return undefined;
       return stored.kind === 'unreadable'
         ? `as-built verdict artifact could not be read for recorded-findings projection: ${stored.reason}`
         : 'as-built verdict artifact is absent for recorded-findings projection';
     }
+    // Every authoritative gate pass closes history, including a delivered
+    // PLAN_GAP. Pending display findings are independent of this settlement.
+    // A blocked verdict (even one that restates resolved cases) must continue
+    // through ordinary remediation and never derives approval from the store.
+    if (
+      stored.value.verdict.verdict === 'APPROVED' ||
+      stored.value.verdict.verdict === 'APPROVED WITH DRIFT NOTES' ||
+      (stored.value.verdict.verdict === 'PLAN_GAP' && stored.value.verdict.outcomeDelivered)
+    ) {
+      const feature = await resolveBuildReviewFeatureIdentity(this.projectRoot);
+      // Legacy in-memory fixtures can exercise gate routing without a Git
+      // feature identity. Production remediation always has one; absent
+      // identity here leaves the historical gate behavior unchanged.
+      if (feature) {
+        const store = new RemediationCaseStore(this.projectRoot, {
+          version: 'v1', repository: feature.repository, feature: feature.feature,
+        });
+        const settled = await store.mutate(async (caseState) => {
+          const result = resolveOpenAsBuiltCases(caseState);
+          return { value: undefined, nextState: result.state };
+        });
+        if (!settled.ok) return `remediation case store write fault while resolving as-built cases: ${settled.reason}`;
+        await drainRemediationCaseOutbox(store, async (event) => this.events.emitOrThrow(event));
+      }
+    }
+    if (this.pendingAsBuiltRemediationFindings.size === 0) return undefined;
     const recordedFindings: RecordedAsBuiltFinding[] = [...this.pendingAsBuiltRemediationFindings.values()]
       .map((finding) => ({
         id: finding.finding,
@@ -1365,6 +1623,83 @@ export class Conductor {
     }
     await this.clearPendingAsBuiltRemediationFindings();
     this.pendingAsBuiltRemediationFindings.clear();
+    return undefined;
+  }
+
+  /** Atomically record accepted as-built reconciliation before BUILD can dispatch. */
+  private async recordAsBuiltReconciliationResults(
+    results: readonly AsBuiltReconciliationResult[],
+  ): Promise<string | undefined> {
+    if (results.length === 0) return undefined;
+    const feature = await resolveBuildReviewFeatureIdentity(this.projectRoot);
+    if (!feature) return undefined;
+    const store = new RemediationCaseStore(this.projectRoot, {
+      version: 'v1', repository: feature.repository, feature: feature.feature,
+    });
+    await drainRemediationCaseOutbox(store, async (event) => this.events.emitOrThrow(event));
+    const written = await store.mutate(async (caseState) => {
+      const recorded = recordAsBuiltReconciliation(caseState, { results });
+      return { value: undefined, nextState: recorded.state };
+    });
+    if (!written.ok) return `remediation case store write fault: ${written.reason}`;
+    await drainRemediationCaseOutbox(store, async (event) => this.events.emitOrThrow(event));
+    return undefined;
+  }
+
+  /** Project admitted, repair-bearing as-built dispositions into case-store results. */
+  private asBuiltReconciliationResults(
+    dispositions: readonly AcceptedRemediationPlanDisposition[],
+    findings: ReadonlyMap<string, RecordedAsBuiltRemediationFinding>,
+    attemptId: string | undefined,
+    existingTaskIdsByFindingId: ReadonlyMap<string, readonly string[]>,
+    appendedTaskIdsByFindingId: ReadonlyMap<string, readonly string[]> | undefined,
+  ): AsBuiltReconciliationResult[] {
+    return dispositions.flatMap((disposition): AsBuiltReconciliationResult[] => {
+      if (
+        disposition.reference.kind !== 'as-built-finding' ||
+        disposition.disposition === 'halt' ||
+        !disposition.reconciliation
+      ) return [];
+      const finding = findings.get(disposition.reference.id);
+      if (finding === undefined) return [];
+      const repairTaskIds = disposition.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION
+        ? existingTaskIdsByFindingId.get(disposition.reference.id)
+        : appendedTaskIdsByFindingId?.get(disposition.reference.id);
+      if (repairTaskIds === undefined) return [];
+      return [{
+        source: {
+          findingId: finding.finding,
+          attemptId: attemptId ?? this.currentRunId ?? 'unknown-attempt',
+          class: finding.class,
+          ...(finding.reference === undefined ? {} : { reference: finding.reference }),
+          summary: finding.summary,
+        },
+        relation: disposition.reconciliation.relation,
+        reason: disposition.reconciliation.reason,
+        ...(disposition.reconciliation.priorCaseId === undefined
+          ? {} : { priorCaseId: disposition.reconciliation.priorCaseId }),
+        repairTaskIds,
+      }];
+    });
+  }
+
+  /** Persist terminal DESIGN/planner outcomes before their needs-human halt. */
+  private async recordAsBuiltNeedsHumanFindings(
+    findings: readonly AsBuiltCaseFinding[], reason: string,
+  ): Promise<string | undefined> {
+    if (findings.length === 0) return undefined;
+    const feature = await resolveBuildReviewFeatureIdentity(this.projectRoot);
+    if (!feature) return undefined;
+    const store = new RemediationCaseStore(this.projectRoot, {
+      version: 'v1', repository: feature.repository, feature: feature.feature,
+    });
+    await drainRemediationCaseOutbox(store, async (event) => this.events.emitOrThrow(event));
+    const written = await store.mutate(async (caseState) => {
+      const recorded = recordAsBuiltNeedsHuman(caseState, { findings, reason });
+      return { value: undefined, nextState: recorded.state };
+    });
+    if (!written.ok) return `remediation case store write fault: ${written.reason}`;
+    await drainRemediationCaseOutbox(store, async (event) => this.events.emitOrThrow(event));
     return undefined;
   }
 
@@ -1635,7 +1970,9 @@ export class Conductor {
       })({ prUrl, state, mode: opts.mode });
     };
 
-    const routedVerifyGreen = await (async () => {
+    const [routedRound, routedVerifyGreen] = await Promise.all([
+      this.routedRoundForActiveChild(state),
+      (async () => {
       try {
         const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
         if (!slug) return undefined;
@@ -1654,10 +1991,12 @@ export class Conductor {
           ? { roundId: execution.roundId, host: execution.target.child, headSha }
           : undefined;
       } catch { return undefined; }
-    })();
+      })(),
+    ]);
 
     return {
       ...(this.activeRegionChild === undefined ? {} : { activeChild: this.activeRegionChild }),
+      ...(routedRound === undefined ? {} : { routedRound }),
       ...(routedVerifyGreen === undefined ? {} : { routedVerifyGreen }),
       sessionStartedAt: state.session_started_at,
       attemptStartedAt: this.currentAttemptStartedAt,
@@ -2085,9 +2424,9 @@ export class Conductor {
         publicationDisposition: {
           kind: 'human_required',
           reason: 'publication_coordinator_unavailable',
-        },
-      };
-    }
+      },
+    };
+  }
 
     const publicationDisposition = await this.finishPublication.advance({
       state,
@@ -2123,6 +2462,23 @@ export class Conductor {
       success: publicationDisposition.kind === 'complete',
       publicationDisposition,
     };
+  }
+
+  /** The active routed host is the only child allowed to retain round-scoped gate evidence. */
+  private async routedRoundForActiveChild(state?: ConductState): Promise<RoundId | undefined> {
+    if (this.config.stacked_prs?.route_whole_feature_fixes !== true || this.activeRegionChild === undefined) {
+      return undefined;
+    }
+    const slug = state?.feature_desc ?? this.featureSlug ?? this.featureDesc;
+    if (!slug) return undefined;
+    try {
+      const marker = await readRepairMarker(this.projectRoot, slug);
+      return marker.kind === 'marker' && marker.marker.host === this.activeRegionChild
+        ? marker.marker.roundId
+        : undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   /**
@@ -2553,6 +2909,30 @@ export class Conductor {
     return result.value;
   }
 
+  /**
+   * Advance clean fields to values an engine writer already made durable.
+   *
+   * Local changes retain their original compare-and-swap baseline so a peer's
+   * same-field update still refuses the next write rather than being lost.
+   */
+  private async adoptDurableState(state: ConductState): Promise<void> {
+    const snapshot = this.persistedStateSnapshot as Record<string, unknown> | undefined;
+    if (!snapshot) return;
+
+    const durable = this.activeRegionChild === undefined
+      ? await readState(this.stateFilePath)
+      : await readConductStateOverlay(this.projectRoot, this.activeRegionChild);
+    if (!durable.ok) return;
+
+    const current = state as Record<string, unknown>;
+    for (const [field, value] of Object.entries(durable.value)) {
+      if (stateMutationValuesEqual(current[field], value)) continue;
+      if (!stateMutationValuesEqual(current[field], snapshot[field])) continue;
+      current[field] = value;
+      snapshot[field] = value;
+    }
+  }
+
   private async initializeRunState(state: ConductState): Promise<boolean> {
     const sessionStartedAt = Date.now();
     const isFreshFeatureSession = !state.run_started_at;
@@ -2606,7 +2986,7 @@ export class Conductor {
     this.enterChildRegion = opts.childRegionLifecycle?.enterChildRegion ?? enterChildRegion;
     this.enterHostRegion = opts.childRegionLifecycle?.enterHostRegion ?? enterHostRegion;
     this.advanceChildRegion = opts.childRegionLifecycle?.advanceChildRegion ?? advanceChildRegion;
-    this.requestRoutedExit = opts.childRegionLifecycle?.requestRoutedExit ?? requestRoutedExit;
+    this.requestRoutedExit = opts.childRegionLifecycle?.requestRoutedExit;
     this.remediationProjectionLimitOverrides = opts.remediationProjectionLimitOverrides;
     this.executionLifecycle = new ExecutionLifecycle({
       events: this.events,
@@ -2617,7 +2997,11 @@ export class Conductor {
       },
     });
     this.featureSlug = opts.featureSlug;
-    this.operatorParkBoundary = opts.operatorParkBoundary;
+    this.rawOperatorParkBoundary = opts.operatorParkBoundary;
+    this.preemptionRequested = opts.preemptionRequested;
+    this.operatorParkBoundary = opts.preemptionRequested === undefined
+      ? opts.operatorParkBoundary
+      : async () => Boolean(await opts.operatorParkBoundary?.()) || opts.preemptionRequested!();
     this.resume = opts.resume ?? false;
     this.fromStep = opts.fromStep;
     this.mode = opts.mode ?? 'default';
@@ -2780,24 +3164,40 @@ export class Conductor {
     child: ChildId,
     isLeaf?: boolean,
   ): Promise<void> {
+    // A routed exit can re-pend whole-feature gates while this process still
+    // carries the former host's overlay. Adopt clean values before changing
+    // stores, while the active overlay still combines that child with the
+    // feature document. The new region values below then replace the old
+    // child's region without making unsaved feature fields look clean.
+    await this.adoptDurableState(state);
     this.stateStore = createRoutedConductStateStore(this.projectRoot, child);
     const overlay = await readConductStateOverlay(this.projectRoot, child);
     if (!overlay.ok) throw new Error(`cannot read child ${child} BUILD state: ${overlay.error.message}`);
+    const snapshot = this.persistedStateSnapshot as Record<string, unknown> | undefined;
     for (const step of CHILD_REGION_STEPS) {
       const value = overlay.value[step];
-      if (value === undefined) delete state[step];
-      else state[step] = value;
+      if (value === undefined) {
+        delete state[step];
+        if (snapshot) delete snapshot[step];
+      } else {
+        state[step] = value;
+        if (snapshot) snapshot[step] = value;
+      }
     }
     // `last_step` is written alongside every region status through the routed
     // store.  Keeping the flat breadcrumb here makes its compare-and-swap
     // expectation target a field that does not exist in the child state,
     // falsely reporting a concurrent update on the first resumed dispatch.
     const lastStep = overlay.value.last_step;
-    if (lastStep === undefined) delete state.last_step;
-    else state.last_step = lastStep;
+    if (lastStep === undefined) {
+      delete state.last_step;
+      if (snapshot) delete snapshot.last_step;
+    } else {
+      state.last_step = lastStep;
+      if (snapshot) snapshot.last_step = lastStep;
+    }
     this.activeRegionChild = child;
     this.activeRegionIsLeaf = isLeaf;
-    this.persistedStateSnapshot = { ...state };
   }
 
   /** Rebind from a child overlay to feature state after a routed leaf return. */
@@ -2848,6 +3248,21 @@ export class Conductor {
     return false;
   }
 
+  /** True only when durable routing history proves that returnToLeaf closed a round. */
+  private async hasSettledRoutedLeafReturn(slug: string): Promise<boolean> {
+    const git = makeGitRunner(this.projectRoot);
+    const listed = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
+    if (listed.exitCode !== 0) return false;
+    for (const ref of listed.stdout.split('\n').filter(Boolean)) {
+      const roundId = parseRoundId(ref.split('/').at(-1) ?? '');
+      if (!roundId) return false;
+      const stored = await readRouteRecord(this.projectRoot, slug, roundId, { git });
+      if (stored.kind !== 'record') return false;
+      if (stored.record.phase === 'closed' && stored.record.leafReturn !== undefined) return true;
+    }
+    return false;
+  }
+
   /**
    * Whole-feature verdicts stay flat. For a selected child, each region
    * verdict is replaced by the child's record; an absent child record masks a
@@ -2857,9 +3272,17 @@ export class Conductor {
     const verdicts = await readAllVerdicts(this.projectRoot);
     if (this.activeRegionChild === undefined) return verdicts;
 
+    // A routed host may carry successful evidence from an earlier lap.  That
+    // evidence cannot satisfy work which this round explicitly re-pended;
+    // only a verdict stamped by the current marker may do so.  Failed
+    // verdicts remain visible so their kickback continues to route the loop.
+    const routedRound = await this.routedRoundForActiveChild(this.persistedStateSnapshot);
+
     for (const step of CHILD_REGION_STEPS) {
       const verdict = await readVerdict(this.projectRoot, step, this.activeRegionChild);
-      if (verdict) verdicts[step] = verdict;
+      if (verdict && !(routedRound !== undefined && verdict.satisfied && verdict.routedRound !== routedRound)) {
+        verdicts[step] = verdict;
+      }
       else delete verdicts[step];
     }
     return verdicts;
@@ -3107,6 +3530,41 @@ export class Conductor {
           retryDelayMs = Math.min(retryDelayMs * 2, 30_000);
         }
       }
+    }
+
+    if (
+      authentication !== undefined &&
+      readinessDescriptor !== undefined &&
+      supportsProviderCapability(readinessDescriptor, 'credentialFileRecovery') &&
+      'credentialRecoveryFile' in readinessDescriptor &&
+      readinessDescriptor.credentialRecoveryFile !== undefined
+    ) {
+      const home = process.env[readinessDescriptor.homeVariable] ?? join(homedir(), readinessDescriptor.defaultHome);
+      const credentialsPath = join(home, readinessDescriptor.credentialRecoveryFile);
+      const providerName = readinessDescriptor.displayName;
+      await this.events.emit({
+        type: 'credentials_park',
+        reason: `${providerName} credentials rejected or missing — waiting for the ${providerName} credentials file to change`,
+      });
+      const result = await waitForCredentialsChange({
+        initialState: 'expired', credentialsPath, globalConfigDir: '',
+        timeoutMs: shPark.authParkTimeoutMinutes * 60 * 1000,
+        sleep: this.sleep, now: () => Date.now(),
+        contentClassifier: (content) => {
+          try {
+            const parsed: unknown = JSON.parse(content);
+            return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed);
+          } catch { return false; }
+        },
+      });
+      if (result.type === 'refreshed') return { disposition: 'recovered' };
+      return {
+        disposition: 'halt',
+        haltReason:
+          `${providerName} credentials did not change before the auth park timed out.\n` +
+          `Credentials file: ${credentialsPath}\n` +
+          `Store a working credential with ${providerName} (/login), or fix the upstream provider's environment key and restart the daemon, then re-queue this feature.`,
+      };
     }
 
     if (this.selfHost && shPark.buildAuthMode === 'api-key') {
@@ -3484,12 +3942,9 @@ export class Conductor {
       capture: { operator, offerStore: caseStore, decisionStore },
     });
     if (prepared.migration.kind === 'failed') {
-      const recoveryReason = prepared.migration.reason.includes('unsupported')
-        ? 'unsupported-history'
-        : 'malformed-history';
       await this.emitPrdWideningRejections(prepared.migration.reason);
       return renderPrdWideningRecovery(
-        recoveryReason,
+        PRD_WIDENING_MIGRATION_FAILURE_RECOVERY[prepared.migration.reason],
         ['.pipeline/accepted-widenings.json', '.pipeline/remediation-cases.json'],
       );
     }
@@ -3517,18 +3972,16 @@ export class Conductor {
     }
     if (prepared.capture.defects.length > 0) {
       for (const defect of prepared.capture.defects) {
-        await this.emitPrdWideningRejections(defect.kind, [defect.offerEntryId ?? 'prd-audit:entry']);
+        await this.emitPrdWideningRejections(defect.kind, [defect.criterion ?? defect.offerEntryId ?? 'prd-audit:entry']);
       }
-      const reason = prepared.capture.defects.some((defect) => defect.kind === 'missing-operator')
-        ? 'missing-operator'
-        : prepared.capture.defects.some((defect) => defect.kind === 'write-failed' || defect.kind === 'offer-read-failed')
-          ? 'persistence-failed'
-          : prepared.capture.defects.some((defect) => defect.kind === 'invalid-decision')
-            ? 'invalid-decision'
-            : prepared.capture.defects.some((defect) => defect.kind === 'unsupported-legacy-clear')
-              ? 'unsupported-history'
-              : 'malformed-history';
-      return renderPrdWideningRecovery(reason, prepared.capture.defects.flatMap((defect) => defect.offerEntryId ? [defect.offerEntryId] : []));
+      const grouped = new Map<PrdWideningRecoveryReason, string[]>();
+      for (const defect of prepared.capture.defects) {
+        const reason = PRD_WIDENING_CAPTURE_DEFECT_RECOVERY[defect.kind];
+        const records = grouped.get(reason) ?? [];
+        records.push(defect.criterion ?? defect.offerEntryId ?? 'prd-audit:entry');
+        grouped.set(reason, records);
+      }
+      return [...grouped].map(([reason, records]) => renderPrdWideningRecovery(reason, records)).join('\n');
     }
     const decisions = await decisionStore.read();
     if (decisions.kind !== 'absent' && decisions.kind !== 'valid') {
@@ -4083,6 +4536,18 @@ export class Conductor {
         };
       }
     }
+    // Re-deliver crash-left reconciliation events before the planner sees the
+    // same durable case history. This keeps the event spine's at-least-once
+    // handoff ahead of the next as-built projection.
+    if (remediationEvidenceSources.some((source) => source.gate === 'architecture_review_as_built')) {
+      const feature = await resolveBuildReviewFeatureIdentity(this.projectRoot);
+      if (feature) {
+        const store = new RemediationCaseStore(this.projectRoot, {
+          version: 'v1', repository: feature.repository, feature: feature.feature,
+        });
+        await drainRemediationCaseOutbox(store, async (event) => this.events.emitOrThrow(event));
+      }
+    }
     const projectionResult = await buildRemediationProjection(this.projectRoot, {
       source: remediationProjectionSource(hintSource.source),
       activePlanPath: await this.getActivePlanPath() ?? undefined,
@@ -4100,11 +4565,18 @@ export class Conductor {
       const bounds = actual === undefined || limit === undefined
         ? ''
         : ` (actual ${actual}, limit ${limit})`;
+      // Only the operator-owned as-built history can require a human decision.
+      // Every other projection input fault is a mechanical validator failure,
+      // including PRD-only ledger and artifact faults.
+      const haltClass = dimension === 'prior-as-built-cases' || source === 'remediation case store'
+        ? 'needs-human'
+        : 'mechanical';
       return this.haltForRemediationValidatorFault(
         state,
         hintSource,
         `remediation projection input fault: source ${source}` +
           `${dimension === undefined ? '' : `, dimension ${dimension}`}${bounds}: ${detail}`,
+        haltClass,
       );
     }
     const remediateModelPolicy = this.modelPolicyForStep('remediate');
@@ -4338,6 +4810,7 @@ export class Conductor {
     const asBuiltUnresolvableClauses: Array<{ id: string; clause: string }> = [];
     let prdAuditValidated = false;
     let asBuiltValidated = false;
+    let asBuiltAttemptId: string | undefined;
     let activePlanText = '';
     let asBuiltTypedFindings: readonly import('./as-built-contract.js').AsBuiltFinding[] | undefined;
     if (planPath && prdAuditRemediation && prdAuditVerdict) {
@@ -4383,6 +4856,7 @@ export class Conductor {
           }
         } else {
           asBuiltTypedFindings = stored.value.verdict.findings;
+          asBuiltAttemptId = stored.value.attemptId;
           for (const finding of stored.value.verdict.findings) {
             if (finding.class !== 'REMEDIABLE') continue;
             const resolution = typedAsBuiltResolution(finding.reference);
@@ -4591,13 +5065,18 @@ export class Conductor {
         // this finding: the former judges it a human decision, while the
         // latter binds it to already-authored work rather than plan growth.
         // Count both so the exact-match check below does not report the
-        // finding `Missing`. Sealed-artifact and publication dispositions
-        // sharing this early return keep their existing `Missing` reporting
-        // untouched.
+        // finding `Missing`. A sealed-artifact step disposition is the planner
+        // sending the finding to DECIDE, tasks or not (#3471): credit it and
+        // halt with it below, as #3320 does for task-free escalations.
+        // Publication keeps its existing `Missing` reporting.
+        const sealedEscalation = sealedArtifactGapIds.has(gap.id) &&
+          remediationDispositionAppendsToPlan(gap.disposition);
         if (
-          (gap.disposition === 'halt' || gap.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION) &&
+          (sealedEscalation || gap.disposition === 'halt' ||
+            gap.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION) &&
           asBuiltFindings.has(gap.id)
         ) {
+          if (sealedEscalation) escalatedAsBuiltGaps.push(gap);
           admittedAsBuiltFindingCounts.set(
             gap.id,
             (admittedAsBuiltFindingCounts.get(gap.id) ?? 0) + 1,
@@ -4768,6 +5247,7 @@ export class Conductor {
 
     let prdAuditBudget: RemediationGateAppendBudget | undefined;
     let asBuiltBudget: RemediationGateAppendBudget | undefined;
+    let appendedTaskIdsByGapId: ReadonlyMap<string, readonly string[]> | undefined;
     if (allTasks.length > 0 || prdAuditTasks.length > 0 || asBuiltTasks.length > 0) {
       try {
         prdAuditBudget = prdAuditCapEnforced
@@ -4811,6 +5291,7 @@ export class Conductor {
         if (appendResult.success) {
           appendAttempted = true;
           appendedTaskIds = appendResult.appendedIds;
+          appendedTaskIdsByGapId = appendResult.appendedIdsByGapId;
           const unreadable = await this.reloadPendingAsBuiltRemediationFindings();
           if (unreadable) {
             return { kind: 'halt', haltClass: 'needs-human', detail: unreadable };
@@ -5006,6 +5487,15 @@ export class Conductor {
               }
               return paths;
             };
+            const planTaskIds = new Set(parsePlanTaskBodies(planText).keys());
+            const existingTaskOwnerIds = (gap: RemediationGap): string[] | undefined => {
+              const recorded = resolvedExistingTaskIdsByGapId.get(gap.id);
+              if (recorded !== undefined || !hintSource.consolidatedManualTestFail) return recorded;
+              // Decision 8 skips the gate-local binding in a consolidated round,
+              // but the router still needs the owner to place the repair.
+              const bindings = resolveExistingTaskBindingsForAdmission(gap.tasks, planTaskIds);
+              return bindings.kind === 'resolved' ? bindings.ids : undefined;
+            };
             const routed = await routeAdmittedRound({
               admitted: routedFixes.map((gap) => {
                 const routedGap = gap as CriterionBoundRemediationGap;
@@ -5026,7 +5516,7 @@ export class Conductor {
                       summary: asBuiltRecordedFindings.get(gap.id)?.summary ?? gap.rationale,
                 };
                 const ownerTaskIds = gap.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION
-                  ? resolvedExistingTaskIdsByGapId.get(gap.id)
+                  ? existingTaskOwnerIds(gap)
                   : routedGap.parentTask === undefined
                     ? undefined
                     : String(routedGap.parentTask).split(',');
@@ -5065,6 +5555,8 @@ export class Conductor {
             };
             const priorSealed = await routedSealedAuthored(this.projectRoot, this.featureSlug, { cursor, config: this.config });
             const sealedAuthored = priorSealed ?? countAuthoredTaskHeadings(planText);
+            const fence = await checkRoundAdmissionFence(this.projectRoot, this.featureSlug, { roundId, kind: 'audit' });
+            if (fence !== undefined) return { kind: 'halt', haltClass: fence.fence ? 'mechanical' : 'needs-human', detail: fence.detail };
             const created = await createRouteRecord(this.projectRoot, this.featureSlug, {
               roundId, kind: 'audit', items: routed.items, allocation: routed.allocation, receipt, sealedAuthored,
               pendingAsBuiltFindings: [...this.pendingAsBuiltRemediationFindings.values()],
@@ -5078,7 +5570,7 @@ export class Conductor {
                 return 'persisted';
               },
             });
-            if (admission.kind !== 'admitted') return { kind: 'halt', haltClass: 'needs-human', detail: admission.detail };
+            if (admission.kind !== 'admitted') return { kind: 'halt', haltClass: admission.fence ? 'mechanical' : 'needs-human', detail: admission.detail };
             return { kind: 'route', target: 'build', hint: routed.hostHints[firstHost] ?? buildRemediationHint(routedFixes, hintSource.source, ''), evidence: `routed round ${roundId}` };
           }
         }
@@ -5093,9 +5585,34 @@ export class Conductor {
     // plan (some fixes + one halt) still surfaces the halt rather than
     // routing around it and losing the halt detail entirely.
     if (halts.length > 0) {
+      // A halt exits before existing-task bindings can be admitted and
+      // restaged.  Only successfully appended repairs have crossed an
+      // admission boundary at this point, so never reconcile those merely
+      // resolved bindings into durable as-built history.
+      const reconciled = this.asBuiltReconciliationResults(
+        typedPlan.value.dispositions,
+        asBuiltRecordedFindings,
+        asBuiltAttemptId,
+        new Map(),
+        appendedTaskIdsByGapId,
+      );
+      const reconciliationFault = await this.recordAsBuiltReconciliationResults(reconciled);
+      if (reconciliationFault !== undefined) return { kind: 'halt', haltClass: 'needs-human', detail: reconciliationFault };
+      const plannerHaltFindings = typedPlan.value.dispositions.flatMap((disposition): AsBuiltCaseFinding[] => {
+        if (disposition.reference.kind !== 'as-built-finding' || disposition.disposition !== 'halt') return [];
+        const finding = asBuiltRecordedFindings.get(disposition.reference.id);
+        return finding === undefined ? [] : [{
+          findingId: finding.finding, attemptId: asBuiltAttemptId ?? this.currentRunId ?? 'unknown-attempt',
+          class: finding.class, ...(finding.reference === undefined ? {} : { reference: finding.reference }),
+          summary: finding.summary,
+        }];
+      });
+      const plannerHaltReason = halts.map((gap) => `${gap.id} (${gap.category}: ${gap.rationale})`).join('; ');
+      const recordingFault = await this.recordAsBuiltNeedsHumanFindings(plannerHaltFindings, plannerHaltReason);
+      if (recordingFault !== undefined) return { kind: 'halt', haltClass: 'needs-human', detail: recordingFault };
       return {
         kind: 'halt',
-        detail: halts.map((g) => `${g.id} (${g.category}: ${g.rationale})`).join('; ') + droppedSuffix,
+        detail: plannerHaltReason + droppedSuffix,
       };
     }
     if (fixes.length > 0 && routedFixes.length === 0) {
@@ -5275,6 +5792,21 @@ export class Conductor {
             resolvedCount: admittedBaseline.resolvedCount ?? admission.baseline.resolvedCount,
           });
         }
+      }
+      // The append/restage transaction is the admission boundary.  Do not
+      // write a case for rejected, missing, failed-append, or failed-restage
+      // plans; a durable source means the repair was actually admitted.
+      const reconciled = this.asBuiltReconciliationResults(
+        typedPlan.value.dispositions,
+        asBuiltRecordedFindings,
+        asBuiltAttemptId,
+        resolvedExistingTaskIdsByGapId,
+        appendedTaskIdsByGapId,
+      );
+      const recordingFault = await this.recordAsBuiltReconciliationResults(reconciled);
+      if (recordingFault !== undefined) {
+        await reportRefusal(recordingFault);
+        return { kind: 'halt', haltClass: 'needs-human', detail: recordingFault };
       }
       // #647 D1: a remediation route into `build` can be a guaranteed no-op
       // when the appended/upserted rem-* task(s) are already evidence-
@@ -5598,13 +6130,13 @@ export class Conductor {
     const survivingObligation = reconciled.state.cases.find(isBuildReviewSettlementObligationCase);
     // ai-conductor:session-command-context=operator-only
     if (survivingObligation && survivingObligation.effect.kind !== 'none') {
-      const actionResolution = survivingObligation.effect.kind === 'action'
-        ? `; resolve with ${formatBuildReviewResolveCaseCommand({ feature: feature.feature, child: this.activeRegionChild, caseId: survivingObligation.id })}`
-        : '';
+      // Every surviving obligation is open, so resolve-case can retire it,
+      // whatever its effect kind (adr-2026-10-20 D7).
+      const resolution = `; resolve with ${formatBuildReviewResolveCaseCommand({ feature: feature.feature, child: this.activeRegionChild, caseId: survivingObligation.id })}`;
       await drainOutbox();
       return {
         kind: 'invalid',
-        reason: `clean PASS cannot settle open ${survivingObligation.effect.kind} case ${survivingObligation.id} (${survivingObligation.effect.status})${actionResolution}`,
+        reason: `clean PASS cannot settle open ${survivingObligation.effect.kind} case ${survivingObligation.id} (${survivingObligation.effect.status})${resolution}`,
       };
     }
     // /ai-conductor:session-command-context
@@ -5768,6 +6300,191 @@ export class Conductor {
     return true;
   }
 
+  /** Runs the common routed-exit effects; callers own subsequent navigation. */
+  private async continueRoutedExit(
+    slug: string,
+    execution: ExecutionChildTargetResolution & { readonly source: 'routed-host'; readonly roundId: RoundId },
+  ) {
+    const continued = await exitRoutedHostAndReconcile({
+      worktree: this.projectRoot,
+      slug,
+      roundId: execution.roundId,
+      host: execution.target.child,
+      events: this.events,
+      resolver: this.stepRunner.resolveRebaseConflict
+        ? (ctx) => this.stepRunner.resolveRebaseConflict!(ctx)
+        : undefined,
+      resolverCap: resolveRebaseResolutionAttempts(this.config),
+      persist: (event) => persistOnActiveEventSpine(this.events, event),
+      exit: this.requestRoutedExit,
+      reconcile: reconcileRounds,
+    });
+    if (continued.kind === 'exit-halted') {
+      const existing = await readFile(join(this.projectRoot, LOOP_HALT_MARKER), 'utf-8').catch(() => null);
+      if (existing?.trim()) {
+        const body = existing.trim();
+        const prUrl = await this.surfaceRemediationPr(body);
+        await this.emitLoopHalt(body, prUrl);
+      } else {
+        await this.haltChildRegionRefusal(continued.detail);
+      }
+      return 'halt' as const;
+    }
+    if (continued.next.kind === 'unavailable') {
+      await this.haltChildRegionRefusal(
+        `child ${execution.target.child} routed round reconciliation refused: ${continued.next.detail}`,
+      );
+      return 'halt' as const;
+    }
+    const admission = await admitQueuedRevalidation({
+      worktree: this.projectRoot,
+      slug,
+      reconciled: continued.next,
+    });
+    switch (admission.kind) {
+      case 'unavailable':
+        await this.haltChildRegionRefusal('cannot consume routed revalidation queue');
+        return 'halt' as const;
+      case 'stalled': {
+        if ('haltClass' in admission) {
+          await this.haltChildRegionRefusal(admission.detail, admission.haltClass);
+        } else {
+          const stall = await recordRoundStall(this.projectRoot, slug, admission, this.events);
+          await this.haltChildRegionRefusal(stall.detail, stall.haltClass ?? 'needs-human');
+        }
+        return 'halt' as const;
+      }
+      case 'admitted':
+      case 'none':
+      case 'busy':
+      case 'continue':
+        return { continued, admission };
+      default:
+        return assertNever(admission);
+    }
+  }
+
+  /**
+   * Complete a routed host exit from either the live build-review closure or
+   * the resumed parked boundary. The latter checks the verdict overlay so
+   * evidence from an earlier round must re-run, not exit.
+   */
+  private async continueRoutedHostExit(
+    state: ConductState,
+    indexOf: (name: StepName) => number,
+    requireSatisfiedRegion = false,
+  ): Promise<{ readonly index: number; readonly activeChild?: ActiveChildLifecycleTarget } | 'halt' | undefined> {
+    const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+    if (!slug || this.activeRegionChild === undefined) return undefined;
+    const execution = resolveExecutionChild(await this.resolveActiveChild(this.projectRoot, slug), slug);
+    if (execution.source !== 'routed-host' || execution.roundId === undefined || execution.target.child !== this.activeRegionChild) {
+      return undefined;
+    }
+    if (requireSatisfiedRegion) {
+      const verdicts = await this.readGateVerdictOverlay();
+      if (!CHILD_REGION_STEPS.every((step) => gateSatisfied(step, state, verdicts))) return undefined;
+    }
+
+    const result = await this.continueRoutedExit(slug, execution);
+    if (result === 'halt') return 'halt';
+    const { admission, continued } = result;
+    // Queue admission always wins over a return to whole-feature gates.
+    switch (admission.kind) {
+      case 'admitted': {
+        const next = await this.resolveActiveChild(this.projectRoot, slug);
+        const nextExecution = resolveExecutionChild(next, slug);
+        if (nextExecution.source !== 'revalidating' && nextExecution.source !== 'routed-host') {
+          await this.haltChildRegionRefusal('queued child was not admitted into a revalidate round');
+          return 'halt';
+        }
+        await this.activateChildRegionState(state, nextExecution.target.child, nextExecution.target.isLeaf);
+        return { index: indexOf('acceptance_specs'), activeChild: nextExecution.target };
+      }
+      case 'none':
+        if (
+          (
+            continued.next.kind === 'none' ||
+            continued.next.kind === 'aborted' ||
+            continued.next.kind === 'leaf-returned' ||
+            continued.next.kind === 'quiescent'
+          ) &&
+          !await routedRoundOpen(this.projectRoot, slug)
+        ) {
+          // returnToLeaf re-pends whole-feature gates in the root state file.
+          // Do not keep the former routed host's overlay or its CAS baseline.
+          await this.restoreWholeFeatureState(state);
+          return { index: indexOf('manual_test') };
+        }
+        break;
+      case 'busy':
+      case 'continue':
+        break;
+      default:
+        assertNever(admission);
+    }
+
+    // The exit may have admitted a following host. Rebind the overlay before
+    // selecting its first region gate.
+    const nextCursor = await this.resolveActiveChild(this.projectRoot, slug);
+    const next = resolveExecutionChild(nextCursor, slug);
+    if (next.source === 'routed-host' || next.source === 'revalidating' || next.source === 'cursor') {
+      await this.activateChildRegionState(state, next.target.child, next.target.isLeaf);
+      return { index: indexOf('acceptance_specs'), activeChild: next.target };
+    }
+    await this.haltChildRegionRefusal(await this.renderChildCursorRefusal(nextCursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
+    return 'halt';
+  }
+
+  /**
+   * A selector parking decision is durable unfinished routing work, not a
+   * successful terminal state.  Give it the same bounded, event-spine-backed
+   * diagnostic as an in-loop round stall before returning control to daemon.
+   */
+  private async stopParkedForRouting(
+    cause: { readonly kind: 'parked' | 'completion-refused'; readonly reason: string },
+    state: ConductState,
+  ): Promise<void> {
+    const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+    if (!slug) return;
+
+    const [affected, marker, queue, leaf] = await Promise.all([
+      diagnoseAffectedRounds(this.projectRoot, slug),
+      readRepairMarker(this.projectRoot, slug),
+      readRevalidationQueue(this.projectRoot, slug),
+      resolveSealedLeaf(this.projectRoot),
+    ]);
+    const rounds = affected.kind === 'affected' ? affected.rounds : [];
+    const parked = cause.kind === 'parked'
+      ? marker.kind === 'marker'
+        ? marker.marker.host === leaf
+          ? { kind: 'leaf-host' as const, subject: `host ${marker.marker.host}` }
+          : { kind: 'child' as const, subject: `host ${marker.marker.host}` }
+        : { kind: 'queue' as const, subject: queue.kind === 'queue' && queue.queue.entries.length > 0
+          ? `child ${queue.queue.entries[0]!.child}`
+          : 'routing work' }
+      : undefined;
+    const detail = cause.kind === 'completion-refused'
+      ? `completion refused: ${cause.reason}`
+      : `parked ${parked!.kind} ${parked!.subject}: ${cause.reason}`;
+    // `advanceTail` optimistically leaves DONE at selector convergence. A
+    // later completion fence can still reject an open routed round; do not
+    // let the daemon observe that provisional marker as terminal success.
+    if (cause.kind === 'completion-refused') {
+      await unlinkFile(join(this.projectRoot, DONE_MARKER)).catch(() => {});
+    }
+    const stall = await recordRoundStall(this.projectRoot, slug, {
+      kind: 'stalled',
+      detail,
+      rounds,
+    }, this.events);
+    const existing = await readFile(join(this.projectRoot, LOOP_HALT_MARKER), 'utf8').catch(() => undefined);
+    const reason = existing?.trim().split('\n')[0] || stall.detail;
+    if (!existing?.trim()) {
+      await this.writeHaltMarker(`${stall.detail}\n`, stall.haltClass ?? 'needs-human');
+    }
+    await this.emitLoopHalt(reason);
+  }
+
   /** Emit a HALT event with the most recently advanced conductor step. */
   private async emitLoopHalt(reason: string, prUrl?: string): Promise<void> {
     // While the loop is active, the breadcrumb identifies the step that is
@@ -5797,9 +6514,13 @@ export class Conductor {
   }
 
   /** Halt a deterministic SHIP-validator precondition fault in either dispatch path. */
-  private async haltForValidatorFault(state: ConductState, reason: string): Promise<void> {
+  private async haltForValidatorFault(
+    state: ConductState,
+    reason: string,
+    haltClass: 'mechanical' | 'needs-human' = 'mechanical',
+  ): Promise<void> {
     await this.closeOpenExecutions();
-    await this.writeHaltMarker(reason + '\n', 'mechanical');
+    await this.writeHaltMarker(reason + '\n', haltClass);
     await this.persistPendingStateChanges(state, 'persist conductor transition');
     await this.emitLoopHalt(reason);
   }
@@ -5813,10 +6534,11 @@ export class Conductor {
     state: ConductState,
     hintSource: RemediationHintSource,
     detail: string,
+    haltClass: 'mechanical' | 'needs-human' = 'mechanical',
   ): Promise<{
     kind: 'halt';
     detail: string;
-    haltClass: 'mechanical';
+    haltClass: 'mechanical' | 'needs-human';
   }> {
     const stallEvidence = hintSource.source === 'build-stall' ||
       hintSource.source === 'build_stall' ||
@@ -5829,8 +6551,8 @@ export class Conductor {
     const reason = stallQuestion === null || stallQuestion === undefined || stallQuestion === ''
       ? detail
       : `${stallQuestion}\n\n${detail}`;
-    await this.haltForValidatorFault(state, reason);
-    return { kind: 'halt', detail: reason, haltClass: 'mechanical' };
+    await this.haltForValidatorFault(state, reason, haltClass);
+    return { kind: 'halt', detail: reason, haltClass };
   }
 
   /** Resolve the strict merged-history verdict for the recorded implementation PR. */
@@ -6762,7 +7484,7 @@ export class Conductor {
     return checkStepCompletion(this.projectRoot, 'build', { ...ctx, unverifiedDoneWhenNudgeSpent: true });
   }
 
-  async run(): Promise<OperatorParkedTermination | undefined> {
+  async run(): Promise<OperatorParkedTermination | PreemptedTermination | undefined> {
     this.shutdownRequested = false;
     await this.transcriptRetention.ready();
     // #788 regression guard: the phase-active marker creates `.pipeline/`
@@ -6828,24 +7550,13 @@ export class Conductor {
       // recoverable restack into an unrelated rebase HALT.
       const resumeSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
       let routedLeafBuildResume = false;
+      let resumedAtWholeFeature = false;
       let routedHostEntryStep: RegionGate | undefined;
       if (resumeSlug) {
-        // Receipt recovery is meaningful only for a routed stack.  Keep the
-        // N=1 path byte-for-byte free of route-ref probes.
-        if (this.config.stacked_prs?.route_whole_feature_fixes === true && await hasDurableChildState(this.projectRoot, resumeSlug)) {
-          try {
-            const receiptCursor = await this.resolveActiveChild(this.projectRoot, resumeSlug);
-            const routing = { cursor: receiptCursor, config: this.config };
-            if (routingEligible(receiptCursor, this.config)) {
-              const rebuilt = await rebuildLedgerFromReceipts(this.projectRoot, resumeSlug, routing);
-              if (rebuilt.kind === 'unreadable') throw new Error('route receipts are unreadable');
-              await reconcileReceiptLedger(this.projectRoot, resumeSlug, routing);
-            }
-          } catch {
-            await this.writeHaltMarker('routed receipt ledger recovery is unavailable; inspect route records before resuming\n', 'needs-human');
-            return;
-          }
-        }
+        // Preflight owns durable routing reconciliation, including draining a
+        // sole leaf-return close whose marker was deliberately removed.  It
+        // must run before receipt recovery: the pre-close cursor can no
+        // longer describe the settled leaf state.
         const preflight = await this.stackPreflight({
           worktree: this.projectRoot,
           slug: resumeSlug,
@@ -6866,6 +7577,40 @@ export class Conductor {
           },
         });
         if (preflight.kind === 'halted' || preflight.kind === 'unavailable') return;
+        // The preflight may have re-pended feature or region gates through a
+        // separate writer. Refresh only clean fields before the resume path
+        // computes its next transition or enters a child region.
+        await this.adoptDurableState(state);
+        // A closed routed round alone is ordinary history. Only returnToLeaf
+        // leaves a durable leaf-return receipt whose root state is authoritative.
+        // Other stacked resumes must still enter their active child's overlay.
+        const routingEnabled = this.config.stacked_prs?.route_whole_feature_fixes === true;
+        const hasChildren = routingEnabled && await hasDurableChildState(this.projectRoot, resumeSlug);
+        const roundIsOpen = hasChildren ? await routedRoundOpen(this.projectRoot, resumeSlug) : false;
+        if (hasChildren && !roundIsOpen && await this.hasSettledRoutedLeafReturn(resumeSlug)) {
+          await this.restoreWholeFeatureState(state);
+          resumedAtWholeFeature = true;
+        }
+        // Receipt recovery is meaningful only for a routed stack.  Resolve
+        // its cursor after preflight has settled any recorded round so a
+        // leaf-return close resumes as ordinary whole-feature validation.
+        if (
+          hasChildren
+          && roundIsOpen
+        ) {
+          try {
+            const receiptCursor = await this.resolveActiveChild(this.projectRoot, resumeSlug);
+            const routing = { cursor: receiptCursor, config: this.config };
+            if (routingEligible(receiptCursor, this.config)) {
+              const rebuilt = await rebuildLedgerFromReceipts(this.projectRoot, resumeSlug, routing);
+              if (rebuilt.kind === 'unreadable') throw new Error('route receipts are unreadable');
+              await reconcileReceiptLedger(this.projectRoot, resumeSlug, routing);
+            }
+          } catch {
+            await this.writeHaltMarker('routed receipt ledger recovery is unavailable; inspect route records before resuming\n', 'needs-human');
+            return;
+          }
+        }
         if (preflight.kind === 'navigate-leaf-to-build' || preflight.kind === 'navigate-host') {
           // Admission wrote the route and marker before its normal leaf
           // rewind.  A crash in that gap is recovered by rewinding the leaf's
@@ -6886,7 +7631,7 @@ export class Conductor {
           }
         }
       }
-      if (!routedLeafBuildResume && !await this.activateChildRegionStateForResume(state)) return;
+      if (!routedLeafBuildResume && !resumedAtWholeFeature && !await this.activateChildRegionStateForResume(state)) return;
       // A restarted process has no `lastRebaseOutcome`, so the durable
       // operation descriptor is the only authority that can prevent it from
       // selecting finish across an interrupted/inconsistent rebase write.
@@ -7669,14 +8414,16 @@ export class Conductor {
     // completion must continue through the tail without trying to close again.
     let activeChildRequiresClosure = false;
     let parkedAtOperatorBoundary = false;
+    let preemptedAtBoundary = false;
     // Routing has durable work but no runnable whole-feature gate.  This is a
     // resumable parking boundary, not loop convergence and not a failure.
     let parkedForRouting = false;
     const stopAtOperatorParkBoundary =
       async (
-        alreadyObserved = false,
+        _alreadyObserved = false,
         observedBoundary?: SchedulingUnitRef,
-      ): Promise<OperatorParkedTermination | undefined> => {
+        preemptionBoundary?: SchedulingUnitRef,
+      ): Promise<OperatorParkedTermination | PreemptedTermination | undefined> => {
         if (
           !this.daemon ||
           this.featureSlug === undefined ||
@@ -7685,27 +8432,37 @@ export class Conductor {
           return undefined;
         }
 
-        const operatorParkRequested = alreadyObserved || await this.operatorParkBoundary().catch(() => true);
-        if (!operatorParkRequested) {
-          return undefined;
-        }
-
         const boundary: SchedulingUnitRef = observedBoundary ?? lastSettledUnit ?? { kind: 'pre-first-unit' };
+        const operatorParkRequested = await this.rawOperatorParkBoundary?.().catch(() => true) ?? false;
         // A declined attempt leaves the owning step in_progress, but the
         // admitted execution window still needs its truthful interruption
         // terminal. Close it before announcing the operator boundary so the
         // boundary is the event-stream terminal, rather than letting finally
         // append step_interrupted after it.
+        if (operatorParkRequested || (_alreadyObserved && !this.preemptionRequested?.())) {
+          await this.closeOpenExecutions();
+          await emitTracked({
+            type: 'operator_park_boundary',
+            featureSlug: this.featureSlug,
+            boundary,
+          });
+          process.off('SIGINT', sigintHandler);
+          process.off('SIGTERM', sigterm);
+          parkedAtOperatorBoundary = true;
+          return { kind: 'operator-parked', boundary };
+        }
+
+        if (!this.preemptionRequested?.()) return undefined;
         await this.closeOpenExecutions();
         await emitTracked({
-          type: 'operator_park_boundary',
+          type: 'preemption_boundary',
           featureSlug: this.featureSlug,
-          boundary,
+          boundary: preemptionBoundary ?? boundary,
         });
         process.off('SIGINT', sigintHandler);
         process.off('SIGTERM', sigterm);
-        parkedAtOperatorBoundary = true;
-        return { kind: 'operator-parked', boundary };
+        preemptedAtBoundary = true;
+        return { kind: 'preempted', boundary: preemptionBoundary ?? boundary };
       };
     // Late declarations cannot reopen existing work, but their refusal must be
     // visible even when resume/settled-state short circuits skip the step loop.
@@ -7764,8 +8521,9 @@ export class Conductor {
             }
             const execution = resolveExecutionChild(cursor, slug);
             if (execution.source === 'cursor' || execution.source === 'routed-host' || execution.source === 'revalidating') {
-              const target: ActiveChildLifecycleTarget = execution.target;
-              if (!await this.enterRoutedHostRegion(execution, slug, state)) return;
+              const enteredExecution = await this.enterRoutedHostRegion(execution, slug, state, cursor);
+              if (!enteredExecution) return;
+              const target: ActiveChildLifecycleTarget = enteredExecution.target;
               const entered = await this.enterChildRegion(
                 this.projectRoot,
                 slug,
@@ -7782,8 +8540,23 @@ export class Conductor {
               // A routed host already owns its closure, but it still needs its
               // BUILD-region exit.  Only revalidation has a separate exit
               // protocol at this point in the lifecycle.
-              activeChildRequiresClosure = execution.source === 'routed-host'
-                || (execution.source === 'cursor' && !target.isLeaf);
+              activeChildRequiresClosure = enteredExecution.source === 'routed-host'
+                || (enteredExecution.source === 'cursor' && !target.isLeaf);
+              // Revalidation restages exactly the gates invalidated by its
+              // queue entry.  The loop may have arrived at a later gate (for
+              // example after rebase), so return to the earliest pending
+              // region gate instead of silently skipping it positionally.
+              const firstPendingRegionGate = CHILD_REGION_STEPS.find((gate) =>
+                state[gate] !== 'done' && state[gate] !== 'skipped',
+              );
+              if (
+                execution.source === 'revalidating' &&
+                firstPendingRegionGate !== undefined &&
+                indexOf(firstPendingRegionGate) < i
+              ) {
+                i = indexOf(firstPendingRegionGate) - 1;
+                continue stepLoop;
+              }
             } else if (cursor.kind !== 'no-child') {
               await this.haltChildRegionRefusal(await this.renderChildCursorRefusal(cursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
               return;
@@ -8307,7 +9080,7 @@ export class Conductor {
           if (parkedMember) {
             const parked = await stopAtOperatorParkBoundary(true, {
               kind: 'attempt', step: step.name, attempt: parkedMember.attempt ?? 1, member: parkedMember.name,
-            });
+            }, { kind: 'group', name: step.name });
             if (parked) return parked;
           }
           // State keys are already written inside runParallelGroupViaCore.
@@ -9444,6 +10217,12 @@ export class Conductor {
                 asBuiltRemediationEnabled &&
                 asBuiltOutcome.kind === 'blocked-remediable' &&
                 !consolidatedKickbackOwnsThisRound;
+              // Planning has side effects: under routed repairs it admits a
+              // round. When the merge below owns this round, it is the only
+              // planning call, or its plan is refused against the round that
+              // an earlier call in this same join just opened.
+              const mergeOwnsRemediationPlanning =
+                consolidatedKickbackOwnsThisRound && asBuiltOutcome.kind === 'blocked-remediable';
               if (remediableAsBuiltRoute) {
                 // The join bypasses the serial as-built halt site, so it
                 // must consume the same single-use gate-scoped no-op
@@ -9583,6 +10362,7 @@ export class Conductor {
                   remediationNoPlanReason = remediationOutcome.reason;
                 }
               } else if (
+                !mergeOwnsRemediationPlanning &&
                 this.daemon &&
                 prdAuditUnsatisfied &&
                 (prdAuditRoute?.kind === 'over-scope-refusal-rework'
@@ -9643,7 +10423,8 @@ export class Conductor {
               } else if (
                 this.daemon &&
                 prdAuditUnsatisfied &&
-                prdAuditRoute?.kind === 'over-scope-refusal-rework'
+                prdAuditRoute?.kind === 'over-scope-refusal-rework' &&
+                !(mergeOwnsRemediationPlanning && await refusalReworkAllowanceAvailable())
               ) {
                 await haltGroupedRefusalRework();
                 return;
@@ -9676,6 +10457,26 @@ export class Conductor {
                     asBuiltOutcome.kind === 'invalid'
                     ? renderAsBuiltBlockedFindingDetail(asBuiltOutcome.findings)
                     : '');
+                const recordingFault = asBuiltOutcome.kind === 'blocked-design'
+                  ? await this.recordAsBuiltNeedsHumanFindings(
+                    (asBuiltOutcome.findings ?? []).map((finding) => ({
+                      findingId: finding.id,
+                      attemptId: this.currentRunId ?? 'unknown-attempt',
+                      class: finding.class,
+                      reference: finding.reference,
+                      summary: finding.summary,
+                    })),
+                    reason,
+                  )
+                  : undefined;
+                if (recordingFault !== undefined) {
+                  await this.writeHaltMarker(recordingFault + '\n', 'needs-human');
+                  await closeClassifiedPassingMembers();
+                  await this.emitLoopHalt(recordingFault);
+                  process.off('SIGINT', sigintHandler);
+                  if (!this.daemon) process.off('SIGTERM', sigterm);
+                  return;
+                }
                 await this.writeHaltMarker(
                   reason + '\n',
                   asBuiltOutcome.kind === 'plan-gap-undelivered' ? 'plan-gap' : 'needs-human',
@@ -10296,6 +11097,7 @@ export class Conductor {
           let settlementGrowth: PlanGrowth | undefined;
           let growthCap: number | undefined;
           let settlementAuthoredSource: 'plan' | 'ledger' | 'unresolved' | undefined;
+          let routedSettlement = false;
           try {
             settlementLedger = await readKickbackLedger(this.projectRoot);
             if (
@@ -10307,6 +11109,7 @@ export class Conductor {
             const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
             const cursor = slug ? await this.resolveActiveChild(this.projectRoot, slug) : undefined;
             const execution = cursor && slug ? resolveExecutionChild(cursor, slug) : undefined;
+            routedSettlement = execution?.source === 'routed-host';
             // A routed round owns a receipt instead of a flat pendingRepair.
             // Either durable admission shape needs its budget settled before
             // the provider can receive BUILD.
@@ -10357,9 +11160,14 @@ export class Conductor {
           if (settlement?.kind === 'exhausted' || settlementFailure !== undefined) {
             const gate = settlement?.kind === 'exhausted' ? settlement.gate : 'prd_audit';
             const allowance = settlement?.kind === 'exhausted' ? settlement.allowance : 'growth';
+            const routedExhaustion = settlement?.kind === 'exhausted' && 'round' in settlement
+              ? settlement
+              : undefined;
+            const refusedRound = routedExhaustion?.round;
             const pendingTasks = settlementLedger?.pendingRepair?.taskIds ?? [];
             const prdAuditCriteria = settlementLedger?.pendingRepair?.prdAuditCriteria ?? [];
-            const pendingAsBuiltFindings = settlementLedger?.pendingAsBuiltRemediationFindings ?? [];
+            const legacyPendingAsBuiltFindings = settlementLedger?.pendingAsBuiltRemediationFindings ?? [];
+            const pendingAsBuiltFindings = refusedRound?.pendingAsBuiltFindings ?? legacyPendingAsBuiltFindings;
             const asBuiltFindingIds = pendingAsBuiltFindings.map((finding) => finding.finding);
             const haltingFindings = gate === 'architecture_review_as_built'
               ? asBuiltFindingIds
@@ -10370,61 +11178,94 @@ export class Conductor {
             const otherFindings = gate === 'architecture_review_as_built'
               ? prdAuditCriteria
               : asBuiltFindingIds;
-            const findings = haltingFindings.length > 0
-              ? `Findings (${gate}): ${haltingFindings.join(', ')}`
-              : pendingTasks.length > 0
-              ? `Pending remediation tasks: ${pendingTasks.join(', ')}`
-              : 'Pending remediation findings are unavailable because the repair record is malformed.';
+            const renderFindings = (): string => {
+              if (refusedRound !== undefined) return `Routed round ${refusedRound.roundId} findings: ${refusedRound.findingIds.join(', ')}`;
+              if (settlementFailure !== undefined && routedSettlement) return `Pending remediation findings are unavailable: ${settlementFailure}.`;
+              if (haltingFindings.length > 0) return `Findings (${gate}): ${haltingFindings.join(', ')}`;
+              if (pendingTasks.length > 0) return `Pending remediation tasks: ${pendingTasks.join(', ')}`;
+              return 'Pending remediation findings are unavailable because the repair record is malformed.';
+            };
+            const renderRoutedTasks = (): string => {
+              if (refusedRound === undefined) return '';
+              const taskLines: string[] = [];
+              if (refusedRound.remTaskIds.length > 0) {
+                taskLines.push(`Routed round ${refusedRound.roundId} remediation tasks: ${refusedRound.remTaskIds.join(', ')}`);
+              }
+              if (refusedRound.existingTaskIds.length > 0) {
+                taskLines.push(`Routed round ${refusedRound.roundId} repairs existing tasks: ${refusedRound.existingTaskIds.join(', ')}`);
+              }
+              return taskLines.join('\n');
+            };
             const alsoPending = otherFindings.length > 0
               ? `Also pending (${otherGate}): ${otherFindings.join(', ')}`
               : '';
-            const asBuiltFindingDetail = pendingAsBuiltFindings.length > 0
-              ? `\n\nBlocking findings:\n${pendingAsBuiltFindings.map((finding) =>
-                  `${finding.finding} (${finding.class}; ${finding.reference === undefined
-                    ? finding.governingClause
-                    : finding.reference.kind === 'plan-task'
-                      ? `plan task ${finding.reference.taskId}`
-                      : `${finding.reference.stem} decision ${finding.reference.decision}`}): ${finding.summary}`,
-                ).join('; ')}`
-              : '';
+            const renderAsBuiltFindingDetail = (): string => {
+              if (refusedRound !== undefined) {
+                if (refusedRound.pendingAsBuiltFindings.length === 0) return '';
+                return `\n\nBlocking findings:\n${refusedRound.pendingAsBuiltFindings.map((finding) =>
+                  `${finding.finding} (${finding.class}; ${finding.governingClause}): ${finding.summary}`,
+                ).join('; ')}`;
+              }
+              if (legacyPendingAsBuiltFindings.length === 0) return '';
+              return `\n\nBlocking findings:\n${legacyPendingAsBuiltFindings.map((finding) =>
+                `${finding.finding} (${finding.class}; ${finding.reference === undefined
+                  ? finding.governingClause
+                  : finding.reference.kind === 'plan-task'
+                    ? `plan task ${finding.reference.taskId}`
+                    : `${finding.reference.stem} decision ${finding.reference.decision}`}): ${finding.summary}`,
+              ).join('; ')}`;
+            };
             const fallbackLapCap = remediationLapCapForGate(
               gate, this.config, MAX_KICKBACKS_PER_GATE, state.complexity_tier,
             );
             const remediationAllowance = gate === 'prd_audit' || gate === 'architecture_review_as_built'
               ? resolveRemediationLapAllowance(gate, this.config, state.complexity_tier)
               : undefined;
-            const growthView = settlementGrowth === undefined || growthCap === undefined || settlementAuthoredSource === undefined
-              ? undefined
-              : withPendingGrowth({
-                  ...settlementGrowth,
-                  cap: growthCap,
-                  capSource: settlementLedger?.effectiveGrowthCap === undefined
-                    ? 'config-derived' as const
-                    : 'raised' as const,
-                  authoredSource: settlementAuthoredSource,
-                }, settlementLedger?.pendingRepair);
-            const detail = settlementFailure === undefined
-              ? renderKickbackBudgetView(
-                  settlementLedger?.gates[gate],
-                  gate,
-                  fallbackLapCap,
-                  growthView,
-                  undefined,
-                  undefined,
-                  0,
-                  remediationAllowance,
-                )
-              : `Kickback budget (${gate}): ${allowance} allowance unavailable (${settlementFailure})`;
+            const growthView = refusedRound !== undefined
+              ? withPendingGrowth({
+                  authored: refusedRound.growthAuthored,
+                  added: refusedRound.settledAdded,
+                  byGate: refusedRound.settledGrowthByGate,
+                  remaining: Math.max(0, refusedRound.growthCap - refusedRound.settledAdded),
+                  cap: refusedRound.growthCap,
+                  capSource: refusedRound.growthCapSource,
+                  authoredSource: refusedRound.growthAuthoredSource,
+                }, { charges: refusedRound.charges })
+              : settlementGrowth === undefined || growthCap === undefined || settlementAuthoredSource === undefined
+                ? undefined
+                : withPendingGrowth({
+                    ...settlementGrowth,
+                    cap: growthCap,
+                    capSource: settlementLedger?.effectiveGrowthCap === undefined
+                      ? 'config-derived' as const
+                      : 'raised' as const,
+                    authoredSource: settlementAuthoredSource,
+                  }, settlementLedger?.pendingRepair);
+            const renderBudgetDetail = (): string => {
+              if (settlementFailure !== undefined) return `Kickback budget (${gate}): ${allowance} allowance unavailable (${settlementFailure})`;
+              return renderKickbackBudgetView(
+                settlementLedger?.gates[gate], gate, fallbackLapCap, growthView, undefined, undefined, 0, remediationAllowance,
+              );
+            };
+            const findings = renderFindings();
+            const routedTasks = renderRoutedTasks();
+            const asBuiltFindingDetail = renderAsBuiltFindingDetail();
+            const detail = renderBudgetDetail();
+            const capEvidence = refusedRound === undefined
+              ? {
+                  consumed: allowance === 'laps'
+                    ? settlementLedger?.gates[gate]?.laps ?? fallbackLapCap
+                    : settlementGrowth?.added ?? growthCap ?? 0,
+                  limit: allowance === 'laps'
+                    ? settlementLedger?.gates[gate]?.effectiveLapCap ?? fallbackLapCap
+                    : growthCap ?? 0,
+                }
+              : refusedRound.capEvidence;
 
             let generation: string | undefined;
             try {
               const capEntry = await recordKickbackCapEvidence(this.projectRoot, gate, {
-                consumed: allowance === 'laps'
-                  ? settlementLedger?.gates[gate]?.laps ?? fallbackLapCap
-                  : settlementGrowth?.added ?? growthCap ?? 0,
-                limit: allowance === 'laps'
-                  ? settlementLedger?.gates[gate]?.effectiveLapCap ?? fallbackLapCap
-                  : growthCap ?? 0,
+                ...capEvidence,
                 latestReason: findings,
                 allowance,
               });
@@ -10436,7 +11277,7 @@ export class Conductor {
             }
             const reason = this.withActiveChild(
               `BUILD dispatch halted: ${gate} ${allowance} allowance exhausted.\n` +
-              `${detail}\n${findings}${alsoPending === '' ? '' : `\n${alsoPending}`}${asBuiltFindingDetail}\n` +
+              `${detail}\n${findings}${routedTasks === '' ? '' : `\n${routedTasks}`}${alsoPending === '' ? '' : `\n${alsoPending}`}${asBuiltFindingDetail}\n` +
               renderKickbackRecoveryHint({
                 slug: state.feature_desc,
                 gate,
@@ -10544,7 +11385,7 @@ export class Conductor {
             const execution = resolveExecutionChild(await this.resolveActiveChild(this.projectRoot, slug), slug);
             if (execution.source === 'routed-host' && execution.roundId !== undefined) {
               const route = await readRouteRecord(this.projectRoot, slug, execution.roundId);
-              const workOrder = route.kind === 'record' && route.record.kind === 'operator'
+              const workOrder = route.kind === 'record'
                 ? route.record.allocation[execution.target.child]?.retryHint
                 : undefined;
               if (workOrder && !retryHint?.includes(workOrder)) retryHint = [retryHint, workOrder].filter(Boolean).join('\n\n');
@@ -11127,27 +11968,6 @@ export class Conductor {
                 PROTECTED_ARTIFACT_HALT_CLASS,
               );
             }
-            // T7 invariant: EVERY build-step exit path records
-            // `lastResolvedCount`. This exit short-circuits before any build
-            // dispatch, so none of the T7 stamp sites further below are
-            // reached — and without a stamp here the sidecar keeps whatever
-            // stale (typically 0) count it had while the live count still
-            // counts `Task:`-trailered commits already on the branch. That
-            // makes daemon-cli's `isProgressReKickEligible`
-            // (`liveResolvedCount > lastResolvedCount`) permanently true for
-            // a feature halted at the seal, so the daemon re-dispatches it
-            // forever — a tight spin bounded only by the IN-MEMORY per-run
-            // progress-re-kick dispatch ceiling, which resets on every daemon
-            // restart. Recording the count on this exit is the honest reading
-            // of the predicate's own contract: this dispatch ended without
-            // making forward progress, so it must not earn a re-kick.
-            if (step.name === 'build') {
-              // Re-read fresh from disk rather than writing the possibly-
-              // stale in-memory snapshot — same reason as the other T7 stamps.
-              const freshEvidence = await createTaskEvidence(this.projectRoot);
-              freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot, this.activeRegionChild);
-              await freshEvidence.write();
-            }
           } else
           try {
             const dispatchIdentityArmed =
@@ -11256,6 +12076,7 @@ export class Conductor {
                 })();
               }
             }
+            if (step.name === 'build_review' && !missingWorktree) await this.settlePreservedSuiteProof(state);
             result =
               missingWorktree ??
               (step.name === 'complexity'
@@ -11363,12 +12184,6 @@ export class Conductor {
           // pre-existing terminal routing without retry or failure accounting.
           if (result.pendingRepairSettlementHalt) return;
 
-          if (step.name === 'build') {
-            const freshEvidence = await createTaskEvidence(this.projectRoot);
-            freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot, this.activeRegionChild);
-            await freshEvidence.write();
-          }
-
           // A routed BUILD owns the terminal claim boundary.  No parser or
           // provider output gets to move a ref: parsing, immutable-tree
           // verification, the fenced reroute and worktree synchronization are
@@ -11397,7 +12212,39 @@ export class Conductor {
               process.off('SIGTERM', sigterm);
               return;
             }
-            if (settled.kind === 'failed') result = { ...result, success: false, output: settled.detail };
+            if (settled.kind === 'failed') {
+              // A rejected prerequisite claim is a completed, region-local
+              // BUILD attempt.  It must retain its precise settlement detail
+              // without falling through to the generic retry-exhaustion HALT:
+              // the open round remains on this host for the next builder.
+              const [headAfter, treeAfter, resolvedAfter, outcomeStore] = await Promise.all([
+                currentCommitSha(this.projectRoot),
+                currentTreeHash(this.projectRoot),
+                countResolvedTasks(this.projectRoot, this.activeRegionChild),
+                readBuildOutcome(this.projectRoot),
+              ]);
+              const note = [settled.detail];
+              await this.recordBuildOutcome({
+                terminalOutcome: 'failed',
+                reason: 'routed-prerequisite-claim',
+                note,
+                gate: null,
+                rung: buildOutcomeRung(result, esc),
+                treeBefore: treeHashBeforeBuild,
+                treeAfter,
+                resolvedBefore: resolvedTasksBefore,
+                resolvedAfter,
+                headBefore: headShaBeforeBuild,
+                headAfter,
+                outcomeStore,
+              });
+              // Keep this rejected claim in this step's ordinary failure
+              // flow: it consumes the host region's retry allowance, emits
+              // the normal retry event, and revisits the operator-park
+              // boundary before another builder dispatch.  Re-entering
+              // `stepLoop` would reset the local `attempt` counter.
+              result = { ...result, success: false, output: settled.detail };
+            }
           }
 
           // An end_attempt policy is an ordinary failed provider attempt: it
@@ -11627,30 +12474,19 @@ export class Conductor {
               const outcomeStore = await readBuildOutcome(this.projectRoot);
               const note = result.output ? result.output.split('\n').slice(-200) : undefined;
               const gate = await pendingBuildKickbackGate();
-              await writeBuildOutcomeBestEffort(this.projectRoot, {
-                ...outcomeStore,
-                records: [
-                  ...outcomeStore.records,
-                  {
-                    outcome: classifyBuildSettle({
-                      treeBefore: treeHashBeforeBuild,
-                      treeAfter,
-                      resolvedBefore: resolvedTasksBefore,
-                      resolvedAfter,
-                    }),
-                    terminalOutcome: 'no-verdict',
-                    gate,
-                    verdict: gate === null ? null : false,
-                    rung: buildOutcomeRung(result, esc),
-                    treeBefore: treeHashBeforeBuild,
-                    treeAfter,
-                    headBefore: headShaBeforeBuild,
-                    headAfter,
-                    note,
-                    category: await resolveBuildOutcomeCategory(this.projectRoot, note),
-                    reason: 'authFailure',
-                  },
-                ],
+              await this.recordBuildOutcome({
+                terminalOutcome: 'no-verdict',
+                reason: 'authFailure',
+                note,
+                gate,
+                rung: buildOutcomeRung(result, esc),
+                treeBefore: treeHashBeforeBuild,
+                treeAfter,
+                resolvedBefore: resolvedTasksBefore,
+                resolvedAfter,
+                headBefore: headShaBeforeBuild,
+                headAfter,
+                outcomeStore,
               });
             };
             if (isAuthorizedRecoveryTrial) {
@@ -11847,7 +12683,9 @@ export class Conductor {
                 });
                 continue;
               }
-              const reason = `FINISH publication retry exhausted: ${route.reason}`;
+              const reason =
+                `FINISH publication retry exhausted: ${route.reason}` +
+                (route.detail === undefined ? '' : ` Detail: ${route.detail}`);
               await this.saveConductorStepStatus(state, 'finish', 'failed');
               await this.haltSerialExecution({
                 reason,
@@ -11994,6 +12832,7 @@ export class Conductor {
                   renderExhaustedMechanicalBuildReviewHalt(
                     mechanicalEntry ?? { mechanicalFaults: 0 },
                     aggregateRaw,
+                    this.activeRegionChild,
                   ),
                 );
                 const aggregate = parseBuildReviewAggregate(aggregateRaw);
@@ -12977,16 +13816,6 @@ export class Conductor {
                 }
 
                 if (bpCeilingHit) {
-                  // T7: stamp the ending resolved count on this park exit too
-                  // — every build-step exit path records lastResolvedCount,
-                  // not just success. Re-read fresh from disk (see the
-                  // success-exit comment above) so this doesn't clobber
-                  // stamps written directly to the sidecar elsewhere.
-                  if (step.name === 'build') {
-                    const freshEvidence = await createTaskEvidence(this.projectRoot);
-                    freshEvidence.lastResolvedCount = resolvedTasksAfter;
-                    await freshEvidence.write();
-                  }
                   const reason = `build progressing but hit absolute attempt ceiling ${bpCeilingValue}`;
                   state[step.name] = 'failed';
                   await this.haltSerialExecution({
@@ -13059,17 +13888,6 @@ export class Conductor {
                       })
                     : { parked: false };
                   if (parkResult.parked) {
-                    // T7: stamp the ending resolved count on this park exit
-                    // too — every build-step exit path records
-                    // lastResolvedCount, not just success. Re-read fresh
-                    // from disk (see the success-exit comment above) so this
-                    // doesn't clobber stamps written directly to the
-                    // sidecar elsewhere.
-                    if (step.name === 'build') {
-                      const freshEvidence = await createTaskEvidence(this.projectRoot);
-                      freshEvidence.lastResolvedCount = resolvedTasksAfter;
-                      await freshEvidence.write();
-                    }
                     const reason =
                       `auto-parked: empty/missing plan` +
                       ` — unpark with \`conduct daemon unpark ${slug}\``;
@@ -13427,21 +14245,6 @@ export class Conductor {
                 }
                 continue;
               }
-              // T7: stamp the ending resolved count on this exit too — the
-              // fixed-budget-exhausted / non-daemon-park failure exit is
-              // still a build-step dispatch end, so lastResolvedCount must
-              // be recorded here even though nothing "succeeded".
-              if (step.name === 'build') {
-                // Re-read fresh from disk rather than writing the possibly-
-                // stale in-memory `this.taskEvidence` snapshot — stamps can
-                // be written directly to the sidecar by other pathways
-                // (task-cli / trailer-stamping telemetry paths) between this
-                // Conductor's start and this exit, and blindly writing the
-                // stale snapshot would clobber them.
-                const freshEvidence = await createTaskEvidence(this.projectRoot);
-                freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot, this.activeRegionChild);
-                await freshEvidence.write();
-              }
               // Task 8 (builds-stall-when-work-lands-without-task-trailer-):
               // budget exhausted with NO attempt ever satisfying the
               // completion gate would normally fall straight into the
@@ -13486,11 +14289,6 @@ export class Conductor {
                 // from whatever is already persisted, not from this `state`
                 // object.
                 await this.persistPendingStateChanges(state, 'persist conductor transition');
-                if (step.name === 'build') {
-                  const freshEvidence = await createTaskEvidence(this.projectRoot);
-                  freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot, this.activeRegionChild);
-                  await freshEvidence.write();
-                }
                 succeeded = true;
                 buildRoutedForward = true;
                 successOutput = result.output;
@@ -13507,18 +14305,6 @@ export class Conductor {
           }
 
           if (this.verifyArtifacts && stepHasCompletionCheck(step.name, this.config) && !succeeded) break;
-
-          // T7: stamp the ending resolved count on the success/completing
-          // exit — every build-step exit path (success, park, ceiling)
-          // records lastResolvedCount, not just the park paths above.
-          if (step.name === 'build') {
-            // Re-read fresh from disk — see comment at the fixed-budget-
-            // exhausted exit above for why this must not write the stale
-            // in-memory `this.taskEvidence` snapshot.
-            const freshEvidence = await createTaskEvidence(this.projectRoot);
-            freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot, this.activeRegionChild);
-            await freshEvidence.write();
-          }
 
           succeeded = true;
           successOutput = result.output;
@@ -13573,29 +14359,18 @@ export class Conductor {
             const outcomeStore = await readBuildOutcome(this.projectRoot);
             const note = lastError ? lastError.split('\n').slice(-200) : undefined;
             const gate = await pendingBuildKickbackGate();
-            await writeBuildOutcomeBestEffort(this.projectRoot, {
-              ...outcomeStore,
-              records: [
-                ...outcomeStore.records,
-                {
-                  outcome: classifyBuildSettle({
-                    treeBefore: treeHashBeforeBuild,
-                    treeAfter,
-                    resolvedBefore: resolvedTasksBefore,
-                    resolvedAfter,
-                  }),
-                  terminalOutcome: 'failed',
-                  gate,
-                  verdict: gate === null ? null : false,
-                  rung: buildOutcomeRung(failedStepResult, lastBuildEscalation),
-                  treeBefore: treeHashBeforeBuild,
-                  treeAfter,
-                  headBefore: headShaBeforeBuild,
-                  headAfter,
-                  note,
-                  category: await resolveBuildOutcomeCategory(this.projectRoot, note),
-                },
-              ],
+            await this.recordBuildOutcome({
+              terminalOutcome: 'failed',
+              note,
+              gate,
+              rung: buildOutcomeRung(failedStepResult, lastBuildEscalation),
+              treeBefore: treeHashBeforeBuild,
+              treeAfter,
+              resolvedBefore: resolvedTasksBefore,
+              resolvedAfter,
+              headBefore: headShaBeforeBuild,
+              headAfter,
+              outcomeStore,
             });
           }
           await emitTracked({
@@ -14840,6 +15615,27 @@ export class Conductor {
                   ? ` — remediation did not route: ${remediableNoPlanReason}`
                   : '') +
                 renderAsBuiltBlockedFindingDetail(asBuiltOutcome.findings);
+              const recordingFault = asBuiltOutcome.kind === 'blocked-design'
+                ? await this.recordAsBuiltNeedsHumanFindings(
+                  (asBuiltOutcome.findings ?? []).map((finding) => ({
+                    findingId: finding.id,
+                    attemptId: this.currentRunId ?? 'unknown-attempt',
+                    class: finding.class,
+                    reference: finding.reference,
+                    summary: finding.summary,
+                  })),
+                  reason,
+                )
+                : undefined;
+              if (recordingFault !== undefined) {
+                await this.writeHaltMarker(recordingFault + '\n', 'needs-human');
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
+                const prUrl = await this.surfaceRemediationPr(recordingFault);
+                await this.emitLoopHalt(recordingFault, prUrl);
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
               await this.writeHaltMarker(
                 reason + '\n',
                 asBuiltOutcome.kind === 'plan-gap-undelivered' ? 'plan-gap' : 'needs-human',
@@ -15328,29 +16124,18 @@ export class Conductor {
             completedBuildTreeAfter = treeAfter;
             completedBuildMadeProgress = resolvedAfter > resolvedTasksBefore;
             const gate = await pendingBuildKickbackGate();
-            await writeBuildOutcomeBestEffort(this.projectRoot, {
-              ...outcomeStore,
-              records: [
-                ...outcomeStore.records,
-                {
-                  outcome: classifyBuildSettle({
-                    treeBefore: treeHashBeforeBuild,
-                    treeAfter,
-                    resolvedBefore: resolvedTasksBefore,
-                    resolvedAfter,
-                  }),
-                  terminalOutcome: 'done',
-                  gate,
-                  verdict: gate === null ? null : false,
-                  rung: buildOutcomeRung(stepResult, lastBuildEscalation),
-                  treeBefore: treeHashBeforeBuild,
-                  treeAfter,
-                  headBefore: headShaBeforeBuild,
-                  headAfter,
-                  note: tail,
-                  category: await resolveBuildOutcomeCategory(this.projectRoot, tail),
-                },
-              ],
+            await this.recordBuildOutcome({
+              terminalOutcome: 'done',
+              note: tail,
+              gate,
+              rung: buildOutcomeRung(stepResult, lastBuildEscalation),
+              treeBefore: treeHashBeforeBuild,
+              treeAfter,
+              resolvedBefore: resolvedTasksBefore,
+              resolvedAfter,
+              headBefore: headShaBeforeBuild,
+              headAfter,
+              outcomeStore,
             });
             if (
               reverifyDoneTestSuiteAfterBuild &&
@@ -15437,7 +16222,13 @@ export class Conductor {
             await this.commitStateChanges(state, 'adopt documentation delivery pull request URL', {
               pr_url: documentationDelivery.prUrl,
             });
-            if (!await this.completeRun(state, 'documentation delivery complete\n')) parkedForRouting = true;
+            if (!await this.completeRun(state, 'documentation delivery complete\n')) {
+              parkedForRouting = true;
+              await this.stopParkedForRouting({
+                kind: 'completion-refused',
+                reason: 'a routed round remains open',
+              }, state);
+            }
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
             return;
@@ -15485,115 +16276,11 @@ export class Conductor {
           ) {
             const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
             if (!slug) throw new Error('cannot advance child BUILD region without a feature slug');
-            const execution = resolveExecutionChild(await this.resolveActiveChild(this.projectRoot, slug), slug);
-            if (execution.source === 'routed-host' && execution.roundId !== undefined) {
-              const exited = await this.requestRoutedExit({
-                worktree: this.projectRoot,
-                slug,
-                roundId: execution.roundId,
-                host: execution.target.child,
-                events: this.events,
-                resolver: this.stepRunner.resolveRebaseConflict
-                  ? (ctx) => this.stepRunner.resolveRebaseConflict!(ctx)
-                  : undefined,
-                resolverCap: resolveRebaseResolutionAttempts(this.config),
-              });
-              if (exited.kind === 'halted') {
-                // requestRoutedExit supplies the durable diagnostic (including
-                // a restack HALT where appropriate); do not replace it with a
-                // generic conductor refusal.
-                // `.pipeline/HALT` itself, not the user-input marker
-                // `readHaltMarkerContent` reads.
-                const existingHalt = await readFile(join(this.projectRoot, LOOP_HALT_MARKER), 'utf-8').catch(() => null);
-                if (existingHalt?.trim()) {
-                  const body = existingHalt.trim();
-                  const prUrl = await this.surfaceRemediationPr(body);
-                  await this.emitLoopHalt(body, prUrl);
-                } else {
-                  await this.haltChildRegionRefusal(exited.detail);
-                }
-                return;
-              }
-              const drained = await drainRoutingOutboxes(
-                this.projectRoot,
-                slug,
-                (event) => persistOnActiveEventSpine(this.events, event),
-              );
-              if (drained.kind !== 'drained') {
-                await this.haltChildRegionRefusal(`child ${execution.target.child} routed region exit outbox refused: ${drained.kind}`);
-                return;
-              }
-              // A routed exit only settles its host. Reconcile immediately so
-              // the same loop iteration admits the next host, closes a round
-              // before queue consumption, or records the final leaf return.
-              const reconciled = await reconcileRounds(this.projectRoot, slug);
-              if (reconciled.kind === 'unavailable') {
-                await this.haltChildRegionRefusal(`child ${execution.target.child} routed round reconciliation refused: ${reconciled.detail}`);
-                return;
-              }
-              let consumed: Awaited<ReturnType<typeof consumeLowestQueued>> | undefined;
-              // Queue admission always wins over a return to whole-feature
-              // gates. Reconciliation reports the final leaf return separately
-              // from a close that still has routed work, but every terminal
-              // result must still prove the queue empty before whole-feature
-              // validation may resume.
-              if (
-                reconciled.kind === 'deferred' ||
-                reconciled.kind === 'none' ||
-                reconciled.kind === 'aborted' ||
-                reconciled.kind === 'leaf-returned' ||
-                reconciled.kind === 'quiescent'
-              ) {
-                consumed = await consumeLowestQueued(this.projectRoot, slug);
-                if (consumed.kind === 'unavailable') {
-                  await this.haltChildRegionRefusal('cannot consume routed revalidation queue');
-                  return;
-                }
-                if (consumed.kind === 'admitted') {
-                  const next = await this.resolveActiveChild(this.projectRoot, slug);
-                  const nextExecution = resolveExecutionChild(next, slug);
-                  if (nextExecution.source !== 'revalidating' && nextExecution.source !== 'routed-host') {
-                    await this.haltChildRegionRefusal('queued child was not admitted into a revalidate round');
-                    return;
-                  }
-                  activeChild = nextExecution.target;
-                  await this.activateChildRegionState(state, nextExecution.target.child, nextExecution.target.isLeaf);
-                  i = indexOf('acceptance_specs') - 1;
-                  continue;
-                }
-              }
-              if (
-                (
-                  reconciled.kind === 'none' ||
-                  reconciled.kind === 'aborted' ||
-                  reconciled.kind === 'leaf-returned' ||
-                  reconciled.kind === 'quiescent'
-                ) &&
-                consumed?.kind === 'none' &&
-                !await routedRoundOpen(this.projectRoot, slug)
-              ) {
-                // returnToLeaf re-pends whole-feature gates in the root state
-                // file.  Do not keep the former routed host's overlay or its
-                // CAS baseline while selecting those gates.
-                await this.restoreWholeFeatureState(state);
-                activeChild = undefined;
-                // `returnToLeaf` intentionally re-pends manual_test as well
-                // as the audit gates.  Re-enter at the first re-pended tail
-                // gate: prd_audit depends on manual_test, so jumping straight
-                // to it would halt on its own prerequisite before any
-                // whole-feature validation could resume.
-                i = indexOf('manual_test') - 1;
-                continue;
-              }
-              const next = await this.resolveActiveChild(this.projectRoot, slug);
-              const nextExecution = resolveExecutionChild(next, slug);
-              if (nextExecution.source !== 'cursor' && nextExecution.source !== 'routed-host' && nextExecution.source !== 'revalidating') {
-                await this.haltChildRegionRefusal(await this.renderChildCursorRefusal(next as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>));
-                return;
-              }
-              activeChild = nextExecution.target;
-              await this.activateChildRegionState(state, nextExecution.target.child, nextExecution.target.isLeaf);
-              i = indexOf('acceptance_specs') - 1;
+            const routedExit = await this.continueRoutedHostExit(state, indexOf);
+            if (routedExit === 'halt') return;
+            if (routedExit !== undefined) {
+              activeChild = routedExit.activeChild;
+              i = routedExit.index - 1;
               continue;
             }
             const advanced = await this.advanceChildRegion(
@@ -15649,7 +16336,26 @@ export class Conductor {
             return;
           }
           if (advance === 'parked') {
+            // A process can stop after every region gate has settled but before
+            // the build-review closure advances the routed host. On resume the
+            // selector reports the region as parked; that is not a stall when
+            // this round's own evidence says the host is green.
+            const resumedExit = await this.continueRoutedHostExit(state, indexOf, true);
+            if (resumedExit === 'halt') {
+              process.off('SIGINT', sigintHandler);
+              if (!this.daemon) process.off('SIGTERM', sigterm);
+              return;
+            }
+            if (resumedExit !== undefined) {
+              activeChild = resumedExit.activeChild;
+              i = resumedExit.index - 1;
+              continue;
+            }
             parkedForRouting = true;
+            await this.stopParkedForRouting({
+              kind: 'parked',
+              reason: 'routed work is awaiting admission',
+            }, state);
             return;
           }
           if (advance !== null) {
@@ -15679,6 +16385,10 @@ export class Conductor {
 
       if (!parkedForRouting && !await this.completeRun(state, 'gate-driven loop converged\n')) {
         parkedForRouting = true;
+        await this.stopParkedForRouting({
+          kind: 'completion-refused',
+          reason: 'a routed round remains open',
+        }, state);
       }
       if (!parkedForRouting && state.feature_desc && state.pr_url) {
         await refreshPostFinishShippedRecord({
@@ -15743,6 +16453,7 @@ export class Conductor {
       if (
         this.daemon &&
         !parkedAtOperatorBoundary &&
+        !preemptedAtBoundary &&
         !parkedForRouting &&
         !(await this.markerExists(DONE_MARKER)) &&
         !(await this.markerExists(LOOP_HALT_MARKER))
@@ -15876,11 +16587,60 @@ export class Conductor {
     await this.fullSuiteVerifier.recordPreservation(inspection);
   }
 
+  /**
+   * build_review accepts only CURRENT proof, and a within-budget preservation
+   * turns CURRENT only once recorded (adr-2026-08-28 D4). An entry that skipped
+   * `test_suite` (resume, routed host, `--from`) acts on that judgement here, the
+   * one boundary all of them cross. A failure leaves assembly's own proof check
+   * to refuse; it is never treated as proof.
+   */
+  private async settlePreservedSuiteProof(state: ConductState): Promise<void> {
+    if (!this.verifyArtifacts || getStepStatus(state, 'test_suite') !== 'done') return;
+    try {
+      const inspection = await this.fullSuiteVerifier.inspect(this.fullSuiteVerifyOptions());
+      if (inspection.status !== 'PRESERVED_WITHIN_BUDGET') return;
+      await this.recordFullSuitePreservation(inspection);
+      const budgetVerdict = testSuiteBudgetVerdict(inspection);
+      await this.events.emit({
+        type: 'test_suite_verification',
+        freshness: { status: 'CURRENT' },
+        mode: inspection.evidence.mode ?? 'aggregate',
+        ...(budgetVerdict === undefined ? {} : { budgetVerdict }),
+      });
+    } catch {
+      // Assembly re-inspects and fails closed with the typed proof error.
+    }
+  }
+
   private manualTestExhaustionReason(count: number, evidence: string): string {
     const rows = evidence.split('\n').filter(Boolean);
     return `manual-test FAIL unresolved after ${count} build ` +
       `kickback(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${rows[0] ?? 'no failure detail'}` +
       (rows.length > 1 ? ` (+${rows.length - 1} more FAIL row(s))` : '');
+  }
+
+  /**
+   * Adapt the conductor's injected PR-operation Git seam to routing helpers,
+   * which require a complete result even when the underlying command fails.
+   */
+  private tasklessRoutingGit(): RebaseGitRunner {
+    return async (args) => {
+      try {
+        const result = await this.git(args, { cwd: this.projectRoot });
+        const observed = result as { stdout: string; stderr?: string; exitCode?: number };
+        return {
+          exitCode: observed.exitCode ?? 0,
+          stdout: observed.stdout,
+          stderr: observed.stderr ?? '',
+        };
+      } catch (error) {
+        return {
+          exitCode: 1,
+          stdout: '',
+          stderr: error instanceof Error ? error.message : String(error),
+        };
+      }
+    };
   }
 
   /** Creates and admits one taskless round after its receipt-specific charge is durable. */
@@ -15936,17 +16696,51 @@ export class Conductor {
     if (declaredPositions.length === 0) {
       return { kind: 'halted', reason: 'taskless routing cannot resolve the sealed plan slice topology' };
     }
+    const changedPaths = await changedPathsByPosition({
+      slug,
+      positions: declaredPositions,
+      leafTip: leafBranchFor(slug),
+      baseRef: this.baseBranch ?? 'main',
+      git: this.tasklessRoutingGit(),
+    });
+    if ('kind' in changedPaths) {
+      return { kind: 'halted', reason: `taskless routing manifest failed: ${changedPaths.detail}` };
+    }
     const judged = await runResidueRoutingCall({
-      items: [{ itemId: input.findingId(execution.target.child), rationale: input.reason }],
+      items: [{
+        itemId: input.findingId(execution.target.child),
+        rationale: input.reason,
+        ...(input.retryHint === undefined ? {} : { evidence: input.retryHint }),
+        changedPaths,
+      }],
       declaredPositions,
       judge: this.stepRunner.dispatchResidueRoutingJudgement === undefined
         ? undefined
         : (prompt) => this.stepRunner.dispatchResidueRoutingJudgement!(prompt),
     });
     if (judged.kind === 'halt') {
-      return { kind: 'halted', reason: `taskless routing judgement failed: ${judged.detail}` };
+      return { kind: 'halted', reason: `taskless routing judgement failed for ${judged.itemId}: ${judged.detail}` };
     }
-    const host = resolveResidueOwner(judged.answers[0]!).owner as ChildId;
+    const answer = judged.answers[0]!;
+    const ownership = resolveResidueOwner(answer);
+    const paths = await resolveCitedPaths(answer.implicatedPaths ?? [], leafBranchFor(slug), this.tasklessRoutingGit());
+    if ('kind' in paths) {
+      return { kind: 'halted', reason: `taskless routing implicated-path resolution failed: ${paths.detail}` };
+    }
+    const placement = paths.inputs.length === 0
+      ? { host: declaredPositions.at(-1)!, reason: 'prerequisite-paths' as const }
+      : await selectHost({
+        owner: ownership.owner as ChildId,
+        inputs: paths.inputs,
+        positions: declaredPositions,
+        leafTip: leafBranchFor(slug),
+        git: this.tasklessRoutingGit(),
+      });
+    if ('kind' in placement) {
+      return { kind: 'halted', reason: `taskless routing host selection failed: ${placement.detail}` };
+    }
+    const host = placement.host;
+    const reason = placement.reason === 'prerequisite-paths' ? placement.reason : ownership.reason;
     let sealedAuthored: number | undefined;
     try {
       sealedAuthored = await routedSealedAuthored(this.projectRoot, slug, { cursor, config: this.config });
@@ -15969,7 +16763,7 @@ export class Conductor {
     const created = await createRouteRecord(this.projectRoot, slug, {
       roundId,
       kind: 'audit',
-      items: [{ findingId: input.findingId(host), kind: 'audit', owner: host, host, reason: input.reason, fallback: [] }],
+      items: [{ findingId: input.findingId(host), kind: 'audit', owner: ownership.owner as ChildId, host, reason, fallback: [] }],
       allocation: { [host]: { remTaskIds: [], blockBodies: [], ...(input.retryHint === undefined ? {} : { retryHint: input.retryHint }) } },
       sealedAuthored,
     });
@@ -16227,6 +17021,7 @@ export class Conductor {
         await this.emitLoopHalt(reason);
         return 'halt';
       }
+      if (await this.reconcileStaleRebaseVerdict(state) === 'halt') return 'halt';
       // A durable completed replay already applied its explicitly named state
       // mutation through applyRebaseTransition. Older/recovery rebase verdicts
       // have no such operation, so consume the rebase-origin kickbacks
@@ -16304,6 +17099,7 @@ export class Conductor {
           step.name,
           verdict,
           step.name === 'build' ? this.activeRegionChild : undefined,
+          { routedRound: step.name === 'build' ? await this.routedRoundForActiveChild(state) : undefined },
         );
       }
       await this.events.emit(this.stampGateTier(this.withActiveRegionChild({
@@ -16642,6 +17438,9 @@ export class Conductor {
           providerAvailability: this.providerExecution?.providerAvailability,
           onProviderSuppressed: this.providerExecution?.onProviderSuppressed,
           executionContext,
+          // A configured group's members must drain once admitted. Its retry
+          // gate still observes the composed park+yield predicate: a yield
+          // declines only a redispatch, then surfaces at the owning join.
           operatorParkBoundary: this.daemon && this.featureSlug !== undefined
             ? this.operatorParkBoundary
             : undefined,
@@ -16907,6 +17706,62 @@ export class Conductor {
    * the verdict and so a HALT routes the loop to stop.
    */
   private async runRebaseStep(state: ConductState): Promise<StepRunResult> {
+    this.rebaseDispatchStartedAtMs = Date.now();
+    this.lastRebaseOutcome = null;
+    const result = await this.runRebaseStepBody(state);
+    await this.adoptDurableState(state);
+    return result;
+  }
+
+  /**
+   * A rebase normally persists its own gate verdict. If a prior unsatisfied
+   * verdict survives this dispatch, replay only the side-effect-free outcomes
+   * that can authoritatively refresh the rebase gate without reopening others.
+   */
+  private async reconcileStaleRebaseVerdict(
+    state: ConductState,
+  ): Promise<'fresh' | 'healed' | 'halt'> {
+    const dispatchStartedAtMs = this.rebaseDispatchStartedAtMs;
+    this.rebaseDispatchStartedAtMs = undefined;
+    const verdict = await readVerdict(this.projectRoot, 'rebase');
+    if (
+      dispatchStartedAtMs === undefined ||
+      verdict === null ||
+      verdict.satisfied ||
+      verdict.checkedAt >= dispatchStartedAtMs
+    ) {
+      return 'fresh';
+    }
+
+    const outcome = this.lastRebaseOutcome;
+    if (outcome?.kind !== 'noop' && outcome?.kind !== 'mergeable_skip') {
+      const reason = `step 'rebase' completed but its gate verdict was not refreshed ` +
+        `(stale verdict: ${verdict.reason ?? 'no reason recorded'})`;
+      await this.writeHaltMarker(reason + '\n', 'needs-human');
+      const prUrl = await this.surfaceRemediationPr(reason);
+      await this.emitLoopHalt(reason, prUrl);
+      return 'halt';
+    }
+
+    const healed = await applyRebaseVerdicts(
+      this.projectRoot,
+      outcome,
+      getStepStatus(state, 'manual_test') !== 'skipped',
+      undefined,
+      undefined,
+      undefined,
+      this.activeRegionChild,
+    );
+    await this.events.emit(this.stampGateTier(this.withActiveRegionChild({
+      type: 'gate_verdict',
+      step: 'rebase',
+      satisfied: healed.satisfied,
+      reason: (await readVerdict(this.projectRoot, 'rebase'))?.reason,
+    })));
+    return 'healed';
+  }
+
+  private async runRebaseStepBody(state: ConductState): Promise<StepRunResult> {
     // Phase 9.0: the native rebase-on-latest is a DAEMON finish-time mechanism.
     // In non-daemon runs (interactive `/conduct` and the entire test suite) we
     // must NOT invoke git here: a real `git rebase origin/<default>` against the

@@ -41,6 +41,7 @@ const PLAN = [
   '',
   '### Task 1: Register artifacts',
   '**Story:** Story 1',
+  '**Dependencies:** none',
   '',
   '**Done when:**',
   '- Given valid artifacts, when land runs, then it commits a manifest.',

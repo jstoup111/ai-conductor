@@ -46,6 +46,8 @@ Terms used below:
 As a reviewer of child 1's PR, I want the fix and its plan entry committed on child 1's branch and
 child 1's gates re-run, so that child 1's PR is green with its own fix.
 
+Scope: this story governs every `operator` and `revalidate` round, and `audit` rounds admitted with `stacked_prs.fold_routed_fixes` set to `false`. An `audit` round admitted with the setting on executes its hosts on the leaf and defers placement to the fold (`.docs/stories/late-gate-fixes-restack-the-whole-stack-every-repa.md` Stories 1 to 3 and 9).
+
 ### Acceptance Criteria
 
 #### Happy Path
@@ -54,7 +56,7 @@ child 1's gates re-run, so that child 1's PR is green with its own fix.
 - Given round `r1` region entry, when it completes, then host 1 is `repairing` in the route record, and that transition happened only after the append commit exists.
 - Given round `r1` region entry, when it begins, then host 1's base is pinned in the route record as the `closed/c1` SHA before any branch switch or commit.
 - Given a round whose only host is the leaf, when region entry runs, then the leaf's frozen blocks are written on `feat/daemon-demo` and the pinned base is the leaf tip read before the append commit.
-- Given an audit round whose every routed task for host 1, frozen rem ids and restaged bound ids alike, is already evidence-complete on child 1's tree after region entry, when the no-op guard runs, then the feature halts with outcome `derived-already-complete` on its halt record and no build is dispatched.
+- Given an audit round where host 1 has at least one routed task and no taskless obligation, and every routed task for host 1, frozen rem ids and restaged bound ids alike, is already evidence-complete on child 1's tree after region entry, and no other host in the round is `pending`, `restacked` or `rerouted`, when the no-op guard runs, then the feature halts with outcome `derived-already-complete` on its halt record and no build is dispatched.
 - Given round `r1` admitted and region entry run, when the events are read, then exactly one `kickback` event and one leaf rewind exist for the round, and region entry emitted neither.
 
 #### Negative Paths
@@ -82,6 +84,8 @@ child 1's gates re-run, so that child 1's PR is green with its own fix.
 As an operator, I want every routed task's child recorded in committed text and every commit on the
 host stamped with its round, so that membership survives a worktree recreation and the plan never
 mints a duplicate id.
+
+Scope: this story governs every `operator` and `revalidate` round, and `audit` rounds admitted with `stacked_prs.fold_routed_fixes` set to `false`. An `audit` round admitted with the setting on executes its hosts on the leaf and defers placement to the fold (`.docs/stories/late-gate-fixes-restack-the-whole-stack-every-repa.md` Stories 1 to 3 and 9).
 
 ### Acceptance Criteria
 
@@ -215,6 +219,8 @@ leaves nothing behind.
 As an operator, I want a reopened task resolved only by commits made on the child that repairs it,
 so that old trailers never close a routed repair and a reroute never strands it.
 
+Scope: this story governs every `operator` and `revalidate` round, and `audit` rounds admitted with `stacked_prs.fold_routed_fixes` set to `false`. An `audit` round admitted with the setting on executes its hosts on the leaf and defers placement to the fold (`.docs/stories/late-gate-fixes-restack-the-whole-stack-every-repa.md` Stories 1 to 3 and 9).
+
 ### Acceptance Criteria
 
 #### Happy Path
@@ -246,6 +252,8 @@ As an operator, I want a routed repair reviewed on its own diff without spending
 exhausted review budget, so that a well-reviewed child is not re-litigated and does not halt for
 lack of allowance.
 
+Scope: this story governs every `operator` and `revalidate` round, and `audit` rounds admitted with `stacked_prs.fold_routed_fixes` set to `false`. An `audit` round admitted with the setting on executes its hosts on the leaf and defers placement to the fold (`.docs/stories/late-gate-fixes-restack-the-whole-stack-every-repa.md` Stories 1 to 3 and 9).
+
 ### Acceptance Criteria
 
 #### Happy Path
@@ -271,6 +279,8 @@ lack of allowance.
 
 As an operator, I want a builder's claim that it needs a later child's code checked before the fix
 moves, so that a bad fix is never disguised as a placement problem.
+
+Scope: this story governs every `operator` and `revalidate` round, and `audit` rounds admitted with `stacked_prs.fold_routed_fixes` set to `false`. An `audit` round admitted with the setting on executes its hosts on the leaf and defers placement to the fold (`.docs/stories/late-gate-fixes-restack-the-whole-stack-every-repa.md` Stories 1 to 3 and 9).
 
 ### Acceptance Criteria
 

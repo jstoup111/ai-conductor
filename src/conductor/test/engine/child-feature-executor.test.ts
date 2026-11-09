@@ -1,13 +1,15 @@
 // Covers: task:17, task:18, task:19, task:20
 
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { createChildProcessFeatureExecutor, type ForkedExecutor } from '../../src/engine/child-feature-executor.js';
+import type { FeatureExecutionOutcome } from '../../src/engine/feature-executor.js';
 import type { WorkOrder } from '../../src/engine/work-order.js';
+import { createForwardingFeatureEventEmitter } from '../../src/engine/event-persister.js';
 
 const VERSION = '20261019T120000Z-aaaaaaaaaaaa' as WorkOrder['engineVersionId'];
 const VERSION_TWO = '20261019T120001Z-bbbbbbbbbbbb' as WorkOrder['engineVersionId'];
@@ -25,6 +27,81 @@ let root: string | undefined;
 afterEach(async () => { if (root) await rm(root, { recursive: true, force: true }); root = undefined; });
 
 describe('child feature executor dispatch lifecycle', () => {
+  // Covers: task:3
+  it('sends yield only to a running child with the requested slug and retains its later outcome', async () => {
+    root = await mkdtemp(join(tmpdir(), 'child-executor-'));
+    const messages: Array<(value?: unknown) => void> = [];
+    const sent: unknown[] = [];
+    let exit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+    const executor = createChildProcessFeatureExecutor({
+      projectRoot: root,
+      engineDirForOrder: () => `/store/dist-versions/${VERSION}`,
+      supervisorEngineVersionId: VERSION,
+      rootEvents: new ConductorEventEmitter(),
+      attachBroker: () => ({ events: new ConductorEventEmitter(), close() {} }),
+      fork: () => ({
+        pid: 40,
+        send(message) { sent.push(message); return true; },
+        on(event, listener) { if (event === 'message') messages.push(listener); return this; },
+        once(_event, listener) { exit = listener; return this; },
+        kill() { return true; },
+      }),
+    });
+
+    const execution = executor.execute({ ...order, slug: 'a' });
+    await vi.waitFor(() => expect(messages).toHaveLength(1));
+    messages[0]!({ kind: 'hello', protocolVersion: 1, engineVersionId: VERSION });
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+
+    expect(executor.requestYield('a')).toBe(true);
+    expect(executor.requestYield('b')).toBe(false);
+    expect(sent).toEqual([
+      expect.objectContaining({ kind: 'work-order' }),
+      { kind: 'yield' },
+    ]);
+
+    const outcome = { slug: 'a', status: 'done' as const };
+    messages[0]!({ kind: 'outcome', outcome });
+    exit?.(0, null);
+    await expect(execution).resolves.toEqual(outcome);
+    expect(executor.requestYield('a')).toBe(false);
+    expect(sent).toHaveLength(2);
+  });
+
+  // Covers: task:3
+  it('keeps a preempted child outcome and records its dispatch as terminated', async () => {
+    root = await mkdtemp(join(tmpdir(), 'child-executor-'));
+    const messages: Array<(value?: unknown) => void> = [];
+    let exit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+    const events = new ConductorEventEmitter();
+    const lifecycle: Array<Record<string, unknown>> = [];
+    events.on('feature_dispatch_ended', (event) => { lifecycle.push(event as Record<string, unknown>); });
+    const executor = createChildProcessFeatureExecutor({
+      projectRoot: root,
+      engineDirForOrder: () => `/store/dist-versions/${VERSION}`,
+      supervisorEngineVersionId: VERSION,
+      rootEvents: events,
+      attachBroker: () => ({ events: new ConductorEventEmitter(), close() {} }),
+      fork: () => ({
+        pid: 41,
+        send() { return true; },
+        on(event, listener) { if (event === 'message') messages.push(listener); return this; },
+        once(_event, listener) { exit = listener; return this; },
+        kill() { return true; },
+      }),
+    });
+
+    const execution = executor.execute({ ...order, slug: 'a' });
+    await vi.waitFor(() => expect(messages).toHaveLength(1));
+    messages[0]!({ kind: 'hello', protocolVersion: 1, engineVersionId: VERSION });
+    const outcome: FeatureExecutionOutcome = { slug: 'a', status: 'preempted' };
+    messages[0]!({ kind: 'outcome', outcome });
+    exit?.(0, null);
+
+    await expect(execution).resolves.toEqual(outcome);
+    expect(lifecycle).toEqual([expect.objectContaining({ type: 'feature_dispatch_ended', outcome: 'terminated' })]);
+  });
+
   it('drains piped stdout and stderr into the slug-tagged daemon sink', async () => {
     root = await mkdtemp(join(tmpdir(), 'child-executor-'));
     const stdout = new PassThrough();
@@ -107,6 +184,53 @@ describe('child feature executor dispatch lifecycle', () => {
     expect(emitted).toEqual([
       expect.objectContaining({ type: 'feature_dispatch_started', engineVersionId: VERSION, pinFallbackReason: 'publish-incomplete' }),
       expect.objectContaining({ type: 'feature_dispatch_ended', outcome: 'complete' }),
+    ]);
+  });
+
+  it('classifies a halted dispatch with its tier, halt sidecar class and the halting step forwarded from the child', async () => {
+    root = await mkdtemp(join(tmpdir(), 'child-executor-'));
+    const pipeline = join(root, '.worktrees', 'feature', '.pipeline');
+    await mkdir(pipeline, { recursive: true });
+    await writeFile(join(pipeline, 'HALT'), 'halted\n');
+    await writeFile(join(pipeline, 'HALT.class'), 'needs-human\n');
+    const messages = new Map<string, Array<(value?: unknown) => void>>();
+    let exit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined;
+    const child: ForkedExecutor = {
+      pid: 43,
+      send() { return true; },
+      on(event, listener) { (messages.get(event) ?? messages.set(event, []).get(event)!).push(listener); return this; },
+      once(_event, listener) { exit = listener; return this; },
+      kill() { return true; },
+    };
+    const events = new ConductorEventEmitter();
+    const lifecycle: Array<Record<string, unknown>> = [];
+    events.on('feature_dispatch_started', (event) => { lifecycle.push(event as Record<string, unknown>); });
+    events.on('feature_dispatch_ended', (event) => { lifecycle.push(event as Record<string, unknown>); });
+    // The broker forwards the child's feature-scope events to the root bus
+    // tagged with their slug; another feature's halt must not be attributed.
+    const featureEvents = createForwardingFeatureEventEmitter(events, 'feature');
+    const otherFeatureEvents = createForwardingFeatureEventEmitter(events, 'other-feature');
+    const executor = createChildProcessFeatureExecutor({
+      projectRoot: root,
+      engineDirForOrder: () => `/store/dist-versions/${VERSION}`,
+      supervisorEngineVersionId: VERSION,
+      rootEvents: events,
+      attachBroker: () => ({ events: featureEvents, close() {} }),
+      fork: () => child,
+    });
+
+    const execution = executor.execute({ ...order, tier: 'M' });
+    await vi.waitFor(() => expect(messages.get('message')?.length).toBeGreaterThan(0));
+    for (const listener of messages.get('message') ?? []) listener({ kind: 'hello', protocolVersion: 1, engineVersionId: VERSION });
+    await featureEvents.emit({ type: 'loop_halt', step: 'build_review', reason: 'stuck' });
+    await otherFeatureEvents.emit({ type: 'loop_halt', step: 'manual_test', reason: 'unrelated' });
+    for (const listener of messages.get('message') ?? []) listener({ kind: 'outcome', outcome: { slug: 'feature', status: 'halted' } });
+    exit?.(0, null);
+    await execution;
+
+    expect(lifecycle).toEqual([
+      expect.objectContaining({ type: 'feature_dispatch_started', tier: 'M' }),
+      { type: 'feature_dispatch_ended', slug: 'feature', outcome: 'halted', tier: 'M', haltClass: 'needs-human', step: 'build_review' },
     ]);
   });
 

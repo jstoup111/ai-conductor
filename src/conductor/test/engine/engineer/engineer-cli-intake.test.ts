@@ -200,7 +200,7 @@ describe('engineer land tracker write-back (Task 11)', () => {
     ].join('\n'));
     await writeFile(join(worktree, '.docs', 'plans', 'jira-writeback.md'), [
       '# Implementation Plan: Jira writeback', '', '**Stories:** .docs/stories/jira-writeback.md', '',
-      '### Task 1: Route Jira write-backs', '', '**Story:** 1', '', '**Done when:**', '- Jira write-backs are no-ops.', '- The ledger advances after the no-op.', '',
+      '### Task 1: Route Jira write-backs', '', '**Story:** 1', '', '**Dependencies:** none', '', '**Done when:**', '- Jira write-backs are no-ops.', '- The ledger advances after the no-op.', '',
       '## Task Dependency Graph', '```', '1', '```', '',
     ].join('\n'));
     await writeFile(join(worktree, '.docs', 'coherence', 'jira-writeback.md'), [

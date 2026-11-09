@@ -31,6 +31,7 @@
 //    them before their fixture can exercise the target behavior. Enable only
 //    the guard's documented test valve here; tests of the guard pass an
 //    explicit environment and still cover the production refusal path.
+import { afterEach } from 'vitest';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -43,6 +44,8 @@ import { NO_AUTOLAUNCH_ENV } from '../src/engine/engineer/daemon-launch.js';
 // Keeping the conventional aliases together matters for child tools that do
 // not select TMPDIR first.
 const runTmpRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+const runTmpScope = process.env.AI_CONDUCTOR_TEST_TMP_SCOPE;
+const originalTmpdir = process.env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR;
 if (runTmpRoot) {
   process.env.TMPDIR = runTmpRoot;
   process.env.TMP = runTmpRoot;
@@ -58,11 +61,28 @@ delete process.env.GIT_EXTERNAL_DIFF;
 process.env[NO_AUTOLAUNCH_ENV] = '1';
 process.env.AI_CONDUCTOR_NO_REAL_EXEC = '1';
 process.env.CONDUCT_DAEMON_SESSION_UNSAFE_ALLOW = '1';
-if (!process.env.AI_CONDUCTOR_ENGINEER_DIR) {
-  process.env.AI_CONDUCTOR_ENGINEER_DIR = mkdtempSync(
-    join(tmpdir(), 'ai-conductor-test-engineer-')
-  );
-}
+const testEngineerDir = process.env.AI_CONDUCTOR_ENGINEER_DIR || mkdtempSync(
+  join(tmpdir(), 'ai-conductor-test-engineer-')
+);
+process.env.AI_CONDUCTOR_ENGINEER_DIR = testEngineerDir;
+// Individual suites use vi.unstubAllEnvs() or restore a captured pre-setup
+// value. Reassert the process-local redirect after every test so the next
+// suite cannot fall back to the operator's engineer store.
+afterEach(() => {
+  process.env.AI_CONDUCTOR_ENGINEER_DIR = testEngineerDir;
+  // `vi.unstubAllEnvs()` restores the process state that existed before a
+  // test's stubs, which can discard the run-scoped temp markers installed by
+  // the Vitest launcher. Reassert the entire redirect for the next test so a
+  // provider-created prompt file cannot fall back to the operator's /tmp.
+  if (runTmpRoot) {
+    process.env.AI_CONDUCTOR_TEST_TMP_ROOT = runTmpRoot;
+    process.env.TMPDIR = runTmpRoot;
+    process.env.TMP = runTmpRoot;
+    process.env.TEMP = runTmpRoot;
+  }
+  if (runTmpScope) process.env.AI_CONDUCTOR_TEST_TMP_SCOPE = runTmpScope;
+  if (originalTmpdir) process.env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR = originalTmpdir;
+});
 if (!process.env.AI_CONDUCTOR_USER_CONFIG_DIR?.trim()) {
   process.env.AI_CONDUCTOR_USER_CONFIG_DIR = mkdtempSync(
     join(tmpdir(), 'ai-conductor-test-user-config-')

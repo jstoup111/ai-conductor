@@ -1,0 +1,5 @@
+{"type":"session"}
+{"type":"agent_start"}
+{"type":"message_end","message":{"role":"assistant","provider":"deepseek","model":"x","content":"","usage":{"input":0,"output":0},"stopReason":"error","errorMessage":"401: {\"message\":\"Authentication Fails, Your api key: ****0000 is invalid (request_id: 72ea5ff9-8912-4cdf-ab67-9dfd24e4af24)\",\"type\":\"authentication_error\",\"param\":null,\"code\":\"invalid_request_error\"}"}}
+{"type":"agent_end"}
+{"type":"agent_settled"}

@@ -50,6 +50,9 @@ describe('conductor auth-park: daemon-token mode', () => {
   let priorToken: string | undefined;
   let priorCodexApiKey: string | undefined;
   let priorClaudeConfigDir: string | undefined;
+  let priorPiCodingAgentDir: string | undefined;
+  let priorHome: string | undefined;
+  let extraDirs: string[];
 
   function selfHostConfig() {
     return {
@@ -76,6 +79,9 @@ describe('conductor auth-park: daemon-token mode', () => {
     priorToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
     priorCodexApiKey = process.env.CODEX_API_KEY;
     priorClaudeConfigDir = process.env.CLAUDE_CONFIG_DIR;
+    priorPiCodingAgentDir = process.env.PI_CODING_AGENT_DIR;
+    priorHome = process.env.HOME;
+    extraDirs = [];
     delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeState(statePath, READY_STATE);
@@ -89,8 +95,13 @@ describe('conductor auth-park: daemon-token mode', () => {
     else process.env.CODEX_API_KEY = priorCodexApiKey;
     if (priorClaudeConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
     else process.env.CLAUDE_CONFIG_DIR = priorClaudeConfigDir;
+    if (priorPiCodingAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = priorPiCodingAgentDir;
+    if (priorHome === undefined) delete process.env.HOME;
+    else process.env.HOME = priorHome;
     await rm(dir, { recursive: true, force: true }).catch(() => {});
     await rm(tokenDir, { recursive: true, force: true }).catch(() => {});
+    await Promise.all(extraDirs.map((path) => rm(path, { recursive: true, force: true }).catch(() => {})));
   });
 
   it('rechecks the failed Codex cached login through its own runtime before resuming', async () => {
@@ -2631,5 +2642,197 @@ describe('conductor auth-park: daemon-token mode', () => {
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  describe('Pi credential-file recovery', () => {
+    async function piCredentials(home?: string) {
+      const resolvedHome = home ?? await mkdtemp(join(tmpdir(), 'pi-auth-park-'));
+      const path = join(resolvedHome, 'auth.json');
+      await mkdir(resolvedHome, { recursive: true });
+      await writeFile(path, JSON.stringify({ token: 'expired' }), 'utf8');
+      return { home: resolvedHome, path };
+    }
+
+    function piFailure(): StepRunResult {
+      return {
+        success: false,
+        authFailure: true,
+        actualProvider: 'pi',
+        authentication: { provider: 'pi', source: 'cached-login', state: 'unusable' },
+      };
+    }
+
+    it('parks a serial Pi failure on auth.json and resumes at the same attempt after valid credentials change', async () => {
+      const credentials = await piCredentials();
+      extraDirs.push(credentials.home);
+      process.env.PI_CODING_AGENT_DIR = credentials.home;
+      const parked: unknown[] = [];
+      events.on('credentials_park', (event) => { parked.push(event); });
+      let offset = 0;
+      const base = Date.now();
+      const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => base + offset);
+      const attempts: number[] = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state, options) => {
+          if (step !== 'build') return { success: false, output: 'tail barrier' };
+          attempts.push(options?.attempt ?? -1);
+          return attempts.length === 1 ? piFailure() : { success: true, actualProvider: 'pi' };
+        }),
+      };
+      try {
+        const conductor = new Conductor({
+          stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
+          fromStep: 'build', mode: 'auto', maxRetries: 1,
+          config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+          sleepFn: vi.fn(async () => {
+            offset += 1_000;
+            await writeFile(credentials.path, JSON.stringify({ token: 'fresh' }), 'utf8');
+            await utimes(credentials.path, new Date(base + offset), new Date(base + offset));
+          }),
+        });
+        await conductor.run();
+        expect(attempts).toEqual([1, 1]);
+        expect(parked).toEqual([expect.objectContaining({
+          type: 'credentials_park',
+          reason: 'Pi credentials rejected or missing — waiting for the Pi credentials file to change',
+        })]);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('uses HOME/.pi/agent/auth.json when PI_CODING_AGENT_DIR is unset', async () => {
+      const home = await mkdtemp(join(tmpdir(), 'pi-home-auth-park-'));
+      extraDirs.push(home);
+      const credentials = await piCredentials(join(home, '.pi', 'agent'));
+      delete process.env.PI_CODING_AGENT_DIR;
+      process.env.HOME = home;
+      let offset = 0;
+      const base = Date.now();
+      const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => base + offset);
+      try {
+        const conductor = new Conductor({
+          stateFilePath: statePath, stepRunner: { run: vi.fn() }, events, projectRoot: dir,
+          fromStep: 'build', mode: 'auto',
+          config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+          sleepFn: vi.fn(async () => {
+            offset += 1_000;
+            await writeFile(credentials.path, JSON.stringify({ token: 'fresh' }), 'utf8');
+            await utimes(credentials.path, new Date(base + offset), new Date(base + offset));
+          }),
+        });
+        await expect((conductor as any).parkOnAuthFailure(piFailure())).resolves.toEqual({ disposition: 'recovered' });
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('does not resume Pi parking for invalid Pi JSON or changed Claude credentials, and reports a safe Pi-specific timeout', async () => {
+      const credentials = await piCredentials();
+      const claudeDir = await mkdtemp(join(tmpdir(), 'claude-auth-park-'));
+      extraDirs.push(credentials.home, claudeDir);
+      process.env.PI_CODING_AGENT_DIR = credentials.home;
+      process.env.CLAUDE_CONFIG_DIR = claudeDir;
+      const claudePath = join(claudeDir, '.credentials.json');
+      await writeFile(claudePath, JSON.stringify({ token: 'fresh' }), 'utf8');
+      let offset = 0;
+      const base = Date.now();
+      const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => base + offset);
+      let sleeps = 0;
+      try {
+        const conductor = new Conductor({
+          stateFilePath: statePath, stepRunner: { run: vi.fn() }, events, projectRoot: dir,
+          fromStep: 'build', mode: 'auto',
+          config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+          sleepFn: vi.fn(async () => {
+            sleeps++;
+            offset += sleeps === 1 ? 1_000 : 60_000;
+            if (sleeps === 1) {
+              await writeFile(credentials.path, '{not json', 'utf8');
+              await utimes(credentials.path, new Date(base + offset), new Date(base + offset));
+              await utimes(claudePath, new Date(base + offset), new Date(base + offset));
+            }
+          }),
+        });
+        const park = await (conductor as any).parkOnAuthFailure(piFailure());
+        expect(park).toMatchObject({ disposition: 'halt' });
+        const reason = park.haltReason as string;
+        expect(reason).toContain('Pi credentials did not change');
+        expect(reason).toContain(credentials.path);
+        expect(reason).toContain('re-queue this feature');
+        for (const forbidden of ['.credentials.json', 'OAuth token', 'Authentication Fails', '{"message"']) expect(reason).not.toContain(forbidden);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('parks one failed Pi group member and redispatches only that member after auth.json changes', async () => {
+      await writeState(statePath, { ...READY_STATE, build: 'done', build_review: 'done', rebase: 'done', finish: 'done' });
+      const credentials = await piCredentials();
+      extraDirs.push(credentials.home);
+      process.env.PI_CODING_AGENT_DIR = credentials.home;
+      const parked: unknown[] = [];
+      events.on('credentials_park', (event) => { parked.push(event); });
+      const calls: StepName[] = [];
+      let offset = 0;
+      const base = Date.now();
+      const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => base + offset);
+      try {
+        const conductor = new Conductor({
+          stateFilePath: statePath,
+          stepRunner: {
+            run: vi.fn(async (step: StepName) => {
+              calls.push(step);
+              if (step === 'manual_test') {
+                await writeFile(join(dir, '.pipeline/manual-test-results.md'), '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n');
+              }
+              if (step === 'prd_audit' && calls.filter((name) => name === step).length === 1) return piFailure();
+              if (step === 'prd_audit') {
+                await writeFile(join(dir, '.pipeline/prd-audit.md'), '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n');
+              }
+              if (step === 'architecture_review_as_built') {
+                await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), '# As-Built Architecture Review\n\nVerdict: APPROVED\n');
+              }
+              return { success: true, actualProvider: 'pi' };
+            }),
+          },
+          events, projectRoot: dir, fromStep: 'manual_test', mode: 'auto', maxRetries: 1,
+          config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+          sleepFn: vi.fn(async () => {
+            offset += 1_000;
+            await writeFile(credentials.path, JSON.stringify({ token: 'fresh' }), 'utf8');
+            await utimes(credentials.path, new Date(base + offset), new Date(base + offset));
+          }),
+        });
+        await conductor.run();
+        expect(calls).toEqual(['manual_test', 'prd_audit', 'architecture_review_as_built', 'prd_audit']);
+        expect(parked).toHaveLength(1);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('halts a Pi group on an unchanged auth.json without redispatching either member', async () => {
+      await writeState(statePath, { ...READY_STATE, build: 'done', build_review: 'done', test_suite: 'done' });
+      const credentials = await piCredentials();
+      extraDirs.push(credentials.home);
+      process.env.PI_CODING_AGENT_DIR = credentials.home;
+      const calls: StepName[] = [];
+      const halts: string[] = [];
+      events.on('loop_halt', (event) => { if (event.type === 'loop_halt') halts.push(event.reason); });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: { run: vi.fn(async (step: StepName) => {
+          calls.push(step);
+          return step === 'manual_test' ? piFailure() : { success: true };
+        }) },
+        events, projectRoot: dir, fromStep: 'manual_test', mode: 'auto', maxRetries: 1,
+        config: { harness_self_host: { auth_park_timeout_minutes: 0 } } as never,
+        sleepFn: vi.fn(async () => {}),
+      });
+      await conductor.run();
+      expect(calls).toEqual(['manual_test', 'prd_audit', 'architecture_review_as_built']);
+      expect(halts).toEqual([expect.stringContaining(credentials.path)]);
+    });
   });
 });

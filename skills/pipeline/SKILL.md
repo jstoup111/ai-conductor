@@ -10,23 +10,10 @@ requires: [".docs/plans/ with implementation plan"]
 
 ## Purpose
 
-Orchestrates execution of an implementation plan through quality-gated stages. The configured
-harness runner drives the task loop — it parses the plan, iterates tasks, and sends one prompt
-per task. The selected host agent orchestrates each task by dispatching implementers through its
-available subagent facility. Subagent
-context is isolated and discarded after completion, keeping the orchestrator's context lean.
+Orchestrates execution of an implementation plan. The host agent dispatches each task to a TDD
+implementer through its available subagent facility; subagent context is discarded after each task.
 
 ## Execution Model
-
-```
-Harness runner              Host agent (orchestrator)    Subagent (implementer)
-──────────────              ─────────────────────         ──────────────────────
-Parse plan, extract task →  Receive task context    →     Full TDD cycle
-                            Dispatch subagent       →     RED → DOMAIN → GREEN
-                            Verify result           ←     → DOMAIN → COMMIT
-Check task-status.json  ←   Report PASS/FAIL              (context discarded)
-Next task
-```
 
 **Key constraint:** The selected host agent MUST dispatch implementers through its available
 subagent facility. It must NOT implement directly in the orchestration session. This keeps the orchestrator's
@@ -43,27 +30,13 @@ contracts below.
 
 ## Practices
 
-### Execution Mode
-
-There is one mode. The human reviews at batch boundaries; the agent runs quality gates on every
-task and dispatches independent tasks in parallel, up to X at a time (see
-[Parallel Execution](#parallel-execution)).
-
 ### Per-Task Execution
 
-Task stamping is engine machinery, not an orchestrator instruction. In Claude Code, a
-Claude Code session PreToolUse hook, installed into the build worktree at provisioning time (see
-`adr-2026-07-10-session-hook-task-stamping.md`), inspects **line 1 only** of every
-subagent dispatch prompt. `Task: <id>` (id = bare plan header id, e.g. `Task: 9`, never
-`task-9`) flips that row to `in_progress` in `.pipeline/task-status.json` and writes
-`.pipeline/current-task`; `Task: none` passes through untouched. A missing or malformed
-line-1 marker, or an id not present in `task-status.json`, is BLOCKED (hook exit 2) with
-instructive stderr — fix the dispatch prompt's first line and redispatch. If a different
-task's stamp is already present (overlap), the hook still flips the new row but clears
-the stamp file, so the commit-msg hook abstains from attribution rather than guessing —
-never a wrong stamp. A symmetric PostToolUse hook removes `.pipeline/current-task` on
-subagent return iff its content still matches that dispatch's id. Other supported hosts use their
-native task-attribution mechanism to preserve the same marker, state, and recovery contract.
+Line 1 of every subagent dispatch prompt MUST be `Task: <id>` (the bare plan header id, e.g.
+`Task: 9`, never `task-9`), or `Task: none` for work that is not a plan task.
+In Claude Code a PreToolUse session hook reads that line to stamp the task; if it blocks the
+dispatch (exit 2), fix line 1 as its stderr says and redispatch. Other hosts use their native
+attribution mechanism.
 
 **Hosts without a session hook (Codex and Pi today) stamp through the CLI.** Neither has a PreToolUse
 hook, so nothing writes `.pipeline/current-task` or flips the row to `in_progress` when a task is
@@ -87,26 +60,14 @@ PLAN VALIDATION (at pipeline start):
 DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dependencies.
   Never skip a task unless its acceptance criteria are already satisfied (verified by test run).
 
-0. DISPATCH MARKER — Before dispatching, ensure the implementer prompt's FIRST LINE will be
-                   `Task: <id>` (bare plan header id, e.g. `Task: 9`, never `task-9`). This is
-                   the contract the session hook enforces mechanically (see above) — in Claude
-                   Code you do not run any CLI command for this step. On a host without the
-                   session hook (Codex), run `conduct task start <id>` before the dispatch so the
-                   stamp exists and the row is marked `in_progress`; a stampless later `task done`
-                   still applies the Done when close contract.
-                   If the hook blocks the dispatch (exit 2,
-                   stderr names the fix), correct the prompt's line 1 and redispatch; if
-                   `.pipeline/current-task` doesn't show the expected id after a successful
-                   dispatch, treat it as a configuration issue (forward-progress check will halt).
-                   Crash recovery: if a session restarts mid-task, manually reset the task back to
-                   `pending` in .pipeline/task-status.json (same approach as before).
+0. DISPATCH MARKER — Line 1 of the implementer prompt is `Task: <id>` (see above). On a host
+                   without the session hook, run `conduct task start <id>` first.
 1. DECOMPOSE    — Read task, identify files to touch, check dependencies met
 2. DISPATCH     — Send task to a TDD implementer through the selected host's available subagent facility
                   with scoped context only. In Claude Code, dispatch through the Agent tool with
                   Claude Code model="sonnet"; other supported hosts use their native model-selection mechanism.
-                  Dispatch template's line 1 MUST be exactly `Task: <id>` — <id> is the bare PLAN header id (e.g. 9, not task-9).
-                  Implementer includes it as a trailer in all commits (including refactors); implementer amends before PASS
-                  if the trailer is malformed. Implementer runs full TDD cycle: RED → DOMAIN → GREEN → DOMAIN → COMMIT
+                  Dispatch template's line 1 MUST be exactly `Task: <id>`. Implementer runs the full
+                  TDD cycle: RED → DOMAIN → GREEN → DOMAIN → COMMIT.
                   Removal-shaped task (the task deletes a file, seam, flag, symbol, or code path)? The
                   implementer runs `/code-removal` for that task instead of opening a RED cycle — a
                   deletion has no failing test to write, and an absence assertion is never the subject.
@@ -115,21 +76,21 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
                   `test_suite` owns configured suite verification.
 3. VERIFY       — Inspect the implementer's scoped test evidence (see Scoped VERIFY below); run only a minimal targeted check if the evidence is missing or a concrete defect needs reproduction
 4. FIX          — If tests fail, VERIFY failure first (see below), then dispatch implementer with error context
-5. COMMIT       — Verify the implementer's commit carries the `Task: <id>` trailer with <id> as the bare plan id
-                  (e.g. Task: 9, not Task: task-9). The trailer is non-authoritative routing
-                  telemetry: it routes the build→build_review handoff, but `build_review`
-                  judges/derives actual completion from a plan-vs-diff comparison (union of
-                  trailer-tagged and diff-resolved tasks); the orchestrator never writes
-                  `completed` itself. If the trailer uses task-N format, report FAIL and dispatch for fix
+5. COMMIT       — The implementer commits. `Task:` trailers are telemetry (see Attribution
+                  telemetry); a malformed trailer is never a reason to FAIL a task.
 6. DONE         — Before reporting PASS, use the normal BUILD task-close path. For a task with a
                   declared `Done when:` block, close it with `conduct task done <id> --done-when <n>=<evidence>`
                   once for every declared check; the engine records the evidence through
                   `completeTaskDoneWhen` before it clears `.pipeline/current-task`. If a declared
                   `[test]` check is closed, use `--done-when <n>=test:<path>::<title>` for a committed
                   covering test, or `--unverified <n>=<reason>` when it cannot be verified. A missing
-                  test for a tagged check is never `--plan-gap`. For an untagged check that cannot be
-                  satisfied within the approved plan, use `conduct task done <id> --plan-gap <n> --reason <text>`
-                  instead and report the resulting HALT — do not clear the task or append off-plan work.
+                  test for a tagged check is never `--plan-gap`. A check that needs a file the task's
+                  `**Files:**` omits (a call site, union member, registry, or test) is not a plan gap:
+                  change it and add `Scope: <repo-relative path> — <why>` beside the `Task:` trailer.
+                  In a parallel batch, if another running task lists that file, return FAIL so the
+                  orchestrator runs the two in sequence. Use
+                  `conduct task done <id> --plan-gap <n> --reason <text>` and report the HALT only when no code
+                  change can meet an untagged check or meeting it would contradict a story, the plan, or an ADR.
                   A `[test]` citation whose title cannot be provenance-verified as added since the
                   task began closes as `pending-judgement`; the conductor judges it when the BUILD session ends.
                   A refused citation returns as a retry hint naming the check and the judge's reason. Repair it by
@@ -137,12 +98,6 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
                   `--unverified <n>=<reason>` when it cannot be verified.
                   For a legacy task with no `Done when:` block, close with `conduct task done <id>`.
                   Then read `.pipeline/task-status.json` and confirm the row reads `completed`.
-                  A stampless close records declared Done when evidence or refuses naming the
-                  missing check; a stampless re-close of an already completed or skipped row exits
-                  0 without rewriting it. The exit code alone is not proof of closure.
-                  The host-native attribution mechanism (the Claude Code PostToolUse hook uses the same matcher as
-                  step 0/2) remains the idempotent cleanup fallback after the implementer returns.
-                  Task close records task-level proof only; `build_review` remains the BUILD completion authority.
 7. REPORT       — Return PASS or FAIL with reason to the conductor
 ```
 
@@ -164,15 +119,6 @@ unreadable or any preparation fails, fail closed naming that file and leave no p
 set behind. Only after that preflight may the task atomically write each declared target with the
 source content transformed by the rename map. It consumes zero LLM turns or dispatches for the
 copy itself.
-
-**Failure branches:**
-
-- If the `**Files:**` declaration omits a rename-map-implied target, fail the copy task and name
-  that undeclared target. Do not write it or any other path outside the declaration.
-- If a source is unreadable at copy time, fail closed and name that source. Because preflight
-  completes before any write, write no copy target and leave no partially copied target set.
-- If a copy task has no resolved `**Pattern-source:**` / `**Rename-map:**` declaration, fail the
-  copy task naming the absent declaration; do not infer a source or proceed with a copy.
 
 The copy task remains an ordinary declared plan task: it retains its `Task: <id>` attribution and
 commit ownership, and existing scoped verification, build review, and all lifecycle gates remain
@@ -197,12 +143,11 @@ build-time tasks, and do not close any portion with `Evidence: satisfied-by`; ru
 unmodified TDD cycle — RED → DOMAIN → GREEN → DOMAIN → COMMIT — for that task. Ambiguity always
 resolves toward the full cycle.
 
-**Pre-completion scan (at pipeline start):** Before dispatching any tasks, check each task's
-acceptance criteria against existing code and test coverage (git log, test files). Mark tasks
-as `pre-completed` if criteria are already satisfied. Batch-verify in one pass — do not
-dispatch individual subagents to discover "already done." If Task N's implementation was a
-side effect of Task N-1 (verified by passing tests), auto-complete Task N with a note
-referencing the completing task.
+**Pre-completion scan (first BUILD entry only, never on a retry):** Before dispatching any tasks, check each task's
+acceptance criteria against existing code and test coverage (git log, test files). Batch-verify in
+one pass. A task already satisfied — including as a side effect of an earlier task, verified by
+passing tests — closes with the `Evidence: satisfied-by <sha>` empty commit (see `/tdd`), not a
+dispatch.
 
 **Dependency checking (step 1):** Before dispatching the subagent, verify that all tasks
 listed in the task's `**Dependencies:**` field are marked as completed in
@@ -210,12 +155,9 @@ listed in the task's `**Dependencies:**` field are marked as completed in
 
 **Design-conformance check (step 1):** Before dispatching the subagent, confirm the task builds
 toward — not against — the governing APPROVED design (the relevant ADR in `.docs/decisions/`
-and the FR in the approved PRD). This is the BUILD-phase instance of the harness-wide
-**design-conformance-before-effort** convention in the repository harness documentation. If a task would
-implement or harden a code path that a current APPROVED ADR/PRD supersedes or forbids, do NOT
-dispatch it — report BLOCKED and escalate as a conformance finding. Writing code slated for
-deletion is wasted effort; the cheapest check (one ADR/PRD read) precedes the most expensive
-action (a full TDD subagent dispatch + review cycle).
+and the FR in the approved PRD). If a task would implement or harden a code path that a current
+APPROVED ADR/PRD supersedes or forbids, do NOT dispatch it — report BLOCKED and escalate as a
+conformance finding.
 
 **Failure verification (step 4):** Before re-dispatching a failed task, run the **task's scoped
 set** from step 3 VERIFY to confirm the failure is real. On a suite-failure kickback, include
@@ -224,12 +166,6 @@ If no scoped set can be identified, record that limitation rather than claiming 
 passed. If the scoped tests pass, required task evidence exists, and commits exist for the
 task, mark it completed; aggregate proof remains pending at `test_suite`. Do not trust JSON
 state alone: it can become stale after connection interruptions or subagent context loss.
-
-**Citation-refusal remediation (step 4):** A `[test]` citation that closes
-`pending-judgement` is judged at BUILD session end. When its citation is refused, use the retry
-hint's named check and reason to write or cite a test that asserts the check. If that cannot be
-verified, close the check with `--unverified <n>=<reason>`; do not claim the refused citation is
-verified.
 
 **Superseded-symbol check (step 5 — replacement tasks):** Before marking a task `completed`
 whose plan says it **replaces or supersedes** an existing symbol/behavior ("replace X",
@@ -240,14 +176,9 @@ non-test callers** in production source:
 grep -rn 'oldSymbol' src/ | grep -vE '\.test\.|/test/|/__tests__/'
 ```
 
-If any production caller remains, the new code shipped **orphaned** — the live path still runs
-the OLD behavior while green unit tests pass against the new function (the orphaned-primitive
-escape that recurred across ~5 consecutive Phase-9 features, each caught late by the
-fresh-context evaluator). Report the task FAIL with the surviving call sites; do NOT mark it
-complete. This is a cheap mechanical gate that runs before the next batch advances, so the class
-fails fast. Pair it with the real-entry-point acceptance test required by
-`/writing-system-tests` (§3b): the acceptance test proves the new path runs; this grep proves
-the old one is gone.
+If any production caller remains, the new code shipped **orphaned**: report the task FAIL with the
+surviving call sites; do NOT mark it complete. Pair it with the real-entry-point test required by
+`/writing-system-tests` (§3b).
 
 ### Attribution telemetry
 
@@ -256,22 +187,14 @@ display progress and diagnose unattributed dispatches, but they never authorize 
 mutation, reject a commit, decide task completion, halt a build, or park work. The
 fresh `build_review` plan-versus-diff judgment is the BUILD completion authority.
 
-Before every BUILD dispatch, the engine best-effort seeds
-`.pipeline/task-status.json` from the selected plan. Missing or unwritable telemetry
-warns and continues; it is never a lifecycle gate. The retired
-`attribution_enforcement_cutover` and `attribution_judge_cutover` config keys are no
-longer accepted — a config file still setting either fails to load with an unknown
-top-level key error.
+Before every BUILD dispatch, the engine best-effort seeds `.pipeline/task-status.json` from the
+selected plan.
 
-**Task status tracking:** `.pipeline/task-status.json` is owned entirely by the engine and its
-session hooks — you (the orchestrator) do NOT hand-edit this file. The PreToolUse session hook
-stamps `in_progress` on dispatch, keyed off the dispatch prompt's line-1 `Task: <id>` /
-`Task: none` marker (see Per-Task Execution above). At ordinary BUILD closure, use
+**Task status tracking:** `.pipeline/task-status.json` is owned by the engine, its session hooks,
+and `conduct task` — never hand-edit it. At ordinary BUILD closure, use
 `conduct task done <id> --done-when <n>=<evidence>` for every declared check so the engine-owned
 `completeTaskDoneWhen` writer records the task-level proof; use `conduct task done <id> --plan-gap <n> --reason <text>`
-when an approved-plan check is unsatisfiable. The CLI still supports operator recovery (for example,
-resetting a task after a crash), but the evidence and plan-gap forms are the normal per-task flow.
-You report the subagent's result (PASS/FAIL) to inform the conductor's logging and audit trail.
+when step 6 requires it. Report each subagent's result (PASS/FAIL) to the conductor.
 
 **SHIP validator verdict artifacts are read-only during BUILD.** `.pipeline/prd-audit.json` is the
 typed PRD verdict authority (ADR D2.2), and `.pipeline/prd-audit.md` is its derived human report.
@@ -285,7 +208,8 @@ records its task-level proof through `conduct task done <id> --done-when <n>=<ev
 editing a verdict artifact.
 
 **Subagent context scoping:** The implementer receives ONLY:
-- The task description and acceptance criteria (from the plan)
+- The task description, its `Done when:` checks, and the verbatim text of every story criterion
+  and ADR decision mapped to it (SHIP grades that text, not the plan's paraphrase)
 - File paths to modify (from the plan's "Files likely touched")
 - The TDD skill instructions
 - Every implementer dispatch prompt MUST carry this SHIP verdict read-only rule.
@@ -308,11 +232,8 @@ replication copy task's resolved source, rename-map, preflight, or exact-copy re
 
 **No branch hygiene by the implementer — stay on the branch as-is.** Every dispatch prompt MUST
 instruct the implementer to NOT run `git fetch`, `git pull`, `git rebase`, or switch
-branches. It commits only to the current feature branch. Mid-build fetch/rebase is how a feature
-branch silently auto-rebased onto a moved `origin/main` and stalled in a CHANGELOG conflict that
-blocked the commit. The **only** sanctioned rebase is the daemon's finish-time rebase-onto-latest
-(9.0, with conflict → HALT + CHANGELOG auto-resolver); it is daemon-gated and runs outside the
-per-task loop. Implementation agents never integrate upstream themselves.
+branches. It commits only to the current feature branch. The only sanctioned rebase is the
+daemon's finish-time rebase, outside the per-task loop.
 
 **Context efficiency:** Do not inline file contents in subagent prompts. Provide current-checkout
 paths, stable symbol or role hints, and the relevant semantic traits; never use line ranges as a
@@ -323,7 +244,8 @@ this preserves file cache and avoids redundant reads.
 **Scope discipline:** Implementers MUST only modify lines directly related to their assigned task.
 Changes to unrelated code in the same file (e.g., changing a CI command while fixing a service
 definition, or "improving" a method signature while adding a validation) are scope violations.
-`prd_audit`'s "nothing more" acceptance check owns those violations.
+`prd_audit` grades them OVER_SCOPE. A file the task needs but its Files list omits is not a
+violation; record it with a `Scope:` trailer.
 
 **Scoped VERIFY (step 3):** Inspect the implementer's scoped evidence without routine reruns.
 Missing evidence or a concrete suspected defect may require a minimal targeted check, never a suite.
@@ -358,6 +280,11 @@ selectors to repair subagents. Fix the failure, verify the scoped affected-test 
 through `ai-conductor scoped-run <selectors...>`, then commit and leave the aggregate rerun to
 `test_suite`. A scoped PASS does not establish an aggregate PASS.
 
+**Build-review work order:** A retry carrying a `Build-review remediation work order` is the job
+even when every task already reads completed. Each listed repair ends in a commit under its admitted
+task id, or, if you judge it done or wrong, in `Need user decision: case <caseId> — <evidence>`
+written to `.pipeline/halt-user-input-required`.
+
 **Batch affected-test union:** At each batch boundary, compute one named
 `BATCH_AFFECTED_TESTS` union by deduplicating every task's scoped affected-test set and retain
 the supplied results. Do not rerun the union routinely. A concrete task-interaction risk or
@@ -390,56 +317,10 @@ echo "Need user decision: <one-line summary of the blocker>" > \
   .pipeline/halt-user-input-required
 ```
 
-**Interactive mode (unchanged):** The conductor's build-retry loop checks for this file after each attempt. When
-present, it:
-
-1. Emits a `build_stall` event (reason: `halt_marker`).
-2. Clears the marker (ack).
-3. Opens the selected host's native interactive session scoped to the build step; in Claude Code,
-   this is an interactive Claude REPL, so the user can discuss the blocker and take action.
-4. Re-checks the completion predicate once the REPL exits.
-5. Either succeeds (user + host agent resolved enough tasks) or falls into the
-   normal recovery menu.
-
-This REPL escalation path is unaffected by daemon-mode routing below — it applies only
-when the conductor is attached to an interactive terminal.
-
-**Daemon mode (ADR-2026-07-10):** The daemon's build-retry loop has no interactive REPL to
-fall back to, so it routes the halt marker through a single bounded `/remediate` pass before
-escalating to a human:
-
-1. **Capture first.** The marker content (the question) is read and written verbatim to
-   `.pipeline/build-stall-question.md` *before* the halt marker itself is cleared
-   (`clearHaltMarker`) — the question is durably captured on disk before the ack, so it can
-   never be lost between detection and dispatch.
-2. Dispatches the `/remediate` skill once with `hintSource: { source: 'build_stall',
-   evidenceFile: '.pipeline/build-stall-question.md' }`. This is a single bounded attempt —
-   daemon mode does not loop `/remediate` against the same stall.
-3. **If answerable** — the planner returns a `build` disposition with the answer in `rationale`
-   and `tasks: []`. The conductor resumes the retry loop (no retry burned) with the answer
-   as context, and the build proceeds with the agent's question resolved.
-4. **If unanswerable** — the planner returns a `halt` disposition (category: `architectural-clarity`,
-   `product-scope`, or `unanswerable`). The conductor writes `.pipeline/HALT` with the original
-   question preserved verbatim and escalates for human triage.
-5. **Fail-safe** — if remediation fails, the budget is exhausted, or `/remediate` returns
-   `none`, the conductor writes `.pipeline/HALT` **carrying the question verbatim** and stops.
-   The operator never loses sight of what the agent needed.
-
-**Budget:** Stall remediations share the existing `MAX_KICKBACKS_PER_GATE` remediation budget
-(not a separate counter). Multiple stalls in one run consume the shared budget; once exhausted,
-subsequent stalls go straight to HALT without remediation dispatch. This prevents ask→answer→ask
-loops while keeping the fallback path safe.
-
-**Also triggered implicitly** when a build attempt produces zero new task
-completions (the attributed count from `.pipeline/task-status.json`/`Task:`
-trailers doesn't move) AND HEAD doesn't move that same attempt — the
-attributed count alone is advisory routing/telemetry and can never by itself
-kill a build; commit movement is the liveness authority
-(adr-2026-07-23-commit-movement-liveness-floor). An attempt that lands real,
-committed work without a `Task:` trailer is never misread as a stall. So even
-if you forget to write the marker, the circuit breaker catches a genuine
-wedge — but writing the marker is the polite contract: it labels the reason
-and prevents a speculative second retry.
+In interactive runs the conductor then opens a session so the user can resolve the blocker. In
+daemon runs it routes the question once to `/remediate`, which either answers it (the build resumes
+with the answer) or escalates it to a human with your question verbatim — so make the one-line
+question self-contained.
 
 ### User-requested exit during a run
 
@@ -449,54 +330,21 @@ as a halt — **not** as a successful exit. Before exiting, you MUST:
 
 1. Write `.pipeline/halt-user-input-required` with a one-line summary of the
    next action (e.g. `"user requested exit; 1 regression in test_X pending fix"`).
-2. If a task is currently in-flight (marked `in_progress` by the session hook's dispatch
-   stamp), reset it back to `pending` in `.pipeline/task-status.json` so the conductor's
-   build gate will re-enter the task on resume rather than treating it as
-   completed (crash-recovery pattern: manually edit the JSON if a session
-   restarts mid-task).
-3. Do NOT mark unfinished tasks as `completed` or `skipped`. Only tasks
-   that genuinely passed all TDD gates this run get `completed`.
+2. Do NOT mark unfinished tasks as `completed` or `skipped`.
 
-This contract is mandatory. Without the marker, the conductor reads
-`task-status.json`, sees nothing in flight, and concludes the build step
-is done — silently cascading through `manual-test` / `finish`
-to mark the entire feature complete while the user's actual blocker is
-still open. The build-completion predicate in
-the build-completion predicate checks for the
-halt marker on every attempt; a marker present at gate-check time fails
-the gate.
+Without the marker the conductor can read the build as done and cascade into SHIP.
 
 ### Retry Pre-Check (Connection Interruption Recovery)
 
-The engine mechanically evaluates the working tree before BUILD completion and before an
-exhausted build may route on commit movement. When its status probe reports dirty paths, the
-tree is not eligible to complete or route; the halt names those paths until they are committed or
-discarded. A missing or failed probe preserves the legacy fail-open behavior.
-
-For connection interruption or session-resume diagnosis, inspect recent commits
-(`git log --oneline -3`) and verify existing work before redoing it. Do not rely on an implementer
-remembering a prompt-level dirty-tree check: the engine enforces the condition.
-
-This prevents wasting a full subagent dispatch to redo work that was already completed.
+After a connection interruption or session resume, inspect recent commits
+(`git log --oneline -3`) and verify existing work before redoing it. The engine refuses to complete
+BUILD with a dirty tree.
 
 ### Rework Budget
 
-Each task gets **3 rework cycles** per quality gate:
-- Cycle 1-2: Auto-fix and re-review
-- Cycle 3: If still failing, **escalate to user** with full context:
-  - What the evaluator found
-  - What fixes were attempted
-  - What's still failing and why
-
-### Conflict Check Integration
-
-If stories in `.docs/stories/` have been modified since the plan was created:
-- Re-run `conflict-check` before starting the next task
-- If new conflicts found: halt and resolve before continuing
-
-### State Management
-
-Track all state in `.pipeline/`: `config.yaml` (project refs), `plan-ref.md` (active plan path), `task-status.json` (per-task status and rework cycle counts), and `audit-trail/` (per-task `rework-N.json`, `commit.txt`, plus `summary.json` for final pipeline metrics).
+Each task gets **3 rework cycles** per quality gate. If it still fails after the third, write the
+halt marker (see Halt-and-Escalate) naming what the evaluator found, what was tried, and what still
+fails.
 
 ### Parallel Execution
 
@@ -525,9 +373,9 @@ reduced parallelism is visible.
 Daemon concurrency does not change X. Each daemon dispatch is its own host session with its own
 slots.
 
-When X ≥ 2 and the ready frontier holds two or more independent tasks, use one host-native fan-out
-operation to dispatch up to X of them concurrently. Do not emit one dispatch, wait for it, and then
-emit the next. The provider-specific seams are explicit:
+When X ≥ 2 and the ready frontier holds two or more independent tasks,
+use one host-native fan-out operation to dispatch up to X of them concurrently. Do not emit one
+dispatch, wait for it, and then emit the next. The provider-specific seams are explicit:
 
 - Claude Code performs one response containing multiple Agent tool dispatches, one per selected
   task, then waits for all dispatched agents to return.
@@ -536,32 +384,13 @@ emit the next. The provider-specific seams are explicit:
 
 Parallel agents share the same directory, so their file sets must not overlap.
 
-**When to parallelize:**
-- Tasks touch different files (check `**Files likely touched:**` in the plan)
-- Tasks have `Dependencies: none` or depend only on already-completed tasks
-- Tasks follow the same pattern (e.g., "add validation to Model X" for 5 models)
-
-**How to parallelize:**
-1. Build the ready frontier from dependency and likely-touched-file metadata
-2. Compute X, then select at most X mutually independent tasks
-3. Dispatch all selected tasks in one host-native fan-out operation
-4. Each agent receives: the task description, the test directory, the source directory
-5. Wait for every concurrent dispatch to complete before verification
-6. Collect `BATCH_AFFECTED_TESTS` and supplied results without routine reruns. If a concrete
-   interaction risk needs checking, run only the relevant tests. Uncertain scope returns
-   configured suite proof to `test_suite`; never use a full-suite fallback here.
-7. If tests fail: identify the conflict, fix sequentially, and verify only the affected behavior
-
 ### Batch Boundaries
 
 At natural batch boundaries (after completing a group of related tasks):
 
 **Pre-batch verification (before starting next batch):**
-- Inspect the supplied results for `BATCH_AFFECTED_TESTS`; do not rerun the union as a
-  batch-boundary ritual. If ANY test fails that is NOT an expected RED test, stop and fix before
-  proceeding. If the union cannot be determined confidently, record that and defer aggregate
-  proof to the engine's dedicated aggregate gate — never run the full suite in this session.
-  Previous session bugs must not accumulate.
+- Inspect the supplied results for `BATCH_AFFECTED_TESTS`; do not rerun the union as a ritual.
+  If ANY test fails that is NOT an expected RED test, stop and fix before proceeding.
 - Verify the current branch is merge-ready: no WIP commits, no TODO-fixme code added this batch,
   all new code has tests. The branch should be shippable at any batch boundary, even if the
   feature is incomplete.
@@ -590,62 +419,21 @@ Persist decisions, patterns, gotchas, or context learned during the batch. Updat
 
 Append to `.pipeline/progress.log` at every batch boundary — a chronological narrative for cross-session continuity.
 
-```
-## Batch 1 — 2026-03-28 14:30
-- Completed: 1 (User model), 2 (registration endpoint) | Rework: 0 cycles
-- Issue: PostgreSQL JSONB casting needed explicit type (wrote .memory/gotchas/)
-- Next: 3 (authentication) | State: 2/13 tasks, all tests passing, merge-ready
-```
-
 ### Git Revert Recovery
 
 When the rework budget is exhausted, consider reverting to the last clean batch boundary commit (`git revert --no-commit HEAD~N..HEAD`) and re-approaching rather than continuing to patch. Each batch boundary is a merge-ready state, so reverting never loses unrelated work.
 
 ### Pipeline Summary
 
-**GATE: At final-task completion, write `.pipeline/summary.json` before marking the
-pipeline done.** It preserves final pipeline metrics without recomputing them from git log
-and `task-status.json`.
-
-Required fields (all numeric unless noted):
-
-```json
-{
-  "plan_ref": "<relative path to plan file>",
-  "complexity_tier": "S|M|L",
-  "max_parallel": 0,
-  "tasks_total": 0,
-  "tasks_completed": 0,
-  "tasks_skipped": 0,
-  "batches_total": 0,
-  "rework_cycles_used": 0,
-  "human_interventions": 0,
-  "started_at": "<ISO-8601>",
-  "completed_at": "<ISO-8601>",
-  "elapsed_seconds": 0,
-  "first_commit": "<SHA>",
-  "last_commit": "<SHA>"
-}
-```
-
-Counts come from `.pipeline/task-status.json` and `.pipeline/audit-trail/`. Timestamps
-come from `session-created` (start) and the write time (end). Commit SHAs come from
-`git log --format=%H --reverse <plan-ref-commit>..HEAD` (first + last).
-
-Write the file while the data is still in context.
+**At final-task completion, write `.pipeline/summary.json` before marking the pipeline done:**
+`{"plan_ref": "<plan path>", "tasks_total": N, "tasks_completed": N, "tasks_skipped": N}`, counted
+from `.pipeline/task-status.json`. The engine reads `tasks_completed` as completion evidence.
 
 ## Verification
 
 - [ ] Parallel cap X computed from free host slots before each fan-out
-- [ ] Implementation plan loaded and validated
-- [ ] Each task follows TDD cycle (not skipping RED or DOMAIN phases)
-- [ ] Every subagent dispatch's line 1 is exactly `Task: <id>` (bare plan id) so the session
-      hooks stamp `.pipeline/current-task` and commits auto-carry the trailer
-- [ ] No `completed` status was ever hand-written — completion derives solely from
-      commit-anchored evidence (trailers / `Evidence:` forms / engine stamps)
-- [ ] Quality gates enforced after each task
-- [ ] Rework budget tracked (escalate at 3 cycles)
-- [ ] State tracked in `.pipeline/` with audit trail
-- [ ] Conflict check re-run if stories changed
-- [ ] Batch summaries presented at natural boundaries
-- [ ] Pipeline summary available for final metrics
+- [ ] Each task followed the TDD cycle (or `/code-removal` for a removal task)
+- [ ] Every subagent dispatch's line 1 is exactly `Task: <id>` or `Task: none`
+- [ ] No `completed` status was hand-written
+- [ ] Rework budget tracked (halt marker at 3 cycles)
+- [ ] `.pipeline/summary.json` written at final-task completion

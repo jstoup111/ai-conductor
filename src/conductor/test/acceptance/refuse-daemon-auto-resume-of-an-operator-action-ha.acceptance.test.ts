@@ -1,5 +1,5 @@
 /**
- * Covers: Story 1, Task 1
+ * Covers: task:9
  *
  * The real daemon pool is bounded with injected backlog, feature, halt, and
  * progress seams. No provider, network, Git, or filesystem boundary is used.

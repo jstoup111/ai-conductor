@@ -251,13 +251,13 @@ be able to invoke the resolver on demand.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a NON-daemon run, when `runRebaseStep` executes, then it is a self-satisfying no-op — no
+- Given a NON-daemon run with no routed host awaiting a fold, when `runRebaseStep` executes, then it is a self-satisfying no-op — no
   git rebase, no resolver dispatch (unchanged from today).
 - Given I invoke `/rebase` manually, when there is a paused rebase, then the resolution skill runs
   against the current worktree independently of the daemon loop.
 
 #### Negative Paths
-- Given a NON-daemon run with a real conflict in the live worktree, when the step runs, then it
+- Given a NON-daemon run with no routed host awaiting a fold and a real conflict in the live worktree, when the step runs, then it
   does NOT touch git (no corruption of the interactive branch).
 - Given `/rebase` is invoked with no rebase in progress, when it runs, then it reports "nothing to
   resolve" and makes no changes.

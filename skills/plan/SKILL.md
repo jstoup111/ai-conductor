@@ -71,9 +71,9 @@ refusal is not a git conflict: do not invoke the rebase resolver or run `git reb
 **GATE: Refuse to produce a plan without these artifacts:**
 
 - [ ] Stories exist in `.docs/stories/` for the feature being planned
-- [ ] Every task carries a `**Dependencies:**` line (use `none` when independent) or the plan
-      includes a `## Task Dependency Graph` section — daemon discovery refuses merged specs
-      whose plans lack a dependency tree
+- [ ] Every non-remediation task declares exactly one `**Dependencies:**` line: `none` when
+      independent, or a comma-separated task reference list. Every cited id is declared and the
+      dependency graph is acyclic. Land and the conduct `plan` gate enforce this rule for new plans
 - [ ] Every story has both happy and negative paths
 - [ ] Conflict-check has passed (check `.docs/conflicts/` for recent clean pass, or no blocking conflicts)
 - [ ] Before the plan declares a `## Slices` section, the operator has explicitly accepted stacked
@@ -332,7 +332,8 @@ without making the task undeliverable or its evidence stale.
 3. **Negative paths are explicit tasks** — Each negative path scenario gets its own task, not a "clean up error handling" catch-all
 4. **Integration points identified** — Mark tasks where components connect for the first time
 5. **Dependencies declared** — If Task 5 requires Task 3's model, say so. Declare only genuine
-   dependencies and keep each task's `**Files likely touched:**` to the files it actually changes:
+   dependencies. List in `**Files likely touched:**` every file the task must change, including
+   the call sites, exhaustive unions or switches, and registries its change forces, and nothing more:
    BUILD schedules by ready frontier and fans out independent tasks concurrently, so a dependency
    that is merely narrative order, or a file set padded beyond the task's real reach, serializes
    work that could have been delivered in parallel
@@ -455,8 +456,8 @@ the shape of the work before reading individual tasks.]
 ### Task 2: [Title]
 ...
 
-## Task Dependency Graph
-[Simple text diagram showing which tasks block which]
+## Optional Task Dependency Graph
+[Optional simple text diagram showing which tasks block which, alongside the per-task lines]
 
 ## Integration Points
 - After Task [N]: [What can be tested end-to-end at this point]

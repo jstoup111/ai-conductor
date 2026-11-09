@@ -1,6 +1,6 @@
 import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
 
-// Covers: task:1, task:10, task:15
+// Covers: task:1, task:6, task:10, task:15
 
 import { describe, expect, it, vi } from 'vitest';
 import { readFile, readdir } from 'node:fs/promises';
@@ -72,15 +72,13 @@ describe('guardDaemonSessionInvocation', () => {
     },
   );
 
-  it('refuses any conductor invocation when the daemon-session marker is set', () => {
+  it('refuses any conductor invocation with a subcommand when the daemon-session marker is set', () => {
     for (const argv of [
       argvFor('daemon', 'park', 'some-slug'),
       argvFor('daemon', 'restart'),
       argvFor('reseal', '--feature', 'x'),
       argvFor('shipped-record', '--slug', 'x', '--pr', 'url'),
       argvFor('engineer'),
-      argvFor('--interactive'),
-      argvFor(),
     ]) {
       const verdict = guardDaemonSessionInvocation(argv, markedEnv());
       expect(verdict.allowed).toBe(false);
@@ -93,6 +91,41 @@ describe('guardDaemonSessionInvocation', () => {
         );
       }
     }
+  });
+
+  // Covers: task:12
+  it.each([
+    [argvFor()],
+    [argvFor('--help')],
+    [argvFor('--help', '--zz-unknown-token')],
+  ])('explains a missing subcommand without reflecting argv: %j', (argv) => {
+    const verdict = guardDaemonSessionInvocation(argv, markedEnv());
+
+    expect(verdict).toMatchObject({ allowed: false, subcommand: 'none' });
+    if (verdict.allowed) throw new Error('expected no-subcommand refusal');
+    expect(verdict.message).toContain(
+      'ai-conductor was invoked without a subcommand from inside a daemon-managed session.',
+    );
+    expect(verdict.message).not.toContain('blocked subcommand: <none>');
+    expect(verdict.message).not.toContain('--zz-unknown-token');
+    for (const sanctioned of SESSION_SANCTIONED_SUBCOMMANDS) {
+      expect(verdict.message).toContain(sanctioned);
+    }
+  });
+
+  // Covers: task:12
+  it('leaves known blocked and sanctioned subcommands unchanged', () => {
+    expect(guardDaemonSessionInvocation(argvFor('daemon', 'status'), markedEnv())).toEqual({
+      allowed: false,
+      subcommand: 'daemon',
+      message: expect.stringContaining('blocked subcommand: daemon'),
+    });
+    expect(
+      guardDaemonSessionInvocation(
+        argvFor('github-operation', '--request-file', '/tmp/request.json'),
+        markedEnv(),
+      ),
+    ).toEqual({ allowed: true });
   });
 
   it('names the blocked subcommand in the refusal', () => {
@@ -150,6 +183,24 @@ describe('guardDaemonSessionInvocation', () => {
     expect(SESSION_SANCTIONED_SUBCOMMANDS).toContain('stack-commit-guard');
     expect(guardDaemonSessionInvocation(argvFor('stack', 'land'), markedEnv()).allowed).toBe(false);
     expect(guardDaemonSessionInvocation(argvFor('stack', 'owners'), markedEnv()).allowed).toBe(false);
+  });
+
+  // Covers: task:8
+  it('refuses operator-recorded restack decisions before any feature read or command dispatch', async () => {
+    expect(SESSION_SANCTIONED_SUBCOMMANDS).not.toContain('stack');
+    const readFeaturePath = vi.fn();
+    const dispatch = vi.fn(async () => {
+      readFeaturePath('/project/.worktrees/demo');
+      return 0;
+    });
+    await expect(dispatchCliEntry({
+      argv: argvFor('stack', 'restack-resolve', '--slug', 'demo', '--child', '2', '--decision', 'operator answer'),
+      environment: markedEnv(),
+      dispatch,
+      diagnostic: vi.fn(),
+    })).resolves.toEqual({ exitCode: 1, refused: true });
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(readFeaturePath).not.toHaveBeenCalled();
   });
 
   it('never grants build-review operator authority to a daemon session', () => {

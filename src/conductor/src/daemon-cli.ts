@@ -57,6 +57,8 @@ import type { TerminalRendererOptions } from './ui/terminal-renderer.js';
 import type { UIRenderer } from './ui/types.js';
 import { ALL_STEPS } from './engine/steps.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
+import type { StepRunner } from './engine/step-runner-types.js';
+import type { RestackResolver } from './engine/restack/restack-resolver.js';
 import { createProviderRuntimeSet } from './engine/provider-runtime.js';
 import { ProviderSessionStore } from './engine/provider-session.js';
 import type { ProviderExecutionContext } from './engine/provider-execution.js';
@@ -80,6 +82,7 @@ import {
   type ProviderVersionProbeRunner,
 } from './engine/provider-discovery.js';
 import {
+  resolveProviderModelTiers,
   validateConfiguredProviderModels,
   type ProviderModelProbeRunner,
 } from './engine/provider-model-probe.js';
@@ -108,7 +111,9 @@ import {
   formatSessionOccurrence,
   renderedEventTypes,
   renderedSessionOccurrenceTypes,
+  type RenderedEventType,
 } from './engine/event-sinks.js';
+import { composeDaemonLineBodies, DAEMON_EVENT_DEPTH } from './engine/daemon-line-shape.js';
 import { resolveExecutionIdentity } from './engine/execution-identity.js';
 import { formatGithubCredentialFallback, formatGithubOperationRefusal, formatGithubOperationTarget } from './engine/github-operations.js';
 import { formatBotCoAuthorSkipped } from './engine/bot-co-author.js';
@@ -124,7 +129,7 @@ import {
   BUILD_PROGRESS_HALT_DEFAULTS,
 } from './engine/config.js';
 import type { HarnessConfig } from './types/config.js';
-import { readLastResolvedCount } from './engine/task-evidence.js';
+import { readLastResolvedCount, stampDispatchBaseline } from './engine/task-evidence.js';
 import { countResolvedTasks } from './engine/task-progress.js';
 import { holdLock, readPidRecord, ownsLock, selfGuardEnv } from './engine/daemon-lock.js';
 import {
@@ -201,6 +206,7 @@ import {
   makeWorkClaimLivenessPredicate,
   makeWorktreeRemovalPredicate,
   makeWatchHaltClearedSeam,
+  appendHaltClearedRecord,
   resolveDaemonBaseSha,
 } from './engine/daemon-deps.js';
 import { encodeClaimKey, featureSlugs, InMemoryWorkClaims } from './engine/work-claims.js';
@@ -254,6 +260,7 @@ import {
   hasRebaseInProgress,
   abortRebase,
   clearMarker,
+  clearRetryableHaltMarker,
   clearHaltForResume,
   consumeResumeAuthorizations,
   readRawHaltClass,
@@ -714,6 +721,10 @@ export interface DaemonModeOptions {
   awaitDaemonOtelStop?: AwaitDaemonOtelStop;
   /** Injectable executor boundary for daemon composition tests. */
   runFeature?: (item: BacklogItem) => Promise<FeatureOutcome>;
+  /** Injectable scheduler boundary for daemon composition tests. */
+  runDaemon?: typeof runDaemon;
+  /** Injectable retryable-HALT dependency factory for daemon composition tests. */
+  buildRetryableHaltDeps?: typeof buildRetryableHaltDeps;
   /**
    * Task 3: Show completed (PROCESSED) features in the startup dashboard's
    * console output. Defaults to false/undefined — the persisted log sink
@@ -974,6 +985,47 @@ export function buildProgressReKickDeps(
         countResolvedTasks(slugRoot),
       ]);
       return liveResolvedCount > lastResolvedCount;
+    },
+  };
+}
+
+/** Production seams for retryable HALTs; intentionally independent of progress config. */
+export function buildRetryableHaltDeps(
+  worktreeBase: string,
+  recordRemote: import('./engine/halt-record.js').HaltRecordRemoteOptions | undefined,
+): {
+  clearRetryableHalt: (slug: string) => Promise<void>;
+  isFreshRetryableHalt: (slug: string) => Promise<boolean>;
+  stampDispatchBaseline: (slug: string) => Promise<void>;
+} {
+  const worktreePath = (slug: string) => join(worktreeBase, slug);
+  return {
+    clearRetryableHalt: async (slug) => {
+      const root = worktreePath(slug);
+      const cleared = await clearRetryableHaltMarker(root);
+      if (cleared) await appendHaltClearedRecord(root, 'rekick', recordRemote);
+    },
+    isFreshRetryableHalt: async (slug) => {
+      const root = worktreePath(slug);
+      let haltBody: string;
+      try {
+        haltBody = await readFile(join(root, HALT_MARKER), 'utf-8');
+      } catch {
+        return false;
+      }
+      const retention = await resolveHaltRetention(
+        () => readRawHaltClass(root),
+        { retainUnclassified: true },
+      );
+      if (retention.retained) return false;
+      try {
+        return haltBody !== await readFile(join(root, '.pipeline/HALT.rekicked'), 'utf-8');
+      } catch {
+        return true;
+      }
+    },
+    stampDispatchBaseline: async (slug) => {
+      await stampDispatchBaseline(worktreePath(slug), countResolvedTasks);
     },
   };
 }
@@ -1355,6 +1407,15 @@ export async function runDaemonRekickStackPreflight(
   return result;
 }
 
+/** The daemon's provider seam for resolver dispatches, including restack hand-offs. */
+export function restackResolverForStepRunner(
+  stepRunner: Pick<StepRunner, 'resolveRebaseConflict'>,
+): RestackResolver | undefined {
+  return stepRunner.resolveRebaseConflict === undefined
+    ? undefined
+    : (context) => stepRunner.resolveRebaseConflict!(context);
+}
+
 export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResult | undefined> {
   const { projectRoot, showCompleted } = opts;
   const installedHarnessVersion = await installedHarnessVersionForConfig(__dirname);
@@ -1456,7 +1517,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   const teeConsoleLine = (level: string, args: unknown[]): void => {
     try {
       const line = args.map((a) => (typeof a === 'string' ? a : String(a))).join(' ');
-      logSink?.write(formatDaemonLogLine(formatDaemonConsoleTeeLine(level, stripAnsi(line))));
+      for (const body of composeDaemonLineBodies(stripAnsi(line), 0)) {
+        logSink?.write(formatDaemonLogLine(formatDaemonConsoleTeeLine(level, body)));
+      }
     } catch {
       // Best-effort: the tee must never disrupt the warning path itself.
     }
@@ -1724,6 +1787,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   await validateConfiguredProviderModels({
     config: config ?? {},
     discovery: providerDiscovery,
+    ...(opts.providerModelProbeRunner ? { runner: opts.providerModelProbeRunner } : {}),
+  });
+  await resolveProviderModelTiers({
+    discovery: providerDiscovery,
+    projectRoot,
     ...(opts.providerModelProbeRunner ? { runner: opts.providerModelProbeRunner } : {}),
   });
   validateRegisteredProviderSelections({
@@ -2137,9 +2205,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         await writeFile(rekickPath, '');
       },
       events: featureEvents,
-      resolver: stepRunner.resolveRebaseConflict
-        ? (ctx) => stepRunner.resolveRebaseConflict(ctx)
-        : undefined,
+      resolver: restackResolverForStepRunner(stepRunner),
       resolverCap: resolveRebaseResolutionAttempts(config),
       // Authorizations are consumed by the daemon's pre-dispatch maintenance
       // boundary. A record left by an already-cleared halt can be resolved
@@ -2754,7 +2820,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // invokes these captured sanctioned call-sites at claim time.
   const repairQueue = new RepairQueue();
   let recordEngineSourceRefresh: (() => void) | undefined;
-  const result = await runDaemon(
+  const dispatchDaemon = opts.runDaemon ?? runDaemon;
+  const retryableHaltDeps = opts.buildRetryableHaltDeps ?? buildRetryableHaltDeps;
+  const result = await dispatchDaemon(
     {
       claims: workClaims,
       repairPriority: (slug) => priorityResolver.bandForSlug?.(slug),
@@ -2799,6 +2867,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // — previously constructed and fully unit-tested only at the
       // daemon.ts/pickEligible level, never reachable from this entrypoint.
       ...buildProgressReKickDeps(config, worktreeBase, log),
+      ...retryableHaltDeps(worktreeBase, { events }),
+      readHaltClass: (slug) => readHaltClass(join(worktreeBase, slug)),
       // FR-1 (Task 11): gate dispatch on the durable `.daemon/PAUSED` marker,
       // re-polled every loop iteration by runDaemon so a pause lifted mid-run
       // resumes dispatch at the next boundary (no restart required).
@@ -2860,6 +2930,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       },
       getDiscoverySnapshot: async (parkedSlugs) => workSource.snapshot?.(parkedSlugs),
       runFeature,
+      // Only child executors have a separately running conductor to yield.
+      // The rollback in-process executor deliberately receives no preemption
+      // signal, preserving its existing single-process scheduling semantics.
+      ...(childMode ? { requestYield: (slug: string) => childExecutor.requestYield(slug) } : {}),
       onExecutorStarted: () => {
         activeExecutorCount += 1;
       },
@@ -3542,7 +3616,9 @@ export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => v
   // (e.g. from a future event kind whose formatter assumes a field that
   // isn't there) degrades to a dropped line, not a process crash.
   try {
-    renderDaemonEventUnsafe(event, log);
+    renderDaemonEventUnsafe(event, (message) => {
+      for (const body of composeDaemonLineBodies(message, DAEMON_EVENT_DEPTH[event.type as RenderedEventType])) log(body);
+    });
   } catch {
     // Best-effort: rendering a daemon.log line must never disrupt the run.
   }
@@ -3565,7 +3641,10 @@ function renderedExecutionSubject(event: ConductorEvent, legacyStep: string): st
 }
 
 function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => void): void {
-  const dot = chalk.dim('·');
+  // Depth and its marker belong to renderDaemonEvent.  Keeping this empty
+  // lets the legacy arm strings retain their content while the composer
+  // removes their former leading spacing.
+  const dot = '';
   switch (event.type) {
     case 'executor_protocol_mismatch':
       log(`${dot} executor ${event.slug} protocol mismatch: ${event.reason}${event.restartRequested ? ' (restart requested)' : ''}`);
@@ -4010,6 +4089,18 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       log(
         `${dot} ${chalk.cyan('⏸')} ${chalk.cyan(`operator park[${event.featureSlug}]: ${boundary}`)}`,
       );
+      break;
+    }
+    case 'preemption_boundary': {
+      const boundary =
+        event.boundary.kind === 'pre-first-unit'
+          ? 'before first scheduling unit'
+          : event.boundary.kind === 'attempt'
+            ? event.boundary.member === undefined
+              ? `after attempt ${event.boundary.attempt} for step ${event.boundary.step}`
+              : `after attempt ${event.boundary.attempt} for group step ${event.boundary.step} member ${event.boundary.member}`
+            : `after ${event.boundary.kind} ${event.boundary.name}`;
+      log(`${dot} ${chalk.yellow('■')} ${chalk.yellow(`preempted[${event.featureSlug}]: ${boundary}`)}`);
       break;
     }
     case 'verdict_freshness': {

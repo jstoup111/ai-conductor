@@ -21,7 +21,7 @@ describe('interactive overlap decisions', () => {
   it('files accepted suggestions as dependencies, leaves declined suggestions unlinked, and renders advisory overlaps without prompting', async () => {
     const operations: GithubOperationRequest[] = [];
     let prompts = 0;
-    const result = await fileIntakeIssue({ title: 't', body: 'b', size: 'S', priority: 'low', interactive: true }, {
+    const result = await fileIntakeIssue({ title: 't', body: 'b', size: 'S', priority: 'low', semver: 'patch', interactive: true }, {
       prompt: async () => {
         prompts++;
         return prompts === 1 ? 'accept' : 'decline';
@@ -77,7 +77,7 @@ describe('interactive overlap decisions', () => {
     const operations: GithubOperationRequest[] = [];
     let markFirstPrompt: () => void;
     const firstPrompt = new Promise<void>((resolvePrompt) => { markFirstPrompt = resolvePrompt; });
-    const resultPromise = fileIntakeIssue({ title: 't', body: 'b', size: 'S', priority: 'low', interactive: true }, {
+    const resultPromise = fileIntakeIssue({ title: 't', body: 'b', size: 'S', priority: 'low', semver: 'patch', interactive: true }, {
       prompt: (question) => {
         const answer = promptReadlineQuestion(rl, question);
         markFirstPrompt();

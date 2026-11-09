@@ -457,7 +457,7 @@ describe('recoverRestackJournal after a real runRestack crash (sweep G3)', () =>
 
     await expect(recoverRestackJournal({
       worktree: subject.repo, slug: 'demo', events, git: makeGitRunner(subject.repo),
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
 
     expect(refusals).toEqual([expect.objectContaining({ reason: 'published-stack', child: 1 })]);
     expect(await readJournal(subject.repo)).toMatchObject({ state: 'applied', followOnCause: 'base-refresh' });

@@ -55,6 +55,8 @@ Terms used below:
 As a reviewer of the children above a fix, I want the fix carried into every child above its host
 once the host is green, so that no child ships without the correction beneath it.
 
+Scope: this story governs every `operator` and `revalidate` round, and `audit` rounds admitted with `stacked_prs.fold_routed_fixes` set to `false`. An `audit` round admitted with the setting on executes its hosts on the leaf and defers placement to the fold (`.docs/stories/late-gate-fixes-restack-the-whole-stack-every-repa.md` Stories 1 to 3 and 9).
+
 ### Acceptance Criteria
 
 #### Happy Path
@@ -84,6 +86,8 @@ once the host is green, so that no child ships without the correction beneath it
 
 As an operator, I want a host whose repair produced no commits to leave its round without a
 restack, so that a no-op repair never rewrites the stack.
+
+Scope: this story governs every `operator` and `revalidate` round, and `audit` rounds admitted with `stacked_prs.fold_routed_fixes` set to `false`. An `audit` round admitted with the setting on executes its hosts on the leaf and defers placement to the fold (`.docs/stories/late-gate-fixes-restack-the-whole-stack-every-repa.md` Stories 1 to 3 and 9).
 
 ### Acceptance Criteria
 
@@ -258,7 +262,7 @@ only when the check still matches the child, so that no child is marked green on
 #### Negative Paths
 - Given a newer generation replaced child 2's entry while child 2 was being validated, when the PASS acknowledgement is attempted, then the compare-and-swap fails and child 2 stays queued.
 - Given child 2's closure moved during validation, when the PASS acknowledgement is attempted, then it fails, and the entry, the round and the marker stay pending.
-- Given a queued child and no `revalidate` round for it, when region entry is attempted for that child, then it is refused, and no region step is dispatched.
+- Given a queued child and no `revalidate` round for it, when region entry is attempted for that child, then no region step is dispatched before queue admission has created that child's `revalidate` round and repair marker, and a refused admission halts with no region step dispatched.
 - Given the same `revalidate` round is entered again after a crash, when region entry runs, then child 2's region is not restaged a second time.
 - Given a crash after child 2's `revalidate` record is created in phase `prepared` and before its marker is set, when the feature resumes, then that record is aborted, nothing was mutated, and child 2 stays queued.
 - Given child 2's `revalidate` round dispatches BUILD after a failing gate, when the dispatch runs, then no round receipt is settled and no lap or growth is charged.

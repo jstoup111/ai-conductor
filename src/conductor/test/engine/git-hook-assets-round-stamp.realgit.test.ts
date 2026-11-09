@@ -15,7 +15,10 @@ import { withGitArgvShim } from './n1-golden-shared.js';
 
 const execFile = promisify(execFileCallback);
 const roots: string[] = [];
-const sourceIndex = fileURLToPath(new URL('../../src/index.ts', import.meta.url));
+// global-setup builds this entry before workers start. Invoking it directly
+// avoids compiling TypeScript once per Git hook, which can exceed this
+// integration test's bounded timeout under CI parallelism.
+const engineIndex = fileURLToPath(new URL('../../dist/index.js', import.meta.url));
 const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
   readFile: (path) => readFile(path, 'utf8'),
   mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
@@ -34,7 +37,7 @@ async function git(root: string, args: string[], input?: string): Promise<string
 async function writeHookLauncher(root: string, failRoundStamp = false): Promise<string> {
   const launcher = join(root, 'round-stamp-launcher');
   const fail = failRoundStamp ? 'if [ "$1" = round-stamp ]; then exit 1; fi\n' : '';
-  await writeFile(launcher, `#!/bin/sh\n${fail}exec node --import tsx ${JSON.stringify(sourceIndex)} "$@"\n`, 'utf8');
+  await writeFile(launcher, `#!/bin/sh\n${fail}exec node ${JSON.stringify(engineIndex)} "$@"\n`, 'utf8');
   await chmod(launcher, 0o755);
   return launcher;
 }

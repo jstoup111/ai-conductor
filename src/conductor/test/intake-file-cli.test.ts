@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 
 import { execa } from 'execa';
 import { afterEach, describe, expect, it } from 'vitest';
+import { renderIntakeFileOutput } from '../src/engine/engineer/intake/filing-output.js';
+import type { FileIntakeIssueResult } from '../src/engine/engineer/intake/file-issue.js';
 
 const CONDUCTOR_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const INTAKE_FILE_CLI = join(CONDUCTOR_ROOT, 'src', 'intake-file-cli.ts');
@@ -20,7 +22,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-async function runIntakeFile(options: { failPost43?: boolean; failRead43?: boolean } = {}) {
+async function runIntakeFile(options: { args?: string[]; failPost43?: boolean; failRead43?: boolean; failSemverLabel?: boolean } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'intake-file-cli-'));
   roots.push(root);
   const bin = join(root, 'bin');
@@ -46,6 +48,9 @@ else if (args[0] === 'api' && args[1] === 'repos/acme/app/issues/43' && process.
     process.stderr.write('HTTP 422: dependency rejected\\n');
     process.exit(1);
   }
+} else if (args[0] === 'api' && process.env.FAIL_SEMVER_LABEL === '1' && args.some((argument) => argument.includes('semver:patch'))) {
+  process.stderr.write('semver label rejected\\n');
+  process.exit(1);
 }
 `, 'utf8');
   await writeFile(join(bin, 'gh'), '#!/bin/sh\nexec node "$(dirname "$0")/gh-stub.mjs" "$@"\n', 'utf8');
@@ -56,10 +61,11 @@ else if (args[0] === 'api' && args[1] === 'repos/acme/app/issues/43' && process.
     ...environment
   } = process.env;
 
-  const result = await execa(TSX, [INTAKE_FILE_CLI,
+  const args = options.args ?? [
     '--title', 'Typed dependency', '--body', 'body', '--size', 'S', '--priority', 'low', '--repo', 'acme/app',
     '--depends-on', 'acme/app#42', '--depends-on', 'acme/app#43',
-  ], {
+  ];
+  const result = await execa(TSX, [INTAKE_FILE_CLI, ...args], {
     cwd: root,
     reject: false,
     extendEnv: false,
@@ -73,13 +79,136 @@ else if (args[0] === 'api' && args[1] === 'repos/acme/app/issues/43' && process.
       TEMP: CHILD_TMPDIR ?? root,
       ...(options.failPost43 ? { FAIL_POST_43: '1' } : {}),
       ...(options.failRead43 ? { FAIL_READ_43: '1' } : {}),
+      ...(options.failSemverLabel ? { FAIL_SEMVER_LABEL: '1' } : {}),
     },
   });
-  const calls = (await readFile(callsPath, 'utf8')).trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as string[]);
+  const calls = await readFile(callsPath, 'utf8').then(
+    (contents) => contents.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as string[]),
+    () => [],
+  );
   return { ...result, calls };
 }
 
 describe('intake-file CLI', () => {
+  // Covers: task:2
+  it('files a lowercase semver label and reports its given minor tier', async () => {
+    const result = await runIntakeFile({
+      args: ['--title', 'Semver', '--body', 'body', '--repo', 'acme/app', '--semver', 'minor'],
+    });
+
+    expect({ exitCode: result.exitCode, stdout: result.stdout, calls: result.calls }).toEqual({
+      exitCode: 0,
+      stdout: expect.stringContaining('[intake-file] semver=minor (given)'),
+      calls: expect.arrayContaining([
+        expect.arrayContaining(['labels[]=priority: medium']),
+        expect.arrayContaining(['labels[]=size: M']),
+        expect.arrayContaining(['labels[]=semver:minor']),
+      ]),
+    });
+  });
+
+  // Covers: task:2
+  it('normalizes uppercase --semver values', async () => {
+    const result = await runIntakeFile({
+      args: ['--title', 'Semver', '--body', 'body', '--repo', 'acme/app', '--semver', 'MAJOR'],
+    });
+
+    expect({ exitCode: result.exitCode, stdout: result.stdout, calls: result.calls }).toEqual({
+      exitCode: 0,
+      stdout: expect.stringContaining('[intake-file] semver=major (given)'),
+      calls: expect.arrayContaining([expect.arrayContaining(['labels[]=semver:major'])]),
+    });
+  });
+
+  // Covers: task:2
+  it('reports an unset semver exactly once without adding a semver label when noninteractive', async () => {
+    const result = await runIntakeFile({
+      args: ['--title', 'No semver', '--body', 'body', '--repo', 'acme/app'],
+    });
+
+    expect({ exitCode: result.exitCode, semverLines: result.stdout.match(/\[intake-file\] semver=/g), calls: result.calls }).toEqual({
+      exitCode: 0,
+      semverLines: ['[intake-file] semver='],
+      calls: expect.not.arrayContaining([expect.arrayContaining(['semver:'])]),
+    });
+    expect(result.stdout).toContain('[intake-file] semver=unset');
+  });
+
+  // Covers: task:2
+  it('rejects invalid and valueless --semver before issue creation', async () => {
+    const invalid = await runIntakeFile({
+      args: ['--title', 'Invalid semver', '--body', 'body', '--repo', 'acme/app', '--semver', 'feature'],
+    });
+    const missing = await runIntakeFile({
+      args: ['--title', 'Missing semver', '--body', 'body', '--repo', 'acme/app', '--semver'],
+    });
+
+    expect({ exitCode: invalid.exitCode, stderr: invalid.stderr, calls: invalid.calls }).toEqual({
+      exitCode: 1,
+      stderr: '[intake-file] error: invalid --semver "feature" (major|minor|patch)',
+      calls: [],
+    });
+    expect({ exitCode: missing.exitCode, stderr: missing.stderr, calls: missing.calls }).toEqual({
+      exitCode: 1,
+      stderr: '[intake-file] error: missing value for --semver',
+      calls: [],
+    });
+  });
+
+  // Covers: task:2
+  it('lists --semver in CLI usage', async () => {
+    const result = await runIntakeFile({ args: ['--title', 'Missing body'] });
+
+    expect({ exitCode: result.exitCode, stderr: result.stderr, calls: result.calls }).toEqual({
+      exitCode: 1,
+      stderr: expect.stringContaining('[--semver major|minor|patch]'),
+      calls: [],
+    });
+  });
+
+  // Covers: task:2
+  it('keeps a filed semver issue successful when its label application fails', async () => {
+    const result = await runIntakeFile({
+      args: ['--title', 'Semver label failure', '--body', 'body', '--repo', 'acme/app', '--semver', 'patch'],
+      failSemverLabel: true,
+    });
+
+    expect({ exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr }).toEqual({
+      exitCode: 0,
+      stdout: expect.stringMatching(/\[intake-file\] filed: https:\/\/github\.com\/acme\/app\/issues\/99[\s\S]*\[intake-file\] semver=patch \(given\)/),
+      stderr: expect.stringMatching(/\[intake-file\] warning: label-apply failed:[\s\S]*semver label rejected/),
+    });
+  });
+
+  // Covers: task:2
+  it('renders prompted and unset semver results from interactive filing', () => {
+    const base: FileIntakeIssueResult = {
+      ok: true,
+      issueUrl: 'https://github.com/acme/app/issues/99',
+      size: 'M',
+      priority: 'medium',
+      semver: 'patch',
+      sizeSource: 'prompted',
+      prioritySource: 'prompted',
+      semverSource: 'prompted',
+      dependsOnDecision: 'none',
+      linked: [],
+      unlinked: [],
+      badRefs: [],
+      warnings: [],
+      metadataFailures: [],
+      redactions: [],
+    };
+
+    expect(renderIntakeFileOutput(base).stdout).toContain('[intake-file] priority=medium (prompted)\n[intake-file] semver=patch (prompted)');
+    for (const result of [
+      { semver: null, semverSource: null },
+      { semver: null, semverSource: null },
+    ] as const) {
+      expect(renderIntakeFileOutput({ ...base, ...result }).stdout).toContain('[intake-file] semver=unset');
+    }
+  });
+
   it('reports dependency links and every missing link after a successful filing', async () => {
     const linked = await runIntakeFile();
 

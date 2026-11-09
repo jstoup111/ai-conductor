@@ -141,7 +141,7 @@ describe('runRestack pre-move checks (sweep G1, real local Git)', () => {
     const elsewhere = await worktreeElsewhere(baseRefresh, 'feat/c1/demo');
     const before = await refSnapshot(baseRefresh);
     const refused = await persisted(baseRefresh, (events) => restack(baseRefresh, events));
-    expect(refused.result).toEqual({ kind: 'halted' });
+    expect(refused.result).toMatchObject({ kind: 'halted' });
     expect(refused.refusals).toEqual([{ type: 'restack_refused', reason: 'checked-out-elsewhere', detail: elsewhere }]);
     expect(await refSnapshot(baseRefresh)).toBe(before);
     expect(await readRestackJournal(baseRefresh.repo, 'demo')).toMatchObject({ kind: 'journal', journal: { state: 'aborted' } });
@@ -152,7 +152,7 @@ describe('runRestack pre-move checks (sweep G1, real local Git)', () => {
     const c2Worktree = await worktreeElsewhere(childTwoElsewhere, 'feat/c2/demo');
     const beforeTwo = await refSnapshot(childTwoElsewhere);
     const refusedTwo = await persisted(childTwoElsewhere, (events) => repair(childTwoElsewhere, events));
-    expect(refusedTwo.result).toEqual({ kind: 'halted' });
+    expect(refusedTwo.result).toMatchObject({ kind: 'halted' });
     expect(refusedTwo.refusals).toEqual([{ type: 'restack_refused', reason: 'checked-out-elsewhere', detail: c2Worktree }]);
     expect(await refSnapshot(childTwoElsewhere)).toBe(beforeTwo);
 
@@ -180,7 +180,7 @@ describe('runRestack pre-move checks (sweep G1, real local Git)', () => {
 
     const { result, refusals } = await persisted(subject, (events) => restack(subject, events));
 
-    expect(result).toEqual({ kind: 'halted' });
+    expect(result).toMatchObject({ kind: 'halted' });
     expect(refusals).toEqual([{ type: 'restack_refused', reason: 'dirty-overlap', detail: 'src/a.ts' }]);
     expect(await refSnapshot(subject)).toBe(before);
     await expect(readFile(join(subject.repo, 'src', 'a.ts'), 'utf8')).resolves.toBe('operator edit\n');
@@ -208,7 +208,7 @@ describe('runRestack pre-move checks (sweep G1, real local Git)', () => {
     const before = await refSnapshot(readOnly);
     try {
       const { result, refusals } = await persisted(readOnly, (events) => restack(readOnly, events));
-      expect(result).toEqual({ kind: 'halted' });
+      expect(result).toMatchObject({ kind: 'halted' });
       expect(refusals).toEqual([{ type: 'restack_refused', reason: 'sync-collision', detail: 'tmp/out.txt' }]);
       expect(await refSnapshot(readOnly)).toBe(before);
       await expect(readFile(join(readOnly.repo, 'tmp', 'out.txt'), 'utf8')).resolves.toBe('untracked output\n');
@@ -228,7 +228,7 @@ describe('runRestack pre-move checks (sweep G1, real local Git)', () => {
     await writeFile(join(subject.repo, '.docs', 'decisions', 'approved.md'), 'mutated\n');
     const before = await refSnapshot(subject);
 
-    await expect(restack(subject)).resolves.toEqual({ kind: 'halted' });
+    await expect(restack(subject)).resolves.toMatchObject({ kind: 'halted' });
 
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('protected-artifact seal error');
     expect(await refSnapshot(subject)).toBe(before);

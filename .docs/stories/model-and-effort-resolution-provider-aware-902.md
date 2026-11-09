@@ -64,19 +64,20 @@ changes.
 
 - **HP-1:** Given either built-in provider and no model or effort override,
   when every engine step is resolved, then its base model and effort equal the
-  selected provider's row in the policy matrix.
+  selected provider's row in the policy matrix, where each Codex model is
+  a floor that a dispatching process may upgrade to a newer listed model of the same tier (codex-steps-resolve-the-newest-catalog-model-per-t Story 1).
 - **HP-2:** Given a complexity tier, when tier-aware steps are resolved, then
   `stories` uses effort `low` at S, `medium` at M, and `high` at L;
   `explore` uses effort `low` at S and `high` at M/L; `plan` uses effort
   `medium` at S, `high` at M, and `xhigh` at L; and L-tier `plan` and
-  `conflict_check` use the selected provider's deepest model (`fable` for
-  Claude, `gpt-5.6-sol` for Codex).
+  `conflict_check` use the selected provider's deepest step-default model
+  (`fable` for Claude, the `gpt-5.6-sol` floor for Codex).
 
 #### Negative Paths
 
 - **NP-1 (covers HP-1):** Given Codex is selected, when the complete engine
-  step set is resolved, then every model is one of `gpt-5.6-luna`,
-  `gpt-5.6-terra`, or `gpt-5.6-sol`; no step is missing and no `haiku`,
+  step set is resolved, then every model is one of the floors `gpt-5.6-luna`,
+  `gpt-5.6-terra`, or `gpt-5.6-sol`, or a newer listed id of the same tier; no step is missing and no `haiku`,
   `sonnet`, `opus`, or `fable` value is returned.
 - **NP-2 (covers HP-2):** Given tier S or M, when `plan` and
   `conflict_check` are resolved, then neither is promoted to the selected
@@ -199,7 +200,8 @@ retry behavior remains unchanged.
   then attempt 1 uses the resolved base model/effort, attempt 2 bumps effort one
   rung in `low → medium → high → xhigh → max`, and attempt 3+ cumulatively
   bumps the base model `(attempt − 2)` rungs through
-  `gpt-5.6-luna → gpt-5.6-terra → gpt-5.6-sol`, capped at Sol.
+  `gpt-5.6-luna → gpt-5.6-terra → gpt-5.6-sol → gpt-6-astra`, capped at Astra,
+  where each rung is a floor that a dispatching process may upgrade to a newer listed model of the same tier (codex-steps-resolve-the-newest-catalog-model-per-t Story 1).
 - **HP-2:** Given a Claude step with escalation enabled, when the same attempt
   sequence runs, then model escalation remains
   `haiku → sonnet → opus → fable`, effort ordering remains unchanged, and the
@@ -211,7 +213,7 @@ retry behavior remains unchanged.
 #### Negative Paths
 
 - **NP-1 (covers HP-1):** Given a Codex base model already at
-  `gpt-5.6-sol`, or an effort already at `max`, when later attempts run, then
+  `gpt-6-astra`, or an effort already at `max`, when later attempts run, then
   the value remains capped and no Claude alias or value outside the declared
   effort order is produced.
 - **NP-2 (covers HP-2):** Given Claude is selected, when escalation reaches
@@ -251,8 +253,9 @@ extra retry attempts and Claude fallback behavior remains unchanged.
 #### Happy Path
 
 - **HP-1:** Given Codex is selected with no explicit fallback ladder, when
-  `gpt-5.6-sol` is unavailable, then the same attempt walks
-  `gpt-5.6-sol → gpt-5.6-terra → gpt-5.6-luna` until one succeeds.
+  the sol rung is unavailable, then the same attempt walks
+  `gpt-5.6-sol → gpt-5.6-terra → gpt-5.6-luna` until one succeeds, where each
+  rung is a floor that a dispatching process may upgrade to a newer listed model of the same tier (codex-steps-resolve-the-newest-catalog-model-per-t Story 1).
 - **HP-2:** Given Claude is selected with no explicit fallback ladder, when
   `fable` is unavailable, then the same attempt retains the accepted
   `fable → opus → sonnet` walk.

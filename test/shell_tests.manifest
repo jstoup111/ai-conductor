@@ -12,6 +12,7 @@ check_skill_model_pins.sh integrity integrity validates its contract directly
 check_task_status_writers.sh integrity integrity validates its contract directly
 check_shell_test_classification.sh integrity integrity validates the delivered shell-test classifications
 check_skill_invocation_policy.sh integrity integrity validates its contract directly
+check_local_skill_host_wiring.sh integrity integrity validates its contract directly
 check_update_flow_config_ownership.sh integrity integrity validates its contract directly
 lint_shell.sh integrity integrity runs shell syntax and static checks
 test_as_built_markdown_authority.sh integrity integrity runs its fixture suite
@@ -36,6 +37,7 @@ test_release_pr_workflow.sh integrity integrity runs its fixture suite
 test_run_shell_tests.sh integrity integrity runs shell-test runner fixtures
 test_shell_test_classification.sh integrity integrity runs shell-test classification fixtures
 test_skill_invocation_policy.sh integrity integrity runs its fixture suite
+test_local_skill_host_wiring.sh integrity integrity runs its fixture suite
 
 # Scripts called by an integrity-run fixture suite.
 check_docs_navigation.sh invoked-by:test_docs_navigation.sh documentation fixture invokes it

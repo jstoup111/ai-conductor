@@ -47,6 +47,7 @@ import { createHash } from 'node:crypto';
 import { basename, join } from 'node:path';
 import {
   PRE_COMMIT_HOOK,
+  buildPreCommitHook,
   PREPARE_COMMIT_MSG_HOOK,
   COMMIT_MSG_HOOK,
   REFERENCE_TRANSACTION_HOOK,
@@ -620,6 +621,7 @@ export async function ensureSessionHooks(
 export async function writeGitHooksAndWire(
   worktreePath: string,
   log?: (msg: string) => void,
+  options: { launcher?: string } = {},
 ): Promise<void> {
   // Some unit-level setup tests exercise the project-script boundary in a
   // plain temporary directory rather than a Git worktree. There is no commit
@@ -640,7 +642,7 @@ export async function writeGitHooksAndWire(
     throw new Error(`preventive git hook installation failed: unable to access .git metadata: ${msg}`);
   }
   try {
-    await writeGitHooks(worktreePath, log);
+    await writeGitHooks(worktreePath, log, options);
     await wireGitHooks(worktreePath, log);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -654,12 +656,13 @@ export async function writeGitHooksAndWire(
 async function writeGitHooks(
   worktreePath: string,
   log?: (msg: string) => void,
+  options: { launcher?: string } = {},
 ): Promise<void> {
   const hooksDir = join(worktreePath, '.pipeline', 'git-hooks');
   await mkdir(hooksDir, { recursive: true });
 
   const preCommitPath = join(hooksDir, 'pre-commit');
-  await writeFile(preCommitPath, PRE_COMMIT_HOOK, 'utf-8');
+  await writeFile(preCommitPath, options.launcher === undefined ? PRE_COMMIT_HOOK : buildPreCommitHook(options.launcher), 'utf-8');
   await chmod(preCommitPath, 0o755);
 
   const prepareCommitMsgPath = join(hooksDir, 'prepare-commit-msg');

@@ -1,3 +1,4 @@
+// Covers: task:1, task:9, task:rem-prd-audit-rem-prd-audit-S4.2-r1, task:rem-as-built-rem-asbuilt-b00b54a4-2-r1
 import { mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -589,6 +590,121 @@ describe('filesystem conduct state store', () => {
     })).resolves.toMatchObject({ kind: 'conflict' });
 
     expect(writes).toEqual([]);
+    await expect(readFile(statePath, 'utf-8')).resolves.toBe(originalBytes);
+  });
+
+  it('accepts an already-repended selected gate while atomically advancing its cursor', async () => {
+    const statePath = await createStatePath();
+    const initialState: ConductState = {
+      test_suite: 'pending',
+      last_step: 'build_review',
+    };
+    await writeState(statePath, initialState);
+    const writes: ConductState[] = [];
+    const store = createFilesystemConductStateStore(
+      statePath,
+      persistenceWritesToDisk(writes),
+    );
+
+    await expect(store.applyBatch({
+      name: 'reopen selected gate after rebase',
+      mutations: [
+        {
+          field: 'test_suite',
+          expected: 'done',
+          intent: 'reopen test_suite selected gate',
+          next: 'pending',
+        },
+        {
+          field: 'last_step',
+          expected: 'build_review',
+          intent: 'record rebase cursor',
+          next: 'rebase',
+        },
+      ],
+    })).resolves.toEqual({ kind: 'applied' });
+
+    const expectedState: ConductState = {
+      test_suite: 'pending',
+      last_step: 'rebase',
+    };
+    expect(writes).toEqual([expectedState]);
+    expect(JSON.parse(await readFile(statePath, 'utf-8'))).toEqual(expectedState);
+  });
+
+  it('preserves bytes and returns the exact conflict for a stale selected gate', async () => {
+    const statePath = await createStatePath();
+    await writeState(statePath, { test_suite: 'stale' });
+    const originalBytes = await readFile(statePath, 'utf-8');
+    const store = createFilesystemConductStateStore(statePath);
+
+    await expect(store.applyBatch({
+      name: 'reopen selected gate after rebase',
+      mutations: [{
+        field: 'test_suite',
+        expected: 'done',
+        intent: 'reopen test_suite selected gate',
+        next: 'pending',
+      }],
+    })).resolves.toEqual({
+      kind: 'conflict',
+      message: 'Expected test_suite to match before reopen test_suite selected gate',
+    });
+
+    await expect(readFile(statePath, 'utf-8')).resolves.toBe(originalBytes);
+  });
+
+  it('does not write a partly accepted batch when its second field conflicts', async () => {
+    const statePath = await createStatePath();
+    await writeState(statePath, { test_suite: 'pending', last_step: 'plan_review' });
+    const originalBytes = await readFile(statePath, 'utf-8');
+    const writes: ConductState[] = [];
+    const store = createFilesystemConductStateStore(
+      statePath,
+      persistenceWritesToDisk(writes),
+    );
+
+    await expect(store.applyBatch({
+      name: 'reopen selected gate after rebase',
+      mutations: [
+        {
+          field: 'test_suite',
+          expected: 'done',
+          intent: 'reopen test_suite selected gate',
+          next: 'pending',
+        },
+        {
+          field: 'last_step',
+          expected: 'build_review',
+          intent: 'record rebase cursor',
+          next: 'rebase',
+        },
+      ],
+    })).resolves.toEqual({
+      kind: 'conflict',
+      message: 'Expected last_step to match before record rebase cursor',
+    });
+
+    expect(writes).toEqual([]);
+    await expect(readFile(statePath, 'utf-8')).resolves.toBe(originalBytes);
+  });
+
+  it('does not resolve a skipped plan as stale when its expectation mismatches', async () => {
+    const statePath = await createStatePath();
+    await writeState(statePath, { plan: 'skipped' });
+    const originalBytes = await readFile(statePath, 'utf-8');
+    const store = createFilesystemConductStateStore(statePath);
+
+    await expect(store.applyBatch({
+      name: 'mark plan stale',
+      mutations: [{
+        field: 'plan',
+        expected: 'done',
+        intent: 'mark plan stale',
+        next: 'stale',
+      }],
+    })).resolves.toMatchObject({ kind: 'conflict' });
+
     await expect(readFile(statePath, 'utf-8')).resolves.toBe(originalBytes);
   });
 

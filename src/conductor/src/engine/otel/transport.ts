@@ -13,6 +13,8 @@ import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import { SpoolStore } from './spool-store.js';
 import { SpoolingMetricExporter, SpoolingSpanExporter } from './spooling-exporter.js';
 import { otlpExportRefusal } from './export-refusal.js';
+import { createOtelHeaderProvider } from './otel-header-provider.js';
+import type { CommandRunner } from '../credentials/command-source.js';
 
 export interface Exporters {
   spanExporter: SpanExporter;
@@ -23,6 +25,8 @@ export interface ExporterBuildOptions {
   spoolStore?: SpoolStore;
   events?: ConductorEventEmitter;
   env?: NodeJS.ProcessEnv;
+  commandRunner?: CommandRunner;
+  now?: () => number;
 }
 
 type ExporterBuildEnvironment = NodeJS.ProcessEnv;
@@ -31,7 +35,7 @@ function exporterBuildOptions(options: ExporterBuildOptions | ExporterBuildEnvir
   // The default empty options object is options, not an explicitly supplied
   // empty environment: otherwise it suppresses the process-environment
   // refusal fallback below.
-  if (Object.keys(options).length === 0 || 'env' in options || 'spoolStore' in options || 'events' in options) {
+  if (Object.keys(options).length === 0 || 'env' in options || 'spoolStore' in options || 'events' in options || 'commandRunner' in options || 'now' in options) {
     return options as ExporterBuildOptions;
   }
   return { env: options as ExporterBuildEnvironment };
@@ -68,10 +72,15 @@ const METRIC_TEMPORALITY = AggregationTemporalityPreference.LOWMEMORY;
 export function buildHttpExporterOptions(
   config: Omit<Extract<ResolvedOtelConfig, { enabled: true; exporter: 'otlp' }>, 'provenance'>,
   signal: 'traces' | 'metrics',
-): { url: string; headers?: Record<string, string> } {
+  headerOptions: Pick<ExporterBuildOptions, 'env' | 'commandRunner' | 'now'> = {},
+): { url: string; headers?: Record<string, string> | (() => Promise<Record<string, string>>) } {
   return {
     url: `${config.endpoint.replace(/\/$/, '')}/v1/${signal}`,
-    ...(config.headers ? { headers: config.headers } : {}),
+    ...((config.headerReferences || config.headers) ? { headers: createOtelHeaderProvider(config.headerReferences, config.headers, {
+      environment: headerOptions.env,
+      commandRunner: headerOptions.commandRunner,
+      now: headerOptions.now,
+    }) } : {}),
   };
 }
 
@@ -101,8 +110,8 @@ export function buildExporters(
     }
     // Default: HTTP/protobuf (port 4318)
     const direct = {
-      spanExporter: new OTLPHttpTraceExporter(buildHttpExporterOptions(config, 'traces')),
-      metricExporter: new OTLPHttpMetricExporter({ ...buildHttpExporterOptions(config, 'metrics'), temporalityPreference: METRIC_TEMPORALITY }),
+      spanExporter: new OTLPHttpTraceExporter(buildHttpExporterOptions(config, 'traces', options)),
+      metricExporter: new OTLPHttpMetricExporter({ ...buildHttpExporterOptions(config, 'metrics', options), temporalityPreference: METRIC_TEMPORALITY }),
     };
     return options.spoolStore && config.spool?.enabled
       ? {

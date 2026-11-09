@@ -1,11 +1,12 @@
 import { classifyNetworkError, classifyResponse, type DeliveryClassification } from './delivery-classifier.js';
 import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import { type SpoolSignal, SpoolStore } from './spool-store.js';
+import { CredentialUnavailableError } from './otel-header-provider.js';
 
 export interface SpoolDrainerOptions {
   endpoint: string;
   /** Resolves credentials at delivery time; spool files never contain them. */
-  headers: () => Record<string, string>;
+  headers: () => Record<string, string> | Promise<Record<string, string>>;
   fetch?: typeof globalThis.fetch;
   /** Injectable time boundary for retry tests. */
   now?: () => number;
@@ -27,7 +28,8 @@ const DEFAULT_EXPORT_TIMEOUT_MS = 5_000;
 const BACKLOG_REPORT_INTERVAL_MS = 30_000;
 const IDLE_POLL_INTERVAL_MS = 1_000;
 type DeliveryFailureClass = Extract<DeliveryClassification, { action: 'keep' }>['failureClass'];
-type ReportedFailureClass = DeliveryFailureClass | 'spool';
+type ReportedFailureClass = DeliveryFailureClass | 'spool' | 'credential';
+type AttemptClassification = DeliveryClassification | { action: 'keep'; failureClass: 'credential'; reason: string };
 
 /**
  * Delivers immutable OTLP batches one at a time. Delivery is at-least-once:
@@ -139,11 +141,15 @@ export class SpoolDrainer {
           break;
         }
 
-        this.lastFailures.set(signal, classification.failureClass);
-        await this.reportFailure(signal, classification.failureClass, `OTLP ${signal} delivery failed: ${classification.failureClass}`);
+        if (classification.failureClass !== 'credential') {
+          this.lastFailures.set(signal, classification.failureClass);
+        }
+        await this.reportFailure(signal, classification.failureClass, classification.failureClass === 'credential'
+          ? classification.reason
+          : `OTLP ${signal} delivery failed: ${classification.failureClass}`);
 
         // A server-directed delay takes precedence over the ordinary backoff.
-        if (classification.retryAfterMs !== undefined) {
+        if ('retryAfterMs' in classification && classification.retryAfterMs !== undefined) {
           await this.delay(classification.retryAfterMs);
           continue;
         }
@@ -184,7 +190,7 @@ export class SpoolDrainer {
     return loop;
   }
 
-  private async deliver(signal: SpoolSignal, body: Buffer) {
+  private async deliver(signal: SpoolSignal, body: Buffer): Promise<AttemptClassification> {
     const controller = new AbortController();
     this.inFlight.add(controller);
     let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -195,10 +201,11 @@ export class SpoolDrainer {
       }, this.exportTimeoutMs);
     });
     try {
+      const headers = await this.options.headers();
       const response = await Promise.race([
         this.send(`${this.options.endpoint.replace(/\/$/, '')}/v1/${signal}`, {
           method: 'POST',
-          headers: { ...this.options.headers(), 'Content-Type': 'application/x-protobuf' },
+          headers: { ...headers, 'Content-Type': 'application/x-protobuf' },
           body: new Uint8Array(body).buffer as ArrayBuffer,
           signal: controller.signal,
         }),
@@ -212,7 +219,10 @@ export class SpoolDrainer {
         signal,
         this.now,
       );
-    } catch {
+    } catch (error) {
+      if (error instanceof CredentialUnavailableError) {
+        return { action: 'keep' as const, failureClass: 'credential' as const, reason: error.message };
+      }
       return classifyNetworkError();
     } finally {
       if (timeout !== undefined) clearTimeout(timeout);

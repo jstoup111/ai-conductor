@@ -3,9 +3,13 @@ import { parseFeatureBranch } from '../feature-branch-identity.js';
 import type { GitRunner } from '../rebase.js';
 import { closureRefFor } from './routing-refs.js';
 
-export type CitedPathClassification = {
+export type ResolvedCitedPaths = {
   readonly inputs: readonly string[];
   readonly outputs: readonly string[];
+  readonly dropped: readonly {
+    readonly path: string;
+    readonly kind: 'dropped-directory' | 'dropped-ambiguous';
+  }[];
 } | { readonly kind: 'halt'; readonly detail: string };
 
 export type HostSelection = {
@@ -18,6 +22,18 @@ export interface SelectHostOptions {
   readonly inputs: readonly string[];
   readonly positions: readonly ChildId[];
   readonly leafTip: string;
+  readonly git: GitRunner;
+}
+
+export type ChangedPathsByPosition = {
+  readonly [position: number]: readonly string[];
+} | { readonly kind: 'halt'; readonly detail: string };
+
+export interface ChangedPathsByPositionOptions {
+  readonly slug: string;
+  readonly positions: readonly ChildId[];
+  readonly leafTip: string;
+  readonly baseRef: string;
   readonly git: GitRunner;
 }
 
@@ -41,20 +57,80 @@ function slugForLeafTip(leafTip: string): string | undefined {
   return identity.kind === 'leaf' ? identity.slug : undefined;
 }
 
-/** Separates prerequisite inputs already present on the leaf from repair outputs. */
-export async function classifyCitedPaths(
+/** Derives each stack position's contribution from its closed predecessor. */
+export async function changedPathsByPosition(options: ChangedPathsByPositionOptions): Promise<ChangedPathsByPosition> {
+  const { slug, positions, leafTip, baseRef, git } = options;
+  const changed: Record<number, readonly string[]> = {};
+  let previous = baseRef;
+
+  for (let index = 0; index < positions.length; index += 1) {
+    const position = positions[index]!;
+    const isLeaf = index === positions.length - 1;
+    const current = isLeaf ? leafTip : closureRefFor(slug, position);
+
+    if (index === 0 && !isLeaf) {
+      const mergeBase = await git(['merge-base', baseRef, current]);
+      if (mergeBase.exitCode !== 0 || !mergeBase.stdout.trim()) {
+        return { kind: 'halt', detail: `cannot read closure tree for child ${position}` };
+      }
+      previous = mergeBase.stdout.trim();
+    }
+
+    const diff = await git(['diff', '--name-only', previous, current]);
+    if (diff.exitCode !== 0) return { kind: 'halt', detail: `cannot read closure tree for child ${position}` };
+    changed[position] = diff.stdout.split('\n').map((path) => path.trim()).filter(Boolean);
+    previous = current;
+  }
+
+  return changed;
+}
+
+/** Resolves citations against one recursive listing of the leaf's files. */
+export async function resolveCitedPaths(
   paths: readonly string[],
   leafTip: string,
   git: GitRunner,
-): Promise<CitedPathClassification> {
+): Promise<ResolvedCitedPaths> {
+  const listing = await git(['ls-tree', '-r', '--name-only', leafTip]);
+  if (listing.exitCode !== 0) return { kind: 'halt', detail: `cannot read leaf branch ${leafTip}` };
+
+  const files = listing.stdout.split('\n').filter((path) => path.length > 0);
+  const listed = new Set(files);
   const inputs: string[] = [];
+  const inputSet = new Set<string>();
   const outputs: string[] = [];
+  const dropped: { path: string; kind: 'dropped-directory' | 'dropped-ambiguous' }[] = [];
+
   for (const path of paths) {
-    const exists = await hasPath(git, leafTip, path);
-    if (exists === undefined) return { kind: 'halt', detail: `cannot read leaf branch ${leafTip}` };
-    (exists ? inputs : outputs).push(path);
+    if (listed.has(path)) {
+      if (!inputSet.has(path)) {
+        inputSet.add(path);
+        inputs.push(path);
+      }
+      continue;
+    }
+
+    const directory = path.endsWith('/') ? path.slice(0, -1) : path;
+    if (files.some((file) => file.startsWith(`${directory}/`))) {
+      dropped.push({ path, kind: 'dropped-directory' });
+      continue;
+    }
+
+    const suffixMatches = files.filter((file) => file.endsWith(`/${path}`));
+    if (suffixMatches.length === 1) {
+      const [match] = suffixMatches;
+      if (!inputSet.has(match)) {
+        inputSet.add(match);
+        inputs.push(match);
+      }
+    } else if (suffixMatches.length > 1) {
+      dropped.push({ path, kind: 'dropped-ambiguous' });
+    } else {
+      outputs.push(path);
+    }
   }
-  return { inputs, outputs };
+
+  return { inputs, outputs, dropped };
 }
 
 /**

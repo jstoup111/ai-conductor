@@ -1,0 +1,7 @@
+# Track: A build_review judgement that binds a prior case with a disposition the case cannot take gets one corrected re-judgement before any halt
+
+Track: technical
+
+Scope boundary: the remediate context lists, for every prior case, the dispositions an `existingCaseId` binding to that case can take (`bindableDispositions`), computed by the same predicate the case reconciler uses to admit a disposition change. The case-graph validator refuses a binding outside that list as `inadmissible-case-binding` before reconciliation, and the coordinator re-dispatches the same `remediate` judgement once per lap with the refused bindings named. A corrected judgement is reconciled normally; a second inadmissible or otherwise invalid judgement fails closed as today, with the halt naming the case, the proposed disposition and the bindable set. The reconciler keeps its own `illegal-disposition-transition` check as a backstop. Unchanged: the evidence rules of the refute lane, the refutation-repeat halt, the semantic repeat and regression halts (#3362, #3449), the act-to-defer and failed-action retry lanes, carry, escalation, and every judgement whose bindings are already admissible. No new disposition or transition lane is added; in particular a bound `reject` is never converted to `refute` or admitted on an action case.
+
+Engine-internal build_review adjudication machinery and the remediate skill's case contract; no user-facing product requirements worth a PRD. Acceptance criteria live in stories.

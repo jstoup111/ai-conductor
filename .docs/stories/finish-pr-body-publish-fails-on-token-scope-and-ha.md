@@ -36,47 +36,43 @@ As an operator diagnosing a halted feature, I want every failed guarded GitHub o
 
 ## Story 2: FINISH halts with the underlying publish failure, not "unchanged"
 
-**Requirement:** adr-2026-10-24-finish-surfaces-guarded-publish-failures D3, D4
+**Requirement:** adr-2026-10-24-finish-surfaces-guarded-publish-failures D4; adr-2026-10-31-engine-performs-finish-pr-prose-write D2, D5
 
 As an operator, I want a FINISH halt caused by a failed PR publish to name that failure, so that the halt reason points at the real fix.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a feature PR whose prose is the engine placeholder, when the authoring pass completes successfully and a `github_operation_failed` record for `pull-request.edit` on that same PR was appended to the sibling ledger during the pass, and re-observation still shows placeholder prose, then FINISH resolves `human_required` with reason `publication_operation_failed`
-- Given that halt, when it is rendered and persisted, then the halt message names a failed PR publish, the next action tells the operator to resolve the named failure and retry FINISH, the detail contains the recorded error text (for example the missing `read:org` scope message), and the `finish_publication_disposition` and `loop_halt` events carry that reason and detail
+- Given a feature PR whose prose is the engine placeholder and a valid authored-prose handoff, when the engine's guarded `pull-request.edit` returns a failed result such as a missing `read:org` scope and re-observation still shows placeholder prose, then FINISH resolves `human_required` with reason `publication_operation_failed`
+- Given that halt, when it is rendered and persisted, then the halt message names a failed PR publish, the next action tells the operator to resolve the named failure and retry FINISH, the detail contains the operation and its error text (for example the missing `read:org` scope message), and the `finish_publication_disposition` and `loop_halt` events carry that reason and detail
 - Given that halt, when its reason text is inspected, then it does not contain "left pr.prose unchanged at placeholder"
 
 #### Negative Paths
-- Given a failure recorded during the pass, when re-observation shows the PR prose is no longer the placeholder, then the `author_pr_prose` transition advances normally and FINISH does not halt
-- Given a `github_operation_failed` record for this PR appended before the pass started, and none during it, when the pass completes leaving placeholder prose, then the earlier failure is not attributed and FINISH resolves `publication_transition_unmoved` as today
-- Given a failure recorded during the pass for a different pull-request number, a different repository, or a different operation such as `pull-request.comment.create`, when the pass completes leaving placeholder prose, then that record is not attributed and FINISH resolves `publication_transition_unmoved`
-- Given two failures for this PR recorded during the pass, when FINISH halts, then the detail carries the error of the last recorded failure
-- Given a sibling ledger that is missing or unreadable after the pass, when the pass completes leaving placeholder prose, then FINISH treats it as no recorded failure and resolves `publication_transition_unmoved`, with no crash
-- Given a sibling ledger with a malformed line appended during the pass alongside a valid matching failure record, when FINISH reads the pass window, then the malformed line is skipped and the valid failure still produces `publication_operation_failed`
-- Given an authoring dispatch that itself does not complete successfully, when a matching failure was also recorded, then FINISH follows the existing transient retry path (`authoring_dispatch_failed`) and does not resolve `publication_operation_failed`
+- Given the engine's edit returns a failed result, when re-observation shows the PR prose is no longer the placeholder, then the `author_pr_prose` transition advances normally and FINISH does not halt
+- Given the engine's guarded edit is refused rather than executed or failed, for example because publication dependencies are unavailable, when re-observation still shows placeholder prose, then FINISH resolves `publication_operation_failed` with a detail naming the refusal
+- Given a `github_operation_failed` record for this PR appended to the sibling ledger during the pass, when the engine's own edit executes and the prose moves, then the record is not attributed and the transition advances
+- Given an authoring dispatch that itself does not complete successfully, when it returns, then the engine performs no edit and FINISH follows the existing transient retry path (`authoring_dispatch_failed`), not `publication_operation_failed`
 
 ### Done When
-- [ ] A coordinator test reproduces #3376 (placeholder before and after, a matching recorded failure, a successful dispatch) and asserts `human_required` / `publication_operation_failed` with the error text in its detail
+- [ ] A coordinator test reproduces #3376 through the engine edit (placeholder before and after, a valid handoff, a failed `pull-request.edit` result) and asserts `human_required` / `publication_operation_failed` with the error text in its detail
 - [ ] `HUMAN_REQUIRED_REASONS` contains `publication_operation_failed` with a message and next action, and the rendered halt reason contains the error text
-- [ ] Production `authorProse` tests assert attribution only for same-PR `pull-request.edit` failures delivered on the feature event bus during the pass, with last-failure selection, and that a missing or failing tail flush is tolerated
-- [ ] A test asserts that a recorded failure with moved prose advances the transition
+- [ ] A test asserts that a failed engine edit with moved prose advances the transition
 
-## Story 3: A genuinely unchanged authoring pass keeps the existing halt
+## Story 3: A published edit that leaves placeholder prose keeps the existing halt
 
-**Requirement:** adr-2026-10-24-finish-surfaces-guarded-publish-failures D5
+**Requirement:** adr-2026-10-24-finish-surfaces-guarded-publish-failures D5; adr-2026-10-31-engine-performs-finish-pr-prose-write D4
 
-As an operator, I want an authoring pass that simply failed to write prose, with no publish failure, to keep halting with the existing "unchanged" reason, so that the guard still catches a provider that did nothing.
+As an operator, I want an authoring pass whose prose was published yet still reads as placeholder to keep halting with the existing "unchanged" reason, so that the fixed-point guard still catches a pass that made no progress.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a feature PR whose prose is the engine placeholder, when the authoring pass completes successfully, no `github_operation_failed` record was appended during the pass, and re-observation still shows placeholder prose, then FINISH resolves `human_required` / `publication_transition_unmoved` with the detail "The author_pr_prose transition left pr.prose unchanged at placeholder."
+- Given a feature PR whose prose is the engine placeholder, when the engine publishes a validated handoff, its edit executes, and re-observation still shows placeholder prose, then FINISH resolves `human_required` / `publication_transition_unmoved` with the detail "The author_pr_prose transition left pr.prose unchanged at placeholder."
 
 #### Negative Paths
-- Given the same pass, when the sibling ledger received only records of other admitted kinds during the pass, then FINISH still resolves `publication_transition_unmoved`, not `publication_operation_failed`
-- Given a pass that completes with no recorded failure and leaves authored prose, when re-observed, then the transition advances and no halt is produced
+- Given an authoring pass that writes no handoff, when it completes and re-observation still shows placeholder prose, then FINISH returns `publication_retry` with reason `prose_not_returned`, not `publication_transition_unmoved`
+- Given a pass whose published edit leaves authored prose, when re-observed, then the transition advances and no halt is produced
 
 ### Done When
-- [ ] An existing or new coordinator test asserts the unchanged halt text for a completed pass with no recorded failure
-- [ ] A test asserts that records of other admitted kinds in the pass window do not trigger `publication_operation_failed`
+- [ ] A coordinator test asserts the unchanged halt text for an executed engine edit whose re-observation still reads placeholder
+- [ ] A test asserts that a pass with no handoff returns `prose_not_returned` rather than the unchanged halt

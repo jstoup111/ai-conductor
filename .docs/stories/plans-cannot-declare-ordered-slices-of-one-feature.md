@@ -39,18 +39,18 @@ opted in, so that the grammar can land before any consumer of it exists.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a plan with no `## Slices` section whose tasks use free-form Dependencies prose such as "Tasks 1–9 all passing", when land runs, then no slice refusal is raised and the spec commits as it does today
+- Given a plan with no `## Slices` section whose tasks use free-form Dependencies prose such as "Tasks 1–9 all passing", when land runs, then no `plan-slices` refusal is raised; whether the plan's dependency lines are accepted is decided by the separate dependency rung, not by slice validation
 - Given a plan with no `## Slices` section and `stacked_prs.enabled` set to true, when land runs, then no slice refusal is raised and the spec commits
 - Given a plan with no `## Slices` section, when the `coverage_binding` step runs, then it records no slice membership, emits no slice event, and reaches the same completion status it reaches today
 - Given a well-formed sliced plan and `stacked_prs.enabled` false, when land and then the `coverage_binding` step run, then both succeed, `coverage_binding` reads the flag only to leave its stacked-delivery layer inert, and no build, finish or publication step creates a child or reads the slice manifest (the BUILD child cursor reads the flag only to decide whether to create children, and creates none when it is false)
 
 #### Negative Paths
 - Given a malformed slice manifest, when land runs once with `stacked_prs.enabled` false and once with it true, then both runs refuse with the identical slice refusal message
-- Given a plan with no `## Slices` section but a `## Task Dependency Graph` section and no per-task Dependencies lines, when land runs, then no slice refusal is raised and the existing presence-only dependency check still accepts the plan
+- Given a plan with no `## Slices` section but a `## Task Dependency Graph` section and no per-task Dependencies lines, when land runs, then no `plan-slices` refusal is raised; whether the plan's dependency declaration is accepted is decided by the separate dependency rung, not by slice validation
 - Given a plan whose `## Slices` table appears only inside a fenced code block, when land runs, then the plan is treated as having no slices and no slice refusal is raised
 
 ### Done When
-- [ ] A land test commits an unsliced plan carrying free-form Dependencies prose with the flag both on and off
+- [ ] A land test of an unsliced plan carrying free-form Dependencies prose raises no `plan-slices` refusal with the flag both on and off
 - [ ] A `coverage_binding` runner test on an unsliced plan asserts no membership field is written and no `plan_slices_changed` event is emitted
 - [ ] A test asserts the land slice refusal message is identical with `stacked_prs.enabled` true and false
 

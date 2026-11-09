@@ -63,7 +63,8 @@ Static-analysis configuration sits at two levels. Anything needing the TypeScrip
 | `engine/engineer/intake/` | 26 | Intake queue, ledger, GitHub issue read/write-back, label sync, closed-issue reconciliation, filing-time evidence-path overlap preflight. |
 | `engine/self-host/` | 16 | Guardrails for the harness building itself: detector, write fence, sandbox build env, build auth, version gate, release gate. |
 | `engine/halt-issues/` | 6 | Halt-monitor issue reconciliation and its CLI. |
-| `engine/otel/` | 15 | OpenTelemetry config, metrics, visualizer, shared entry-point wiring, and the durable export spool (store, lease, drainer, delivery classifier). |
+| `engine/otel/` | 17 | OpenTelemetry config, metrics, visualizer, shared entry-point wiring, delivery-time OTLP header provider, and the durable export spool (store, lease, drainer, delivery classifier). |
+| `engine/credentials/` | 3 | Credential references (`env`, `command`): parsing, environment and command resolution, and command-result caching. |
 | `engine/owner-gate/` | 5 | Multi-operator identity partitioning. |
 
 Flat `engine/` files cluster by filename prefix. Use the prefix to find the subsystem:
@@ -93,7 +94,9 @@ Two lookups that are easy to get wrong:
   `engine/artifacts.ts:1122-1219`.
 - The daemon's ship-eligibility guard has no module of its own. It is inline in
   `engine/daemon-runner.ts` — `isVerifiedShip` at `:219` and `failureReasonForFalseShip` at `:228`.
-- Backlog priority resolution is `createPriorityResolver` in `engine/backlog-priority.ts:114`.
+- Backlog priority resolution is `createPriorityResolver` in `engine/backlog-priority.ts:182`. Daemon
+  preemption ranking and victim choice are `preemptionRank` and `selectPreemptionVictim` in the same file;
+  `runDaemon` in `engine/daemon.ts` requests the yield.
 - Priority, size, and blocker facts come from the backend-neutral `createOrderingSource` in
   `engine/ordering-source.ts`; the daemon shares one source per run via
   `engine/daemon-ordering-readers.ts`. Do not add direct `gh` priority or blocker reads elsewhere.
@@ -242,6 +245,17 @@ entry whose edge disappears or stops violating fails the test as stale.
 | --- | --- | --- |
 | engine → engine (cycle) | 225 | `engine/slice-topology.ts` → `engine/plan-slices.ts` |
 | execution → execution (cycle) | 9 | `execution/provider-catalog.ts` ↔ provider adapters |
+
+## External boundaries
+
+Production code reaches eight external boundaries: `llm`, `git`, `gh`, `tmux`, `process`, `clock`,
+`otel`, and `filesystem`. `test/structural/boundary-registry.ts` records each one's port, adapter
+modules, and status. Only `llm` is ported, behind `LLMProvider`; the rest are pending a port.
+
+New code reaches a boundary through an injected dependency, not a direct `fs`, `child_process`,
+`execa`, `@opentelemetry/`, or clock call. Only entry points at the `src/` root import adapter modules.
+`test/structural/boundary-ratchet.test.ts` enforces this against the shrink-only
+`test/structural/boundary-allowlist.txt`; see [external boundary ratchet](testing.md#external-boundary-ratchet).
 
 ## Build output
 

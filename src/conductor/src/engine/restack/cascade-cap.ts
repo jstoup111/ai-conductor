@@ -3,9 +3,6 @@ import { parseChildId } from '../child-context.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
 import { parseCommitSha, parseRefName, type CommitSha, type RefName } from './restack-types.js';
 
-/** The default number of applied feature repairs one child may originate. */
-export const MAX_RESTACK_CASCADES_PER_CHILD = 3;
-
 export interface CascadeCounts {
   readonly version: 1;
   /** String keys keep the ref-backed JSON stable and readable outside TypeScript. */
@@ -35,7 +32,7 @@ export type ReadCascadeCountsResult =
 
 export type CascadeCapResult =
   | { readonly kind: 'clear'; readonly counts: CascadeCounts; readonly limit: number }
-  | { readonly kind: 'exhausted'; readonly child: ChildId; readonly count: number; readonly limit: number; readonly detail?: string };
+  | { readonly kind: 'exhausted'; readonly child: ChildId; readonly count: number; readonly limit: number; readonly raised: boolean; readonly detail?: string };
 
 export type CascadeUpdateLinesResult =
   | { readonly kind: 'lines'; readonly lines: readonly string[]; readonly counts: CascadeCounts }
@@ -173,7 +170,7 @@ export async function applyCascadeAdjustment(
   worktree: string,
   slug: string,
   adjustment: CascadeAdjustment,
-  defaultLimit = MAX_RESTACK_CASCADES_PER_CHILD,
+  defaultLimit: number,
   dependencies: CascadeCapDependencies = {},
 ): Promise<CascadeLimitUpdateResult> {
   const git = dependencies.git ?? makeGitRunner(worktree);
@@ -251,19 +248,20 @@ export async function checkCascadeCap(
   worktree: string,
   slug: string,
   originatingChildren: readonly ChildId[],
+  defaultLimit: number,
   dependencies: CascadeCapDependencies = {},
 ): Promise<CascadeCapResult> {
-  const limit = MAX_RESTACK_CASCADES_PER_CHILD;
+  const limit = defaultLimit;
   const state = await readCascadeCounts(worktree, slug, dependencies);
   const first = [...new Set(originatingChildren)].sort((left, right) => left - right)[0];
   if (first === undefined) return { kind: 'clear', counts: state.kind === 'counts' ? state.counts : emptyCounts(), limit };
   if (state.kind === 'unreadable') {
-    return { kind: 'exhausted', child: first, count: limit, limit, detail: `${state.detail} (${state.ref})` };
+    return { kind: 'exhausted', child: first, count: limit, limit, raised: false, detail: `${state.detail} (${state.ref})` };
   }
   for (const child of [...new Set(originatingChildren)].sort((left, right) => left - right)) {
     const childLimit = state.counts.limits?.[String(child)] ?? limit;
     const count = state.counts.counts[String(child)] ?? 0;
-    if (count >= childLimit) return { kind: 'exhausted', child, count, limit: childLimit };
+    if (count >= childLimit) return { kind: 'exhausted', child, count, limit: childLimit, raised: state.counts.limits?.[String(child)] !== undefined };
   }
   return { kind: 'clear', counts: state.counts, limit };
 }

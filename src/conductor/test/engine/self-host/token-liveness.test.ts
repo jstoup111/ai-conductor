@@ -1,3 +1,4 @@
+// Covers: task:11
 import { describe, it, expect } from 'vitest';
 import {
   verifyTokenLiveness,
@@ -149,6 +150,22 @@ describe('verifyTokenLiveness', () => {
     const { argv, env } = calls[0];
     expect(argv.join(' ')).not.toContain(TOKEN);
     expect(Object.values(env).some((v) => v === TOKEN)).toBe(true);
+  });
+
+  it('uses the haiku alias for the liveness probe model', async () => {
+    const { spawner, calls } = makeSpawner({
+      exitCode: 0,
+      stdout: JSON.stringify({ is_error: false }),
+      timedOut: false,
+    });
+
+    await verifyTokenLiveness({ token: TOKEN, spawner });
+
+    const { argv } = calls[0];
+    const modelFlag = argv.indexOf('--model');
+    expect(argv[modelFlag + 1]).toBe('haiku');
+    expect(argv).not.toContain('claude-haiku-4-5-20251001');
+    expect(argv.some((arg) => /^claude-[a-z]+-\d/.test(arg))).toBe(false);
   });
 
   it('Task 11: no unverifiable-path detail string contains the token substring', async () => {

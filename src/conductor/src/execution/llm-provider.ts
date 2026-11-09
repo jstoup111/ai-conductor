@@ -42,7 +42,7 @@ export type UnrelatedHealth = 'degraded';
  * output and credential material deliberately have no representation here.
  */
 interface AuthenticationReadinessBase {
-  provider: ProviderWith<'readiness'>['id'];
+  provider: ProviderWith<'readiness'>['id'] | ProviderWith<'credentialFileRecovery'>['id'];
   source: AuthenticationSource;
 }
 
@@ -278,6 +278,16 @@ export interface InvokeOptions {
    * the session). Values: low | medium | high | xhigh | max.
    */
   effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+  /**
+   * Per-dispatch environment overlaid on the spawned session, so commands the
+   * session runs see it. Applied after any self-host overlay.
+   */
+  env?: NodeJS.ProcessEnv;
+  /**
+   * Engine-owned environment overlaid after self-host setup and before
+   * adapter-owned session markers and tmux masking.
+   */
+  environmentOverlay?: NodeJS.ProcessEnv;
   /**
    * Working directory for the spawned `claude` process. CRITICAL for the daemon:
    * each feature runs in its own git worktree, so the agent's file writes and

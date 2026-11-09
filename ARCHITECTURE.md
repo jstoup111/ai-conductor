@@ -35,6 +35,8 @@ Agent prompt templates are in `agents/`. Skills define *what* to do; agents defi
 Use the least expensive provider-native capability tier that can do the job.
 The Claude autonomous family is `fable`, `opus`, `sonnet`, and `haiku`.
 The Codex autonomous family is `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`.
+Codex ids are tier floors: at dispatch boot each resolves to the newest same-tier catalog id
+(see [model resolution](docs/reference/models.md#codex-catalog-tier-resolution)).
 Each provider policy assigns those native models independently; no cross-provider alias
 translation occurs.
 
@@ -83,6 +85,7 @@ this section. CI enforces both content drift (the table matches the source) and 
 | build-review-test-quality | engine-managed auxiliary rubric | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | Judges whether criterion-bound changed tests are insensitive to the behavior they claim to cover; preflight is evidence, never a verdict. |
 | build-review-security | engine-managed auxiliary rubric | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | Judges the whole feature diff for concrete, changed-hunk-anchored security defects in the closed security vocabulary. |
 | build-review-implementation-quality | engine-managed auxiliary rubric | opus | medium | gpt-5.6-sol | medium | n/a | n/a | Judges the whole feature diff for concrete, changed-hunk-anchored code-quality and domain-modelling defects in the closed implementation-quality vocabulary. |
+| build-review-dependency-hygiene | engine-managed auxiliary rubric | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | inherits resolved rubric policy | Judges dependency additions and version changes for necessity, bounded pinning, and compatible on-disk license evidence. |
 | rebase-regrade | engine-managed auxiliary judge | inherits resolved rebase policy | inherits resolved rebase policy | inherits resolved rebase policy | inherits resolved rebase policy | inherits resolved rebase policy | inherits resolved rebase policy | Judges whether a rebase resolution that changed the feature diff warrants regrading prd_audit or architecture_review_as_built; the engine scopes the delta, validates the closed verdict, and fails closed. |
 | verify-claims | supported-host interactive | inherits caller | n/a | inherits model from the Codex session or spawned-agent configuration | inherits effort from the Codex session or spawned-agent configuration | n/a | n/a | Cross-cutting correctness protocol applied within the invoking skill's context (calibrate claims, gate assumptions) — not a separately dispatched agent, so it runs on the caller's model. |
 | code-removal | supported-host interactive | inherits caller | n/a | inherits model from the Codex session or spawned-agent configuration | inherits effort from the Codex session or spawned-agent configuration | n/a | n/a | Cross-cutting removal discipline applied in the invoking session: preserves survivors while removing obsolete code, without a separately dispatched agent. |
@@ -176,7 +179,7 @@ history.
 > (`low→medium→high→xhigh→max`); **attempt 3+** holds that effort and bumps the model
 > **(attempt − 2) tiers** up the selected provider's native capability ladder. Claude
 > ascends `haiku→sonnet→opus→fable`; Codex ascends
-> `gpt-5.6-luna→gpt-5.6-terra→gpt-5.6-sol`. Attempt 3 is one tier and attempt 4 two
+> `gpt-5.6-luna→gpt-5.6-terra→gpt-5.6-sol→gpt-6-astra`. Attempt 3 is one tier and attempt 4 two
 > tiers. Bumps are capped at the selected policy's top — an effort already at `max` or
 > a model already at its provider's deepest rung is a no-op, never an error. Thus the
 > normal M/L/no-tier `explore` and every `prd` move `high→xhigh` on attempt 2

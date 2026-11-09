@@ -312,10 +312,11 @@ const OBSERVATION_EVENT_TYPES = new Set<ConductorEvent['type']>([
   'session_event_delivery_diagnostic',
 ]);
 const ROUTING_OCCURRENCE_TYPES = new Set<ConductorEvent['type']>([
-  'remediation_routed', 'remediation_rerouted', 'routed_repair_phase', 'operator_round', 'child_revalidated',
+  'remediation_routed', 'remediation_rerouted', 'routed_repair_phase', 'routing_rounds_stalled', 'operator_round', 'routing_round_superseded', 'child_revalidated',
 ]);
 const REMEDIATION_CASE_OCCURRENCE_TYPES = new Set<ConductorEvent['type']>([
   'build_review_acceptance_carried', 'remediation_case_operator_resolved', 'remediation_case_reconciled',
+  'as_built_finding_reconciled',
 ]);
 
 /** Producer observations and at-least-once lifecycle events are replay-deduplicated; ordinary events still append. */

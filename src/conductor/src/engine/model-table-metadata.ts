@@ -202,6 +202,12 @@ export const AUXILIARY_MODEL_TABLE_ROWS: readonly AuxiliaryModelTableRow[] = [
     why: 'Judges the whole feature diff for concrete, changed-hunk-anchored code-quality and domain-modelling defects in the closed implementation-quality vocabulary.',
   },
   {
+    name: 'build-review-dependency-hygiene',
+    executionPath: 'engine-managed auxiliary rubric',
+    providerCells: providerCellsForReview(RESOLVED_RUBRIC_POLICY, RESOLVED_RUBRIC_POLICY),
+    why: 'Judges dependency additions and version changes for necessity, bounded pinning, and compatible on-disk license evidence.',
+  },
+  {
     name: 'rebase-regrade',
     executionPath: 'engine-managed auxiliary judge',
     providerCells: providerCellsForReview(RESOLVED_REBASE_POLICY, RESOLVED_REBASE_POLICY),

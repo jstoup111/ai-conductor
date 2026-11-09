@@ -15,7 +15,7 @@ import type { RemediationProjection } from '../../src/engine/remediation-project
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 
 const projection: RemediationProjection = {
-  version: 1,
+  version: 2,
   source: 'build-stall',
   requiredReferences: [],
   evidence: { excerpts: [], omittedFiles: [] },
@@ -30,7 +30,7 @@ function runnerFor(
   key: 'claude' | 'codex',
   invoke: LLMProvider['invoke'],
   nativeOutputSchema = true,
-  remediationPlanStoreFilesystem?: RemediationPlanStoreFilesystem,
+  remediationPlanStoreFilesystem: RemediationPlanStoreFilesystem = memoryFilesystem(),
 ) {
   const policy = key === 'claude' ? CLAUDE_MODEL_POLICY : CODEX_MODEL_POLICY;
   const provider: LLMProvider = {

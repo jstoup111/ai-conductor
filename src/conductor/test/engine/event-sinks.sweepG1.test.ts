@@ -26,15 +26,15 @@ const RESTACK_REFUSAL_REASONS = [
   'replay-mismatch',
   'range-not-ancestor',
   'closed-child-rewritten',
-  'flatten_refused',
   'restack-outstanding',
   'journal-live-owner',
   'published-stack',
   'deferred-base-refresh',
+  'restack-resolution-stale',
 ] as const;
 
 describe('restack_refused on the event spine (sweep G1)', () => {
-  // Covers: task:1, task:2
+  // Covers: task:1, task:2, task:11
   it('closes restack_refused to the fifteen ADR reasons and persists child and detail through EventPersister', async () => {
     const closedVocabulary: Equal<Extract<ConductorEvent, { type: 'restack_refused' }>['reason'], typeof RESTACK_REFUSAL_REASONS[number]> = true;
     const sharedVocabulary: Equal<RestackRefusalReason, typeof RESTACK_REFUSAL_REASONS[number]> = true;

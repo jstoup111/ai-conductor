@@ -56,16 +56,15 @@ git for-each-ref --format='%(refname) %(objectname:short) %(objecttype)' refs/co
 | `pushed/<branch>`, `push-intent/<branch>` | Last pushed tip per branch. |
 | `red/c<k>` | Recorded failing-acceptance baseline for child k. |
 
-Summarize every round:
+Summarize every round and the repair marker:
 
 ```bash
-for r in $(git for-each-ref --format='%(refname:lstrip=-1)' refs/conductor/<slug>/routes/); do
-  git cat-file -p refs/conductor/<slug>/routes/$r |
-    python3 -c "import json,sys;d=json.load(sys.stdin);print('$r',d['kind'],d['phase'],d['hosts'],d.get('currentHostIndex'))"
-done
-git cat-file -p refs/conductor/<slug>/repairing; echo
+ai-conductor stack rounds --slug <slug>
 git cat-file -p refs/conductor/<slug>/cascades; echo
 ```
+
+`stack rounds` prints one line per round (`<id> <kind> <phase> hosts <host>:<state>, ...`) and flags a
+wedged round with a `wedge:` line ([reference](../reference/cli.md#routed-rounds)).
 
 A healthy feature has at most one round with `phase` `open`. Each host moves through
 `pending → admitted → repairing → built → restacked`, ending in `restacked`, `done` or
@@ -96,7 +95,7 @@ ai-conductor kickback-budget inspect --feature <slug> --child <k>
 
 ```text
 restack refused (cascade-cap) child 1
-originating child 1 reached 3/3 cascades
+originating child 1 reached 3/3 cascades — tier M allowance 3 (default)
 Runbook: Routed repair halted on the cascade cap
 Child: 2
 Kickback budget (restack): 3/3 consumed; 0 remaining
@@ -106,11 +105,13 @@ Kickback halt generation: <generation>
 
 **Diagnosis.** Two child ids appear. `restack refused (cascade-cap) child <origin>` names the
 **originating** child whose cascades ran out. `Child: <active>` names the **active** child, which
-is where the ledger evidence is recorded. Inspect the active child to see the exhausted budget:
+is where the ledger evidence is recorded. The detail line names the resolved
+[allowance](../reference/configuration.md#restack) and ends `; raised to <n>` when the child's limit
+was already raised. Inspect the active child to see the exhausted budget:
 
 ```bash
-ai-conductor kickback-budget inspect --feature <slug> --child <active>   # shows restack 3/3
-ai-conductor kickback-budget inspect --feature <slug> --child <origin>   # may show 0/3
+ai-conductor kickback-budget inspect --feature <slug> --child <active>   # shows restack 3/3 and the cascade summary
+ai-conductor kickback-budget inspect --feature <slug> --child <origin>   # its own restack gate may show 0/3
 ```
 
 **Recovery.**
@@ -151,9 +152,16 @@ dispatch records `restack_planned` in `.pipeline/events.jsonl`.
 
 ## 3. Two routed rounds open at once
 
-Engine defect [#3445](https://github.com/jstoup111/ai-conductor/issues/3445).
+Engine defect [#3445](https://github.com/jstoup111/ai-conductor/issues/3445). Engines with the
+fix refuse a second audit round while one is open, and drain a feature that already holds two:
+the marker's round finishes first, then the older round's pending hosts run
+([routed repair](../reference/configuration.md#stacked_prs)). A round that cannot advance
+halts with `routing rounds stalled: r<n> (<host>: <state>, …); <cause>`. The first two identical
+stalls are `mechanical` and retry on their own. A third halts `needs-human`. Then summarize the
+rounds ([section 1](#1-inspect-stack-and-routing-state)), fix the named round as below, and clear
+the halt. The rest of this section is for older engines.
 
-**Symptom.** Every resume ends within seconds with no reason anywhere:
+**Symptom (older engines).** Every resume ends within seconds with no reason anywhere:
 
 ```text
 ■ done <slug>: error — loop ended without DONE or HALT marker
@@ -165,8 +173,10 @@ The daemon then writes `feature errored — will re-dispatch on the next scan` a
 looks like this:
 
 ```text
-r3 audit open {'1': 'restacked', '2': 'pending'} 0
-r4 audit open {'1': 'built', '2': 'pending'} 0
+r3 audit open hosts 1:restacked, 2:pending current host 1 ...
+r4 audit open hosts 1:built, 2:pending current host 1 ...
+repair marker: host 1 round r4
+wedge: r3 host 2 pending unadmitted behind marker r4; ...
 ```
 
 Rounds are reconciled in ref order. The older open round tries to admit its next host and create
@@ -186,37 +196,19 @@ for r in r3 r4; do echo "== $r"; git -C .worktrees/<slug> cat-file -p refs/condu
 ```
 
 Closing the stale round drops its unstarted items. Record that in your halt-clear rationale.
-Then close it through the engine's own compare-and-swap transaction. Never `git update-ref` a
-route blob by hand: the serializer enforces round invariants that a hand-written blob skips.
-
-Save as `close-round.mts` in a scratch directory. Edit `ROUND` and the host ids:
-
-```ts
-import { readRouteRecord, writeRoutingTransaction } from '<repo>/src/conductor/src/engine/routing/route-record-store.ts';
-const wt = '<repo>/.worktrees/<slug>';
-const slug = '<slug>';
-const ROUND = 'r3';
-void (async () => {
-  const stored = await readRouteRecord(wt, slug, ROUND as never);
-  if (stored.kind !== 'record') throw new Error(`${ROUND} ${stored.kind}`);
-  if (stored.record.phase !== 'open') throw new Error(`${ROUND} phase ${stored.record.phase}`);
-  // Every host must end restacked, done or rerouted; mark unstarted hosts done.
-  const hosts = { ...stored.record.hosts, 2: 'done' as const };
-  const wrote = await writeRoutingTransaction(wt, slug, [
-    { kind: 'update-record', previous: stored, record: { ...stored.record, phase: 'closed' as const, hosts } },
-  ]);
-  console.log('WROTE', wrote.kind);
-})();
-```
+Close it through the engine's compare-and-swap transaction. Never `git update-ref` a route blob by
+hand: the serializer enforces round invariants that a hand-written blob skips.
 
 ```bash
-<repo>/src/conductor/node_modules/.bin/tsx close-round.mts
+ai-conductor stack rounds --slug <slug> --close r3 --reason "<why r3 is superseded>"
 ```
 
-`WROTE updated` means it succeeded. `WROTE unavailable` means the record failed validation: a
-closed round needs every host `restacked`, `done` or `rerouted`, and the current host `restacked`
-or `done`. Fix `hosts` and rerun. `restack-journal-open` means a restack is in progress, so let it
-finish first.
+The output names the dropped hosts and finding ids, and `.pipeline/events.jsonl` records
+`routing_round_superseded`. A refusal names the blocking state, such as an active host or the
+marker holding this round. If the other round already closed, the command performs a leaf return
+instead of a supersede. Resolve that state and rerun; see the
+[refusal list](../reference/cli.md#routed-rounds). A contested or failed write is also refused;
+rerun after the competing write settles.
 
 Then clear the halt with an [audited clear](stalled-or-stuck-feature.md#audited-clear) that names
 the closed round and its dropped items.
@@ -288,6 +280,21 @@ It returns `{"kind":"halted","detail":"..."}` with the real reason. Delete the c
 
 **Recovery.** Follow the section that matches the reason.
 
+### Halt: `routed host closure moved`
+
+**Symptom.** The HALT's first line reads `routed host closure moved: refs/conductor/<slug>/closed/c<k> is <current>, but open round r<N> pinned host <k> at <pinned>`.
+
+**Cause.** Something outside the engine moved a closure ref while its routed round was repairing that child. If the dispatch continued, the routed exit could read the moved closure as "no commits" and never carry the repair to the children above.
+
+**Recovery.** Run the two commands the HALT prints. The first restores the ref, and fails if it has moved again. Any repair commits stay on the child's branch, and the round carries them when it exits.
+
+```bash
+git update-ref refs/conductor/<slug>/closed/c<k> <pinned> <current>
+ai-conductor halt clear --feature <slug> --rationale "restored closed/c<k> to the round r<N> pin"
+```
+
+**Verification.** The next dispatch re-enters host `<k>` with no HALT.
+
 ## 5. Seal or generic HALTs on older engines
 
 Both are fixed by [#3444](https://github.com/jstoup111/ai-conductor/pull/3444). Check the running
@@ -311,8 +318,9 @@ engine with `ai-conductor daemon status | grep "EXECUTOR ENGINE CURRENT"`.
   ```
 
   The real reason was overwritten. Read it from the first commit of the halt episode
-  (`git -C .worktrees/<slug> log -- .docs/halted/<slug>.md`, then `git show <commit>:...`) and
-  follow the matching section.
+  (`git -C .worktrees/<slug> log refs/conductor/<slug>/halt-record` on current engines, or
+  `git -C .worktrees/<slug> log -- .docs/halted/<slug>.md` for branch-committed records, then
+  `git show <commit>:.docs/halted/<slug>.md`) and follow the matching section.
 
 ## 6. Restack conflicts
 
@@ -331,8 +339,27 @@ current, clear the HALT and the next resume tries the resolver.
 `Missing decision:` line. Settle the conflict on the named child's branch as described in
 [A stacked restack halted](stalled-or-stuck-feature.md#a-stacked-restack-halted), then clear.
 
-**Halt-record-only commits.** The engine commits `.docs/halted/<slug>.md` on the checked-out child
-branch at every halt. A later restack replays those commits onto a branch carrying a newer record:
+**Halt-record-only commits.** Current engines store a stacked feature's halt record at
+`refs/conductor/<slug>/halt-record` and commit nothing to a child branch. Older engines committed
+`.docs/halted/<slug>.md` on the checked-out child branch at every halt, so existing stacks can still
+carry those commits. A restack treats them as bookkeeping, on both the plumbing replay and the
+`git rebase` resolver fallback, and a leaf move skips them as strays:
+
+- A non-merge commit whose only changed path is the feature's halt record is not replayed and
+  never reaches the resolver. Its rewrite entry points at the nearest earlier rewritten commit (or
+  the new parent), or at the final tip when no later commit was rewritten, so an unentered leaf
+  still moves.
+- The rebuilt tip keeps the newer record. The child's record wins only when the child owns the
+  path and its `Resolved at:` (or `Halted at:`) time is strictly later than the new parent's;
+  ties and unparseable times keep the parent's record.
+- When the replayed tip's record differs from the winner, the engine appends one commit whose
+  message is exactly `halt record: <slug>`, stamped with the journal's committer identity so a
+  recovered replay reproduces the same SHA.
+
+A `halt record: <slug>` commit in a rebuilt child's history is expected; do not remove it.
+
+**Older engines.** Before #3451, a restack replayed those commits onto a branch carrying a newer
+record and escalated:
 
 ```text
 replay commit <sha>; .docs/halted/<slug>.md whole record (...); ... Keeping upstream empties these
@@ -341,9 +368,10 @@ content absent'. ... Missing decision: whether halt-record-only replay commits s
 verbatim (overwriting the newer upstream record) or treated as superseded
 ```
 
-Tracked as [#3451](https://github.com/jstoup111/ai-conductor/issues/3451). The halt record is
-engine bookkeeping, so the fix is to make the upstream child's copy match what the downstream
-child's commits were made against. Then the replay applies cleanly and no commit empties.
+Fixed by [#3451](https://github.com/jstoup111/ai-conductor/issues/3451). Once a fixed engine is
+current, clear the HALT and the next restack handles the record. Only if you must recover on an
+older engine, make the upstream child's copy match what the downstream child's commits were made
+against. Then the replay applies cleanly and no commit empties.
 
 Terms: child **K** carries the newer halt records, child **K+1** is the downstream child being
 replayed, and `<oldParent>` is the K+1 base the restack replays from. That is the K closure tip
@@ -395,52 +423,25 @@ In a stacked feature, a child's review state lives under `.pipeline/children/<k>
 | `.pipeline/children/<k>/build-review.json` | The child's aggregate: `lapId` and each rubric's `findings`. |
 | `.pipeline/children/<k>/remediation-cases.json` | The child's remediation cases. |
 
-`ai-conductor build-review findings` and `build-review accept` read only the root
-`.pipeline/build-review.json`. On a stacked child they fail with
-`current feature state is invalid or unavailable`, even when given `--child`. `accept` has no
-`--child` at all. This is [#3448](https://github.com/jstoup111/ai-conductor/issues/3448).
-
-**Symptom (semantic case repeat).** No runbook section existed for this before
-[#3449](https://github.com/jstoup111/ai-conductor/issues/3449):
-
-```text
-build_review adjudication halted: semantic remediation case repeat <case-id>
-```
-
-**Diagnosis.** Read the case and its finding directly. Both reads are safe:
+Pass `--child <k>` to inspect or accept against the child's state:
 
 ```bash
-cd .worktrees/<slug>
-python3 -c "
-import json; d=json.load(open('.pipeline/children/<k>/remediation-cases.json'))
-cs=d.get('cases',d); cs=cs.values() if isinstance(cs,dict) else cs
-[print(json.dumps(c,indent=1)) for c in cs if c.get('id')=='<case-id>']"
-python3 -c "
-import json; d=json.load(open('.pipeline/children/<k>/build-review.json'))
-print(d['lapId']); [print(json.dumps(f,indent=1)) for r in d['results'].values() for f in r.get('findings',[])]"
+ai-conductor build-review findings --feature <slug> --child <k>
+ai-conductor build-review accept --feature <slug> --child <k> --lap <lap> --finding <id> --rationale "<why>"
 ```
 
-A repeat means the case was `act`, its action was applied (`effect.status: applied`), and the next
-review raised the same concern. Decide whether the finding can actually be satisfied. One example
-that cannot: a test-insensitivity finding on behavior the feature did not change, where the code
-under test is a behavior-preserving refactor, so no test can fail against the base.
+`--lap` is the child's `lapId`, which `findings --child <k>` prints. Without `--child`, both commands
+read `.pipeline/build-review.json`; on a stacked feature with no root aggregate they report it missing
+and list the children that have one.
 
-**Recovery.** If the finding is accepted risk or already fixed, resolve the case on the child,
-then do an audited clear:
+For a `semantic remediation case repeat` or `regression` halt on a child, follow
+[semantic case repeat or regression](stalled-or-stuck-feature.md#build_review-halted-on-a-semantic-case-repeat-or-regression).
+The child regression halt still says `build-review accept has no --child yet`; that text is stale, and
+`accept --child <k>` works.
 
-```bash
-ai-conductor build-review resolve-case --feature <slug> --child <k> --case <case-id> \
-  --rationale "<why this is accepted risk or fixed>"
-ai-conductor halt clear --feature <slug> --rationale "<case-id> resolved: <why>"
-```
-
-If the finding is real, fix it on the child's branch and leave the case open. For flat features and
-the other build_review halts, see
-[open action case](stalled-or-stuck-feature.md#build_review-halted-on-an-open-action-case) and
+For the other build_review halts, see
+[open action case](stalled-or-stuck-feature.md#build_review-halted-on-an-open-action-or-deferral-case) and
 [recurrence limit](stalled-or-stuck-feature.md#build_review-halted-on-a-recurrence-limit).
-
-**Verification.** `resolve-case` prints `resolved <case-id>`. The next `build_review` lap settles
-or routes without repeating the halt.
 
 ## 8. Shipped-record hash mismatch on a stacked PR
 
@@ -477,3 +478,39 @@ If no such commit exists, regenerate the record as described in
 [Shipped record reconciliation](shipped-record-reconciliation.md).
 
 **Verification.** `gh pr checks <pr>` shows `shipped-record` passing on the new head.
+
+## 9. Queued revalidation refused at BUILD entry
+
+Engines before this fix halted `needs-human` with `revalidating child <k> has no matching repair
+marker` whenever a base refresh queued a closed child that reached BUILD before preflight admitted
+it. Fixed engines admit that child at BUILD entry in the same run
+([revalidation](../reference/configuration.md#stacked_prs)). On an older engine, clear the HALT
+once a fixed engine is current; the next dispatch admits the child.
+
+**Symptom.**
+
+```text
+child BUILD region refused: queued child <k>, queue generation <g>; non-closed rounds: <rounds>; marker owner: <owner>; <detail>
+```
+
+**Diagnosis.** Read `<detail>` and `.pipeline/HALT.class`:
+
+| Detail | Class | Meaning |
+| --- | --- | --- |
+| `routing is ineligible` | `needs-human` | The feature no longer satisfies routing eligibility. |
+| `routing rounds stalled: …` or a busy fence / marker owner | `mechanical`, then `needs-human` | Another round or admission holds the queue. The first two identical stalls retry on their own; the third needs a human. |
+| `region-entry queue admission returned <kind>; resume preflight must recover it` | `mechanical` | Reconciliation has other work first. The next dispatch's preflight handles it. |
+| `cannot drain routing outbox: …`, `cannot consume routed revalidation queue`, `unreadable ref: …`, or `revalidate route record is unreadable: …` | `needs-human` | Routing state cannot be read or written. |
+| `repair marker does not match the revalidating child` or `revalidate route record is not open` | `needs-human` | The marker and the queue disagree. |
+
+`non-closed rounds` lists each open round with its unsettled hosts; `marker owner` names the
+`repairing` holder or `none`. Confirm with [section 1](#1-inspect-stack-and-routing-state).
+
+**Recovery.** For `mechanical` halts, wait for the re-kick. For a stall that reached
+`needs-human`, close the superseded round as in [section 3](#3-two-routed-rounds-open-at-once). For
+an unreadable ref or a marker mismatch, inspect the named ref with `git cat-file -p` and repair it
+through the engine's own commands, never a hand-written `git update-ref` on a route blob. Then
+clear the halt with an [audited clear](stalled-or-stuck-feature.md#audited-clear).
+
+**Verification.** The next dispatch enters child `<k>` as the routed host, and
+`.pipeline/events.jsonl` later records `child_revalidated` for it.

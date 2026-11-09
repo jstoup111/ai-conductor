@@ -98,26 +98,18 @@ An integration label does not justify a broad path. Preserve the real boundary a
 
 ## 8. Verify with CI parity
 
-During authoring, run the project's narrowest test invocation for the file under work, then the
-project's configured static checks: its typecheck command and, where one is configured, its lint
-command. Each project supplies its own concrete commands; this repository documents them in
-`docs/contributing/testing.md`.
+During authoring, run the project's narrowest test invocation for the file under work.
+
+The required CI `typecheck` job (`npm run typecheck:test`) and `lint` job in
+`.github/workflows/ci.yml` are the gate that proves test files type-check and lint.
 
 A test whose verdict depends on the live repository `.docs/` corpus belongs in
 `src/conductor/test/corpus/`, because docs-only pull requests run only that tier. A
 projection-limit check in that tier asserts that the shipped limits admit the corpus, never equality
 with a recorded snapshot.
 
-The typecheck command MUST be one that covers test files. Many projects' default typecheck target
-excludes the test directory, and many test runners transpile without type-checking — together those
-mean a test can carry a type error indefinitely, pass every run, and surface only when someone edits
-nearby code. If the project's default typecheck skips tests, use the target that includes them.
-
-A green test run is not evidence that the test compiles. Verify both.
-
-Before handoff, run the project's configured aggregate test command — the one CI runs, declared in
-`test_suite.command`. Do not substitute a raw, broad test-runner invocation for the configured
-aggregate operation in CI or completion evidence.
+The engine-native `test_suite` gate owns aggregate test execution as `HARNESS.md` defines;
+authoring and diagnosis never launch it.
 
 The ordinary suite must finish in under five minutes. The expected healthy range is roughly two to three minutes. If it exceeds five minutes, inspect active workers and recent temporary fixture state; do not wait indefinitely.
 
@@ -129,7 +121,15 @@ The ordinary suite must finish in under five minutes. The expected healthy range
 4. Look for repeated `stale` validator states, unchanged gate evidence, or a mocked-success runner traversing an artifact-driven finish fence.
 5. Fix the inconsistent authority or fixture boundary.
 6. Run the formerly failing files together; isolation-only success is insufficient.
-7. Run the project's aggregate test command once from a clean process set.
+
+## What is already mechanized — point at it, do not restate it
+
+- `AI_CONDUCTOR_NO_REAL_EXEC` in `src/conductor/test/setup.ts` is a partial backstop for the §4 external-boundary rules: it covers only daemon launch, the pr-labels gh/git seam, and the engineer directory.
+- The suite leak guards `tmpdir-leak-guard.ts`, `pipeline-leak-guard.ts`, `signals-leak-guard.ts`, `park-leak-guard.ts`, and `tmux-leak-guard.ts` under `src/conductor/test/` are a partial backstop for the §6 cleanup rules: they detect leaks after the run.
+- The default `vitest.config.ts` exclusion of `test/smoke/**`, `*.smoke.test.ts`, and `*.e2e.test.ts` is a partial backstop for §1 smoke and e2e placement: it excludes by name but cannot classify a test.
+- The CI `typecheck:test` and `lint` jobs in `.github/workflows/ci.yml` back §8.
+
+Each backstop is partial, so the rule it backs remains binding.
 
 ## Completion checklist
 
@@ -138,10 +138,5 @@ The ordinary suite must finish in under five minutes. The expected healthy range
 - Every async operation has an awaited terminal path.
 - Conductor fixtures declare and satisfy only their required gates.
 - The test passes both alone and with affected neighboring files.
-- The project's typecheck command passes, AND it is one that covers test files — not a target that
-  excludes the test directory.
-- The project's lint command passes, where one is configured.
-- CI and local aggregate execution use the project's configured aggregate test command.
-- The aggregate suite completes under five minutes.
 - Each test whose verdict depends on the live `.docs/` corpus is in `src/conductor/test/corpus/`, and
   projection-limit checks there assert admission rather than equality with recorded maxima.

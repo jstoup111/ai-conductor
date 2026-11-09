@@ -23,6 +23,22 @@ export interface StackLandAbandonDispatch {
 
 export type StackLandDispatch = StackLandOpenDispatch | StackLandDoneDispatch | StackLandAbandonDispatch;
 
+/** Parsed read-only inspection of a feature's routed rounds. */
+export interface StackRoundsInspectDispatch {
+  kind: 'stack-rounds-inspect';
+  slug: string;
+}
+
+/** Parsed close request for one superseded routed round. */
+export interface StackRoundsCloseDispatch {
+  kind: 'stack-rounds-close';
+  slug: string;
+  roundId: string;
+  reason: string;
+}
+
+export type StackRoundsDispatch = StackRoundsInspectDispatch | StackRoundsCloseDispatch;
+
 export interface StackOwnersDispatch {
   kind: 'stack-owners';
   slug: string;

@@ -71,13 +71,17 @@ export const EVENT_SINKS = {
   restack_planned: { render: false, persist: true, audit: false, otel: false },
   restack_applied: { render: false, persist: true, audit: false, otel: false },
   restack_conflict: { render: false, persist: true, audit: false, otel: false },
+  restack_resolution: { render: false, persist: true, audit: false, otel: false },
+  restack_decision: { render: false, persist: true, audit: false, otel: false },
   restack_refused: { render: false, persist: true, audit: false, otel: false },
   restack_recovered: { render: false, persist: true, audit: false, otel: false },
   push_lease_refused: { render: false, persist: true, audit: false, otel: false },
   remediation_routed: { render: false, persist: true, audit: false, otel: false },
   remediation_rerouted: { render: false, persist: true, audit: false, otel: false },
   routed_repair_phase: { render: false, persist: true, audit: false, otel: false },
+  routing_rounds_stalled: { render: false, persist: true, audit: false, otel: false },
   operator_round: { render: false, persist: true, audit: false, otel: false },
+  routing_round_superseded: { render: false, persist: true, audit: false, otel: false },
   child_revalidated: { render: false, persist: true, audit: false, otel: false },
   config_deprecated_key: { render: false, persist: true, audit: false, otel: false },
   build_review_read_only_capability: { render: true, persist: true, audit: false, otel: false },
@@ -117,6 +121,7 @@ export const EVENT_SINKS = {
   build_review_acceptance_carried: { render: false, persist: true, audit: false, otel: false },
   remediation_case_operator_resolved: { render: false, persist: true, audit: false, otel: false },
   remediation_case_reconciled: { render: false, persist: true, audit: false, otel: false },
+  as_built_finding_reconciled: { render: false, persist: true, audit: false, otel: false },
   remediation_case_refuted: { render: true, persist: true, audit: true, otel: false },
   prd_widening_reconciled: { render: false, persist: true, audit: false, otel: false },
   remediation_effect_reserved: { render: false, persist: true, audit: false, otel: false },
@@ -172,6 +177,7 @@ export const EVENT_SINKS = {
   session_reset: { render: true, persist: true, audit: false, otel: false },
   credentials_park: { render: false, persist: true, audit: false, otel: false },
   operator_park_boundary: { render: true, persist: true, audit: false, otel: false },
+  preemption_boundary: { render: true, persist: true, audit: false, otel: false },
   credentials_park_progress: { render: true, persist: true, audit: false, otel: false },
   finish_publication_transition: { render: true, persist: true, audit: false, otel: false },
   finish_publication_blocked: { render: true, persist: true, audit: false, otel: false },
@@ -269,6 +275,11 @@ export const EVENT_SINKS = {
 
 export type OtelEventType = {
   [Type in keyof typeof EVENT_SINKS]: (typeof EVENT_SINKS)[Type]['otel'] extends true ? Type : never;
+}[keyof typeof EVENT_SINKS];
+
+/** Event types which have a daemon renderer declared by the canonical sink registry. */
+export type RenderedEventType = {
+  [Type in keyof typeof EVENT_SINKS]: (typeof EVENT_SINKS)[Type]['render'] extends true ? Type : never;
 }[keyof typeof EVENT_SINKS];
 
 export type OtelTracedEventType = {

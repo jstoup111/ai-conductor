@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "slug": "nothing-proves-a-faithful-fake-still-matches-its-r",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/nothing-proves-a-faithful-fake-still-matches-its-r.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/nothing-proves-a-faithful-fake-still-matches-its-r.md"
+    },
+    {
+      "kind": "coherence-waiver",
+      "path": ".docs/coherence-waivers/nothing-proves-a-faithful-fake-still-matches-its-r.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/nothing-proves-a-faithful-fake-still-matches-its-r.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/nothing-proves-a-faithful-fake-still-matches-its-r.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-11-07-external-boundary-ports-registry-and-ratchet.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/nothing-proves-a-faithful-fake-still-matches-its-r.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/nothing-proves-a-faithful-fake-still-matches-its-r.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/nothing-proves-a-faithful-fake-still-matches-its-r.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/nothing-proves-a-faithful-fake-still-matches-its-r.md"
+    }
+  ]
+}

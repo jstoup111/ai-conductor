@@ -49,6 +49,7 @@ run the full suite once.
 - Given a recorded PASS and a budget of `source: 20`, when 3 source files change and the gate is re-evaluated, then the fingerprint is recomputed, the PASS is preserved without launching the suite command, and the preservation records the drifted category and path count
 - Given a recorded PASS and budgets on `source` and `tests`, when both categories drift within their bounds, then the PASS is preserved and both categories appear in the drift record
 - Given a preservation has already tolerated 15 source-path changes since the attested PASS, when 4 more source paths change, then drift is measured cumulatively from the attested PASS (19 total) and the PASS is preserved
+- Given a recorded PASS whose drift is within budget and a run that enters directly at `build_review` without evaluating `test_suite` (a base-moved re-kick, a routed host, or `--from`), when `build_review` is dispatched, then the preservation is recorded and its verification event emitted first, the suite does not run, and `build_review` finds a CURRENT proof rather than halting
 
 #### Negative Paths
 - Given a recorded PASS whose evidence carries an unresolvable provenance commit, when the gate is re-evaluated after drift, then the suite re-runs and the stale reason names the indeterminate drift measurement
@@ -59,6 +60,7 @@ run the full suite once.
 ### Done When
 - [ ] A verifier test proves the within-budget path never spawns the suite command process
 - [ ] A verifier test proves cumulative-from-attested-PASS measurement (no per-evaluation reset)
+- [ ] A conductor test proves a resume entering at `build_review` records a within-budget preservation before dispatching it, without running the suite
 - [ ] A verifier test proves each fail-closed branch (unresolvable provenance, git error, old evidence version) resolves to re-run
 
 ## Story 3: Exceeded or unbudgetable drift re-runs, naming the exhausted category

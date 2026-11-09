@@ -7,10 +7,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { Conductor, type StepRunner } from '../../../src/engine/conductor.js';
+import { leafBranchFor } from '../../../src/engine/feature-branch-identity.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
 import { chargeTasklessAtAdmission } from '../../../src/engine/routing/round-receipt.js';
 import { createRouteRecord, readRouteRecord, writeRouteRecord } from '../../../src/engine/routing/route-record-store.js';
+import { closureRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { emptyUnsettledReceipt, parseRoundId } from '../../../src/engine/routing/route-types.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { writeSliceTopologyFixture } from '../slice-topology-fixture.js';
@@ -39,6 +41,9 @@ async function fixture({ route = true }: { readonly route?: boolean } = {}) {
   ].join('\n'));
   await git(['add', 'base.txt']);
   await git(['commit', '-qm', 'base']);
+  await git(['branch', leafBranchFor('demo')]);
+  await git(['update-ref', closureRefFor('demo', child), 'HEAD']);
+  await git(['update-ref', closureRefFor('demo', parseChildId(2)!), 'HEAD']);
   if (route) {
     const made = await createRouteRecord(root, 'demo', {
       roundId, sealedAuthored: 1, kind: 'audit',
@@ -71,13 +76,14 @@ describe('taskless routed admission receipts', () => {
       projectRoot: subject.root,
       stateFilePath: join(subject.root, '.pipeline', 'conduct-state.json'),
       events: new ConductorEventEmitter(),
+      git: subject.git,
       stepRunner: {
         run: async () => ({ success: true }),
         dispatchResidueRoutingJudgement: async (prompt) => {
           const itemId = JSON.parse(prompt.split('\n\n').at(-1)!).items[0].itemId;
           return {
             success: true,
-            output: JSON.stringify({ version: 'v1', items: [{ itemId, child: 1, candidates: [1], rationale: 'fixture' }] }),
+            output: JSON.stringify({ version: 'v2', items: [{ itemId, child: 1, candidates: [1], rationale: 'fixture' }] }),
           };
         },
       } satisfies StepRunner,

@@ -225,7 +225,7 @@ describe('runRestack orchestration (sweep G1, real local Git)', () => {
     const newTips = { 1: await tip(subject.git, 'feat/c1/demo'), 2: await tip(subject.git, 'feat/c2/demo'), 3: await tip(subject.git, 'feat/daemon-demo') } as Record<number, string>;
     expect(applied.map((record) => record.child)).toEqual([1, 2, 3]);
     for (const record of applied) {
-      expect(Object.keys(record).sort()).toEqual(['cause', 'child', 'newTip', 'oldTip', 'opId', 'parentOverlapPaths', 'type', 'wouldInvalidate']);
+      expect(Object.keys(record).sort()).toEqual(['adaptedPaths', 'cause', 'child', 'newTip', 'oldTip', 'opId', 'parentOverlapPaths', 'type', 'wouldInvalidate']);
       expect(record).toMatchObject({
         opId: planned!.opId,
         cause: 'base-refresh',
@@ -234,6 +234,7 @@ describe('runRestack orchestration (sweep G1, real local Git)', () => {
       });
       expect(Array.isArray(record.wouldInvalidate)).toBe(true);
       expect(Array.isArray(record.parentOverlapPaths)).toBe(true);
+      expect(Array.isArray(record.adaptedPaths)).toBe(true);
     }
   });
 
@@ -255,7 +256,7 @@ describe('runRestack orchestration (sweep G1, real local Git)', () => {
       worktree: rebased.repo, slug: 'demo', cause: 'base-refresh', newDefault: rebased.advanced, events, git: makeGitRunner(rebased.repo),
     }));
 
-    expect(halted).toEqual({ kind: 'halted' });
+    expect(halted).toMatchObject({ kind: 'halted' });
     expect((await persistedRecords(rebased.repo)).filter((record) => record.type === 'restack_refused'))
       .toEqual([{ type: 'restack_refused', reason: 'range-not-ancestor', child: 2 }]);
     await expect(readFile(join(rebased.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
@@ -308,7 +309,7 @@ describe('runRestack orchestration (sweep G1, real local Git)', () => {
     }));
 
     expect(corrupted).toBe(true);
-    expect(result).toEqual({ kind: 'halted' });
+    expect(result).toMatchObject({ kind: 'halted' });
     // Every branch and closure ref is back at its journaled old SHA; only the
     // halted operation's own journal, staging and leaf-moved bookkeeping remain.
     const refsAfter = (await refSnapshot(subject.git)).trim().split('\n')

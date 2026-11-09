@@ -24,7 +24,11 @@ import { discoverInstalledProviders } from './provider-discovery.js';
 import { createProviderRuntimeSet } from './provider-runtime.js';
 import { ProviderSessionStore } from './provider-session.js';
 import { normalizeProviderSelection, validateProviderInstallation, validateRegisteredProviderSelections } from './provider-selection.js';
-import { validateConfiguredProviderModels } from './provider-model-probe.js';
+import {
+  resolveProviderModelTiers,
+  validateConfiguredProviderModels,
+  type ProviderModelProbeRunner,
+} from './provider-model-probe.js';
 import { createCandidateSafetyBoundary, providerExecutionEventCallbacks, type ProviderExecutionContext } from './provider-execution.js';
 import { resolveHarnessRoot } from './install-freshness.js';
 import { originDefaultBranch, makeGitRunner } from './rebase.js';
@@ -56,6 +60,22 @@ export interface MakeExecutorChildRunOptions {
   readonly projectRoot: string;
   readonly runFeature?: typeof runExecutorChildFeature;
   readonly githubBoundary?: Pick<DaemonProcessServicesOptions, 'runner' | 'readCredential' | 'readToken'>;
+}
+
+/** The supervisor owns both boundary signals; the child only relays them to its conductor. */
+export function buildExecutorChildConductorBoundaryOptions({
+  projectRoot,
+  slug,
+  preemptionRequested,
+}: {
+  projectRoot: string;
+  slug: string;
+  preemptionRequested: () => boolean;
+}): Pick<ConstructorParameters<typeof Conductor>[0], 'operatorParkBoundary' | 'preemptionRequested'> {
+  return {
+    operatorParkBoundary: () => isOperatorParked(projectRoot, slug),
+    preemptionRequested,
+  };
 }
 
 /**
@@ -189,6 +209,8 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
   worktree: { path: string; branch: string };
   projectRoot: string;
   supervisorEngineVersionId: string;
+  /** Injectable only for the child boot's provider-tier catalog probe. */
+  providerModelProbeRunner?: ProviderModelProbeRunner;
 }): Promise<FeatureExecutionOutcome> {
   const { order, events, signal, worktree, projectRoot } = input;
   if (signal.aborted) return { slug: order.slug, status: 'parked', reason: String(signal.reason ?? 'stopped') };
@@ -206,7 +228,16 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
   registerBuiltins(registry, config?.codex_doctor_timeout_seconds, new Set(discovery.installed));
   registry.markInitialized();
   validateProviderInstallation({ config: config ?? {}, discovery });
-  await validateConfiguredProviderModels({ config: config ?? {}, discovery });
+  await validateConfiguredProviderModels({
+    config: config ?? {},
+    discovery,
+    ...(input.providerModelProbeRunner ? { runner: input.providerModelProbeRunner } : {}),
+  });
+  await resolveProviderModelTiers({
+    discovery,
+    projectRoot,
+    ...(input.providerModelProbeRunner ? { runner: input.providerModelProbeRunner } : {}),
+  });
   validateRegisteredProviderSelections({ config: config ?? {}, registeredProviders: registry.list('llm_provider') });
 
   const configuredProviders = normalizeProviderSelection(config?.llm_provider);
@@ -286,7 +317,11 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
     // Child isolation changes process ownership, not operator-park semantics:
     // consult the same root marker at each existing conductor admission
     // boundary and leave the feature state intact for a later unpark/retry.
-    operatorParkBoundary: () => isOperatorParked(projectRoot, order.slug),
+    ...buildExecutorChildConductorBoundaryOptions({
+      projectRoot,
+      slug: order.slug,
+      preemptionRequested: input.preemptionRequested,
+    }),
     registerAbortController: (controller) => {
       waitControllers.add(controller);
       controller.signal.addEventListener('abort', () => waitControllers.delete(controller), { once: true });

@@ -184,6 +184,34 @@ describe('dispatchRateCard refresh', () => {
     expect(errors.join('\n')).toMatch(/no upstream rate for "gpt-6-astra"/);
   });
 
+  it('prices every newer same-tier id the codex catalog probe could upgrade a floor model to', async () => {
+    const rate = { input_cost_per_token: 1e-6, output_cost_per_token: 1e-5 };
+    const upstream = JSON.stringify({
+      ...JSON.parse(UPSTREAM),
+      'gpt-6-luna': rate,
+      'gpt-6-sol': rate,
+      'gpt-6.1-sol': rate,
+      'gpt-6.1-terra': rate,
+      'gpt-5.5-luna': rate,
+      'gpt-6-astra-law': rate,
+      'azure/gpt-6.1-terra': rate,
+    });
+
+    await dispatchRateCard({ kind: 'refresh', models: [] }, dir, { fetch: async () => upstream });
+
+    const card = parseRateCard(await readFile(cardPath(), 'utf-8'));
+    expect(Object.keys(card!.models).sort()).toEqual([
+      'gpt-5.6-luna',
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-6-astra',
+      'gpt-6-luna',
+      'gpt-6-sol',
+      'gpt-6.1-sol',
+      'gpt-6.1-terra',
+    ]);
+  });
+
   it('adds explicitly requested models on top of the policy set', async () => {
     await dispatchRateCard({ kind: 'refresh', models: ['claude-opus-4'] }, dir, {
       fetch: async () => UPSTREAM,

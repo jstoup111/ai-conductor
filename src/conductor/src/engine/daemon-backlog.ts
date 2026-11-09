@@ -31,7 +31,9 @@ import {
   backlogTreeManifestSource,
   MalformedFeatureManifestError,
   resolveFeatureArtifact,
+  type ManifestSource,
 } from './feature-manifest-source.js';
+import { featureManifestPath, type FeatureScopedKind } from './feature-manifest.js';
 import {
   healPlan,
   enumerateCandidates,
@@ -754,6 +756,112 @@ export function undatedStem(stem: string): string {
   return stem.replace(/^\d{4}-\d{2}-\d{2}-(?=.)/, '');
 }
 
+export interface BacklogCandidate {
+  slug: string;
+  planFile?: string;
+  manifestBacked: boolean;
+}
+
+/** List every legacy-plan and manifest-backed feature exactly once per scan. */
+export async function listBacklogCandidates(tree: BacklogTreeSource): Promise<BacklogCandidate[]> {
+  const planFiles = (await tree.listPlanFiles()).filter((file) => file.endsWith('.md'));
+  const manifestSlugs = new Set(
+    (await tree.listFeatureManifests?.() ?? [])
+      .map((path) => path.match(/^\.docs\/([^/]+)\/manifest\.json$/)?.[1])
+      .filter((slug): slug is string => slug !== undefined),
+  );
+  const candidates = new Map<string, BacklogCandidate>();
+  for (const planFile of planFiles) {
+    const slug = planStem(planFile);
+    candidates.set(slug, { slug, planFile, manifestBacked: manifestSlugs.has(slug) });
+  }
+  for (const slug of manifestSlugs) {
+    const existing = candidates.get(slug);
+    candidates.set(slug, { slug, ...existing, manifestBacked: true });
+  }
+  return [...candidates.values()].sort((left, right) => {
+    const leftPlanFile = `${left.slug}.md`;
+    const rightPlanFile = `${right.slug}.md`;
+    return leftPlanFile < rightPlanFile ? -1 : leftPlanFile > rightPlanFile ? 1 : 0;
+  });
+}
+
+async function resolveBacklogManifestPath(
+  manifestSource: ManifestSource,
+  slug: string,
+  kind: FeatureScopedKind,
+): Promise<string | undefined> {
+  const artifact = await resolveFeatureArtifact(manifestSource, slug, kind, async () => []);
+  return artifact.paths.find((path) => artifact.origin === 'legacy' || !artifact.missing.includes(path));
+}
+
+export type CandidateStoriesResolution =
+  | { kind: 'no-plan' }
+  | { kind: 'malformed-manifest'; manifestPath: string; message: string }
+  | { kind: 'resolved'; planRel: string; planContent: string; storiesPath: string }
+  | { kind: 'unresolvable'; planRel: string; planContent: string }
+  | { kind: 'missing'; planRel: string; planContent: string; source: 'plan-line'; path: string }
+  | { kind: 'missing'; planRel: string; planContent: string; source: 'manifest'; manifestPath: string; listed: readonly string[] };
+
+export async function resolveCandidateStories(
+  tree: BacklogTreeSource,
+  candidate: BacklogCandidate,
+  legacyPlanContent?: string | null,
+): Promise<CandidateStoriesResolution> {
+  let planRel = `.docs/plans/${candidate.planFile ?? `${candidate.slug}.md`}`;
+  let planContent: string | null;
+  if (candidate.manifestBacked) {
+    try {
+      const resolvedPlan = await resolveBacklogManifestPath(
+        backlogTreeManifestSource(tree), candidate.slug, 'plan',
+      );
+      if (!resolvedPlan) return { kind: 'no-plan' };
+      planRel = resolvedPlan;
+      planContent = await tree.readFile(planRel);
+    } catch (error) {
+      if (!(error instanceof MalformedFeatureManifestError)) throw error;
+      return {
+        kind: 'malformed-manifest',
+        manifestPath: featureManifestPath(candidate.slug),
+        message: error.message,
+      };
+    }
+  } else {
+    planContent = legacyPlanContent === undefined ? await tree.readFile(planRel) : legacyPlanContent;
+  }
+  if (planContent === null) return { kind: 'no-plan' };
+
+  if (!candidate.manifestBacked) {
+    const stories = await resolveStoriesRef(tree, candidate.slug, planContent);
+    if (stories.kind === 'resolved') {
+      return { kind: 'resolved', planRel, planContent, storiesPath: stories.path };
+    }
+    if (stories.kind === 'unresolvable') return { kind: 'unresolvable', planRel, planContent };
+    return { kind: 'missing', planRel, planContent, source: 'plan-line', path: stories.path };
+  }
+
+  try {
+    const stories = await resolveFeatureArtifact(
+      backlogTreeManifestSource(tree), candidate.slug, 'stories', async () => [],
+    );
+    const storiesPath = stories.paths.find((path) =>
+      stories.origin === 'legacy' || !stories.missing.includes(path),
+    );
+    if (storiesPath) return { kind: 'resolved', planRel, planContent, storiesPath };
+    return {
+      kind: 'missing', planRel, planContent, source: 'manifest',
+      manifestPath: featureManifestPath(candidate.slug), listed: stories.paths,
+    };
+  } catch (error) {
+    if (!(error instanceof MalformedFeatureManifestError)) throw error;
+    return {
+      kind: 'malformed-manifest',
+      manifestPath: featureManifestPath(candidate.slug),
+      message: error.message,
+    };
+  }
+}
+
 export async function discoverBacklog(
   projectRoot: string,
   isProcessed: (slug: string) => Promise<boolean> = async () => false,
@@ -808,21 +916,8 @@ export async function discoverBacklog(
     );
   };
 
-  const planFiles = (await tree.listPlanFiles()).filter((f) => f.endsWith('.md'));
-  const manifestSlugs = new Set(
-    (await tree.listFeatureManifests?.() ?? [])
-      .map((path) => path.match(/^\.docs\/([^/]+)\/manifest\.json$/)?.[1])
-      .filter((slug): slug is string => slug !== undefined),
-  );
-  const candidates = new Map<string, { planFile?: string; manifestBacked: boolean }>();
-  for (const file of planFiles) {
-    const slug = planStem(file);
-    candidates.set(slug, { planFile: file, manifestBacked: manifestSlugs.has(slug) });
-  }
-  for (const slug of manifestSlugs) {
-    const existing = candidates.get(slug);
-    candidates.set(slug, { ...existing, manifestBacked: true });
-  }
+  const candidates = await listBacklogCandidates(tree);
+  const planFiles = candidates.flatMap((candidate) => candidate.planFile === undefined ? [] : [candidate.planFile]);
   const persistBlockedSnapshot = async (blocked: BlockedSpecItem[]): Promise<void> => {
     try {
       await (opts.writeBlockedSnapshot ?? ((items) => writeBlockedSnapshot(projectRoot, items)))(blocked);
@@ -830,7 +925,7 @@ export async function discoverBacklog(
       log(`blocked snapshot: failed to persist latest state: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
-  if (candidates.size === 0) {
+  if (candidates.length === 0) {
     await persistBlockedSnapshot([]);
     return { items: [], waiting: [], blocked: [], gated: [] };
   }
@@ -914,11 +1009,8 @@ export async function discoverBacklog(
   // alongside the existing warnOnce log line below — never in place of it.
   const gatedItems: GatedItem[] = [];
   const manifestSource = backlogTreeManifestSource(tree);
-  for (const [slug, candidate] of [...candidates].sort(([leftSlug], [rightSlug]) => {
-    const leftPlanFile = `${leftSlug}.md`;
-    const rightPlanFile = `${rightSlug}.md`;
-    return leftPlanFile < rightPlanFile ? -1 : leftPlanFile > rightPlanFile ? 1 : 0;
-  })) {
+  for (const candidate of candidates) {
+    const { slug } = candidate;
     let planRel = `.docs/plans/${candidate.planFile ?? `${slug}.md`}`;
     // Preserve the legacy candidate's historical read timing and fallback
     // behavior. Manifest candidates defer parsing until after identity-only
@@ -954,34 +1046,33 @@ export async function discoverBacklog(
 
     if (await isOperatorParked(slug)) continue;
 
-    const manifestPathFor = async (kind: 'plan' | 'stories' | 'complexity' | 'coherence' | 'track' | 'applicability' | 'intake'): Promise<string | undefined> => {
-      const artifact = await resolveFeatureArtifact(manifestSource, slug, kind, async () => []);
-      return artifact.paths.find((path) => artifact.origin === 'legacy' || !artifact.missing.includes(path));
-    };
-    if (candidate.manifestBacked) {
-      try {
-        const resolvedPlan = await manifestPathFor('plan');
-        if (!resolvedPlan) continue;
-        planRel = resolvedPlan;
-        planContent = await tree.readFile(planRel);
-        if (planContent === null) continue;
-      } catch (error) {
-        if (!(error instanceof MalformedFeatureManifestError)) throw error;
-        const manifestPath = `.docs/${slug}/manifest.json`;
-        await block(
-          { slug, reason: 'malformed-manifest', remedy: `Fix malformed feature manifest ${manifestPath}: ${error.message}` },
-          `skip ${slug}: merged spec cannot build — malformed feature manifest ${manifestPath}. ${error.message} logged once.`,
-        );
-        continue;
-      }
+    const manifestPathFor = (kind: 'plan' | 'stories' | 'complexity' | 'coherence' | 'track' | 'applicability' | 'intake') =>
+      resolveBacklogManifestPath(manifestSource, slug, kind);
+    const storiesResolution = await resolveCandidateStories(tree, candidate, planContent);
+    if (storiesResolution.kind === 'no-plan') continue;
+    if (storiesResolution.kind === 'malformed-manifest') {
+      await block(
+        { slug, reason: 'malformed-manifest', remedy: `Fix malformed feature manifest ${storiesResolution.manifestPath}: ${storiesResolution.message}` },
+        `skip ${slug}: merged spec cannot build — malformed feature manifest ${storiesResolution.manifestPath}. ${storiesResolution.message} logged once.`,
+      );
+      continue;
     }
-
-    if (planContent === null) continue;
-
+    planRel = storiesResolution.planRel;
+    planContent = storiesResolution.planContent;
     let storiesRel: string;
-    if (candidate.manifestBacked) {
-      const resolvedStories = await manifestPathFor('stories');
-      if (!resolvedStories) {
+    if (storiesResolution.kind === 'unresolvable') {
+      const remedy =
+        `Fix ${planRel}: use a repo-relative path, an inline-code path, or a Markdown link, ` +
+        'each optionally followed by a trailing annotation.';
+      await block(
+        { slug, reason: 'unresolvable-stories-ref', remedy },
+        `skip ${slug}: merged spec cannot build — Stories reference cannot resolve. ${remedy} ` +
+          'logged once.',
+      );
+      continue;
+    }
+    if (storiesResolution.kind === 'missing') {
+      if (storiesResolution.source === 'manifest') {
         const remedy = `Add a committed stories entry to .docs/${slug}/manifest.json.`;
         await block(
           { slug, reason: 'stories-missing', remedy },
@@ -989,33 +1080,17 @@ export async function discoverBacklog(
         );
         continue;
       }
-      storiesRel = resolvedStories;
-    } else {
-      const storiesRef = await resolveStoriesRef(tree, slug, planContent);
-      if (storiesRef.kind === 'unresolvable') {
-        const remedy =
-          `Fix ${planRel}: use a repo-relative path, an inline-code path, or a Markdown link, ` +
-          'each optionally followed by a trailing annotation.';
-        await block(
-          { slug, reason: 'unresolvable-stories-ref', remedy },
-          `skip ${slug}: merged spec cannot build — Stories reference cannot resolve. ${remedy} ` +
-            'logged once.',
-        );
-        continue;
-      }
-      if (storiesRef.kind === 'missing') {
-        const remedy =
-          `Create the Stories file at ${storiesRef.path} on the default branch, or fix its ` +
-          `reference in ${planRel}.`;
-        await block(
-          { slug, reason: 'stories-missing', remedy },
-          `skip ${slug}: merged spec cannot build — Stories file missing at ${storiesRef.path}. ` +
-            `${remedy} logged once.`,
-        );
-        continue;
-      }
-      storiesRel = storiesRef.path;
+      const remedy =
+        `Create the Stories file at ${storiesResolution.path} on the default branch, or fix its ` +
+        `reference in ${planRel}.`;
+      await block(
+        { slug, reason: 'stories-missing', remedy },
+        `skip ${slug}: merged spec cannot build — Stories file missing at ${storiesResolution.path}. ` +
+          `${remedy} logged once.`,
+      );
+      continue;
     }
+    storiesRel = storiesResolution.storiesPath;
 
     // Carry the engineer-assessed complexity tier so the daemon build honors it
     // (Small skips acceptance_specs). Resolve it before vetting so those

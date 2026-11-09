@@ -1,18 +1,23 @@
-// Covers: task:7, task:8, task:9, task:10, task:11, task:12, task:13, task:14, task:18
+// Covers: task:3, task:7, task:8, task:9, task:10, task:11, task:12, task:13, task:14, task:18
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { execFile as execFileCallback } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { resolveActiveChild } from '../../../src/engine/child-cursor.js';
 import { checkStepCompletion } from '../../../src/engine/artifacts.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
+import { readKickbackLedger } from '../../../src/engine/kickback-ledger.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
-import { cascadesRefFor, MAX_RESTACK_CASCADES_PER_CHILD } from '../../../src/engine/restack/cascade-cap.js';
+import { cascadesRefFor } from '../../../src/engine/restack/cascade-cap.js';
+import { RESTACK_CASCADE_TIER_DEFAULTS } from '../../../src/engine/restack/cascade-allowance.js';
 import { journalRefFor } from '../../../src/engine/restack/restack-journal.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import { readRevalidationQueue, readRouteRecord } from '../../../src/engine/routing/route-record-store.js';
+import { exitRoutedHostAndReconcile } from '../../../src/engine/routing/round-admission.js';
 import { routedRepairPhaseEvent } from '../../../src/engine/routing/routing-events.js';
 vi.mock('../../../src/engine/routing/routed-exit.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../../src/engine/routing/routed-exit.js')>();
@@ -20,7 +25,7 @@ vi.mock('../../../src/engine/routing/routed-exit.js', async (importOriginal) => 
 });
 
 import { requestRoutedExit } from '../../../src/engine/routing/routed-exit.js';
-import { advanceRound } from '../../../src/engine/routing/routed-exit.js';
+import { advanceRound, settleDerivedNoOpHost } from '../../../src/engine/routing/routed-exit.js';
 import { runStackPreflight } from '../../../src/engine/restack/stack-preflight.js';
 import { closureRefFor, repairMarkerRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { emptyUnsettledReceipt, parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
@@ -32,6 +37,7 @@ const cleanup: string[] = [];
 const host = parseChildId(1)!;
 const childTwo = parseChildId(2)!;
 const roundId = parseRoundId('r1')!;
+const execFile = promisify(execFileCallback);
 
 afterEach(async () => {
   vi.mocked(requestRoutedExit).mockClear();
@@ -132,6 +138,199 @@ function addOutbox(record: RouteRecord): RouteRecord {
 }
 
 describe('routed exit (real local Git)', () => {
+  // Covers: task:3
+  it('settles an admitted audit host when later hosts are pending', async () => {
+    const subject = await fixture(false);
+    const childThree = parseChildId(3)!;
+    await replaceRoute(subject, (record) => ({
+      ...record,
+      hosts: { [host]: 'admitted', [childTwo]: 'pending', [childThree]: 'pending' },
+    }));
+
+    await expect(settleDerivedNoOpHost({
+      worktree: subject.repo, slug: 'demo', roundId, host, git: subject.gitRunner,
+    })).resolves.toEqual({ kind: 'settled' });
+
+    await expect(readRouteRecord(subject.repo, 'demo', roundId, { git: subject.gitRunner })).resolves.toMatchObject({
+      kind: 'record', record: {
+        hosts: { 1: 'repairing', 2: 'pending', 3: 'pending' },
+        outbox: [expect.objectContaining({
+          event: expect.objectContaining({
+            type: 'routed_repair_phase', host: 1, phase: 'repairing', credit: false, reason: 'derived-already-complete',
+          }),
+        })],
+      },
+    });
+  });
+
+  // Covers: task:3
+  it('settles an admitted last host when another host is restacked', async () => {
+    const subject = await fixture(false);
+    await replaceRoute(subject, (record) => ({
+      ...record,
+      hosts: { [host]: 'restacked', [childTwo]: 'admitted' },
+      currentHostIndex: 1,
+      entry: undefined,
+    }));
+
+    await expect(settleDerivedNoOpHost({
+      worktree: subject.repo, slug: 'demo', roundId, host: childTwo, git: subject.gitRunner,
+    })).resolves.toEqual({ kind: 'settled' });
+  });
+
+  // Covers: task:3
+  it('settles an admitted last host when another host is rerouted', async () => {
+    const subject = await fixture(false);
+    await replaceRoute(subject, (record) => ({
+      ...record,
+      hosts: { [host]: 'rerouted', [childTwo]: 'admitted' },
+      currentHostIndex: 1,
+      entry: undefined,
+    }));
+
+    await expect(settleDerivedNoOpHost({
+      worktree: subject.repo, slug: 'demo', roundId, host: childTwo, git: subject.gitRunner,
+    })).resolves.toEqual({ kind: 'settled' });
+  });
+
+  // Covers: task:3
+  it('halts without writing for a single-host round', async () => {
+    const subject = await fixture(false);
+    await replaceRoute(subject, (record) => ({ ...record, hosts: { [host]: 'admitted' }, currentHostIndex: 0 }));
+    const before = (await subject.gitRunner(['rev-parse', routeRecordRefFor('demo', roundId)])).stdout.trim();
+
+    await expect(settleDerivedNoOpHost({
+      worktree: subject.repo, slug: 'demo', roundId, host, git: subject.gitRunner,
+    })).resolves.toEqual({ kind: 'halt' });
+
+    await expect(subject.gitRunner(['rev-parse', routeRecordRefFor('demo', roundId)])).resolves.toMatchObject({ stdout: before });
+  });
+
+  // Covers: task:3
+  it('halts without writing for a last host after all other hosts are done', async () => {
+    const subject = await fixture(false);
+    await replaceRoute(subject, (record) => ({
+      ...record,
+      hosts: { [host]: 'done', [childTwo]: 'admitted' },
+      currentHostIndex: 1,
+      entry: undefined,
+    }));
+    const before = (await subject.gitRunner(['rev-parse', routeRecordRefFor('demo', roundId)])).stdout.trim();
+
+    await expect(settleDerivedNoOpHost({
+      worktree: subject.repo, slug: 'demo', roundId, host: childTwo, git: subject.gitRunner,
+    })).resolves.toEqual({ kind: 'halt' });
+
+    await expect(subject.gitRunner(['rev-parse', routeRecordRefFor('demo', roundId)])).resolves.toMatchObject({ stdout: before });
+  });
+
+  // Covers: task:3
+  it('never grants routed repair credit while settling a derived no-op host', async () => {
+    const subject = await fixture(false);
+    await replaceRoute(subject, (record) => ({ ...record, hosts: { [host]: 'admitted', [childTwo]: 'pending' } }));
+
+    await expect(settleDerivedNoOpHost({
+      worktree: subject.repo, slug: 'demo', roundId, host, git: subject.gitRunner,
+    })).resolves.toEqual({ kind: 'settled' });
+
+    expect((await readKickbackLedger(subject.repo)).routedRepairCredit).toBeUndefined();
+  });
+
+  // Covers: task:3
+  it('refuses without writing when the round is revalidate', async () => {
+    const subject = await fixture(false);
+    await replaceRoute(subject, (record) => ({ ...record, kind: 'revalidate', hosts: { [host]: 'admitted', [childTwo]: 'pending' } }));
+    const before = (await subject.gitRunner(['rev-parse', routeRecordRefFor('demo', roundId)])).stdout.trim();
+
+    await expect(settleDerivedNoOpHost({
+      worktree: subject.repo, slug: 'demo', roundId, host, git: subject.gitRunner,
+    })).resolves.toEqual({ kind: 'refused' });
+
+    await expect(subject.gitRunner(['rev-parse', routeRecordRefFor('demo', roundId)])).resolves.toMatchObject({ stdout: before });
+  });
+
+  // Covers: task:3
+  it('refuses without writing when the round is operator', async () => {
+    const subject = await fixture(false);
+    await replaceRoute(subject, (record) => ({ ...record, kind: 'operator', hosts: { [host]: 'admitted', [childTwo]: 'pending' } }));
+    const before = (await subject.gitRunner(['rev-parse', routeRecordRefFor('demo', roundId)])).stdout.trim();
+
+    await expect(settleDerivedNoOpHost({
+      worktree: subject.repo, slug: 'demo', roundId, host, git: subject.gitRunner,
+    })).resolves.toEqual({ kind: 'refused' });
+
+    await expect(subject.gitRunner(['rev-parse', routeRecordRefFor('demo', roundId)])).resolves.toMatchObject({ stdout: before });
+  });
+
+  // Covers: task:4
+  it('drains routing outboxes before reconciling a restacked exit', async () => {
+    const subject = await fixture(false);
+    await replaceRoute(subject, (record) => ({
+      ...addOutbox(record),
+      hosts: { [host]: 'restacked', [childTwo]: 'pending' },
+    }));
+    const order: string[] = [];
+    const exit = vi.fn(async () => {
+      order.push('exit');
+      await subject.gitRunner(['update-ref', '-d', repairMarkerRefFor('demo')]);
+      return { kind: 'restacked' as const };
+    });
+    const persist = vi.fn(async () => {
+      order.push('persist');
+      return 'persisted' as const;
+    });
+    const recorded = recordingRunner(subject.gitRunner);
+    const git: GitRunner = async (args, options) => {
+      const result = await recorded.git(args, options);
+      if (args[0] === 'update-ref' && args[1] === '--stdin' && options?.input?.includes(repairMarkerRefFor('demo'))) order.push('reconcile');
+      return result;
+    };
+
+    await expect(exitRoutedHostAndReconcile({
+      worktree: subject.repo, slug: 'demo', roundId, host, exit, persist, git,
+    })).resolves.toEqual({ kind: 'continued', next: { kind: 'navigate-host', roundId, host: childTwo } });
+
+    expect(order).toEqual(['exit', 'persist', 'reconcile']);
+    expect(exit).toHaveBeenCalledOnce();
+    expect(persist).toHaveBeenCalledOnce();
+  });
+
+  // Covers: task:4
+  it.each(['refused', 'rolled-back'] as const)('preserves routed state when the exit is %s', async (outcome) => {
+    const subject = await fixture(true);
+    await replaceRoute(subject, (record) => ({ ...record, hosts: { ...record.hosts, [host]: 'built', [childTwo]: 'pending' } }));
+    const before = (await subject.gitRunner(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/conductor/demo/'])).stdout;
+    const marker = (await subject.gitRunner(['rev-parse', repairMarkerRefFor('demo')])).stdout.trim();
+    const exit = vi.fn(async () => ({ kind: 'halted' as const, detail: `${outcome} exit` }));
+
+    await expect(exitRoutedHostAndReconcile({
+      worktree: subject.repo, slug: 'demo', roundId, host, exit, git: subject.gitRunner,
+    })).resolves.toEqual({ kind: 'exit-halted', detail: `${outcome} exit` });
+
+    await expect(readRouteRecord(subject.repo, 'demo', roundId, { git: subject.gitRunner })).resolves.toMatchObject({
+      kind: 'record', record: { hosts: { 1: 'built', 2: 'pending' } },
+    });
+    await expect(subject.gitRunner(['rev-parse', repairMarkerRefFor('demo')])).resolves.toMatchObject({ stdout: marker });
+    await expect(subject.gitRunner(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/conductor/demo/'])).resolves.toMatchObject({ stdout: before });
+  });
+
+  // Covers: task:4
+  it.each(['no-commit-done', 'noop'] as const)('reconciles after a %s exit', async (kind) => {
+    const subject = await fixture(false);
+    await replaceRoute(subject, (record) => ({
+      ...record,
+      hosts: { [host]: 'done', [childTwo]: 'pending' },
+    }));
+    await subject.gitRunner(['update-ref', '-d', repairMarkerRefFor('demo')]);
+    const exit = vi.fn(async () => ({ kind }));
+
+    await expect(exitRoutedHostAndReconcile({
+      worktree: subject.repo, slug: 'demo', roundId, host, exit, persist: async () => 'persisted', git: subject.gitRunner,
+    })).resolves.toEqual({ kind: 'continued', next: { kind: 'navigate-host', roundId, host: childTwo } });
+
+    expect(exit).toHaveBeenCalledOnce();
+  });
+
   // Covers: task:rem-prd-audit-rem-prd-audit-rem-vg6-s6-1
   it('distinguishes a final leaf return from a close that yields to an open round or queue', async () => {
     const leafReturn = await fixture(false);
@@ -270,7 +469,8 @@ describe('routed exit (real local Git)', () => {
       worktree: subject.repo, slug: 'demo', roundId, host,
       persist: async () => { throw new Error('crash after built'); },
     })).resolves.toMatchObject({ kind: 'halted', detail: expect.stringContaining('outbox') });
-    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', git: subject.gitRunner })).resolves.toEqual({ kind: 'repaired' });
+    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', git: subject.gitRunner }))
+      .resolves.toEqual({ kind: 'navigate-host', roundId: parseRoundId('r2')!, host: childTwo });
     const afterFirst = await readRouteRecord(subject.repo, 'demo', roundId, { git: subject.gitRunner });
     expect(afterFirst).toMatchObject({ kind: 'record', record: { hosts: { 1: 'restacked' } } });
     const recorded = recordingRunner(subject.gitRunner);
@@ -300,7 +500,9 @@ describe('routed exit (real local Git)', () => {
 
     await expect(requestRoutedExit({
       worktree: subject.repo, slug: 'demo', roundId, host, git: corruptingGit,
-    })).resolves.toEqual({ kind: 'halted', detail: 'routed exit host 1: halted' });
+    })).resolves.toMatchObject({
+      kind: 'halted', detail: expect.stringContaining('tree mismatch for child 2'),
+    });
 
     expect(corrupted).toBe(true);
     await expect(Promise.all([
@@ -326,14 +528,72 @@ describe('routed exit (real local Git)', () => {
     // The routed fix creates the file child 2 adds, so replaying child 2 conflicts.
     await subject.commit('routed fix touching child 2', 'two.txt', 'routed\n');
     const resolver = vi.fn(async () => ({ resolved: false as const, reason: 'test resolver declined' }));
+    let result;
     if (entry === 'exit') {
-      await requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host, git: subject.gitRunner, resolver, resolverCap: 1 });
+      result = await requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host, git: subject.gitRunner, resolver, resolverCap: 1 });
     } else {
       await replaceRoute(subject, (record) => ({ ...record, hosts: { ...record.hosts, [host]: 'built' } }));
-      await runStackPreflight({ worktree: subject.repo, slug: 'demo', git: subject.gitRunner, resolver, resolverCap: 1 });
+      result = await runStackPreflight({ worktree: subject.repo, slug: 'demo', git: subject.gitRunner, resolver, resolverCap: 1 });
     }
 
     expect(resolver).toHaveBeenCalled();
+    expect(result).toMatchObject({ kind: 'halted', detail: expect.stringContaining('test resolver declined') });
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/restack conflict child 2[\s\S]*test resolver declined/);
+  });
+
+  it('applies a routed restack when the supplied resolver reconciles child 2', async () => {
+    const subject = await fixture(true);
+    await subject.commit('routed fix touching child 2', 'two.txt', 'routed\n');
+
+    await expect(requestRoutedExit({
+      worktree: subject.repo,
+      slug: 'demo',
+      roundId,
+      host,
+      git: subject.gitRunner,
+      resolver: async ({ projectRoot, environment }) => {
+        await writeFile(join(projectRoot, 'two.txt'), 'two\nrouted\n');
+        await execFile('git', ['add', 'two.txt'], { cwd: projectRoot, env: { ...process.env, ...environment } });
+        await execFile('git', ['rebase', '--continue'], { cwd: projectRoot, env: { ...process.env, ...environment } });
+        return { resolved: true };
+      },
+      resolverCap: 1,
+    })).resolves.toEqual({ kind: 'restacked' });
+
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('reports a provider setup exhaustion from the routed resolver', async () => {
+    const subject = await fixture(true);
+    await subject.commit('routed fix touching child 2', 'two.txt', 'routed\n');
+    const refs = ['refs/heads/feat/c2/demo', closureRefFor('demo', childTwo)];
+    const before = await Promise.all(refs.map(async (ref) => (await subject.gitRunner(['rev-parse', ref])).stdout.trim()));
+
+    await expect(requestRoutedExit({
+      worktree: subject.repo,
+      slug: 'demo',
+      roundId,
+      host,
+      git: subject.gitRunner,
+      resolver: async () => ({
+        resolved: false,
+        reason: 'provider setup failed',
+        providerSetupExhaustion: {
+          candidates: [{
+            provider: 'codex',
+            reason: 'provider setup failed',
+            recoveryAction: 'Restore Codex setup, then retry the routed exit.',
+          }],
+        },
+      }),
+      resolverCap: 1,
+    })).resolves.toMatchObject({
+      kind: 'halted',
+      detail: expect.stringContaining('every configured provider is unavailable during setup'),
+    });
+
+    const after = await Promise.all(refs.map(async (ref) => (await subject.gitRunner(['rev-parse', ref])).stdout.trim()));
+    expect(after).toEqual(before);
   });
 
   it('takes the one-transaction no-commit exit only at the exact closure tip', async () => {
@@ -519,7 +779,7 @@ describe('routed exit (real local Git)', () => {
     await expect(runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'feature-repair', originatingChildren: [childTwo],
       routed: { roundId, host, routeOld: route.blob, markerOld: marker }, git: subject.gitRunner,
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('child 1');
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
     expect(await refExists(subject.gitRunner, journalRefFor('demo'))).toBe(false);
@@ -528,9 +788,11 @@ describe('routed exit (real local Git)', () => {
   it('keeps the marker and names the runbook when the routed exit reaches the cascade cap', async () => {
     const subject = await fixture(true);
     await subject.gitRunner(['update-ref', cascadesRefFor('demo'), await blob(subject.gitRunner, {
-      version: 1, counts: { '1': MAX_RESTACK_CASCADES_PER_CHILD },
+      version: 1, counts: { '1': RESTACK_CASCADE_TIER_DEFAULTS.M },
     })]);
-    await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host })).resolves.toMatchObject({ kind: 'halted' });
+    await expect(requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host })).resolves.toMatchObject({
+      kind: 'halted', detail: expect.stringContaining('cascade-cap'),
+    });
     expect(await refExists(subject.gitRunner, repairMarkerRefFor('demo'))).toBe(true);
     expect(await refExists(subject.gitRunner, journalRefFor('demo'))).toBe(false);
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(/^restack refused \(cascade-cap\) child 1[\s\S]*Routed repair halted on the cascade cap/);

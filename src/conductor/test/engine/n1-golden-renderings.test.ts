@@ -76,6 +76,13 @@ describe('N=1 golden renderings', () => {
     // run-root marker rather than forwarding that mutable value, otherwise
     // this nested Vitest run can create shell fixtures in the real /tmp.
     const runTmpRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+    // The nested runner needs a short, private parent.  Do not use the real
+    // system tmpdir here: its global leak guard would then observe unrelated
+    // outer-suite workers that happen to create entries while this child runs.
+    // Keeping the base below this run's root also avoids the package-local
+    // socket-path limit that made Vitest fall back to `/tmp/tmp.*`.
+    const childTmpBase = await mkdtemp(join(runTmpRoot ?? tmpdir(), 'n1-golden-child-suite-'));
+    roots.push(childTmpBase);
     const result = await execFile(process.execPath, [
       'scripts/run-vitest.mjs',
       'run',
@@ -89,11 +96,13 @@ describe('N=1 golden renderings', () => {
       env: {
         ...process.env,
         [N1_GOLDEN_SUITE_CHILD]: '1',
-        ...(runTmpRoot === undefined ? {} : {
-          TMPDIR: runTmpRoot,
-          TMP: runTmpRoot,
-          TEMP: runTmpRoot,
-        }),
+        AI_CONDUCTOR_TEST_TMP_BASE: childTmpBase,
+        // `run-vitest.mjs` preserves this marker across its fresh allocation;
+        // make the child's real-tmpdir guard observe only its private base.
+        AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR: childTmpBase,
+        TMPDIR: childTmpBase,
+        TMP: childTmpBase,
+        TEMP: childTmpBase,
       },
     });
     // The child may report the pre-run stale-root sweep and its teardown's
@@ -472,8 +481,11 @@ describe('N=1 golden renderings', () => {
         mode: 'auto',
         daemon: true,
         dispatchAuthoring: async () => {
-          title = 'feat: freeze N=1 FINISH';
-          body = '## Why\n\nFreeze the single-leaf FINISH baseline.\n\n## What Changed\n\nCommitted N=1 goldens.\n\n## Testing\n\nai-conductor scoped-run src/conductor/test/engine/n1-golden-renderings.test.ts\n';
+          await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({
+            version: 1,
+            title: 'feat: freeze N=1 FINISH',
+            body: '## Why\n\nFreeze the single-leaf FINISH baseline.\n\n## What Changed\n\nCommitted N=1 goldens.\n\n## Testing\n\nai-conductor scoped-run src/conductor/test/engine/n1-golden-renderings.test.ts\n',
+          }));
           return { success: true };
         },
         dispatchJudgment: async () => ({ success: true, output: '{"kind":"accepted"}' }),
@@ -483,7 +495,7 @@ describe('N=1 golden renderings', () => {
       const gitArgv = await withGitArgvShim(root, async () => {
         let coordinator = makeCoordinator();
         const first = await advance(coordinator);
-        expect(first).toEqual({ kind: 'publication_progress', transition: 'author_pr_prose' });
+        expect(first).toEqual({ kind: 'advanced', transition: 'author_pr_prose' });
         if (resumeAfterAuthoring) coordinator = makeCoordinator();
         const outcomes: unknown[] = [];
         for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -500,7 +512,7 @@ describe('N=1 golden renderings', () => {
     const normal = await run(false);
     await expectFinishGolden('leaf-body', normal.body);
     await expectFinishGolden('conduct-state', JSON.stringify(JSON.parse(await readFile(statePath, 'utf8')), null, 2));
-    await expectFinishGolden('gh-argv', JSON.stringify(normal.ghArgv, null, 2));
+    await expectFinishGolden('gh-argv', `${JSON.stringify(normal.ghArgv, null, 2)}\n`);
     // ADR 2026-10-17 D1 (amended 2026-10-20): local read-only conductor-ref
     // probes are recorded separately; remote and mutating argv stay pinned.
     const normalGit = partitionConductorRefProbes(normal.gitArgv, 'n1-golden');

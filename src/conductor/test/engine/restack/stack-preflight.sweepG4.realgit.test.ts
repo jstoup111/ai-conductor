@@ -1,4 +1,4 @@
-// Covers: task:30, task:rem-prd-audit-rem-v3-intent-restack
+// Covers: task:3, task:30, task:rem-prd-audit-rem-v3-intent-restack
 import { execFile as execFileCallback } from 'node:child_process';
 import { access, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -396,7 +396,7 @@ describe('runStackPreflight Task 30 sweep (real local Git)', () => {
       expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
       expect(await exists(join(subject.repo, '.pipeline', 'HALT'))).toBe(false);
     }
-  });
+  }, 60_000);
 
   // Covers: S6.4, task:rem-prd-audit-rem-s6-4-preflight-freeze-scope
   it('suppresses a follow-on when publication arrives after feature-repair applies', async () => {

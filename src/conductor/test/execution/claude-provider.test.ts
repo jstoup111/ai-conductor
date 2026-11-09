@@ -4,7 +4,7 @@ import { dispatchGitGuard } from '../fixtures/dispatch-git-guard.js';
 // Covers: task:5
 // Covers: task:7
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { access, readFile } from 'node:fs/promises';
+import { access, readFile, readdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 const { mockExeca, mockValidateSpawnPermit, mockEnforceFreshSessionOptions, mockEnsureGitGuardForDispatch } = vi.hoisted(() => ({
@@ -35,6 +35,7 @@ const {
   ClaudeProvider,
   detectsSessionLimit,
   parseRateLimitWaitSeconds,
+  resolveSystemPromptTempRoot,
 } = await import('../../src/execution/claude-provider.js');
 import { classifyMetering } from '../../src/engine/metering.js';
 import { executeAuxiliaryProviderCandidates } from '../../src/engine/provider-execution.js';
@@ -103,6 +104,13 @@ describe('ClaudeProvider', () => {
     sessionId: 'abc-123',
     resume: false,
   };
+
+  it('keeps system-prompt files within the Vitest scope while nested discovery clears its run root', () => {
+    expect(resolveSystemPromptTempRoot({
+      AI_CONDUCTOR_TEST_TMP_SCOPE: '/isolated/vitest-scope',
+      TMPDIR: '/tmp',
+    }, () => '/tmp')).toBe('/isolated/vitest-scope');
+  });
 
   it.each([
     {
@@ -272,6 +280,66 @@ describe('ClaudeProvider', () => {
         });
       });
 
+      it('keeps a well-formed verdict a success when its prose quotes limit notices mid-text (#3545)', async () => {
+        const verdict = { version: 1, relationships: [] };
+        const quotedEvidence = [
+          'Story 2.3 is FIXABLE.',
+          "The test replays errorStream('429: Monthly usage limit reached') and asserts usageExhausted:true.",
+          'The incident report quotes "You\'ve hit your monthly spend limit. /model to switch models." verbatim.',
+        ].join('\n');
+        mockExeca.mockResolvedValue({
+          stdout: JSON.stringify({
+            type: 'result',
+            result: quotedEvidence,
+            structured_output: JSON.stringify(verdict),
+          }),
+          stderr: '',
+          exitCode: 0,
+          failed: false,
+        } as any);
+
+        const result = await provider.invoke({ ...baseOptions, nativeSchema: schema });
+
+        expect(result.success).toBe(true);
+        expect(result.rateLimited).toBeUndefined();
+        expect(result.modelUnavailable).toBeUndefined();
+        expect(result.waitSeconds).toBeUndefined();
+        expect(result.finalStructuredResult).toEqual(verdict);
+      });
+
+      it('still classifies a genuine limit notice opening the terminal result as rateLimited (#3545)', async () => {
+        mockExeca.mockResolvedValue({
+          stdout: JSON.stringify({
+            type: 'result',
+            result: "You've hit your session limit · resets 3:20pm (America/New_York)",
+          }),
+          stderr: '',
+          exitCode: 0,
+          failed: false,
+        } as any);
+
+        const result = await provider.invoke(baseOptions);
+
+        expect(result.rateLimited).toBe(true);
+        expect(result.success).toBe(false);
+        expect(result.waitSeconds).toBeDefined();
+      });
+
+      it('still classifies a genuine limit notice on a stderr line as rateLimited (#3545)', async () => {
+        mockExeca.mockResolvedValue({
+          stdout: JSON.stringify({ type: 'result', result: 'Partial answer.' }),
+          stderr: "warning: retrying request\nYou've hit your session limit · resets 3:20pm (America/New_York)",
+          exitCode: 0,
+          failed: false,
+        } as any);
+
+        const result = await provider.invoke(baseOptions);
+
+        expect(result.rateLimited).toBe(true);
+        expect(result.success).toBe(false);
+        expect(result.waitSeconds).toBeDefined();
+      });
+
       it('passes the security descriptor schema through provider execution to Claude argv', async () => {
         const nativeSchema = BUILD_REVIEW_RUBRIC_REGISTRY.security.contract.output.jsonSchema;
         mockExeca.mockResolvedValue({
@@ -429,17 +497,7 @@ describe('ClaudeProvider', () => {
       });
 
       const testTmpRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
-      const originalTmpdir = process.env.TMPDIR;
-      delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
-      process.env.TMPDIR = '/tmp';
-      try {
-        await provider.invoke({ ...baseOptions, interactive: false, systemPrompt });
-      } finally {
-        if (testTmpRoot === undefined) delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
-        else process.env.AI_CONDUCTOR_TEST_TMP_ROOT = testTmpRoot;
-        if (originalTmpdir === undefined) delete process.env.TMPDIR;
-        else process.env.TMPDIR = originalTmpdir;
-      }
+      await provider.invoke({ ...baseOptions, interactive: false, systemPrompt });
 
       const [, args] = mockExeca.mock.calls[0] as [string, string[], any];
       expect(args).not.toContain('--append-system-prompt');
@@ -448,6 +506,23 @@ describe('ClaudeProvider', () => {
       expect(testTmpRoot).toBeDefined();
       expect(dirname(dirname(promptPath!))).toBe(testTmpRoot);
       await expect(access(promptPath!)).rejects.toThrow();
+    });
+
+    it('removes a system-prompt file when serializing the native schema throws', async () => {
+      const testTmpRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT!;
+      const schema: { self?: unknown } = {};
+      schema.self = schema;
+
+      await expect(provider.invoke({
+        ...baseOptions,
+        interactive: false,
+        systemPrompt: 'Keep this private.',
+        nativeSchema: schema,
+      })).rejects.toThrow(/circular structure/i);
+
+      expect((await readdir(testTmpRoot))
+        .filter((entry) => entry.startsWith('ai-conductor-claude-system-prompt-'))).toEqual([]);
+      expect(mockExeca).not.toHaveBeenCalled();
     });
 
     it('selects the stream-json envelope for a non-REPL dispatch', async () => {
@@ -784,6 +859,13 @@ describe('ClaudeProvider', () => {
           '--verbose',
         ],
       ]);
+    });
+
+    it('overlays the dispatch environment on the spawned session', async () => {
+      mockExeca.mockResolvedValue({ stdout: 'Done.', stderr: '', exitCode: 0, failed: false } as any);
+      await provider.invoke({ ...baseOptions, env: { GIT_CONFIG_VALUE_0: '/helpers/hooks' } });
+      const [, , options] = mockExeca.mock.calls[0] as [string, string[], any];
+      expect(options.env.GIT_CONFIG_VALUE_0).toBe('/helpers/hooks');
     });
 
     it('checks a current permit immediately before the injected subprocess factory', async () => {

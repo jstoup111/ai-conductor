@@ -126,6 +126,7 @@ const PLAN = [
   '',
   '### Task 1: implement outcome one',
   '**Story:** Story 1 (happy path — outcomes travel)',
+  '**Dependencies:** none',
   '**Type:** happy-path',
   '**Files likely touched:**',
   '- src/conductor/src/engine/engineer/outcome-staging.ts',
@@ -137,6 +138,7 @@ const PLAN = [
   '',
   '### Task 2: implement story two',
   '**Story:** Story 2 (happy path — stories map)',
+  '**Dependencies:** Task 1',
   '**Type:** happy-path',
   '**Files likely touched:**',
   '- src/conductor/src/engine/engineer/coherence-validator.ts',
@@ -672,8 +674,8 @@ describe('Story 6 / FR-5 — orphan-task detection (task-<id>)', () => {
 
   it('negative: an infrastructure task with an empty **Story:** line is refused (type alone does not excuse)', async () => {
     const plan = PLAN.replace(
-      '**Story:** Story 2 (happy path — stories map)\n**Type:** happy-path',
-      '**Story:**\n**Type:** infrastructure',
+      '**Story:** Story 2 (happy path — stories map)\n**Dependencies:** Task 1\n**Type:** happy-path',
+      '**Story:**\n**Dependencies:** Task 1\n**Type:** infrastructure',
     );
     const wt = await seedWorktree('coherence demo', { plan });
     await expect(
@@ -690,6 +692,7 @@ describe('Story 6 / FR-5 — orphan-task detection (task-<id>)', () => {
       [
         '### Task 3: orphan one',
         '**Story:** Story 404 (nonexistent)',
+        '**Dependencies:** none',
         '**Type:** happy-path',
         '**Files likely touched:**',
         '- src/orphan-one.ts',
@@ -700,6 +703,7 @@ describe('Story 6 / FR-5 — orphan-task detection (task-<id>)', () => {
         '',
         '### Task 4: orphan two',
         '**Story:** Story 405 (also nonexistent)',
+        '**Dependencies:** none',
         '**Type:** happy-path',
         '**Files likely touched:**',
         '- src/orphan-two.ts',
@@ -734,8 +738,8 @@ describe('Story 6 / FR-5 — orphan-task detection (task-<id>)', () => {
 
   it('happy: an infrastructure task with a declared supporting purpose is covered without a story id', async () => {
     const plan = PLAN.replace(
-      '**Story:** Story 2 (happy path — stories map)\n**Type:** happy-path',
-      '**Story:** supports the coherence validator wiring\n**Type:** infrastructure',
+      '**Story:** Story 2 (happy path — stories map)\n**Dependencies:** Task 1\n**Type:** happy-path',
+      '**Story:** supports the coherence validator wiring\n**Dependencies:** Task 1\n**Type:** infrastructure',
     ).replace('| 2 | 2 |\n', '');
     // Story 2 now has no citing task, so also drop Story 2 + its FR to keep the
     // rest of the chain coherent; this isolates the "infra task is covered" claim.

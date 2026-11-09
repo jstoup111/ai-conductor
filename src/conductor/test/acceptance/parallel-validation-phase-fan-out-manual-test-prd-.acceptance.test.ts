@@ -1465,4 +1465,80 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  /**
+   * The ignored PRD-audit planning call must not run when the merge below owns
+   * the round. Planning has side effects: under routed repairs it admits a
+   * round, so a second plan for the same join was refused with "routing round
+   * r1 is already open; cannot admit r2".
+   */
+  it('plans once when manual-test, PRD-audit and remediable as-built gaps share a join', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'parvalid-mt-prd-as-built-merge-'));
+    const statePath = join(dir, 'conduct-state.json');
+    try {
+      await seedToValidators(dir, statePath);
+      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+      await writeFile(
+        join(dir, '.docs', 'plans', 'parallel-validation-phase-fan-out-manual-test-prd-.md'),
+        [1, 2, 3, 4].map((id) => `### Task ${id}: Existing work ${id}`).join('\n'),
+      );
+
+      const remediateReasons: string[] = [];
+      let buildHint = '';
+      let asBuiltFindingId = '';
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName, _state, opts) => {
+          if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), [
+              '# PRD Audit',
+              '',
+              '**PRD:** none',
+              '',
+              '## Verdict Table',
+              '| Criterion | Grade | Plan task | PRD: | Evidence |',
+              '| --- | --- | --- | --- | --- |',
+              '| S1.1 | FIXABLE | 1 | FR-1 | Missing implementation |',
+            ].join('\n'));
+            await writePrdAuditPass(dir, opts?.runId, 'FIXABLE');
+          } else if (step === 'architecture_review_as_built') {
+            asBuiltFindingId = await writeRemediableAsBuiltVerdict(dir, opts?.runId, '1', 'Add the missing guard');
+          } else if (step === 'remediate') {
+            remediateReasons.push(opts?.retryReason ?? '');
+            await persistFixtureProjectedRemediationPlan(dir, opts, [
+              {
+                id: 'S1.1', disposition: 'existing-task', category: null,
+                rationale: 'Implement the criterion.',
+                tasks: [],
+                boundTaskIds: ['1'],
+              },
+              {
+                id: asBuiltFindingId, disposition: 'build', category: null,
+                rationale: 'Add the missing guard.',
+                tasks: [{ id: 'missing-guard', title: 'Add the missing guard' }],
+              },
+            ]);
+          } else if (step === 'build') {
+            buildHint = opts?.retryReason ?? '';
+            return { success: false, error: 'stop after observing the merged reroute' } as StepRunResult;
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      const conductor = makeConductor(dir, statePath, runner, new ConductorEventEmitter(), {
+        config: { architecture_review_as_built: { remediation: { enabled: true } } } as never,
+      });
+      await conductor.run();
+
+      expect(remediateReasons).toHaveLength(1);
+      expect(remediateReasons[0]).toContain('.pipeline/prd-audit.md');
+      expect(remediateReasons[0]).toContain('.pipeline/architecture-review-as-built.json');
+      expect(buildHint).toContain('FAIL');
+      expect(buildHint).toContain('missing guard');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });

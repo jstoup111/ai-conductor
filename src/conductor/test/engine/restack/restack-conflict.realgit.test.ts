@@ -158,7 +158,7 @@ describe('runRestack conflict resolver (real local Git)', () => {
     await expect(runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
       git: makeGitRunner(subject.repo), events, resolver: async () => ({ resolved: false, reason: 'budget exhausted' }), resolverCap: 1,
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
     persister.stop();
 
     expect(await refs(subject)).toBe(before);
@@ -189,7 +189,7 @@ describe('runRestack conflict resolver (real local Git)', () => {
         return { resolved: true };
       },
       resolverCap: 1,
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
 
     expect(attempts).toBe(1);
     await expect(readRestackJournal(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'journal', journal: { state: 'aborted' } });
@@ -213,7 +213,7 @@ describe('runRestack conflict resolver (real local Git)', () => {
     await expect(runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
       git: makeGitRunner(subject.repo), events, resolver, resolverCap: 1,
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
     persister.stop();
     await expect(readRestackJournal(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'journal', journal: { state: 'aborted' } });
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(`commit ${subject.c2}; paths: src/c.ts`);
@@ -234,7 +234,7 @@ describe('runRestack conflict resolver (real local Git)', () => {
     await expect(runRestack({
       worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
       git: makeGitRunner(subject.repo), events, resolver: resolverThatContinues('one\nchild\n', 'src/unowned.ts'), resolverCap: 1,
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
     persister.stop();
 
     const persisted = (await readFile(join(subject.repo, '.pipeline', 'events.jsonl'), 'utf8'))
@@ -260,7 +260,7 @@ describe('runRestack conflict resolver (real local Git)', () => {
         return { resolved: false, reason: 'cannot resolve rename collision' };
       },
       resolverCap: 1,
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
 
     expect(contexts).toHaveLength(1);
     expect(contexts[0]?.conflicts).toContain('src/z.ts');

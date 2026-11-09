@@ -1,3 +1,4 @@
+// Covers: task:9
 import { describe, it, expect, vi } from 'vitest';
 import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/execution/llm-provider.js';
 import {
@@ -92,6 +93,49 @@ describe('parseRebaseResolutionOutput', () => {
 // ── DefaultStepRunner.resolveRebaseConflict (integration with stubbed provider)
 
 describe('DefaultStepRunner.resolveRebaseConflict', () => {
+  it('adds the operator decision paragraph only when a decision is provided', async () => {
+    const decidedProvider = makeProvider({ success: true, output: '{"resolved": true}', exitCode: 0 });
+    const decidedRunner = new DefaultStepRunner(decidedProvider, 'session-1', '/wt/feature-x');
+    await decidedRunner.resolveRebaseConflict({
+      ...sampleCtx,
+      operatorDecision: {
+        answer: "keep upstream's resolveReviewScope seam",
+        commit: 'C',
+        paths: ['src/flag.ts'],
+      },
+    });
+    const decided = (decidedProvider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+
+    expect(decided.systemPrompt).toContain("Operator decision for commit C on src/flag.ts: keep upstream's resolveReviewScope seam. Apply this decision; do not escalate the same question again.");
+  });
+
+  it('delivers the restack environment to the resolver session', async () => {
+    const provider = makeProvider({ success: true, output: '{"resolved": true}', exitCode: 0 });
+    const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x');
+    const environment = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: '/helpers/hooks' };
+    await runner.resolveRebaseConflict({ ...sampleCtx, environment });
+    expect(((provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions).environmentOverlay).toEqual(environment);
+  });
+
+  it('keeps the plain-rebase prompt byte-identical when no operator decision is provided', async () => {
+    const provider = makeProvider({ success: true, output: '{"resolved": true}', exitCode: 0 });
+    const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x');
+    await runner.resolveRebaseConflict(sampleCtx);
+    const prompt = ((provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions).systemPrompt;
+
+    expect(prompt).toBe(
+      'You are resolving a paused git rebase conflict. The rebase is stopped mid-flight.\n' +
+      'Project root: /wt/feature-x\n' +
+      'Base ref: abc1234\n' +
+      'Conflicted files: src/foo.ts, src/bar.ts\n\n' +
+      'Resolve the conflicts, stage the fixes, and run `git rebase --continue` until the rebase completes or you reach an unsafe hunk.\n' +
+      'Follow the canonical rebase skill workflow: validate the full replay against the captured source intent and upstream intent before continuing. At the first semantic ambiguity, HALT this attempt and return a false result with the missing decision; do not replace that workflow with a condensed procedure.\n' +
+      'Your FINAL output line MUST be exactly one of:\n' +
+      '{"resolved": true}\n' +
+      '{"resolved": false, "reason": "<explanation>"}',
+    );
+  });
+
   it('returns {resolved:true} when skill stdout ends with {"resolved": true}', async () => {
     const provider = makeProvider({ success: true, output: 'log\n{"resolved": true}', exitCode: 0 });
     const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x');
@@ -265,11 +309,13 @@ describe('DefaultStepRunner.resolveRebaseConflict', () => {
       configuredProviders: ['codex'],
     });
 
-    const result = await runner.resolveRebaseConflict(sampleCtx);
+    const environment = { GIT_COMMITTER_NAME: 'Journal Committer' };
+    const result = await runner.resolveRebaseConflict({ ...sampleCtx, environment });
 
     expect(result.resolved).toBe(false);
     expect(codex.invoke).toHaveBeenCalledOnce();
     const options = (codex.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(options.environmentOverlay).toEqual(environment);
     expect(options.prompt).toBe('$rebase');
     expect(options.systemPrompt).toContain('full replay');
     expect(options.systemPrompt).toContain('source intent');

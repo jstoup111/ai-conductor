@@ -47,6 +47,13 @@ describe('engine/worktree', () => {
     it('removes special characters', () => {
       expect(slugify('hello@world! (v2.0)')).toBe('helloworld-v20');
     });
+
+    it('is idempotent when truncation leaves a trailing hyphen', () => {
+      // Issue title of a real stacked feature whose cut lands just after "a ".
+      const slug = slugify('A published stacked child changes silently when a routed fix lands in it');
+      expect(slug).toBe('a-published-stacked-child-changes-silently-when-a-');
+      expect(slugify(slug)).toBe(slug);
+    });
   });
 
   describe('WorktreeManager', () => {

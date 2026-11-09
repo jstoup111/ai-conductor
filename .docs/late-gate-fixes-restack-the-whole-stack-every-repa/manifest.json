@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "slug": "late-gate-fixes-restack-the-whole-stack-every-repa",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/late-gate-fixes-restack-the-whole-stack-every-repa.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/late-gate-fixes-restack-the-whole-stack-every-repa.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/late-gate-fixes-restack-the-whole-stack-every-repa.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/2026-11-08-late-gate-fixes-restack-the-whole-stack-every-repa.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-10-stacked-restack-journaled-replay.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-12-routed-whole-feature-repair.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/late-gate-fixes-restack-the-whole-stack-every-repa.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/late-gate-fixes-restack-the-whole-stack-every-repa.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/late-gate-fixes-restack-the-whole-stack-every-repa.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/late-gate-fixes-restack-the-whole-stack-every-repa.md"
+    }
+  ]
+}

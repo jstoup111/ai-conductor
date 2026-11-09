@@ -84,6 +84,12 @@ Forces:
    subscribable emitter or no tail flush available, it does not subscribe and no failure is
    attributed. (Pre-subscribe drain and fresh-read flush: operator decision 2026-10-25 resolving the
    as-built review's pass-boundary finding.)
+
+   > **Amended 2026-10-31 by #3529:** superseded for `author_pr_prose` by
+   > adr-2026-10-31-engine-performs-finish-pr-prose-write D5. The engine now performs the
+   > `pull-request.edit` itself and receives its result directly, so the `authorProse` effect no
+   > longer flushes the session tail or subscribes to `github_operation_failed` around the dispatch.
+   > That observation machinery is removed.
 4. **The coordinator halts with the real cause, after re-observation.** On that typed failure, the
    `author_pr_prose` branch re-observes the PR. If the prose moved off the placeholder, it advances
    as today, because re-observation stays authoritative. Otherwise it returns `human_required` with
@@ -96,6 +102,12 @@ Forces:
    matching `github_operation_failed` record and leaves placeholder prose still returns
    `publication_transition_unmoved` with today's text. A dispatch that itself fails still follows
    the existing transient-retry path.
+
+   > **Amended 2026-10-31 by #3529:** narrowed by adr-2026-10-31-engine-performs-finish-pr-prose-write
+   > D4. A completed pass that returns no prose handoff, or an invalid one, is now a bounded
+   > `publication_retry` with reason `prose_not_returned` or `prose_invalid`. Exhausting that retry
+   > allowance halts naming the reason, not `publication_transition_unmoved`.
+
 ## Assumptions
 
 | # | Assumption | Basis | Confidence | Load-bearing | Impact if wrong | Approval |

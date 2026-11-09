@@ -13,9 +13,8 @@ Priority order:
    - Good: `it "rejects expired authentication tokens with 401"`
    - Bad: `it "calls TokenValidator.validate and checks expiry field"`
 
-2. **One assertion per test**
-   - Test one behavior. If you need multiple assertions, you're testing multiple behaviors.
-   - Exception: asserting both the status code AND the response body of an error response is fine — they describe one behavior from different angles.
+2. **One behavior per test**
+   - Assert every observable outcome of that behavior; several assertions on one result are still one behavior.
 
 3. **Use concrete examples, not abstract descriptions**
    - Good: `given: user with role "viewer", when: accessing /admin, then: 403`
@@ -30,7 +29,7 @@ Priority order:
 Run the test BEFORE writing any implementation. Read the failure message carefully:
 
 - **Expected failure:** Test fails because the behavior doesn't exist yet. Proceed to DOMAIN.
-- **Wrong failure:** Test fails due to syntax error, missing import, or unrelated issue. Fix the test setup, not the production code.
+- **Wrong failure:** Test fails due to a syntax error or an unrelated issue. Fix the test setup, not the production code.
 - **No failure:** Test passes immediately. The behavior already exists — investigate before proceeding.
 
 ## Common RED Phase Mistakes

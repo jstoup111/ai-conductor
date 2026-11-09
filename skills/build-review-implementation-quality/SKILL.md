@@ -25,6 +25,11 @@ identifies a finding outside the delta, set `causeHunk` to the delta hunk that c
 Report one finding per independent concrete defect. Anchor it to the changed hunk that introduces
 the defect; name related unchanged code only in `evidenceLocations`.
 
+A `duplication` or `excess-complexity` finding must be complete, because its repair consolidates in
+one pass. Its summary names every repeated behavior or tangled flow the delta introduces for that
+defect, and `evidenceLocations` lists every site that shares it. Do not report the most visible
+instance and leave the remainder for a later lap.
+
 - `duplication` — newly repeated behavior creates divergent maintenance paths. **Non-finding:** a
   declared exact pattern replication or incidental short syntax repetition.
 - `excess-complexity` — a changed control/data flow is unnecessarily difficult to follow, including
@@ -35,7 +40,8 @@ the defect; name related unchanged code only in `evidenceLocations`.
 - `primitive-obsession` — changed primitive values encode a domain concept that needs invariants.
   **Non-finding:** a primitive whose valid range and meaning are already locally enforced.
 - `representable-invalid-state` — changed state shape permits an invalid domain combination.
-  **Non-finding:** states constrained at construction so invalid combinations cannot arise.
+  **Non-finding:** states constrained at construction so invalid combinations cannot arise, or a
+  persisted or wire shape whose every writer and reader passes through one validating parser.
 - `non-exhaustive-domain-match` — a changed domain branch silently drops a meaningful case.
   **Non-finding:** an explicit exhaustive default that preserves all remaining cases.
 - `non-semantic-name` — a changed public or domain name obscures its semantic role. **Non-finding:**
@@ -48,7 +54,5 @@ conformance, ADR conformance (owned by the as-built architecture review), or hyp
 
 Return only `{ "findings": [...] }`. Each finding has `concernKind`, `summary`,
 `evidenceLocations`, an `anchor` with this rubric and a changed content-region locus, and optional
-integer `confidence`, and required `severity`. Use `critical` for security exposure, data loss, or
-wrong results; `major` for a real defect or broken invariant; `minor` for a real low-impact quality
-issue; and `nit` only for cosmetic naming or style. Return an empty findings array when there is no
+integer `confidence`, and required `severity`. Return an empty findings array when there is no
 concrete defect.

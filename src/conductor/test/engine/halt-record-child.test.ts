@@ -12,6 +12,7 @@ import {
   type HaltRecordInput,
   type HaltRecordRemoteOptions,
 } from '../../src/engine/halt-record.js';
+import { haltRecordRefFor, readHaltRecordRef } from '../../src/engine/halt-record-ref.js';
 import { writeHaltMarker } from '../../src/engine/halt-marker.js';
 import { escalateBuildFailure } from '../../src/engine/build-failure-escalation.js';
 import {
@@ -37,15 +38,17 @@ afterEach(async () => {
 });
 
 describe('child halt records', () => {
-  it('commits and supersedes a child record locally without publishing it', async () => {
+  it('appends and supersedes a child record ref locally without publishing it', async () => {
     const worktree = await makeFeatureWorktree('feat/c1/demo');
     const remote = recordingRemote();
     const input = haltInput(worktree, 'feat/c1/demo', 1);
 
-    await expect(recordHalt(worktree, input, remote.options)).resolves.toEqual({ kind: 'written' });
-    await expect(readFile(join(worktree, haltRecordPath('demo')), 'utf8')).resolves.toContain('Child: 1\n');
+    await expect(recordHalt(worktree, input, remote.options)).resolves.toEqual({ kind: 'written', path: haltRecordRefFor('demo') });
+    await expect(readHaltRecordRef(worktree, 'demo')).resolves.toMatchObject({
+      kind: 'record', source: 'ref', text: expect.stringContaining('Child: 1\n'),
+    });
     await expect(currentBranch(worktree)).resolves.toBe('feat/c1/demo');
-    await expect(supersedeHaltRecord(worktree, 'demo', 'operator resume', remote.options)).resolves.toEqual({ kind: 'written' });
+    await expect(supersedeHaltRecord(worktree, 'demo', 'operator resume', remote.options)).resolves.toEqual({ kind: 'written', path: haltRecordRefFor('demo') });
     await expect(currentBranch(worktree)).resolves.toBe('feat/c1/demo');
 
     expect(remote.calls).toEqual([]);
@@ -62,7 +65,7 @@ describe('child halt records', () => {
     expect(remote.calls).toEqual([]);
   });
 
-  it('records the active leaf position and publishes the leaf branch', async () => {
+  it('records the active stacked leaf position on a local ref without publishing', async () => {
     const worktree = await makeFeatureWorktree('feat/daemon-demo');
     await sealChildren(worktree, [1, 2]);
     const { stdout: tip } = await execa('git', ['rev-parse', 'HEAD'], { cwd: worktree });
@@ -72,11 +75,10 @@ describe('child halt records', () => {
     await expect(writeHaltMarker(worktree, 'operator decision required\n', 'needs-human', undefined, remote.options))
       .resolves.toEqual({ status: 'written' });
 
-    await expect(readFile(join(worktree, haltRecordPath('demo')), 'utf8')).resolves.toContain('Child: 2\n');
-    expect(remote.calls).toEqual([[
-      'push', 'origin', 'HEAD:refs/heads/feat/daemon-demo',
-      `--force-with-lease=refs/heads/feat/daemon-demo:${leaseTip}`,
-    ]]);
+    await expect(readHaltRecordRef(worktree, 'demo')).resolves.toMatchObject({
+      kind: 'record', source: 'ref', text: expect.stringContaining('Child: 2\n'),
+    });
+    expect(remote.calls).toEqual([]);
   });
 
   it('keeps the N=1 record byte shape and publishes it', async () => {

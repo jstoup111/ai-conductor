@@ -5,6 +5,8 @@ import {
   parseSizeLabel,
   createPriorityResolver,
   orderBacklog,
+  preemptionRank,
+  selectPreemptionVictim,
   PRIORITY_BAND_RANK,
   type PriorityResolution,
   type PriorityBand,
@@ -54,6 +56,74 @@ describe('PRIORITY_BAND_RANK — exported band ranking', () => {
       low: 4,
       unlabeled: 5,
     });
+  });
+});
+
+// Covers: task:1
+describe('preemptionRank and selectPreemptionVictim', () => {
+  it('ranks resolver bands for preemption without assigning an unbanded item a rank', () => {
+    expect(preemptionRank('critical')).toBe(3);
+    expect(preemptionRank('high')).toBe(2);
+    expect(preemptionRank('medium')).toBe(1);
+    expect(preemptionRank('unlabeled')).toBe(1);
+    expect(preemptionRank('no-issue')).toBe(1);
+    expect(preemptionRank('low')).toBe(0);
+    expect(preemptionRank(undefined)).toBeUndefined();
+  });
+
+  it('selects the lowest-ranked eligible victim, breaking ties by latest dispatch', () => {
+    const next = { slug: 'critical-arrival', band: 'critical' as const, backlogIndex: 0 };
+
+    expect(selectPreemptionVictim(next, [
+      { slug: 'medium-running', band: 'medium', backlogIndex: 2, dispatchSequence: 4 },
+      { slug: 'low-running', band: 'low', backlogIndex: 1, dispatchSequence: 3 },
+    ])).toBe('low-running');
+
+    expect(selectPreemptionVictim(next, [
+      { slug: 'older-low', band: 'low', backlogIndex: 1, dispatchSequence: 3 },
+      { slug: 'newer-low', band: 'low', backlogIndex: 2, dispatchSequence: 4 },
+    ])).toBe('newer-low');
+  });
+
+  it('treats an unlabeled running item as medium when a higher-ranked arrival precedes it', () => {
+    expect(selectPreemptionVictim(
+      { slug: 'high-arrival', band: 'high', backlogIndex: 0 },
+      [{ slug: 'unlabeled-running', band: 'unlabeled', backlogIndex: 1, dispatchSequence: 1 }],
+    )).toBe('unlabeled-running');
+  });
+
+  it('does not select a victim for equal, lower, unbanded, or behind arrivals', () => {
+    const mediumRunning = {
+      slug: 'medium-running', band: 'medium', backlogIndex: 1, dispatchSequence: 1,
+    } as const;
+
+    for (const band of ['unlabeled', 'no-issue', 'medium'] as const) {
+      expect(selectPreemptionVictim(
+        { slug: `${band}-arrival`, band, backlogIndex: 0 },
+        [mediumRunning],
+      )).toBeUndefined();
+    }
+
+    expect(selectPreemptionVictim(
+      { slug: 'low-arrival', band: 'low', backlogIndex: 0 },
+      [mediumRunning],
+    )).toBeUndefined();
+    expect(selectPreemptionVictim(
+      { slug: 'unbanded-arrival', backlogIndex: 0 },
+      [{ slug: 'low-running', band: 'low', backlogIndex: 1, dispatchSequence: 1 }],
+    )).toBeUndefined();
+    expect(selectPreemptionVictim(
+      { slug: 'critical-arrival', band: 'critical', backlogIndex: 0 },
+      [{ slug: 'unbanded-running', backlogIndex: 1, dispatchSequence: 1 }],
+    )).toBeUndefined();
+    expect(selectPreemptionVictim(
+      { slug: 'unlabeled-arrival', band: 'unlabeled', backlogIndex: 2 },
+      [{ slug: 'low-running', band: 'low', backlogIndex: 1, dispatchSequence: 1 }],
+    )).toBeUndefined();
+    expect(selectPreemptionVictim(
+      { slug: 'no-issue-arrival', band: 'no-issue', backlogIndex: 0 },
+      [{ slug: 'critical-running', band: 'critical', backlogIndex: 1, dispatchSequence: 1 }],
+    )).toBeUndefined();
   });
 });
 

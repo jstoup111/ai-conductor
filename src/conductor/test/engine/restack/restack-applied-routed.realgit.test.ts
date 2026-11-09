@@ -257,7 +257,7 @@ describe('routed restack applied transaction (real local Git)', () => {
       cause: 'feature-repair',
       routed: { roundId, host, routeOld: subject.routeOld, markerOld: subject.markerOld },
       git,
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
 
     const journal = await readRestackJournal(subject.repo, 'demo', { git: native });
     expect({
@@ -292,7 +292,7 @@ describe('routed restack applied transaction (real local Git)', () => {
       cause: 'feature-repair',
       routed: { roundId, host, routeOld: subject.routeOld, markerOld: subject.markerOld },
       git,
-    })).resolves.toEqual({ kind: 'halted' });
+    })).resolves.toMatchObject({ kind: 'halted' });
 
     const journal = await readRestackJournal(subject.repo, 'demo', { git: native });
     expect({
@@ -336,7 +336,7 @@ describe('routed restack applied transaction (real local Git)', () => {
     };
 
     await expect(recoverRestackJournal({ worktree: subject.repo, slug: 'demo', git: recording }))
-      .resolves.toEqual({ kind: 'halted' });
+      .resolves.toMatchObject({ kind: 'halted' });
 
     const journal = await readRestackJournal(subject.repo, 'demo', { git: native });
     expect({

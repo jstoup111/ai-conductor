@@ -173,7 +173,7 @@ export function detectDaemonSupervisorCommand(argv: string[]): DaemonSupervisorC
  * tmux management verbs. A bare `daemon` (no sub-verb) RUNS the daemon; these are
  * the only non-flag tokens that legitimately follow `daemon`.
  */
-export const DAEMON_SUBVERBS = new Set(['status', 'logs', 'park', 'unpark', 'exit-witness', ...MANAGEMENT_VERBS]);
+export const DAEMON_SUBVERBS = new Set(['status', 'logs', 'stories-refs', 'park', 'unpark', 'exit-witness', ...MANAGEMENT_VERBS]);
 
 /**
  * Detect a typo'd / unknown `daemon` sub-verb so the CLI can surface help instead
@@ -250,12 +250,12 @@ export function formatDaemonConcurrencyWarning(
  */
 export function detectDaemonCommand(argv: string[]): DaemonCommandOptions | null {
   if (argv[2] !== 'daemon') return null;
-  // `daemon status` / `daemon logs` are read-only observability sub-subcommands
+  // `daemon status` / `daemon logs` / `daemon stories-refs` are read-only observability sub-subcommands
   // (detectDaemonObserveCommand in daemon-observe-cli.ts), NOT a daemon run.
   // `daemon start|stop|restart|connect|debug` are management verbs dispatched to
   // the Supervisor port (detectDaemonSupervisorCommand above), NOT a daemon run.
   // Yield so none of these are ever dispatched as a launch.
-  if (argv[3] === 'status' || argv[3] === 'logs') return null;
+  if (argv[3] === 'status' || argv[3] === 'logs' || argv[3] === 'stories-refs') return null;
   if (argv[3] === 'park' || argv[3] === 'unpark') return null;
   if (argv[3] === 'exit-witness') return null;
   if (MANAGEMENT_VERBS.has(argv[3])) return null;

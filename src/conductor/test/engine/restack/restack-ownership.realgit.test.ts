@@ -143,7 +143,7 @@ describe('runRestack path ownership (real local Git)', () => {
     const refusals: unknown[] = [];
     events.on('restack_refused', (event) => { refusals.push(event); });
 
-    await expect(restack(subject, advanced, events)).resolves.toEqual({ kind: 'halted' });
+    await expect(restack(subject, advanced, events)).resolves.toMatchObject({ kind: 'halted' });
 
     expect(refusals).toEqual([expect.objectContaining({ reason: 'replay-mismatch', child: 2, detail: 'src/g.ts' })]);
     expect((await subject.git(['rev-parse', 'feat/daemon-demo'])).stdout.trim()).toBe(oldLeaf);
@@ -170,7 +170,7 @@ describe('runRestack path ownership (real local Git)', () => {
     const restoredRefusals: unknown[] = [];
     restoredEvents.on('restack_refused', (event) => { restoredRefusals.push(event); });
 
-    await expect(restack(restored, deletedDefault, restoredEvents)).resolves.toEqual({ kind: 'halted' });
+    await expect(restack(restored, deletedDefault, restoredEvents)).resolves.toMatchObject({ kind: 'halted' });
 
     expect(restoredRefusals).toEqual([expect.objectContaining({ reason: 'replay-mismatch', child: 2, detail: 'src/deleted.ts' })]);
     expect((await restored.git(['rev-parse', 'feat/daemon-demo'])).stdout.trim()).toBe(oldRestoredLeaf);

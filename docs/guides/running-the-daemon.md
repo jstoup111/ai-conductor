@@ -357,8 +357,9 @@ What the draft window does and does not mean:
 - **FINISH authors the prose, then flips it ready.** The engine-owned publication coordinator
   re-observes the PR and dispatches one bounded title/body pass — `author_pr_prose` while the body is
   still the engine-seeded placeholder, `judge_pr_prose` for a quality verdict on prose that exists.
-  The authoring pass is given the branch diff and the feature's spec artifacts, so the judgment pass
-  is never asked to grade a body nobody wrote. Only after prose is accepted does the coordinator write
+  The authoring pass is given the branch diff and the feature's spec artifacts and returns its title
+  and body in the `.pipeline/finish-pr-prose.json` handoff; the engine validates it and edits the PR
+  itself. The judgment pass only returns a verdict, and is never asked to grade a body nobody wrote. Only after prose is accepted does the coordinator write
   and push the shipped record and mark the PR ready for review. That order is deliberate: the shipped
   record is the daemon backlog's dedup key, so committing it before the prose survived used to make a
   prose halt permanently un-redispatchable. When the judgment finds an authored body structurally
@@ -787,8 +788,10 @@ proof-gated cleanup paths.
   retain the worktree for recovery.
 - **Published stack.** For a [stacked publication](../reference/configuration.md#stacked-publication),
   the sweep then deletes each child's local branch by name, only when that child's PR is merged, its
-  merge commit is on `origin/main`, and the local tip equals the merged head. A child PR that is
-  open or closed unmerged, or whose merge is not on `origin/main`, is kept and the watch entry is
+  merge commit is on `origin/main`, and every local commit is accounted for by the merged head, the
+  recorded pushed tip, or an engine halt-record commit (see
+  [teardown](../reference/configuration.md#stacked-publication)). A child PR that is open or closed
+  unmerged, whose merge is not on `origin/main`, or whose branch carries an unaccounted commit, is kept and the watch entry is
   retained; an unreachable member emits `stack_members_unreachable` once and logs `retained <slug> —
   reason: stack-members-unreachable`.
 
@@ -943,6 +946,36 @@ A typo'd sub-verb — anything outside `status`, `logs`, `park`, `unpark`, `reco
 `start`, `stop`, `restart`, `connect`, `debug`, `pause`, `resume` — prints `conduct daemon: unknown
 subcommand '<token>'.` followed by the daemon help, and exits 1.
 
+## Priority preemption
+
+When every pool slot is busy, each busy poll checks whether the next eligible backlog item outranks
+a running feature. If it does, the daemon asks one running feature to yield its slot.
+
+Preemption ranks priority bands as follows: `critical` > `high` > `medium` = `unlabeled` =
+no-issue > `low`. It applies only while priority resolution is banded. During a priority-read outage
+the backlog falls back to input order and nothing is preempted. Preemption also requires the
+default [`executor_isolation: child`](../reference/configuration.md#executor_isolation); the
+`in-process` executor never yields.
+
+A running feature is a candidate only when its rank is strictly lower than the arrival's and it sits
+later in the current backlog. The lowest-ranked candidate yields first. Among equal ranks, the most
+recently dispatched feature yields. Only one yield request is outstanding at a time.
+
+The feature yields at its next scheduling boundary, the same boundary an
+[operator park](#park-a-feature-before-you-touch-its-git-state) uses. The current provider attempt
+finishes, and later attempts are declined. A parallel group's started members drain, and their
+retries are declined. The yield surfaces at the group join. The feature log shows:
+
+```text
+■ preempted[<slug>]: <boundary>
+■ preempted <slug>: yielded to <arrival-slug>
+```
+
+A yield is not a terminal outcome. The run writes a `preemption_boundary` event to the feature's
+`.pipeline/events.jsonl`. The daemon releases the feature's claim and keeps its worktree. It
+creates no HALT or park marker and runs no terminal effects. The yielded feature resumes from its
+kept worktree when backlog order dispatches it again.
+
 ## Dispatch-first maintenance
 
 At startup the daemon runs one backlog refresh and then claims its first eligible feature. It does
@@ -1078,6 +1111,11 @@ Both refusals block `finish` and issue no push. For recovery, see
 
 A stacked feature does not use this path: the re-kick and finish-time rebases run a whole-stack
 [restack](../reference/configuration.md#restack), and autoresolve escalates with `published-stack`.
+A restack conflict on a child whose range contains a merge goes to the resolver with that range
+flattened by the same rule, and a settled restack records a `rebase_merge_audit` event. An
+unsettled conflict takes the ordinary
+[restack conflict halt](../runbooks/stalled-or-stuck-feature.md#a-stacked-restack-halted), whose
+recipe starts from the flattened tip.
 Once the stack is [published](../reference/configuration.md#stacked-publication), the re-kick
 leaves it on its current base and emits `restack_refused` with reason `published-stack`.
 
@@ -1104,6 +1142,31 @@ only reliable way to make a feature stay stopped.
 
 Restarting the daemon no longer grants a fresh re-kick at an unchanged base SHA; clearing the halt
 or unparking the feature remains the sanctioned operator lever.
+
+### Fresh retryable halts re-dispatch at the dispatch boundary
+
+A `mechanical` or `legacy` HALT does not wait for a base advance when its body is new. The daemon
+treats a halted feature as eligible when the live `.pipeline/HALT` body differs from
+`.pipeline/HALT.rekicked`, the body the dispatch boundary last cleared. Each such dispatch counts
+against the same per-run ceiling as progress re-kicks, `build_progress_halt.dispatch_ceiling`
+(default 20); a daemon restart resets that count. An identical HALT body never earns a second
+prompt re-dispatch, so a halt that reproduces verbatim stays parked until a base advance, a
+different failure, or an operator clear.
+
+Before it starts the executor for a resumed feature with a live HALT, the daemon:
+
+1. Reads `.pipeline/HALT.class`. A failed read counts as `unclassified`.
+2. For `mechanical` or `legacy`, renames `.pipeline/HALT` to `.pipeline/HALT.rekicked`, removes
+   `HALT.class`, drops `.pipeline/REKICK`, and appends a `halt_cleared` record with cause `rekick`.
+   `.pipeline/HALT.cleared` is left untouched.
+3. For any other class, leaves every marker in place and re-parks the feature without dispatching.
+4. If the clear fails for any reason other than a concurrent removal, logs
+   `re-kick <slug>: HALT clear failed — <reason>`, leaves the HALT live, and re-parks the feature.
+
+Every dispatch then stamps the whole-feature resolved-task count into `task-evidence.json`
+(`lastResolvedCount`) immediately before the executor starts, so a progress re-kick requires tasks
+resolved after that dispatch began. A failed stamp logs `baseline stamp failed for <slug> — <reason>`
+and does not block the dispatch.
 
 ### Budget-cap halts need an authorization
 

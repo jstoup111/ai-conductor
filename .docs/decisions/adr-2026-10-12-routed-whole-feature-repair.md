@@ -89,6 +89,8 @@ Verified facts at the spec base (paths relative to `src/conductor/src/engine/`):
   it cannot detect a missing prerequisite. It adds a second history transformation beside the
   journaled replay, and violates "recorded before mutation".
 
+> **Amended 2026-11-08 by #3653:** A form of Option C is adopted for `audit` rounds. Fixes are built on the leaf with an engine-stamped `Owner:` trailer and folded onto their placement child once, before publish. The four objections are answered by machinery: fold-time re-validation of every changed child (objections 1 and 2), the existing journaled replay with a new `fold` cause (objection 3), and a fold plan journaled before any ref moves (objection 4). Routing still chooses every owner and host (`adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish`).
+
 ## Decision
 
 Option B′. Machinery does the bookkeeping, and judgement is used only where the question is one
@@ -137,6 +139,10 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
      - existing-task gaps ride their host's retry hint without a restage, as today's consolidated
        dispatch does.
 
+   > **Amended 2026-11-05 by #3590:** An item with an admitted existing-task binding is task-bound, even when it is an as-built finding citing only `<adr-stem> D<n>`. Its owner comes from decision 2's `taskSlices[taskId]`, and it never reaches the residue judgement. The residue is only what has no such binding. The earliest-candidate default is unchanged (`architecture-review-2026-11-05-routed-residue-finding-lands-on-a-taskless-host-an`).
+
+   > **Amended 2026-11-07 by #3605:** A standalone taskless obligation is no longer judged blind. Its residue item carries the obligation's evidence (the `manual_test` FAIL rows, when present) and a manifest of each declared position's changed paths: `git diff --name-only` from the stack base to child 1's closure, between consecutive closures, and from the last child closure to the leaf tip. The routing contract answer gains an optional `implicatedPaths` list, and the contract version becomes `v2`. The engine keeps only the implicated paths present on the leaf tip, then places the obligation through decision 4's `selectHost`, starting at the judged child and moving up until the host contains every kept path. When no implicated path survives, the obligation is hosted on the leaf rather than at the earliest candidate, because the leaf tree holds every child's code. A judged path can therefore raise a host but never halt the round. Mixed rounds and task-bound residue keep their existing placement (`architecture-review-2026-11-07-manual-test-failure-routed-to-a-child-that-can-t-h`).
+
 4. **Owner and host are separate; the host moves upward only on evidence.**
    - The **host** is the child that builds the fix. It defaults to the owner. The host branch is
      resolved through `feature-branch-identity`, never by string assembly.
@@ -163,6 +169,10 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
      `existing-task` repair of the owner's task. Task scope, task-status seeding, the membership hook
      and `task-cli` all honour it by reading the route record.
    - A test failure is never evidence that a child cannot host a fix.
+
+   > **Amended 2026-10-31 by #3550:** A cited path is evidence only once it is resolved against one recursive listing of the leaf tip. An exact file entry stands. Otherwise a citation that is the unique `/`-bounded suffix of one listed file, such as a bare basename or a partial path, resolves to that file. A citation that names a directory, or matches several files, is dropped: it is neither a prerequisite input nor an output, so it can never satisfy or fail a host check. A citation with no match remains an output. The inputs also cover the text allocation renders into the item's rem blocks: task titles, rationale, criterion and governing clause. The route record's `prerequisitePaths` holds resolved files only. Because every resolved input is present at the leaf tip, the host this decision selects always holds every file the item's rem blocks cite, and the amendment adds no halt (`architecture-review-2026-10-31-routed-repair-hosts-a-finding-on-a-stack-child-tha`).
+
+   > **Amended 2026-11-08 by #3653:** For an `audit` round admitted with `stacked_prs.fold_routed_fixes` on, the host chosen here is the fix's placement floor, and the host executes on the leaf branch. No part of the fix is placed below it at the fold (`adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish` decisions 2 and 3).
 
 5. **A builder may claim a missing prerequisite, and the engine verifies it before re-routing.**
    - During a routed build, the builder may return a schema'd
@@ -194,6 +204,10 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
    - Reroutes move strictly upward, so a round has at most N−1.
 
    > **Amended 2026-10-24 by #3203:** Prerequisite claims are disabled in an `operator` round, so no reroute can move or reset an operator's change (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decision 1).
+
+   > **Amended 2026-10-31 by #3550:** Claimed paths and the stored prerequisite inputs are compared through decision 4's citation resolver, so the destination check compares files with files. A stored directory entry, which a route record written before this amendment may hold, is dropped and never fails a destination.
+
+   > **Amended 2026-11-08 by #3653:** A leaf-executed host refuses a `blocked-by-prerequisite` claim as an ordinary failed attempt, because every path exists on the leaf. In a `revalidate` round produced by a fold, a verified claim halts needs-human naming the folded fix, the child that cannot hold it and the child holding the prerequisite, instead of rerouting (`adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish` decisions 2 and 9).
 
 6. **A ref-backed route record is the authority for a routing round.**
    - **Where.** `refs/conductor/<slug>/routes/<roundId>`, a blob ref written only through
@@ -236,6 +250,14 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
 
    > **Amended 2026-10-24 by #3203:** The record gains a third kind, `operator`, with an `operator` section written at `prepared`, and the host states `abandoning` and `abandoned`; a closed round counts `abandoned` as terminal. Every kind test is an exhaustive switch. No new ref is created: abandoned work is pinned under the existing `rejected/<roundId>/<k>` (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decisions 1 and 13).
 
+   > **Amended 2026-10-26 by #3445:** The `restacked` and `done` recovery rows hold on every path that settles a host, not only the in-loop exit. The resume preflight's exit of a `built` host now reconciles before it returns, and navigates to whatever the record selects next. Previously it returned `repaired`, and resume continued on the plain stack cursor with no marker. The round's next host was then never admitted, and a later audit opened a second round while this one was still open. That happened in `build-review-re-raises-already-decided-findings-ev` rounds r1→r2, r2→r3, r3→r4 and r4→r5. The `closed` row gains a continuation: closing one round while another stays open does not hand control to the plain cursor. Reconciliation continues to the next non-closed round in the same call (decision 7).
+
+   > **Amended 2026-10-29 by #3459:** The `closed` row gains one operator writer. `ai-conductor stack rounds --close <rN> --reason <text>` supersedes an `open` `audit` round that has no `admitted`, `repairing`, `built`, `reroute-moved`, `abandoning` or `abandoned` host and no in-progress reroute, and that the marker does not name, while at least one other round stays non-closed. In one compare-and-swap it writes each `pending` host `done` and the round `closed`. `done` is used, not `abandoned`, because reconciliation treats `abandoned` on a non-operator round as unavailable. The surviving round's own exit performs the leaf return, so closing never skips whole-feature re-validation. The sole non-closed round, and any `revalidate` or `operator` round, is never closed this way: a revalidate round's queue entry was consumed at admission, and an operator round has its own abandon. Settled receipt charges stay in the ledger. Unsettled charges were never applied.
+
+   > **Amended 2026-11-07 by #3605:** The `closed` row gains a second operator case. `ai-conductor stack rounds --close <rN> --reason <text>` also closes the sole non-closed `open` `audit` round when every host is `pending`, `admitted`, `restacked`, `done` or `rerouted`, there is no in-progress reroute, and the repair marker names that round or is absent. `admitted` qualifies because no provider has run for that host yet. In one compare-and-swap it writes each `pending` and `admitted` host `done`, writes the round `closed`, and deletes the marker it names. With no surviving round, the close itself is the leaf return. The leaf resumes from the state the round's kickback already set, so the whole-feature gates that kickback restaged re-run on the leaf, and no re-validation is skipped. A host that is `repairing`, `built`, `reroute-moved`, `abandoning` or `abandoned` still refuses the close, as does any `revalidate` or `operator` round. Settled receipt charges stay in the ledger (`architecture-review-2026-11-07-manual-test-failure-routed-to-a-child-that-can-t-h`).
+
+   > **Amended 2026-11-08 by #3653:** A leaf-executed audit host may also end `done` with `placement: 'deferred'`, recording its entry and exit tips. Every restack that replays the leaf while such a host exists carries the record and remaps those tips in its `applied` transaction. `stack rounds --close` treats a deferred host as settled and never clears its placement (`adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish` decisions 5, 12 and 13).
+
 7. **Admission is marker-first, and reconciliation runs after journal recovery.**
    - **Order:**
      - the route record is created in phase `prepared`;
@@ -263,7 +285,32 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
      (`adr-2026-07-13-kickback-build-no-op-escalation` decision 1) runs at the host's region entry,
      after the frozen blocks are written. It never runs at the leaf's route resolution.
 
+   > **Amended 2026-11-05 by #3590:** A host that the guard finds already evidence-complete no longer halts by itself. When the round has a later `pending` host, or another host ended `restacked` or `rerouted`, the host settles. It is marked `repairing` with no credit, and its `routed_repair_phase` event carries `reason: 'derived-already-complete'`. It then leaves through the ordinary routed exit (the no-commit `done` exit, or `built → restacked` if region entry committed), and reconciliation continues the round. The needs-human halt remains only when no host in the round did work. A cleared halt re-enters the host and reaches the same settle (`architecture-review-2026-11-05-routed-residue-finding-lands-on-a-taskless-host-an`).
+
+   > **Amended 2026-11-07 by #3605:** A host that carries a taskless obligation (decision 1) has dispatchable BUILD work even when it has no routed task. A host carries one when an item is hosted on it while its allocation has no rem task and no item hosted there carries `taskIds`, because task work always yields one or the other. The guard derives `derived-already-complete` only from routed tasks, so such a host always dispatches BUILD, carrying its allocation's `retryHint` when one is recorded. An empty build then takes the no-commit exit, and the #3212 anti-whitewash escalation applies unchanged (`architecture-review-2026-11-07-manual-test-failure-routed-to-a-child-that-can-t-h`).
+
    > **Amended 2026-10-24 by #3203:** An operator round is admitted by the CLI under the feature dispatch lease, through `openOperatorRound`, not by the gate loop. Reconciliation's navigate result carries the round's `entryStep`. An undeclared `land` round halts `operator-round-undeclared` before the base-refresh deferral and the navigate arms. With routing eligible, a `repair-pending` cursor with no marker no longer runs the automatic `feature-repair` restack; it halts `unlanded-closed-child-commits` (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decisions 2, 5, 8, 9 and 10).
+
+   > **Amended 2026-10-26 by #3445:**
+   > - **One open audit round per feature.** The marker is deleted between hosts, so it is not a round lock. Admission therefore also enumerates the route records, without adding any ref. It refuses an `audit` round while any other round is non-closed. It refuses a `revalidate` round unless every other non-closed round has no `admitted`, `repairing` or `built` host and selects the queue next (decision 14's child hosts → queue → leaf host order). A fence refusal ends the run with a `mechanical` HALT naming the blocking round, which the daemon's episode-end sweep re-kicks without an operator. The audit's routing checks the same fence before it allocates a route record. Refusals that are not the fence keep their existing needs-human halts: a marker transaction lost to another writer's marker, and the round limit.
+   > - **Reconciliation order.** The round named by the marker is reconciled first. Then the remaining non-closed rounds advance in ref order. A round that closes while another stays open does not end reconciliation: the walk continues to the next round, and only `navigate`, `resume-exit`, queue consumption, a leaf return or quiescence ends it. This lets a feature that already holds two open rounds drain both without hand repair. The newer round's in-flight host finishes first, then the older round's unadmitted hosts run.
+   > - **Every continuing preflight result has reconciled.** The base-refresh deferral still reconciles after deferring, so a round between hosts is never resumed on the plain cursor.
+   > - **No progress is a bounded mechanical stop.** When reconciliation can make no progress, the preflight stops through #3446's stop path with a `mechanical` HALT whose first line names every non-closed round. This happens when a compare-and-swap is contested, or when two rounds each need the marker and neither can be advanced. The daemon re-kicks a mechanical HALT on its own. After 3 consecutive identical stops with no intervening routing progress, the HALT is written `needs-human` instead.
+
+   > **Amended 2026-10-28 by #3455:** The gate loop never ends silently because routed parking left nothing runnable. When selection finds no runnable gate while a marker or a non-empty re-validation queue parks the loop (parking kind `child`, `leaf-host` or `queue`), or when completion is refused because routed work is outstanding, the run records the stop through the same bounded stall as reconciliation (#3445's `routing_rounds_stalled`). It writes a HALT whose first line names the executing or queued round, the parking kind and the reason. Attempts 1 and 2 are `mechanical`, and the daemon's re-kick lets the next preflight admit, resume or exit the round. The third consecutive identical stall with no intervening routing progress is written `needs-human`. The daemon no longer records "loop ended without DONE or HALT marker" for this path.
+
+   > **Amended 2026-10-29 by #3459:** The decision 6 supersession is an operator CLI writer, as #3203's operator round is. It runs under the feature dispatch lease with an approved operator identity, and its refusal predicate runs before the lease and before any write. A read-only `ai-conductor stack rounds --slug <slug>` lists every round, the marker and receipt settlement state, writing nothing. Neither command reconciles, admits, or clears a HALT. The next dispatch's reconciliation continues from the surviving round.
+
+   > **Amended 2026-11-07 by #3605:** The sole-round close (decision 6) is the same operator CLI writer, under the same lease, identity and pre-lease refusal predicate. Its occurrence is the existing `routing_round_superseded` event, with `disposition: 'leaf-return'` and no `supersededBy`; a survivor supersession carries `disposition: 'superseded'`. The stack-commit-guard refusal names only commands valid for the marker's round kind: `stack rounds --close` for an `audit` round and `stack land --abandon` for an `operator` round (`architecture-review-2026-11-07-manual-test-failure-routed-to-a-child-that-can-t-h`).
+
+   > **Amended 2026-10-31 by #3477:** Reconciliation followed by queue consumption is one shared admission helper, the same one decision 14 names. Resume stack preflight and the routed-exit continuation pass it the result they already reconciled. BUILD-region entry calls it when the execution child resolves `revalidating` with no repair marker, and the helper then drains the routing outbox and reconciles before it consumes. A failed drain stops through the read-only diagnostic, as in the preflight. At region entry, a `navigate-host` result re-resolves and enters the navigated host, and queue admission re-resolves and enters the admitted child. Any result that only the preflight may act on, such as `resume-exit`, ends the run with a `mechanical` HALT naming it, so the daemon's re-kick reaches the preflight. The append still happens solely at region entry, on the checked-out host.
+
+   > **Amended 2026-11-07 by #3597:**
+   > - **Whole-feature gates wait for routed work.** No whole-feature gate (a step after `build_review`) starts on a stacked feature with routing on while routed work is outstanding. Routed work is outstanding while a repair marker exists, the re-validation queue has an entry or is unreadable, or any route record is not `closed`. This is the test D15 relies on; the marker alone is not the test, as the base-refresh bullet already says. Every entry into a whole-feature gate applies it, including the loop's linear advance and resume, not only gate selection. When the test holds, reconciliation runs. It takes a satisfied host's routed exit, re-enters a host's BUILD region, admits a pending host or queued child, or stops through the bounded routing stall (#3445 and #3455).
+   > - **Every fence stop is bounded.** A round-admission fence refusal from stacked audit routing, including refusal rework, is recorded through the same bounded routing stall. It is `mechanical` on the first two consecutive identical stops and `needs-human` on the third, as #3477 already does for the region-entry fence. The HALT's first line names the blocking round, its phase, its open host and that host's state, and the `ai-conductor stack rounds` inspection command.
+   > - **A fence refusal is a routing deferral, not a refusal outcome.** Refusal rework refused by the fence writes that bounded routing stop. It writes no over-scope HALT and asks for no decision; recorded refusals stay recorded for the next audit lap. The existing refused HALT (`adr-2026-10-03-over-scope-refusal-routes-to-bounded-build-rework` decision 3) remains the outcome for a spent allowance or a planner that cannot produce rework.
+
+   > **Amended 2026-11-08 by #3653:** The base-refresh deferral also holds while any host is `deferred`. Under a marker with `execution: 'leaf'`, the stack-commit guard admits tracked commits on the leaf and refuses them on the host's own branch. The hand-moved-closure check compares against the host closure recorded at entry, not the leaf entry tip (`adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish` decisions 3 and 6).
 
 8. **The cursor gains fields, not kinds, and one execution-child resolver serves every consumer.**
    - **Cursor.** After the `no-child` return, `resolveActiveChild` reads the marker and the queue.
@@ -295,6 +342,8 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
      gates are restaged stale and are not re-pended until the queue drains (decision 15).
 
    > **Amended 2026-10-24 by #3203:** A closed non-host child with unstamped post-closure commits is a co-origin only when the open operator round carried it. Any other co-origin halts `unlanded-closed-child-commits`, in every round kind. An explicit closed `rewind --child` opens an operator round (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decisions 8 and 11).
+
+   > **Amended 2026-10-31 by #3477:** Region entry admits before it refuses. When the execution child resolves `revalidating` and no repair marker exists, region entry runs the shared admission helper (decisions 7 and 14) and re-resolves the execution child before any entry side effect or dispatch. A child admitted this way is entered as the routed host of its new `revalidate` round. A refused admission ends the run with a HALT whose reason names the queued child and queue generation, every non-closed round with its unsettled hosts, and the marker owner or `none`, not only "no matching repair marker". A fence refusal and a routing stall take #3445's bounded stop: `mechanical`, then `needs-human` after three identical stops. Unreadable queue, marker or route refs halt `needs-human`. With routing ineligible, region entry admits nothing and halts `needs-human` naming the same state. When no queue entry exists, the cursor never resolves `revalidating` and region entry is unchanged.
 
 9. **Routed tasks are appended on the host's checked-out branch, carry their child in committed
    text, and merge deterministically on replay.**
@@ -334,6 +383,12 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
      - Any other plan conflict goes to the existing resolver.
      - Inherited rem-* blocks are excluded from the replayed child's own contribution when its path
        ownership is checked.
+
+   > **Amended 2026-10-28 by #3455:** A routed host's region gate verdicts belong to the round that produced them. Restaging the region's step states alone does not invalidate a verdict file from an earlier lap. The selector lets a verdict outrank every status except `stale`, so a re-pended step whose old `children/<k>/gates/<step>.json` still read satisfied was skipped. That let a routed repair build skip `test_suite` and `build_review`, and stopped two features on 2026-10-26. Two rules now hold for every round kind (`audit`, `revalidate`, `operator`):
+   > - **Stamp.** While a routed round's marker names a child as host, the engine stamps that `roundId` as `routedRound` on every region verdict it writes for that child. The field is optional and additive on the existing gate verdict record. A provider never supplies it. Flat features, N=1 features and unrouted child regions never write it.
+   > - **Scope.** While a routed round is executing on a host, gate selection ignores any *satisfied* region verdict for that host whose `routedRound` is not the executing round, including unstamped verdicts already on disk. An unsatisfied verdict from any round still blocks. Selection then falls back to the child's step status. A re-pended step re-runs; a step already `done` within the round stays satisfied. A verdict stamped with the executing round stays authoritative across a crash and resume, so finished in-round work is not redone. A writer that misses the stamp fails safe: its step re-runs once, and no gate is skipped.
+
+   > **Amended 2026-11-08 by #3653:** For a leaf-executed audit host, region entry keeps the leaf checked out. It writes the frozen blocks into the leaf's copy of the plan, and restages and seeds host k's child state there. The marker and the host entry carry `execution: 'leaf'`. The blocks reach the host's own plan copy only at the fold, through this decision's deterministic block merge (`adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish` decisions 3 and 7).
 
 10. **One round receipt, settled in the route record, charged once per budget.**
     - **Contents.** The receipt carries:
@@ -468,6 +523,12 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
 
     > **Amended 2026-10-24 by #3203:** Unstamped operator commits on other closed children are no longer automatic co-origins: the exit halts `unlanded-closed-child-commits` unless the open operator round carried them. Carried children originate the exit restack with the host. A closed-child rewind whose host tip still equals its closure is a further case that reaches the no-commit exit (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decisions 8 and 11).
 
+    > **Amended 2026-10-26 by #3445:** "The cursor then follows the record" is owned by the exit itself. One routing continuation exits the host and then reconciles the rounds. It returns the next routed step: next child host, queue, leaf host, leaf gates or a stop. Every exit caller consumes that result, both the in-loop BUILD-region exit and the resume preflight's `built`-host exit, and neither reconciles separately. The continuation lives in `round-admission.ts`, which already depends on `routed-exit.ts`, so the module layering ratchet gains no cycle.
+
+    > **Amended 2026-10-28 by #3455:** A host's routed exit no longer depends on the run that finished its region surviving long enough to take it. The host moves from `repairing` to `built` only inside the exit, so an interruption after the host's `build_review` passes leaves the host `repairing` with every region step satisfied in the executing round (decision 9 as amended by #3455). When selection on such a host finds every region gate satisfied under decision 9's round scope, the run takes that host's routed exit through the same exit continuation as the in-loop exit, instead of parking. A refusal from that exit stops exactly as an in-loop exit refusal does: a HALT the exit already wrote stands, otherwise the child-region refusal HALT is written, and no routing stall is recorded. A parked stop (decision 7 as amended by #3455) then remains only for a host or queue that genuinely cannot proceed.
+
+    > **Amended 2026-11-08 by #3653:** A leaf-executed audit host's exit requests no restack and writes no queue generation. One compare-and-swap marks it `done` with `placement: 'deferred'` and deletes the marker (`adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish` decision 5).
+
 14. **A durable re-validation queue re-judges every closed child a restack moved.**
     - **Production.** Every restack carries, in its journal, the closed-child invalidation set
       computed at its transition. Its `applied` transaction writes the next generation of
@@ -518,6 +579,10 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
 
     > **Amended 2026-10-24 by #3203:** With routing eligible, operator commits on closed children reach the queue only as children an operator round carried; uncarried ones halt `unlanded-closed-child-commits` instead (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decision 8).
 
+    > **Amended 2026-10-31 by #3477:** Consumption runs through the one shared admission helper of decision 7, at three points: resume stack preflight, the routed-exit continuation, and BUILD-region entry (decision 8). A restack applied inside the gate loop, such as the `rebase` step's base refresh, therefore has its queue head admitted in the same run, at the next region entry, without an operator halt clear. A queue head is admitted at most once. The helper consumes only through `consumeLowestQueued`, which returns `busy` while a marker exists, so a later resume continues the admitted round instead of opening a second `revalidate` round. Production, merge, acknowledgement and the round-admission fence are unchanged.
+
+    > **Amended 2026-11-08 by #3653:** A fold restack is a fourth queue producer. Its `applied` transaction queues every non-leaf child whose tree the fold changed (`adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish` decision 9).
+
 15. **The leaf gates re-run when the queue drains, under their existing caps.**
     - When no marker and no queue entry remain, the leaf's whole-feature gates are re-pended under
       their existing lap caps.
@@ -529,6 +594,8 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
       restack, which carries the host's fix commits.
 
     > **Amended 2026-10-24 by #3203:** An abandoned operator round returns to the leaf in an `abandon` mode, which records the switch and closes the round without re-pending the leaf gates, because no restack ran (`adr-2026-10-24-operator-route-round-for-closed-stacked-children` decision 13).
+
+    > **Amended 2026-11-08 by #3653:** When the queue drains after a fold, `returnToLeaf` runs in `fold` mode. It re-pends no whole-feature gate while the leaf tip's tree equals the tree recorded by the fold, and it navigates to the FINISH `rebase` step (`adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish` decision 10).
 
 16. **Events ride the existing spine through a transactional outbox.**
     - **New `ConductorEvent` members,** all carrying `child`:
@@ -545,6 +612,8 @@ Option B′. Machinery does the bookkeeping, and judgement is used only where th
       `eventId`.
     - The refs are durable snapshots, never a second telemetry channel. Every consumer reads the
       spine.
+
+    > **Amended 2026-10-29 by #3459:** A new member, `routing_round_superseded {roundId, child, supersededBy, droppedHosts, findingIds, reason, operator}`, records an operator supersession (decision 6). It is written to the superseded round's outbox in the same compare-and-swap that closes the round. It is drained like the others, and joins the canonical persister's dedup by `eventId`.
 
 17. **N=1 parity is structural and proven by the golden suite.**
     - With `no-child`, none of these is read or written:

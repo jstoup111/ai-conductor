@@ -1,0 +1,2 @@
+{"type":"message_end","message":{"role":"assistant","provider":"openrouter","model":"x","content":"","usage":{"input":0,"output":0},"stopReason":"error","errorMessage":"401: {\"message\":\"User not found.\",\"code\":401}"}}
+{"type":"agent_end"}

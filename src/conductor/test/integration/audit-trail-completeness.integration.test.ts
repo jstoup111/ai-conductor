@@ -97,6 +97,8 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   restack_planned: 'not-audited-by-design',
   restack_applied: 'not-audited-by-design',
   restack_conflict: 'not-audited-by-design',
+  restack_resolution: 'not-audited-by-design',
+  restack_decision: 'not-audited-by-design',
   restack_refused: 'not-audited-by-design',
   restack_recovered: 'not-audited-by-design',
   push_lease_refused: 'not-audited-by-design',
@@ -130,6 +132,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   build_review_acceptance_carried: 'not-audited-by-design',
   remediation_case_operator_resolved: 'not-audited-by-design',
   remediation_case_reconciled: 'not-audited-by-design',
+  as_built_finding_reconciled: 'not-audited-by-design',
   remediation_case_refuted: 'friction-mapped',
   prd_widening_reconciled: 'not-audited-by-design',
   remediation_effect_reserved: 'not-audited-by-design',
@@ -251,6 +254,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   rebase_resolution_exhausted: 'not-audited-by-design',
   auto_park: 'not-audited-by-design',
   operator_park_boundary: 'not-audited-by-design',
+  preemption_boundary: 'not-audited-by-design',
   auto_park_contradiction: 'not-audited-by-design',
   zero_work_product: 'not-audited-by-design',
   unattributed_dispatch: 'not-audited-by-design',
@@ -279,7 +283,9 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   remediation_routed: 'not-audited-by-design',
   remediation_rerouted: 'not-audited-by-design',
   routed_repair_phase: 'not-audited-by-design',
+  routing_rounds_stalled: 'not-audited-by-design',
   operator_round: 'not-audited-by-design',
+  routing_round_superseded: 'not-audited-by-design',
   child_revalidated: 'not-audited-by-design',
   // Stack-publication occurrences persist on the spine but are not audited (event-sinks audit: false).
   stack_member_published: 'not-audited-by-design',
@@ -423,11 +429,19 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   restack_applied: {
     type: 'restack_applied', opId: 'restack-1' as RestackOpId, cause: 'base-refresh', child: parseChildId(1)!,
     oldTip: parseCommitSha('a'.repeat(40))!, newTip: parseCommitSha('b'.repeat(40))!,
-    wouldInvalidate: ['build_review'], parentOverlapPaths: ['src/feature.ts'],
+    wouldInvalidate: ['build_review'], parentOverlapPaths: ['src/feature.ts'], adaptedPaths: [],
   },
   restack_conflict: {
     type: 'restack_conflict', opId: 'restack-1' as RestackOpId, child: parseChildId(1)!,
     commit: parseCommitSha('c'.repeat(40))!, paths: ['src/feature.ts'],
+  },
+  restack_resolution: {
+    type: 'restack_resolution', opId: 'restack-1' as RestackOpId, child: parseChildId(1)!,
+    action: 'recorded', tip: parseCommitSha('d'.repeat(40))!, operator: 'operator',
+  },
+  restack_decision: {
+    type: 'restack_decision', opId: 'restack-1' as RestackOpId, child: parseChildId(1)!,
+    action: 'recorded', commit: parseCommitSha('e'.repeat(40))!, paths: ['src/feature.ts'], operator: 'operator',
   },
   restack_refused: { type: 'restack_refused', reason: 'dirty-overlap', child: parseChildId(1)!, detail: 'src/feature.ts' },
   restack_recovered: { type: 'restack_recovered', opId: 'restack-1' as RestackOpId, fromState: 'ready' },
@@ -500,6 +514,7 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   build_review_acceptance_carried: { type: 'build_review_acceptance_carried', eventId: 'carried-1', feature: 'feature', lapId: 'lap-1', sourceId: 'testQuality:finding-1', caseId: 'case-1', originSourceIds: ['testQuality:finding-0'], originLapIds: ['lap-0'] },
   remediation_case_operator_resolved: { type: 'remediation_case_operator_resolved', eventId: 'operator-resolved-1', feature: 'feature', caseId: 'case-1', sourceIds: ['testQuality:finding-1'] },
   remediation_case_reconciled: { type: 'remediation_case_reconciled', domain: 'build_review', lapId: 'lap-1', caseId: 'case-1', resolution: 'open' },
+  as_built_finding_reconciled: { type: 'as_built_finding_reconciled', eventId: 'as-built-1', findingId: 'as-built:attempt-1:1', caseId: 'as-built-case-1', attemptId: 'attempt-1', outcome: 'new', reason: 'No prior case describes this contract gap.' },
   remediation_case_refuted: { type: 'remediation_case_refuted', domain: 'build_review', lapId: 'lap-1', caseId: 'case-1' },
   prd_widening_reconciled: { type: 'prd_widening_reconciled', sourceId: 'source-1', caseId: 'case-1', outcome: 'same-case' },
   remediation_effect_reserved: { type: 'remediation_effect_reserved', domain: 'build_review', lapId: 'lap-1', caseId: 'case-1', effectId: 'effect-1', effectKind: 'action' },
@@ -932,6 +947,11 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     featureSlug: 'my-feature',
     boundary: { kind: 'pre-first-unit' },
   },
+  preemption_boundary: {
+    type: 'preemption_boundary',
+    featureSlug: 'my-feature',
+    boundary: { kind: 'pre-first-unit' },
+  },
   auto_park_contradiction: {
     type: 'auto_park_contradiction',
     slug: 'my-feature',
@@ -1021,9 +1041,20 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     type: 'routed_repair_phase', eventId: 'route-3', occurredAt: '2030-01-01T00:00:00.000Z',
     roundId: parseRoundId('r1')!, host: parseChildId(1)!, phase: 'repairing', credit: false, child: parseChildId(1)!,
   },
+  routing_rounds_stalled: {
+    type: 'routing_rounds_stalled',
+    rounds: [{ roundId: parseRoundId('r1')!, readable: true, unsettledHosts: { [parseChildId(1)!]: 'pending' } }],
+    detail: 'routing rounds stalled: r1 (1: pending); test',
+    attempt: 1,
+  },
   operator_round: {
     type: 'operator_round', eventId: 'route-5', occurredAt: '2030-01-01T00:00:00.000Z',
     roundId: parseRoundId('r1')!, child: parseChildId(1)!, origin: 'land', reason: 'test', action: 'opened',
+  },
+  routing_round_superseded: {
+    type: 'routing_round_superseded', eventId: 'route-6', occurredAt: '2030-01-01T00:00:00.000Z',
+    roundId: parseRoundId('r1')!, child: parseChildId(1)!, disposition: 'superseded', supersededBy: parseRoundId('r2')!,
+    droppedHosts: [parseChildId(1)!], findingIds: ['finding-1'], reason: 'test', operator: 'operator@example.test',
   },
   child_revalidated: {
     type: 'child_revalidated', eventId: 'route-4', occurredAt: '2030-01-01T00:00:00.000Z',

@@ -308,6 +308,8 @@ export interface RouteRecord {
   readonly items: readonly RoutedItem[];
   readonly allocation: FrozenAllocation;
   readonly hosts: Readonly<Record<ChildId, HostState>>;
+  /** Reason attached to a host's current lifecycle state, when recovery needs it. */
+  readonly hostReasons?: Readonly<Partial<Record<ChildId, 'derived-already-complete'>>>;
   readonly currentHostIndex: number;
   readonly receipt: RoundReceipt;
   /** Required only for the `operator` route kind; rejected on every other kind. */
@@ -751,6 +753,25 @@ function parseHosts(value: unknown): Readonly<Record<ChildId, HostState>> | unde
   return hosts;
 }
 
+function parseHostReasons(
+  value: unknown,
+  hosts: Readonly<Record<ChildId, HostState>>,
+): Readonly<Partial<Record<ChildId, 'derived-already-complete'>>> | undefined {
+  if (!isRecord(value)) return undefined;
+  const reasons: Partial<Record<ChildId, 'derived-already-complete'>> = {};
+  for (const [rawChild, rawReason] of Object.entries(value)) {
+    const child = parseChildId(rawChild);
+    if (!child || hosts[child] !== 'repairing' || rawReason !== 'derived-already-complete') return undefined;
+    reasons[child] = rawReason;
+  }
+  return reasons;
+}
+
+/** Whether this repairing host was durably settled because it had no work to dispatch. */
+export function isDerivedAlreadyCompleteHost(record: RouteRecord, host: ChildId): boolean {
+  return record.hosts[host] === 'repairing' && record.hostReasons?.[host] === 'derived-already-complete';
+}
+
 /** The current host is indexed by ascending child position in durable records. */
 export function currentHostOf(
   record: Pick<RouteRecord, 'hosts' | 'currentHostIndex'>,
@@ -866,6 +887,7 @@ export function parseRouteRecord(blob: string): RouteRecord | undefined {
   const phase = parseRoundPhase(value.phase);
   const allocation = parseAllocation(value.allocation);
   const hosts = parseHosts(value.hosts);
+  const hostReasons = value.hostReasons === undefined || hosts === undefined ? undefined : parseHostReasons(value.hostReasons, hosts);
   const outbox = parseOutbox(value.outbox);
   const receipt = parseReceipt(value.receipt);
   const sealedAuthored = value.sealedAuthored === undefined ? undefined : nonNegativeInteger(value.sealedAuthored);
@@ -887,6 +909,7 @@ export function parseRouteRecord(blob: string): RouteRecord | undefined {
     || (value.pendingAsBuiltFindings !== undefined && pendingAsBuiltFindings === undefined)
     || (value.leafReturn !== undefined && leafReturn === undefined)
     || (value.operator !== undefined && operator === undefined)
+    || (value.hostReasons !== undefined && hostReasons === undefined)
     || (kind === 'operator' && (operator === undefined || Object.keys(hosts).length !== 1))
     || (kind !== 'operator' && operator !== undefined)) return undefined;
   if (!hasConsistentRouteLifecycle({
@@ -901,6 +924,7 @@ export function parseRouteRecord(blob: string): RouteRecord | undefined {
     items: items as RoutedItem[],
     allocation,
     hosts,
+    ...(hostReasons === undefined ? {} : { hostReasons }),
     currentHostIndex,
     receipt,
     ...(operator === undefined ? {} : { operator }),

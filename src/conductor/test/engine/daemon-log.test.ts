@@ -1,3 +1,4 @@
+// Covers: task:1
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, stat, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -292,7 +293,7 @@ describe('engine/daemon-log', () => {
 
       expect(live).toEqual([
         '[daemon][feature-a] stdout first line',
-        '[daemon][feature-a] stderr continuation',
+        '[daemon][feature-a] │ stderr continuation',
       ]);
       expect(persisted).toEqual(live);
     });

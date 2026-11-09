@@ -1,16 +1,22 @@
-// Covers: pi-per-step-model-selection-via-wrapped-providers:task:14,task:15
-import { describe, expect, it, vi } from 'vitest';
+// Covers: pi-per-step-model-selection-via-wrapped-providers:task:14,task:15, codex-steps-resolve-the-newest-catalog-model-per-t:task:5,task:6,task:7
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { execa } from 'execa';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import { bootDispatchingCliProviders } from '../../src/index.js';
 import {
   ProviderModelUnknownError,
+  resetProviderModelTierProbeForTest,
+  resolveProviderModelTiers,
   validateConfiguredProviderModels,
   type ProviderModelProbeRunner,
 } from '../../src/engine/provider-model-probe.js';
 import type { InstalledProviderDiscovery } from '../../src/engine/provider-discovery.js';
 import type { HarnessConfig } from '../../src/types/config.js';
+import { resetResolvedModelTiersForTest } from '../../src/engine/model-tier-resolution.js';
+import { resolveProviderModelPolicy } from '../../src/engine/provider-model-policy.js';
+import { resolveStepConfig } from '../../src/engine/resolved-config.js';
+import { clearRateCardCache } from '../../src/execution/rate-card.js';
 
 vi.mock('execa', () => ({ execa: vi.fn() }));
 
@@ -46,6 +52,39 @@ function installedPi(): InstalledProviderDiscovery {
 function runner(result: { exitCode: number; stdout: string }): ProviderModelProbeRunner {
   return vi.fn(async () => result);
 }
+
+const CODEX_LISTING = JSON.stringify({
+  models: [
+    { slug: 'gpt-6.1-sol', visibility: 'list', supported_in_api: true },
+    { slug: 'gpt-6-astra', visibility: 'list', supported_in_api: true },
+    { slug: 'gpt-6-sol', visibility: 'list', supported_in_api: true },
+    { slug: 'gpt-6-luna', visibility: 'list', supported_in_api: true },
+    { slug: 'gpt-5.6-sol', visibility: 'list', supported_in_api: true },
+    { slug: 'gpt-5.6-terra', visibility: 'list', supported_in_api: true },
+    { slug: 'gpt-5.6-luna', visibility: 'list', supported_in_api: true },
+  ],
+});
+
+function installedCodex(): InstalledProviderDiscovery {
+  return { installed: ['codex'], missing: [] };
+}
+
+function codexStepModels(): Record<string, string> {
+  const policy = resolveProviderModelPolicy('codex');
+  return {
+    buildReview: resolveStepConfig('build_review', 'BUILD', policy).model,
+    memory: resolveStepConfig('memory', 'UNDERSTAND', policy).model,
+    build: resolveStepConfig('build', 'BUILD', policy).model,
+  };
+}
+
+afterEach(() => {
+  resetProviderModelTierProbeForTest();
+  resetResolvedModelTiersForTest();
+  clearRateCardCache();
+  vi.unstubAllEnvs();
+  vi.useRealTimers();
+});
 
 describe('validateConfiguredProviderModels', () => {
   it('does not list Pi models when Pi is installed but no Pi model selection is configured', async () => {
@@ -255,5 +294,162 @@ describe('validateConfiguredProviderModels', () => {
       runner: runner({ exitCode: 0, stdout: 'Pi cannot list models' }),
       timeoutMs: 20,
     })).rejects.toThrow(/Pi model listing.*unparseable.*Pi cannot list models/i);
+  });
+});
+
+describe('resolveProviderModelTiers', () => {
+  it('warns once per unpriced upgraded id, and never warns for priced upgrades', async () => {
+    const warn = vi.fn();
+    const floorsOnlyRateCard = {
+      as_of: '2026-10-25T00:00:00.000Z', source: 'https://example.invalid/rates', models: {
+        'gpt-5.6-luna': { input_cost_per_token: 1, output_cost_per_token: 1 }, 'gpt-5.6-terra': { input_cost_per_token: 1, output_cost_per_token: 1 },
+        'gpt-5.6-sol': { input_cost_per_token: 1, output_cost_per_token: 1 }, 'gpt-6-astra': { input_cost_per_token: 1, output_cost_per_token: 1 },
+      },
+    };
+    await resolveProviderModelTiers({
+      discovery: installedCodex(), runner: runner({ exitCode: 0, stdout: CODEX_LISTING }), warn,
+      rateCardLoader: () => floorsOnlyRateCard,
+    });
+
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('gpt-6.1-sol has no rate-card price'));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('gpt-6-luna has no rate-card price'));
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('gpt-5.6-terra has no rate-card price'));
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('gpt-6-astra has no rate-card price'));
+
+    resetProviderModelTierProbeForTest();
+    const pricedWarn = vi.fn();
+    await resolveProviderModelTiers({
+      discovery: installedCodex(), runner: runner({ exitCode: 0, stdout: CODEX_LISTING }), warn: pricedWarn,
+      rateCardLoader: () => ({
+        ...floorsOnlyRateCard,
+        models: {
+          ...floorsOnlyRateCard.models,
+          'gpt-6-luna': { input_cost_per_token: 1, output_cost_per_token: 1 }, 'gpt-6.1-sol': { input_cost_per_token: 1, output_cost_per_token: 1 },
+        },
+      }),
+    });
+    expect(pricedWarn).not.toHaveBeenCalled();
+
+    resetProviderModelTierProbeForTest();
+    const failedWarn = vi.fn();
+    await resolveProviderModelTiers({
+      discovery: installedCodex(), runner: runner({ exitCode: 2, stdout: '' }), warn: failedWarn,
+      rateCardLoader: () => floorsOnlyRateCard,
+    });
+    expect(failedWarn).toHaveBeenCalledExactlyOnceWith(
+      'Codex tier catalog unavailable (exit code 2); using floor model ids.',
+    );
+  });
+
+  it('resolves tiers during dispatching CLI boot before runtimes are created', async () => {
+    const probe = runner({ exitCode: 0, stdout: CODEX_LISTING });
+    await bootDispatchingCliProviders({
+      command: 'inline',
+      registry: new PluginRegistry(),
+      events: new ConductorEventEmitter(),
+      config: { llm_provider: 'codex' },
+      rendererOpts: {
+        stateFilePath: '/tmp/codex-tier-boot-state.json', steps: [],
+        readStateFn: async () => ({ ok: true, value: {} }), projectRoot: '/tmp',
+      },
+      discover: async () => installedCodex(),
+      providerModelProbeRunner: probe,
+    });
+
+    expect(probe).toHaveBeenCalledExactlyOnceWith('codex', ['debug', 'models']);
+    expect(codexStepModels()).toEqual({
+      buildReview: 'gpt-6.1-sol', memory: 'gpt-6-luna', build: 'gpt-5.6-terra',
+    });
+  });
+
+  it('probes Codex once per process and installs the newest same-tier models', async () => {
+    const fake = runner({ exitCode: 0, stdout: CODEX_LISTING });
+
+    await resolveProviderModelTiers({ discovery: installedCodex(), runner: fake, projectRoot: '/tmp' });
+    await resolveProviderModelTiers({ discovery: installedCodex(), runner: fake, projectRoot: '/tmp' });
+
+    expect(fake).toHaveBeenCalledOnce();
+    expect(fake).toHaveBeenCalledWith('codex', ['debug', 'models']);
+    expect(codexStepModels()).toEqual({
+      buildReview: 'gpt-6.1-sol',
+      memory: 'gpt-6-luna',
+      build: 'gpt-5.6-terra',
+    });
+  });
+
+  it('ignores hidden and non-API Codex catalog models', async () => {
+    const fake = runner({
+      exitCode: 0,
+      stdout: JSON.stringify({
+        models: [
+          ...JSON.parse(CODEX_LISTING).models,
+          { slug: 'gpt-7-sol', visibility: 'hide', supported_in_api: true },
+          { slug: 'gpt-7.1-sol', visibility: 'list', supported_in_api: false },
+        ],
+      }),
+    });
+
+    await resolveProviderModelTiers({ discovery: installedCodex(), runner: fake, projectRoot: '/tmp' });
+
+    expect(codexStepModels().buildReview).toBe('gpt-6.1-sol');
+  });
+
+  it('keeps floor ids and warns once when the tier catalog times out', async () => {
+    vi.useFakeTimers();
+    const warn = vi.fn();
+    const resolution = resolveProviderModelTiers({
+      discovery: installedCodex(),
+      runner: async () => new Promise(() => {}),
+      timeoutMs: 5_000,
+      warn,
+      projectRoot: '/tmp',
+    });
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(resolution).resolves.toBeUndefined();
+
+    expect(codexStepModels().buildReview).toBe('gpt-5.6-sol');
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith('Codex tier catalog unavailable (timeout); using floor model ids.');
+  });
+
+  it.each([
+    ['non-zero exit', { exitCode: 2, stdout: 'catalog unavailable' }, 'exit code 2'],
+    ['non-JSON stdout', { exitCode: 0, stdout: 'not json' }, 'unparseable: "not json"'],
+    ['JSON without models', { exitCode: 0, stdout: '{}' }, 'unparseable: "{}"'],
+  ])('keeps floor ids and warns once for %s', async (_caseName, result, reason) => {
+    const warn = vi.fn();
+
+    await expect(resolveProviderModelTiers({
+      discovery: installedCodex(),
+      runner: runner(result),
+      warn,
+      projectRoot: '/tmp',
+    })).resolves.toBeUndefined();
+
+    expect(codexStepModels()).toEqual({
+      buildReview: 'gpt-5.6-sol',
+      memory: 'gpt-5.6-luna',
+      build: 'gpt-5.6-terra',
+    });
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      `Codex tier catalog unavailable (${reason}); using floor model ids.`,
+    );
+  });
+
+  it('does not probe or warn when Codex is not installed', async () => {
+    const fake = runner({ exitCode: 0, stdout: CODEX_LISTING });
+    const warn = vi.fn();
+
+    await resolveProviderModelTiers({
+      discovery: { installed: ['claude'], missing: [{ id: 'codex', reason: 'not-found' }] },
+      runner: fake,
+      warn,
+      projectRoot: '/tmp',
+    });
+
+    expect(fake).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
   });
 });

@@ -130,6 +130,15 @@ build_review:
   # Re-enabled 2026-10-23 (operator order): acceptance now survives a re-raise
   # (#3271 via #3358/#3367) and resolved-case re-raises are admitted (#3292).
   custom_rubrics:
+    dependencyHygiene:
+      enabled: true
+      skill: build-review-dependency-hygiene
+      source: global
+      question: "Does the frozen feature diff add or change dependencies that lack necessity, bounded pinning, or compatible on-disk license evidence?"
+      min_severity: minor
+      paths:
+        - "**/package.json"
+        - "**/package-lock.json"
     eventSpine:
       enabled: true
       skill: event-spine
