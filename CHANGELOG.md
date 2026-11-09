@@ -263,6 +263,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Memory setup now keeps `.memory` out of git in every worktree, even for projects that never ran bootstrap. ([implementation PR #3644](https://github.com/jstoup111/ai-conductor/pull/3644)).
 - build_review no longer fails a lap as review-input-mutated when reviewer transcripts are captured mid-lap. ([implementation PR #3672](https://github.com/jstoup111/ai-conductor/pull/3672)).
 - Restack safely refuses a child resolution when its recorded target tip has changed. ([implementation PR #3667](https://github.com/jstoup111/ai-conductor/pull/3667)).
+- As-built remediation no longer halts needs-human on features with many open as-built cases; pending findings are no longer sent twice. ([implementation PR #3678](https://github.com/jstoup111/ai-conductor/pull/3678)).
 
 ## Migration
 
