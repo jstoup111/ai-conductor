@@ -38,6 +38,97 @@ const ACTIVE_STALL_EVENT: ConductorEvent = {
   resolvedAfter: 2,
 };
 
+const COMPOSER_RUN_TRANSITION_EVENTS = [
+  {
+    type: 'composer_run_started',
+    slug: 'composer-run',
+    worktreePath: '/workspace/.worktrees/composer-run',
+    launchId: 'launch-1',
+    provider: 'codex',
+    actor: 'operator-a',
+  },
+  {
+    type: 'composer_run_checkpointed',
+    slug: 'composer-run',
+    step: 'explore',
+    state: 'accepted',
+    published: true,
+    provider: 'codex',
+    actor: 'operator-a',
+  },
+  {
+    type: 'composer_run_resumed',
+    slug: 'composer-run',
+    provider: 'claude',
+    actor: 'operator-b',
+    previousProvider: 'codex',
+    previousActor: 'operator-a',
+    ownership: 'taken-over',
+  },
+  {
+    type: 'composer_provider_switched',
+    slug: 'composer-run',
+    step: 'plan',
+    fromProvider: 'codex',
+    toProvider: 'claude',
+    actor: 'operator-b',
+  },
+  {
+    type: 'composer_run_handed_off',
+    slug: 'composer-run',
+    actor: 'operator-b',
+    prUrl: 'https://example.test/pull/1',
+  },
+] satisfies ConductorEvent[];
+
+// Covers: task:2
+it('registers every Composer run event as a persistent sink', () => {
+  expect(COMPOSER_RUN_TRANSITION_EVENTS.map((event) => event.type)).toEqual([
+    'composer_run_started',
+    'composer_run_checkpointed',
+    'composer_run_resumed',
+    'composer_provider_switched',
+    'composer_run_handed_off',
+  ]);
+
+  for (const event of COMPOSER_RUN_TRANSITION_EVENTS) {
+    expect(EVENT_SINKS).toHaveProperty(event.type, {
+      render: false,
+      persist: true,
+      audit: false,
+      otel: false,
+    });
+  }
+});
+
+// Covers: task:2
+it('keeps deliberate Composer provider switches distinct from fallback and retry telemetry', async () => {
+  const switched = COMPOSER_RUN_TRANSITION_EVENTS.find(
+    (event) => event.type === 'composer_provider_switched',
+  );
+
+  expect(switched).toEqual({
+    type: 'composer_provider_switched',
+    slug: 'composer-run',
+    step: 'plan',
+    fromProvider: 'codex',
+    toProvider: 'claude',
+    actor: 'operator-b',
+  });
+
+  const engineRoot = new URL('../../src/engine/', import.meta.url);
+  const sourcePaths = (await readdir(engineRoot, { recursive: true }))
+    .filter((path) => path.endsWith('.ts'));
+  const switchedEmitters = (await Promise.all(sourcePaths.map(async (path) => {
+    const source = await readFile(new URL(path, engineRoot), 'utf8');
+    return /emit(?:OrThrow)?\(\s*\{\s*type:\s*['\"]composer_provider_switched['\"]/.test(source)
+      ? path
+      : undefined;
+  }))).filter((path): path is string => path !== undefined);
+
+  expect(switchedEmitters.every((path) => path === 'engineer-cli.ts')).toBe(true);
+});
+
 it('declares one persistent sink row for each stack event', () => {
   const stackEventTypes = [
     'stack_member_published',
@@ -356,6 +447,11 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'github_bypass_result',
   'github_possible_bypass',
   'session_event_delivery_diagnostic',
+  'composer_run_started',
+  'composer_run_checkpointed',
+  'composer_run_resumed',
+  'composer_provider_switched',
+  'composer_run_handed_off',
   'bot_co_author_skipped',
   'intake_inbound_sanitized',
   'intake_overlap_checked',

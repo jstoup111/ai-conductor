@@ -328,6 +328,7 @@ describe('engineer land tracker write-back (Task 11)', () => {
     const events: unknown[] = [];
     const gh = async (args: string[]) => {
       calls.push(args);
+      if (args[0] === 'pr' && args[1] === 'view' && args[2] === branch) return { stdout: '{}' };
       throw new Error(`unexpected gh write-back call: ${args.join(' ')}`);
     };
     const featureMarker = `.docs/intake/${branch.slice('spec/'.length)}.md`;

@@ -127,6 +127,7 @@ describe('legacy engineer CLI alias — process dispatch boundary', () => {
     expect(spawnHost).toHaveBeenCalledOnce();
     expect(spawnHost).toHaveBeenCalledWith('codex', ['$composer'], process.cwd(), {
       AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex',
+      AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String),
     });
     expect(vi.mocked(discoverInstalledProviders)).not.toHaveBeenCalled();
   });
@@ -143,6 +144,8 @@ describe('detectEngineerCommand — argv detection', () => {
     phase: ['--worktree', '/tmp/worktree', '--phase', 'stories'],
     land: ['--project', 'project', '--idea', 'idea', '--worktree', '/tmp/worktree'],
     handoff: ['--project', 'project', '--branch', 'spec/idea', '--worktree', '/tmp/worktree'],
+    checkpoint: ['--worktree', '/tmp/worktree', '--step', 'explore', '--accept'],
+    resume: ['spec/resume-demo', '--project', 'project'],
     poll: [],
     claim: [],
     forget: ['owner/repo#1'],

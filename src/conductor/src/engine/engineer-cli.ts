@@ -34,7 +34,10 @@ import { loadConfig, loadMergedConfig, validateConfig, type ConfigResult } from 
 import { readUserConfig } from './user-config.js';
 import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner } from './owner-gate/identity.js';
-import { openSpecPr, type HandoffDeps } from './engineer/handoff.js';
+import { findExistingSpecPullRequest, openSpecPr, type HandoffDeps } from './engineer/handoff.js';
+import { checkpointComposerRun, type CheckpointDeps } from './engineer/checkpoint.js';
+import { resumeComposerRun, type ResumeTarget } from './engineer/resume.js';
+import { ensureWorktree } from './worktree-shared.js';
 import { isSpecSlug } from './engineer/spec-branch.js';
 import {
   createEngineerWorktree,
@@ -78,14 +81,17 @@ import { reconcileStrandedClaims } from './engineer/intake/reconcile-strands.js'
 import { isStaleClaim } from './engineer/intake/stale-claim.js';
 import { resolveStaleClaimWindowMs } from './resolved-config.js';
 import { parseSourceRef } from './engineer/intake/source-ref.js';
+import { splitOwnerRepo } from './engineer/source-ref.js';
 import { createDependencyLinks, runMigration } from './engineer/issue-dep-migration.js';
-import { createGithubTrackerClient, createGuardedGithubOperationRunner, GithubTrackerOperationRefusalError, makeProductionGh, runTrackerAmbientRead, runTrackerRepositoryRead, type GhRunner, type TrackerClient } from './tracker-client.js';
+import { createGithubTrackerClient, createGuardedGithubOperationRunner, GithubTrackerOperationRefusalError, makeProductionGh, runTrackerAmbientRead, runTrackerGraphqlRead, runTrackerRepositoryRead, type GhRunner, type TrackerClient } from './tracker-client.js';
 import {
   sweepDependencyDrift,
   type DependencyDriftResult,
 } from './engineer/dependency-reconciler.js';
 import type { GithubOperationEventEmitter } from './github-operations.js';
 import { bindMutationToPullRequest } from './ship-draft-pr.js';
+import { executeGithubOperation } from './github-operations.js';
+import { executeRemoteGit } from './remote-git-operations.js';
 import type { OwnerResolution } from './owner-gate/identity.js';
 import {
   GH_VERSION_FLOOR,
@@ -97,6 +103,7 @@ import {
   DEFAULT_PROVIDER,
   requireProviderCapability,
   resolveProviderExecutable,
+  type BuiltInProviderId,
 } from '../execution/provider-catalog.js';
 import { resolveComposeLaunchHost } from './compose-launch-host.js';
 import { resolveHarnessRoot } from './install-freshness.js';
@@ -128,6 +135,8 @@ type EngineerDispatchDescriptor =
     dependsOn?: string[]; declinedDependencies?: string[]; skipDependencyCheck?: string;
   }
   | { kind: 'handoff'; project: string; branch: string; worktree: string; sourceRef?: string }
+  | { kind: 'checkpoint'; worktree: string; step: string; state: 'accepted' | 'draft'; notesFile?: string }
+  | { kind: 'resume'; target: string; provider?: string; project?: string }
   | { kind: 'plan-review'; project: string; worktree: string; sourceRef?: string; accept?: string; acknowledge?: true; reason?: string; maxPromptChars?: number; invalidMaxPromptChars?: true }
   | { kind: 'poll' }
   | { kind: 'claim' }
@@ -149,7 +158,7 @@ export type EngineerDispatch = EngineerDispatchDescriptor & {
 
 /** Single source of truth for the known deterministic subcommands (#524). */
 export const ENGINEER_SUBCOMMANDS = [
-  'projects', 'dep-audit', 'worktree', 'phase', 'land', 'handoff', 'plan-review', 'poll', 'claim', 'forget', 'unclaim', 'requeue',
+  'projects', 'dep-audit', 'worktree', 'phase', 'land', 'handoff', 'checkpoint', 'resume', 'plan-review', 'poll', 'claim', 'forget', 'unclaim', 'requeue',
   'resolve', 'migrate-issue-deps',
 ] as const;
 
@@ -313,6 +322,28 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
     const unk = findUnknownFlag(argv, ['--project', '--branch', '--worktree', '--source-ref']);
     if (unk) return { kind: 'reject', sub: 'handoff', flag: unk };
     return { kind: 'handoff', project, branch, worktree, sourceRef };
+  }
+
+  if (subCmd === 'checkpoint') {
+    const worktree = parseFlag(argv, '--worktree');
+    const step = parseFlag(argv, '--step');
+    const accept = argv.includes('--accept');
+    const draft = argv.includes('--draft');
+    const notesFile = parseFlag(argv, '--notes-file') ?? undefined;
+    if (!worktree || !step || accept === draft) return { kind: 'guide' };
+    const unk = findUnknownFlag(argv, ['--worktree', '--step', '--accept', '--draft', '--notes-file']);
+    if (unk) return { kind: 'reject', sub: 'checkpoint', flag: unk };
+    return { kind: 'checkpoint', worktree, step, state: accept ? 'accepted' : 'draft', ...(notesFile ? { notesFile } : {}) };
+  }
+
+  if (subCmd === 'resume') {
+    const target = argv[4];
+    if (!target || target.startsWith('--')) return { kind: 'guide' };
+    const provider = parseFlag(argv, '--provider') ?? undefined;
+    const project = parseFlag(argv, '--project') ?? undefined;
+    const unk = findUnknownFlag(argv, ['--provider', '--project']);
+    if (unk) return { kind: 'reject', sub: 'resume', flag: unk };
+    return { kind: 'resume', target, ...(provider ? { provider } : {}), ...(project ? { project } : {}) };
   }
 
   if (subCmd === 'plan-review') {
@@ -637,6 +668,14 @@ export interface DispatchEngineerOpts {
   probeGhVersion?: () => Promise<GhVersionFloorVerdict>;
   /** Injected git runner (for tests). */
   git?: GitRunner;
+  /** Task 3 local-checkpoint seam; production uses checkpointComposerRun. */
+  checkpoint?: (request: { worktree: string; step: string; state: 'accepted' | 'draft'; notesFile?: string }) => Promise<{ slug: string; state: 'accepted' | 'draft'; committed: boolean; published: boolean; prUrl?: string }>;
+  /** Machine-owner seam for deterministic checkpoint tests; production resolves the local machine identity. */
+  resolveCheckpointOwner?: () => Promise<OwnerResolution>;
+  /** Resume boundary seam. */
+  resume?: (request: { target: string; provider?: string; project?: string }) => Promise<{ worktree: string; context: unknown }>;
+  /** Machine-owner seam for deterministic resume tests; production resolves the local machine identity. */
+  resolveResumeOwner?: () => Promise<OwnerResolution>;
   /** Task 16 handoff-publication seam; production derives this from current machine evidence. */
   handoffPublication?: HandoffDeps['publication'];
   /** Injected ensureRunning launch spy (for tests). */
@@ -914,6 +953,81 @@ export function initialSpecPublication(
 }
 
 /**
+ * Compose the checkpoint's guarded transport at the production boundary.  The
+ * checkpoint module deliberately knows only its retryable publication seam;
+ * this is where that seam is bound to the same guarded remote/GitHub paths as
+ * handoff.  In particular, a clean retry reaches this adapter too.
+ */
+function checkpointPublication(
+  target: { remote?: string; canonicalPath: string },
+  branch: string,
+  worktree: string,
+  gh: NonNullable<DispatchEngineerOpts['gh']>,
+  git: GitRunner,
+  events: ConductorEventEmitter,
+  onPublished: (input: { slug: string; branch: string; prUrl: string }) => Promise<void>,
+): NonNullable<CheckpointDeps['publication']> {
+  const guarded = initialSpecPublication(target, branch, worktree, gh, git, events);
+  const repository = guarded.repository;
+  const prNumber = (url: string): number => {
+    const match = /\/pull\/(\d+)$/.exec(url);
+    if (!match) throw new Error(`compose checkpoint: invalid draft PR URL ${url}`);
+    return Number(match[1]);
+  };
+  return {
+    defaultBase: 'main',
+    push: async (requestedBranch) => {
+      const result = await executeRemoteGit(
+        ['push', '-u', 'origin', `HEAD:refs/heads/${requestedBranch}`],
+        guarded.remote,
+      );
+      if (result.kind === 'executed') return;
+      if (result.kind === 'failed') throw new Error(result.error);
+      if (result.kind === 'refused') throw new Error(`guarded push refused: ${result.reason}`);
+      throw new Error('guarded push did not identify a remote write');
+    },
+    findOpenPullRequest: async (requestedBranch) => {
+      try {
+        const stdout = await runTrackerRepositoryRead(
+          gh, worktree, 'pull-request.read', repository, { kind: 'repository' },
+          ['pr', 'view', requestedBranch, '--repo', repository, '--json', 'url,body'],
+        );
+        const parsed = JSON.parse(stdout || '{}') as { url?: unknown; body?: unknown };
+        return typeof parsed.url === 'string'
+          ? { url: parsed.url, body: typeof parsed.body === 'string' ? parsed.body : '' }
+          : undefined;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (/no pull requests? found|could not resolve to a pull request|not found/i.test(message)) return undefined;
+        throw error;
+      }
+    },
+    createDraftPullRequest: async (input) => {
+      const result = await executeGithubOperation({
+        operation: 'pull-request.create', repository, resource: { kind: 'repository' },
+        context: { actor: 'composer-checkpoint' },
+        payload: { title: input.title, body: input.body, head: input.branch, base: input.base, draft: true },
+      }, guarded.operations);
+      if (result.kind === 'executed') {
+        const url = result.url ?? (result.target.kind === 'pull-request'
+          ? `https://github.com/${result.target.repository}/pull/${result.target.number}` : undefined);
+        if (url) return { url, body: input.body };
+      }
+      if (result.kind === 'refused') throw new Error(`guarded draft PR creation refused: ${result.reason}`);
+      throw new Error(result.kind === 'failed' ? result.error : 'guarded draft PR creation did not identify a pull request');
+    },
+    editPullRequest: async ({ url, body }) => {
+      const result = await executeGithubOperation({
+        operation: 'pull-request.edit', repository, resource: { kind: 'pull-request', number: prNumber(url) },
+        context: { actor: 'composer-checkpoint' }, payload: { body },
+      }, guarded.presentation?.(url) ?? guarded.operations);
+      if (result.kind !== 'executed') throw new Error(result.kind === 'failed' ? result.error : 'guarded PR refresh was refused');
+    },
+    published: onPublished,
+  };
+}
+
+/**
  * Per-subcommand `--help`/`-h` text (#524). Each entry states: what the subcommand
  * does, its flags (required vs optional), what durable state it mutates (or that
  * it is read-only), and where it sits in the idea→spec loop (claim → worktree →
@@ -951,6 +1065,16 @@ export const SUBCOMMAND_HELP = {
     'Flags: --project <name> (required), --branch <branch> (required), --worktree <path> (required), --source-ref <ref> (optional — intake write-back anchor).\n' +
     'Mutates: pushes the spec branch; opens the spec PR or marks an existing draft spec PR ready for review; uses a local-commit fallback when no remote is configured; nudges the daemon and updates ledger write-back state when --source-ref is present.\n' +
     'Loop fit: fourth step — claim → worktree → land → handoff → resolve/forget.',
+  checkpoint:
+    'compose checkpoint --worktree <path> --step <step> (--accept | --draft) [--notes-file <file>] — save one DECIDE boundary and publish it when guarded publication is available.\n' +
+    'Flags: --worktree, --step, and exactly one of --accept or --draft are required; --notes-file is optional.\n' +
+    'Mutates: commits .docs artifacts, the composer run record, and owner marker; guarded publication pushes the checkpoint and creates or refreshes a draft PR.\n' +
+    'Loop fit: durable per-step DECIDE checkpoint before publication.',
+  resume:
+    'compose resume <PR|spec/branch|owner/repo#issue> [--provider <id>] [--project <name>] — attach a saved Composer run.\n' +
+    'Flags: a run selector is required; --provider and --project are optional.\n' +
+    'Mutates: may fetch and attach the saved spec branch; it never accepts an unaccepted DECIDE step.\n' +
+    'Loop fit: continue a draft DECIDE run from its first unaccepted step.',
   'plan-review':
     'compose plan-review --project <name> --worktree <path> [--max-prompt-chars <positive-integer>] [--accept <finding-id> --reason <text> | --acknowledge --reason <text>] — run or disposition the bounded source-grounded plan review.\n' +
     'Flags: --project <name> and --worktree <path> are required; --source-ref is optional.\n' +
@@ -1014,6 +1138,7 @@ function printGuide(print: (s: string) => void): void {
       '  ai-conductor compose plan-review --project <n> --worktree <p> [--max-prompt-chars <positive-integer>] [--accept <id> --reason <text> | --acknowledge --reason <text>] — run or disposition bounded plan review\n' +
       '  ai-conductor compose land --project <n> --idea "<i>" --worktree <p> [--source-ref <ref>]    — commit spec artifacts in the worktree\n' +
       '  ai-conductor compose handoff --project <n> --branch <b> --worktree <p> [--source-ref <ref>] — open spec PR + remove worktree + nudge daemon\n' +
+      '  ai-conductor compose checkpoint --worktree <p> --step <step> (--accept | --draft) [--notes-file <f>] — locally save a DECIDE checkpoint\n' +
       '  ai-conductor compose resolve <ref> --pr-url <url> [--branch <b>]              — mark a claimed entry as delivered (recovery from write-back failure)\n' +
       '  ai-conductor compose unclaim <owner/repo#N>              — requeue a claimed ledger entry back to pending (single-idea recovery)\n' +
       '  ai-conductor compose requeue --stale [--older-than <dur>] — bulk-recover stranded claimed ledger entries (e.g. "24h")\n' +
@@ -1238,6 +1363,9 @@ export async function dispatchEngineer(
         return 1;
       }
       const executable = host ? resolveProviderExecutable(host.id) : undefined;
+      // One launcher invocation owns one correlation id.  Worktree/resume
+      // primitives inherit it and write their events to the target ledger.
+      const launchId = launchEnv.AI_CONDUCTOR_COMPOSE_LAUNCH_ID ?? crypto.randomUUID();
       const launchOne = opts.launchInteractive ?? ((idea?: string) => {
         const prompt = `${host!.invocationPrefix}${composerName}${idea?.trim() ? ` ${idea.trim()}` : ''}`;
         return (opts.spawnHost ?? spawnInteractiveHost)(
@@ -1249,7 +1377,7 @@ export async function dispatchEngineer(
               : launchEnv.CONDUCT_ENGINEER_PERMISSION_MODE ?? 'default',
           }),
           launchingDirectory,
-          { ...launchEnv, AI_CONDUCTOR_AUTHORING_PROVIDER: host!.id },
+          { ...launchEnv, AI_CONDUCTOR_AUTHORING_PROVIDER: host!.id, AI_CONDUCTOR_COMPOSE_LAUNCH_ID: launchId },
         );
       });
 
@@ -1496,6 +1624,20 @@ export async function dispatchEngineer(
           } finally {
             persister.stop();
           }
+        }
+        const launchId = (opts.env ?? process.env).AI_CONDUCTOR_COMPOSE_LAUNCH_ID;
+        if (launchId) {
+          const events = new ConductorEventEmitter();
+          const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
+          persister.start();
+          try {
+            const owner = await resolveDaemonOwner(await readMachineOwnerConfig(), gh, target.canonicalPath);
+            await events.emitOrThrow({
+              type: 'composer_run_started', slug: wt.slug, worktreePath: wt.worktreePath, launchId,
+              provider: (opts.env ?? process.env).AI_CONDUCTOR_AUTHORING_PROVIDER ?? DEFAULT_PROVIDER,
+              actor: owner.resolved ? owner.id : 'unresolved',
+            });
+          } finally { persister.stop(); }
         }
         print(JSON.stringify({ kind: 'worktree', ...wt }));
         return 0;
@@ -1754,7 +1896,7 @@ export async function dispatchEngineer(
           try {
             await events.emitOrThrow({
               type: 'land_dependency_decided',
-              repository: sourceRef.split('#', 1)[0],
+              repository: parseSourceRef(sourceRef)?.repo ?? sourceRef,
               sourceRef,
               proposals: proposals.kind === 'computed' ? proposals.proposals.map((proposal) => proposal.target) : [],
               accepted: decision.kind === 'proceed' ? decision.accepted : [],
@@ -1771,6 +1913,145 @@ export async function dispatchEngineer(
       }
       print(JSON.stringify(result));
       return 0;
+    }
+
+    // ── checkpoint ────────────────────────────────────────────────────────────
+    case 'checkpoint': {
+      const { worktree, step, state, notesFile } = dispatch;
+      try {
+        const result = opts.checkpoint
+          ? await opts.checkpoint({ worktree, step, state, ...(notesFile ? { notesFile } : {}) })
+          : await (async () => {
+            const reader = createRegistryReader(registryPath ? { registryPath } : {});
+            const projects = await reader.listProjects();
+            const project = projects.find((candidate) => worktree === candidate.path || worktree.startsWith(`${candidate.path}/.worktrees/`));
+            if (!project) throw new Error(`compose checkpoint: worktree "${worktree}" is not beneath a registered project; register the repository first with conduct register.`);
+            const target = await resolveTargetRepo(project.path, reader);
+            const events = new ConductorEventEmitter();
+            const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
+            persister.start();
+            try {
+              const branchResult = await git(['branch', '--show-current'], { cwd: worktree });
+              const branch = branchResult.stdout.trim();
+              const sourceRef = await readFile(join(worktree, '.docs', 'intake', `${branch.replace(/^spec\//, '')}.md`), 'utf8')
+                .then((marker) => /^Source-Ref:\s*(.+)$/m.exec(marker)?.[1]?.trim())
+                .catch(() => undefined);
+              const publication = target.remote && branch.startsWith('spec/')
+                ? checkpointPublication(target, branch, worktree, gh, git, events, async ({ branch: publishedBranch, prUrl }) => {
+                  if (!sourceRef) return;
+                  const ledger = createLedger(join(engineerDir ?? resolveEngineerDir({}), 'ledger.json'));
+                  const existing = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
+                  if (!existing) await ledger.record({ source: GITHUB_ISSUES_SOURCE, sourceRef });
+                  await ledger.transition(GITHUB_ISSUES_SOURCE, sourceRef, 'deciding', { branch: publishedBranch, draftPrUrl: prUrl });
+                })
+                : undefined;
+              return await checkpointComposerRun(
+                { worktree, step, state, ...(notesFile ? { notesFile } : {}) },
+                {
+                  git: async (args) => {
+                    const result = await git([...args], { cwd: worktree });
+                    return { exitCode: result.exitCode ?? 0, stdout: result.stdout, stderr: '' };
+                  },
+                  resolveOwner: opts.resolveCheckpointOwner ?? (async () => resolveDaemonOwner(await readMachineOwnerConfig(), gh, worktree)),
+                  emit: async (event) => events.emitOrThrow(event),
+                  provider: (opts.env ?? process.env).AI_CONDUCTOR_AUTHORING_PROVIDER,
+                  publication,
+                },
+              );
+            } finally {
+              persister.stop();
+            }
+          })();
+        print(JSON.stringify({ kind: 'checkpoint', ...result }));
+        return 0;
+      } catch (error: unknown) {
+        printErr(`engineer checkpoint: ${error instanceof Error ? error.message : String(error)}`);
+        return 1;
+      }
+    }
+
+    // ── resume ────────────────────────────────────────────────────────────────
+    case 'resume': {
+      try {
+        // Host capability and nesting are entry conditions, not post-attach
+        // cleanup.  Refusal here must leave the remote and worktree untouched.
+        const provider = (dispatch.provider ?? DEFAULT_PROVIDER) as BuiltInProviderId;
+        const host = requireProviderCapability(provider, 'interactiveLaunch');
+        const executable = resolveProviderExecutable(provider);
+        const nested = Boolean((opts.env ?? process.env).CLAUDECODE || (opts.env ?? process.env).CODEX_THREAD_ID);
+        if (nested) throw new Error('compose resume: already inside an interactive host; run $composer directly instead of nesting a host.');
+        if (!executable) throw new Error(`compose resume: provider ${provider} is not installed.`);
+        const launchId = (opts.env ?? process.env).AI_CONDUCTOR_COMPOSE_LAUNCH_ID ?? crypto.randomUUID();
+        const result = opts.resume
+          ? await opts.resume(dispatch)
+          : await (async () => {
+            const reader = createRegistryReader(registryPath ? { registryPath } : {});
+            const projects = await reader.listProjects();
+            const project = dispatch.project ? projects.find((item) => item.name === dispatch.project) : projects.length === 1 ? projects[0] : undefined;
+            if (!project) throw new Error(dispatch.project
+              ? `project "${dispatch.project}" is not registered; register it before resuming.`
+              : 'resume requires --project when more than one project is registered.');
+            const target = await resolveTargetRepo(project.path, reader);
+            const repository = dependencyRepository(project);
+            const resolveBranch = async (selector: ResumeTarget) => {
+              if (selector.kind === 'branch') return { branch: selector.branch };
+              if (selector.kind === 'pr') {
+                const stdout = await runTrackerRepositoryRead(
+                  gh, target.canonicalPath, 'pull-request.read', repository,
+                  { kind: 'pull-request', number: selector.number },
+                  ['pr', 'view', String(selector.number), '--repo', repository, '--json', 'headRefName,url'],
+                );
+                const parsed = JSON.parse(stdout || '{}') as { headRefName?: string; url?: string };
+                return parsed.headRefName?.startsWith('spec/') ? { branch: parsed.headRefName, draftPrUrl: parsed.url } : undefined;
+              }
+              const stdout = await runTrackerRepositoryRead(
+                gh, target.canonicalPath, 'pull-request.read', selector.repository,
+                { kind: 'repository' },
+                ['pr', 'list', '--repo', selector.repository, '--state', 'open', '--json', 'headRefName,url'],
+              );
+              const found = (JSON.parse(stdout || '[]') as Array<{ headRefName?: string; url?: string }>).find((item) => item.headRefName?.startsWith('spec/'));
+              return found?.headRefName ? { branch: found.headRefName, draftPrUrl: found.url } : undefined;
+            };
+            const owner = await (opts.resolveResumeOwner ?? (async () => resolveDaemonOwner(await readMachineOwnerConfig(), gh, target.canonicalPath)))();
+            const events = new ConductorEventEmitter();
+            const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
+            persister.start();
+            try {
+              const resumed = await resumeComposerRun(dispatch.target, {
+                resolveBranch,
+                fetch: target.remote ? async (branch) => {
+                  const fetched = await git(['fetch', 'origin', branch], { cwd: target.canonicalPath });
+                  if ((fetched.exitCode ?? 0) !== 0) throw new Error(`could not fetch origin ${branch}: ${fetched.stdout}`);
+                } : undefined,
+                attach: async (branch) => {
+                  const slug = branch.slice('spec/'.length);
+                  const result = await ensureWorktree({ root: target.canonicalPath, path: join(target.canonicalPath, '.worktrees', `engineer-${slug}`), branch, resolveBase: async () => 'HEAD' });
+                  return { worktree: result.path };
+                },
+                recordDeciding: async ({ branch, draftPrUrl }) => {
+                  // Resuming without an intake origin is still a valid local run.
+                  // Existing source entries are updated by checkpoint publication.
+                  void branch; void draftPrUrl;
+                },
+                emit: async (event) => events.emitOrThrow({
+                  type: 'composer_run_resumed', slug: event.slug, provider: dispatch.provider ?? DEFAULT_PROVIDER,
+                  actor: owner.resolved ? owner.id : 'unresolved', previousActor: event.previousActor,
+                  previousProvider: event.previousProvider, ownership: event.ownership,
+                  worktreePath: event.worktreePath, launchId,
+                }),
+              });
+              const composerName = await resolveSkillName(opts.skillNameRoot ?? null, 'composer');
+              const prompt = `${host.invocationPrefix}${composerName} --resume ${resumed.worktree} --step ${resumed.context.nextStep}`;
+              await (opts.spawnHost ?? spawnInteractiveHost)(executable, host.interactiveLaunch.argv({ prompt, permissionMode: 'default' }), resumed.worktree, { ...(opts.env ?? process.env), AI_CONDUCTOR_AUTHORING_PROVIDER: provider, AI_CONDUCTOR_COMPOSE_LAUNCH_ID: launchId });
+              return resumed;
+            } finally { persister.stop(); }
+          })();
+        print(JSON.stringify({ kind: 'resume', ...result }));
+        return 0;
+      } catch (error) {
+        printErr(`engineer resume: ${error instanceof Error ? error.message : String(error)}`);
+        return 1;
+      }
     }
 
     // ── handoff ───────────────────────────────────────────────────────────────
@@ -1810,6 +2091,16 @@ export async function dispatchEngineer(
             const r = await gh(args, { cwd });
             return { stdout: r.stdout, stderr: '' };
           },
+          findExistingSpecPr: () => findExistingSpecPullRequest(
+            async (args, runnerOpts) => {
+              const cwd = runnerOpts?.cwd ?? worktree;
+              const r = await gh(args, { cwd });
+              return { stdout: r.stdout, stderr: '' };
+            },
+            publication!.repository,
+            branch,
+            worktree,
+          ),
           // gh runs in the per-idea worktree (checked out on spec/<slug>) — FR-4.
           worktreePath: worktree,
           ledgerOpts: engineerDir ? { engineerDir } : {},
@@ -1867,16 +2158,20 @@ export async function dispatchEngineer(
         return 1;
       }
 
+      const alreadyDelivered = handoffResult.kind === 'pr-opened' && handoffResult.alreadyDelivered === true;
+
       // The PR opened (or was skipped on no-remote) — the cycle succeeded, so remove
       // the per-idea worktree (FR-5). The spec/<slug> branch + commit persist; a
       // removal failure is REPORTED, never swallowed (FR-5 negative).
-      try {
-        await removeEngineerWorktree(target.canonicalPath, worktree);
-      } catch (err: unknown) {
-        printErr(
-          `⚠ Spec delivered, but the per-idea worktree "${worktree}" could not be removed: ` +
-            `${err instanceof Error ? err.message : String(err)}. Remove it manually.`,
-        );
+      if (!alreadyDelivered) {
+        try {
+          await removeEngineerWorktree(target.canonicalPath, worktree);
+        } catch (err: unknown) {
+          printErr(
+            `⚠ Spec delivered, but the per-idea worktree "${worktree}" could not be removed: ` +
+              `${err instanceof Error ? err.message : String(err)}. Remove it manually.`,
+          );
+        }
       }
 
       if (handoffResult.kind === 'pr-opened') {
@@ -1884,7 +2179,7 @@ export async function dispatchEngineer(
         // apply `engineer:handled`, and advance the ledger to `done`. Advisory —
         // a gh failure never reverts a delivered PR. Only on a PR (not local-commit,
         // which has no URL to report).
-        if (sourceRef) {
+        if (sourceRef && !alreadyDelivered) {
           const engDir = engineerDir ?? resolveEngineerDir({});
           const { ledger, adapter } = buildIntake({
             engineerDir: engDir, registryPath, gh, printErr, resolveActor: opts.intakeResolveActor, events: opts.events,
@@ -1938,21 +2233,23 @@ export async function dispatchEngineer(
       // host throws TmuxNotInstalledError here. Swallowing it would author the spec
       // while launching no daemon (specs pile up unbuilt with no signal). Surface
       // the reason on stderr; the handoff still succeeds.
-      try {
-        const launchFn = opts.ensureRunningLaunch;
-        if (launchFn) {
-          await Promise.resolve(launchFn(target.canonicalPath));
-        } else {
-          await ensureRunning(target.canonicalPath, {
-            ...opts.ensureRunningOpts,
-            onReclaim: (message) => printErr(message),
-          });
+      if (!alreadyDelivered) {
+        try {
+          const launchFn = opts.ensureRunningLaunch;
+          if (launchFn) {
+            await Promise.resolve(launchFn(target.canonicalPath));
+          } else {
+            await ensureRunning(target.canonicalPath, {
+              ...opts.ensureRunningOpts,
+              onReclaim: (message) => printErr(message),
+            });
+          }
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          printErr(
+            `⚠ Spec authored, but the build daemon was not started for "${target.name}": ${reason}`,
+          );
         }
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err);
-        printErr(
-          `⚠ Spec authored, but the build daemon was not started for "${target.name}": ${reason}`,
-        );
       }
 
       return 0;
@@ -2009,6 +2306,21 @@ export async function dispatchEngineer(
           gh,
           logger: { info: (msg) => printErr(msg) },
           config: claimConfig,
+          findCrossReferencedDraft: async (sourceRef) => {
+            const parsedRef = parseSourceRef(sourceRef);
+            const repository = parsedRef && splitOwnerRepo(parsedRef.repo);
+            if (!parsedRef || !repository) return undefined;
+            // GitHub's crossReferencedBy connection is the source of truth: PR
+            // title/body text is neither complete nor safe to parse as routing state.
+            const query = 'query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){timelineItems(first:100,itemTypes:[CROSS_REFERENCED_EVENT]){nodes{... on CrossReferencedEvent{source{... on PullRequest{url headRefName state isDraft}}}}}}}}';
+            const stdout = await runTrackerGraphqlRead(gh, process.cwd(), {
+              query,
+              variables: { owner: repository.owner, repo: repository.repo, number: Number(parsedRef.issue) },
+            });
+            const nodes = (JSON.parse(stdout || '{}') as any).data?.repository?.issue?.timelineItems?.nodes ?? [];
+            const pr = nodes.map((node: any) => node?.source).find((value: any) => value?.state === 'OPEN' && value?.isDraft === true && typeof value?.headRefName === 'string' && value.headRefName.startsWith('spec/'));
+            return pr ? { branch: pr.headRefName, url: pr.url } : undefined;
+          },
         });
 
         // Fresh resolver per claim call — createBlockerResolver()'s memo is scoped

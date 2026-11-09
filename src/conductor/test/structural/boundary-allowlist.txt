@@ -132,6 +132,8 @@ engine/engineer/authored-ledger.ts -> filesystem
 engine/engineer/brain-liveness.ts -> filesystem
 engine/engineer/brain-liveness.ts -> process
 engine/engineer/brain-liveness.ts -> tmux
+engine/engineer/checkpoint.ts -> clock
+engine/engineer/checkpoint.ts -> filesystem
 engine/engineer/coherence-validator.ts -> filesystem
 engine/engineer/intake-marker.ts -> filesystem
 engine/engineer/intake/delivery-guard.ts -> clock
@@ -150,6 +152,7 @@ engine/engineer/plan-review-gate.ts -> filesystem
 engine/engineer/quarantine.ts -> clock
 engine/engineer/quarantine.ts -> filesystem
 engine/engineer/release-metadata-inject.ts -> filesystem
+engine/engineer/resume.ts -> filesystem
 engine/engineer/spec-branch.ts -> process
 engine/engineer/spec-change-set.ts -> process
 engine/engineer/target.ts -> filesystem
