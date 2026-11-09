@@ -45,7 +45,7 @@ import { parseChildId, pipelinePathFor } from '../../../src/engine/child-context
 import { Conductor } from '../../../src/engine/conductor.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
-import { admitRound } from '../../../src/engine/routing/round-admission.js';
+import { admitRound, reconcileRounds } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord, readRepairMarker, readRouteRecord, transitionHost, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
 import { routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { parseRoundId } from '../../../src/engine/routing/route-types.js';
@@ -775,5 +775,102 @@ describe('routed round conductor resume', () => {
     expect(record).toMatchObject({ kind: 'record', record: { hosts: { 1: 'restacked', 2: 'admitted' } } });
     expect(marker).toMatchObject({ kind: 'marker', marker: { host: 2, roundId } });
     expect(starts).toContainEqual(expect.objectContaining({ child: 2 }));
+  });
+
+  // Covers: task:8, S3.1
+  it('closes r2 before admitting the NC-4 refusal-rework audit round r3', async () => {
+    const subject = await fixture();
+    const first = parseChildId(1)!;
+    const second = parseChildId(2)!;
+    const r2 = parseRoundId('r2')!;
+    const r3 = parseRoundId('r3')!;
+    const prior = await createRouteRecord(subject.repo, 'demo', {
+      roundId: r2, sealedAuthored: 1, kind: 'audit',
+      items: [],
+      allocation: {
+        [first]: { remTaskIds: [], blockBodies: [] },
+        [second]: { remTaskIds: [], blockBodies: [] },
+      },
+    });
+    if (prior.kind !== 'created') throw new Error(`could not create r2: ${prior.kind}`);
+    // Both hosts have completed the interrupted round before the recorded
+    // refusal is allowed to create its own audit route.
+    const storedPrior = await readRouteRecord(subject.repo, 'demo', r2);
+    if (storedPrior.kind !== 'record') throw new Error('could not read r2');
+    await writeRoutingTransaction(subject.repo, 'demo', [{
+      kind: 'update-record', previous: storedPrior,
+      record: { ...prior.record, phase: 'open', hosts: { [first]: 'restacked', [second]: 'restacked' } },
+    }]);
+    await expect(reconcileRounds(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'leaf-returned', roundId: 'r2' });
+    await expect(readRouteRecord(subject.repo, 'demo', r2)).resolves.toMatchObject({ kind: 'record', record: { phase: 'closed', hosts: { 1: 'restacked', 2: 'restacked' } } });
+
+    const refusal = await createRouteRecord(subject.repo, 'demo', {
+      roundId: r3, sealedAuthored: 1, kind: 'audit',
+      items: [{ findingId: 'NC-4', kind: 'audit', owner: first, host: first, reason: 'refusal-rework', fallback: [] }],
+      allocation: { [first]: { remTaskIds: ['rem-prd-audit-NC-4'], blockBodies: ['### Task rem-prd-audit-NC-4\\n'] } },
+    });
+    if (refusal.kind !== 'created') throw new Error(`could not create r3: ${refusal.kind}`);
+    await expect(admitRound(subject.repo, 'demo', refusal.record, first)).resolves.toMatchObject({ kind: 'admitted' });
+    await expect(readRouteRecord(subject.repo, 'demo', r3)).resolves.toMatchObject({
+      kind: 'record',
+      record: { kind: 'audit', items: [expect.objectContaining({ findingId: 'NC-4', reason: 'refusal-rework' })], allocation: { 1: { remTaskIds: ['rem-prd-audit-NC-4'] } } },
+    });
+    await expect(access(join(subject.repo, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  // Covers: task:8, S3.3
+  it('resumes a cleared NC-4 over-scope halt through routed repair progress without re-requesting a decision', async () => {
+    const subject = await fixture();
+    const host = parseChildId(1)!;
+    const roundId = parseRoundId('r2')!;
+    const statePath = join(subject.repo, '.pipeline', 'conduct-state.json');
+    const state: ConductState = {
+      feature_desc: 'demo', complexity_tier: 'M',
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+    };
+    await writeState(statePath, state);
+    await mkdir(join(subject.repo, '.pipeline'), { recursive: true });
+    // This is the durable output of `halt clear`: all NC-4 decisions have
+    // already been recorded, so resume must make routing progress rather than
+    // render another `revise-decision` request.
+    await writeFile(join(subject.repo, '.pipeline', 'HALT.cleared'), [
+      '```json over-scope-decisions',
+      JSON.stringify([{ criterion: 'NC-4', decision: 'refuse', rationale: 'Remove the refused behavior.' }]),
+      '```',
+    ].join('\n'));
+    const created = await createRouteRecord(subject.repo, 'demo', {
+      roundId, sealedAuthored: 1, kind: 'audit',
+      items: [{ findingId: 'NC-4', kind: 'audit', owner: host, host, reason: 'refusal-rework', fallback: [] }],
+      allocation: { [host]: { remTaskIds: ['rem-prd-audit-NC-4'], blockBodies: ['### Task rem-prd-audit-NC-4\\n'] } },
+    });
+    if (created.kind !== 'created') throw new Error(`could not create r2: ${created.kind}`);
+    await expect(admitRound(subject.repo, 'demo', created.record, host)).resolves.toMatchObject({ kind: 'admitted' });
+    const admitted = await readRouteRecord(subject.repo, 'demo', roundId);
+    if (admitted.kind !== 'record') throw new Error('r2 was not admitted');
+    const repairing = transitionHost(admitted, host, 'repairing', { credit: true });
+    if (repairing.kind !== 'updated') throw new Error('could not stage r2 host');
+    await writeRoutingTransaction(subject.repo, 'demo', [{ kind: 'update-record', previous: admitted, record: repairing.record }]);
+
+    const events = new ConductorEventEmitter();
+    const progress: unknown[] = [];
+    events.on('routed_repair_phase', (event) => progress.push(event));
+    mocks.routedExit = async (input) => {
+      const route = await readRouteRecord((input as { worktree: string }).worktree, 'demo', roundId);
+      if (route.kind !== 'record') throw new Error('r2 missing at exit');
+      // The event is the observable routing-progress seam; the production
+      // exit normally persists this occurrence with its transaction.
+      await events.emit({ type: 'routed_repair_phase', roundId, host, phase: 'restacked', credit: false });
+      return { kind: 'continued', next: { kind: 'none' } };
+    };
+    const conductor = new Conductor({
+      projectRoot: subject.repo, stateFilePath: statePath, featureSlug: 'demo', resume: true, verifyArtifacts: false, events,
+      stepRunner: { run: vi.fn() },
+      childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'repair-pending' as const, child: host, position: host, isLeaf: true, branch: 'feat/daemon-demo', repairChildren: [host], routedRepair: { child: host, roundId } }) },
+    }) as unknown as { activeRegionChild: typeof host; continueRoutedHostExit: (candidate: ConductState, indexOf: (step: StepName) => number, requireSatisfiedRegion: boolean) => Promise<unknown> };
+    conductor.activeRegionChild = host;
+    await expect(conductor.continueRoutedHostExit(state, (step) => ALL_STEPS.findIndex((candidate) => candidate.name === step), true)).resolves.toBeDefined();
+
+    expect(progress).toEqual([expect.objectContaining({ type: 'routed_repair_phase', roundId: 'r2', host, phase: 'restacked' })]);
+    await expect(access(join(subject.repo, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
