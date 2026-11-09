@@ -217,48 +217,45 @@ describe('routed-round admission (real local Git)', () => {
   });
 
   // Covers: task:3
-  it.each(['unset', 'false'] as const)(
-    'never gives an operator or revalidate round leaf execution when folding is %s',
-    async (_foldRoutedFixes) => {
-      const operator = await operatorFixture();
-      try {
-        await expect(openOperatorRound({
-          worktree: operator.repo,
-          slug: 'demo',
-          roundId,
-          host: c1,
-          reason: 'land reviewer edits',
-          operator: 'operator@example.test',
-          carried: [],
-          emitter: new ConductorEventEmitter(),
-          git: operator.git,
-        })).resolves.toMatchObject({ kind: 'opened' });
-        const operatorRecord = await readRouteRecord(operator.repo, 'demo', roundId);
-        const operatorMarker = await readRepairMarker(operator.repo, 'demo');
-        if (operatorRecord.kind !== 'record' || operatorMarker.kind !== 'marker') throw new Error('operator admission was not durable');
-        expect(operatorRecord.record.kind).toBe('operator');
-        expect(operatorRecord.record).not.toHaveProperty('execution');
-        expect(operatorMarker.marker).not.toHaveProperty('execution');
-      } finally { await rm(operator.repo, { recursive: true, force: true }); }
+  it('keeps operator and revalidate rounds on owner execution', async () => {
+    const operator = await operatorFixture();
+    try {
+      await expect(openOperatorRound({
+        worktree: operator.repo,
+        slug: 'demo',
+        roundId,
+        host: c1,
+        reason: 'land reviewer edits',
+        operator: 'operator@example.test',
+        carried: [],
+        emitter: new ConductorEventEmitter(),
+        git: operator.git,
+      })).resolves.toMatchObject({ kind: 'opened' });
+      const operatorRecord = await readRouteRecord(operator.repo, 'demo', roundId);
+      const operatorMarker = await readRepairMarker(operator.repo, 'demo');
+      if (operatorRecord.kind !== 'record' || operatorMarker.kind !== 'marker') throw new Error('operator admission was not durable');
+      expect(operatorRecord.record.kind).toBe('operator');
+      expect(operatorRecord.record).not.toHaveProperty('execution');
+      expect(operatorMarker.marker).not.toHaveProperty('execution');
+    } finally { await rm(operator.repo, { recursive: true, force: true }); }
 
-      const revalidate = await fixture();
-      try {
-        await writeQueue(revalidate);
-        await expect(admitQueuedRevalidation({
-          worktree: revalidate.repo,
-          slug: 'demo',
-          reconciled: { kind: 'quiescent' },
-          git: revalidate.git,
-        })).resolves.toMatchObject({ kind: 'admitted', host: c1 });
-        const revalidateRecord = await readRouteRecord(revalidate.repo, 'demo', roundId);
-        const revalidateMarker = await readRepairMarker(revalidate.repo, 'demo');
-        if (revalidateRecord.kind !== 'record' || revalidateMarker.kind !== 'marker') throw new Error('revalidate admission was not durable');
-        expect(revalidateRecord.record.kind).toBe('revalidate');
-        expect(revalidateRecord.record).not.toHaveProperty('execution');
-        expect(revalidateMarker.marker).not.toHaveProperty('execution');
-      } finally { await rm(revalidate.repo, { recursive: true, force: true }); }
-    },
-  );
+    const revalidate = await fixture();
+    try {
+      await writeQueue(revalidate);
+      await expect(admitQueuedRevalidation({
+        worktree: revalidate.repo,
+        slug: 'demo',
+        reconciled: { kind: 'quiescent' },
+        git: revalidate.git,
+      })).resolves.toMatchObject({ kind: 'admitted', host: c1 });
+      const revalidateRecord = await readRouteRecord(revalidate.repo, 'demo', roundId);
+      const revalidateMarker = await readRepairMarker(revalidate.repo, 'demo');
+      if (revalidateRecord.kind !== 'record' || revalidateMarker.kind !== 'marker') throw new Error('revalidate admission was not durable');
+      expect(revalidateRecord.record.kind).toBe('revalidate');
+      expect(revalidateRecord.record).not.toHaveProperty('execution');
+      expect(revalidateMarker.marker).not.toHaveProperty('execution');
+    } finally { await rm(revalidate.repo, { recursive: true, force: true }); }
+  });
 
   // Covers: task:rem-prd-audit-rem-prd-audit-rem-vg6-s6-1
   it('reports quiescent when closed route history has neither a marker nor queued work', async () => {
