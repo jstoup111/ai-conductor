@@ -269,7 +269,7 @@ async function materializeHunk(
       : await git(['rm', '--cached', '--ignore-unmatch', '--', path], { env });
     if (materialized.exitCode !== 0) throw new Error(`cannot materialize fold whole-file path: ${materialized.stderr}`);
   } else {
-    const applied = await git(['apply', '--cached', '--binary', '--whitespace=nowarn'], { env, input: patch });
+    const applied = await git(['apply', '--cached', '--binary', '--unidiff-zero', '--whitespace=nowarn'], { env, input: patch });
     if (applied.exitCode !== 0) throw new Error(`cannot materialize fold hunk: ${applied.stderr}`);
   }
   const tree = await git(['write-tree'], { env });
