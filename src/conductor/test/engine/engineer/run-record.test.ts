@@ -9,6 +9,7 @@ import {
   recordDraft,
   serializeRunRecord,
   stepForArtifactPath,
+  summarizeRun,
   type RunRecord,
 } from '../../../src/engine/engineer/run-record.js';
 
@@ -139,6 +140,11 @@ describe('composer run records', () => {
     const classification = classifyArtifacts(reaccepted, [editedStories, plan]);
 
     expect(classification.needsReconfirm).toEqual(['plan']);
+    expect(summarizeRun(reaccepted)).toMatchObject({
+      nextStep: 'plan',
+      drafts: ['plan'],
+    });
+    expect(summarizeRun(reaccepted).acceptedSteps).not.toContainEqual(expect.objectContaining({ step: 'plan' }));
     expect(parseRunRecord(serializeRunRecord(reaccepted))).toEqual(reaccepted);
   });
 

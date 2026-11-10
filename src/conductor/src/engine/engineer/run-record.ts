@@ -101,6 +101,7 @@ export function summarizeRun(record: RunRecord, currentDigests?: readonly Artifa
   const invalidSteps = new Set<RunStepId>([
     ...(classification?.draft.flatMap((artifact) => artifact.step === undefined ? [] : [artifact.step]) ?? []),
     ...(classification?.needsReconfirm ?? []),
+    ...record.needsReconfirm,
   ]);
   const acceptedSteps = RUN_STEP_ORDER.flatMap((step) => {
     const value = record.steps[step];

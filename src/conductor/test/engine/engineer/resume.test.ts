@@ -59,6 +59,31 @@ describe('Composer resume', () => {
     expect(contextForRun(landed).nextStep).toBe('complexity');
   });
 
+  it('does not expose a needs-reconfirm plan as accepted in resume context', () => {
+    const { architecture_diagram: _draftArchitectureDiagram, ...stepsWithoutDraft } = record.steps;
+    const planNeedsReconfirm: RunRecord = {
+      ...record,
+      steps: {
+        ...stepsWithoutDraft,
+        stories: { state: 'accepted', actor: 'A', provider: 'codex', at: '2026-11-08T00:02:00.000Z', artifacts: [] },
+        plan: {
+          state: 'accepted',
+          actor: 'A',
+          provider: 'codex',
+          at: '2026-11-08T00:03:00.000Z',
+          artifacts: [{ path: '.docs/plans/demo.md', sha256: 'b'.repeat(64) }],
+        },
+      },
+      needsReconfirm: ['plan'],
+    };
+
+    const context = contextForRun(planNeedsReconfirm);
+
+    expect(context.nextStep).toBe('plan');
+    expect(context.acceptedArtifacts).not.toContain('.docs/plans/demo.md');
+    expect(context.drafts).toContain('plan');
+  });
+
   it('Covers: Task 12 leaves worktrees untouched for unknown targets and failed fetches, while no-remote attach skips fetch', async () => {
     const attach = vi.fn(async () => ({ worktree: '/should-not-exist' }));
     await expect(resumeComposerRun('not a target', { resolveBranch: async () => undefined, attach, readRunRecord: async () => JSON.stringify(record) })).rejects.toThrow(/searched PR, spec branch, and intake reference/);
