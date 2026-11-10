@@ -138,6 +138,25 @@ function addOutbox(record: RouteRecord): RouteRecord {
 }
 
 describe('routed exit (real local Git)', () => {
+  // Covers: task:10
+  it('settles a leaf-executed leaf host without a placement entry', async () => {
+    const subject = await fixture(false);
+    await replaceRoute(subject, (record) => ({ ...record, execution: 'leaf' }));
+    await subject.git(['update-ref', '-d', closureRefFor('demo', host)]);
+
+    await expect(requestRoutedExit({
+      worktree: subject.repo,
+      slug: 'demo',
+      roundId,
+      host,
+      git: subject.gitRunner,
+    })).resolves.toEqual({ kind: 'no-commit-done' });
+    const stored = await readRouteRecord(subject.repo, 'demo', roundId);
+    expect(stored).toMatchObject({ kind: 'record', record: { hosts: { 1: 'done' } } });
+    if (stored.kind !== 'record') throw new Error('route record disappeared');
+    expect(Object.hasOwn(stored.record, 'placements')).toBe(false);
+  });
+
   // Covers: task:3
   it('settles an admitted audit host when later hosts are pending', async () => {
     const subject = await fixture(false);

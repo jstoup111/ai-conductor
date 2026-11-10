@@ -130,10 +130,36 @@ async function routedFixture(options: { readonly failRoundStamp?: boolean; reado
 describe('prepare-commit-msg round stamp (real local Git)', () => {
   it('rejects a leaf-executed commit when round stamping is unavailable', async () => {
     const root = await routedFixture({ failRoundStamp: true });
+    await writeRepairMarker(root, 1, 'r1', 'leaf');
+    await git(root, ['checkout', '-q', 'feat/daemon-demo']);
 
     await expect(commit(root, 'member.txt', 'feat: permitted child task')).rejects.toThrow(
       'leaf routed commit is missing its Round:/Owner: trailers',
     );
+  });
+
+  it('rejects a leaf-executed commit when its marker blob is unreadable', async () => {
+    const root = await routedFixture();
+    await writeRepairMarker(root, 1, 'r1', 'leaf');
+    const malformedMarker = join(root, '.pipeline', 'malformed-marker.json');
+    await writeFile(malformedMarker, '{not-json');
+    const unreadable = await git(root, ['hash-object', '-w', malformedMarker]);
+    await git(root, ['update-ref', repairMarkerRefFor('demo'), unreadable]);
+    await git(root, ['checkout', '-q', 'feat/daemon-demo']);
+    const before = await git(root, ['rev-parse', 'HEAD']);
+    const message = join(root, '.pipeline', 'commit-message');
+    await writeFile(message, 'feat: leaf repair\n');
+
+    await expect(execFile('node', [engineIndex, 'round-stamp', '--verify', message], { cwd: root }))
+      .rejects.toMatchObject({ code: 1 });
+
+    await expect(commit(root, 'unreadable-marker.txt', 'feat: leaf repair')).rejects.toThrow(/marker is unreadable|missing its Round/);
+    await expect(git(root, ['rev-parse', 'HEAD'])).resolves.toBe(before);
+  });
+
+  it('permits an unrelated commit when no repair marker exists', async () => {
+    const root = await routedFixture();
+    await expect(commit(root, 'no-marker.txt', 'feat: no marker')).resolves.not.toMatch(/^Round:/m);
   });
 
   it('adds one Task and Round trailer for the marker host and refuses a non-host commit', async () => {
@@ -191,10 +217,8 @@ describe('prepare-commit-msg round stamp (real local Git)', () => {
     await expect(git(root, ['log', '-1', '--format=%B'])).resolves.toMatch(/^Round: r1$/m);
   });
 
-  it('leaves the message unchanged without a marker and preserves N=1 without routing-ref reads', async () => {
+  it('preserves N=1 without routing-ref reads', async () => {
     const root = await routedFixture();
-    await expect(commit(root, 'no-marker.txt', 'feat: no marker')).resolves.not.toMatch(/^Round:/m);
-
     const n1 = await mkdtemp(join(tmpdir(), 'round-stamp-n1-'));
     roots.push(n1);
     await git(n1, ['init', '-q', '-b', 'main']);
