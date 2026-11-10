@@ -167,6 +167,7 @@ describe('appendRestackSection', () => {
       dispatches: 5, retries: 0, halts: 0, unmetered: { count: 0, durationMs: 0 },
     }), { state: 'unavailable' });
     const attempt = (costUsd: number, restack?: { opId: string; cause: 'fold' | 'feature-repair' | 'base-refresh'; roundId?: string }) => ({
+      ts: 0,
       type: 'provider_attempt' as const, step: 'rebase' as const, provider: 'test', outcome: 'success' as const,
       invoked: true, tokenUsage: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, costUsd },
       ...(restack === undefined ? {} : { restack: restack as never }),

@@ -8,8 +8,8 @@ import type { TimingRollup } from './timing-rollup.js';
 import { upsertBuildReviewAcceptedRisk } from './build-review-accepted-risk.js';
 import type { BuildReviewDispositionRecord } from './build-review-dispositions.js';
 import type { RemediationCaseStoreReadResult } from './remediation-case-store.js';
-import type { BuildReviewMetrics } from './build-tail-rollup.js';
-import type { ConductorEvent } from '../types/events.js';
+import type { BuildReviewMetrics, BuildTailEvent } from './build-tail-rollup.js';
+import type { ProviderAttemptEvent } from '../types/events.js';
 
 /**
  * Result of hashing a plan/stories pair into a canonical spec identity.
@@ -288,7 +288,7 @@ export function appendTimingSection(
  */
 export function appendRestackSection(
   existingContent: string,
-  events: readonly ConductorEvent[],
+  events: readonly BuildTailEvent[],
   stacked: boolean,
 ): string {
   if (!stacked) return existingContent;
@@ -300,10 +300,11 @@ export function appendRestackSection(
     row.costUsd += costUsd;
     rows.set(label, row);
   };
-  for (const event of events) {
-    if (event.type !== 'provider_attempt' || event.step !== 'rebase') continue;
+  for (const rawEvent of events) {
+    if (rawEvent.type !== 'provider_attempt' || rawEvent.step !== 'rebase') continue;
+    const event = rawEvent as Pick<ProviderAttemptEvent, 'tokenUsage' | 'restack'>;
     const costUsd = event.tokenUsage?.costUsd;
-    if (!Number.isFinite(costUsd)) continue;
+    if (typeof costUsd !== 'number' || !Number.isFinite(costUsd)) continue;
     const restack = event.restack;
     const label = restack === undefined
       ? 'unattributed'

@@ -974,7 +974,7 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
         const prior = planned.ranges[index - 1];
         return [{
           child: range.child,
-          position: Number(range.child),
+          position: range.child,
           closureSha: move.newSha,
           gates: [...CHILD_REGION_STEPS],
           replay: { oldParent: range.oldParent, newParent: prior === undefined ? base : staged.get(prior.child) ?? base },
