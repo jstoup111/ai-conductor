@@ -21,6 +21,7 @@ const COMMIT_CALL_ALLOWLIST: Record<string, string> = {
   'engine/shipment-evidence-cli.ts': 'shipment-repair site selects the guarded helper',
   'engine/shipped-record-cli.ts': 'shipped-record site selects the guarded helper',
   'engine/docs-prune.ts': 'operator-run temporary docs-prune worktree follows the repair-publication commit pattern',
+  'engine/engineer-cli.ts': 'Composer resume commits a WIP backup or approved take-over only in its isolated spec worktree',
   'engine/engineer/checkpoint.ts': 'Composer checkpoints commit durable DECIDE state on their isolated spec worktree',
   'engine/engineer/land-spec.ts': 'spec worktree, never a feature worktree',
 };
