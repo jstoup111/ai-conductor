@@ -4747,6 +4747,7 @@ export class Conductor {
       /** Raw rows remain durable routing evidence for a consolidated join. */
       readonly consolidatedManualTestFailRows?: readonly string[];
     },
+    attemptRunId = this.currentRunId,
   ): Promise<
     | { kind: 'route'; target: StepName; hint: string; evidence: string }
     | {
@@ -4795,7 +4796,7 @@ export class Conductor {
       // typed-verdict migration; normal lifecycle handling will request a
       // current audit instead.
       const current = await readCurrentPrdAuditVerdict(this.projectRoot, {
-        attemptRunId: this.currentRunId,
+        attemptRunId,
         config: this.config,
         git: this.prdAuditGit(),
       });
@@ -4816,7 +4817,7 @@ export class Conductor {
         return { kind: 'halt', haltClass: 'mechanical', detail };
       }
       prdAuditVerdict = current.value;
-      const overScopeRoute = await this.routeCurrentPrdAuditOverScope(state.feature_desc, state, this.currentRunId);
+      const overScopeRoute = await this.routeCurrentPrdAuditOverScope(state.feature_desc, state, attemptRunId);
       prdAuditOverScopeRoute = overScopeRoute;
       // Accepted-only scope closes the round. The scope router inspects only
       // OVER_SCOPE rows, so a recorded acceptance may coexist with FIXABLE or
@@ -4825,7 +4826,7 @@ export class Conductor {
       if (
         overScopeRoute.kind === 'record' &&
         remediationEvidenceSources.every((provenance) => provenance.gate === 'prd_audit') &&
-        !(await this.prdAuditHasNonScopeBlockingFindings(this.currentRunId))
+        !(await this.prdAuditHasNonScopeBlockingFindings(attemptRunId))
       ) {
         return { kind: 'none', reason: 'the recorded prd-audit scope acceptance closes the only blocking finding' };
       }
@@ -4863,7 +4864,7 @@ export class Conductor {
         source: remediationProjectionSource(hintSource.source),
         activePlanPath: (await this.getActivePlanPath()) ?? undefined,
         featureDesc: state.feature_desc,
-        attemptRunId: this.currentRunId,
+        attemptRunId,
         config: this.config,
         git: this.prdAuditGit(),
         includedGates: remediationEvidenceSources.map((evidence) => evidence.gate),
@@ -14134,6 +14135,7 @@ export class Conductor {
                           source: 'prd-audit',
                           evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }],
                         },
+                        dispatchRunId,
                       );
                     } catch {
                       // Append-side mechanical faults (e.g. a decision id that
