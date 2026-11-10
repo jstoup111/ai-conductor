@@ -105,6 +105,7 @@ import {
   DEFAULT_PROVIDER,
   requireProviderCapability,
   resolveProviderExecutable,
+  supportsProviderCapability,
   type BuiltInProviderId,
 } from '../execution/provider-catalog.js';
 import { resolveComposeLaunchHost } from './compose-launch-host.js';
@@ -1536,7 +1537,7 @@ export async function dispatchEngineer(
                 const activeProvider = (record.lastCheckpoint?.provider ?? touched.provider) as BuiltInProviderId;
                 print(`Composer run ${touched.slug}: current step ${summary.nextStep}; active provider ${activeProvider}. Choices: continue, switch, hand off.`);
                 const boundary = opts.chooseComposerBoundary
-                  ? await opts.chooseComposerBoundary({ slug: touched.slug, step: summary.nextStep, provider: activeProvider, choices: ['continue', 'switch', 'handoff'], providers: BUILT_IN_PROVIDERS.filter((provider) => 'interactiveLaunch' in provider.capabilities && provider.capabilities.interactiveLaunch).map((provider) => provider.id) })
+                  ? await opts.chooseComposerBoundary({ slug: touched.slug, step: summary.nextStep, provider: activeProvider, choices: ['continue', 'switch', 'handoff'], providers: BUILT_IN_PROVIDERS.filter((provider) => supportsProviderCapability(provider, 'interactiveLaunch')).map((provider) => provider.id) })
                   : { choice: (opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY)))() ? 'continue' as const : 'handoff' as const };
                 const action = resolveBoundaryProvider({ choice: boundary.choice, activeProvider, switchTo: boundary.switchTo, hasRemote: Boolean(target.remote) });
                 if (action.action === 'handoff') {
