@@ -81,7 +81,7 @@ describe('interactive read-only review capability config warnings', () => {
 
   it('probes after config warnings but before a step runner or Conductor is created, then threads the result', async () => {
     const source = await readFile(new URL('../src/index.ts', import.meta.url), 'utf8');
-    const probeAt = source.indexOf('probeInteractiveReadOnlyReviewCapabilities({ config, projectRoot, events })');
+    const probeAt = source.indexOf('const readOnlyReviewCapabilities = await probeInteractiveReadOnlyReviewCapabilities');
     const runnerAt = source.indexOf('new DefaultStepRunner(');
     const conductorAt = source.indexOf('new Conductor({');
 

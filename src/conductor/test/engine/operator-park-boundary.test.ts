@@ -132,16 +132,8 @@ describe('operator park boundary contract', () => {
       'runGroupBranch(',
       'this.runParallelGroupViaCore(',
     ] as const;
-    const prdWideningReconciliationDispatch = `const judgement = await this.stepRunner.run('remediate', state, {
-          remediationRequest: {
-            mode: 'prd-widening-reconciliation',
-            projection: JSON.stringify(context.value),
-            nativeSchema: PRD_WIDENING_RECONCILIATION_SCHEMA,
-          },
-        });`;
-    const buildReviewAdjudicationDispatch = `const dispatched = await this.stepRunner.run('remediate', state, {
-                        retryReason: \`Adjudicate this complete build-review context only; write \${requestedMode} remediation output.\\n\${JSON.stringify(context)}\`,
-                      });`;
+    const prdWideningReconciliationDispatch = /const judgement = await this\.stepRunner\.run\('remediate', state, \{\s*remediationRequest: \{\s*mode: 'prd-widening-reconciliation',\s*projection: JSON\.stringify\(context\.value\),\s*nativeSchema: PRD_WIDENING_RECONCILIATION_SCHEMA,\s*\},\s*\}\);/g;
+    const buildReviewAdjudicationDispatch = /const dispatched = await this\.stepRunner\.run\('remediate', state, \{\s*retryReason: `Adjudicate this complete build-review context only; write \$\{requestedMode\} remediation output\.\\n\$\{JSON\.stringify\(context\)\}`,\s*\}\);/g;
     // A string entry matches the exact statement text; a RegExp entry matches
     // the executionContext-reshaped helper dispatches whose option objects span
     // several lines. Either way the primitive must sit at the matched offset.
@@ -155,7 +147,7 @@ describe('operator park boundary contract', () => {
       /return(?: await)? this\.stepRunner\.run\(name, state, \{\s*attempt: 1,\s*captureAttempt,\s*escalate: false,\s*retryReason: retryHint,\s*\.\.\.identityOption,\s*\.\.\.executionContextOption,\s*\.{3}\(abortSignal === undefined \? \{\} : \{ abortSignal \}\),\s*\.\.\.this\.buildReviewCapabilityOption\(name\),\s*\}\);/g,
       // Configured-group branches run only through runParallelGroupViaCore,
       // whose caller is one of the guarded scheduling-unit entries above.
-      /return runGroupBranch\(member, state, \{\s*stepRunner: this\.stepRunner,\s*providerAvailability: this\.providerExecution\?\.providerAvailability,\s*onProviderSuppressed: this\.providerExecution\?\.onProviderSuppressed,\s*executionContext,/g,
+      /return runGroupBranch\(\s*member,\s*state,\s*\{\s*stepRunner: this\.stepRunner,\s*providerAvailability: this\.providerExecution\?\.providerAvailability,\s*onProviderSuppressed: this\.providerExecution\?\.onProviderSuppressed,\s*executionContext,/g,
       "return this.stepRunner.run('finish', state, options);",
       // The two bounded FINISH prose passes. Their cleanup wrapper may evolve,
       // but both are reached only from inside the already-park-guarded FINISH
@@ -163,8 +155,8 @@ describe('operator park boundary contract', () => {
       /this\.stepRunner\.run\('finish', state, \{\s*\.\.\.options, finishProsePass: 'judge'\s*\}\)/g,
       /this\.stepRunner\.run\('finish', state, \{\s*\.\.\.options,\s*finishProsePass: 'author',\s*\.\.\.\(request\.revisionGuidance === undefined\s*\? \{\}\s*:\s*\{ revisionGuidance: request\.revisionGuidance \}\),\s*\}\)/g,
     ];
-    expect(conductorSource).toContain(prdWideningReconciliationDispatch);
-    expect(conductorSource).toContain(buildReviewAdjudicationDispatch);
+    expect(conductorSource).toMatch(prdWideningReconciliationDispatch);
+    expect(conductorSource).toMatch(buildReviewAdjudicationDispatch);
     const guardedSegmentsIn = (source: string) => {
       const guardedSegments = [
         /if \(stepCfg\?\.parallel\) \{[\s\S]*?await this\.runParallelGroupViaCore\(/,
@@ -249,7 +241,7 @@ describe('operator park boundary contract', () => {
     // one: the raw predicate intentionally belongs only to the owner-boundary
     // classifier, where it gives an operator park precedence over a yield.
     const groupBranchInjections = [...conductorSource.matchAll(
-      /return(?: await)? runGroupBranch\(member, state, \{[\s\S]*?operatorParkBoundary:\s*this\.daemon && this\.featureSlug !== undefined\s*\?\s*(this\.(?:rawOperatorParkBoundary|operatorParkBoundary))\s*:\s*undefined,/g,
+      /return(?: await)? runGroupBranch\(\s*member,\s*state,\s*\{[\s\S]*?operatorParkBoundary:\s*this\.daemon && this\.featureSlug !== undefined\s*\?\s*(this\.(?:rawOperatorParkBoundary|operatorParkBoundary))\s*:\s*undefined,/g,
     )].map((match) => match[1]);
     expect(groupBranchInjections).toEqual([
       'this.operatorParkBoundary',
@@ -800,24 +792,24 @@ describe('operator park boundary contract', () => {
     const serialLoop = conductorSource.slice(serialLoopStart, serialLoopEnd);
 
     const reentryCases = [
-      ['rate-limit wait', 'if (result.rateLimited)', 'attempt--;\n            continue;'],
-      ['auth refresh', 'if (result.authFailure)', 'attempt--;\n            continue;'],
-      ['finish-publication progress retry', 'if (progressBypassed || attempt < stepMaxRetries)', 'continue;'],
-      ['test-suite infrastructure retry', 'MAX_SUITE_INFRASTRUCTURE_RETRIES', 'attempt--;\n                continue;'],
-      ['build-review mechanical-fault retry', 'result.currentLapMechanicalFault === true', 'attempt--;\n                continue;'],
-      ['budgeted completion-check miss', "reason: completion.reason ?? 'completion check failed'", 'continue;'],
+      ['rate-limit wait', 'if (result.rateLimited)', /attempt--;\s*continue;/],
+      ['auth refresh', 'if (result.authFailure)', /attempt--;\s*continue;/],
+      ['finish-publication progress retry', 'if (progressBypassed || attempt < stepMaxRetries)', /continue;/],
+      ['test-suite infrastructure retry', 'MAX_SUITE_INFRASTRUCTURE_RETRIES', /attempt--;\s*continue;/],
+      ['build-review mechanical-fault retry', 'result.currentLapMechanicalFault === true', /attempt--;\s*continue;/],
+      ['budgeted completion-check miss', "reason: completion.reason ?? 'completion check failed'", /continue;/],
     ] as const;
 
     for (const [name, branch, reentry] of reentryCases) {
       const branchOffset = serialLoop.indexOf(branch);
       expect(branchOffset, `${name} branch is inside the serial retry loop`).toBeGreaterThan(-1);
-      expect(
-        serialLoop.indexOf(reentry, branchOffset),
-        `${name} re-enters the serial retry loop`,
-      ).toBeGreaterThan(branchOffset);
+      const reentrySource = serialLoop.slice(branchOffset);
+      const match = reentrySource.match(reentry);
+      expect(match, `${name} re-enters the serial retry loop`).not.toBeNull();
+      expect(branchOffset + match!.index!).toBeGreaterThan(branchOffset);
     }
 
-    const attemptGate = /this\.daemon\s*&&\s*this\.featureSlug !== undefined\s*&&\s*this\.operatorParkBoundary\s*&&\s*await this\.operatorParkBoundary\(\)\.catch\(\(\) => true\)/;
+    const attemptGate = /this\.daemon\s*&&\s*this\.featureSlug !== undefined\s*&&\s*this\.operatorParkBoundary\s*&&\s*\(await this\.operatorParkBoundary\(\)\.catch\(\(\) => true\)\)/;
     expect(attemptGate.test(serialLoop)).toBe(true);
     // The runtime cases immediately above prove a rejected gate returns the
     // typed termination before a runner call. Every listed `continue` returns

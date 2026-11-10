@@ -19,8 +19,8 @@ describe('candidate safety production wiring', () => {
 
       const providerExecution = source.match(
         entrypoint === 'index.ts'
-          ? /const providerExecution: ProviderExecutionContext = \{([\s\S]*?)\n  \};/
-          : /const createProviderExecution = \([\s\S]*?\): ProviderExecutionContext => \(\{([\s\S]*?)\n  \}\);/,
+          ? /const providerExecution: ProviderExecutionContext = \{([\s\S]*?)\n\s*\};/
+          : /const createProviderExecution = \([\s\S]*?\): ProviderExecutionContext => \(\{([\s\S]*?)\n\s*\}\);/,
       )?.[1];
 
       expect(providerExecution, `expected ${entrypoint} to construct ProviderExecutionContext`).toBeTruthy();

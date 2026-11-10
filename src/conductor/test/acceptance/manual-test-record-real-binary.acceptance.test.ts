@@ -18,6 +18,11 @@ import { tmpdir } from 'node:os';
 
 const REPO_ROOT = join(process.cwd(), '..', '..');
 const REAL_CONDUCT_TS = join(REPO_ROOT, 'bin', 'conduct-ts');
+// This smoke exercises only git against its own disposable repository.  The
+// suite-wide guard remains enabled for every other test process, but the
+// production command needs its injected git runner to resolve that fixture's
+// worktree root.
+const realBinaryEnv = { ...process.env, AI_CONDUCTOR_NO_REAL_EXEC: '' };
 
 let scratchParent: string;
 let cwd: string;
@@ -42,6 +47,7 @@ describe('conduct-ts manual-test-record — real-binary acceptance smoke', () =>
     const result = await execa(REAL_CONDUCT_TS, ['manual-test-record', '--results', '-'], {
       cwd,
       input: table,
+      env: realBinaryEnv,
       reject: false,
     });
 
@@ -55,6 +61,7 @@ describe('conduct-ts manual-test-record — real-binary acceptance smoke', () =>
   it('--skip --reason <r> from the git root derives its pipeline directory', async () => {
     const result = await execa(REAL_CONDUCT_TS, ['manual-test-record', '--skip', '--reason', 'no ui yet'], {
       cwd,
+      env: realBinaryEnv,
       reject: false,
     });
 
@@ -71,6 +78,7 @@ describe('conduct-ts manual-test-record — real-binary acceptance smoke', () =>
     const result = await execa(REAL_CONDUCT_TS, ['manual-test-record', '--results', '-'], {
       cwd: nestedCwd,
       input: table,
+      env: realBinaryEnv,
       reject: false,
     });
 
@@ -87,7 +95,7 @@ describe('conduct-ts manual-test-record — real-binary acceptance smoke', () =>
     const result = await execa(
       REAL_CONDUCT_TS,
       ['manual-test-record', '--skip', '--reason', 'override', '--pipeline-dir', pipelineDir],
-      { cwd: unrelatedCwd, reject: false },
+      { cwd: unrelatedCwd, env: realBinaryEnv, reject: false },
     );
 
     expect(result.exitCode).toBe(0);
@@ -102,6 +110,7 @@ describe('conduct-ts manual-test-record — real-binary acceptance smoke', () =>
     const result = await execa(REAL_CONDUCT_TS, ['manual-test-record', '--results', '-'], {
       cwd: unrelatedCwd,
       input: '| Story | Result |\n| --- | --- |\n| S1 | PASS |\n',
+      env: realBinaryEnv,
       reject: false,
     });
 
@@ -117,6 +126,7 @@ describe('conduct-ts manual-test-record — real-binary acceptance smoke', () =>
     const result = await execa(REAL_CONDUCT_TS, ['manual-test-record', '--results', '-'], {
       cwd,
       input: '| Story | Result |\n| --- | --- |\n| S1 | PASS |\n',
+      env: realBinaryEnv,
       reject: false,
     });
 
@@ -133,7 +143,7 @@ describe('conduct-ts manual-test-record — real-binary acceptance smoke', () =>
     const result = await execa(
       REAL_CONDUCT_TS,
       ['manual-test-record', '--skip', '--reason', 'relative override', '--pipeline-dir', 'relative/dir'],
-      { cwd, reject: false },
+      { cwd, env: realBinaryEnv, reject: false },
     );
 
     expect(result.exitCode).toBe(1);
@@ -147,7 +157,7 @@ describe('conduct-ts manual-test-record — real-binary acceptance smoke', () =>
     const result = await execa(
       REAL_CONDUCT_TS,
       ['manual-test-record', '--skip', '--reason', 'no ui yet', '--pipeline-dir', pipelineDir],
-      { cwd, reject: false },
+      { cwd, env: realBinaryEnv, reject: false },
     );
 
     expect(result.exitCode).toBe(0);
@@ -158,6 +168,7 @@ describe('conduct-ts manual-test-record — real-binary acceptance smoke', () =>
   it('--skip without --reason exits non-zero and prints usage', async () => {
     const result = await execa(REAL_CONDUCT_TS, ['manual-test-record', '--skip', '--pipeline-dir', pipelineDir], {
       cwd,
+      env: realBinaryEnv,
       reject: false,
     });
 
