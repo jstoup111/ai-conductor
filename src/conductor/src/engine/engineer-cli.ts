@@ -2164,6 +2164,7 @@ export async function dispatchEngineer(
                   provider: (opts.env ?? process.env).AI_CONDUCTOR_AUTHORING_PROVIDER,
                   sourceRef,
                   localOnly,
+                  localOnlyOwner: markerOwner,
                   publication,
                 },
               );
