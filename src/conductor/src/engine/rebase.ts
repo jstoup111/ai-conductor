@@ -1749,6 +1749,8 @@ export interface ResolutionContext {
   environment?: NodeJS.ProcessEnv;
   /** Explicit sweep-only exception; all normal callers remain strict. */
   supersessionJudgement?: boolean;
+  /** Immutable journal attribution when this resolver runs inside a restack. */
+  restack?: { readonly opId: import('../types/restack.js').RestackOpId; readonly cause: RestackCause; readonly roundId?: import('../types/routing.js').RoundId };
 }
 export type RebaseResolver = (ctx: ResolutionContext) => Promise<ResolutionAttempt>;
 

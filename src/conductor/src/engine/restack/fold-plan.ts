@@ -447,8 +447,8 @@ export async function placeFoldCommits(input: PlaceFoldCommitsInput): Promise<Fo
   try {
     for (const source of input.commits) {
       const commit = await planFoldCommit(input, source, indexDirectory);
-      if (commit.kind === 'refused') return commit;
-      planned.push(commit);
+      if ('kind' in commit && commit.kind === 'refused') return commit;
+      planned.push(commit as FoldCommitPlan);
     }
     return { kind: 'planned', commits: planned };
   } finally {
