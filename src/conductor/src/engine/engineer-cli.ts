@@ -70,6 +70,7 @@ import {
 import { resolveTrackerSelection } from './tracker-selection.js';
 import { reportRouted, reportDone } from './engineer/intake/writeback.js';
 import { makeProductionGit, type GitRunner } from './pr-labels.js';
+import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
 import {
   claimUnblocked,
   resolveClaimBands,
@@ -2242,9 +2243,12 @@ export async function dispatchEngineer(
         const provider = (dispatch.provider ?? DEFAULT_PROVIDER) as BuiltInProviderId;
         const host = requireProviderCapability(provider, 'interactiveLaunch');
         const executable = resolveProviderExecutable(provider);
-        const nested = Boolean((opts.env ?? process.env).CLAUDECODE || (opts.env ?? process.env).CODEX_THREAD_ID);
+        const environment = opts.env ?? process.env;
+        const nested = Boolean(environment.CLAUDECODE || environment.CODEX_THREAD_ID);
         if (nested) {
-          const detected = (opts.env ?? process.env).CLAUDECODE ? 'Claude Code' : 'Codex';
+          const detected = BUILT_IN_PROVIDERS.find(({ interactiveLaunch }) =>
+            interactiveLaunch?.sessionMarkers.some((marker) => Boolean(environment[marker])),
+          )?.displayName ?? host.displayName;
           throw new Error(`You are already inside a ${detected} session — run ${host.invocationPrefix}composer directly to resume (no need to launch a nested session).`);
         }
         if (!opts.spawnHost && !(await (opts.providerInstalled ?? executableOnPath)(executable))) throw new Error(`compose resume: provider ${provider} is not installed.`);
@@ -2383,7 +2387,7 @@ export async function dispatchEngineer(
                       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
                       if (dirtyDocs.length > 0 && hasWorktree) {
                         await git(['add', '-A'], { cwd: path });
-                        await git(['commit', '-m', `composer WIP backup: ${slug}`], { cwd: path });
+                        await git(['commit', '-m', withDaemonCoAuthorTrailer(`composer WIP backup: ${slug}`)], { cwd: path });
                       }
                       const cwd = hasWorktree ? path : target.canonicalPath;
                       await git(['branch', `composer-backup/${slug}-${stamp}`, localRef], { cwd });
@@ -2446,7 +2450,7 @@ export async function dispatchEngineer(
                   }
                   const add = await git(['add', '--', '.docs/intake', '.docs/composer-runs'], { cwd: worktree });
                   if ((add.exitCode ?? 0) !== 0) throw new Error(`compose resume: could not stage take-over: ${add.stdout}`);
-                  const commit = await git(['commit', '-m', `composer take-over: ${slug} ${committedOwner} to ${owner.id}`], { cwd: worktree });
+                  const commit = await git(['commit', '-m', withDaemonCoAuthorTrailer(`composer take-over: ${slug} ${committedOwner} to ${owner.id}`)], { cwd: worktree });
                   if ((commit.exitCode ?? 0) !== 0) throw new Error(`compose resume: could not commit take-over: ${commit.stdout}`);
                   const publication = initialSpecPublication(target, branch, worktree, gh, git, events);
                   const pushed = await executeRemoteGit(
