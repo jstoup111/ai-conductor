@@ -27,6 +27,8 @@ export interface PlaceFoldCommitsInput {
   readonly worktree: string;
   readonly slug: string;
   readonly commits: readonly FoldSourceCommit[];
+  /** Deferred route ranges provide host ownership evidence for plan refusal. */
+  readonly ranges?: readonly FoldRange[];
   readonly git: GitRunner;
   readonly frozenBlocksFor?: (source: FoldSourceCommit) => Promise<readonly FoldFrozenBlock[] | undefined>;
 }
@@ -362,6 +364,19 @@ export async function placeFoldCommits(input: PlaceFoldCommitsInput): Promise<Fo
       const commit = await planFoldCommit(input, source, indexDirectory);
       if ('kind' in commit && commit.kind === 'refused') return commit;
       planned.push(commit as FoldCommitPlan);
+    }
+    // A fold may distribute individual hunks upward, but each recorded host
+    // must retain some real work on its placement child.
+    for (const range of input.ranges ?? []) {
+      const hostPlans = planned.filter((commit) => commit.owner === range.host && commit.roundId === range.roundId);
+      if (hostPlans.length === 0) continue;
+      const acceptingChildren = [...new Set(hostPlans.flatMap((commit) => commit.parts
+        .flatMap((part) => part.child === 'leaf' ? [] : [part.child])))]
+        .sort((left, right) => Number(left) - Number(right));
+      if (!acceptingChildren.includes(range.host)) {
+        return { kind: 'refused', reason: 'fold-misrouted', host: range.host,
+          findingIds: range.findingIds ?? [], acceptingChildren };
+      }
     }
     return { kind: 'planned', commits: planned };
   } finally {

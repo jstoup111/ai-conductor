@@ -12,6 +12,8 @@ export interface FoldSourceCommit {
 export interface FoldRange {
   readonly host: ChildId;
   readonly roundId: RoundId;
+  /** Findings assigned to this host, retained for a useful misrouting halt. */
+  readonly findingIds?: readonly string[];
   readonly leafEntryTip: CommitSha;
   readonly exitTip?: CommitSha;
 }
@@ -53,4 +55,11 @@ export type FoldPlan =
     readonly reason: 'fold-unplaced-path' | 'fold-residual-unexpressible';
     readonly commit: CommitSha;
     readonly paths: readonly string[];
+  }
+  | {
+    readonly kind: 'refused';
+    readonly reason: 'fold-misrouted';
+    readonly host: ChildId;
+    readonly findingIds: readonly string[];
+    readonly acceptingChildren: readonly ChildId[];
   };
