@@ -1,5 +1,5 @@
 // Covers: task:3, task:6, task:7, task:8, task:9, task:10, task:67, task:rem-prd-audit-W7
-import { access, mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -41,19 +41,30 @@ vi.mock('../../../src/engine/routing/queue-admission.js', async (importOriginal)
   };
 });
 
-import { parseChildId, pipelinePathFor } from '../../../src/engine/child-context.js';
+import { CHILD_REGION_STEPS, parseChildId, pipelinePathFor, type ChildId } from '../../../src/engine/child-context.js';
+import { AcceptedWideningDecisionStore, renderOverScopeDecisionBlock, type OverScopePersistedOffer } from '../../../src/engine/accepted-widenings.js';
 import { Conductor } from '../../../src/engine/conductor.js';
-import { makeGitRunner } from '../../../src/engine/rebase.js';
+import { EventPersister } from '../../../src/engine/event-persister.js';
+import { writeVerdict } from '../../../src/engine/gate-verdicts.js';
+import { dispatchHaltClearCommand } from '../../../src/engine/halt-clear-cli.js';
+import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
+import { persistPrdAuditVerdict } from '../../../src/engine/prd-audit-verdict-store.js';
+import { prdWideningSourceId } from '../../../src/engine/prd-widening-context.js';
+import { persistPrdWideningOffers } from '../../../src/engine/prd-widening-offers.js';
+import { pinHostEntry } from '../../../src/engine/routing/host-region-entry.js';
 import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
-import { admitRound, reconcileRounds } from '../../../src/engine/routing/round-admission.js';
+import { admitRound } from '../../../src/engine/routing/round-admission.js';
 import { createRouteRecord, readRepairMarker, readRouteRecord, transitionHost, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
-import { routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
-import { parseRoundId } from '../../../src/engine/routing/route-types.js';
+import { closureRefFor, repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
+import { emptyUnsettledReceipt, parseRoundId, type RoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { advanceRound } from '../../../src/engine/routing/routed-exit.js';
 import { readState, writeState } from '../../../src/engine/state.js';
 import { ALL_STEPS } from '../../../src/engine/steps.js';
 import type { ConductState, StepName } from '../../../src/types/index.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
+import { createSweepRepository, persistedEvents, sealStack } from '../restack/restack-sweepG2-fixture.js';
+import { PASSING_FULL_SUITE_VERIFIER } from '../../test-conductor.js';
+import { persistFixtureProjectedRemediationPlan } from '../remediation-plan-fixtures.js';
 
 const repositories: string[] = [];
 const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
@@ -113,6 +124,142 @@ async function fixture() {
     storyOwnership: { S1: 1, S2: 2 },
   }, envelopeFilesystem);
   return { repo, git };
+}
+
+const nc4 = {
+  first: parseChildId(1)!,
+  second: parseChildId(2)!,
+  r2: parseRoundId('r2')!,
+  r3: parseRoundId('r3')!,
+};
+const ROUTING_CONFIG = { stacked_prs: { enabled: true, max_slices: 3, route_whole_feature_fixes: true } };
+const WHOLE_FEATURE_GATES: readonly StepName[] = ['manual_test', 'prd_audit', 'architecture_review_as_built'];
+
+async function blobOf(git: GitRunner, value: unknown): Promise<string> {
+  return (await git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(value) })).stdout.trim();
+}
+
+/**
+ * A real three-slice stack interrupted inside r2, checked out as the daemon's
+ * `.worktrees/demo` feature worktree: host 1 has committed its repair and
+ * holds satisfied region evidence, host 2 is still pending, and the
+ * whole-feature gates are next in the root state.
+ */
+async function interruptedR2Fixture(): Promise<{ readonly main: string; readonly worktree: string; readonly git: GitRunner; readonly statePath: string }> {
+  const subject = await createSweepRepository('conductor-routing-resume-r2-', repositories);
+  await subject.write('.gitignore', '.pipeline/\n.worktrees/\n');
+  await subject.write('.ai-conductor/config.yml', 'stacked_prs:\n  enabled: true\n  max_slices: 3\n  route_whole_feature_fixes: true\n');
+  await subject.git(['add', '.gitignore', '.ai-conductor/config.yml']);
+  await subject.git(['commit', '-qm', 'configure stack routing']);
+  await subject.commit('base', 'base.txt', 'base\n');
+  await subject.git(['checkout', '-qb', 'feat/c1/demo']);
+  const closedOne = await subject.commit('closed one', 'one.txt', 'one\n');
+  await subject.git(['update-ref', closureRefFor('demo', nc4.first), closedOne]);
+  await subject.git(['checkout', '-qb', 'feat/c2/demo']);
+  const closedTwo = await subject.commit('closed two', 'two.txt', 'two\n');
+  await subject.git(['update-ref', closureRefFor('demo', nc4.second), closedTwo]);
+  await subject.git(['checkout', '-qb', 'feat/daemon-demo']);
+  await subject.commit('leaf', 'leaf.txt', 'leaf\n');
+  await sealStack(subject.repo, [1, 2, 3]);
+  await subject.git(['checkout', '-q', 'feat/c1/demo']);
+  await subject.commit('r2 host 1 repair', 'one-fix.txt', 'fixed\n');
+  await subject.git(['checkout', '-q', 'main']);
+  const worktree = join(subject.repo, '.worktrees', 'demo');
+  await subject.git(['worktree', 'add', '-q', worktree, 'feat/c1/demo']);
+
+  const git = makeGitRunner(worktree);
+  const r2: RouteRecord = {
+    roundId: nc4.r2, kind: 'audit', phase: 'open', sealedAuthored: 3,
+    items: [
+      { findingId: 'S1.1', kind: 'audit', owner: nc4.first, host: nc4.first, reason: 'task-slice', fallback: [] },
+      { findingId: 'S2.1', kind: 'audit', owner: nc4.second, host: nc4.second, reason: 'task-slice', fallback: [] },
+    ],
+    allocation: {
+      [nc4.first]: { remTaskIds: [], blockBodies: [] },
+      [nc4.second]: { remTaskIds: [], blockBodies: [] },
+    },
+    hosts: { [nc4.first]: 'repairing', [nc4.second]: 'pending' },
+    currentHostIndex: 0,
+    receipt: emptyUnsettledReceipt(),
+    outbox: [],
+    entry: { host: nc4.first, pinnedBase: closedOne, tree: (await subject.rev(`${closedOne}^{tree}`)) as never },
+  };
+  await git(['update-ref', routeRecordRefFor('demo', nc4.r2), await blobOf(git, r2)]);
+  await git(['update-ref', repairMarkerRefFor('demo'), await blobOf(git, { host: nc4.first, roundId: nc4.r2 })]);
+  await git(['update-ref', revalidationQueueRefFor('demo'), await blobOf(git, { generation: 1, entries: [], outbox: [] })]);
+
+  const statePath = join(worktree, '.pipeline', 'conduct-state.json');
+  await writeState(statePath, doneThrough('manual_test'));
+  const region = { feature_desc: 'demo', complexity_tier: 'M' } as const;
+  await writeState(pipelinePathFor(worktree, 'conduct-state.json', nc4.first), {
+    ...region, acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done', last_step: 'build_review',
+  });
+  await writeState(pipelinePathFor(worktree, 'conduct-state.json', nc4.second), {
+    ...region, acceptance_specs: 'pending', build: 'pending', test_suite: 'pending', build_review: 'pending',
+  });
+  for (const step of CHILD_REGION_STEPS) {
+    await writeVerdict(worktree, step, { satisfied: true, reason: 'r2 host 1 region passed', checkedAt: 1 }, nc4.first, { routedRound: 'r2' });
+  }
+  return { main: subject.repo, worktree, git, statePath };
+}
+
+const NC4_SUMMARY = 'The diff adds a visible export command outside the approved plan.';
+
+/** Persist the NC.4 offer and its operator refusal exactly as halt clear records them. */
+async function recordNc4Refusal(main: string, worktree: string): Promise<{ readonly decisionId: string; readonly sourceId: string; readonly offer: OverScopePersistedOffer }> {
+  const repository = await realpath(main);
+  const sourceId = prdWideningSourceId({ criterion: 'NC.4', grade: 'OVER_SCOPE', evidence: NC4_SUMMARY, prdIds: [] });
+  const offers = await persistPrdWideningOffers(worktree, { version: 'v1', repository, feature: 'demo' }, [{
+    criterion: 'NC.4', sourceId, evidence: NC4_SUMMARY, reportSnapshot: NC4_SUMMARY, relation: 'outside-visible',
+  }]);
+  if (!offers.ok || offers.offers.length !== 1) throw new Error(`could not persist NC.4 offer: ${offers.ok ? 'no offer' : offers.reason}`);
+  const offer = offers.offers[0]!;
+  const recorded = await new AcceptedWideningDecisionStore(worktree, { version: 1, repository, feature: 'demo' }).append({
+    criterion: 'NC.4', authority: 'refuse', rationale: 'Remove the refused export command.', operator: 'operator@example.test',
+    originalSource: offer.originalSource, originalCaseId: offer.originalCaseId, offerEntryId: offer.offerEntryId,
+  });
+  if (!recorded.ok) throw new Error(`could not record NC.4 refusal: ${recorded.reason}`);
+  return { decisionId: recorded.decision.id, sourceId, offer };
+}
+
+/**
+ * Routed host entry runs host-local plan restaging and acceptance probes that
+ * are outside this resume boundary.  The adapter keeps its durable effects:
+ * pin the entry baseline, check out the host and mark it repairing.
+ */
+async function enterRoutedHostForTest(input: { readonly worktree: string; readonly slug: string; readonly roundId: RoundId; readonly host: ChildId }) {
+  const git = makeGitRunner(input.worktree);
+  const stored = await readRouteRecord(input.worktree, input.slug, input.roundId);
+  if (stored.kind !== 'record') return { kind: 'refused' as const, detail: `${input.roundId} is unreadable` };
+  const pinned = await pinHostEntry(input.worktree, input.slug, stored, input.host, git);
+  if (pinned.kind !== 'pinned') return { kind: 'refused' as const, detail: pinned.detail };
+  await git(['checkout', '-q', pinned.target.branch]);
+  if (pinned.stored.record.hosts[input.host] === 'admitted') {
+    const repairing = transitionHost(pinned.stored, input.host, 'repairing', { credit: true });
+    if (repairing.kind !== 'updated') return { kind: 'refused' as const, detail: `cannot enter ${input.roundId} host ${input.host}` };
+    const wrote = await writeRoutingTransaction(input.worktree, input.slug, [{ kind: 'update-record', previous: pinned.stored, record: repairing.record }]);
+    if (wrote.kind !== 'updated') return { kind: 'refused' as const, detail: `cannot write ${input.roundId} host ${input.host}` };
+  }
+  return { kind: 'entered' as const, pinnedBase: pinned.pinnedBase };
+}
+
+async function runResumedConductor(
+  repo: string,
+  statePath: string,
+  run: NonNullable<ConstructorParameters<typeof Conductor>[0]['stepRunner']>['run'],
+): Promise<void> {
+  const events = new ConductorEventEmitter();
+  const persister = new EventPersister(join(repo, '.pipeline', 'events.jsonl'), events);
+  persister.start();
+  try {
+    await new Conductor({
+      projectRoot: repo, stateFilePath: statePath, featureSlug: 'demo', fromStep: 'manual_test', resume: true,
+      verifyArtifacts: false, events, config: ROUTING_CONFIG, stepRunner: { run }, fullSuiteVerifier: PASSING_FULL_SUITE_VERIFIER,
+      childRegionLifecycle: { enterHostRegion: (input) => enterRoutedHostForTest(input) as never },
+    }).run();
+  } finally {
+    persister.stop();
+  }
 }
 
 describe('routed round conductor resume', () => {
@@ -777,96 +924,148 @@ describe('routed round conductor resume', () => {
     expect(starts).toContainEqual(expect.objectContaining({ child: 2 }));
   });
 
-  // Covers: task:8, S3.1
-  it('closes r2 before admitting the NC-4 refusal-rework audit round r3', async () => {
-    const subject = await fixture();
-    const first = parseChildId(1)!;
-    const second = parseChildId(2)!;
-    const r2 = parseRoundId('r2')!;
-    const r3 = parseRoundId('r3')!;
-    const prior = await createRouteRecord(subject.repo, 'demo', {
-      roundId: r2, sealedAuthored: 1, kind: 'audit',
-      items: [],
-      allocation: {
-        [first]: { remTaskIds: [], blockBodies: [] },
-        [second]: { remTaskIds: [], blockBodies: [] },
-      },
-    });
-    if (prior.kind !== 'created') throw new Error(`could not create r2: ${prior.kind}`);
-    // Both hosts have completed the interrupted round before the recorded
-    // refusal is allowed to create its own audit route.
-    const storedPrior = await readRouteRecord(subject.repo, 'demo', r2);
-    if (storedPrior.kind !== 'record') throw new Error('could not read r2');
-    await writeRoutingTransaction(subject.repo, 'demo', [{
-      kind: 'update-record', previous: storedPrior,
-      record: { ...prior.record, phase: 'open', hosts: { [first]: 'restacked', [second]: 'restacked' } },
-    }]);
-    await expect(reconcileRounds(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'leaf-returned', roundId: 'r2' });
-    await expect(readRouteRecord(subject.repo, 'demo', r2)).resolves.toMatchObject({ kind: 'record', record: { phase: 'closed', hosts: { 1: 'restacked', 2: 'restacked' } } });
+  // Covers: task:8, S3.3
+  it('resumes a cleared NC-4 over-scope halt into routing progress without re-requesting a decision', async () => {
+    const { main, worktree, statePath } = await interruptedR2Fixture();
+    // The operator refused NC.4 in the over-scope block; the refusal is
+    // recorded and `halt clear` preserves the answered block.
+    const refusal = await recordNc4Refusal(main, worktree);
+    await writeFile(join(worktree, '.pipeline', 'HALT'), `${renderOverScopeDecisionBlock([refusal.offer]).replace(
+      '"decision": "pending"',
+      '"decision": "refuse",\n    "rationale": "Remove the refused export command."',
+    )}\n`);
+    await writeFile(join(worktree, '.pipeline', 'HALT.class'), 'over-scope');
+    await expect(dispatchHaltClearCommand({ kind: 'halt-clear', feature: 'demo', rationale: 'NC.4 refusal recorded' }, {
+      cwd: main, resolveOperator: () => 'operator@example.test', isInteractive: () => true, print: () => {},
+      supersedeRecord: async () => ({ kind: 'noop' }),
+    })).resolves.toBe(0);
+    await expect(access(join(worktree, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(join(worktree, '.pipeline', 'HALT.cleared'), 'utf8')).resolves.toContain('"decision": "refuse"');
 
-    const refusal = await createRouteRecord(subject.repo, 'demo', {
-      roundId: r3, sealedAuthored: 1, kind: 'audit',
-      items: [{ findingId: 'NC-4', kind: 'audit', owner: first, host: first, reason: 'refusal-rework', fallback: [] }],
-      allocation: { [first]: { remTaskIds: ['rem-prd-audit-NC-4'], blockBodies: ['### Task rem-prd-audit-NC-4\\n'] } },
+    await runResumedConductor(worktree, statePath, async () =>
+      // End the resumed run at its first provider dispatch: the routing
+      // progress under test is durable before any provider can run.
+      ({ success: false, operatorParkedBeforeDispatch: true }));
+
+    const events = await persistedEvents(worktree);
+    const progress = events.findIndex((event) => event.type === 'routed_repair_phase' && event.roundId === 'r2');
+    expect(progress).toBeGreaterThanOrEqual(0);
+    expect(events[progress]).toMatchObject({ host: 1, phase: 'built' });
+    expect(events).toContainEqual(expect.objectContaining({ type: 'routed_repair_phase', roundId: 'r2', host: 1, phase: 'restacked' }));
+    expect(events.slice(0, progress).filter((event) => event.type === 'step_started' && WHOLE_FEATURE_GATES.includes(event.step as StepName)))
+      .toEqual([]);
+    await expect(readRouteRecord(worktree, 'demo', nc4.r2)).resolves.toMatchObject({
+      kind: 'record', record: { phase: 'open', hosts: { 1: 'restacked', 2: 'repairing' } },
     });
-    if (refusal.kind !== 'created') throw new Error(`could not create r3: ${refusal.kind}`);
-    await expect(admitRound(subject.repo, 'demo', refusal.record, first)).resolves.toMatchObject({ kind: 'admitted' });
-    await expect(readRouteRecord(subject.repo, 'demo', r3)).resolves.toMatchObject({
-      kind: 'record',
-      record: { kind: 'audit', items: [expect.objectContaining({ findingId: 'NC-4', reason: 'refusal-rework' })], allocation: { 1: { remTaskIds: ['rem-prd-audit-NC-4'] } } },
-    });
-    await expect(access(join(subject.repo, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
+    const halt = await readFile(join(worktree, '.pipeline', 'HALT'), 'utf8').catch(() => '');
+    expect(halt).not.toContain('revise-decision');
+    expect(halt).not.toContain('over-scope-decisions');
   });
 
-  // Covers: task:8, S3.3
-  it('resumes a cleared NC-4 over-scope halt through the real routed exit without re-requesting a decision', async () => {
-    const subject = await fixture();
-    const host = parseChildId(1)!;
-    const roundId = parseRoundId('r2')!;
-    const statePath = join(subject.repo, '.pipeline', 'conduct-state.json');
-    const state = doneThrough('manual_test');
-    await writeState(statePath, state);
-    await mkdir(join(subject.repo, '.pipeline'), { recursive: true });
-    // This is the durable output of `halt clear`: all NC-4 decisions have
-    // already been recorded, so resume must make routing progress rather than
-    // render another `revise-decision` request.
-    await writeFile(join(subject.repo, '.pipeline', 'HALT.cleared'), [
-      '```json over-scope-decisions',
-      JSON.stringify([{ criterion: 'NC-4', decision: 'refuse', rationale: 'Remove the refused behavior.' }]),
-      '```',
-    ].join('\n'));
-    const created = await createRouteRecord(subject.repo, 'demo', {
-      roundId, sealedAuthored: 1, kind: 'audit',
-      items: [{ findingId: 'NC-4', kind: 'audit', owner: host, host, reason: 'refusal-rework', fallback: [] }],
-      // Host 2 is the leaf, so its production exit takes the no-commit
-      // completion path.  This keeps the run bounded without replacing the
-      // routed-exit implementation under test.
-      allocation: { [parseChildId(2)!]: { remTaskIds: ['rem-prd-audit-NC-4'], blockBodies: ['### Task rem-prd-audit-NC-4\\n'] } },
+  // Covers: task:8, S3.1
+  it('closes r2 through host 2 before prd_audit, then admits NC-4 refusal rework as audit round r3', async () => {
+    const { main, worktree, git, statePath } = await interruptedR2Fixture();
+    const refusal = await recordNc4Refusal(main, worktree);
+    let r2AtFirstPrdAudit: Awaited<ReturnType<typeof readRouteRecord>> | undefined;
+    // Resume r2 to its first prd_audit dispatch. Host 2 commits its repair so
+    // its exit is a real restack.
+    await runResumedConductor(worktree, statePath, async (step) => {
+      if (step === 'build') {
+        await writeFile(join(worktree, 'two-fix.txt'), 'fixed\n');
+        await git(['add', 'two-fix.txt']);
+        await git(['commit', '-qm', 'r2 host 2 repair']);
+      }
+      if (step === 'prd_audit') {
+        r2AtFirstPrdAudit ??= await readRouteRecord(worktree, 'demo', nc4.r2);
+        return { success: false, operatorParkedBeforeDispatch: true };
+      }
+      return { success: true };
     });
-    if (created.kind !== 'created') throw new Error(`could not create r2: ${created.kind}`);
-    const leaf = parseChildId(2)!;
-    await expect(admitRound(subject.repo, 'demo', created.record, leaf)).resolves.toMatchObject({ kind: 'admitted' });
-    const admitted = await readRouteRecord(subject.repo, 'demo', roundId);
-    if (admitted.kind !== 'record') throw new Error('r2 was not admitted');
-    const repairing = transitionHost(admitted, leaf, 'repairing', { credit: true });
-    if (repairing.kind !== 'updated') throw new Error('could not stage r2 host');
-    await writeRoutingTransaction(subject.repo, 'demo', [{ kind: 'update-record', previous: admitted, record: repairing.record }]);
 
+    // The audited gate run: prd_audit reports NC.4 again, and the recorded
+    // refusal is routed as rework. The run stops at the first BUILD dispatch.
     const events = new ConductorEventEmitter();
-    const conductor = new Conductor({
-      projectRoot: subject.repo, stateFilePath: statePath, featureSlug: 'demo', fromStep: 'manual_test', resume: true, verifyArtifacts: false, events,
-      config: { stacked_prs: { enabled: true, max_slices: 2, route_whole_feature_fixes: true } },
-      stepRunner: { run: async (step) => { throw new Error(`stop after routed exit: ${step}`); } },
-      childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'repair-pending' as const, child: leaf, position: leaf, isLeaf: true, branch: 'feat/daemon-demo', repairChildren: [leaf], routedRepair: { child: leaf, roundId } }) },
-    });
-    const resumed = conductor as unknown as {
-      activeRegionChild: typeof leaf;
-      continueRoutedHostExit: (candidate: ConductState, indexOf: (step: StepName) => number, requireSatisfiedRegion: boolean) => Promise<unknown>;
-    };
-    resumed.activeRegionChild = leaf;
-    await expect(resumed.continueRoutedHostExit(state, (step) => ALL_STEPS.findIndex((candidate) => candidate.name === step), true)).resolves.toBeDefined();
+    const persister = new EventPersister(join(worktree, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    try {
+      await new Conductor({
+        projectRoot: worktree, stateFilePath: statePath, featureSlug: 'demo', fromStep: 'prd_audit',
+        mode: 'default', daemon: true, verifyArtifacts: true, maxRetries: 1, events,
+        // Three authored tasks leave no default 25% growth room for one rework task.
+        config: { ...ROUTING_CONFIG, prd_audit: { max_appended_ratio: 1 } } as never,
+        fullSuiteVerifier: PASSING_FULL_SUITE_VERIFIER,
+        childRegionLifecycle: { enterHostRegion: (input) => enterRoutedHostForTest(input) as never },
+        stepRunner: {
+          // The NC.4 refusal has no owning plan task; the residue judge
+          // places its rework on child 1.
+          dispatchResidueRoutingJudgement: async (prompt) => {
+            const itemId = (JSON.parse(prompt.split('\n\n').at(-1)!) as { items: Array<{ itemId: string }> }).items[0]!.itemId;
+            return { success: true, output: JSON.stringify({ version: 'v1', items: [{ itemId, child: 1, candidates: [1], rationale: 'The refused command lives in child 1.' }] }) };
+          },
+          run: async (step, _state, options) => {
+            if (step === 'prd_audit') {
+              await persistPrdAuditVerdict(worktree, {
+                complete: true,
+                judgment: { version: 'v1', criterionJudgments: [], noOwnerObservations: [{
+                  presentationOrdinal: 'NC.4', grade: 'OVER_SCOPE', evidence: NC4_SUMMARY,
+                  rationale: 'The diff adds visible behavior outside the approved plan.', intentRelation: 'outside-visible',
+                }] },
+                diagnostics: [],
+                recordedDispositions: [],
+              }, { attemptId: options?.runId ?? 'nc4-audit', codeStamp: null });
+            } else if (step === 'remediate' && options?.remediationRequest?.mode === 'gap-plan') {
+              await persistFixtureProjectedRemediationPlan(worktree, options, [{
+                id: `refusal-${refusal.decisionId}`, disposition: 'build', category: null,
+                rationale: 'Remove the refused NC.4 behavior.',
+                tasks: [{ id: 'remove-refused-nc4', title: 'Remove the refused NC.4 behavior' }],
+              }]);
+            } else if (step === 'remediate') {
+              // PRD-widening reconciliation: today's NC.4 is the refused case.
+              return { success: true, finalStructuredResult: { version: 'v1', results: [{
+                sourceId: refusal.sourceId, kind: 'same-case', caseId: refusal.offer.originalCaseId,
+                reason: 'The current report names the refused NC.4 behavior.',
+              }] } };
+            } else if (step === 'build') {
+              return { success: false, error: 'sentinel: stop at the r3 BUILD dispatch' };
+            }
+            return { success: true };
+          },
+        },
+      }).run();
+    } finally {
+      persister.stop();
+    }
 
-    await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({ kind: 'record', record: { hosts: { 2: 'done' } } });
-    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.not.toContain('revise-decision');
+    const spine = await persistedEvents(worktree);
+    const indexOf = (predicate: (event: (typeof spine)[number]) => boolean) => spine.findIndex(predicate);
+    const firstPrdAudit = indexOf((event) => event.type === 'step_started' && event.step === 'prd_audit');
+    const hostTwoBuild = indexOf((event) => event.type === 'step_started' && event.step === 'build' && event.child === 2);
+    const restacked = (host: number) => indexOf((event) => event.type === 'routed_repair_phase' && event.roundId === 'r2' && event.host === host && event.phase === 'restacked');
+    expect(hostTwoBuild).toBeGreaterThanOrEqual(0);
+    expect(restacked(1)).toBeGreaterThanOrEqual(0);
+    expect(restacked(2)).toBeGreaterThan(hostTwoBuild);
+    expect(firstPrdAudit).toBeGreaterThan(restacked(2));
+    expect(spine.slice(0, firstPrdAudit).filter((event) => event.type === 'step_started' && event.step === 'prd_audit')).toEqual([]);
+    expect(r2AtFirstPrdAudit).toMatchObject({ kind: 'record', record: { phase: 'closed', hosts: { 1: 'restacked', 2: 'restacked' } } });
+
+    const r3 = await readRouteRecord(worktree, 'demo', nc4.r3);
+    if (r3.kind !== 'record') throw new Error(`r3 was not admitted: ${r3.kind}`);
+    expect(r3.record.kind).toBe('audit');
+    const reworkTask = `rem-prd-audit-refusal-${refusal.decisionId}`;
+    expect(r3.record.items.map((item) => item.findingId)).toEqual([`refusal-${refusal.decisionId}`]);
+    expect(Object.values(r3.record.allocation).flatMap((allocation) => allocation.remTaskIds)).toEqual([reworkTask]);
+    const firstHost = Math.min(...Object.keys(r3.record.hosts).map(Number));
+    const admitted = indexOf((event) => event.type === 'routed_repair_phase' && event.roundId === 'r3' && event.phase === 'admitted');
+    expect(admitted).toBeGreaterThan(firstPrdAudit);
+    expect(spine.slice(admitted + 1).find((event) => event.type === 'step_started')).toMatchObject({ step: 'build', child: firstHost });
+
+    const halts = [
+      await readFile(join(worktree, '.pipeline', 'HALT'), 'utf8').catch(() => ''),
+      ...spine.filter((event) => event.type === 'loop_halt').map((event) => String(event.reason)),
+    ];
+    for (const halt of halts) {
+      expect(halt).not.toContain('cannot admit');
+      expect(halt).not.toContain('Remediation planner fault');
+    }
   });
 });
