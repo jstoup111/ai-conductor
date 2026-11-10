@@ -351,6 +351,7 @@ async function runResumedConductor(
       events,
       config: ROUTING_CONFIG,
       stepRunner: { run },
+      sleepFn: async () => {},
       fullSuiteVerifier: PASSING_FULL_SUITE_VERIFIER,
       childRegionLifecycle: { enterHostRegion: (input) => enterRoutedHostForTest(input) as never },
     }).run();
@@ -1513,6 +1514,7 @@ describe('routed round conductor resume', () => {
                 },
                 { attemptId: options?.runId ?? 'nc4-audit', codeStamp: null },
               );
+              return { success: true };
             } else if (step === 'remediate' && options?.remediationRequest?.mode === 'gap-plan') {
               await persistFixtureProjectedRemediationPlan(worktree, options, [
                 {
@@ -1523,6 +1525,7 @@ describe('routed round conductor resume', () => {
                   tasks: [{ id: 'remove-refused-nc4', title: 'Remove the refused NC.4 behavior' }],
                 },
               ]);
+              return { success: true };
             } else if (step === 'remediate') {
               // PRD-widening reconciliation: today's NC.4 is the refused case.
               return {
@@ -1545,6 +1548,7 @@ describe('routed round conductor resume', () => {
             return { success: true };
           },
         },
+        sleepFn: async () => {},
       }).run();
     } finally {
       persister.stop();

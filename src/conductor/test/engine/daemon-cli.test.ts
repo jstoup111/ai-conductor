@@ -552,9 +552,11 @@ describe('protected artifact rotation rendering', () => {
 
 let daemonDir: string;
 let root: string;
+const gatedSnapshotRoots = new Set<string>();
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'daemon-cli-gated-snapshot-'));
+  gatedSnapshotRoots.add(root);
   daemonDir = join(root, '.daemon');
 });
 
@@ -576,7 +578,13 @@ describe('daemon event rendering', () => {
 });
 
 afterEach(async () => {
-  await rm(root, { recursive: true, force: true });
+  // This fixture shares its setup state across the daemon CLI cases. Retain
+  // every allocation until cleanup so each created root is removed even if
+  // setup advances before an earlier teardown runs.
+  await Promise.all([...gatedSnapshotRoots].map(async (path) => {
+    await rm(path, { recursive: true, force: true });
+    gatedSnapshotRoots.delete(path);
+  }));
 });
 
 function baseDeps(overrides: Partial<LocalWorkSourceDeps> = {}): LocalWorkSourceDeps {
