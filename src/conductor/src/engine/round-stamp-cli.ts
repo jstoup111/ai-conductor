@@ -8,6 +8,7 @@ import { resolveActiveChildForCurrentFeature } from './child-cursor.js';
 import { loadConfig } from './config.js';
 import { parseFeatureBranch } from './feature-branch-identity.js';
 import { readRepairMarker } from './routing/route-record-store.js';
+import { repairMarkerRefFor } from './routing/routing-refs.js';
 import { routingEligible } from './routing/route-types.js';
 
 export interface RoundStampCommand {
@@ -68,9 +69,17 @@ export async function runRoundStamp(deps: RoundStampDependencies): Promise<numbe
     resolveActiveChildForCurrentFeature(deps.projectRoot),
   ]);
   const config = loadedConfig.ok ? loadedConfig.config : undefined;
+  // `resolveActiveChildForCurrentFeature` already distinguishes this exact
+  // unreadable marker without probing routing refs on N=1 worktrees.
+  if (cursor.kind === 'git-error' && cursor.unreadableRef === repairMarkerRefFor(identity.slug)) {
+    return deps.verify ? 1 : 0;
+  }
   if (!routingEligible(cursor, config)) return 0;
 
   const marker = await readRepairMarker(deps.projectRoot, identity.slug);
+  // No marker means an unrelated commit, which remains permitted. An
+  // unreadable marker cannot prove the mandatory leaf attribution.
+  if (marker.kind === 'unreadable') return deps.verify ? 1 : 0;
   if (marker.kind !== 'marker' || !branchHostsMarker(identity, cursor, marker.marker.host, marker.marker.execution)) return 0;
 
   let message: string;
@@ -99,20 +108,22 @@ export async function runRoundStamp(deps: RoundStampDependencies): Promise<numbe
         rounds[0] === `Round: ${marker.marker.roundId}` && owners[0] === `Owner: ${owner}` ? 0 : 1;
     }
     if (leafExecution) {
-      await execa('git', [
+      const stamped = await execa('git', [
         'interpret-trailers', '--in-place', '--if-exists', 'replace',
         '--trailer', `Round: ${marker.marker.roundId}`,
         '--trailer', `Owner: ${owner}`, deps.commitMessagePath,
       ], { cwd: deps.projectRoot, reject: false });
-      return 0;
+      return stamped.exitCode === 0 ? 0 : 1;
     }
     if (/^Round:/m.test(parsed.stdout)) return 0;
-    await execa('git', [
+    const stamped = await execa('git', [
       'interpret-trailers', '--in-place', '--if-exists', 'addIfDifferent',
       '--trailer', `Round: ${marker.marker.roundId}`, deps.commitMessagePath,
     ], { cwd: deps.projectRoot, reject: false });
+    if (stamped.exitCode !== 0) return deps.verify ? 1 : 0;
   } catch {
-    // Attribution hooks fail open when their local Git plumbing is unavailable.
+    // Ordinary attribution remains advisory, but verification must fail closed.
+    return deps.verify ? 1 : 0;
   }
   return 0;
 }

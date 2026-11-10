@@ -525,7 +525,7 @@ describe('routed host region entry (real local Git)', () => {
 
   // Covers: task:50
   it('writes a single-host round on the leaf and pins the pre-append leaf tip', async () => {
-    const subject = await fixture();
+    const subject = await fixture('audit', { execution: 'leaf' });
     const leafTip = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
     await subject.git(['update-ref', '-d', closureRefFor('demo', child)]);
 
@@ -535,6 +535,10 @@ describe('routed host region entry (real local Git)', () => {
     await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
       kind: 'record', record: { entry: { pinnedBase: leafTip }, hosts: { 1: 'repairing' } },
     });
+    const stored = await readRouteRecord(subject.repo, 'demo', roundId);
+    expect(stored).toMatchObject({ kind: 'record' });
+    if (stored.kind !== 'record') throw new Error('route record disappeared');
+    expect(Object.hasOwn(stored.record, 'placements')).toBe(false);
     await expect(readFile(join(subject.repo, planPath), 'utf8')).resolves.toContain('### Task rem-prd-audit-T1:');
   });
 
