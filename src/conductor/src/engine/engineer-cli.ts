@@ -2244,8 +2244,9 @@ export async function dispatchEngineer(
         const host = requireProviderCapability(provider, 'interactiveLaunch');
         const executable = resolveProviderExecutable(provider);
         const environment = opts.env ?? process.env;
-        const nestedHost = BUILT_IN_PROVIDERS.find(({ interactiveLaunch }) =>
-          interactiveLaunch?.sessionMarkers.some((marker) => Boolean(environment[marker])),
+        const nestedHost = BUILT_IN_PROVIDERS.find((candidate) =>
+          'interactiveLaunch' in candidate
+          && candidate.interactiveLaunch.sessionMarkers.some((marker) => Boolean(environment[marker])),
         );
         if (nestedHost) {
           const detected = nestedHost.displayName;
