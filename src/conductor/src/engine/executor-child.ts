@@ -90,10 +90,12 @@ export function withExecutorBrokerProxies(
     createWorktree(order: WorkOrder, lifecycle: ReturnType<typeof createWorktreeLifecycleProxy>): Promise<{ path: string }>;
     run(input: ExecutorChildRunInput): Promise<FeatureExecutionOutcome>;
     liveBoundaryEnabled?: boolean;
+    /** Test-only in-process forks must not replace their supervisor's console. */
+    forwardConsole?: boolean;
   },
 ): ExecutorChildDeps {
   const client = createExecutorRequestClient(port);
-  const restoreConsole = teeExecutorConsole(port);
+  const restoreConsole = deps.forwardConsole === false ? () => {} : teeExecutorConsole(port);
   const run = deps.run;
   return {
     ...deps,

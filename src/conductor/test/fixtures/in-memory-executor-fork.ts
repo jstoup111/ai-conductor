@@ -27,6 +27,11 @@ export interface InMemoryExecutorForkOptions {
   readonly onHello?: (hello: { readonly engineVersionId: string }) => void;
   /** Per-child console lines, keyed by the dispatched feature slug. */
   readonly consoleSinks?: Map<string, string[]>;
+  /**
+   * An in-memory child shares the test process with its supervisor. Opt in only
+   * when a test specifically exercises the child console forwarding boundary.
+   */
+  readonly captureConsole?: boolean;
 }
 
 type Listener = (value?: unknown) => void;
@@ -148,6 +153,7 @@ export function createInMemoryExecutorFork({
   handshake = 'normal',
   onHello,
   consoleSinks,
+  captureConsole = false,
 }: InMemoryExecutorForkOptions): NonNullable<ChildFeatureExecutorDeps['fork']> {
   // A real child installs these process-global services at process start. The
   // test host owns them once and children therefore inherit rather than
@@ -164,6 +170,7 @@ export function createInMemoryExecutorFork({
           createWorktree: runtime.createWorktree,
           run: runtime.run,
           waitForSupervisorVisualizerClose: true,
+          forwardConsole: captureConsole,
           exit: () => child.exit(),
         }));
       });

@@ -151,7 +151,11 @@ describe('in-memory executor fork', () => {
     const resolver: BotCoAuthorResolver = { prepare: async () => ({ kind: 'unconfigured' }), current: () => undefined };
     installDaemonBotCoAuthor(resolver);
     const sinks = new Map<string, string[]>();
-    const childExecutor = executor(fixture.root, createInMemoryExecutorFork({ projectRoot: fixture.root, consoleSinks: sinks }));
+    const childExecutor = executor(fixture.root, createInMemoryExecutorFork({
+      projectRoot: fixture.root,
+      consoleSinks: sinks,
+      captureConsole: true,
+    }));
 
     const first = childExecutor.execute(fixture.order);
     await vi.waitFor(() => expect(entered.has('first')).toBe(true));
