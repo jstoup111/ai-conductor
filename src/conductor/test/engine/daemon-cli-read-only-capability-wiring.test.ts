@@ -12,6 +12,7 @@ import { allInstalledProviderDiscoveryRunner } from './boot-test-helpers.js';
 import { createInMemoryExecutorFork, useTempEngineStore } from '../fixtures/in-memory-executor-fork.js';
 import { commitAll, initTestRepo } from '../fixtures/git-repo.js';
 
+// Covers: task:rem-prd-audit-refusal-ca8fa374-6174-42f9-8840-ced0fff2fb94, task:rem-prd-audit-refusal-ca8fa374-6174-42f9-8840-ced0fff2fb94-2
 const seams = vi.hoisted(() => ({
   prepareWorktree: vi.fn(),
 }));
