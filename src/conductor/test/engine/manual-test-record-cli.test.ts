@@ -21,22 +21,24 @@ describe('engine/manual-test-record-cli', () => {
 
     it('detects `manual-test-record --results <p> --pipeline-dir <d>`', () => {
       expect(
-        detectManualTestRecordCommand(
-          argv('manual-test-record', '--results', 'p', '--pipeline-dir', '/abs/d'),
-        ),
+        detectManualTestRecordCommand(argv('manual-test-record', '--results', 'p', '--pipeline-dir', '/abs/d')),
       ).toEqual({ kind: 'results', resultsPath: 'p', pipelineDir: '/abs/d' });
     });
 
     it('detects `manual-test-record --skip --reason <r>` without a pipeline directory', () => {
-      expect(
-        detectManualTestRecordCommand(argv('manual-test-record', '--skip', '--reason', 'r')),
-      ).toEqual({ kind: 'skip', reason: 'r', pipelineDir: undefined });
+      expect(detectManualTestRecordCommand(argv('manual-test-record', '--skip', '--reason', 'r'))).toEqual({
+        kind: 'skip',
+        reason: 'r',
+        pipelineDir: undefined,
+      });
     });
 
     it('detects `manual-test-record --results <p>` without a pipeline directory', () => {
-      expect(
-        detectManualTestRecordCommand(argv('manual-test-record', '--results', 'p')),
-      ).toEqual({ kind: 'results', resultsPath: 'p', pipelineDir: undefined });
+      expect(detectManualTestRecordCommand(argv('manual-test-record', '--results', 'p'))).toEqual({
+        kind: 'results',
+        resultsPath: 'p',
+        pipelineDir: undefined,
+      });
     });
 
     it('returns {kind:"guide"} when --pipeline-dir is relative (skip mode)', () => {
@@ -49,9 +51,7 @@ describe('engine/manual-test-record-cli', () => {
 
     it('returns {kind:"guide"} when --pipeline-dir is relative (results mode)', () => {
       expect(
-        detectManualTestRecordCommand(
-          argv('manual-test-record', '--results', 'p', '--pipeline-dir', 'relative/dir'),
-        ),
+        detectManualTestRecordCommand(argv('manual-test-record', '--results', 'p', '--pipeline-dir', 'relative/dir')),
       ).toEqual({ kind: 'guide' });
     });
 
@@ -68,16 +68,7 @@ describe('engine/manual-test-record-cli', () => {
     it('returns {kind:"guide"} when both --skip and --results are present', () => {
       expect(
         detectManualTestRecordCommand(
-          argv(
-            'manual-test-record',
-            '--skip',
-            '--reason',
-            'r',
-            '--results',
-            'p',
-            '--pipeline-dir',
-            'd',
-          ),
+          argv('manual-test-record', '--skip', '--reason', 'r', '--results', 'p', '--pipeline-dir', 'd'),
         ),
       ).toEqual({ kind: 'guide' });
     });
@@ -172,10 +163,7 @@ describe('engine/manual-test-record-cli', () => {
       expect(runners.writeFile).toHaveBeenCalledTimes(1);
       const [writtenPath] = (runners.writeFile as ReturnType<typeof vi.fn>).mock.calls[0];
       expect(writtenPath).not.toBe('/abs/pipeline/manual-test-results.md');
-      expect(runners.rename).toHaveBeenCalledWith(
-        writtenPath,
-        '/abs/pipeline/manual-test-results.md',
-      );
+      expect(runners.rename).toHaveBeenCalledWith(writtenPath, '/abs/pipeline/manual-test-results.md');
     });
 
     it('fails closed when writeFile throws: returns non-zero, never renames, temp file cleaned up', async () => {
@@ -298,9 +286,7 @@ describe('engine/manual-test-record-cli', () => {
         runners,
       );
       expect(code).toBe(0);
-      expect(files.get('/abs/pipeline/manual-test-results.md')).toContain(
-        '<!-- manual-test:warning -->',
-      );
+      expect(files.get('/abs/pipeline/manual-test-results.md')).toContain('<!-- manual-test:warning -->');
     });
 
     it('does not machine-mark WARN mentioned only in descriptive text', async () => {
@@ -316,9 +302,7 @@ describe('engine/manual-test-record-cli', () => {
         runners,
       );
       expect(code).toBe(0);
-      expect(files.get('/abs/pipeline/manual-test-results.md')).not.toContain(
-        '<!-- manual-test:warning -->',
-      );
+      expect(files.get('/abs/pipeline/manual-test-results.md')).not.toContain('<!-- manual-test:warning -->');
     });
 
     it('appends an Attempt 2 section after an existing Attempt 1, preserving prior content', async () => {

@@ -1,6 +1,17 @@
 export * from './types/index.js';
 export { wireOtelVisualizer } from './engine/otel/wire.js';
-export { parseArgs, createProgram, detectBuildReviewAcceptCommand, detectBuildReviewFindingsCommand, detectBuildReviewRecordReducedCoverageCommand, detectBuildReviewResolveCaseCommand, detectDoneWhenAcceptCommand, detectHaltClearCommand, detectKickbackBudgetCommand, type CLIOptions } from './cli.js';
+export {
+  parseArgs,
+  createProgram,
+  detectBuildReviewAcceptCommand,
+  detectBuildReviewFindingsCommand,
+  detectBuildReviewRecordReducedCoverageCommand,
+  detectBuildReviewResolveCaseCommand,
+  detectDoneWhenAcceptCommand,
+  detectHaltClearCommand,
+  detectKickbackBudgetCommand,
+  type CLIOptions,
+} from './cli.js';
 export { runShipmentReconcileAction } from './engine/shipment-reconcile-action.js';
 
 import type { RunMode } from './types/index.js';
@@ -51,10 +62,7 @@ import {
   validateProviderInstallation,
   validateRegisteredProviderSelections,
 } from './engine/provider-selection.js';
-import {
-  discoverInstalledProviders,
-  type ProviderVersionProbeRunner,
-} from './engine/provider-discovery.js';
+import { discoverInstalledProviders, type ProviderVersionProbeRunner } from './engine/provider-discovery.js';
 import {
   resolveProviderModelTiers,
   validateConfiguredProviderModels,
@@ -68,11 +76,7 @@ import {
 } from './engine/build-review-read-only-capability.js';
 import { ConductorEventEmitter } from './ui/events.js';
 import type { TerminalRendererOptions } from './ui/terminal-renderer.js';
-import {
-  emitDeprecatedConfigKeyEvents,
-  loadConfig,
-  loadMergedConfig,
-} from './engine/config.js';
+import { emitDeprecatedConfigKeyEvents, loadConfig, loadMergedConfig } from './engine/config.js';
 import { renderDiagramsForFile, defaultRenderDeps } from './engine/mermaid-renderer.js';
 import { readState } from './engine/state.js';
 import {
@@ -112,7 +116,12 @@ import * as stackRoundsCli from './engine/stack-rounds-cli.js';
 import { dispatchStackOwnersCommand } from './engine/stack-owners-cli.js';
 import { dispatchStackRestackResolve } from './engine/stack-restack-resolve-cli.js';
 import { dispatchHaltClearCommand } from './engine/halt-clear-cli.js';
-import { dispatchBuildReviewAccept, dispatchBuildReviewFindings, dispatchBuildReviewRecordReducedCoverage, dispatchBuildReviewResolveCase } from './engine/build-review-cli.js';
+import {
+  dispatchBuildReviewAccept,
+  dispatchBuildReviewFindings,
+  dispatchBuildReviewRecordReducedCoverage,
+  dispatchBuildReviewResolveCase,
+} from './engine/build-review-cli.js';
 import { dispatchDoneWhenAccept } from './engine/done-when-accept-cli.js';
 import type { StepName } from './types/index.js';
 import { ALL_STEPS, validateFromStep } from './engine/steps.js';
@@ -124,10 +133,7 @@ import {
   type InteractiveConductorRunLeaseAcquisition,
 } from './engine/interactive-run-lease.js';
 import { detectAutoResume } from './engine/auto-resume.js';
-import {
-  verifyCompleteState,
-  formatGapReport,
-} from './engine/complete-verifier.js';
+import { verifyCompleteState, formatGapReport } from './engine/complete-verifier.js';
 import { ensureClaudeSettings } from './engine/preflight.js';
 import { spawnAutoUpdateCheck } from './engine/auto-update-check.js';
 import { createLiveRegion } from './ui/live-region.js';
@@ -136,11 +142,7 @@ import { runProjectPrelude } from './engine/project-prelude.js';
 import { discoverPlugins } from './engine/plugin-loader.js';
 import { registerCliBuiltins } from './cli-builtins.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
-import {
-  EventPersister,
-  startOperatorEventSpine,
-  startSessionEventTail,
-} from './engine/event-persister.js';
+import { EventPersister, startOperatorEventSpine, startSessionEventTail } from './engine/event-persister.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { wireInteractiveOtelMetrics, wireOtelVisualizer } from './engine/otel/wire.js';
 import type { OtelVisualizerStartContext } from './engine/otel/wire.js';
@@ -174,22 +176,13 @@ import {
   detectUnknownDaemonSubcommand,
   type DaemonCommandOptions,
 } from './engine/daemon-command.js';
-import {
-  detectDaemonExitWitnessCommand,
-  dispatchDaemonExitWitness,
-} from './engine/daemon-exit-witness.js';
+import { detectDaemonExitWitnessCommand, dispatchDaemonExitWitness } from './engine/daemon-exit-witness.js';
 import { detectRenderCommand, dispatchRender } from './engine/render-cli.js';
 import { detectRateCardCommand, dispatchRateCard } from './engine/rate-card-cli.js';
 import { detectDecisionsCommand, dispatchDecisions } from './engine/decisions-cli.js';
-import {
-  detectShippedRecordCommand,
-  dispatchShippedRecord,
-} from './engine/shipped-record-cli.js';
+import { detectShippedRecordCommand, dispatchShippedRecord } from './engine/shipped-record-cli.js';
 import { detectTranscriptsCommand, dispatchTranscripts } from './engine/transcripts-cli.js';
-import {
-  detectShipmentEvidenceCommand,
-  dispatchShipmentEvidence,
-} from './engine/shipment-evidence-cli.js';
+import { detectShipmentEvidenceCommand, dispatchShipmentEvidence } from './engine/shipment-evidence-cli.js';
 import { detectDocsPruneCommand, dispatchDocsPrune } from './engine/docs-prune-cli.js';
 
 import {
@@ -203,65 +196,26 @@ import {
   dispatchManualTestRecord,
   makeProductionManualTestRecordRunners,
 } from './engine/manual-test-record-cli.js';
-import {
-  detectDeriveFeedbackCommand,
-  dispatchDeriveFeedback,
-} from './engine/derive-feedback-cli.js';
-import {
-  detectDaemonObserveCommand,
-  dispatchDaemonObserve,
-} from './engine/daemon-observe-cli.js';
-import {
-  detectDaemonParkCommand,
-  dispatchDaemonPark,
-  resolveMainRepoRoot,
-} from './engine/daemon-park-cli.js';
+import { detectDeriveFeedbackCommand, dispatchDeriveFeedback } from './engine/derive-feedback-cli.js';
+import { detectDaemonObserveCommand, dispatchDaemonObserve } from './engine/daemon-observe-cli.js';
+import { detectDaemonParkCommand, dispatchDaemonPark, resolveMainRepoRoot } from './engine/daemon-park-cli.js';
 import { detectTaskCommand, dispatchTaskCommand } from './engine/task-cli.js';
 import { detectGithubOperationCommand, dispatchGithubOperationCommand } from './engine/github-operations-cli.js';
 import { detectGithubBoundaryAuditCommand, dispatchGithubBoundaryAudit } from './engine/github-invocation-audit-cli.js';
 import { createTerminalGithubOperationConfirmation } from './engine/github-operation-terminal-confirmation.js';
-import {
-  detectScopeCheckCommand,
-  loadScopeCheckEnforcement,
-  runScopeCheck,
-} from './engine/scope-check-cli.js';
-import {
-  detectTaskMembershipCheckCommand,
-  runTaskMembershipCheck,
-} from './engine/task-membership-check-cli.js';
-import {
-  detectRoundStampCommand,
-  runRoundStamp,
-} from './engine/round-stamp-cli.js';
-import {
-  detectStackCommitGuardCommand,
-  runStackCommitGuard,
-} from './engine/stack-commit-guard-cli.js';
-import {
-  detectTestSuiteCommand,
-  dispatchTestSuiteCommand,
-} from './engine/test-suite-cli.js';
-import {
-  detectScopedRunCommand,
-  dispatchScopedRunCommand,
-} from './engine/scoped-run-cli.js';
+import { detectScopeCheckCommand, loadScopeCheckEnforcement, runScopeCheck } from './engine/scope-check-cli.js';
+import { detectTaskMembershipCheckCommand, runTaskMembershipCheck } from './engine/task-membership-check-cli.js';
+import { detectRoundStampCommand, runRoundStamp } from './engine/round-stamp-cli.js';
+import { detectStackCommitGuardCommand, runStackCommitGuard } from './engine/stack-commit-guard-cli.js';
+import { detectTestSuiteCommand, dispatchTestSuiteCommand } from './engine/test-suite-cli.js';
+import { detectScopedRunCommand, dispatchScopedRunCommand } from './engine/scoped-run-cli.js';
 import { detectEvidenceCommand, dispatchEvidence } from './engine/evidence-cli.js';
 import { detectRewindCommand, dispatchRewindCommand } from './engine/rewind.js';
-import {
-  detectMissingResealReasonCommand,
-  detectResealCommand,
-  dispatchResealCommand,
-} from './engine/reseal-cli.js';
+import { detectMissingResealReasonCommand, detectResealCommand, dispatchResealCommand } from './engine/reseal-cli.js';
 import { detectKpiCommand, dispatchKpi } from './engine/kpi-cli.js';
-import {
-  detectBuildTailCommand,
-  dispatchBuildTailCommand,
-} from './engine/build-tail-cli.js';
+import { detectBuildTailCommand, dispatchBuildTailCommand } from './engine/build-tail-cli.js';
 import { detectBuildAuthStatusCommand, dispatchBuildAuthStatus } from './engine/build-auth-cli.js';
-import {
-  detectHaltIssuesSweepCommand,
-  dispatchHaltIssuesSweep,
-} from './engine/halt-issues/halt-issues-cli.js';
+import { detectHaltIssuesSweepCommand, dispatchHaltIssuesSweep } from './engine/halt-issues/halt-issues-cli.js';
 import { makeGitRunner, originDefaultBranch } from './engine/rebase.js';
 import { createBlockerResolver } from './engine/blocker-resolver.js';
 import { createOrderingSource } from './engine/ordering-source.js';
@@ -458,12 +412,17 @@ export async function buildDaemonModeOptions(
   const sessionName = deps.sessionNameForRepo(projectRoot);
   const triggerSelfRestart = (await deps.hasSession(sessionName))
     ? async () => {
-        const foregroundCommand = await (deps.resolveDaemonForegroundCommand ?? resolveDaemonForegroundCommand)(projectRoot);
+        const foregroundCommand = await (deps.resolveDaemonForegroundCommand ?? resolveDaemonForegroundCommand)(
+          projectRoot,
+        );
         const replayedFlags = daemonCmd.operatorFlagArgs?.length
           ? ` ${daemonCmd.operatorFlagArgs.map(shellQuote).join(' ')}`
           : '';
         const command = `${foregroundCommand}${replayedFlags}`;
-        const witnessCommand = (deps.buildDaemonExitWitnessCommand ?? buildDaemonExitWitnessCommand)(command, projectRoot);
+        const witnessCommand = (deps.buildDaemonExitWitnessCommand ?? buildDaemonExitWitnessCommand)(
+          command,
+          projectRoot,
+        );
         await deps.respawnPane(sessionName, undefined, witnessCommand);
       }
     : undefined;
@@ -513,22 +472,30 @@ export async function probeInteractiveReadOnlyReviewCapabilities(options: {
 
   const probe = options.probe ?? probeReadOnlyReviewCapability;
   const warn = options.warn ?? console.warn;
-  return Object.freeze(Object.fromEntries(await Promise.all(providers.map(async (provider) => {
-    const capability = await probe({
-      provider,
-      platform: options.platform ?? process.platform,
-      scratchDir: join(options.projectRoot, '.pipeline', 'read-only-review-probe'),
-      runProcess: async (executable, args) => {
-        const result = await execa(executable, [...args], { reject: false });
-        return { exitCode: result.exitCode ?? 1, stdout: result.stdout, stderr: result.stderr };
-      },
-    });
-    await options.events.emit({ type: 'build_review_read_only_capability', ...capability });
-    if (capability.status === 'unavailable') {
-      warn(`⚠ Config warning: Read-only build-review capability unavailable for ${capability.provider} on ${capability.platform}: ${capability.reason}`);
-    }
-    return [provider, capability] as const;
-  }))));
+  return Object.freeze(
+    Object.fromEntries(
+      await Promise.all(
+        providers.map(async (provider) => {
+          const capability = await probe({
+            provider,
+            platform: options.platform ?? process.platform,
+            scratchDir: join(options.projectRoot, '.pipeline', 'read-only-review-probe'),
+            runProcess: async (executable, args) => {
+              const result = await execa(executable, [...args], { reject: false });
+              return { exitCode: result.exitCode ?? 1, stdout: result.stdout, stderr: result.stderr };
+            },
+          });
+          await options.events.emit({ type: 'build_review_read_only_capability', ...capability });
+          if (capability.status === 'unavailable') {
+            warn(
+              `⚠ Config warning: Read-only build-review capability unavailable for ${capability.provider} on ${capability.platform}: ${capability.reason}`,
+            );
+          }
+          return [provider, capability] as const;
+        }),
+      ),
+    ),
+  );
 }
 
 /**
@@ -634,9 +601,7 @@ interface VisualizerStartContextInput {
 }
 
 /** Build identity for every visualizer without fabricating unavailable values. */
-export function createVisualizerStartContext(
-  input: VisualizerStartContextInput,
-): OtelVisualizerStartContext {
+export function createVisualizerStartContext(input: VisualizerStartContextInput): OtelVisualizerStartContext {
   return {
     runId: input.runId,
     project: input.project,
@@ -663,10 +628,7 @@ export async function resolveCurrentBranch(projectRoot: string): Promise<string 
 
 // --- Merged worktree cleanup ---
 
-async function cleanupMergedWorktrees(
-  projectRoot: string,
-  promptHost: TerminalPromptHost,
-): Promise<void> {
+async function cleanupMergedWorktrees(projectRoot: string, promptHost: TerminalPromptHost): Promise<void> {
   const features = await scanResumableFeatures(projectRoot);
   const manager = new WorktreeManager(projectRoot);
   let cleaned = 0;
@@ -858,9 +820,10 @@ export async function dispatchCliEntry(input: {
   // Keep the production-process call explicit: the structural boundary test
   // guards this ordering, while injected argv remains available to the entry
   // collaboration fixture.
-  const verdict = input.argv === process.argv
-    ? guardDaemonSessionInvocation(process.argv)
-    : guardDaemonSessionInvocation(input.argv, environment);
+  const verdict =
+    input.argv === process.argv
+      ? guardDaemonSessionInvocation(process.argv)
+      : guardDaemonSessionInvocation(input.argv, environment);
   if (!verdict.allowed) {
     await (input.emitRefusal ?? emitDaemonSessionRefusal)(verdict, { environment, diagnostic });
     diagnostic(verdict.message);
@@ -900,37 +863,41 @@ async function dispatchCliCommand(): Promise<void> {
       import('./engine/self-host/detector.js'),
     ]);
     const projectRoot = process.cwd();
-    await runExecutorChild(process as never, withExecutorBrokerProxies(process as never, {
-      admitDispatch: (order) => makeExecutorChildDispatchAdmission({ projectRoot }, order),
-      // Reuse the daemon seam, which verifies the WorkOrder before its first
-      // worktree side effect and performs the pinned-base create under the
-      // brokered lifecycle lock.
-      createWorktree: async (order, worktreeLifecycle) => {
-        const runnerDeps = makeFeatureRunnerDeps({
-          projectRoot,
-          worktreeBase: join(projectRoot, '.worktrees'),
-          baseBranch: 'main',
-          runConductorInWorktree: async () => {},
-          workOrderGit: createWorkOrderGitRunner(projectRoot),
-          worktreeLifecycle: worktreeLifecycle as never,
-        });
-        return runnerDeps.createWorktree(order.slug, order);
-      },
-      run: makeExecutorChildRun({ projectRoot }),
-      // The WorkOrder is the supervisor's authority for self-host mode.  The
-      // detector is only a compatibility fallback for pre-field orders.
-      liveBoundaryEnabled: await defaultSelfHostDetector().isSelfHost(projectRoot),
-      log: (line) => { process.send?.({ kind: 'log', level: 'info', message: line }); },
-      exit: (code) => { process.exitCode = code; },
-    }));
+    await runExecutorChild(
+      process as never,
+      withExecutorBrokerProxies(process as never, {
+        admitDispatch: (order) => makeExecutorChildDispatchAdmission({ projectRoot }, order),
+        // Reuse the daemon seam, which verifies the WorkOrder before its first
+        // worktree side effect and performs the pinned-base create under the
+        // brokered lifecycle lock.
+        createWorktree: async (order, worktreeLifecycle) => {
+          const runnerDeps = makeFeatureRunnerDeps({
+            projectRoot,
+            worktreeBase: join(projectRoot, '.worktrees'),
+            baseBranch: 'main',
+            runConductorInWorktree: async () => {},
+            workOrderGit: createWorkOrderGitRunner(projectRoot),
+            worktreeLifecycle: worktreeLifecycle as never,
+          });
+          return runnerDeps.createWorktree(order.slug, order);
+        },
+        run: makeExecutorChildRun({ projectRoot }),
+        // The WorkOrder is the supervisor's authority for self-host mode.  The
+        // detector is only a compatibility fallback for pre-field orders.
+        liveBoundaryEnabled: await defaultSelfHostDetector().isSelfHost(projectRoot),
+        log: (line) => {
+          process.send?.({ kind: 'log', level: 'info', message: line });
+        },
+        exit: (code) => {
+          process.exitCode = code;
+        },
+      }),
+    );
     return;
   }
   // Per-command help is answered by `main()` before the daemon-session guard,
   // so it never reaches this dispatcher.
-  const nonDispatchingExitCode = await dispatchNonDispatchingCliCommand(
-    process.argv,
-    process.cwd(),
-  );
+  const nonDispatchingExitCode = await dispatchNonDispatchingCliCommand(process.argv, process.cwd());
   if (nonDispatchingExitCode !== undefined) {
     process.exitCode = nonDispatchingExitCode;
     return;
@@ -1098,10 +1065,7 @@ async function dispatchCliCommand(): Promise<void> {
     return;
   }
 
-  if (
-    process.argv[2] === 'config' &&
-    process.argv.slice(3).some((arg) => arg === '--help' || arg === '-h')
-  ) {
+  if (process.argv[2] === 'config' && process.argv.slice(3).some((arg) => arg === '--help' || arg === '-h')) {
     const config = createProgram().commands.find((command) => command.name() === 'config');
     process.stdout.write(config?.helpInformation() ?? '');
     return;
@@ -1215,7 +1179,11 @@ async function dispatchCliCommand(): Promise<void> {
   // mirroring the finish-record dispatch pattern above.
   const mtRecordCmd = detectManualTestRecordCommand(process.argv);
   if (mtRecordCmd) {
-    const code = await dispatchManualTestRecord(mtRecordCmd, process.cwd(), makeProductionManualTestRecordRunners({ git: makeProductionGit() }));
+    const code = await dispatchManualTestRecord(
+      mtRecordCmd,
+      process.cwd(),
+      makeProductionManualTestRecordRunners({ git: makeProductionGit() }),
+    );
     process.exit(code);
   }
 
@@ -1280,19 +1248,23 @@ async function dispatchCliCommand(): Promise<void> {
   const taskMembershipCheckCmd = detectTaskMembershipCheckCommand(process.argv);
   if (taskMembershipCheckCmd) {
     const projectRoot = process.env.CONDUCT_TASK_MEMBERSHIP_PROJECT_ROOT ?? process.cwd();
-    process.exit(await runTaskMembershipCheck({
-      projectRoot,
-      commitMessagePath: taskMembershipCheckCmd.commitMessagePath,
-    }));
+    process.exit(
+      await runTaskMembershipCheck({
+        projectRoot,
+        commitMessagePath: taskMembershipCheckCmd.commitMessagePath,
+      }),
+    );
   }
 
   const roundStampCmd = detectRoundStampCommand(process.argv);
   if (roundStampCmd) {
     const projectRoot = process.env.CONDUCT_ROUND_STAMP_PROJECT_ROOT ?? process.cwd();
-    process.exit(await runRoundStamp({
-      projectRoot,
-      commitMessagePath: roundStampCmd.commitMessagePath,
-    }));
+    process.exit(
+      await runRoundStamp({
+        projectRoot,
+        commitMessagePath: roundStampCmd.commitMessagePath,
+      }),
+    );
   }
 
   if (detectStackCommitGuardCommand(process.argv)) {
@@ -1375,10 +1347,7 @@ async function dispatchCliCommand(): Promise<void> {
   // status/logs + management verbs) and exit. MUST precede every daemon dispatcher
   // below — otherwise detectDaemonCommand treats `--help` as an unknown flag and
   // LAUNCHES a daemon run instead of showing help (a real footgun).
-  if (
-    process.argv[2] === 'daemon' &&
-    process.argv.slice(3).some((a) => a === '--help' || a === '-h')
-  ) {
+  if (process.argv[2] === 'daemon' && process.argv.slice(3).some((a) => a === '--help' || a === '-h')) {
     process.stdout.write(renderDaemonHelp());
     process.exit(0);
   }
@@ -1528,307 +1497,145 @@ async function dispatchCliCommand(): Promise<void> {
   let subscriber: Awaited<ReturnType<typeof bootDispatchingCliProviders>>;
   let visualizerList: ReturnType<typeof buildInteractiveVisualizers> = [];
   try {
+    let projectRoot = process.cwd();
+    let pipelineDir = join(projectRoot, '.pipeline');
+    let stateFilePath = join(pipelineDir, 'conduct-state.json');
+    const resumeNeedsFeatureSelection = opts.resume && !opts.featureDesc;
 
-  let projectRoot = process.cwd();
-  let pipelineDir = join(projectRoot, '.pipeline');
-  let stateFilePath = join(pipelineDir, 'conduct-state.json');
-  const resumeNeedsFeatureSelection = opts.resume && !opts.featureDesc;
+    // Shared UI state: one live region, one prompt host. The host suspends the
+    // region around each readline prompt so dashboard and prompts don't fight
+    // for the terminal.
+    const liveRegion = createLiveRegion();
+    const events = new ConductorEventEmitter();
 
-  // Shared UI state: one live region, one prompt host. The host suspends the
-  // region around each readline prompt so dashboard and prompts don't fight
-  // for the terminal.
-  const liveRegion = createLiveRegion();
-  const events = new ConductorEventEmitter();
-
-  // Load config (optional — conductor works without it)
-  const installedHarnessVersion = await installedHarnessVersionForConfig(__dirname);
-  const configResult = await loadConfig(projectRoot, installedHarnessVersion);
-  const config = configResult.ok ? configResult.config : undefined;
-  if (configResult.ok && configResult.warnings.length > 0) {
-    for (const w of configResult.warnings) {
-      console.warn(`⚠ Config warning: ${w}`);
-    }
-  }
-  if (!configResult.ok && configResult.error.type !== 'missing') {
-    console.error(`Config error: ${configResult.error.message}`);
-    process.exit(1);
-  }
-
-  // Validate --from against the resolved step registry (built-ins + any
-  // config-declared custom steps) BEFORE it reaches the conductor (#1027).
-  const fromStepError = validateFromStep(opts.from, config ?? {});
-  if (fromStepError) {
-    console.error(fromStepError);
-    process.exit(1);
-  }
-
-  // Resolve the Mermaid renderer from the MERGED config (the user-level
-  // ~/.ai-conductor/config.yml is where `install` writes the chosen preset).
-  // The host renders diagrams at the approval gate; best-effort, with a notice
-  // on any skip/failure so the human knows to fall back to the raw Markdown.
-  const mergedResult = await loadMergedConfig(projectRoot, installedHarnessVersion);
-  const mermaidCfg = mergedResult.ok ? mergedResult.config.mermaid_renderer : undefined;
-  const renderDeps = defaultRenderDeps((m) => console.error(m));
-  const promptHost = new TerminalPromptHost(liveRegion, {
-    renderDiagrams: async (file, content) => {
-      const result = await renderDiagramsForFile(file, content, mermaidCfg, renderDeps);
-      // Return the notice so the host logs it on its own channel (TUI-safe).
-      return result.notice;
-    },
-  });
-
-  // Handle --report: render summary from events.jsonl and exit (read-only, no Claude session)
-  if (opts.report) {
-    const eventsLogPath = join(pipelineDir, 'events.jsonl');
-    try {
-      const report = renderReport(eventsLogPath);
-      console.log(report);
-    } catch (err) {
-      if (err instanceof ReportError) {
-        console.error(err.message);
-        process.exit(1);
-      }
-      throw err;
-    }
-    process.exit(0);
-  }
-
-  // Handle --status: show state and exit
-  if (opts.status) {
-    const stateResult = await readState(stateFilePath);
-    const state = stateResult.ok ? stateResult.value : {};
-    console.log('\n## Conductor State\n');
-    console.log(JSON.stringify(state, null, 2));
-    return;
-  }
-
-  // Handle --reset: clear state and exit
-  if (opts.reset) {
-    // Deliberate full clear — the one place a recorded pr_url is meant to go.
-    await mkdir(pipelineDir, { recursive: true });
-    await replaceCommandState(stateFilePath, 'reset conductor state');
-    console.log('State cleared.');
-    return;
-  }
-
-  // Handle --cleanup: check for merged worktrees and clean up
-  if (opts.cleanup) {
-    console.log('\nChecking for merged worktrees...\n');
-    await cleanupMergedWorktrees(projectRoot, promptHost);
-    return;
-  }
-
-  // Handle --diagnose: re-verify SHIP-phase evidence for the named (or
-  // current) feature and report gaps. Non-mutating; exits 1 if the state
-  // claims complete but evidence is missing, 0 otherwise.
-  if (opts.diagnose) {
-    let targetWorktree = projectRoot;
-    let targetFeatureDesc: string | undefined;
-    if (opts.featureDesc) {
-      const detection = await detectAutoResume(projectRoot, opts.featureDesc);
-      if (detection.kind === 'complete' || detection.kind === 'resume') {
-        targetWorktree = detection.worktreePath;
-        targetFeatureDesc = opts.featureDesc;
-      } else if (detection.kind === 'none') {
-        console.log(
-          `No conductor state found for "${opts.featureDesc}" — nothing to diagnose.`,
-        );
-        return;
-      } else {
-        // orphaned-state: surface the same message --resume would
-        console.error(
-          `\nOrphaned conductor state in ${detection.stateFilePath}.\n  Run ai-conductor --reset to clear, or recreate the worktree.\n`,
-        );
-        process.exit(1);
+    // Load config (optional — conductor works without it)
+    const installedHarnessVersion = await installedHarnessVersionForConfig(__dirname);
+    const configResult = await loadConfig(projectRoot, installedHarnessVersion);
+    const config = configResult.ok ? configResult.config : undefined;
+    if (configResult.ok && configResult.warnings.length > 0) {
+      for (const w of configResult.warnings) {
+        console.warn(`⚠ Config warning: ${w}`);
       }
     }
-    const verification = await verifyCompleteState(targetWorktree);
-    if (verification.ok) {
-      console.log(
-        `\nState OK: ${targetFeatureDesc ? `"${targetFeatureDesc}"` : 'this worktree'} has consistent SHIP-phase evidence.\n`,
-      );
+    if (!configResult.ok && configResult.error.type !== 'missing') {
+      console.error(`Config error: ${configResult.error.message}`);
+      process.exit(1);
+    }
+
+    // Validate --from against the resolved step registry (built-ins + any
+    // config-declared custom steps) BEFORE it reaches the conductor (#1027).
+    const fromStepError = validateFromStep(opts.from, config ?? {});
+    if (fromStepError) {
+      console.error(fromStepError);
+      process.exit(1);
+    }
+
+    // Resolve the Mermaid renderer from the MERGED config (the user-level
+    // ~/.ai-conductor/config.yml is where `install` writes the chosen preset).
+    // The host renders diagrams at the approval gate; best-effort, with a notice
+    // on any skip/failure so the human knows to fall back to the raw Markdown.
+    const mergedResult = await loadMergedConfig(projectRoot, installedHarnessVersion);
+    const mermaidCfg = mergedResult.ok ? mergedResult.config.mermaid_renderer : undefined;
+    const renderDeps = defaultRenderDeps((m) => console.error(m));
+    const promptHost = new TerminalPromptHost(liveRegion, {
+      renderDiagrams: async (file, content) => {
+        const result = await renderDiagramsForFile(file, content, mermaidCfg, renderDeps);
+        // Return the notice so the host logs it on its own channel (TUI-safe).
+        return result.notice;
+      },
+    });
+
+    // Handle --report: render summary from events.jsonl and exit (read-only, no Claude session)
+    if (opts.report) {
+      const eventsLogPath = join(pipelineDir, 'events.jsonl');
+      try {
+        const report = renderReport(eventsLogPath);
+        console.log(report);
+      } catch (err) {
+        if (err instanceof ReportError) {
+          console.error(err.message);
+          process.exit(1);
+        }
+        throw err;
+      }
+      process.exit(0);
+    }
+
+    // Handle --status: show state and exit
+    if (opts.status) {
+      const stateResult = await readState(stateFilePath);
+      const state = stateResult.ok ? stateResult.value : {};
+      console.log('\n## Conductor State\n');
+      console.log(JSON.stringify(state, null, 2));
       return;
     }
-    console.error(formatGapReport(targetFeatureDesc, targetWorktree, verification));
-    console.error(
-      '  To roll back feature_status and resume at the first failing step, run:\n' +
-        `    ai-conductor ${targetFeatureDesc ? `"${targetFeatureDesc}"` : ''}\n` +
-        '  …and answer "y" at the recovery prompt. To inspect raw state: ai-conductor --status\n',
-    );
-    process.exit(1);
-  }
 
-  // A stacked interactive run must own its feature before any foreground
-  // setup can create session state, managed context, or a worktree marker.
-  // Flat features deliberately keep the historical no-lease path. A bare
-  // --resume receives its feature identity from the selection below.
-  interactiveLease = await prepareInteractiveConductorRunWithLease({
-    projectRoot,
-    featureDesc: opts.featureDesc,
-    prepare: async () => {
-      if (!resumeNeedsFeatureSelection) {
-        await mkdir(pipelineDir, { recursive: true });
-        await ensureClaudeSettings(projectRoot);
-      }
-    },
-  });
-  if (interactiveLease.kind === 'refused') {
-    console.error(interactiveLease.message);
-    process.exitCode = 1;
-    return;
-  }
-  // Auto-resume: if a feature description was provided and a worktree for its
-  // slug already exists with in-progress state, silently redirect to that
-  // worktree and enable resume. --fresh bypasses this.
-  if (opts.featureDesc && !opts.resume && !opts.fresh && !opts.from) {
-    const detection = await detectAutoResume(projectRoot, opts.featureDesc);
-    if (detection.kind === 'resume') {
-      projectRoot = detection.worktreePath;
-      pipelineDir = join(projectRoot, '.pipeline');
-      stateFilePath = detection.stateFilePath;
+    // Handle --reset: clear state and exit
+    if (opts.reset) {
+      // Deliberate full clear — the one place a recorded pr_url is meant to go.
       await mkdir(pipelineDir, { recursive: true });
-      opts.resume = true;
-      const position =
-        detection.lastStep
-          ? `${detection.stepIndex}/${detection.totalSteps} (after ${detection.lastStep})`
-          : 'step 1';
-      console.log(
-        `\nResuming "${opts.featureDesc}" at ${position}. Use --fresh to start over.\n`,
-      );
-    } else if (detection.kind === 'complete') {
-      // Re-verify SHIP-phase evidence before trusting feature_status=complete.
-      // A prior buggy version of the conductor (pre-0.99.14) could mark a
-      // feature complete when pipeline exited mid-implementation without
-      // writing the halt marker — cascading lax SHIP gates would then fall
-      // through to feature_status=complete. This re-check self-heals those
-      // worktrees: if evidence is missing, we surface the gap and offer to
-      // roll back to the actual stopping point.
-      const verification = await verifyCompleteState(detection.worktreePath);
-      if (!verification.ok) {
-        console.warn(formatGapReport(opts.featureDesc, detection.worktreePath, verification));
-        const answer = await promptHost.ask(
-          'Roll back feature_status and resume at the first failing step? [Y/n/q]: ',
-        );
-        if (answer === 'n' || answer === 'q') {
-          console.log(
-            '\nNo changes made. To inspect: ai-conductor --status\n' +
-              `  To start over: ai-conductor --fresh ${opts.featureDesc ? `"${opts.featureDesc}"` : ''}\n`,
+      await replaceCommandState(stateFilePath, 'reset conductor state');
+      console.log('State cleared.');
+      return;
+    }
+
+    // Handle --cleanup: check for merged worktrees and clean up
+    if (opts.cleanup) {
+      console.log('\nChecking for merged worktrees...\n');
+      await cleanupMergedWorktrees(projectRoot, promptHost);
+      return;
+    }
+
+    // Handle --diagnose: re-verify SHIP-phase evidence for the named (or
+    // current) feature and report gaps. Non-mutating; exits 1 if the state
+    // claims complete but evidence is missing, 0 otherwise.
+    if (opts.diagnose) {
+      let targetWorktree = projectRoot;
+      let targetFeatureDesc: string | undefined;
+      if (opts.featureDesc) {
+        const detection = await detectAutoResume(projectRoot, opts.featureDesc);
+        if (detection.kind === 'complete' || detection.kind === 'resume') {
+          targetWorktree = detection.worktreePath;
+          targetFeatureDesc = opts.featureDesc;
+        } else if (detection.kind === 'none') {
+          console.log(`No conductor state found for "${opts.featureDesc}" — nothing to diagnose.`);
+          return;
+        } else {
+          // orphaned-state: surface the same message --resume would
+          console.error(
+            `\nOrphaned conductor state in ${detection.stateFilePath}.\n  Run ai-conductor --reset to clear, or recreate the worktree.\n`,
           );
-          return;
+          process.exit(1);
         }
-        // Default Y → roll back. Drop feature_status and flip the failing
-        // SHIP steps back to 'pending' so the conductor's resume index
-        // lands at the earliest one and the loop re-runs them.
-        projectRoot = detection.worktreePath;
-        pipelineDir = join(projectRoot, '.pipeline');
-        stateFilePath = join(pipelineDir, 'conduct-state.json');
-        await mkdir(pipelineDir, { recursive: true });
-        const r = await readState(stateFilePath);
-        if (!r.ok) {
-          throw new Error(`Feature recovery state read failed: ${r.error.message}`);
-        }
-        await recoverCommandState(stateFilePath, r.value, verification.failedSteps);
-        opts.resume = true;
-        console.log(
-          `\nRolled back. Resuming "${opts.featureDesc}" at ${verification.failedSteps[0]}.\n`,
-        );
-      } else {
-        const answer = await promptHost.ask(
-          `Feature "${opts.featureDesc}" is already marked complete (${detection.worktreePath}). Start over? [y/N]: `,
-        );
-        if (answer !== 'y') {
-          console.log('Exiting. Use --fresh to force a new start.');
-          return;
-        }
-        // User chose to start over — clear the existing state and continue fresh.
-        projectRoot = detection.worktreePath;
-        pipelineDir = join(projectRoot, '.pipeline');
-        stateFilePath = join(pipelineDir, 'conduct-state.json');
-        await mkdir(pipelineDir, { recursive: true });
-        // Explicit start-over — the prior run's pr_url is intentionally dropped.
-        await replaceCommandState(stateFilePath, 'start over conductor state');
       }
-    } else if (detection.kind === 'orphaned-state') {
-      // Root-level state says we're past the worktree step, but no worktree
-      // exists at any conventional location. Continuing would re-land all
-      // downstream artifacts on main and lose the per-feature isolation
-      // the worktree step is supposed to provide. Refuse and give the user
-      // a clear next-action.
-      console.error(
-        `\nOrphaned conductor state in ${detection.stateFilePath}.\n` +
-          `\n  Feature "${detection.featureDesc ?? opts.featureDesc}" was marked past the worktree step,\n` +
-          `  but no worktree exists at any of:\n` +
-          detection.expectedLocations.map((p) => `    - ${p}`).join('\n') +
-          `\n\n  Either:\n` +
-          `    1) Recreate the missing worktree at one of those paths, OR\n` +
-          `    2) Run \`ai-conductor --reset\` from this directory to clear the stale state\n` +
-          `       (you'll lose the recorded progress, but the actual code on the\n` +
-          `       feature branch — if it exists — is untouched).\n` +
-          `\n  Refusing to continue here so artifacts don't land on the wrong branch.\n`,
-      );
-      process.exitCode = 1;
-      return;
-    }
-  }
-
-  // Handle --resume: check for merged worktrees, then scan and present selection menu
-  if (opts.resume && !opts.featureDesc) {
-    await cleanupMergedWorktrees(projectRoot, promptHost);
-    const features = await scanResumableFeatures(projectRoot);
-    if (features.length === 0) {
-      console.error('No active features found in .worktrees/');
-      process.exitCode = 1;
-      return;
-    }
-
-    let selected = selectFeature(features, undefined);
-    if (!selected) {
-      // Multiple features — show menu and prompt
-      console.log(`\n${formatResumeMenu(features)}\n`);
-      const answer = await promptHost.ask(`Choose feature [0-${features.length}]: `);
-      const choice = parseInt(answer, 10);
-      selected = selectFeature(features, isNaN(choice) ? 0 : choice);
-      if (!selected) {
-        console.log('Cancelled.');
+      const verification = await verifyCompleteState(targetWorktree);
+      if (verification.ok) {
+        console.log(
+          `\nState OK: ${targetFeatureDesc ? `"${targetFeatureDesc}"` : 'this worktree'} has consistent SHIP-phase evidence.\n`,
+        );
         return;
       }
+      console.error(formatGapReport(targetFeatureDesc, targetWorktree, verification));
+      console.error(
+        '  To roll back feature_status and resume at the first failing step, run:\n' +
+          `    ai-conductor ${targetFeatureDesc ? `"${targetFeatureDesc}"` : ''}\n` +
+          '  …and answer "y" at the recovery prompt. To inspect raw state: ai-conductor --status\n',
+      );
+      process.exit(1);
     }
 
-    // Reconfigure paths to point at the selected worktree
-    projectRoot = selected.path;
-    pipelineDir = join(projectRoot, '.pipeline');
-    stateFilePath = join(pipelineDir, 'conduct-state.json');
-
-    if (!opts.featureDesc && selected.featureDesc) {
-      opts.featureDesc = selected.featureDesc;
-    }
-
-    // Also check for state in worktree root (legacy location)
-    const legacyStatePath = join(selected.path, 'conduct-state.json');
-    try {
-      const legacyState = await readFile(legacyStatePath, 'utf-8');
-      if (legacyState.trim()) {
-        // Use worktree root state if .pipeline state doesn't exist
-        const pipelineResult = await readState(stateFilePath);
-        if (!pipelineResult.ok || Object.keys(pipelineResult.value).length === 0) {
-          stateFilePath = legacyStatePath;
-        }
-      }
-    } catch {
-      // No legacy state — use .pipeline
-    }
-  }
-
-  // A bare --resume learns its stacked feature only after the non-mutating
-  // selection prompt. Acquire before materializing that selected worktree's
-  // pipeline or provider session state.
-  if (resumeNeedsFeatureSelection) {
+    // A stacked interactive run must own its feature before any foreground
+    // setup can create session state, managed context, or a worktree marker.
+    // Flat features deliberately keep the historical no-lease path. A bare
+    // --resume receives its feature identity from the selection below.
     interactiveLease = await prepareInteractiveConductorRunWithLease({
       projectRoot,
       featureDesc: opts.featureDesc,
       prepare: async () => {
-        await mkdir(pipelineDir, { recursive: true });
-        await ensureClaudeSettings(projectRoot);
+        if (!resumeNeedsFeatureSelection) {
+          await mkdir(pipelineDir, { recursive: true });
+          await ensureClaudeSettings(projectRoot);
+        }
       },
     });
     if (interactiveLease.kind === 'refused') {
@@ -1836,269 +1643,412 @@ async function dispatchCliCommand(): Promise<void> {
       process.exitCode = 1;
       return;
     }
-  }
+    // Auto-resume: if a feature description was provided and a worktree for its
+    // slug already exists with in-progress state, silently redirect to that
+    // worktree and enable resume. --fresh bypasses this.
+    if (opts.featureDesc && !opts.resume && !opts.fresh && !opts.from) {
+      const detection = await detectAutoResume(projectRoot, opts.featureDesc);
+      if (detection.kind === 'resume') {
+        projectRoot = detection.worktreePath;
+        pipelineDir = join(projectRoot, '.pipeline');
+        stateFilePath = detection.stateFilePath;
+        await mkdir(pipelineDir, { recursive: true });
+        opts.resume = true;
+        const position = detection.lastStep
+          ? `${detection.stepIndex}/${detection.totalSteps} (after ${detection.lastStep})`
+          : 'step 1';
+        console.log(`\nResuming "${opts.featureDesc}" at ${position}. Use --fresh to start over.\n`);
+      } else if (detection.kind === 'complete') {
+        // Re-verify SHIP-phase evidence before trusting feature_status=complete.
+        // A prior buggy version of the conductor (pre-0.99.14) could mark a
+        // feature complete when pipeline exited mid-implementation without
+        // writing the halt marker — cascading lax SHIP gates would then fall
+        // through to feature_status=complete. This re-check self-heals those
+        // worktrees: if evidence is missing, we surface the gap and offer to
+        // roll back to the actual stopping point.
+        const verification = await verifyCompleteState(detection.worktreePath);
+        if (!verification.ok) {
+          console.warn(formatGapReport(opts.featureDesc, detection.worktreePath, verification));
+          const answer = await promptHost.ask(
+            'Roll back feature_status and resume at the first failing step? [Y/n/q]: ',
+          );
+          if (answer === 'n' || answer === 'q') {
+            console.log(
+              '\nNo changes made. To inspect: ai-conductor --status\n' +
+                `  To start over: ai-conductor --fresh ${opts.featureDesc ? `"${opts.featureDesc}"` : ''}\n`,
+            );
+            return;
+          }
+          // Default Y → roll back. Drop feature_status and flip the failing
+          // SHIP steps back to 'pending' so the conductor's resume index
+          // lands at the earliest one and the loop re-runs them.
+          projectRoot = detection.worktreePath;
+          pipelineDir = join(projectRoot, '.pipeline');
+          stateFilePath = join(pipelineDir, 'conduct-state.json');
+          await mkdir(pipelineDir, { recursive: true });
+          const r = await readState(stateFilePath);
+          if (!r.ok) {
+            throw new Error(`Feature recovery state read failed: ${r.error.message}`);
+          }
+          await recoverCommandState(stateFilePath, r.value, verification.failedSteps);
+          opts.resume = true;
+          console.log(`\nRolled back. Resuming "${opts.featureDesc}" at ${verification.failedSteps[0]}.\n`);
+        } else {
+          const answer = await promptHost.ask(
+            `Feature "${opts.featureDesc}" is already marked complete (${detection.worktreePath}). Start over? [y/N]: `,
+          );
+          if (answer !== 'y') {
+            console.log('Exiting. Use --fresh to force a new start.');
+            return;
+          }
+          // User chose to start over — clear the existing state and continue fresh.
+          projectRoot = detection.worktreePath;
+          pipelineDir = join(projectRoot, '.pipeline');
+          stateFilePath = join(pipelineDir, 'conduct-state.json');
+          await mkdir(pipelineDir, { recursive: true });
+          // Explicit start-over — the prior run's pr_url is intentionally dropped.
+          await replaceCommandState(stateFilePath, 'start over conductor state');
+        }
+      } else if (detection.kind === 'orphaned-state') {
+        // Root-level state says we're past the worktree step, but no worktree
+        // exists at any conventional location. Continuing would re-land all
+        // downstream artifacts on main and lose the per-feature isolation
+        // the worktree step is supposed to provide. Refuse and give the user
+        // a clear next-action.
+        console.error(
+          `\nOrphaned conductor state in ${detection.stateFilePath}.\n` +
+            `\n  Feature "${detection.featureDesc ?? opts.featureDesc}" was marked past the worktree step,\n` +
+            `  but no worktree exists at any of:\n` +
+            detection.expectedLocations.map((p) => `    - ${p}`).join('\n') +
+            `\n\n  Either:\n` +
+            `    1) Recreate the missing worktree at one of those paths, OR\n` +
+            `    2) Run \`ai-conductor --reset\` from this directory to clear the stale state\n` +
+            `       (you'll lose the recorded progress, but the actual code on the\n` +
+            `       feature branch — if it exists — is untouched).\n` +
+            `\n  Refusing to continue here so artifacts don't land on the wrong branch.\n`,
+        );
+        process.exitCode = 1;
+        return;
+      }
+    }
 
-  // Foreground resume reuses the persisted run id (conductor.run.id stays
-  // stable across resumes). That id may be a legacy bare UUID, so the
-  // prelude dispatch directory gets its own letter-prefixed identity.
-  const sessionId = await resolveForegroundRunId(pipelineDir);
-  const preludeDispatchId = createSessionEventIdentity();
+    // Handle --resume: check for merged worktrees, then scan and present selection menu
+    if (opts.resume && !opts.featureDesc) {
+      await cleanupMergedWorktrees(projectRoot, promptHost);
+      const features = await scanResumableFeatures(projectRoot);
+      if (features.length === 0) {
+        console.error('No active features found in .worktrees/');
+        process.exitCode = 1;
+        return;
+      }
 
-  // Set up terminal UI with live dashboard (needed before registry initialization)
-  const rendererOpts = {
-    stateFilePath,
-    featureDesc: opts.featureDesc,
-    steps: ALL_STEPS,
-    readStateFn: readState,
-    notifyFn: sendNotification,
-    projectRoot,
-    liveRegion,
-    viewMode: opts.view,
-    tailLines: opts.tailLines,
-  };
-  // Initialize plugin registry and discover plugins
-  const registry = new PluginRegistry();
+      let selected = selectFeature(features, undefined);
+      if (!selected) {
+        // Multiple features — show menu and prompt
+        console.log(`\n${formatResumeMenu(features)}\n`);
+        const answer = await promptHost.ask(`Choose feature [0-${features.length}]: `);
+        const choice = parseInt(answer, 10);
+        selected = selectFeature(features, isNaN(choice) ? 0 : choice);
+        if (!selected) {
+          console.log('Cancelled.');
+          return;
+        }
+      }
 
-  // Determine plugin directories
-  const globalPluginsDir = join(process.env.HOME || '', '.ai-conductor', 'plugins');
-  const projectPluginsDir = join(projectRoot, '.ai-conductor', 'plugins');
+      // Reconfigure paths to point at the selected worktree
+      projectRoot = selected.path;
+      pipelineDir = join(projectRoot, '.pipeline');
+      stateFilePath = join(pipelineDir, 'conduct-state.json');
 
-  // Discover and register external plugins, then built-ins
-  await discoverPlugins(globalPluginsDir, projectPluginsDir, registry);
-  // Start persistence before boot discovery so the boot event is retained in
-  // the same ledger as the dispatch it authorizes.
-  const eventsLogPath = join(pipelineDir, 'events.jsonl');
-  persister = new EventPersister(eventsLogPath, events);
-  persister.start();
-  // Foreground/project-prelude provider sessions have no daemon feature
-  // scope. Own their same-schema producer tail alongside this persister so
-  // every exit drains records before subscribers detach.
-  sessionTail = startSessionEventTail(projectRoot, events);
+      if (!opts.featureDesc && selected.featureDesc) {
+        opts.featureDesc = selected.featureDesc;
+      }
+
+      // Also check for state in worktree root (legacy location)
+      const legacyStatePath = join(selected.path, 'conduct-state.json');
+      try {
+        const legacyState = await readFile(legacyStatePath, 'utf-8');
+        if (legacyState.trim()) {
+          // Use worktree root state if .pipeline state doesn't exist
+          const pipelineResult = await readState(stateFilePath);
+          if (!pipelineResult.ok || Object.keys(pipelineResult.value).length === 0) {
+            stateFilePath = legacyStatePath;
+          }
+        }
+      } catch {
+        // No legacy state — use .pipeline
+      }
+    }
+
+    // A bare --resume learns its stacked feature only after the non-mutating
+    // selection prompt. Acquire before materializing that selected worktree's
+    // pipeline or provider session state.
+    if (resumeNeedsFeatureSelection) {
+      interactiveLease = await prepareInteractiveConductorRunWithLease({
+        projectRoot,
+        featureDesc: opts.featureDesc,
+        prepare: async () => {
+          await mkdir(pipelineDir, { recursive: true });
+          await ensureClaudeSettings(projectRoot);
+        },
+      });
+      if (interactiveLease.kind === 'refused') {
+        console.error(interactiveLease.message);
+        process.exitCode = 1;
+        return;
+      }
+    }
+
+    // Foreground resume reuses the persisted run id (conductor.run.id stays
+    // stable across resumes). That id may be a legacy bare UUID, so the
+    // prelude dispatch directory gets its own letter-prefixed identity.
+    const sessionId = await resolveForegroundRunId(pipelineDir);
+    const preludeDispatchId = createSessionEventIdentity();
+
+    // Set up terminal UI with live dashboard (needed before registry initialization)
+    const rendererOpts = {
+      stateFilePath,
+      featureDesc: opts.featureDesc,
+      steps: ALL_STEPS,
+      readStateFn: readState,
+      notifyFn: sendNotification,
+      projectRoot,
+      liveRegion,
+      viewMode: opts.view,
+      tailLines: opts.tailLines,
+    };
+    // Initialize plugin registry and discover plugins
+    const registry = new PluginRegistry();
+
+    // Determine plugin directories
+    const globalPluginsDir = join(process.env.HOME || '', '.ai-conductor', 'plugins');
+    const projectPluginsDir = join(projectRoot, '.ai-conductor', 'plugins');
+
+    // Discover and register external plugins, then built-ins
+    await discoverPlugins(globalPluginsDir, projectPluginsDir, registry);
+    // Start persistence before boot discovery so the boot event is retained in
+    // the same ledger as the dispatch it authorizes.
+    const eventsLogPath = join(pipelineDir, 'events.jsonl');
+    persister = new EventPersister(eventsLogPath, events);
+    persister.start();
+    // Foreground/project-prelude provider sessions have no daemon feature
+    // scope. Own their same-schema producer tail alongside this persister so
+    // every exit drains records before subscribers detach.
+    sessionTail = startSessionEventTail(projectRoot, events);
     subscriber = await bootDispatchingCliProviders({
-    command: 'inline',
-    registry,
-    events,
-    config,
-    rendererOpts,
+      command: 'inline',
+      registry,
+      events,
+      config,
+      rendererOpts,
     });
     if (!subscriber) {
       throw new Error('Provider discovery was not enabled for the inline command');
     }
 
-  // Compose one provider-routing context from the complete frozen registry.
-  // The ordered config survives intact; its first entry is only the
-  // compatibility adapter for legacy constructor surfaces.
-  const configuredProviders = normalizeProviderSelection(config?.llm_provider);
-  const providerExecution: ProviderExecutionContext = {
-    configuredProviders: configuredProviders,
-    runtimes: createProviderRuntimeSet(registry, console.warn, config),
-    sessions: new ProviderSessionStore(),
-    config: config,
-    modelOverride: opts.model,
-    effortOverride: opts.effort,
-    // BUILD/SHIP StepRunner paths retain this resolved-candidate boundary.
-    // Conductor composes self-host authority around it when applicable.
-    withCandidateSafety: createCandidateSafetyBoundary(),
-    ...providerExecutionEventCallbacks(events),
-  };
-  const compatibilityRuntime = providerExecution.runtimes.get(
-    providerExecution.configuredProviders[0],
-  );
-  const preludeProvider = providerExecution.configuredProviders[0];
-  if (!preludeProvider) throw new Error('Project prelude requires a configured provider');
-  const preludeProducerRoot = join(pipelineDir, 'session-events', preludeDispatchId);
-  await mkdir(preludeProducerRoot, { recursive: true });
-  const preparedPreludeContext = await prepareManagedSessionContext({
-    projectRoot,
-    worktreeRoot: projectRoot,
-    producerRoot: preludeProducerRoot,
-    scope: { kind: 'project' },
-    dispatchId: preludeDispatchId,
-    provider: preludeProvider,
-  });
-  if (!preparedPreludeContext.ok) {
-    throw new Error(`Project prelude managed-session context refused: ${preparedPreludeContext.code}`);
-  }
-  const preludeProviderExecution: ProviderExecutionContext = {
-    ...providerExecution,
-    managedSessionContext: preparedPreludeContext.context,
-    prepareManagedSessionObservation: createManagedSessionObservationPreparer((input) => probeManagedObservationDestination({
+    // Compose one provider-routing context from the complete frozen registry.
+    // The ordered config survives intact; its first entry is only the
+    // compatibility adapter for legacy constructor surfaces.
+    const configuredProviders = normalizeProviderSelection(config?.llm_provider);
+    const providerExecution: ProviderExecutionContext = {
+      configuredProviders: configuredProviders,
+      runtimes: createProviderRuntimeSet(registry, console.warn, config),
+      sessions: new ProviderSessionStore(),
+      config: config,
+      modelOverride: opts.model,
+      effortOverride: opts.effort,
+      // BUILD/SHIP StepRunner paths retain this resolved-candidate boundary.
+      // Conductor composes self-host authority around it when applicable.
+      withCandidateSafety: createCandidateSafetyBoundary(),
+      ...providerExecutionEventCallbacks(events),
+    };
+    const compatibilityRuntime = providerExecution.runtimes.get(providerExecution.configuredProviders[0]);
+    const preludeProvider = providerExecution.configuredProviders[0];
+    if (!preludeProvider) throw new Error('Project prelude requires a configured provider');
+    const preludeProducerRoot = join(pipelineDir, 'session-events', preludeDispatchId);
+    await mkdir(preludeProducerRoot, { recursive: true });
+    const preparedPreludeContext = await prepareManagedSessionContext({
+      projectRoot,
+      worktreeRoot: projectRoot,
+      producerRoot: preludeProducerRoot,
+      scope: { kind: 'project' },
+      dispatchId: preludeDispatchId,
+      provider: preludeProvider,
+    });
+    if (!preparedPreludeContext.ok) {
+      throw new Error(`Project prelude managed-session context refused: ${preparedPreludeContext.code}`);
+    }
+    const preludeProviderExecution: ProviderExecutionContext = {
+      ...providerExecution,
+      managedSessionContext: preparedPreludeContext.context,
+      prepareManagedSessionObservation: createManagedSessionObservationPreparer((input) =>
+        probeManagedObservationDestination({
           ...input,
           runProcess: async (executable, args) => {
             const result = await execa(executable, [...args], { reject: false });
             return { exitCode: result.exitCode ?? 1, stdout: result.stdout, stderr: result.stderr };
           },
-        })),
-  };
-
-  // Select UI subscriber based on config (default: 'terminal').
-  const renderer = registry.get<UIRenderer>('ui_renderer', config?.ui_renderer ?? 'terminal');
-  subscriber.start([renderer]);
-
-  await emitDeprecatedConfigKeyEvents(mergedResult, events);
-  // Every foreground mode can reach build_review.  The daemon performs this
-  // once at daemon start; foreground runs establish the same frozen evidence
-  // before constructing their Conductor.
-  const readOnlyReviewCapabilities = await probeInteractiveReadOnlyReviewCapabilities({ config, projectRoot, events });
-
-  // Wire AuditTrailWriter: appends friction/positive-evidence records to
-  // .pipeline/audit-trail/events.jsonl, rooted at the resolved projectRoot
-  // (never process.cwd()) so the audit trail preserves this run's history.
-  const auditWriter = new AuditTrailWriter(projectRoot);
-  auditWriter.subscribe(events);
-
-  // Build configured visualizers plus OTel, whose shared helper retains
-  // ownership of its `otel:` configuration gate and start lifecycle.
-  const visualizerContext: VisualizerFactoryContext & { startContext: OtelVisualizerStartContext } = {
-    config: config ?? {},
-    pipelineDir,
-    emitter: events,
-    startContext: createVisualizerStartContext({
-      runId: sessionId,
-      project: projectRoot,
-      feature: opts.featureDesc,
-      sourceRef: await resolveRunSourceRef(projectRoot, opts.featureDesc),
-      branch: await resolveCurrentBranch(projectRoot),
-      engineVersion: resolveEngineVersion(__dirname),
-      harnessVersion: await resolveHarnessVersion(__dirname),
-      pipelineDir,
-    }),
-  };
-  visualizerList = buildInteractiveVisualizers(
-    registry,
-    visualizerContext.config,
-    visualizerContext,
-  );
-
-  const stepRunner = new DefaultStepRunner(compatibilityRuntime.provider, sessionId, projectRoot, {
-    featureDesc: opts.featureDesc,
-    pipelineDir,
-    stepCooldown: opts.cooldown,
-    config,
-    modelPolicy: compatibilityRuntime.policy,
-    mode,
-    providerExecution: preludeProviderExecution,
-    events,
-    skillNameRoot: await resolveHarnessRoot(),
-  });
-
-  // Project-level prelude: bootstrap (if never run or migration pending) and
-  // assess (if project has code and assessment is missing/stale). Runs ONCE
-  // before the per-feature loop. Auto mode skips the staleness prompt — users
-  // get a nudge on the next interactive run.
-  const harnessVersion = await readHarnessVersion();
-  const interactivePrompt: ((r: { days: number; commits: number }) => Promise<boolean>) | undefined =
-    mode === 'auto' ? undefined : async ({ days, commits }) => {
-      console.log(
-        `\n⚠ Last assessment was ${days} days / ${commits} commits ago ` +
-          `(thresholds: ${config?.assess?.stale_after_days ?? 90} days / ` +
-          `${config?.assess?.stale_after_commits ?? 500} commits).`,
-      );
-      const answer = await promptHost.confirm('Re-run /assess now?', false);
-      return answer;
+        }),
+      ),
     };
-  const prelude = await runProjectPrelude(
-    projectRoot,
-    compatibilityRuntime.provider,
-    sessionId,
-    config ?? {},
-    {
+
+    // Select UI subscriber based on config (default: 'terminal').
+    const renderer = registry.get<UIRenderer>('ui_renderer', config?.ui_renderer ?? 'terminal');
+    subscriber.start([renderer]);
+
+    await emitDeprecatedConfigKeyEvents(mergedResult, events);
+    // Every foreground mode can reach build_review.  The daemon performs this
+    // once at daemon start; foreground runs establish the same frozen evidence
+    // before constructing their Conductor.
+    const readOnlyReviewCapabilities = await probeInteractiveReadOnlyReviewCapabilities({
+      config,
+      projectRoot,
+      events,
+    });
+
+    // Wire AuditTrailWriter: appends friction/positive-evidence records to
+    // .pipeline/audit-trail/events.jsonl, rooted at the resolved projectRoot
+    // (never process.cwd()) so the audit trail preserves this run's history.
+    const auditWriter = new AuditTrailWriter(projectRoot);
+    auditWriter.subscribe(events);
+
+    // Build configured visualizers plus OTel, whose shared helper retains
+    // ownership of its `otel:` configuration gate and start lifecycle.
+    const visualizerContext: VisualizerFactoryContext & { startContext: OtelVisualizerStartContext } = {
+      config: config ?? {},
+      pipelineDir,
+      emitter: events,
+      startContext: createVisualizerStartContext({
+        runId: sessionId,
+        project: projectRoot,
+        feature: opts.featureDesc,
+        sourceRef: await resolveRunSourceRef(projectRoot, opts.featureDesc),
+        branch: await resolveCurrentBranch(projectRoot),
+        engineVersion: resolveEngineVersion(__dirname),
+        harnessVersion: await resolveHarnessVersion(__dirname),
+        pipelineDir,
+      }),
+    };
+    visualizerList = buildInteractiveVisualizers(registry, visualizerContext.config, visualizerContext);
+
+    const stepRunner = new DefaultStepRunner(compatibilityRuntime.provider, sessionId, projectRoot, {
+      featureDesc: opts.featureDesc,
+      pipelineDir,
+      stepCooldown: opts.cooldown,
+      config,
+      modelPolicy: compatibilityRuntime.policy,
+      mode,
+      providerExecution: preludeProviderExecution,
+      events,
+      skillNameRoot: await resolveHarnessRoot(),
+    });
+
+    // Project-level prelude: bootstrap (if never run or migration pending) and
+    // assess (if project has code and assessment is missing/stale). Runs ONCE
+    // before the per-feature loop. Auto mode skips the staleness prompt — users
+    // get a nudge on the next interactive run.
+    const harnessVersion = await readHarnessVersion();
+    const interactivePrompt: ((r: { days: number; commits: number }) => Promise<boolean>) | undefined =
+      mode === 'auto'
+        ? undefined
+        : async ({ days, commits }) => {
+            console.log(
+              `\n⚠ Last assessment was ${days} days / ${commits} commits ago ` +
+                `(thresholds: ${config?.assess?.stale_after_days ?? 90} days / ` +
+                `${config?.assess?.stale_after_commits ?? 500} commits).`,
+            );
+            const answer = await promptHost.confirm('Re-run /assess now?', false);
+            return answer;
+          };
+    const prelude = await runProjectPrelude(projectRoot, compatibilityRuntime.provider, sessionId, config ?? {}, {
       harnessVersion,
       onAssessStalePrompt: interactivePrompt,
       providerExecution: preludeProviderExecution,
-    },
-  );
-  if (prelude.bootstrapExecuted) {
-    console.log(
-      `[prelude] bootstrap ran (${prelude.bootstrapReason}): ${
-        prelude.bootstrapSuccess ? 'ok' : 'failed'
-      }`,
-    );
-  }
-  if (prelude.assessExecuted) {
-    console.log(
-      `[prelude] assess ran (${prelude.assessReason}): ${
-        prelude.assessSuccess ? 'ok' : 'failed'
-      }`,
-    );
-  }
-  if (prelude.setupRequired) {
-    const detail = prelude.setupRequired.configError.message;
-    throw new Error(`Project bootstrap configuration is required before provider launch: ${detail}`);
-  }
+    });
+    if (prelude.bootstrapExecuted) {
+      console.log(
+        `[prelude] bootstrap ran (${prelude.bootstrapReason}): ${prelude.bootstrapSuccess ? 'ok' : 'failed'}`,
+      );
+    }
+    if (prelude.assessExecuted) {
+      console.log(`[prelude] assess ran (${prelude.assessReason}): ${prelude.assessSuccess ? 'ok' : 'failed'}`);
+    }
+    if (prelude.setupRequired) {
+      const detail = prelude.setupRequired.configError.message;
+      throw new Error(`Project bootstrap configuration is required before provider launch: ${detail}`);
+    }
 
-  // Auto-update check (port-self-update-flow T5 / Story 7): spawn
-  // `bin/update --auto` before the pipeline boots. Advisory only — a missing
-  // harness root, a missing `bin/update`, or any spawn/exec failure is logged
-  // and swallowed inside spawnAutoUpdateCheck; it must never block or crash
-  // startup.
-  await spawnAutoUpdateCheck();
+    // Auto-update check (port-self-update-flow T5 / Story 7): spawn
+    // `bin/update --auto` before the pipeline boots. Advisory only — a missing
+    // harness root, a missing `bin/update`, or any spawn/exec failure is logged
+    // and swallowed inside spawnAutoUpdateCheck; it must never block or crash
+    // startup.
+    await spawnAutoUpdateCheck();
 
-  // FINISH and SHIP-entry draft publication both need a concrete PR base.
-  // Resolve origin's declared default with the existing local `main` fallback
-  // so foreground publication never receives an undefined base.
-  const finishPublicationBaseBranch =
-    (await originDefaultBranch(makeGitRunner(projectRoot))) ?? 'main';
+    // FINISH and SHIP-entry draft publication both need a concrete PR base.
+    // Resolve origin's declared default with the existing local `main` fallback
+    // so foreground publication never receives an undefined base.
+    const finishPublicationBaseBranch = (await originDefaultBranch(makeGitRunner(projectRoot))) ?? 'main';
 
-  const finishPublicationGit = makeProductionGit();
-  const finishPublicationGh = makeProductionGh();
-  const conductor = new Conductor({
-    stateFilePath,
-    stepRunner,
-    events,
-    resume: opts.resume,
-    fromStep: opts.from as StepName | undefined,
-    mode,
-    config,
-    modelPolicy: compatibilityRuntime.policy,
-    providerExecution: preludeProviderExecution,
-    ...(readOnlyReviewCapabilities !== undefined ? { readOnlyReviewCapabilities } : {}),
-    projectRoot,
-    acceptanceRedExec: createProductionAcceptanceRedExec(),
-    baseBranch: finishPublicationBaseBranch,
-    // FINISH mechanics are engine-owned. Keep this explicit at the foreground
-    // composition root so production cannot silently fall back to the
-    // judgment-only StepRunner path used before the coordinator existed.
-    finishPublication: createProductionFinishPublicationCoordinator({
-      projectRoot,
+    const finishPublicationGit = makeProductionGit();
+    const finishPublicationGh = makeProductionGh();
+    const conductor = new Conductor({
       stateFilePath,
-      baseBranch: finishPublicationBaseBranch,
-      prTemplateBytes: config?.pr_template_bytes,
-      git: finishPublicationGit,
-      gh: finishPublicationGh,
+      stepRunner,
       events,
-      flushSessionEvents: sessionTail.flush,
-      repairPresentation: createProvenanceGuardedFinishPresentationRepair({
+      resume: opts.resume,
+      fromStep: opts.from as StepName | undefined,
+      mode,
+      config,
+      modelPolicy: compatibilityRuntime.policy,
+      providerExecution: preludeProviderExecution,
+      ...(readOnlyReviewCapabilities !== undefined ? { readOnlyReviewCapabilities } : {}),
+      projectRoot,
+      acceptanceRedExec: createProductionAcceptanceRedExec(),
+      baseBranch: finishPublicationBaseBranch,
+      // FINISH mechanics are engine-owned. Keep this explicit at the foreground
+      // composition root so production cannot silently fall back to the
+      // judgment-only StepRunner path used before the coordinator existed.
+      finishPublication: createProductionFinishPublicationCoordinator({
         projectRoot,
+        stateFilePath,
+        baseBranch: finishPublicationBaseBranch,
+        prTemplateBytes: config?.pr_template_bytes,
         git: finishPublicationGit,
         gh: finishPublicationGh,
-        baseBranch: finishPublicationBaseBranch,
         events,
+        flushSessionEvents: sessionTail.flush,
+        repairPresentation: createProvenanceGuardedFinishPresentationRepair({
+          projectRoot,
+          git: finishPublicationGit,
+          gh: finishPublicationGh,
+          baseBranch: finishPublicationBaseBranch,
+          events,
+        }),
+        observeReleaseReadiness: createProductionReleaseReadinessObserver({
+          projectRoot,
+          config,
+        }),
+        acquireInteractiveIntent: async () => {
+          while (true) {
+            const answer = await promptHost.ask(
+              'Publication outcome: [p]ull request, [k]eep committed work, or [d]efer? ',
+            );
+            if (answer === 'p' || answer === 'pr' || answer === 'pull request') return 'pr';
+            if (answer === 'k' || answer === 'keep') return 'keep';
+            if (answer === 'd' || answer === 'defer') return 'defer';
+            console.log('  Invalid choice. Enter p, k, or d.');
+          }
+        },
       }),
-      observeReleaseReadiness: createProductionReleaseReadinessObserver({
-        projectRoot,
-        config,
-      }),
-      acquireInteractiveIntent: async () => {
-        while (true) {
-          const answer = await promptHost.ask(
-            'Publication outcome: [p]ull request, [k]eep committed work, or [d]efer? ',
-          );
-          if (answer === 'p' || answer === 'pr' || answer === 'pull request') return 'pr';
-          if (answer === 'k' || answer === 'keep') return 'keep';
-          if (answer === 'd' || answer === 'defer') return 'defer';
-          console.log('  Invalid choice. Enter p, k, or d.');
-        }
-      },
-    }),
-    featureDesc: opts.featureDesc,
-    verifyArtifacts: true,
-    onCheckpoint: (s) => promptHost.checkpoint(s),
-    onNavigate: (steps) => promptHost.navigate(steps),
-    onReviewArtifacts: (s, files) => promptHost.reviewArtifacts(s, files),
-    onRecovery: (s, isGating) => promptHost.recovery(s, isGating),
-    onComplexityAssessment: (r) => promptHost.complexityAssessment(r),
-  });
+      featureDesc: opts.featureDesc,
+      verifyArtifacts: true,
+      onCheckpoint: (s) => promptHost.checkpoint(s),
+      onNavigate: (steps) => promptHost.navigate(steps),
+      onReviewArtifacts: (s, files) => promptHost.reviewArtifacts(s, files),
+      onRecovery: (s, isGating) => promptHost.recovery(s, isGating),
+      onComplexityAssessment: (r) => promptHost.complexityAssessment(r),
+    });
 
     await conductor.run();
   } finally {

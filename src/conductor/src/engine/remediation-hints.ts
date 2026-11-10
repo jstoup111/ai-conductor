@@ -38,31 +38,44 @@ export interface RemediationHintSource {
 export function formatRejectedDispositions(rejected: readonly RemediationDispositionRejection[]): string {
   if (rejected.length === 0) return '';
   if (rejected.every((rejection) => rejection.field === 'disposition')) {
-    return `${rejected.map(({ gapId, disposition }) => `${gapId} → "${disposition}"`).join(', ')}; ` +
-      `accepted dispositions are ${rejected[0].accepted.join(' | ')}`;
+    return (
+      `${rejected.map(({ gapId, disposition }) => `${gapId} → "${disposition}"`).join(', ')}; ` +
+      `accepted dispositions are ${rejected[0].accepted.join(' | ')}`
+    );
   }
-  return rejected.map((rejection) => {
-    const field = rejection.field === 'category' ? 'category' : 'disposition';
-    const fieldPlural = field === 'category' ? 'categories' : 'dispositions';
-    return `${rejection.gapId} ${field} → "${rejection.disposition}"; ` +
-      `accepted ${fieldPlural} are ${rejection.accepted.join(' | ')}`;
-  }).join('; ');
+  return rejected
+    .map((rejection) => {
+      const field = rejection.field === 'category' ? 'category' : 'disposition';
+      const fieldPlural = field === 'category' ? 'categories' : 'dispositions';
+      return (
+        `${rejection.gapId} ${field} → "${rejection.disposition}"; ` +
+        `accepted ${fieldPlural} are ${rejection.accepted.join(' | ')}`
+      );
+    })
+    .join('; ');
 }
 
 // Covers: task:19
 export function remediationProjectionSource(source: string): RemediationProjectionSource {
   switch (source) {
-    case 'validation-group': return 'validation-group';
-    case 'prd-audit': return 'prd-audit';
-    case 'prd_audit': return 'prd-audit';
+    case 'validation-group':
+      return 'validation-group';
+    case 'prd-audit':
+      return 'prd-audit';
+    case 'prd_audit':
+      return 'prd-audit';
     case 'build-stall':
     case 'build_stall':
-    case 'build_stall_zero_work': return 'build-stall';
-    case 'finish-verification': return 'finish-verification';
+    case 'build_stall_zero_work':
+      return 'build-stall';
+    case 'finish-verification':
+      return 'finish-verification';
     case 'architecture-review-as-built':
     case 'architecture_review_as_built':
-    case 'as-built architecture review': return 'as-built';
-    default: return 'finish-verification';
+    case 'as-built architecture review':
+      return 'as-built';
+    default:
+      return 'finish-verification';
   }
 }
 
@@ -75,9 +88,10 @@ export function remediationGapsFromTypedPlan(
     disposition: disposition.disposition,
     category: disposition.category,
     rationale: disposition.rationale,
-    tasks: disposition.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION
-      ? disposition.boundTaskIds.map((id) => ({ id, title: `Existing task ${id}` }))
-      : disposition.tasks.map((task) => ({ ...task })),
+    tasks:
+      disposition.disposition === REMEDIATION_EXISTING_TASK_DISPOSITION
+        ? disposition.boundTaskIds.map((id) => ({ id, title: `Existing task ${id}` }))
+        : disposition.tasks.map((task) => ({ ...task })),
   }));
 }
 
@@ -110,13 +124,16 @@ export function remediationDispositionRejectionsFromDispatchOutput(
       !Array.isArray(rejection.accepted) ||
       !rejection.accepted.every((value) => typeof value === 'string') ||
       (rejection.field !== 'disposition' && rejection.field !== 'category' && rejection.field !== 'boundTaskIds')
-    ) return [];
-    return [{
-      gapId: rejection.gapId,
-      disposition: rejection.disposition,
-      accepted: [...rejection.accepted],
-      field: rejection.field,
-    }];
+    )
+      return [];
+    return [
+      {
+        gapId: rejection.gapId,
+        disposition: rejection.disposition,
+        accepted: [...rejection.accepted],
+        field: rejection.field,
+      },
+    ];
   });
 }
 
@@ -151,9 +168,7 @@ export function earliestRemediationTarget(
   return { target: best, unresolved: [...unresolved] };
 }
 
-export type ExistingTaskBindingResolution =
-  | { kind: 'resolved'; ids: string[] }
-  | { kind: 'unresolvable'; id: string };
+export type ExistingTaskBindingResolution = { kind: 'resolved'; ids: string[] } | { kind: 'unresolvable'; id: string };
 
 /**
  * Resolve an existing-task remediation binding against the active plan. Keep
@@ -183,11 +198,13 @@ export function resolveExistingTaskBindingsForAdmission(
 export function remediationGapTargetsAnotherFeatureSealedArtifact(
   gap: RemediationGap,
   activePlanStem: string,
-): {
-  artifact: string;
-  directingClause: string;
-  directingSource: 'task title' | 'rationale';
-} | undefined {
+):
+  | {
+      artifact: string;
+      directingClause: string;
+      directingSource: 'task title' | 'rationale';
+    }
+  | undefined {
   // Task titles are prose, not plan Files declarations — remediation tasks
   // routinely cite .docs artifacts as evidence ("the sequence contract at
   // .docs/architecture/sequences/<slug>.md:87 requires ..."), and treating the
@@ -213,10 +230,10 @@ export function remediationGapTargetsAnotherFeatureSealedArtifact(
   return rationaleTarget === undefined
     ? undefined
     : {
-      artifact: rationaleTarget.path,
-      directingClause: rationaleTarget.clause,
-      directingSource: 'rationale',
-    };
+        artifact: rationaleTarget.path,
+        directingClause: rationaleTarget.clause,
+        directingSource: 'rationale',
+      };
 }
 
 /**
@@ -252,9 +269,10 @@ export function directedProtectedTarget(
   if (directedPaths.length === 0) return undefined;
   const directedScope = `### Task directed: remediation\n\n**Files:** ${directedPaths.map(({ path }) => path).join(', ')}`;
   const target = scanPlanProtectedTargets(directedScope, activePlanStem)[0]?.path;
-  const targetClause = target === undefined
-    ? undefined
-    : directedPaths.find(({ path }) => path.replace(/^\.\//, '') === target.replace(/^\.\//, ''))?.clause;
+  const targetClause =
+    target === undefined
+      ? undefined
+      : directedPaths.find(({ path }) => path.replace(/^\.\//, '') === target.replace(/^\.\//, ''))?.clause;
   return targetClause === undefined || target === undefined
     ? undefined
     : { path: target, clause: normalizeDirectingClause(targetClause) };
@@ -289,7 +307,7 @@ export function buildRemediationHint(
     return (
       `Remediating blocking ${source} gaps (see the engine-owned typed remediation result and ` +
       `${evidenceFile}). These are PUBLICATION gaps: the implementation is complete and ` +
-      'must not change. Fix only the pull request\'s published prose — rewrite the PR body ' +
+      "must not change. Fix only the pull request's published prose — rewrite the PR body " +
       '(`## Why` / `## What Changed` / `## Testing`, plus the `Closes` reference) with a ' +
       '`pull-request.edit` request passed to `ai-conductor github-operation --request-file`, and correct the title or issue linkage if named below. Do not change ' +
       'code, do not amend the plan, and do not re-run the build:\n' +
@@ -343,7 +361,7 @@ export function buildRetryHint(
     return (
       `Previous attempt did not satisfy the completion check: ${r}. ` +
       'The implementation, the tests and the shipped-record are already complete — ' +
-      'ONLY the pull request\'s presentation is wrong. Do NOT re-implement anything, ' +
+      "ONLY the pull request's presentation is wrong. Do NOT re-implement anything, " +
       'do not change code, do not touch the plan, and do not re-run the build. Fix the ' +
       'PR in place:\n' +
       '  1. Author a real body from the branch diff — `## Why`, `## What Changed`, ' +

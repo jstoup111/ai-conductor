@@ -18,7 +18,8 @@ describe('buildRetryHint manual_test recording guidance', () => {
   it('keeps the generic hint when the completion miss is not a missing results file', () => {
     const reason = '.pipeline/manual-test-results.md contains FAIL rows';
 
-    expect(buildRetryHint('manual_test', reason))
-      .toBe(`Previous attempt did not satisfy the completion check: ${reason}. Finish the work now.`);
+    expect(buildRetryHint('manual_test', reason)).toBe(
+      `Previous attempt did not satisfy the completion check: ${reason}. Finish the work now.`,
+    );
   });
 });

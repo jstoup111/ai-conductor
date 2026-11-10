@@ -7,8 +7,6 @@ export function manualTestBlockerClause(dispatchOutput: string | undefined): str
   const normalized = dispatchOutput?.trim().replace(/\s+/g, ' ');
   if (!normalized) return '; the agent gave no final message';
 
-  const excerpt = normalized.length > 600
-    ? `…${normalized.slice(-600)}`
-    : normalized;
+  const excerpt = normalized.length > 600 ? `…${normalized.slice(-600)}` : normalized;
   return `; agent reported: "${excerpt}"`;
 }

@@ -25,27 +25,28 @@ function handshakeFor(projectRoot: string) {
     stepRunner: { run: vi.fn() } as never,
     events: new ConductorEventEmitter(),
   });
-  return (conductor as unknown as {
-    verdictDispatchHandshake: (
-      step: StepName,
-      runId: string,
-      startedAt: number,
-      dispatchOutput?: string,
-    ) => Promise<{
-      done: false;
-      routeClass: 'absent';
-      retrySignal?: string;
-      reason: string;
-    } | undefined>;
-  }).verdictDispatchHandshake.bind(conductor);
+  return (
+    conductor as unknown as {
+      verdictDispatchHandshake: (
+        step: StepName,
+        runId: string,
+        startedAt: number,
+        dispatchOutput?: string,
+      ) => Promise<
+        | {
+            done: false;
+            routeClass: 'absent';
+            retrySignal?: string;
+            reason: string;
+          }
+        | undefined
+      >;
+    }
+  ).verdictDispatchHandshake.bind(conductor);
 }
 
 async function writeRunStamp(dir: string, runId: string): Promise<void> {
-  await writeFile(
-    join(dir, '.pipeline', 'manual-test-code-stamp.json'),
-    JSON.stringify({ runId }) + '\n',
-    'utf8',
-  );
+  await writeFile(join(dir, '.pipeline', 'manual-test-code-stamp.json'), JSON.stringify({ runId }) + '\n', 'utf8');
 }
 
 afterEach(async () => {
@@ -93,9 +94,7 @@ describe('manual_test current-output handshake reason', () => {
       'Manual testing is blocked:\n\n  the app   would not start',
     );
 
-    expect(result?.reason).toContain(
-      'agent reported: "Manual testing is blocked: the app would not start"',
-    );
+    expect(result?.reason).toContain('agent reported: "Manual testing is blocked: the app would not start"');
   });
 
   it('appends only the last 600 characters of a long agent blocker', async () => {

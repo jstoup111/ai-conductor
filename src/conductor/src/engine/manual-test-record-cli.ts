@@ -6,11 +6,7 @@
 import { isAbsolute, join } from 'node:path';
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import type { GitRunner } from './pr-labels.js';
-import {
-  hasManualTestWarnRows,
-  MANUAL_TEST_SKIP_SENTINEL,
-  MANUAL_TEST_WARN_SENTINEL,
-} from './artifacts.js';
+import { hasManualTestWarnRows, MANUAL_TEST_SKIP_SENTINEL, MANUAL_TEST_WARN_SENTINEL } from './artifacts.js';
 
 export type ManualTestRecordDispatch =
   | { kind: 'skip'; reason: string; pipelineDir?: string }
@@ -229,9 +225,7 @@ export async function dispatchManualTestRecord(
 
     pipelineDir = join(toplevel, '.pipeline');
     if (!(await runners.isDirectory(pipelineDir))) {
-      console.error(
-        `manual-test-record: ${pipelineDir} does not exist; pass --pipeline-dir <absolute path>`,
-      );
+      console.error(`manual-test-record: ${pipelineDir} does not exist; pass --pipeline-dir <absolute path>`);
       return 1;
     }
   }
@@ -250,9 +244,7 @@ export async function dispatchManualTestRecord(
     }
 
     if (content.trim().length === 0) {
-      console.error(
-        `manual-test-record: results payload from "${cmd.resultsPath}" is empty — refusing to record`,
-      );
+      console.error(`manual-test-record: results payload from "${cmd.resultsPath}" is empty — refusing to record`);
       return 1;
     }
 
@@ -260,9 +252,7 @@ export async function dispatchManualTestRecord(
       pipelineDir,
       resultsPath,
       (attemptNumber) => {
-        const warningMarker = hasManualTestWarnRows(content)
-          ? `${MANUAL_TEST_WARN_SENTINEL}\n`
-          : '';
+        const warningMarker = hasManualTestWarnRows(content) ? `${MANUAL_TEST_WARN_SENTINEL}\n` : '';
         return `## Attempt ${attemptNumber}\n\n${warningMarker}${content}`;
       },
       runners,
@@ -275,9 +265,7 @@ export async function dispatchManualTestRecord(
     pipelineDir,
     resultsPath,
     (attemptNumber) =>
-      `## Attempt ${attemptNumber}\n\n` +
-      `${MANUAL_TEST_SKIP_SENTINEL}\n` +
-      `**Result:** SKIPPED — ${cmd.reason}\n`,
+      `## Attempt ${attemptNumber}\n\n` + `${MANUAL_TEST_SKIP_SENTINEL}\n` + `**Result:** SKIPPED — ${cmd.reason}\n`,
     runners,
   );
 }
