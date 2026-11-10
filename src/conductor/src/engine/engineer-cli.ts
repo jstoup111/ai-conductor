@@ -61,7 +61,7 @@ import {
   HANDLED_LABEL,
 } from './engineer/intake/github-issues.js';
 import { createTerminalGithubOperationConfirmation } from './github-operation-terminal-confirmation.js';
-import type { InteractiveGithubOperationConfirmation } from './github-operation-approval.js';
+import { requestExplicitGithubOperationApproval, type InteractiveGithubOperationConfirmation } from './github-operation-approval.js';
 import {
   createIntakeBackendComposite,
   type IntakeBackend,
@@ -810,10 +810,11 @@ async function composerSourceRef(worktree: string, slug: string): Promise<string
   } catch { return undefined; }
 }
 
-async function composerMarkerOwner(worktree: string, slug: string): Promise<string | undefined> {
+async function composerCommittedMarkerOwner(git: GitRunner, worktree: string, branch: string, slug: string): Promise<string | undefined> {
   try {
-    const marker = await readFile(join(worktree, '.docs', 'intake', `${slug}.md`), 'utf8');
-    return /^Owner:\s*(.+)$/m.exec(marker)?.[1]?.trim();
+    const marker = await git(['show', `${branch}:.docs/intake/${slug}.md`], { cwd: worktree });
+    if ((marker.exitCode ?? 0) !== 0) return undefined;
+    return /^Owner:\s*(.+)$/m.exec(marker.stdout)?.[1]?.trim();
   } catch { return undefined; }
 }
 
@@ -904,9 +905,21 @@ function promptComposerTakeover(previousOwner: string, branch: string): Promise<
   });
 }
 
-function promptComposerLocalState(input: { dirtyDocs: readonly string[]; unpushedCommits: readonly string[] }): Promise<'keep-local' | 'discard-local' | undefined> {
+export function renderComposerLocalStatePrompt(input: {
+  dirtyDocs: readonly string[];
+  unpushedCommits: readonly string[];
+  remote?: { step: string; lastActor?: string; lastAt?: string; tip: string };
+}): string {
+  const local = [...input.dirtyDocs, ...input.unpushedCommits].join(', ');
+  const remote = input.remote
+    ? ` Saved remote progress: step ${input.remote.step}; last actor ${input.remote.lastActor ?? 'unknown'}${input.remote.lastAt ? ` at ${input.remote.lastAt}` : ''}; origin/spec tip ${input.remote.tip}.`
+    : '';
+  return `Local Composer work (${local}).${remote} Keep local or discard to backup? [keep/discard] `;
+}
+
+function promptComposerLocalState(input: { dirtyDocs: readonly string[]; unpushedCommits: readonly string[]; remote?: { step: string; lastActor?: string; lastAt?: string; tip: string } }): Promise<'keep-local' | 'discard-local' | undefined> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return Promise.resolve(undefined);
-  process.stdout.write(`Local Composer work (${[...input.dirtyDocs, ...input.unpushedCommits].join(', ')}). Keep local or discard to backup? [keep/discard] `);
+  process.stdout.write(renderComposerLocalStatePrompt(input));
   return new Promise((resolve) => {
     const onData = (chunk: Buffer): void => {
       process.stdin.off('data', onData); process.stdin.pause();
@@ -1478,9 +1491,9 @@ export async function dispatchEngineer(
         return 1;
       }
       const executable = host ? resolveProviderExecutable(host.id) : undefined;
-      // One launcher invocation owns one correlation id.  Worktree/resume
-      // primitives inherit it and write their events to the target ledger.
-      const launchId = launchEnv.AI_CONDUCTOR_COMPOSE_LAUNCH_ID ?? crypto.randomUUID();
+      // One host session owns one correlation id. Worktree/resume primitives
+      // inherit it; a later, untouched idea must never rediscover this run.
+      let launchId = launchEnv.AI_CONDUCTOR_COMPOSE_LAUNCH_ID ?? crypto.randomUUID();
       const launchOne = opts.launchInteractive ?? ((idea?: string) => {
         const prompt = `${host!.invocationPrefix}${composerName}${idea?.trim() ? ` ${idea.trim()}` : ''}`;
         return (opts.spawnHost ?? spawnInteractiveHost)(
@@ -1531,6 +1544,9 @@ export async function dispatchEngineer(
       let pendingIdea = dispatch.idea;
       let lastCode = 0;
       for (;;) {
+        // Preserve a caller-supplied id for its first host, then give every
+        // subsequent fresh host a new correlation boundary.
+        if (pendingIdea === undefined) launchId = crypto.randomUUID();
         if (!pendingIdea && prePoll) {
           try {
             const n = await prePoll();
@@ -1578,25 +1594,30 @@ export async function dispatchEngineer(
               const branch = `spec/${touched.slug}`;
               let record;
               try { record = parseRunRecord(await readFile(join(touched.worktreePath, '.docs', 'composer-runs', `${touched.slug}.json`), 'utf8')); } catch { record = undefined; }
-              // A delivered/removed run has no unfinished DECIDE boundary.  Do
-              // not autosave against a removed worktree or publish a clean run.
-              if (record && summarizeRun(record).nextStep !== 'delivery') {
-              let summary = summarizeRun(record);
               const status = await git(['status', '--porcelain', '--untracked-files=all', '--', '.docs'], { cwd: touched.worktreePath });
               const dirtyDocs = (status.exitCode ?? 0) === 0 && status.stdout.trim().length > 0;
+              // A session can exit during its very first DECIDE step, before a
+              // run record exists. Its dirty artifacts still need the first
+              // durable draft checkpoint instead of being silently skipped.
+              if ((record || dirtyDocs) && (!record || summarizeRun(record).nextStep !== 'delivery')) {
+              let summary = record ? summarizeRun(record) : { nextStep: 'explore' as const, drafts: [], acceptedSteps: [], decisions: [], openQuestions: [] };
               let saved: Awaited<ReturnType<typeof checkpointComposerRun>> | undefined;
               let saveFailed = false;
-              if (dirtyDocs) try {
+              const checkpointDraft = async (step: typeof summary.nextStep) => {
                 const sourceRef = await composerSourceRef(touched.worktreePath, touched.slug);
-                saved = await checkpointComposerRun({ worktree: touched.worktreePath, step: summary.nextStep, state: 'draft' }, {
+                const owner = await resolveDaemonOwner(await readMachineOwnerConfig(), gh, touched.worktreePath);
+                const committedOwner = await composerCommittedMarkerOwner(git, touched.worktreePath, branch, touched.slug);
+                return checkpointComposerRun({ worktree: touched.worktreePath, step, state: 'draft' }, {
                   git: async (args) => {
                     const result = await git([...args], { cwd: touched.worktreePath });
                     return { exitCode: result.exitCode ?? 0, stdout: result.stdout, stderr: '' };
                   },
-                  resolveOwner: async () => resolveDaemonOwner(await readMachineOwnerConfig(), gh, touched.worktreePath),
+                  resolveOwner: async () => owner,
                   emit: async (event) => events.emitOrThrow(event),
                   provider: touched.provider,
                   sourceRef,
+                  localOnly: Boolean(committedOwner && (!owner.resolved || committedOwner !== owner.id)),
+                  localOnlyOwner: committedOwner,
                   publication: target.remote ? checkpointPublication(target, branch, touched.worktreePath, gh, git, events, async ({ branch: publishedBranch, prUrl }) => {
                     if (!sourceRef) return;
                     const ledger = createLedger(join(engineerDir ?? resolveEngineerDir({}), 'ledger.json'));
@@ -1604,6 +1625,9 @@ export async function dispatchEngineer(
                     await ledger.transition(GITHUB_ISSUES_SOURCE, sourceRef, 'deciding', { branch: publishedBranch, draftPrUrl: prUrl });
                   }) : undefined,
                 });
+              };
+              if (dirtyDocs) try {
+                saved = await checkpointDraft(summary.nextStep);
               } catch (error) {
                 // The local commit is deliberately durable before publication.
                 // Continue to the boundary so the operator can retry or hand off.
@@ -1613,7 +1637,7 @@ export async function dispatchEngineer(
               try { record = parseRunRecord(await readFile(join(touched.worktreePath, '.docs', 'composer-runs', `${touched.slug}.json`), 'utf8')); } catch { record = undefined; }
               if (record && summarizeRun(record).nextStep !== 'delivery') {
                 summary = summarizeRun(record);
-                const activeProvider = (record.lastCheckpoint?.provider ?? touched.provider) as BuiltInProviderId;
+                let activeProvider = (record.lastCheckpoint?.provider ?? touched.provider) as BuiltInProviderId;
                 print(`Composer run ${touched.slug}: current step ${summary.nextStep}; active provider ${activeProvider}. Choices: continue, switch, hand off.`);
                 const providers = BUILT_IN_PROVIDERS.filter((provider) => supportsProviderCapability(provider, 'interactiveLaunch')).map((provider) => provider.id);
                 // Refused/failed switch attempts return to this exact durable
@@ -1624,12 +1648,29 @@ export async function dispatchEngineer(
                     : await promptComposerBoundary({ providers });
                   let action;
                   try { action = resolveBoundaryProvider({ choice: boundary.choice, activeProvider, switchTo: boundary.switchTo, hasRemote: Boolean(target.remote) }); }
-                  catch (error) { printErr(`compose boundary: ${error instanceof Error ? error.message : String(error)}`); continue; }
+                  catch (error) {
+                    printErr(`compose boundary: ${error instanceof Error ? error.message : String(error)}`);
+                    if (!(opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY)))()) break;
+                    continue;
+                  }
                   if (action.action === 'handoff') {
-                    if (saveFailed) { printErr('compose boundary: handoff is unavailable until the local checkpoint is published; choose continue to retry.'); continue; }
+                    if (saveFailed) {
+                      printErr('compose boundary: handoff is unavailable until the local checkpoint is published; choose continue to retry.');
+                      if (!(opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY)))()) break;
+                      continue;
+                    }
                   const owner = await resolveDaemonOwner(await readMachineOwnerConfig(), gh, touched.worktreePath);
-                  await events.emitOrThrow({ type: 'composer_run_handed_off', slug: touched.slug, actor: owner.resolved ? owner.id : 'unresolved', ...(saved?.prUrl ? { prUrl: saved.prUrl } : {}) });
-                  print(`Composer run handed off${saved?.prUrl ? `: ${saved.prUrl}` : ''}. Resume with compose resume ${branch}.`);
+                  const repository = target.remote ? parseGhRepo(target.remote) : undefined;
+                  const existing = repository ? await findExistingSpecPullRequest(
+                    async (args, options) => {
+                      const result = await gh(args, { ...options, cwd: options?.cwd ?? touched.worktreePath });
+                      return { ...result, stderr: '' };
+                    },
+                    repository, branch, touched.worktreePath,
+                  ) : undefined;
+                  const prUrl = saved?.prUrl ?? existing?.url;
+                  await events.emitOrThrow({ type: 'composer_run_handed_off', slug: touched.slug, actor: owner.resolved ? owner.id : 'unresolved', ...(prUrl ? { prUrl } : {}) });
+                  print(`Composer run handed off${prUrl ? `: ${prUrl}` : ''}. Resume with compose resume ${branch}.`);
                     break;
                   }
                   try {
@@ -1643,7 +1684,20 @@ export async function dispatchEngineer(
                     const name = await resolveSkillName(skillNameRoot, 'composer');
                     const prompt = `${nextHost.invocationPrefix}${name} --resume ${touched.worktreePath} --step ${summary.nextStep}\nResume context: ${JSON.stringify({ drafts: summary.drafts, acceptedArtifacts: summary.acceptedSteps.flatMap((step) => step.artifacts.map((artifact) => artifact.path)), decisions: summary.decisions, openQuestions: summary.openQuestions })}`;
                     lastCode = await (opts.spawnHost ?? spawnInteractiveHost)(nextExecutable, nextHost.interactiveLaunch.argv({ prompt, permissionMode: 'default' }), touched.worktreePath, { ...launchEnv, AI_CONDUCTOR_AUTHORING_PROVIDER: action.provider, AI_CONDUCTOR_COMPOSE_LAUNCH_ID: launchId });
-                    saveFailed = false;
+                    // Every child exit is another durable boundary. A clean
+                    // retry is intentionally passed to checkpoint so a prior
+                    // publication failure cannot be cleared by exit status.
+                    try {
+                      saved = await checkpointDraft(summary.nextStep);
+                      saveFailed = saved.published === false && Boolean(target.remote);
+                    } catch (error) {
+                      printErr(`compose: draft is saved locally only. ${error instanceof Error ? error.message : String(error)}`);
+                      saveFailed = true;
+                    }
+                    try { record = parseRunRecord(await readFile(join(touched.worktreePath, '.docs', 'composer-runs', `${touched.slug}.json`), 'utf8')); } catch { record = undefined; }
+                    if (!record || summarizeRun(record).nextStep === 'delivery') break;
+                    summary = summarizeRun(record);
+                    activeProvider = (record.lastCheckpoint?.provider ?? action.provider) as BuiltInProviderId;
                   } catch (error) { printErr(`compose boundary: ${error instanceof Error ? error.message : String(error)}`); }
                 }
               }
@@ -2140,7 +2194,7 @@ export async function dispatchEngineer(
               const branch = branchResult.stdout.trim();
               const slug = branch.replace(/^spec\//, '');
               const sourceRef = await composerSourceRef(worktree, slug);
-              const markerOwner = await composerMarkerOwner(worktree, slug);
+              const markerOwner = await composerCommittedMarkerOwner(git, worktree, branch, slug);
               const owner = await (opts.resolveCheckpointOwner ?? (async () => resolveDaemonOwner(await readMachineOwnerConfig(), gh, worktree)))();
               const localOnly = Boolean(markerOwner && (!owner.resolved || markerOwner !== owner.id));
               const publication = target.remote && branch.startsWith('spec/')
@@ -2221,7 +2275,24 @@ export async function dispatchEngineer(
             const target = await resolveTargetRepo(project.path, reader);
             const repository = dependencyRepository(project);
             const resolveBranch = async (selector: ResumeTarget) => {
-              if (selector.kind === 'branch') return { branch: selector.branch };
+              if (selector.kind === 'branch') {
+                if (!target.remote) return { branch: selector.branch };
+                try {
+                  const stdout = await runTrackerRepositoryRead(
+                    gh, target.canonicalPath, 'pull-request.read', repository, { kind: 'repository' },
+                    ['pr', 'view', selector.branch, '--repo', repository, '--json', 'url'],
+                  );
+                  const parsed = JSON.parse(stdout || '{}') as { url?: unknown };
+                  return {
+                    branch: selector.branch,
+                    ...(typeof parsed.url === 'string' ? { draftPrUrl: parsed.url } : {}),
+                  };
+                } catch (error) {
+                  const message = error instanceof Error ? error.message : String(error);
+                  if (/no pull requests? found|could not resolve to a pull request|not found/i.test(message)) return { branch: selector.branch };
+                  throw error;
+                }
+              }
               if (selector.kind === 'pr') {
                 const stdout = await runTrackerRepositoryRead(
                   gh, target.canonicalPath, 'pull-request.read', repository,
@@ -2259,27 +2330,47 @@ export async function dispatchEngineer(
                 localState: async (branch) => {
                   const slug = branch.slice('spec/'.length);
                   const path = join(target.canonicalPath, '.worktrees', `engineer-${slug}`);
-                  try { await access(path); } catch {
-                    return { leftovers: { dirtyDocs: [], unpushedCommits: [] }, interactive: false, fastForwardable: true };
-                  }
-                  const status = await git(['status', '--porcelain', '--', '.docs'], { cwd: path });
+                  const hasWorktree = await access(path).then(() => true, () => false);
+                  const localRef = hasWorktree ? 'HEAD' : branch;
+                  const status = hasWorktree
+                    ? await git(['status', '--porcelain', '--untracked-files=all'], { cwd: path })
+                    : { stdout: '' };
                   const dirtyDocs = status.stdout.split('\n').filter(Boolean).map((line) => line.slice(3));
                   const ahead = target.remote
-                    ? await git(['log', '--format=%h', `origin/${branch}..HEAD`], { cwd: path })
+                    ? await git(['log', '--format=%h', `origin/${branch}..${localRef}`], { cwd: hasWorktree ? path : target.canonicalPath })
                     : { stdout: '' };
                   const unpushedCommits = ahead.stdout.split('\n').filter(Boolean);
                   const fastForwardable = !target.remote ? true : await (async () => {
                     const [base, remoteHead] = await Promise.all([
-                      git(['merge-base', `origin/${branch}`, 'HEAD'], { cwd: path }),
-                      git(['rev-parse', `origin/${branch}`], { cwd: path }),
+                      git(['merge-base', `origin/${branch}`, localRef], { cwd: hasWorktree ? path : target.canonicalPath }),
+                      git(['rev-parse', `origin/${branch}`], { cwd: hasWorktree ? path : target.canonicalPath }),
                     ]);
                     return base.stdout.trim() === remoteHead.stdout.trim();
                   })();
+                  // An abandoned worktree must not leave a clean local branch
+                  // behind its fetched remote. Advance it before ensureWorktree
+                  // attaches that branch; a branch with local commits remains a
+                  // visible leftover and is never rewritten implicitly.
+                  if (!hasWorktree && target.remote && unpushedCommits.length === 0 && !fastForwardable) {
+                    await git(['branch', '-f', branch, `origin/${branch}`], { cwd: target.canonicalPath });
+                  }
+                  const remote = target.remote ? await (async () => {
+                    const [tip, serialized] = await Promise.all([
+                      git(['rev-parse', `origin/${branch}`], { cwd: target.canonicalPath }),
+                      git(['show', `origin/${branch}:.docs/composer-runs/${slug}.json`], { cwd: target.canonicalPath }),
+                    ]);
+                    try {
+                      const summary = summarizeRun(parseRunRecord(serialized.stdout));
+                      return { step: summary.nextStep, lastActor: summary.lastActor, lastAt: summary.lastAt, tip: tip.stdout.trim() };
+                    } catch {
+                      return { step: 'unknown', tip: tip.stdout.trim() };
+                    }
+                  })() : undefined;
                   const interactive = (opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY)))();
                   const choice = dirtyDocs.length || unpushedCommits.length
                     ? opts.chooseComposerLocalState
                       ? await opts.chooseComposerLocalState({ dirtyDocs, unpushedCommits })
-                      : await promptComposerLocalState({ dirtyDocs, unpushedCommits })
+                      : await promptComposerLocalState({ dirtyDocs, unpushedCommits, remote })
                     : undefined;
                   return {
                     leftovers: { dirtyDocs, unpushedCommits }, interactive, choice,
@@ -2290,12 +2381,16 @@ export async function dispatchEngineer(
                     fastForwardable,
                     discard: async () => {
                       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-                      if (dirtyDocs.length > 0) {
-                        await git(['add', '--', '.docs'], { cwd: path });
+                      if (dirtyDocs.length > 0 && hasWorktree) {
+                        await git(['add', '-A'], { cwd: path });
                         await git(['commit', '-m', `composer WIP backup: ${slug}`], { cwd: path });
                       }
-                      await git(['branch', `composer-backup/${slug}-${stamp}`], { cwd: path });
-                      if (target.remote) await git(['reset', '--hard', `origin/${branch}`], { cwd: path });
+                      const cwd = hasWorktree ? path : target.canonicalPath;
+                      await git(['branch', `composer-backup/${slug}-${stamp}`, localRef], { cwd });
+                      if (target.remote) {
+                        if (hasWorktree) await git(['reset', '--hard', `origin/${branch}`], { cwd });
+                        else await git(['branch', '-f', branch, `origin/${branch}`], { cwd });
+                      }
                     },
                   };
                 },
@@ -2309,7 +2404,7 @@ export async function dispatchEngineer(
                   return { worktree: result.path };
                 },
                 ownership: async ({ worktree, slug, branch }) => {
-                  const committedOwner = await composerMarkerOwner(worktree, slug);
+                  const committedOwner = await composerCommittedMarkerOwner(git, worktree, branch, slug);
                   const daemonSession = Boolean((opts.env ?? process.env).CONDUCT_DAEMON_SESSION);
                   const interactive = (opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY)))();
                   if (!committedOwner || committedOwner === owner.id) return 'unchanged';
@@ -2321,6 +2416,21 @@ export async function dispatchEngineer(
                   const mode = resumeOwnershipMode({ committedOwner, machineOwner: owner.id, daemonSession, interactive, approved });
                   if (mode !== 'taken-over') {
                     printErr(`compose resume: run remains owned by ${committedOwner} and stays local until interactive take-over.`);
+                    return 'local-only';
+                  }
+                  const repository = target.remote ? parseGhRepo(target.remote)?.toLowerCase() : undefined;
+                  if (!repository) throw new Error('compose resume: take-over publication requires a GitHub remote.');
+                  const approvalRequest = {
+                    operation: 'remote-ref.push' as const,
+                    access: 'remote-ref-write' as const,
+                    target: { repository, kind: 'remote-ref' as const, ref: `refs/heads/${branch}` },
+                    context: { actor: owner.id },
+                  };
+                  const confirmation = opts.githubOperationConfirmation
+                    ?? createTerminalGithubOperationConfirmation();
+                  const approval = await requestExplicitGithubOperationApproval(approvalRequest, confirmation);
+                  if (approval.kind !== 'approved') {
+                    printErr(`compose resume: take-over publication was refused; ${committedOwner} remains the owner and this run stays local until interactive take-over.`);
                     return 'local-only';
                   }
                   await writeIntakeMarker(worktree, slug, undefined, owner.id);
@@ -2338,6 +2448,18 @@ export async function dispatchEngineer(
                   if ((add.exitCode ?? 0) !== 0) throw new Error(`compose resume: could not stage take-over: ${add.stdout}`);
                   const commit = await git(['commit', '-m', `composer take-over: ${slug} ${committedOwner} to ${owner.id}`], { cwd: worktree });
                   if ((commit.exitCode ?? 0) !== 0) throw new Error(`compose resume: could not commit take-over: ${commit.stdout}`);
+                  const publication = initialSpecPublication(target, branch, worktree, gh, git, events);
+                  const pushed = await executeRemoteGit(
+                    ['push', '-u', 'origin', `HEAD:refs/heads/${branch}`],
+                    {
+                      ...publication.remote,
+                      explicitApproval: { capability: approval.capability, request: approvalRequest },
+                    },
+                  );
+                  if (pushed.kind !== 'executed') {
+                    printErr(`compose resume: take-over commit remains local; ${committedOwner} remains the remote owner until an approved take-over push succeeds.`);
+                    return 'local-only';
+                  }
                   return 'taken-over';
                 },
                 sourceRef: composerSourceRef,
@@ -2365,6 +2487,42 @@ export async function dispatchEngineer(
               // printing it after the host exits cannot resume its context.
               const prompt = `${host.invocationPrefix}${composerName} --resume ${resumed.worktree} --step ${resumed.context.nextStep}\nResume context: ${JSON.stringify(resumed.context)}`;
               await (opts.spawnHost ?? spawnInteractiveHost)(executable, host.interactiveLaunch.argv({ prompt, permissionMode: 'default' }), resumed.worktree, { ...(opts.env ?? process.env), AI_CONDUCTOR_AUTHORING_PROVIDER: provider, AI_CONDUCTOR_COMPOSE_LAUNCH_ID: launchId });
+              // A direct resume is a host-exit boundary too. Save any draft
+              // before returning control, including the first checkpoint of a
+              // run that had no record when its child was launched.
+              const branch = resumed.context.branch;
+              const slug = resumed.context.slug;
+              let current: ReturnType<typeof parseRunRecord> | undefined;
+              try { current = parseRunRecord(await readFile(join(resumed.worktree, '.docs', 'composer-runs', `${slug}.json`), 'utf8')); } catch { current = undefined; }
+              const dirty = await git(['status', '--porcelain', '--untracked-files=all', '--', '.docs'], { cwd: resumed.worktree });
+              if (dirty.stdout.trim() && (!current || summarizeRun(current).nextStep !== 'delivery')) {
+                const nextStep = current ? summarizeRun(current).nextStep : 'explore';
+                const committedOwner = await composerCommittedMarkerOwner(git, resumed.worktree, branch, slug);
+                await checkpointComposerRun({ worktree: resumed.worktree, step: nextStep, state: 'draft' }, {
+                  git: async (args) => {
+                    const result = await git([...args], { cwd: resumed.worktree });
+                    return { exitCode: result.exitCode ?? 0, stdout: result.stdout, stderr: '' };
+                  },
+                  resolveOwner: async () => owner,
+                  emit: async (event) => events.emitOrThrow(event),
+                  provider,
+                  sourceRef: await composerSourceRef(resumed.worktree, slug),
+                  localOnly: Boolean(committedOwner && committedOwner !== owner.id),
+                  localOnlyOwner: committedOwner,
+                  publication: target.remote ? checkpointPublication(target, branch, resumed.worktree, gh, git, events, async ({ branch: publishedBranch, prUrl }) => {
+                    const sourceRef = await composerSourceRef(resumed.worktree, slug);
+                    if (!sourceRef) return;
+                    const ledger = createLedger(join(engineerDir ?? resolveEngineerDir({}), 'ledger.json'));
+                    if (!await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef)) await ledger.record({ source: GITHUB_ISSUES_SOURCE, sourceRef });
+                    await ledger.transition(GITHUB_ISSUES_SOURCE, sourceRef, 'deciding', { branch: publishedBranch, draftPrUrl: prUrl });
+                  }) : undefined,
+                });
+                current = parseRunRecord(await readFile(join(resumed.worktree, '.docs', 'composer-runs', `${slug}.json`), 'utf8'));
+              }
+              if (current && summarizeRun(current).nextStep !== 'delivery') {
+                const summary = summarizeRun(current);
+                print(`Composer run ${slug}: current step ${summary.nextStep}; active provider ${(current.lastCheckpoint?.provider ?? provider)}. Choices: continue, switch, hand off.`);
+              }
               return resumed;
             } finally { persister.stop(); }
           })();
