@@ -348,7 +348,12 @@ export function renderRoutingRounds(slug: string, description: RoutingRoundsDesc
   }
   const lines = description.rounds.map(({ roundId, stored }) => {
     if (stored.kind === 'record') {
-      const hosts = Object.entries(stored.record.hosts).map(([host, state]) => `${host}:${state}`).join(', ');
+      const execution = stored.record.execution ?? 'owner';
+      const hosts = Object.entries(stored.record.hosts).map(([host, state]) => {
+        const child = parseChildId(host);
+        const placement = child === undefined ? 'none' : stored.record.placements?.[child]?.state ?? 'none';
+        return `${host}:${state} execution=${execution} placement=${placement}`;
+      }).join(', ');
       return `${roundId} ${stored.record.kind} ${stored.record.phase} hosts ${hosts} current host ${currentHost(stored.record)} ${receiptState(stored.record.receipt)} outbox ${stored.record.outbox.length}`;
     }
     return `${roundId} ${stored.kind}${stored.kind === 'unreadable' && stored.blob !== undefined ? ` ${stored.blob}` : ''}`;

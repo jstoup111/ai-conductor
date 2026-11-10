@@ -38,8 +38,19 @@ async function fixture() {
   };
   const stored4 = await create(r4);
   const stored5 = await create(r5);
+  const boundary = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim() as never;
   const settled = { ...emptyUnsettledReceipt(), settlementId: 'r4-settled', acks: { [c1]: true } } as const;
-  const open4: RouteRecord = { ...stored4.record, phase: 'open', hosts: { [c1]: 'restacked', [c2]: 'pending' }, receipt: settled };
+  const open4: RouteRecord = {
+    ...stored4.record,
+    phase: 'open',
+    execution: 'leaf',
+    hosts: { [c1]: 'restacked', [c2]: 'pending' },
+    placements: {
+      [c1]: { state: 'deferred', leafEntryTip: boundary, exitTip: boundary },
+      [c2]: { state: 'placed', leafEntryTip: boundary, exitTip: boundary },
+    },
+    receipt: settled,
+  };
   const open5: RouteRecord = { ...stored5.record, phase: 'open', hosts: { [c1]: 'repairing' } };
   expect(await writeRoutingTransaction(subject.repo, slug, [{ kind: 'update-record', previous: stored4, record: open4 }])).toEqual({ kind: 'updated' });
   expect(await writeRoutingTransaction(subject.repo, slug, [{ kind: 'update-record', previous: stored5, record: open5 }, { kind: 'create-marker', marker: { host: c1, roundId: r5 } }])).toEqual({ kind: 'updated' });
@@ -68,8 +79,8 @@ describe('stack rounds inspection (real local Git)', () => {
     expect(described.readable).toBe(true);
     expect(described.rounds.map((round) => round.roundId)).toEqual([r4, r5]);
     expect(described.marker).toMatchObject({ kind: 'marker', marker: { host: c1, roundId: r5 } });
-    expect(renderRoutingRounds(slug, described)).toContain('r4 audit open hosts 1:restacked, 2:pending current host 1 settled outbox 0');
-    expect(renderRoutingRounds(slug, described)).toContain('r5 audit open hosts 1:repairing current host 1 unsettled outbox 0');
+    expect(renderRoutingRounds(slug, described)).toContain('r4 audit open hosts 1:restacked execution=leaf placement=deferred, 2:pending execution=leaf placement=placed current host 1 settled outbox 0');
+    expect(renderRoutingRounds(slug, described)).toContain('r5 audit open hosts 1:repairing execution=owner placement=none current host 1 unsettled outbox 0');
     expect(renderRoutingRounds(slug, described)).toContain('repair marker: host 1 round r5');
     expect(renderRoutingRounds(slug, described)).toContain(`wedge: r4 host 2 pending unadmitted behind marker r5; ai-conductor stack rounds --slug ${slug} --close r4 --reason <text>`);
     expect(await routeRefs(subject)).toBe(beforeRefs);
