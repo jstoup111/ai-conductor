@@ -59,7 +59,10 @@ vi.mock('../../src/engine/step-runners.js', () => ({
 vi.mock('../../src/engine/conductor.js', () => ({
   Conductor: class { async run() {} },
 }));
-vi.mock('../../src/engine/daemon-runner.js', () => ({
+vi.mock('../../src/engine/daemon-runner.js', async (importOriginal) => ({
+  // The supervisor's child executor classifies each dispatch with the real
+  // daemon-runner helpers; only the one-feature runner is bounded here.
+  ...(await importOriginal<typeof import('../../src/engine/daemon-runner.js')>()),
   makeRunFeature: (deps: { beginFeatureRun: (worktree: { path: string; branch: string }, item: { slug: string }) => Promise<{ providerExecution: unknown; events: unknown; stop: () => Promise<void>; sessionId?: string }>; runConductor: (worktree: { path: string; branch: string }, item: { slug: string }, providerExecution: unknown, events: unknown, log: undefined, sessionId: string | undefined) => Promise<void> }) => async (item: { slug: string }) => {
     const worktree = { path: fixture.worktreePath, branch: `feat/${item.slug}` };
     const scope = await deps.beginFeatureRun(worktree, item);

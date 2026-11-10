@@ -83,7 +83,10 @@ const finishPresentationRepair = vi.hoisted(() => ({
 
 vi.mock('../../src/engine/finish-presentation-repair.js', () => finishPresentationRepair);
 
-vi.mock('../../src/engine/daemon-runner.js', () => ({
+vi.mock('../../src/engine/daemon-runner.js', async (importOriginal) => ({
+  // The supervisor's child executor classifies each dispatch with the real
+  // daemon-runner helpers; only the one-feature runner is bounded here.
+  ...(await importOriginal<typeof import('../../src/engine/daemon-runner.js')>()),
   makeRunFeature: (deps: {
     beginFeatureRun: (worktree: { path: string; branch: string }, item: { slug: string }) => Promise<{
       events: unknown;

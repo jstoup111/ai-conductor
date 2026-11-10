@@ -55,7 +55,10 @@ vi.mock('../../src/engine/work-order.js', async (importOriginal) => {
     })),
   };
 });
-vi.mock('../../src/engine/daemon-runner.js', () => ({
+vi.mock('../../src/engine/daemon-runner.js', async (importOriginal) => ({
+  // The supervisor's child executor classifies each dispatch with the real
+  // daemon-runner helpers; only the one-feature runner is bounded here.
+  ...(await importOriginal<typeof import('../../src/engine/daemon-runner.js')>()),
   makeRunFeature: (deps: { beginFeatureRun: (worktree: { path: string; branch: string }, item: { slug: string }) => Promise<Record<string, unknown>> }) => async (item: { slug: string }) => {
     const scope = await deps.beginFeatureRun({ path: fixture.worktreePath, branch: `feat/${item.slug}` }, item);
     const events = scope.events as { emit: (event: ConductorEvent) => Promise<void> };
@@ -112,7 +115,10 @@ const eventSequences: Partial<Record<ConductorEvent['type'], ConductorEvent[]>> 
     blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false },
     pollDurationMs: 1,
   }],
-  feature_dispatch_started: [{ type: 'feature_dispatch_started', slug: 'feature-a', kind: 'initial' }],
+  // The supervisor owns this event too (ADR D4): the broker drops a child's
+  // copy and the supervisor classifies the claim itself. The fixture worktree
+  // already exists when the claim is dispatched, so its kind is `resume`.
+  feature_dispatch_started: [{ type: 'feature_dispatch_started', slug: 'feature-a', kind: 'resume' }],
   // The supervisor owns this terminal event; the child fixture returns its
   // normal halted outcome, which the supervisor records as `halted`.
   feature_dispatch_ended: [{ type: 'feature_dispatch_ended', slug: 'feature-a', outcome: 'halted' }],
