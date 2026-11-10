@@ -2244,11 +2244,11 @@ export async function dispatchEngineer(
         const host = requireProviderCapability(provider, 'interactiveLaunch');
         const executable = resolveProviderExecutable(provider);
         const environment = opts.env ?? process.env;
-        const nested = Boolean(environment.CLAUDECODE || environment.CODEX_THREAD_ID);
-        if (nested) {
-          const detected = BUILT_IN_PROVIDERS.find(({ interactiveLaunch }) =>
-            interactiveLaunch?.sessionMarkers.some((marker) => Boolean(environment[marker])),
-          )?.displayName ?? host.displayName;
+        const nestedHost = BUILT_IN_PROVIDERS.find(({ interactiveLaunch }) =>
+          interactiveLaunch?.sessionMarkers.some((marker) => Boolean(environment[marker])),
+        );
+        if (nestedHost) {
+          const detected = nestedHost.displayName;
           throw new Error(`You are already inside a ${detected} session — run ${host.invocationPrefix}composer directly to resume (no need to launch a nested session).`);
         }
         if (!opts.spawnHost && !(await (opts.providerInstalled ?? executableOnPath)(executable))) throw new Error(`compose resume: provider ${provider} is not installed.`);
