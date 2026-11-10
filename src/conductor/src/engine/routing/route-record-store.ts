@@ -66,7 +66,13 @@ export type RoutingTransactionOp =
   | { readonly kind: 'update-marker'; readonly old: CommitSha; readonly new: CommitSha }
   | { readonly kind: 'delete-marker'; readonly old: CommitSha }
   /** A value-only fence for authority refs not otherwise written by this transaction. */
-  | { readonly kind: 'verify-ref'; readonly ref: string; readonly value: CommitSha };
+  | { readonly kind: 'verify-ref'; readonly ref: string; readonly value: CommitSha }
+  /**
+   * A restack's already-rendered terminal transaction. Its journal transition
+   * is its CAS fence, so the route store must commit it without adding a
+   * second verify for the same journal ref after that transition.
+   */
+  | { readonly kind: 'restack-applied'; readonly ownerOpId: RestackOpId; readonly lines: readonly string[] };
 
 export interface RouteRecordStoreDependencies { readonly git?: GitRunner }
 /**
@@ -153,7 +159,9 @@ export async function writeRoutingTransaction(
   const git = dependencies.git ?? makeGitRunner(worktree);
   const journal = await readRestackJournal(worktree, slug, { git });
   if (journal.kind === 'unreadable') return { kind: 'unavailable' };
-  if (!routingFenceOpen(journal)) {
+  const restackApplied = ops.find((op): op is Extract<RoutingTransactionOp, { readonly kind: 'restack-applied' }> => op.kind === 'restack-applied');
+  if (restackApplied !== undefined && ops.length !== 1) return { kind: 'unavailable' };
+  if (!routingFenceOpen(journal, restackApplied?.ownerOpId)) {
     return { kind: 'restack-journal-open' };
   }
   try {
@@ -232,12 +240,16 @@ export async function writeRoutingTransaction(
         case 'verify-ref':
           lines.push(`verify ${op.ref} ${op.value}`);
           break;
+        case 'restack-applied':
+          lines.push(...op.lines);
+          break;
       }
     }
     // Keep the ordinary record update first for compatibility with Git's
     // transaction grammar, while retaining the journal fence in this exact
     // atomic transaction before prepare/commit.
-    lines.push(`verify ${journalRefFor(slug)} ${journal.kind === 'journal' ? journal.blob : ZERO_SHA}`, 'prepare', 'commit', '');
+    if (restackApplied === undefined) lines.push(`verify ${journalRefFor(slug)} ${journal.kind === 'journal' ? journal.blob : ZERO_SHA}`);
+    lines.push('prepare', 'commit', '');
     const input = lines.join('\n');
     const updated = await git(['update-ref', '--stdin'], { input });
     if (updated.exitCode === 0) return { kind: 'updated' };
@@ -265,6 +277,10 @@ export async function writeRoutingTransaction(
         case 'update-marker':
         case 'delete-marker': expectRef(repairMarkerRefFor(slug), op.old); break;
         case 'verify-ref': expectRef(op.ref, op.value); break;
+        // The supplied applied transaction already compare-and-swaps the
+        // journal as its final state transition. A generic re-read cannot
+        // safely classify its arbitrary ref set after a failed transaction.
+        case 'restack-applied': return { kind: 'unavailable' };
       }
     }
     expectRef(journalRefFor(slug), journal.kind === 'journal' ? journal.blob : undefined);
