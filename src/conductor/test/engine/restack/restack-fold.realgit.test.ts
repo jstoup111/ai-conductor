@@ -114,7 +114,7 @@ describe('planned fold recovery (real local Git)', () => {
         { child: child(3), oldParent: subject.c2, oldTip: subject.leaf, kind: 'leaf-active' },
       ],
       children: [child(1), child(2), child(3)].map((value) => ({ child: value, status: 'pending' as const })),
-    }, { git: makeGitRunner(subject.repo) });
+    }, undefined, { git: makeGitRunner(subject.repo) });
     if (created.kind !== 'created') throw new Error(`could not create planned fold journal: ${created.kind}`);
 
     // The journal write is durable; process death happens before staging or a move.
