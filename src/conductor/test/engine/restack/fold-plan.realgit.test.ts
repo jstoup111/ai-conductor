@@ -9,9 +9,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { collectFoldSet, placeFoldCommits } from '../../../src/engine/restack/fold-plan.js';
-import { createRouteRecord } from '../../../src/engine/routing/route-record-store.js';
+import { createRouteRecord, readRouteRecord } from '../../../src/engine/routing/route-record-store.js';
 import { closureRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { parseRoundId, type HostPlacement } from '../../../src/engine/routing/route-types.js';
+import type { FoldRange } from '../../../src/engine/restack/fold-types.js';
 
 const execFile = promisify(execFileCallback);
 const repositories: string[] = [];
@@ -87,7 +88,11 @@ describe('collectFoldSet (real local Git)', () => {
     await subject.addPlacement('r1', hostOne, { state: 'deferred', leafEntryTip: firstEntry as never, exitTip: firstExit as never });
     await subject.addPlacement('r2', hostThree, { state: 'deferred', leafEntryTip: thirdEntry as never, exitTip: thirdExit as never });
 
-    await expect(collectFoldSet({ worktree: subject.repo, slug, git: makeGitRunner(subject.repo) })).resolves.toEqual({
+    const ranges: FoldRange[] = [
+      { host: hostOne, roundId: parseRoundId('r1')!, leafEntryTip: firstEntry as never, exitTip: firstExit as never },
+      { host: hostThree, roundId: parseRoundId('r2')!, leafEntryTip: thirdEntry as never, exitTip: thirdExit as never },
+    ];
+    await expect(collectFoldSet({ ranges, slug, git: makeGitRunner(subject.repo) })).resolves.toEqual({
       kind: 'collected', commits: [
         { sha: hostOneFix, roundId: 'r1', owner: hostOne },
         { sha: operatorInside, roundId: 'r1', owner: hostOne },
@@ -103,7 +108,7 @@ describe('collectFoldSet (real local Git)', () => {
     const wrongOwner = await subject.commit('wrong-owner.txt', 'wrong\n', `wrong owner${trailers('r1', 'c2')}`);
     await subject.addPlacement('r1', hostOne, { state: 'deferred', leafEntryTip: entry as never, exitTip: wrongOwner as never });
 
-    await expect(collectFoldSet({ worktree: subject.repo, slug, git: makeGitRunner(subject.repo) }))
+    await expect(collectFoldSet({ ranges: [{ host: hostOne, roundId: parseRoundId('r1')!, leafEntryTip: entry as never, exitTip: wrongOwner as never }], slug, git: makeGitRunner(subject.repo) }))
       .resolves.toEqual({ kind: 'refused', reason: 'fold-owner-invalid', commit: wrongOwner, host: hostOne });
   });
 
@@ -113,7 +118,7 @@ describe('collectFoldSet (real local Git)', () => {
     await markClosed(subject, 1);
     await subject.addPlacement('r1', hostOne, { state: 'deferred', leafEntryTip: entry as never });
 
-    await expect(collectFoldSet({ worktree: subject.repo, slug, git: makeGitRunner(subject.repo) }))
+    await expect(collectFoldSet({ ranges: [{ host: hostOne, roundId: parseRoundId('r1')!, leafEntryTip: entry as never }], slug, git: makeGitRunner(subject.repo) }))
       .resolves.toEqual({ kind: 'refused', reason: 'fold-owner-invalid', commit: entry, host: hostOne });
   });
 
@@ -130,7 +135,7 @@ describe('collectFoldSet (real local Git)', () => {
     const merge = await subject.head();
     await subject.addPlacement('r1', hostOne, { state: 'deferred', leafEntryTip: entry as never, exitTip: merge as never });
 
-    await expect(collectFoldSet({ worktree: subject.repo, slug, git: makeGitRunner(subject.repo) }))
+    await expect(collectFoldSet({ ranges: [{ host: hostOne, roundId: parseRoundId('r1')!, leafEntryTip: entry as never, exitTip: merge as never }], slug, git: makeGitRunner(subject.repo) }))
       .resolves.toEqual({ kind: 'refused', reason: 'fold-owner-invalid', commit: merge, host: hostOne });
   });
 
@@ -147,7 +152,7 @@ describe('collectFoldSet (real local Git)', () => {
     const leafExit = await subject.head();
     await subject.addPlacement('r3', leaf, { state: 'deferred', leafEntryTip: leafEntry as never, exitTip: leafExit as never });
 
-    await expect(collectFoldSet({ worktree: subject.repo, slug, git: makeGitRunner(subject.repo) })).resolves.toEqual({
+    await expect(collectFoldSet({ ranges: [{ host: hostOne, roundId: parseRoundId('r1')!, leafEntryTip: entry as never, exitTip: operator as never }], slug, git: makeGitRunner(subject.repo) })).resolves.toEqual({
       kind: 'collected', commits: [{ sha: operator, roundId: 'r1', owner: hostOne }],
     });
   });
@@ -320,6 +325,12 @@ describe('placeFoldCommits (real local Git)', () => {
       slug,
       commits: [{ sha: frozen as never, roundId: parseRoundId('r2')!, owner: hostOne }],
       git: makeGitRunner(subject.repo),
+      frozenBlocksFor: async (source) => {
+        const stored = await readRouteRecord(subject.repo, slug, source.roundId, { git: makeGitRunner(subject.repo) });
+        if (stored.kind !== 'record') return undefined;
+        const allocation = stored.record.allocation[source.owner];
+        return allocation === undefined ? undefined : allocation.blockBodies.map((body, index) => ({ id: allocation.remTaskIds[index]!, body }));
+      },
     });
     return { frozen, plan: await planned };
   }

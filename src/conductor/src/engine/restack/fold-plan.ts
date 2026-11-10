@@ -6,13 +6,10 @@ import { withDaemonCoAuthorTrailer } from '../bot-co-author.js';
 import { type ChildId } from '../child-context.js';
 import { childBranchFor, leafBranchFor } from '../feature-branch-identity.js';
 import { type GitRunner } from '../rebase.js';
-import { readRouteRecord } from '../routing/route-record-store.js';
-import { closureRefFor } from '../routing/routing-refs.js';
-import { parseRoundId, type FrozenHostAllocation, type RoundId } from '../routing/route-types.js';
 import { parseCommitSha, type CommitSha } from './restack-types.js';
-import type { FoldCommitPlan, FoldHunk, FoldPart, FoldPartReason, FoldPlan, FoldSourceCommit } from './fold-types.js';
+import type { FoldCommitPlan, FoldFrozenBlock, FoldHunk, FoldPart, FoldPartReason, FoldPlan, FoldRange, FoldSourceCommit } from './fold-types.js';
 
-export type { FoldCommitPlan, FoldHunk, FoldPart, FoldPartReason, FoldPlan, FoldSourceCommit } from './fold-types.js';
+export type { FoldCommitPlan, FoldFrozenBlock, FoldHunk, FoldPart, FoldPartReason, FoldPlan, FoldRange, FoldSourceCommit } from './fold-types.js';
 
 export type CollectFoldSetResult =
   | { readonly kind: 'collected'; readonly commits: readonly FoldSourceCommit[] }
@@ -20,7 +17,8 @@ export type CollectFoldSetResult =
   | { readonly kind: 'unavailable' };
 
 export interface CollectFoldSetInput {
-  readonly worktree: string;
+  /** Durable ranges are read by the restack executor, which owns routing I/O. */
+  readonly ranges: readonly FoldRange[];
   readonly slug: string;
   readonly git: GitRunner;
 }
@@ -30,14 +28,8 @@ export interface PlaceFoldCommitsInput {
   readonly slug: string;
   readonly commits: readonly FoldSourceCommit[];
   readonly git: GitRunner;
+  readonly frozenBlocksFor?: (source: FoldSourceCommit) => Promise<readonly FoldFrozenBlock[] | undefined>;
 }
-
-type DeferredRange = {
-  readonly host: ChildId;
-  readonly roundId: RoundId;
-  readonly leafEntryTip: CommitSha;
-  readonly exitTip?: CommitSha;
-};
 
 function refused(commit: CommitSha, host: ChildId): Extract<CollectFoldSetResult, { readonly kind: 'refused' }> {
   return { kind: 'refused', reason: 'fold-owner-invalid', commit, host };
@@ -51,44 +43,7 @@ function trailerValues(message: string, key: 'Round' | 'Owner'): string[] {
   });
 }
 
-async function isLeafHost(git: GitRunner, slug: string, host: ChildId): Promise<boolean | undefined> {
-  try {
-    const closure = await git(['rev-parse', '-q', '--verify', closureRefFor(slug, host)]);
-    return closure.exitCode === 1 ? true : closure.exitCode === 0 ? false : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-async function deferredRanges(input: CollectFoldSetInput): Promise<DeferredRange[] | undefined> {
-  const prefix = `refs/conductor/${input.slug}/routes/`;
-  let listed;
-  try {
-    listed = await input.git(['for-each-ref', '--format=%(refname)', prefix]);
-  } catch {
-    return undefined;
-  }
-  if (listed.exitCode !== 0) return undefined;
-
-  const ranges: DeferredRange[] = [];
-  for (const ref of listed.stdout.split('\n').filter(Boolean)) {
-    const roundId = parseRoundId(ref.slice(prefix.length));
-    if (roundId === undefined || ref !== `${prefix}${roundId}`) return undefined;
-    const stored = await readRouteRecord(input.worktree, input.slug, roundId, { git: input.git });
-    if (stored.kind !== 'record') return undefined;
-    for (const [rawHost, placement] of Object.entries(stored.record.placements ?? {})) {
-      const host = Number(rawHost) as ChildId;
-      if (placement.state !== 'deferred') continue;
-      const leaf = await isLeafHost(input.git, input.slug, host);
-      if (leaf === undefined) return undefined;
-      if (leaf) continue;
-      ranges.push({ host, roundId, leafEntryTip: placement.leafEntryTip, ...(placement.exitTip === undefined ? {} : { exitTip: placement.exitTip }) });
-    }
-  }
-  return ranges;
-}
-
-async function rangeCommits(input: CollectFoldSetInput, range: DeferredRange): Promise<CommitSha[] | CollectFoldSetResult> {
+async function rangeCommits(input: CollectFoldSetInput, range: FoldRange): Promise<CommitSha[] | CollectFoldSetResult> {
   const boundary = range.exitTip ?? range.leafEntryTip;
   if (range.exitTip === undefined) return refused(boundary, range.host);
   try {
@@ -103,7 +58,7 @@ async function rangeCommits(input: CollectFoldSetInput, range: DeferredRange): P
   }
 }
 
-async function validOwnedCommit(input: CollectFoldSetInput, commit: CommitSha, range: DeferredRange): Promise<boolean> {
+async function validOwnedCommit(input: CollectFoldSetInput, commit: CommitSha, range: FoldRange): Promise<boolean> {
   try {
     const parents = await input.git(['rev-list', '--parents', '-n', '1', commit]);
     if (parents.exitCode !== 0 || parents.stdout.trim().split(/\s+/).length !== 2) return false;
@@ -122,11 +77,8 @@ async function validOwnedCommit(input: CollectFoldSetInput, commit: CommitSha, r
  * first-parent, non-merge commit stamped for the round and host that own it.
  */
 export async function collectFoldSet(input: CollectFoldSetInput): Promise<CollectFoldSetResult> {
-  const ranges = await deferredRanges(input);
-  if (ranges === undefined) return { kind: 'unavailable' };
-
   const commits: FoldSourceCommit[] = [];
-  for (const range of ranges) {
+  for (const range of input.ranges) {
     const listed = await rangeCommits(input, range);
     if (!Array.isArray(listed)) return listed;
     for (const commit of listed) {
@@ -227,18 +179,16 @@ async function sourceParent(git: GitRunner, sha: CommitSha): Promise<CommitSha> 
 async function frozenBlocks(
   input: PlaceFoldCommitsInput,
   source: FoldSourceCommit,
-): Promise<readonly { readonly id: string; readonly body: string }[] | undefined> {
-  const stored = await readRouteRecord(input.worktree, input.slug, source.roundId, { git: input.git });
-  if (stored.kind !== 'record') return undefined;
-  const allocation: FrozenHostAllocation | undefined = stored.record.allocation[source.owner];
-  if (allocation === undefined || allocation.remTaskIds.length === 0) return undefined;
+): Promise<readonly FoldFrozenBlock[] | undefined> {
+  if (input.frozenBlocksFor === undefined) return undefined;
+  const configured = await input.frozenBlocksFor(source);
+  if (configured === undefined || configured.length === 0) return configured;
   const patch = await input.git(['show', '--format=', '--no-ext-diff', source.sha]);
   if (patch.exitCode !== 0) throw new Error(`cannot read frozen block commit ${source.sha}`);
   const added = new Set(patch.stdout.split('\n')
     .filter((line) => line.startsWith('+') && !line.startsWith('+++'))
     .map((line) => line.slice(1)));
-  const blocks = allocation.blockBodies.map((body, index) => ({ id: allocation.remTaskIds[index]!, body }));
-  return blocks.every(({ body }) => body.replace(/\n$/, '').split('\n').every((line) => added.has(line))) ? blocks : undefined;
+  return configured.every(({ body }) => body.replace(/\n$/, '').split('\n').every((line) => added.has(line))) ? configured : undefined;
 }
 
 async function childTips(input: PlaceFoldCommitsInput, owner: ChildId): Promise<readonly { readonly child: ChildId; readonly tip: CommitSha }[]> {
