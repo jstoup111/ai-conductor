@@ -56,7 +56,7 @@ import {
   checkCascadeCap,
 } from './cascade-cap.js';
 import { formatCascadeAllowance, resolveCascadeAllowanceForWorktree } from './cascade-allowance.js';
-import { readRevalidationQueue, readRouteRecord, routedAppliedLines, routedRecordAfterExit } from '../routing/route-record-store.js';
+import { readRevalidationQueue, readRouteRecord, routedAppliedLines, routedRecordAfterExit, writeRoutingTransaction } from '../routing/route-record-store.js';
 import { closureRefFor, repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../routing/routing-refs.js';
 import { mergeQueueGeneration } from '../routing/revalidation-queue.js';
 import { childRevalidatedEvent } from '../routing/routing-events.js';
@@ -1007,8 +1007,10 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
         : [`update ${revalidationQueueRefFor(options.slug)} ${journal.journal.queueNew} ${journal.journal.queueOld}`]),
     ...journalStateUpdateLines(journal, appliedBlob, 'applied'),
   ];
-  const appliedWrite = await runGit(git, ['update-ref', '--stdin'], transaction(appliedLines));
-  if (appliedWrite.exitCode !== 0) {
+  const appliedWrite = await writeRoutingTransaction(options.worktree, options.slug, [{
+    kind: 'restack-applied', ownerOpId: journal.journal.opId, lines: appliedLines,
+  }], { git });
+  if (appliedWrite.kind !== 'updated') {
     await haltRestack(options.worktree, 'stack-ref-changed', options.events, { detail: 'fold route record changed during applied transaction' });
     return haltedResult(options.worktree);
   }
@@ -1511,8 +1513,10 @@ async function runOrdinaryRestack(
       throw error;
     }
     const applied = await restackTransactionBuilder.appliedTransactionLines(options.worktree, journal, git);
-    const appliedWrite = await runGit(git, ['update-ref', '--stdin'], transaction(applied.lines));
-    if (appliedWrite.exitCode !== 0) {
+    const appliedWrite = await writeRoutingTransaction(options.worktree, options.slug, [{
+      kind: 'restack-applied', ownerOpId: journal.journal.opId, lines: applied.lines,
+    }], { git });
+    if (appliedWrite.kind !== 'updated') {
       const changed = await changedRoutedAppliedRef(journal, git);
       if (changed !== undefined) {
         await haltRestack(options.worktree, 'stack-ref-changed', options.events, { detail: changed });
