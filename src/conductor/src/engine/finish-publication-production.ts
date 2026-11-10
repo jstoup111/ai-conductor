@@ -34,7 +34,7 @@ import {
 import { activePublicationRecord, readPublicationRecord, writePublicationRecord, type PublicationMember } from './stack-publication-record.js';
 import type { GitRunner as PublicationRecordGitRunner } from './rebase.js';
 import { leafBranchFor } from './feature-branch-identity.js';
-import { deferredPlacementsExist } from './routing/round-admission.js';
+import { deferredPlacementDescriptions, deferredPlacementsExist } from './routing/round-admission.js';
 import { checkChildBodyPostconditions, renderChildBody, renderStackNavigation } from './stack-member-body.js';
 import { splitStoryBlocks } from './story-criteria.js';
 import { loadSliceTopology } from './slice-topology.js';
@@ -978,7 +978,9 @@ async function establishChildPrs(input: {
   if (!leaf || !input.operations || !input.remoteMutation) throw new Error('stack child publication boundary unavailable');
   const stackGit = publicationRecordGit(input.git, input.root);
   if (await deferredPlacementsExist(input.root, input.slug, { git: stackGit })) {
-    throw new StackPublicationHaltError('stack_publication_precondition_failed', `deferred routed placement remains for ${input.slug}; run the fold rebase before publication`);
+    const deferred = await deferredPlacementDescriptions(input.root, input.slug, { git: stackGit });
+    const detail = deferred === undefined || deferred.length === 0 ? `feature ${input.slug}` : deferred.join(', ');
+    throw new StackPublicationHaltError('stack_publication_precondition_failed', `deferred routed placement remains (${detail}); run the fold rebase before publication`);
   }
   const children = await readStackPublicationChildren(input.root, input.slug, { git: stackGit });
   if (children === 'unreadable') throw new Error('stack child positions are unreadable');

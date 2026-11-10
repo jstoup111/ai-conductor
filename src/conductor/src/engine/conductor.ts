@@ -17817,6 +17817,29 @@ export class Conductor {
         return { success: false, output: reason };
       }
 
+      // Deferred audit work is intentionally left on the leaf until FINISH.
+      // Fold it before either the interactive no-op path or a base-refresh
+      // refusal; the recorded execution mode, not the current config toggle,
+      // is the authority for this recovery.
+      if (!await routedRoundOpen(this.projectRoot, stackSlug, { git })
+        && await deferredPlacementsExist(this.projectRoot, stackSlug, { git })) {
+        const folded = await runRestack({
+          worktree: this.projectRoot,
+          slug: stackSlug,
+          cause: 'fold',
+          events: this.events,
+          git,
+          resolver: this.stepRunner.resolveRebaseConflict
+            ? (ctx) => this.stepRunner.resolveRebaseConflict!(ctx)
+            : undefined,
+          resolverCap: resolveRebaseResolutionAttempts(this.config),
+        });
+        if (folded.kind !== 'applied') {
+          const detail = folded.kind === 'unavailable' ? folded.detail : folded.kind === 'halted' ? folded.detail : folded.kind;
+          return { success: false, output: `stack fold ${folded.kind}: ${detail}` };
+        }
+      }
+
       const base = await resolveBase(git, localBase);
       const defaultTip = await git(['rev-parse', '--verify', base.ref]);
       const oldLeaf = await git(['rev-parse', '--verify', 'HEAD']);

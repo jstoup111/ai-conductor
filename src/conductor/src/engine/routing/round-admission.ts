@@ -52,6 +52,28 @@ export async function deferredPlacementsExist(
   return false;
 }
 
+/** Stable operator-facing identities for publication and fold refusals. */
+export async function deferredPlacementDescriptions(
+  worktree: string,
+  slug: string,
+  dependencies: RouteRecordStoreDependencies = {},
+): Promise<readonly string[] | undefined> {
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  const listed = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
+  if (listed.exitCode !== 0) return undefined;
+  const descriptions: string[] = [];
+  for (const ref of listed.stdout.split('\n').filter(Boolean)) {
+    const roundId = parseRoundId(ref.split('/').at(-1) ?? '');
+    if (!roundId) return undefined;
+    const stored = await readRouteRecord(worktree, slug, roundId, { git });
+    if (stored.kind !== 'record') return undefined;
+    for (const [host, placement] of Object.entries(stored.record.placements ?? {})) {
+      if (placement.state === 'deferred') descriptions.push(`host ${host} round ${roundId}`);
+    }
+  }
+  return descriptions;
+}
+
 /**
  * Reject a new admission while another active round could still make progress.
  * Revalidation is the sole exception: it may proceed only after every active

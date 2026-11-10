@@ -311,6 +311,11 @@ export class SpanManager {
           ? { fallbackReason: state.dispatch.fallbackReason }
           : {}),
     };
+    if (event.restack !== undefined) {
+      state.span.setAttribute('conductor.restack.op_id', event.restack.opId);
+      state.span.setAttribute('conductor.restack.cause', event.restack.cause);
+      if (event.restack.roundId !== undefined) state.span.setAttribute('conductor.round', event.restack.roundId);
+    }
   }
 
   /**

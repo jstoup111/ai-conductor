@@ -69,6 +69,7 @@ export const EVENT_SINKS = {
   // Restack and expected-lease outcomes remain durable on the existing event
   // spine; later tasks own any renderer, audit, or metric projections.
   restack_planned: { render: false, persist: true, audit: false, otel: false },
+  fold_planned: { render: false, persist: true, audit: false, otel: false },
   restack_applied: { render: false, persist: true, audit: false, otel: false },
   restack_conflict: { render: false, persist: true, audit: false, otel: false },
   restack_resolution: { render: false, persist: true, audit: false, otel: false },
