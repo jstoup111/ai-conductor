@@ -8,6 +8,19 @@ export interface FoldSourceCommit {
   readonly owner: ChildId;
 }
 
+/** A closed leaf interval that remains to be folded onto its recorded owner. */
+export interface FoldRange {
+  readonly host: ChildId;
+  readonly roundId: RoundId;
+  readonly leafEntryTip: CommitSha;
+  readonly exitTip?: CommitSha;
+}
+
+export interface FoldFrozenBlock {
+  readonly id: string;
+  readonly body: string;
+}
+
 export type FoldPartReason = 'owner' | 'introduced-above-owner';
 
 /** One source hunk, retained in the plan so its placement can be replayed exactly. */

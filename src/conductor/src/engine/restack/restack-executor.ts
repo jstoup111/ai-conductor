@@ -35,7 +35,8 @@ import {
   type RestackMoveRef,
 } from './restack-move.js';
 import { planRestackRanges } from './restack-plan.js';
-import { collectFoldSet, placeFoldCommits, type FoldCommitPlan, type FoldPart } from './fold-plan.js';
+import { collectFoldSet, placeFoldCommits } from './fold-plan.js';
+import type { FoldCommitPlan, FoldFrozenBlock, FoldPart, FoldRange, FoldSourceCommit } from './fold-types.js';
 import { withDaemonCoAuthorTrailer } from '../bot-co-author.js';
 import { adaptedPathsFor, checkPathOwnership, checkResolvedTipOwnership, parentOverlapPaths } from './restack-ownership.js';
 import { replayChildRange, RemBlockBodyMismatchError, type CommitterStamp } from './restack-replay.js';
@@ -56,10 +57,10 @@ import {
 } from './cascade-cap.js';
 import { formatCascadeAllowance, resolveCascadeAllowanceForWorktree } from './cascade-allowance.js';
 import { readRevalidationQueue, readRouteRecord, routedAppliedLines, routedRecordAfterExit, writeRoutingTransaction } from '../routing/route-record-store.js';
-import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../routing/routing-refs.js';
+import { closureRefFor, repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../routing/routing-refs.js';
 import { mergeQueueGeneration } from '../routing/revalidation-queue.js';
 import { childRevalidatedEvent } from '../routing/routing-events.js';
-import { parseRevalidationQueueRecord, routingEligible, type RevalidationQueueRecord } from '../routing/route-types.js';
+import { parseRevalidationQueueRecord, parseRoundId, routingEligible, type RevalidationQueueRecord } from '../routing/route-types.js';
 import { recordKickbackCapEvidence } from '../kickback-ledger.js';
 import { renderKickbackBudgetView } from '../kickback-budget-view.js';
 import {
@@ -658,6 +659,46 @@ async function replayLeafWithoutFoldSources(
   return { tip, rewrites };
 }
 
+/** Read fold candidates at the routing boundary so the fold planner remains routing-free. */
+async function deferredFoldRanges(
+  worktree: string,
+  slug: string,
+  git: GitRunner,
+): Promise<readonly FoldRange[] | undefined> {
+  const prefix = `refs/conductor/${slug}/routes/`;
+  const listed = await git(['for-each-ref', '--format=%(refname)', prefix]);
+  if (listed.exitCode !== 0) return undefined;
+  const ranges: FoldRange[] = [];
+  for (const ref of listed.stdout.split('\n').filter(Boolean)) {
+    const roundId = parseRoundId(ref.slice(prefix.length));
+    if (roundId === undefined || ref !== `${prefix}${roundId}`) return undefined;
+    const stored = await readRouteRecord(worktree, slug, roundId, { git });
+    if (stored.kind !== 'record') return undefined;
+    for (const [rawHost, placement] of Object.entries(stored.record.placements ?? {})) {
+      if (placement.state !== 'deferred') continue;
+      const host = Number(rawHost) as ChildId;
+      const closure = await git(['rev-parse', '-q', '--verify', closureRefFor(slug, host)]);
+      if (closure.exitCode !== 0 && closure.exitCode !== 1) return undefined;
+      if (closure.exitCode === 1) continue;
+      ranges.push({ host, roundId, leafEntryTip: placement.leafEntryTip, ...(placement.exitTip === undefined ? {} : { exitTip: placement.exitTip }) });
+    }
+  }
+  return ranges;
+}
+
+async function foldFrozenBlocks(
+  worktree: string,
+  slug: string,
+  source: FoldSourceCommit,
+  git: GitRunner,
+): Promise<readonly FoldFrozenBlock[] | undefined> {
+  const stored = await readRouteRecord(worktree, slug, source.roundId, { git });
+  if (stored.kind !== 'record') return undefined;
+  const allocation = stored.record.allocation[source.owner];
+  if (allocation === undefined || allocation.remTaskIds.length === 0) return undefined;
+  return allocation.blockBodies.map((body, index) => ({ id: allocation.remTaskIds[index]!, body }));
+}
+
 /**
  * Fold deferred leaf ranges back onto their owners.  The normal restacker is
  * intentionally range-centric; folding adds a source-to-placement plan first,
@@ -665,14 +706,19 @@ async function replayLeafWithoutFoldSources(
  * commits disappear from its history.
  */
 async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promise<RunRestackResult> {
-  const collected = await collectFoldSet({ worktree: options.worktree, slug: options.slug, git });
+  const ranges = await deferredFoldRanges(options.worktree, options.slug, git);
+  if (ranges === undefined) return { kind: 'unavailable', detail: 'cannot collect deferred fold ranges' };
+  const collected = await collectFoldSet({ ranges, slug: options.slug, git });
   if (collected.kind === 'unavailable') return { kind: 'unavailable', detail: 'cannot collect deferred fold ranges' };
   if (collected.kind === 'refused') {
     await haltRestack(options.worktree, 'fold-owner-invalid', options.events, { child: collected.host, detail: `fold owner invalid for ${collected.commit}` });
     return haltedResult(options.worktree);
   }
   if (collected.commits.length === 0) return { kind: 'applied', opId: randomUUID() as RestackOpId };
-  const folded = await placeFoldCommits({ worktree: options.worktree, slug: options.slug, commits: collected.commits, git });
+  const folded = await placeFoldCommits({
+    worktree: options.worktree, slug: options.slug, commits: collected.commits, git,
+    frozenBlocksFor: (source) => foldFrozenBlocks(options.worktree, options.slug, source, git),
+  });
   if (folded.kind === 'refused') {
     await haltRestack(options.worktree, 'fold-misrouted', options.events, { detail: `${folded.reason}: ${folded.commit}; ${folded.paths.join(', ')}` });
     return haltedResult(options.worktree);
