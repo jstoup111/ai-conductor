@@ -12,7 +12,7 @@ import type { RunRecord } from '../../../src/engine/engineer/run-record.js';
 
 const execFile = promisify(execFileCb);
 
-const record: RunRecord = { schemaVersion: 1, slug: 'demo', steps: { explore: { state: 'accepted', actor: 'A', provider: 'codex', at: '2026-11-08T00:00:00.000Z', artifacts: [{ path: '.docs/track/demo.md', sha256: 'a'.repeat(64) }] }, prd: { state: 'accepted', actor: 'A', provider: 'codex', at: '2026-11-08T00:01:00.000Z', artifacts: [] }, architecture_diagram: { state: 'draft' } }, needsReconfirm: [], ownerHistory: [], notes: { explore: { decisions: ['technical'], openQuestions: ['why?'] } } };
+const record: RunRecord = { schemaVersion: 1, slug: 'demo', track: 'technical', steps: { explore: { state: 'accepted', actor: 'A', provider: 'codex', at: '2026-11-08T00:00:00.000Z', artifacts: [{ path: '.docs/track/demo.md', sha256: 'a'.repeat(64) }] }, prd: { state: 'accepted', actor: 'A', provider: 'codex', at: '2026-11-08T00:01:00.000Z', artifacts: [] }, architecture_diagram: { state: 'draft' } }, needsReconfirm: [], ownerHistory: [], notes: { explore: { decisions: ['technical'], openQuestions: ['why?'] } } };
 describe('Composer resume', () => {
   it('parses PR, branch and intake targets', () => {
     expect(parseResumeTarget('17')).toEqual({ kind: 'pr', number: 17 });

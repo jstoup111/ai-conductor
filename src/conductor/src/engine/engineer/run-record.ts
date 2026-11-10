@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { Track } from '../../types/steps.js';
 
 export const RUN_RECORD_SCHEMA_VERSION = 1;
 
@@ -79,6 +80,8 @@ export interface RunSummary {
 export interface RunRecord {
   readonly schemaVersion: typeof RUN_RECORD_SCHEMA_VERSION;
   readonly slug: string;
+  /** Closed routing choice captured from the Explore track marker. */
+  readonly track: Track;
   readonly sourceRef?: string;
   readonly steps: Readonly<Partial<Record<RunStepId, RunStep>>>;
   /**
@@ -120,9 +123,8 @@ export function summarizeRun(record: RunRecord, currentDigests?: readonly Artifa
   // acceptance, continue from the step after the last accepted checkpoint
   // rather than mistaking an omitted optional step for the current one.
   const lastRecordedAcceptance = [...RUN_STEP_ORDER].reverse().find((step) => record.steps[step]?.state === 'accepted');
-  const technicalTrack = record.notes.explore?.decisions.some((decision) => /\btechnical\b/i.test(decision)) === true;
   const nextRecordedStep = (after: number): RunStepId | 'delivery' =>
-    RUN_STEP_ORDER.slice(after + 1).find((step) => !(technicalTrack && step === 'prd')) ?? 'delivery';
+    RUN_STEP_ORDER.slice(after + 1).find((step) => !(record.track === 'technical' && step === 'prd')) ?? 'delivery';
   const nextStep = explicitNextStep
     ?? (lastRecordedAcceptance === undefined
       ? nextRecordedStep(-1)
@@ -159,6 +161,7 @@ export interface ArtifactClassification {
 }
 
 const RUN_STEP_IDS = new Set<string>(RUN_STEP_ORDER);
+const RUN_TRACKS = new Set<Track>(['product', 'technical']);
 const SHA256_HEX = /^[a-f0-9]{64}$/;
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -167,6 +170,13 @@ function isObject(value: unknown): value is Record<string, unknown> {
 
 function isStepId(value: unknown): value is RunStepId {
   return typeof value === 'string' && RUN_STEP_IDS.has(value);
+}
+
+function parseTrack(value: unknown): Track {
+  if (typeof value !== 'string' || !RUN_TRACKS.has(value as Track)) {
+    throw new Error('Run record track must be product or technical');
+  }
+  return value as Track;
 }
 
 function requiredString(value: unknown, field: string): string {
@@ -278,7 +288,7 @@ export function parseRunRecord(serialized: string): RunRecord {
   }
   if (!isObject(value)) throw new Error('Run record must be an object');
   if (value.schemaVersion !== RUN_RECORD_SCHEMA_VERSION) throw new Error(`Unsupported run record schemaVersion ${String(value.schemaVersion)}`);
-  if (Object.keys(value).some((key) => !['schemaVersion', 'slug', 'sourceRef', 'steps', 'lastAcceptedArtifacts', 'needsReconfirm', 'ownerHistory', 'notes', 'lastCheckpoint'].includes(key))) {
+  if (Object.keys(value).some((key) => !['schemaVersion', 'slug', 'track', 'sourceRef', 'steps', 'lastAcceptedArtifacts', 'needsReconfirm', 'ownerHistory', 'notes', 'lastCheckpoint'].includes(key))) {
     throw new Error('Run record has unknown fields');
   }
   if (value.sourceRef !== undefined && typeof value.sourceRef !== 'string') throw new Error('Run record sourceRef must be a string');
@@ -287,6 +297,7 @@ export function parseRunRecord(serialized: string): RunRecord {
   return {
     schemaVersion: RUN_RECORD_SCHEMA_VERSION,
     slug: requiredString(value.slug, 'slug'),
+    track: parseTrack(value.track),
     ...(value.sourceRef === undefined ? {} : { sourceRef: value.sourceRef }),
     steps: parseSteps(value.steps),
     ...(value.lastAcceptedArtifacts === undefined ? {} : { lastAcceptedArtifacts: parseLastAcceptedArtifacts(value.lastAcceptedArtifacts) }),
