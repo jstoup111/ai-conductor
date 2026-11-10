@@ -289,7 +289,7 @@ describe('daemon child dispatch composition', () => {
     }
   });
 
-  it('keeps concurrent child logs attributed to their feature while supervisor warnings stay untagged', async () => {
+  it('tags every concurrent child log only with its own slug while leaving supervisor warnings untagged', async () => {
     const { root, baseSha } = await project();
     const store = await useTempEngineStore();
     const entered = new Set<string>();
@@ -327,9 +327,10 @@ describe('daemon child dispatch composition', () => {
       for (const [slug, otherSlug] of [['feature-a', 'feature-b'], ['feature-b', 'feature-a']] as const) {
         expect(childConsoleSinks.get(slug)).toContain(`child warning ${slug}`);
         for (const message of [`[executor:info] feature log ${slug}`, `[executor:warn] child warning ${slug}`]) {
-          const line = daemonLog.split('\n').find((candidate) => candidate.includes(message));
-          expect(line).toContain(`[daemon][${slug}] ${message}`);
-          expect(line).not.toContain(`[${otherSlug}]`);
+          const lines = daemonLog.split('\n').filter((candidate) => candidate.includes(message));
+          expect(lines).toHaveLength(1);
+          expect(lines[0]).toContain(`[daemon][${slug}] ${message}`);
+          expect(lines[0]).not.toContain(`[${otherSlug}]`);
         }
       }
       const supervisorWarning = daemonLog.split('\n').find((candidate) =>
