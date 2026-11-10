@@ -1,4 +1,4 @@
-// Covers: task:5, task:6
+// Covers: task:5, task:6, task:9
 import { existsSync } from 'node:fs';
 import { readdir } from 'node:fs/promises';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -24,6 +24,9 @@ const liveProviderSmokeCapabilities: Readonly<Record<string, SmokeCapability>> =
 );
 const smokeCapabilities: Readonly<Record<string, SmokeCapability>> = {
   'test/backlog-priority.smoke.test.ts': 'toolchain',
+  'test/contracts/llm-claude.contract.smoke.test.ts': 'credentialed:claude',
+  'test/contracts/llm-codex.contract.smoke.test.ts': 'credentialed:codex',
+  'test/contracts/llm-pi.contract.smoke.test.ts': 'credentialed:pi',
   'test/engine/build-token-auth.smoke.test.ts': 'credentialed:claude',
   ...liveProviderSmokeCapabilities,
   'test/engine/daemon-tmux.smoke.test.ts': 'toolchain',
@@ -41,13 +44,47 @@ const smokeCapabilities: Readonly<Record<string, SmokeCapability>> = {
   'test/smoke/surgical-finish-retry.smoke.test.ts': 'hermetic',
 };
 
+const llmRealLegs = [
+  {
+    file: 'test/contracts/llm-claude.contract.smoke.test.ts',
+    capability: 'credentialed:claude' as const,
+    credential: 'CLAUDE_CODE_OAUTH_TOKEN',
+    binary: 'claude',
+  },
+  {
+    file: 'test/contracts/llm-codex.contract.smoke.test.ts',
+    capability: 'credentialed:codex' as const,
+    credential: 'CODEX_API_KEY',
+    binary: 'codex',
+  },
+  {
+    file: 'test/contracts/llm-pi.contract.smoke.test.ts',
+    capability: 'credentialed:pi' as const,
+    credential: 'PI_API_KEY',
+    binary: 'pi',
+  },
+] as const;
+
+async function discoverLlmRealLegs() {
+  return Promise.all(
+    llmRealLegs.map(async ({ file }) => ({
+      file,
+      source: await readFile(join(conductorRoot, file), 'utf8'),
+    })),
+  );
+}
+
 async function allTestFiles(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
-  return (await Promise.all(entries.map(async (entry) => {
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) return allTestFiles(path);
-    return entry.isFile() && entry.name.endsWith('.test.ts') ? [path] : [];
-  }))).flat();
+  return (
+    await Promise.all(
+      entries.map(async (entry) => {
+        const path = join(directory, entry.name);
+        if (entry.isDirectory()) return allTestFiles(path);
+        return entry.isFile() && entry.name.endsWith('.test.ts') ? [path] : [];
+      }),
+    )
+  ).flat();
 }
 
 function startsUnmockedLiveProvider(source: string): boolean {
@@ -55,10 +92,14 @@ function startsUnmockedLiveProvider(source: string): boolean {
   // session starts at invoke. The ordinary suite may reach that boundary only
   // through an injected recording process adapter. Do not depend on a fixed
   // list of known smoke files: a newly-added provider must be caught.
-  const invokesAdapter = /new\s+(?:ClaudeProvider|CodexProvider|PiProvider)\s*\([\s\S]{0,500}?\)\s*[\s\S]{0,500}?\.invoke\s*\(/.test(source);
-  const spawnsBinary = /\b(?:spawn|spawnSync|execFile|exec|execa|execaCommand)\s*\(\s*['"`](?:claude|codex|pi)['"`]/.test(source);
-  const hasMockedSpawn = /\b(?:vi\.(?:mock|fn)|mockExeca|mockEnsureGitGuardForDispatch|subprocessFactory|processFactory|spawn(?:Pi)?\s*=\s*vi\.fn|mockExeca)\b/.test(source)
-    || /new\s+(?:ClaudeProvider|CodexProvider|PiProvider)\s*\([^)]*,\s*[^)]/.test(source);
+  const invokesAdapter =
+    /new\s+(?:ClaudeProvider|CodexProvider|PiProvider)\s*\([\s\S]{0,500}?\)\s*[\s\S]{0,500}?\.invoke\s*\(/.test(source);
+  const spawnsBinary =
+    /\b(?:spawn|spawnSync|execFile|exec|execa|execaCommand)\s*\(\s*['"`](?:claude|codex|pi)['"`]/.test(source);
+  const hasMockedSpawn =
+    /\b(?:vi\.(?:mock|fn)|mockExeca|mockEnsureGitGuardForDispatch|subprocessFactory|processFactory|spawn(?:Pi)?\s*=\s*vi\.fn|mockExeca)\b/.test(
+      source,
+    ) || /new\s+(?:ClaudeProvider|CodexProvider|PiProvider)\s*\([^)]*,\s*[^)]/.test(source);
   return (invokesAdapter || spawnsBinary) && !hasMockedSpawn;
 }
 
@@ -66,13 +107,19 @@ describe('structural: smoke test entry point', () => {
   it('keeps every unmocked live-provider session smoke-only and excluded from default Vitest', async () => {
     const testRoot = join(conductorRoot, 'test');
     const files = await allTestFiles(testRoot);
-    const flagged = (await Promise.all(files.map(async (path) => {
-      const source = await readFile(path, 'utf8');
-      return startsUnmockedLiveProvider(source) ? relative(conductorRoot, path) : undefined;
-    }))).filter((path): path is string => path !== undefined);
+    const flagged = (
+      await Promise.all(
+        files.map(async (path) => {
+          const source = await readFile(path, 'utf8');
+          return startsUnmockedLiveProvider(source) ? relative(conductorRoot, path) : undefined;
+        }),
+      )
+    ).filter((path): path is string => path !== undefined);
     const vitest = await createVitest('test', { root: conductorRoot });
     try {
-      const defaultFiles = new Set((await vitest.globTestSpecifications()).map(({ moduleId }) => relative(conductorRoot, moduleId)));
+      const defaultFiles = new Set(
+        (await vitest.globTestSpecifications()).map(({ moduleId }) => relative(conductorRoot, moduleId)),
+      );
       // Both assertions are intentional: a live invocation must be smoke-only,
       // and smoke-only is insufficient unless default Vitest excludes it.
       expect(flagged.filter((path) => !path.endsWith('.smoke.test.ts'))).toEqual([]);
@@ -106,20 +153,17 @@ describe('structural: smoke test entry point', () => {
     };
 
     try {
-      await runSmokeEntryPoint(
-        ['vitest.smoke.config.ts', 'test/selected.smoke.test.ts'],
-        async () => ({
-          runSmokeCommand: async (arguments_) => {
-            observed.arguments = JSON.stringify(arguments_);
-            observed.root = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
-            observed.scope = process.env.AI_CONDUCTOR_TEST_TMP_SCOPE;
-            observed.tmpdir = process.env.TMPDIR;
-            observed.originalTmpdir = process.env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR;
-            ownedRoot = observed.scope;
-            observed.path = process.env.PATH;
-          },
-        }),
-      );
+      await runSmokeEntryPoint(['vitest.smoke.config.ts', 'test/selected.smoke.test.ts'], async () => ({
+        runSmokeCommand: async (arguments_) => {
+          observed.arguments = JSON.stringify(arguments_);
+          observed.root = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+          observed.scope = process.env.AI_CONDUCTOR_TEST_TMP_SCOPE;
+          observed.tmpdir = process.env.TMPDIR;
+          observed.originalTmpdir = process.env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR;
+          ownedRoot = observed.scope;
+          observed.path = process.env.PATH;
+        },
+      }));
       expect({
         environment: {
           TMPDIR: process.env.TMPDIR,
@@ -194,17 +238,25 @@ describe('structural: smoke test entry point', () => {
           const sentinel = join(outerScope, 'outer-sentinel');
           await writeFile(sentinel, 'keep');
           roots.push(outerScope);
-          await expect(runSmokeEntryPoint([], async () => ({
-            runSmokeCommand: async () => { throw new Error('nested failure'); },
-          }))).rejects.toThrow('nested failure');
+          await expect(
+            runSmokeEntryPoint([], async () => ({
+              runSmokeCommand: async () => {
+                throw new Error('nested failure');
+              },
+            })),
+          ).rejects.toThrow('nested failure');
           expect(existsSync(sentinel)).toBe(true);
         },
       }));
       await runSmokeEntryPoint([], async () => ({
-        runSmokeCommand: async () => { roots.push(process.env.AI_CONDUCTOR_TEST_TMP_SCOPE!); },
+        runSmokeCommand: async () => {
+          roots.push(process.env.AI_CONDUCTOR_TEST_TMP_SCOPE!);
+        },
       }));
       await runSmokeEntryPoint([], async () => ({
-        runSmokeCommand: async () => { roots.push(process.env.AI_CONDUCTOR_TEST_TMP_SCOPE!); },
+        runSmokeCommand: async () => {
+          roots.push(process.env.AI_CONDUCTOR_TEST_TMP_SCOPE!);
+        },
       }));
       expect(new Set(roots).size).toBe(3);
       const inheritedScope = await mkdtemp(join(selectedStorage, 'inherited-scope-'));
@@ -232,7 +284,9 @@ describe('structural: smoke test entry point', () => {
 
     try {
       await runSmokeEntryPoint([], async () => ({
-        runSmokeCommand: async () => { scope = process.env.AI_CONDUCTOR_TEST_TMP_SCOPE; },
+        runSmokeCommand: async () => {
+          scope = process.env.AI_CONDUCTOR_TEST_TMP_SCOPE;
+        },
       }));
       expect(scope).toMatch(new RegExp(`^${join(conductorRoot, '.vitest-tmp', 'ai-conductor-vitest-run-')}`));
     } finally {
@@ -266,7 +320,9 @@ describe('structural: smoke test entry point', () => {
     process.env.AI_CONDUCTOR_TEST_TMP_BASE = unavailable;
 
     try {
-      await expect(runSmokeEntryPoint([], loader)).rejects.toThrow(/Unable to allocate Vitest temporary storage|not a directory/i);
+      await expect(runSmokeEntryPoint([], loader)).rejects.toThrow(
+        /Unable to allocate Vitest temporary storage|not a directory/i,
+      );
       expect(loader).not.toHaveBeenCalled();
     } finally {
       if (previousBase === undefined) delete process.env.AI_CONDUCTOR_TEST_TMP_BASE;
@@ -296,7 +352,10 @@ describe('structural: smoke test entry point', () => {
       discover: async () => [
         { file: 'test/smoke/finish-record.smoke.test.ts', source: "const smokeCapability = 'hermetic';" },
         { file: 'test/backlog-priority.smoke.test.ts', source: "const smokeCapability = 'toolchain';" },
-        { file: 'test/engine/daemon-e2e-live-claude.smoke.test.ts', source: "const smokeCapability = 'credentialed:claude';" },
+        {
+          file: 'test/engine/daemon-e2e-live-claude.smoke.test.ts',
+          source: "const smokeCapability = 'credentialed:claude';",
+        },
       ],
       runVitest,
       mode: 'advisory',
@@ -307,23 +366,32 @@ describe('structural: smoke test entry point', () => {
 
     expect(runVitest).toHaveBeenCalledTimes(1);
     expect(runVitest).toHaveBeenNthCalledWith(1, 'test/smoke/finish-record.smoke.test.ts');
-    expect(emit.mock.calls).toEqual(expect.arrayContaining([
-      ['smoke ledger: test/backlog-priority.smoke.test.ts [toolchain] skipped (unmet: gh)'],
-      ['smoke ledger: test/engine/daemon-e2e-live-claude.smoke.test.ts [credentialed:claude] skipped (unmet: CLAUDE_CODE_OAUTH_TOKEN)'],
-      ['smoke ledger: test/smoke/finish-record.smoke.test.ts [hermetic] ran'],
-    ]));
+    expect(emit.mock.calls).toEqual(
+      expect.arrayContaining([
+        ['smoke ledger: test/backlog-priority.smoke.test.ts [toolchain] skipped (unmet: gh)'],
+        [
+          'smoke ledger: test/engine/daemon-e2e-live-claude.smoke.test.ts [credentialed:claude] skipped (unmet: CLAUDE_CODE_OAUTH_TOKEN)',
+        ],
+        ['smoke ledger: test/smoke/finish-record.smoke.test.ts [hermetic] ran'],
+      ]),
+    );
 
-    await expect(runSmokeCli('vitest.smoke.config.ts', {
-      discover: async () => [
-        { file: 'test/smoke/finish-record.smoke.test.ts', source: "const smokeCapability = 'hermetic';" },
-        { file: 'test/engine/daemon-e2e-live-claude.smoke.test.ts', source: "const smokeCapability = 'credentialed:claude';" },
-      ],
-      runVitest,
-      mode: 'gate',
-      hasCommand: () => true,
-      environment: {},
-      emit,
-    })).rejects.toThrow('Gate-mode smoke run executed no credentialed test files');
+    await expect(
+      runSmokeCli('vitest.smoke.config.ts', {
+        discover: async () => [
+          { file: 'test/smoke/finish-record.smoke.test.ts', source: "const smokeCapability = 'hermetic';" },
+          {
+            file: 'test/engine/daemon-e2e-live-claude.smoke.test.ts',
+            source: "const smokeCapability = 'credentialed:claude';",
+          },
+        ],
+        runVitest,
+        mode: 'gate',
+        hasCommand: () => true,
+        environment: {},
+        emit,
+      }),
+    ).rejects.toThrow('Gate-mode smoke run executed no credentialed test files');
   });
 
   it('keeps provider-leg credential and failure outcomes isolated', async () => {
@@ -349,14 +417,16 @@ describe('structural: smoke test entry point', () => {
       const runVitest = vi.fn(async () => ({ executedAssertions: true, output: '' }));
       const emit = vi.fn();
 
-      await expect(runSmokeCli('vitest.smoke.config.ts', {
-        discover: async () => providerLegs,
-        runVitest,
-        mode: 'gate',
-        hasCommand: () => true,
-        environment,
-        emit,
-      })).resolves.toBeUndefined();
+      await expect(
+        runSmokeCli('vitest.smoke.config.ts', {
+          discover: async () => providerLegs,
+          runVitest,
+          mode: 'gate',
+          hasCommand: () => true,
+          environment,
+          emit,
+        }),
+      ).resolves.toBeUndefined();
 
       expect(runVitest).toHaveBeenCalledTimes(1);
       expect(runVitest).toHaveBeenCalledWith(executedFile);
@@ -369,38 +439,159 @@ describe('structural: smoke test entry point', () => {
     });
     const emit = vi.fn();
 
-    await expect(runSmokeCli('vitest.smoke.config.ts', {
-      discover: async () => providerLegs,
-      runVitest,
-      mode: 'gate',
-      hasCommand: () => true,
-      environment: { CLAUDE_CODE_OAUTH_TOKEN: 'claude-token', CODEX_API_KEY: 'codex-token' },
-      emit,
-    })).rejects.toThrow('Claude leg failed');
+    await expect(
+      runSmokeCli('vitest.smoke.config.ts', {
+        discover: async () => providerLegs,
+        runVitest,
+        mode: 'gate',
+        hasCommand: () => true,
+        environment: { CLAUDE_CODE_OAUTH_TOKEN: 'claude-token', CODEX_API_KEY: 'codex-token' },
+        emit,
+      }),
+    ).rejects.toThrow('Claude leg failed');
 
     expect(runVitest).toHaveBeenCalledWith(codexFile);
-    expect(emit.mock.calls).toEqual(expect.arrayContaining([
-      [`smoke ledger: ${claudeFile} [credentialed:claude] failed (evidence: Vitest output for ${claudeFile})`],
-      [`smoke ledger: ${codexFile} [credentialed:codex] ran`],
-    ]));
+    expect(emit.mock.calls).toEqual(
+      expect.arrayContaining([
+        [`smoke ledger: ${claudeFile} [credentialed:claude] failed (evidence: Vitest output for ${claudeFile})`],
+        [`smoke ledger: ${codexFile} [credentialed:codex] ran`],
+      ]),
+    );
   });
 
-  it(
-    'executes both hermetic smoke files through real discovery and child-process dispatch',
-    async () => {
-      const ledger: string[] = [];
-      const fixtureDir = await mkdtemp(join(tmpdir(), 'ai-conductor-task21-smoke-'));
-      const fixtureFiles = ['first.smoke.test.ts', 'second.smoke.test.ts']
-        .map((name) => join(fixtureDir, name));
-      const config = join(fixtureDir, 'vitest.config.ts');
+  it('runs each real LLM contract leg with its credentialed capability in advisory mode', async () => {
+    const legs = await discoverLlmRealLegs();
 
-      try {
-        await Promise.all(fixtureFiles.map((file) => writeFile(file, [
-          "import { expect, it } from 'vitest';",
-          "const smokeCapability = 'hermetic';",
-          "it('executes', () => expect(true).toBe(true));",
-        ].join('\n'))));
-        await writeFile(config, [
+    for (const { file, capability, credential, binary } of llmRealLegs) {
+      const runVitest = vi.fn(async () => ({ executedAssertions: true, output: '' }));
+      const emit = vi.fn();
+
+      await runSmokeCli('vitest.smoke.config.ts', {
+        discover: async () => legs,
+        runVitest,
+        mode: 'advisory',
+        hasCommand: (command) => command === binary,
+        environment: { [credential]: 'test-credential' },
+        emit,
+      });
+
+      expect(runVitest).toHaveBeenCalledWith(file);
+      expect(emit).toHaveBeenCalledWith(`smoke ledger: ${file} [${capability}] ran`);
+    }
+  });
+
+  it('keeps available real LLM contract legs running when another capability is unmet in advisory mode', async () => {
+    const legs = await discoverLlmRealLegs();
+    const [claude, codex, pi] = llmRealLegs;
+
+    const missingCodexRunVitest = vi.fn(async (_file: string) => ({ executedAssertions: true, output: '' }));
+    const missingCodexEmit = vi.fn();
+    await runSmokeCli('vitest.smoke.config.ts', {
+      discover: async () => legs,
+      runVitest: missingCodexRunVitest,
+      mode: 'advisory',
+      hasCommand: () => true,
+      environment: { [claude.credential]: 'claude-token', [pi.credential]: 'pi-token' },
+      emit: missingCodexEmit,
+    });
+    expect(missingCodexRunVitest.mock.calls.map(([file]) => file)).toEqual([claude.file, pi.file]);
+    expect(missingCodexEmit).toHaveBeenCalledWith(
+      `smoke ledger: ${codex.file} [${codex.capability}] skipped (unmet: ${codex.credential})`,
+    );
+
+    const missingPiRunVitest = vi.fn(async (_file: string) => ({ executedAssertions: true, output: '' }));
+    const missingPiEmit = vi.fn();
+    await runSmokeCli('vitest.smoke.config.ts', {
+      discover: async () => legs,
+      runVitest: missingPiRunVitest,
+      mode: 'advisory',
+      hasCommand: (command) => command !== pi.binary,
+      environment: {
+        [claude.credential]: 'claude-token',
+        [codex.credential]: 'codex-token',
+        [pi.credential]: 'pi-token',
+      },
+      emit: missingPiEmit,
+    });
+    expect(missingPiRunVitest.mock.calls.map(([file]) => file)).toEqual([claude.file, codex.file]);
+    expect(missingPiEmit).toHaveBeenCalledWith(
+      `smoke ledger: ${pi.file} [${pi.capability}] skipped (unmet: ${pi.binary})`,
+    );
+  });
+
+  it('fails gate-mode real LLM contract legs that cannot execute and preserves failed case titles', async () => {
+    const [claude, codex] = llmRealLegs;
+    const claudeLeg = (await discoverLlmRealLegs()).filter(({ file }) => file === claude.file);
+    const missingCredentialEmit = vi.fn();
+
+    await expect(
+      runSmokeCli('vitest.smoke.config.ts', {
+        discover: async () => claudeLeg,
+        runVitest: vi.fn(),
+        mode: 'gate',
+        hasCommand: () => true,
+        environment: {},
+        emit: missingCredentialEmit,
+      }),
+    ).rejects.toThrow('Gate-mode smoke run executed no credentialed test files');
+    expect(missingCredentialEmit).toHaveBeenCalledWith(
+      `smoke ledger: ${claude.file} [${claude.capability}] skipped (unmet: ${claude.credential})`,
+    );
+
+    const missingBinaryEmit = vi.fn();
+    await expect(
+      runSmokeCli('vitest.smoke.config.ts', {
+        discover: async () => claudeLeg,
+        runVitest: vi.fn(),
+        mode: 'gate',
+        hasCommand: () => false,
+        environment: { [claude.credential]: 'claude-token' },
+        emit: missingBinaryEmit,
+      }),
+    ).rejects.toThrow(`Smoke gate unmet for ${claude.file}: ${claude.binary}`);
+    expect(missingBinaryEmit).toHaveBeenCalledWith(
+      `smoke ledger: ${claude.file} [${claude.capability}] failed (evidence: ${claude.binary})`,
+    );
+
+    const failedCaseTitle = 'llm contract [codex real] › returns a native-schema terminal result';
+    const failedCaseEmit = vi.fn();
+    await expect(
+      runSmokeCli('vitest.smoke.config.ts', {
+        discover: async () => (await discoverLlmRealLegs()).filter(({ file }) => file === codex.file),
+        runVitest: async () => {
+          throw new Error(failedCaseTitle);
+        },
+        mode: 'advisory',
+        hasCommand: () => true,
+        environment: { [codex.credential]: 'codex-token' },
+        emit: failedCaseEmit,
+      }),
+    ).rejects.toThrow(failedCaseTitle);
+    expect(failedCaseEmit).toHaveBeenCalledWith(failedCaseTitle);
+  });
+
+  it('executes both hermetic smoke files through real discovery and child-process dispatch', async () => {
+    const ledger: string[] = [];
+    const fixtureDir = await mkdtemp(join(tmpdir(), 'ai-conductor-task21-smoke-'));
+    const fixtureFiles = ['first.smoke.test.ts', 'second.smoke.test.ts'].map((name) => join(fixtureDir, name));
+    const config = join(fixtureDir, 'vitest.config.ts');
+
+    try {
+      await Promise.all(
+        fixtureFiles.map((file) =>
+          writeFile(
+            file,
+            [
+              "import { expect, it } from 'vitest';",
+              "const smokeCapability = 'hermetic';",
+              "it('executes', () => expect(true).toBe(true));",
+            ].join('\n'),
+          ),
+        ),
+      );
+      await writeFile(
+        config,
+        [
           "import { tmpdir } from 'node:os';",
           `import { defineConfig } from ${JSON.stringify(join(conductorRoot, 'node_modules/vitest/dist/config.js'))};`,
           `import { ensureRunTmpRootSync } from ${JSON.stringify(join(conductorRoot, 'test/tmpdir-leak-guard.js'))};`,
@@ -415,41 +606,43 @@ describe('structural: smoke test entry point', () => {
           "  pool: 'forks',",
           '  maxWorkers: 1,',
           '} });',
-        ].join('\n'));
+        ].join('\n'),
+      );
 
-        await runSmokeCli(config, {
-          mode: 'advisory',
-          environment: {},
-          emit: (line) => ledger.push(line),
-        });
+      await runSmokeCli(config, {
+        mode: 'advisory',
+        environment: {},
+        emit: (line) => ledger.push(line),
+      });
 
-        expect(ledger.filter((line) => line.endsWith('[hermetic] ran'))).toEqual(
-          fixtureFiles.map((file) => `smoke ledger: ${relative(conductorRoot, file)} [hermetic] ran`),
-        );
-      } finally {
-        await rm(config, { force: true });
-        await rm(fixtureDir, { recursive: true, force: true });
-      }
-    },
-    60_000,
-  );
+      expect(ledger.filter((line) => line.endsWith('[hermetic] ran'))).toEqual(
+        fixtureFiles.map((file) => `smoke ledger: ${relative(conductorRoot, file)} [hermetic] ran`),
+      );
+    } finally {
+      await rm(config, { force: true });
+      await rm(fixtureDir, { recursive: true, force: true });
+    }
+  }, 60_000);
 
-  it(
-    'ledgers a provider-leg child with only skipped assertions as skipped and rejects it in gate mode',
-    async () => {
-      const ledger: string[] = [];
-      const fixtureDir = await mkdtemp(join(tmpdir(), 'ai-conductor-skipped-smoke-'));
-      const fixtureFile = join(fixtureDir, 'credentialed-claude.smoke.test.ts');
-      const config = join(fixtureDir, 'vitest.config.ts');
-      const vitestEntry = join(conductorRoot, 'node_modules/vitest/dist/index.js');
+  it('ledgers a provider-leg child with only skipped assertions as skipped and rejects it in gate mode', async () => {
+    const ledger: string[] = [];
+    const fixtureDir = await mkdtemp(join(tmpdir(), 'ai-conductor-skipped-smoke-'));
+    const fixtureFile = join(fixtureDir, 'credentialed-claude.smoke.test.ts');
+    const config = join(fixtureDir, 'vitest.config.ts');
+    const vitestEntry = join(conductorRoot, 'node_modules/vitest/dist/index.js');
 
-      try {
-        await writeFile(fixtureFile, [
+    try {
+      await writeFile(
+        fixtureFile,
+        [
           `import { it } from ${JSON.stringify(vitestEntry)};`,
           "const smokeCapability = 'credentialed:claude';",
           "it.skip('has no executable assertion', () => {});",
-        ].join('\n'));
-        await writeFile(config, [
+        ].join('\n'),
+      );
+      await writeFile(
+        config,
+        [
           "import { tmpdir } from 'node:os';",
           `import { defineConfig } from ${JSON.stringify(join(conductorRoot, 'node_modules/vitest/dist/config.js'))};`,
           `import { ensureRunTmpRootSync } from ${JSON.stringify(join(conductorRoot, 'test/tmpdir-leak-guard.js'))};`,
@@ -462,30 +655,31 @@ describe('structural: smoke test entry point', () => {
           "  pool: 'forks',",
           '  maxWorkers: 1,',
           '} });',
-        ].join('\n'));
+        ].join('\n'),
+      );
 
-        await runSmokeCli(config, {
-          mode: 'advisory',
-          environment: { CLAUDE_CODE_OAUTH_TOKEN: 'test-token' },
-          hasCommand: () => true,
-          emit: (line) => ledger.push(line),
-        });
+      await runSmokeCli(config, {
+        mode: 'advisory',
+        environment: { CLAUDE_CODE_OAUTH_TOKEN: 'test-token' },
+        hasCommand: () => true,
+        emit: (line) => ledger.push(line),
+      });
 
-        await expect(runSmokeCli(config, {
+      await expect(
+        runSmokeCli(config, {
           mode: 'gate',
           environment: { CLAUDE_CODE_OAUTH_TOKEN: 'test-token' },
           hasCommand: () => true,
-        })).rejects.toThrow('Gate-mode smoke run executed no credentialed test files');
+        }),
+      ).rejects.toThrow('Gate-mode smoke run executed no credentialed test files');
 
-        expect(ledger, ledger.join('\n')).toContain(
-          `smoke ledger: ${relative(conductorRoot, fixtureFile)} [credentialed:claude] skipped (unmet: no Vitest assertions executed)`,
-        );
-      } finally {
-        await rm(fixtureDir, { recursive: true, force: true });
-      }
-    },
-    60_000,
-  );
+      expect(ledger, ledger.join('\n')).toContain(
+        `smoke ledger: ${relative(conductorRoot, fixtureFile)} [credentialed:claude] skipped (unmet: no Vitest assertions executed)`,
+      );
+    } finally {
+      await rm(fixtureDir, { recursive: true, force: true });
+    }
+  }, 60_000);
 
   it('discovers every known smoke file through the resolved smoke config', async () => {
     const fixtureDirectory = join(conductorRoot, '.vitest-tmp', `smoke-discovery-${Date.now()}-${Math.random()}`);
@@ -504,6 +698,9 @@ describe('structural: smoke test entry point', () => {
 
       expect(discovered).toEqual([
         'test/backlog-priority.smoke.test.ts',
+        'test/contracts/llm-claude.contract.smoke.test.ts',
+        'test/contracts/llm-codex.contract.smoke.test.ts',
+        'test/contracts/llm-pi.contract.smoke.test.ts',
         'test/engine/build-token-auth.smoke.test.ts',
         'test/engine/daemon-e2e-live-claude.smoke.test.ts',
         'test/engine/daemon-e2e-live-codex.smoke.test.ts',
@@ -522,6 +719,21 @@ describe('structural: smoke test entry point', () => {
         'test/smoke/publish-interrupted.smoke.test.ts',
         'test/smoke/surgical-finish-retry.smoke.test.ts',
       ]);
+
+      const defaultVitest = await createVitest('test', { root: conductorRoot });
+      try {
+        const defaultFiles = new Set(
+          (await defaultVitest.globTestSpecifications()).map(({ moduleId }) =>
+            relative(conductorRoot, moduleId).replaceAll('\\', '/'),
+          ),
+        );
+        expect(defaultFiles).toContain('test/contracts/llm.contract.test.ts');
+        expect(defaultFiles).not.toContain('test/contracts/llm-claude.contract.smoke.test.ts');
+        expect(defaultFiles).not.toContain('test/contracts/llm-codex.contract.smoke.test.ts');
+        expect(defaultFiles).not.toContain('test/contracts/llm-pi.contract.smoke.test.ts');
+      } finally {
+        await defaultVitest.close();
+      }
     } finally {
       await vitest.close();
       await rm(fixtureDirectory, { recursive: true, force: true });
@@ -552,16 +764,21 @@ describe('structural: smoke test entry point', () => {
       );
 
       expect(discovered).toEqual(Object.keys(smokeCapabilities).sort());
-      expect(sources.filter(([file, source]) => {
-        const declaration = new RegExp(
-          `(?:export\\s+)?const\\s+smokeCapability\\s*=\\s*['\"]${smokeCapabilities[file]}['\"]`,
-        );
-        return !declaration.test(source);
-      }).map(([file]) => file)).toEqual([]);
-      expect(sources.flatMap(([file, source]) => retiredVariables
-        .filter((variable) => source.includes(variable))
-        .map((variable) => `${file}: ${variable}`)))
-        .toEqual([]);
+      expect(
+        sources
+          .filter(([file, source]) => {
+            const declaration = new RegExp(
+              `(?:export\\s+)?const\\s+smokeCapability\\s*=\\s*['\"]${smokeCapabilities[file]}['\"]`,
+            );
+            return !declaration.test(source);
+          })
+          .map(([file]) => file),
+      ).toEqual([]);
+      expect(
+        sources.flatMap(([file, source]) =>
+          retiredVariables.filter((variable) => source.includes(variable)).map((variable) => `${file}: ${variable}`),
+        ),
+      ).toEqual([]);
     } finally {
       await vitest.close();
     }

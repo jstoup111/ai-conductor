@@ -1,16 +1,16 @@
-export type BoundaryName =
-  | 'llm'
-  | 'git'
-  | 'gh'
-  | 'tmux'
-  | 'process'
-  | 'clock'
-  | 'otel'
-  | 'filesystem';
+export type BoundaryName = 'llm' | 'git' | 'gh' | 'tmux' | 'process' | 'clock' | 'otel' | 'filesystem';
 
-export type BoundaryStatus =
-  | { readonly kind: 'ported' }
-  | { readonly kind: 'pending'; readonly issue: number };
+export type BoundaryStatus = { readonly kind: 'ported' } | { readonly kind: 'pending'; readonly issue: number };
+
+export interface BoundaryContractEntry {
+  readonly module: string;
+  readonly legs: readonly {
+    readonly adapter: string;
+    readonly fake: string;
+    readonly fakeLeg: string;
+    readonly realLeg: string;
+  }[];
+}
 
 export interface BoundaryEntry {
   readonly name: BoundaryName;
@@ -19,6 +19,7 @@ export interface BoundaryEntry {
   readonly specifiers: readonly string[];
   readonly clockCalls: readonly string[];
   readonly commandLiterals: readonly string[];
+  readonly contract: BoundaryContractEntry | null;
   readonly status: BoundaryStatus;
 }
 
@@ -32,30 +33,40 @@ export interface MissingAdapterPath {
   readonly path: string;
 }
 
-const BOUNDARY_NAMES: readonly BoundaryName[] = [
-  'llm',
-  'git',
-  'gh',
-  'tmux',
-  'process',
-  'clock',
-  'otel',
-  'filesystem',
-];
+const BOUNDARY_NAMES: readonly BoundaryName[] = ['llm', 'git', 'gh', 'tmux', 'process', 'clock', 'otel', 'filesystem'];
 const BOUNDARY_NAME_SET = new Set<string>(BOUNDARY_NAMES);
 
 export const BOUNDARY_REGISTRY: Readonly<Record<BoundaryName, BoundaryEntry>> = {
   llm: {
     name: 'llm',
     port: 'LLMProvider',
-    adapterModules: [
-      'execution/claude-provider.ts',
-      'execution/codex-provider.ts',
-      'execution/pi-provider.ts',
-    ],
+    adapterModules: ['execution/claude-provider.ts', 'execution/codex-provider.ts', 'execution/pi-provider.ts'],
     specifiers: [],
     clockCalls: [],
     commandLiterals: [],
+    contract: {
+      module: 'test/contracts/llm.contract.ts',
+      legs: [
+        {
+          adapter: 'execution/claude-provider.ts',
+          fake: 'test/fixtures/claude-provider-fake.ts',
+          fakeLeg: 'test/contracts/llm.contract.test.ts',
+          realLeg: 'test/contracts/llm-claude.contract.smoke.test.ts',
+        },
+        {
+          adapter: 'execution/codex-provider.ts',
+          fake: 'test/fixtures/codex-provider-fake.ts',
+          fakeLeg: 'test/contracts/llm.contract.test.ts',
+          realLeg: 'test/contracts/llm-codex.contract.smoke.test.ts',
+        },
+        {
+          adapter: 'execution/pi-provider.ts',
+          fake: 'test/fixtures/pi-provider-fake.ts',
+          fakeLeg: 'test/contracts/llm.contract.test.ts',
+          realLeg: 'test/contracts/llm-pi.contract.smoke.test.ts',
+        },
+      ],
+    },
     status: { kind: 'ported' },
   },
   git: {
@@ -65,6 +76,7 @@ export const BOUNDARY_REGISTRY: Readonly<Record<BoundaryName, BoundaryEntry>> = 
     specifiers: [],
     clockCalls: [],
     commandLiterals: ['git'],
+    contract: null,
     status: { kind: 'pending', issue: 3043 },
   },
   gh: {
@@ -74,6 +86,7 @@ export const BOUNDARY_REGISTRY: Readonly<Record<BoundaryName, BoundaryEntry>> = 
     specifiers: [],
     clockCalls: [],
     commandLiterals: ['gh'],
+    contract: null,
     status: { kind: 'pending', issue: 3637 },
   },
   tmux: {
@@ -83,6 +96,7 @@ export const BOUNDARY_REGISTRY: Readonly<Record<BoundaryName, BoundaryEntry>> = 
     specifiers: [],
     clockCalls: [],
     commandLiterals: ['tmux'],
+    contract: null,
     status: { kind: 'pending', issue: 3639 },
   },
   process: {
@@ -92,6 +106,7 @@ export const BOUNDARY_REGISTRY: Readonly<Record<BoundaryName, BoundaryEntry>> = 
     specifiers: ['child_process', 'execa'],
     clockCalls: [],
     commandLiterals: [],
+    contract: null,
     status: { kind: 'pending', issue: 3634 },
   },
   clock: {
@@ -101,6 +116,7 @@ export const BOUNDARY_REGISTRY: Readonly<Record<BoundaryName, BoundaryEntry>> = 
     specifiers: [],
     clockCalls: ['Date.now', 'new Date', 'performance.now'],
     commandLiterals: [],
+    contract: null,
     status: { kind: 'pending', issue: 3638 },
   },
   otel: {
@@ -110,6 +126,7 @@ export const BOUNDARY_REGISTRY: Readonly<Record<BoundaryName, BoundaryEntry>> = 
     specifiers: ['@opentelemetry/'],
     clockCalls: [],
     commandLiterals: [],
+    contract: null,
     status: { kind: 'pending', issue: 3635 },
   },
   filesystem: {
@@ -119,13 +136,12 @@ export const BOUNDARY_REGISTRY: Readonly<Record<BoundaryName, BoundaryEntry>> = 
     specifiers: ['fs', 'fs/promises', 'chokidar'],
     clockCalls: [],
     commandLiterals: [],
+    contract: null,
     status: { kind: 'pending', issue: 3636 },
   },
 };
 
-export function expectedBoundaryNames(
-  registry: Readonly<Record<string, BoundaryEntry>>,
-): BoundaryNameDifferences {
+export function expectedBoundaryNames(registry: Readonly<Record<string, BoundaryEntry>>): BoundaryNameDifferences {
   const names = new Set(Object.keys(registry));
   return {
     missing: BOUNDARY_NAMES.filter((name) => !names.has(name)),

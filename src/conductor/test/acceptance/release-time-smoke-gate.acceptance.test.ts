@@ -47,10 +47,12 @@ function record(value: unknown, label: string): UnknownRecord {
 
 async function filesBelow(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
-  const nested = await Promise.all(entries.map(async (entry) => {
-    const path = resolve(directory, entry.name);
-    return entry.isDirectory() ? filesBelow(path) : [path];
-  }));
+  const nested = await Promise.all(
+    entries.map(async (entry) => {
+      const path = resolve(directory, entry.name);
+      return entry.isDirectory() ? filesBelow(path) : [path];
+    }),
+  );
   return nested.flat();
 }
 
@@ -77,11 +79,13 @@ describe('Story 1: one command discovers the complete smoke tier', () => {
     expect(scripts.smoke).toBe('node --import tsx scripts/smoke.ts vitest.smoke.config.ts');
 
     const config = await readFile(resolve(CONDUCTOR_ROOT, 'vitest.smoke.config.ts'), 'utf8');
-    expect(config).toMatch(/include\s*:\s*\[[^\]]*['"]test\/smoke\/\*\*['"][^\]]*['"]\*\*\/\*\.smoke\.test\.ts['"][^\]]*\]/s);
+    expect(config).toMatch(
+      /include\s*:\s*\[[^\]]*['"]test\/smoke\/\*\*['"][^\]]*['"]\*\*\/\*\.smoke\.test\.ts['"][^\]]*\]/s,
+    );
     expect(config).toMatch(/exclude\s*:\s*\[\s*['"]\*\*\/\.vitest-tmp\/\*\*['"]\s*\]/);
 
     const discovered = smokeFiles(await filesBelow(resolve(CONDUCTOR_ROOT, 'test')));
-    expect(discovered).toHaveLength(18);
+    expect(discovered).toHaveLength(21);
     expect(new Set(discovered).size).toBe(discovered.length);
   });
 });

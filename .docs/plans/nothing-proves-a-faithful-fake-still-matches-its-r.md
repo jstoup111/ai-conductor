@@ -335,3 +335,11 @@ The work is 11 tasks. There is no production (`src/conductor/src/`) change.
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-as-built-remediate-as-built-d7-missing-paths: In src/conductor/test/structural/boundary-contract-obligation.test.ts filesNamedByContracts, omit paths that do not exist on disk instead of reading them unconditionally, and add a case proving a registry naming a missing contract/fake/leg file yields the checker's typed missing-file violation (boundary + rule) instead of an ENOENT throw
+**Gate:** as-built
+**Rationale:** Verified: filesNamedByContracts in src/conductor/test/structural/boundary-contract-obligation.test.ts calls readFileSync unconditionally for every contract/adapter/fake/fakeLeg/realLeg path, so a missing file throws ENOENT before checkBoundaryContractObligations runs, losing the boundary+rule diagnostic ADR D7 requires and stopping collection of later violations. ADR D7 remains authoritative; this is conforming test-implementation drift admitted by plan Task 10 (obligation check over the real registry, same file). Repair: skip absent paths (existsSync guard) so they are omitted from the files map and the checker emits its missing-file violations; add a case asserting a registry naming a nonexistent path yields the typed missing-file violation rather than throwing. Existing real-registry and ported-git assertions (Task 10, Task 3 coverage) are preserved unchanged.
+**Governing clause:** adr-2026-11-07-external-boundary-ports-registry-and-ratchet decision 7
+**Done when:**
+- adr-2026-11-07-external-boundary-ports-registry-and-ratchet decision 7 is satisfied by this task.
+- The repair for task rem-as-built-remediate-as-built-d7-missing-paths is committed and its targeted tests pass.
