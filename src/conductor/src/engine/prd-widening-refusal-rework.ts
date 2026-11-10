@@ -1,9 +1,6 @@
 import type { KickbackPlanGrowthView } from './kickback-budget-view.js';
 import type { AcceptedRemediationPlanDisposition } from './remediation-plan-contract.js';
-import {
-  PRD_AUDIT_REMEDIATION_GATE_SOURCE,
-  type CriterionBoundRemediationGap,
-} from './remediation-append.js';
+import { PRD_AUDIT_REMEDIATION_GATE_SOURCE, type CriterionBoundRemediationGap } from './remediation-append.js';
 
 /**
  * Engine-supplied evidence for one refused OVER_SCOPE finding, routed to the
@@ -48,8 +45,8 @@ export function admitRefusalReworkPlan(
   const unboundKeys: string[] = [];
 
   for (const refusal of refusals) {
-    const disposition = dispositions.find((candidate) =>
-      candidate.reference.kind === 'refusal' && candidate.reference.id === refusal.decisionId,
+    const disposition = dispositions.find(
+      (candidate) => candidate.reference.kind === 'refusal' && candidate.reference.id === refusal.decisionId,
     );
     if (
       disposition === undefined ||
@@ -78,8 +75,7 @@ export function admitRefusalReworkPlan(
 }
 
 export type RefusalReworkAdmission =
-  | { kind: 'admitted'; gaps: CriterionBoundRemediationGap[] }
-  | { kind: 'rejected'; criteria: string[] };
+  { kind: 'admitted'; gaps: CriterionBoundRemediationGap[] } | { kind: 'rejected'; criteria: string[] };
 
 const REWORK_ONLY_SENTENCE =
   'Every task for the refusal-<decisionId> gaps listed below must either remove the refused behavior or rework it ' +
@@ -129,7 +125,7 @@ export function refusalRoundFault(outcome?: RefusalRoundOutcome): string | undef
 }
 
 export type RefusalRoundOutcome =
-  | { kind: 'halt'; detail: string; haltClass?: string; refusalAdmissionRejected?: true }
+  | { kind: 'halt'; detail: string; haltClass?: string; refusalAdmissionRejected?: true; routingFence?: true }
   | { kind: 'none'; reason: string };
 
 export function thrownRefusalRoundFault(error: unknown): { kind: 'none'; reason: string } {
