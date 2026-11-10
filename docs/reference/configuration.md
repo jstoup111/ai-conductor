@@ -231,7 +231,6 @@ deprecation warning and event; see [build_review](#build_review)). Everything el
 | `rebase_resolution_attempts` | number | `3` | [rebase_resolution_attempts](#rebase_resolution_attempts) |
 | `validation_concurrency` | number | `4` | [validation_concurrency](#validation_concurrency) |
 | `daemon_concurrency` | number | `1` | [daemon_concurrency](#daemon_concurrency) |
-| `executor_isolation` | `child` \| `in-process` | `child` | [executor_isolation](#executor_isolation) |
 | `supervisor_max_stale_hours` | number | `24` | [supervisor_max_stale_hours](#supervisor_max_stale_hours) |
 | `daemon_heap_limit_mb` | number | `4096` | [daemon_heap_limit_mb](#daemon_heap_limit_mb) |
 | `daemon_heap_dump_threshold_mb` | number | `3072` | [Daemon heap dump threshold](#daemon-heap-dump-threshold) |
@@ -1450,8 +1449,8 @@ daemon restart.
 When armed, the supervisor restarts at its next natural idle (no feature in flight). While features
 are in flight it keeps claiming, and drains for restart only when it has been stale longer than
 [`supervisor_max_stale_hours`](#supervisor_max_stale_hours) or a child executor failed the protocol
-handshake. With [`executor_isolation: child`](#executor_isolation), new claims already run the
-current build, so the restart only refreshes the supervisor.
+handshake. Because [each claim runs in a child executor](#daemon-feature-executors), new claims
+already run the current build, so the restart only refreshes the supervisor.
 
 User-level values apply when the project omits this key; see
 [Load order and precedence](#load-order-and-precedence).
@@ -2442,23 +2441,17 @@ effective daemon concurrency above `1` before build dispatch and reports
 `LEGACY_NO_PROVIDER_EXECUTION_CONCURRENCY_REFUSAL`. That compatibility-path refusal is not a clamp
 on the daemon's normal worker pool.
 
-## executor_isolation
+## Daemon feature executors
 
-Selects the process boundary for each daemon feature dispatch. Optional, default `child`.
+Every claimed daemon feature runs in a separate executor process forked from the immutable
+`dist-versions/<id>/` build that `dist` names at claim time. A merged engine change reaches the next
+claim without a daemon restart; in-flight features keep the build they were claimed on. The
+supervisor never runs a feature itself, and no configuration key selects the executor.
 
-```yaml
-executor_isolation: in-process
-```
+The former `executor_isolation` key is removed. Any value, including `child`, fails configuration
+loading with `Unknown top-level key: "executor_isolation"`. Delete the line from `config.yml`.
 
-| Value | Behavior |
-| --- | --- |
-| `child` | Each claimed feature runs in a separate executor process forked from the immutable `dist-versions/<id>/` build that `dist` names at claim time. A merged engine change reaches the next claim without a daemon restart; in-flight features keep the build they were claimed on. |
-| `in-process` | Every feature runs inside the supervisor on the supervisor's boot build. Rollback mode; the daemon logs `[daemon] executor isolation: in-process; per-dispatch engine pinning is disabled`. |
-
-Any other value fails configuration loading with `executor_isolation must be one of: child |
-in-process`. Read at daemon startup, so a change requires a daemon restart.
-
-In `child` mode the pin falls back to the supervisor's own build when `dist` is dangling, its publish
+The pin falls back to the supervisor's own build when `dist` is dangling, its publish
 is incomplete, or its target is not a valid version id; `feature_dispatch_started` records the reason
 as `pinFallbackReason`. A child whose executor protocol version does not match the supervisor's is
 refused before it receives work and the feature is relaunched on the supervisor build; an

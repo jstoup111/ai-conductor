@@ -74,7 +74,7 @@ Flat `engine/` files cluster by filename prefix. Use the prefix to find the subs
 | Prefix | Representative files |
 | --- | --- |
 | `daemon-*`, `daemon.ts` | `daemon.ts`, `daemon-runner.ts`, `daemon-backlog.ts`, `daemon-lock.ts`, `daemon-log.ts`, `daemon-tmux.ts`, `daemon-command.ts`, `daemon-fleet.ts`, `daemon-auto-park.ts` |
-| `executor-*`, engine pinning | `child-feature-executor.ts`, `executor-protocol.ts`, `executor-child.ts`, `executor-child-runtime.ts`, `executor-broker.ts`, `executor-proxies.ts`, `executor-records.ts`, `engine-pin.ts`, `supervisor-staleness.ts` |
+| `executor-*`, engine pinning | `child-feature-executor.ts` (the only feature executor), `daemon-feature-lifecycle.ts` (the per-feature conductor run, setup triage, and rekick stack preflight every child executes), `executor-protocol.ts`, `executor-child.ts`, `executor-child-runtime.ts`, `executor-broker.ts`, `executor-proxies.ts`, `executor-records.ts`, `engine-pin.ts`, `supervisor-staleness.ts` |
 | step/pipeline core | `steps.ts`, `step-runners.ts`, `conductor.ts`, `selector.ts`, `state.ts`, `artifacts.ts`, `skill-invocation.ts`, `skill-resolver.ts`, `complete-verifier.ts` |
 | `gate*` | `gates.ts`, `gate-verdicts.ts`, `gate-code-validity.ts`, `gate-invalidation.ts`, `gate-writeback.ts`, `gated-snapshot.ts` |
 | `build-review-*` | `build-review-prompt.ts`, `build-review-inputs.ts`, `build-review-disposition.ts` |
@@ -125,8 +125,8 @@ purpose-named engine module:
 | `artifact-approvals.ts` | Artifact approval hashing and active-plan recording. |
 | `finish-presentation-repair.ts`, `post-finish-shipped-record.ts` | Finish presentation repair and the post-finish shipped-record refresh and push. |
 
-Only `src/index.ts` and `src/daemon-cli.ts` may import `engine/conductor.js`, and only the `Conductor`
-value. Every other module imports a moved declaration from its defining module. See
+Only `src/index.ts`, `src/daemon-cli.ts`, and `src/engine/daemon-feature-lifecycle.ts` may import
+`engine/conductor.js`, and only the `Conductor` value. Every other module imports a moved declaration from its defining module. See
 [Conductor facade guards](testing.md#conductor-facade-guards) for the enforcing tests.
 
 ### execution/
@@ -202,7 +202,7 @@ Eleven files sit at the top level of `src/conductor/src/`.
 | --- | --- |
 | `index.ts` | The composition root and argv dispatcher. `bin/ai-conductor` execs `dist/index.js`, built from this file. |
 | `cli.ts` | The commander declaration surface. Builds the help text; most subcommands declared here are help-only. |
-| `daemon-cli.ts` | The daemon runtime. Registers zero commander commands; entered through `runDaemonMode` at `:1006`, lazily imported from `index.ts` so non-daemon paths never load it. |
+| `daemon-cli.ts` | The daemon runtime. Registers zero commander commands; entered through `runDaemonMode` at `:1276`, lazily imported from `index.ts` so non-daemon paths never load it. |
 | `intake-loop-cli.ts` | `detectIntakeLoopCommand` `:49` / `dispatchIntakeLoop` `:106`, wired into `index.ts`. |
 | `intake-file-cli.ts` | Standalone `main()`; invoked by `skills/intake/scripts/intake-file`. |
 | `intake-backfill-cli.ts` | Standalone `main()`; invoked by `bin/intake-backfill`. |
