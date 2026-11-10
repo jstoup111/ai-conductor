@@ -378,7 +378,28 @@ export async function requestRoutedExit(input: RequestRoutedExitInput): Promise<
     return halted(`routed exit host ${input.host}: repair marker is unavailable or belongs to another round`);
   }
 
-  // Fold-mode audit hosts execute on the leaf.  Their work is deliberately
+  // The actual leaf already owns the whole-feature branch. It never enters a
+  // deferred fold set, even when this audit executes every host on the leaf.
+  const closure = await resolveGitRef(git, closureRefFor(input.slug, input.host));
+  if (typeof closure !== 'string') {
+    const done = transitionHost(stored, input.host, 'done', { credit: false });
+    if (done.kind !== 'updated') return halted(`routed exit host ${input.host}: cannot mark leaf host done`);
+    const placements = Object.fromEntries(Object.entries(done.record.placements ?? {})
+      .filter(([key]) => key !== String(input.host)));
+    const { placements: _previousPlacements, ...withoutPlacements } = done.record;
+    const record = Object.keys(placements).length === 0
+      ? withoutPlacements
+      : { ...withoutPlacements, placements };
+    const wrote = await writeRoutingTransaction(input.worktree, input.slug, [
+      { kind: 'update-record', previous: stored, record },
+      { kind: 'delete-marker', old: marker.blob },
+    ], { git });
+    return wrote.kind === 'updated'
+      ? { kind: 'no-commit-done' }
+      : halted(`routed exit host ${input.host}: leaf compare-and-swap ${wrote.kind}`);
+  }
+
+  // Fold-mode audit hosts execute on the leaf. Their work is deliberately
   // left there until FINISH folds the recorded boundary range back onto its
   // owner; a normal feature-repair restack here would defeat that invariant.
   if (stored.record.execution === 'leaf') {
@@ -398,22 +419,6 @@ export async function requestRoutedExit(input: RequestRoutedExitInput): Promise<
     return wrote.kind === 'updated'
       ? { kind: 'no-commit-done' }
       : halted(`routed exit host ${input.host}: leaf deferred compare-and-swap ${wrote.kind}`);
-  }
-
-  // The leaf is already the whole-feature branch.  Its successful BUILD
-  // region settles the marker in one CAS; replaying it would carry the fix
-  // above the stack it is meant to return to.
-  const closure = await resolveGitRef(git, closureRefFor(input.slug, input.host));
-  if (typeof closure !== 'string') {
-    const done = transitionHost(stored, input.host, 'done', { credit: false });
-    if (done.kind !== 'updated') return halted(`routed exit host ${input.host}: cannot mark leaf host done`);
-    const wrote = await writeRoutingTransaction(input.worktree, input.slug, [
-      { kind: 'update-record', previous: stored, record: done.record },
-      { kind: 'delete-marker', old: marker.blob },
-    ], { git });
-    return wrote.kind === 'updated'
-      ? { kind: 'no-commit-done' }
-      : halted(`routed exit host ${input.host}: leaf compare-and-swap ${wrote.kind}`);
   }
 
   const evidence = await hostNoOpEvidence(input.worktree, input.slug, stored, input.host);
