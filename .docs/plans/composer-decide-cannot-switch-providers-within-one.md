@@ -624,3 +624,13 @@ belongs to the follow-up spec (ADR D12).
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-refusal-64449b95-c15a-495f-a1e3-bbe241a13806: Delete docs/reports/composer-build-evidence-review/report.html (and the now-empty directory); add nothing in its place
+**Gate:** prd-audit
+**Rationale:** Removal only, per the operator's refusal decision. Delete the refused, non-plan, stale HTML evidence report. This introduces no new behavior, and nothing references the file.
+**Criterion:** NC-1
+**Governing clause:** Refused NC-1 (decision 64449b95-c15a-495f-a1e3-bbe241a13806 r2)
+**Done when:**
+- [test] NC-1 is satisfied by this task.
+- Refused NC-1 (decision 64449b95-c15a-495f-a1e3-bbe241a13806 r2) is satisfied by this task.
+- The repair for task rem-prd-audit-refusal-64449b95-c15a-495f-a1e3-bbe241a13806 is committed and its targeted tests pass.
