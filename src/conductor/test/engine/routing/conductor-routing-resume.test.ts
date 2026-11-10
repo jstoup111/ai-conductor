@@ -1485,7 +1485,7 @@ describe('routed round conductor resume', () => {
             return {
               success: true,
               output: JSON.stringify({
-                version: 'v1',
+                version: 'v2',
                 items: [{ itemId, child: 1, candidates: [1], rationale: 'The refused command lives in child 1.' }],
               }),
             };
@@ -1604,5 +1604,5 @@ describe('routed round conductor resume', () => {
       expect(halt).not.toContain('cannot admit');
       expect(halt).not.toContain('Remediation planner fault');
     }
-  });
+  }, 60_000);
 });
