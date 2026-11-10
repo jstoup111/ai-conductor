@@ -863,3 +863,37 @@ Slice 2
 - The repair for task rem-as-built-rem-as-built-d4-dispatch-kind-resume is committed and its targeted tests pass.
 **Child:** 1
 **Round:** r2
+
+### Task rem-prd-audit-refusal-ca8fa374-6174-42f9-8840-ced0fff2fb94: src/conductor/src/daemon-cli.ts: restore exported collectReadOnlyReviewCapabilityProviders(config) and the DaemonModeOptions.probeReadOnlyReviewCapability option. Restore the startup pass after subscriber.start that probes every provider named by an enabled custom build-review policy (scratchDir <projectRoot>/.pipeline/read-only-review-probe), emits build_review_read_only_capability on the root bus, and freezes the per-provider snapshot, all byte-for-byte as on main. RED first: restore the three startup cases in src/conductor/test/engine/daemon-cli-read-only-capability-wiring.test.ts, retargeted to executorFork: createInMemoryExecutorFork. The cases are: 'records unavailable Codex with its platform and reason, then still dispatches'; 'does not spawn a probe or emit a capability event without an enabled custom rubric'; 'threads the frozen startup snapshot to an ordinary non-self-host build_review dispatch'. Commit under Task 28.
+**Gate:** prd-audit
+**Rationale:** Rework only: the operator kept the daemon-startup read-only review capability probe, so its deletion is reverted rather than new capability added. Main's daemon-cli.ts ran collectReadOnlyReviewCapabilityProviders at startup through opts.probeReadOnlyReviewCapability, emitted build_review_read_only_capability for each provider, and threaded the frozen snapshot into each dispatch. The child path now passes readOnlyReviewCapabilities: {} (executor-child-runtime.ts:338) and probes lazily. Task 28 (daemon composition builds only the child executor) admits restoring this composition piece. Task 8 (child builds its lifecycle) admits threading the existing snapshot into the child lifecycle, which reproduces main's behavior and adds nothing. The three deleted startup test cases are restored, so their coverage survives.
+**Criterion:** NC-1
+**Governing clause:** Refused NC-1 (decision ca8fa374-6174-42f9-8840-ced0fff2fb94 r2)
+**Done when:**
+- [test] NC-1 is satisfied by this task.
+- Refused NC-1 (decision ca8fa374-6174-42f9-8840-ced0fff2fb94 r2) is satisfied by this task.
+- The repair for task rem-prd-audit-refusal-ca8fa374-6174-42f9-8840-ced0fff2fb94 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r3
+### Task rem-prd-audit-refusal-ca8fa374-6174-42f9-8840-ced0fff2fb94-2: Thread the restored startup snapshot into the child lifecycle so the child does not re-probe. Carry it in the existing WorkOrder/child dispatch inputs (src/conductor/src/engine/work-order.ts and the daemon-cli.ts createWorkOrder call site) and consume it in src/conductor/src/engine/executor-child-runtime.ts in place of the hard-coded readOnlyReviewCapabilities: {} at line 338, matching main's in-process behavior. Leave the lazy probe in step-runners.ts unchanged for interactive runs. GREEN: the restored 'threads the frozen startup snapshot…' case passes through the in-memory fork. Commit under Task 8.
+**Gate:** prd-audit
+**Rationale:** Rework only: the operator kept the daemon-startup read-only review capability probe, so its deletion is reverted rather than new capability added. Main's daemon-cli.ts ran collectReadOnlyReviewCapabilityProviders at startup through opts.probeReadOnlyReviewCapability, emitted build_review_read_only_capability for each provider, and threaded the frozen snapshot into each dispatch. The child path now passes readOnlyReviewCapabilities: {} (executor-child-runtime.ts:338) and probes lazily. Task 28 (daemon composition builds only the child executor) admits restoring this composition piece. Task 8 (child builds its lifecycle) admits threading the existing snapshot into the child lifecycle, which reproduces main's behavior and adds nothing. The three deleted startup test cases are restored, so their coverage survives.
+**Criterion:** NC-1
+**Governing clause:** Refused NC-1 (decision ca8fa374-6174-42f9-8840-ced0fff2fb94 r2)
+**Done when:**
+- [test] NC-1 is satisfied by this task.
+- Refused NC-1 (decision ca8fa374-6174-42f9-8840-ced0fff2fb94 r2) is satisfied by this task.
+- The repair for task rem-prd-audit-refusal-ca8fa374-6174-42f9-8840-ced0fff2fb94-2 is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r3
+### Task rem-prd-audit-refusal-638ba68a-c7c1-404d-b424-5e7f360882eb: src/conductor/src/daemon-cli.ts (attachChildFeatureOtelVisualizer) and src/conductor/src/engine/executor-broker.ts: route the supervisor-attached visualizer's renderer_error onto the feature event spine so the feature's .pipeline/events.jsonl persists it. Use the existing persistence path (the feature EventPersister for that worktree), with no new channel. Render the failure exactly once in daemon.log as a single tagged 'renderer otel failed' line, so the forwarded copy is not rendered a second time. Keep the daemon-cli.ts daemonLogRenderer comment accurate. RED first: revert the retargeted expectations. In src/conductor/test/acceptance/export-failure-visible-without-changing-run.acceptance.test.ts (~line 209) and src/conductor/test/acceptance/daemon-otel-parity.acceptance.test.ts (~line 356), go back to exactly one 'renderer otel failed' daemon.log line. In src/conductor/test/daemon-otel-wiring.test.ts (cases near lines 724/744/761/799/844), go back to expecting the OTel renderer_error for constructor failure, span export failure and tracer shutdown timeout in the feature .pipeline/events.jsonl instead of []. Keep the runId/engineVersion trace-context assertions. Run the touched files GREEN and commit under Task 25.
+**Gate:** prd-audit
+**Rationale:** Rework within the decision: OTel failures for a child dispatch must be written once to daemon.log and must persist as renderer_error in the feature .pipeline/events.jsonl, as they did in-process. The supervisor-side visualizer (daemon-cli.ts attachChildFeatureOtelVisualizer, attached through executor-broker.ts) emits renderer_error onto the forwarding proxy bus. That event bypasses the child-owned feature EventPersister, so it never reaches events.jsonl, and both the child renderer and the forwarded renderer log it, giving two daemon.log lines. Task 25 (the child dispatch's trace context matches in-process) owns this visualizer wiring and admits the repair. Restoring the original test expectations keeps the coverage those tests had before the retarget, and no new behavior is added.
+**Criterion:** NC-2
+**Governing clause:** Refused NC-2 (decision 638ba68a-c7c1-404d-b424-5e7f360882eb r3)
+**Done when:**
+- [test] NC-2 is satisfied by this task.
+- Refused NC-2 (decision 638ba68a-c7c1-404d-b424-5e7f360882eb r3) is satisfied by this task.
+- The repair for task rem-prd-audit-refusal-638ba68a-c7c1-404d-b424-5e7f360882eb is committed and its targeted tests pass.
+**Child:** 1
+**Round:** r3
