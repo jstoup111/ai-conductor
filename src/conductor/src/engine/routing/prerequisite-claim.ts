@@ -247,6 +247,16 @@ async function hasOnlyRoundOrHaltCommits(
   } catch { return { ok: false }; }
 }
 
+/** A Folded-from trailer is durable proof that this child is revalidating a
+ * folded placement rather than an ordinary routed repair. */
+async function foldedSourceForChild(git: GitRunner, slug: string, child: ChildId): Promise<string | undefined> {
+  const branch = childBranchFor(slug, child);
+  if (!branch.ok) return undefined;
+  const log = await git(['log', '--format=%B', `refs/heads/${branch.branch}`]);
+  if (log.exitCode !== 0) return undefined;
+  return /^Folded-from:\s*([0-9a-f]{7,64})\s*$/mi.exec(log.stdout)?.[1];
+}
+
 /**
  * Atomically preserve a rejected host tip, restore its immutable closure and
  * advance the routing marker.  Tree synchronization deliberately happens in
@@ -420,6 +430,15 @@ export async function settleRoutedBuildClaim(input: SettleRoutedBuildClaimInput)
     claim: parsed.claim, host: input.host, slug: input.slug, leaf, git, prerequisitePaths,
   });
   if (verified.kind !== 'verified') return { kind: 'failed', detail: `routed prerequisite claim ${verified.kind}: ${verified.detail}` };
+  if (stored.record.kind === 'revalidate') {
+    const foldedFrom = await foldedSourceForChild(git, input.slug, input.host);
+    if (foldedFrom !== undefined) {
+      return {
+        kind: 'needs-human',
+        detail: `fold-prerequisite-missing: Folded-from ${foldedFrom}; child ${input.host} requires prerequisite from child ${verified.destination}`,
+      };
+    }
+  }
   const moved = await rerouteRound({
     worktree: input.worktree, slug: input.slug, roundId: input.roundId,
     from: input.host, to: verified.destination, leaf,

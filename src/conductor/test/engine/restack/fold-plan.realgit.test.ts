@@ -235,6 +235,23 @@ describe('placeFoldCommits (real local Git)', () => {
     });
   });
 
+  it('refuses a deferred host whose only owner placement is an empty whole commit', async () => {
+    const subject = await placementFixture();
+    await subject.git(['commit', '--allow-empty', '-qm', `tdd evidence${trailers('r1', 'c1')}`]);
+    const empty = await subject.head();
+
+    await expect(placeFoldCommits({
+      worktree: subject.repo,
+      slug,
+      commits: [{ sha: empty as never, roundId: parseRoundId('r1')!, owner: hostOne }],
+      ranges: [{ host: hostOne, roundId: parseRoundId('r1')!, findingIds: ['finding-owner'], leafEntryTip: empty as never, exitTip: empty as never }],
+      git: makeGitRunner(subject.repo),
+    })).resolves.toEqual({
+      kind: 'refused', reason: 'fold-misrouted', host: hostOne,
+      findingIds: ['finding-owner'], acceptingChildren: [hostOne],
+    });
+  });
+
   it('places binary, mode-only, and empty-file path changes on their accepting child', async () => {
     const subject = await placementFixture();
     await writeFile(join(subject.repo, 'binary.bin'), Buffer.from([0, 1, 2, 3]));

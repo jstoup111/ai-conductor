@@ -373,7 +373,20 @@ export async function placeFoldCommits(input: PlaceFoldCommitsInput): Promise<Fo
       const acceptingChildren = [...new Set(hostPlans.flatMap((commit) => commit.parts
         .flatMap((part) => part.child === 'leaf' ? [] : [part.child])))]
         .sort((left, right) => Number(left) - Number(right));
-      if (!acceptingChildren.includes(range.host)) {
+      // A metadata-only empty evidence commit is replayable, but it does not
+      // prove that the recorded host received any of the repair.  Require a
+      // material hunk or frozen block on the placement child before accepting
+      // the plan; otherwise the fold would silently carry that host's work
+      // above its assigned floor.
+      const hasNonEmptyOwnerPart = hostPlans.some((commit) => commit.parts.some((part) =>
+        part.child === range.host && (
+          part.kind === 'hunks'
+            ? part.hunk.patch.trim().length > 0
+            : part.kind === 'blocks'
+              ? part.blocks.some((block) => block.body.trim().length > 0)
+              : false
+        )));
+      if (!hasNonEmptyOwnerPart) {
         return { kind: 'refused', reason: 'fold-misrouted', host: range.host,
           findingIds: range.findingIds ?? [], acceptingChildren };
       }

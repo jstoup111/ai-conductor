@@ -12073,6 +12073,10 @@ export class Conductor {
                     case 'audit':
                       return { target: routedClaimExecution.target, roundId: routedClaimExecution.roundId };
                     case 'revalidate':
+                      // A fold-produced revalidation must validate a
+                      // prerequisite claim at the same engine boundary as an
+                      // audit host, so it can halt rather than reroute it.
+                      return { target: routedClaimExecution.target, roundId: routedClaimExecution.roundId };
                     case 'operator':
                       return undefined;
                   }
@@ -17810,6 +17814,21 @@ export class Conductor {
         if (folded.kind !== 'applied') {
           const detail = folded.kind === 'unavailable' ? folded.detail : folded.kind === 'halted' ? folded.detail : folded.kind;
           return { success: false, output: `stack fold ${folded.kind}: ${detail}` };
+        }
+        // A fold owns a fresh revalidation generation.  Admit its first child
+        // in this same rebase dispatch so publication and base refresh cannot
+        // race ahead of the newly rebuilt child regions.
+        const queue = await readRevalidationQueue(this.projectRoot, stackSlug, { git });
+        if (queue.kind === 'queue' && queue.queue.entries.length > 0) {
+          const admission = await admitQueuedRevalidation({
+            worktree: this.projectRoot,
+            slug: stackSlug,
+            persist: (event) => persistOnActiveEventSpine(this.events, event),
+            git,
+          });
+          if (admission.kind === 'unavailable' || admission.kind === 'stalled') {
+            return { success: false, output: `fold revalidation admission ${admission.kind}: ${admission.detail}` };
+          }
         }
       }
     }
