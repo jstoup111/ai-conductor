@@ -1,34 +1,31 @@
-// `conduct manual-test-record --skip --reason <r> --pipeline-dir <dir>`
-// `conduct manual-test-record --results <path> --pipeline-dir <dir>`
+// `conduct manual-test-record --skip --reason <r> [--pipeline-dir <dir>]`
+// `conduct manual-test-record --results <path> [--pipeline-dir <dir>]`
 // — argv detection for the manual-test-record subcommand (flag parser
 // mirrors finish-record-cli.ts's `detectFinishRecordCommand`).
 
 import { isAbsolute, join } from 'node:path';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import {
-  hasManualTestWarnRows,
-  MANUAL_TEST_SKIP_SENTINEL,
-  MANUAL_TEST_WARN_SENTINEL,
-} from './artifacts.js';
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import type { GitRunner } from './pr-labels.js';
+import { hasManualTestWarnRows, MANUAL_TEST_SKIP_SENTINEL, MANUAL_TEST_WARN_SENTINEL } from './artifacts.js';
 
 export type ManualTestRecordDispatch =
-  | { kind: 'skip'; reason: string; pipelineDir: string }
-  | { kind: 'results'; resultsPath: string; pipelineDir: string }
+  | { kind: 'skip'; reason: string; pipelineDir?: string }
+  | { kind: 'results'; resultsPath: string; pipelineDir?: string }
   | { kind: 'guide' };
 
 export const MANUAL_TEST_RECORD_USAGE =
-  'conduct manual-test-record --skip --reason <r> --pipeline-dir <dir>\n' +
+  'conduct manual-test-record --skip --reason <r> [--pipeline-dir <dir>]\n' +
   '  --skip           requires --reason <r>; must NOT be paired with --results.\n' +
-  'conduct manual-test-record --results <path> --pipeline-dir <dir>\n' +
+  'conduct manual-test-record --results <path> [--pipeline-dir <dir>]\n' +
   '  --results        requires <path>; must NOT be paired with --skip.\n' +
-  '  --pipeline-dir   absolute path to the pipeline directory (required).';
+  '  --pipeline-dir   absolute path to the pipeline directory (optional).';
 
 /**
  * Parse argv for the `manual-test-record` subcommand.
- *   conduct manual-test-record --skip --reason <r> --pipeline-dir <dir>
- *     → {kind:'skip', reason, pipelineDir}
- *   conduct manual-test-record --results <path> --pipeline-dir <dir>
- *     → {kind:'results', resultsPath, pipelineDir}
+ *   conduct manual-test-record --skip --reason <r> [--pipeline-dir <dir>]
+ *     → {kind:'skip', reason, pipelineDir?}
+ *   conduct manual-test-record --results <path> [--pipeline-dir <dir>]
+ *     → {kind:'results', resultsPath, pipelineDir?}
  *   conduct manual-test-record [anything malformed]  → {kind:'guide'}
  *   (any other sub)                                  → null
  *
@@ -52,11 +49,10 @@ export function detectManualTestRecordCommand(argv: string[]): ManualTestRecordD
   const pipelineDir = flag('--pipeline-dir');
 
   if (skip && resultsPath !== undefined) return { kind: 'guide' };
-  if (!pipelineDir) return { kind: 'guide' };
   // --pipeline-dir must be an absolute path (mirrors detectFinishRecordCommand's
   // dispatch-stage isAbsolute guard in finish-record-cli.ts) — a relative path
   // refuses via guide dispatch rather than silently proceeding.
-  if (!isAbsolute(pipelineDir)) return { kind: 'guide' };
+  if (pipelineDir !== undefined && !isAbsolute(pipelineDir)) return { kind: 'guide' };
 
   if (skip) {
     if (!reason) return { kind: 'guide' };
@@ -81,18 +77,37 @@ export interface ManualTestRecordRunners {
   writeFile: (path: string, contents: string) => Promise<void>;
   rename: (from: string, to: string) => Promise<void>;
   rm: (path: string) => Promise<void>;
+  /** Resolves the git worktree toplevel for a cwd, if it has one. */
+  resolveToplevel: (cwd: string) => Promise<string | undefined>;
+  /** True only when path exists and is a directory. */
+  isDirectory: (path: string) => Promise<boolean>;
   /** Reads all of stdin as utf-8 text; used when `--results -` is given. */
   readStdin: () => Promise<string>;
 }
 
-/** Production runners: real fs/promises. */
-export function makeProductionManualTestRecordRunners(): ManualTestRecordRunners {
+/** Production runners: real fs/promises; git is injected by the composition root. */
+export function makeProductionManualTestRecordRunners(deps: { git: GitRunner }): ManualTestRecordRunners {
   return {
     readFile: (path: string) => readFile(path, 'utf-8'),
     mkdir: (path: string) => mkdir(path, { recursive: true }),
     writeFile: (path: string, contents: string) => writeFile(path, contents, 'utf-8'),
     rename: (from: string, to: string) => rename(from, to),
     rm: (path: string) => rm(path, { force: true }).then(() => undefined),
+    resolveToplevel: async (cwd: string) => {
+      try {
+        const result = await deps.git(['rev-parse', '--show-toplevel'], { cwd });
+        return (result.exitCode ?? 0) === 0 && result.stdout.trim() ? result.stdout.trim() : undefined;
+      } catch {
+        return undefined;
+      }
+    },
+    isDirectory: async (path: string) => {
+      try {
+        return (await stat(path)).isDirectory();
+      } catch {
+        return false;
+      }
+    },
     readStdin: async () => {
       const chunks: Buffer[] = [];
       for await (const chunk of process.stdin) {
@@ -179,7 +194,8 @@ async function appendAttemptSection(
  * cells receive MANUAL_TEST_WARN_SENTINEL so non-blocking capability gaps are
  * machine-visible. Both write to
  * `<pipelineDir>/manual-test-results.md`, creating the file (and pipeline
- * dir) if absent. The write is atomic — temp file in the same directory,
+ * dir) if an explicit directory is supplied. When omitted, the pipeline
+ * directory is derived from the git toplevel and must already exist. The write is atomic — temp file in the same directory,
  * then rename(2) over the target — and fail-closed: any read/write error
  * refuses (non-zero exit) rather than risk a torn/partial results file.
  *
@@ -189,16 +205,33 @@ async function appendAttemptSection(
  */
 export async function dispatchManualTestRecord(
   cmd: ManualTestRecordDispatch,
-  _cwd: string,
-  runners: ManualTestRecordRunners = makeProductionManualTestRecordRunners(),
+  cwd: string,
+  runners: ManualTestRecordRunners,
 ): Promise<number> {
   if (cmd.kind === 'guide') {
     console.error(MANUAL_TEST_RECORD_USAGE);
     return 1;
   }
 
+  let pipelineDir = cmd.pipelineDir;
+  if (pipelineDir === undefined) {
+    const toplevel = await runners.resolveToplevel(cwd);
+    if (!toplevel) {
+      console.error(
+        'manual-test-record: could not determine the pipeline directory (not inside a git work tree); pass --pipeline-dir <absolute path>',
+      );
+      return 1;
+    }
+
+    pipelineDir = join(toplevel, '.pipeline');
+    if (!(await runners.isDirectory(pipelineDir))) {
+      console.error(`manual-test-record: ${pipelineDir} does not exist; pass --pipeline-dir <absolute path>`);
+      return 1;
+    }
+  }
+
   if (cmd.kind === 'results') {
-    const resultsPath = join(cmd.pipelineDir, MANUAL_TEST_RESULTS_FILENAME);
+    const resultsPath = join(pipelineDir, MANUAL_TEST_RESULTS_FILENAME);
 
     let content: string;
     try {
@@ -211,19 +244,15 @@ export async function dispatchManualTestRecord(
     }
 
     if (content.trim().length === 0) {
-      console.error(
-        `manual-test-record: results payload from "${cmd.resultsPath}" is empty — refusing to record`,
-      );
+      console.error(`manual-test-record: results payload from "${cmd.resultsPath}" is empty — refusing to record`);
       return 1;
     }
 
     return appendAttemptSection(
-      cmd.pipelineDir,
+      pipelineDir,
       resultsPath,
       (attemptNumber) => {
-        const warningMarker = hasManualTestWarnRows(content)
-          ? `${MANUAL_TEST_WARN_SENTINEL}\n`
-          : '';
+        const warningMarker = hasManualTestWarnRows(content) ? `${MANUAL_TEST_WARN_SENTINEL}\n` : '';
         return `## Attempt ${attemptNumber}\n\n${warningMarker}${content}`;
       },
       runners,
@@ -231,14 +260,12 @@ export async function dispatchManualTestRecord(
   }
 
   // cmd.kind === 'skip'
-  const resultsPath = join(cmd.pipelineDir, MANUAL_TEST_RESULTS_FILENAME);
+  const resultsPath = join(pipelineDir, MANUAL_TEST_RESULTS_FILENAME);
   return appendAttemptSection(
-    cmd.pipelineDir,
+    pipelineDir,
     resultsPath,
     (attemptNumber) =>
-      `## Attempt ${attemptNumber}\n\n` +
-      `${MANUAL_TEST_SKIP_SENTINEL}\n` +
-      `**Result:** SKIPPED — ${cmd.reason}\n`,
+      `## Attempt ${attemptNumber}\n\n` + `${MANUAL_TEST_SKIP_SENTINEL}\n` + `**Result:** SKIPPED — ${cmd.reason}\n`,
     runners,
   );
 }
