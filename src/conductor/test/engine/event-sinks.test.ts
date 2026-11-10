@@ -68,6 +68,16 @@ it('declares restack decisions as durable, unaudited event-spine records', () =>
   expect(persistedEventTypes()).toContain('restack_decision');
 });
 
+it('declares fold plans as durable, unaudited event-spine records', () => {
+  expect(EVENT_SINKS.fold_planned).toEqual({
+    render: false,
+    persist: true,
+    audit: false,
+    otel: false,
+  });
+  expect(persistedEventTypes()).toContain('fold_planned');
+});
+
 it('declares remediation-closure judgements as durable, unaudited event-spine records', () => {
   expect(EVENT_SINKS.remediation_closure_judged).toEqual({
     render: false,
@@ -170,6 +180,10 @@ type RestackRefusalReasonIsClosed = Assert<Equal<
   | 'published-stack'
   | 'deferred-base-refresh'
   | 'restack-resolution-stale'
+  | 'fold-owner-invalid'
+  | 'fold-misrouted'
+  | 'fold-tree-mismatch'
+  | 'fold-boundary-lost'
 >>;
 const restackRefusalReasonContract: RestackRefusalReasonIsClosed = true;
 void restackRefusalReasonContract;
@@ -423,6 +437,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'stack_tip_diverged',
   'rebase_skipped_for_stack',
   'restack_planned',
+  'fold_planned',
   'restack_applied',
   'restack_conflict',
   'restack_resolution',
