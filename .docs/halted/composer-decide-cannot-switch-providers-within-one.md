@@ -1,20 +1,19 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-11-10T14:09:49.735Z
+Status: halted
 Slug: composer-decide-cannot-switch-providers-within-one
 Class: needs-human
-Halting step: prd_audit
-Phase: SHIP
+Halting step: unknown
+Phase: unknown
 Branch: feat/daemon-composer-decide-cannot-switch-providers-within-one
-Head SHA: 1bd4961786df453f130542486064c06ea6b0e506
-Halted at: 2026-11-09T01:00:58.124Z
+Head SHA: f4de833dd48ec53d09a5208515a41d537b9023e4
+Halted at: 2026-11-10T23:48:55.769Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-Validation group "prd_audit" halted: needs human DECIDE — remediation projection input fault: source validation-group, dimension prior-as-built-cases (actual 8929, limit 4096): prior-as-built-cases exceeds its required structured-input limit
+build_review adjudication halted: build-review kickback budget exhausted (cumulative): blocked cases 4a034738-ace5-4f50-b718-73e159c180a6 (effect 86bab62c-a4bd-4e4f-aa40-fe46acad3b9c); count 1, cumulative 6
+Kickback halt generation: 1794354535466-818s5a8a05u
 ```
