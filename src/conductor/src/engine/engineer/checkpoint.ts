@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { writeIntakeMarker } from './intake-marker.js';
+import { parseTrack } from '../artifacts.js';
 import {
   RUN_RECORD_SCHEMA_VERSION,
   RUN_STEP_ORDER,
@@ -15,6 +16,7 @@ import {
   type StepNotes,
 } from './run-record.js';
 import type { OwnerResolution } from '../owner-gate/identity.js';
+import type { Track } from '../../types/steps.js';
 import { withDaemonCoAuthorTrailer } from '../bot-co-author.js';
 import { renderRunBlock, upsertRunBlock } from './run-pr-block.js';
 
@@ -165,15 +167,32 @@ const defaultFs: CheckpointFileSystem = {
   mkdir: async (path) => { await mkdir(path, { recursive: true }); },
 };
 
-function emptyRecord(slug: string): RunRecord {
+function emptyRecord(slug: string, track: Track): RunRecord {
   return {
     schemaVersion: RUN_RECORD_SCHEMA_VERSION,
     slug,
+    track,
     steps: {},
     needsReconfirm: [],
     ownerHistory: [],
     notes: {},
   };
+}
+
+async function trackForCheckpoint(worktree: string, slug: string, fs: CheckpointFileSystem): Promise<Track> {
+  let contents: string;
+  try {
+    contents = await fs.readFile(join(worktree, '.docs', 'track', `${slug}.md`));
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith('ENOENT')) {
+      throw new Error('compose checkpoint: Explore track marker is required before saving a DECIDE checkpoint');
+    }
+    throw error;
+  }
+  // The track marker's established contract defaults absent metadata to
+  // product. Persist that closed value so later routing never has to infer it
+  // from prose decisions.
+  return parseTrack(contents) ?? 'product';
 }
 
 function parseDirtyDocs(porcelain: string): string[] {
@@ -249,7 +268,8 @@ export async function checkpointComposerRun(request: CheckpointRequest, deps: Ch
   };
 
   const recordPath = join(request.worktree, '.docs', 'composer-runs', `${slug}.json`);
-  let record = emptyRecord(slug);
+  const track = await trackForCheckpoint(request.worktree, slug, fs);
+  let record = emptyRecord(slug, track);
   let recordExists = true;
   try { record = parseRunRecord(await fs.readFile(recordPath)); } catch (error) {
     recordExists = false;
@@ -297,6 +317,7 @@ export async function checkpointComposerRun(request: CheckpointRequest, deps: Ch
   const checkpointAt = (deps.now ?? (() => new Date().toISOString()))();
   record = {
     ...record,
+    ...(step === 'explore' ? { track } : {}),
     ...(record.sourceRef || !deps.sourceRef ? {} : { sourceRef: deps.sourceRef }),
     lastCheckpoint: { actor: owner.id, provider, at: checkpointAt },
   };

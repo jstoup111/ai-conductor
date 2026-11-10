@@ -6,7 +6,7 @@ type FileMap = Map<string, string>;
 
 function fixture(options: { dirty?: string[]; owner?: string; provider?: string; branch?: string } = {}) {
   const files: FileMap = new Map([
-    ['.docs/track/demo.md', '# Track\n'],
+    ['.docs/track/demo.md', '# Track\n\nTrack: technical\n'],
   ]);
   const calls: Array<readonly string[]> = [];
   const events: unknown[] = [];
@@ -48,6 +48,7 @@ describe('checkpointComposerRun', () => {
     expect(result).toMatchObject({ slug: 'demo', committed: true, state: 'accepted' });
     expect(f.files.get('.docs/intake/demo.md')).toContain('Owner: machine-owner');
     expect(JSON.parse(f.files.get('.docs/composer-runs/demo.json')!)).toMatchObject({
+      track: 'technical',
       steps: { explore: { state: 'accepted', actor: 'machine-owner', provider: 'codex' } },
     });
     expect(f.calls).toContainEqual(['add', '--', '.docs']);
