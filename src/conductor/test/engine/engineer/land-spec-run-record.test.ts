@@ -123,7 +123,7 @@ beforeEach(async () => {
 afterEach(async () => { await rm(repoPath, { recursive: true, force: true }); });
 
 describe('landSpec Composer run-record gate', () => {
-  it('refuses unaccepted track or complexity artifacts without committing', async () => {
+  it('Covers: Task 7 refuses unaccepted track or complexity artifacts without committing', async () => {
     for (const directory of ['track', 'complexity']) {
       const worktreePath = await seedWorktree();
       await writeRecord(worktreePath, (await currentDigests(worktreePath)).filter(({ path }) => !path.startsWith(`.docs/${directory}/`)));
@@ -140,7 +140,7 @@ describe('landSpec Composer run-record gate', () => {
     }
   });
 
-  it('strips a fully accepted run record in the landing commit', async () => {
+  it('Covers: Task 7 strips a fully accepted run record in the landing commit', async () => {
     const worktreePath = await seedWorktree();
     await writeRecord(worktreePath, await currentDigests(worktreePath));
     await checkpoint(worktreePath);
@@ -151,7 +151,7 @@ describe('landSpec Composer run-record gate', () => {
     expect(await git(['show', '--name-status', '--format=', 'HEAD'], worktreePath)).toContain(`D\t${RECORD_PATH}`);
   });
 
-  it('uses the strip parent record to refuse a post-strip edit', async () => {
+  it('Covers: Task 7 uses the strip parent record to refuse a post-strip edit', async () => {
     const worktreePath = await seedWorktree();
     await writeRecord(worktreePath, await currentDigests(worktreePath));
     await checkpoint(worktreePath);
@@ -172,7 +172,7 @@ describe('landSpec Composer run-record gate', () => {
     expect((await git(['rev-parse', 'HEAD'], worktreePath)).trim()).toBe(before);
   });
 
-  it('refuses a plan that needs reconfirmation after saved draft stories are edited and re-accepted', async () => {
+  it('Covers: Task 7 refuses a plan that needs reconfirmation after saved draft stories are edited and re-accepted', async () => {
     const worktreePath = await seedWorktree();
     await writeRecord(worktreePath, await currentDigests(worktreePath));
     const recordPath = join(worktreePath, RECORD_PATH);
