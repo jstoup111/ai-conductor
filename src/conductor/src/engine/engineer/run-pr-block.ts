@@ -7,14 +7,11 @@ export const RUN_BLOCK_END = '<!-- ai-conductor:composer-run:end -->';
 /** Render an operator-facing summary.  No counterpart parses this text. */
 export function renderRunBlock(record: RunRecord): string {
   const summary = summarizeRun(record);
-  const active = summary.nextStep === 'delivery'
-    ? undefined
-    : summary.acceptedSteps.find((step) => step.step === summary.nextStep);
   return [
     RUN_BLOCK_START,
     '## Composer run',
     `Current step: ${summary.nextStep}`,
-    `Active provider: ${active?.provider ?? summary.lastAcceptedStep?.provider ?? 'unrecorded'}`,
+    `Active provider: ${record.lastCheckpoint?.provider ?? summary.lastAcceptedStep?.provider ?? 'unrecorded'}`,
     `Last actor: ${summary.lastActor ? `${summary.lastActor} at ${summary.lastAt}` : 'none'}`,
     'Accepted steps:',
     ...(summary.acceptedSteps.length === 0 ? ['- none'] : summary.acceptedSteps.map((step) => `- ${step.step}: accepted by ${step.actor} via ${step.provider} at ${step.at}`)),
