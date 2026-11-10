@@ -53,6 +53,8 @@ export interface CheckpointDeps {
   readonly provider?: string;
   /** A resumed foreign-owned run is durable locally until an explicit take-over. */
   readonly localOnly?: boolean;
+  /** The committed owner retained by a local-only resumed run. */
+  readonly localOnlyOwner?: string;
   /** Intake identity is staged before the owner marker is first committed. */
   readonly sourceRef?: string;
   /** Guarded publication seam. Keeping transport outside record mutation makes retries idempotent. */
@@ -131,6 +133,30 @@ async function publishCheckpoint(
   await publication.published?.({ slug, branch, prUrl: pr.url });
   await deps.emit({ ...event, published: true });
   return { slug, state, committed: false, published: true, prUrl: pr.url, ...(warnings.length ? { warnings } : {}) };
+}
+
+async function publishOrKeepCheckpointLocal(
+  slug: string,
+  worktree: string,
+  state: CheckpointRequest['state'],
+  record: RunRecord,
+  deps: CheckpointDeps,
+  event: { type: 'composer_run_checkpointed'; slug: string; step: string; state: 'accepted' | 'draft'; published: boolean; provider: string; actor: string },
+  committed: boolean,
+): Promise<CheckpointResult> {
+  if (deps.localOnly) {
+    await deps.emit(event);
+    const owner = deps.localOnlyOwner ? ` owned by ${deps.localOnlyOwner}` : '';
+    return {
+      slug,
+      state,
+      committed,
+      published: false,
+      warnings: [`Composer run${owner} stays local until interactive take-over.`],
+    };
+  }
+  const published = await publishCheckpoint(slug, worktree, state, record, deps, event);
+  return { ...published, committed };
 }
 
 const defaultFs: CheckpointFileSystem = {
@@ -248,8 +274,7 @@ export async function checkpointComposerRun(request: CheckpointRequest, deps: Ch
       await deps.emit(event);
       return { slug, state: request.state, committed: false, published: false };
     }
-    const published = await publishCheckpoint(slug, request.worktree, request.state, record, deps, event);
-    return { ...published, committed: false };
+    return publishOrKeepCheckpointLocal(slug, request.worktree, request.state, record, deps, event, false);
   }
   const notes = await notesFor(request, fs);
   if (request.state === 'accepted') {
@@ -300,10 +325,5 @@ export async function checkpointComposerRun(request: CheckpointRequest, deps: Ch
     const commit = await deps.git(['commit', '-m', withDaemonCoAuthorTrailer(`composer checkpoint: ${slug} ${step}`)]);
     if (commit.exitCode !== 0) throw new Error(`compose checkpoint: local commit failed: ${commit.stderr}`);
   }
-  if (deps.localOnly) {
-    await deps.emit(event);
-    return { slug, state: request.state, committed, published: false, warnings: ['Composer run stays local until interactive take-over.'] };
-  }
-  const published = await publishCheckpoint(slug, request.worktree, request.state, record, deps, event);
-  return { ...published, committed };
+  return publishOrKeepCheckpointLocal(slug, request.worktree, request.state, record, deps, event, committed);
 }
