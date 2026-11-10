@@ -10,12 +10,9 @@ import { readRouteRecord } from '../routing/route-record-store.js';
 import { closureRefFor } from '../routing/routing-refs.js';
 import { parseRoundId, type FrozenHostAllocation, type RoundId } from '../routing/route-types.js';
 import { parseCommitSha, type CommitSha } from './restack-types.js';
+import type { FoldCommitPlan, FoldHunk, FoldPart, FoldPartReason, FoldPlan, FoldSourceCommit } from './fold-types.js';
 
-export interface FoldSourceCommit {
-  readonly sha: CommitSha;
-  readonly roundId: RoundId;
-  readonly owner: ChildId;
-}
+export type { FoldCommitPlan, FoldHunk, FoldPart, FoldPartReason, FoldPlan, FoldSourceCommit } from './fold-types.js';
 
 export type CollectFoldSetResult =
   | { readonly kind: 'collected'; readonly commits: readonly FoldSourceCommit[] }
@@ -27,40 +24,6 @@ export interface CollectFoldSetInput {
   readonly slug: string;
   readonly git: GitRunner;
 }
-
-export type FoldPartReason = 'owner' | 'introduced-above-owner';
-
-/** One source hunk, retained in the plan so its placement can be replayed exactly. */
-export interface FoldHunk {
-  readonly path: string;
-  readonly patch: string;
-  readonly wholeFile: boolean;
-}
-
-export type FoldPart =
-  | { readonly kind: 'hunks'; readonly child: ChildId | 'leaf'; readonly path: string; readonly hunk: FoldHunk; readonly reason: FoldPartReason }
-  | { readonly kind: 'whole'; readonly child: ChildId; readonly paths: readonly []; readonly reason: 'owner' }
-  | {
-    readonly kind: 'blocks';
-    readonly child: ChildId;
-    readonly paths: readonly [];
-    readonly reason: 'owner';
-    readonly blocks: readonly { readonly id: string; readonly body: string }[];
-  };
-
-export interface FoldCommitPlan extends FoldSourceCommit {
-  readonly parts: readonly FoldPart[];
-}
-
-/** The durable source-to-placement correspondence recorded before fold replay. */
-export type FoldPlan =
-  | { readonly kind: 'planned'; readonly commits: readonly FoldCommitPlan[] }
-  | {
-    readonly kind: 'refused';
-    readonly reason: 'fold-unplaced-path' | 'fold-residual-unexpressible';
-    readonly commit: CommitSha;
-    readonly paths: readonly string[];
-  };
 
 export interface PlaceFoldCommitsInput {
   readonly worktree: string;

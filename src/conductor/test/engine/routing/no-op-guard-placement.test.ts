@@ -416,7 +416,7 @@ describe('routed host no-op guard placement', () => {
     await expect(dispatchStackRoundsCommand({ kind: 'stack-rounds-inspect', slug: 'demo' }, {
       cwd: root, resolveMainRoot: async () => root, resolveWorktree: async () => root, print: (line: string) => printed.push(line), git,
     } as never)).resolves.toBe(0);
-    expect(printed.join('\n')).toContain('hosts 1:done, 2:admitted, 3:pending');
+    expect(printed.join('\n')).toContain('hosts 1:done execution=owner placement=none, 2:admitted execution=owner placement=none, 3:pending execution=owner placement=none');
     expect(printed.join('\n')).toContain('repair marker: host 2 round r1');
   }, 10_000);
 
