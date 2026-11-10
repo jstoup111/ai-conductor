@@ -54,7 +54,9 @@ describe('Composer resume', () => {
       lastAt: '2026-11-08T00:01:00.000Z',
     });
     const landed: RunRecord = { ...record, steps: { explore: record.steps.explore, prd: record.steps.prd }, needsReconfirm: [] };
-    expect(contextForRun(landed).nextStep).toBe('delivery');
+    // A partial accept-only record is still mid-run. A stripped landed record
+    // reaches delivery through resumeComposerRun's ENOENT handling instead.
+    expect(contextForRun(landed).nextStep).toBe('complexity');
   });
 
   it('Covers: Task 12 leaves worktrees untouched for unknown targets and failed fetches, while no-remote attach skips fetch', async () => {

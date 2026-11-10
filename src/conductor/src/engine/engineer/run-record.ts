@@ -48,6 +48,13 @@ export interface OwnerHistoryEntry {
   readonly at: string;
 }
 
+/** The session that last saved this record, including a draft-only save. */
+export interface RunCheckpoint {
+  readonly actor: string;
+  readonly provider: string;
+  readonly at: string;
+}
+
 export interface AcceptedRunStepSummary extends AcceptedRunStep {
   readonly step: RunStepId;
 }
@@ -84,19 +91,29 @@ export interface RunRecord {
   readonly needsReconfirm: readonly RunStepId[];
   readonly ownerHistory: readonly OwnerHistoryEntry[];
   readonly notes: Readonly<Partial<Record<RunStepId, StepNotes>>>;
+  /** Unlike acceptance, this is updated by every checkpoint, including drafts. */
+  readonly lastCheckpoint?: RunCheckpoint;
 }
 
 /** Derive the one authoritative handoff summary from durable Composer state. */
-export function summarizeRun(record: RunRecord): RunSummary {
+export function summarizeRun(record: RunRecord, currentDigests?: readonly ArtifactDigest[]): RunSummary {
+  const classification = currentDigests === undefined ? undefined : classifyArtifacts(record, currentDigests);
+  const invalidSteps = new Set<RunStepId>([
+    ...(classification?.draft.flatMap((artifact) => artifact.step === undefined ? [] : [artifact.step]) ?? []),
+    ...(classification?.needsReconfirm ?? []),
+  ]);
   const acceptedSteps = RUN_STEP_ORDER.flatMap((step) => {
     const value = record.steps[step];
-    return value?.state === 'accepted' ? [{ step, ...value }] : [];
+    return value?.state === 'accepted' && !invalidSteps.has(step) ? [{ step, ...value }] : [];
   });
   const lastAcceptedStep = acceptedSteps.at(-1);
-  const lastActivity = record.ownerHistory.at(-1) ?? lastAcceptedStep;
+  const lastActivity = record.lastCheckpoint ?? lastAcceptedStep;
+  // An explicit draft/reconfirmation is authoritative even where optional
+  // earlier DECIDE steps were not recorded. For an accept-only mid-run record,
+  // however, do not pretend it reached delivery merely because no draft exists.
   const nextStep = RUN_STEP_ORDER.find((step) =>
-    record.needsReconfirm.includes(step) || record.steps[step]?.state === 'draft',
-  ) ?? 'delivery';
+    invalidSteps.has(step) || record.needsReconfirm.includes(step) || record.steps[step]?.state === 'draft',
+  ) ?? RUN_STEP_ORDER.find((step) => record.steps[step]?.state !== 'accepted') ?? 'delivery';
   return {
     nextStep,
     acceptedSteps,
@@ -104,7 +121,7 @@ export function summarizeRun(record: RunRecord): RunSummary {
     ...(lastActivity ? { lastActor: lastActivity.actor, lastAt: lastActivity.at } : {}),
     decisions: RUN_STEP_ORDER.flatMap((step) => record.notes[step]?.decisions ?? []),
     openQuestions: RUN_STEP_ORDER.flatMap((step) => record.notes[step]?.openQuestions ?? []),
-    drafts: RUN_STEP_ORDER.filter((step) => record.steps[step]?.state === 'draft' || record.needsReconfirm.includes(step)),
+    drafts: RUN_STEP_ORDER.filter((step) => invalidSteps.has(step) || record.steps[step]?.state === 'draft' || record.needsReconfirm.includes(step)),
   };
 }
 
@@ -229,6 +246,15 @@ function parseOwnerHistory(value: unknown): readonly OwnerHistoryEntry[] {
   });
 }
 
+function parseCheckpoint(value: unknown): RunCheckpoint {
+  if (!isObject(value) || Object.keys(value).some((key) => key !== 'actor' && key !== 'provider' && key !== 'at')) {
+    throw new Error('Run record lastCheckpoint must contain actor, provider, and at');
+  }
+  const at = requiredString(value.at, 'last checkpoint time');
+  if (Number.isNaN(Date.parse(at))) throw new Error('Run record last checkpoint time must be a timestamp');
+  return { actor: requiredString(value.actor, 'last checkpoint actor'), provider: requiredString(value.provider, 'last checkpoint provider'), at };
+}
+
 /** Parse the sole supported run-record schema, failing closed on unknown state. */
 export function parseRunRecord(serialized: string): RunRecord {
   let value: unknown;
@@ -239,7 +265,7 @@ export function parseRunRecord(serialized: string): RunRecord {
   }
   if (!isObject(value)) throw new Error('Run record must be an object');
   if (value.schemaVersion !== RUN_RECORD_SCHEMA_VERSION) throw new Error(`Unsupported run record schemaVersion ${String(value.schemaVersion)}`);
-  if (Object.keys(value).some((key) => !['schemaVersion', 'slug', 'sourceRef', 'steps', 'lastAcceptedArtifacts', 'needsReconfirm', 'ownerHistory', 'notes'].includes(key))) {
+  if (Object.keys(value).some((key) => !['schemaVersion', 'slug', 'sourceRef', 'steps', 'lastAcceptedArtifacts', 'needsReconfirm', 'ownerHistory', 'notes', 'lastCheckpoint'].includes(key))) {
     throw new Error('Run record has unknown fields');
   }
   if (value.sourceRef !== undefined && typeof value.sourceRef !== 'string') throw new Error('Run record sourceRef must be a string');
@@ -254,6 +280,7 @@ export function parseRunRecord(serialized: string): RunRecord {
     needsReconfirm: [...new Set(needsReconfirm)] as readonly RunStepId[],
     ownerHistory: parseOwnerHistory(value.ownerHistory),
     notes: parseNotes(value.notes),
+    ...(value.lastCheckpoint === undefined ? {} : { lastCheckpoint: parseCheckpoint(value.lastCheckpoint) }),
   };
 }
 
@@ -313,6 +340,7 @@ export function recordAcceptance(record: RunRecord, input: RecordAcceptanceInput
         openQuestions: [...input.openQuestions],
       },
     },
+    lastCheckpoint: { actor: input.actor, provider: input.provider, at: input.at },
   };
 }
 

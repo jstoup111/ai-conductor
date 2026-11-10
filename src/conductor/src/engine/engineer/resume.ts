@@ -1,10 +1,10 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { parseRunRecord, summarizeRun, type RunRecord, type RunStepId, type RunSummary } from './run-record.js';
+import { digestArtifact, parseRunRecord, summarizeRun, type ArtifactDigest, type RunRecord, type RunStepId, type RunSummary } from './run-record.js';
 import { strictSlugGithubRef } from './source-ref.js';
 
 export type ResumeTarget =
-  | { kind: 'pr'; number: number }
+  | { kind: 'pr'; number: number; repository?: string }
   | { kind: 'branch'; branch: string }
   | { kind: 'intake'; repository: string; number: number };
 
@@ -57,8 +57,8 @@ export function resumeOwnershipMode(input: {
 /** Parse the only stable resume selectors; GitHub resolution is deliberately injected. */
 export function parseResumeTarget(value: string): ResumeTarget {
   if (/^\d+$/.test(value)) return { kind: 'pr', number: Number(value) };
-  const url = /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/(\d+)$/.exec(value);
-  if (url) return { kind: 'pr', number: Number(url[1]) };
+  const url = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)$/.exec(value);
+  if (url) return { kind: 'pr', repository: url[1], number: Number(url[2]) };
   if (/^spec\/[a-z0-9][a-z0-9-]*$/.test(value)) return { kind: 'branch', branch: value };
   const intake = strictSlugGithubRef(value);
   if (intake) return { kind: 'intake', repository: intake.repo, number: Number(intake.number) };
@@ -83,6 +83,8 @@ export interface ResumeDeps {
   fetch?(branch: string): Promise<void>;
   attach(branch: string): Promise<{ worktree: string }>;
   readRunRecord?(worktree: string, slug: string): Promise<string>;
+  /** Current committed artifact bytes make acceptance a claim about this checkout, not stale JSON. */
+  readArtifact?(worktree: string, path: string): Promise<Uint8Array>;
   recordDeciding?(input: { branch: string; draftPrUrl?: string }): Promise<void>;
   emit?(input: { slug: string; worktreePath: string; previousActor?: string; previousProvider?: string; ownership: 'unchanged' | 'taken-over' }): Promise<void>;
 }
@@ -95,9 +97,33 @@ export async function resumeComposerRun(value: string, deps: ResumeDeps): Promis
   if (deps.fetch) await deps.fetch(resolved.branch);
   const attached = await deps.attach(resolved.branch);
   const slug = resolved.branch.slice('spec/'.length);
-  const raw = await (deps.readRunRecord ?? ((worktree, name) => readFile(join(worktree, '.docs', 'composer-runs', `${name}.json`), 'utf8')))(attached.worktree, slug);
+  let raw: string;
+  try {
+    raw = await (deps.readRunRecord ?? ((worktree, name) => readFile(join(worktree, '.docs', 'composer-runs', `${name}.json`), 'utf8')))(attached.worktree, slug);
+  } catch (error) {
+    // land-spec intentionally strips the record. A branch which has already
+    // landed resumes at delivery instead of presenting an ENOENT as corruption.
+    if (error instanceof Error && /ENOENT/.test(error.message)) {
+      return {
+        worktree: attached.worktree,
+        context: { slug, branch: resolved.branch, nextStep: 'delivery', acceptedArtifacts: [], decisions: [], openQuestions: [], drafts: [] },
+      };
+    }
+    throw error;
+  }
   const record = parseRunRecord(raw);
-  const summary = summarizeRun(record);
+  const reader = deps.readArtifact ?? ((worktree: string, path: string) => readFile(join(worktree, path)));
+  const known = Object.values(record.steps).flatMap((step) => step?.state === 'accepted' ? step.artifacts : []);
+  const current = await Promise.all(known.map(async (artifact) => {
+    try {
+      const bytes = await reader(attached.worktree, artifact.path);
+      return digestArtifact(artifact.path, bytes);
+    } catch { return undefined; }
+  }));
+  const currentDigests = current.filter((entry): entry is ArtifactDigest => entry !== undefined);
+  // A partial/unavailable checkout is not proof that accepted files vanished.
+  // Only compare when every recorded artifact was actually read.
+  const summary = summarizeRun(record, currentDigests.length === known.length ? currentDigests : undefined);
   const context = contextForRun(record, summary);
   await deps.recordDeciding?.({ branch: resolved.branch, draftPrUrl: resolved.draftPrUrl });
   const previous = summary.lastAcceptedStep;
