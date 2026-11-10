@@ -108,9 +108,14 @@ describe('Composer resume', () => {
       await execFile('git', ['commit', '-m', 'run'], { cwd: root });
       await execFile('git', ['checkout', 'main'], { cwd: root });
       await writeFile(registryPath, JSON.stringify([{ schemaVersion: 1, name: 'demo', path: root, status: 'registered', registeredAt: '2026-11-08T00:00:00.000Z' }]));
+      const localGit = async (args: string[], options?: { cwd?: string }) => {
+        const result = await execFile('git', args, { cwd: options?.cwd ?? root });
+        return { exitCode: 0, stdout: result.stdout };
+      };
       const code = await dispatchEngineer({ kind: 'resume', target: 'spec/demo', provider: 'codex', project: 'demo' }, {
         registryPath, spawnHost: spawned, print: () => {}, printErr: (line) => errors.push(line),
         env: {}, resolveResumeOwner: async () => ({ resolved: true, id: 'A' }),
+        git: localGit,
         probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
       });
       expect(code).toBe(0);
