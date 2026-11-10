@@ -618,10 +618,12 @@ afterEach(async () => {
   // This fixture shares its setup state across the daemon CLI cases. Retain
   // every allocation until cleanup so each created root is removed even if
   // setup advances before an earlier teardown runs.
-  await Promise.all([...gatedSnapshotRoots].map(async (path) => {
-    await rm(path, { recursive: true, force: true });
-    gatedSnapshotRoots.delete(path);
-  }));
+  await Promise.all(
+    [...gatedSnapshotRoots].map(async (path) => {
+      await rm(path, { recursive: true, force: true });
+      gatedSnapshotRoots.delete(path);
+    }),
+  );
 });
 
 async function prepareChildDispatchProject(slugs: readonly string[]): Promise<void> {

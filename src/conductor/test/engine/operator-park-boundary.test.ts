@@ -131,7 +131,8 @@ describe('operator park boundary contract', () => {
             nativeSchema: PRD_WIDENING_RECONCILIATION_SCHEMA,
           },
         });`;
-    const buildReviewAdjudicationDispatch = /const dispatched = await this\.stepRunner\.run\('remediate', state, \{\s*retryReason: `Adjudicate this complete build-review context only; write \$\{requestedMode\} remediation output\.\\n\$\{JSON\.stringify\(context\)\}`,\s*\}\);/g;
+    const buildReviewAdjudicationDispatch =
+      /const dispatched = await this\.stepRunner\.run\('remediate', state, \{\s*retryReason: `Adjudicate this complete build-review context only; write \$\{requestedMode\} remediation output\.\\n\$\{JSON\.stringify\(context\)\}`,\s*\}\);/g;
     // A string entry matches the exact statement text; a RegExp entry matches
     // the executionContext-reshaped helper dispatches whose option objects span
     // several lines. Either way the primitive must sit at the matched offset.
