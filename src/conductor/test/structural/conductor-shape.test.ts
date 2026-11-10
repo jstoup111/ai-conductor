@@ -33,15 +33,9 @@ const ALLOWED_TUNABLES = [
   'LOOP_HALT_MARKER',
 ];
 
-// The hidden executor-child command is a third process entry point.  It owns
-// a feature-local conductor in the isolated child, while the two public entry
-// points continue to own interactive and supervisor conductors.
-const ALLOWED_IMPORTERS = new Set([
-  'index.ts',
-  'daemon-cli.ts',
-  'engine/daemon-feature-lifecycle.ts',
-  'engine/executor-child-runtime.ts',
-]);
+// The lifecycle module owns the child feature conductor; the two public entry
+// points own interactive and supervisor conductors.
+const ALLOWED_IMPORTERS = new Set(['index.ts', 'daemon-cli.ts', 'engine/daemon-feature-lifecycle.ts']);
 const SOURCE_ROOT = join(CONDUCTOR_ROOT, 'src');
 const DIRECT_IMPORTERS = [
   'engine/step-runners.ts',

@@ -6,20 +6,15 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  CorruptLedgerError,
-  createLedger,
-  loadStore,
-} from '../../../../src/engine/engineer/intake/ledger.js';
-import {
-  createConductStateLease,
-  type ConductStateLease,
-} from '../../../../src/engine/conduct-state-lease.js';
+import { CorruptLedgerError, createLedger, loadStore } from '../../../../src/engine/engineer/intake/ledger.js';
+import { createConductStateLease, type ConductStateLease } from '../../../../src/engine/conduct-state-lease.js';
 import { resolveEngineerDir } from '../../../../src/engine/engineer-store.js';
 
 let dir: string;
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'ledger-writeback-'));
+  // The run marker remains stable even if another suite temporarily restores
+  // TMPDIR; os.tmpdir() alone could then create this fixture in real /tmp.
+  dir = await mkdtemp(join(process.env.AI_CONDUCTOR_TEST_TMP_ROOT ?? tmpdir(), 'ledger-writeback-'));
 });
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
@@ -94,17 +89,12 @@ describe('loadStore()', () => {
       vi.useRealTimers();
     }
 
-    const quarantines = (await readdir(dir))
-      .filter((name) => name.startsWith('ledger.json.corrupt-'))
-      .sort();
+    const quarantines = (await readdir(dir)).filter((name) => name.startsWith('ledger.json.corrupt-')).sort();
     expect({
       quarantines,
       bytes: await Promise.all(quarantines.map((name) => readFile(join(dir, name)))),
     }).toEqual({
-      quarantines: [
-        'ledger.json.corrupt-1786622400000',
-        'ledger.json.corrupt-1786622403000',
-      ],
+      quarantines: ['ledger.json.corrupt-1786622400000', 'ledger.json.corrupt-1786622403000'],
       bytes: [firstCorruption, secondCorruption],
     });
   });
@@ -119,10 +109,12 @@ describe('loadStore()', () => {
     try {
       vi.setSystemTime(new Date('2026-08-13T12:00:00.000Z'));
       await writeFile(`${ledgerPath}.corrupt-1786622400000`, collidingBytes);
-      const error = await createLedger(ledgerPath).list().then(
-        () => undefined,
-        (caught: unknown) => caught,
-      );
+      const error = await createLedger(ledgerPath)
+        .list()
+        .then(
+          () => undefined,
+          (caught: unknown) => caught,
+        );
 
       expect(error).toMatchObject({
         ledgerPath,
@@ -158,14 +150,16 @@ describe('loadStore()', () => {
             handle: { release: async () => ({ ok: true }) },
           }),
         },
-      }).list().then(
-        () => ({ error: undefined, errorIsTyped: false, original: undefined }),
-        async (error: unknown) => ({
-          error,
-          errorIsTyped: error instanceof CorruptLedgerError,
-          original: await readFile(ledgerPath),
-        }),
-      );
+      })
+        .list()
+        .then(
+          () => ({ error: undefined, errorIsTyped: false, original: undefined }),
+          async (error: unknown) => ({
+            error,
+            errorIsTyped: error instanceof CorruptLedgerError,
+            original: await readFile(ledgerPath),
+          }),
+        );
 
       expect(result).toEqual({
         error: expect.objectContaining({
@@ -193,7 +187,13 @@ describe('loadStore()', () => {
       await writeFile(ledgerPath, '{}', 'utf8');
       const empty = await loadStore(ledgerPath);
 
-      expect({ absent, entries, corruptFiles: afterAbsent.filter((name) => name.startsWith('ledger.json.corrupt-')), empty, stderrWrites: stderr.mock.calls }).toEqual({
+      expect({
+        absent,
+        entries,
+        corruptFiles: afterAbsent.filter((name) => name.startsWith('ledger.json.corrupt-')),
+        empty,
+        stderrWrites: stderr.mock.calls,
+      }).toEqual({
         absent: { kind: 'absent' },
         entries: [],
         corruptFiles: [],
@@ -235,12 +235,16 @@ describe('lease-bracketed ledger access', () => {
     const ledgerPath = join(dir, 'ledger.json');
     const staleLeasePath = `${ledgerPath}.lease`;
     await mkdir(staleLeasePath);
-    await writeFile(join(staleLeasePath, 'owner.json'), `${JSON.stringify({
-      version: 1,
-      pid: 999_999_999,
-      token: 'dead-owner',
-      acquiredAt: '2026-08-13T12:00:00.000Z',
-    })}\n`, 'utf8');
+    await writeFile(
+      join(staleLeasePath, 'owner.json'),
+      `${JSON.stringify({
+        version: 1,
+        pid: 999_999_999,
+        token: 'dead-owner',
+        acquiredAt: '2026-08-13T12:00:00.000Z',
+      })}\n`,
+      'utf8',
+    );
 
     const ledger = createLedger(ledgerPath);
     await ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' });
@@ -264,8 +268,9 @@ describe('lease-bracketed ledger access', () => {
         lease: createConductStateLease(ledgerPath, { pid: process.pid, waitTimeoutMs: 0 }),
       });
 
-      await expect(ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' }))
-        .rejects.toThrow(new RegExp(`owner pid ${process.pid} is live`));
+      await expect(ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' })).rejects.toThrow(
+        new RegExp(`owner pid ${process.pid} is live`),
+      );
     } finally {
       await held.handle.release();
     }
@@ -284,15 +289,19 @@ describe('lease-bracketed ledger access', () => {
     await mkdir(unreadableLedgerPath);
     const readLedger = createLedger(unreadableLedgerPath, { lease });
 
-    const errors = await Promise.all([
-      ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' }),
-      readLedger.known('github-issues', 'o/a#1'),
-      readLedger.get('github-issues', 'o/a#1'),
-      readLedger.list(),
-    ].map((operation) => operation.then(
-      () => undefined,
-      (error: unknown) => error instanceof Error ? error.message : String(error),
-    )));
+    const errors = await Promise.all(
+      [
+        ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' }),
+        readLedger.known('github-issues', 'o/a#1'),
+        readLedger.get('github-issues', 'o/a#1'),
+        readLedger.list(),
+      ].map((operation) =>
+        operation.then(
+          () => undefined,
+          (error: unknown) => (error instanceof Error ? error.message : String(error)),
+        ),
+      ),
+    );
 
     expect({ errors, bytes: await readFile(ledgerPath) }).toEqual({
       errors: Array(4).fill(`Unable to acquire intake ledger lease: ${refusal}`),
@@ -480,11 +489,18 @@ describe('lease-bracketed ledger access', () => {
         };
       },
     };
-    await writeFile(ledgerPath, JSON.stringify({
-      'github-issues\u0000o/a#old': {
-        source: 'github-issues', sourceRef: 'o/a#old', status: 'pending', attempts: 0,
-      },
-    }), 'utf8');
+    await writeFile(
+      ledgerPath,
+      JSON.stringify({
+        'github-issues\u0000o/a#old': {
+          source: 'github-issues',
+          sourceRef: 'o/a#old',
+          status: 'pending',
+          attempts: 0,
+        },
+      }),
+      'utf8',
+    );
     const ledger = createLedger(ledgerPath, { lease });
 
     await ledger.record({ source: 'github-issues', sourceRef: 'o/a#new' });
@@ -516,18 +532,24 @@ describe('lease-bracketed ledger access', () => {
     const failedBodyLedger = createLedger(join(dir, 'failed-body.json'), { lease });
     await writeFile(join(dir, 'failed-body.json'), 'not valid json', 'utf8');
 
-    const successfulBodyError = await successfulBodyLedger.record({
-      source: 'github-issues', sourceRef: 'o/a#1',
-    }).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    const failedBodyError = await failedBodyLedger.record({
-      source: 'github-issues', sourceRef: 'o/a#2',
-    }).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
+    const successfulBodyError = await successfulBodyLedger
+      .record({
+        source: 'github-issues',
+        sourceRef: 'o/a#1',
+      })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    const failedBodyError = await failedBodyLedger
+      .record({
+        source: 'github-issues',
+        sourceRef: 'o/a#2',
+      })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
 
     expect({
       successfulBodyMessage: successfulBodyError instanceof Error ? successfulBodyError.message : undefined,
@@ -539,7 +561,10 @@ describe('lease-bracketed ledger access', () => {
   });
 
   it.each([
-    ['record', (ledger: ReturnType<typeof createLedger>) => ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' })],
+    [
+      'record',
+      (ledger: ReturnType<typeof createLedger>) => ledger.record({ source: 'github-issues', sourceRef: 'o/a#1' }),
+    ],
     ['transition', (ledger: ReturnType<typeof createLedger>) => ledger.transition('github-issues', 'o/a#1', 'done')],
     ['forget', (ledger: ReturnType<typeof createLedger>) => ledger.forget('github-issues', 'o/a#1')],
     ['reopen', (ledger: ReturnType<typeof createLedger>) => ledger.reopen('github-issues', 'o/a#1')],
@@ -584,10 +609,18 @@ describe('lease-bracketed ledger access', () => {
     });
     const mutations = [
       ['record', {}, (ledger: ReturnType<typeof createLedger>) => ledger.record({ source, sourceRef })],
-      ['transition', entry('pending'), (ledger: ReturnType<typeof createLedger>) => ledger.transition(source, sourceRef, 'done')],
+      [
+        'transition',
+        entry('pending'),
+        (ledger: ReturnType<typeof createLedger>) => ledger.transition(source, sourceRef, 'done'),
+      ],
       ['forget', entry('pending'), (ledger: ReturnType<typeof createLedger>) => ledger.forget(source, sourceRef)],
       ['reopen', entry('done'), (ledger: ReturnType<typeof createLedger>) => ledger.reopen(source, sourceRef)],
-      ['requeueClaimed', entry('claimed'), (ledger: ReturnType<typeof createLedger>) => ledger.requeueClaimed(source, sourceRef)],
+      [
+        'requeueClaimed',
+        entry('claimed'),
+        (ledger: ReturnType<typeof createLedger>) => ledger.requeueClaimed(source, sourceRef),
+      ],
     ] as const;
     const results: Array<{
       method: string;
@@ -619,33 +652,47 @@ describe('lease-bracketed ledger access', () => {
         method,
         refused,
         retrySucceeded,
-        semanticState: retriedEntry === undefined
-          ? undefined
-          : { status: retriedEntry.status, attempts: retriedEntry.attempts },
+        semanticState:
+          retriedEntry === undefined ? undefined : { status: retriedEntry.status, attempts: retriedEntry.attempts },
         tempFiles: [tempFilesAfterRefusal, tempFilesAfterRetry],
       });
     }
 
     expect(results).toEqual([
       {
-        method: 'record', refused: true, retrySucceeded: true,
-        semanticState: { status: 'pending', attempts: 0 }, tempFiles: [[], []],
+        method: 'record',
+        refused: true,
+        retrySucceeded: true,
+        semanticState: { status: 'pending', attempts: 0 },
+        tempFiles: [[], []],
       },
       {
-        method: 'transition', refused: true, retrySucceeded: true,
-        semanticState: { status: 'done', attempts: 0 }, tempFiles: [[], []],
+        method: 'transition',
+        refused: true,
+        retrySucceeded: true,
+        semanticState: { status: 'done', attempts: 0 },
+        tempFiles: [[], []],
       },
       {
-        method: 'forget', refused: true, retrySucceeded: true,
-        semanticState: undefined, tempFiles: [[], []],
+        method: 'forget',
+        refused: true,
+        retrySucceeded: true,
+        semanticState: undefined,
+        tempFiles: [[], []],
       },
       {
-        method: 'reopen', refused: true, retrySucceeded: true,
-        semanticState: { status: 'pending', attempts: 1 }, tempFiles: [[], []],
+        method: 'reopen',
+        refused: true,
+        retrySucceeded: true,
+        semanticState: { status: 'pending', attempts: 1 },
+        tempFiles: [[], []],
       },
       {
-        method: 'requeueClaimed', refused: true, retrySucceeded: true,
-        semanticState: { status: 'pending', attempts: 1 }, tempFiles: [[], []],
+        method: 'requeueClaimed',
+        refused: true,
+        retrySucceeded: true,
+        semanticState: { status: 'pending', attempts: 1 },
+        tempFiles: [[], []],
       },
     ]);
   });
@@ -814,12 +861,16 @@ describe('engineer-directory ledger artifacts', () => {
     if (!held.ok) throw new Error(held.message);
 
     try {
-      await expect(createLedger(ledgerPath).record({ source: 'github-issues', sourceRef: 'o/a#1' }))
-        .rejects.toThrow(new RegExp(`owner pid ${process.pid} is live`));
+      await expect(createLedger(ledgerPath).record({ source: 'github-issues', sourceRef: 'o/a#1' })).rejects.toThrow(
+        new RegExp(`owner pid ${process.pid} is live`),
+      );
 
       expect({
         customArtifacts: (await readdir(customEngineerDir)).sort(),
-        defaultExists: await readdir(defaultEngineerDir).then(() => true, () => false),
+        defaultExists: await readdir(defaultEngineerDir).then(
+          () => true,
+          () => false,
+        ),
       }).toEqual({
         customArtifacts: ['ledger.json.lease'],
         defaultExists: false,
@@ -835,13 +886,13 @@ describe('engineer-directory ledger artifacts', () => {
     expect({
       resolvedEngineerDir,
       customArtifacts: (await readdir(customEngineerDir)).sort(),
-      defaultExists: await readdir(defaultEngineerDir).then(() => true, () => false),
+      defaultExists: await readdir(defaultEngineerDir).then(
+        () => true,
+        () => false,
+      ),
     }).toEqual({
       resolvedEngineerDir: customEngineerDir,
-      customArtifacts: [
-        'ledger.json',
-        expect.stringMatching(/^ledger\.json\.corrupt-\d+$/),
-      ],
+      customArtifacts: ['ledger.json', expect.stringMatching(/^ledger\.json\.corrupt-\d+$/)],
       defaultExists: false,
     });
   });
@@ -880,8 +931,9 @@ describe('engineer-directory ledger artifacts', () => {
       });
       const secondLedger = createLedger(secondLedgerPath);
 
-      await expect(firstLedger.record({ source: 'github-issues', sourceRef: 'o/a#1' }))
-        .rejects.toThrow(new RegExp(`owner pid ${process.pid} is live`));
+      await expect(firstLedger.record({ source: 'github-issues', sourceRef: 'o/a#1' })).rejects.toThrow(
+        new RegExp(`owner pid ${process.pid} is live`),
+      );
       await secondLedger.record({ source: 'github-issues', sourceRef: 'o/a#2' });
 
       expect(await secondLedger.list()).toEqual([

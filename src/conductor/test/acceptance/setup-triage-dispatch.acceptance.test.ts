@@ -53,6 +53,10 @@ import ts from 'typescript';
 
 const execFileAsync = promisify(execFile);
 
+function canonicalExpression(text: string): string {
+  return text.replace(/\s+/g, ' ').replace(/,\s*}/g, ' }').trim();
+}
+
 /** The plan's forward-declared (not-yet-added) triage wiring surface. */
 type FutureDeps = FeatureRunnerDeps & {
   dispatchFixSession?: (...args: unknown[]) => Promise<unknown>;
@@ -136,10 +140,20 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
         factoryState = Object.fromEntries(
           body.properties.flatMap((property) =>
             ts.isPropertyAssignment(property)
-              ? [[property.name.getText(sourceFile), property.initializer.getText(sourceFile)] as const]
+              ? [
+                  [
+                    property.name.getText(sourceFile),
+                    canonicalExpression(property.initializer.getText(sourceFile)),
+                  ] as const,
+                ]
               : ts.isSpreadAssignment(property) &&
                   property.expression.getText(sourceFile) === 'providerExecutionEventCallbacks(eventTarget)'
-                ? [['...providerExecutionEventCallbacks', property.expression.getText(sourceFile)] as const]
+                ? [
+                    [
+                      '...providerExecutionEventCallbacks',
+                      canonicalExpression(property.expression.getText(sourceFile)),
+                    ] as const,
+                  ]
                 : ts.isShorthandPropertyAssignment(property)
                   ? [[property.name.text, property.name.text] as const]
                   : [],
@@ -221,8 +235,7 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
       sessions: 'new ProviderSessionStore()',
       config: 'config',
       providerAvailability: 'providerAvailability',
-      onProviderSuppressed:
-        "(provider, deadline) => events.emit({\n      type: 'provider_suppressed', provider, deadline,\n    })",
+      onProviderSuppressed: "(provider, deadline) => events.emit({ type: 'provider_suppressed', provider, deadline })",
       '...providerExecutionEventCallbacks': 'providerExecutionEventCallbacks(eventTarget)',
       withCandidateSafety: 'createCandidateSafetyBoundary()',
     },

@@ -2,7 +2,7 @@ import { mkdir } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import type { Conductor } from './conductor.js';
+import type { ConductorOptions } from './conductor-options.js';
 import { loadMergedConfig } from './config.js';
 import { makeRunFeature, type FeatureRunnerDeps, type FeatureWorktree } from './daemon-runner.js';
 import { makeFeatureRunnerDeps } from './daemon-deps.js';
@@ -84,7 +84,7 @@ export function buildExecutorChildConductorBoundaryOptions({
   projectRoot: string;
   slug: string;
   preemptionRequested: () => boolean;
-}): Pick<ConstructorParameters<typeof Conductor>[0], 'operatorParkBoundary' | 'preemptionRequested'> {
+}): Pick<ConductorOptions, 'operatorParkBoundary' | 'preemptionRequested'> {
   return {
     operatorParkBoundary: () => isOperatorParked(projectRoot, slug),
     preemptionRequested,
