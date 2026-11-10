@@ -31,18 +31,22 @@ const RESTACK_REFUSAL_REASONS = [
   'published-stack',
   'deferred-base-refresh',
   'restack-resolution-stale',
+  'fold-owner-invalid',
+  'fold-misrouted',
+  'fold-tree-mismatch',
+  'fold-boundary-lost',
 ] as const;
 
 describe('restack_refused on the event spine (sweep G1)', () => {
   // Covers: task:1, task:2, task:11
-  it('closes restack_refused to the fifteen ADR reasons and persists child and detail through EventPersister', async () => {
+  it('closes restack_refused to the nineteen ADR reasons and persists child and detail through EventPersister', async () => {
     const closedVocabulary: Equal<Extract<ConductorEvent, { type: 'restack_refused' }>['reason'], typeof RESTACK_REFUSAL_REASONS[number]> = true;
     const sharedVocabulary: Equal<RestackRefusalReason, typeof RESTACK_REFUSAL_REASONS[number]> = true;
     expect([closedVocabulary, sharedVocabulary]).toEqual([true, true]);
     // @ts-expect-error -- any string outside the closed reason vocabulary is rejected.
     const unknownReason: ConductorEvent = { type: 'restack_refused', reason: 'not-a-restack-reason' };
     void unknownReason;
-    expect(new Set(RESTACK_REFUSAL_REASONS).size).toBe(15);
+    expect(new Set(RESTACK_REFUSAL_REASONS).size).toBe(19);
 
     const projectRoot = await mkdtemp(join(tmpdir(), 'restack-refused-sweep-'));
     const events = new ConductorEventEmitter();

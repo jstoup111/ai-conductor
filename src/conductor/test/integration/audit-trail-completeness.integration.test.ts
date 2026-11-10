@@ -95,6 +95,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   child_switched: 'not-audited-by-design',
   rebase_skipped_for_stack: 'not-audited-by-design',
   restack_planned: 'not-audited-by-design',
+  fold_planned: 'not-audited-by-design',
   restack_applied: 'not-audited-by-design',
   restack_conflict: 'not-audited-by-design',
   restack_resolution: 'not-audited-by-design',
@@ -425,6 +426,16 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   rebase_skipped_for_stack: { type: 'rebase_skipped_for_stack', child: parseChildId(1)!, reason: 'intermediate child' },
   restack_planned: {
     type: 'restack_planned', opId: 'restack-1' as RestackOpId, cause: 'base-refresh', children: [parseChildId(1)!],
+  },
+  fold_planned: {
+    type: 'fold_planned',
+    opId: 'restack-1' as RestackOpId,
+    commits: [{
+      sha: parseCommitSha('f'.repeat(40))!,
+      roundId: parseRoundId('r1')!,
+      owner: parseChildId(1)!,
+      placements: [{ child: parseChildId(1)!, paths: ['src/feature.ts'], reason: 'owner' }],
+    }],
   },
   restack_applied: {
     type: 'restack_applied', opId: 'restack-1' as RestackOpId, cause: 'base-refresh', child: parseChildId(1)!,
