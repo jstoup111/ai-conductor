@@ -36,8 +36,9 @@ import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner } from './owner-gate/identity.js';
 import { findExistingSpecPullRequest, openSpecPr, type HandoffDeps } from './engineer/handoff.js';
 import { checkpointComposerRun, type CheckpointDeps } from './engineer/checkpoint.js';
-import { parseRunRecord, summarizeRun } from './engineer/run-record.js';
-import { parseResumeTarget, resumeComposerRun, type ResumeTarget } from './engineer/resume.js';
+import { parseRunRecord, serializeRunRecord, summarizeRun } from './engineer/run-record.js';
+import { parseResumeTarget, resumeComposerRun, resumeOwnershipMode, type ResumeTarget } from './engineer/resume.js';
+import { writeIntakeMarker } from './engineer/intake-marker.js';
 import { resolveBoundaryProvider, type BoundaryChoice } from './engineer/launch-boundary.js';
 import { ensureWorktree } from './worktree-shared.js';
 import { isSpecSlug } from './engineer/spec-branch.js';
@@ -45,7 +46,7 @@ import {
   createEngineerWorktree,
   removeEngineerWorktree,
 } from './engineer/worktree-authoring.js';
-import { INTAKE_OUTCOMES_RELATIVE_PATH } from './engineer/outcome-staging.js';
+import { INTAKE_OUTCOMES_RELATIVE_PATH, readStagedIntakeOutcomes } from './engineer/outcome-staging.js';
 import { ensureRunning, type EnsureRunningOpts } from './daemon-lock.js';
 // The CLI is the composition root for the github-issues intake adapter used by
 // deterministic engineer commands and the interactive launch pre-poll.
@@ -679,6 +680,10 @@ export interface DispatchEngineerOpts {
   resume?: (request: { target: string; provider?: string; project?: string }) => Promise<{ worktree: string; context: unknown }>;
   /** Machine-owner seam for deterministic resume tests; production resolves the local machine identity. */
   resolveResumeOwner?: () => Promise<OwnerResolution>;
+  /** Explicit take-over approval for a foreign Composer run. */
+  confirmComposerTakeover?: (input: { previousOwner: string; branch: string }) => boolean | Promise<boolean>;
+  /** Choice for dirty/local-ahead Composer resume worktrees. */
+  chooseComposerLocalState?: (input: { dirtyDocs: readonly string[]; unpushedCommits: readonly string[] }) => 'keep-local' | 'discard-local' | Promise<'keep-local' | 'discard-local'>;
   /** Task 16 handoff-publication seam; production derives this from current machine evidence. */
   handoffPublication?: HandoffDeps['publication'];
   /** Injected ensureRunning launch spy (for tests). */
@@ -796,6 +801,22 @@ function dependencyRepository(project: { name: string; remote?: string }): strin
   return match?.[1] ?? project.name;
 }
 
+async function composerSourceRef(worktree: string, slug: string): Promise<string | undefined> {
+  const staged = await readStagedIntakeOutcomes(worktree);
+  if (staged.sourceRef) return staged.sourceRef;
+  try {
+    const marker = await readFile(join(worktree, '.docs', 'intake', `${slug}.md`), 'utf8');
+    return /^Source-Ref:\s*(.+)$/m.exec(marker)?.[1]?.trim();
+  } catch { return undefined; }
+}
+
+async function composerMarkerOwner(worktree: string, slug: string): Promise<string | undefined> {
+  try {
+    const marker = await readFile(join(worktree, '.docs', 'intake', `${slug}.md`), 'utf8');
+    return /^Owner:\s*(.+)$/m.exec(marker)?.[1]?.trim();
+  } catch { return undefined; }
+}
+
 function formatDependencyDrift(result: DependencyDriftResult): string {
   if (result.kind === 'repository-indeterminate') {
     return `Dependency drift audit: indeterminate (${result.cause})`;
@@ -850,6 +871,48 @@ function promptAnother(): Promise<boolean> {
     };
     process.stdin.resume();
     process.stdin.on('data', onData);
+  });
+}
+
+/** One terminal decision at a durable Composer boundary; non-TTY keeps handoff safe. */
+function promptComposerBoundary(input: { providers: readonly BuiltInProviderId[] }): Promise<{ choice: BoundaryChoice; switchTo?: BuiltInProviderId }> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return Promise.resolve({ choice: 'handoff' });
+  process.stdout.write(`Choose continue, switch <${input.providers.join('|')}>, or handoff: `);
+  return new Promise((resolve) => {
+    const onData = (chunk: Buffer): void => {
+      process.stdin.off('data', onData);
+      process.stdin.pause();
+      const [choice, target] = chunk.toString().trim().toLowerCase().split(/\s+/, 2);
+      if (choice === 'switch') resolve({ choice: 'switch', ...(target ? { switchTo: target as BuiltInProviderId } : {}) });
+      else if (choice === 'handoff' || choice === 'hand-off') resolve({ choice: 'handoff' });
+      else resolve({ choice: 'continue' });
+    };
+    process.stdin.resume();
+    process.stdin.on('data', onData);
+  });
+}
+
+function promptComposerTakeover(previousOwner: string, branch: string): Promise<boolean> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return Promise.resolve(false);
+  process.stdout.write(`Run ${branch} is owned by ${previousOwner}. Take over publishing? [y/N] `);
+  return new Promise((resolve) => {
+    const onData = (chunk: Buffer): void => {
+      process.stdin.off('data', onData); process.stdin.pause();
+      resolve(['y', 'yes'].includes(chunk.toString().trim().toLowerCase()));
+    };
+    process.stdin.resume(); process.stdin.on('data', onData);
+  });
+}
+
+function promptComposerLocalState(input: { dirtyDocs: readonly string[]; unpushedCommits: readonly string[] }): Promise<'keep-local' | 'discard-local' | undefined> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return Promise.resolve(undefined);
+  process.stdout.write(`Local Composer work (${[...input.dirtyDocs, ...input.unpushedCommits].join(', ')}). Keep local or discard to backup? [keep/discard] `);
+  return new Promise((resolve) => {
+    const onData = (chunk: Buffer): void => {
+      process.stdin.off('data', onData); process.stdin.pause();
+      resolve(chunk.toString().trim().toLowerCase().startsWith('discard') ? 'discard-local' : 'keep-local');
+    };
+    process.stdin.resume(); process.stdin.on('data', onData);
   });
 }
 
@@ -1513,9 +1576,19 @@ export async function dispatchEngineer(
             persister.start();
             try {
               const branch = `spec/${touched.slug}`;
+              let record;
+              try { record = parseRunRecord(await readFile(join(touched.worktreePath, '.docs', 'composer-runs', `${touched.slug}.json`), 'utf8')); } catch { record = undefined; }
+              // A delivered/removed run has no unfinished DECIDE boundary.  Do
+              // not autosave against a removed worktree or publish a clean run.
+              if (record && summarizeRun(record).nextStep !== 'delivery') {
+              let summary = summarizeRun(record);
+              const status = await git(['status', '--porcelain', '--untracked-files=all', '--', '.docs'], { cwd: touched.worktreePath });
+              const dirtyDocs = (status.exitCode ?? 0) === 0 && status.stdout.trim().length > 0;
               let saved: Awaited<ReturnType<typeof checkpointComposerRun>> | undefined;
-              try {
-                saved = await checkpointComposerRun({ worktree: touched.worktreePath, step: 'prd', state: 'draft' }, {
+              let saveFailed = false;
+              if (dirtyDocs) try {
+                const sourceRef = await composerSourceRef(touched.worktreePath, touched.slug);
+                saved = await checkpointComposerRun({ worktree: touched.worktreePath, step: summary.nextStep, state: 'draft' }, {
                   git: async (args) => {
                     const result = await git([...args], { cwd: touched.worktreePath });
                     return { exitCode: result.exitCode ?? 0, stdout: result.stdout, stderr: '' };
@@ -1523,39 +1596,57 @@ export async function dispatchEngineer(
                   resolveOwner: async () => resolveDaemonOwner(await readMachineOwnerConfig(), gh, touched.worktreePath),
                   emit: async (event) => events.emitOrThrow(event),
                   provider: touched.provider,
-                  publication: target.remote ? checkpointPublication(target, branch, touched.worktreePath, gh, git, events, async () => {}) : undefined,
+                  sourceRef,
+                  publication: target.remote ? checkpointPublication(target, branch, touched.worktreePath, gh, git, events, async ({ branch: publishedBranch, prUrl }) => {
+                    if (!sourceRef) return;
+                    const ledger = createLedger(join(engineerDir ?? resolveEngineerDir({}), 'ledger.json'));
+                    if (!await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef)) await ledger.record({ source: GITHUB_ISSUES_SOURCE, sourceRef });
+                    await ledger.transition(GITHUB_ISSUES_SOURCE, sourceRef, 'deciding', { branch: publishedBranch, draftPrUrl: prUrl });
+                  }) : undefined,
                 });
               } catch (error) {
                 // The local commit is deliberately durable before publication.
                 // Continue to the boundary so the operator can retry or hand off.
                 printErr(`compose: draft is saved locally only. ${error instanceof Error ? error.message : String(error)}`);
+                saveFailed = true;
               }
-              let record;
               try { record = parseRunRecord(await readFile(join(touched.worktreePath, '.docs', 'composer-runs', `${touched.slug}.json`), 'utf8')); } catch { record = undefined; }
-              if (record) {
-                const summary = summarizeRun(record);
+              if (record && summarizeRun(record).nextStep !== 'delivery') {
+                summary = summarizeRun(record);
                 const activeProvider = (record.lastCheckpoint?.provider ?? touched.provider) as BuiltInProviderId;
                 print(`Composer run ${touched.slug}: current step ${summary.nextStep}; active provider ${activeProvider}. Choices: continue, switch, hand off.`);
-                const boundary = opts.chooseComposerBoundary
-                  ? await opts.chooseComposerBoundary({ slug: touched.slug, step: summary.nextStep, provider: activeProvider, choices: ['continue', 'switch', 'handoff'], providers: BUILT_IN_PROVIDERS.filter((provider) => supportsProviderCapability(provider, 'interactiveLaunch')).map((provider) => provider.id) })
-                  : { choice: (opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY)))() ? 'continue' as const : 'handoff' as const };
-                const action = resolveBoundaryProvider({ choice: boundary.choice, activeProvider, switchTo: boundary.switchTo, hasRemote: Boolean(target.remote) });
-                if (action.action === 'handoff') {
+                const providers = BUILT_IN_PROVIDERS.filter((provider) => supportsProviderCapability(provider, 'interactiveLaunch')).map((provider) => provider.id);
+                // Refused/failed switch attempts return to this exact durable
+                // boundary instead of silently falling through to another idea.
+                for (;;) {
+                  const boundary = opts.chooseComposerBoundary
+                    ? await opts.chooseComposerBoundary({ slug: touched.slug, step: summary.nextStep, provider: activeProvider, choices: ['continue', 'switch', 'handoff'], providers })
+                    : await promptComposerBoundary({ providers });
+                  let action;
+                  try { action = resolveBoundaryProvider({ choice: boundary.choice, activeProvider, switchTo: boundary.switchTo, hasRemote: Boolean(target.remote) }); }
+                  catch (error) { printErr(`compose boundary: ${error instanceof Error ? error.message : String(error)}`); continue; }
+                  if (action.action === 'handoff') {
+                    if (saveFailed) { printErr('compose boundary: handoff is unavailable until the local checkpoint is published; choose continue to retry.'); continue; }
                   const owner = await resolveDaemonOwner(await readMachineOwnerConfig(), gh, touched.worktreePath);
                   await events.emitOrThrow({ type: 'composer_run_handed_off', slug: touched.slug, actor: owner.resolved ? owner.id : 'unresolved', ...(saved?.prUrl ? { prUrl: saved.prUrl } : {}) });
                   print(`Composer run handed off${saved?.prUrl ? `: ${saved.prUrl}` : ''}. Resume with compose resume ${branch}.`);
-                } else {
-                  if (action.provider !== activeProvider) {
+                    break;
+                  }
+                  try {
+                    const nextHost = requireProviderCapability(action.provider, 'interactiveLaunch');
+                    const nextExecutable = resolveProviderExecutable(action.provider);
+                    if (!(await (opts.providerInstalled ?? executableOnPath)(nextExecutable))) throw new Error(`provider ${action.provider} is not installed.`);
+                    if (action.provider !== activeProvider) {
                     const owner = await resolveDaemonOwner(await readMachineOwnerConfig(), gh, touched.worktreePath);
                     await events.emitOrThrow({ type: 'composer_provider_switched', slug: touched.slug, step: summary.nextStep, fromProvider: activeProvider, toProvider: action.provider, actor: owner.resolved ? owner.id : 'unresolved' });
-                  }
-                  const nextHost = requireProviderCapability(action.provider, 'interactiveLaunch');
-                  const nextExecutable = resolveProviderExecutable(action.provider);
-                  if (!(await (opts.providerInstalled ?? executableOnPath)(nextExecutable))) throw new Error(`compose boundary: provider ${action.provider} is not installed.`);
-                  const name = await resolveSkillName(skillNameRoot, 'composer');
-                  const prompt = `${nextHost.invocationPrefix}${name} --resume ${touched.worktreePath} --step ${summary.nextStep}\nResume context: ${JSON.stringify({ drafts: summary.drafts, acceptedArtifacts: summary.acceptedSteps.flatMap((step) => step.artifacts.map((artifact) => artifact.path)), decisions: summary.decisions, openQuestions: summary.openQuestions })}`;
-                  lastCode = await (opts.spawnHost ?? spawnInteractiveHost)(nextExecutable, nextHost.interactiveLaunch.argv({ prompt, permissionMode: 'default' }), touched.worktreePath, { ...launchEnv, AI_CONDUCTOR_AUTHORING_PROVIDER: action.provider, AI_CONDUCTOR_COMPOSE_LAUNCH_ID: launchId });
+                    }
+                    const name = await resolveSkillName(skillNameRoot, 'composer');
+                    const prompt = `${nextHost.invocationPrefix}${name} --resume ${touched.worktreePath} --step ${summary.nextStep}\nResume context: ${JSON.stringify({ drafts: summary.drafts, acceptedArtifacts: summary.acceptedSteps.flatMap((step) => step.artifacts.map((artifact) => artifact.path)), decisions: summary.decisions, openQuestions: summary.openQuestions })}`;
+                    lastCode = await (opts.spawnHost ?? spawnInteractiveHost)(nextExecutable, nextHost.interactiveLaunch.argv({ prompt, permissionMode: 'default' }), touched.worktreePath, { ...launchEnv, AI_CONDUCTOR_AUTHORING_PROVIDER: action.provider, AI_CONDUCTOR_COMPOSE_LAUNCH_ID: launchId });
+                    saveFailed = false;
+                  } catch (error) { printErr(`compose boundary: ${error instanceof Error ? error.message : String(error)}`); }
                 }
+              }
               }
             } finally { persister.stop(); }
           }
@@ -2047,9 +2138,11 @@ export async function dispatchEngineer(
             try {
               const branchResult = await git(['branch', '--show-current'], { cwd: worktree });
               const branch = branchResult.stdout.trim();
-              const sourceRef = await readFile(join(worktree, '.docs', 'intake', `${branch.replace(/^spec\//, '')}.md`), 'utf8')
-                .then((marker) => /^Source-Ref:\s*(.+)$/m.exec(marker)?.[1]?.trim())
-                .catch(() => undefined);
+              const slug = branch.replace(/^spec\//, '');
+              const sourceRef = await composerSourceRef(worktree, slug);
+              const markerOwner = await composerMarkerOwner(worktree, slug);
+              const owner = await (opts.resolveCheckpointOwner ?? (async () => resolveDaemonOwner(await readMachineOwnerConfig(), gh, worktree)))();
+              const localOnly = Boolean(markerOwner && (!owner.resolved || markerOwner !== owner.id));
               const publication = target.remote && branch.startsWith('spec/')
                 ? checkpointPublication(target, branch, worktree, gh, git, events, async ({ branch: publishedBranch, prUrl }) => {
                   if (!sourceRef) return;
@@ -2066,9 +2159,11 @@ export async function dispatchEngineer(
                     const result = await git([...args], { cwd: worktree });
                     return { exitCode: result.exitCode ?? 0, stdout: result.stdout, stderr: '' };
                   },
-                  resolveOwner: opts.resolveCheckpointOwner ?? (async () => resolveDaemonOwner(await readMachineOwnerConfig(), gh, worktree)),
+                  resolveOwner: async () => owner,
                   emit: async (event) => events.emitOrThrow(event),
                   provider: (opts.env ?? process.env).AI_CONDUCTOR_AUTHORING_PROVIDER,
+                  sourceRef,
+                  localOnly,
                   publication,
                 },
               );
@@ -2093,7 +2188,10 @@ export async function dispatchEngineer(
         const host = requireProviderCapability(provider, 'interactiveLaunch');
         const executable = resolveProviderExecutable(provider);
         const nested = Boolean((opts.env ?? process.env).CLAUDECODE || (opts.env ?? process.env).CODEX_THREAD_ID);
-        if (nested) throw new Error(`compose resume: already inside an interactive host (${host.displayName}); run ${host.invocationPrefix}composer directly instead of nesting a host.`);
+        if (nested) {
+          const detected = (opts.env ?? process.env).CLAUDECODE ? 'Claude Code' : 'Codex';
+          throw new Error(`You are already inside a ${detected} session — run ${host.invocationPrefix}composer directly to resume (no need to launch a nested session).`);
+        }
         if (!opts.spawnHost && !(await (opts.providerInstalled ?? executableOnPath)(executable))) throw new Error(`compose resume: provider ${provider} is not installed.`);
         const launchId = (opts.env ?? process.env).AI_CONDUCTOR_COMPOSE_LAUNCH_ID ?? crypto.randomUUID();
         const result = opts.resume
@@ -2102,12 +2200,20 @@ export async function dispatchEngineer(
             const reader = createRegistryReader(registryPath ? { registryPath } : {});
             const projects = await reader.listProjects();
             const selector = parseResumeTarget(dispatch.target);
-            const project = dispatch.project ? projects.find((item) => item.name === dispatch.project) : projects.length === 1 ? projects[0] : undefined;
-            if (!project) throw new Error(dispatch.project
-              ? `project "${dispatch.project}" is not registered; register it before resuming.`
-              : 'resume requires --project when more than one project is registered.');
-            const selectedRepository = dependencyRepository(project).toLowerCase();
             const selectorRepository = selector.kind === 'intake' ? selector.repository : selector.kind === 'pr' ? selector.repository : undefined;
+            const project = dispatch.project
+              ? projects.find((item) => item.name === dispatch.project)
+              : selectorRepository
+                ? projects.find((item) => dependencyRepository(item).toLowerCase() === selectorRepository.toLowerCase())
+                : projects.length === 1 ? projects[0] : undefined;
+            if (!project) throw new Error(dispatch.project
+              ? `project "${dispatch.project}" is not registered; register it with conduct register <path> before resuming.`
+              : selectorRepository
+                ? `compose resume: repository ${selectorRepository} is not registered; register it with conduct register <path>.`
+                : projects.length === 0
+                  ? 'compose resume: no registered projects; register the repository with conduct register <path>.'
+                  : 'compose resume: target has no repository qualifier; searched registered projects and require --project.');
+            const selectedRepository = dependencyRepository(project).toLowerCase();
             if (selectorRepository && selectedRepository !== selectorRepository.toLowerCase()) {
               throw new Error(`compose resume: repository ${selectorRepository} is not registered for this target; register it with conduct register <path>.`);
             }
@@ -2119,9 +2225,9 @@ export async function dispatchEngineer(
                 const stdout = await runTrackerRepositoryRead(
                   gh, target.canonicalPath, 'pull-request.read', repository,
                   { kind: 'pull-request', number: selector.number },
-                  ['pr', 'view', String(selector.number), '--repo', repository, '--json', 'headRefName,url'],
+                  ['pr', 'view', String(selector.number), '--repo', repository, '--json', 'headRefName,url,body'],
                 );
-                const parsed = JSON.parse(stdout || '{}') as { headRefName?: string; url?: string };
+                const parsed = JSON.parse(stdout || '{}') as { headRefName?: string; url?: string; body?: string };
                 return parsed.headRefName?.startsWith('spec/') ? { branch: parsed.headRefName, draftPrUrl: parsed.url } : undefined;
               }
               const local = await createLedger(join(engineerDir ?? resolveEngineerDir({}), 'ledger.json')).get(GITHUB_ISSUES_SOURCE, `${selector.repository}#${selector.number}`);
@@ -2138,6 +2244,7 @@ export async function dispatchEngineer(
               return found?.headRefName ? { branch: found.headRefName, draftPrUrl: found.url } : undefined;
             };
             const owner = await (opts.resolveResumeOwner ?? (async () => resolveDaemonOwner(await readMachineOwnerConfig(), gh, target.canonicalPath)))();
+            if (!owner.resolved) throw new Error('compose resume: machine identity is unresolved; configure spec_owner or authenticate with gh');
             const events = new ConductorEventEmitter();
             const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
             persister.start();
@@ -2148,6 +2255,49 @@ export async function dispatchEngineer(
                   const fetched = await git(['fetch', 'origin', branch], { cwd: target.canonicalPath });
                   if ((fetched.exitCode ?? 0) !== 0) throw new Error(`could not fetch origin ${branch}: ${fetched.stdout}`);
                 } : undefined,
+                localState: async (branch) => {
+                  const slug = branch.slice('spec/'.length);
+                  const path = join(target.canonicalPath, '.worktrees', `engineer-${slug}`);
+                  try { await access(path); } catch {
+                    return { leftovers: { dirtyDocs: [], unpushedCommits: [] }, interactive: false, fastForwardable: true };
+                  }
+                  const status = await git(['status', '--porcelain', '--', '.docs'], { cwd: path });
+                  const dirtyDocs = status.stdout.split('\n').filter(Boolean).map((line) => line.slice(3));
+                  const ahead = target.remote
+                    ? await git(['log', '--format=%h', `origin/${branch}..HEAD`], { cwd: path })
+                    : { stdout: '' };
+                  const unpushedCommits = ahead.stdout.split('\n').filter(Boolean);
+                  const fastForwardable = !target.remote ? true : await (async () => {
+                    const [base, remoteHead] = await Promise.all([
+                      git(['merge-base', `origin/${branch}`, 'HEAD'], { cwd: path }),
+                      git(['rev-parse', `origin/${branch}`], { cwd: path }),
+                    ]);
+                    return base.stdout.trim() === remoteHead.stdout.trim();
+                  })();
+                  const interactive = (opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY)))();
+                  const choice = dirtyDocs.length || unpushedCommits.length
+                    ? opts.chooseComposerLocalState
+                      ? await opts.chooseComposerLocalState({ dirtyDocs, unpushedCommits })
+                      : await promptComposerLocalState({ dirtyDocs, unpushedCommits })
+                    : undefined;
+                  return {
+                    leftovers: { dirtyDocs, unpushedCommits }, interactive, choice,
+                    // A local-only branch has no remote to diverge from. For a
+                    // remote branch, any local-only commits must be discarded
+                    // unless the operator explicitly selected keep after a
+                    // fast-forwardable comparison supplied by the git graph.
+                    fastForwardable,
+                    discard: async () => {
+                      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+                      if (dirtyDocs.length > 0) {
+                        await git(['add', '--', '.docs'], { cwd: path });
+                        await git(['commit', '-m', `composer WIP backup: ${slug}`], { cwd: path });
+                      }
+                      await git(['branch', `composer-backup/${slug}-${stamp}`], { cwd: path });
+                      if (target.remote) await git(['reset', '--hard', `origin/${branch}`], { cwd: path });
+                    },
+                  };
+                },
                 attach: async (branch) => {
                   const slug = branch.slice('spec/'.length);
                   if (!target.remote) {
@@ -2157,17 +2307,50 @@ export async function dispatchEngineer(
                   const result = await ensureWorktree({ root: target.canonicalPath, path: join(target.canonicalPath, '.worktrees', `engineer-${slug}`), branch, resolveBase: async () => 'HEAD' });
                   return { worktree: result.path };
                 },
-                recordDeciding: async ({ branch, draftPrUrl }) => {
+                ownership: async ({ worktree, slug, branch }) => {
+                  const committedOwner = await composerMarkerOwner(worktree, slug);
+                  const daemonSession = Boolean((opts.env ?? process.env).CONDUCT_DAEMON_SESSION);
+                  const interactive = (opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY)))();
+                  if (!committedOwner || committedOwner === owner.id) return 'unchanged';
+                  const approved = !daemonSession && interactive
+                    ? opts.confirmComposerTakeover
+                      ? await opts.confirmComposerTakeover({ previousOwner: committedOwner, branch })
+                      : await promptComposerTakeover(committedOwner, branch)
+                    : false;
+                  const mode = resumeOwnershipMode({ committedOwner, machineOwner: owner.id, daemonSession, interactive, approved });
+                  if (mode !== 'taken-over') {
+                    printErr(`compose resume: run remains owned by ${committedOwner} and stays local until interactive take-over.`);
+                    return 'local-only';
+                  }
+                  await writeIntakeMarker(worktree, slug, undefined, owner.id);
+                  const recordPath = join(worktree, '.docs', 'composer-runs', `${slug}.json`);
+                  try {
+                    const record = parseRunRecord(await readFile(recordPath, 'utf8'));
+                    await writeFile(recordPath, serializeRunRecord({
+                      ...record,
+                      ownerHistory: [...record.ownerHistory, { actor: owner.id, at: new Date().toISOString() }],
+                    }), 'utf8');
+                  } catch (error) {
+                    if (!(error instanceof Error) || !/ENOENT/.test(error.message)) throw error;
+                  }
+                  const add = await git(['add', '--', '.docs/intake', '.docs/composer-runs'], { cwd: worktree });
+                  if ((add.exitCode ?? 0) !== 0) throw new Error(`compose resume: could not stage take-over: ${add.stdout}`);
+                  const commit = await git(['commit', '-m', `composer take-over: ${slug} ${committedOwner} to ${owner.id}`], { cwd: worktree });
+                  if ((commit.exitCode ?? 0) !== 0) throw new Error(`compose resume: could not commit take-over: ${commit.stdout}`);
+                  return 'taken-over';
+                },
+                sourceRef: composerSourceRef,
+                readArtifact: async (worktree, path) => readFile(join(worktree, path)),
+                recordDeciding: async ({ branch, draftPrUrl, sourceRef }) => {
                   // Reconstruct durable intake state from the branch when the
                   // launcher resumes a run after a process boundary.
-                  // A plain branch has no intake identity to reconstruct; do
-                  // not create a user-level ledger merely to discover that.
-                  if (!dispatch.target.includes('#')) return;
-                  const sourceRef = dispatch.target;
+                  const intakeRef = sourceRef
+                    ?? (dispatch.target.includes('#') ? dispatch.target : undefined);
+                  if (!intakeRef) return;
                   const ledger = createLedger(join(engineerDir ?? resolveEngineerDir({}), 'ledger.json'));
-                  const existing = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
-                  if (!existing) await ledger.record({ source: GITHUB_ISSUES_SOURCE, sourceRef });
-                  await ledger.transition(GITHUB_ISSUES_SOURCE, sourceRef, 'deciding', { branch, draftPrUrl });
+                  const existing = await ledger.get(GITHUB_ISSUES_SOURCE, intakeRef);
+                  if (!existing) await ledger.record({ source: GITHUB_ISSUES_SOURCE, sourceRef: intakeRef });
+                  await ledger.transition(GITHUB_ISSUES_SOURCE, intakeRef, 'deciding', { branch, draftPrUrl });
                 },
                 emit: async (event) => events.emitOrThrow({
                   type: 'composer_run_resumed', slug: event.slug, provider: dispatch.provider ?? DEFAULT_PROVIDER,

@@ -128,7 +128,13 @@ describe('Composer resume', () => {
       await execFile('git', ['commit', '-m', 'init'], { cwd: root });
       await execFile('git', ['checkout', '-b', 'spec/demo'], { cwd: root });
       await mkdir(join(root, '.docs', 'composer-runs'), { recursive: true });
-      await writeFile(join(root, '.docs', 'composer-runs', 'demo.json'), JSON.stringify(record));
+      // This fixture owns launch wiring, not digest verification; use an
+      // accepted step with no artifact bytes to keep it independent of a
+      // synthetic digest.
+      await writeFile(join(root, '.docs', 'composer-runs', 'demo.json'), JSON.stringify({
+        ...record,
+        steps: { ...record.steps, explore: { ...record.steps.explore!, artifacts: [] } },
+      }));
       await execFile('git', ['add', '.docs'], { cwd: root });
       await execFile('git', ['commit', '-m', 'run'], { cwd: root });
       await execFile('git', ['checkout', 'main'], { cwd: root });
@@ -153,7 +159,7 @@ describe('Composer resume', () => {
       });
       expect(nested).toBe(1);
       expect(nestedSpawn).not.toHaveBeenCalled();
-      expect(errors.join('\n')).toMatch(/already inside an interactive host/);
+      expect(errors.join('\n')).toMatch(/already inside a Codex session/);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

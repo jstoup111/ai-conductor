@@ -51,6 +51,10 @@ export interface CheckpointDeps {
   }) => Promise<void>;
   readonly now?: () => string;
   readonly provider?: string;
+  /** A resumed foreign-owned run is durable locally until an explicit take-over. */
+  readonly localOnly?: boolean;
+  /** Intake identity is staged before the owner marker is first committed. */
+  readonly sourceRef?: string;
   /** Guarded publication seam. Keeping transport outside record mutation makes retries idempotent. */
   readonly publication?: {
     push(branch: string): Promise<void>;
@@ -91,7 +95,12 @@ async function publishCheckpoint(
   try {
     await publication.push(branch);
   } catch (error) {
-    throw new Error(`compose checkpoint: checkpoint was not saved remotely (it is saved locally): ${error instanceof Error ? error.message : String(error)}. Retry publication with compose checkpoint --worktree ${worktree} --step <step> --state ${state}`);
+    const detail = error instanceof Error ? error.message : String(error);
+    if (/non-fast-forward|fetch first|rejected/i.test(detail)) {
+      throw new Error(`compose checkpoint: checkpoint was not saved remotely (it is saved locally): ${detail}. Reconcile with compose resume ${branch}.`);
+    }
+    const flag = state === 'accepted' ? '--accept' : '--draft';
+    throw new Error(`compose checkpoint: checkpoint was not saved remotely (it is saved locally): ${detail}. Retry publication with compose checkpoint --worktree ${worktree} --step ${event.step} ${flag}`);
   }
   let pr = await publication.findOpenPullRequest(branch);
   const warnings: string[] = [];
@@ -102,6 +111,7 @@ async function publishCheckpoint(
       const marker = await (deps.fs ?? defaultFs).readFile(join(worktree, '.docs', 'intake', `${slug}.md`));
       sourceRef = /^Source-Ref:\s*(.+)$/m.exec(marker)?.[1]?.trim();
     } catch { /* hand-authored runs have no intake marker */ }
+    sourceRef ??= record.sourceRef;
     const metadata = '## Release metadata\n\nRelease-Disposition: no-note';
     const refs = sourceRef ? `\n\nRefs ${sourceRef}` : '';
     pr = await publication.createDraftPullRequest({
@@ -244,9 +254,10 @@ export async function checkpointComposerRun(request: CheckpointRequest, deps: Ch
   const notes = await notesFor(request, fs);
   if (request.state === 'accepted') {
     const paths = dirtyDocs.length > 0 ? dirtyDocs : draftPaths;
-    const priorArtifacts = record.steps[step]?.state === 'accepted' ? record.steps[step].artifacts : [];
+    const priorArtifacts = record.lastAcceptedArtifacts?.[step]
+      ?? (record.steps[step]?.state === 'accepted' ? record.steps[step].artifacts : []);
     const changedArtifacts = paths.length > 0 ? await Promise.all(paths
-      .filter((path) => stepForArtifactPath(path) === step && path !== '.docs/coherence/.gitkeep')
+      .filter((path) => stepForArtifactPath(path) === step && path !== '.docs/coherence/.gitkeep' && !path.startsWith('.docs/plan-review/'))
       .map(async (path) => digestArtifact(path, Buffer.from(await fs.readFile(join(request.worktree, path)))))) : [];
     // A checkpoint often carries one changed file from a multi-artifact step. Keep
     // the unchanged accepted digests instead of silently dropping them.
@@ -259,25 +270,39 @@ export async function checkpointComposerRun(request: CheckpointRequest, deps: Ch
   }
 
   const checkpointAt = (deps.now ?? (() => new Date().toISOString()))();
-  record = { ...record, lastCheckpoint: { actor: owner.id, provider, at: checkpointAt } };
+  record = {
+    ...record,
+    ...(record.sourceRef || !deps.sourceRef ? {} : { sourceRef: deps.sourceRef }),
+    lastCheckpoint: { actor: owner.id, provider, at: checkpointAt },
+  };
 
-  if (!record.ownerHistory.some((entry) => entry.actor === owner.id)) {
+  if (!deps.localOnly && !record.ownerHistory.some((entry) => entry.actor === owner.id)) {
     record = { ...record, ownerHistory: [...record.ownerHistory, { actor: owner.id, at: checkpointAt }] };
   }
   await fs.mkdir(join(request.worktree, '.docs', 'composer-runs'));
   await fs.writeFile(recordPath, serializeRunRecord(record));
-  await (deps.writeMarker ?? (async (worktree, markerSlug, markerOwner) => {
-    await writeIntakeMarker(worktree, markerSlug, undefined, markerOwner);
-  }))(request.worktree, slug, owner.id);
+  if (!deps.localOnly) {
+    await (deps.writeMarker ?? (async (worktree, markerSlug, markerOwner) => {
+      await writeIntakeMarker(worktree, markerSlug, deps.sourceRef, markerOwner);
+    }))(request.worktree, slug, owner.id);
+  }
 
   const add = await deps.git(['add', '--', '.docs']);
   if (add.exitCode !== 0) throw new Error(`compose checkpoint: could not stage .docs: ${add.stderr}`);
-  const staged = await deps.git(['diff', '--cached', '--quiet']);
-  const committed = staged.exitCode === 1;
+  // Do not use `diff --quiet`: the production git adapter deliberately rejects
+  // every non-zero exit, including its ordinary "changes exist" result.
+  const staged = await deps.git(['diff', '--cached', '--name-only']);
+  // `1` remains accepted for older injected test runners that model the old
+  // quiet-diff convention; production's rejecting runner can only return zero.
   if (staged.exitCode !== 0 && staged.exitCode !== 1) throw new Error(`compose checkpoint: could not inspect staged changes: ${staged.stderr}`);
+  const committed = staged.stdout.trim().length > 0 || staged.exitCode === 1;
   if (committed) {
     const commit = await deps.git(['commit', '-m', withDaemonCoAuthorTrailer(`composer checkpoint: ${slug} ${step}`)]);
     if (commit.exitCode !== 0) throw new Error(`compose checkpoint: local commit failed: ${commit.stderr}`);
+  }
+  if (deps.localOnly) {
+    await deps.emit(event);
+    return { slug, state: request.state, committed, published: false, warnings: ['Composer run stays local until interactive take-over.'] };
   }
   const published = await publishCheckpoint(slug, request.worktree, request.state, record, deps, event);
   return { ...published, committed };
