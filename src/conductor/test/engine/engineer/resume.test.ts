@@ -59,6 +59,21 @@ describe('Composer resume', () => {
     expect(contextForRun(landed).nextStep).toBe('architecture_diagram');
   });
 
+  it('Covers: Task 12 treats the deliberately stripped landed record as delivery, not corruption', async () => {
+    const deciding = vi.fn(async () => {});
+    const emitted = vi.fn(async () => {});
+    const result = await resumeComposerRun('spec/demo', {
+      resolveBranch: async () => ({ branch: 'spec/demo' }),
+      attach: async () => ({ worktree: '/tmp/landed-demo' }),
+      readRunRecord: async () => { throw new Error('ENOENT .docs/composer-runs/demo.json'); },
+      recordDeciding: deciding,
+      emit: emitted,
+    });
+    expect(result.context).toMatchObject({ slug: 'demo', branch: 'spec/demo', nextStep: 'delivery' });
+    expect(deciding).not.toHaveBeenCalled();
+    expect(emitted).not.toHaveBeenCalled();
+  });
+
   it('does not expose a needs-reconfirm plan as accepted in resume context', () => {
     const { architecture_diagram: _draftArchitectureDiagram, ...stepsWithoutDraft } = record.steps;
     const planNeedsReconfirm: RunRecord = {
