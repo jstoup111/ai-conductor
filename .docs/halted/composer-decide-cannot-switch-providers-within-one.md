@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-11-10T14:09:49.735Z
 Slug: composer-decide-cannot-switch-providers-within-one
 Class: needs-human
 Halting step: prd_audit
