@@ -218,7 +218,6 @@ describe('prepare-commit-msg round stamp (real local Git)', () => {
   });
 
   it('preserves N=1 without routing-ref reads', async () => {
-    const root = await routedFixture();
     const n1 = await mkdtemp(join(tmpdir(), 'round-stamp-n1-'));
     roots.push(n1);
     await git(n1, ['init', '-q', '-b', 'main']);
