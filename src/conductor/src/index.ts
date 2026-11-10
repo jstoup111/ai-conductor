@@ -901,6 +901,7 @@ async function dispatchCliCommand(): Promise<void> {
       admitDispatch: runtime.admitDispatch,
       createWorktree: runtime.createWorktree,
       run: runtime.run,
+      waitForSupervisorVisualizerClose: true,
       // The WorkOrder is the supervisor's authority for self-host mode.  The
       // detector is only a compatibility fallback for pre-field orders.
       liveBoundaryEnabled: await defaultSelfHostDetector().isSelfHost(projectRoot),

@@ -135,6 +135,33 @@ describe('executor broker', () => {
     expect(proxy.active()).toBe(true);
   });
 
+  it('queues a supervisor visualizer failure until the child can persist it on its feature spine', () => {
+    const channel = pair();
+    const received: unknown[] = [];
+    channel.child.on('message', (message) => { received.push(message); });
+    const broker = createExecutorBroker({
+      rateLimitEpisode: createRateLimitEpisode({ now: () => 1_000 }),
+      providerAvailability: createProviderAvailability({ now: () => 1_000 }),
+      worktreeLifecycle: new WorktreeLifecycleQueue(),
+      rootEvents: new ConductorEventEmitter(),
+      featureLogFor: () => () => {},
+      attachFeatureOtelVisualizer: (_trace, events) => {
+        void events.emit({ type: 'renderer_error', rendererName: 'otel', error: 'constructor failed' });
+        return () => {};
+      },
+    });
+
+    broker.attach('feature', channel.supervisor, { engineVersionId: '20261019T120000Z-aaaaaaaaaaaa' as never });
+    channel.child.send({ kind: 'hello', protocolVersion: 1, engineVersionId: '20261019T120000Z-aaaaaaaaaaaa' });
+    channel.flush();
+
+    expect(received).toContainEqual({
+      kind: 'event',
+      scope: 'feature',
+      payload: { type: 'renderer_error', rendererName: 'otel', error: 'constructor failed' },
+    });
+  });
+
   it('replicates the one supervisor rate-limit episode to child synchronous views', async () => {
     const fixture = brokerFixture();
     const a = pair();

@@ -77,6 +77,38 @@ afterEach(async () => {
 });
 
 describe('executor child entrypoint', () => {
+  it('persists a supervisor visualizer renderer error without forwarding it back to the supervisor', async () => {
+    root = await mkdtemp(join(tmpdir(), 'executor-child-supervisor-renderer-error-'));
+    const port = new FakePort();
+    let releaseRun!: () => void;
+    const done = runExecutorChild(port, {
+      moduleDir: CHILD_MODULE_DIR,
+      createWorktree: async () => ({ path: root! }),
+      run: async () => new Promise((resolve) => { releaseRun = () => resolve({ slug: order.slug, status: 'done' }); }),
+    });
+
+    port.dispatch({ kind: 'work-order', order });
+    await vi.waitFor(() => expect(releaseRun).toBeTypeOf('function'));
+    port.dispatch({
+      kind: 'event',
+      scope: 'feature',
+      payload: { type: 'renderer_error', rendererName: 'otel', error: 'supervisor exporter failed' },
+    });
+    releaseRun();
+    await vi.waitFor(() => expect(port.sent).toContainEqual(expect.objectContaining({ kind: 'outcome' })));
+    port.dispatch({ kind: 'stop', reason: 'supervisor visualizer closed' });
+    await done;
+
+    const events = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8'))
+      .trim().split('\n').map((line) => JSON.parse(line));
+    expect(events.filter((event) => event.type === 'renderer_error')).toEqual([
+      expect.objectContaining({ rendererName: 'otel', error: 'supervisor exporter failed' }),
+    ]);
+    expect(port.sent).not.toContainEqual(expect.objectContaining({
+      kind: 'event', payload: expect.objectContaining({ type: 'renderer_error' }),
+    }));
+  });
+
   it('installs the daemon co-author resolver on the feature bus before the child feature run', async () => {
     root = await mkdtemp(join(tmpdir(), 'executor-child-co-author-'));
     await execFile('git', ['init', '-b', 'main', root]);

@@ -82,7 +82,21 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
       const pendingWorktreeAcquires = new Map<string, { cancelled: boolean }>();
       let closed = false;
       let closePromise: Promise<void> | undefined;
+      let childReadyForSupervisorEvents = false;
+      const pendingSupervisorRendererErrors: ConductorEvent[] = [];
       const featureEvents = createForwardingFeatureEventEmitter(deps.rootEvents, slug);
+      // The child owns the feature EventPersister. Relay a supervisor-owned
+      // visualizer failure on the existing IPC event spine for persistence.
+      const persistSupervisorRendererError = (event: ConductorEvent) => {
+        if (event.type === 'renderer_error') {
+          if (childReadyForSupervisorEvents) {
+            port.send({ kind: 'event', scope: 'feature', payload: event });
+          } else {
+            pendingSupervisorRendererErrors.push(event);
+          }
+        }
+      };
+      featureEvents.on('renderer_error', persistSupervisorRendererError);
       // The child owns the feature EventPersister. The supervisor attaches only
       // ephemeral subscribers (currently the slug-aware daemon renderer) to
       // the proxy bus before it forwards to the root spine.
@@ -210,6 +224,10 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
           // listeners. The accepted hello is the admission point at which a
           // snapshot can be observed synchronously by that composition.
           broadcastState();
+          childReadyForSupervisorEvents = true;
+          for (const event of pendingSupervisorRendererErrors.splice(0)) {
+            port.send({ kind: 'event', scope: 'feature', payload: event });
+          }
         } else if (message.kind === 'request') void request(message.requestId, message.method, message.params);
         else if (message.kind === 'event') {
           // Dispatch lifecycle is supervisor-owned once per claim. Never let
@@ -238,8 +256,9 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
         }
         pendingWorktreeAcquires.clear();
         release();
-        detachFeatureEventRenderer?.();
         await detachFeatureOtelVisualizer?.();
+        featureEvents.off('renderer_error', persistSupervisorRendererError);
+        detachFeatureEventRenderer?.();
         ports.delete(port);
         attachments.delete(close);
         })();

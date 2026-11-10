@@ -1987,6 +1987,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         enginePin,
         effectiveConcurrency: daemonConcurrency.concurrency,
         selfHost: isSelfHost,
+        readOnlyReviewCapabilities,
         documentRefs: await resolveDaemonWorkOrderDocumentRefs(projectRoot, baseSha, item.slug, item),
         tier: item.tier,
         sourceRef: item.sourceRef,

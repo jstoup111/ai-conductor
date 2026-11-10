@@ -65,7 +65,9 @@ describe('child feature executor dispatch lifecycle', () => {
     exit?.(0, null);
     await expect(execution).resolves.toEqual(outcome);
     expect(executor.requestYield('a')).toBe(false);
-    expect(sent).toHaveLength(2);
+    // The only post-outcome message is the visualizer-closed stop; a finished
+    // child never receives a yield.
+    expect(sent.slice(2)).toEqual([{ kind: 'stop', reason: 'supervisor visualizer closed' }]);
   });
 
   // Covers: task:3

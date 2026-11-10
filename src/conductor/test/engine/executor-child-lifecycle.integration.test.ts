@@ -270,6 +270,22 @@ describe('executor child shared lifecycle', () => {
     expect(outcome).not.toMatchObject({ status: 'parked', reason: 'feature-lease-held' });
   });
 
+  it('threads the daemon startup read-only review capability snapshot through the child lifecycle', async () => {
+    const subject = await fixture('child-read-only-review-capability');
+    const capabilities = Object.freeze({
+      codex: { provider: 'codex', platform: process.platform, status: 'available' as const },
+    });
+    subject.order.readOnlyReviewCapabilities = capabilities;
+    let observed: unknown;
+    vi.spyOn(Conductor.prototype, 'run').mockImplementation(async function (this: Conductor) {
+      observed = (this as unknown as { readOnlyReviewCapabilities?: unknown }).readOnlyReviewCapabilities;
+    });
+
+    await subject.execute();
+
+    expect(observed).toBe(capabilities);
+  });
+
   it('keeps ordinary setup and forced setup triage pinned to the order base', async () => {
     const subject = await fixture('pinned-base');
     const observedBaseShas: Array<string | undefined> = [];

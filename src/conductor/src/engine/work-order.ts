@@ -4,6 +4,7 @@ import type { ComplexityTier, Track } from '../types/steps.js';
 import type { FeatureApplicabilityDeclaration, FeatureApplicabilityIgnored } from '../types/state.js';
 import type { EnginePin, EnginePinFallbackReason } from './engine-pin.js';
 import { versionIdFromEngineDir, type EngineVersionId } from './engine-version-id.js';
+import type { ReadOnlyReviewCapability } from './build-review-read-only-capability.js';
 
 /** Increment when the serializable dispatcher-to-executor contract changes. */
 export const WORK_ORDER_SCHEMA_VERSION = 1;
@@ -39,6 +40,8 @@ export interface WorkOrder {
   effectiveConcurrency?: number;
   /** Whether this order was issued by the harness self-host supervisor. */
   selfHost?: boolean;
+  /** Frozen at daemon startup so a child does not re-probe build-review support. */
+  readOnlyReviewCapabilities?: Readonly<Record<string, ReadOnlyReviewCapability>>;
   manifest: ManifestEntry[];
   /** Executor inputs formerly recovered from dispatcher-local bookkeeping. */
   tier?: ComplexityTier;
@@ -86,6 +89,8 @@ export interface BuildWorkOrderInput {
   effectiveConcurrency?: number;
   /** Preserve the supervisor's self-host mode across the process boundary. */
   selfHost?: boolean;
+  /** Daemon-start snapshot carried to the child lifecycle unchanged. */
+  readOnlyReviewCapabilities?: Readonly<Record<string, ReadOnlyReviewCapability>>;
   documentRefs: readonly string[];
   tier?: ComplexityTier;
   sourceRef?: string;
@@ -132,6 +137,9 @@ export async function buildWorkOrder(
     ...(input.enginePin.fallbackReason === undefined ? {} : { pinFallbackReason: input.enginePin.fallbackReason }),
     ...(input.effectiveConcurrency === undefined ? {} : { effectiveConcurrency: input.effectiveConcurrency }),
     ...(input.selfHost === undefined ? {} : { selfHost: input.selfHost }),
+    ...(input.readOnlyReviewCapabilities === undefined
+      ? {}
+      : { readOnlyReviewCapabilities: input.readOnlyReviewCapabilities }),
     manifest,
     ...(input.tier ? { tier: input.tier } : {}),
     ...(input.sourceRef ? { sourceRef: input.sourceRef } : {}),

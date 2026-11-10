@@ -163,6 +163,7 @@ export function createInMemoryExecutorFork({
           admitDispatch: runtime.admitDispatch,
           createWorktree: runtime.createWorktree,
           run: runtime.run,
+          waitForSupervisorVisualizerClose: true,
           exit: () => child.exit(),
         }));
       });

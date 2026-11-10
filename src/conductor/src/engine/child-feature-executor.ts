@@ -200,9 +200,12 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
       if (message.kind === 'outcome') {
         if (outcome) { deps.log?.(`[executor ${order.slug}] ignored duplicate outcome`); return; }
         outcome = message.outcome;
-        // The child may stay connected due to a leaked handle. Preserve its
-        // terminal result but bound the supervisor resource lifetime.
-        void delay(teardownTimeoutMs).then(() => { if (!ended) requestTermination(); });
+        // Close the supervisor visualizer while the child still owns its
+        // feature persister; shutdown-time renderer errors must be durable.
+        void Promise.resolve(attachment.close()).finally(() => {
+          child.send({ kind: 'stop', reason: 'supervisor visualizer closed' });
+          void delay(teardownTimeoutMs).then(() => { if (!ended) requestTermination(); });
+        });
       }
     });
     const result = await done;

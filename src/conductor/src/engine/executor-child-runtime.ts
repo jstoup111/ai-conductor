@@ -352,7 +352,9 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
     effectiveDaemonConcurrency: input.effectiveConcurrency ?? order.effectiveConcurrency ?? 1,
     worktreeLifecycle: input.worktreeLifecycle as never,
     rateLimitEpisode: input.rateLimitEpisode as never,
-    readOnlyReviewCapabilities: {},
+    // Daemon startup owns this one capability observation. Retain the
+    // WorkOrder snapshot so a child dispatch does not probe again.
+    readOnlyReviewCapabilities: order.readOnlyReviewCapabilities ?? {},
     liveBoundaryCoordinator: input.liveBoundaryCoordinator as never,
     // Only the child executor relays the supervisor's memory-only yield
     // request; the in-process daemon path leaves this unset.
