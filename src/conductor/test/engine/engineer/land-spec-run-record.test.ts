@@ -235,4 +235,36 @@ describe('landSpec Composer run-record gate', () => {
     expect((error as Error).message).toMatch(/plan.*reconfirm/i);
     expect((await git(['rev-parse', 'HEAD'], worktreePath)).trim()).toBe(before);
   });
+
+  it('Covers: Task 7 lands only after the edited stories and dependent plan are accepted again', async () => {
+    const worktreePath = await seedWorktree();
+    await writeRecord(worktreePath, await currentDigests(worktreePath));
+    const recordPath = join(worktreePath, RECORD_PATH);
+    const initial = parseRunRecord(await readFile(recordPath, 'utf8'));
+    await writeFile(join(worktreePath, '.docs', 'stories', `${SLUG}.md`), `${stories}\nReaccepted edit.\n`);
+    const editedStories = digestArtifact(`.docs/stories/${SLUG}.md`, await readFile(join(worktreePath, '.docs', 'stories', `${SLUG}.md`)));
+    const storiesAccepted = recordAcceptance(initial, {
+      step: 'stories', actor: 'operator', provider: 'codex', at: '2026-11-10T12:01:00.000Z',
+      artifacts: [editedStories], decisions: [], openQuestions: [],
+    });
+    expect(storiesAccepted.needsReconfirm).toContain('plan');
+    const planArtifacts = initial.steps.plan?.state === 'accepted' ? initial.steps.plan.artifacts : [];
+    const planReconfirmed = recordAcceptance(storiesAccepted, {
+      step: 'plan', actor: 'operator', provider: 'codex', at: '2026-11-10T12:02:00.000Z',
+      artifacts: planArtifacts, decisions: [], openQuestions: [],
+    });
+    expect(planReconfirmed.needsReconfirm).not.toContain('plan');
+    const coherenceArtifacts = initial.steps.coherence_check?.state === 'accepted'
+      ? initial.steps.coherence_check.artifacts : [];
+    const reconfirmed = recordAcceptance(planReconfirmed, {
+      step: 'coherence_check', actor: 'operator', provider: 'codex', at: '2026-11-10T12:03:00.000Z',
+      artifacts: coherenceArtifacts, decisions: [], openQuestions: [],
+    });
+    expect(reconfirmed.needsReconfirm).toEqual([]);
+    await writeFile(recordPath, serializeRunRecord(reconfirmed));
+    await checkpoint(worktreePath);
+
+    await expect(landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, worktreePath, undefined, options())).resolves.toMatchObject({ slug: SLUG });
+    await expect(git(['show', `HEAD:${RECORD_PATH}`], worktreePath)).rejects.toMatchObject({ code: 128 });
+  });
 });
