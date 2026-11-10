@@ -1,20 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-11-10T12:49:24.649Z
+Status: halted
 Slug: refused-over-scope-rework-can-t-start-while-a-rout
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-refused-over-scope-rework-can-t-start-while-a-rout
-Head SHA: f2d9a1ff1d11dd08e2c77e7a75ef089e1b6a39f5
-Halted at: 2026-11-09T13:24:34.065Z
+Head SHA: 2e76f37b97beb3f3d8d951e9a571e77eb5d20ec8
+Halted at: 2026-11-10T15:31:39.393Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-build_review adjudication halted: semantic remediation case repeat b0c5bab2-ee78-4863-b7a7-3541433c69cc; resolve with ai-conductor build-review resolve-case --feature refused-over-scope-rework-can-t-start-while-a-rout --case b0c5bab2-ee78-4863-b7a7-3541433c69cc --rationale "<why>"
+gate 'test_suite' selected 7 times without satisfying: kickback from rebase: rebase changed paths: .ai-conductor/config.yml, .editorconfig, .github/ISSUE_TEMPLATE/intake.yml, .github/workflows/ci.yml, .prettierignore (+269 more)
 ```
