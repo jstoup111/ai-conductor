@@ -4,6 +4,13 @@ spec_hash: 018dac41ce15f55879751356b5a70914f94feef31b0419014b633e59169ce5d7
 pr: https://github.com/jstoup111/ai-conductor/pull/3679
 shipped: 2026-11-10
 engine_version: 20261109T160131Z-3c6fb4eda614
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "This unplanned test-harness change lets the leak guard ignore temp directories that an unrelated concurrent project creates on the same host. It repairs a test_suite failure that was not caused by this feature. It touches only test infrastructure: no product code, CLI output or persisted state."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
