@@ -16,6 +16,24 @@ describe('Composer PR run block', () => {
     expect(rendered).toContain('Which API?');
     expect(rendered).toContain('Next step: prd');
   });
+
+  it('does not present a needs-reconfirm plan as accepted', () => {
+    const { prd: _draftPrd, ...stepsWithoutDraft } = record.steps;
+    const planNeedsReconfirm: RunRecord = {
+      ...record,
+      steps: {
+        ...stepsWithoutDraft,
+        plan: { state: 'accepted', actor: 'A', provider: 'codex', at: '2026-11-08T00:02:00.000Z', artifacts: [] },
+      },
+      needsReconfirm: ['plan'],
+    };
+
+    const rendered = renderRunBlock(planNeedsReconfirm);
+
+    expect(rendered).not.toContain('- plan: accepted by A via codex');
+    expect(rendered).toContain('Next step: plan');
+  });
+
   it('replaces only the marker-delimited region', () => {
     const body = 'Intro\n\n## Release metadata\n\nRelease-Disposition: no-note\n\nRefs o/r#1';
     const once = upsertRunBlock(body, renderRunBlock(record));
