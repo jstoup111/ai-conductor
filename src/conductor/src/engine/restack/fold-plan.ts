@@ -345,6 +345,97 @@ async function lowestAcceptingChild(
   return 'leaf';
 }
 
+type FoldPlanRefusal = Extract<FoldPlan, { readonly kind: 'refused' }>;
+
+type HunkPlacement =
+  | { readonly kind: 'placed'; readonly part: FoldPart }
+  | { readonly kind: 'frozen'; readonly path: string }
+  | { readonly kind: 'unexpressible'; readonly path: string };
+
+interface HunkPlacementInput {
+  readonly source: FoldSourceCommit;
+  readonly parent: CommitSha;
+  readonly candidates: readonly { readonly child: ChildId; readonly tip: CommitSha }[];
+  readonly blocks: readonly { readonly id: string; readonly body: string }[] | undefined;
+  readonly sourceHunk: FoldHunk;
+  readonly index: string;
+}
+
+/** Classifies a hunk's frozen-block residual, then probes and places it. */
+async function placeFoldHunk(input: PlaceFoldCommitsInput, hunkInput: HunkPlacementInput): Promise<HunkPlacement> {
+  let hunk = hunkInput.sourceHunk;
+  if (hunkInput.blocks !== undefined && containsFrozenBlock(hunk, hunkInput.blocks)) {
+    const residual = residualHunk(hunk, hunkInput.blocks);
+    if (residual === null) return { kind: 'frozen', path: hunk.path };
+    if (residual === undefined || !await residualApplies(input.git, hunkInput.parent, residual.patch, hunkInput.index)) {
+      return { kind: 'unexpressible', path: hunk.path };
+    }
+    hunk = residual;
+  }
+
+  const probe = await materializeHunk(
+    input.git,
+    hunkInput.parent,
+    hunkInput.source.sha,
+    hunk.path,
+    hunk.patch,
+    hunk.wholeFile,
+    hunkInput.index,
+  );
+  const child = await lowestAcceptingChild(input, hunkInput.parent, probe, hunkInput.candidates);
+  const reason: FoldPartReason = child === hunkInput.source.owner ? 'owner' : 'introduced-above-owner';
+  return { kind: 'placed', part: { kind: 'hunks', child, path: hunk.path, hunk, reason } };
+}
+
+/** Plans one source commit, classifying whole, block, residual, and hunk parts. */
+async function planFoldCommit(
+  input: PlaceFoldCommitsInput,
+  source: FoldSourceCommit,
+  indexDirectory: string,
+): Promise<FoldCommitPlan | FoldPlanRefusal> {
+  const blocks = await frozenBlocks(input, source);
+  const paths = await changedPaths(input.git, source.sha);
+  if (paths.length === 0) {
+    return { ...source, parts: [{ kind: 'whole', child: source.owner, paths: [], reason: 'owner' }] };
+  }
+
+  const parent = await sourceParent(input.git, source.sha);
+  const candidates = await childTips(input, source.owner);
+  const parts: FoldPart[] = blocks === undefined
+    ? []
+    : [{ kind: 'blocks', child: source.owner, paths: [], reason: 'owner', blocks }];
+  const frozenPaths = new Set<string>();
+  const unexpressiblePaths: string[] = [];
+
+  for (const path of paths) {
+    const diff = await input.git(['diff', '--binary', '--no-ext-diff', '--no-renames', '--unified=0', parent, source.sha, '--', path]);
+    if (diff.exitCode !== 0) throw new Error(`cannot read fold hunks for ${source.sha}:${path}`);
+    for (const [ordinal, sourceHunk] of hunkPatches(path, diff.stdout).entries()) {
+      const index = join(indexDirectory, `${source.sha}-${path.replace(/[^A-Za-z0-9_.-]/g, '-')}-${ordinal}.index`);
+      const placement = await placeFoldHunk(input, { source, parent, candidates, blocks, sourceHunk, index });
+      if (placement.kind === 'frozen') {
+        frozenPaths.add(placement.path);
+        continue;
+      }
+      if (placement.kind === 'unexpressible') {
+        unexpressiblePaths.push(placement.path);
+        continue;
+      }
+      parts.push(placement.part);
+    }
+  }
+
+  if (unexpressiblePaths.length > 0) {
+    return { kind: 'refused', reason: 'fold-residual-unexpressible', commit: source.sha, paths: [...new Set(unexpressiblePaths)] };
+  }
+  const placedPaths = new Set(parts.flatMap((part) => part.kind === 'hunks' ? [part.path] : []).concat([...frozenPaths]));
+  const unplacedPaths = paths.filter((path) => !placedPaths.has(path));
+  if (unplacedPaths.length > 0) {
+    return { kind: 'refused', reason: 'fold-unplaced-path', commit: source.sha, paths: unplacedPaths };
+  }
+  return { ...source, parts };
+}
+
 /**
  * Plans, without moving a ref or worktree, where each folded source commit is
  * replayed. Hunk probes use temporary indexes and merge-tree's three-way mode
@@ -352,64 +443,15 @@ async function lowestAcceptingChild(
  */
 export async function placeFoldCommits(input: PlaceFoldCommitsInput): Promise<FoldPlan> {
   const planned: FoldCommitPlan[] = [];
-  for (const source of input.commits) {
-    const blocks = await frozenBlocks(input, source);
-    const paths = await changedPaths(input.git, source.sha);
-    if (paths.length === 0) {
-      planned.push({ ...source, parts: [{ kind: 'whole', child: source.owner, paths: [], reason: 'owner' }] });
-      continue;
+  const indexDirectory = await mkdtemp(join(tmpdir(), 'fold-plan-index-'));
+  try {
+    for (const source of input.commits) {
+      const commit = await planFoldCommit(input, source, indexDirectory);
+      if (commit.kind === 'refused') return commit;
+      planned.push(commit);
     }
-
-    const parent = await sourceParent(input.git, source.sha);
-    const candidates = await childTips(input, source.owner);
-    const parts: FoldPart[] = blocks === undefined
-      ? []
-      : [{ kind: 'blocks', child: source.owner, paths: [], reason: 'owner', blocks }];
-    const frozenPaths = new Set<string>();
-    const unexpressiblePaths: string[] = [];
-    const indexDirectory = await mkdtemp(join(tmpdir(), 'fold-plan-index-'));
-    try {
-      for (const path of paths) {
-        const diff = await input.git(['diff', '--binary', '--no-ext-diff', '--no-renames', '--unified=0', parent, source.sha, '--', path]);
-        if (diff.exitCode !== 0) throw new Error(`cannot read fold hunks for ${source.sha}:${path}`);
-        for (const [ordinal, sourceHunk] of hunkPatches(path, diff.stdout).entries()) {
-          const index = join(indexDirectory, `${path.replace(/[^A-Za-z0-9_.-]/g, '-')}-${ordinal}.index`);
-          let hunk = sourceHunk;
-          if (blocks !== undefined && containsFrozenBlock(sourceHunk, blocks)) {
-            // The block itself travels as the owner's re-materialization; only
-            // the hunk's non-block lines are placed as an ordinary hunk.
-            const residual = residualHunk(sourceHunk, blocks);
-            if (residual === null) {
-              frozenPaths.add(sourceHunk.path);
-              continue;
-            }
-            if (residual === undefined || !await residualApplies(input.git, parent, residual.patch, index)) {
-              unexpressiblePaths.push(sourceHunk.path);
-              continue;
-            }
-            hunk = residual;
-          }
-          const probe = await materializeHunk(input.git, parent, source.sha, hunk.path, hunk.patch, hunk.wholeFile, index);
-          const child = await lowestAcceptingChild(input, parent, probe, candidates);
-          const reason: FoldPartReason = child === source.owner ? 'owner' : 'introduced-above-owner';
-          parts.push({ kind: 'hunks', child, path: hunk.path, hunk, reason });
-        }
-      }
-    } finally {
-      await rm(indexDirectory, { recursive: true, force: true });
-    }
-    if (unexpressiblePaths.length > 0) {
-      return { kind: 'refused', reason: 'fold-residual-unexpressible', commit: source.sha, paths: [...new Set(unexpressiblePaths)] };
-    }
-    const placedPaths = new Set(parts.flatMap((part) => part.kind === 'hunks' ? [part.path] : []).concat([...frozenPaths]));
-    const unplacedPaths = paths.filter((path) => !placedPaths.has(path));
-    if (unplacedPaths.length > 0) {
-      return { kind: 'refused', reason: 'fold-unplaced-path', commit: source.sha, paths: unplacedPaths };
-    }
-    planned.push({
-      ...source,
-      parts,
-    });
+    return { kind: 'planned', commits: planned };
+  } finally {
+    await rm(indexDirectory, { recursive: true, force: true });
   }
-  return { kind: 'planned', commits: planned };
 }
