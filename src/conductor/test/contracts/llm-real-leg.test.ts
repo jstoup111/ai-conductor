@@ -11,6 +11,7 @@ import { createClaudeProviderFake } from '../fixtures/claude-provider-fake.js';
 import { createCodexProviderFake } from '../fixtures/codex-provider-fake.js';
 import { createPiProviderFake } from '../fixtures/pi-provider-fake.js';
 import { createDefaultLlmRealProvider, defineLlmRealLeg, meterLlmProvider } from './llm-real-leg.js';
+import { llmContract } from './llm.contract.js';
 import { assertTokenCap } from '../fixtures/live-e2e-run-body.js';
 
 const providers = {
@@ -75,7 +76,7 @@ interface ContractCaseResult {
   readonly state: string | undefined;
 }
 
-async function runInjectedRealLegFixture(divergeOnDeniedPermit = false): Promise<readonly ContractCaseResult[]> {
+async function runInjectedRealLegFixture(): Promise<readonly ContractCaseResult[]> {
   const root = await mkdtemp(join(tmpdir(), 'llm-real-leg-contract-'));
   const fixture = join(root, 'llm-real-leg-contract.fixture.test.ts');
   const realLegModule = fileURLToPath(new URL('./llm-real-leg.ts', import.meta.url));
@@ -94,11 +95,7 @@ async function runInjectedRealLegFixture(divergeOnDeniedPermit = false): Promise
       `import ${JSON.stringify(fakeLegModule)};`,
       '',
       'const claude = createClaudeProviderFake().provider;',
-      "defineLlmRealLeg('claude', { createProvider: () => " +
-        (divergeOnDeniedPermit
-          ? "({ ...claude, invoke: async (options) => options.spawnPermit?.().permitted === false ? { success: true, output: 'x', exitCode: 0 } : claude.invoke(options) })"
-          : 'claude') +
-        ' });',
+      "defineLlmRealLeg('claude', { createProvider: () => claude });",
       "defineLlmRealLeg('codex', { createProvider: () => createCodexProviderFake().provider });",
       "defineLlmRealLeg('pi', { createProvider: () => createPiProviderFake().provider });",
     ].join('\n'),
@@ -123,8 +120,6 @@ async function runInjectedRealLegFixture(divergeOnDeniedPermit = false): Promise
       state: test.result?.state,
     }));
   } finally {
-    // The divergent fixture is expected to fail one case; its result is data
-    // for this test rather than a failure of this parent Vitest process.
     process.exitCode = priorExitCode;
     await vitest.close();
     await rm(root, { recursive: true, force: true });
@@ -166,16 +161,21 @@ describe('llm real leg injected providers', () => {
   });
 
   // Covers: task:8
-  it('fails only the Claude real denied-permit case when its provider resolves instead', async () => {
-    const cases = await runInjectedRealLegFixture(true);
-    const deniedPermit = 'llm contract [claude real] › refuses a denied spawn permit before spawning';
+  it('rejects a provider that resolves a denied spawn permit without registering a failing nested suite', async () => {
+    const deniedPermit = llmContract.expectations.find(
+      ({ name }) => name === 'refuses a denied spawn permit before spawning',
+    )!;
+    const claude = createClaudeProviderFake().provider;
 
-    expect(cases.find(({ name }) => name === deniedPermit)).toEqual({ name: deniedPermit, state: 'fail' });
-    expect(
-      cases
-        .filter(({ name }) => name.startsWith('llm contract [claude real] › ') && name !== deniedPermit)
-        .map(({ state }) => state),
-    ).toEqual(['pass', 'pass', 'pass']);
+    await expect(
+      deniedPermit.run({
+        ...claude,
+        invoke: async (options) =>
+          options.spawnPermit?.().permitted === false
+            ? { success: true, output: 'x', exitCode: 0 }
+            : claude.invoke(options),
+      }),
+    ).rejects.toThrow();
   });
 });
 
