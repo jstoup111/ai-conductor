@@ -9,6 +9,7 @@ import type {
 } from '../execution/llm-provider.js';
 import type { ObservedInterval } from '../execution/observed-interval.js';
 import type { ComplexityTier, ExecutionContext, StepName } from '../types/index.js';
+import type { ProviderAttemptEvent } from '../types/events.js';
 import type {
   EffortLevel,
   HarnessConfig,
@@ -81,6 +82,8 @@ export interface ProviderAttemptMetadata {
   provider: string;
   /** Logical execution identity carried by the caller-owned invocation scope. */
   executionContext?: ExecutionContext;
+  /** Journal attribution for a resolver attempt. */
+  restack?: ProviderAttemptEvent['restack'];
   /** Auxiliary member that selected this candidate; never a lifecycle step. */
   auxiliaryMember?: string;
   /** Validated task-local telemetry; never an authorization input. */

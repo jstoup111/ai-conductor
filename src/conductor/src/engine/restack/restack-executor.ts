@@ -3,7 +3,7 @@ import { readFile, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { type ChildId } from '../child-context.js';
+import { CHILD_REGION_STEPS, type ChildId } from '../child-context.js';
 import { hasDurableChildState, resolveActiveChild, resolveSealedLeaf } from '../child-cursor.js';
 import { childBranchFor, leafBranchFor } from '../feature-branch-identity.js';
 import { loadMergedConfigForRead } from '../config.js';
@@ -795,6 +795,7 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
     opId: randomUUID() as RestackOpId,
     cause: 'fold',
     committer: await committerStamp(git),
+    ...(await queueTrackingAtCreation(options.worktree, options.slug, git) ?? {}),
     foldPlan: folded.commits,
     dirtyPaths: [],
     refs: await journalRefs(git, options.slug, planned.ranges),
@@ -853,8 +854,18 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
         throw error;
       }
       let tip = replay.tip;
-      for (const entry of byChild.get(range.child) ?? []) {
-        tip = await writeFoldCommit(git, tip, entry.source, entry.parts, draft.committer, join(directory, `c${range.child}-${entry.source.sha}.index`));
+      try {
+        for (const entry of byChild.get(range.child) ?? []) {
+          tip = await writeFoldCommit(git, tip, entry.source, entry.parts, draft.committer, join(directory, `c${range.child}-${entry.source.sha}.index`));
+        }
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        if (detail.startsWith('cannot apply fold hunk') || detail.startsWith('cannot apply frozen fold source')) {
+          await abortJournal(options.worktree, journal, git, []);
+          await haltRestackConflict(options.worktree, range.child, `unresolved-restack-conflict ${detail}`, options.events);
+          return haltedResult(options.worktree);
+        }
+        throw error;
       }
       const rewrites = new Map(replay.rewrites);
       const updated = await updateRestackChildStatus(options.worktree, options.slug, journal, range.child, 'replayed', tip, rewrites, { git });
@@ -949,6 +960,39 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
   // The fold's branch moves are already verified.  Its route placement state
   // and terminal journal transition now commit together, guarded by the route
   // blobs observed before any ref moved.
+  // Every non-leaf range rebuilt by a fold must be revalidated before the
+  // stack can publish.  Record the generation in the journal before the
+  // applied transaction so crash recovery has one durable authority for the
+  // queue CAS as well as the route replacements.
+  if (journal.journal.queueTracked === true) {
+    const queueBefore = await queueRecordAtJournalStart(journal, git);
+    const entries = planned.ranges
+      .filter((range) => range.kind !== 'leaf-active' && range.kind !== 'leaf-unentered')
+      .flatMap((range, index) => {
+        const move = moves.find((candidate) => candidate.child === range.child && candidate.ref.startsWith('refs/heads/'));
+        if (move === undefined || move.oldSha === move.newSha) return [];
+        const prior = planned.ranges[index - 1];
+        return [{
+          child: range.child,
+          position: Number(range.child),
+          closureSha: move.newSha,
+          gates: [...CHILD_REGION_STEPS],
+          replay: { oldParent: range.oldParent, newParent: prior === undefined ? base : staged.get(prior.child) ?? base },
+          state: 'queued' as const,
+        }];
+      });
+    const nextQueue = mergeQueueGeneration(queueBefore, entries);
+    const queueBlob = await runGit(git, ['hash-object', '-w', '--stdin'], JSON.stringify(nextQueue));
+    const queueNew = queueBlob.exitCode === 0 ? parseCommitSha(queueBlob.stdout.trim()) : undefined;
+    if (queueNew === undefined) return { kind: 'unavailable', detail: 'cannot write fold revalidation queue' };
+    const recorded = await recordRoutedApplyPlan(options.worktree, journal, {
+      queueNew,
+      invalidation: entries.map(({ child, gates }) => ({ child, gates })),
+      queueInvalidation: entries,
+    }, { git });
+    if (recorded.kind !== 'updated') return { kind: 'unavailable', detail: 'cannot journal fold revalidation queue' };
+    journal = recorded.journal;
+  }
   const applied = { ...journal.journal, state: 'applied' as const };
   const appliedBlob = await writeRestackJournalBlob(options.worktree, applied, { git });
   const cascade = await cascadeUpdateLines(options.worktree, options.slug, foldTargets, { git });
@@ -956,6 +1000,11 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
   const appliedLines = [
     ...foldRoutes.map((route) => `update ${routeRecordRefFor(options.slug, route.roundId)} ${route.next} ${route.old}`),
     ...cascade.lines,
+    ...(journal.journal.queueTracked !== true || journal.journal.queueNew === undefined
+      ? []
+      : journal.journal.queueOld === undefined
+        ? [`create ${revalidationQueueRefFor(options.slug)} ${journal.journal.queueNew}`]
+        : [`update ${revalidationQueueRefFor(options.slug)} ${journal.journal.queueNew} ${journal.journal.queueOld}`]),
     ...journalStateUpdateLines(journal, appliedBlob, 'applied'),
   ];
   const appliedWrite = await runGit(git, ['update-ref', '--stdin'], transaction(appliedLines));
