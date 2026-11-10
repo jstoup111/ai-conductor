@@ -173,7 +173,10 @@ import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js'
 import { hasDurableChildState } from './engine/child-cursor.js';
 import { acquireFeatureDispatchLease } from './engine/feature-dispatch-lease.js';
 import { createInProcessFeatureExecutor } from './engine/feature-executor.js';
-import { createChildProcessFeatureExecutor } from './engine/child-feature-executor.js';
+import {
+  createChildProcessFeatureExecutor,
+  type ChildFeatureExecutorDeps,
+} from './engine/child-feature-executor.js';
 import { createExecutorBroker } from './engine/executor-broker.js';
 import { sweepExecutorRecordsOnBoot } from './engine/executor-records.js';
 import { buildWorkOrder, type WorkOrder } from './engine/work-order.js';
@@ -697,6 +700,8 @@ export interface DaemonModeOptions {
   runDaemon?: typeof runDaemon;
   /** Injectable retryable-HALT dependency factory for daemon composition tests. */
   buildRetryableHaltDeps?: typeof buildRetryableHaltDeps;
+  /** Injectable child-process fork boundary for daemon lifecycle tests. */
+  executorFork?: ChildFeatureExecutorDeps['fork'];
   /**
    * Task 3: Show completed (PROCESSED) features in the startup dashboard's
    * console output. Defaults to false/undefined — the persisted log sink
@@ -2060,6 +2065,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       return isArmed;
     },
     log,
+    ...(opts.executorFork === undefined ? {} : { fork: opts.executorFork }),
   });
   const childMode = (config?.executor_isolation ?? 'child') === 'child';
   const executor = childMode ? childExecutor : inProcessExecutor;
