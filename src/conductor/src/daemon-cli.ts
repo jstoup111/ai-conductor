@@ -240,7 +240,7 @@ import {
   resolveHaltRetention,
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
-import { isOperatorActionHalt, readHaltClass } from './engine/halt-marker.js';
+import { HALT_MARKER, isOperatorActionHalt, readHaltClass } from './engine/halt-marker.js';
 import { migrateLegacyHaltClasses } from './engine/halt-class-migration.js';
 import {
   applyPooledRepairOutcome,
