@@ -37,7 +37,10 @@ describe('typed PRD-audit remediation admission', () => {
     });
     try {
       const fence = conductor as unknown as {
-        boundedRoutingFenceHalt(slug: string, detail: string): Promise<{
+        boundedRoutingFenceHalt(
+          slug: string,
+          detail: string,
+        ): Promise<{
           kind: 'halt';
           detail: string;
           haltClass: 'mechanical' | 'needs-human';
@@ -50,11 +53,11 @@ describe('typed PRD-audit remediation admission', () => {
       }
 
       expect(results.map((result) => result.routingFence)).toEqual([true, true, true]);
-      expect(results.map((result) => result.haltClass)).toEqual([
-        'mechanical', 'mechanical', 'needs-human',
-      ]);
+      expect(results.map((result) => result.haltClass)).toEqual(['mechanical', 'mechanical', 'needs-human']);
       const stalls = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8'))
-        .trim().split('\n').map((line) => JSON.parse(line))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line))
         .filter((event) => event.type === 'routing_rounds_stalled');
       expect(stalls.map((event) => event.attempt)).toEqual([1, 2, 3]);
     } finally {
@@ -70,19 +73,31 @@ describe('typed PRD-audit remediation admission', () => {
     await mkdir(join(root, '.docs', 'plans'), { recursive: true });
     await writeFile(planPath, '### Task 1: Existing repair\n');
     await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
-    await persistPrdAuditVerdict(root, {
-      complete: true,
-      judgment: {
-        version: 'v1',
-        criterionJudgments: [{
-          criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'FIXABLE',
-          evidence: 'The repair is otherwise owner-bound.', rationale: 'Fixture.',
-          requirementAssociations: [], evidenceTaskIds: [], ownerTaskId: '1',
-        }],
-        noOwnerObservations: [],
+    await persistPrdAuditVerdict(
+      root,
+      {
+        complete: true,
+        judgment: {
+          version: 'v1',
+          criterionJudgments: [
+            {
+              criterion: { storyId: '1', ordinal: 1 },
+              criterionId: 'S1.1',
+              grade: 'FIXABLE',
+              evidence: 'The repair is otherwise owner-bound.',
+              rationale: 'Fixture.',
+              requirementAssociations: [],
+              evidenceTaskIds: [],
+              ownerTaskId: '1',
+            },
+          ],
+          noOwnerObservations: [],
+        },
+        diagnostics: [],
+        recordedDispositions: [],
       },
-      diagnostics: [], recordedDispositions: [],
-    }, { attemptId: 'current-audit', codeStamp: 'reviewed-head' });
+      { attemptId: 'current-audit', codeStamp: 'reviewed-head' },
+    );
 
     const run = vi.fn(async () => ({ success: true }));
     const conductor = new Conductor({
@@ -91,20 +106,23 @@ describe('typed PRD-audit remediation admission', () => {
       stepRunner: { run },
       events: new ConductorEventEmitter(),
       config: { gate_code_validity: { enabled: true } },
-      git: async (args) => args[0] === 'merge-base'
-        ? { exitCode: 0, stdout: '', stderr: '' }
-        : { exitCode: 0, stdout: '.docs/stories/feature.md\n', stderr: '' },
+      git: async (args) =>
+        args[0] === 'merge-base'
+          ? { exitCode: 0, stdout: '', stderr: '' }
+          : { exitCode: 0, stdout: '.docs/stories/feature.md\n', stderr: '' },
     });
     (conductor as unknown as { currentRunId?: string }).currentRunId = 'current-audit';
 
-    const outcome = await (conductor as unknown as {
-      planRemediation(
-        state: ConductState,
-        steps: typeof ALL_STEPS,
-        dispatchContext: string,
-        hintSource: { source: string; evidence: Array<{ gate: StepName; evidenceFile: string }> },
-      ): Promise<{ kind: string; reason?: string }>;
-    }).planRemediation(
+    const outcome = await (
+      conductor as unknown as {
+        planRemediation(
+          state: ConductState,
+          steps: typeof ALL_STEPS,
+          dispatchContext: string,
+          hintSource: { source: string; evidence: Array<{ gate: StepName; evidenceFile: string }> },
+        ): Promise<{ kind: string; reason?: string }>;
+      }
+    ).planRemediation(
       { session_started_at: Date.now(), feature_desc: 'feature' } as ConductState,
       ALL_STEPS,
       'prd audit blocked',
@@ -126,19 +144,31 @@ describe('typed PRD-audit remediation admission', () => {
     await mkdir(join(root, '.pipeline'), { recursive: true });
     await writeFile(planPath, '### Task 1: Existing repair\n');
     await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
-    await persistPrdAuditVerdict(root, {
-      complete: true,
-      judgment: {
-        version: 'v1',
-        criterionJudgments: [{
-          criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'FIXABLE',
-          evidence: 'The requested behavior is incomplete.', rationale: 'Fixture.',
-          requirementAssociations: [], evidenceTaskIds: [], ownerTaskId: '1',
-        }],
-        noOwnerObservations: [],
+    await persistPrdAuditVerdict(
+      root,
+      {
+        complete: true,
+        judgment: {
+          version: 'v1',
+          criterionJudgments: [
+            {
+              criterion: { storyId: '1', ordinal: 1 },
+              criterionId: 'S1.1',
+              grade: 'FIXABLE',
+              evidence: 'The requested behavior is incomplete.',
+              rationale: 'Fixture.',
+              requirementAssociations: [],
+              evidenceTaskIds: [],
+              ownerTaskId: '1',
+            },
+          ],
+          noOwnerObservations: [],
+        },
+        diagnostics: [],
+        recordedDispositions: [],
       },
-      diagnostics: [], recordedDispositions: [],
-    }, { attemptId: 'current-audit', codeStamp: null });
+      { attemptId: 'current-audit', codeStamp: null },
+    );
     const runner = vi.fn(async (step: StepName) => {
       if (step === 'remediate') return { success: false, output: 'final typed planner fault' };
       return { success: true };
@@ -152,14 +182,16 @@ describe('typed PRD-audit remediation admission', () => {
     });
     (conductor as unknown as { currentRunId?: string }).currentRunId = 'current-audit';
 
-    const outcome = await (conductor as unknown as {
-      planRemediation(
-        state: ConductState,
-        steps: typeof ALL_STEPS,
-        dispatchContext: string,
-        hintSource: { source: string; evidence: Array<{ gate: StepName; evidenceFile: string }> },
-      ): Promise<{ kind: string; reason?: string }>;
-    }).planRemediation(
+    const outcome = await (
+      conductor as unknown as {
+        planRemediation(
+          state: ConductState,
+          steps: typeof ALL_STEPS,
+          dispatchContext: string,
+          hintSource: { source: string; evidence: Array<{ gate: StepName; evidenceFile: string }> },
+        ): Promise<{ kind: string; reason?: string }>;
+      }
+    ).planRemediation(
       { session_started_at: Date.now(), feature_desc: 'feature' } as ConductState,
       ALL_STEPS,
       'prd audit blocked',
@@ -184,13 +216,15 @@ describe('typed PRD-audit remediation admission', () => {
       events: new ConductorEventEmitter(),
     });
 
-    const reason = await (conductor as unknown as {
-      writeRefusalReworkHalt(
-        detail: string,
-        refused: Array<{ criterion: string; summary: string; relation: 'outside-visible' }>,
-        plannerFault: string,
-      ): Promise<string>;
-    }).writeRefusalReworkHalt(
+    const reason = await (
+      conductor as unknown as {
+        writeRefusalReworkHalt(
+          detail: string,
+          refused: Array<{ criterion: string; summary: string; relation: 'outside-visible' }>,
+          plannerFault: string,
+        ): Promise<string>;
+      }
+    ).writeRefusalReworkHalt(
       'OVER_SCOPE visible behavior on S2.1.',
       [{ criterion: 'S2.1', summary: 'Outside approved intent.', relation: 'outside-visible' }],
       'final refused planner fault',

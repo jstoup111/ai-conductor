@@ -6,7 +6,12 @@ import { describe, expect, it } from 'vitest';
 
 const ENGINE_ROOT = fileURLToPath(new URL('../../src/', import.meta.url));
 const FLAT_REGION_ACCESSORS = new Set([
-  'readAllVerdicts', 'readVerdict', 'writeVerdict', 'readKickbackLedger', 'updateKickbackLedger', 'bumpKickbackGate',
+  'readAllVerdicts',
+  'readVerdict',
+  'writeVerdict',
+  'readKickbackLedger',
+  'updateKickbackLedger',
+  'bumpKickbackGate',
 ]);
 const CONDUCT_STATE_MUTATORS = new Set(['apply', 'applyBatch', 'applyCorrection', 'replace']);
 
@@ -116,7 +121,12 @@ function callSiteName(expression: ts.Expression): string | undefined {
   if (ts.isIdentifier(expression) && FLAT_REGION_ACCESSORS.has(expression.text)) return expression.text;
   if (!ts.isPropertyAccessExpression(expression) || !CONDUCT_STATE_MUTATORS.has(expression.name.text)) return undefined;
   const receiver = expression.expression.getText();
-  if (expression.name.text === 'applyBatch' || /^(this\.stateStore|options\.stateStore|stateStore|store|resolved|resolveStateStore\(|createFilesystemConductStateStore\(|storeFor\()/.test(receiver)) {
+  if (
+    expression.name.text === 'applyBatch' ||
+    /^(this\.stateStore|options\.stateStore|stateStore|store|resolved|resolveStateStore\(|createFilesystemConductStateStore\(|storeFor\()/.test(
+      receiver,
+    )
+  ) {
     return `ConductStateStore.${expression.name.text}`;
   }
   return undefined;
@@ -178,13 +188,15 @@ function isWholeFeatureOnly(call: CallSite): boolean {
   const { site, arguments: args } = call;
   const [path, _line, accessor] = site.split(':');
   const gate = args[1]?.replace(/\s+/g, '');
-  return (path === 'engine/daemon-rekick.ts' &&
+  return (
+    (path === 'engine/daemon-rekick.ts' &&
       RESTACK_REGION_ACCESS_CLASSIFICATIONS[restackAccessIdentity(call)] === 'whole-feature-only') ||
     ((path === 'engine/rebase-transition.ts' || path === 'engine/rebase.ts') &&
       (accessor === 'readVerdict' || accessor === 'writeVerdict') &&
       (gate === "'rebase'" || gate === "'coverage_binding'")) ||
     (path === 'engine/routing/routed-exit.ts' && accessor === 'writeVerdict') ||
-    (path === 'engine/kickback-ledger.ts' && accessor === 'bumpKickbackGate');
+    (path === 'engine/kickback-ledger.ts' && accessor === 'bumpKickbackGate')
+  );
 }
 
 function childArgumentCarriesActiveRegionChild({ arguments: args, source }: CallSite): boolean {
@@ -199,7 +211,10 @@ function childArgumentCarriesActiveRegionChild({ arguments: args, source }: Call
 function audit(files: ReadonlyMap<string, string>): readonly AllowlistEntry[] {
   const calls = collectCallSites(files);
   const sites = calls.map(({ site }) => site);
-  const counts = Object.fromEntries(Object.entries(EXPECTED_ACCESS_COUNTS).map(([key]) => [key, 0])) as Record<string, number>;
+  const counts = Object.fromEntries(Object.entries(EXPECTED_ACCESS_COUNTS).map(([key]) => [key, 0])) as Record<
+    string,
+    number
+  >;
   const unexpected: string[] = [];
   for (const site of sites) {
     const key = accessKey(site);
@@ -210,7 +225,9 @@ function audit(files: ReadonlyMap<string, string>): readonly AllowlistEntry[] {
     .filter(([key, expected]) => counts[key] !== expected)
     .map(([key, expected]) => `${key} expected ${expected}, got ${counts[key] ?? 0}`);
   if (unexpected.length > 0 || drift.length > 0) {
-    throw new Error(`unallowlisted flat-region access sites: ${unexpected.join(', ') || 'none'}\naccess manifest drift: ${drift.join(', ') || 'none'}`);
+    throw new Error(
+      `unallowlisted flat-region access sites: ${unexpected.join(', ') || 'none'}\naccess manifest drift: ${drift.join(', ') || 'none'}`,
+    );
   }
   const conductorWriteVerdicts = calls
     .filter(({ site }) => site.startsWith('engine/conductor.ts:') && site.endsWith(':writeVerdict'))
@@ -219,13 +236,17 @@ function audit(files: ReadonlyMap<string, string>): readonly AllowlistEntry[] {
     .filter(({ identity }) => identity === undefined || CONDUCTOR_WRITE_VERDICT_CLASSIFICATIONS[identity] === undefined)
     .map(({ site }) => site);
   const conductorWriteClassificationCountDrift = Object.keys(CONDUCTOR_WRITE_VERDICT_CLASSIFICATIONS)
-    .map((identity) => ({ identity, count: conductorWriteVerdicts.filter((call) => call.identity === identity).length }))
+    .map((identity) => ({
+      identity,
+      count: conductorWriteVerdicts.filter((call) => call.identity === identity).length,
+    }))
     .filter(({ count }) => count !== 1)
     .map(({ identity, count }) => `${identity} expected 1, got ${count}`);
   const activeRegionWritesMissingChild = conductorWriteVerdicts
-    .filter(({ identity, ...call }) =>
-      CONDUCTOR_WRITE_VERDICT_CLASSIFICATIONS[identity ?? ''] === 'child-aware' &&
-      !childArgumentCarriesActiveRegionChild(call),
+    .filter(
+      ({ identity, ...call }) =>
+        CONDUCTOR_WRITE_VERDICT_CLASSIFICATIONS[identity ?? ''] === 'child-aware' &&
+        !childArgumentCarriesActiveRegionChild(call),
     )
     .map(({ site }) => site);
   if (
@@ -233,16 +254,20 @@ function audit(files: ReadonlyMap<string, string>): readonly AllowlistEntry[] {
     conductorWriteClassificationCountDrift.length > 0 ||
     activeRegionWritesMissingChild.length > 0
   ) {
-    throw new Error([
-      `unclassified conductor writeVerdict sites: ${unclassifiedConductorWrites.join(', ') || 'none'}`,
-      `conductor writeVerdict classification count drift: ${conductorWriteClassificationCountDrift.join(', ') || 'none'}`,
-      `active-region conductor writeVerdict sites missing child: ${activeRegionWritesMissingChild.join(', ') || 'none'}`,
-    ].join('\n'));
+    throw new Error(
+      [
+        `unclassified conductor writeVerdict sites: ${unclassifiedConductorWrites.join(', ') || 'none'}`,
+        `conductor writeVerdict classification count drift: ${conductorWriteClassificationCountDrift.join(', ') || 'none'}`,
+        `active-region conductor writeVerdict sites missing child: ${activeRegionWritesMissingChild.join(', ') || 'none'}`,
+      ].join('\n'),
+    );
   }
   const restackAccesses = calls.filter(({ site }) => {
     const path = site.split(':', 1)[0] ?? '';
-    return (path === 'engine/daemon-rekick.ts' || path.startsWith('engine/restack/')) &&
-      FLAT_REGION_ACCESSORS.has(site.split(':').at(-1) ?? '');
+    return (
+      (path === 'engine/daemon-rekick.ts' || path.startsWith('engine/restack/')) &&
+      FLAT_REGION_ACCESSORS.has(site.split(':').at(-1) ?? '')
+    );
   });
   const unclassifiedRestackAccesses = restackAccesses
     .filter((call) => RESTACK_REGION_ACCESS_CLASSIFICATIONS[restackAccessIdentity(call)] === undefined)
@@ -250,23 +275,37 @@ function audit(files: ReadonlyMap<string, string>): readonly AllowlistEntry[] {
   if (unclassifiedRestackAccesses.length > 0) {
     throw new Error(`unclassified restack region access sites: ${unclassifiedRestackAccesses.join(', ')}`);
   }
-  return calls.map((call) => isWholeFeatureOnly(call)
-    ? { site: call.site, classification: 'whole-feature-only' as const, reason: 'This access is deliberately whole-feature scoped.' }
-    : {
-      site: call.site,
-      classification: RESTACK_REGION_ACCESS_CLASSIFICATIONS[restackAccessIdentity(call)] ?? 'child-aware' as const,
-    });
+  return calls.map((call) =>
+    isWholeFeatureOnly(call)
+      ? {
+          site: call.site,
+          classification: 'whole-feature-only' as const,
+          reason: 'This access is deliberately whole-feature scoped.',
+        }
+      : {
+          site: call.site,
+          classification:
+            RESTACK_REGION_ACCESS_CLASSIFICATIONS[restackAccessIdentity(call)] ?? ('child-aware' as const),
+        },
+  );
 }
 
 describe('child-region flat-access audit', () => {
   it('requires every current flat-region reader and writer to be classified', async () => {
     const entries = audit(await sourceFiles(ENGINE_ROOT));
     expect(entries).toHaveLength(Object.values(EXPECTED_ACCESS_COUNTS).reduce((total, count) => total + count, 0));
-    expect(entries.filter((entry) => entry.classification === 'whole-feature-only' && !entry.reason?.trim())).toEqual([]);
+    expect(entries.filter((entry) => entry.classification === 'whole-feature-only' && !entry.reason?.trim())).toEqual(
+      [],
+    );
   });
 
   it('rejects an unallowlisted reader in an in-memory production source fixture', () => {
-    const fixture = new Map([['engine/future.ts', "import { readVerdict } from './gate-verdicts.js';\nexport async function future(root: string) { return readVerdict(root, 'build'); }"]]);
+    const fixture = new Map([
+      [
+        'engine/future.ts',
+        "import { readVerdict } from './gate-verdicts.js';\nexport async function future(root: string) { return readVerdict(root, 'build'); }",
+      ],
+    ]);
     expect(() => audit(fixture)).toThrow('engine/future.ts:2:readVerdict');
   });
 
