@@ -100,10 +100,32 @@ describe('daemon-mode feature log integration', () => {
             await events.emit({ type: 'navigation_back', from: 'manual_test', to: 'build' });
             await events.emit({ type: 'loop_halt', reason: 'cap' });
             await events.emit({ type: 'loop_converged' });
-            await events.emit({ type: 'ci_failed', prUrl: 'https://example.test/pr/1', slug: order.slug, checks: ['test'], attempts: 1, phase: 'detected' });
-            await events.emit({ type: 'build_review_base', mergeBase: 'abc1234567890', trackingRefSha: 'abc1234567890', remoteHeadSha: 'abc1234567890', fresh: true });
-            await events.emit({ type: 'build_review_stale_mirage_regrade', mergeBase: 'abc1234567890', regradeCount: 1 });
-            await events.emit({ type: 'auto_park_contradiction', slug: order.slug, verdict: 'empty/missing plan', evidence: { summaryTasksCompleted: 1, evidenceStamps: 1, resolvedTasks: 0 } });
+            await events.emit({
+              type: 'ci_failed',
+              prUrl: 'https://example.test/pr/1',
+              slug: order.slug,
+              checks: ['test'],
+              attempts: 1,
+              phase: 'detected',
+            });
+            await events.emit({
+              type: 'build_review_base',
+              mergeBase: 'abc1234567890',
+              trackingRefSha: 'abc1234567890',
+              remoteHeadSha: 'abc1234567890',
+              fresh: true,
+            });
+            await events.emit({
+              type: 'build_review_stale_mirage_regrade',
+              mergeBase: 'abc1234567890',
+              regradeCount: 1,
+            });
+            await events.emit({
+              type: 'auto_park_contradiction',
+              slug: order.slug,
+              verdict: 'empty/missing plan',
+              evidence: { summaryTasksCompleted: 1, evidenceStamps: 1, resolvedTasks: 0 },
+            });
             log?.('WARNING: provider unavailable');
             log?.('retrying build (2/3)');
             log?.('subprocess diagnostic: exit 1');
@@ -141,10 +163,7 @@ describe('daemon-mode feature log integration', () => {
       expect(live).toContain(`[daemon][feature-a] ${message}`);
       expect(persisted).toContain(`[daemon][feature-a] ${message}`);
     }
-    expect(daemonLogSpy.formatDaemonActivityLine).toHaveBeenCalledWith(
-      '[feature-a] ▶ start feature-a',
-      true,
-    );
+    expect(daemonLogSpy.formatDaemonActivityLine).toHaveBeenCalledWith('[feature-a] ▶ start feature-a', true);
     // The mock keeps credential reads deterministic; their scheduler count is
     // not part of the feature-log contract under test.
     expect(buildAuthSpy.readDaemonBuildToken).toHaveBeenCalled();
@@ -153,9 +172,7 @@ describe('daemon-mode feature log integration', () => {
     // step_started is one of the 19 TerminalSubscriber-rendered event types.
     // It must render exactly once (tagged) — not a second time untagged via
     // the daemon-wide bus the feature-scoped bus forwards onto.
-    const buildLineOccurrences = live
-      .split('\n')
-      .filter((line) => line.includes('▶ build')).length;
+    const buildLineOccurrences = live.split('\n').filter((line) => line.includes('▶ build')).length;
     expect(buildLineOccurrences).toBe(1);
     expect(live).not.toContain('[daemon] · ▶ build');
     expect(live).not.toContain('operator park[feature-a]');

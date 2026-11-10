@@ -112,11 +112,7 @@ import { wireDaemonOtel, wireOtelVisualizer } from './engine/otel/wire.js';
 import { resolveOtelConfig, resolveWorkerName } from './engine/otel/otel-config.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
 import { LiveBoundaryCoordinator } from './engine/self-host/live-boundary-coordinator.js';
-import {
-  emitDeprecatedConfigKeyEvents,
-  loadMergedConfig,
-  BUILD_PROGRESS_HALT_DEFAULTS,
-} from './engine/config.js';
+import { emitDeprecatedConfigKeyEvents, loadMergedConfig, BUILD_PROGRESS_HALT_DEFAULTS } from './engine/config.js';
 import type { HarnessConfig } from './types/config.js';
 import { readLastResolvedCount, stampDispatchBaseline } from './engine/task-evidence.js';
 import { countResolvedTasks } from './engine/task-progress.js';

@@ -15,7 +15,12 @@
 
 import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import chalk from 'chalk';
-import type { ComplexityTier, FeatureApplicabilityDeclaration, FeatureApplicabilityIgnored, Track } from '../types/index.js';
+import type {
+  ComplexityTier,
+  FeatureApplicabilityDeclaration,
+  FeatureApplicabilityIgnored,
+  Track,
+} from '../types/index.js';
 import { Waker } from './waker.js';
 import type { RateLimitEpisode } from './rate-limit-episode.js';
 import { encodeClaimKey, featureSlugs, InMemoryWorkClaims, type WorkClaims } from './work-claims.js';
@@ -221,15 +226,20 @@ interface DaemonSchedulerDeps {
   /** Seed the self-host source-refresh throttle after the startup refresh. */
   recordEngineSourceRefresh?: () => void;
   /** Optional event-spine projection for maintenance timing. */
-  emitMaintenancePhase?: (event: Extract<import('../types/events.js').ConductorEvent, { type: 'daemon_maintenance_phase' }>) => void | Promise<void>;
+  emitMaintenancePhase?: (
+    event: Extract<import('../types/events.js').ConductorEvent, { type: 'daemon_maintenance_phase' }>,
+  ) => void | Promise<void>;
   /** Synchronous observation of each scheduler pass; consumers must not perform I/O here. */
   onTick?: (snapshot: DaemonTickSnapshot) => void;
   /** Most recent real discovery pass, supplied by the production WorkSource. */
-  getDiscoverySnapshot?: (parkedSlugs: readonly string[]) => Promise<{
-    counts: DaemonTickSnapshot['counts'];
-    oldestAgeSeconds: DaemonTickSnapshot['oldestAgeSeconds'];
-    pollDurationMs?: number;
-  } | undefined>;
+  getDiscoverySnapshot?: (parkedSlugs: readonly string[]) => Promise<
+    | {
+        counts: DaemonTickSnapshot['counts'];
+        oldestAgeSeconds: DaemonTickSnapshot['oldestAgeSeconds'];
+        pollDurationMs?: number;
+      }
+    | undefined
+  >;
   /**
    * Features eligible to run: stories + plan present, not yet at .pipeline/DONE.
    *
@@ -638,17 +648,18 @@ interface FeatureExecutionDeps {
  * remains injectable for focused composition tests, while production executes
  * the dispatcher-built WorkOrder through its FeatureExecutor.
  */
-export type DaemonDeps = DaemonSchedulerDeps & (
-  | {
-    /** Run one feature to DONE/HALT in isolation. */
-    runFeature: (item: BacklogItem) => Promise<FeatureOutcome>;
-    featureExecution?: never;
-  }
-  | {
-    runFeature?: never;
-    featureExecution: FeatureExecutionDeps;
-  }
-);
+export type DaemonDeps = DaemonSchedulerDeps &
+  (
+    | {
+        /** Run one feature to DONE/HALT in isolation. */
+        runFeature: (item: BacklogItem) => Promise<FeatureOutcome>;
+        featureExecution?: never;
+      }
+    | {
+        runFeature?: never;
+        featureExecution: FeatureExecutionDeps;
+      }
+  );
 
 export interface DaemonTickSnapshot {
   counts: Record<'eligible' | 'waiting' | 'blocked' | 'gated' | 'parked', number>;
@@ -713,7 +724,12 @@ type RepairWorkerCompletion = { readonly kind: 'repair-complete' };
 
 /** A pooled worker's completion is tied to its kind, so repairs cannot become features. */
 type Worker =
-  | { readonly kind: 'feature'; readonly slug: string; readonly completion: Promise<FeatureOutcome>; readonly dispatchSequence: number }
+  | {
+      readonly kind: 'feature';
+      readonly slug: string;
+      readonly completion: Promise<FeatureOutcome>;
+      readonly dispatchSequence: number;
+    }
   | { readonly kind: 'repair'; readonly request: RepairRequest; readonly completion: Promise<RepairWorkerCompletion> };
 
 /**
@@ -751,10 +767,7 @@ export async function guardedDispatchWith(
   return (await onDispatch(item)) !== false;
 }
 
-export async function runDaemon(
-  deps: DaemonDeps,
-  options: DaemonOptions,
-): Promise<DaemonResult> {
+export async function runDaemon(deps: DaemonDeps, options: DaemonOptions): Promise<DaemonResult> {
   const concurrency = Math.max(1, Math.floor(options.concurrency));
   const sleep = deps.sleep ?? createDefaultSleep();
   const now = deps.now ?? (() => Date.now());
@@ -881,64 +894,65 @@ export async function runDaemon(
   const progressReKickCeilingLogged = new Set<string>();
   const progressReKickOperatorActionLogged = new Set<string>();
   const progressReKickLegacyLogged = new Set<string>();
-  const isProgressReKickEligibleBounded = (deps.isProgressReKickEligible || deps.isFreshRetryableHalt)
-    ? async (slug: string): Promise<boolean> => {
-        if (deps.readHaltClass) {
-          let disposition: HaltDisposition;
-          try {
-            disposition = await deps.readHaltClass(slug);
-          } catch {
-            disposition = 'unclassified';
+  const isProgressReKickEligibleBounded =
+    deps.isProgressReKickEligible || deps.isFreshRetryableHalt
+      ? async (slug: string): Promise<boolean> => {
+          if (deps.readHaltClass) {
+            let disposition: HaltDisposition;
+            try {
+              disposition = await deps.readHaltClass(slug);
+            } catch {
+              disposition = 'unclassified';
+            }
+            if (isOperatorActionHalt(disposition)) {
+              if (!progressReKickOperatorActionLogged.has(slug)) {
+                progressReKickOperatorActionLogged.add(slug);
+                log(
+                  `[daemon] ${slug}: progress-gated re-kick refused — HALT disposition ${disposition} requires operator action`,
+                );
+              }
+              return false;
+            }
+            if (disposition === 'legacy' && !progressReKickLegacyLogged.has(slug)) {
+              progressReKickLegacyLogged.add(slug);
+              log(`[daemon] ${slug}: progress-gated re-kick compatibility path (halt class: legacy)`);
+            }
           }
-          if (isOperatorActionHalt(disposition)) {
-            if (!progressReKickOperatorActionLogged.has(slug)) {
-              progressReKickOperatorActionLogged.add(slug);
+          const count = progressReKickCounts.get(slug) ?? 0;
+          if (count >= progressReKickDispatchCeiling) {
+            if (!progressReKickCeilingLogged.has(slug)) {
+              progressReKickCeilingLogged.add(slug);
               log(
-                `[daemon] ${slug}: progress-gated re-kick refused — HALT disposition ${disposition} requires operator action`,
+                `[daemon] ${slug}: progress-gated re-kick dispatch ceiling (${progressReKickDispatchCeiling}) reached — stopping re-kicks for this run; spec remains eligible for base-advance rekickSweep / operator unpark`,
               );
             }
             return false;
           }
-          if (disposition === 'legacy' && !progressReKickLegacyLogged.has(slug)) {
-            progressReKickLegacyLogged.add(slug);
-            log(`[daemon] ${slug}: progress-gated re-kick compatibility path (halt class: legacy)`);
+          let fresh = false;
+          if (deps.isFreshRetryableHalt) {
+            try {
+              fresh = await deps.isFreshRetryableHalt(slug);
+            } catch (err) {
+              log(
+                `[daemon] isFreshRetryableHalt(${slug}) threw (${err instanceof Error ? err.message : String(err)}); treating as not eligible`,
+              );
+            }
           }
-        }
-        const count = progressReKickCounts.get(slug) ?? 0;
-        if (count >= progressReKickDispatchCeiling) {
-          if (!progressReKickCeilingLogged.has(slug)) {
-            progressReKickCeilingLogged.add(slug);
-            log(
-              `[daemon] ${slug}: progress-gated re-kick dispatch ceiling (${progressReKickDispatchCeiling}) reached — stopping re-kicks for this run; spec remains eligible for base-advance rekickSweep / operator unpark`,
-            );
+          let progressed = false;
+          if (deps.isProgressReKickEligible) {
+            try {
+              progressed = await deps.isProgressReKickEligible(slug);
+            } catch (err) {
+              log(
+                `[daemon] isProgressReKickEligible(${slug}) threw (${err instanceof Error ? err.message : String(err)}); treating as not eligible`,
+              );
+            }
           }
-          return false;
+          const eligible = fresh || progressed;
+          if (eligible) progressReKickCounts.set(slug, count + 1);
+          return eligible;
         }
-        let fresh = false;
-        if (deps.isFreshRetryableHalt) {
-          try {
-            fresh = await deps.isFreshRetryableHalt(slug);
-          } catch (err) {
-            log(
-              `[daemon] isFreshRetryableHalt(${slug}) threw (${err instanceof Error ? err.message : String(err)}); treating as not eligible`,
-            );
-          }
-        }
-        let progressed = false;
-        if (deps.isProgressReKickEligible) {
-          try {
-            progressed = await deps.isProgressReKickEligible(slug);
-          } catch (err) {
-            log(
-              `[daemon] isProgressReKickEligible(${slug}) threw (${err instanceof Error ? err.message : String(err)}); treating as not eligible`,
-            );
-          }
-        }
-        const eligible = fresh || progressed;
-        if (eligible) progressReKickCounts.set(slug, count + 1);
-        return eligible;
-      }
-    : undefined;
+      : undefined;
 
   // Register a watchHaltCleared watcher for a newly-parked slug, if the seam
   // is present and no watcher already exists for it. Shared by both park
@@ -1056,16 +1070,15 @@ export async function runDaemon(
     // preflight never sees a mechanical/legacy HALT as an unauthorized resume.
     // Keep the seam optional while its composition-root wiring lands; callers
     // that do provide it get the fail-closed disposition boundary below.
-    if (isResume && deps.clearRetryableHalt && await deps.isHalted?.(item.slug)) {
+    if (isResume && deps.clearRetryableHalt && (await deps.isHalted?.(item.slug))) {
       let disposition: HaltDisposition = 'unclassified';
       try {
-        disposition = await deps.readHaltClass?.(item.slug) ?? 'unclassified';
+        disposition = (await deps.readHaltClass?.(item.slug)) ?? 'unclassified';
       } catch {
         // A failed class read is unclassified and therefore operator-retained.
       }
 
-      const retained = isOperatorActionHalt(disposition)
-        || (disposition !== 'mechanical' && disposition !== 'legacy');
+      const retained = isOperatorActionHalt(disposition) || (disposition !== 'mechanical' && disposition !== 'legacy');
       if (!retained) {
         try {
           await deps.clearRetryableHalt(item.slug);
@@ -1098,9 +1111,7 @@ export async function runDaemon(
       deps.onExecutorStarted?.();
       try {
         if (deps.featureExecution) {
-          return await deps.featureExecution.executor.execute(
-            await deps.featureExecution.createWorkOrder(item),
-          );
+          return await deps.featureExecution.executor.execute(await deps.featureExecution.createWorkOrder(item));
         }
         return await deps.runFeature(item);
       } finally {
@@ -1113,65 +1124,76 @@ export async function runDaemon(
       const reason = error instanceof Error ? error.message : String(error);
       log(`baseline stamp failed for ${item.slug} — ${reason}`);
     }
-    const completion: Promise<FeatureOutcome> = runFeature()
-      .catch((err) => ({
-        slug: item.slug,
-        status: 'error' as const,
-        reason: err instanceof Error ? err.message : String(err),
-      }));
+    const completion: Promise<FeatureOutcome> = runFeature().catch((err) => ({
+      slug: item.slug,
+      status: 'error' as const,
+      reason: err instanceof Error ? err.message : String(err),
+    }));
     workers.push({ kind: 'feature', slug: item.slug, completion, dispatchSequence: ++dispatchSequence });
     observeWorkerSet();
     return true;
   };
 
-  const repairClaim = (request: RepairRequest): string =>
-    encodeClaimKey({ kind: 'repair', prUrl: request.prUrl });
+  const repairClaim = (request: RepairRequest): string => encodeClaimKey({ kind: 'repair', prUrl: request.prUrl });
   const repairBand = (request: RepairRequest): [number, string] => {
     const band = deps.repairPriority?.(request.slug);
     const rank = band && /^P[0-9]+$/i.test(band) ? Number(band.slice(1)) : Number.MAX_SAFE_INTEGER;
     return [rank, request.prCreatedAt];
   };
-  const startRepair = deps.repairs ? async (request: RepairRequest): Promise<boolean> => {
-    const claim = repairClaim(request);
-    if (!claims.claim(claim)) return false;
-    const completion: Promise<RepairWorkerCompletion> = (async () => {
-      try {
-        if (deps.emitMaintenancePhase) {
-          await timeMaintenancePhase({ phase: 'repair', prUrl: request.prUrl, ...(request.slug ? { slug: request.slug } : {}) }, () => deps.repairs!.run(request), {
-            now,
-            emit: deps.emitMaintenancePhase,
-          });
-        } else {
-          await deps.repairs!.run(request);
-        }
-        return { kind: 'repair-complete' };
-      } catch (error) {
-        log(`[daemon] repair ${request.prUrl} error: ${error instanceof Error ? error.message : String(error)}`);
-        return { kind: 'repair-complete' };
+  const startRepair = deps.repairs
+    ? async (request: RepairRequest): Promise<boolean> => {
+        const claim = repairClaim(request);
+        if (!claims.claim(claim)) return false;
+        const completion: Promise<RepairWorkerCompletion> = (async () => {
+          try {
+            if (deps.emitMaintenancePhase) {
+              await timeMaintenancePhase(
+                { phase: 'repair', prUrl: request.prUrl, ...(request.slug ? { slug: request.slug } : {}) },
+                () => deps.repairs!.run(request),
+                {
+                  now,
+                  emit: deps.emitMaintenancePhase,
+                },
+              );
+            } else {
+              await deps.repairs!.run(request);
+            }
+            return { kind: 'repair-complete' };
+          } catch (error) {
+            log(`[daemon] repair ${request.prUrl} error: ${error instanceof Error ? error.message : String(error)}`);
+            return { kind: 'repair-complete' };
+          }
+        })();
+        workers.push({ kind: 'repair', request, completion });
+        observeWorkerSet();
+        return true;
       }
-    })();
-    workers.push({ kind: 'repair', request, completion });
-    observeWorkerSet();
-    return true;
-  } : undefined;
+    : undefined;
   /** Select, claim, and start one repair for a free pool slot. */
-  const startNextRepair = deps.repairs && startRepair ? async (): Promise<RepairRequest | undefined> => {
-    const repair = deps.repairs!.queue.list().slice().sort((a, b) => {
-      const [aRank, aCreated] = repairBand(a);
-      const [bRank, bCreated] = repairBand(b);
-      return aRank - bRank || aCreated.localeCompare(bCreated);
-    }).find((candidate) => !candidate.slug || !isFeatureInFlight(candidate.slug));
-    if (!repair) return undefined;
-    // A feature owns its slug for the entire build. Keep the repair queued
-    // until that claim is released; do not create a repair claim or read PR
-    // state while the feature can still mutate the same branch/worktree.
-    if (repair.slug && isFeatureInFlight(repair.slug)) return undefined;
-    if (!deps.repairs!.queue.takeByUrl(repair.prUrl)) return undefined;
-    if (await startRepair(repair)) return repair;
-    // A duplicate claim is still live; leave the request available for a later pass.
-    deps.repairs!.queue.enqueue(repair);
-    return undefined;
-  } : undefined;
+  const startNextRepair =
+    deps.repairs && startRepair
+      ? async (): Promise<RepairRequest | undefined> => {
+          const repair = deps
+            .repairs!.queue.list()
+            .slice()
+            .sort((a, b) => {
+              const [aRank, aCreated] = repairBand(a);
+              const [bRank, bCreated] = repairBand(b);
+              return aRank - bRank || aCreated.localeCompare(bCreated);
+            })
+            .find((candidate) => !candidate.slug || !isFeatureInFlight(candidate.slug));
+          if (!repair) return undefined;
+          // A feature owns its slug for the entire build. Keep the repair queued
+          // until that claim is released; do not create a repair claim or read PR
+          // state while the feature can still mutate the same branch/worktree.
+          if (repair.slug && isFeatureInFlight(repair.slug)) return undefined;
+          if (!deps.repairs!.queue.takeByUrl(repair.prUrl)) return undefined;
+          if (await startRepair(repair)) return repair;
+          // A duplicate claim is still live; leave the request available for a later pass.
+          deps.repairs!.queue.enqueue(repair);
+          return undefined;
+        }
+      : undefined;
 
   // Task 1 (#651): park check immediately before every build-start, closing
   // the selection→dispatch race — pickEligible's selection-time check
@@ -1215,9 +1237,10 @@ export async function runDaemon(
     // durable state and operator-facing markers untouched so backlog order can
     // resume this kept worktree normally.
     if (outcome.status === 'preempted') {
-      if (preemption) (deps.featureLog?.(slug) ?? log)(
-        `${chalk.yellow('■')} preempted ${chalk.bold(slug)}: yielded to ${chalk.bold(preemption.cause)}`,
-      );
+      if (preemption)
+        (deps.featureLog?.(slug) ?? log)(
+          `${chalk.yellow('■')} preempted ${chalk.bold(slug)}: yielded to ${chalk.bold(preemption.cause)}`,
+        );
       return;
     }
     await deps.onFeatureTerminalEffects?.(outcome);
@@ -1274,9 +1297,7 @@ export async function runDaemon(
   // Seed the last-seen SHA from the persisted value. A genuine advance is
   // `current !== lastSeenSha` with `lastSeenSha != null`; a null seed (first
   // run / corrupt file) initializes WITHOUT a sweep (FR-5 first-run path).
-  let lastSeenSha: string | null = deps.readPersistedBaseSha
-    ? await deps.readPersistedBaseSha()
-    : null;
+  let lastSeenSha: string | null = deps.readPersistedBaseSha ? await deps.readPersistedBaseSha() : null;
   // A background maintenance pass and a refreshed-backlog fold can both reach
   // re-kick while the first sweep is awaiting I/O. Serialize the compare →
   // sweep → persist transaction so only one of them observes a given advance.
@@ -1296,10 +1317,7 @@ export async function runDaemon(
    * Re-evaluated at the same call sites as the fill-pool pause check, so
    * lifting the pause mid-run makes re-kick eligible again at the next call.
    */
-  const maybeRekick = (
-    refresh: boolean,
-    knownCurrent?: string | null,
-  ): Promise<void> => {
+  const maybeRekick = (refresh: boolean, knownCurrent?: string | null): Promise<void> => {
     const reconciliation = baseShaReconciliation.then(async () => {
       if (await checkPaused()) return;
       let current = knownCurrent;
@@ -1308,7 +1326,9 @@ export async function runDaemon(
         try {
           current = await deps.resolveBaseSha({ refresh });
         } catch (err) {
-          log(`base-SHA resolution failed (${err instanceof Error ? err.message : String(err)}); treating as no advance`);
+          log(
+            `base-SHA resolution failed (${err instanceof Error ? err.message : String(err)}); treating as no advance`,
+          );
           return;
         }
       }
@@ -1355,16 +1375,17 @@ export async function runDaemon(
         // building a dirty or diverged root would publish an untrustworthy
         // engine version for later children.  Discovery still runs: a skipped
         // refresh must never stall backlog pickup.
-        const sourceRefresh = staleGatesArmed && deps.refreshEngineSource
-          ? await deps.refreshEngineSource()
-          : undefined;
+        const sourceRefresh =
+          staleGatesArmed && deps.refreshEngineSource ? await deps.refreshEngineSource() : undefined;
         const sourceRefreshSkipped = sourceRefresh?.status === 'skipped';
         // `refreshEngineSource` owns fetch/fast-forward cadence. Once it was
         // skipped (including throttle), discovery must remain local or it
         // silently performs the very fetch the throttle refused.
-        const refreshed = await maintenance.refreshOnly(() => deps.discoverBacklog({
-          refresh: sourceRefreshSkipped ? false : true,
-        }));
+        const refreshed = await maintenance.refreshOnly(() =>
+          deps.discoverBacklog({
+            refresh: sourceRefreshSkipped ? false : true,
+          }),
+        );
         if (refreshed !== undefined) {
           refreshedBacklog = refreshed;
           // Wake a busy poll so the result is folded promptly. The idle waker
@@ -1380,7 +1401,9 @@ export async function runDaemon(
           try {
             await deps.rebuildEngine();
           } catch (err) {
-            log(`[daemon] background engine rebuild failed (${err instanceof Error ? err.message : String(err)}); a later pass will retry`);
+            log(
+              `[daemon] background engine rebuild failed (${err instanceof Error ? err.message : String(err)}); a later pass will retry`,
+            );
           }
         }
       } catch (err) {
@@ -1409,9 +1432,11 @@ export async function runDaemon(
     // tail, but a slow background pass must not occupy this dispatch slot.
     // `maybeRekick` catches the tail for later callers; catch this caller's
     // promise too so a failed durable write is never an unhandled rejection.
-    void maintenance.run('rekick', () => maybeRekick(false)).catch((error) => {
-      log(`base-SHA reconciliation failed (${error instanceof Error ? error.message : String(error)}); continuing`);
-    });
+    void maintenance
+      .run('rekick', () => maybeRekick(false))
+      .catch((error) => {
+        log(`base-SHA reconciliation failed (${error instanceof Error ? error.message : String(error)}); continuing`);
+      });
     const parkedBeforeRefresh = new Set(claims.listParked());
     const picked = await pickEligible({ items: refreshed }, pickCtx);
     for (const slug of claims.listParked()) {
@@ -1428,7 +1453,10 @@ export async function runDaemon(
   // exact result rather than re-reading pause state after the first claim.
   let pausedAtStartup = false;
   let startupDashboardPending = true;
-  const runPhase = async (phase: Exclude<MaintenancePhaseInput, { phase: 'repair' | 'parked-reconcile' }>, run: () => Promise<void>): Promise<void> => {
+  const runPhase = async (
+    phase: Exclude<MaintenancePhaseInput, { phase: 'repair' | 'parked-reconcile' }>,
+    run: () => Promise<void>,
+  ): Promise<void> => {
     if (!deps.emitMaintenancePhase) return run();
     await timeMaintenancePhase(phase, run, { now, emit: deps.emitMaintenancePhase });
   };
@@ -1448,50 +1476,85 @@ export async function runDaemon(
     resumeAuthorizationsInFlight = shared;
     return shared;
   };
-  const maintenanceJob = new MaintenanceJob([
-    ['startup-dashboard', async () => {
-      if (!startupDashboardPending) return;
-      startupDashboardPending = false;
-      await runPhase({ phase: 'startup-dashboard' }, async () => {
-        if (!pausedAtStartup) await deps.renderStartupDashboard?.(pausedAtStartup);
-      });
-    }],
-    ['rekick', async () => {
-      // A pure scheduler caller with no re-kick hooks has no mutable base
-      // state to reconcile; avoid an extra pause-marker read in that mode.
-      if (!deps.rekickSweep && !deps.resolveBaseSha) {
-        // Telemetry still records the no-op phase; only legacy pure-core
-        // callers avoid an otherwise-observable pause read.
-        if (deps.emitMaintenancePhase) await runPhase({ phase: 'rekick' }, async () => {});
-        return;
-      }
-      // The startup discovery's base is valid for exactly one deferred
-      // reconciliation pass.  Reusing it on every coalesced maintenance pass
-      // would move `lastSeenSha` backwards after a later live advance.
-      const knownStartupBase = startupBaseSha;
-      startupBaseSha = undefined;
-      await runPhase({ phase: 'rekick' }, () => maybeRekick(false, knownStartupBase));
-    }],
-    ['resume-authorizations', consumeResumeAuthorizations],
-    ['reconcileHaltPrs', async () => runPhase({ phase: 'halt-pr-reconcile' }, async () => { await deps.reconcileHaltPrs?.(); })],
-    ['reconcileParkedFeatures', async () => {
-      if (!deps.emitMaintenancePhase) {
-        await deps.reconcileParkedFeatures?.({ disposeHaltWatcher: disposeWatcher, isFeatureInFlight });
-        return;
-      }
-      await timeMaintenancePhase({ phase: 'parked-reconcile' }, async () => {
-        const result = await deps.reconcileParkedFeatures?.({ disposeHaltWatcher: disposeWatcher, isFeatureInFlight });
-        return {
-          outcome: result?.outcome ?? 'completed',
-          summary: result?.counts,
-        };
-      }, { now, emit: deps.emitMaintenancePhase });
-    }],
-    ['sweepProviderScratch', async () => runPhase({ phase: 'provider-scratch' }, async () => { await deps.sweepProviderScratch?.(); })],
-    ['sweepMergeableLabels', async () => runPhase({ phase: 'mergeable-sweep' }, async () => {
-      await deps.sweepMergeableLabels?.({ isFeatureInFlight });
-    })],
-  ], log);
+  const maintenanceJob = new MaintenanceJob(
+    [
+      [
+        'startup-dashboard',
+        async () => {
+          if (!startupDashboardPending) return;
+          startupDashboardPending = false;
+          await runPhase({ phase: 'startup-dashboard' }, async () => {
+            if (!pausedAtStartup) await deps.renderStartupDashboard?.(pausedAtStartup);
+          });
+        },
+      ],
+      [
+        'rekick',
+        async () => {
+          // A pure scheduler caller with no re-kick hooks has no mutable base
+          // state to reconcile; avoid an extra pause-marker read in that mode.
+          if (!deps.rekickSweep && !deps.resolveBaseSha) {
+            // Telemetry still records the no-op phase; only legacy pure-core
+            // callers avoid an otherwise-observable pause read.
+            if (deps.emitMaintenancePhase) await runPhase({ phase: 'rekick' }, async () => {});
+            return;
+          }
+          // The startup discovery's base is valid for exactly one deferred
+          // reconciliation pass.  Reusing it on every coalesced maintenance pass
+          // would move `lastSeenSha` backwards after a later live advance.
+          const knownStartupBase = startupBaseSha;
+          startupBaseSha = undefined;
+          await runPhase({ phase: 'rekick' }, () => maybeRekick(false, knownStartupBase));
+        },
+      ],
+      ['resume-authorizations', consumeResumeAuthorizations],
+      [
+        'reconcileHaltPrs',
+        async () =>
+          runPhase({ phase: 'halt-pr-reconcile' }, async () => {
+            await deps.reconcileHaltPrs?.();
+          }),
+      ],
+      [
+        'reconcileParkedFeatures',
+        async () => {
+          if (!deps.emitMaintenancePhase) {
+            await deps.reconcileParkedFeatures?.({ disposeHaltWatcher: disposeWatcher, isFeatureInFlight });
+            return;
+          }
+          await timeMaintenancePhase(
+            { phase: 'parked-reconcile' },
+            async () => {
+              const result = await deps.reconcileParkedFeatures?.({
+                disposeHaltWatcher: disposeWatcher,
+                isFeatureInFlight,
+              });
+              return {
+                outcome: result?.outcome ?? 'completed',
+                summary: result?.counts,
+              };
+            },
+            { now, emit: deps.emitMaintenancePhase },
+          );
+        },
+      ],
+      [
+        'sweepProviderScratch',
+        async () =>
+          runPhase({ phase: 'provider-scratch' }, async () => {
+            await deps.sweepProviderScratch?.();
+          }),
+      ],
+      [
+        'sweepMergeableLabels',
+        async () =>
+          runPhase({ phase: 'mergeable-sweep' }, async () => {
+            await deps.sweepMergeableLabels?.({ isFeatureInFlight });
+          }),
+      ],
+    ],
+    log,
+  );
 
   // The sole awaited startup I/O before a claim.  Later task work folds its
   // resolved base through rekick and the refresh throttle; Task 4 only keeps
@@ -1508,9 +1571,13 @@ export async function runDaemon(
   if (!pausedAtStartup) {
     try {
       if (deps.emitMaintenancePhase) {
-        await timeMaintenancePhase({ phase: 'startup-refresh' }, async () => {
-          startupBacklog = await deps.discoverBacklog({ refresh: true });
-        }, { now, emit: deps.emitMaintenancePhase });
+        await timeMaintenancePhase(
+          { phase: 'startup-refresh' },
+          async () => {
+            startupBacklog = await deps.discoverBacklog({ refresh: true });
+          },
+          { now, emit: deps.emitMaintenancePhase },
+        );
       } else {
         startupBacklog = await deps.discoverBacklog({ refresh: true });
       }
@@ -1572,9 +1639,7 @@ export async function runDaemon(
         try {
           await deps.recordRestartPendingDrain(drain.slugs);
         } catch (err) {
-          log(
-            `[daemon] failed to record restart drain set: ${err instanceof Error ? err.message : String(err)}`,
-          );
+          log(`[daemon] failed to record restart drain set: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
       log(`[daemon] drain started: ${drain.reason}`);
@@ -1585,11 +1650,11 @@ export async function runDaemon(
   // already due; an unconditional await adds scheduler turns that let a
   // settled serial worker skip its busy poll.
   const serialBusyDrainDue = (): boolean =>
-    !maintenance.isDraining()
-    && inFlight.size > 0
-    && (deps.protocolMismatchPending?.() === true
-      || supervisorStaleness.restartReason === 'protocol-mismatch'
-      || supervisorStaleness.capExceeded(staleAgeCapHours));
+    !maintenance.isDraining() &&
+    inFlight.size > 0 &&
+    (deps.protocolMismatchPending?.() === true ||
+      supervisorStaleness.restartReason === 'protocol-mismatch' ||
+      supervisorStaleness.capExceeded(staleAgeCapHours));
 
   const observeBusyDrainRequest = async (): Promise<void> => {
     if (maintenance.isDraining() || inFlight.size === 0) return;
@@ -1721,12 +1786,20 @@ export async function runDaemon(
       abandonDrain();
       return false;
     }
-    if (inFlight.size !== 0) { abandonDrain(); return false; } // re-verify after async suppression check
+    if (inFlight.size !== 0) {
+      abandonDrain();
+      return false;
+    } // re-verify after async suppression check
 
     const fromIdentity = deps.staleEngineChecker.capturedIdentity?.() ?? null;
-    if (!deps.requestRestart) { abandonDrain(); return false; }
+    if (!deps.requestRestart) {
+      abandonDrain();
+      return false;
+    }
     restartPending = true;
-    log(`[daemon] stale supervisor at idle — captured: ${fromIdentity}, target: ${targetIdentity} — restarting before next task`);
+    log(
+      `[daemon] stale supervisor at idle — captured: ${fromIdentity}, target: ${targetIdentity} — restarting before next task`,
+    );
     maintenanceJob.close();
     await maintenanceJob.settled();
     await refreshJob;
@@ -1789,13 +1862,22 @@ export async function runDaemon(
       if (!deps.onTick) return;
       const snapshot = await deps.getDiscoverySnapshot?.(claims.listParked());
       deps.onTick({
-        counts: { eligible: snapshot?.counts.eligible ?? 0, waiting: snapshot?.counts.waiting ?? 0,
-          blocked: snapshot?.counts.blocked ?? 0, gated: snapshot?.counts.gated ?? 0,
-          parked: snapshot?.counts.parked ?? claims.listParked().length },
+        counts: {
+          eligible: snapshot?.counts.eligible ?? 0,
+          waiting: snapshot?.counts.waiting ?? 0,
+          blocked: snapshot?.counts.blocked ?? 0,
+          gated: snapshot?.counts.gated ?? 0,
+          parked: snapshot?.counts.parked ?? claims.listParked().length,
+        },
         oldestAgeSeconds: snapshot?.oldestAgeSeconds ?? {},
         slots: { busy: inFlight.size, free: Math.max(0, concurrency - inFlight.size) },
-        inFlight: workers.map((worker) => worker.kind === 'feature' ? worker.slug : repairClaim(worker.request)),
-        blocked: { paused, build_auth_missing: buildAuthMissing, gh_version: ghVersionBlocked, episode_active: episodeActive },
+        inFlight: workers.map((worker) => (worker.kind === 'feature' ? worker.slug : repairClaim(worker.request))),
+        blocked: {
+          paused,
+          build_auth_missing: buildAuthMissing,
+          gh_version: ghVersionBlocked,
+          episode_active: episodeActive,
+        },
         pollDurationMs: snapshot?.pollDurationMs ?? 0,
         rootRefreshPending: refreshJob !== undefined,
       });
@@ -1849,7 +1931,14 @@ export async function runDaemon(
           const key = `${reason}:${request.prUrl}`;
           if (deferredRepairEpisodes.has(key)) continue;
           deferredRepairEpisodes.add(key);
-          void deps.emitMaintenancePhase({ type: 'daemon_maintenance_phase', phase: 'repair', durationMs: 0, outcome: 'deferred', prUrl: request.prUrl, ...(request.slug ? { slug: request.slug } : {}) });
+          void deps.emitMaintenancePhase({
+            type: 'daemon_maintenance_phase',
+            phase: 'repair',
+            durationMs: 0,
+            outcome: 'deferred',
+            prUrl: request.prUrl,
+            ...(request.slug ? { slug: request.slug } : {}),
+          });
         }
       }
       if (!dispatchBlocked) {
@@ -1865,9 +1954,10 @@ export async function runDaemon(
         // Local-only discovery first (no remote fetch): cheap, and it preserves
         // the common path when a slot can be filled without origin I/O.
         const parkedBeforeLocal = new Set(claims.listParked());
-        const items = firstFillPass && startupBacklog !== undefined
-          ? startupBacklog
-          : await deps.discoverBacklog({ refresh: false });
+        const items =
+          firstFillPass && startupBacklog !== undefined
+            ? startupBacklog
+            : await deps.discoverBacklog({ refresh: false });
         next = await pickEligible({ items }, pickCtx);
         // pickEligible's "durable HALT from a prior run" branch adds directly to
         // `parked` for a slug this run never dispatched — register its watcher
@@ -1906,7 +1996,12 @@ export async function runDaemon(
         // Task 1 (#651): re-check park immediately before this dispatch — closes
         // the selection→dispatch race opened by the rebuild/restart await above.
         if (deps.emitMaintenancePhase && !firstClaimEmitted) {
-          await deps.emitMaintenancePhase({ type: 'daemon_maintenance_phase', phase: 'first-claim', durationMs: now() - firstClaimScanStartedAt, outcome: 'completed' });
+          await deps.emitMaintenancePhase({
+            type: 'daemon_maintenance_phase',
+            phase: 'first-claim',
+            durationMs: now() - firstClaimScanStartedAt,
+            outcome: 'completed',
+          });
           firstClaimEmitted = true;
         }
         const dispatched = await guardedDispatch(next);
@@ -1945,92 +2040,91 @@ export async function runDaemon(
           async (episodeActive): Promise<DaemonStopReason | null> => {
             if (!restartTriggeredSuccessfully && deps.hasRestartPending) {
               try {
-                const hasRestart =
-                  restartPendingDeferredByEpisode || (await deps.hasRestartPending());
+                const hasRestart = restartPendingDeferredByEpisode || (await deps.hasRestartPending());
                 if (hasRestart) {
-                restartPending = true;
-                maintenanceJob.close();
-                await refreshJob;
-                // Task 21 (#392): never fire restart triggers while a rate-limit
-                // episode is active — a respawn mid-episode discards the shared
-                // backoff state and re-enters the API storm.
-              if (!episodeActive) {
-                // T28 path: supervisor mode — fire respawn trigger
-                if (deps.triggerSelfRestart) {
-                  log('[daemon] self-restart marker found at idle boundary; firing trigger');
+                  restartPending = true;
                   maintenanceJob.close();
-                  await maintenanceJob.settled();
-                  let refreshFailed = false;
-                  if (deps.refreshEngineSource) {
-                    try {
-                      const outcome = await deps.refreshEngineSource({ force: true });
-                      if (outcome?.status === 'skipped') {
-                        log(
-                          `[daemon] source refresh skipped (${outcome.cause ?? 'unknown cause'}); ` +
-                            'restart marker retained for retry at next idle boundary',
-                        );
-                        refreshFailed = true;
+                  await refreshJob;
+                  // Task 21 (#392): never fire restart triggers while a rate-limit
+                  // episode is active — a respawn mid-episode discards the shared
+                  // backoff state and re-enters the API storm.
+                  if (!episodeActive) {
+                    // T28 path: supervisor mode — fire respawn trigger
+                    if (deps.triggerSelfRestart) {
+                      log('[daemon] self-restart marker found at idle boundary; firing trigger');
+                      maintenanceJob.close();
+                      await maintenanceJob.settled();
+                      let refreshFailed = false;
+                      if (deps.refreshEngineSource) {
+                        try {
+                          const outcome = await deps.refreshEngineSource({ force: true });
+                          if (outcome?.status === 'skipped') {
+                            log(
+                              `[daemon] source refresh skipped (${outcome.cause ?? 'unknown cause'}); ` +
+                                'restart marker retained for retry at next idle boundary',
+                            );
+                            refreshFailed = true;
+                          }
+                        } catch (err) {
+                          log(
+                            `[daemon] source refresh failed: ${err instanceof Error ? err.message : String(err)}; ` +
+                              'restart marker retained for retry at next idle boundary',
+                          );
+                          refreshFailed = true;
+                        }
                       }
-                    } catch (err) {
-                      log(
-                        `[daemon] source refresh failed: ${err instanceof Error ? err.message : String(err)}; ` +
-                          'restart marker retained for retry at next idle boundary',
-                      );
-                      refreshFailed = true;
+                      // Task 13 (#393): relink BEFORE firing the trigger (queued-restart
+                      // relink wiring); a relink failure keeps the marker for retry.
+                      let relinkFailed = refreshFailed;
+                      if (!refreshFailed && deps.relink) {
+                        try {
+                          await deps.relink();
+                        } catch (err) {
+                          log(
+                            `[daemon] relink failed: ${err instanceof Error ? err.message : String(err)}; will retry at next idle boundary`,
+                          );
+                          relinkFailed = true;
+                        }
+                      }
+                      // Only fire trigger if relink succeeded (or was absent)
+                      if (!relinkFailed) {
+                        try {
+                          await deps.triggerSelfRestart();
+                          // If trigger succeeds, it respawns the process and we never reach here.
+                          // But if it doesn't respawn immediately, track that we succeeded so we
+                          // don't retry (in production, the process exits on respawn).
+                          restartTriggeredSuccessfully = true;
+                          log('[daemon] self-restart trigger completed (no respawn yet)');
+                        } catch (err) {
+                          log(
+                            `[daemon] self-restart trigger failed: ${err instanceof Error ? err.message : String(err)}; will retry at next idle boundary`,
+                          );
+                        }
+                      }
                     }
-                  }
-                  // Task 13 (#393): relink BEFORE firing the trigger (queued-restart
-                  // relink wiring); a relink failure keeps the marker for retry.
-                  let relinkFailed = refreshFailed;
-                  if (!refreshFailed && deps.relink) {
-                    try {
-                      await deps.relink();
-                    } catch (err) {
-                      log(
-                        `[daemon] relink failed: ${err instanceof Error ? err.message : String(err)}; will retry at next idle boundary`,
-                      );
-                      relinkFailed = true;
+                    // T30 path: bare-run mode — no supervisor, consume marker and exit cleanly
+                    else if (deps.consumeRestartPending) {
+                      log('[daemon] restart-pending honored (bare-run, no supervisor available)');
+                      maintenanceJob.close();
+                      await maintenanceJob.settled();
+                      try {
+                        await deps.consumeRestartPending();
+                        log('[daemon] restart marker consumed; exiting cleanly');
+                        restartTriggeredSuccessfully = true;
+                        restartPendingConsumed = true;
+                        // Break from the loop to exit cleanly with the current processed results
+                        return 'backlog_drained';
+                      } catch (err) {
+                        log(
+                          `[daemon] bare-run consume failed: ${err instanceof Error ? err.message : String(err)}; will retry at next idle boundary`,
+                        );
+                      }
                     }
+                  } else {
+                    // Episode is active: defer the restart trigger but keep the marker
+                    restartPendingDeferredByEpisode = true;
+                    log('[daemon] restart marker present but episode active; deferring trigger');
                   }
-                  // Only fire trigger if relink succeeded (or was absent)
-                  if (!relinkFailed) {
-                    try {
-                      await deps.triggerSelfRestart();
-                      // If trigger succeeds, it respawns the process and we never reach here.
-                      // But if it doesn't respawn immediately, track that we succeeded so we
-                      // don't retry (in production, the process exits on respawn).
-                      restartTriggeredSuccessfully = true;
-                      log('[daemon] self-restart trigger completed (no respawn yet)');
-                    } catch (err) {
-                      log(
-                        `[daemon] self-restart trigger failed: ${err instanceof Error ? err.message : String(err)}; will retry at next idle boundary`,
-                      );
-                    }
-                  }
-                }
-                // T30 path: bare-run mode — no supervisor, consume marker and exit cleanly
-                else if (deps.consumeRestartPending) {
-                  log('[daemon] restart-pending honored (bare-run, no supervisor available)');
-                  maintenanceJob.close();
-                  await maintenanceJob.settled();
-                  try {
-                    await deps.consumeRestartPending();
-                    log('[daemon] restart marker consumed; exiting cleanly');
-                    restartTriggeredSuccessfully = true;
-                    restartPendingConsumed = true;
-                    // Break from the loop to exit cleanly with the current processed results
-                    return 'backlog_drained';
-                  } catch (err) {
-                    log(
-                      `[daemon] bare-run consume failed: ${err instanceof Error ? err.message : String(err)}; will retry at next idle boundary`,
-                    );
-                  }
-                }
-              } else {
-                // Episode is active: defer the restart trigger but keep the marker
-                restartPendingDeferredByEpisode = true;
-                log('[daemon] restart marker present but episode active; deferring trigger');
-              }
                 }
               } catch (err) {
                 log(
@@ -2041,14 +2135,14 @@ export async function runDaemon(
             return null;
           },
 
-        // Task 12: stale-engine detection gate chain. Evaluate gates in order:
-        // 1. continuous mode (NOT once-mode)
-        // 2. self-host enabled
-        // 3. config flag enabled
-        // 4. checker armed (checker exists)
-        // 5. (Task 11 addition) not suppressed
-        // If all gates pass, call the checker. On 'stale' verdict, (Task 13) call
-        // requestRestart. If ANY gate fails, skip the check and continue idle behavior.
+          // Task 12: stale-engine detection gate chain. Evaluate gates in order:
+          // 1. continuous mode (NOT once-mode)
+          // 2. self-host enabled
+          // 3. config flag enabled
+          // 4. checker armed (checker exists)
+          // 5. (Task 11 addition) not suppressed
+          // If all gates pass, call the checker. On 'stale' verdict, (Task 13) call
+          // requestRestart. If ANY gate fails, skip the check and continue idle behavior.
           async (episodeActive): Promise<DaemonStopReason | null> => {
             if (maintenance.drain()?.reason === 'stale-engine') {
               if (episodeActive) {
@@ -2097,19 +2191,20 @@ export async function runDaemon(
         // HALTs if the maintenance scheduler observed the episode end.
         // The scheduler still owns episode-end observation, but the ordinary
         // sweep is now a fire-and-forget MaintenanceJob trigger.
-        await maintenance.afterIdlePoll(async () => {
-          maintenanceJob.trigger();
-        }, async () => {
-          if (deps.sweepEpisodeHalts) {
-            try {
-              await deps.sweepEpisodeHalts(deps.isParked);
-            } catch (err) {
-              log(
-                `[daemon] sweepEpisodeHalts error: ${err instanceof Error ? err.message : String(err)}`,
-              );
+        await maintenance.afterIdlePoll(
+          async () => {
+            maintenanceJob.trigger();
+          },
+          async () => {
+            if (deps.sweepEpisodeHalts) {
+              try {
+                await deps.sweepEpisodeHalts(deps.isParked);
+              } catch (err) {
+                log(`[daemon] sweepEpisodeHalts error: ${err instanceof Error ? err.message : String(err)}`);
+              }
             }
-          }
-        });
+          },
+        );
 
         continue;
       }
@@ -2120,28 +2215,38 @@ export async function runDaemon(
       // rather than replaying the last free-slot discovery with a stale age.
       const items = await deps.discoverBacklog({ refresh: false });
       if (!preemptionOutstanding && deps.requestYield) {
-        const next = await pickEligible({ items }, {
-          claims,
-          isHalted: deps.isHalted,
-          isParked: deps.isParked,
-          isProgressReKickEligible: isProgressReKickEligibleBounded,
-        });
+        const next = await pickEligible(
+          { items },
+          {
+            claims,
+            isHalted: deps.isHalted,
+            isParked: deps.isParked,
+            isProgressReKickEligible: isProgressReKickEligibleBounded,
+          },
+        );
         if (next?.resolutionMode === 'banded') {
-          const victim = selectPreemptionVictim({
-            slug: next.slug,
-            band: next.band as PriorityBand | undefined,
-            backlogIndex: items.indexOf(next),
-          }, workers.flatMap((worker) => {
-            if (worker.kind !== 'feature') return [];
-            const running = items.findIndex((item) => item.slug === worker.slug);
-            const item = running >= 0 ? items[running] : undefined;
-            return item?.resolutionMode === 'banded' ? [{
-              slug: worker.slug,
-              band: item.band as PriorityBand | undefined,
-              backlogIndex: running,
-              dispatchSequence: worker.dispatchSequence,
-            }] : [];
-          }));
+          const victim = selectPreemptionVictim(
+            {
+              slug: next.slug,
+              band: next.band as PriorityBand | undefined,
+              backlogIndex: items.indexOf(next),
+            },
+            workers.flatMap((worker) => {
+              if (worker.kind !== 'feature') return [];
+              const running = items.findIndex((item) => item.slug === worker.slug);
+              const item = running >= 0 ? items[running] : undefined;
+              return item?.resolutionMode === 'banded'
+                ? [
+                    {
+                      slug: worker.slug,
+                      band: item.band as PriorityBand | undefined,
+                      backlogIndex: running,
+                      dispatchSequence: worker.dispatchSequence,
+                    },
+                  ]
+                : [];
+            }),
+          );
           if (victim && deps.requestYield(victim)) preemptionOutstanding = { victim, cause: next.slug };
         }
       }

@@ -179,18 +179,19 @@ interface SharedStepConfig {
  * Configuration for a single step. A step can dispatch one skill or a
  * parallel branch group, but never both.
  */
-export type StepConfig = SharedStepConfig & (
-  | {
-      /** Replace the default SKILL.md file with this path. */
-      skill?: string;
-      parallel?: never;
-    }
-  | {
-      skill?: never;
-      /** Concurrent branch group. */
-      parallel?: ParallelBranch[];
-    }
-);
+export type StepConfig = SharedStepConfig &
+  (
+    | {
+        /** Replace the default SKILL.md file with this path. */
+        skill?: string;
+        parallel?: never;
+      }
+    | {
+        skill?: never;
+        /** Concurrent branch group. */
+        parallel?: ParallelBranch[];
+      }
+  );
 
 /**
  * Phase-wide defaults. Apply to every step in the phase unless overridden.
@@ -532,10 +533,7 @@ export interface TestSuiteConfig {
   verification?: TestSuiteVerificationConfig;
 }
 
-export type AggregateTestSuiteConfig = TestSuiteConfig & (
-  | { command: string }
-  | { commands: TestSuiteCommandConfig[] }
-);
+export type AggregateTestSuiteConfig = TestSuiteConfig & ({ command: string } | { commands: TestSuiteCommandConfig[] });
 
 /** Per-project work-tracker backend selection. */
 export type TrackerConfig =
@@ -894,9 +892,7 @@ export interface BuildReviewCustomRubricConfig extends BuildReviewRubricConfig {
 }
 
 /** Per-rubric settings keyed by the closed {@link BuildReviewRubricId} set. */
-export type BuildReviewRubricsConfig = Partial<
-  Record<BuildReviewRubricId, BuildReviewRubricConfig>
->;
+export type BuildReviewRubricsConfig = Partial<Record<BuildReviewRubricId, BuildReviewRubricConfig>>;
 
 /** Project-defined rubric declarations keyed by their stable rubric IDs. */
 export type BuildReviewCustomRubricsConfig = Record<string, BuildReviewCustomRubricConfig>;

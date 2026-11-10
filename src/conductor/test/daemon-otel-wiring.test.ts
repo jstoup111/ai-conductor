@@ -6,7 +6,12 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ExportResultCode, type ExportResult } from '@opentelemetry/core';
-import { AggregationTemporality, InMemoryMetricExporter, type PushMetricExporter, type ResourceMetrics } from '@opentelemetry/sdk-metrics';
+import {
+  AggregationTemporality,
+  InMemoryMetricExporter,
+  type PushMetricExporter,
+  type ResourceMetrics,
+} from '@opentelemetry/sdk-metrics';
 import { type ReadableSpan, type SpanExporter } from '@opentelemetry/sdk-trace-base';
 import { CapturingSpanExporter as InMemorySpanExporter } from './fixtures/capturing-span-exporter.js';
 import { buildInteractiveVisualizers } from '../src/index.js';
@@ -111,11 +116,12 @@ vi.mock('../src/engine/daemon-runner.js', async (importOriginal) => {
           const scope = await deps.beginFeatureRun!(worktree, item);
           fixture.scopes.push(scope);
           const events = scope.events as {
-            emit: (event:
-              | { type: 'step_started'; step: 'bootstrap'; index: number }
-              | { type: 'step_completed'; step: 'bootstrap'; status: 'done' }
-              | { type: 'feature_complete'; featureDesc: string }
-              | { type: 'loop_halt'; reason: string }
+            emit: (
+              event:
+                | { type: 'step_started'; step: 'bootstrap'; index: number }
+                | { type: 'step_completed'; step: 'bootstrap'; status: 'done' }
+                | { type: 'feature_complete'; featureDesc: string }
+                | { type: 'loop_halt'; reason: string },
             ) => Promise<void>;
           };
           if (fixture.emitOtelEvents) {
@@ -264,7 +270,7 @@ async function dispatchWithSessionId(
         createWorktree: async () => ({ path: fixture.worktreePath }),
         run: async ({ order, events }) => {
           let stopPromise: Promise<void> | undefined;
-          const stop = () => stopPromise ??= Promise.resolve();
+          const stop = () => (stopPromise ??= Promise.resolve());
           const visualizer = wireOtelVisualizer.mock.results.at(-1)?.value ?? null;
           const context = wireOtelVisualizer.mock.calls.at(-1)?.[1] as OtelVisualizerStartContext | undefined;
           fixture.scopes.push({
@@ -412,9 +418,7 @@ describe('daemon OTel visualizer wiring', () => {
         attributes,
       },
     } as unknown as HarnessConfig;
-    const actualWire = await vi.importActual<typeof import('../src/engine/otel/wire.js')>(
-      '../src/engine/otel/wire.js',
-    );
+    const actualWire = await vi.importActual<typeof import('../src/engine/otel/wire.js')>('../src/engine/otel/wire.js');
     const mainRoot = await mkdtemp(join(tmpdir(), 'daemon-otel-root-'));
     dirs.push(mainRoot);
     const daemonOtel = actualWire.wireDaemonOtel(config, {
@@ -496,10 +500,12 @@ describe('daemon OTel visualizer wiring', () => {
     const rootEvents = new ConductorEventEmitter();
     const interactivePipelineDir = await mkdtemp(join(tmpdir(), 'interactive-otel-parity-'));
     dirs.push(interactivePipelineDir);
-    buildExporters.mockReturnValueOnce({
-      spanExporter: new InMemorySpanExporter(),
-      metricExporter: daemonMetricExporter,
-    }).mockReturnValue({ spanExporter: interactiveSpanExporter, metricExporter: interactiveMetricExporter });
+    buildExporters
+      .mockReturnValueOnce({
+        spanExporter: new InMemorySpanExporter(),
+        metricExporter: daemonMetricExporter,
+      })
+      .mockReturnValue({ spanExporter: interactiveSpanExporter, metricExporter: interactiveMetricExporter });
     fixture.emitOtelEvents = true;
     wireOtelVisualizer.mockImplementation((config, context, events) => {
       const interactive = context.pipelineDir === interactivePipelineDir;
@@ -520,9 +526,7 @@ describe('daemon OTel visualizer wiring', () => {
         attributes,
       },
     } as unknown as HarnessConfig;
-    const actualWire = await vi.importActual<typeof import('../src/engine/otel/wire.js')>(
-      '../src/engine/otel/wire.js',
-    );
+    const actualWire = await vi.importActual<typeof import('../src/engine/otel/wire.js')>('../src/engine/otel/wire.js');
     const mainRoot = await mkdtemp(join(tmpdir(), 'daemon-otel-root-'));
     dirs.push(mainRoot);
     const daemonOtel = actualWire.wireDaemonOtel(config, {
@@ -567,9 +571,8 @@ describe('daemon OTel visualizer wiring', () => {
 
     const daemonMetricResource = daemonMetrics[0]?.resource.attributes;
     const daemonMetricPoint = firstMetricPointAttributes(daemonMetrics);
-    const daemonTraceResource = dispatchSpanExporter
-      .getFinishedSpans()
-      .find((span) => span.name === 'conductor.run')?.resource.attributes;
+    const daemonTraceResource = dispatchSpanExporter.getFinishedSpans().find((span) => span.name === 'conductor.run')
+      ?.resource.attributes;
     const interactiveMetricResource = interactiveMetricExporter.getMetrics()[0]?.resource.attributes;
     const interactiveMetricPoint = firstMetricPointAttributes(interactiveMetricExporter.getMetrics());
     const interactiveTraceResource = interactiveSpanExporter
@@ -622,9 +625,8 @@ describe('daemon OTel visualizer wiring', () => {
     vi.stubEnv('OTEL_RESOURCE_ATTRIBUTES', 'deployment.environment=from-environment,team.name=from-environment');
 
     try {
-      const actualWire = await vi.importActual<typeof import('../src/engine/otel/wire.js')>(
-        '../src/engine/otel/wire.js',
-      );
+      const actualWire =
+        await vi.importActual<typeof import('../src/engine/otel/wire.js')>('../src/engine/otel/wire.js');
       const mainRoot = await mkdtemp(join(tmpdir(), 'daemon-otel-root-'));
       dirs.push(mainRoot);
       const daemonOtel = actualWire.wireDaemonOtel(config, {
@@ -654,10 +656,12 @@ describe('daemon OTel visualizer wiring', () => {
           .flatMap((scope) => scope.metrics)
           .flatMap((metric) => metric.dataPoints.map((point) => point.attributes)),
       ];
-      expect(exportedAttributes).not.toContainEqual(expect.objectContaining({
-        'deployment.environment': 'from-environment',
-        'team.name': 'from-environment',
-      }));
+      expect(exportedAttributes).not.toContainEqual(
+        expect.objectContaining({
+          'deployment.environment': 'from-environment',
+          'team.name': 'from-environment',
+        }),
+      );
     } finally {
       vi.unstubAllEnvs();
     }
@@ -727,10 +731,7 @@ describe('daemon OTel visualizer wiring', () => {
   });
 
   it('treats an invalid OTel block as disabled and completes the same feature dispatch', async () => {
-    await dispatchWithSessionId(
-      undefined,
-      { otel: { exporter: 'unknown' } } as unknown as HarnessConfig,
-    );
+    await dispatchWithSessionId(undefined, { otel: { exporter: 'unknown' } } as unknown as HarnessConfig);
 
     expect({
       visualizerConstructions: fixture.visualizerConstructions,
@@ -796,10 +797,12 @@ describe('daemon OTel visualizer wiring', () => {
       dispatches: fixture.scopes.length,
       stoppedIdempotently: fixture.sameStopPromise,
     }).toEqual({
-      rendererErrors: [{
-        rendererName: 'otel',
-        error: '[otel] span export failed: connection refused',
-      }],
+      rendererErrors: [
+        {
+          rendererName: 'otel',
+          error: '[otel] span export failed: connection refused',
+        },
+      ],
       dispatches: 1,
       stoppedIdempotently: true,
     });

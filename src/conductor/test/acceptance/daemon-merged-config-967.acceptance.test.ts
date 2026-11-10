@@ -171,15 +171,17 @@ const PROJECT_WITHOUT_POLICY = 'auto_restart_on_stale_engine: false\n';
 describe('#1039 Story 4 — daemon Codex readiness timeout composition', () => {
   it('passes the resolved doctor timeout without changing provider, invocation, or auth-park timeouts', async () => {
     const home = await makeUserHome('codex_doctor_timeout_seconds: 30\n');
-    const project = await makeProject([
-      'codex_doctor_timeout_seconds: 2.5',
-      'harness_self_host:',
-      '  auth_park_timeout_minutes: 7',
-      'test_suite:',
-      '  command: npm test',
-      '  timeout_seconds: 41',
-      '',
-    ].join('\n'));
+    const project = await makeProject(
+      [
+        'codex_doctor_timeout_seconds: 2.5',
+        'harness_self_host:',
+        '  auth_park_timeout_minutes: 7',
+        'test_suite:',
+        '  command: npm test',
+        '  timeout_seconds: 41',
+        '',
+      ].join('\n'),
+    );
 
     const codexFactory = vi.spyOn(providerDescriptor('codex'), 'createAdapter');
     const result = await launchDaemon(home, project);
@@ -216,9 +218,7 @@ describe('#967 Story 1 — daemon inherits machine-scoped runtime policy', () =>
   it('happy: user-only nested runtime policy survives into the daemon runtime', async () => {
     // The daemon's self-host decision is a startup observable; feature-local
     // policy is loaded by the child after dispatch.
-    const home = await makeUserHome(
-      'harness_self_host:\n  activation: force_on\n',
-    );
+    const home = await makeUserHome('harness_self_host:\n  activation: force_on\n');
     const project = await makeProject(PROJECT_WITHOUT_POLICY);
 
     const result = await launchDaemon(home, project);
@@ -233,9 +233,7 @@ describe('#967 Story 1 — daemon inherits machine-scoped runtime policy', () =>
 
     const result = await launchDaemon(home, project);
 
-    expect(result.error).toMatch(
-      /steps\.build\.llm_provider names unknown provider "ghost-user-step"/,
-    );
+    expect(result.error).toMatch(/steps\.build\.llm_provider names unknown provider "ghost-user-step"/);
     expect(result.dispatchCount).toBe(0);
   });
 
@@ -285,9 +283,7 @@ describe('#967 Story 2 — project policy retains precise precedence', () => {
 
     const result = await launchDaemon(home, project);
 
-    expect(result.error).toMatch(
-      /steps\.plan\.llm_provider names unknown provider "ghost-user-plan"/,
-    );
+    expect(result.error).toMatch(/steps\.plan\.llm_provider names unknown provider "ghost-user-plan"/);
     expect(result.error).not.toMatch(/ghost-user-build/);
     expect(result.dispatchCount).toBe(0);
   });

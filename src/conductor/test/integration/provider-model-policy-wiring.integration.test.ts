@@ -217,8 +217,9 @@ it('composes isolated provider execution state for every daemon feature after on
       /runtimes:\s*createProviderRuntimeSet\(registry, console\.warn, config\)/.test(childRuntimeSource) &&
       /\.\.\.\(input\.log \? \{ diagnosticLog: input\.log \} : \{\}\)/.test(childRuntimeSource),
     factoryInjectedAtFeatureBoundary:
-      /makeExecutorChildFeatureRunner\(\s*\{ order, worktree, events, providerExecution, log: input\.log \},/.test(childRuntimeSource) &&
-      /providerExecution:\s*input\.providerExecution/.test(childRuntimeSource),
+      /makeExecutorChildFeatureRunner\(\s*\{ order, worktree, events, providerExecution, log: input\.log \},/.test(
+        childRuntimeSource,
+      ) && /providerExecution:\s*input\.providerExecution/.test(childRuntimeSource),
     mainRunnerContext: /featureDesc:\s*item\.slug,[\s\S]*?providerExecution,[\s\S]*?\}\s*,?\s*\);/.test(mainRunBody),
     conductorContext: /const conductor = new Conductor\(\{[\s\S]*?providerExecution,[\s\S]*?\}\);/.test(mainRunBody),
     setupRecoveryContext:

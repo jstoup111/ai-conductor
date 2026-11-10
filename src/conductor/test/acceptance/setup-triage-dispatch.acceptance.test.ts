@@ -218,7 +218,9 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
     contextOwner,
     contextFlow,
     childRuntimeOwnsFeatureProviderExecution:
-      /const providerExecution: ProviderExecutionContext = \{[\s\S]*?runtimes: createProviderRuntimeSet\(registry, console\.warn, config\)[\s\S]*?makeExecutorChildFeatureRunner\(\s*\{ order, worktree, events, providerExecution, log: input\.log \}/.test(childRuntimeSource),
+      /const providerExecution: ProviderExecutionContext = \{[\s\S]*?runtimes: createProviderRuntimeSet\(registry, console\.warn, config\)[\s\S]*?makeExecutorChildFeatureRunner\(\s*\{ order, worktree, events, providerExecution, log: input\.log \}/.test(
+        childRuntimeSource,
+      ),
   }).toEqual({
     runners: {
       feature: {

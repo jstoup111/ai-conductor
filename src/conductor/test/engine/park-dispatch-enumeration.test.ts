@@ -3,10 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  runDaemon,
-  type BacklogItem,
-} from '../../src/engine/daemon.js';
+import { runDaemon, type BacklogItem } from '../../src/engine/daemon.js';
 import type { FeatureExecutor } from '../../src/engine/feature-executor.js';
 import type { WorkClaims } from '../../src/engine/work-claims.js';
 import type { WorkOrder } from '../../src/engine/work-order.js';

@@ -9,8 +9,9 @@ describe('engine/feature-executor', () => {
       fileURLToPath(new URL('../../src/engine/feature-executor.ts', import.meta.url)),
       'utf8',
     );
-    const imports = [...executorSource.matchAll(/^import(?:\s+type)?[\s\S]*?from ['"]([^'"]+)['"];/gm)]
-      .map((match) => match[1]);
+    const imports = [...executorSource.matchAll(/^import(?:\s+type)?[\s\S]*?from ['"]([^'"]+)['"];/gm)].map(
+      (match) => match[1],
+    );
     const executableSource = executorSource.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
 
     expect(imports).toEqual(['./work-order.js']);

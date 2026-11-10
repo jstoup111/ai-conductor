@@ -19,9 +19,7 @@ const fixture = vi.hoisted(() => ({
 // way daemon-otel-wiring.test.ts does, so the credential state is the test's
 // to declare rather than the host's.
 vi.mock('../../src/engine/self-host/daemon-build-token.js', async (importOriginal) => {
-  const actual = await importOriginal<
-    typeof import('../../src/engine/self-host/daemon-build-token.js')
-  >();
+  const actual = await importOriginal<typeof import('../../src/engine/self-host/daemon-build-token.js')>();
   return {
     ...actual,
     readDaemonBuildToken: vi.fn(async () => ({ state: 'ok' as const, token: 'test-daemon-token' })),
@@ -87,39 +85,37 @@ vi.mock('../../src/engine/daemon-runner.js', async (importOriginal) => ({
   // The supervisor's child executor classifies each dispatch with the real
   // daemon-runner helpers; only the one-feature runner is bounded here.
   ...(await importOriginal<typeof import('../../src/engine/daemon-runner.js')>()),
-  makeRunFeature: (deps: {
-    beginFeatureRun: (worktree: { path: string; branch: string }, item: { slug: string }) => Promise<{
-      events: unknown;
-      providerExecution: unknown;
-      sessionId?: string;
-      log?: (message: string) => void;
-      stop: () => Promise<void>;
-    }>;
-    runConductor: (
-      worktree: { path: string; branch: string },
-      item: { slug: string },
-      providerExecution: unknown,
-      events: unknown,
-      log: ((message: string) => void) | undefined,
-      sessionId: string | undefined,
-    ) => Promise<void>;
-  }) => async (item: { slug: string }) => {
-    const worktree = { path: fixture.worktreePath, branch: `feat/${item.slug}` };
-    const scope = await deps.beginFeatureRun(worktree, item);
-    try {
-      await deps.runConductor(
-        worktree,
-        item,
-        scope.providerExecution,
-        scope.events,
-        scope.log,
-        scope.sessionId,
-      );
-    } finally {
-      await scope.stop();
-    }
-    return { slug: item.slug, status: 'halted' as const };
-  },
+  makeRunFeature:
+    (deps: {
+      beginFeatureRun: (
+        worktree: { path: string; branch: string },
+        item: { slug: string },
+      ) => Promise<{
+        events: unknown;
+        providerExecution: unknown;
+        sessionId?: string;
+        log?: (message: string) => void;
+        stop: () => Promise<void>;
+      }>;
+      runConductor: (
+        worktree: { path: string; branch: string },
+        item: { slug: string },
+        providerExecution: unknown,
+        events: unknown,
+        log: ((message: string) => void) | undefined,
+        sessionId: string | undefined,
+      ) => Promise<void>;
+    }) =>
+    async (item: { slug: string }) => {
+      const worktree = { path: fixture.worktreePath, branch: `feat/${item.slug}` };
+      const scope = await deps.beginFeatureRun(worktree, item);
+      try {
+        await deps.runConductor(worktree, item, scope.providerExecution, scope.events, scope.log, scope.sessionId);
+      } finally {
+        await scope.stop();
+      }
+      return { slug: item.slug, status: 'halted' as const };
+    },
 }));
 
 import { runDaemonMode } from '../../src/daemon-cli.js';
@@ -130,10 +126,14 @@ const directories: string[] = [];
 
 afterEach(async () => {
   finishPresentationRepair.createProvenanceGuardedFinishPresentationRepair.mockClear();
-  await Promise.all(directories.splice(0).map((directory) => rm(directory, {
-    recursive: true,
-    force: true,
-  })));
+  await Promise.all(
+    directories.splice(0).map((directory) =>
+      rm(directory, {
+        recursive: true,
+        force: true,
+      }),
+    ),
+  );
 });
 
 describe('daemon skipped-to-stale refusal event wiring', () => {
@@ -142,10 +142,7 @@ describe('daemon skipped-to-stale refusal event wiring', () => {
     directories.push(projectRoot);
     fixture.worktreePath = join(projectRoot, '.worktrees', 'feature-a');
     await mkdir(join(fixture.worktreePath, '.pipeline'), { recursive: true });
-    await writeState(
-      join(fixture.worktreePath, '.pipeline', 'conduct-state.json'),
-      { manual_test: 'skipped' },
-    );
+    await writeState(join(fixture.worktreePath, '.pipeline', 'conduct-state.json'), { manual_test: 'skipped' });
 
     const store = await useTempEngineStore();
     try {

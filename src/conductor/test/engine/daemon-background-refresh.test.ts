@@ -105,9 +105,8 @@ describe('engine/daemon — background root refresh (#2275)', () => {
     let refreshCall = 0;
     const h = harness({
       local: () => [{ slug: 'sibling' }, { slug: 'cleared' }],
-      refresh: () => ++refreshCall === 1
-        ? Promise.resolve([{ slug: 'sibling' }, { slug: 'cleared' }])
-        : heldRefresh.promise,
+      refresh: () =>
+        ++refreshCall === 1 ? Promise.resolve([{ slug: 'sibling' }, { slug: 'cleared' }]) : heldRefresh.promise,
       isHalted: async (slug) => slug === 'cleared' && halted,
     });
 
@@ -137,9 +136,10 @@ describe('engine/daemon — background root refresh (#2275)', () => {
     let refreshCall = 0;
     const h = harness({
       local: () => [{ slug: 'sibling' }, { slug: 'still-halted' }, { slug: 'parked' }],
-      refresh: () => ++refreshCall === 1
-        ? Promise.resolve([{ slug: 'sibling' }, { slug: 'still-halted' }, { slug: 'parked' }])
-        : heldRefresh.promise,
+      refresh: () =>
+        ++refreshCall === 1
+          ? Promise.resolve([{ slug: 'sibling' }, { slug: 'still-halted' }, { slug: 'parked' }])
+          : heldRefresh.promise,
       isHalted: async (slug) => slug === 'still-halted',
       isParked: async (slug) => slug === 'parked',
     });
@@ -192,12 +192,11 @@ describe('engine/daemon — background root refresh (#2275)', () => {
     let refreshCall = 0;
     const h = harness({
       local: () => [{ slug: 'sibling' }],
-      refresh: () => (++refreshCall === 1
-        ? Promise.resolve([{ slug: 'sibling' }])
-        : heldRefresh.promise).then((items) => {
-        if (refreshCall > 1) originFetched = true;
-        return items;
-      }),
+      refresh: () =>
+        (++refreshCall === 1 ? Promise.resolve([{ slug: 'sibling' }]) : heldRefresh.promise).then((items) => {
+          if (refreshCall > 1) originFetched = true;
+          return items;
+        }),
       extra: {
         readPersistedBaseSha: async () => 'aaa',
         resolveBaseSha: async () => (originFetched ? 'bbb' : 'aaa'),
@@ -269,11 +268,10 @@ describe('engine/daemon — background root refresh (#2275)', () => {
     let refreshCall = 0;
     const h = harness({
       local: () => [{ slug: 'sibling' }],
-      refresh: () => (++refreshCall === 1
-        ? Promise.resolve([{ slug: 'sibling' }])
-        : heldRefresh.promise).finally(() => {
-        refreshSettled = true;
-      }),
+      refresh: () =>
+        (++refreshCall === 1 ? Promise.resolve([{ slug: 'sibling' }]) : heldRefresh.promise).finally(() => {
+          refreshSettled = true;
+        }),
     });
 
     const daemon = runDaemon(h.deps, { concurrency: 2, once: false, idlePollMs: 0 });

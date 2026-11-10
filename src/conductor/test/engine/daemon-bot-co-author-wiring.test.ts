@@ -70,10 +70,14 @@ async function readProductionSources(): Promise<Record<string, string>> {
   const sourceRoot = join(process.cwd(), 'src');
   const entries = await readdir(sourceRoot, { recursive: true });
   const files = entries.filter((entry): entry is string => typeof entry === 'string' && entry.endsWith('.ts'));
-  return Object.fromEntries(await Promise.all(files.map(async (entry) => {
-    const path = join(sourceRoot, entry);
-    return [relative(process.cwd(), path), await readFile(path, 'utf8')];
-  })));
+  return Object.fromEntries(
+    await Promise.all(
+      files.map(async (entry) => {
+        const path = join(sourceRoot, entry);
+        return [relative(process.cwd(), path), await readFile(path, 'utf8')];
+      }),
+    ),
+  );
 }
 
 function validFixture(): SourceMap {
@@ -91,20 +95,26 @@ describe('daemon bot co-author wiring', () => {
   });
 
   it('names malformed bootstrap wiring fixtures', () => {
-    expect(() => assertDaemonCoAuthorWiring({
-      ...validFixture(),
-      'src/engine/foo.ts': 'installDaemonBotCoAuthor();',
-    })).toThrow('src/engine/foo.ts');
+    expect(() =>
+      assertDaemonCoAuthorWiring({
+        ...validFixture(),
+        'src/engine/foo.ts': 'installDaemonBotCoAuthor();',
+      }),
+    ).toThrow('src/engine/foo.ts');
 
-    expect(() => assertDaemonCoAuthorWiring({
-      ...validFixture(),
-      [DAEMON_CLI]: 'makeRunFeature();',
-    })).toThrow(DAEMON_CLI);
+    expect(() =>
+      assertDaemonCoAuthorWiring({
+        ...validFixture(),
+        [DAEMON_CLI]: 'makeRunFeature();',
+      }),
+    ).toThrow(DAEMON_CLI);
 
-    expect(() => assertDaemonCoAuthorWiring({
-      ...validFixture(),
-      [EXECUTOR_CHILD]: 'export function makeExecutorChildRun() { runFeature(); }',
-    })).toThrow(EXECUTOR_CHILD);
+    expect(() =>
+      assertDaemonCoAuthorWiring({
+        ...validFixture(),
+        [EXECUTOR_CHILD]: 'export function makeExecutorChildRun() { runFeature(); }',
+      }),
+    ).toThrow(EXECUTOR_CHILD);
   });
 
   it('keeps default rebase-resolution and CI-fix preparation on the installed resolver path', async () => {
@@ -117,6 +127,8 @@ describe('daemon bot co-author wiring', () => {
 
     expect(autoresolve).toContain('const prepare = prepareWorktree ?? defaultPrepareWorktree;');
     expect(ciFix).toContain('}, deps.prepareWorktree, deps.liveness ?? {});');
-    expect(prepare).toContain('await refreshWorktreeCoAuthor(worktreePath, opts?.events, { dispatch: opts?.dispatchStart === true });');
+    expect(prepare).toContain(
+      'await refreshWorktreeCoAuthor(worktreePath, opts?.events, { dispatch: opts?.dispatchStart === true });',
+    );
   });
 });

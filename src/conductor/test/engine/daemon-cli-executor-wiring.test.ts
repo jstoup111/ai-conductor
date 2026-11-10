@@ -18,12 +18,12 @@ const seams = vi.hoisted(() => ({
 }));
 
 vi.mock('../../src/engine/child-feature-executor.js', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../../src/engine/child-feature-executor.js')>(),
+  ...(await importOriginal<typeof import('../../src/engine/child-feature-executor.js')>()),
   createChildProcessFeatureExecutor: seams.childFactory,
 }));
 
 vi.mock('../../src/engine/executor-records.js', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../../src/engine/executor-records.js')>(),
+  ...(await importOriginal<typeof import('../../src/engine/executor-records.js')>()),
   sweepExecutorRecordsOnBoot: seams.sweepExecutorRecordsOnBoot,
 }));
 
@@ -98,8 +98,12 @@ describe('daemon executor-isolation composition', () => {
   });
 
   it('does not expose a supervisor-side feature runner option', () => {
-    // @ts-expect-error Task 28 removes the in-process runner from daemon composition.
-    const invalid: import('../../src/daemon-cli.js').DaemonModeOptions = { projectRoot: 'root', concurrency: 1, runFeature: async () => ({ slug: 'feature', status: 'done' }) };
+    const invalid: import('../../src/daemon-cli.js').DaemonModeOptions = {
+      projectRoot: 'root',
+      concurrency: 1,
+      // @ts-expect-error Task 28 removes the in-process runner from daemon composition.
+      runFeature: async () => ({ slug: 'feature', status: 'done' }),
+    };
     expect(invalid).toBeDefined();
   });
 
@@ -108,7 +112,9 @@ describe('daemon executor-isolation composition', () => {
     const child = executor();
     seams.childFactory.mockReturnValue(child);
     const calls: string[] = [];
-    seams.sweepExecutorRecordsOnBoot.mockImplementation(async () => { calls.push('sweep'); });
+    seams.sweepExecutorRecordsOnBoot.mockImplementation(async () => {
+      calls.push('sweep');
+    });
     const daemon = await import('../../src/engine/daemon.js');
     vi.spyOn(daemon, 'runDaemon').mockImplementation(async (deps) => {
       calls.push('runDaemon');

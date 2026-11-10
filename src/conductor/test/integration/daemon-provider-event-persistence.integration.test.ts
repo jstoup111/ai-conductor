@@ -402,10 +402,8 @@ describe('daemon feature provider-event persistence', () => {
           childSource,
         ),
       childRunnerBindsFeatureBus:
-        runtimeSource.includes('events: input.events') &&
-        runtimeSource.includes('beginFeatureRun: async () => ({'),
-      supervisorAttachesProxyRenderer:
-        daemonSource.includes('attachFeatureEventRenderer: (slug, featureEvents)'),
+        runtimeSource.includes('events: input.events') && runtimeSource.includes('beginFeatureRun: async () => ({'),
+      supervisorAttachesProxyRenderer: daemonSource.includes('attachFeatureEventRenderer: (slug, featureEvents)'),
       runConductorAcceptsFeatureBus:
         /export async function runDaemonFeatureConductor\([\s\S]*?featureEvents: ConductorEventEmitter/.test(
           lifecycleSource,

@@ -121,7 +121,11 @@ async function runExportDaemon(metricExporter: PushMetricExporter): Promise<{
           await events.emit({ type: 'step_started', step: 'build', index: 0 });
           for (let attempt = 0; attempt < 3; attempt += 1) {
             await events.emit({
-              type: 'provider_attempt', step: 'build', provider: 'claude', outcome: 'success', invoked: true,
+              type: 'provider_attempt',
+              step: 'build',
+              provider: 'claude',
+              outcome: 'success',
+              invoked: true,
               tokenUsage: { input: 10, output: 2, costUsd: 0.25 },
             });
             if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(60_000);
@@ -175,8 +179,9 @@ function terminalVerdicts(events: ConductorEvent[]): Array<Record<string, unknow
 describe('acceptance: failed telemetry export is visible without changing daemon outcome', () => {
   it('contains a rejected daemon per-dispatch flush and preserves the dispatch outcome', async () => {
     const result = await runExportDaemon(rejectingLifecycleMetricExporter());
-    const lifecycleWarnings = result.events.filter((event): event is Extract<ConductorEvent, { type: 'renderer_error' }> =>
-      event.type === 'renderer_error' && event.error === '[otel] metric export failed: flush rejected',
+    const lifecycleWarnings = result.events.filter(
+      (event): event is Extract<ConductorEvent, { type: 'renderer_error' }> =>
+        event.type === 'renderer_error' && event.error === '[otel] metric export failed: flush rejected',
     );
 
     expect(lifecycleWarnings).toHaveLength(1);
@@ -185,9 +190,7 @@ describe('acceptance: failed telemetry export is visible without changing daemon
       status: 'halted',
       reason: 'test dispatch complete',
     });
-    expect(terminalVerdicts(result.events)).toEqual([
-      { type: 'step_completed', step: 'build', status: 'done' },
-    ]);
+    expect(terminalVerdicts(result.events)).toEqual([{ type: 'step_completed', step: 'build', status: 'done' }]);
   });
 
   it('logs and persists one matching otel failure across repeated export attempts', async () => {
@@ -207,9 +210,7 @@ describe('acceptance: failed telemetry export is visible without changing daemon
     expect(failureLines).toHaveLength(1);
     expect(failureLines[0]).toContain('otel');
     expect(failureLines[0]).toContain('collector refused metrics');
-    expect(terminalVerdicts(failed.events)).toEqual([
-      { type: 'step_completed', step: 'build', status: 'done' },
-    ]);
+    expect(terminalVerdicts(failed.events)).toEqual([{ type: 'step_completed', step: 'build', status: 'done' }]);
     expect(failed.outcome).toEqual(succeeded.outcome);
   });
 });

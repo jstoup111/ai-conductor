@@ -1,9 +1,6 @@
 // Covers: task:27
 import { describe, expect, it, vi } from 'vitest';
-import {
-  runDaemon,
-  type DaemonDeps,
-} from '../../src/engine/daemon.js';
+import { runDaemon, type DaemonDeps } from '../../src/engine/daemon.js';
 import type { WorkOrder } from '../../src/engine/work-order.js';
 
 const workOrder: WorkOrder = {

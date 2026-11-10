@@ -1,14 +1,6 @@
 import { readFile, rename, mkdir } from 'fs/promises';
 import { existsSync, realpathSync } from 'fs';
-import {
-  join,
-  isAbsolute,
-  normalize,
-  resolve as resolvePath,
-  dirname,
-  relative,
-  sep,
-} from 'path';
+import { join, isAbsolute, normalize, resolve as resolvePath, dirname, relative, sep } from 'path';
 import { load as loadYaml } from 'js-yaml';
 import { satisfies, validRange } from 'semver';
 import type {
@@ -79,12 +71,7 @@ const VALID_PHASES = new Set(['SETUP', 'UNDERSTAND', 'DECIDE', 'BUILD', 'SHIP'])
 const VALID_EFFORTS = new Set<EffortLevel>(['low', 'medium', 'high', 'xhigh', 'max']);
 const VALID_ENFORCEMENTS = new Set<EnforcementLevel>(['structural', 'advisory', 'gating']);
 const VALID_COMPLEXITY_TIERS = new Set(['S', 'M', 'L']);
-const AS_BUILT_CHECK_NAMES = new Set([
-  'reachability',
-  'planGap',
-  'adrCompliance',
-  'diagramDrift',
-]);
+const AS_BUILT_CHECK_NAMES = new Set(['reachability', 'planGap', 'adrCompliance', 'diagramDrift']);
 const PRD_AUDIT_DEFAULTS = {
   max_appended_tasks: 5,
   max_appended_ratio: 0.25,
@@ -96,9 +83,7 @@ const ARCHITECTURE_REVIEW_AS_BUILT_DEFAULTS = {
 /** Built-in ids (now including shipped `security`) are reserved from custom declarations. */
 const RESERVED_BUILD_REVIEW_RUBRIC_IDS = new Set<string>(BUILD_REVIEW_RUBRIC_IDS);
 /** Keys accepted on each member of test_suite.commands. */
-export const TEST_SUITE_COMMAND_ENTRY_KEYS = [
-  'command', 'working_directory', 'timeout_seconds',
-] as const;
+export const TEST_SUITE_COMMAND_ENTRY_KEYS = ['command', 'working_directory', 'timeout_seconds'] as const;
 const MAX_CUSTOM_BUILD_REVIEW_RUBRICS = 32;
 const CUSTOM_BUILD_REVIEW_RUBRIC_ID = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const CUSTOM_BUILD_REVIEW_FORBIDDEN_IDS = new Set(['__proto__', 'constructor', 'prototype']);
@@ -106,39 +91,146 @@ const CUSTOM_BUILD_REVIEW_SOURCES = new Set(['project', 'global', 'plugin']);
 /** Accepted config-key universe used by the consumer-registry coverage gate. */
 export const CONFIG_CONSUMER_KEY_SETS = {
   top: [
-    'harness_version', 'defaults', 'phases', 'steps', 'complexity', 'conductor', 'monitor',
-    'markdown_viewer', 'mermaid_renderer', 'assess', 'acceptance_spec_globs', 'test_suite',
-    'llm_provider', 'provider_substitution', 'llm_providers', 'ui_renderer', 'visualizers', 'memory_provider', 'tracker', 'otel', 'build_progress',
-    'provider_stream', 'spec_owner', 'github_bot', 'owner_gate_cutover', 'attribution_audit_sample_pct',
-    'rebase_resolution_attempts', 'validation_concurrency', 'daemon_concurrency', 'daemon_heap_limit_mb',
-    'daemon_heap_dump_threshold_mb', 'daemon_heap_dump_retention', 'harness_self_host',
-    'model_fallback_ladder', 'auto_restart_on_stale_engine', 'engine_refresh_min_interval_seconds',
+    'harness_version',
+    'defaults',
+    'phases',
+    'steps',
+    'complexity',
+    'conductor',
+    'monitor',
+    'markdown_viewer',
+    'mermaid_renderer',
+    'assess',
+    'acceptance_spec_globs',
+    'test_suite',
+    'llm_provider',
+    'provider_substitution',
+    'llm_providers',
+    'ui_renderer',
+    'visualizers',
+    'memory_provider',
+    'tracker',
+    'otel',
+    'build_progress',
+    'provider_stream',
+    'spec_owner',
+    'github_bot',
+    'owner_gate_cutover',
+    'attribution_audit_sample_pct',
+    'rebase_resolution_attempts',
+    'validation_concurrency',
+    'daemon_concurrency',
+    'daemon_heap_limit_mb',
+    'daemon_heap_dump_threshold_mb',
+    'daemon_heap_dump_retention',
+    'harness_self_host',
+    'model_fallback_ladder',
+    'auto_restart_on_stale_engine',
+    'engine_refresh_min_interval_seconds',
     'supervisor_max_stale_hours',
-    'codex_doctor_timeout_seconds', 'mergeable_autoresolve', 'stacked_prs', 'build_review',
-    'prd_audit', 'plan_review', 'architecture_review_as_built', 'ci_watch', 'build_progress_halt',
-    'retry_routing', 'wiring', 'kickback_escalation', 'cumulative_kickback_bound',
+    'codex_doctor_timeout_seconds',
+    'mergeable_autoresolve',
+    'stacked_prs',
+    'build_review',
+    'prd_audit',
+    'plan_review',
+    'architecture_review_as_built',
+    'ci_watch',
+    'build_progress_halt',
+    'retry_routing',
+    'wiring',
+    'kickback_escalation',
+    'cumulative_kickback_bound',
     'feature_applicability',
-    'gate_code_validity', 'daemon_verbose', 'reconcile_parked_auto_cleanup', 'reclaim_merged_worktrees',
-    'step_heartbeat_stall_minutes', 'stale_claim_window_hours',
-    'provider_preparation_timeout_minutes', 'teardown_timeout_seconds',
+    'gate_code_validity',
+    'daemon_verbose',
+    'reconcile_parked_auto_cleanup',
+    'reclaim_merged_worktrees',
+    'step_heartbeat_stall_minutes',
+    'stale_claim_window_hours',
+    'provider_preparation_timeout_minutes',
+    'teardown_timeout_seconds',
     'dispatch_start_timeout_seconds',
   ],
   defaults: ['model', 'effort', 'max_retries', 'escalate'],
   llm_providers: ['model', 'model_escalation_order', 'model_fallback_ladder', 'trust_project_files', 'subagents'],
   monitor: ['llm_provider', 'model', 'effort'],
   phases: ['model', 'effort', 'max_retries', 'escalate', 'by_tier'],
-  steps: ['llm_provider', 'provider_substitution', 'model', 'effort', 'max_retries', 'disable', 'escalate', 'skill', 'hooks', 'by_tier', 'after', 'enforcement', 'completion_artifact', 'gate', 'kickback_target', 'when', 'parallel'],
+  steps: [
+    'llm_provider',
+    'provider_substitution',
+    'model',
+    'effort',
+    'max_retries',
+    'disable',
+    'escalate',
+    'skill',
+    'hooks',
+    'by_tier',
+    'after',
+    'enforcement',
+    'completion_artifact',
+    'gate',
+    'kickback_target',
+    'when',
+    'parallel',
+  ],
   conductor: ['update_channel', 'auto_check', 'current_version', 'last_checked_at'],
-  harness_self_host: ['activation', 'version_freeze', 'auth_park_timeout_minutes', 'build_auth', 'sandbox_build_env', 'live_containment', 'version_approval_gate', 'release_artifact_gate'],
+  harness_self_host: [
+    'activation',
+    'version_freeze',
+    'auth_park_timeout_minutes',
+    'build_auth',
+    'sandbox_build_env',
+    'live_containment',
+    'version_approval_gate',
+    'release_artifact_gate',
+  ],
   harness_self_host_build_auth: ['mode', 'token_path'],
   mergeable_autoresolve: ['enabled', 'cooldownMinutes', 'suiteCommand'],
   stacked_prs: ['enabled', 'max_slices', 'route_whole_feature_fixes', 'max_restack_cascades'],
   'steps.parallel': ['name', 'skill', 'model', 'effort', 'advisory'],
   'steps.by_tier': ['model', 'effort', 'max_retries'],
   'build_review.adjudication': ['enabled'],
-  'build_review.rubrics': ['timeout_seconds', 'enabled', 'max_projection_bytes', 'llm_provider', 'model', 'effort', 'model_fallback_ladder', 'max_retries', 'escalate', 'min_confidence', 'min_severity'],
-  'build_review.custom_rubrics': ['timeout_seconds', 'skill', 'question', 'source', 'resources', 'paths', 'enabled', 'llm_provider', 'model', 'effort', 'model_fallback_ladder', 'max_retries', 'escalate', 'min_confidence', 'min_severity'],
-  build_review: ['enabled', 'perTaskFloor', 'scopeContainmentEnforced', 'maxParallel', 'adjudication', 'rubrics', 'custom_rubrics'],
+  'build_review.rubrics': [
+    'timeout_seconds',
+    'enabled',
+    'max_projection_bytes',
+    'llm_provider',
+    'model',
+    'effort',
+    'model_fallback_ladder',
+    'max_retries',
+    'escalate',
+    'min_confidence',
+    'min_severity',
+  ],
+  'build_review.custom_rubrics': [
+    'timeout_seconds',
+    'skill',
+    'question',
+    'source',
+    'resources',
+    'paths',
+    'enabled',
+    'llm_provider',
+    'model',
+    'effort',
+    'model_fallback_ladder',
+    'max_retries',
+    'escalate',
+    'min_confidence',
+    'min_severity',
+  ],
+  build_review: [
+    'enabled',
+    'perTaskFloor',
+    'scopeContainmentEnforced',
+    'maxParallel',
+    'adjudication',
+    'rubrics',
+    'custom_rubrics',
+  ],
   ci_watch: ['enabled', 'cooldownMinutes'],
   kickback_escalation: ['enabled'],
   cumulative_kickback_bound: ['enabled'],
@@ -149,16 +241,44 @@ export const CONFIG_CONSUMER_KEY_SETS = {
   'architecture_review_as_built.checks': ['tiers'],
   assess: ['stale_after_days', 'stale_after_commits'],
   tracker: ['backend', 'transport', 'credentials', 'site', 'project_key'],
-  test_suite: ['command', 'commands', 'scoped_command', 'changed_command', 'working_directory', 'timeout_seconds', 'inputs', 'environment', 'verification'],
+  test_suite: [
+    'command',
+    'commands',
+    'scoped_command',
+    'changed_command',
+    'working_directory',
+    'timeout_seconds',
+    'inputs',
+    'environment',
+    'verification',
+  ],
   'test_suite.commands[]': TEST_SUITE_COMMAND_ENTRY_KEYS,
   'test_suite.verification': ['mode', 'full_suite', 'drift_budget'],
-  build_progress: ['poll_seconds', 'quiet_minutes', 'heartbeat_minutes', 'enabled', 'active_stall_minutes', 'active_stall_action'],
+  build_progress: [
+    'poll_seconds',
+    'quiet_minutes',
+    'heartbeat_minutes',
+    'enabled',
+    'active_stall_minutes',
+    'active_stall_action',
+  ],
   provider_stream: ['min_interval_ms'],
   build_progress_halt: ['enabled', 'attempt_ceiling', 'dispatch_ceiling'],
   gate_code_validity: ['enabled'],
   retry_routing: ['enabled'],
   feature_applicability: ['enabled'],
-  otel: ['exporter', 'endpoint', 'file', 'protocol', 'headers', 'project_name', 'worker_name', 'attributes', 'provenance', 'spool'],
+  otel: [
+    'exporter',
+    'endpoint',
+    'file',
+    'protocol',
+    'headers',
+    'project_name',
+    'worker_name',
+    'attributes',
+    'provenance',
+    'spool',
+  ],
   'otel.spool': ['enabled', 'max_bytes'],
   markdown_viewer: ['preset', 'command', 'args', 'mode'],
   mermaid_renderer: ['preset', 'command', 'args', 'mode'],
@@ -172,15 +292,10 @@ export const DEPRECATED_BUILD_REVIEW_RUBRIC_IDS = [
   'wiring',
 ] as const;
 
-const DEPRECATED_BUILD_REVIEW_RUBRIC_ID_SET = new Set<string>(
-  DEPRECATED_BUILD_REVIEW_RUBRIC_IDS,
-);
-const DEPRECATED_BUILD_REVIEW_ADR =
-  'adr-2026-08-22-build-review-opt-in-rubric-container';
-const DEPRECATED_WIRING_ADR =
-  'adr-2026-08-14-retire-build-review-wiring-rubric';
-const RETIRED_COVERAGE_BINDING_ADR =
-  'adr-2026-10-23-slice-topology-from-sealed-plan';
+const DEPRECATED_BUILD_REVIEW_RUBRIC_ID_SET = new Set<string>(DEPRECATED_BUILD_REVIEW_RUBRIC_IDS);
+const DEPRECATED_BUILD_REVIEW_ADR = 'adr-2026-08-22-build-review-opt-in-rubric-container';
+const DEPRECATED_WIRING_ADR = 'adr-2026-08-14-retire-build-review-wiring-rubric';
+const RETIRED_COVERAGE_BINDING_ADR = 'adr-2026-10-23-slice-topology-from-sealed-plan';
 /**
  * Top-level blocks retired without a migration. Feature branches cut before the
  * retirement still carry them in their own `.ai-conductor/config.yml`, and the
@@ -227,9 +342,7 @@ function normalizeKeyedBlock(
     } else if (spec.isValid(value)) {
       normalized[key] = value;
     } else {
-      warnings.push(
-        `${blockName}.${key} has invalid value ${JSON.stringify(value)}, omitting.`,
-      );
+      warnings.push(`${blockName}.${key} has invalid value ${JSON.stringify(value)}, omitting.`);
     }
   }
   return normalized;
@@ -243,10 +356,7 @@ function validateBuildReviewRubrics(
 ): ConfigError | null {
   if (
     maxParallel !== undefined &&
-    (typeof maxParallel !== 'number' ||
-      !Number.isInteger(maxParallel) ||
-      maxParallel < 1 ||
-      maxParallel > 4)
+    (typeof maxParallel !== 'number' || !Number.isInteger(maxParallel) || maxParallel < 1 || maxParallel > 4)
   ) {
     return {
       type: 'validation_error',
@@ -262,9 +372,7 @@ function validateBuildReviewRubrics(
   for (const [rubricId, policy] of Object.entries(rubrics)) {
     const path = `build_review.rubrics.${rubricId}`;
     if (DEPRECATED_BUILD_REVIEW_RUBRIC_ID_SET.has(rubricId)) {
-      warnings.push(
-        `${path} is retired and ignored (${DEPRECATED_BUILD_REVIEW_ADR}).`,
-      );
+      warnings.push(`${path} is retired and ignored (${DEPRECATED_BUILD_REVIEW_ADR}).`);
       deprecatedKeys.push({ key: path, adr: DEPRECATED_BUILD_REVIEW_ADR });
       continue;
     }
@@ -293,10 +401,17 @@ function validateBuildReviewRubrics(
         message: `${path}.max_projection_bytes must be a positive integer byte count`,
       };
     }
-    if (policy.timeout_seconds !== undefined &&
-      (typeof policy.timeout_seconds !== 'number' || !Number.isFinite(policy.timeout_seconds) ||
-        policy.timeout_seconds * 1_000 < 1 || policy.timeout_seconds * 1_000 > 2_147_483_647)) {
-      return { type: 'validation_error', message: `${path}.timeout_seconds must be a positive number representable by a Node timer` };
+    if (
+      policy.timeout_seconds !== undefined &&
+      (typeof policy.timeout_seconds !== 'number' ||
+        !Number.isFinite(policy.timeout_seconds) ||
+        policy.timeout_seconds * 1_000 < 1 ||
+        policy.timeout_seconds * 1_000 > 2_147_483_647)
+    ) {
+      return {
+        type: 'validation_error',
+        message: `${path}.timeout_seconds must be a positive number representable by a Node timer`,
+      };
     }
     const providerError = validateProviderSelection(policy.llm_provider, `${path}.llm_provider`);
     if (providerError) return providerError;
@@ -325,7 +440,13 @@ function validateBuildReviewRubrics(
     if (policy.escalate !== undefined && typeof policy.escalate !== 'boolean') {
       return { type: 'validation_error', message: `${path}.escalate must be a boolean` };
     }
-    if (policy.min_confidence !== undefined && (typeof policy.min_confidence !== 'number' || !Number.isInteger(policy.min_confidence) || policy.min_confidence < 0 || policy.min_confidence > 100)) {
+    if (
+      policy.min_confidence !== undefined &&
+      (typeof policy.min_confidence !== 'number' ||
+        !Number.isInteger(policy.min_confidence) ||
+        policy.min_confidence < 0 ||
+        policy.min_confidence > 100)
+    ) {
       return { type: 'validation_error', message: `${path}.min_confidence must be an integer between 0 and 100` };
     }
     if (policy.min_severity !== undefined && parseBuildReviewSeverity(policy.min_severity) === undefined) {
@@ -335,10 +456,7 @@ function validateBuildReviewRubrics(
   return null;
 }
 
-function validateBuildReviewCustomRubrics(
-  customRubrics: unknown,
-  adjudicationEnabled: boolean,
-): ConfigError | null {
+function validateBuildReviewCustomRubrics(customRubrics: unknown, adjudicationEnabled: boolean): ConfigError | null {
   if (customRubrics === undefined) return null;
   if (!isPlainObject(customRubrics)) {
     return {
@@ -392,27 +510,26 @@ function validateBuildReviewCustomRubrics(
     if (typeof declaration.question !== 'string' || declaration.question === '') {
       return { type: 'validation_error', message: `${path}.question must be a non-empty string` };
     }
-    if (
-      declaration.source !== undefined
-      && (!CUSTOM_BUILD_REVIEW_SOURCES.has(declaration.source as string))
-    ) {
+    if (declaration.source !== undefined && !CUSTOM_BUILD_REVIEW_SOURCES.has(declaration.source as string)) {
       return { type: 'validation_error', message: `${path}.source must be project|global|plugin` };
     }
     if (
-      declaration.resources !== undefined
-      && (!Array.isArray(declaration.resources)
-        || declaration.resources.some((resource) => typeof resource !== 'string' || resource === '' ||
-          isAbsolute(resource) || resource.split(/[\\/]/).includes('..')))
+      declaration.resources !== undefined &&
+      (!Array.isArray(declaration.resources) ||
+        declaration.resources.some(
+          (resource) =>
+            typeof resource !== 'string' ||
+            resource === '' ||
+            isAbsolute(resource) ||
+            resource.split(/[\\/]/).includes('..'),
+        ))
     ) {
       return {
         type: 'validation_error',
         message: `${path}.resources must be an array of non-empty strings`,
       };
     }
-    if (
-      declaration.paths !== undefined
-      && (!Array.isArray(declaration.paths) || declaration.paths.length === 0)
-    ) {
+    if (declaration.paths !== undefined && (!Array.isArray(declaration.paths) || declaration.paths.length === 0)) {
       return {
         type: 'validation_error',
         message: `${path}.paths must be a non-empty array`,
@@ -430,10 +547,17 @@ function validateBuildReviewCustomRubrics(
     if (declaration.enabled !== undefined && typeof declaration.enabled !== 'boolean') {
       return { type: 'validation_error', message: `${path}.enabled must be a boolean` };
     }
-    if (declaration.timeout_seconds !== undefined &&
-      (typeof declaration.timeout_seconds !== 'number' || !Number.isFinite(declaration.timeout_seconds) ||
-        declaration.timeout_seconds * 1_000 < 1 || declaration.timeout_seconds * 1_000 > 2_147_483_647)) {
-      return { type: 'validation_error', message: `${path}.timeout_seconds must be a positive number representable by a Node timer` };
+    if (
+      declaration.timeout_seconds !== undefined &&
+      (typeof declaration.timeout_seconds !== 'number' ||
+        !Number.isFinite(declaration.timeout_seconds) ||
+        declaration.timeout_seconds * 1_000 < 1 ||
+        declaration.timeout_seconds * 1_000 > 2_147_483_647)
+    ) {
+      return {
+        type: 'validation_error',
+        message: `${path}.timeout_seconds must be a positive number representable by a Node timer`,
+      };
     }
     const providerError = validateProviderSelection(declaration.llm_provider, `${path}.llm_provider`);
     if (providerError) return providerError;
@@ -444,9 +568,9 @@ function validateBuildReviewCustomRubrics(
       return { type: 'validation_error', message: `${path}.effort must be low|medium|high|xhigh|max` };
     }
     if (
-      declaration.model_fallback_ladder !== undefined
-      && (!Array.isArray(declaration.model_fallback_ladder)
-        || declaration.model_fallback_ladder.some((model) => typeof model !== 'string' || model === ''))
+      declaration.model_fallback_ladder !== undefined &&
+      (!Array.isArray(declaration.model_fallback_ladder) ||
+        declaration.model_fallback_ladder.some((model) => typeof model !== 'string' || model === ''))
     ) {
       return {
         type: 'validation_error',
@@ -460,21 +584,18 @@ function validateBuildReviewCustomRubrics(
       return { type: 'validation_error', message: `${path}.escalate must be a boolean` };
     }
     if (
-      declaration.min_confidence !== undefined
-      && (typeof declaration.min_confidence !== 'number'
-        || !Number.isInteger(declaration.min_confidence)
-        || declaration.min_confidence < 0
-        || declaration.min_confidence > 100)
+      declaration.min_confidence !== undefined &&
+      (typeof declaration.min_confidence !== 'number' ||
+        !Number.isInteger(declaration.min_confidence) ||
+        declaration.min_confidence < 0 ||
+        declaration.min_confidence > 100)
     ) {
       return {
         type: 'validation_error',
         message: `${path}.min_confidence must be an integer between 0 and 100`,
       };
     }
-    if (
-      declaration.min_severity !== undefined
-      && parseBuildReviewSeverity(declaration.min_severity) === undefined
-    ) {
+    if (declaration.min_severity !== undefined && parseBuildReviewSeverity(declaration.min_severity) === undefined) {
       return {
         type: 'validation_error',
         message: `${path}.min_severity must be ${BUILD_REVIEW_SEVERITIES.join('|')}`,
@@ -544,10 +665,7 @@ export async function migrateLegacyProjectConfig(projectRoot: string): Promise<b
   }
 }
 
-export async function loadConfig(
-  projectRoot: string,
-  harnessVersion?: string,
-): Promise<ConfigResult> {
+export async function loadConfig(projectRoot: string, harnessVersion?: string): Promise<ConfigResult> {
   return loadProjectConfig(projectRoot, harnessVersion, true);
 }
 
@@ -770,11 +888,7 @@ export function validateTrackerConfig(raw: unknown): ConfigError | null {
   return null;
 }
 
-export function validateConfig(
-  raw: unknown,
-  projectRoot?: string,
-  opts: ValidateConfigOpts = {},
-): ConfigResult {
+export function validateConfig(raw: unknown, projectRoot?: string, opts: ValidateConfigOpts = {}): ConfigResult {
   const materializeDefaults = opts.materializeDefaults ?? true;
 
   if (raw === null || raw === undefined) {
@@ -819,15 +933,23 @@ export function validateConfig(
     if (!isPlainObject(obj.monitor)) return errVal('monitor must be an object');
     const monitor = obj.monitor as Record<string, unknown>;
     for (const key of Object.keys(monitor)) {
-      if (!new Set<string>(CONFIG_CONSUMER_KEY_SETS.monitor).has(key)) return errVal(`Unknown key in monitor: "${key}"`);
+      if (!new Set<string>(CONFIG_CONSUMER_KEY_SETS.monitor).has(key))
+        return errVal(`Unknown key in monitor: "${key}"`);
     }
     if (monitor.llm_provider !== undefined) {
-      if (typeof monitor.llm_provider !== 'string' || !BUILT_IN_PROVIDERS.some((provider) => provider.id === monitor.llm_provider)) {
-        return errVal(`monitor.llm_provider names unknown provider "${monitor.llm_provider}". Available catalog providers: ${BUILT_IN_PROVIDERS.map((provider) => provider.id).join(', ')}`);
+      if (
+        typeof monitor.llm_provider !== 'string' ||
+        !BUILT_IN_PROVIDERS.some((provider) => provider.id === monitor.llm_provider)
+      ) {
+        return errVal(
+          `monitor.llm_provider names unknown provider "${monitor.llm_provider}". Available catalog providers: ${BUILT_IN_PROVIDERS.map((provider) => provider.id).join(', ')}`,
+        );
       }
     }
-    if (monitor.model !== undefined && typeof monitor.model !== 'string') return errVal('monitor.model must be a string');
-    if (monitor.effort !== undefined && !VALID_EFFORTS.has(monitor.effort as EffortLevel)) return errVal('monitor.effort must be low|medium|high|xhigh|max');
+    if (monitor.model !== undefined && typeof monitor.model !== 'string')
+      return errVal('monitor.model must be a string');
+    if (monitor.effort !== undefined && !VALID_EFFORTS.has(monitor.effort as EffortLevel))
+      return errVal('monitor.effort must be low|medium|high|xhigh|max');
   }
 
   if (Object.hasOwn(obj, 'harness_version')) {
@@ -909,8 +1031,7 @@ export function validateConfig(
     ): string | undefined => {
       if (
         !def ||
-        (def.enforcement !== 'structural' &&
-          (def.enforcement !== 'gating' || def.configDisableAllowed === true))
+        (def.enforcement !== 'structural' && (def.enforcement !== 'gating' || def.configDisableAllowed === true))
       ) {
         return undefined;
       }
@@ -967,10 +1088,7 @@ export function validateConfig(
       }
 
       // Common validations
-      const stepProviderSelectionErr = validateProviderSelection(
-        cfg.llm_provider,
-        `steps.${name}.llm_provider`,
-      );
+      const stepProviderSelectionErr = validateProviderSelection(cfg.llm_provider, `steps.${name}.llm_provider`);
       if (stepProviderSelectionErr) {
         return { ok: false, error: stepProviderSelectionErr };
       }
@@ -1028,11 +1146,7 @@ export function validateConfig(
           const skipAuthorityError = stepSkipAuthorityError(def, name, 'when');
           if (skipAuthorityError) return errVal(skipAuthorityError);
         } else if (cfg.enforcement === 'gating' || cfg.enforcement === 'structural') {
-          const skipAuthorityError = stepSkipAuthorityError(
-            { enforcement: cfg.enforcement },
-            name,
-            'when',
-          );
+          const skipAuthorityError = stepSkipAuthorityError({ enforcement: cfg.enforcement }, name, 'when');
           if (skipAuthorityError) return errVal(skipAuthorityError);
         }
         const syntaxErr = validateWhenSyntax(cfg.when);
@@ -1047,9 +1161,7 @@ export function validateConfig(
           return errVal(`steps.${name}.parallel must be an array`);
         }
         if (cfg.skill !== undefined) {
-          return errVal(
-            `steps.${name}: "skill" and "parallel" are mutually exclusive`,
-          );
+          return errVal(`steps.${name}: "skill" and "parallel" are mutually exclusive`);
         }
         const branchNames = new Set<string>();
         for (let bi = 0; bi < (cfg.parallel as unknown[]).length; bi++) {
@@ -1068,9 +1180,7 @@ export function validateConfig(
             return errVal(`steps.${name}.parallel[${bi}].name must be a non-empty string`);
           }
           if (branchNames.has(b.name)) {
-            return errVal(
-              `steps.${name}.parallel has duplicate branch name: "${b.name}"`,
-            );
+            return errVal(`steps.${name}.parallel has duplicate branch name: "${b.name}"`);
           }
           branchNames.add(b.name);
           if (b.skill === undefined) {
@@ -1094,10 +1204,7 @@ export function validateConfig(
       if (isCustom) {
         if (cfg.completion_artifact !== undefined) {
           const field = `steps.${name}.completion_artifact`;
-          if (
-            typeof cfg.completion_artifact !== 'string' ||
-            cfg.completion_artifact.trim() === ''
-          ) {
+          if (typeof cfg.completion_artifact !== 'string' || cfg.completion_artifact.trim() === '') {
             return errVal(`${field} must be a non-empty string`);
           }
           const artifact = cfg.completion_artifact;
@@ -1125,17 +1232,13 @@ export function validateConfig(
         const isBuiltIn = builtInNames.has(afterTarget as StepName);
         const isSiblingCustom = customStepNames.has(afterTarget) && afterTarget !== name;
         if (!isBuiltIn && !isSiblingCustom) {
-          return errVal(
-            `Custom step "${name}" references unknown after target: "${afterTarget}"`,
-          );
+          return errVal(`Custom step "${name}" references unknown after target: "${afterTarget}"`);
         }
         if ((!Array.isArray(cfg.parallel) || cfg.parallel.length === 0) && typeof cfg.skill !== 'string') {
           return errVal(`Custom step "${name}" requires 'skill: <path-to-SKILL.md>'`);
         }
         if (cfg.enforcement !== undefined && !VALID_ENFORCEMENTS.has(cfg.enforcement as EnforcementLevel)) {
-          return errVal(
-            `Custom step "${name}".enforcement must be structural|advisory|gating`,
-          );
+          return errVal(`Custom step "${name}".enforcement must be structural|advisory|gating`);
         }
         if (cfg.disable === true) {
           const skipAuthorityError = stepSkipAuthorityError(
@@ -1146,13 +1249,9 @@ export function validateConfig(
           if (skipAuthorityError) return errVal(skipAuthorityError);
         }
         if (projectRoot && typeof cfg.skill === 'string') {
-          const skillPath = isAbsolute(cfg.skill)
-            ? cfg.skill
-            : resolvePath(projectRoot, cfg.skill);
+          const skillPath = isAbsolute(cfg.skill) ? cfg.skill : resolvePath(projectRoot, cfg.skill);
           if (!existsSync(skillPath)) {
-            return errVal(
-              `Custom step "${name}" skill file not found: ${skillPath}`,
-            );
+            return errVal(`Custom step "${name}" skill file not found: ${skillPath}`);
           }
         }
       } else {
@@ -1323,7 +1422,7 @@ export function validateConfig(
   if (opts.source === 'project' && 'github_bot' in obj) {
     return errVal(
       `github_bot must not be set in a project config (${projectConfigPath(projectRoot ?? '.')}): ` +
-      'Move github_bot to your user config at ~/.ai-conductor/config.yml.',
+        'Move github_bot to your user config at ~/.ai-conductor/config.yml.',
     );
   }
   if (obj.github_bot !== undefined) {
@@ -1365,9 +1464,7 @@ export function validateConfig(
     // Clamp to [0, 100] with warning
     if (obj.attribution_audit_sample_pct < 0 || obj.attribution_audit_sample_pct > 100) {
       const clamped = Math.max(0, Math.min(100, obj.attribution_audit_sample_pct));
-      warnings.push(
-        `attribution_audit_sample_pct out of range [0, 100]; clamped to ${clamped}.`,
-      );
+      warnings.push(`attribution_audit_sample_pct out of range [0, 100]; clamped to ${clamped}.`);
       obj.attribution_audit_sample_pct = clamped;
     }
   } else if (materializeDefaults) {
@@ -1486,10 +1583,7 @@ export function validateConfig(
   //   C2  finite positive number → that value (no warning)
   //   C3  other value (non-numeric, non-finite, zero, or negative) → 300
   //       + one warning
-  if (
-    obj.engine_refresh_min_interval_seconds !== undefined &&
-    obj.engine_refresh_min_interval_seconds !== null
-  ) {
+  if (obj.engine_refresh_min_interval_seconds !== undefined && obj.engine_refresh_min_interval_seconds !== null) {
     if (
       typeof obj.engine_refresh_min_interval_seconds === 'number' &&
       Number.isFinite(obj.engine_refresh_min_interval_seconds) &&
@@ -1526,14 +1620,8 @@ export function validateConfig(
   // step_heartbeat_stall_minutes is a deprecated compatibility no-op. Retain
   // finite legacy values so older configs continue to load, but never resolve
   // this key into termination authority or provider preparation timeout.
-  if (
-    obj.step_heartbeat_stall_minutes !== undefined &&
-    obj.step_heartbeat_stall_minutes !== null
-  ) {
-    if (
-      typeof obj.step_heartbeat_stall_minutes !== 'number' ||
-      !Number.isFinite(obj.step_heartbeat_stall_minutes)
-    ) {
+  if (obj.step_heartbeat_stall_minutes !== undefined && obj.step_heartbeat_stall_minutes !== null) {
+    if (typeof obj.step_heartbeat_stall_minutes !== 'number' || !Number.isFinite(obj.step_heartbeat_stall_minutes)) {
       warnings.push(
         `step_heartbeat_stall_minutes is a deprecated compatibility no-op; invalid value ${JSON.stringify(obj.step_heartbeat_stall_minutes)} is ignored. It grants no termination authority and is never used as provider_preparation_timeout_minutes.`,
       );
@@ -1549,10 +1637,7 @@ export function validateConfig(
   // before a provider process is spawned. 0 and negative values deliberately
   // opt out; only non-finite or non-numeric values are invalid. Left unset
   // when absent so the resolver applies its independent five-minute default.
-  if (
-    obj.provider_preparation_timeout_minutes !== undefined &&
-    obj.provider_preparation_timeout_minutes !== null
-  ) {
+  if (obj.provider_preparation_timeout_minutes !== undefined && obj.provider_preparation_timeout_minutes !== null) {
     if (
       typeof obj.provider_preparation_timeout_minutes !== 'number' ||
       !Number.isFinite(obj.provider_preparation_timeout_minutes)
@@ -1614,7 +1699,7 @@ export function validateConfig(
           key,
           // Preserve any supplied max_bytes value for resolveOtelConfig(), which
           // owns the range/type error and disables telemetry safely.
-          isValid: (value: unknown) => key === 'enabled' ? typeof value === 'boolean' : value !== undefined,
+          isValid: (value: unknown) => (key === 'enabled' ? typeof value === 'boolean' : value !== undefined),
         })),
         warnings,
       );
@@ -1637,9 +1722,10 @@ export function validateConfig(
     const configured = obj.provider_stream as Record<string, unknown> | undefined;
     const minInterval = configured?.min_interval_ms;
     obj.provider_stream = {
-      min_interval_ms: typeof minInterval === 'number' && Number.isFinite(minInterval) && minInterval > 0
-        ? minInterval
-        : DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS,
+      min_interval_ms:
+        typeof minInterval === 'number' && Number.isFinite(minInterval) && minInterval > 0
+          ? minInterval
+          : DEFAULT_PROVIDER_STREAM_MIN_INTERVAL_MS,
     };
   }
 
@@ -1665,9 +1751,7 @@ export function validateConfig(
     const err = validateArchitectureReviewAsBuiltBlock(obj.architecture_review_as_built);
     if (err) return { ok: false, error: err };
     if (obj.architecture_review_as_built !== undefined || materializeDefaults) {
-      obj.architecture_review_as_built = resolveArchitectureReviewAsBuiltBlock(
-        obj.architecture_review_as_built,
-      );
+      obj.architecture_review_as_built = resolveArchitectureReviewAsBuiltBlock(obj.architecture_review_as_built);
     }
   }
 
@@ -1693,9 +1777,7 @@ export function validateConfig(
         warnings,
       );
       if (Object.hasOwn(br, 'perTaskFloor')) {
-        warnings.push(
-          `build_review.perTaskFloor is retired and ignored (${DEPRECATED_BUILD_REVIEW_ADR}).`,
-        );
+        warnings.push(`build_review.perTaskFloor is retired and ignored (${DEPRECATED_BUILD_REVIEW_ADR}).`);
         deprecatedKeys.push({
           key: 'build_review.perTaskFloor',
           adr: DEPRECATED_BUILD_REVIEW_ADR,
@@ -1705,24 +1787,14 @@ export function validateConfig(
       const rubricInput = br.rubrics;
       const adjudicationError = validateBuildReviewAdjudication(br.adjudication);
       if (adjudicationError) return { ok: false, error: adjudicationError };
-      const rubricError = validateBuildReviewRubrics(
-        br.maxParallel,
-        rubricInput,
-        warnings,
-        deprecatedKeys,
-      );
+      const rubricError = validateBuildReviewRubrics(br.maxParallel, rubricInput, warnings, deprecatedKeys);
       if (rubricError) return { ok: false, error: rubricError };
       const adjudicationEnabled = (br.adjudication as Record<string, unknown> | undefined)?.enabled !== false;
-      const customRubricError = validateBuildReviewCustomRubrics(
-        br.custom_rubrics,
-        adjudicationEnabled,
-      );
+      const customRubricError = validateBuildReviewCustomRubrics(br.custom_rubrics, adjudicationEnabled);
       if (customRubricError) return { ok: false, error: customRubricError };
       const activeRubricInput = isPlainObject(rubricInput)
         ? Object.fromEntries(
-            Object.entries(rubricInput).filter(
-              ([rubricId]) => !DEPRECATED_BUILD_REVIEW_RUBRIC_ID_SET.has(rubricId),
-            ),
+            Object.entries(rubricInput).filter(([rubricId]) => !DEPRECATED_BUILD_REVIEW_RUBRIC_ID_SET.has(rubricId)),
           )
         : undefined;
       const resolvedBuildReview = {
@@ -1741,7 +1813,8 @@ export function validateConfig(
             {
               ...((activeRubricInput as Record<string, Record<string, unknown>> | undefined)?.[rubricId] ?? {}),
               enabled:
-                typeof (activeRubricInput as Record<string, Record<string, unknown>> | undefined)?.[rubricId]?.enabled === 'boolean'
+                typeof (activeRubricInput as Record<string, Record<string, unknown>> | undefined)?.[rubricId]
+                  ?.enabled === 'boolean'
                   ? (activeRubricInput as Record<string, Record<string, unknown>>)[rubricId].enabled
                   : BUILD_REVIEW_RUBRIC_DEFAULT_ENABLED[rubricId],
             },
@@ -1750,14 +1823,17 @@ export function validateConfig(
       };
       obj.build_review = resolvedBuildReview;
     } else {
-      warnings.push(
-        `build_review has invalid value ${JSON.stringify(obj.build_review)}, falling back to enabled.`,
-      );
+      warnings.push(`build_review has invalid value ${JSON.stringify(obj.build_review)}, falling back to enabled.`);
       obj.build_review = {
         enabled: true,
         maxParallel: 4,
         adjudication: { enabled: true },
-        rubrics: Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [rubricId, { enabled: BUILD_REVIEW_RUBRIC_DEFAULT_ENABLED[rubricId] }])),
+        rubrics: Object.fromEntries(
+          BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [
+            rubricId,
+            { enabled: BUILD_REVIEW_RUBRIC_DEFAULT_ENABLED[rubricId] },
+          ]),
+        ),
       };
     }
   } else if (obj.build_review === null || materializeDefaults) {
@@ -1765,7 +1841,12 @@ export function validateConfig(
       enabled: true,
       maxParallel: 4,
       adjudication: { enabled: true },
-      rubrics: Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [rubricId, { enabled: BUILD_REVIEW_RUBRIC_DEFAULT_ENABLED[rubricId] }])),
+      rubrics: Object.fromEntries(
+        BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [
+          rubricId,
+          { enabled: BUILD_REVIEW_RUBRIC_DEFAULT_ENABLED[rubricId] },
+        ]),
+      ),
     };
   }
 
@@ -1781,9 +1862,10 @@ export function validateConfig(
         obj.ci_watch,
         CONFIG_CONSUMER_KEY_SETS.ci_watch.map((key) => ({
           key,
-          isValid: (value: unknown) => key === 'enabled'
-            ? typeof value === 'boolean'
-            : typeof value === 'number' && Number.isFinite(value) && value >= 0,
+          isValid: (value: unknown) =>
+            key === 'enabled'
+              ? typeof value === 'boolean'
+              : typeof value === 'number' && Number.isFinite(value) && value >= 0,
         })),
         warnings,
       );
@@ -1792,9 +1874,7 @@ export function validateConfig(
         enabled: typeof cw.enabled === 'boolean' ? cw.enabled : true,
       };
     } else {
-      warnings.push(
-        `ci_watch has invalid value ${JSON.stringify(obj.ci_watch)}, falling back to enabled.`,
-      );
+      warnings.push(`ci_watch has invalid value ${JSON.stringify(obj.ci_watch)}, falling back to enabled.`);
       obj.ci_watch = { enabled: true };
     }
   } else if (obj.ci_watch === null || materializeDefaults) {
@@ -1904,12 +1984,7 @@ export function validateConfig(
 }
 
 const SELF_HOST_ACTIVATIONS = new Set(['auto', 'force_on', 'force_off']);
-const SELF_HOST_GATE_KEYS = [
-  'sandbox_build_env',
-  'live_containment',
-  'version_approval_gate',
-  'release_artifact_gate',
-];
+const SELF_HOST_GATE_KEYS = ['sandbox_build_env', 'live_containment', 'version_approval_gate', 'release_artifact_gate'];
 
 function validateSelfHostBlock(raw: unknown): ConfigError | null {
   if (!isPlainObject(raw)) {
@@ -2012,10 +2087,7 @@ function validatePrdAuditBlock(raw: unknown): ConfigError | null {
     }
   }
 
-  const remediationLapError = validateRemediationLapCap(
-    obj.max_remediation_laps,
-    'prd_audit.max_remediation_laps',
-  );
+  const remediationLapError = validateRemediationLapCap(obj.max_remediation_laps, 'prd_audit.max_remediation_laps');
   if (remediationLapError) return remediationLapError;
 
   if (
@@ -2031,20 +2103,14 @@ function validatePrdAuditBlock(raw: unknown): ConfigError | null {
   }
 
   const ratio = obj.max_appended_ratio;
-  if (
-    ratio !== undefined &&
-    (typeof ratio !== 'number' || !Number.isFinite(ratio) || ratio <= 0 || ratio > 1)
-  ) {
+  if (ratio !== undefined && (typeof ratio !== 'number' || !Number.isFinite(ratio) || ratio <= 0 || ratio > 1)) {
     return {
       type: 'validation_error',
       message: 'prd_audit.max_appended_ratio must be a finite number in (0, 1]',
     };
   }
 
-  if (
-    obj.halt_on_any_plan_gap !== undefined &&
-    typeof obj.halt_on_any_plan_gap !== 'boolean'
-  ) {
+  if (obj.halt_on_any_plan_gap !== undefined && typeof obj.halt_on_any_plan_gap !== 'boolean') {
     return {
       type: 'validation_error',
       message: 'prd_audit.halt_on_any_plan_gap must be a boolean',
@@ -2090,17 +2156,11 @@ function resolvePrdAuditBlock(raw: unknown): {
 } {
   const obj = isPlainObject(raw) ? raw : {};
   return {
-    ...(obj.max_remediation_laps === undefined
-      ? {}
-      : { max_remediation_laps: obj.max_remediation_laps }),
+    ...(obj.max_remediation_laps === undefined ? {} : { max_remediation_laps: obj.max_remediation_laps }),
     max_appended_tasks:
-      typeof obj.max_appended_tasks === 'number'
-        ? obj.max_appended_tasks
-        : PRD_AUDIT_DEFAULTS.max_appended_tasks,
+      typeof obj.max_appended_tasks === 'number' ? obj.max_appended_tasks : PRD_AUDIT_DEFAULTS.max_appended_tasks,
     max_appended_ratio:
-      typeof obj.max_appended_ratio === 'number'
-        ? obj.max_appended_ratio
-        : PRD_AUDIT_DEFAULTS.max_appended_ratio,
+      typeof obj.max_appended_ratio === 'number' ? obj.max_appended_ratio : PRD_AUDIT_DEFAULTS.max_appended_ratio,
     halt_on_any_plan_gap:
       typeof obj.halt_on_any_plan_gap === 'boolean'
         ? obj.halt_on_any_plan_gap
@@ -2207,14 +2267,12 @@ function resolveArchitectureReviewAsBuiltBlock(raw: unknown): Record<string, unk
           ? remediation.enabled
           : ARCHITECTURE_REVIEW_AS_BUILT_DEFAULTS.remediation.enabled,
     },
-    ...(obj.max_remediation_laps === undefined
-      ? {}
-      : { max_remediation_laps: obj.max_remediation_laps }),
+    ...(obj.max_remediation_laps === undefined ? {} : { max_remediation_laps: obj.max_remediation_laps }),
   };
 }
 
 function validateRemediationLapCap(raw: unknown, path: string): ConfigError | null {
-  if (raw === undefined || typeof raw === 'number' && Number.isInteger(raw) && raw > 0) {
+  if (raw === undefined || (typeof raw === 'number' && Number.isInteger(raw) && raw > 0)) {
     return null;
   }
   if (!isPlainObject(raw)) {
@@ -2319,11 +2377,7 @@ function validateTestSuiteBlock(
     }
   }
 
-  if (
-    raw.command === undefined &&
-    raw.commands === undefined &&
-    raw.scoped_command === undefined
-  ) {
+  if (raw.command === undefined && raw.commands === undefined && raw.scoped_command === undefined) {
     return {
       type: 'validation_error',
       message: 'test_suite.command, test_suite.commands, or test_suite.scoped_command must be configured',
@@ -2437,9 +2491,7 @@ function validateTestSuiteBlock(
 
   if (
     raw.timeout_seconds !== undefined &&
-    (typeof raw.timeout_seconds !== 'number' ||
-      !Number.isFinite(raw.timeout_seconds) ||
-      raw.timeout_seconds <= 0)
+    (typeof raw.timeout_seconds !== 'number' || !Number.isFinite(raw.timeout_seconds) || raw.timeout_seconds <= 0)
   ) {
     return {
       type: 'validation_error',
@@ -2449,10 +2501,7 @@ function validateTestSuiteBlock(
 
   for (const field of ['inputs', 'environment'] as const) {
     const value = raw[field];
-    if (
-      value !== undefined &&
-      (!Array.isArray(value) || !value.every((entry) => typeof entry === 'string'))
-    ) {
+    if (value !== undefined && (!Array.isArray(value) || !value.every((entry) => typeof entry === 'string'))) {
       return {
         type: 'validation_error',
         message: `test_suite.${field} must be an array of strings`,
@@ -2460,11 +2509,7 @@ function validateTestSuiteBlock(
     }
   }
 
-  const verificationError = validateTestSuiteVerification(
-    raw.verification,
-    raw.scoped_command,
-    raw.changed_command,
-  );
+  const verificationError = validateTestSuiteVerification(raw.verification, raw.scoped_command, raw.changed_command);
   if (verificationError) return verificationError;
 
   if (materializeDefaults) {
@@ -2494,8 +2539,7 @@ function validateTestSuiteWorkingDirectory(
     relativeDirectory === '..' ||
     relativeDirectory.startsWith(`..${sep}`) ||
     isAbsolute(relativeDirectory) ||
-    (projectRoot !== undefined &&
-      existingRealPathEscapesRoot(projectRoot, resolvedDirectory))
+    (projectRoot !== undefined && existingRealPathEscapesRoot(projectRoot, resolvedDirectory))
   ) {
     return {
       type: 'validation_error',
@@ -2523,13 +2567,9 @@ export const UNBUDGETABLE_TEST_SUITE_DRIFT_CATEGORIES = [
   'project_config',
 ] as const satisfies readonly TestSuiteDriftCategory[];
 
-export type UnbudgetableTestSuiteDriftCategory =
-  (typeof UNBUDGETABLE_TEST_SUITE_DRIFT_CATEGORIES)[number];
+export type UnbudgetableTestSuiteDriftCategory = (typeof UNBUDGETABLE_TEST_SUITE_DRIFT_CATEGORIES)[number];
 
-const DEFAULT_TEST_SUITE_DRIFT_BUDGET: Record<
-  TestSuiteDriftCategory,
-  TestSuiteDriftBudgetBound
-> = Object.fromEntries(
+const DEFAULT_TEST_SUITE_DRIFT_BUDGET: Record<TestSuiteDriftCategory, TestSuiteDriftBudgetBound> = Object.fromEntries(
   TEST_SUITE_DRIFT_CATEGORIES.map((category) => [category, 'none']),
 ) as Record<TestSuiteDriftCategory, TestSuiteDriftBudgetBound>;
 
@@ -2553,12 +2593,7 @@ function validateTestSuiteVerification(
     }
   }
 
-  if (
-    raw.mode !== undefined &&
-    raw.mode !== 'aggregate' &&
-    raw.mode !== 'scoped' &&
-    raw.mode !== 'changed'
-  ) {
+  if (raw.mode !== undefined && raw.mode !== 'aggregate' && raw.mode !== 'scoped' && raw.mode !== 'changed') {
     return {
       type: 'validation_error',
       message: `test_suite.verification.mode ${JSON.stringify(raw.mode)} must be "aggregate", "scoped", or "changed"`,
@@ -2609,11 +2644,7 @@ function validateTestSuiteVerification(
         message: `Unknown test_suite.verification.drift_budget category "${category}". Valid categories: ${TEST_SUITE_DRIFT_CATEGORIES.join(', ')}`,
       };
     }
-    if (
-      UNBUDGETABLE_TEST_SUITE_DRIFT_CATEGORIES.includes(
-        category as UnbudgetableTestSuiteDriftCategory,
-      )
-    ) {
+    if (UNBUDGETABLE_TEST_SUITE_DRIFT_CATEGORIES.includes(category as UnbudgetableTestSuiteDriftCategory)) {
       return {
         type: 'validation_error',
         message: `test_suite.verification.drift_budget.${category} is unbudgetable`,
@@ -2637,17 +2668,16 @@ function validateTestSuiteVerification(
 function resolveTestSuiteVerification(raw: unknown): TestSuiteVerificationConfig {
   const verification = isPlainObject(raw) ? raw : {};
   const rawBudget = isPlainObject(verification.drift_budget) ? verification.drift_budget : {};
-  const mode = verification.mode === 'scoped' || verification.mode === 'changed'
-    ? verification.mode
-    : 'aggregate';
+  const mode = verification.mode === 'scoped' || verification.mode === 'changed' ? verification.mode : 'aggregate';
 
   return {
     mode,
     ...(mode === 'changed'
       ? {
-          full_suite: verification.full_suite === 'once' || verification.full_suite === 'skip'
-            ? verification.full_suite
-            : 'before_publish' as const,
+          full_suite:
+            verification.full_suite === 'once' || verification.full_suite === 'skip'
+              ? verification.full_suite
+              : ('before_publish' as const),
         }
       : {}),
     drift_budget: Object.fromEntries(
@@ -2683,11 +2713,7 @@ function existingRealPathEscapesRoot(projectRoot: string, candidate: string): bo
   }
 
   const relativeCandidate = relative(realRoot, realCandidate);
-  return (
-    relativeCandidate === '..' ||
-    relativeCandidate.startsWith(`..${sep}`) ||
-    isAbsolute(relativeCandidate)
-  );
+  return relativeCandidate === '..' || relativeCandidate.startsWith(`..${sep}`) || isAbsolute(relativeCandidate);
 }
 
 /**
@@ -2779,12 +2805,8 @@ function validateBuildProgressBlock(raw: unknown): ConfigError | null {
   // episode before the watcher has a chance to report or end it. Validate
   // against the resolved default too: validation preserves an omitted value,
   // while the watcher resolves that omission to 45 minutes.
-  const activeStallMinutes =
-    typeof obj.active_stall_minutes === 'number' ? obj.active_stall_minutes : 45;
-  if (
-    typeof obj.poll_seconds === 'number' &&
-    obj.poll_seconds > activeStallMinutes * 60
-  ) {
+  const activeStallMinutes = typeof obj.active_stall_minutes === 'number' ? obj.active_stall_minutes : 45;
+  if (typeof obj.poll_seconds === 'number' && obj.poll_seconds > activeStallMinutes * 60) {
     return {
       type: 'validation_error',
       message: `build_progress.poll_seconds (${obj.poll_seconds}s) must not exceed build_progress.active_stall_minutes (${activeStallMinutes}m = ${activeStallMinutes * 60}s)`,
@@ -2827,10 +2849,7 @@ export const BUILD_PROGRESS_HALT_DEFAULTS = {
  * the halt/park decision could fire before a single step exhausted its own
  * retry budget.
  */
-function validateBuildProgressHaltBlock(
-  raw: unknown,
-  resolvedMaxRetries: number,
-): ConfigError | null {
+function validateBuildProgressHaltBlock(raw: unknown, resolvedMaxRetries: number): ConfigError | null {
   if (raw === undefined || raw === null) return null;
   if (!isPlainObject(raw)) {
     return { type: 'validation_error', message: 'build_progress_halt must be an object' };
@@ -2858,10 +2877,7 @@ function validateBuildProgressHaltBlock(
     }
   }
 
-  if (
-    typeof obj.attempt_ceiling === 'number' &&
-    obj.attempt_ceiling < resolvedMaxRetries
-  ) {
+  if (typeof obj.attempt_ceiling === 'number' && obj.attempt_ceiling < resolvedMaxRetries) {
     return {
       type: 'validation_error',
       message: `build_progress_halt.attempt_ceiling (${obj.attempt_ceiling}) must not be below the resolved max_retries (${resolvedMaxRetries})`,
@@ -2880,13 +2896,9 @@ function resolveBuildProgressHaltBlock(raw: unknown): {
   return {
     enabled: typeof obj.enabled === 'boolean' ? obj.enabled : BUILD_PROGRESS_HALT_DEFAULTS.enabled,
     attempt_ceiling:
-      typeof obj.attempt_ceiling === 'number'
-        ? obj.attempt_ceiling
-        : BUILD_PROGRESS_HALT_DEFAULTS.attempt_ceiling,
+      typeof obj.attempt_ceiling === 'number' ? obj.attempt_ceiling : BUILD_PROGRESS_HALT_DEFAULTS.attempt_ceiling,
     dispatch_ceiling:
-      typeof obj.dispatch_ceiling === 'number'
-        ? obj.dispatch_ceiling
-        : BUILD_PROGRESS_HALT_DEFAULTS.dispatch_ceiling,
+      typeof obj.dispatch_ceiling === 'number' ? obj.dispatch_ceiling : BUILD_PROGRESS_HALT_DEFAULTS.dispatch_ceiling,
   };
 }
 
@@ -3046,17 +3058,17 @@ function validateStackedPrsBlock(raw: unknown): ConfigError | null {
   }
   if (
     obj.max_slices !== undefined &&
-    (typeof obj.max_slices !== 'number' || !Number.isInteger(obj.max_slices) || obj.max_slices < 1 || obj.max_slices >= 10)
+    (typeof obj.max_slices !== 'number' ||
+      !Number.isInteger(obj.max_slices) ||
+      obj.max_slices < 1 ||
+      obj.max_slices >= 10)
   ) {
     return {
       type: 'validation_error',
       message: 'stacked_prs.max_slices must be an integer from 1 through 9',
     };
   }
-  const restackCascadeError = validateRemediationLapCap(
-    obj.max_restack_cascades,
-    'stacked_prs.max_restack_cascades',
-  );
+  const restackCascadeError = validateRemediationLapCap(obj.max_restack_cascades, 'stacked_prs.max_restack_cascades');
   if (restackCascadeError) return restackCascadeError;
   return null;
 }
@@ -3095,7 +3107,10 @@ function validateMarkdownViewerBlock(raw: unknown): ConfigError | null {
       };
     }
   }
-  if (obj.mode !== undefined && !VALID_MARKDOWN_VIEWER_MODES.has(obj.mode as NonNullable<MarkdownViewerConfig['mode']>)) {
+  if (
+    obj.mode !== undefined &&
+    !VALID_MARKDOWN_VIEWER_MODES.has(obj.mode as NonNullable<MarkdownViewerConfig['mode']>)
+  ) {
     return {
       type: 'validation_error',
       message: 'markdown_viewer.mode must be inline|blocking|external',
@@ -3103,13 +3118,22 @@ function validateMarkdownViewerBlock(raw: unknown): ConfigError | null {
   }
   if (obj.preset === undefined || obj.preset === 'custom') {
     if (obj.command === undefined) {
-      return { type: 'validation_error', message: 'markdown_viewer.command is required when no preset or custom preset is named' };
+      return {
+        type: 'validation_error',
+        message: 'markdown_viewer.command is required when no preset or custom preset is named',
+      };
     }
     if (obj.args === undefined) {
-      return { type: 'validation_error', message: 'markdown_viewer.args is required when no preset or custom preset is named' };
+      return {
+        type: 'validation_error',
+        message: 'markdown_viewer.args is required when no preset or custom preset is named',
+      };
     }
     if (obj.mode === undefined) {
-      return { type: 'validation_error', message: 'markdown_viewer.mode is required when no preset or custom preset is named' };
+      return {
+        type: 'validation_error',
+        message: 'markdown_viewer.mode is required when no preset or custom preset is named',
+      };
     }
   }
   return null;
@@ -3228,13 +3252,20 @@ function validateProviderModelConfigs(raw: unknown): ConfigError | null {
     }
     if (policy.trust_project_files !== undefined) {
       const descriptor = BUILT_IN_PROVIDERS.find((candidate) => candidate.id === providerId);
-      if (!descriptor || !('projectFileTrust' in descriptor && descriptor.projectFileTrust === true)) return { type: 'validation_error', message: `${path}.trust_project_files is not applicable to provider ${providerId}` };
-      if (typeof policy.trust_project_files !== 'boolean') return { type: 'validation_error', message: `${path}.trust_project_files must be a boolean` };
+      if (!descriptor || !('projectFileTrust' in descriptor && descriptor.projectFileTrust === true))
+        return {
+          type: 'validation_error',
+          message: `${path}.trust_project_files is not applicable to provider ${providerId}`,
+        };
+      if (typeof policy.trust_project_files !== 'boolean')
+        return { type: 'validation_error', message: `${path}.trust_project_files must be a boolean` };
     }
     if (policy.subagents !== undefined) {
       const descriptor = BUILT_IN_PROVIDERS.find((candidate) => candidate.id === providerId);
-      if (!descriptor || !('subagentExtension' in descriptor && descriptor.subagentExtension === true)) return { type: 'validation_error', message: `${path}.subagents is not applicable to provider ${providerId}` };
-      if (typeof policy.subagents !== 'boolean') return { type: 'validation_error', message: `${path}.subagents must be a boolean` };
+      if (!descriptor || !('subagentExtension' in descriptor && descriptor.subagentExtension === true))
+        return { type: 'validation_error', message: `${path}.subagents is not applicable to provider ${providerId}` };
+      if (typeof policy.subagents !== 'boolean')
+        return { type: 'validation_error', message: `${path}.subagents must be a boolean` };
     }
     if (policy.model !== undefined && (typeof policy.model !== 'string' || policy.model.trim() === '')) {
       return { type: 'validation_error', message: `${path}.model must be a non-empty string` };
@@ -3268,10 +3299,14 @@ function validateRequiredProviderModelConfigs(config: HarnessConfig): string[] {
       errors.push(`llm_providers.${provider.id}.model is required because ${provider.id} is configured`);
     }
     if (!policy?.model_escalation_order || policy.model_escalation_order.length === 0) {
-      errors.push(`llm_providers.${provider.id}.model_escalation_order is required because ${provider.id} is configured`);
+      errors.push(
+        `llm_providers.${provider.id}.model_escalation_order is required because ${provider.id} is configured`,
+      );
     }
     if (!policy?.model_fallback_ladder || policy.model_fallback_ladder.length === 0) {
-      errors.push(`llm_providers.${provider.id}.model_fallback_ladder is required because ${provider.id} is configured`);
+      errors.push(
+        `llm_providers.${provider.id}.model_fallback_ladder is required because ${provider.id} is configured`,
+      );
     }
   }
   return errors;
@@ -3457,10 +3492,7 @@ export async function loadMergedConfigForRead(
  * hard failures, so a broken user file never blocks an otherwise-healthy
  * project.
  */
-export async function loadMergedConfig(
-  projectRoot: string,
-  harnessVersion?: string,
-): Promise<ConfigResult> {
+export async function loadMergedConfig(projectRoot: string, harnessVersion?: string): Promise<ConfigResult> {
   const projectResult = await loadProjectConfig(projectRoot, harnessVersion, false);
   if (!projectResult.ok) return projectResult;
 
@@ -3502,9 +3534,7 @@ export async function loadMergedConfig(
   };
 }
 
-function uniqueDeprecatedConfigKeys(
-  deprecatedKeys: readonly DeprecatedConfigKey[],
-): DeprecatedConfigKey[] {
+function uniqueDeprecatedConfigKeys(deprecatedKeys: readonly DeprecatedConfigKey[]): DeprecatedConfigKey[] {
   const seen = new Set<string>();
   return deprecatedKeys.filter(({ key }) => {
     if (seen.has(key)) return false;
@@ -3667,9 +3697,7 @@ export async function resolveMemoryProvider(
   }
   if (!ctx._seenBadMemoryProviders.has(selection)) {
     ctx._seenBadMemoryProviders.add(selection);
-    ctx.warnings.push(
-      `memory_provider "${selection}" is not installed; falling back to local.`,
-    );
+    ctx.warnings.push(`memory_provider "${selection}" is not installed; falling back to local.`);
   }
 
   return registry.tryGet('memory_provider', 'local');
@@ -3742,15 +3770,13 @@ export function resolveValidationConcurrency(config: Pick<HarnessConfig, 'valida
  * shape: absent block, absent `enabled`, or a non-boolean `enabled` all
  * resolve to `enabled: true` (feature ON by default) — never throws.
  */
-export function resolveGateCodeValidityConfig(
-  config: Pick<HarnessConfig, 'gate_code_validity'> | undefined,
-): { enabled: boolean } {
+export function resolveGateCodeValidityConfig(config: Pick<HarnessConfig, 'gate_code_validity'> | undefined): {
+  enabled: boolean;
+} {
   return resolveGateCodeValidityBlock(config?.gate_code_validity);
 }
 
-export function resolveBuildProgressConfig(
-  config: Pick<HarnessConfig, 'build_progress'>,
-): ResolvedBuildProgressConfig {
+export function resolveBuildProgressConfig(config: Pick<HarnessConfig, 'build_progress'>): ResolvedBuildProgressConfig {
   const buildProgress = config.build_progress;
 
   if (!buildProgress) {
@@ -3760,12 +3786,9 @@ export function resolveBuildProgressConfig(
   return {
     poll_seconds: buildProgress.poll_seconds ?? BUILD_PROGRESS_DEFAULTS.poll_seconds,
     quiet_minutes: buildProgress.quiet_minutes ?? BUILD_PROGRESS_DEFAULTS.quiet_minutes,
-    heartbeat_minutes:
-      buildProgress.heartbeat_minutes ?? BUILD_PROGRESS_DEFAULTS.heartbeat_minutes,
+    heartbeat_minutes: buildProgress.heartbeat_minutes ?? BUILD_PROGRESS_DEFAULTS.heartbeat_minutes,
     enabled: buildProgress.enabled ?? BUILD_PROGRESS_DEFAULTS.enabled,
-    active_stall_minutes:
-      buildProgress.active_stall_minutes ?? BUILD_PROGRESS_DEFAULTS.active_stall_minutes,
-    active_stall_action:
-      buildProgress.active_stall_action ?? BUILD_PROGRESS_DEFAULTS.active_stall_action,
+    active_stall_minutes: buildProgress.active_stall_minutes ?? BUILD_PROGRESS_DEFAULTS.active_stall_minutes,
+    active_stall_action: buildProgress.active_stall_action ?? BUILD_PROGRESS_DEFAULTS.active_stall_action,
   };
 }

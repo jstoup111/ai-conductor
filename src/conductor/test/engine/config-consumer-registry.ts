@@ -89,20 +89,11 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   supervisor_max_stale_hours: consumer(DAEMON_CLI),
   codex_doctor_timeout_seconds: consumer('src/conductor/src/engine/plugin-loader.ts'),
   mergeable_autoresolve: consumer(AUTORESOLVE),
-  stacked_prs: consumer([
-    'src/conductor/src/engine/engineer/land-spec.ts',
-    STEP_RUNNERS,
-  ]),
+  stacked_prs: consumer(['src/conductor/src/engine/engineer/land-spec.ts', STEP_RUNNERS]),
   build_review: consumer(RESOLVED_CONFIG),
-  feature_applicability: consumer([
-    'src/conductor/src/engine/engineer/land-spec.ts',
-    CONDUCTOR,
-  ]),
+  feature_applicability: consumer(['src/conductor/src/engine/engineer/land-spec.ts', CONDUCTOR]),
   prd_audit: consumer([REMEDIATION_CAPS, PRD_AUDIT_ROUTING]),
-  plan_review: consumer([
-    'src/conductor/src/engine/engineer-cli.ts',
-    STEP_RUNNERS,
-  ]),
+  plan_review: consumer(['src/conductor/src/engine/engineer-cli.ts', STEP_RUNNERS]),
   architecture_review_as_built: consumer(AS_BUILT_POLICY),
   ci_watch: consumer(DAEMON_CLI),
   build_progress_halt: consumer(DAEMON_CLI),
@@ -230,10 +221,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
     STEP_RUNNERS,
     'src/conductor/src/engine/slice-topology.ts',
   ]),
-  'stacked_prs.max_slices': consumer([
-    'src/conductor/src/engine/engineer/land-spec.ts',
-    STEP_RUNNERS,
-  ]),
+  'stacked_prs.max_slices': consumer(['src/conductor/src/engine/engineer/land-spec.ts', STEP_RUNNERS]),
   'stacked_prs.route_whole_feature_fixes': consumer(ROUTE_TYPES),
   'stacked_prs.max_restack_cascades': consumer(CASCADE_ALLOWANCE),
 
@@ -292,10 +280,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'build_review.custom_rubrics.min_confidence': consumer(RESOLVED_CONFIG),
   'build_review.custom_rubrics.min_severity': consumer(RESOLVED_CONFIG),
 
-  'feature_applicability.enabled': consumer([
-    'src/conductor/src/engine/engineer/land-spec.ts',
-    CONDUCTOR,
-  ]),
+  'feature_applicability.enabled': consumer(['src/conductor/src/engine/engineer/land-spec.ts', CONDUCTOR]),
 
   // ── ci_watch ──────────────────────────────────────────────────────────────
   'ci_watch.enabled': consumer(DAEMON_CLI),
@@ -312,10 +297,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'prd_audit.halt_on_any_plan_gap': consumer(PRD_AUDIT_ROUTING),
 
   // ── plan_review ──────────────────────────────────────────────────────────
-  'plan_review.max_prompt_chars': consumer([
-    'src/conductor/src/engine/engineer-cli.ts',
-    STEP_RUNNERS,
-  ]),
+  'plan_review.max_prompt_chars': consumer(['src/conductor/src/engine/engineer-cli.ts', STEP_RUNNERS]),
 
   // ── architecture_review_as_built ──────────────────────────────────────────
   // `checks.<check>.tiers` is the as-built policy's own input; the remediation
@@ -388,14 +370,18 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'mermaid_renderer.preset': consumer('src/conductor/src/engine/mermaid-renderer.ts'),
   'mermaid_renderer.command': consumer('bin/install'),
   'mermaid_renderer.args': none(
-    'the mmdc invocation is built from mermaid-renderer.ts\'s own argv, never from the configured array (#1025)',
+    "the mmdc invocation is built from mermaid-renderer.ts's own argv, never from the configured array (#1025)",
   ),
   'mermaid_renderer.mode': none(
-    'the renderer dispatches on `preset` alone; each preset\'s open/external behavior is hardcoded in mermaid-renderer.ts (#1025)',
+    "the renderer dispatches on `preset` alone; each preset's open/external behavior is hardcoded in mermaid-renderer.ts (#1025)",
   ),
 };
 
-export function assertRegistryCovers(sets: ConfigKeySets, registry: Record<string, ConsumerDeclaration>, repoRoot = resolve(process.cwd(), '../..')): void {
+export function assertRegistryCovers(
+  sets: ConfigKeySets,
+  registry: Record<string, ConsumerDeclaration>,
+  repoRoot = resolve(process.cwd(), '../..'),
+): void {
   const accepted = new Set(flattenedConfigKeys(sets));
   for (const key of accepted) {
     const declaration = registry[key];
@@ -404,9 +390,7 @@ export function assertRegistryCovers(sets: ConfigKeySets, registry: Record<strin
       if (!declaration.reason?.trim()) throw new Error(`Config key ${key} is none without a reason`);
       continue;
     }
-    const consumers = typeof declaration.consumer === 'string'
-      ? [declaration.consumer]
-      : declaration.consumer;
+    const consumers = typeof declaration.consumer === 'string' ? [declaration.consumer] : declaration.consumer;
     for (const consumerPath of consumers) {
       if (!existsSync(resolve(repoRoot, consumerPath))) {
         throw new Error(`Config key ${key} has unresolvable consumer: ${consumerPath}`);

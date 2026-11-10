@@ -622,10 +622,12 @@ async function prepareChildDispatchProject(slugs: readonly string[]): Promise<vo
     mkdir(join(root, '.docs', 'stories'), { recursive: true }),
     mkdir(join(root, '.docs', 'plans'), { recursive: true }),
   ]);
-  await Promise.all(slugs.flatMap((slug) => [
-    writeFile(join(root, '.docs', 'stories', `${slug}.md`), `# ${slug}\n`),
-    writeFile(join(root, '.docs', 'plans', `${slug}.md`), `# ${slug}\n`),
-  ]));
+  await Promise.all(
+    slugs.flatMap((slug) => [
+      writeFile(join(root, '.docs', 'stories', `${slug}.md`), `# ${slug}\n`),
+      writeFile(join(root, '.docs', 'plans', `${slug}.md`), `# ${slug}\n`),
+    ]),
+  );
   await commitAll(root, 'base');
 }
 
@@ -1173,9 +1175,7 @@ describe('Task 3: SIGTERM drains then releases lock; bounded force-release', () 
     const forceReleaseBody = src.slice(forceReleaseStart, forceReleaseEnd);
     expect(releaseBackstopBody).toContain('lock.releaseSync()');
     expect(forceReleaseBody).toContain('[daemon] teardown force-release:');
-    expect(forceReleaseBody.indexOf('releaseBackstop()')).toBeLessThan(
-      forceReleaseBody.indexOf('exitProcess(1)'),
-    );
+    expect(forceReleaseBody.indexOf('releaseBackstop()')).toBeLessThan(forceReleaseBody.indexOf('exitProcess(1)'));
   });
 
   it('drains two child executors after SIGTERM before releasing the lock and exiting once', async () => {
@@ -1206,7 +1206,7 @@ describe('Task 3: SIGTERM drains then releases lock; bounded force-release', () 
       // shutdown finishes; a one-shot fixture can otherwise refill during
       // stopAll's grace wait, before the handler arms the drain flag.
       workSource: {
-        discover: async () => discoveryPass++ < 2 ? [{ slug: 'first' }, { slug: 'second' }] : [],
+        discover: async () => (discoveryPass++ < 2 ? [{ slug: 'first' }, { slug: 'second' }] : []),
       },
       watch: false,
       executorFork: createInMemoryExecutorFork({
@@ -1214,10 +1214,14 @@ describe('Task 3: SIGTERM drains then releases lock; bounded force-release', () 
         run: async ({ order, signal }) => {
           started.push(order.slug);
           await new Promise<void>((resolve) => {
-            signal.addEventListener('abort', () => {
-              settledOnAbort.push(order.slug);
-              resolve();
-            }, { once: true });
+            signal.addEventListener(
+              'abort',
+              () => {
+                settledOnAbort.push(order.slug);
+                resolve();
+              },
+              { once: true },
+            );
           });
           return { slug: order.slug, status: 'parked', reason: 'supervisor shutdown' };
         },
