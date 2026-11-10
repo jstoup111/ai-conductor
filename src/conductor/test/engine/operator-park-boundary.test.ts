@@ -54,7 +54,9 @@ function noExternalIo(): Pick<ConductorOptions, 'gh' | 'git' | 'runGh'> {
 async function terminalMarkerNames(root: string): Promise<string[]> {
   return Promise.all(
     ['HALT', 'HALT.class'].map(async (name) =>
-      readFile(join(root, '.pipeline', name), 'utf8').then(() => name).catch(() => undefined),
+      readFile(join(root, '.pipeline', name), 'utf8')
+        .then(() => name)
+        .catch(() => undefined),
     ),
   ).then((names) => names.filter((name): name is string => name !== undefined));
 }
@@ -108,10 +110,7 @@ describe('operator park boundary contract', () => {
         featureSlug: 'boundary-aware-operator-parking',
         operatorParkBoundary: async () => false,
       },
-    ] satisfies Pick<
-      ConductorOptions,
-      'featureSlug' | 'operatorParkBoundary'
-    >[];
+    ] satisfies Pick<ConductorOptions, 'featureSlug' | 'operatorParkBoundary'>[];
 
     expect({
       boundaries: parked.map(({ boundary }) => boundary.kind),
@@ -123,17 +122,12 @@ describe('operator park boundary contract', () => {
   });
 
   it('mechanically inventories every supported scheduling-unit dispatch boundary', async () => {
-    const conductorSource = await readFile(
-      new URL('../../src/engine/conductor.ts', import.meta.url),
-      'utf8',
-    );
-    const dispatchPrimitives = [
-      'this.stepRunner.run(',
-      'runGroupBranch(',
-      'this.runParallelGroupViaCore(',
-    ] as const;
-    const prdWideningReconciliationDispatch = /const judgement = await this\.stepRunner\.run\('remediate', state, \{\s*remediationRequest: \{\s*mode: 'prd-widening-reconciliation',\s*projection: JSON\.stringify\(context\.value\),\s*nativeSchema: PRD_WIDENING_RECONCILIATION_SCHEMA,\s*\},\s*\}\);/g;
-    const buildReviewAdjudicationDispatch = /const dispatched = await this\.stepRunner\.run\('remediate', state, \{\s*retryReason: `Adjudicate this complete build-review context only; write \$\{requestedMode\} remediation output\.\\n\$\{JSON\.stringify\(context\)\}`,\s*\}\);/g;
+    const conductorSource = await readFile(new URL('../../src/engine/conductor.ts', import.meta.url), 'utf8');
+    const dispatchPrimitives = ['this.stepRunner.run(', 'runGroupBranch(', 'this.runParallelGroupViaCore('] as const;
+    const prdWideningReconciliationDispatch =
+      /const judgement = await this\.stepRunner\.run\('remediate', state, \{\s*remediationRequest: \{\s*mode: 'prd-widening-reconciliation',\s*projection: JSON\.stringify\(context\.value\),\s*nativeSchema: PRD_WIDENING_RECONCILIATION_SCHEMA,\s*\},\s*\}\);/g;
+    const buildReviewAdjudicationDispatch =
+      /const dispatched = await this\.stepRunner\.run\('remediate', state, \{\s*retryReason: `Adjudicate this complete build-review context only; write \$\{requestedMode\} remediation output\.\\n\$\{JSON\.stringify\(context\)\}`,\s*\}\);/g;
     // A string entry matches the exact statement text; a RegExp entry matches
     // the executionContext-reshaped helper dispatches whose option objects span
     // several lines. Either way the primitive must sit at the matched offset.
@@ -172,9 +166,7 @@ describe('operator park boundary contract', () => {
           end: start + guardedSource.length,
         };
       });
-      const serialGuard = source.lastIndexOf(
-        'const preDispatchPark = await stopAtOperatorParkBoundary();',
-      );
+      const serialGuard = source.lastIndexOf('const preDispatchPark = await stopAtOperatorParkBoundary();');
       // The guarded serial block is one park guard followed by a dispatch
       // ternary whose final arm folds the prd_audit preparation and the
       // regular fallback into one runner call. The segment runs from the
@@ -193,17 +185,16 @@ describe('operator park boundary contract', () => {
     };
     const unreviewedDispatchesIn = (source: string) => {
       const discoveredDispatches = dispatchPrimitives.flatMap((primitive) =>
-        [...source.matchAll(new RegExp(primitive.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))].map(
-          (match) => ({ primitive, offset: match.index! }),
-        ),
+        [...source.matchAll(new RegExp(primitive.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))].map((match) => ({
+          primitive,
+          offset: match.index!,
+        })),
       );
       const guardedSegments = guardedSegmentsIn(source);
       return {
         discoveredDispatches,
         unreviewedDispatches: discoveredDispatches.filter(({ primitive, offset }) => {
-          const guarded = guardedSegments.some(
-            (segment) => offset > segment.guard && offset < segment.end,
-          );
+          const guarded = guardedSegments.some((segment) => offset > segment.guard && offset < segment.end);
           const reviewedHelper = reviewedHelperDispatchAllowlist.some((statement) => {
             if (statement instanceof RegExp) {
               return [...source.matchAll(statement)].some((match) => {
@@ -240,19 +231,16 @@ describe('operator park boundary contract', () => {
     // directly.  Audit every injection rather than only the configured-group
     // one: the raw predicate intentionally belongs only to the owner-boundary
     // classifier, where it gives an operator park precedence over a yield.
-    const groupBranchInjections = [...conductorSource.matchAll(
-      /return(?: await)? runGroupBranch\(\s*member,\s*state,\s*\{[\s\S]*?operatorParkBoundary:\s*this\.daemon && this\.featureSlug !== undefined\s*\?\s*(this\.(?:rawOperatorParkBoundary|operatorParkBoundary))\s*:\s*undefined,/g,
-    )].map((match) => match[1]);
-    expect(groupBranchInjections).toEqual([
-      'this.operatorParkBoundary',
-      'this.operatorParkBoundary',
-    ]);
+    const groupBranchInjections = [
+      ...conductorSource.matchAll(
+        /return(?: await)? runGroupBranch\(\s*member,\s*state,\s*\{[\s\S]*?operatorParkBoundary:\s*this\.daemon && this\.featureSlug !== undefined\s*\?\s*(this\.(?:rawOperatorParkBoundary|operatorParkBoundary))\s*:\s*undefined,/g,
+      ),
+    ].map((match) => match[1]);
+    expect(groupBranchInjections).toEqual(['this.operatorParkBoundary', 'this.operatorParkBoundary']);
 
-    const unguardedRemediateDispatch = "const judgement = await this.stepRunner.run('remediate', state, { retryReason: 'unguarded reconciliation dispatch' });";
-    const unguardedSource = conductorSource.replace(
-      prdWideningReconciliationDispatch,
-      unguardedRemediateDispatch,
-    );
+    const unguardedRemediateDispatch =
+      "const judgement = await this.stepRunner.run('remediate', state, { retryReason: 'unguarded reconciliation dispatch' });";
+    const unguardedSource = conductorSource.replace(prdWideningReconciliationDispatch, unguardedRemediateDispatch);
     const unguardedOffset = unguardedSource.indexOf(
       'this.stepRunner.run(',
       unguardedSource.indexOf(unguardedRemediateDispatch),
@@ -290,7 +278,6 @@ describe('operator park boundary contract', () => {
       runnerCalls: [],
       terminalMarkers: [],
     });
-
   });
 
   // Covers: task:4
@@ -302,22 +289,33 @@ describe('operator park boundary contract', () => {
     persister.start();
     const run = vi.fn<StepRunner['run']>(async () => ({ success: true }));
     const conductor = new Conductor({
-      projectRoot, stateFilePath: statePath, stepRunner: { run }, events,
-      fromStep: 'memory', mode: 'auto', daemon: true, verifyArtifacts: false,
-      featureSlug: 'preempted-feature', operatorParkBoundary: async () => false,
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events,
+      fromStep: 'memory',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      featureSlug: 'preempted-feature',
+      operatorParkBoundary: async () => false,
       preemptionRequested: () => run.mock.calls.length === 1,
     });
 
     const result = await conductor.run();
     persister.stop();
-    const persistedEvents = (await readFile(eventsPath, 'utf8')).trim().split('\n').map((text) => JSON.parse(text));
+    const persistedEvents = (await readFile(eventsPath, 'utf8'))
+      .trim()
+      .split('\n')
+      .map((text) => JSON.parse(text));
 
     expect({ result, steps: run.mock.calls.map(([step]) => step), persistedEvents }).toEqual({
       result: { kind: 'preempted', boundary: { kind: 'step', name: 'memory' } },
       steps: ['memory'],
       persistedEvents: expect.arrayContaining([
         expect.objectContaining({
-          type: 'preemption_boundary', featureSlug: 'preempted-feature',
+          type: 'preemption_boundary',
+          featureSlug: 'preempted-feature',
           boundary: { kind: 'step', name: 'memory' },
         }),
       ]),
@@ -334,12 +332,24 @@ describe('operator park boundary contract', () => {
       await writeState(path, stateWithPending('memory'));
       const events = new ConductorEventEmitter();
       const seen: ConductorEvent[] = [];
-      events.on('operator_park_boundary', (event) => { seen.push(event); });
-      events.on('preemption_boundary', (event) => { seen.push(event); });
+      events.on('operator_park_boundary', (event) => {
+        seen.push(event);
+      });
+      events.on('preemption_boundary', (event) => {
+        seen.push(event);
+      });
       const result = await new Conductor({
-        projectRoot: root, stateFilePath: path, stepRunner: { run: async () => ({ success: true }) }, events,
-        fromStep: 'memory', mode: 'auto', daemon: true, verifyArtifacts: false,
-        featureSlug: 'park-wins', operatorParkBoundary, preemptionRequested: () => true,
+        projectRoot: root,
+        stateFilePath: path,
+        stepRunner: { run: async () => ({ success: true }) },
+        events,
+        fromStep: 'memory',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: false,
+        featureSlug: 'park-wins',
+        operatorParkBoundary,
+        preemptionRequested: () => true,
       }).run();
       await rm(root, { recursive: true, force: true });
       return { result, seen };
@@ -349,7 +359,11 @@ describe('operator park boundary contract', () => {
       result: { kind: 'operator-parked', boundary: { kind: 'pre-first-unit' } },
       seen: [expect.objectContaining({ type: 'operator_park_boundary' })],
     });
-    await expect(runCase(async () => { throw new Error('unreadable'); })).resolves.toEqual({
+    await expect(
+      runCase(async () => {
+        throw new Error('unreadable');
+      }),
+    ).resolves.toEqual({
       result: { kind: 'operator-parked', boundary: { kind: 'pre-first-unit' } },
       seen: [expect.objectContaining({ type: 'operator_park_boundary' })],
     });
@@ -360,11 +374,20 @@ describe('operator park boundary contract', () => {
     await writeState(statePath, stateWithPending('memory'));
     const parkEvents: ConductorEvent[] = [];
     const parkEmitter = new ConductorEventEmitter();
-    parkEmitter.on('operator_park_boundary', (event) => { parkEvents.push(event); });
+    parkEmitter.on('operator_park_boundary', (event) => {
+      parkEvents.push(event);
+    });
     const parkResult = await new Conductor({
-      projectRoot, stateFilePath: statePath, stepRunner: { run: async () => ({ success: true }) }, events: parkEmitter,
-      fromStep: 'memory', mode: 'auto', daemon: true, verifyArtifacts: false,
-      featureSlug: 'ordinary-park', operatorParkBoundary: async () => true,
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run: async () => ({ success: true }) },
+      events: parkEmitter,
+      fromStep: 'memory',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      featureSlug: 'ordinary-park',
+      operatorParkBoundary: async () => true,
     }).run();
 
     const interactiveRoot = await mkdtemp(join(tmpdir(), 'interactive-preemption-'));
@@ -373,20 +396,32 @@ describe('operator park boundary contract', () => {
     const preemptionRequested = vi.fn(() => true);
     const interactiveRun = vi.fn<StepRunner['run']>(async () => ({ success: true }));
     const interactiveResult = await new Conductor({
-      projectRoot: interactiveRoot, stateFilePath: interactiveStatePath, stepRunner: { run: interactiveRun }, events: new ConductorEventEmitter(),
-      fromStep: 'memory', mode: 'interactive', daemon: false, verifyArtifacts: false,
-      featureSlug: 'interactive-preemption', preemptionRequested,
+      projectRoot: interactiveRoot,
+      stateFilePath: interactiveStatePath,
+      stepRunner: { run: interactiveRun },
+      events: new ConductorEventEmitter(),
+      fromStep: 'memory',
+      mode: 'interactive',
+      daemon: false,
+      verifyArtifacts: false,
+      featureSlug: 'interactive-preemption',
+      preemptionRequested,
     }).run();
     await rm(interactiveRoot, { recursive: true, force: true });
 
-    expect({ parkResult, parkEvents, interactiveResult, interactiveSteps: interactiveRun.mock.calls.length, preemptionCalls: preemptionRequested.mock.calls.length })
-      .toEqual({
-        parkResult: { kind: 'operator-parked', boundary: { kind: 'pre-first-unit' } },
-        parkEvents: [expect.objectContaining({ type: 'operator_park_boundary' })],
-        interactiveResult: undefined,
-        interactiveSteps: 1,
-        preemptionCalls: 0,
-      });
+    expect({
+      parkResult,
+      parkEvents,
+      interactiveResult,
+      interactiveSteps: interactiveRun.mock.calls.length,
+      preemptionCalls: preemptionRequested.mock.calls.length,
+    }).toEqual({
+      parkResult: { kind: 'operator-parked', boundary: { kind: 'pre-first-unit' } },
+      parkEvents: [expect.objectContaining({ type: 'operator_park_boundary' })],
+      interactiveResult: undefined,
+      interactiveSteps: 1,
+      preemptionCalls: 0,
+    });
   });
 
   // Covers: task:4
@@ -407,7 +442,9 @@ describe('operator park boundary contract', () => {
       daemon: true,
       verifyArtifacts: false,
       featureSlug: 'operator-park-boundary',
-      operatorParkBoundary: async () => { throw new Error('park boundary unreadable'); },
+      operatorParkBoundary: async () => {
+        throw new Error('park boundary unreadable');
+      },
     });
 
     const result = await conductor.run();
@@ -420,7 +457,6 @@ describe('operator park boundary contract', () => {
       runnerCalls: [],
       terminalMarkers: [],
     });
-
   });
 
   it('declines an ordinary-path retry after a park lands during attempt one', async () => {
@@ -553,13 +589,24 @@ describe('operator park boundary contract', () => {
     const events = new ConductorEventEmitter();
     const retries: ConductorEvent[] = [];
     const failures: ConductorEvent[] = [];
-    events.on('step_retry', (event) => { retries.push(event); });
-    events.on('step_failed', (event) => { failures.push(event); });
+    events.on('step_retry', (event) => {
+      retries.push(event);
+    });
+    events.on('step_failed', (event) => {
+      failures.push(event);
+    });
     const run = vi.fn<StepRunner['run']>(async () => ({ success: true }));
     const conductor = new Conductor({
-      projectRoot, stateFilePath: statePath, stepRunner: { run }, events,
-      fromStep: 'build', mode: 'auto', daemon: true, selfHost: true,
-      verifyArtifacts: false, featureSlug: 'operator-park-boundary',
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events,
+      fromStep: 'build',
+      mode: 'auto',
+      daemon: true,
+      selfHost: true,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
       operatorParkBoundary: async () => false,
     });
     const admission = vi.fn(async () => ({ success: false, operatorParkedBeforeDispatch: true }));
@@ -567,7 +614,13 @@ describe('operator park boundary contract', () => {
 
     const result = await conductor.run();
 
-    expect({ result, admissionCalls: admission.mock.calls.length, runnerCalls: run.mock.calls.length, retries, failures }).toEqual({
+    expect({
+      result,
+      admissionCalls: admission.mock.calls.length,
+      runnerCalls: run.mock.calls.length,
+      retries,
+      failures,
+    }).toEqual({
       result: { kind: 'operator-parked', boundary: { kind: 'attempt', step: 'build', attempt: 1 } },
       admissionCalls: 1,
       runnerCalls: 0,
@@ -580,13 +633,16 @@ describe('operator park boundary contract', () => {
     await writeState(statePath, stateWithPending('build'));
     await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
     const evidencePath = join(projectRoot, '.pipeline', 'task-evidence.json');
-    await writeFile(evidencePath, JSON.stringify({
-      evidenceStamps: {},
-      noEvidenceAttempts: 7,
-      noEvidenceReasons: ['zero_work_product'],
-      migrationGrandfather: [],
-      lastResolvedCount: 0,
-    }));
+    await writeFile(
+      evidencePath,
+      JSON.stringify({
+        evidenceStamps: {},
+        noEvidenceAttempts: 7,
+        noEvidenceReasons: ['zero_work_product'],
+        migrationGrandfather: [],
+        lastResolvedCount: 0,
+      }),
+    );
     const events = new ConductorEventEmitter();
     const timeline: ConductorEvent[] = [];
     const emit = events.emit.bind(events);
@@ -639,12 +695,10 @@ describe('operator park boundary contract', () => {
 
   it('fails toward parked when the ordinary-path retry check rejects', async () => {
     await writeState(statePath, stateWithPending('memory'));
-    const boundary = vi.fn<NonNullable<ConductorOptions['operatorParkBoundary']>>(
-      async () => {
-        if (boundary.mock.calls.length >= 3) throw new Error('park boundary unreadable');
-        return false;
-      },
-    );
+    const boundary = vi.fn<NonNullable<ConductorOptions['operatorParkBoundary']>>(async () => {
+      if (boundary.mock.calls.length >= 3) throw new Error('park boundary unreadable');
+      return false;
+    });
     const run = vi.fn<StepRunner['run']>(async () => ({ success: false, output: 'retry me' }));
     const conductor = new Conductor({
       projectRoot,
@@ -673,7 +727,8 @@ describe('operator park boundary contract', () => {
 
   it('allows an ordinary-path retry dispatch when no park is active', async () => {
     await writeState(statePath, stateWithPending('memory'));
-    const run = vi.fn<StepRunner['run']>()
+    const run = vi
+      .fn<StepRunner['run']>()
       .mockResolvedValueOnce({ success: false, output: 'retry me' })
       .mockResolvedValueOnce({ success: true });
     const conductor = new Conductor({
@@ -781,10 +836,7 @@ describe('operator park boundary contract', () => {
     // than duplicating the loop's branch mechanics in seven broad fixtures.
     // The ordinary-path tests above execute the gate; this inventory binds
     // every non-consuming and ordinary retry branch to that same loop entry.
-    const conductorSource = await readFile(
-      new URL('../../src/engine/conductor.ts', import.meta.url),
-      'utf8',
-    );
+    const conductorSource = await readFile(new URL('../../src/engine/conductor.ts', import.meta.url), 'utf8');
     const serialLoopStart = conductorSource.indexOf('while (attempt < stepMaxRetries) {');
     const serialLoopEnd = conductorSource.indexOf('\n\n        if (succeeded &&', serialLoopStart);
     expect(serialLoopStart).toBeGreaterThan(-1);
@@ -809,7 +861,8 @@ describe('operator park boundary contract', () => {
       expect(branchOffset + match!.index!).toBeGreaterThan(branchOffset);
     }
 
-    const attemptGate = /this\.daemon\s*&&\s*this\.featureSlug !== undefined\s*&&\s*this\.operatorParkBoundary\s*&&\s*\(await this\.operatorParkBoundary\(\)\.catch\(\(\) => true\)\)/;
+    const attemptGate =
+      /this\.daemon\s*&&\s*this\.featureSlug !== undefined\s*&&\s*this\.operatorParkBoundary\s*&&\s*\(await this\.operatorParkBoundary\(\)\.catch\(\(\) => true\)\)/;
     expect(attemptGate.test(serialLoop)).toBe(true);
     // The runtime cases immediately above prove a rejected gate returns the
     // typed termination before a runner call. Every listed `continue` returns
@@ -823,23 +876,37 @@ describe('operator park boundary contract', () => {
     const boundary = vi.fn<NonNullable<ConductorOptions['operatorParkBoundary']>>(async () => parked);
     const boundaries: ConductorEvent[] = [];
     const emitter = new ConductorEventEmitter();
-    emitter.on('operator_park_boundary', (event) => { boundaries.push(event); });
+    emitter.on('operator_park_boundary', (event) => {
+      boundaries.push(event);
+    });
     const ensure = vi.fn(async () => {
       parked = true;
       return { status: 'FAILED', reason: 'internal_error', message: 'suite runner unavailable' } as const;
     });
     const conductor = new Conductor({
-      projectRoot, stateFilePath: statePath, stepRunner: { run: vi.fn() }, events: emitter,
-      fromStep: 'test_suite', mode: 'auto', daemon: true, verifyArtifacts: false,
-      featureSlug: 'operator-park-boundary', operatorParkBoundary: boundary,
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn() },
+      events: emitter,
+      fromStep: 'test_suite',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: boundary,
       fullSuiteVerifier: { inspect: async () => ({ status: 'STALE', reason: 'missing' }), ensure },
       ...noExternalIo(),
     });
 
     const result = await conductor.run();
 
-    expect({ result, suiteDispatches: ensure.mock.calls.length, boundaryCalls: boundary.mock.calls.length,
-      terminalMarkers: await terminalMarkerNames(projectRoot), eventTail: boundaries.at(-1) }).toEqual({
+    expect({
+      result,
+      suiteDispatches: ensure.mock.calls.length,
+      boundaryCalls: boundary.mock.calls.length,
+      terminalMarkers: await terminalMarkerNames(projectRoot),
+      eventTail: boundaries.at(-1),
+    }).toEqual({
       result: { kind: 'operator-parked', boundary: { kind: 'attempt', step: 'test_suite', attempt: 1 } },
       suiteDispatches: 1,
       boundaryCalls: 4,
@@ -857,9 +924,17 @@ describe('operator park boundary contract', () => {
       return { success: false, rateLimited: true, waitSeconds: 0 };
     });
     const result = await new Conductor({
-      projectRoot, stateFilePath: statePath, stepRunner: { run }, events: new ConductorEventEmitter(),
-      fromStep: 'memory', mode: 'auto', daemon: true, verifyArtifacts: false,
-      featureSlug: 'operator-park-boundary', operatorParkBoundary: boundary, sleepFn: async () => {},
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events: new ConductorEventEmitter(),
+      fromStep: 'memory',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: boundary,
+      sleepFn: async () => {},
     }).run();
 
     expect({ result, runnerCalls: run.mock.calls.length, boundaryCalls: boundary.mock.calls.length }).toEqual({
@@ -875,15 +950,30 @@ describe('operator park boundary contract', () => {
     const boundary = vi.fn<NonNullable<ConductorOptions['operatorParkBoundary']>>(async () => parked);
     const run = vi.fn<StepRunner['run']>(async () => ({ success: false, authFailure: true }));
     const conductor = new Conductor({
-      projectRoot, stateFilePath: statePath, stepRunner: { run }, events: new ConductorEventEmitter(),
-      fromStep: 'memory', mode: 'auto', daemon: true, verifyArtifacts: false,
-      featureSlug: 'operator-park-boundary', operatorParkBoundary: boundary,
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events: new ConductorEventEmitter(),
+      fromStep: 'memory',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: boundary,
     });
-    const refresh = vi.fn(async () => { parked = true; return { disposition: 'resumed' as const }; });
+    const refresh = vi.fn(async () => {
+      parked = true;
+      return { disposition: 'resumed' as const };
+    });
     (conductor as unknown as { parkOnAuthFailure: typeof refresh }).parkOnAuthFailure = refresh;
     const result = await conductor.run();
 
-    expect({ result, runnerCalls: run.mock.calls.length, refreshCalls: refresh.mock.calls.length, boundaryCalls: boundary.mock.calls.length }).toEqual({
+    expect({
+      result,
+      runnerCalls: run.mock.calls.length,
+      refreshCalls: refresh.mock.calls.length,
+      boundaryCalls: boundary.mock.calls.length,
+    }).toEqual({
       result: { kind: 'operator-parked', boundary: { kind: 'attempt', step: 'memory', attempt: 1 } },
       runnerCalls: 1,
       refreshCalls: 1,
@@ -894,13 +984,23 @@ describe('operator park boundary contract', () => {
   it('declines a build-review mechanical-fault retry before a second runner dispatch', async () => {
     await writeState(statePath, stateWithPending('build_review'));
     await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
-    await writeFile(join(projectRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
-      version: 1,
-      gates: { build_review: {
-        count: 0, cumulative: 0, mechanicalFaults: 1, treeHash: null,
-        lastReason: '', priorVerdict: true, resolvedBefore: 0,
-      } },
-    }));
+    await writeFile(
+      join(projectRoot, '.pipeline', 'kickback-ledger.json'),
+      JSON.stringify({
+        version: 1,
+        gates: {
+          build_review: {
+            count: 0,
+            cumulative: 0,
+            mechanicalFaults: 1,
+            treeHash: null,
+            lastReason: '',
+            priorVerdict: true,
+            resolvedBefore: 0,
+          },
+        },
+      }),
+    );
     let parked = false;
     const boundary = vi.fn<NonNullable<ConductorOptions['operatorParkBoundary']>>(async () => parked);
     const run = vi.fn<StepRunner['run']>(async () => {
@@ -908,9 +1008,16 @@ describe('operator park boundary contract', () => {
       return { success: false, currentLapMechanicalFault: true };
     });
     const result = await new Conductor({
-      projectRoot, stateFilePath: statePath, stepRunner: { run }, events: new ConductorEventEmitter(),
-      fromStep: 'build_review', mode: 'auto', daemon: true, verifyArtifacts: false,
-      featureSlug: 'operator-park-boundary', operatorParkBoundary: boundary,
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events: new ConductorEventEmitter(),
+      fromStep: 'build_review',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: boundary,
     }).run();
 
     expect({ result, runnerCalls: run.mock.calls.length, boundaryCalls: boundary.mock.calls.length }).toEqual({
@@ -927,22 +1034,43 @@ describe('operator park boundary contract', () => {
     const events = new ConductorEventEmitter();
     const retries: ConductorEvent[] = [];
     const timeline: string[] = [];
-    events.on('step_retry', (event) => { retries.push(event); });
-    events.on('step_retry', () => { timeline.push('retry'); });
-    events.on('operator_park_boundary', () => { timeline.push('park'); });
+    events.on('step_retry', (event) => {
+      retries.push(event);
+    });
+    events.on('step_retry', () => {
+      timeline.push('retry');
+    });
+    events.on('operator_park_boundary', () => {
+      timeline.push('park');
+    });
     const run = vi.fn<StepRunner['run']>(async () => {
       parked = true;
       return { success: true };
     });
     const result = await new Conductor({
-      projectRoot, stateFilePath: statePath, stepRunner: { run }, events,
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events,
       config: { steps: { memory: { completion_artifact: '.pipeline/missing-memory-proof' } } },
-      fromStep: 'memory', mode: 'auto', daemon: true, maxRetries: 2, verifyArtifacts: true,
-      featureSlug: 'operator-park-boundary', operatorParkBoundary: boundary,
+      fromStep: 'memory',
+      mode: 'auto',
+      daemon: true,
+      maxRetries: 2,
+      verifyArtifacts: true,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: boundary,
     }).run();
     const persisted = await readState(statePath);
 
-    expect({ result, runnerCalls: run.mock.calls.length, boundaryCalls: boundary.mock.calls.length, retries, timeline, memory: persisted.ok ? persisted.value.memory : persisted }).toEqual({
+    expect({
+      result,
+      runnerCalls: run.mock.calls.length,
+      boundaryCalls: boundary.mock.calls.length,
+      retries,
+      timeline,
+      memory: persisted.ok ? persisted.value.memory : persisted,
+    }).toEqual({
       result: { kind: 'operator-parked', boundary: { kind: 'attempt', step: 'memory', attempt: 2 } },
       runnerCalls: 1,
       boundaryCalls: 4,
@@ -1181,12 +1309,8 @@ describe('operator park boundary contract', () => {
   it('settles the active serial step once, persists it, then parks before the next step', async () => {
     await writeState(statePath, stateWithPending('memory', 'explore'));
     const run = vi.fn<StepRunner['run']>(async () => ({ success: true }));
-    let boundaryObservation:
-      | { memory: ConductState['memory']; explore: ConductState['explore'] }
-      | undefined;
-    const operatorParkBoundary = vi.fn<
-      NonNullable<ConductorOptions['operatorParkBoundary']>
-    >(async () => {
+    let boundaryObservation: { memory: ConductState['memory']; explore: ConductState['explore'] } | undefined;
+    const operatorParkBoundary = vi.fn<NonNullable<ConductorOptions['operatorParkBoundary']>>(async () => {
       if (operatorParkBoundary.mock.calls.length === 1) return false;
       const state = await readState(statePath);
       if (!state.ok) return false;
@@ -1219,14 +1343,9 @@ describe('operator park boundary contract', () => {
       boundaryChecks: operatorParkBoundary.mock.calls.length,
       boundaryObservation,
       settledStepsStillInProgress: persistedState
-        ? ALL_STEPS
-            .map(({ name }) => name)
-            .filter((name) => persistedState[name] === 'in_progress')
+        ? ALL_STEPS.map(({ name }) => name).filter((name) => persistedState[name] === 'in_progress')
         : ['state-read-failed'],
-      persisted:
-        persisted.ok
-          ? { memory: persisted.value.memory, explore: persisted.value.explore }
-          : persisted,
+      persisted: persisted.ok ? { memory: persisted.value.memory, explore: persisted.value.explore } : persisted,
     }).toEqual({
       result: {
         kind: 'operator-parked',
@@ -1241,11 +1360,7 @@ describe('operator park boundary contract', () => {
   });
 
   it('parks after a settled serial step before dispatching a later parallel validation group', async () => {
-    const members = [
-      'manual_test',
-      'prd_audit',
-      'architecture_review_as_built',
-    ] as const;
+    const members = ['manual_test', 'prd_audit', 'architecture_review_as_built'] as const;
     await writeState(statePath, stateWithPending('memory', ...members));
     const run = vi.fn<StepRunner['run']>(async () => ({ success: true }));
     const events = new ConductorEventEmitter();
@@ -1254,9 +1369,7 @@ describe('operator park boundary contract', () => {
       if (event.type === 'parallel_started') parallelStarts.push(event);
     });
     let boundaryChecks = 0;
-    const operatorParkBoundary = vi.fn<
-      NonNullable<ConductorOptions['operatorParkBoundary']>
-    >(async () => {
+    const operatorParkBoundary = vi.fn<NonNullable<ConductorOptions['operatorParkBoundary']>>(async () => {
       boundaryChecks += 1;
       return boundaryChecks > 2;
     });
@@ -1279,9 +1392,7 @@ describe('operator park boundary contract', () => {
     expect({
       result,
       runnerSteps: run.mock.calls.map(([step]) => step),
-      memberRunnerCalls: run.mock.calls.filter(([step]) =>
-        members.includes(step as typeof members[number]),
-      ),
+      memberRunnerCalls: run.mock.calls.filter(([step]) => members.includes(step as (typeof members)[number])),
       parallelStarts,
     }).toEqual({
       result: {
@@ -1591,8 +1702,12 @@ describe('operator park boundary contract', () => {
     let yielded = false;
     const terminalEvents: ConductorEvent[] = [];
     const events = new ConductorEventEmitter();
-    events.on('parallel_failure', (event) => { terminalEvents.push(event); });
-    events.on('step_failed', (event) => { terminalEvents.push(event); });
+    events.on('parallel_failure', (event) => {
+      terminalEvents.push(event);
+    });
+    events.on('step_failed', (event) => {
+      terminalEvents.push(event);
+    });
     const run = vi.fn<StepRunner['run']>(async (step) => {
       if (step === ('alpha' as StepName)) {
         alphaStarted.resolve();
@@ -1609,10 +1724,17 @@ describe('operator park boundary contract', () => {
       stateFilePath: statePath,
       stepRunner: { run },
       events,
-      config: { steps: { memory: { max_retries: 3, parallel: [
-        { name: 'alpha', skill: 'skills/memory/SKILL.md' },
-        { name: 'beta', skill: 'skills/memory/SKILL.md' },
-      ] } } },
+      config: {
+        steps: {
+          memory: {
+            max_retries: 3,
+            parallel: [
+              { name: 'alpha', skill: 'skills/memory/SKILL.md' },
+              { name: 'beta', skill: 'skills/memory/SKILL.md' },
+            ],
+          },
+        },
+      },
       fromStep: 'memory',
       mode: 'auto',
       daemon: true,
@@ -1634,12 +1756,14 @@ describe('operator park boundary contract', () => {
       result,
       dispatchedMembers: run.mock.calls.map(([step, , options]) => ({ step, attempt: options?.attempt })),
       terminalEvents,
-      state: persisted.ok ? {
-        group: persisted.value.memory,
-        alpha: (persisted.value as Record<string, unknown>)['memory__alpha'],
-        beta: (persisted.value as Record<string, unknown>)['memory__beta'],
-        later: persisted.value.explore,
-      } : persisted,
+      state: persisted.ok
+        ? {
+            group: persisted.value.memory,
+            alpha: (persisted.value as Record<string, unknown>)['memory__alpha'],
+            beta: (persisted.value as Record<string, unknown>)['memory__beta'],
+            later: persisted.value.explore,
+          }
+        : persisted,
       terminalMarkers: await terminalMarkerNames(projectRoot),
     }).toEqual({
       result: { kind: 'preempted', boundary: { kind: 'group', name: 'memory' } },
@@ -1661,9 +1785,15 @@ describe('operator park boundary contract', () => {
     const retries: ConductorEvent[] = [];
     const memberOutcomes: Array<Extract<ConductorEvent, { type: 'group_member_step' }>> = [];
     const events = new ConductorEventEmitter();
-    events.on('parallel_failure', (event) => { terminalEvents.push(event); });
-    events.on('step_failed', (event) => { terminalEvents.push(event); });
-    events.on('step_retry', (event) => { retries.push(event); });
+    events.on('parallel_failure', (event) => {
+      terminalEvents.push(event);
+    });
+    events.on('step_failed', (event) => {
+      terminalEvents.push(event);
+    });
+    events.on('step_retry', (event) => {
+      retries.push(event);
+    });
     events.on('group_member_step', (event) => {
       if (event.type === 'group_member_step') memberOutcomes.push(event);
     });
@@ -1679,10 +1809,17 @@ describe('operator park boundary contract', () => {
       stateFilePath: statePath,
       stepRunner: { run },
       events,
-      config: { steps: { memory: { max_retries: 3, parallel: [
-        { name: 'yielded-member', skill: 'skills/memory/SKILL.md' },
-        { name: 'drained-member', skill: 'skills/memory/SKILL.md' },
-      ] } } },
+      config: {
+        steps: {
+          memory: {
+            max_retries: 3,
+            parallel: [
+              { name: 'yielded-member', skill: 'skills/memory/SKILL.md' },
+              { name: 'drained-member', skill: 'skills/memory/SKILL.md' },
+            ],
+          },
+        },
+      },
       fromStep: 'memory',
       mode: 'auto',
       daemon: true,
@@ -1703,12 +1840,14 @@ describe('operator park boundary contract', () => {
       memberOutcomes: memberOutcomes
         .map(({ member, outcome }) => ({ member, outcome }))
         .sort((left, right) => left.member.localeCompare(right.member)),
-      state: persisted.ok ? {
-        group: persisted.value.memory,
-        yielded: (persisted.value as Record<string, unknown>)['memory__yielded-member'],
-        drained: (persisted.value as Record<string, unknown>)['memory__drained-member'],
-        later: persisted.value.explore,
-      } : persisted,
+      state: persisted.ok
+        ? {
+            group: persisted.value.memory,
+            yielded: (persisted.value as Record<string, unknown>)['memory__yielded-member'],
+            drained: (persisted.value as Record<string, unknown>)['memory__drained-member'],
+            later: persisted.value.explore,
+          }
+        : persisted,
       terminalMarkers: await terminalMarkerNames(projectRoot),
     }).toEqual({
       result: { kind: 'preempted', boundary: { kind: 'group', name: 'memory' } },
@@ -1751,10 +1890,17 @@ describe('operator park boundary contract', () => {
       stateFilePath: statePath,
       stepRunner: { run },
       events,
-      config: { steps: { memory: { max_retries: 2, parallel: [
-        { name: 'parked-member', skill: 'skills/memory/SKILL.md' },
-        { name: 'passing-member', skill: 'skills/memory/SKILL.md' },
-      ] } } },
+      config: {
+        steps: {
+          memory: {
+            max_retries: 2,
+            parallel: [
+              { name: 'parked-member', skill: 'skills/memory/SKILL.md' },
+              { name: 'passing-member', skill: 'skills/memory/SKILL.md' },
+            ],
+          },
+        },
+      },
       fromStep: 'memory',
       mode: 'auto',
       daemon: true,
@@ -1771,11 +1917,13 @@ describe('operator park boundary contract', () => {
       calls: run.mock.calls.map(([step]) => step),
       failures,
       parkBoundaries,
-      state: persisted.ok ? {
-        memory: persisted.value.memory,
-        parked: (persisted.value as Record<string, unknown>)['memory__parked-member'],
-        passing: (persisted.value as Record<string, unknown>)['memory__passing-member'],
-      } : persisted,
+      state: persisted.ok
+        ? {
+            memory: persisted.value.memory,
+            parked: (persisted.value as Record<string, unknown>)['memory__parked-member'],
+            passing: (persisted.value as Record<string, unknown>)['memory__passing-member'],
+          }
+        : persisted,
     }).toEqual({
       result: {
         kind: 'operator-parked',
@@ -1783,11 +1931,13 @@ describe('operator park boundary contract', () => {
       },
       calls: ['parked-member', 'passing-member'],
       failures: [],
-      parkBoundaries: [{
-        type: 'operator_park_boundary',
-        featureSlug: 'operator-park-boundary',
-        boundary: { kind: 'attempt', step: 'memory', attempt: 2, member: 'parked-member' },
-      }],
+      parkBoundaries: [
+        {
+          type: 'operator_park_boundary',
+          featureSlug: 'operator-park-boundary',
+          boundary: { kind: 'attempt', step: 'memory', attempt: 2, member: 'parked-member' },
+        },
+      ],
       state: { memory: 'in_progress', parked: 'in_progress', passing: 'done' },
     });
   });
@@ -1824,13 +1974,18 @@ describe('operator park boundary contract', () => {
       stateFilePath: statePath,
       stepRunner: { run },
       events,
-      config: { validation_concurrency: 2, steps: { memory: {
-        max_retries: 2,
-        parallel: [
-          { name: 'parked-member', skill: 'skills/memory/SKILL.md' },
-          { name: 'failed-member', skill: 'skills/memory/SKILL.md' },
-        ],
-      } } },
+      config: {
+        validation_concurrency: 2,
+        steps: {
+          memory: {
+            max_retries: 2,
+            parallel: [
+              { name: 'parked-member', skill: 'skills/memory/SKILL.md' },
+              { name: 'failed-member', skill: 'skills/memory/SKILL.md' },
+            ],
+          },
+        },
+      },
       fromStep: 'memory',
       mode: 'auto',
       daemon: true,
@@ -1851,30 +2006,31 @@ describe('operator park boundary contract', () => {
       calls: run.mock.calls.map(([step]) => step),
       failures,
       parkBoundaries,
-      state: persisted.ok ? {
-        group: persisted.value.memory,
-        parked: (persisted.value as Record<string, unknown>)['memory__parked-member'],
-        failed: (persisted.value as Record<string, unknown>)['memory__failed-member'],
-      } : persisted,
+      state: persisted.ok
+        ? {
+            group: persisted.value.memory,
+            parked: (persisted.value as Record<string, unknown>)['memory__parked-member'],
+            failed: (persisted.value as Record<string, unknown>)['memory__failed-member'],
+          }
+        : persisted,
     }).toEqual({
       result: undefined,
       calls: ['parked-member', 'failed-member', 'failed-member'],
-      failures: [{
-        type: 'parallel_failure',
-        step: 'memory',
-        branch: 'failed-member',
-        error: 'original failed-member diagnostic',
-      }],
+      failures: [
+        {
+          type: 'parallel_failure',
+          step: 'memory',
+          branch: 'failed-member',
+          error: 'original failed-member diagnostic',
+        },
+      ],
       parkBoundaries: [],
       state: { group: 'failed', parked: 'in_progress', failed: 'failed' },
     });
   });
 
   it('preserves mixed parallel statuses before parking at the next boundary', async () => {
-    await writeState(
-      statePath,
-      stateWithPending('memory', 'explore', 'architecture_diagram'),
-    );
+    await writeState(statePath, stateWithPending('memory', 'explore', 'architecture_diagram'));
     let boundaryChecks = 0;
     let boundaryObservation: Record<string, unknown> | undefined;
     const parkObserved = deferred();
@@ -1952,20 +2108,11 @@ describe('operator park boundary contract', () => {
 
   it('joins the built-in SHIP validation group before parking and does not dispatch the later unit', async () => {
     await writeState(statePath, {
-      ...stateWithPending(
-        'manual_test',
-        'prd_audit',
-        'architecture_review_as_built',
-        'rebase',
-      ),
+      ...stateWithPending('manual_test', 'prd_audit', 'architecture_review_as_built', 'rebase'),
       track: 'product',
       complexity_tier: 'M',
     });
-    const members = [
-      'manual_test',
-      'prd_audit',
-      'architecture_review_as_built',
-    ] as const;
+    const members = ['manual_test', 'prd_audit', 'architecture_review_as_built'] as const;
     const yieldCounts: Record<(typeof members)[number], number> = {
       manual_test: 4,
       prd_audit: 1,
@@ -1992,14 +2139,9 @@ describe('operator park boundary contract', () => {
         const raw = persisted.value as unknown as Record<string, unknown>;
         boundaryObservation = {
           event,
-          memberStatuses: Object.fromEntries(
-            members.map((member) => [member, raw[member]]),
-          ),
+          memberStatuses: Object.fromEntries(members.map((member) => [member, raw[member]])),
           syntheticStatuses: Object.fromEntries(
-            members.map((member) => [
-              `validation__${member}`,
-              raw[`validation__${member}`],
-            ]),
+            members.map((member) => [`validation__${member}`, raw[`validation__${member}`]]),
           ),
         };
       }
@@ -2058,16 +2200,8 @@ describe('operator park boundary contract', () => {
       startsAtFirstSettlement: 2,
       thirdStartedWithoutCapacity: false,
       maxActiveMembers: 2,
-      startedMembers: [
-        'manual_test',
-        'prd_audit',
-        'architecture_review_as_built',
-      ],
-      settlementOrder: expect.arrayContaining([
-        'manual_test',
-        'prd_audit',
-        'architecture_review_as_built',
-      ]),
+      startedMembers: ['manual_test', 'prd_audit', 'architecture_review_as_built'],
+      settlementOrder: expect.arrayContaining(['manual_test', 'prd_audit', 'architecture_review_as_built']),
       settlementCount: 3,
       boundaryObservation: {
         event: {
@@ -2091,11 +2225,7 @@ describe('operator park boundary contract', () => {
   });
 
   it('skips an all-skipped built-in SHIP group before parking at the later pending unit', async () => {
-    const members = [
-      'manual_test',
-      'prd_audit',
-      'architecture_review_as_built',
-    ] as const;
+    const members = ['manual_test', 'prd_audit', 'architecture_review_as_built'] as const;
     await writeState(statePath, {
       ...stateWithPending('rebase'),
       complexity_tier: 'S',
@@ -2105,9 +2235,7 @@ describe('operator park boundary contract', () => {
       architecture_review_as_built: 'skipped',
     });
     const run = vi.fn<StepRunner['run']>(async () => ({ success: true }));
-    const operatorParkBoundary = vi.fn<
-      NonNullable<ConductorOptions['operatorParkBoundary']>
-    >(async () => true);
+    const operatorParkBoundary = vi.fn<NonNullable<ConductorOptions['operatorParkBoundary']>>(async () => true);
     const conductor = new Conductor({
       projectRoot,
       stateFilePath: statePath,
@@ -2131,7 +2259,7 @@ describe('operator park boundary contract', () => {
         ? Object.fromEntries(members.map((member) => [member, persisted.value[member]]))
         : persisted,
       boundaryChecks: operatorParkBoundary.mock.calls.length,
-      memberRunnerCalls: run.mock.calls.filter(([step]) => members.includes(step as typeof members[number])),
+      memberRunnerCalls: run.mock.calls.filter(([step]) => members.includes(step as (typeof members)[number])),
       laterUnitRunnerCalls: run.mock.calls.filter(([step]) => step === 'rebase'),
     }).toEqual({
       result: {
@@ -2151,20 +2279,14 @@ describe('operator park boundary contract', () => {
 
   it('parks a one-member built-in SHIP group through the ordinary serial boundary without fan-out', async () => {
     const state: ConductState = {
-      ...stateWithPending(
-        'manual_test',
-        'prd_audit',
-        'architecture_review_as_built',
-      ),
+      ...stateWithPending('manual_test', 'prd_audit', 'architecture_review_as_built'),
       complexity_tier: 'M',
       track: 'technical',
       architecture_review: 'skipped',
     };
     await writeState(statePath, state);
     const run = vi.fn<StepRunner['run']>(async () => ({ success: true }));
-    const operatorParkBoundary = vi.fn<
-      NonNullable<ConductorOptions['operatorParkBoundary']>
-    >(async () => true);
+    const operatorParkBoundary = vi.fn<NonNullable<ConductorOptions['operatorParkBoundary']>>(async () => true);
     const parallelStarts: Array<Extract<ConductorEvent, { type: 'parallel_started' }>> = [];
     const events = new ConductorEventEmitter();
     events.on('parallel_started', (event) => {
@@ -2187,12 +2309,9 @@ describe('operator park boundary contract', () => {
     const result = await conductor.run();
 
     expect({
-      membership: resolveGroupMembership(
-        VALIDATION_GROUP,
-        state,
-        'technical',
-        CLAUDE_MODEL_POLICY,
-      ).dispatchable.map((member) => member.name),
+      membership: resolveGroupMembership(VALIDATION_GROUP, state, 'technical', CLAUDE_MODEL_POLICY).dispatchable.map(
+        (member) => member.name,
+      ),
       result,
       boundaryChecks: operatorParkBoundary.mock.calls.length,
       parallelStarts,
@@ -2268,19 +2387,14 @@ describe('operator park boundary contract', () => {
     parked = true;
     const result = await resultPromise;
     const persisted = await readState(statePath);
-    const raw = persisted.ok
-      ? (persisted.value as unknown as Record<string, unknown>)
-      : {};
+    const raw = persisted.ok ? (persisted.value as unknown as Record<string, unknown>) : {};
 
     expect({
       result,
       settled,
       memberStatuses: Object.fromEntries(members.map((member) => [member, raw[member]])),
       syntheticStatuses: Object.fromEntries(
-        members.map((member) => [
-          `build_verification__${member}`,
-          raw[`build_verification__${member}`],
-        ]),
+        members.map((member) => [`build_verification__${member}`, raw[`build_verification__${member}`]]),
       ),
       buildReviewDispatches: run.mock.calls.filter(([step]) => step === 'build_review').length,
       suiteEnsureCalls: ensure.mock.calls.length,
@@ -2399,15 +2513,25 @@ describe('operator park boundary contract', () => {
       output: 'retry interactive work',
     }));
     const conductor = new Conductor({
-      projectRoot, stateFilePath: statePath, stepRunner: { run }, events: new ConductorEventEmitter(),
-      fromStep: 'memory', mode: 'interactive', daemon: false, maxRetries: 3,
-      verifyArtifacts: false, featureSlug: 'interactive-feature', operatorParkBoundary: boundary,
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events: new ConductorEventEmitter(),
+      fromStep: 'memory',
+      mode: 'interactive',
+      daemon: false,
+      maxRetries: 3,
+      verifyArtifacts: false,
+      featureSlug: 'interactive-feature',
+      operatorParkBoundary: boundary,
     });
 
     await conductor.run();
 
-    expect({ attempts: run.mock.calls.map(([, , options]) => options?.attempt), parkReads: boundary.mock.calls.length })
-      .toEqual({ attempts: [1, 2, 3], parkReads: 0 });
+    expect({
+      attempts: run.mock.calls.map(([, , options]) => options?.attempt),
+      parkReads: boundary.mock.calls.length,
+    }).toEqual({ attempts: [1, 2, 3], parkReads: 0 });
   });
 
   it('logs a marker-read anomaly and fails closed before the first pending unit', async () => {
@@ -2433,18 +2557,16 @@ describe('operator park boundary contract', () => {
     });
 
     const result = await conductor.run();
-    const daemonCliSource = await readFile(
-      new URL('../../src/daemon-cli.ts', import.meta.url),
-      'utf8',
-    );
+    const daemonCliSource = await readFile(new URL('../../src/daemon-cli.ts', import.meta.url), 'utf8');
 
     expect({
       result,
       runnerCalls: run.mock.calls,
       logLines,
-      daemonWiresMarkerReadErrors: /operatorParkBoundary:\s*\(\)\s*=>\s*isOperatorParked\(\s*projectRoot,\s*item\.slug,\s*\(error\)\s*=>\s*featureLog\(`operator park marker read failed: \$\{error\.message\}`\),?\s*\)/.test(
-        daemonCliSource,
-      ),
+      daemonWiresMarkerReadErrors:
+        /operatorParkBoundary:\s*\(\)\s*=>\s*isOperatorParked\(\s*projectRoot,\s*item\.slug,\s*\(error\)\s*=>\s*featureLog\(`operator park marker read failed: \$\{error\.message\}`\),?\s*\)/.test(
+          daemonCliSource,
+        ),
     }).toEqual({
       result: {
         kind: 'operator-parked',
@@ -2462,9 +2584,7 @@ describe('operator park boundary contract', () => {
       complexity_tier: 'S',
     });
     const run = vi.fn<StepRunner['run']>(async () => ({ success: true }));
-    const operatorParkBoundary = vi.fn<
-      NonNullable<ConductorOptions['operatorParkBoundary']>
-    >(async () => true);
+    const operatorParkBoundary = vi.fn<NonNullable<ConductorOptions['operatorParkBoundary']>>(async () => true);
     const conductor = new Conductor({
       projectRoot,
       stateFilePath: statePath,
