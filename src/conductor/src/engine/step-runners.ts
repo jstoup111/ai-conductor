@@ -917,6 +917,8 @@ interface ProviderAwareOneShotRequestBase {
   options: ExecuteProviderCandidatesInput['options'];
   tier?: ComplexityTier;
   dispatch?: StepRunOptions;
+  /** Resolver attempts retain their immutable journal attribution on the event spine. */
+  restack?: ResolutionContext['restack'];
 }
 
 type ProviderAwareOneShotRequest =
@@ -1989,6 +1991,7 @@ export class DefaultStepRunner implements StepRunner {
     options: ExecuteProviderCandidatesInput['options'],
     tier?: ComplexityTier,
     dispatch?: StepRunOptions,
+    restack?: ResolutionContext['restack'],
   ): Promise<ProviderExecutionResult | undefined> {
     return this.executeProviderAwareOneShotCore({
       kind: 'skill',
@@ -1996,6 +1999,7 @@ export class DefaultStepRunner implements StepRunner {
       options,
       tier,
       dispatch,
+      ...(restack === undefined ? {} : { restack }),
     });
   }
 
@@ -2044,7 +2048,9 @@ export class DefaultStepRunner implements StepRunner {
           prepareCandidateSelfHost:
             this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
           prepareManagedSessionObservation: this.providerExecutionContext?.prepareManagedSessionObservation,
-          onAttempt: this.providerAttempt,
+          onAttempt: request.restack === undefined
+            ? this.providerAttempt
+            : async (step, attempt) => this.providerAttempt?.(step, { ...attempt, restack: request.restack }),
           onCandidateStart: this.providerCandidateStart,
           warn: this.providerWarn,
           options,
@@ -3015,6 +3021,9 @@ export class DefaultStepRunner implements StepRunner {
         cwd: ctx.projectRoot,
         ...(ctx.environment === undefined ? {} : { environmentOverlay: ctx.environment }),
       },
+      undefined,
+      undefined,
+      ctx.restack,
     );
     if (providerResult) {
       return {

@@ -28,6 +28,7 @@ import {
   appendBuildReviewAcceptedRisk,
   appendBuildReviewReducedCoverageEvidence,
   appendBuildReviewMetrics,
+  appendRestackSection,
   parseStoriesReference,
   specHash,
   renderShippedRecord,
@@ -191,6 +192,22 @@ export async function dispatchShippedRecord(
     } catch (err) {
       console.error(
         `build-review rollup failed — shipped record written without a Build Review block for ${identity.slug}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
+    // A Restack block is always rendered for a real stack, even when no
+    // resolver had to run.  It is a projection of the same events used by
+    // Cost, never a second source of accounting truth.
+    try {
+      const [events, children] = await Promise.all([
+        readMergedFeatureEvents(cwd),
+        listExistingChildren(cwd),
+      ]);
+      recordBody = appendRestackSection(recordBody, events ?? [], children.length > 1);
+    } catch (err) {
+      console.error(
+        `restack rollup failed — shipped record written without a Restack block for ${identity.slug}: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );

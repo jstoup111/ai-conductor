@@ -17,6 +17,7 @@ import {
   listShippedRecords,
   makeIsProcessed,
   appendTimingSection,
+  appendRestackSection,
   parseStoriesReference,
 } from '../../src/engine/shipped-record.js';
 import { parseCostBlock } from '../../src/engine/kpi-report.js';
@@ -156,6 +157,35 @@ describe('renderShippedRecord', () => {
     expect(body).toContain('spec_hash: deadbeef\n');
     expect(body).toMatch(/pr: https:\/\/github\.com\/.*\n/);
     expect(body).toMatch(/shipped: \d{4}-\d{2}-\d{2}\n/);
+  });
+});
+
+describe('appendRestackSection', () => {
+  it('renders fold, round, base-refresh and unattributed resolver costs without changing Cost', () => {
+    const record = appendTimingSection(renderShippedRecordWithCost({ slug: 'stack', specHash: 'abc' }, {
+      tokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 }, costUsd: 2.25,
+      dispatches: 5, retries: 0, halts: 0, unmetered: { count: 0, durationMs: 0 },
+    }), { state: 'unavailable' });
+    const attempt = (costUsd: number, restack?: { opId: string; cause: 'fold' | 'feature-repair' | 'base-refresh'; roundId?: string }) => ({
+      type: 'provider_attempt' as const, step: 'rebase' as const, provider: 'test', outcome: 'success' as const,
+      invoked: true, tokenUsage: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0, costUsd },
+      ...(restack === undefined ? {} : { restack: restack as never }),
+    });
+    const rendered = appendRestackSection(record, [
+      attempt(0.5, { opId: 'f1', cause: 'fold' }), attempt(1, { opId: 'f1', cause: 'fold' }),
+      attempt(0.4, { opId: 'r5', cause: 'feature-repair', roundId: 'r5' }),
+      attempt(0.1, { opId: 'b1', cause: 'base-refresh' }), attempt(0.25),
+    ], true);
+
+    expect(rendered).toContain('## Restack\nbase-refresh: runs: 1, cost_usd: $0.10\nfold: runs: 2, cost_usd: $1.50\nr5: runs: 1, cost_usd: $0.40\nunattributed: runs: 1, cost_usd: $0.25');
+    expect(rendered.indexOf('## Time')).toBeLessThan(rendered.indexOf('## Restack'));
+    expect(parseCostBlock(rendered)?.costUsd).toBe(2.25);
+  });
+
+  it('always renders the zero case for stacks and never renders it for N=1', () => {
+    const record = appendTimingSection(renderShippedRecord({ slug: 'stack', specHash: 'abc' }), { state: 'unavailable' });
+    expect(appendRestackSection(record, [], true)).toContain('## Restack\ntotal: runs: 0, cost_usd: $0.00');
+    expect(appendRestackSection(record, [], false)).toBe(record);
   });
 });
 
