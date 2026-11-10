@@ -26,11 +26,27 @@ describe('composer run records', () => {
   it.each([
     ['.docs/architecture/composer-run.md', 'architecture_diagram'],
     ['.docs/decisions/architecture-review-composer-run.md', 'architecture_review'],
+    ['.docs/decisions/adr-composer-run.md', 'architecture_review'],
     ['.docs/conflicts/composer-run.md', 'conflict_check'],
     ['.docs/coherence/composer-run.md', 'coherence_check'],
+    ['.docs/coherence-waivers/composer-run.md', 'coherence_check'],
     ['.docs/plan-review/composer-run.md', 'plan_review'],
   ] as const)('maps %s to its DECIDE checkpoint', (path, step) => {
     expect(stepForArtifactPath(path)).toBe(step);
+  });
+
+  it('uses the step after the last acceptance when optional DECIDE steps were skipped', () => {
+    const technical = recordAcceptance({ ...emptyRecord(), notes: { explore: { decisions: ['technical track'], openQuestions: [] } } }, {
+      step: 'complexity', actor: 'operator', provider: 'codex', at: '2026-11-10T00:00:00.000Z',
+      artifacts: [], decisions: [], openQuestions: [],
+    });
+    const smallTier = recordAcceptance(emptyRecord(), {
+      step: 'stories', actor: 'operator', provider: 'codex', at: '2026-11-10T00:00:00.000Z',
+      artifacts: [], decisions: [], openQuestions: [],
+    });
+
+    expect(summarizeRun(technical).nextStep).toBe('architecture_diagram');
+    expect(summarizeRun(smallTier).nextStep).toBe('conflict_check');
   });
 
   it('records accepted artifacts, actor, provider, time, and notes through a lossless round trip', () => {

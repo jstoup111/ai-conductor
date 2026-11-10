@@ -98,7 +98,9 @@ export interface ResumeDeps {
 /** Attach an existing run. The caller chooses the project and host; this module never infers either. */
 export async function resumeComposerRun(value: string, deps: ResumeDeps): Promise<{ worktree: string; context: ResumeContext }> {
   const target = parseResumeTarget(value);
-  const resolved = target.kind === 'branch' ? { branch: target.branch } : await deps.resolveBranch(target);
+  // Branch selectors still need the associated draft PR.  The ledger uses its
+  // URL as the remote in-flight identity on machines with no local history.
+  const resolved = await deps.resolveBranch(target) ?? (target.kind === 'branch' ? { branch: target.branch } : undefined);
   if (!resolved) throw new Error(`compose resume: no saved Composer run found for ${value} (searched the selected PR, spec branch, and intake reference)`);
   if (deps.fetch) await deps.fetch(resolved.branch);
   const local = await deps.localState?.(resolved.branch);
