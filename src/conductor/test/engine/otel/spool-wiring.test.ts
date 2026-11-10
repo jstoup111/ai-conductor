@@ -47,6 +47,14 @@ function collectorArrival(deadlineMs = 5_000): { arrive(): void; arrived: Promis
   return { arrive, arrived: Promise.race([signal, deadline]).finally(() => clearTimeout(timer)) };
 }
 
+async function waitFor(predicate: () => boolean | Promise<boolean>, message: string): Promise<void> {
+  for (const deadline = Date.now() + 5_000; Date.now() < deadline;) {
+    if (await predicate()) return;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+  throw new Error(message);
+}
+
 function exportSpan(exporter: { export(spans: ReadableSpan[], callback: () => void): void }, span: ReadableSpan): Promise<void> {
   return new Promise((resolve) => exporter.export([span], resolve));
 }
@@ -154,18 +162,13 @@ describe("resolveSpoolDir", () => {
     const directory = await mkdtemp(join(tmpdir(), "spool-wiring-rotated-env-"));
     temporaryDirectories.push(directory);
     const received: string[] = [];
-    let firstDelivery!: () => void;
-    const firstDeliveryComplete = new Promise<void>((resolve) => { firstDelivery = resolve; });
     let arrive!: () => void;
     const secondRequest = new Promise<void>((resolve) => { arrive = resolve; });
     const collector = createServer(async (request, response) => {
       received.push(String(request.headers.authorization));
-      const requestNumber = received.length;
       for await (const _chunk of request) { /* consume */ }
-      response.writeHead(200).end(() => {
-        if (requestNumber === 1) firstDelivery();
-        if (requestNumber === 2) arrive();
-      });
+      response.writeHead(200).end();
+      if (received.length === 2) arrive();
     });
     // Config validation reads the ambient environment once, while the runtime
     // gets its own live environment object. Keep the validation-only key
@@ -183,10 +186,10 @@ describe("resolveSpoolDir", () => {
       await runtime.store.write("traces", Buffer.from("first"));
       const draining = runtime.drainer.drainUntilStopped();
       try {
-        await Promise.race([
-          firstDeliveryComplete,
-          new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("first delivery did not complete")), 5_000)),
-        ]);
+        // A response flush only proves that the collector wrote the response;
+        // it can precede the drainer reading it and deleting the first batch.
+        // Rotate only after that first delivery has reached its terminal state.
+        await waitFor(async () => (await runtime.store.list("traces")).length === 0, "first delivery did not complete");
         environment[credentialVariable] = "rotated";
         await runtime.store.write("traces", Buffer.from("second"));
         await Promise.race([
