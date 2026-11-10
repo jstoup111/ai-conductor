@@ -834,3 +834,568 @@ implementation PR carries the waiver or migration block that the gate requires.
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
 - [ ] Tasks do not invalidate each other's fixtures or assertions
+
+### Task rem-prd-audit-rem-S1.4: Add task 11's Conductor-level test. It drives hosts 1, 3 and the leaf through a leaf-executed audit round on feat/daemon-demo and asserts no restack_planned line appears before the round closes. Land it after the S1.9 leaf-placement fix.
+**Gate:** prd-audit
+**Rationale:** Approved ADR adr-2026-11-08 and plan task 11 specify this. Task-status marks task 11 completed, but its Conductor-level test is absent. This is conforming test drift with no architectural decision needed, so it goes to BUILD under task 11.
+**Criterion:** S1.4
+**Parent task:** 11
+**Done when:**
+- [test] S1.4 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S1.4 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S1.5: Add task 11's tests. Cover four consecutive leaf-executed rounds with no feature-repair restack_planned line, the suppression of preflight while a round is open, and the owner-branch path when fold_routed_fixes is false.
+**Gate:** prd-audit
+**Rationale:** Plan task 11 specifies the four-round test, but the test is absent even though task-status marks the task completed. This is conforming test drift, so it goes to BUILD.
+**Criterion:** S1.5
+**Parent task:** 11
+**Done when:**
+- [test] S1.5 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S1.5 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S1.9: Stop creating a placement for the leaf host (host-region-entry.ts:580-588), and exempt the leaf before the deferred branch (routed-exit.ts:381-396). Add task 10's test that a leaf host exits done with no placement entry.
+**Gate:** prd-audit
+**Rationale:** ADR D5 and task 10's done-when require a leaf host to exit with no placement entry. host-region-entry.ts and routed-exit.ts lack a leaf special case. This is conforming implementation drift, so it goes to BUILD.
+**Criterion:** S1.9
+**Parent task:** 10
+**Done when:**
+- [test] S1.9 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S1.9 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S1.16: Wire collectFoldSet and placeFoldCommits into a production fold restack so that in-range operator commits are folded (task 16).
+**Gate:** prd-audit
+**Rationale:** Plan task 16 specifies the fold restack that folds in-range operator commits. The planner functions exist, but production code never calls them. This is conforming implementation drift, so it goes to BUILD.
+**Criterion:** S1.16
+**Parent task:** 16
+**Done when:**
+- [test] S1.16 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S1.16 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S2.5: Make round-stamp --verify fail closed on an unreadable leaf marker blob (round-stamp-cli.ts:74) and on a git execution error (:114). Add task 7's realgit test that a leaf commit with an unreadable marker is rejected and not created.
+**Gate:** prd-audit
+**Rationale:** ADR D4 and task 7's done-when require verification to reject an unreadable leaf marker. round-stamp-cli.ts:74 returns 0 before the verify check. This is conforming implementation drift, so it goes to BUILD.
+**Criterion:** S2.5
+**Parent task:** 7
+**Done when:**
+- [test] S2.5 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S2.5 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S2.7: Restore the no-marker contract: round-stamp --verify exits 0 when no marker exists, and the commit-msg hook permits unrelated commits. Rework the git-hook-assets-round-stamp realgit test to assert no-marker success and leaf-marker rejection as separate cases.
+**Gate:** prd-audit
+**Rationale:** Task 7's done-when keeps no-marker commits succeeding as they do today. The rewritten hook test drops that coverage, and the unconditional hook rejects whenever the launcher fails. The fix restores the planned behavior and its coverage, so it goes to BUILD.
+**Criterion:** S2.7
+**Parent task:** 7
+**Done when:**
+- [test] S2.7 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S2.7 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S3.1: Make the FINISH rebase step run a fold restack through collectFoldSet and placeFoldCommits when deferred placements exist, placing identity.ts on child 1 and ten-players.ts on child 3.
+**Gate:** prd-audit
+**Rationale:** ADR D6 and plan task 20 require the rebase step to run the fold. conductor.ts only defers the base refresh, so it goes to BUILD.
+**Criterion:** S3.1
+**Parent task:** 20
+**Done when:**
+- [test] S3.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S3.1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S3.2: Implement fold replay that appends `Folded-from: <source sha>` and preserves the source commit's author, subject and body.
+**Gate:** prd-audit
+**Rationale:** ADR D8 and task 16 specify fold replay with a Folded-from trailer, and no such replay exists. This is conforming implementation drift, so it goes to BUILD.
+**Criterion:** S3.2
+**Parent task:** 16
+**Done when:**
+- [test] S3.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S3.2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S3.3: Implement the fold move transaction. Move the child branches and closure refs to their placed tips, and remove the folded source commits from the leaf.
+**Gate:** prd-audit
+**Rationale:** Task 16 specifies the fold move of the leaf, the child branches and the closure refs, and no move exists. This goes to BUILD.
+**Criterion:** S3.3
+**Parent task:** 16
+**Done when:**
+- [test] S3.3 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S3.3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S3.4: Add the fold_planned event to the ConductorEvent union. Emit it from the fold restack with each source SHA, its round and owner, and each part's child, paths and reason.
+**Gate:** prd-audit
+**Rationale:** ADR D11 and task 25 specify the fold_planned event, which is absent. This is conforming spine-extension work, so it goes to BUILD.
+**Criterion:** S3.4
+**Parent task:** 25
+**Done when:**
+- [test] S3.4 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S3.4 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S3.5: Replay empty tdd evidence commits whole on their owner child during the fold.
+**Gate:** prd-audit
+**Rationale:** Task 16 requires empty evidence commits to be replayed whole. The planner handles them, but no replay exists, so this goes to BUILD.
+**Criterion:** S3.5
+**Parent task:** 16
+**Done when:**
+- [test] S3.5 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S3.5 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S3.6: Have the rebase step gather the deferred ranges from every round into a single fold restack.
+**Gate:** prd-audit
+**Rationale:** Task 20 requires the rebase step to plan one fold across rounds, and that is absent. This goes to BUILD.
+**Criterion:** S3.6
+**Parent task:** 20
+**Done when:**
+- [test] S3.6 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S3.6 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S3.7: Implement the fold's applied transaction, which moves folded placements to 'placed' in the route records.
+**Gate:** prd-audit
+**Rationale:** Task 18 specifies the applied transaction that marks placements placed. No code writes that state, so this goes to BUILD.
+**Criterion:** S3.7
+**Parent task:** 18
+**Done when:**
+- [test] S3.7 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S3.7 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S3.8: Make the applied fold leave out-of-range leaf, operator and halt-record commits on the leaf, and assert this in task 16's tests.
+**Gate:** prd-audit
+**Rationale:** Task 16 requires out-of-range commits to stay on the leaf after an applied fold. No fold applies, so this goes to BUILD.
+**Criterion:** S3.8
+**Parent task:** 16
+**Done when:**
+- [test] S3.8 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S3.8 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S3.10: Make the refusal in finish-publication-production.ts:980 name the deferred host and its round. Add task 21's test that push and pull-request.create are never called.
+**Gate:** prd-audit
+**Rationale:** Task 21 requires the publication refusal to name the deferred host and its round. The current detail names neither, so this goes to BUILD.
+**Criterion:** S3.10
+**Parent task:** 21
+**Done when:**
+- [test] S3.10 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S3.10 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S3.11: Run the fold in every rebase-step mode, including before the noop return in conductor.ts when daemon is unset.
+**Gate:** prd-audit
+**Rationale:** Task 20 requires the fold to run in every mode. conductor.ts:17777 returns the interactive noop first, so this goes to BUILD.
+**Criterion:** S3.11
+**Parent task:** 20
+**Done when:**
+- [test] S3.11 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S3.11 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S3.12: Extend the restack journal to cause 'fold' with the FoldPlan: each source SHA, owner, placement child and parts. Make recovery end with every ref moved or every ref at its pre-fold value.
+**Gate:** prd-audit
+**Rationale:** ADR D8 and task 16 specify a fold journal and its recovery, and both are absent. This goes to BUILD.
+**Criterion:** S3.12
+**Parent task:** 16
+**Done when:**
+- [test] S3.12 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S3.12 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S4.1: Add a per-host check to the fold plan that the host's placement child receives a non-empty part. Refuse with fold-misrouted when it does not.
+**Gate:** prd-audit
+**Rationale:** ADR D7 and task 15 require a check that each host's placement child receives a part, and that check is absent. This goes to BUILD.
+**Criterion:** S4.1
+**Parent task:** 15
+**Done when:**
+- [test] S4.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S4.1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S4.2: Compare the staged leaf tree for equality before the fold move transaction runs.
+**Gate:** prd-audit
+**Rationale:** ADR D9 and task 17 specify the staged-leaf-tree comparison, which is absent. This goes to BUILD.
+**Criterion:** S4.2
+**Parent task:** 17
+**Done when:**
+- [test] S4.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S4.2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S4.3: Add 'fold-misrouted' to the FoldPlan refusal reasons, carrying the host, its finding ids from the route record, and acceptingChildren.
+**Gate:** prd-audit
+**Rationale:** Task 15 specifies the fold-misrouted refusal, which is absent from fold-plan.ts. This goes to BUILD.
+**Criterion:** S4.3
+**Parent task:** 15
+**Done when:**
+- [test] S4.3 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S4.3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S4.4: Make runRestack({cause:'fold'}) turn a fold-owner-invalid plan result into a needs-human HALT naming the host and the commit, with no ref moved.
+**Gate:** prd-audit
+**Rationale:** Task 17 requires a fold-owner-invalid result to become a needs-human HALT, and no caller does that. This goes to BUILD.
+**Criterion:** S4.4
+**Parent task:** 17
+**Done when:**
+- [test] S4.4 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S4.4 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S4.5: Surface the merge-commit fold-owner-invalid refusal as a needs-human HALT naming the merge SHA.
+**Gate:** prd-audit
+**Rationale:** Task 17 requires the merge-commit refusal to surface as a halt, and it does not. This goes to BUILD.
+**Criterion:** S4.5
+**Parent task:** 17
+**Done when:**
+- [test] S4.5 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S4.5 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S4.6: Add the 'fold-tree-mismatch' restack refusal reason, with a HALT naming the changed path and the source SHA that touched it.
+**Gate:** prd-audit
+**Rationale:** ADR D9 and task 17 specify fold-tree-mismatch, which is absent. This goes to BUILD.
+**Criterion:** S4.6
+**Parent task:** 17
+**Done when:**
+- [test] S4.6 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S4.6 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S4.7: Route an unresolvable fold replay conflict through the existing unresolved-restack-conflict halt, naming the child and moving no ref.
+**Gate:** prd-audit
+**Rationale:** Task 17 requires fold conflicts to use the existing unresolved-conflict halt. No fold replay exists, so this goes to BUILD.
+**Criterion:** S4.7
+**Parent task:** 17
+**Done when:**
+- [test] S4.7 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S4.7 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S4.8: Check the cascade caps of fold targets before writing the fold restack journal, and halt with the existing cap evidence.
+**Gate:** prd-audit
+**Rationale:** Task 17 requires a cascade-cap check before the journal is written, and that check is absent. This goes to BUILD.
+**Criterion:** S4.8
+**Parent task:** 17
+**Done when:**
+- [test] S4.8 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S4.8 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S5.1: Have the fold's applied transaction enqueue a revalidation generation for the changed children and their descendants.
+**Gate:** prd-audit
+**Rationale:** Task 18 specifies the queue generation for the fold's applied transaction, which is absent. This goes to BUILD.
+**Criterion:** S5.1
+**Parent task:** 18
+**Done when:**
+- [test] S5.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S5.1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S5.2: Admit the fold's revalidation queue in the same rebase-step run.
+**Gate:** prd-audit
+**Rationale:** Task 20 specifies same-run queue admission after a fold, which is absent. This goes to BUILD.
+**Criterion:** S5.2
+**Parent task:** 20
+**Done when:**
+- [test] S5.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S5.2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S5.3: Emit child_revalidated for each child in the fold generation as the queue drains, and refuse deferred-base-refresh while the queue is non-empty.
+**Gate:** prd-audit
+**Rationale:** Task 20 specifies child_revalidated events per child in the fold's generation, which are absent. This goes to BUILD.
+**Criterion:** S5.3
+**Parent task:** 20
+**Done when:**
+- [test] S5.3 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S5.3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S5.4: Handle kickbacks and exits in fold-produced revalidate rounds as child-region feature-repair originating at that child.
+**Gate:** prd-audit
+**Rationale:** Task 23 specifies kickback and exit handling in fold-produced rounds, which is absent. This goes to BUILD.
+**Criterion:** S5.4
+**Parent task:** 23
+**Done when:**
+- [test] S5.4 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S5.4 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S5.5: Make a verified prerequisite claim in a fold-produced revalidate round write a HALT naming the Folded-from SHA and both children, without calling rerouteRound (prerequisite-claim.ts).
+**Gate:** prd-audit
+**Rationale:** ADR D9 and task 23 require a verified claim in fold revalidation to halt. prerequisite-claim.ts reroutes instead, so this goes to BUILD.
+**Criterion:** S5.5
+**Parent task:** 23
+**Done when:**
+- [test] S5.5 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S5.5 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S5.6: Add task 23's test that region-cap exhaustion in fold-produced revalidation writes the existing cap HALT and never calls establishChildPrs.
+**Gate:** prd-audit
+**Rationale:** Task 23 requires proof of the cap halt in fold revalidation, which is absent. This goes to BUILD.
+**Criterion:** S5.6
+**Parent task:** 23
+**Done when:**
+- [test] S5.6 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S5.6 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S6.1: Add the fold returnToLeaf mode in routed-exit.ts. Keep satisfied whole-feature verdicts when the leaf tree is unchanged, and navigate to rebase.
+**Gate:** prd-audit
+**Rationale:** ADR D10 and task 22 specify the fold returnToLeaf mode, which is absent. This goes to BUILD.
+**Criterion:** S6.1
+**Parent task:** 22
+**Done when:**
+- [test] S6.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S6.1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S6.2: Drive fold, queue drain, rebase, then establishChildPrs, so that the child PRs contain the Folded-from commits.
+**Gate:** prd-audit
+**Rationale:** Task 22 requires an end-to-end fold that reaches publication, which is absent. This goes to BUILD.
+**Criterion:** S6.2
+**Parent task:** 22
+**Done when:**
+- [test] S6.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S6.2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S6.3: Re-pend prd_audit, architecture_review_as_built and manual_test when fold revalidation changed the leaf tree.
+**Gate:** prd-audit
+**Rationale:** Task 22 requires gates to re-pend after a fold-produced leaf change, and that is absent. This goes to BUILD.
+**Criterion:** S6.3
+**Parent task:** 22
+**Done when:**
+- [test] S6.3 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S6.3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S6.4: Make a later fold collect only the new round's deferred hosts and exclude placements already placed.
+**Gate:** prd-audit
+**Rationale:** Task 22 requires a second fold to exclude placed hosts, and that is absent. This goes to BUILD.
+**Criterion:** S6.4
+**Parent task:** 22
+**Done when:**
+- [test] S6.4 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S6.4 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S7.1: Add restack context {opId, cause, roundId} to provider_attempt for resolver attempts, including fold opIds.
+**Gate:** prd-audit
+**Rationale:** ADR D11 and task 25 specify restack context on provider_attempt, which is absent. This goes to BUILD.
+**Criterion:** S7.1
+**Parent task:** 25
+**Done when:**
+- [test] S7.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S7.1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S7.2: Add roundId to restack_planned, and add restack attribution to resolver provider_attempt lines.
+**Gate:** prd-audit
+**Rationale:** Task 25 specifies restack_planned.roundId and resolver attribution, which are absent. This goes to BUILD.
+**Criterion:** S7.2
+**Parent task:** 25
+**Done when:**
+- [test] S7.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S7.2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S7.3: Set conductor.restack.op_id, conductor.restack.cause and conductor.round on resolver spans in SpanManager. Add a bounded restack_cause metric attribute, with no round or op_id keys.
+**Gate:** prd-audit
+**Rationale:** Task 25 specifies the span attributes and the bounded metric dimension, which are absent. This goes to BUILD.
+**Criterion:** S7.3
+**Parent task:** 25
+**Done when:**
+- [test] S7.3 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S7.3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S7.4: Add the `## Restack` block to the shipped-record writer for stacked features.
+**Gate:** prd-audit
+**Rationale:** Task 26 specifies the shipped-record Restack block, which is absent. This goes to BUILD.
+**Criterion:** S7.4
+**Parent task:** 26
+**Done when:**
+- [test] S7.4 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S7.4 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S7.5: Render fold, per-round, base-refresh and unattributed rows in the Restack block, summing to the total restack cost.
+**Gate:** prd-audit
+**Rationale:** Task 26 specifies the Restack rows, including an unattributed row, and they are absent. This goes to BUILD.
+**Criterion:** S7.5
+**Parent task:** 26
+**Done when:**
+- [test] S7.5 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S7.5 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S7.8: Always write the Restack block for stacked features, including the 0 runs / $0.00 case, and never for N=1.
+**Gate:** prd-audit
+**Rationale:** Task 26 requires the block for every stacked feature, including one at zero cost. It is absent, so this goes to BUILD.
+**Criterion:** S7.8
+**Parent task:** 26
+**Done when:**
+- [test] S7.8 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S7.8 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S7.9: Place the Restack block immediately after `## Children`, or after `## Time` when there is no Children block.
+**Gate:** prd-audit
+**Rationale:** Task 26 specifies where the block is placed, and the block is absent. This goes to BUILD.
+**Criterion:** S7.9
+**Parent task:** 26
+**Done when:**
+- [test] S7.9 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S7.9 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S7.10: Add the kpi-report test showing that cost for a record with a Restack block equals the value parsed from `## Cost` alone.
+**Gate:** prd-audit
+**Rationale:** Task 26 plans a kpi-report test for this, and the test is absent. This goes to BUILD.
+**Criterion:** S7.10
+**Parent task:** 26
+**Done when:**
+- [test] S7.10 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S7.10 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S8.6: Make the rebase-step fold run for existing deferred placements whatever the current fold_routed_fixes value. Add task 28's test.
+**Gate:** prd-audit
+**Rationale:** Task 28 requires deferred placements to fold even after the setting is turned off. No fold exists, so this goes to BUILD.
+**Criterion:** S8.6
+**Parent task:** 28
+**Done when:**
+- [test] S8.6 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S8.6 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S8.8: Render each host's execution mode and placement state in the stack-rounds-cli.ts output.
+**Gate:** prd-audit
+**Rationale:** ADR D13 and task 24 specify execution and placement output, which is absent from stack-rounds-cli.ts. This goes to BUILD.
+**Criterion:** S8.8
+**Parent task:** 24
+**Done when:**
+- [test] S8.8 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S8.8 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S8.9: Preserve deferred placements on `stack rounds --close`, and fold them on the next rebase-step dispatch.
+**Gate:** prd-audit
+**Rationale:** Task 24 requires close to preserve deferred placements and the next rebase to fold them. This goes to BUILD.
+**Criterion:** S8.9
+**Parent task:** 24
+**Done when:**
+- [test] S8.9 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S8.9 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S9.2: Remap every deferred placement's leafEntryTip and exitTip through the restack commit map in the applied transaction.
+**Gate:** prd-audit
+**Rationale:** ADR D12 and task 19 specify boundary remapping, which is absent. This goes to BUILD.
+**Criterion:** S9.2
+**Parent task:** 19
+**Done when:**
+- [test] S9.2 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S9.2 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S9.3: Add task 19's test that collectFoldSet and placeFoldCommits return the same parts after a remapping feature-repair restack.
+**Gate:** prd-audit
+**Rationale:** Task 19 requires proof that collect and place results are stable after a remap. This goes to BUILD.
+**Criterion:** S9.3
+**Parent task:** 19
+**Done when:**
+- [test] S9.3 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S9.3 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S9.4: Let the deferred base refresh run once the fold has left no deferred placements.
+**Gate:** prd-audit
+**Rationale:** Task 22 requires the deferred base refresh to run after a fold clears deferral. No fold exists, so this goes to BUILD.
+**Criterion:** S9.4
+**Parent task:** 22
+**Done when:**
+- [test] S9.4 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S9.4 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S9.5: Add the fold-boundary-lost refusal for a restack that drops a deferred host's exit-tip commit. It halts naming the host and leaves every ref at its pre-restack value.
+**Gate:** prd-audit
+**Rationale:** Task 19 specifies fold-boundary-lost, which is absent. This goes to BUILD.
+**Criterion:** S9.5
+**Parent task:** 19
+**Done when:**
+- [test] S9.5 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S9.5 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem-S9.6: Include route records in the restack applied transaction's compare-and-swap. If it loses, roll back and write the contested-writer HALT.
+**Gate:** prd-audit
+**Rationale:** Task 19 requires route records in the applied CAS, and they are absent. This goes to BUILD.
+**Criterion:** S9.6
+**Parent task:** 19
+**Done when:**
+- [test] S9.6 is satisfied by this task.
+- The repair for task rem-prd-audit-rem-S9.6 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asb-1: Call collectFoldSet from the fold restack planner that the FINISH rebase step reaches.
+**Gate:** as-built
+**Rationale:** collectFoldSet has no production caller. The approved ADR decides the behavior, and tasks 13, 16 and 20 admit the wiring. This is conforming drift.
+**Parent task:** 13
+**Governing clause:** Task 13
+**Done when:**
+- Task 13 is satisfied by this task.
+- The repair for task rem-as-built-rem-asb-1 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asb-2: Call placeFoldCommits from the fold restack planner that the FINISH rebase step reaches.
+**Gate:** as-built
+**Rationale:** placeFoldCommits has no production caller. Tasks 14, 16 and 20 admit the wiring. This is conforming drift.
+**Parent task:** 14
+**Governing clause:** Task 14
+**Done when:**
+- Task 14 is satisfied by this task.
+- The repair for task rem-as-built-rem-asb-2 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asb-3: Dispatch the fold from the rebase step in conductor.ts, before the interactive noop return (:17777) and before the deferred base-refresh refusal (:17857).
+**Gate:** as-built
+**Rationale:** ADR D6 requires FINISH to dispatch the fold, and it does not. Task 20 admits the fix.
+**Governing clause:** adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish decision 6
+**Done when:**
+- adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish decision 6 is satisfied by this task.
+- The repair for task rem-as-built-rem-asb-3 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asb-4: Probe placements in fold-plan.ts against accumulated placement trees instead of the reloaded branch tips. Add the per-host non-empty check with a fold-misrouted refusal carrying finding ids and accepting children.
+**Gate:** as-built
+**Rationale:** ADR D7 requires accumulated placement trees and the fold-misrouted check, and both are missing. Tasks 14 and 15 admit the fix.
+**Governing clause:** adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish decision 7
+**Done when:**
+- adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish decision 7 is satisfied by this task.
+- The repair for task rem-as-built-rem-asb-4 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asb-5: Add cause 'fold' to the restack types and journal, with the FoldPlan's source-to-placement correspondence. In restack-executor.ts, apply the fold atomically: remove source commits, keep author and message with Folded-from, charge targets, and mark placements placed.
+**Gate:** as-built
+**Rationale:** ADR D8's journaled fold replay is absent. Tasks 16 and 18 admit it.
+**Governing clause:** adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish decision 8
+**Done when:**
+- adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish decision 8 is satisfied by this task.
+- The repair for task rem-as-built-rem-asb-5 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asb-6: Add the fold leaf-tree equality guard with fold-tree-mismatch, and the queue generation for children a fold changed. Add the halt for a verified prerequisite claim during fold revalidation, naming Folded-from and both children.
+**Gate:** as-built
+**Rationale:** ADR D9's fold acceptance and revalidation integration are absent. Tasks 17, 18 and 23 admit them.
+**Governing clause:** adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish decision 9
+**Done when:**
+- adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish decision 9 is satisfied by this task.
+- The repair for task rem-as-built-rem-asb-6 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asb-7: Add the fold returnToLeaf mode in routed-exit.ts with a recorded fold-tree comparison. Keep satisfied whole-feature verdicts and navigate to rebase.
+**Gate:** as-built
+**Rationale:** ADR D10's fold return mode is absent. Task 22 admits it.
+**Governing clause:** adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish decision 10
+**Done when:**
+- adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish decision 10 is satisfied by this task.
+- The repair for task rem-as-built-rem-asb-7 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asb-8: Add the fold cause, restack_planned.roundId, fold_planned, and restack context on provider_attempt. Add the span attributes, the bounded restack_cause metric dimension, and the shipped-record Restack block.
+**Gate:** as-built
+**Rationale:** ADR D11's restack attribution is missing across all of its consumers. Tasks 25 and 26 admit it.
+**Governing clause:** adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish decision 11
+**Done when:**
+- adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish decision 11 is satisfied by this task.
+- The repair for task rem-as-built-rem-asb-8 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asb-9: Represent every deferred route record in the restack journal, remap leafEntryTip and exitTip through the commit map, and refuse with fold-boundary-lost when an exit-tip commit is dropped.
+**Gate:** as-built
+**Rationale:** ADR D12's boundary preservation is missing. Task 19 admits it.
+**Governing clause:** adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish decision 12
+**Done when:**
+- adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish decision 12 is satisfied by this task.
+- The repair for task rem-as-built-rem-asb-9 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asb-10: Render each host's execution mode and deferred or placed state in stack-rounds-cli.ts.
+**Gate:** as-built
+**Rationale:** ADR D13's round inspection omits execution and placement. Task 24 admits the fix.
+**Governing clause:** adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish decision 13
+**Done when:**
+- adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish decision 13 is satisfied by this task.
+- The repair for task rem-as-built-rem-asb-10 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asb-11: Make round-stamp --verify reject an unreadable marker and git execution errors for leaf-executed work, while keeping success when no marker exists.
+**Gate:** as-built
+**Rationale:** ADR D4 requires verification to fail closed, and round-stamp-cli.ts fails open. Task 7 admits the fix.
+**Governing clause:** adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish decision 4
+**Done when:**
+- adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish decision 4 is satisfied by this task.
+- The repair for task rem-as-built-rem-asb-11 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asb-12: Persist the leaf entry boundary placement before committing frozen blocks (host-region-entry.ts:515-585), and on the derived-complete return (:566). In routed-exit.ts, stop treating a missing boundary as unchanged so block-only work is folded.
+**Gate:** as-built
+**Rationale:** ADR D4 requires the leaf entry boundary to be durable before any mutation. Tasks 4 and 10 own region entry and exit placement, so they admit this ordering fix.
+**Governing clause:** adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish decision 4
+**Done when:**
+- adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish decision 4 is satisfied by this task.
+- The repair for task rem-as-built-rem-asb-12 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem-asb-13: Exempt the leaf host from placement creation and from deferred retention, so leaf-only fixes do not block completion or publication.
+**Gate:** as-built
+**Rationale:** ADR D5 says the actual leaf host is not deferred, but the code defers it. Task 10's done-when admits the fix.
+**Governing clause:** adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish decision 5
+**Done when:**
+- adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish decision 5 is satisfied by this task.
+- The repair for task rem-as-built-rem-asb-13 is committed and its targeted tests pass.
