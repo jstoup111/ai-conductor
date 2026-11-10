@@ -240,7 +240,7 @@ export async function returnToLeaf(
   worktree: string,
   slug: string,
   stored: StoredRouteRecord,
-  options: { readonly git?: GitRunner; readonly events?: ConductorEventEmitter; readonly abandon?: boolean } = {},
+  options: { readonly git?: GitRunner; readonly events?: ConductorEventEmitter; readonly abandon?: boolean; /** A fold has already rebuilt the stack and may preserve unchanged leaf gates. */ readonly mode?: 'fold' } = {},
 ): Promise<Extract<AdvanceRoundResult, { readonly kind: 'closed' | 'leaf-returned' | 'unavailable' }>> {
   const git = options.git ?? makeGitRunner(worktree);
   if (stored.record.phase === 'closed') return { kind: 'closed' };
@@ -273,7 +273,17 @@ export async function returnToLeaf(
   // An operator abandon restores the host's prior region and deliberately
   // discards its landing. Returning from that path is bookkeeping only: the
   // leaf's prior whole-feature validation remains authoritative.
-  if (!options.abandon) {
+  // Folding records the leaf head before replay.  When its rebuilt leaf has
+  // the same tree, whole-feature verdicts still describe the exact surface
+  // under review and need not be re-pended merely for history surgery.
+  const foldedTreeUnchanged = options.mode === 'fold' && currentStored.record.leafReturn !== undefined
+    ? await (async () => {
+      const before = await git(['rev-parse', `${currentStored.record.leafReturn!.head}^{tree}`]);
+      const after = await git(['rev-parse', `${resolved}^{tree}`]);
+      return before.exitCode === 0 && after.exitCode === 0 && before.stdout.trim() === after.stdout.trim();
+    })()
+    : false;
+  if (!options.abandon && !foldedTreeUnchanged) {
     const restageFailure = await restageLeafGates(worktree);
     if (restageFailure !== undefined) return { kind: 'unavailable', detail: restageFailure };
   }
