@@ -10,9 +10,17 @@ import { restackResolverForStepRunner } from '../../../src/engine/daemon-feature
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
-import { journalRefFor, readRestackJournal, writeRestackJournalBlob, type RestackJournal } from '../../../src/engine/restack/restack-journal.js';
+import {
+  journalRefFor,
+  readRestackJournal,
+  writeRestackJournalBlob,
+  type RestackJournal,
+} from '../../../src/engine/restack/restack-journal.js';
 import { recoverRestackJournal } from '../../../src/engine/restack/restack-recovery.js';
-import { resolveRestackConflict, type ResolveRestackConflictOptions } from '../../../src/engine/restack/restack-resolver.js';
+import {
+  resolveRestackConflict,
+  type ResolveRestackConflictOptions,
+} from '../../../src/engine/restack/restack-resolver.js';
 import type { CommitterStamp } from '../../../src/engine/restack/restack-replay.js';
 import { parseCommitSha, type CommitSha } from '../../../src/engine/restack/restack-types.js';
 import { sealStack } from './restack-sweepG2-fixture.js';
@@ -22,7 +30,10 @@ const repositories: string[] = [];
 
 interface Fixture {
   readonly repo: string;
-  readonly git: (args: string[], env?: NodeJS.ProcessEnv) => Promise<{ readonly stdout: string; readonly stderr: string }>;
+  readonly git: (
+    args: string[],
+    env?: NodeJS.ProcessEnv,
+  ) => Promise<{ readonly stdout: string; readonly stderr: string }>;
   readonly newDefault: CommitSha;
   readonly oldParent: CommitSha;
   readonly oldTip: CommitSha;
@@ -46,10 +57,11 @@ function sha(value: string): CommitSha {
 async function createFixture(): Promise<Fixture> {
   const repo = await mkdtemp(join(tmpdir(), 'restack-resolver-lost-commit-'));
   repositories.push(repo);
-  const git = (args: string[], env?: NodeJS.ProcessEnv) => execFile('git', args, {
-    cwd: repo,
-    ...(env === undefined ? {} : { env: { ...process.env, ...env } }),
-  });
+  const git = (args: string[], env?: NodeJS.ProcessEnv) =>
+    execFile('git', args, {
+      cwd: repo,
+      ...(env === undefined ? {} : { env: { ...process.env, ...env } }),
+    });
   const commit = async (subject: string, path: string, content: string) => {
     await writeFile(join(repo, path), content);
     await git(['add', path]);
@@ -72,11 +84,13 @@ async function createFixture(): Promise<Fixture> {
   const oldParent = c2;
   const leafCommits: CommitSha[] = [];
   for (let index = 1; index <= 8; index += 1) {
-    leafCommits.push(await commit(
-      `child three ${index}`,
-      index === 1 ? 'conflict.txt' : `three-${index}.txt`,
-      index === 1 ? 'child\n' : `${index}\n`,
-    ));
+    leafCommits.push(
+      await commit(
+        `child three ${index}`,
+        index === 1 ? 'conflict.txt' : `three-${index}.txt`,
+        index === 1 ? 'child\n' : `${index}\n`,
+      ),
+    );
   }
   const oldTip = sha((await git(['rev-parse', 'HEAD'])).stdout);
   await git(['checkout', '-q', 'main']);
@@ -88,10 +102,14 @@ async function createFixture(): Promise<Fixture> {
 }
 
 async function stackRefs(subject: Fixture): Promise<string> {
-  return (await subject.git([
-    'for-each-ref', '--format=%(refname) %(objectname)',
-    'refs/heads/feat/', 'refs/conductor/demo/closed/',
-  ])).stdout;
+  return (
+    await subject.git([
+      'for-each-ref',
+      '--format=%(refname) %(objectname)',
+      'refs/heads/feat/',
+      'refs/conductor/demo/closed/',
+    ])
+  ).stdout;
 }
 
 afterEach(async () => {
@@ -160,16 +178,18 @@ describe('restack resolver lost commit (real local Git)', () => {
       },
       temporaryGit: (worktree) => {
         const real = makeGitRunner(worktree);
-        return async (args, options) => args[0] === 'rev-parse' && args[1] === 'HEAD'
-          ? { exitCode: 1, stdout: '', stderr: 'unreadable tip' }
-          : real(args, options);
+        return async (args, options) =>
+          args[0] === 'rev-parse' && args[1] === 'HEAD'
+            ? { exitCode: 1, stdout: '', stderr: 'unreadable tip' }
+            : real(args, options);
       },
     };
 
     const result = await resolveRestackConflict(options);
 
     expect(result.outcome).toMatchObject({
-      kind: 'conflict_halt', reason: expect.stringContaining('child three 2'),
+      kind: 'conflict_halt',
+      reason: expect.stringContaining('child three 2'),
     });
   });
 
@@ -221,7 +241,10 @@ describe('restack resolver lost commit (real local Git)', () => {
 
     expect(result).toMatchObject({ kind: 'halted' });
     expect(await stackRefs(subject)).toBe(before);
-    expect(await readRestackJournal(subject.repo, 'demo')).toMatchObject({ kind: 'journal', journal: { state: 'aborted' } });
+    expect(await readRestackJournal(subject.repo, 'demo')).toMatchObject({
+      kind: 'journal',
+      journal: { state: 'aborted' },
+    });
     await expect(readFile(join(subject.repo, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
     const halt = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8');
     expect(halt).toContain('Restack-Conflict: 3 ');
@@ -247,7 +270,10 @@ describe('restack resolver lost commit (real local Git)', () => {
     const base = sha((await subject.git(['rev-parse', `${subject.first}^`])).stdout);
     const journal: RestackJournal = {
       opId: 'recover-resolver-without-environment' as never,
-      cause: 'base-refresh', newDefault: subject.newDefault, committer: stamp, dirtyPaths: [],
+      cause: 'base-refresh',
+      newDefault: subject.newDefault,
+      committer: stamp,
+      dirtyPaths: [],
       refs: [
         { ref: 'refs/heads/feat/c1/demo' as never, oldSha: subject.first },
         { ref: 'refs/conductor/demo/closed/c1' as never, oldSha: subject.first },
@@ -260,15 +286,26 @@ describe('restack resolver lost commit (real local Git)', () => {
         { child: second, oldParent: subject.first, oldTip: subject.second, kind: 'closed' },
         { child: third, oldParent: subject.second, oldTip: subject.oldTip, kind: 'leaf-active' },
       ],
-      children: [{ child: first, status: 'pending' }, { child: second, status: 'pending' }, { child: third, status: 'pending' }],
-      state: 'planned', owner: { host: 'dead-recovery-host', pid: 1, processStartTime: '0' },
+      children: [
+        { child: first, status: 'pending' },
+        { child: second, status: 'pending' },
+        { child: third, status: 'pending' },
+      ],
+      state: 'planned',
+      owner: { host: 'dead-recovery-host', pid: 1, processStartTime: '0' },
     };
     const blob = await writeRestackJournalBlob(subject.repo, journal);
     await subject.git(['update-ref', journalRefFor('demo'), blob]);
 
-    await expect(recoverRestackJournal({
-      worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo), resolver, resolverCap: 1,
-    })).resolves.toEqual({ kind: 'recovered', fromState: 'planned' });
+    await expect(
+      recoverRestackJournal({
+        worktree: subject.repo,
+        slug: 'demo',
+        git: makeGitRunner(subject.repo),
+        resolver,
+        resolverCap: 1,
+      }),
+    ).resolves.toEqual({ kind: 'recovered', fromState: 'planned' });
 
     const subjects = (await subject.git(['log', '--format=%s', 'feat/daemon-demo'])).stdout.split('\n');
     for (let index = 1; index <= 8; index += 1) expect(subjects).toContain(`child three ${index}`);

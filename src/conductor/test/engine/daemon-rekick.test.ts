@@ -34,7 +34,11 @@ import type { BacklogItem } from '../../src/engine/daemon.js';
 import { readVerdict } from '../../src/engine/gate-verdicts.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { checkAndAutoPark } from '../../src/engine/daemon-auto-park.js';
-import { isOperatorParked, __resetResolveCacheForTests, reconcileStrandedParkMarkers } from '../../src/engine/park-marker.js';
+import {
+  isOperatorParked,
+  __resetResolveCacheForTests,
+  reconcileStrandedParkMarkers,
+} from '../../src/engine/park-marker.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 import { FullSuiteVerifier } from '../../src/engine/full-suite-verifier.js';
@@ -76,7 +80,12 @@ const SHA_C = 'c'.repeat(40);
 
 describe('consumeResumeAuthorizations', () => {
   const gateEntry = {
-    count: 1, cumulative: 5, treeHash: null, lastReason: 'cap', priorVerdict: false, resolvedBefore: 0,
+    count: 1,
+    cumulative: 5,
+    treeHash: null,
+    lastReason: 'cap',
+    priorVerdict: false,
+    resolvedBefore: 0,
     capEvidence: { gate: 'build_review', consumed: 5, limit: 5, latestReason: 'cap', haltGeneration: 'g1' },
     resumeAuthorization: { adjustmentId: 'a1', haltGeneration: 'g1', consumed: false },
   };
@@ -106,17 +115,23 @@ describe('consumeResumeAuthorizations', () => {
     const { root, worktree } = await seed();
     try {
       const trace: string[] = [];
-      await expect(consumeResumeAuthorizations(base(worktree, {
-        clearHalt: async () => {
-          const ledger = await readKickbackLedger(worktree);
-          // The authorization is still unconsumed while the clear is running:
-          // a `partial` clear must be able to leave it untouched.
-          expect(ledger.gates.build_review.resumeAuthorization?.consumed).toBe(false);
-          trace.push('clear');
-          return 'confirmed' as const;
-        },
-        emit: async () => { trace.push('event'); },
-      }) as never)).resolves.toEqual(['feature']);
+      await expect(
+        consumeResumeAuthorizations(
+          base(worktree, {
+            clearHalt: async () => {
+              const ledger = await readKickbackLedger(worktree);
+              // The authorization is still unconsumed while the clear is running:
+              // a `partial` clear must be able to leave it untouched.
+              expect(ledger.gates.build_review.resumeAuthorization?.consumed).toBe(false);
+              trace.push('clear');
+              return 'confirmed' as const;
+            },
+            emit: async () => {
+              trace.push('event');
+            },
+          }) as never,
+        ),
+      ).resolves.toEqual(['feature']);
       expect(trace).toEqual(['clear', 'event']);
       expect((await readKickbackLedger(worktree)).gates.build_review.resumeAuthorization?.consumed).toBe(true);
     } finally {
@@ -134,9 +149,19 @@ describe('consumeResumeAuthorizations', () => {
         JSON.stringify({ version: 1, gates: { build_review: gateEntry } }),
       );
 
-      await expect(consumeResumeAuthorizations(base(worktree, {
-        resolveActiveChild: async () => ({ kind: 'active', child, position: child, isLeaf: true, branch: 'feat/feature' }),
-      }) as never)).resolves.toEqual(['feature']);
+      await expect(
+        consumeResumeAuthorizations(
+          base(worktree, {
+            resolveActiveChild: async () => ({
+              kind: 'active',
+              child,
+              position: child,
+              isLeaf: true,
+              branch: 'feat/feature',
+            }),
+          }) as never,
+        ),
+      ).resolves.toEqual(['feature']);
 
       expect((await readKickbackLedger(worktree)).gates.build_review.resumeAuthorization?.consumed).toBe(false);
       expect((await readKickbackLedger(worktree, child)).gates.build_review.resumeAuthorization?.consumed).toBe(true);
@@ -155,11 +180,20 @@ describe('consumeResumeAuthorizations', () => {
         JSON.stringify({ version: 1, gates: { build_review: gateEntry } }),
       );
 
-      await expect(consumeResumeAuthorizations(base(worktree, {
-        resolveActiveChild: async () => ({
-          kind: 'repair-pending', child, position: child, isLeaf: true, branch: 'feat/feature', repairChildren: [1],
-        }),
-      }) as never)).resolves.toEqual(['feature']);
+      await expect(
+        consumeResumeAuthorizations(
+          base(worktree, {
+            resolveActiveChild: async () => ({
+              kind: 'repair-pending',
+              child,
+              position: child,
+              isLeaf: true,
+              branch: 'feat/feature',
+              repairChildren: [1],
+            }),
+          }) as never,
+        ),
+      ).resolves.toEqual(['feature']);
 
       expect((await readKickbackLedger(worktree)).gates.build_review.resumeAuthorization?.consumed).toBe(false);
       expect((await readKickbackLedger(worktree, child)).gates.build_review.resumeAuthorization?.consumed).toBe(true);
@@ -186,16 +220,33 @@ describe('consumeResumeAuthorizations', () => {
       );
       await writeFile(
         join(worktree, '.pipeline', 'children', '1', 'kickback-ledger.json'),
-        JSON.stringify({ version: 1, gates: { restack: { ...restackEntry, resumeAuthorization: { adjustmentId: 'host', haltGeneration: 'g1', consumed: false } } } }),
+        JSON.stringify({
+          version: 1,
+          gates: {
+            restack: {
+              ...restackEntry,
+              resumeAuthorization: { adjustmentId: 'host', haltGeneration: 'g1', consumed: false },
+            },
+          },
+        }),
       );
 
-      await expect(consumeResumeAuthorizations(base(worktree, {
-        readLiveHaltClass: async () => 'needs-human',
-        resolveActiveChild: async () => ({
-          kind: 'repair-pending', child: leaf, position: leaf, isLeaf: true, branch: 'feat/feature', repairChildren: [host],
-          routedRepair: { child: host, roundId: 'r1' as import('../../src/engine/routing/route-types.js').RoundId },
-        }),
-      }) as never)).resolves.toEqual(['feature']);
+      await expect(
+        consumeResumeAuthorizations(
+          base(worktree, {
+            readLiveHaltClass: async () => 'needs-human',
+            resolveActiveChild: async () => ({
+              kind: 'repair-pending',
+              child: leaf,
+              position: leaf,
+              isLeaf: true,
+              branch: 'feat/feature',
+              repairChildren: [host],
+              routedRepair: { child: host, roundId: 'r1' as import('../../src/engine/routing/route-types.js').RoundId },
+            }),
+          }) as never,
+        ),
+      ).resolves.toEqual(['feature']);
 
       expect((await readKickbackLedger(worktree, leaf)).gates.restack.resumeAuthorization?.consumed).toBe(true);
       expect((await readKickbackLedger(worktree, host)).gates.restack.resumeAuthorization?.consumed).toBe(false);
@@ -207,23 +258,34 @@ describe('consumeResumeAuthorizations', () => {
   it('retains the halt with an unconsumed authorization when the clear reports partial', async () => {
     const { root, worktree } = await seed();
     try {
-      await expect(consumeResumeAuthorizations(base(worktree, {
-        clearHalt: async () => 'partial' as const,
-      }) as never)).resolves.toEqual([]);
+      await expect(
+        consumeResumeAuthorizations(
+          base(worktree, {
+            clearHalt: async () => 'partial' as const,
+          }) as never,
+        ),
+      ).resolves.toEqual([]);
       expect((await readKickbackLedger(worktree)).gates.build_review.resumeAuthorization?.consumed).toBe(false);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
 
-  it('retains the halt when the live class is not the gate\'s recoverable cap halt', async () => {
+  it("retains the halt when the live class is not the gate's recoverable cap halt", async () => {
     const { root, worktree } = await seed();
     try {
       let cleared = false;
-      await expect(consumeResumeAuthorizations(base(worktree, {
-        readLiveHaltClass: async () => 'kickback-cap',
-        clearHalt: async () => { cleared = true; return 'confirmed' as const; },
-      }) as never)).resolves.toEqual([]);
+      await expect(
+        consumeResumeAuthorizations(
+          base(worktree, {
+            readLiveHaltClass: async () => 'kickback-cap',
+            clearHalt: async () => {
+              cleared = true;
+              return 'confirmed' as const;
+            },
+          }) as never,
+        ),
+      ).resolves.toEqual([]);
       expect(cleared).toBe(false);
       expect((await readKickbackLedger(worktree)).gates.build_review.resumeAuthorization?.consumed).toBe(false);
     } finally {
@@ -232,28 +294,42 @@ describe('consumeResumeAuthorizations', () => {
   });
 
   it('accepts a remediation gate whose live halt class is kickback-cap', async () => {
-    const { root, worktree } = await seed({
-      ...gateEntry,
-      laps: 1,
-      capEvidence: { gate: 'prd_audit', consumed: 1, limit: 1, latestReason: 'lap cap', haltGeneration: 'g1' },
-    }, 'prd_audit');
+    const { root, worktree } = await seed(
+      {
+        ...gateEntry,
+        laps: 1,
+        capEvidence: { gate: 'prd_audit', consumed: 1, limit: 1, latestReason: 'lap cap', haltGeneration: 'g1' },
+      },
+      'prd_audit',
+    );
     try {
-      await expect(consumeResumeAuthorizations(base(worktree, {
-        readLiveHaltClass: async () => 'kickback-cap\n',
-      }) as never)).resolves.toEqual(['feature']);
+      await expect(
+        consumeResumeAuthorizations(
+          base(worktree, {
+            readLiveHaltClass: async () => 'kickback-cap\n',
+          }) as never,
+        ),
+      ).resolves.toEqual(['feature']);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
   });
 
-  it('leaves a processed (already shipped) feature\'s authorization unconsumed', async () => {
+  it("leaves a processed (already shipped) feature's authorization unconsumed", async () => {
     const { root, worktree } = await seed();
     try {
       let cleared = false;
-      await expect(consumeResumeAuthorizations(base(worktree, {
-        isProcessed: async () => true,
-        clearHalt: async () => { cleared = true; return 'confirmed' as const; },
-      }) as never)).resolves.toEqual([]);
+      await expect(
+        consumeResumeAuthorizations(
+          base(worktree, {
+            isProcessed: async () => true,
+            clearHalt: async () => {
+              cleared = true;
+              return 'confirmed' as const;
+            },
+          }) as never,
+        ),
+      ).resolves.toEqual([]);
       expect(cleared).toBe(false);
       expect((await readKickbackLedger(worktree)).gates.build_review.resumeAuthorization?.consumed).toBe(false);
     } finally {
@@ -264,9 +340,13 @@ describe('consumeResumeAuthorizations', () => {
   it('retains an operator-parked feature before it reads the ledger', async () => {
     const { root, worktree } = await seed();
     try {
-      await expect(consumeResumeAuthorizations(base(worktree, {
-        isOperatorParked: async () => true,
-      }) as never)).resolves.toEqual([]);
+      await expect(
+        consumeResumeAuthorizations(
+          base(worktree, {
+            isOperatorParked: async () => true,
+          }) as never,
+        ),
+      ).resolves.toEqual([]);
       expect((await readKickbackLedger(worktree)).gates.build_review.resumeAuthorization?.consumed).toBe(false);
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -280,9 +360,16 @@ describe('consumeResumeAuthorizations', () => {
     });
     try {
       let cleared = false;
-      await expect(consumeResumeAuthorizations(base(worktree, {
-        clearHalt: async () => { cleared = true; return 'confirmed' as const; },
-      }) as never)).resolves.toEqual([]);
+      await expect(
+        consumeResumeAuthorizations(
+          base(worktree, {
+            clearHalt: async () => {
+              cleared = true;
+              return 'confirmed' as const;
+            },
+          }) as never,
+        ),
+      ).resolves.toEqual([]);
       expect(cleared).toBe(false);
       expect((await readKickbackLedger(worktree)).gates.build_review.resumeAuthorization?.consumed).toBe(false);
     } finally {
@@ -291,18 +378,28 @@ describe('consumeResumeAuthorizations', () => {
   });
 
   it('retains a prd-audit cap halt without a raise authorization', async () => {
-    const { root, worktree } = await seed({
-      ...gateEntry,
-      laps: 1,
-      capEvidence: { gate: 'prd_audit', consumed: 1, limit: 1, latestReason: 'lap cap', haltGeneration: 'g1' },
-      resumeAuthorization: undefined,
-    }, 'prd_audit');
+    const { root, worktree } = await seed(
+      {
+        ...gateEntry,
+        laps: 1,
+        capEvidence: { gate: 'prd_audit', consumed: 1, limit: 1, latestReason: 'lap cap', haltGeneration: 'g1' },
+        resumeAuthorization: undefined,
+      },
+      'prd_audit',
+    );
     try {
       let cleared = false;
-      await expect(consumeResumeAuthorizations(base(worktree, {
-        readLiveHaltClass: async () => 'kickback-cap',
-        clearHalt: async () => { cleared = true; return 'confirmed' as const; },
-      }) as never)).resolves.toEqual([]);
+      await expect(
+        consumeResumeAuthorizations(
+          base(worktree, {
+            readLiveHaltClass: async () => 'kickback-cap',
+            clearHalt: async () => {
+              cleared = true;
+              return 'confirmed' as const;
+            },
+          }) as never,
+        ),
+      ).resolves.toEqual([]);
       expect(cleared).toBe(false);
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -312,9 +409,13 @@ describe('consumeResumeAuthorizations', () => {
   it('retains an authorization when a newer same-class halt replaced its cap marker', async () => {
     const { root, worktree } = await seed();
     try {
-      await expect(consumeResumeAuthorizations(base(worktree, {
-        readLiveHaltGeneration: async () => 'g2',
-      }) as never)).resolves.toEqual([]);
+      await expect(
+        consumeResumeAuthorizations(
+          base(worktree, {
+            readLiveHaltGeneration: async () => 'g2',
+          }) as never,
+        ),
+      ).resolves.toEqual([]);
       expect((await readKickbackLedger(worktree)).gates.build_review.resumeAuthorization?.consumed).toBe(false);
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -336,7 +437,13 @@ describe('consumeResumeAuthorizations', () => {
           },
           architecture_review_as_built: {
             ...gateEntry,
-            capEvidence: { gate: 'architecture_review_as_built', consumed: 1, limit: 1, latestReason: 'cap', haltGeneration: 'g1' },
+            capEvidence: {
+              gate: 'architecture_review_as_built',
+              consumed: 1,
+              limit: 1,
+              latestReason: 'cap',
+              haltGeneration: 'g1',
+            },
             resumeAuthorization: { adjustmentId: 'a1', haltGeneration: 'g1', consumed: false },
           },
         },
@@ -344,12 +451,18 @@ describe('consumeResumeAuthorizations', () => {
       const logs: string[] = [];
       const clearHalt = vi.fn(async () => 'confirmed' as const);
 
-      await expect(consumeResumeAuthorizations(base(worktree, {
-        readLiveHaltClass: async () => 'kickback-cap',
-        readLiveHaltGeneration: async () => 'g1',
-        clearHalt,
-        log: (message: string) => { logs.push(message); },
-      }) as never)).resolves.toEqual(['feature']);
+      await expect(
+        consumeResumeAuthorizations(
+          base(worktree, {
+            readLiveHaltClass: async () => 'kickback-cap',
+            readLiveHaltGeneration: async () => 'g1',
+            clearHalt,
+            log: (message: string) => {
+              logs.push(message);
+            },
+          }) as never,
+        ),
+      ).resolves.toEqual(['feature']);
 
       expect(clearHalt).toHaveBeenCalledTimes(1);
       const ledger = await readKickbackLedger(worktree);
@@ -381,11 +494,15 @@ describe('consumeResumeAuthorizations', () => {
       } as never);
       const clearHalt = vi.fn(async () => 'confirmed' as const);
 
-      await expect(consumeResumeAuthorizations(base(worktree, {
-        readLiveHaltClass: async () => 'kickback-cap',
-        readLiveHaltGeneration: async () => 'g1',
-        clearHalt,
-      }) as never)).resolves.toEqual([]);
+      await expect(
+        consumeResumeAuthorizations(
+          base(worktree, {
+            readLiveHaltClass: async () => 'kickback-cap',
+            readLiveHaltGeneration: async () => 'g1',
+            clearHalt,
+          }) as never,
+        ),
+      ).resolves.toEqual([]);
 
       expect(clearHalt).not.toHaveBeenCalled();
       const ledger = await readKickbackLedger(worktree);
@@ -411,18 +528,28 @@ describe('consumeResumeAuthorizations', () => {
           },
           architecture_review_as_built: {
             ...gateEntry,
-            capEvidence: { gate: 'architecture_review_as_built', consumed: 1, limit: 1, latestReason: 'cap', haltGeneration: 'g2' },
+            capEvidence: {
+              gate: 'architecture_review_as_built',
+              consumed: 1,
+              limit: 1,
+              latestReason: 'cap',
+              haltGeneration: 'g2',
+            },
             resumeAuthorization: { adjustmentId: 'a2', haltGeneration: 'g2', consumed: false },
           },
         },
       } as never);
       const clearHalt = vi.fn(async () => 'confirmed' as const);
 
-      await expect(consumeResumeAuthorizations(base(worktree, {
-        readLiveHaltClass: async () => 'kickback-cap',
-        readLiveHaltGeneration: async () => 'g1',
-        clearHalt,
-      }) as never)).resolves.toEqual([]);
+      await expect(
+        consumeResumeAuthorizations(
+          base(worktree, {
+            readLiveHaltClass: async () => 'kickback-cap',
+            readLiveHaltGeneration: async () => 'g1',
+            clearHalt,
+          }) as never,
+        ),
+      ).resolves.toEqual([]);
 
       expect(clearHalt).not.toHaveBeenCalled();
       const ledger = await readKickbackLedger(worktree);
@@ -433,13 +560,24 @@ describe('consumeResumeAuthorizations', () => {
     }
   });
 
-  it('does not let an authorization from one remediation gate clear another gate\'s cap halt', async () => {
-    const { root, worktree } = await seed({
-      ...gateEntry,
-      capEvidence: { gate: 'architecture_review_as_built', consumed: 1, limit: 1, latestReason: 'cap', haltGeneration: 'g1' },
-    }, 'prd_audit');
+  it("does not let an authorization from one remediation gate clear another gate's cap halt", async () => {
+    const { root, worktree } = await seed(
+      {
+        ...gateEntry,
+        capEvidence: {
+          gate: 'architecture_review_as_built',
+          consumed: 1,
+          limit: 1,
+          latestReason: 'cap',
+          haltGeneration: 'g1',
+        },
+      },
+      'prd_audit',
+    );
     try {
-      await expect(consumeResumeAuthorizations(base(worktree, { readLiveHaltClass: async () => 'kickback-cap' }) as never)).resolves.toEqual([]);
+      await expect(
+        consumeResumeAuthorizations(base(worktree, { readLiveHaltClass: async () => 'kickback-cap' }) as never),
+      ).resolves.toEqual([]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -451,10 +589,7 @@ describe('consumeResumeAuthorizations', () => {
   ): Promise<{ kind: string; target?: string; detail?: string; haltClass?: string }> {
     const planPath = join(worktree, '.docs', 'plans', 'feature.md');
     const criteria = Array.from({ length: options.requested }, (_, index) => `S2.${index + 1}`);
-    const authoredTasks = Array.from(
-      { length: 10 },
-      (_, index) => `### Task ${index + 1}: authored work ${index + 1}`,
-    );
+    const authoredTasks = Array.from({ length: 10 }, (_, index) => `### Task ${index + 1}: authored work ${index + 1}`);
     const priorRemediationTasks = Array.from(
       { length: options.added },
       (_, index) => `### Task rem-prior-${index + 1}: prior remediation ${index + 1}`,
@@ -463,41 +598,56 @@ describe('consumeResumeAuthorizations', () => {
     await mkdir(join(worktree, '.docs', 'stories'), { recursive: true });
     await writeFile(planPath, [...authoredTasks, ...priorRemediationTasks].join('\n'));
     await writeFile(join(worktree, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
-    await writeFile(join(worktree, '.docs', 'stories', 'feature.md'), [
-      '# Stories', '', '## Story 2: remediation', '', '#### Happy Path',
-      ...criteria.map((criterion) => `- Given ${criterion}, when repaired, then it holds.`),
-    ].join('\n'));
-    await persistPrdAuditVerdict(worktree, {
-      complete: true,
-      judgment: {
-        version: 'v1',
-        criterionJudgments: criteria.map((criterion, index) => ({
-          criterion: { storyId: '2', ordinal: index + 1 },
-          criterionId: criterion,
-          grade: 'FIXABLE' as const,
-          evidence: `Missing ${criterion} behavior`,
-          rationale: `Fixture repair for ${criterion}.`,
-          requirementAssociations: [],
-          evidenceTaskIds: [String(index + 1)],
-          ownerTaskId: String(index + 1),
-        })),
-        noOwnerObservations: [],
+    await writeFile(
+      join(worktree, '.docs', 'stories', 'feature.md'),
+      [
+        '# Stories',
+        '',
+        '## Story 2: remediation',
+        '',
+        '#### Happy Path',
+        ...criteria.map((criterion) => `- Given ${criterion}, when repaired, then it holds.`),
+      ].join('\n'),
+    );
+    await persistPrdAuditVerdict(
+      worktree,
+      {
+        complete: true,
+        judgment: {
+          version: 'v1',
+          criterionJudgments: criteria.map((criterion, index) => ({
+            criterion: { storyId: '2', ordinal: index + 1 },
+            criterionId: criterion,
+            grade: 'FIXABLE' as const,
+            evidence: `Missing ${criterion} behavior`,
+            rationale: `Fixture repair for ${criterion}.`,
+            requirementAssociations: [],
+            evidenceTaskIds: [String(index + 1)],
+            ownerTaskId: String(index + 1),
+          })),
+          noOwnerObservations: [],
+        },
+        diagnostics: [],
+        recordedDispositions: [],
       },
-      diagnostics: [],
-      recordedDispositions: [],
-    }, { attemptId: 'growth-remediation-fixture', codeStamp: null });
+      { attemptId: 'growth-remediation-fixture', codeStamp: null },
+    );
 
     const conductor = new Conductor({
       stateFilePath: join(worktree, '.pipeline', 'conduct-state.json'),
       stepRunner: {
         run: async (_step, _state, options) => {
-          await persistFixtureProjectedRemediationPlan(worktree, options, criteria.map((criterion) => ({
+          await persistFixtureProjectedRemediationPlan(
+            worktree,
+            options,
+            criteria.map((criterion) => ({
               id: criterion,
               disposition: 'build',
               category: null,
               rationale: `Repair ${criterion}.`,
               tasks: [{ id: `rem-${criterion.toLowerCase()}`, title: `Repair ${criterion}` }],
-          })));
+            })),
+          );
           return { success: true };
         },
       },
@@ -509,14 +659,16 @@ describe('consumeResumeAuthorizations', () => {
       maxRetries: 1,
       config: { prd_audit: { max_remediation_laps: 1, max_appended_tasks: 10, max_appended_ratio: 1 } } as never,
     });
-    return (conductor as unknown as {
-      planRemediation: (
-        state: ConductState,
-        steps: typeof ALL_STEPS,
-        dispatchContext: string,
-        hintSource: { source: string; evidence: Array<{ gate: StepName; evidenceFile: string }> },
-      ) => Promise<{ kind: string; target?: string; detail?: string; haltClass?: string }>;
-    }).planRemediation(
+    return (
+      conductor as unknown as {
+        planRemediation: (
+          state: ConductState,
+          steps: typeof ALL_STEPS,
+          dispatchContext: string,
+          hintSource: { source: string; evidence: Array<{ gate: StepName; evidenceFile: string }> },
+        ) => Promise<{ kind: string; target?: string; detail?: string; haltClass?: string }>;
+      }
+    ).planRemediation(
       { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
       ALL_STEPS,
       'prd audit blocked',
@@ -535,11 +687,20 @@ describe('consumeResumeAuthorizations', () => {
       growth: { authored: 10, added: options.added, byGate: { prd_audit: options.added } },
       gates: {
         prd_audit: {
-          count: 0, cumulative: 0, laps: 0, treeHash: null, lastReason: 'growth cap', priorVerdict: false,
+          count: 0,
+          cumulative: 0,
+          laps: 0,
+          treeHash: null,
+          lastReason: 'growth cap',
+          priorVerdict: false,
           resolvedBefore: 0,
           capEvidence: {
-            gate: 'prd_audit', allowance: 'growth', consumed: options.added, limit: 10,
-            latestReason: 'growth cap', haltGeneration: 'g1',
+            gate: 'prd_audit',
+            allowance: 'growth',
+            consumed: options.added,
+            limit: 10,
+            latestReason: 'growth cap',
+            haltGeneration: 'g1',
           },
           resumeAuthorization: { adjustmentId: 'raise-1', haltGeneration: 'g1', consumed: false },
         },
@@ -549,7 +710,10 @@ describe('consumeResumeAuthorizations', () => {
     await writeFile(join(worktree, '.pipeline', 'HALT.class'), 'kickback-cap\n');
   }
 
-  function authorizationDeps(worktree: string, events: ConductorEvent[]): Parameters<typeof consumeResumeAuthorizations>[0] {
+  function authorizationDeps(
+    worktree: string,
+    events: ConductorEvent[],
+  ): Parameters<typeof consumeResumeAuthorizations>[0] {
     return {
       listHaltedWorktrees: async () => ['feature'],
       worktreePath: () => worktree,
@@ -563,7 +727,9 @@ describe('consumeResumeAuthorizations', () => {
         await clearMarker(worktree);
         return 'confirmed';
       },
-      emit: async (_slug, event) => { events.push(event); },
+      emit: async (_slug, event) => {
+        events.push(event);
+      },
     };
   }
 
@@ -575,15 +741,26 @@ describe('consumeResumeAuthorizations', () => {
       const events: ConductorEvent[] = [];
 
       await expect(consumeResumeAuthorizations(authorizationDeps(worktree, events))).resolves.toEqual(['feature']);
-      expect(await access(join(worktree, HALT_MARKER)).then(() => false, () => true)).toBe(true);
+      expect(
+        await access(join(worktree, HALT_MARKER)).then(
+          () => false,
+          () => true,
+        ),
+      ).toBe(true);
       expect((await readKickbackLedger(worktree)).gates.prd_audit.resumeAuthorization?.consumed).toBe(true);
       expect(events).toEqual([{ type: 'halt_cleared', cause: 'kickback-budget' }]);
 
-      await expect(runGrowthRemediation(worktree, { requested: 6, added: 6, effectiveGrowthCap: 12 }))
-        .resolves.toMatchObject({ kind: 'route', target: 'build' });
+      await expect(
+        runGrowthRemediation(worktree, { requested: 6, added: 6, effectiveGrowthCap: 12 }),
+      ).resolves.toMatchObject({ kind: 'route', target: 'build' });
       const plan = await readFile(join(worktree, '.docs', 'plans', 'feature.md'), 'utf8');
       expect([...plan.matchAll(/^\*\*Criterion:\*\* S2\.\d+$/gm)]).toHaveLength(6);
-      expect(await access(join(worktree, HALT_MARKER)).then(() => true, () => false)).toBe(false);
+      expect(
+        await access(join(worktree, HALT_MARKER)).then(
+          () => true,
+          () => false,
+        ),
+      ).toBe(false);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -618,9 +795,13 @@ describe('consumeResumeAuthorizations', () => {
         stateFilePath: statePath,
         projectRoot: worktree,
         events: new ConductorEventEmitter(),
-        mode: 'auto', daemon: true, resume: true, fromStep: 'build', verifyArtifacts: false,
+        mode: 'auto',
+        daemon: true,
+        resume: true,
+        fromStep: 'build',
+        verifyArtifacts: false,
         config: { prd_audit: { max_remediation_laps: 1, max_appended_tasks: 10, max_appended_ratio: 1 } } as never,
-        stepRunner: { run: async (step) => step === 'build' ? build() : { success: true } },
+        stepRunner: { run: async (step) => (step === 'build' ? build() : { success: true }) },
       }).run();
 
       expect(build).not.toHaveBeenCalled();
@@ -632,7 +813,12 @@ describe('consumeResumeAuthorizations', () => {
       );
 
       await expect(consumeResumeAuthorizations(authorizationDeps(worktree, events))).resolves.toEqual([]);
-      expect(await access(join(worktree, HALT_MARKER)).then(() => true, () => false)).toBe(true);
+      expect(
+        await access(join(worktree, HALT_MARKER)).then(
+          () => true,
+          () => false,
+        ),
+      ).toBe(true);
       expect(events).toEqual([{ type: 'halt_cleared', cause: 'kickback-budget' }]);
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -644,11 +830,19 @@ describe('clearHaltForResume', () => {
   it('repairs the presentation before removing the marker and supersedes the record', async () => {
     const trace: string[] = [];
     const result = await clearHaltForResume({
-      worktreePath: '/wt', slug: 'feature',
-      clearMarker: async () => { trace.push('marker'); },
+      worktreePath: '/wt',
+      slug: 'feature',
+      clearMarker: async () => {
+        trace.push('marker');
+      },
       resolvePrUrl: async () => 'https://example/pr/1',
-      cleanupPresentation: async () => { trace.push('presentation'); return 'confirmed'; },
-      resolveCommittedRecord: async () => { trace.push('record'); },
+      cleanupPresentation: async () => {
+        trace.push('presentation');
+        return 'confirmed';
+      },
+      resolveCommittedRecord: async () => {
+        trace.push('record');
+      },
     });
     expect(result).toBe('confirmed');
     expect(trace).toEqual(['presentation', 'record', 'marker']);
@@ -657,11 +851,16 @@ describe('clearHaltForResume', () => {
   it('reports partial and leaves the marker in place when presentation repair fails', async () => {
     const trace: string[] = [];
     const result = await clearHaltForResume({
-      worktreePath: '/wt', slug: 'feature',
-      clearMarker: async () => { trace.push('marker'); },
+      worktreePath: '/wt',
+      slug: 'feature',
+      clearMarker: async () => {
+        trace.push('marker');
+      },
       resolvePrUrl: async () => 'https://example/pr/1',
       cleanupPresentation: async () => 'partial',
-      resolveCommittedRecord: async () => { trace.push('record'); },
+      resolveCommittedRecord: async () => {
+        trace.push('record');
+      },
     });
     expect(result).toBe('partial');
     expect(trace).toEqual([]);
@@ -670,10 +869,16 @@ describe('clearHaltForResume', () => {
   it('confirms when the feature has no PR to repair', async () => {
     const trace: string[] = [];
     const result = await clearHaltForResume({
-      worktreePath: '/wt', slug: 'feature',
-      clearMarker: async () => { trace.push('marker'); },
+      worktreePath: '/wt',
+      slug: 'feature',
+      clearMarker: async () => {
+        trace.push('marker');
+      },
       resolvePrUrl: async () => undefined,
-      cleanupPresentation: async () => { trace.push('presentation'); return 'confirmed'; },
+      cleanupPresentation: async () => {
+        trace.push('presentation');
+        return 'confirmed';
+      },
     });
     expect(result).toBe('confirmed');
     expect(trace).toEqual(['marker']);
@@ -681,9 +886,12 @@ describe('clearHaltForResume', () => {
 
   it('retains the marker when the committed record cannot be superseded', async () => {
     const result = await clearHaltForResume({
-      worktreePath: '/wt', slug: 'feature',
+      worktreePath: '/wt',
+      slug: 'feature',
       clearMarker: async () => {},
-      resolveCommittedRecord: async () => { throw new Error('no record'); },
+      resolveCommittedRecord: async () => {
+        throw new Error('no record');
+      },
     });
     expect(result).toBe('partial');
   });
@@ -692,10 +900,15 @@ describe('clearHaltForResume', () => {
     const trace: string[] = [];
     const logs: string[] = [];
     const result = await clearHaltForResume({
-      worktreePath: '/wt', slug: 'feature',
-      clearMarker: async () => { trace.push('marker'); },
+      worktreePath: '/wt',
+      slug: 'feature',
+      clearMarker: async () => {
+        trace.push('marker');
+      },
       resolveCommittedRecord: async () => ({ kind: 'failed', reason: 'EISDIR: illegal operation' }),
-      log: (message) => { logs.push(message); },
+      log: (message) => {
+        logs.push(message);
+      },
     });
     expect(result).toBe('partial');
     expect(trace).toEqual([]);
@@ -722,9 +935,7 @@ function fakeDeps(opts: {
   warned?: Set<string>;
   isOperatorParked?: (slug: string) => Promise<boolean>;
   markRekicked?: (slug: string, sha: string) => Promise<void>;
-  readHaltClass?: (
-    slug: string,
-  ) => Promise<HaltDisposition>;
+  readHaltClass?: (slug: string) => Promise<HaltDisposition>;
 }): { deps: RekickSweepDeps; trace: Trace } {
   const trace: Trace = { events: [], cleared: new Set() };
   const warned = opts.warned ?? new Set<string>();
@@ -787,7 +998,9 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
     const trace: string[] = [];
     const { deps } = fakeDeps({
       halted: ['clear-me'],
-      markRekicked: async (slug, sha) => { trace.push(`record:${slug}:${sha}`); },
+      markRekicked: async (slug, sha) => {
+        trace.push(`record:${slug}:${sha}`);
+      },
     });
     const originalClear = deps.clearMarker;
     deps.clearMarker = async (slug) => {
@@ -806,7 +1019,9 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
       rebasing: failure === 'abort' ? new Set(['broken']) : undefined,
       abortFails: failure === 'abort' ? new Set(['broken']) : undefined,
       clearFails: failure === 'clear' ? new Set(['broken']) : undefined,
-      markRekicked: async (slug) => { recorded.push(slug); },
+      markRekicked: async (slug) => {
+        recorded.push(slug);
+      },
     });
 
     await expect(rekickSweep(deps, SHA_B)).resolves.toEqual({ cleared: [], skipped: ['broken'] });
@@ -822,11 +1037,14 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
     });
 
     await expect(rekickSweep(deps, SHA_B)).resolves.toEqual({
-      cleared: ['bad-record', 'good-record'], skipped: [],
+      cleared: ['bad-record', 'good-record'],
+      skipped: [],
     });
     expect(deps.lastRekickSha.get('bad-record')).toBe(SHA_B);
     expect(deps.lastRekickSha.get('good-record')).toBe(SHA_B);
-    expect(trace.events.some((event) => event.includes('bad-record') && event.includes('durable record anomaly'))).toBe(true);
+    expect(trace.events.some((event) => event.includes('bad-record') && event.includes('durable record anomaly'))).toBe(
+      true,
+    );
   });
 
   it('aborts an in-progress rebase BEFORE clearing the marker', async () => {
@@ -898,9 +1116,7 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
       expect(trace.events.some((e) => e.startsWith('clear:'))).toBe(false);
       expect(trace.cleared).toEqual(new Set());
       expect(last.has('h')).toBe(false);
-      const skipLogs = trace.events.filter(
-        (e) => e.startsWith('log:') && e.includes('h') && e.includes(disposition),
-      );
+      const skipLogs = trace.events.filter((e) => e.startsWith('log:') && e.includes('h') && e.includes(disposition));
       expect(skipLogs).toHaveLength(2);
     },
   );
@@ -916,9 +1132,7 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
     expect(res.cleared).toEqual(['m']);
     expect(trace.cleared.has('m')).toBe(true);
     expect(last.get('m')).toBe(SHA_B);
-    const logLine = trace.events.find(
-      (e) => e.startsWith('log:') && e.includes('m') && e.includes('mechanical'),
-    );
+    const logLine = trace.events.find((e) => e.startsWith('log:') && e.includes('m') && e.includes('mechanical'));
     expect(logLine).toBeDefined();
   });
 
@@ -936,12 +1150,8 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
     } satisfies Record<HaltDisposition, 'retain' | 'retry'>;
 
     const matrix = Object.entries(expectedActionByDisposition);
-    const retryable = matrix
-      .filter(([, action]) => action === 'retry')
-      .map(([disposition]) => disposition);
-    const retained = matrix
-      .filter(([, action]) => action === 'retain')
-      .map(([disposition]) => disposition);
+    const retryable = matrix.filter(([, action]) => action === 'retry').map(([disposition]) => disposition);
+    const retained = matrix.filter(([, action]) => action === 'retain').map(([disposition]) => disposition);
     const isMatrixDisposition = (disposition: string): disposition is HaltDisposition =>
       Object.hasOwn(expectedActionByDisposition, disposition);
     const last = new Map<string, string>();
@@ -975,9 +1185,7 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
       retryable.map((disposition) => `clear:${disposition}`),
     );
     for (const [disposition, action] of matrix) {
-      const dispositionLogs = trace.events.filter(
-        (event) => event.startsWith('log:') && event.includes(disposition),
-      );
+      const dispositionLogs = trace.events.filter((event) => event.startsWith('log:') && event.includes(disposition));
       expect(dispositionLogs).toHaveLength(action === 'retain' ? 2 : 1);
     }
   });
@@ -1074,9 +1282,7 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
     expect(trace.events.some((e) => e.startsWith('hasRebaseInProgress:'))).toBe(false);
     expect(trace.events.some((e) => e.startsWith('abort:'))).toBe(false);
     expect(trace.events.some((e) => e.startsWith('clear:'))).toBe(false);
-    expect(
-      trace.events.some((e) => e.includes('skipping re-kick') && e.includes('shipped-slug')),
-    ).toBe(true);
+    expect(trace.events.some((e) => e.includes('skipping re-kick') && e.includes('shipped-slug'))).toBe(true);
   });
 
   it('isProcessed=false → behavior byte-identical to the no-isProcessed sweep', async () => {
@@ -1105,9 +1311,7 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
     const res = await rekickSweep(deps, SHA_B);
     expect(res.cleared.sort()).toEqual(['a', 'boom']);
     expect(res.skipped).toEqual([]);
-    expect(
-      trace.events.some((e) => e.includes('boom') && e.toLowerCase().includes('isprocessed')),
-    ).toBe(true);
+    expect(trace.events.some((e) => e.includes('boom') && e.toLowerCase().includes('isprocessed'))).toBe(true);
   });
 
   it('warn-once: the skip log for the same slug does not repeat on a second poll at a different SHA', async () => {
@@ -1142,9 +1346,7 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
     expect(trace.events.some((e) => e.startsWith('hasRebaseInProgress:'))).toBe(false);
     expect(trace.events.some((e) => e.startsWith('abort:'))).toBe(false);
     expect(trace.events.some((e) => e.startsWith('clear:'))).toBe(false);
-    expect(
-      trace.events.some((e) => e === 'log:re-kick parked-slug: skipped — operator-parked'),
-    ).toBe(true);
+    expect(trace.events.some((e) => e === 'log:re-kick parked-slug: skipped — operator-parked')).toBe(true);
   });
 
   it('operator-parked slug with isProcessed also true → isProcessed is never called (ordering)', async () => {
@@ -1199,11 +1401,7 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
     expect(res.cleared).toEqual(['halted-b']);
     expect(trace.events.some((e) => e === 'clear:halted-b')).toBe(true);
     expect(trace.events.some((e) => e === 'clear:boom-slug')).toBe(false);
-    expect(
-      trace.events.some(
-        (e) => e.includes('boom-slug') && e.toLowerCase().includes('anomaly'),
-      ),
-    ).toBe(true);
+    expect(trace.events.some((e) => e.includes('boom-slug') && e.toLowerCase().includes('anomaly'))).toBe(true);
   });
 
   // ── FR-5 regression: operator-park must never weaken existing guards ──────
@@ -1279,7 +1477,10 @@ describe('engine/daemon-rekick — real primitives (isolated repo)', () => {
     return stdout.trim();
   }
   async function fileExists(p: string): Promise<boolean> {
-    return access(p).then(() => true, () => false);
+    return access(p).then(
+      () => true,
+      () => false,
+    );
   }
 
   beforeEach(async () => {
@@ -1480,11 +1681,16 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
     return stdout.trim();
   }
   async function fileExists(p: string): Promise<boolean> {
-    return access(p).then(() => true, () => false);
+    return access(p).then(
+      () => true,
+      () => false,
+    );
   }
   async function branchContains(sha: string): Promise<boolean> {
-    return execFileAsync('git', ['-C', dir, 'merge-base', '--is-ancestor', sha, 'feature/foo'])
-      .then(() => true, () => false);
+    return execFileAsync('git', ['-C', dir, 'merge-base', '--is-ancestor', sha, 'feature/foo']).then(
+      () => true,
+      () => false,
+    );
   }
   async function initFeatureRepo(): Promise<void> {
     await initTestRepo(dir);
@@ -1550,10 +1756,7 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
   it('play-forwards a cleanly mergeable base commit before the pending gate retries', async () => {
     await initFeatureRepo();
     await git('checkout', 'main');
-    await writeFile(
-      join(dir, 'src/pending-gate-input.ts'),
-      'export const requiredByPendingGate = true;\n',
-    );
+    await writeFile(join(dir, 'src/pending-gate-input.ts'), 'export const requiredByPendingGate = true;\n');
     await git('add', 'src/pending-gate-input.ts');
     await git('commit', '-m', 'base: add pending gate input');
     const baseSha = await git('rev-parse', 'HEAD');
@@ -1619,8 +1822,7 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
     expect(await fileExists(join(dir, REKICK_SENTINEL))).toBe(false);
     // The rebase is left paused (9.0's existing conflict→HALT path).
     const inProgress =
-      (await fileExists(join(dir, '.git/rebase-merge'))) ||
-      (await fileExists(join(dir, '.git/rebase-apply')));
+      (await fileExists(join(dir, '.git/rebase-merge'))) || (await fileExists(join(dir, '.git/rebase-apply')));
     expect(inProgress).toBe(true);
   });
 
@@ -1629,13 +1831,21 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
     await writeFile(join(dir, 'generated.txt'), 'untracked generated\n');
     expect(await git('status', '--porcelain')).toContain('?? generated.txt');
     const hook = join(dir, '.git/hooks/pre-rebase');
-    await writeFile(hook, `#!/bin/sh\nprintf '%s\\n' 'error: The following untracked working tree files would be overwritten by checkout:' >&2\nprintf '\\tgenerated.txt\\n' >&2\nprintf '%s\\n' 'Please move or remove them before you switch branches.' >&2\nexit 1\n`);
+    await writeFile(
+      hook,
+      `#!/bin/sh\nprintf '%s\\n' 'error: The following untracked working tree files would be overwritten by checkout:' >&2\nprintf '\\tgenerated.txt\\n' >&2\nprintf '%s\\n' 'Please move or remove them before you switch branches.' >&2\nexit 1\n`,
+    );
     await chmod(hook, 0o755);
     await writeSentinel();
 
-    await expect(resumeRebaseFirst({
-      worktreePath: dir, localBase: 'main', events, ranManualTest: false,
-    })).resolves.toBe('halted');
+    await expect(
+      resumeRebaseFirst({
+        worktreePath: dir,
+        localBase: 'main',
+        events,
+        ranManualTest: false,
+      }),
+    ).resolves.toBe('halted');
 
     const halt = await readFile(join(dir, HALT_MARKER), 'utf8');
     expect(halt).toContain('rebase conflict — parked for human resolution');
@@ -1653,18 +1863,18 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
       events,
       ranManualTest: false,
       resolveAttempts: 2,
-      resolveConflict: async () => ({
-        resolved: false,
-        reason: 'no provider',
-        providerSetupExhaustion: true,
-      } as unknown as Awaited<ReturnType<NonNullable<Parameters<typeof resumeRebaseFirst>[0]['resolveConflict']>>>),
+      resolveConflict: async () =>
+        ({
+          resolved: false,
+          reason: 'no provider',
+          providerSetupExhaustion: true,
+        }) as unknown as Awaited<ReturnType<NonNullable<Parameters<typeof resumeRebaseFirst>[0]['resolveConflict']>>>,
     });
     expect(res).toBe('halted');
     expect(await fileExists(join(dir, HALT_MARKER))).toBe(true);
     expect(await readFile(join(dir, HALT_MARKER), 'utf8')).toContain('provider setup unavailable');
     const inProgress =
-      (await fileExists(join(dir, '.git/rebase-merge'))) ||
-      (await fileExists(join(dir, '.git/rebase-apply')));
+      (await fileExists(join(dir, '.git/rebase-merge'))) || (await fileExists(join(dir, '.git/rebase-apply')));
     expect(inProgress).toBe(true);
     const statePath = join(dir, '.pipeline', 'conduct-state.json');
     const state = (await fileExists(statePath))
@@ -1700,8 +1910,7 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
     });
     const halt = await readFile(join(dir, HALT_MARKER), 'utf8');
     const rebaseActive =
-      (await fileExists(join(dir, '.git/rebase-merge'))) ||
-      (await fileExists(join(dir, '.git/rebase-apply')));
+      (await fileExists(join(dir, '.git/rebase-merge'))) || (await fileExists(join(dir, '.git/rebase-apply')));
 
     expect({ res, halt, rebaseActive }).toEqual({
       res: 'halted',
@@ -1742,8 +1951,7 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
     expect(await fileExists(join(dir, REKICK_SENTINEL))).toBe(false);
     // Rebase actually completed — nothing left paused.
     const inProgress =
-      (await fileExists(join(dir, '.git/rebase-merge'))) ||
-      (await fileExists(join(dir, '.git/rebase-apply')));
+      (await fileExists(join(dir, '.git/rebase-merge'))) || (await fileExists(join(dir, '.git/rebase-apply')));
     expect(inProgress).toBe(false);
   });
 
@@ -1866,7 +2074,10 @@ describe('engine/daemon-rekick — real-primitive sweep composition (FR-7/FR-8/F
     return stdout.trim();
   }
   async function fileExists(p: string): Promise<boolean> {
-    return access(p).then(() => true, () => false);
+    return access(p).then(
+      () => true,
+      () => false,
+    );
   }
 
   // Build the EXACT RekickSweepDeps daemon-cli.ts assembles for `worktreeBase`.
@@ -1926,9 +2137,7 @@ describe('engine/daemon-rekick — real-primitive sweep composition (FR-7/FR-8/F
     // A: marker cleared, reason preserved, sentinel written.
     expect(await fileExists(join(base, 'feat-a', HALT_MARKER))).toBe(false);
     expect(await fileExists(join(base, 'feat-a', REKICK_SENTINEL))).toBe(true);
-    expect(await readFile(join(base, 'feat-a', HALT_CLEARED_MARKER), 'utf-8')).toContain(
-      'prd-audit gap',
-    );
+    expect(await readFile(join(base, 'feat-a', HALT_CLEARED_MARKER), 'utf-8')).toContain('prd-audit gap');
     // B: the paused rebase was aborted BEFORE the marker cleared.
     expect(await hasRebaseInProgress(b)).toBe(false);
     expect(await fileExists(join(b, HALT_MARKER))).toBe(false);
@@ -1965,9 +2174,10 @@ describe('engine/daemon-rekick — strict merged-history verification', () => {
     );
   }
 
-  function makeGhFake(
-    opts: { state?: string; throws?: boolean } = {},
-  ): { runGh: (args: string[], o: { cwd: string }) => Promise<{ stdout: string }>; calls: string[][] } {
+  function makeGhFake(opts: { state?: string; throws?: boolean } = {}): {
+    runGh: (args: string[], o: { cwd: string }) => Promise<{ stdout: string }>;
+    calls: string[][];
+  } {
     const calls: string[][] = [];
     const runGh = async (args: string[]) => {
       calls.push([...args]);
@@ -2200,12 +2410,16 @@ describe('engine/daemon-rekick — verified merged-history continuation', () => 
     return stdout.trim();
   }
   async function fileExists(p: string): Promise<boolean> {
-    return access(p).then(() => true, () => false);
+    return access(p).then(
+      () => true,
+      () => false,
+    );
   }
 
-  function makeGhFake(
-    opts: { state?: string; throws?: boolean } = {},
-  ): { runGh: (args: string[], o: { cwd: string }) => Promise<{ stdout: string }>; calls: string[][] } {
+  function makeGhFake(opts: { state?: string; throws?: boolean } = {}): {
+    runGh: (args: string[], o: { cwd: string }) => Promise<{ stdout: string }>;
+    calls: string[][];
+  } {
     const calls: string[][] = [];
     const runGh = async (args: string[]) => {
       calls.push([...args]);
@@ -2313,7 +2527,7 @@ describe('engine/daemon-rekick — verified merged-history continuation', () => 
         );
       },
       daemon: false,
-      provider: { invoke: async () => ({ success: true, output: '', exitCode: 0 }), },
+      provider: { invoke: async () => ({ success: true, output: '', exitCode: 0 }) },
       project: 'test-project',
       log,
     };
@@ -2389,7 +2603,10 @@ describe('engine/daemon-rekick — #436: pre-loop rebase must stamp state.rebase
   }
 
   async function fileExists(p: string): Promise<boolean> {
-    return access(p).then(() => true, () => false);
+    return access(p).then(
+      () => true,
+      () => false,
+    );
   }
 
   beforeEach(async () => {
@@ -2422,7 +2639,7 @@ describe('engine/daemon-rekick — #436: pre-loop rebase must stamp state.rebase
     await expect(readFile(join(dir, HALT_MARKER), 'utf8')).resolves.toContain(
       'completed BUILD evidence is unavailable after rebase',
     );
-    expect((await readVerdict(dir, 'rebase'))).toBeNull();
+    expect(await readVerdict(dir, 'rebase')).toBeNull();
   });
 
   // Negative path: a conflicted pre-loop rebase must NOT stamp state.rebase.
@@ -2559,7 +2776,10 @@ describe('engine/daemon-rekick — Task 7 regression (#486)', () => {
   }
 
   async function fileExists(p: string): Promise<boolean> {
-    return access(p).then(() => true, () => false);
+    return access(p).then(
+      () => true,
+      () => false,
+    );
   }
 
   beforeEach(async () => {
@@ -2619,11 +2839,7 @@ describe('engine/daemon-rekick — Task 7 regression (#486)', () => {
       noEvidenceAttempts: MAX_ATTEMPTS,
       stamps: [],
     };
-    await writeFile(
-      join(pipelineDir, 'task-evidence.json'),
-      JSON.stringify(evidenceData, null, 2),
-      'utf-8'
-    );
+    await writeFile(join(pipelineDir, 'task-evidence.json'), JSON.stringify(evidenceData, null, 2), 'utf-8');
 
     // Step 2: Call checkAndAutoPark from the worktree
     // This should write the marker to the MAIN root, not the worktree
@@ -2692,9 +2908,7 @@ describe('engine/daemon-rekick — Task 7 regression (#486)', () => {
     expect(traces).not.toContain('clearMarker called');
 
     // Verify the operator-parked skip log line
-    expect(
-      traces.some((t) => t === `log: re-kick ${SLUG}: skipped — operator-parked`),
-    ).toBe(true);
+    expect(traces.some((t) => t === `log: re-kick ${SLUG}: skipped — operator-parked`)).toBe(true);
 
     // Verify marker is still intact at main root (untouched by sweep)
     expect(await fileExists(mainMarkerPath)).toBe(true);
@@ -2710,15 +2924,22 @@ describe('engine/daemon-rekick — Task 7 regression (#486)', () => {
     await checkAndAutoPark(worktreeDir, SLUG, { daemon: true, reason: 'terminal daemon failure' });
     const lastRekickSha = new Map<string, string>();
 
-    const result = await rekickSweep({
-      listHaltedWorktrees: async () => [SLUG],
-      readHaltReason: async () => 'terminal daemon failure',
-      hasRebaseInProgress: async () => false,
-      abortRebase: async () => { throw new Error('must not abort an automatic park'); },
-      clearMarker: async () => { throw new Error('must not clear an automatic park'); },
-      lastRekickSha,
-      isOperatorParked: async (slug) => isOperatorParked(mainRepoDir, slug),
-    }, SHA_B);
+    const result = await rekickSweep(
+      {
+        listHaltedWorktrees: async () => [SLUG],
+        readHaltReason: async () => 'terminal daemon failure',
+        hasRebaseInProgress: async () => false,
+        abortRebase: async () => {
+          throw new Error('must not abort an automatic park');
+        },
+        clearMarker: async () => {
+          throw new Error('must not clear an automatic park');
+        },
+        lastRekickSha,
+        isOperatorParked: async (slug) => isOperatorParked(mainRepoDir, slug),
+      },
+      SHA_B,
+    );
 
     expect({
       result,
@@ -2749,7 +2970,10 @@ describe('engine/daemon-rekick — Task 15: reconcile stranded markers at sweep 
   }
 
   async function fileExists(p: string): Promise<boolean> {
-    return access(p).then(() => true, () => false);
+    return access(p).then(
+      () => true,
+      () => false,
+    );
   }
 
   beforeEach(async () => {
@@ -2868,9 +3092,7 @@ date: 2026-07-10
     expect(traces).not.toContain('clearMarker called');
 
     // Verify the operator-parked skip log line
-    expect(
-      traces.some((t) => t === `log: re-kick ${SLUG}: skipped — operator-parked`),
-    ).toBe(true);
+    expect(traces.some((t) => t === `log: re-kick ${SLUG}: skipped — operator-parked`)).toBe(true);
   });
 });
 
@@ -2920,10 +3142,7 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
       await git('commit', '-m', `feat: task ${id}\n\nTask: ${id}`);
     }
     await mkdir(join(dir, '.pipeline'), { recursive: true });
-    await writeFile(
-      join(dir, '.pipeline/conduct-state.json'),
-      JSON.stringify({ feature_desc: 'foo' }, null, 2),
-    );
+    await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({ feature_desc: 'foo' }, null, 2));
     await writeFile(
       join(dir, '.pipeline/task-status.json'),
       JSON.stringify(
@@ -3023,7 +3242,7 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
       localBase: 'main',
       events,
       ranManualTest: true,
-      preVerify: async (step) => step === 'build' ? { done: true } : { done: false },
+      preVerify: async (step) => (step === 'build' ? { done: true } : { done: false }),
     });
 
     expect(res).toBe('rebased');
@@ -3050,9 +3269,7 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
     expect(new Set(invalidated.map(({ gate }) => gate))).toEqual(
       new Set((applied?.transition.invalidated ?? []).filter((gate) => gate !== 'build')),
     );
-    expect(new Set(preserved.map(({ gate }) => gate))).toEqual(
-      new Set(applied?.transition.preserved ?? []),
-    );
+    expect(new Set(preserved.map(({ gate }) => gate))).toEqual(new Set(applied?.transition.preserved ?? []));
   });
 
   it('inspects a budget-preserved test suite once and carries its basis into the preserved event', async () => {
@@ -3062,8 +3279,7 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
       status: 'PRESERVED_WITHIN_BUDGET' as const,
       evidence: {} as import('../../src/engine/full-suite-evidence.js').FullSuitePassEvidence,
     });
-    const recordPreservation = vi.spyOn(FullSuiteVerifier.prototype, 'recordPreservation')
-      .mockResolvedValue(undefined);
+    const recordPreservation = vi.spyOn(FullSuiteVerifier.prototype, 'recordPreservation').mockResolvedValue(undefined);
     const preserved: Array<{ gate: string; basis?: string }> = [];
     events.on('rebase_gate_preserved', (event) => {
       if (event.type !== 'rebase_gate_preserved') return;
@@ -3078,13 +3294,16 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
         ranManualTest: false,
       });
 
-      expect({ res, inspectCalls: inspect.mock.calls.length, recordCalls: recordPreservation.mock.calls.length, preserved }).toEqual({
+      expect({
+        res,
+        inspectCalls: inspect.mock.calls.length,
+        recordCalls: recordPreservation.mock.calls.length,
+        preserved,
+      }).toEqual({
         res: 'rebased',
         inspectCalls: 1,
         recordCalls: 1,
-        preserved: expect.arrayContaining([
-          { gate: 'test_suite', basis: 'test_suite_drift_budget' },
-        ]),
+        preserved: expect.arrayContaining([{ gate: 'test_suite', basis: 'test_suite_drift_budget' }]),
       });
     } finally {
       inspect.mockRestore();
@@ -3156,7 +3375,9 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
       localBase: 'main',
       events,
       ranManualTest: false,
-      preVerify: async () => { throw new Error('unreadable completed evidence'); },
+      preVerify: async () => {
+        throw new Error('unreadable completed evidence');
+      },
     });
 
     expect(result).toBe('halted');
@@ -3173,16 +3394,27 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
     const state = JSON.parse(await readFile(statePath, 'utf8')) as Record<string, unknown>;
     await writeFile(statePath, JSON.stringify({ ...state, build: 'done' }, null, 2));
     const statusPath = join(dir, '.pipeline', 'task-status.json');
-    await writeFile(statusPath, JSON.stringify({
-      plan_ref: '.docs/plans/foo.md',
-      tasks: [
+    await writeFile(
+      statusPath,
+      JSON.stringify(
         {
-          id: '1', name: 'Do thing 1', status: 'done',
-          doneWhen: [{ source: 'unverified', check: '[test] reviewer writes are refused', reason: 'needs a live provider' }],
+          plan_ref: '.docs/plans/foo.md',
+          tasks: [
+            {
+              id: '1',
+              name: 'Do thing 1',
+              status: 'done',
+              doneWhen: [
+                { source: 'unverified', check: '[test] reviewer writes are refused', reason: 'needs a live provider' },
+              ],
+            },
+            { id: '2', name: 'Do thing 2', status: 'done' },
+          ],
         },
-        { id: '2', name: 'Do thing 2', status: 'done' },
-      ],
-    }, null, 2) + '\n');
+        null,
+        2,
+      ) + '\n',
+    );
 
     const result = await resumeRebaseFirst({ worktreePath: dir, localBase: 'main', events, ranManualTest: false });
 
@@ -3209,8 +3441,13 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
       version: 1,
       gates: {
         prd_audit: {
-          count: 0, cumulative: 0, laps: 1, treeHash: null,
-          lastReason: 'cap', priorVerdict: true, resolvedBefore: 0,
+          count: 0,
+          cumulative: 0,
+          laps: 1,
+          treeHash: null,
+          lastReason: 'cap',
+          priorVerdict: true,
+          resolvedBefore: 0,
           effectiveLapCap: 2,
         },
       },
@@ -3223,43 +3460,63 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
     } as never);
 
     const logs: string[] = [];
-    await expect(resumeRebaseFirst({
-      worktreePath: dir,
-      localBase: 'main',
-      events,
-      ranManualTest: true,
-      preVerify: async () => { throw new Error('BUILD must not be re-verified'); },
-      log: (message) => { logs.push(message); },
-    })).resolves.toBe('rebased');
+    await expect(
+      resumeRebaseFirst({
+        worktreePath: dir,
+        localBase: 'main',
+        events,
+        ranManualTest: true,
+        preVerify: async () => {
+          throw new Error('BUILD must not be re-verified');
+        },
+        log: (message) => {
+          logs.push(message);
+        },
+      }),
+    ).resolves.toBe('rebased');
     if (changeBase) {
-      await Promise.all((['test_suite',
-        'build_review',
-        'prd_audit',
-        'architecture_review_as_built',
-      ] as const satisfies readonly StepName[]).map(async (gate) => {
-        expect((await readVerdict(dir, gate))?.satisfied).toBe(false);
-      }));
+      await Promise.all(
+        (
+          [
+            'test_suite',
+            'build_review',
+            'prd_audit',
+            'architecture_review_as_built',
+          ] as const satisfies readonly StepName[]
+        ).map(async (gate) => {
+          expect((await readVerdict(dir, gate))?.satisfied).toBe(false);
+        }),
+      );
     }
 
     const dispatched: string[] = [];
     let releaseBuild: (() => void) | undefined;
     let signalBuildStarted: (() => void) | undefined;
-    const buildStarted = new Promise<void>((resolve) => { signalBuildStarted = resolve; });
-    const waitForBuildRelease = new Promise<void>((resolve) => { releaseBuild = resolve; });
+    const buildStarted = new Promise<void>((resolve) => {
+      signalBuildStarted = resolve;
+    });
+    const waitForBuildRelease = new Promise<void>((resolve) => {
+      releaseBuild = resolve;
+    });
     const run = new Conductor({
       stateFilePath: statePath,
       projectRoot: dir,
       events,
-      mode: 'auto', daemon: true, resume: true, verifyArtifacts: false,
+      mode: 'auto',
+      daemon: true,
+      resume: true,
+      verifyArtifacts: false,
       config: { prd_audit: { max_remediation_laps: 1 } } as never,
-      stepRunner: { run: async (step) => {
-        dispatched.push(step);
-        if (step === 'build') {
-          signalBuildStarted?.();
-          await waitForBuildRelease;
-        }
-        return { success: true };
-      } },
+      stepRunner: {
+        run: async (step) => {
+          dispatched.push(step);
+          if (step === 'build') {
+            signalBuildStarted?.();
+            await waitForBuildRelease;
+          }
+          return { success: true };
+        },
+      },
     }).run();
 
     await buildStarted;

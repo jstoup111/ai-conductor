@@ -34,5 +34,4 @@ describe('daemon dispatch session ID wiring', () => {
     const dispatchedSessionIds = runConductor.mock.calls.map((call) => call[5]);
     expect(dispatchedSessionIds).toEqual(scopeSessionIds);
   });
-
 });

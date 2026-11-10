@@ -123,10 +123,14 @@ describe('daemon feature lifecycle adapter context', () => {
       harnessRoot: '/installed/harness',
     })(worktreePath);
 
-    expect(prepare).toHaveBeenCalledWith(worktreePath, undefined, expect.objectContaining({
-      force: true,
-      skillNameRoot: worktreePath,
-    }));
+    expect(prepare).toHaveBeenCalledWith(
+      worktreePath,
+      undefined,
+      expect.objectContaining({
+        force: true,
+        skillNameRoot: worktreePath,
+      }),
+    );
   });
 
   it('uses context-owned lifecycle services and the canonical project root', async () => {
@@ -157,10 +161,11 @@ describe('daemon feature lifecycle adapter context', () => {
       rateLimitEpisode: {} as never,
       readOnlyReviewCapabilities: {},
       ownerGh: vi.fn() as never,
-      createProviderExecution: () => ({
-        configuredProviders: ['fixture'],
-        runtimes: new Map([['fixture', { provider: {}, policy: {} }]]),
-      }) as never,
+      createProviderExecution: () =>
+        ({
+          configuredProviders: ['fixture'],
+          runtimes: new Map([['fixture', { provider: {}, policy: {} }]]),
+        }) as never,
       events: featureEvents,
       log: vi.fn(),
       registerConductor,

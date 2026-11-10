@@ -9,7 +9,7 @@ const seams = vi.hoisted(() => ({
 }));
 
 vi.mock('../../src/engine/child-feature-executor.js', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../../src/engine/child-feature-executor.js')>(),
+  ...(await importOriginal<typeof import('../../src/engine/child-feature-executor.js')>()),
   createChildProcessFeatureExecutor: vi.fn(() => ({
     execute: async (order: { slug: string; engineVersionId: string }) => {
       seams.executions.push(order);
@@ -25,10 +25,9 @@ vi.mock('../../src/engine/work-order.js', async (importOriginal) => {
     ...actual,
     // The daemon fixture is not a Git repository. Preserve the production
     // serializer while replacing only its document-read process boundary.
-    buildWorkOrder: vi.fn((input) => actual.buildWorkOrder(
-      input,
-      async (args) => ({ exitCode: 0, stdout: `contents for ${args[1]}`, stderr: '' }),
-    )),
+    buildWorkOrder: vi.fn((input) =>
+      actual.buildWorkOrder(input, async (args) => ({ exitCode: 0, stdout: `contents for ${args[1]}`, stderr: '' })),
+    ),
   };
 });
 
@@ -72,9 +71,7 @@ describe('runDaemonMode engineRoot', () => {
       await store.teardown();
     }
 
-    expect(seams.executions).toEqual([
-      expect.objectContaining({ engineVersionId: TEMP_ENGINE_VERSION_ID }),
-    ]);
+    expect(seams.executions).toEqual([expect.objectContaining({ engineVersionId: TEMP_ENGINE_VERSION_ID })]);
   });
 
   it('createWorkOrder carries the configured daemon base branch through JSON without changing the schema', async () => {

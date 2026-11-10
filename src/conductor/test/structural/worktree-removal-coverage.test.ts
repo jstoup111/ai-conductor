@@ -10,8 +10,17 @@ const structuralRoot = dirname(fileURLToPath(import.meta.url));
 const conductorRoot = join(structuralRoot, '../..');
 const sourceRoot = join(conductorRoot, 'src');
 const PROCESS_INVOKING_CALLEES = new Set([
-  'exec', 'execFile', 'execFileSync', 'execSync', 'spawn', 'spawnSync',
-  'execa', 'execaCommand', 'git', 'runGit', 'removeWorktree',
+  'exec',
+  'execFile',
+  'execFileSync',
+  'execSync',
+  'spawn',
+  'spawnSync',
+  'execa',
+  'execaCommand',
+  'git',
+  'runGit',
+  'removeWorktree',
 ]);
 const ROUTED_MODULES = new Set([
   'engine/daemon-deps.ts',
@@ -50,11 +59,13 @@ const COVERAGE_GUARD_ADR = 'docs/decisions/adr-2026-08-07-worktree-removal-cover
 
 async function sourceFiles(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
-  const nested = await Promise.all(entries.map(async (entry) => {
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) return sourceFiles(path);
-    return entry.isFile() && entry.name.endsWith('.ts') ? [path] : [];
-  }));
+  const nested = await Promise.all(
+    entries.map(async (entry) => {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) return sourceFiles(path);
+      return entry.isFile() && entry.name.endsWith('.ts') ? [path] : [];
+    }),
+  );
   return nested.flat();
 }
 
@@ -182,10 +193,16 @@ function assertWorktreeRemovalCoverage(
   }
 
   const autoresolveReason = exemptions.find(({ module }) => module === 'engine/autoresolve.ts')?.reason;
-  if (autoresolveReason && exemptions.some(({ module, reason }) =>
-    module !== 'engine/autoresolve.ts' && reason.includes('provisions nothing') && reason === autoresolveReason,
-  )) {
-    throw new Error('worktree-removal coverage: autoresolve exemption reason must differ from provisions-nothing reasons');
+  if (
+    autoresolveReason &&
+    exemptions.some(
+      ({ module, reason }) =>
+        module !== 'engine/autoresolve.ts' && reason.includes('provisions nothing') && reason === autoresolveReason,
+    )
+  ) {
+    throw new Error(
+      'worktree-removal coverage: autoresolve exemption reason must differ from provisions-nothing reasons',
+    );
   }
 
   for (const { module, source } of modules) {
@@ -205,11 +222,13 @@ function assertWorktreeRemovalCoverage(
 }
 
 async function worktreeRemovalModules(root: string): Promise<string[]> {
-  const modules = await Promise.all((await sourceFiles(root)).map(async (path) => {
-    const text = await readFile(path, 'utf8');
-    const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true);
-    return findsWorktreeRemoval(source) ? relative(root, path) : undefined;
-  }));
+  const modules = await Promise.all(
+    (await sourceFiles(root)).map(async (path) => {
+      const text = await readFile(path, 'utf8');
+      const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true);
+      return findsWorktreeRemoval(source) ? relative(root, path) : undefined;
+    }),
+  );
   return modules.filter((module): module is string => module !== undefined).sort();
 }
 
@@ -258,9 +277,11 @@ describe('structural: worktree-removal coverage', () => {
       true,
     );
 
-    expect(() => assertWorktreeRemovalCoverage([
-      { module: 'engine/unclassified-removal.ts', source: fixture },
-    ], [])).toThrow(/engine\/unclassified-removal\.ts.*runProjectTeardown.*exemption registry.*adr-2026-08-07-worktree-removal-coverage-guard/s);
+    expect(() =>
+      assertWorktreeRemovalCoverage([{ module: 'engine/unclassified-removal.ts', source: fixture }], []),
+    ).toThrow(
+      /engine\/unclassified-removal\.ts.*runProjectTeardown.*exemption registry.*adr-2026-08-07-worktree-removal-coverage-guard/s,
+    );
   });
 
   it('rejects a routed removal module whose teardown invitation was deleted', () => {
@@ -271,9 +292,9 @@ describe('structural: worktree-removal coverage', () => {
       true,
     );
 
-    expect(() => assertWorktreeRemovalCoverage([
-      { module: 'engine/daemon-deps.ts', source: fixture },
-    ], [])).toThrow(/engine\/daemon-deps\.ts.*runProjectTeardown/s);
+    expect(() => assertWorktreeRemovalCoverage([{ module: 'engine/daemon-deps.ts', source: fixture }], [])).toThrow(
+      /engine\/daemon-deps\.ts.*runProjectTeardown/s,
+    );
   });
 
   it('skips teardown for a reconciliation worktree that is already absent', async () => {
@@ -293,16 +314,21 @@ describe('structural: worktree-removal coverage', () => {
       true,
     );
 
-    expect(() => assertWorktreeRemovalCoverage([
-      { module: 'test/structural/worktree-removal-coverage.test.ts', source: fixture },
-    ], [])).not.toThrow();
+    expect(() =>
+      assertWorktreeRemovalCoverage(
+        [{ module: 'test/structural/worktree-removal-coverage.test.ts', source: fixture }],
+        [],
+      ),
+    ).not.toThrow();
   });
 
   it('classifies every worktree-removal module in the real source tree', async () => {
-    const modules = await Promise.all((await sourceFiles(sourceRoot)).map(async (path) => ({
-      module: relative(sourceRoot, path),
-      source: ts.createSourceFile(path, await readFile(path, 'utf8'), ts.ScriptTarget.Latest, true),
-    })));
+    const modules = await Promise.all(
+      (await sourceFiles(sourceRoot)).map(async (path) => ({
+        module: relative(sourceRoot, path),
+        source: ts.createSourceFile(path, await readFile(path, 'utf8'), ts.ScriptTarget.Latest, true),
+      })),
+    );
 
     expect(() => assertWorktreeRemovalCoverage(modules)).not.toThrow();
   });
@@ -344,9 +370,12 @@ describe('structural: worktree-removal coverage', () => {
       true,
     );
 
-    expect(() => assertWorktreeRemovalCoverage([
-      { module: 'engine/exempt-removal.ts', source: fixture },
-    ], [{ module: 'engine/exempt-removal.ts', reason: '   ' }])).toThrow(/exempt-removal\.ts.*non-empty reason/);
+    expect(() =>
+      assertWorktreeRemovalCoverage(
+        [{ module: 'engine/exempt-removal.ts', source: fixture }],
+        [{ module: 'engine/exempt-removal.ts', reason: '   ' }],
+      ),
+    ).toThrow(/exempt-removal\.ts.*non-empty reason/);
   });
 
   it('rejects a stale exemption whose module no longer removes a worktree', () => {
@@ -357,10 +386,12 @@ describe('structural: worktree-removal coverage', () => {
       true,
     );
 
-    expect(() => assertWorktreeRemovalCoverage([
-      { module: 'engine/stale-exemption.ts', source: fixture },
-    ], [{ module: 'engine/stale-exemption.ts', reason: 'Does not call prepareWorktree, so it provisions nothing.' }]))
-      .toThrow(/stale-exemption\.ts.*stale/);
+    expect(() =>
+      assertWorktreeRemovalCoverage(
+        [{ module: 'engine/stale-exemption.ts', source: fixture }],
+        [{ module: 'engine/stale-exemption.ts', reason: 'Does not call prepareWorktree, so it provisions nothing.' }],
+      ),
+    ).toThrow(/stale-exemption\.ts.*stale/);
   });
 
   it('requires the autoresolve rationale to differ from provisions-nothing rationales', () => {
@@ -378,12 +409,17 @@ describe('structural: worktree-removal coverage', () => {
     );
     const flattenedReason = 'Does not call prepareWorktree, so it provisions nothing.';
 
-    expect(() => assertWorktreeRemovalCoverage([
-      { module: 'engine/autoresolve.ts', source: autoresolve },
-      { module: 'engine/worktree.ts', source: provisionless },
-    ], [
-      { module: 'engine/autoresolve.ts', reason: flattenedReason },
-      { module: 'engine/worktree.ts', reason: flattenedReason },
-    ])).toThrow(/autoresolve.*differ.*provisions-nothing/);
+    expect(() =>
+      assertWorktreeRemovalCoverage(
+        [
+          { module: 'engine/autoresolve.ts', source: autoresolve },
+          { module: 'engine/worktree.ts', source: provisionless },
+        ],
+        [
+          { module: 'engine/autoresolve.ts', reason: flattenedReason },
+          { module: 'engine/worktree.ts', reason: flattenedReason },
+        ],
+      ),
+    ).toThrow(/autoresolve.*differ.*provisions-nothing/);
   });
 });

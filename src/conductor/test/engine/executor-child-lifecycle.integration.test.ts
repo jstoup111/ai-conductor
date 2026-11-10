@@ -89,7 +89,9 @@ vi.mock('../../src/engine/finish-publication-production.js', async (importOrigin
   const actual = await importOriginal<typeof import('../../src/engine/finish-publication-production.js')>();
   return {
     ...actual,
-    createProductionFinishPublicationCoordinator: (...args: Parameters<typeof actual.createProductionFinishPublicationCoordinator>) => {
+    createProductionFinishPublicationCoordinator: (
+      ...args: Parameters<typeof actual.createProductionFinishPublicationCoordinator>
+    ) => {
       seams.finishPublicationBaseBranches.push(args[0].baseBranch);
       return actual.createProductionFinishPublicationCoordinator(...args);
     },
@@ -103,7 +105,8 @@ vi.mock('../../src/engine/tracker-client.js', async (importOriginal) => {
     makeProductionGh: () => async (args: string[]) => {
       seams.ghCalls.push(args);
       if (args.join(' ') === 'api user --jq .login') return { stdout: 'jstoup111\n' };
-      if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ body: 'Implementation summary.' }) };
+      if (args[0] === 'pr' && args[1] === 'view')
+        return { stdout: JSON.stringify({ body: 'Implementation summary.' }) };
       if (args[0] === 'pr' && args[1] === 'edit') return { stdout: '' };
       throw new Error(`unexpected gh invocation: ${args.join(' ')}`);
     },
@@ -116,13 +119,15 @@ vi.mock('../../src/engine/pr-labels.js', async (importOriginal) => {
     ...actual,
     // Keep the provenance path real against this test's local repository;
     // only the GitHub transport is faked above.
-    makeProductionGit: () => async (
-      args: string[],
-      opts: { cwd: string; credential?: 'operator' | 'write'; endpoint?: 'https' | 'ssh'; input?: string },
-    ) => {
-      const result = await execa('git', args, { cwd: opts.cwd, input: opts.input });
-      return { exitCode: 0, stdout: result.stdout };
-    },
+    makeProductionGit:
+      () =>
+      async (
+        args: string[],
+        opts: { cwd: string; credential?: 'operator' | 'write'; endpoint?: 'https' | 'ssh'; input?: string },
+      ) => {
+        const result = await execa('git', args, { cwd: opts.cwd, input: opts.input });
+        return { exitCode: 0, stdout: result.stdout };
+      },
   };
 });
 
@@ -168,7 +173,10 @@ async function completeConductorState(worktree: string, prUrl?: string): Promise
   );
 }
 
-async function fixture(slug: string, { durableChildState = true }: { durableChildState?: boolean } = {}): Promise<{
+async function fixture(
+  slug: string,
+  { durableChildState = true }: { durableChildState?: boolean } = {},
+): Promise<{
   root: string;
   order: WorkOrder;
   rootEvents: ConductorEventEmitter;
@@ -249,7 +257,9 @@ async function prepareIssueLinkProvenance(subject: Awaited<ReturnType<typeof fix
   await writeFile(join(subject.root, '.docs', 'intake', `${subject.order.slug}.md`), 'Owner: jstoup111\n');
   await commitAll(subject.root, 'record intake ownership');
   subject.order.baseSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: subject.root })).stdout.trim();
-  await execa('git', ['remote', 'add', 'origin', 'https://github.com/jstoup111/ai-conductor.git'], { cwd: subject.root });
+  await execa('git', ['remote', 'add', 'origin', 'https://github.com/jstoup111/ai-conductor.git'], {
+    cwd: subject.root,
+  });
   await execa('git', ['update-ref', 'refs/remotes/origin/main', subject.order.baseSha], { cwd: subject.root });
   await execa('git', ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main'], { cwd: subject.root });
 }
@@ -289,14 +299,16 @@ describe('executor child shared lifecycle', () => {
   it('keeps ordinary setup and forced setup triage pinned to the order base', async () => {
     const subject = await fixture('pinned-base');
     const observedBaseShas: Array<string | undefined> = [];
-    seams.prepareWorktree.mockImplementation(async (worktree: string, _log: unknown, options: { baseSha?: string; force?: boolean }) => {
-      observedBaseShas.push(options.baseSha);
-      if (!options.force) {
-        await writeFile(join(worktree, 'README.md'), 'dirty setup state\n');
-        throw new SetupFailureError('setup failed', 'setup failed');
-      }
-      await completeConductorState(worktree);
-    });
+    seams.prepareWorktree.mockImplementation(
+      async (worktree: string, _log: unknown, options: { baseSha?: string; force?: boolean }) => {
+        observedBaseShas.push(options.baseSha);
+        if (!options.force) {
+          await writeFile(join(worktree, 'README.md'), 'dirty setup state\n');
+          throw new SetupFailureError('setup failed', 'setup failed');
+        }
+        await completeConductorState(worktree);
+      },
+    );
     await writeFile(join(subject.root, 'advanced-base.txt'), 'B2\n');
     await commitAll(subject.root, 'advance configured base to B2');
 
@@ -310,15 +322,16 @@ describe('executor child shared lifecycle', () => {
     const subject = await fixture('parked-rekick', { durableChildState: false });
     const worktree = join(subject.root, '.worktrees', subject.order.slug);
     await mkdir(join(subject.root, '.worktrees'), { recursive: true });
-    await execa('git', ['worktree', 'add', '-b', `feat/daemon-${subject.order.slug}`, worktree, subject.order.baseSha], {
-      cwd: subject.root,
-    });
+    await execa(
+      'git',
+      ['worktree', 'add', '-b', `feat/daemon-${subject.order.slug}`, worktree, subject.order.baseSha],
+      {
+        cwd: subject.root,
+      },
+    );
     const pipelineDir = join(worktree, '.pipeline');
     await mkdir(pipelineDir, { recursive: true });
-    await writeFile(
-      join(pipelineDir, 'conduct-state.json'),
-      JSON.stringify({ build: 'pending' }),
-    );
+    await writeFile(join(pipelineDir, 'conduct-state.json'), JSON.stringify({ build: 'pending' }));
     const rekickPath = join(pipelineDir, 'REKICK');
     await writeFile(rekickPath, '');
     seams.prepareWorktree.mockResolvedValue(undefined);
@@ -410,7 +423,9 @@ describe('executor child shared lifecycle', () => {
     delete subject.order.baseBranch;
     await execa('git', ['branch', 'trunk', subject.order.baseSha], { cwd: subject.root });
     await execa('git', ['update-ref', 'refs/remotes/origin/trunk', subject.order.baseSha], { cwd: subject.root });
-    await execa('git', ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk'], { cwd: subject.root });
+    await execa('git', ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk'], {
+      cwd: subject.root,
+    });
     await prepareRekick(subject);
     vi.spyOn(Conductor.prototype, 'run').mockResolvedValue(undefined);
 
@@ -424,25 +439,28 @@ describe('executor child shared lifecycle', () => {
     const subject = await fixture('source-ref-closes');
     subject.order.sourceRef = 'jstoup111/ai-conductor#42';
     await prepareIssueLinkProvenance(subject);
-    seams.prepareWorktree.mockImplementation((worktree: string) => completeConductorState(
-      worktree,
-      'https://github.com/jstoup111/ai-conductor/pull/42',
-    ));
+    seams.prepareWorktree.mockImplementation((worktree: string) =>
+      completeConductorState(worktree, 'https://github.com/jstoup111/ai-conductor/pull/42'),
+    );
 
     await subject.execute();
 
     expect(seams.ghCalls).toContainEqual([
-      'pr', 'edit', '42', '-R', 'jstoup111/ai-conductor', '--body',
+      'pr',
+      'edit',
+      '42',
+      '-R',
+      'jstoup111/ai-conductor',
+      '--body',
       'Implementation summary.\n\nCloses jstoup111/ai-conductor#42',
     ]);
   });
 
   it('does not edit the implementation PR body when the order has no source ref', async () => {
     const subject = await fixture('no-source-ref-closes');
-    seams.prepareWorktree.mockImplementation((worktree: string) => completeConductorState(
-      worktree,
-      'https://github.com/jstoup111/ai-conductor/pull/42',
-    ));
+    seams.prepareWorktree.mockImplementation((worktree: string) =>
+      completeConductorState(worktree, 'https://github.com/jstoup111/ai-conductor/pull/42'),
+    );
 
     await subject.execute();
 
@@ -472,12 +490,15 @@ describe('executor child shared lifecycle', () => {
       .split('\n')
       .map((line) => JSON.parse(line) as { origin: string; event: string; reason?: string });
 
-    expect(records).toEqual(expect.arrayContaining([
-      expect.objectContaining({ origin: 'plan', event: 'gate_pass', reason: 'plan accepted' }),
-      expect.objectContaining({ origin: 'stories', event: 'gate_fail', reason: 'story rejected' }),
-    ]));
-    await expect(readFile(join(subject.root, '.pipeline', 'audit-trail', 'events.jsonl'), 'utf8'))
-      .rejects.toMatchObject({ code: 'ENOENT' });
+    expect(records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ origin: 'plan', event: 'gate_pass', reason: 'plan accepted' }),
+        expect.objectContaining({ origin: 'stories', event: 'gate_fail', reason: 'story rejected' }),
+      ]),
+    );
+    await expect(
+      readFile(join(subject.root, '.pipeline', 'audit-trail', 'events.jsonl'), 'utf8'),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('prepares memory on the child feature bus and persists its event in the worktree ledger', async () => {
@@ -493,7 +514,10 @@ describe('executor child shared lifecycle', () => {
       join(subject.root, '.worktrees', subject.order.slug),
       expect.any(ConductorEventEmitter),
     );
-    const ledger = await readFile(join(subject.root, '.worktrees', subject.order.slug, '.pipeline', 'events.jsonl'), 'utf8');
+    const ledger = await readFile(
+      join(subject.root, '.worktrees', subject.order.slug, '.pipeline', 'events.jsonl'),
+      'utf8',
+    );
     expect(ledger).toContain('"type":"memory_setup"');
   });
 });

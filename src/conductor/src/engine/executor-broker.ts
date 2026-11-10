@@ -26,7 +26,10 @@ export interface ExecutorBrokerDeps {
   /** Attaches supervisor-owned non-persistence feature subscribers. */
   attachFeatureEventRenderer?: (slug: string, events: ConductorEventEmitter) => () => void;
   /** Child proxy-bus visualizer; its engine identity is the WorkOrder pin. */
-  attachFeatureOtelVisualizer?: (context: ExecutorFeatureTraceContext, events: ConductorEventEmitter) => (() => void | Promise<void>) | undefined;
+  attachFeatureOtelVisualizer?: (
+    context: ExecutorFeatureTraceContext,
+    events: ConductorEventEmitter,
+  ) => (() => void | Promise<void>) | undefined;
   log?: (line: string) => void;
   now?: () => number;
 }
@@ -42,7 +45,11 @@ export interface ExecutorBrokerAttachment {
  * spine events; feature ledger persistence remains in the executor process.
  */
 export function createExecutorBroker(deps: ExecutorBrokerDeps): {
-  attach(slug: string, port: ExecutorIpcPort, identity?: string | Pick<WorkOrder, 'engineVersionId' | 'sourceRef'>): ExecutorBrokerAttachment;
+  attach(
+    slug: string,
+    port: ExecutorIpcPort,
+    identity?: string | Pick<WorkOrder, 'engineVersionId' | 'sourceRef'>,
+  ): ExecutorBrokerAttachment;
   abortAll(): void;
 } {
   const now = deps.now ?? (() => Date.now());
@@ -55,13 +62,17 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
   const broadcast = (name: 'rate-limit' | 'provider', value: unknown) => {
     for (const port of ports) port.send({ kind: 'state', name, value });
   };
-  const rateSnapshot = () => deps.rateLimitEpisode.snapshot?.() ?? ({ deadline: rateDeadline, escalationCounter });
+  const rateSnapshot = () => deps.rateLimitEpisode.snapshot?.() ?? { deadline: rateDeadline, escalationCounter };
   // The supervisor availability service is authoritative. The local map is
   // retained only for implementations predating snapshot(), never as a second
   // source of truth for a newly attached child.
-  const providerSnapshot = () => deps.providerAvailability.snapshot?.()
-    ?? Object.fromEntries([...providerWindows].filter(([, until]) => until > now()));
-  const broadcastState = () => { broadcast('rate-limit', rateSnapshot()); broadcast('provider', providerSnapshot()); };
+  const providerSnapshot = () =>
+    deps.providerAvailability.snapshot?.() ??
+    Object.fromEntries([...providerWindows].filter(([, until]) => until > now()));
+  const broadcastState = () => {
+    broadcast('rate-limit', rateSnapshot());
+    broadcast('provider', providerSnapshot());
+  };
   // The supervisor can mutate either service directly; child IPC is not the
   // sole writer. Broadcast those authoritative changes to every replica.
   deps.rateLimitEpisode.subscribe?.(() => broadcast('rate-limit', rateSnapshot()));
@@ -101,13 +112,19 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
       // ephemeral subscribers (currently the slug-aware daemon renderer) to
       // the proxy bus before it forwards to the root spine.
       const detachFeatureEventRenderer = deps.attachFeatureEventRenderer?.(slug, featureEvents);
-      const detachFeatureOtelVisualizer = engineVersionId === undefined
-        ? undefined
-        : deps.attachFeatureOtelVisualizer?.({
-          slug,
-          engineVersionId,
-          ...(typeof identity === 'string' || identity?.sourceRef === undefined ? {} : { sourceRef: identity.sourceRef }),
-        }, featureEvents);
+      const detachFeatureOtelVisualizer =
+        engineVersionId === undefined
+          ? undefined
+          : deps.attachFeatureOtelVisualizer?.(
+              {
+                slug,
+                engineVersionId,
+                ...(typeof identity === 'string' || identity?.sourceRef === undefined
+                  ? {}
+                  : { sourceRef: identity.sourceRef }),
+              },
+              featureEvents,
+            );
       const respond = (requestId: string, result: unknown) => port.send({ kind: 'response', requestId, result });
       const release = () => {
         for (const window of windows.values()) window.close();
@@ -117,7 +134,10 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
       };
       const request = async (requestId: string, method: string, params: unknown) => {
         try {
-          if (closed) { respond(requestId, { error: 'executor broker closed' }); return; }
+          if (closed) {
+            respond(requestId, { error: 'executor broker closed' });
+            return;
+          }
           if (method === 'rate-limit.enter') {
             const untilMs = (params as { untilMs?: unknown })?.untilMs;
             if (typeof untilMs === 'number') {
@@ -125,7 +145,8 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
               rateDeadline = deps.rateLimitEpisode.active() ? Math.max(rateDeadline ?? 0, untilMs) : undefined;
               broadcast('rate-limit', rateSnapshot());
             }
-            respond(requestId, { ok: undefined }); return;
+            respond(requestId, { ok: undefined });
+            return;
           }
           if (method === 'rate-limit.clear') {
             const abort = new AbortController();
@@ -141,17 +162,21 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
               if (closed) return;
               if (!deps.rateLimitEpisode.active()) rateDeadline = undefined;
               broadcast('rate-limit', rateSnapshot());
-              respond(requestId, { ok: undefined }); return;
+              respond(requestId, { ok: undefined });
+              return;
             } finally {
               pendingRateLimitClears.delete(requestId);
             }
           }
           if (method === 'rate-limit.next-wait') {
             const baseSeconds = (params as { baseSeconds?: unknown })?.baseSeconds;
-            const waitSeconds = deps.rateLimitEpisode.nextWaitSeconds(typeof baseSeconds === 'number' ? baseSeconds : undefined);
+            const waitSeconds = deps.rateLimitEpisode.nextWaitSeconds(
+              typeof baseSeconds === 'number' ? baseSeconds : undefined,
+            );
             escalationCounter += 1;
             broadcast('rate-limit', rateSnapshot());
-            respond(requestId, { ok: waitSeconds }); return;
+            respond(requestId, { ok: waitSeconds });
+            return;
           }
           if (method === 'provider.suppress') {
             const { provider, untilMs } = (params ?? {}) as { provider?: unknown; untilMs?: unknown };
@@ -160,35 +185,58 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
               providerWindows.set(provider, Math.max(providerWindows.get(provider) ?? 0, untilMs));
               broadcast('provider', providerSnapshot());
             }
-            respond(requestId, { ok: undefined }); return;
+            respond(requestId, { ok: undefined });
+            return;
           }
           if (method === 'live.open') {
-            if (!deps.liveBoundaryCoordinator) { respond(requestId, { ok: undefined }); return; }
+            if (!deps.liveBoundaryCoordinator) {
+              respond(requestId, { ok: undefined });
+              return;
+            }
             pendingLiveOpens.add(requestId);
-            const window = await deps.liveBoundaryCoordinator.openWindow({ contained: false, reason: 'executor proxy' });
+            const window = await deps.liveBoundaryCoordinator.openWindow({
+              contained: false,
+              reason: 'executor proxy',
+            });
             // A disconnect may occur while openWindow waits behind a root
             // mutation. Never retain the late grant: its channel is gone and
             // it would otherwise block every later mutation forever.
             pendingLiveOpens.delete(requestId);
-            if (closed) { window.close(); return; }
+            if (closed) {
+              window.close();
+              return;
+            }
             const id = `${slug}-${++nextLiveBoundaryWindowId}`;
-            windows.set(id, window); respond(requestId, { ok: id }); return;
+            windows.set(id, window);
+            respond(requestId, { ok: id });
+            return;
           }
           if (method === 'live.close') {
             const id = (params as { id?: unknown })?.id;
-            if (typeof id === 'string') { windows.get(id)?.close(); windows.delete(id); }
-            respond(requestId, { ok: undefined }); return;
+            if (typeof id === 'string') {
+              windows.get(id)?.close();
+              windows.delete(id);
+            }
+            respond(requestId, { ok: undefined });
+            return;
           }
           if (method === 'worktree.acquire') {
             const pending = { cancelled: false };
             const token = `${slug}:${requestId}`;
             pendingWorktreeAcquires.set(requestId, pending);
             let resolveRelease!: () => void;
-            const hold = new Promise<void>((resolve) => { resolveRelease = resolve; });
+            const hold = new Promise<void>((resolve) => {
+              resolveRelease = resolve;
+            });
             let acquired!: () => void;
-            const acquiredPromise = new Promise<void>((resolve) => { acquired = resolve; });
+            const acquiredPromise = new Promise<void>((resolve) => {
+              acquired = resolve;
+            });
             void deps.worktreeLifecycle.run(async () => {
-              if (closed || pending.cancelled) { acquired(); return; }
+              if (closed || pending.cancelled) {
+                acquired();
+                return;
+              }
               heldWorktreeLocks.set(token, resolveRelease);
               acquired();
               await hold;
@@ -197,7 +245,8 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
             await acquiredPromise;
             if (closed || pending.cancelled) return;
             pendingWorktreeAcquires.delete(requestId);
-            respond(requestId, { ok: token }); return;
+            respond(requestId, { ok: token });
+            return;
           }
           if (method === 'worktree.release') {
             const token = (params as { token?: unknown })?.token;
@@ -206,14 +255,20 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
               releaseLock?.();
               heldWorktreeLocks.delete(token);
             }
-            respond(requestId, { ok: undefined }); return;
+            respond(requestId, { ok: undefined });
+            return;
           }
           respond(requestId, { error: `unknown executor request: ${method}` });
-        } catch (error) { respond(requestId, { error: error instanceof Error ? error.message : String(error) }); }
+        } catch (error) {
+          respond(requestId, { error: error instanceof Error ? error.message : String(error) });
+        }
       };
       const onMessage = (raw?: unknown) => {
         const parsed = parseExecutorMessage(raw);
-        if (parsed.kind === 'malformed') { deps.log?.(`[executor ${slug}] malformed message: ${parsed.reason}`); return; }
+        if (parsed.kind === 'malformed') {
+          deps.log?.(`[executor ${slug}] malformed message: ${parsed.reason}`);
+          return;
+        }
         const message = parsed.message;
         if (closed) {
           if (message.kind === 'request') void request(message.requestId, message.method, message.params);
@@ -232,7 +287,8 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
         else if (message.kind === 'event') {
           // Dispatch lifecycle is supervisor-owned once per claim. Never let
           // a child replay or duplicate these root events during a relaunch.
-          if (message.payload.type === 'feature_dispatch_started' || message.payload.type === 'feature_dispatch_ended') return;
+          if (message.payload.type === 'feature_dispatch_started' || message.payload.type === 'feature_dispatch_ended')
+            return;
           if (!(message.payload.type in EVENT_SINKS)) return; // preserve unknowns in child ledger only
           void (message.scope === 'feature' ? featureEvents : deps.rootEvents).emit(message.payload as ConductorEvent);
         } else if (message.kind === 'log') deps.featureLogFor(slug)(`[executor:${message.level}] ${message.message}`);
@@ -240,27 +296,27 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
       const close = (reason = 'executor broker aborted'): Promise<void> => {
         if (closePromise) return closePromise;
         closePromise = (async () => {
-        closed = true;
-        for (const [requestId, abort] of pendingRateLimitClears) {
-          // A broker shutdown is observable by the child even when the IPC port
-          // itself remains open long enough for its stop protocol.
-          respond(requestId, { error: reason });
-          abort.abort();
-        }
-        pendingRateLimitClears.clear();
-        for (const requestId of pendingLiveOpens) respond(requestId, { error: reason });
-        pendingLiveOpens.clear();
-        for (const [requestId, pending] of pendingWorktreeAcquires) {
-          pending.cancelled = true;
-          respond(requestId, { error: reason });
-        }
-        pendingWorktreeAcquires.clear();
-        release();
-        await detachFeatureOtelVisualizer?.();
-        featureEvents.off('renderer_error', persistSupervisorRendererError);
-        detachFeatureEventRenderer?.();
-        ports.delete(port);
-        attachments.delete(close);
+          closed = true;
+          for (const [requestId, abort] of pendingRateLimitClears) {
+            // A broker shutdown is observable by the child even when the IPC port
+            // itself remains open long enough for its stop protocol.
+            respond(requestId, { error: reason });
+            abort.abort();
+          }
+          pendingRateLimitClears.clear();
+          for (const requestId of pendingLiveOpens) respond(requestId, { error: reason });
+          pendingLiveOpens.clear();
+          for (const [requestId, pending] of pendingWorktreeAcquires) {
+            pending.cancelled = true;
+            respond(requestId, { error: reason });
+          }
+          pendingWorktreeAcquires.clear();
+          release();
+          await detachFeatureOtelVisualizer?.();
+          featureEvents.off('renderer_error', persistSupervisorRendererError);
+          detachFeatureEventRenderer?.();
+          ports.delete(port);
+          attachments.delete(close);
         })();
         return closePromise;
       };
@@ -270,6 +326,8 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
       broadcastState();
       return { events: featureEvents, close };
     },
-    abortAll() { for (const close of [...attachments]) close('executor broker aborted'); },
+    abortAll() {
+      for (const close of [...attachments]) close('executor broker aborted');
+    },
   };
 }

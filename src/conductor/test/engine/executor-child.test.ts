@@ -50,8 +50,12 @@ class FakePort {
     this.listeners.set(event, listeners);
     return this;
   }
-  dispatch(value: unknown): void { for (const listener of this.listeners.get('message') ?? []) listener(value); }
-  disconnect(): void { for (const listener of this.listeners.get('disconnect') ?? []) listener(); }
+  dispatch(value: unknown): void {
+    for (const listener of this.listeners.get('message') ?? []) listener(value);
+  }
+  disconnect(): void {
+    for (const listener of this.listeners.get('disconnect') ?? []) listener();
+  }
 }
 
 function legacyGuardrails(): SelfHostGuardrails {
@@ -84,7 +88,10 @@ describe('executor child entrypoint', () => {
     const done = runExecutorChild(port, {
       moduleDir: CHILD_MODULE_DIR,
       createWorktree: async () => ({ path: root! }),
-      run: async () => new Promise((resolve) => { releaseRun = () => resolve({ slug: order.slug, status: 'done' }); }),
+      run: async () =>
+        new Promise((resolve) => {
+          releaseRun = () => resolve({ slug: order.slug, status: 'done' });
+        }),
     });
 
     port.dispatch({ kind: 'work-order', order });
@@ -100,13 +107,18 @@ describe('executor child entrypoint', () => {
     await done;
 
     const events = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8'))
-      .trim().split('\n').map((line) => JSON.parse(line));
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
     expect(events.filter((event) => event.type === 'renderer_error')).toEqual([
       expect.objectContaining({ rendererName: 'otel', error: 'supervisor exporter failed' }),
     ]);
-    expect(port.sent).not.toContainEqual(expect.objectContaining({
-      kind: 'event', payload: expect.objectContaining({ type: 'renderer_error' }),
-    }));
+    expect(port.sent).not.toContainEqual(
+      expect.objectContaining({
+        kind: 'event',
+        payload: expect.objectContaining({ type: 'renderer_error' }),
+      }),
+    );
   });
 
   it('installs the daemon co-author resolver on the feature bus before the child feature run', async () => {
@@ -121,31 +133,36 @@ describe('executor child entrypoint', () => {
     let commitAuthor = '';
     let commitTrailers = '';
 
-    const done = runExecutorChild(port, withExecutorBrokerProxies(port, {
-      moduleDir: CHILD_MODULE_DIR,
-      createWorktree: async () => ({ path: root! }),
-      run: makeExecutorChildRun({
-        projectRoot: root,
-        githubBoundary: {
-          runner: (async () => ({ stdout: JSON.stringify({ login: 'example-bot', id: 42 }) })) as GhRunner,
-          readCredential: async () => ({ kind: 'configured', tokenFile: '/token' }),
-          readToken: async () => ({ kind: 'token', token: 'secret' }),
-        },
-        runFeature: async (input) => {
-          await prepareWorktree(root!, undefined, {
-            events: input.events,
-            dispatchStart: true,
-            dispatchStartTimeoutSeconds: 1,
-          });
-          coAuthor = await readFile(join(root!, '.pipeline', 'co-author'), 'utf8');
-          await execFile('git', ['-C', root!, 'commit', '--allow-empty', '-m', 'agent commit']);
-          commitAuthor = (await execFile('git', ['-C', root!, 'log', '-1', '--format=%an <%ae>'])).stdout.trim();
-          commitTrailers = (await execFile('git', ['-C', root!, 'log', '-1', '--format=%(trailers:only,unfold)'])).stdout.trim();
-          engineMessage = withDaemonCoAuthorTrailer('halt record');
-          return { slug: input.order.slug, status: 'done' };
-        },
+    const done = runExecutorChild(
+      port,
+      withExecutorBrokerProxies(port, {
+        moduleDir: CHILD_MODULE_DIR,
+        createWorktree: async () => ({ path: root! }),
+        run: makeExecutorChildRun({
+          projectRoot: root,
+          githubBoundary: {
+            runner: (async () => ({ stdout: JSON.stringify({ login: 'example-bot', id: 42 }) })) as GhRunner,
+            readCredential: async () => ({ kind: 'configured', tokenFile: '/token' }),
+            readToken: async () => ({ kind: 'token', token: 'secret' }),
+          },
+          runFeature: async (input) => {
+            await prepareWorktree(root!, undefined, {
+              events: input.events,
+              dispatchStart: true,
+              dispatchStartTimeoutSeconds: 1,
+            });
+            coAuthor = await readFile(join(root!, '.pipeline', 'co-author'), 'utf8');
+            await execFile('git', ['-C', root!, 'commit', '--allow-empty', '-m', 'agent commit']);
+            commitAuthor = (await execFile('git', ['-C', root!, 'log', '-1', '--format=%an <%ae>'])).stdout.trim();
+            commitTrailers = (
+              await execFile('git', ['-C', root!, 'log', '-1', '--format=%(trailers:only,unfold)'])
+            ).stdout.trim();
+            engineMessage = withDaemonCoAuthorTrailer('halt record');
+            return { slug: input.order.slug, status: 'done' };
+          },
+        }),
       }),
-    }));
+    );
 
     port.dispatch({ kind: 'work-order', order });
     await done;
@@ -170,28 +187,38 @@ describe('executor child entrypoint', () => {
     await execFile('git', ['-C', root, 'config', 'user.email', 'operator@example.com']);
     await execFile('git', ['-C', root, 'commit', '--allow-empty', '-m', 'initial']);
     const port = new FakePort();
-    const done = runExecutorChild(port, withExecutorBrokerProxies(port, {
-      moduleDir: CHILD_MODULE_DIR,
-      createWorktree: async () => ({ path: root! }),
-      run: makeExecutorChildRun({
-        projectRoot: root,
-        githubBoundary: {
-          runner: vi.fn() as unknown as GhRunner,
-          readCredential: async () => ({ kind: 'configured', tokenFile: '/token' }),
-          readToken: async () => ({ kind: 'unavailable' }),
-        },
-        runFeature: async (input) => {
-          await prepareWorktree(root!, undefined, {
-            events: input.events,
-            dispatchStart: true,
-            dispatchStartTimeoutSeconds: 1,
-          });
-          await execFile('git', ['-C', root!, 'commit', '--allow-empty', '-m', 'agent commit']);
-          await execFile('git', ['-C', root!, 'commit', '--allow-empty', '-m', withDaemonCoAuthorTrailer('halt record')]);
-          return { slug: input.order.slug, status: 'done' };
-        },
+    const done = runExecutorChild(
+      port,
+      withExecutorBrokerProxies(port, {
+        moduleDir: CHILD_MODULE_DIR,
+        createWorktree: async () => ({ path: root! }),
+        run: makeExecutorChildRun({
+          projectRoot: root,
+          githubBoundary: {
+            runner: vi.fn() as unknown as GhRunner,
+            readCredential: async () => ({ kind: 'configured', tokenFile: '/token' }),
+            readToken: async () => ({ kind: 'unavailable' }),
+          },
+          runFeature: async (input) => {
+            await prepareWorktree(root!, undefined, {
+              events: input.events,
+              dispatchStart: true,
+              dispatchStartTimeoutSeconds: 1,
+            });
+            await execFile('git', ['-C', root!, 'commit', '--allow-empty', '-m', 'agent commit']);
+            await execFile('git', [
+              '-C',
+              root!,
+              'commit',
+              '--allow-empty',
+              '-m',
+              withDaemonCoAuthorTrailer('halt record'),
+            ]);
+            return { slug: input.order.slug, status: 'done' };
+          },
+        }),
       }),
-    }));
+    );
 
     port.dispatch({ kind: 'work-order', order });
     await done;
@@ -200,16 +227,21 @@ describe('executor child entrypoint', () => {
     const commitSubjects = (await execFile('git', ['-C', root, 'log', '-2', '--format=%s'])).stdout.trim().split('\n');
     const commitBodies = (await execFile('git', ['-C', root, 'log', '-2', '--format=%B'])).stdout;
     const events = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8'))
-      .trim().split('\n').map((line) => JSON.parse(line));
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
     const skips = events.filter((event) => event.type === 'bot_co_author_skipped');
-    const forwarded = port.sent.filter((message) => (
-      (message as { kind?: string; payload?: { type?: string } }).kind === 'event'
-      && (message as { payload?: { type?: string } }).payload?.type === 'bot_co_author_skipped'
-    ));
+    const forwarded = port.sent.filter(
+      (message) =>
+        (message as { kind?: string; payload?: { type?: string } }).kind === 'event' &&
+        (message as { payload?: { type?: string } }).payload?.type === 'bot_co_author_skipped',
+    );
     expect({ commitSubjects, skips, forwarded }).toEqual({
       commitSubjects: ['halt record', 'agent commit'],
       skips: [expect.objectContaining({ type: 'bot_co_author_skipped', reason: 'token-unavailable' })],
-      forwarded: [{ kind: 'event', scope: 'feature', payload: { type: 'bot_co_author_skipped', reason: 'token-unavailable' } }],
+      forwarded: [
+        { kind: 'event', scope: 'feature', payload: { type: 'bot_co_author_skipped', reason: 'token-unavailable' } },
+      ],
     });
     expect(commitBodies).not.toContain('Co-authored-by:');
   });
@@ -222,29 +254,34 @@ describe('executor child entrypoint', () => {
     await execFile('git', ['-C', root, 'commit', '--allow-empty', '-m', 'initial']);
     const port = new FakePort();
     let haltCommitMessage = '';
-    const done = runExecutorChild(port, withExecutorBrokerProxies(port, {
-      moduleDir: CHILD_MODULE_DIR,
-      createWorktree: async () => ({ path: root! }),
-      run: makeExecutorChildRun({
-        projectRoot: root,
-        githubBoundary: {
-          runner: (async () => { throw new Error('identity unavailable'); }) as GhRunner,
-          readCredential: async () => ({ kind: 'configured', tokenFile: '/token' }),
-          readToken: async () => ({ kind: 'token', token: 'secret' }),
-        },
-        runFeature: async (input) => {
-          await prepareWorktree(root!, undefined, {
-            events: input.events,
-            dispatchStart: true,
-            dispatchStartTimeoutSeconds: 1,
-          });
-          await execFile('git', ['-C', root!, 'commit', '--allow-empty', '-m', 'agent commit']);
-          haltCommitMessage = withDaemonCoAuthorTrailer('halt record');
-          await execFile('git', ['-C', root!, 'commit', '--allow-empty', '-m', haltCommitMessage]);
-          return { slug: input.order.slug, status: 'done' };
-        },
+    const done = runExecutorChild(
+      port,
+      withExecutorBrokerProxies(port, {
+        moduleDir: CHILD_MODULE_DIR,
+        createWorktree: async () => ({ path: root! }),
+        run: makeExecutorChildRun({
+          projectRoot: root,
+          githubBoundary: {
+            runner: (async () => {
+              throw new Error('identity unavailable');
+            }) as GhRunner,
+            readCredential: async () => ({ kind: 'configured', tokenFile: '/token' }),
+            readToken: async () => ({ kind: 'token', token: 'secret' }),
+          },
+          runFeature: async (input) => {
+            await prepareWorktree(root!, undefined, {
+              events: input.events,
+              dispatchStart: true,
+              dispatchStartTimeoutSeconds: 1,
+            });
+            await execFile('git', ['-C', root!, 'commit', '--allow-empty', '-m', 'agent commit']);
+            haltCommitMessage = withDaemonCoAuthorTrailer('halt record');
+            await execFile('git', ['-C', root!, 'commit', '--allow-empty', '-m', haltCommitMessage]);
+            return { slug: input.order.slug, status: 'done' };
+          },
+        }),
       }),
-    }));
+    );
 
     port.dispatch({ kind: 'work-order', order });
     await done;
@@ -252,17 +289,22 @@ describe('executor child entrypoint', () => {
     const commitSubjects = (await execFile('git', ['-C', root, 'log', '-2', '--format=%s'])).stdout.trim().split('\n');
     const commitBodies = (await execFile('git', ['-C', root, 'log', '-2', '--format=%B'])).stdout;
     const events = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8'))
-      .trim().split('\n').map((line) => JSON.parse(line));
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
     const skips = events.filter((event) => event.type === 'bot_co_author_skipped');
-    const forwarded = port.sent.filter((message) => (
-      (message as { kind?: string; payload?: { type?: string } }).kind === 'event'
-      && (message as { payload?: { type?: string } }).payload?.type === 'bot_co_author_skipped'
-    ));
+    const forwarded = port.sent.filter(
+      (message) =>
+        (message as { kind?: string; payload?: { type?: string } }).kind === 'event' &&
+        (message as { payload?: { type?: string } }).payload?.type === 'bot_co_author_skipped',
+    );
     expect({ commitSubjects, haltCommitMessage, skips, forwarded }).toEqual({
       commitSubjects: ['halt record', 'agent commit'],
       haltCommitMessage: 'halt record',
       skips: [expect.objectContaining({ type: 'bot_co_author_skipped', reason: 'identity-read-failed' })],
-      forwarded: [{ kind: 'event', scope: 'feature', payload: { type: 'bot_co_author_skipped', reason: 'identity-read-failed' } }],
+      forwarded: [
+        { kind: 'event', scope: 'feature', payload: { type: 'bot_co_author_skipped', reason: 'identity-read-failed' } },
+      ],
     });
     expect(commitBodies).not.toContain('Co-authored-by:');
   });
@@ -274,28 +316,38 @@ describe('executor child entrypoint', () => {
     await execFile('git', ['-C', root, 'config', 'user.email', 'operator@example.com']);
     await execFile('git', ['-C', root, 'commit', '--allow-empty', '-m', 'initial']);
     const port = new FakePort();
-    const done = runExecutorChild(port, withExecutorBrokerProxies(port, {
-      moduleDir: CHILD_MODULE_DIR,
-      createWorktree: async () => ({ path: root! }),
-      run: makeExecutorChildRun({
-        projectRoot: root,
-        githubBoundary: {
-          runner: vi.fn() as unknown as GhRunner,
-          readCredential: async () => ({ kind: 'unconfigured' }),
-          readToken: vi.fn(),
-        },
-        runFeature: async (input) => {
-          await prepareWorktree(root!, undefined, {
-            events: input.events,
-            dispatchStart: true,
-            dispatchStartTimeoutSeconds: 1,
-          });
-          await execFile('git', ['-C', root!, 'commit', '--allow-empty', '-m', 'agent commit']);
-          await execFile('git', ['-C', root!, 'commit', '--allow-empty', '-m', withDaemonCoAuthorTrailer('halt record')]);
-          return { slug: input.order.slug, status: 'done' };
-        },
+    const done = runExecutorChild(
+      port,
+      withExecutorBrokerProxies(port, {
+        moduleDir: CHILD_MODULE_DIR,
+        createWorktree: async () => ({ path: root! }),
+        run: makeExecutorChildRun({
+          projectRoot: root,
+          githubBoundary: {
+            runner: vi.fn() as unknown as GhRunner,
+            readCredential: async () => ({ kind: 'unconfigured' }),
+            readToken: vi.fn(),
+          },
+          runFeature: async (input) => {
+            await prepareWorktree(root!, undefined, {
+              events: input.events,
+              dispatchStart: true,
+              dispatchStartTimeoutSeconds: 1,
+            });
+            await execFile('git', ['-C', root!, 'commit', '--allow-empty', '-m', 'agent commit']);
+            await execFile('git', [
+              '-C',
+              root!,
+              'commit',
+              '--allow-empty',
+              '-m',
+              withDaemonCoAuthorTrailer('halt record'),
+            ]);
+            return { slug: input.order.slug, status: 'done' };
+          },
+        }),
       }),
-    }));
+    );
 
     port.dispatch({ kind: 'work-order', order });
     await done;
@@ -304,12 +356,15 @@ describe('executor child entrypoint', () => {
     const commitSubjects = (await execFile('git', ['-C', root, 'log', '-2', '--format=%s'])).stdout.trim().split('\n');
     const commitBodies = (await execFile('git', ['-C', root, 'log', '-2', '--format=%B'])).stdout;
     const events = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8'))
-      .trim().split('\n').map((line) => JSON.parse(line));
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
     const skips = events.filter((event) => event.type === 'bot_co_author_skipped');
-    const forwarded = port.sent.filter((message) => (
-      (message as { kind?: string; payload?: { type?: string } }).kind === 'event'
-      && (message as { payload?: { type?: string } }).payload?.type === 'bot_co_author_skipped'
-    ));
+    const forwarded = port.sent.filter(
+      (message) =>
+        (message as { kind?: string; payload?: { type?: string } }).kind === 'event' &&
+        (message as { payload?: { type?: string } }).payload?.type === 'bot_co_author_skipped',
+    );
     expect({ commitSubjects, skips, forwarded }).toEqual({
       commitSubjects: ['halt record', 'agent commit'],
       skips: [],
@@ -336,9 +391,15 @@ describe('executor child entrypoint', () => {
       moduleDir: CHILD_MODULE_DIR,
       createWorktree: async () => ({ path: root! }),
       run: async (input) => {
-        const status = await dispatchShippedRecord({
-          kind: 'write', slug: input.order.slug, pr: 'local', engineVersion: input.engineVersionId,
-        }, root!);
+        const status = await dispatchShippedRecord(
+          {
+            kind: 'write',
+            slug: input.order.slug,
+            pr: 'local',
+            engineVersion: input.engineVersionId,
+          },
+          root!,
+        );
         expect(status).toBe(0);
         return { slug: input.order.slug, status: 'done' };
       },
@@ -378,9 +439,14 @@ describe('executor child entrypoint', () => {
           },
           effectiveDaemonConcurrency: effectiveConcurrency,
         });
-        const result = await (conductor as unknown as {
-          runSelfBuildDispatch: (step: 'build', state: ConductState) => Promise<{ success: boolean; output?: string }>;
-        }).runSelfBuildDispatch('build', { feature_desc: 'feature' } as ConductState);
+        const result = await (
+          conductor as unknown as {
+            runSelfBuildDispatch: (
+              step: 'build',
+              state: ConductState,
+            ) => Promise<{ success: boolean; output?: string }>;
+          }
+        ).runSelfBuildDispatch('build', { feature_desc: 'feature' } as ConductState);
         return result.success
           ? { slug: 'feature', status: 'done' as const }
           : { slug: 'feature', status: 'error' as const, reason: result.output };
@@ -406,43 +472,61 @@ describe('executor child entrypoint', () => {
     root = await mkdtemp(join(tmpdir(), 'executor-child-'));
     const port = new FakePort();
     const calls: string[] = [];
-    const done = runExecutorChild(port, withExecutorBrokerProxies(port, {
-      moduleDir: CHILD_MODULE_DIR,
-      createWorktree: async (received, lifecycle) => {
-        calls.push(`create:${received.slug}`);
-        expect(lifecycle).toBeDefined();
-        const path = join(root!, '.worktrees', received.slug);
-        await import('node:fs/promises').then(({ mkdir }) => mkdir(path, { recursive: true }));
-        return { path };
-      },
-      run: async ({ order: received, rateLimitEpisode, providerAvailability, liveBoundaryCoordinator, worktreeLifecycle }) => {
-        calls.push(`run:${received.slug}`);
-        expect(rateLimitEpisode).toBeDefined();
-        expect(providerAvailability).toBeDefined();
-        expect(liveBoundaryCoordinator).toBeDefined();
-        expect(worktreeLifecycle).toBeDefined();
-        return { slug: received.slug, status: 'done' };
-      },
-      liveBoundaryEnabled: true,
-    }));
+    const done = runExecutorChild(
+      port,
+      withExecutorBrokerProxies(port, {
+        moduleDir: CHILD_MODULE_DIR,
+        createWorktree: async (received, lifecycle) => {
+          calls.push(`create:${received.slug}`);
+          expect(lifecycle).toBeDefined();
+          const path = join(root!, '.worktrees', received.slug);
+          await import('node:fs/promises').then(({ mkdir }) => mkdir(path, { recursive: true }));
+          return { path };
+        },
+        run: async ({
+          order: received,
+          rateLimitEpisode,
+          providerAvailability,
+          liveBoundaryCoordinator,
+          worktreeLifecycle,
+        }) => {
+          calls.push(`run:${received.slug}`);
+          expect(rateLimitEpisode).toBeDefined();
+          expect(providerAvailability).toBeDefined();
+          expect(liveBoundaryCoordinator).toBeDefined();
+          expect(worktreeLifecycle).toBeDefined();
+          return { slug: received.slug, status: 'done' };
+        },
+        liveBoundaryEnabled: true,
+      }),
+    );
 
-    expect(port.sent).toEqual([{ kind: 'hello', protocolVersion: EXECUTOR_PROTOCOL_VERSION, engineVersionId: VERSION }]);
+    expect(port.sent).toEqual([
+      { kind: 'hello', protocolVersion: EXECUTOR_PROTOCOL_VERSION, engineVersionId: VERSION },
+    ]);
     expect(calls).toEqual([]);
     port.dispatch({ kind: 'work-order', order });
     await done;
 
     expect(calls).toEqual(['create:feature', 'run:feature']);
-    await expect(readFile(join(root, '.worktrees', 'feature', '.pipeline', 'work-order.json'), 'utf8'))
-      .resolves.toBe(`${JSON.stringify(order)}\n`);
+    await expect(readFile(join(root, '.worktrees', 'feature', '.pipeline', 'work-order.json'), 'utf8')).resolves.toBe(
+      `${JSON.stringify(order)}\n`,
+    );
     const ledger = (await readFile(join(root, '.worktrees', 'feature', '.pipeline', 'events.jsonl'), 'utf8'))
-      .trim().split('\n').map((line) => JSON.parse(line));
-    expect(ledger).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        type: 'executor_started', slug: 'feature', engineVersionId: VERSION,
-        protocolVersion: EXECUTOR_PROTOCOL_VERSION,
-        supervisorEngineVersionId: order.supervisorEngineVersionId,
-      }),
-    ]));
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(ledger).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: 'executor_started',
+          slug: 'feature',
+          engineVersionId: VERSION,
+          protocolVersion: EXECUTOR_PROTOCOL_VERSION,
+          supervisorEngineVersionId: order.supervisorEngineVersionId,
+        }),
+      ]),
+    );
     expect(port.sent.filter((message) => (message as { kind?: string }).kind === 'outcome')).toEqual([
       { kind: 'outcome', outcome: { slug: 'feature', status: 'done' } },
     ]);
@@ -452,7 +536,9 @@ describe('executor child entrypoint', () => {
     root = await mkdtemp(join(tmpdir(), 'executor-child-'));
     const port = new FakePort();
     let started!: () => void;
-    const running = new Promise<void>((resolve) => { started = resolve; });
+    const running = new Promise<void>((resolve) => {
+      started = resolve;
+    });
     let observedAbort = false;
     let exitCode: number | undefined;
     const done = runExecutorChild(port, {
@@ -464,17 +550,24 @@ describe('executor child entrypoint', () => {
       },
       run: async ({ signal }) => {
         started();
-        await new Promise<void>((resolve) => signal.addEventListener('abort', () => {
-          observedAbort = true;
-          resolve();
-        }, { once: true }));
-        await import('node:fs/promises').then(({ writeFile }) => writeFile(
-          join(root!, '.worktrees', 'feature', '.pipeline', 'conduct-state.json'),
-          '{"preserved":true}\n',
-        ));
+        await new Promise<void>((resolve) =>
+          signal.addEventListener(
+            'abort',
+            () => {
+              observedAbort = true;
+              resolve();
+            },
+            { once: true },
+          ),
+        );
+        await import('node:fs/promises').then(({ writeFile }) =>
+          writeFile(join(root!, '.worktrees', 'feature', '.pipeline', 'conduct-state.json'), '{"preserved":true}\n'),
+        );
         return { slug: 'feature', status: 'parked', reason: String(signal.reason) };
       },
-      exit: (code) => { exitCode = code; },
+      exit: (code) => {
+        exitCode = code;
+      },
     });
 
     port.dispatch({ kind: 'work-order', order });
@@ -484,8 +577,9 @@ describe('executor child entrypoint', () => {
 
     expect(observedAbort).toBe(true);
     expect(exitCode).toBe(0);
-    await expect(readFile(join(root, '.worktrees', 'feature', '.pipeline', 'conduct-state.json'), 'utf8'))
-      .resolves.toBe('{"preserved":true}\n');
+    await expect(
+      readFile(join(root, '.worktrees', 'feature', '.pipeline', 'conduct-state.json'), 'utf8'),
+    ).resolves.toBe('{"preserved":true}\n');
     expect(port.sent.filter((message) => (message as { kind?: string }).kind === 'outcome')).toEqual([
       { kind: 'outcome', outcome: { slug: 'feature', status: 'parked', reason: 'supervisor shutdown' } },
     ]);
@@ -496,9 +590,13 @@ describe('executor child entrypoint', () => {
     root = await mkdtemp(join(tmpdir(), 'executor-child-yield-'));
     const port = new FakePort();
     let runStarted!: () => void;
-    const started = new Promise<void>((resolve) => { runStarted = resolve; });
+    const started = new Promise<void>((resolve) => {
+      runStarted = resolve;
+    });
     let finishRun!: () => void;
-    const finish = new Promise<void>((resolve) => { finishRun = resolve; });
+    const finish = new Promise<void>((resolve) => {
+      finishRun = resolve;
+    });
     let preemptionRequested: (() => boolean) | undefined;
     let signal: AbortSignal | undefined;
     const done = runExecutorChild(port, {
@@ -528,9 +626,13 @@ describe('executor child entrypoint', () => {
     root = await mkdtemp(join(tmpdir(), 'executor-child-unknown-yield-'));
     const port = new FakePort();
     let runStarted!: () => void;
-    const started = new Promise<void>((resolve) => { runStarted = resolve; });
+    const started = new Promise<void>((resolve) => {
+      runStarted = resolve;
+    });
     let finishRun!: () => void;
-    const finish = new Promise<void>((resolve) => { finishRun = resolve; });
+    const finish = new Promise<void>((resolve) => {
+      finishRun = resolve;
+    });
     let signal: AbortSignal | undefined;
     const outcome = { slug: order.slug, status: 'halted' as const, reason: 'natural halt' };
     const done = runExecutorChild(port, {
@@ -569,11 +671,17 @@ describe('executor child entrypoint', () => {
       if ((value as { kind?: string }).kind !== 'outcome') return send(value, callback);
       port.sent.push(value);
       lifecycle.push('outcome-queued');
-      flushOutcome = () => { lifecycle.push('outcome-flushed'); callback?.(null); };
+      flushOutcome = () => {
+        lifecycle.push('outcome-flushed');
+        callback?.(null);
+      };
       return true;
     };
     const disconnect = port.disconnect.bind(port);
-    port.disconnect = () => { lifecycle.push('disconnect'); disconnect(); };
+    port.disconnect = () => {
+      lifecycle.push('disconnect');
+      disconnect();
+    };
     const done = runExecutorChild(port, {
       moduleDir: CHILD_MODULE_DIR,
       createWorktree: async () => {
@@ -582,7 +690,9 @@ describe('executor child entrypoint', () => {
         return { path };
       },
       run: async () => ({ slug: 'feature', status: 'done', prUrl: 'https://github.com/example/repo/pull/1' }),
-      exit: () => { lifecycle.push('exit'); },
+      exit: () => {
+        lifecycle.push('exit');
+      },
     });
 
     port.dispatch({ kind: 'work-order', order });
@@ -601,7 +711,9 @@ describe('executor child entrypoint', () => {
     root = await mkdtemp(join(tmpdir(), 'executor-child-'));
     const port = new FakePort();
     let started!: () => void;
-    const running = new Promise<void>((resolve) => { started = resolve; });
+    const running = new Promise<void>((resolve) => {
+      started = resolve;
+    });
     let exitCode: number | undefined;
     const done = runExecutorChild(port, {
       moduleDir: CHILD_MODULE_DIR,
@@ -615,7 +727,9 @@ describe('executor child entrypoint', () => {
         await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
         return { slug: 'feature', status: 'parked', reason: String(signal.reason) };
       },
-      exit: (code) => { exitCode = code; },
+      exit: (code) => {
+        exitCode = code;
+      },
     });
 
     port.dispatch({ kind: 'work-order', order });
@@ -635,16 +749,21 @@ describe('executor child entrypoint', () => {
     let exitCode: number | undefined;
     const done = runExecutorChild(port, {
       moduleDir: CHILD_MODULE_DIR,
-      createWorktree: async () => { throw new Error('must not create worktree'); },
+      createWorktree: async () => {
+        throw new Error('must not create worktree');
+      },
       run: async () => ({ slug: 'feature', status: 'done' }),
-      exit: (code) => { exitCode = code; },
+      exit: (code) => {
+        exitCode = code;
+      },
     });
 
     port.dispatch({ kind: 'stop', reason: 'supervisor shutdown' });
     await done;
 
     expect(exitCode).toBe(0);
-    await expect(import('node:fs/promises').then(({ access }) => access(join(root!, '.worktrees', 'feature'))))
-      .rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(
+      import('node:fs/promises').then(({ access }) => access(join(root!, '.worktrees', 'feature'))),
+    ).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

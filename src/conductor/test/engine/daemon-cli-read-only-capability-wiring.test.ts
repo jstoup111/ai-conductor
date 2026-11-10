@@ -55,24 +55,42 @@ async function startWithCustomRubric(
   const projectRoot = await mkdtemp(join(testTmpdir(), 'daemon-read-only-capability-'));
   roots.push(projectRoot);
   await mkdir(join(projectRoot, '.ai-conductor'), { recursive: true });
-  await writeFile(join(projectRoot, '.ai-conductor', 'config.yml'), [
-    'auto_restart_on_stale_engine: false', 'build_review:', '  custom_rubrics:', '    read_only:',
-    '      enabled: true', '      skill: security-review', '      question: Review the change', `      llm_provider: ${provider}`,
-  ].join('\n'));
+  await writeFile(
+    join(projectRoot, '.ai-conductor', 'config.yml'),
+    [
+      'auto_restart_on_stale_engine: false',
+      'build_review:',
+      '  custom_rubrics:',
+      '    read_only:',
+      '      enabled: true',
+      '      skill: security-review',
+      '      question: Review the change',
+      `      llm_provider: ${provider}`,
+    ].join('\n'),
+  );
 
   const order: string[] = [];
   const events: unknown[] = [];
   vi.spyOn(daemonLock, 'holdLock').mockResolvedValue({
-    pid: process.pid, uuid: 'read-only-capability', owned: true, release: async () => {}, releaseSync: () => {},
+    pid: process.pid,
+    uuid: 'read-only-capability',
+    owned: true,
+    release: async () => {},
+    releaseSync: () => {},
   });
   if (renderEvents) {
     const emit = ConductorEventEmitter.prototype.emit;
-    vi.spyOn(ConductorEventEmitter.prototype, 'emit').mockImplementation(async function (this: ConductorEventEmitter, event) {
+    vi.spyOn(ConductorEventEmitter.prototype, 'emit').mockImplementation(async function (
+      this: ConductorEventEmitter,
+      event,
+    ) {
       events.push(event);
       await emit.call(this, event);
     });
   } else {
-    vi.spyOn(ConductorEventEmitter.prototype, 'emit').mockImplementation(async (event) => { events.push(event); });
+    vi.spyOn(ConductorEventEmitter.prototype, 'emit').mockImplementation(async (event) => {
+      events.push(event);
+    });
   }
   vi.spyOn(daemonCore, 'runDaemon').mockImplementation(async () => {
     order.push('dispatch');
@@ -84,11 +102,15 @@ async function startWithCustomRubric(
   });
 
   await runDaemonMode({
-    projectRoot, concurrency: 1, baseBranch: 'main', ensureFresh: async () => {},
+    projectRoot,
+    concurrency: 1,
+    baseBranch: 'main',
+    ensureFresh: async () => {},
     probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
     providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
     probeReadOnlyReviewCapability: probe,
-    runHaltClassMigration: async () => join(projectRoot, '.worktrees'), watch: false,
+    runHaltClassMigration: async () => join(projectRoot, '.worktrees'),
+    watch: false,
     executorFork: createInMemoryExecutorFork({ projectRoot }),
   });
   return { events, order, probe };
@@ -97,26 +119,43 @@ async function startWithCustomRubric(
 describe('Task 10 — daemon read-only review capability wiring', () => {
   it.each(['codex', 'claude'] as const)('emits enabled %s capability before dispatch', async (provider) => {
     const { events, order, probe } = await startWithCustomRubric(provider, {
-      provider, platform: process.platform, status: 'available',
+      provider,
+      platform: process.platform,
+      status: 'available',
     });
 
     expect(probe).toHaveBeenCalledTimes(1);
     expect(events).toContainEqual({
-      type: 'build_review_read_only_capability', provider, platform: process.platform, status: 'available',
+      type: 'build_review_read_only_capability',
+      provider,
+      platform: process.platform,
+      status: 'available',
     });
     expect(order).toEqual(['probe', 'dispatch']);
   });
 
   it('records unavailable Codex with its platform and reason, then still dispatches', async () => {
     const logs: string[] = [];
-    vi.spyOn(console, 'log').mockImplementation((line: string) => { logs.push(line); });
-    const { events, order } = await startWithCustomRubric('codex', {
-      provider: 'codex', platform: process.platform, status: 'unavailable', reason: 'sandbox helper could not start',
-    }, true);
+    vi.spyOn(console, 'log').mockImplementation((line: string) => {
+      logs.push(line);
+    });
+    const { events, order } = await startWithCustomRubric(
+      'codex',
+      {
+        provider: 'codex',
+        platform: process.platform,
+        status: 'unavailable',
+        reason: 'sandbox helper could not start',
+      },
+      true,
+    );
 
     expect(events).toContainEqual({
       type: 'build_review_read_only_capability',
-      provider: 'codex', platform: process.platform, status: 'unavailable', reason: 'sandbox helper could not start',
+      provider: 'codex',
+      platform: process.platform,
+      status: 'unavailable',
+      reason: 'sandbox helper could not start',
     });
     expect(order).toEqual(['probe', 'dispatch']);
     expect(logs.join('\n')).toContain('build_review read-only capability unavailable: codex on');
@@ -128,18 +167,28 @@ describe('Task 10 — daemon read-only review capability wiring', () => {
     roots.push(projectRoot);
     const events: unknown[] = [];
     vi.spyOn(daemonLock, 'holdLock').mockResolvedValue({
-      pid: process.pid, uuid: 'no-read-only-capability', owned: true, release: async () => {}, releaseSync: () => {},
+      pid: process.pid,
+      uuid: 'no-read-only-capability',
+      owned: true,
+      release: async () => {},
+      releaseSync: () => {},
     });
-    vi.spyOn(ConductorEventEmitter.prototype, 'emit').mockImplementation(async (event) => { events.push(event); });
+    vi.spyOn(ConductorEventEmitter.prototype, 'emit').mockImplementation(async (event) => {
+      events.push(event);
+    });
     vi.spyOn(daemonCore, 'runDaemon').mockResolvedValue({ processed: [], stoppedReason: 'backlog_drained' });
     const probe = vi.fn();
 
     await runDaemonMode({
-      projectRoot, concurrency: 1, baseBranch: 'main', ensureFresh: async () => {},
+      projectRoot,
+      concurrency: 1,
+      baseBranch: 'main',
+      ensureFresh: async () => {},
       probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
       providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
       probeReadOnlyReviewCapability: probe,
-      runHaltClassMigration: async () => join(projectRoot, '.worktrees'), watch: false,
+      runHaltClassMigration: async () => join(projectRoot, '.worktrees'),
+      watch: false,
       executorFork: createInMemoryExecutorFork({ projectRoot }),
     });
 
@@ -151,10 +200,20 @@ describe('Task 10 — daemon read-only review capability wiring', () => {
     const projectRoot = await mkdtemp(join(testTmpdir(), 'ordinary-read-only-capability-'));
     roots.push(projectRoot);
     await mkdir(join(projectRoot, '.ai-conductor'), { recursive: true });
-    await writeFile(join(projectRoot, '.ai-conductor', 'config.yml'), [
-      'auto_restart_on_stale_engine: false', 'llm_provider: codex', 'build_review:', '  custom_rubrics:', '    read_only:',
-      '      enabled: true', '      skill: security-review', '      question: Review the change', '      llm_provider: codex',
-    ].join('\n'));
+    await writeFile(
+      join(projectRoot, '.ai-conductor', 'config.yml'),
+      [
+        'auto_restart_on_stale_engine: false',
+        'llm_provider: codex',
+        'build_review:',
+        '  custom_rubrics:',
+        '    read_only:',
+        '      enabled: true',
+        '      skill: security-review',
+        '      question: Review the change',
+        '      llm_provider: codex',
+      ].join('\n'),
+    );
     await mkdir(join(projectRoot, '.docs', 'stories'), { recursive: true });
     await mkdir(join(projectRoot, '.docs', 'plans'), { recursive: true });
     await writeFile(join(projectRoot, '.docs', 'stories', 'ordinary-read-only-review.md'), '# Story\n');
@@ -164,25 +223,34 @@ describe('Task 10 — daemon read-only review capability wiring', () => {
     await commitAll(projectRoot, 'fixture');
     const baseSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: projectRoot })).stdout.trim();
     const capability: ReadOnlyReviewCapability = {
-      provider: 'codex', platform: process.platform, status: 'available',
+      provider: 'codex',
+      platform: process.platform,
+      status: 'available',
     };
     let observed: Readonly<Record<string, ReadOnlyReviewCapability>> | undefined;
     vi.spyOn(Conductor.prototype, 'run').mockImplementation(async function (this: Conductor) {
-      observed = (this as unknown as {
-        readOnlyReviewCapabilities?: Readonly<Record<string, ReadOnlyReviewCapability>>;
-      }).readOnlyReviewCapabilities;
+      observed = (
+        this as unknown as {
+          readOnlyReviewCapabilities?: Readonly<Record<string, ReadOnlyReviewCapability>>;
+        }
+      ).readOnlyReviewCapabilities;
     });
     seams.prepareWorktree.mockResolvedValue(undefined);
     const store = await useTempEngineStore();
     try {
       await runDaemonMode({
-        projectRoot, concurrency: 1, maxItems: 1, baseBranch: 'main', engineRoot: store.engineRoot,
+        projectRoot,
+        concurrency: 1,
+        maxItems: 1,
+        baseBranch: 'main',
+        engineRoot: store.engineRoot,
         ensureFresh: async () => {},
         probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
         providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
         probeReadOnlyReviewCapability: async () => capability,
         workSource: { discover: async () => [{ slug: 'ordinary-read-only-review', baseSha }] },
-        runHaltClassMigration: async () => join(projectRoot, '.worktrees'), watch: false,
+        runHaltClassMigration: async () => join(projectRoot, '.worktrees'),
+        watch: false,
         executorFork: createInMemoryExecutorFork({ projectRoot }),
       });
     } finally {

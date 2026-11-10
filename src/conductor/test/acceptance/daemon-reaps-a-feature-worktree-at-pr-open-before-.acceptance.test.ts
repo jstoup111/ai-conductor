@@ -26,20 +26,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import {
-  makeRunFeature,
-  type FeatureRunnerDeps,
-} from '../../src/engine/daemon-runner.js';
-import {
-  enrollWatch,
-  readWatch,
-  sweepMergeableLabels,
-  type SweepOpts,
-} from '../../src/engine/mergeable-sweep.js';
-import {
-  renderDashboard,
-  scanInheritedState,
-} from '../../src/engine/daemon-dashboard.js';
+import { makeRunFeature, type FeatureRunnerDeps } from '../../src/engine/daemon-runner.js';
+import { enrollWatch, readWatch, sweepMergeableLabels, type SweepOpts } from '../../src/engine/mergeable-sweep.js';
+import { renderDashboard, scanInheritedState } from '../../src/engine/daemon-dashboard.js';
 import {
   detectDaemonParkCommand,
   dispatchDaemonPark,
@@ -54,14 +43,8 @@ const SLUG = 'deferred-reap';
 type RecordPresence = 'present' | 'absent' | 'indeterminate';
 
 type ReapAwareSweepOpts = SweepOpts & {
-  shippedRecordProbe?: (
-    repoCwd: string,
-    slug: string,
-  ) => Promise<RecordPresence>;
-  teardownWorktree?: (
-    worktree: { path: string; branch: string },
-    keep: boolean,
-  ) => Promise<void>;
+  shippedRecordProbe?: (repoCwd: string, slug: string) => Promise<RecordPresence>;
+  teardownWorktree?: (worktree: { path: string; branch: string }, keep: boolean) => Promise<void>;
 };
 
 const roots: string[] = [];
@@ -104,15 +87,18 @@ async function seedWorktree(projectRoot: string, slug: string): Promise<string> 
   const pipeline = join(worktree, '.pipeline');
   await mkdir(join(pipeline, 'gates'), { recursive: true });
   const files: Array<[string, string]> = [
-    ['task-status.json', JSON.stringify({
-      tasks: [
-        { id: 1, status: 'completed' },
-        { id: 2, status: 'completed' },
-        { id: 3, status: 'completed' },
-        { id: 4, status: 'completed' },
-        { id: 5, status: 'pending' },
-      ],
-    })],
+    [
+      'task-status.json',
+      JSON.stringify({
+        tasks: [
+          { id: 1, status: 'completed' },
+          { id: 2, status: 'completed' },
+          { id: 3, status: 'completed' },
+          { id: 4, status: 'completed' },
+          { id: 5, status: 'pending' },
+        ],
+      }),
+    ],
     ['HALT', 'seeded halt evidence\n'],
     ['HALT.class', 'manual\n'],
     ['QUARANTINE', 'quarantine-ref\n'],
@@ -132,16 +118,12 @@ async function seedWorktree(projectRoot: string, slug: string): Promise<string> 
   return worktree;
 }
 
-async function runSweep(
-  opts: ReapAwareSweepOpts,
-): Promise<void> {
+async function runSweep(opts: ReapAwareSweepOpts): Promise<void> {
   await sweepMergeableLabels(opts);
 }
 
 afterEach(async () => {
-  await Promise.all(
-    roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
-  );
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 describe('deferred feature-worktree reap — production lifecycle entry points', () => {
@@ -207,10 +189,7 @@ describe('deferred feature-worktree reap — production lifecycle entry points',
       'protected-artifact-seal.json',
       'events.jsonl',
     ]) {
-      expect(
-        await exists(join(worktree, '.pipeline', relative)),
-        `${relative} should survive PR-open`,
-      ).toBe(true);
+      expect(await exists(join(worktree, '.pipeline', relative)), `${relative} should survive PR-open`).toBe(true);
     }
     expect(await readWatch(projectRoot)).toEqual([
       { prUrl: PR_URL, slug: SLUG, repoCwd: projectRoot, resolveAttempts: 0, ciFixAttempts: 0 },
@@ -258,23 +237,15 @@ describe('deferred feature-worktree reap — production lifecycle entry points',
         repoCwd: projectRoot,
       });
     }
-    const states = Object.fromEntries(urls.map((url) => [url, 'MERGED'])) as Record<
-      string,
-      'MERGED'
-    >;
+    const states = Object.fromEntries(urls.map((url) => [url, 'MERGED'])) as Record<string, 'MERGED'>;
     const logs: string[] = [];
 
     await runSweep({
       projectRoot,
       runGh: ghForStates(states),
       log: (line) => logs.push(line),
-      shippedRecordProbe: async (_repoCwd, slug) => (
-        slug === 'record-absent'
-          ? 'absent'
-          : slug === 'fetch-indeterminate'
-            ? 'indeterminate'
-            : 'present'
-      ),
+      shippedRecordProbe: async (_repoCwd, slug) =>
+        slug === 'record-absent' ? 'absent' : slug === 'fetch-indeterminate' ? 'indeterminate' : 'present',
       teardownWorktree: async (featureWorktree) => {
         await rm(featureWorktree.path, { recursive: true, force: true });
       },
@@ -308,11 +279,10 @@ describe('deferred feature-worktree reap — production lifecycle entry points',
     });
 
     expect(await readWatch(projectRoot)).toEqual([]);
-    const taskStatus = JSON.parse(
-      await readFile(join(worktree, '.pipeline', 'task-status.json'), 'utf8'),
-    ) as { tasks: Array<{ id: number; status: string }> };
-    expect(taskStatus.tasks.filter((task) => task.status === 'completed').map((task) => task.id))
-      .toEqual([1, 2, 3, 4]);
+    const taskStatus = JSON.parse(await readFile(join(worktree, '.pipeline', 'task-status.json'), 'utf8')) as {
+      tasks: Array<{ id: number; status: string }>;
+    };
+    expect(taskStatus.tasks.filter((task) => task.status === 'completed').map((task) => task.id)).toEqual([1, 2, 3, 4]);
     expect(logs.join('\n')).toContain('reason: pr-closed-unmerged');
 
     const state = await scanInheritedState({
@@ -337,11 +307,7 @@ describe('deferred feature-worktree reap — production lifecycle entry points',
     await execFile('git', ['commit', '-q', '-m', 'fixture'], { cwd: projectRoot });
     await mkdir(join(projectRoot, '.worktrees'), { recursive: true });
     const worktree = join(projectRoot, '.worktrees', SLUG);
-    await execFile(
-      'git',
-      ['worktree', 'add', '-q', '-b', `feat/${SLUG}`, worktree, 'main'],
-      { cwd: projectRoot },
-    );
+    await execFile('git', ['worktree', 'add', '-q', '-b', `feat/${SLUG}`, worktree, 'main'], { cwd: projectRoot });
     await mkdir(join(worktree, '.pipeline'), { recursive: true });
     await writeFile(join(worktree, '.pipeline', 'task-status.json'), '{"tasks":[]}\n', 'utf8');
     const nestedCwd = join(projectRoot, 'operator', 'nested');
@@ -352,10 +318,10 @@ describe('deferred feature-worktree reap — production lifecycle entry points',
     expect(detected).toEqual({ kind: 'reclaim-worktree', slug: SLUG });
 
     const output: string[] = [];
-    const code = await dispatchDaemonPark(
-      detected as DaemonParkDispatch,
-      { cwd: nestedCwd, out: (line) => output.push(line) },
-    );
+    const code = await dispatchDaemonPark(detected as DaemonParkDispatch, {
+      cwd: nestedCwd,
+      out: (line) => output.push(line),
+    });
 
     expect(code).toBe(0);
     expect(output.join('\n')).toContain(worktree);

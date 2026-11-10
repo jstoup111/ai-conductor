@@ -19,10 +19,7 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { renderDaemonEvent } from '../../src/daemon-cli.js';
-import {
-  makeRunFeature,
-  type FeatureRunnerDeps,
-} from '../../src/engine/daemon-runner.js';
+import { makeRunFeature, type FeatureRunnerDeps } from '../../src/engine/daemon-runner.js';
 import { startFeatureEventPersistence } from '../../src/engine/event-persister.js';
 import type { ProviderExecutionContext } from '../../src/engine/provider-execution.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
@@ -86,19 +83,24 @@ describe('acceptance: setup fix-session repairs converge (#1346)', () => {
       let prepareCalls = 0;
       let fixSessionDispatches = 0;
       const runSetupTriage = vi.fn<NonNullable<FeatureRunnerDeps['runSetupTriage']>>(
-        async (error, worktree, item, _providerExecution, _log, events) => runSetupFailureTriage(
-          makeGitRunner(worktree.path),
-          worktree.path,
-          item.slug,
-          error,
-          async () => { prepareCalls += 1; },
-          async () => { fixSessionDispatches += 1; },
-          { log: () => {} },
-          events,
-        ),
+        async (error, worktree, item, _providerExecution, _log, events) =>
+          runSetupFailureTriage(
+            makeGitRunner(worktree.path),
+            worktree.path,
+            item.slug,
+            error,
+            async () => {
+              prepareCalls += 1;
+            },
+            async () => {
+              fixSessionDispatches += 1;
+            },
+            { log: () => {} },
+            events,
+          ),
       );
       const deps: FeatureRunnerDeps = {
-      dispatchAdmission: 'acquire',
+        dispatchAdmission: 'acquire',
         createWorktree: async () => ({ path: root, branch: `feat/${SLUG}` }),
         beginFeatureRun: async () => ({
           events: persistence.events,
@@ -113,7 +115,9 @@ describe('acceptance: setup fix-session repairs converge (#1346)', () => {
           }
         },
         runSetupTriage,
-        runConductor: async () => { conductorCalls += 1; },
+        runConductor: async () => {
+          conductorCalls += 1;
+        },
         readOutcome: async () => ({ done: false, halted: false }),
         teardownWorktree: async () => {},
         markProcessed: async () => {},
@@ -131,7 +135,10 @@ describe('acceptance: setup fix-session repairs converge (#1346)', () => {
         .map((line) => JSON.parse(line) as { type: string })
         .filter((event) => event.type === 'setup_repair');
       expect(setupRepairs, scenario).toHaveLength(0);
-      expect(rendered.filter((line) => line.includes('setup repair')), scenario).toHaveLength(0);
+      expect(
+        rendered.filter((line) => line.includes('setup repair')),
+        scenario,
+      ).toHaveLength(0);
       expect(conductorCalls, scenario).toBe(1);
       expect(prepareCalls, scenario).toBe(scenario === 'ordinary setup' ? 1 : 2);
       expect(fixSessionDispatches, scenario).toBe(0);
@@ -162,20 +169,21 @@ describe('acceptance: setup fix-session repairs converge (#1346)', () => {
       _providerExecution,
       _log,
       events,
-    ) => (fixSession as unknown as FutureFixSession)(
-      makeGitRunner(worktree.path),
-      worktree.path,
-      item.slug,
-      async () => {
-        fixCalls += 1;
-        await writeFile(join(root, 'tracked.txt'), 'after\n', 'utf8');
-        await writeFile(join(root, 'untracked.txt'), 'new\n', 'utf8');
-      },
-      async () => {
-        forcedPrepareCalls += 1;
-      },
-      events,
-    );
+    ) =>
+      (fixSession as unknown as FutureFixSession)(
+        makeGitRunner(worktree.path),
+        worktree.path,
+        item.slug,
+        async () => {
+          fixCalls += 1;
+          await writeFile(join(root, 'tracked.txt'), 'after\n', 'utf8');
+          await writeFile(join(root, 'untracked.txt'), 'new\n', 'utf8');
+        },
+        async () => {
+          forcedPrepareCalls += 1;
+        },
+        events,
+      );
 
     const deps: FeatureRunnerDeps = {
       dispatchAdmission: 'acquire',
@@ -216,9 +224,7 @@ describe('acceptance: setup fix-session repairs converge (#1346)', () => {
       .split('\n')
       .map((line) => JSON.parse(line) as { type: string; disposition?: string })
       .filter((event) => event.type === 'setup_repair');
-    expect(persisted).toEqual([
-      expect.objectContaining({ type: 'setup_repair', disposition: 'engine-committed' }),
-    ]);
+    expect(persisted).toEqual([expect.objectContaining({ type: 'setup_repair', disposition: 'engine-committed' })]);
     expect(rendered.filter((line) => line.includes('engine-committed'))).toHaveLength(1);
   });
 
@@ -300,23 +306,24 @@ describe('acceptance: setup fix-session repairs converge (#1346)', () => {
     await git('worktree', 'add', '-q', occupiedWorktree, quarantineRef);
     try {
       const deps: FeatureRunnerDeps = {
-      dispatchAdmission: 'acquire',
+        dispatchAdmission: 'acquire',
         createWorktree: async () => ({ path: root, branch: `feat/${SLUG}` }),
         prepareWorktree: async () => {
           throw new SetupFailureError('setup failed', 'fixture compile failure');
         },
-        runSetupTriage: async (_error, worktree, item, _providerExecution, _log, events) => fixSession(
-          makeGitRunner(worktree.path),
-          worktree.path,
-          item.slug,
-          async () => {
-            await writeFile(join(root, 'rejected-repair.txt'), 'still present\n', 'utf8');
-          },
-          async () => {
-            throw new Error('forced setup still fails');
-          },
-          events,
-        ),
+        runSetupTriage: async (_error, worktree, item, _providerExecution, _log, events) =>
+          fixSession(
+            makeGitRunner(worktree.path),
+            worktree.path,
+            item.slug,
+            async () => {
+              await writeFile(join(root, 'rejected-repair.txt'), 'still present\n', 'utf8');
+            },
+            async () => {
+              throw new Error('forced setup still fails');
+            },
+            events,
+          ),
         runConductor: async () => {
           throw new Error('must remain parked');
         },

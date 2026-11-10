@@ -10,14 +10,7 @@
 
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import {
-  chmod,
-  mkdir,
-  mkdtemp,
-  readFile,
-  rm,
-  writeFile,
-} from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -30,11 +23,7 @@ import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import { fixSession, runTriage } from '../../src/engine/setup-triage.js';
-import {
-  prepareWorktree,
-  SETUP_SCRIPT,
-  SetupFailureError,
-} from '../../src/engine/worktree-prepare.js';
+import { prepareWorktree, SETUP_SCRIPT, SetupFailureError } from '../../src/engine/worktree-prepare.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
 import type { ConductorEvent } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -106,11 +95,7 @@ exit 0
     });
   }
 
-  function prepareOptions(
-    baseSha: string,
-    events?: ConductorEventEmitter,
-    force = false,
-  ) {
+  function prepareOptions(baseSha: string, events?: ConductorEventEmitter, force = false) {
     // `baseSha`, `events`, and `force` are the accepted plan's forward-declared
     // prepare options. Keeping `verbose` makes this object assignable to the
     // pre-implementation signature while the acceptance spec is RED.
@@ -167,11 +152,7 @@ exit 0
       // third prepare argument so this assertion fails if runner-side event
       // propagation is removed.
       prepareWorktree: async (featureWorktree, _log, featureEvents) => {
-        await prepareWorktree(
-          featureWorktree.path,
-          undefined,
-          prepareOptions(baseSha, featureEvents),
-        );
+        await prepareWorktree(featureWorktree.path, undefined, prepareOptions(baseSha, featureEvents));
       },
       runConductor: async () => {
         conductorCalls += 1;
@@ -245,9 +226,7 @@ exit 0
         code: 'ENOENT',
       });
       expect(await persistedEvents()).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ type: 'project_setup', ran: true, reason: 'forced' }),
-        ]),
+        expect.arrayContaining([expect.objectContaining({ type: 'project_setup', ran: true, reason: 'forced' })]),
       );
     } finally {
       persister.stop();
@@ -288,9 +267,7 @@ exit 0
       expect(marker.preparedAtCommit).not.toBe(marker.baseSha);
       expect(marker.preparedAtCommit).not.toBe(staleMarker.preparedAtCommit);
       expect(await persistedEvents()).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ type: 'project_setup', ran: true, reason: 'forced' }),
-        ]),
+        expect.arrayContaining([expect.objectContaining({ type: 'project_setup', ran: true, reason: 'forced' })]),
       );
     } finally {
       persister.stop();
@@ -322,9 +299,7 @@ exit 0
       expect(outcome.outputTail).toContain('SETUP_MUST_RUN_DURING_TRIAGE');
       expect(await invocationCount()).toBe(2);
       expect(await persistedEvents()).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ type: 'project_setup', ran: true, reason: 'forced' }),
-        ]),
+        expect.arrayContaining([expect.objectContaining({ type: 'project_setup', ran: true, reason: 'forced' })]),
       );
     } finally {
       persister.stop();

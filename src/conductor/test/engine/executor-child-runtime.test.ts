@@ -33,7 +33,9 @@ function recordingBus(): { bus: ConductorEventEmitter; seen: ConductorEvent[] } 
   const bus = new ConductorEventEmitter();
   const seen: ConductorEvent[] = [];
   for (const type of Object.keys(EVENT_SINKS) as Array<ConductorEvent['type']>) {
-    bus.on(type, (event) => { seen.push(event); });
+    bus.on(type, (event) => {
+      seen.push(event);
+    });
   }
   return { bus, seen };
 }
@@ -90,31 +92,42 @@ describe('executor child runtime lifecycle composition', () => {
   it('uses the supervisor base branch when present and preserves the origin-default fallback for old orders', async () => {
     const originFallback = vi.fn(async () => ({ exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' }));
 
-    await expect(resolveExecutorChildBaseBranch({ ...order, baseBranch: 'trunk' }, originFallback)).resolves.toBe('trunk');
+    await expect(resolveExecutorChildBaseBranch({ ...order, baseBranch: 'trunk' }, originFallback)).resolves.toBe(
+      'trunk',
+    );
     expect(originFallback).not.toHaveBeenCalled();
     await expect(resolveExecutorChildBaseBranch(order, originFallback)).resolves.toBe('main');
     expect(originFallback).toHaveBeenCalledWith(['symbolic-ref', 'refs/remotes/origin/HEAD']);
   });
 
   it('seeds the order tier and track into conduct-state before the conductor runs', async () => {
-    const testRoot = await import('node:fs/promises').then(({ mkdtemp }) => mkdtemp(join(tmpdir(), 'executor-runtime-')));
+    const testRoot = await import('node:fs/promises').then(({ mkdtemp }) =>
+      mkdtemp(join(tmpdir(), 'executor-runtime-')),
+    );
     root = testRoot;
     const worktree = { path: join(testRoot, '.worktrees', order.slug), branch: 'feature/branch' };
     await mkdir(join(worktree.path, '.pipeline'), { recursive: true });
     await writeFile(join(worktree.path, '.pipeline', 'session-created'), '1');
     let seenAtRun: Record<string, unknown> | undefined;
-    const deps = lifecycle(worktree, { done: false, halted: true, reason: 'stop' }, {
-      runConductor: vi.fn(async () => {
-        seenAtRun = JSON.parse(await readFile(join(worktree.path, '.pipeline', 'conduct-state.json'), 'utf8'));
-      }),
-    });
-
-    await makeExecutorChildFeatureRunner({
-      order: { ...order, tier: 'S', track: 'technical' },
+    const deps = lifecycle(
       worktree,
-      events: new ConductorEventEmitter(),
-      providerExecution,
-    }, deps)();
+      { done: false, halted: true, reason: 'stop' },
+      {
+        runConductor: vi.fn(async () => {
+          seenAtRun = JSON.parse(await readFile(join(worktree.path, '.pipeline', 'conduct-state.json'), 'utf8'));
+        }),
+      },
+    );
+
+    await makeExecutorChildFeatureRunner(
+      {
+        order: { ...order, tier: 'S', track: 'technical' },
+        worktree,
+        events: new ConductorEventEmitter(),
+        providerExecution,
+      },
+      deps,
+    )();
 
     expect(deps.runConductor).toHaveBeenCalledTimes(1);
     expect(seenAtRun).toMatchObject({
@@ -129,21 +142,32 @@ describe('executor child runtime lifecycle composition', () => {
   });
 
   it('returns setup-triage parking as a deferred autoPark effect and tears down the kept worktree', async () => {
-    const testRoot = await import('node:fs/promises').then(({ mkdtemp }) => mkdtemp(join(tmpdir(), 'executor-runtime-')));
+    const testRoot = await import('node:fs/promises').then(({ mkdtemp }) =>
+      mkdtemp(join(tmpdir(), 'executor-runtime-')),
+    );
     root = testRoot;
     const worktree = { path: join(testRoot, '.worktrees', order.slug), branch: 'feature/branch' };
     await mkdir(worktree.path, { recursive: true });
-    const deps = lifecycle(worktree, { done: false, halted: false }, {
-      prepareWorktree: vi.fn(async () => { throw new SetupFailureError('setup failed', 'setup tail'); }),
-      runSetupTriage: vi.fn(async () => ({ kind: 'park' as const, outputTail: 'setup tail' })),
-    });
-
-    const outcome = await makeExecutorChildFeatureRunner({
-      order,
+    const deps = lifecycle(
       worktree,
-      events: new ConductorEventEmitter(),
-      providerExecution,
-    }, deps)();
+      { done: false, halted: false },
+      {
+        prepareWorktree: vi.fn(async () => {
+          throw new SetupFailureError('setup failed', 'setup tail');
+        }),
+        runSetupTriage: vi.fn(async () => ({ kind: 'park' as const, outputTail: 'setup tail' })),
+      },
+    );
+
+    const outcome = await makeExecutorChildFeatureRunner(
+      {
+        order,
+        worktree,
+        events: new ConductorEventEmitter(),
+        providerExecution,
+      },
+      deps,
+    )();
 
     expect(outcome).toMatchObject({
       slug: order.slug,
@@ -154,7 +178,9 @@ describe('executor child runtime lifecycle composition', () => {
   });
 
   it('returns halt-cleanup and engineer signalling declaratively after a verified ship', async () => {
-    const testRoot = await import('node:fs/promises').then(({ mkdtemp }) => mkdtemp(join(tmpdir(), 'executor-runtime-')));
+    const testRoot = await import('node:fs/promises').then(({ mkdtemp }) =>
+      mkdtemp(join(tmpdir(), 'executor-runtime-')),
+    );
     root = testRoot;
     const worktree = { path: join(testRoot, '.worktrees', order.slug), branch: 'feature/branch' };
     await mkdir(join(worktree.path, '.pipeline'), { recursive: true });
@@ -166,12 +192,15 @@ describe('executor child runtime lifecycle composition', () => {
       finishChoice: 'pr',
     });
 
-    const outcome = await makeExecutorChildFeatureRunner({
-      order,
-      worktree,
-      events: new ConductorEventEmitter(),
-      providerExecution,
-    }, deps)();
+    const outcome = await makeExecutorChildFeatureRunner(
+      {
+        order,
+        worktree,
+        events: new ConductorEventEmitter(),
+        providerExecution,
+      },
+      deps,
+    )();
 
     expect(outcome.terminalEffects).toMatchObject({
       cleanupHaltPresentation: { prUrl: 'https://github.com/example/repo/pull/42' },
@@ -187,18 +216,23 @@ describe('executor child runtime lifecycle composition', () => {
   });
 
   it('invokes lifecycle teardown when the conductor reports a halt', async () => {
-    const testRoot = await import('node:fs/promises').then(({ mkdtemp }) => mkdtemp(join(tmpdir(), 'executor-runtime-')));
+    const testRoot = await import('node:fs/promises').then(({ mkdtemp }) =>
+      mkdtemp(join(tmpdir(), 'executor-runtime-')),
+    );
     root = testRoot;
     const worktree = { path: join(testRoot, '.worktrees', order.slug), branch: 'feature/branch' };
     await mkdir(worktree.path, { recursive: true });
     const deps = lifecycle(worktree, { done: false, halted: true, reason: 'gate halted' });
 
-    const outcome = await makeExecutorChildFeatureRunner({
-      order,
-      worktree,
-      events: new ConductorEventEmitter(),
-      providerExecution,
-    }, deps)();
+    const outcome = await makeExecutorChildFeatureRunner(
+      {
+        order,
+        worktree,
+        events: new ConductorEventEmitter(),
+        providerExecution,
+      },
+      deps,
+    )();
 
     expect(outcome).toMatchObject({
       slug: order.slug,
@@ -209,45 +243,56 @@ describe('executor child runtime lifecycle composition', () => {
   });
 
   it('binds the child-owned bus as the runner feature scope without emitting supervisor-owned dispatch lifecycle', async () => {
-    const testRoot = await import('node:fs/promises').then(({ mkdtemp }) => mkdtemp(join(tmpdir(), 'executor-runtime-')));
+    const testRoot = await import('node:fs/promises').then(({ mkdtemp }) =>
+      mkdtemp(join(tmpdir(), 'executor-runtime-')),
+    );
     root = testRoot;
     const worktree = { path: join(testRoot, '.worktrees', order.slug), branch: 'feature/branch' };
     await mkdir(join(worktree.path, '.pipeline'), { recursive: true });
     const { bus, seen } = recordingBus();
-    const deps = lifecycle(worktree, {
-      done: true,
-      halted: false,
-      prUrl: 'https://github.com/example/repo/pull/42',
-      finishChoice: 'pr',
-    }, {
-      prepareWorktree: vi.fn(async (_worktree, _log, events) => {
-        await events?.emit({ type: 'project_setup', ran: false, reason: 'no-script' });
-      }),
-    });
+    const deps = lifecycle(
+      worktree,
+      {
+        done: true,
+        halted: false,
+        prUrl: 'https://github.com/example/repo/pull/42',
+        finishChoice: 'pr',
+      },
+      {
+        prepareWorktree: vi.fn(async (_worktree, _log, events) => {
+          await events?.emit({ type: 'project_setup', ran: false, reason: 'no-script' });
+        }),
+      },
+    );
 
     await makeExecutorChildFeatureRunner({ order, worktree, events: bus, providerExecution }, deps)();
 
     // Setup events travel on the child bus, and the verified ship reaches it.
     expect(vi.mocked(deps.prepareWorktree!).mock.calls[0]?.[2]).toBe(bus);
-    expect(seen.map((event) => event.type)).toEqual(expect.arrayContaining([
-      'project_setup',
-      'feature_shipped',
-    ]));
+    expect(seen.map((event) => event.type)).toEqual(expect.arrayContaining(['project_setup', 'feature_shipped']));
     // The supervisor alone emits the once-per-claim dispatch pair (ADR D4).
     expect(seen.map((event) => event.type)).not.toContain('feature_dispatch_started');
     expect(seen.map((event) => event.type)).not.toContain('feature_dispatch_ended');
   });
 
   it('routes setup-triage events through the child-owned bus and resolves the scope provider execution', async () => {
-    const testRoot = await import('node:fs/promises').then(({ mkdtemp }) => mkdtemp(join(tmpdir(), 'executor-runtime-')));
+    const testRoot = await import('node:fs/promises').then(({ mkdtemp }) =>
+      mkdtemp(join(tmpdir(), 'executor-runtime-')),
+    );
     root = testRoot;
     const worktree = { path: join(testRoot, '.worktrees', order.slug), branch: 'feature/branch' };
     await mkdir(worktree.path, { recursive: true });
     const { bus, seen } = recordingBus();
-    const deps = lifecycle(worktree, { done: false, halted: false }, {
-      prepareWorktree: vi.fn(async () => { throw new SetupFailureError('setup failed', 'setup tail'); }),
-      runSetupTriage: vi.fn(async () => ({ kind: 'park' as const, outputTail: 'setup tail' })),
-    });
+    const deps = lifecycle(
+      worktree,
+      { done: false, halted: false },
+      {
+        prepareWorktree: vi.fn(async () => {
+          throw new SetupFailureError('setup failed', 'setup tail');
+        }),
+        runSetupTriage: vi.fn(async () => ({ kind: 'park' as const, outputTail: 'setup tail' })),
+      },
+    );
 
     await makeExecutorChildFeatureRunner({ order, worktree, events: bus, providerExecution }, deps)();
 
@@ -259,34 +304,37 @@ describe('executor child runtime lifecycle composition', () => {
   });
 
   it('forwards shipment-refusal and conductor-termination events without the supervisor dispatch pair', async () => {
-    const testRoot = await import('node:fs/promises').then(({ mkdtemp }) => mkdtemp(join(tmpdir(), 'executor-runtime-')));
+    const testRoot = await import('node:fs/promises').then(({ mkdtemp }) =>
+      mkdtemp(join(tmpdir(), 'executor-runtime-')),
+    );
     root = testRoot;
     const worktree = { path: join(testRoot, '.worktrees', order.slug), branch: 'feature/branch' };
     await mkdir(join(worktree.path, '.pipeline'), { recursive: true });
     const { bus, seen } = recordingBus();
-    const deps = lifecycle(worktree, {
-      done: true,
-      halted: false,
-      prUrl: 'https://github.com/example/repo/pull/42',
-      finishChoice: 'pr',
-    }, {
-      runConductor: vi.fn(async (_worktree, _item, _providerExecution, events) => {
-        await events?.emit({ type: 'loop_halt', reason: 'child conductor terminated' });
-      }),
-      shipmentEvidence: vi.fn(async () => ({
-        kind: 'refusal' as const,
-        code: 'shipped-record-missing' as const,
-        expected: '.docs/shipped/feature.md',
-        observed: null,
-      })),
-    });
+    const deps = lifecycle(
+      worktree,
+      {
+        done: true,
+        halted: false,
+        prUrl: 'https://github.com/example/repo/pull/42',
+        finishChoice: 'pr',
+      },
+      {
+        runConductor: vi.fn(async (_worktree, _item, _providerExecution, events) => {
+          await events?.emit({ type: 'loop_halt', reason: 'child conductor terminated' });
+        }),
+        shipmentEvidence: vi.fn(async () => ({
+          kind: 'refusal' as const,
+          code: 'shipped-record-missing' as const,
+          expected: '.docs/shipped/feature.md',
+          observed: null,
+        })),
+      },
+    );
 
     await makeExecutorChildFeatureRunner({ order, worktree, events: bus, providerExecution }, deps)();
 
-    expect(seen.map((event) => event.type)).toEqual(expect.arrayContaining([
-      'loop_halt',
-      'shipment_evidence_refused',
-    ]));
+    expect(seen.map((event) => event.type)).toEqual(expect.arrayContaining(['loop_halt', 'shipment_evidence_refused']));
     expect(seen.map((event) => event.type)).not.toContain('feature_dispatch_started');
     expect(seen.map((event) => event.type)).not.toContain('feature_dispatch_ended');
   });

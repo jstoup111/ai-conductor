@@ -12,7 +12,10 @@ import type { BacklogItem } from './daemon.js';
 import type { FeatureWorktree } from './daemon-runner.js';
 import { seedDaemonDispatchState } from './daemon-state.js';
 import { makeProductionGit as makeFinishPublicationGit } from './pr-labels.js';
-import { createProductionFinishPublicationCoordinator, createProductionReleaseReadinessObserver } from './finish-publication-production.js';
+import {
+  createProductionFinishPublicationCoordinator,
+  createProductionReleaseReadinessObserver,
+} from './finish-publication-production.js';
 import { createProvenanceGuardedFinishPresentationRepair } from './finish-presentation-repair.js';
 import { closeIssueOnImplementationMerge } from './engineer/issue-ref.js';
 import { HALT_MARKER } from './halt-marker.js';
@@ -40,9 +43,17 @@ import { resumeRebaseFirst } from './daemon-rekick.js';
 import { resolveDaemonBaseSha } from './daemon-deps.js';
 import { supersedeHaltRecord } from './halt-record.js';
 import type { LiveBoundaryCoordinator } from './self-host/live-boundary-coordinator.js';
-import { runStackPreflight, type RunStackPreflightOptions, type StackPreflightResult } from './restack/stack-preflight.js';
+import {
+  runStackPreflight,
+  type RunStackPreflightOptions,
+  type StackPreflightResult,
+} from './restack/stack-preflight.js';
 import type { RestackResolver } from './restack/restack-resolver.js';
-import { provisionManagedSessionProducerRoot, prepareManagedSessionContext, type ManagedSessionContext } from '../execution/managed-session-context.js';
+import {
+  provisionManagedSessionProducerRoot,
+  prepareManagedSessionContext,
+  type ManagedSessionContext,
+} from '../execution/managed-session-context.js';
 import type { WorkOrderGitRunner } from './work-order.js';
 import { createGuardedGithubOperationRunner, makeProductionGh } from './tracker-client.js';
 
@@ -109,7 +120,7 @@ export function createForcedSetupPrepare(
   },
 ): (worktreePath: string) => Promise<void> {
   return async (worktreePath) => {
-    const baseSha = base.baseSha ?? await resolveDaemonBaseSha(base.projectRoot, base.baseBranch);
+    const baseSha = base.baseSha ?? (await resolveDaemonBaseSha(base.projectRoot, base.baseBranch));
     await prepare(worktreePath, log, {
       verbose,
       force: true,
@@ -120,7 +131,7 @@ export function createForcedSetupPrepare(
       skillNameRoot: skillNameRootFor({
         isSelfHost: base.isSelfHost ?? false,
         worktreePath,
-        harnessRoot: base.harnessRoot ?? await resolveHarnessRoot(),
+        harnessRoot: base.harnessRoot ?? (await resolveHarnessRoot()),
       }),
     });
   };
@@ -177,18 +188,37 @@ export async function runDaemonFeatureConductor(
   sessionId = uuidv4(),
 ): Promise<void | OperatorParkedTermination | PreemptedTermination> {
   const {
-    projectRoot, config, baseBranch, isSelfHost, effectiveDaemonConcurrency, worktreeLifecycle,
-    rateLimitEpisode, readOnlyReviewCapabilities, ownerGh,
+    projectRoot,
+    config,
+    baseBranch,
+    isSelfHost,
+    effectiveDaemonConcurrency,
+    worktreeLifecycle,
+    rateLimitEpisode,
+    readOnlyReviewCapabilities,
+    ownerGh,
   } = context;
   const pipelineDir = join(wt.path, '.pipeline');
   await mkdir(pipelineDir, { recursive: true });
   const selectedRuntime = providerExecution.runtimes.get(providerExecution.configuredProviders[0]);
   const stateFilePath = join(pipelineDir, 'conduct-state.json');
-  const stateStore = resolveConductorStateStore(stateFilePath, undefined, createStepStatusWriteRefusalDiagnostics(featureEvents));
+  const stateStore = resolveConductorStateStore(
+    stateFilePath,
+    undefined,
+    createStepStatusWriteRefusalDiagnostics(featureEvents),
+  );
   const baseState = await seedDaemonDispatchState(pipelineDir, item, stateStore);
   const stepRunner = new DefaultStepRunner(selectedRuntime.provider, sessionId, wt.path, {
-    featureDesc: item.slug, projectRoot, pipelineDir, config, modelPolicy: selectedRuntime.policy,
-    mode: 'auto', providerExecution, events: featureEvents, log: featureLog, worktreeLifecycle,
+    featureDesc: item.slug,
+    projectRoot,
+    pipelineDir,
+    config,
+    modelPolicy: selectedRuntime.policy,
+    mode: 'auto',
+    providerExecution,
+    events: featureEvents,
+    log: featureLog,
+    worktreeLifecycle,
     skillNameRoot: skillNameRootFor({ isSelfHost, worktreePath: wt.path, harnessRoot: await resolveHarnessRoot() }),
   });
   const auditWriter = new AuditTrailWriter(wt.path);
@@ -196,33 +226,59 @@ export async function runDaemonFeatureConductor(
   const finishPublicationGit = makeFinishPublicationGit();
   const finishPublicationGh = makeProductionGh();
   const conductor = new Conductor({
-    stateFilePath, stateStore, stepRunner, events: featureEvents, mode: 'auto', config,
-    modelPolicy: selectedRuntime.policy, providerExecution, effectiveDaemonConcurrency,
-    projectRoot: wt.path, acceptanceRedExec: createProductionAcceptanceRedExec(),
+    stateFilePath,
+    stateStore,
+    stepRunner,
+    events: featureEvents,
+    mode: 'auto',
+    config,
+    modelPolicy: selectedRuntime.policy,
+    providerExecution,
+    effectiveDaemonConcurrency,
+    projectRoot: wt.path,
+    acceptanceRedExec: createProductionAcceptanceRedExec(),
     finishPublication: createProductionFinishPublicationCoordinator({
-      projectRoot: wt.path, stateFilePath, baseBranch, prTemplateBytes: config?.pr_template_bytes,
-      git: finishPublicationGit, gh: finishPublicationGh, events: featureEvents,
+      projectRoot: wt.path,
+      stateFilePath,
+      baseBranch,
+      prTemplateBytes: config?.pr_template_bytes,
+      git: finishPublicationGit,
+      gh: finishPublicationGh,
+      events: featureEvents,
       flushSessionEvents: context.flushFeatureEvents,
       engineVersionId: context.engineVersionId,
       repairPresentation: createProvenanceGuardedFinishPresentationRepair({
-        projectRoot: wt.path, git: finishPublicationGit, gh: finishPublicationGh, baseBranch,
-        log: featureLog, events: featureEvents,
+        projectRoot: wt.path,
+        git: finishPublicationGit,
+        gh: finishPublicationGh,
+        baseBranch,
+        log: featureLog,
+        events: featureEvents,
       }),
       observeReleaseReadiness: createProductionReleaseReadinessObserver({ projectRoot: wt.path, config }),
     }),
-    worktreeBranch: wt.branch, log: featureLog, selfHost: isSelfHost,
+    worktreeBranch: wt.branch,
+    log: featureLog,
+    selfHost: isSelfHost,
     liveBoundaryCoordinator: context.liveBoundaryCoordinator,
-    baseBranch, verifyArtifacts: true, resume: true, daemon: true, featureSlug: item.slug,
+    baseBranch,
+    verifyArtifacts: true,
+    resume: true,
+    daemon: true,
+    featureSlug: item.slug,
     operatorParkBoundary: async () => {
       try {
-        return await isOperatorParked(projectRoot, item.slug, (error) => featureLog(`operator park marker read failed: ${error.message}`));
+        return await isOperatorParked(projectRoot, item.slug, (error) =>
+          featureLog(`operator park marker read failed: ${error.message}`),
+        );
       } catch (error) {
         featureLog(`operator park marker read failed: ${error instanceof Error ? error.message : String(error)}`);
         return false;
       }
     },
     preemptionRequested: context.preemptionRequested,
-    rateLimitEpisode, readOnlyReviewCapabilities,
+    rateLimitEpisode,
+    readOnlyReviewCapabilities,
     registerAbortController: context.registerAbortController,
   });
   const unregisterConductor = context.registerConductor(conductor);
@@ -234,10 +290,8 @@ export async function runDaemonFeatureConductor(
     // reason persisted with this feature rather than lost on the root console.
     let parked = false;
     try {
-      parked = await isOperatorParked(
-        projectRoot,
-        item.slug,
-        (error) => featureLog(`operator park marker read failed: ${error.message}`),
+      parked = await isOperatorParked(projectRoot, item.slug, (error) =>
+        featureLog(`operator park marker read failed: ${error.message}`),
       );
     } catch (error) {
       featureLog(`operator park marker read failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -248,41 +302,94 @@ export async function runDaemonFeatureConductor(
     }
     const rekickPath = join(pipelineDir, 'REKICK');
     const isRekick = existsSync(rekickPath);
-    const stackPreflight = await runDaemonRekickStackPreflight({
-      worktree: wt.path, slug: item.slug, baseRefreshDue: isRekick,
-      consumeRekick: async () => { await unlinkFile(rekickPath).catch((error: unknown) => { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }); },
-      rearmRekick: async () => { await writeFile(rekickPath, ''); }, events: featureEvents,
-      resolver: restackResolverForStepRunner(stepRunner), resolverCap: resolveRebaseResolutionAttempts(config),
-      prepareResume: async () => {
-        if (await access(join(wt.path, HALT_MARKER)).then(() => true).catch(() => false)) return;
-        try { await supersedeHaltRecord(wt.path, item.slug, 'stack-preflight'); }
-        catch (error) { featureLog(`stack preflight could not supersede halt record: ${error instanceof Error ? error.message : String(error)}`); }
+    const stackPreflight = await runDaemonRekickStackPreflight(
+      {
+        worktree: wt.path,
+        slug: item.slug,
+        baseRefreshDue: isRekick,
+        consumeRekick: async () => {
+          await unlinkFile(rekickPath).catch((error: unknown) => {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          });
+        },
+        rearmRekick: async () => {
+          await writeFile(rekickPath, '');
+        },
+        events: featureEvents,
+        resolver: restackResolverForStepRunner(stepRunner),
+        resolverCap: resolveRebaseResolutionAttempts(config),
+        prepareResume: async () => {
+          if (
+            await access(join(wt.path, HALT_MARKER))
+              .then(() => true)
+              .catch(() => false)
+          )
+            return;
+          try {
+            await supersedeHaltRecord(wt.path, item.slug, 'stack-preflight');
+          } catch (error) {
+            featureLog(
+              `stack preflight could not supersede halt record: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        },
       },
-    }, featureLog);
+      featureLog,
+    );
     if (stackPreflight.kind === 'halted' || stackPreflight.kind === 'unavailable') return;
     const resume = isRekick
       ? await resumeRebaseFirst({
-        worktreePath: wt.path, localBase: baseBranch, events: featureEvents, ranManualTest,
-        resolveAttempts: resolveRebaseResolutionAttempts(config),
-        resolveConflict: stepRunner.resolveRebaseConflict ? (ctx) => stepRunner.resolveRebaseConflict!(ctx) : undefined,
-        runGh: ownerGh, prUrl: baseState.pr_url, slug: item.slug, log: featureLog,
-      })
+          worktreePath: wt.path,
+          localBase: baseBranch,
+          events: featureEvents,
+          ranManualTest,
+          resolveAttempts: resolveRebaseResolutionAttempts(config),
+          resolveConflict: stepRunner.resolveRebaseConflict
+            ? (ctx) => stepRunner.resolveRebaseConflict!(ctx)
+            : undefined,
+          runGh: ownerGh,
+          prUrl: baseState.pr_url,
+          slug: item.slug,
+          log: featureLog,
+        })
       : 'skipped';
     if (resume === 'halted') return;
-    if (resume === 'already_shipped') featureLog(`merged shipment evidence verified for ${item.slug}; continuing normal completion`);
+    if (resume === 'already_shipped')
+      featureLog(`merged shipment evidence verified for ${item.slug}; continuing normal completion`);
     if (context.isShutdownRequested()) return;
     const conductorTermination = await conductor.run();
     if (conductorTermination) return conductorTermination;
     const finalState = await readState(stateFilePath);
     const implementationPrUrl = finalState.ok ? finalState.value.pr_url : undefined;
     const ghRunner = makeProductionGh();
-    const featureMutation = item.sourceRef && implementationPrUrl
-      ? await resolveFeatureRemoteMutation({ cwd: wt.path, slug: item.slug, branch: wt.branch, git: (args) => finishPublicationGit(args, { cwd: wt.path }), gh: ghRunner }) : undefined;
-    const closeIssueMutation = featureMutation && implementationPrUrl ? bindMutationToPullRequest(featureMutation, implementationPrUrl) : undefined;
+    const featureMutation =
+      item.sourceRef && implementationPrUrl
+        ? await resolveFeatureRemoteMutation({
+            cwd: wt.path,
+            slug: item.slug,
+            branch: wt.branch,
+            git: (args) => finishPublicationGit(args, { cwd: wt.path }),
+            gh: ghRunner,
+          })
+        : undefined;
+    const closeIssueMutation =
+      featureMutation && implementationPrUrl
+        ? bindMutationToPullRequest(featureMutation, implementationPrUrl)
+        : undefined;
     await closeIssueOnImplementationMerge({
       gh: ghRunner,
-      operations: closeIssueMutation ? createGuardedGithubOperationRunner(ghRunner, { cwd: wt.path, mutation: closeIssueMutation, events: featureEvents }) : undefined,
-      sourceRef: item.sourceRef, prUrl: implementationPrUrl, cwd: wt.path, slug: item.slug, log: featureLog,
+      operations: closeIssueMutation
+        ? createGuardedGithubOperationRunner(ghRunner, {
+            cwd: wt.path,
+            mutation: closeIssueMutation,
+            events: featureEvents,
+          })
+        : undefined,
+      sourceRef: item.sourceRef,
+      prUrl: implementationPrUrl,
+      cwd: wt.path,
+      slug: item.slug,
+      log: featureLog,
     });
   } finally {
     unregisterConductor();
@@ -299,24 +406,49 @@ export async function runDaemonSetupTriage(
   featureEvents?: ConductorEventEmitter,
   workOrderBaseSha?: string,
 ) {
-  if (process.env.CONDUCT_SETUP_TRIAGE_KILLSWITCH) return { kind: 'park' as const, outputTail: 'setup-triage disabled by env killswitch' };
+  if (process.env.CONDUCT_SETUP_TRIAGE_KILLSWITCH)
+    return { kind: 'park' as const, outputTail: 'setup-triage disabled by env killswitch' };
   const git: GitRunner = makeGitRunner(worktree.path);
   const runPrepare = createForcedSetupPrepare(prepareWorktree, featureLog, context.config?.daemon_verbose ?? false, {
-    projectRoot: context.projectRoot, baseBranch: context.baseBranch, baseSha: workOrderBaseSha,
-    events: featureEvents, dispatchStartTimeoutSeconds: resolveDispatchStartTimeoutSeconds(context.config),
+    projectRoot: context.projectRoot,
+    baseBranch: context.baseBranch,
+    baseSha: workOrderBaseSha,
+    events: featureEvents,
+    dispatchStartTimeoutSeconds: resolveDispatchStartTimeoutSeconds(context.config),
     isSelfHost: context.isSelfHost,
-    harnessRoot: await resolveHarnessRoot() ?? undefined,
+    harnessRoot: (await resolveHarnessRoot()) ?? undefined,
   });
   const dispatchFixSession = async () => {
     const sessionId = uuidv4();
     const selectedRuntime = providerExecution.runtimes.get(providerExecution.configuredProviders[0]);
     const stepRunner = new DefaultStepRunner(selectedRuntime.provider, sessionId, worktree.path, {
-      featureDesc: `setup-fix-${item.slug}`, config: context.config, modelPolicy: selectedRuntime.policy,
-      mode: 'auto', providerExecution, log: featureLog,
-      skillNameRoot: skillNameRootFor({ isSelfHost: context.isSelfHost, worktreePath: worktree.path, harnessRoot: await resolveHarnessRoot() }),
+      featureDesc: `setup-fix-${item.slug}`,
+      config: context.config,
+      modelPolicy: selectedRuntime.policy,
+      mode: 'auto',
+      providerExecution,
+      log: featureLog,
+      skillNameRoot: skillNameRootFor({
+        isSelfHost: context.isSelfHost,
+        worktreePath: worktree.path,
+        harnessRoot: await resolveHarnessRoot(),
+      }),
     });
     featureLog(`[setup-triage] fix-session dispatched for ${item.slug} (session ${sessionId})`);
-    return stepRunner.resolveSetupFailure({ worktreePath: worktree.path, outputTail: error.outputTail ?? '', slug: item.slug });
+    return stepRunner.resolveSetupFailure({
+      worktreePath: worktree.path,
+      outputTail: error.outputTail ?? '',
+      slug: item.slug,
+    });
   };
-  return runSetupFailureTriage(git, worktree.path, item.slug, error, runPrepare, dispatchFixSession, { log: featureLog }, featureEvents);
+  return runSetupFailureTriage(
+    git,
+    worktree.path,
+    item.slug,
+    error,
+    runPrepare,
+    dispatchFixSession,
+    { log: featureLog },
+    featureEvents,
+  );
 }

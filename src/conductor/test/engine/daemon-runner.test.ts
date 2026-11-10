@@ -196,16 +196,40 @@ async function stackPreflightFixture(slug: string): Promise<string> {
   await git(['checkout', '-qb', `feat/daemon-${slug}`]);
   await commit('leaf', 'leaf.txt', 'leaf\n');
   await mkdir(join(repo, '.ai-conductor'));
-  await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n  route_whole_feature_fixes: true\n');
+  await writeFile(
+    join(repo, '.ai-conductor', 'config.yml'),
+    'stacked_prs:\n  enabled: true\n  max_slices: 3\n  route_whole_feature_fixes: true\n',
+  );
   await mkdir(join(repo, '.docs', 'plans'), { recursive: true });
   await mkdir(join(repo, '.docs', 'stories'), { recursive: true });
-  await writeFile(join(repo, '.docs', 'stories', `${slug}.md`), `# Stories: ${slug}\n\n## Story 1: One\n\n## Story 2: Two\n`);
-  await writeFile(join(repo, '.docs', 'plans', `${slug}.md`), [
-    `# Implementation Plan: ${slug}`, '', `**Stories:** .docs/stories/${slug}.md`, '', '## Slices', '',
-    '| Slice | Title | Tasks |', '| --- | --- | --- |', '| 1 | One | 1 |', '| 2 | Two | 2 |', '',
-    '### Task 1: One', '**Story:** Story 1', '**Dependencies:** none', '',
-    '### Task 2: Two', '**Story:** Story 2', '**Dependencies:** none', '',
-  ].join('\n'));
+  await writeFile(
+    join(repo, '.docs', 'stories', `${slug}.md`),
+    `# Stories: ${slug}\n\n## Story 1: One\n\n## Story 2: Two\n`,
+  );
+  await writeFile(
+    join(repo, '.docs', 'plans', `${slug}.md`),
+    [
+      `# Implementation Plan: ${slug}`,
+      '',
+      `**Stories:** .docs/stories/${slug}.md`,
+      '',
+      '## Slices',
+      '',
+      '| Slice | Title | Tasks |',
+      '| --- | --- | --- |',
+      '| 1 | One | 1 |',
+      '| 2 | Two | 2 |',
+      '',
+      '### Task 1: One',
+      '**Story:** Story 1',
+      '**Dependencies:** none',
+      '',
+      '### Task 2: Two',
+      '**Story:** Story 2',
+      '**Dependencies:** none',
+      '',
+    ].join('\n'),
+  );
   await writeFile(join(repo, 'positions.json'), '[1,2]');
   const positions = (await git(['hash-object', '-w', 'positions.json'])).stdout.trim();
   await git(['update-ref', `refs/conductor/${slug}/positions`, positions]);
@@ -214,7 +238,10 @@ async function stackPreflightFixture(slug: string): Promise<string> {
 
 async function leaveLiveRestackJournal(repo: string, slug: string): Promise<void> {
   const stat = await readFile(`/proc/${process.pid}/stat`, 'utf8');
-  const processStartTime = stat.slice(stat.lastIndexOf(') ') + 2).trim().split(/\s+/)[19];
+  const processStartTime = stat
+    .slice(stat.lastIndexOf(') ') + 2)
+    .trim()
+    .split(/\s+/)[19];
   if (processStartTime === undefined) throw new Error('could not read test process start time');
   const blob = await writeRestackJournalBlob(repo, {
     opId: 'test-live-owner' as RestackOpId,
@@ -240,7 +267,9 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       featureDeps.createWorktree = async () => ({ path: worktreePath, branch: `feat/${ITEM.slug}` });
       featureDeps.runConductor = async (worktree) => {
         await runStackPreflight({
-          worktree: worktree.path, slug: ITEM.slug, git: makeGitRunner(worktree.path),
+          worktree: worktree.path,
+          slug: ITEM.slug,
+          git: makeGitRunner(worktree.path),
         });
       };
       featureDeps.readOutcome = (worktree) => readWorktreeOutcome(worktree.path);
@@ -259,7 +288,8 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       expect(outcome).toMatchObject({ status: 'halted', reason: expect.stringContaining(`${process.pid}`) });
       expect(log.join('\n')).not.toContain('loop ended without DONE or HALT marker');
       await expect(resolveHaltRetention(() => readRawHaltClass(worktreePath))).resolves.toEqual({
-        haltClass: 'mechanical', retained: false,
+        haltClass: 'mechanical',
+        retained: false,
       });
     } finally {
       await rm(worktreePath, { recursive: true, force: true });
@@ -283,11 +313,15 @@ describe('engine/daemon-runner — makeRunFeature', () => {
             events: events ?? new ConductorEventEmitter(),
             git: makeGitRunner(worktree.path),
             reconcileRounds: async () => ({
-              kind: 'stalled', detail: 'next-host admission refused',
-              rounds: [{
-                roundId: parseRoundId('r1')!, readable: true,
-                unsettledHosts: { [parseChildId(1)!]: 'pending' },
-              }],
+              kind: 'stalled',
+              detail: 'next-host admission refused',
+              rounds: [
+                {
+                  roundId: parseRoundId('r1')!,
+                  readable: true,
+                  unsettledHosts: { [parseChildId(1)!]: 'pending' },
+                },
+              ],
             }),
           });
         } finally {
@@ -311,7 +345,8 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       expect(outcome.reason).toContain('routing rounds stalled: r1 (1: pending); next-host admission refused');
       expect(log.join('\n')).not.toContain('loop ended without DONE or HALT marker');
       await expect(resolveHaltRetention(() => readRawHaltClass(worktreePath))).resolves.toEqual({
-        haltClass: 'mechanical', retained: false,
+        haltClass: 'mechanical',
+        retained: false,
       });
     } finally {
       await rm(worktreePath, { recursive: true, force: true });
@@ -336,22 +371,37 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       if (created.kind !== 'created') throw new Error(`route fixture creation failed: ${created.kind}`);
       await admitRound(worktreePath, ITEM.slug, created.record, host, { git });
       await mkdir(join(worktreePath, '.pipeline', 'children', '1'), { recursive: true });
-      await writeFile(join(worktreePath, '.pipeline', 'conduct-state.json'), JSON.stringify({
-        acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done', feature_desc: ITEM.slug,
-      }));
-      await writeFile(join(worktreePath, '.pipeline', 'children', '1', 'conduct-state.json'), JSON.stringify({
-        acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
-      }));
+      await writeFile(
+        join(worktreePath, '.pipeline', 'conduct-state.json'),
+        JSON.stringify({
+          acceptance_specs: 'done',
+          build: 'done',
+          test_suite: 'done',
+          build_review: 'done',
+          feature_desc: ITEM.slug,
+        }),
+      );
+      await writeFile(
+        join(worktreePath, '.pipeline', 'children', '1', 'conduct-state.json'),
+        JSON.stringify({
+          acceptance_specs: 'done',
+          build: 'done',
+          test_suite: 'done',
+          build_review: 'done',
+        }),
+      );
       await execFile('git', ['add', '.ai-conductor', '.docs'], { cwd: worktreePath });
       await execFile('git', ['commit', '-qm', 'commit conductor fixture artifacts'], { cwd: worktreePath });
 
       const featureDeps = deps({ done: false, halted: false });
       featureDeps.createWorktree = async () => ({ path: worktreePath, branch: `feat/${ITEM.slug}` });
       featureDeps.runConductor = async (worktree, _item, _provider, events) => {
-        const parked = vi.spyOn(
-          Conductor.prototype as unknown as { advanceTail: () => Promise<number | null | 'halt' | 'parked'> },
-          'advanceTail',
-        ).mockResolvedValue('parked');
+        const parked = vi
+          .spyOn(
+            Conductor.prototype as unknown as { advanceTail: () => Promise<number | null | 'halt' | 'parked'> },
+            'advanceTail',
+          )
+          .mockResolvedValue('parked');
         try {
           await new Conductor({
             projectRoot: worktree.path,
@@ -445,9 +495,15 @@ describe('engine/daemon-runner — makeRunFeature', () => {
   ])('emits the raw backlog tier on every feature lifecycle event', async ({ item, expectedTier }) => {
     const events = new ConductorEventEmitter();
     const emitted: Array<Record<string, unknown>> = [];
-    events.on('feature_dispatch_started', (event) => { emitted.push(event as Record<string, unknown>); });
-    events.on('feature_dispatch_ended', (event) => { emitted.push(event as Record<string, unknown>); });
-    events.on('feature_shipped', (event) => { emitted.push(event as Record<string, unknown>); });
+    events.on('feature_dispatch_started', (event) => {
+      emitted.push(event as Record<string, unknown>);
+    });
+    events.on('feature_dispatch_ended', (event) => {
+      emitted.push(event as Record<string, unknown>);
+    });
+    events.on('feature_shipped', (event) => {
+      emitted.push(event as Record<string, unknown>);
+    });
     const featureDeps = deps({
       done: true,
       halted: false,
@@ -504,7 +560,12 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     {
       name: 'provider time falls outside the active union',
       events: [
-        { type: 'provider_attempt', step: 'plan', invoked: true, observedIntervals: [{ startedAtMs: 200, durationMs: 20 }] },
+        {
+          type: 'provider_attempt',
+          step: 'plan',
+          invoked: true,
+          observedIntervals: [{ startedAtMs: 200, durationMs: 20 }],
+        },
         { type: 'step_completed', step: 'plan', activeInterval: { startedAtMs: 0, durationMs: 100 } },
       ],
       expected: { state: 'partial', reason: 'provider-outside-active-union' },
@@ -530,14 +591,26 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       await writeFile(join(worktreePath, '.pipeline', 'pipeline-events.jsonl'), '', 'utf8');
       const events = new ConductorEventEmitter();
       const emitted: Array<Record<string, unknown>> = [];
-      events.on('feature_shipped', (event) => { emitted.push(event as Record<string, unknown>); });
-      const featureDeps = deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'https://github.com/owner/repo/pull/1' });
+      events.on('feature_shipped', (event) => {
+        emitted.push(event as Record<string, unknown>);
+      });
+      const featureDeps = deps({
+        done: true,
+        halted: false,
+        finishChoice: 'pr',
+        prUrl: 'https://github.com/owner/repo/pull/1',
+      });
       featureDeps.daemon = true;
       featureDeps.deferTerminalEffects = true;
       featureDeps.createWorktree = async () => ({ path: worktreePath, branch: 'feat/feature-shipped' });
       featureDeps.beginFeatureRun = () => ({
-        events: new ConductorEventEmitter(), rootEvents: events,
-        providerExecution: { configuredProviders: [], runtimes: new ProviderRuntimeSet([]), sessions: new ProviderSessionStore() },
+        events: new ConductorEventEmitter(),
+        rootEvents: events,
+        providerExecution: {
+          configuredProviders: [],
+          runtimes: new ProviderRuntimeSet([]),
+          sessions: new ProviderSessionStore(),
+        },
         stop: () => {},
       });
 
@@ -557,14 +630,26 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       await writeFile(join(worktreePath, '.pipeline', 'events.jsonl'), 'not json\n', 'utf8');
       const events = new ConductorEventEmitter();
       const emitted: Array<Record<string, unknown>> = [];
-      events.on('feature_shipped', (event) => { emitted.push(event as Record<string, unknown>); });
-      const featureDeps = deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'https://github.com/owner/repo/pull/1' });
+      events.on('feature_shipped', (event) => {
+        emitted.push(event as Record<string, unknown>);
+      });
+      const featureDeps = deps({
+        done: true,
+        halted: false,
+        finishChoice: 'pr',
+        prUrl: 'https://github.com/owner/repo/pull/1',
+      });
       featureDeps.daemon = true;
       featureDeps.deferTerminalEffects = true;
       featureDeps.createWorktree = async () => ({ path: worktreePath, branch: 'feat/feature-shipped' });
       featureDeps.beginFeatureRun = () => ({
-        events: new ConductorEventEmitter(), rootEvents: events,
-        providerExecution: { configuredProviders: [], runtimes: new ProviderRuntimeSet([]), sessions: new ProviderSessionStore() },
+        events: new ConductorEventEmitter(),
+        rootEvents: events,
+        providerExecution: {
+          configuredProviders: [],
+          runtimes: new ProviderRuntimeSet([]),
+          sessions: new ProviderSessionStore(),
+        },
         stop: () => {},
       });
 
@@ -592,14 +677,26 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       await writeFile(join(worktreePath, '.pipeline', 'pipeline-events.jsonl'), '', 'utf8');
       const events = new ConductorEventEmitter();
       const emitted: Array<Record<string, unknown>> = [];
-      events.on('feature_shipped', (event) => { emitted.push(event as Record<string, unknown>); });
-      const featureDeps = deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'https://github.com/owner/repo/pull/1' });
+      events.on('feature_shipped', (event) => {
+        emitted.push(event as Record<string, unknown>);
+      });
+      const featureDeps = deps({
+        done: true,
+        halted: false,
+        finishChoice: 'pr',
+        prUrl: 'https://github.com/owner/repo/pull/1',
+      });
       featureDeps.daemon = true;
       featureDeps.deferTerminalEffects = true;
       featureDeps.createWorktree = async () => ({ path: worktreePath, branch: 'feat/feature-shipped' });
       featureDeps.beginFeatureRun = () => ({
-        events: new ConductorEventEmitter(), rootEvents: events,
-        providerExecution: { configuredProviders: [], runtimes: new ProviderRuntimeSet([]), sessions: new ProviderSessionStore() },
+        events: new ConductorEventEmitter(),
+        rootEvents: events,
+        providerExecution: {
+          configuredProviders: [],
+          runtimes: new ProviderRuntimeSet([]),
+          sessions: new ProviderSessionStore(),
+        },
         stop: () => {},
       });
 
@@ -617,8 +714,12 @@ describe('engine/daemon-runner — makeRunFeature', () => {
   ])('emits the raw backlog tier when a dispatch halts', async ({ item, expectedTier }) => {
     const events = new ConductorEventEmitter();
     const emitted: Array<Record<string, unknown>> = [];
-    events.on('feature_dispatch_started', (event) => { emitted.push(event as Record<string, unknown>); });
-    events.on('feature_dispatch_ended', (event) => { emitted.push(event as Record<string, unknown>); });
+    events.on('feature_dispatch_started', (event) => {
+      emitted.push(event as Record<string, unknown>);
+    });
+    events.on('feature_dispatch_ended', (event) => {
+      emitted.push(event as Record<string, unknown>);
+    });
     const featureDeps = deps({ done: false, halted: true, reason: 'needs human' });
     featureDeps.daemon = true;
     featureDeps.deferTerminalEffects = true;
@@ -652,15 +753,17 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       await mkdir(worktreePath, { recursive: true });
       filesystemWriteOrder.failParkWrite = true;
 
-      await expect(terminateFeature({
-        worktreePath,
-        projectRoot,
-        reason: 'runtime dispatch failure',
-        park: true,
-        deferAutoPark: true,
-        slug: ITEM.slug,
-        log: (message) => logs.push(message),
-      })).resolves.toBeUndefined();
+      await expect(
+        terminateFeature({
+          worktreePath,
+          projectRoot,
+          reason: 'runtime dispatch failure',
+          park: true,
+          deferAutoPark: true,
+          slug: ITEM.slug,
+          log: (message) => logs.push(message),
+        }),
+      ).resolves.toBeUndefined();
 
       const halt = await readFile(join(worktreePath, '.pipeline', 'HALT'), 'utf-8');
       expect({
@@ -704,7 +807,9 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       const halt = await readFile(join(worktreePath, '.pipeline', 'HALT'), 'utf-8');
 
       expect(halt.split('\n', 1)[0]).toBe('feature parked — will not re-dispatch on the next scan');
-      await expect(readFile(join(projectRoot, '.daemon', 'parked', ITEM.slug), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(projectRoot, '.daemon', 'parked', ITEM.slug), 'utf-8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }
@@ -724,14 +829,12 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         slug: ITEM.slug,
       });
 
-      const markerAtMainRoot = await readFile(
-        join(projectRoot, '.daemon', 'parked', ITEM.slug),
-        'utf-8',
-      ).then(() => true).catch(() => false);
-      const markerAtWorktree = await readFile(
-        join(worktreePath, '.daemon', 'parked', ITEM.slug),
-        'utf-8',
-      ).then(() => true).catch(() => false);
+      const markerAtMainRoot = await readFile(join(projectRoot, '.daemon', 'parked', ITEM.slug), 'utf-8')
+        .then(() => true)
+        .catch(() => false);
+      const markerAtWorktree = await readFile(join(worktreePath, '.daemon', 'parked', ITEM.slug), 'utf-8')
+        .then(() => true)
+        .catch(() => false);
 
       expect({ markerAtMainRoot, markerAtWorktree }).toEqual({
         markerAtMainRoot: false,
@@ -756,10 +859,9 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       });
 
       const halt = await readFile(join(worktreePath, '.pipeline', 'HALT'), 'utf-8');
-      const parkMarkerExists = await readFile(
-        join(projectRoot, '.daemon', 'parked', ITEM.slug),
-        'utf-8',
-      ).then(() => true).catch(() => false);
+      const parkMarkerExists = await readFile(join(projectRoot, '.daemon', 'parked', ITEM.slug), 'utf-8')
+        .then(() => true)
+        .catch(() => false);
 
       expect({
         haltFirstLine: halt.split('\n', 1)[0],
@@ -823,12 +925,13 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         } satisfies TriageOutcome,
       });
 
-      const [withQuarantineHalt, withQuarantineClass, withoutQuarantineHalt, preservationFailedHalt] = await Promise.all([
-        readFile(join(withQuarantine, '.pipeline', 'HALT'), 'utf-8'),
-        readFile(join(withQuarantine, '.pipeline', 'HALT.class'), 'utf-8'),
-        readFile(join(withoutQuarantine, '.pipeline', 'HALT'), 'utf-8'),
-        readFile(join(preservationFailed, '.pipeline', 'HALT'), 'utf-8'),
-      ]);
+      const [withQuarantineHalt, withQuarantineClass, withoutQuarantineHalt, preservationFailedHalt] =
+        await Promise.all([
+          readFile(join(withQuarantine, '.pipeline', 'HALT'), 'utf-8'),
+          readFile(join(withQuarantine, '.pipeline', 'HALT.class'), 'utf-8'),
+          readFile(join(withoutQuarantine, '.pipeline', 'HALT'), 'utf-8'),
+          readFile(join(preservationFailed, '.pipeline', 'HALT'), 'utf-8'),
+        ]);
 
       expect(withQuarantineClass).toBe('needs-human');
       expect(withQuarantineHalt).toContain('Resume procedure:');
@@ -843,7 +946,9 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       expect(withoutQuarantineHalt).toContain('src/still-needed.ts');
       expect(preservationFailedHalt).toContain('could not preserve rejected repair ref: branch is checked out');
       expect(preservationFailedHalt).toContain('Contract outcome: preservation-failed');
-      expect(preservationFailedHalt).toContain('No quarantine ref was created because preserving the attempted repair failed');
+      expect(preservationFailedHalt).toContain(
+        'No quarantine ref was created because preserving the attempted repair failed',
+      );
       expect(preservationFailedHalt).not.toContain('No quarantine ref exists (clean-HEAD case)');
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
@@ -933,8 +1038,16 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     featureDeps.enrollWatch = enrollWatch;
     featureDeps.beginFeatureRun = () => ({
       events: new ConductorEventEmitter(),
-      rootEvents: { emit: vi.fn(async (event) => { if (event.type === 'feature_dispatch_ended') ended.push(event.outcome); }) } as never,
-      providerExecution: { configuredProviders: ['claude'], runtimes: new ProviderRuntimeSet([]), sessions: new ProviderSessionStore() },
+      rootEvents: {
+        emit: vi.fn(async (event) => {
+          if (event.type === 'feature_dispatch_ended') ended.push(event.outcome);
+        }),
+      } as never,
+      providerExecution: {
+        configuredProviders: ['claude'],
+        runtimes: new ProviderRuntimeSet([]),
+        sessions: new ProviderSessionStore(),
+      },
       stop,
     });
 
@@ -950,8 +1063,15 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       enrollWatch: enrollWatch.mock.calls.length,
       stop: stop.mock.calls.length,
     }).toEqual({
-      ended: ['terminated'], readOutcome: 0, teardownWorktree: 0, markProcessed: 0,
-      shipmentEvidence: 0, escalateBuildFailure: 0, cleanupHaltPresentation: 0, enrollWatch: 0, stop: 1,
+      ended: ['terminated'],
+      readOutcome: 0,
+      teardownWorktree: 0,
+      markProcessed: 0,
+      shipmentEvidence: 0,
+      escalateBuildFailure: 0,
+      cleanupHaltPresentation: 0,
+      enrollWatch: 0,
+      stop: 1,
     });
   });
 
@@ -1018,9 +1138,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
 
     await makeRunFeature(featureDeps)({ slug: 'feature-a' });
 
-    expect(featureLog).toHaveBeenCalledWith(
-      '[daemon-runner] triage outcome: pass, continuing to runConductor',
-    );
+    expect(featureLog).toHaveBeenCalledWith('[daemon-runner] triage outcome: pass, continuing to runConductor');
   });
 
   it('owns one feature event scope from pre-dispatch setup through error cleanup', async () => {
@@ -1030,8 +1148,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       configuredProviders: ['claude'],
       runtimes: new ProviderRuntimeSet([]),
       sessions: new ProviderSessionStore(),
-      onAttempt: (step, attempt) =>
-        localEvents.emit({ type: 'provider_attempt', step, ...attempt }),
+      onAttempt: (step, attempt) => localEvents.emit({ type: 'provider_attempt', step, ...attempt }),
     };
     const featureDeps = deps({ done: false, halted: false });
     const worktree = { path: '/wt/feature-a', branch: 'feat/feature-a' };
@@ -1047,15 +1164,8 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     };
     let receivedEvents: ConductorEventEmitter | undefined;
     let receivedProviderExecution: ProviderExecutionContext | undefined;
-    let beginArgs:
-      | { worktree: typeof worktree; item: BacklogItem }
-      | undefined;
-    featureDeps.runConductor = async (
-      _worktree,
-      _item,
-      execution,
-      events,
-    ) => {
+    let beginArgs: { worktree: typeof worktree; item: BacklogItem } | undefined;
+    featureDeps.runConductor = async (_worktree, _item, execution, events) => {
       order.push('dispatch');
       receivedProviderExecution = execution;
       receivedEvents = events;
@@ -1101,14 +1211,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       attempts,
       stopCalls: stop.mock.calls.length,
     }).toEqual({
-      order: [
-        'create',
-        'begin:/wt/feature-a:feature-a',
-        'prepare',
-        'dispatch',
-        'teardown',
-        'stop',
-      ],
+      order: ['create', 'begin:/wt/feature-a:feature-a', 'prepare', 'dispatch', 'teardown', 'stop'],
       outcome: {
         slug: 'feature-a',
         status: 'error',
@@ -1165,8 +1268,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       contextsAreIndependent: contexts[0] !== contexts[1],
       runtimeSetsAreIndependent: contexts[0].runtimes !== contexts[1].runtimes,
       availabilityCachesAreIndependent:
-        contexts[0].runtimes.get('claude').availability !==
-        contexts[1].runtimes.get('claude').availability,
+        contexts[0].runtimes.get('claude').availability !== contexts[1].runtimes.get('claude').availability,
       sessionStoresAreIndependent: contexts[0].sessions !== contexts[1].sessions,
       configuredOrderIsShared:
         contexts[0].configuredProviders === configuredProviders &&
@@ -1393,8 +1495,8 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       }).toEqual({
         status: 'halted',
         reason:
-          'durable shipment evidence refused ship: shipment-candidate-not-on-implementation-head'
-          + ` (expected ${remoteHead}, observed ${localHead})`,
+          'durable shipment evidence refused ship: shipment-candidate-not-on-implementation-head' +
+          ` (expected ${remoteHead}, observed ${localHead})`,
         ghCalls: [['pr', 'view', prUrl, '--json', 'url,headRefOid']],
         refusals: [
           {
@@ -1484,9 +1586,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
 
   it('halted → keeps the worktree, does not mark processed', async () => {
     const rec: { teardownKeep?: boolean; processed?: boolean } = {};
-    const run = makeRunFeature(
-      deps({ done: false, halted: true, reason: 'needs human' }, rec),
-    );
+    const run = makeRunFeature(deps({ done: false, halted: true, reason: 'needs human' }, rec));
     const out = await run(ITEM);
     expect(out.status).toBe('halted');
     expect(out.reason).toBe('needs human');
@@ -1505,9 +1605,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
 
   it('a thrown primitive is caught as an error; worktree torn down', async () => {
     const rec: { teardownKeep?: boolean } = {};
-    const run = makeRunFeature(
-      deps({ done: true, halted: false }, rec, { throwIn: 'runConductor' }),
-    );
+    const run = makeRunFeature(deps({ done: true, halted: false }, rec, { throwIn: 'runConductor' }));
     const out = await run(ITEM);
     expect(out.status).toBe('error');
     expect(out.reason).toMatch(/fail in runConductor/);
@@ -1518,11 +1616,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-create-worktree-'));
     try {
       const rec: { teardownKeep?: boolean } = {};
-      const featureDeps = deps(
-        { done: true, halted: false },
-        rec,
-        { throwIn: 'createWorktree' },
-      );
+      const featureDeps = deps({ done: true, halted: false }, rec, { throwIn: 'createWorktree' });
       featureDeps.projectRoot = projectRoot;
       const run = makeRunFeature(featureDeps);
 
@@ -1530,9 +1624,9 @@ describe('engine/daemon-runner — makeRunFeature', () => {
 
       expect(out.status).toBe('error');
       expect(rec.teardownKeep).toBeUndefined(); // never created → nothing to tear down
-      await expect(
-        readFile(join(projectRoot, '.worktrees', ITEM.slug, '.pipeline', 'HALT'), 'utf-8'),
-      ).resolves.toMatch(/fail in createWorktree[\s\S]*rm .pipeline\/HALT/);
+      await expect(readFile(join(projectRoot, '.worktrees', ITEM.slug, '.pipeline', 'HALT'), 'utf-8')).resolves.toMatch(
+        /fail in createWorktree[\s\S]*rm .pipeline\/HALT/,
+      );
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }
@@ -1629,10 +1723,9 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         haltClass: await readFile(join(worktreePath, '.pipeline', 'HALT.class'), 'utf-8'),
         status: outcome.status,
         teardownKeep: rec.teardownKeep,
-        parkMarkerExists: await readFile(
-          join(projectRoot, '.daemon', 'parked', ITEM.slug),
-          'utf-8',
-        ).then(() => true).catch(() => false),
+        parkMarkerExists: await readFile(join(projectRoot, '.daemon', 'parked', ITEM.slug), 'utf-8')
+          .then(() => true)
+          .catch(() => false),
       }).toEqual({
         ...expected,
       });
@@ -1706,8 +1799,14 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     const first: BacklogItem = { slug: 'first-feature' };
     const second: BacklogItem = { slug: 'second-feature' };
     try {
-      const firstOutcome = await runSetupTriageOutcome(projectRoot, first, { kind: 'park', outputTail: 'first setup failure' });
-      const secondOutcome = await runSetupTriageOutcome(projectRoot, second, { kind: 'park', outputTail: 'second setup failure' });
+      const firstOutcome = await runSetupTriageOutcome(projectRoot, first, {
+        kind: 'park',
+        outputTail: 'first setup failure',
+      });
+      const secondOutcome = await runSetupTriageOutcome(projectRoot, second, {
+        kind: 'park',
+        outputTail: 'second setup failure',
+      });
 
       expect([firstOutcome.outcome.terminalEffects, secondOutcome.outcome.terminalEffects]).toEqual([
         { autoPark: { reason: 'first setup failure' } },
@@ -1722,36 +1821,35 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     { kind: 'pass', outputTail: '' },
     { kind: 'quarantined-pass', outputTail: '', quarantineRef: 'wip/setup-quarantine' },
     { kind: 'fixed-pass', outputTail: '', preservedPaths: [] },
-  ] satisfies TriageOutcome[])('continues without a marker for non-park triage outcome $kind', async (triageOutcome) => {
-    const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-triage-non-park-'));
-    try {
-      const { outcome, runConductorCalls } = await runSetupTriageOutcome(projectRoot, ITEM, triageOutcome);
+  ] satisfies TriageOutcome[])(
+    'continues without a marker for non-park triage outcome $kind',
+    async (triageOutcome) => {
+      const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-triage-non-park-'));
+      try {
+        const { outcome, runConductorCalls } = await runSetupTriageOutcome(projectRoot, ITEM, triageOutcome);
 
-      expect({
-        status: outcome.status,
-        runConductorCalls,
-        parkMarkerExists: await readFile(join(projectRoot, '.daemon', 'parked', ITEM.slug), 'utf-8')
-          .then(() => true)
-          .catch(() => false),
-      }).toEqual({
-        status: 'halted',
-        runConductorCalls: 1,
-        parkMarkerExists: false,
-      });
-    } finally {
-      await rm(projectRoot, { recursive: true, force: true });
-    }
-  });
+        expect({
+          status: outcome.status,
+          runConductorCalls,
+          parkMarkerExists: await readFile(join(projectRoot, '.daemon', 'parked', ITEM.slug), 'utf-8')
+            .then(() => true)
+            .catch(() => false),
+        }).toEqual({
+          status: 'halted',
+          runConductorCalls: 1,
+          parkMarkerExists: false,
+        });
+      } finally {
+        await rm(projectRoot, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('warns of unrecoverable state when the slug-derived HALT marker cannot be written', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-unrecoverable-marker-'));
     const logs: string[] = [];
     try {
-      const featureDeps = deps(
-        { done: true, halted: false },
-        {},
-        { throwIn: 'createWorktree' },
-      );
+      const featureDeps = deps({ done: true, halted: false }, {}, { throwIn: 'createWorktree' });
       featureDeps.projectRoot = projectRoot;
       featureDeps.log = (message) => logs.push(message);
       await mkdir(join(projectRoot, '.worktrees'), { recursive: true });
@@ -1759,9 +1857,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
 
       await makeRunFeature(featureDeps)(ITEM);
 
-      expect(logs.join('\n')).toMatch(
-        new RegExp(`unrecoverable-state[\\s\\S]*${ITEM.slug}`, 'i'),
-      );
+      expect(logs.join('\n')).toMatch(new RegExp(`unrecoverable-state[\\s\\S]*${ITEM.slug}`, 'i'));
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }
@@ -1830,10 +1926,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         prepareWorktree: async () => {
           order.push('prepareWorktree');
           if (opts.prepareThrows === 'setup-failure') {
-            throw new SetupFailureError(
-              'project setup (bin/setup) failed: pg unreachable',
-              'tail of output',
-            );
+            throw new SetupFailureError('project setup (bin/setup) failed: pg unreachable', 'tail of output');
           }
           if (opts.prepareThrows === 'plain-error') {
             throw new Error('some random error');
@@ -1916,7 +2009,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       expect(order).toEqual(['createWorktree', 'prepareWorktree', 'runConductor']);
     });
 
-    it('runSetupTriage absent → SetupFailureError reverts to today\'s error path (no-op)', async () => {
+    it("runSetupTriage absent → SetupFailureError reverts to today's error path (no-op)", async () => {
       const order: string[] = [];
       const rec: { teardownKeep?: boolean } = {};
       const base = deps(
@@ -1977,10 +2070,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         surfaceQuarantineRef?: FeatureRunnerDeps['surfaceQuarantineRef'];
       },
     ): FeatureRunnerDeps {
-      const base = deps(
-        { done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' },
-        rec,
-      );
+      const base = deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' }, rec);
       return {
         ...base,
         daemon: true,
@@ -2148,11 +2238,16 @@ describe('engine/daemon-runner — makeRunFeature', () => {
 
         const out = await run(ITEM);
 
-        expect(out).toMatchObject({ status: 'error', reason: expect.stringMatching(/preventive git hook installation failed/) });
-        await expect(readFile(join(worktree, '.pipeline', 'git-hooks', 'reference-transaction'), 'utf8'))
-          .resolves.toBe(REFERENCE_TRANSACTION_HOOK);
-        await expect(readFile(join(worktree, '.pipeline', 'git-hooks', 'pre-push'), 'utf8'))
-          .resolves.toBe(PRE_PUSH_HOOK);
+        expect(out).toMatchObject({
+          status: 'error',
+          reason: expect.stringMatching(/preventive git hook installation failed/),
+        });
+        await expect(readFile(join(worktree, '.pipeline', 'git-hooks', 'reference-transaction'), 'utf8')).resolves.toBe(
+          REFERENCE_TRANSACTION_HOOK,
+        );
+        await expect(readFile(join(worktree, '.pipeline', 'git-hooks', 'pre-push'), 'utf8')).resolves.toBe(
+          PRE_PUSH_HOOK,
+        );
         expect(order).toEqual(['createWorktree', 'prepareWorktree']);
         expect(rec.teardownKeep).toBe(true);
       } finally {
@@ -2237,7 +2332,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
               contractOutcome: 'dirty-tree-uncleaned',
               quarantineRef: 'refs/quarantine/feat-x',
               preservedPaths: ['src/foo.ts', 'src/bar.ts'],
-            } as TriageOutcome),
+            }) as TriageOutcome,
         });
         const out = await run(ITEM);
         expect(out.status).toBe('error');
@@ -2273,7 +2368,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
               contractOutcome: 'dirty-tree-uncleaned',
               quarantineRef: 'refs/quarantine/feat-x',
               preservedPaths: ['src/foo.ts'],
-            } as TriageOutcome),
+            }) as TriageOutcome,
         });
         const out = await run(ITEM);
         expect(out.status).toBe('error');
@@ -2774,7 +2869,6 @@ describe('engine/daemon-runner — makeRunFeature', () => {
           await rm(wt, { recursive: true, force: true });
         }
       });
-
     });
 
     describe('Task 11: Park evidence — extended diagnostic HALT (TS-4)', () => {
@@ -2903,7 +2997,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
           expect(rec.teardownKeep).toBe(true);
 
           // Verify log sink received the write-failure notification
-          const haltFailLog = logCalls.find(msg => msg.includes('unrecoverable-state') && msg.includes(ITEM.slug));
+          const haltFailLog = logCalls.find((msg) => msg.includes('unrecoverable-state') && msg.includes(ITEM.slug));
           expect(haltFailLog).toBeTruthy();
         } finally {
           await rm(wt, { recursive: true, force: true });
@@ -2947,7 +3041,6 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         }
       });
     });
-
   });
 
   // A normal verified PR outcome reaches the daemon-owned ship side effects
@@ -2989,13 +3082,11 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       expect({
         shippedStatus: shipped.status,
         effects,
-        cleanupErrorLogged: logs.some(line => line.includes('clear-on-success error: cleanup exploded')),
-        retainedPathLogged: logs.some(line => line.includes(`worktree retained at ${absentPath}`)),
-        retainedReasonLogged: logs.includes(
-          `[daemon-runner] retained ${ITEM.slug} — reason: pr-open-awaiting-main`,
-        ),
+        cleanupErrorLogged: logs.some((line) => line.includes('clear-on-success error: cleanup exploded')),
+        retainedPathLogged: logs.some((line) => line.includes(`worktree retained at ${absentPath}`)),
+        retainedReasonLogged: logs.includes(`[daemon-runner] retained ${ITEM.slug} — reason: pr-open-awaiting-main`),
         haltedStatus: halted.status,
-        haltedClaimsShipRetention: haltedLogs.some(line => line.includes('worktree retained at')),
+        haltedClaimsShipRetention: haltedLogs.some((line) => line.includes('worktree retained at')),
       }).toEqual({
         shippedStatus: 'done',
         effects: ['enrollWatch', 'markProcessed'],
@@ -3110,8 +3201,7 @@ describe('engine/daemon-runner — engineer signal crosses the dispatcher-execut
     const savedEnv = process.env.AI_CONDUCTOR_ENGINEER_DIR;
     process.env.AI_CONDUCTOR_ENGINEER_DIR = engineerDir;
     const worktreePath = join(projectRoot, '.worktrees', ITEM.slug);
-    const eventsLine =
-      '{"type":"kickback","from":"build","to":"plan","count":1,"ts":"2026-06-25T00:00:02.000Z"}\n';
+    const eventsLine = '{"type":"kickback","from":"build","to":"plan","count":1,"ts":"2026-06-25T00:00:02.000Z"}\n';
     try {
       const featureDeps = deps({ done: false, halted: true, reason: 'needs human', costTokens: 7 });
       featureDeps.daemon = true;
@@ -3141,10 +3231,10 @@ describe('engine/daemon-runner — engineer signal crosses the dispatcher-execut
       });
       // Executor lifetime performed the capture only — zero engineer-store,
       // root-checkout, or `.daemon` writes.
-      await expect(readFile(join(engineerDir, 'signals.jsonl'), 'utf-8'))
-        .rejects.toMatchObject({ code: 'ENOENT' });
-      await expect(readFile(join(projectRoot, '.daemon', 'parked', ITEM.slug), 'utf-8'))
-        .rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(engineerDir, 'signals.jsonl'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(projectRoot, '.daemon', 'parked', ITEM.slug), 'utf-8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
     } finally {
       if (savedEnv === undefined) delete process.env.AI_CONDUCTOR_ENGINEER_DIR;
       else process.env.AI_CONDUCTOR_ENGINEER_DIR = savedEnv;

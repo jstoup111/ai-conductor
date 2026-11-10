@@ -29,17 +29,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
-import {
-  makeRunFeature,
-  type FeatureRunnerDeps,
-  type WorktreeOutcome,
-} from '../../src/engine/daemon-runner.js';
+import { makeRunFeature, type FeatureRunnerDeps, type WorktreeOutcome } from '../../src/engine/daemon-runner.js';
 import { discoverBacklog } from '../../src/engine/daemon-backlog.js';
-import {
-  getProvenanceType,
-  removeOperatorPark,
-  writeAutoPark,
-} from '../../src/engine/park-marker.js';
+import { getProvenanceType, removeOperatorPark, writeAutoPark } from '../../src/engine/park-marker.js';
 import { amendDeferredAutoParkHaltAtWorktree } from '../../src/engine/auto-park-halt.js';
 import { reconcileParkedFeatures } from '../../src/engine/park-reconciliation.js';
 import { SetupFailureError } from '../../src/engine/worktree-prepare.js';
@@ -69,7 +61,9 @@ function freshRecord(): RunRecord {
 }
 
 async function exists(path: string): Promise<boolean> {
-  return access(path).then(() => true).catch(() => false);
+  return access(path)
+    .then(() => true)
+    .catch(() => false);
 }
 
 describe('automatic park termination — real runner to durable daemon consumers', () => {
@@ -97,37 +91,30 @@ describe('automatic park termination — real runner to durable daemon consumers
       join(projectRoot, '.docs', 'plans', `${SLUG}.md`),
       `# Plan\n**Stories:** .docs/stories/${SLUG}.md\n\n### Task 1\n**Dependencies:** none\n`,
     );
-    await writeFile(
-      join(projectRoot, '.docs', 'stories', `${SLUG}.md`),
-      '# Stories\n\n**Status:** Accepted\n',
-    );
-    await writeFile(
-      join(projectRoot, '.docs', 'complexity', `${SLUG}.md`),
-      '# Complexity\n\nTier: M\n',
-    );
-    await writeFile(
-      join(projectRoot, '.docs', 'track', `${SLUG}.md`),
-      '# Track\n\nTrack: technical\n',
-    );
+    await writeFile(join(projectRoot, '.docs', 'stories', `${SLUG}.md`), '# Stories\n\n**Status:** Accepted\n');
+    await writeFile(join(projectRoot, '.docs', 'complexity', `${SLUG}.md`), '# Complexity\n\nTier: M\n');
+    await writeFile(join(projectRoot, '.docs', 'track', `${SLUG}.md`), '# Track\n\nTrack: technical\n');
     await writeFile(
       join(projectRoot, '.docs', 'coherence', `${SLUG}.md`),
       '| Row | Source | Target | Verdict | Notes |\n' +
         '|---|---|---|---|---|\n' +
         '| story | S1 | Task 1 | covered | fixture |\n',
     );
-    await writeFile(
-      join(projectRoot, '.docs', 'intake', `${SLUG}.md`),
-      '# Intake\n\nSource-Ref: acme/project#1328\n',
-    );
+    await writeFile(join(projectRoot, '.docs', 'intake', `${SLUG}.md`), '# Intake\n\nSource-Ref: acme/project#1328\n');
     await git(['add', '.docs']);
     await git(['commit', '-q', '-m', 'merge automatic-park spec']);
     await git(['update-ref', 'refs/remotes/origin/main', 'main']);
   }
 
   async function discoverSlugs(): Promise<string[]> {
-    const result = await discoverBacklog(projectRoot, async () => false, () => {}, {
-      baseBranch: 'main',
-    });
+    const result = await discoverBacklog(
+      projectRoot,
+      async () => false,
+      () => {},
+      {
+        baseBranch: 'main',
+      },
+    );
     return result.items.map((item) => item.slug);
   }
 
@@ -146,19 +133,22 @@ describe('automatic park termination — real runner to durable daemon consumers
       },
       runSetupTriage: async () => {
         record.triageCalls += 1;
-        return opts.triage ?? {
-          kind: 'park',
-          outputTail: 'project setup (bin/setup) failed: exit 1',
-        };
+        return (
+          opts.triage ?? {
+            kind: 'park',
+            outputTail: 'project setup (bin/setup) failed: exit 1',
+          }
+        );
       },
       runConductor: async () => {
         record.conductorCalls += 1;
       },
-      readOutcome: async () => opts.outcome ?? {
-        done: false,
-        halted: false,
-        reason: 'loop ended without DONE or HALT marker',
-      },
+      readOutcome: async () =>
+        opts.outcome ?? {
+          done: false,
+          halted: false,
+          reason: 'loop ended without DONE or HALT marker',
+        },
       teardownWorktree: async (_worktree, keep) => {
         record.teardownKeeps.push(keep);
       },
@@ -175,27 +165,27 @@ describe('automatic park termination — real runner to durable daemon consumers
     };
   }
 
-  async function runTriagePark(
-    reason: string,
-    record = freshRecord(),
-    applyTerminalEffects = true,
-  ) {
-    const run = makeRunFeature(depsFor({
-      record,
-      prepareError: new SetupFailureError('setup failed', reason),
-      triage: {
-        kind: 'park',
-        outputTail: reason,
-        contractOutcome: 'setup-still-failing',
-        preservedPaths: ['tmp/setup-debug.log'],
-      },
-    }));
+  async function runTriagePark(reason: string, record = freshRecord(), applyTerminalEffects = true) {
+    const run = makeRunFeature(
+      depsFor({
+        record,
+        prepareError: new SetupFailureError('setup failed', reason),
+        triage: {
+          kind: 'park',
+          outputTail: reason,
+          contractOutcome: 'setup-still-failing',
+          preservedPaths: ['tmp/setup-debug.log'],
+        },
+      }),
+    );
     const result = await run(ITEM);
     if (applyTerminalEffects && result.terminalEffects?.autoPark) {
       try {
         await writeAutoPark(projectRoot, result.slug, result.terminalEffects.autoPark.reason);
       } catch (err) {
-        record.logs.push(`[daemon-runner] auto-park write failed for ${result.slug}: ${err instanceof Error ? err.message : String(err)}`);
+        record.logs.push(
+          `[daemon-runner] auto-park write failed for ${result.slug}: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
     }
     return { result, record };
@@ -224,9 +214,7 @@ describe('automatic park termination — real runner to durable daemon consumers
   it('triage park writes the main-root marker before an honest HALT, and every next-scan consumer holds the feature', async () => {
     expect(await discoverSlugs()).toContain(SLUG);
 
-    const { result, record } = await runTriagePark(
-      'project setup (bin/setup) failed: exit 1',
-    );
+    const { result, record } = await runTriagePark('project setup (bin/setup) failed: exit 1');
 
     expect(result.status).toBe('error');
     expect(record.teardownKeeps).toEqual([true]);
@@ -293,9 +281,7 @@ describe('automatic park termination — real runner to durable daemon consumers
     expect(halt).toMatch(/^feature errored — automatic park failed/i);
     expect(halt).toContain('permission denied');
     expect(halt).toContain(`ai-conductor daemon park ${SLUG}`);
-    expect(record.logs).toEqual([
-      '[daemon-runner] triage outcome: park, erroring feature — setup still broken',
-    ]);
+    expect(record.logs).toEqual(['[daemon-runner] triage outcome: park, erroring feature — setup still broken']);
 
     await chmod(parkedDir, 0o755);
     expect(await discoverSlugs()).toContain(SLUG);
@@ -307,26 +293,27 @@ describe('automatic park termination — real runner to durable daemon consumers
     { site: 'false-ship guard', mode: 'false-ship', status: 'halted' },
   ] as const)('$site remains unparked and truthfully says it will re-dispatch', async ({ mode, status }) => {
     const record = freshRecord();
-    const opts = mode === 'throw'
-      ? { record, prepareError: new Error('unexpected setup crash') }
-      : mode === 'false-ship'
-        ? {
-            record,
-            outcome: {
-              done: true,
-              halted: false,
-              finishChoice: undefined,
-              prUrl: undefined,
-            } satisfies WorktreeOutcome,
-          }
-        : {
-            record,
-            outcome: {
-              done: false,
-              halted: false,
-              reason: 'loop ended without DONE or HALT marker',
-            } satisfies WorktreeOutcome,
-          };
+    const opts =
+      mode === 'throw'
+        ? { record, prepareError: new Error('unexpected setup crash') }
+        : mode === 'false-ship'
+          ? {
+              record,
+              outcome: {
+                done: true,
+                halted: false,
+                finishChoice: undefined,
+                prUrl: undefined,
+              } satisfies WorktreeOutcome,
+            }
+          : {
+              record,
+              outcome: {
+                done: false,
+                halted: false,
+                reason: 'loop ended without DONE or HALT marker',
+              } satisfies WorktreeOutcome,
+            };
 
     const result = await makeRunFeature(depsFor(opts))(ITEM);
 

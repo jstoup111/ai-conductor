@@ -89,9 +89,7 @@ describe('Task 2 — every build-start call site is park-guarded (enumeration re
   it('guardedDispatchWith awaits isParked BEFORE invoking onDispatch (the guard runs before the call)', async () => {
     const source = await readFile(DAEMON_SRC, 'utf-8');
 
-    const fnMatch = source.match(
-      /export async function guardedDispatchWith\([\s\S]*?\n\}/,
-    );
+    const fnMatch = source.match(/export async function guardedDispatchWith\([\s\S]*?\n\}/);
     expect(fnMatch, 'expected to locate guardedDispatchWith').toBeTruthy();
     const body = fnMatch![0];
 
@@ -109,17 +107,10 @@ describe('Task 2 — every build-start call site is park-guarded (enumeration re
   it('daemon-cli.ts checks isOperatorParked and returns BEFORE the resumeRebaseFirst re-kick resume call', async () => {
     const source = await readFile(DAEMON_CLI_SRC, 'utf-8');
 
-    expect(source).toMatch(
-      /import\s*\{[^}]*\bisOperatorParked\b[^}]*\}\s*from\s*['"]\.\/park-marker\.js['"]/,
-    );
+    expect(source).toMatch(/import\s*\{[^}]*\bisOperatorParked\b[^}]*\}\s*from\s*['"]\.\/park-marker\.js['"]/);
 
-    const region = source.match(
-      /const ranManualTest[\s\S]*?await resumeRebaseFirst\(\{[\s\S]*?\}\);/,
-    );
-    expect(
-      region,
-      'expected a block spanning ranManualTest through the resumeRebaseFirst(...) call',
-    ).toBeTruthy();
+    const region = source.match(/const ranManualTest[\s\S]*?await resumeRebaseFirst\(\{[\s\S]*?\}\);/);
+    expect(region, 'expected a block spanning ranManualTest through the resumeRebaseFirst(...) call').toBeTruthy();
     const block = region![0];
 
     const parkedCheckIdx = block.search(/isOperatorParked\(/);
@@ -135,9 +126,7 @@ describe('Task 2 — every build-start call site is park-guarded (enumeration re
   it('daemon-rekick.ts sweep checks deps.isOperatorParked before any per-slug dispatch-adjacent action', async () => {
     const source = await readFile(DAEMON_REKICK_SRC, 'utf-8');
 
-    const loopMatch = source.match(
-      /for \(const slug of slugs\) \{[\s\S]*?deps\.isOperatorParked[\s\S]*?\n    \}\n/,
-    );
+    const loopMatch = source.match(/for \(const slug of slugs\) \{[\s\S]*?deps\.isOperatorParked[\s\S]*?\n    \}\n/);
     expect(loopMatch, 'expected to locate the re-kick sweep loop body opening').toBeTruthy();
 
     const body = loopMatch![0];
@@ -147,9 +136,7 @@ describe('Task 2 — every build-start call site is park-guarded (enumeration re
     // refuses mutation for a live executor.  Of the HALT-processing guards,
     // though, park remains first so operator intent outranks processed/SHA
     // handling and no marker is touched before it is consulted.
-    const firstHaltProcessingGuard = body.search(
-      /deps\.(?:isOperatorParked|isProcessed|readHaltClass|lastRekickSha)/,
-    );
+    const firstHaltProcessingGuard = body.search(/deps\.(?:isOperatorParked|isProcessed|readHaltClass|lastRekickSha)/);
     expect(firstHaltProcessingGuard).toBe(parkCheckIdx);
 
     // A parked slug must `continue` (skip this slug entirely) rather than

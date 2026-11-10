@@ -106,26 +106,25 @@ export interface BuildWorkOrderInput {
  * Resolves the governing specification documents at the pinned base and
  * creates the serializable dispatcher-to-executor work order.
  */
-export async function buildWorkOrder(
-  input: BuildWorkOrderInput,
-  git: WorkOrderGitRunner,
-): Promise<WorkOrder> {
+export async function buildWorkOrder(input: BuildWorkOrderInput, git: WorkOrderGitRunner): Promise<WorkOrder> {
   for (const ref of input.documentRefs) {
     if (posix.isAbsolute(ref) || win32.isAbsolute(ref)) {
       throw new Error(`document ref must be repository-relative: ${ref}`);
     }
   }
 
-  const manifest = await Promise.all(input.documentRefs.map(async (ref) => {
-    const result = await git(['show', `${input.baseSha}:${ref}`]);
-    if (result.exitCode !== 0) {
-      throw new Error(`could not resolve work-order document ${ref}: ${result.stderr}`);
-    }
-    return {
-      ref,
-      contentHash: `sha256:${createHash('sha256').update(result.stdout).digest('hex')}`,
-    };
-  }));
+  const manifest = await Promise.all(
+    input.documentRefs.map(async (ref) => {
+      const result = await git(['show', `${input.baseSha}:${ref}`]);
+      if (result.exitCode !== 0) {
+        throw new Error(`could not resolve work-order document ${ref}: ${result.stderr}`);
+      }
+      return {
+        ref,
+        contentHash: `sha256:${createHash('sha256').update(result.stdout).digest('hex')}`,
+      };
+    }),
+  );
 
   return {
     schemaVersion: WORK_ORDER_SCHEMA_VERSION,
@@ -147,16 +146,15 @@ export async function buildWorkOrder(
     ...(input.band ? { band: input.band } : {}),
     ...(input.resolutionMode ? { resolutionMode: input.resolutionMode } : {}),
     ...(input.applicabilityDeclarations ? { applicabilityDeclarations: input.applicabilityDeclarations } : {}),
-    ...(input.applicabilityBaseContentSha256 ? { applicabilityBaseContentSha256: input.applicabilityBaseContentSha256 } : {}),
+    ...(input.applicabilityBaseContentSha256
+      ? { applicabilityBaseContentSha256: input.applicabilityBaseContentSha256 }
+      : {}),
     ...(input.applicabilityIgnored ? { applicabilityIgnored: input.applicabilityIgnored } : {}),
   };
 }
 
 /** Verifies a dispatcher-built order before any executor worktree is created. */
-export async function verifyWorkOrder(
-  order: WorkOrder,
-  git: WorkOrderGitRunner,
-): Promise<void> {
+export async function verifyWorkOrder(order: WorkOrder, git: WorkOrderGitRunner): Promise<void> {
   if (order.schemaVersion !== WORK_ORDER_SCHEMA_VERSION) {
     throw new Error(
       `work-order schemaVersion ${order.schemaVersion} is incompatible with ${WORK_ORDER_SCHEMA_VERSION}`,

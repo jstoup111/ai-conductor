@@ -36,7 +36,12 @@ const ALLOWED_TUNABLES = [
 // The hidden executor-child command is a third process entry point.  It owns
 // a feature-local conductor in the isolated child, while the two public entry
 // points continue to own interactive and supervisor conductors.
-const ALLOWED_IMPORTERS = new Set(['index.ts', 'daemon-cli.ts', 'engine/daemon-feature-lifecycle.ts', 'engine/executor-child-runtime.ts']);
+const ALLOWED_IMPORTERS = new Set([
+  'index.ts',
+  'daemon-cli.ts',
+  'engine/daemon-feature-lifecycle.ts',
+  'engine/executor-child-runtime.ts',
+]);
 const SOURCE_ROOT = join(CONDUCTOR_ROOT, 'src');
 const DIRECT_IMPORTERS = [
   'engine/step-runners.ts',
@@ -53,21 +58,25 @@ const DIRECT_IMPORTERS = [
 
 async function engineModules(directory = ENGINE_ROOT): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
-  const nested = await Promise.all(entries.map(async (entry) => {
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) return engineModules(path);
-    return entry.isFile() && entry.name.endsWith('.ts') && path !== CONDUCTOR_PATH ? [path] : [];
-  }));
+  const nested = await Promise.all(
+    entries.map(async (entry) => {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) return engineModules(path);
+      return entry.isFile() && entry.name.endsWith('.ts') && path !== CONDUCTOR_PATH ? [path] : [];
+    }),
+  );
   return nested.flat();
 }
 
 async function sourceModules(directory = SOURCE_ROOT): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
-  const nested = await Promise.all(entries.map(async (entry) => {
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) return sourceModules(path);
-    return entry.isFile() && entry.name.endsWith('.ts') ? [path] : [];
-  }));
+  const nested = await Promise.all(
+    entries.map(async (entry) => {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) return sourceModules(path);
+      return entry.isFile() && entry.name.endsWith('.ts') ? [path] : [];
+    }),
+  );
   return nested.flat();
 }
 
@@ -85,11 +94,11 @@ function declaredNames(source: string, fileName: string): Set<string> {
   const names = new Set<string>();
   for (const statement of sourceFile.statements) {
     if (
-      ts.isFunctionDeclaration(statement)
-      || ts.isClassDeclaration(statement)
-      || ts.isInterfaceDeclaration(statement)
-      || ts.isTypeAliasDeclaration(statement)
-      || ts.isEnumDeclaration(statement)
+      ts.isFunctionDeclaration(statement) ||
+      ts.isClassDeclaration(statement) ||
+      ts.isInterfaceDeclaration(statement) ||
+      ts.isTypeAliasDeclaration(statement) ||
+      ts.isEnumDeclaration(statement)
     ) {
       if (statement.name !== undefined) names.add(statement.name.text);
     }
@@ -121,17 +130,21 @@ describe('structural: conductor shape guard', () => {
     expect(checkConductorShape(conductor, ALLOWED_TUNABLES)).toEqual([]);
 
     const modules = await engineModules();
-    const declarations = await Promise.all(modules.map(async (path) => ({
-      path: relative(ENGINE_ROOT, path),
-      names: declaredNames(await readFile(path, 'utf8'), path),
-    })));
-    const locations = Object.fromEntries(inventory.moduleLevelAtBase.map((name) => [
-      name,
-      declarations.filter((module) => module.names.has(inventoryName(name))).map((module) => module.path),
-    ]));
-    expect(locations).toEqual(expect.objectContaining(
-      Object.fromEntries(inventory.moduleLevelAtBase.map((name) => [name, expect.any(Array)])),
-    ));
+    const declarations = await Promise.all(
+      modules.map(async (path) => ({
+        path: relative(ENGINE_ROOT, path),
+        names: declaredNames(await readFile(path, 'utf8'), path),
+      })),
+    );
+    const locations = Object.fromEntries(
+      inventory.moduleLevelAtBase.map((name) => [
+        name,
+        declarations.filter((module) => module.names.has(inventoryName(name))).map((module) => module.path),
+      ]),
+    );
+    expect(locations).toEqual(
+      expect.objectContaining(Object.fromEntries(inventory.moduleLevelAtBase.map((name) => [name, expect.any(Array)]))),
+    );
     for (const name of inventory.moduleLevelAtBase) expect(locations[name]).toHaveLength(1);
   });
 
@@ -157,11 +170,13 @@ describe('structural: conductor shape guard', () => {
     ['class', 'NotConductor', 'class NotConductor {}'],
     ['expression statement', 'callMe', 'callMe();'],
   ])('rejects a top-level %s and reports its kind, name, and line', (kind, name, source) => {
-    expect(checkConductorShape(source, ALLOWED_TUNABLES)).toContainEqual(expect.objectContaining({
-      kind,
-      name,
-      line: 1,
-    }));
+    expect(checkConductorShape(source, ALLOWED_TUNABLES)).toContainEqual(
+      expect.objectContaining({
+        kind,
+        name,
+        line: 1,
+      }),
+    );
   });
 
   it('accepts imports, named re-exports, the six tunables, and Conductor', () => {
@@ -188,10 +203,12 @@ describe('structural: conductor shape guard', () => {
   ])('rejects a non-destination module with a %s of conductor', (_label, statement) => {
     const violations = checkConductorImports({ 'engine/foo.ts': statement }, ALLOWED_IMPORTERS);
 
-    expect(violations).toContainEqual(expect.objectContaining({
-      file: 'engine/foo.ts',
-      specifier: './conductor.js',
-    }));
+    expect(violations).toContainEqual(
+      expect.objectContaining({
+        file: 'engine/foo.ts',
+        specifier: './conductor.js',
+      }),
+    );
   });
 
   it.each([
@@ -211,61 +228,89 @@ describe('structural: conductor shape guard', () => {
     const statement = `import { Conductor, ${extraName} } from './engine/conductor.js';`;
     const violations = checkConductorImports({ [file]: statement }, ALLOWED_IMPORTERS);
 
-    expect(violations).toContainEqual(expect.objectContaining({
-      file,
-      names: [extraName],
-    }));
+    expect(violations).toContainEqual(
+      expect.objectContaining({
+        file,
+        names: [extraName],
+      }),
+    );
   });
 
   it('rejects an allowed importer that aliases Conductor', () => {
-    const violations = checkConductorImports({
-      'index.ts': "import { Conductor as Runner } from './engine/conductor.js';",
-    }, ALLOWED_IMPORTERS);
+    const violations = checkConductorImports(
+      {
+        'index.ts': "import { Conductor as Runner } from './engine/conductor.js';",
+      },
+      ALLOWED_IMPORTERS,
+    );
 
-    expect(violations).toContainEqual(expect.objectContaining({
-      file: 'index.ts',
-      names: ['Conductor as Runner'],
-    }));
+    expect(violations).toContainEqual(
+      expect.objectContaining({
+        file: 'index.ts',
+        names: ['Conductor as Runner'],
+      }),
+    );
   });
 
   it('rejects a destination module that imports Conductor type-only', () => {
-    const violations = checkConductorImports({
-      'index.ts': "import type { Conductor } from './engine/conductor.js';",
-    }, ALLOWED_IMPORTERS);
+    const violations = checkConductorImports(
+      {
+        'index.ts': "import type { Conductor } from './engine/conductor.js';",
+      },
+      ALLOWED_IMPORTERS,
+    );
 
-    expect(violations).toContainEqual(expect.objectContaining({
-      file: 'index.ts',
-      specifier: './engine/conductor.js',
-    }));
+    expect(violations).toContainEqual(
+      expect.objectContaining({
+        file: 'index.ts',
+        specifier: './engine/conductor.js',
+      }),
+    );
   });
 
   it('accepts destination modules that import only Conductor by value', () => {
-    expect(checkConductorImports({
-      'index.ts': "import { Conductor } from './engine/conductor.js';",
-      'daemon-cli.ts': "import { Conductor } from './engine/conductor.js';",
-    }, ALLOWED_IMPORTERS)).toEqual([]);
+    expect(
+      checkConductorImports(
+        {
+          'index.ts': "import { Conductor } from './engine/conductor.js';",
+          'daemon-cli.ts': "import { Conductor } from './engine/conductor.js';",
+        },
+        ALLOWED_IMPORTERS,
+      ),
+    ).toEqual([]);
   });
 
   it('ignores imports and re-exports whose source is not conductor', () => {
-    expect(checkConductorImports({
-      'engine/foo.ts': [
-        "import { helper } from './helper.js';",
-        "export { exportedHelper } from './exported-helper.js';",
-      ].join('\n'),
-    }, ALLOWED_IMPORTERS)).toEqual([]);
+    expect(
+      checkConductorImports(
+        {
+          'engine/foo.ts': [
+            "import { helper } from './helper.js';",
+            "export { exportedHelper } from './exported-helper.js';",
+          ].join('\n'),
+        },
+        ALLOWED_IMPORTERS,
+      ),
+    ).toEqual([]);
   });
 
   it('ignores a nested import whose normalized path is not the conductor facade', () => {
-    expect(checkConductorImports({
-      'ui/x.ts': "import { helper } from '../other/conductor.js';",
-    }, ALLOWED_IMPORTERS)).toEqual([]);
+    expect(
+      checkConductorImports(
+        {
+          'ui/x.ts': "import { helper } from '../other/conductor.js';",
+        },
+        ALLOWED_IMPORTERS,
+      ),
+    ).toEqual([]);
   });
 
   it('allows only process entry points to import the conductor facade', async () => {
-    const files = Object.fromEntries(await Promise.all((await sourceModules()).map(async (path) => [
-      relative(SOURCE_ROOT, path),
-      await readFile(path, 'utf8'),
-    ])));
+    const files = Object.fromEntries(
+      await Promise.all(
+        (await sourceModules()).map(async (path) => [relative(SOURCE_ROOT, path), await readFile(path, 'utf8')]),
+      ),
+    );
 
     expect(checkConductorImports(files, ALLOWED_IMPORTERS)).toEqual([]);
   });
@@ -287,19 +332,29 @@ describe('structural: conductor shape guard', () => {
           if (!inventoryNames.has(importedName)) continue;
 
           const symbol = checker.getSymbolAtLocation(element.name);
-          const declaration = symbol && (symbol.flags & ts.SymbolFlags.Alias) !== 0
-            ? checker.getAliasedSymbol(symbol).valueDeclaration ?? checker.getAliasedSymbol(symbol).declarations?.[0]
-            : symbol?.valueDeclaration ?? symbol?.declarations?.[0];
+          const declaration =
+            symbol && (symbol.flags & ts.SymbolFlags.Alias) !== 0
+              ? (checker.getAliasedSymbol(symbol).valueDeclaration ??
+                checker.getAliasedSymbol(symbol).declarations?.[0])
+              : (symbol?.valueDeclaration ?? symbol?.declarations?.[0]);
           expect(declaration, `${importer} resolves ${importedName}`).toBeDefined();
           const declarationPath = declaration!.getSourceFile().fileName;
-          expect(decomposed.has(declarationPath), `${importer} resolves ${importedName} to a decomposed module`).toBe(true);
+          expect(decomposed.has(declarationPath), `${importer} resolves ${importedName} to a decomposed module`).toBe(
+            true,
+          );
           expect(declarationPath).not.toBe(CONDUCTOR_PATH);
 
           const specifier = statement.moduleSpecifier;
           expect(ts.isStringLiteral(specifier), `${importer} has a string import specifier`).toBe(true);
-          const resolved = ts.resolveModuleName(specifier.getText(source!).slice(1, -1), source!.fileName, program.getCompilerOptions(), ts.sys)
-            .resolvedModule?.resolvedFileName;
-          expect(resolved, `${importer} directly names ${relative(SOURCE_ROOT, declarationPath)}`).toBe(declarationPath);
+          const resolved = ts.resolveModuleName(
+            specifier.getText(source!).slice(1, -1),
+            source!.fileName,
+            program.getCompilerOptions(),
+            ts.sys,
+          ).resolvedModule?.resolvedFileName;
+          expect(resolved, `${importer} directly names ${relative(SOURCE_ROOT, declarationPath)}`).toBe(
+            declarationPath,
+          );
         }
       }
     }

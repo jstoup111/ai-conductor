@@ -84,12 +84,29 @@ describe('engine/work-order', () => {
           })),
         ],
       },
-      manifestKeys: [['contentHash', 'ref'], ['contentHash', 'ref'], ['contentHash', 'ref']],
+      manifestKeys: [
+        ['contentHash', 'ref'],
+        ['contentHash', 'ref'],
+        ['contentHash', 'ref'],
+      ],
       contentHashes: [...documents.values()].map(
         (content) => `sha256:${createHash('sha256').update(content).digest('hex')}`,
       ),
       gitCalls: [...documents.keys()].map((ref) => ['show', `${'a'.repeat(40)}:${ref}`]),
-      serializedKeys: ['band', 'baseBranch', 'baseSha', 'engineVersionId', 'manifest', 'repository', 'resolutionMode', 'schemaVersion', 'slug', 'sourceRef', 'tier', 'track'],
+      serializedKeys: [
+        'band',
+        'baseBranch',
+        'baseSha',
+        'engineVersionId',
+        'manifest',
+        'repository',
+        'resolutionMode',
+        'schemaVersion',
+        'slug',
+        'sourceRef',
+        'tier',
+        'track',
+      ],
       containsAbsolutePath: false,
     });
   });
@@ -108,33 +125,33 @@ describe('engine/work-order', () => {
 
     expect(JSON.parse(JSON.stringify(order))).toEqual(order);
     expect(order).not.toHaveProperty('baseBranch');
-    await expect(verifyWorkOrder(
-      order,
-      async () => ({ exitCode: 0, stdout: '', stderr: '' }),
-    )).resolves.toBeUndefined();
+    await expect(
+      verifyWorkOrder(order, async () => ({ exitCode: 0, stdout: '', stderr: '' })),
+    ).resolves.toBeUndefined();
 
     const gitMustNotRun = async () => {
       throw new Error('work-order identity must be checked before Git');
     };
-    await expect(verifyWorkOrder(
-      { ...order, schemaVersion: WORK_ORDER_SCHEMA_VERSION + 1 } as WorkOrder,
-      gitMustNotRun,
-    )).rejects.toThrow(/schemaVersion/);
-    await expect(verifyWorkOrder(
-      { ...order, engineVersionId: 'not-an-engine-version' as EngineVersionId },
-      gitMustNotRun,
-    )).rejects.toThrow(/engineVersionId/);
+    await expect(
+      verifyWorkOrder({ ...order, schemaVersion: WORK_ORDER_SCHEMA_VERSION + 1 } as WorkOrder, gitMustNotRun),
+    ).rejects.toThrow(/schemaVersion/);
+    await expect(
+      verifyWorkOrder({ ...order, engineVersionId: 'not-an-engine-version' as EngineVersionId }, gitMustNotRun),
+    ).rejects.toThrow(/engineVersionId/);
   });
 
   it('carries a pin fallback reason across the dispatcher-to-executor boundary', async () => {
-    const order = await buildWorkOrder({
-      repository: 'jstoup/ai-conductor',
-      slug: 'fallback-dispatch',
-      baseSha: 'a'.repeat(40),
-      enginePin: { ...ENGINE_PIN, fallbackReason: 'publish-incomplete' },
-      effectiveConcurrency: 2,
-      documentRefs: [],
-    }, async () => ({ exitCode: 0, stdout: '', stderr: '' }));
+    const order = await buildWorkOrder(
+      {
+        repository: 'jstoup/ai-conductor',
+        slug: 'fallback-dispatch',
+        baseSha: 'a'.repeat(40),
+        enginePin: { ...ENGINE_PIN, fallbackReason: 'publish-incomplete' },
+        effectiveConcurrency: 2,
+        documentRefs: [],
+      },
+      async () => ({ exitCode: 0, stdout: '', stderr: '' }),
+    );
 
     expect(JSON.parse(JSON.stringify(order))).toMatchObject({
       engineVersionId: ENGINE_VERSION_ID,

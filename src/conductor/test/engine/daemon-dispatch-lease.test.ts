@@ -76,11 +76,7 @@ function childOrder(slug = 'stacked'): WorkOrder {
   };
 }
 
-async function dispatchChild(
-  root: string,
-  trace: string[],
-  order = childOrder(),
-): Promise<ChildPort> {
+async function dispatchChild(root: string, trace: string[], order = childOrder()): Promise<ChildPort> {
   const port = new ChildPort();
   const worktree = join(root, '.worktrees', order.slug);
   const complete = runExecutorChild(port, {
@@ -113,10 +109,16 @@ function runnerDeps(trace: string[]): FeatureRunnerDeps {
       trace.push('create');
       return { path: '/repo/.worktrees/stacked', branch: 'feat/stacked' };
     },
-    prepareWorktree: async () => { trace.push('prepare'); },
-    runConductor: async () => { trace.push('conductor'); },
+    prepareWorktree: async () => {
+      trace.push('prepare');
+    },
+    runConductor: async () => {
+      trace.push('conductor');
+    },
     readOutcome: async () => ({ done: false, halted: false }),
-    teardownWorktree: async () => { trace.push('teardown'); },
+    teardownWorktree: async () => {
+      trace.push('teardown');
+    },
     markProcessed: async () => {},
     daemon: true,
     project: 'repo',
@@ -127,7 +129,12 @@ function runnerDeps(trace: string[]): FeatureRunnerDeps {
 function acquired(trace: string[]) {
   return {
     kind: 'acquired' as const,
-    lease: { release: async () => { trace.push('release'); return { ok: true } as const; } },
+    lease: {
+      release: async () => {
+        trace.push('release');
+        return { ok: true } as const;
+      },
+    },
   };
 }
 
@@ -136,7 +143,10 @@ describe('engine/daemon dispatch lease', () => {
     const trace: string[] = [];
     seams.durable.mockResolvedValue(true);
     seams.parked.mockResolvedValue(false);
-    seams.acquire.mockImplementation(async () => { trace.push('acquire'); return acquired(trace); });
+    seams.acquire.mockImplementation(async () => {
+      trace.push('acquire');
+      return acquired(trace);
+    });
 
     await expect(makeRunFeature(runnerDeps(trace))(ITEM)).resolves.toMatchObject({ status: 'error' });
 
@@ -147,10 +157,14 @@ describe('engine/daemon dispatch lease', () => {
     const trace: string[] = [];
     seams.durable.mockResolvedValue(true);
     seams.parked.mockResolvedValue(true);
-    seams.acquire.mockImplementation(async () => { trace.push('acquire'); return acquired(trace); });
+    seams.acquire.mockImplementation(async () => {
+      trace.push('acquire');
+      return acquired(trace);
+    });
 
     await expect(makeRunFeature(runnerDeps(trace))(ITEM)).resolves.toMatchObject({
-      status: 'parked', reason: 'parked-after-lease',
+      status: 'parked',
+      reason: 'parked-after-lease',
     });
     expect(trace).toEqual(['acquire', 'release']);
   });
@@ -164,7 +178,8 @@ describe('engine/daemon dispatch lease', () => {
     });
 
     await expect(makeRunFeature(runnerDeps(trace))(ITEM)).resolves.toMatchObject({
-      status: 'parked', reason: 'feature-lease-held',
+      status: 'parked',
+      reason: 'feature-lease-held',
     });
     expect(trace).toEqual([]);
   });
@@ -185,7 +200,10 @@ describe('engine/daemon dispatch lease', () => {
     const trace: string[] = [];
     seams.durable.mockResolvedValue(true);
     seams.parked.mockResolvedValue(false);
-    seams.acquire.mockImplementation(async () => { trace.push('acquire'); return acquired(trace); });
+    seams.acquire.mockImplementation(async () => {
+      trace.push('acquire');
+      return acquired(trace);
+    });
 
     const port = await dispatchChild(root, trace);
 
@@ -197,7 +215,7 @@ describe('engine/daemon dispatch lease', () => {
   it('releases an acquired child admission lease when creating its worktree rejects', async () => {
     const root = await mkdtemp(join(tmpdir(), 'child-dispatch-lease-'));
     childRoots.push(root);
-    const release = vi.fn(async () => ({ ok: true } as const));
+    const release = vi.fn(async () => ({ ok: true }) as const);
     const port = new ChildPort();
     seams.durable.mockResolvedValue(true);
     seams.parked.mockResolvedValue(false);
@@ -206,7 +224,9 @@ describe('engine/daemon dispatch lease', () => {
     const complete = runExecutorChild(port, {
       moduleDir: '/engine',
       admitDispatch: (order) => makeExecutorChildDispatchAdmission({ projectRoot: root }, order),
-      createWorktree: async () => { throw new Error('cannot create worktree'); },
+      createWorktree: async () => {
+        throw new Error('cannot create worktree');
+      },
       run,
     });
 
@@ -214,7 +234,8 @@ describe('engine/daemon dispatch lease', () => {
     await complete;
 
     expect(childOutcome(port)).toMatchObject({
-      kind: 'outcome', outcome: { slug: 'stacked', status: 'error' },
+      kind: 'outcome',
+      outcome: { slug: 'stacked', status: 'error' },
     });
     expect(release).toHaveBeenCalledTimes(1);
     expect(run).not.toHaveBeenCalled();
@@ -254,7 +275,10 @@ describe('engine/daemon dispatch lease', () => {
     const trace: string[] = [];
     seams.durable.mockResolvedValue(true);
     seams.parked.mockResolvedValue(true);
-    seams.acquire.mockImplementation(async () => { trace.push('acquire'); return acquired(trace); });
+    seams.acquire.mockImplementation(async () => {
+      trace.push('acquire');
+      return acquired(trace);
+    });
 
     const port = await dispatchChild(root, trace);
 
@@ -270,8 +294,12 @@ describe('engine/daemon dispatch lease', () => {
     childRoots.push(root);
     const trace: string[] = [];
     seams.durable.mockResolvedValue(false);
-    seams.acquire.mockImplementation(() => { throw new Error('flat child must not acquire a lease'); });
-    seams.parked.mockImplementation(() => { throw new Error('flat child must not read the stacked park marker'); });
+    seams.acquire.mockImplementation(() => {
+      throw new Error('flat child must not acquire a lease');
+    });
+    seams.parked.mockImplementation(() => {
+      throw new Error('flat child must not read the stacked park marker');
+    });
 
     const port = await dispatchChild(root, trace, childOrder('flat'));
 
@@ -287,12 +315,19 @@ describe('engine/daemon dispatch lease', () => {
       listHaltedWorktrees: async () => ['stacked'],
       readHaltReason: async () => 'halted',
       hasRebaseInProgress: async () => true,
-      abortRebase: async () => { trace.push('abort'); },
-      clearMarker: async () => { trace.push('clear'); },
+      abortRebase: async () => {
+        trace.push('abort');
+      },
+      clearMarker: async () => {
+        trace.push('clear');
+      },
       lastRekickSha: new Map(),
       isOperatorParked: async () => false,
       hasDurableChildState: async () => true,
-      acquireFeatureDispatchLease: async () => { trace.push('acquire'); return acquired(trace); },
+      acquireFeatureDispatchLease: async () => {
+        trace.push('acquire');
+        return acquired(trace);
+      },
     };
 
     await expect(rekickSweep(deps, 'a'.repeat(40))).resolves.toEqual({ cleared: ['stacked'], skipped: [] });
@@ -314,13 +349,23 @@ describe('engine/daemon dispatch lease', () => {
     const deps: RekickSweepDeps = {
       listHaltedWorktrees: async () => ['stacked'],
       readHaltReason: async () => 'halted',
-      hasRebaseInProgress: async () => { trace.push('rebase'); return true; },
-      abortRebase: async () => { trace.push('abort'); },
-      clearMarker: async () => { trace.push('clear'); },
+      hasRebaseInProgress: async () => {
+        trace.push('rebase');
+        return true;
+      },
+      abortRebase: async () => {
+        trace.push('abort');
+      },
+      clearMarker: async () => {
+        trace.push('clear');
+      },
       lastRekickSha: new Map(),
       isOperatorParked: async () => ++parkChecks > 1,
       hasDurableChildState: async () => true,
-      acquireFeatureDispatchLease: async () => { trace.push('acquire'); return acquired(trace); },
+      acquireFeatureDispatchLease: async () => {
+        trace.push('acquire');
+        return acquired(trace);
+      },
     };
 
     await expect(rekickSweep(deps, 'c'.repeat(40))).resolves.toEqual({ cleared: [], skipped: ['stacked'] });

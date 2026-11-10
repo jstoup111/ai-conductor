@@ -100,9 +100,16 @@ vi.mock('../../src/engine/restack/restack-executor.js', async (importOriginal) =
     runRestack: vi.fn(async (...args: Parameters<typeof actual.runRestack>) => {
       captured.trace.push(`restack:${args[0].cause}`);
       const { execFile } = await import('node:child_process');
-      captured.restackEntryRefs.push(await new Promise<string>((resolve) => {
-        execFile('git', ['for-each-ref', '--format=%(refname)', 'refs/conductor/demo/restack/'], { cwd: args[0].worktree }, (_error, stdout) => resolve(String(stdout).trim()));
-      }));
+      captured.restackEntryRefs.push(
+        await new Promise<string>((resolve) => {
+          execFile(
+            'git',
+            ['for-each-ref', '--format=%(refname)', 'refs/conductor/demo/restack/'],
+            { cwd: args[0].worktree },
+            (_error, stdout) => resolve(String(stdout).trim()),
+          );
+        }),
+      );
       return actual.runRestack(...args);
     }),
   };
@@ -115,7 +122,9 @@ vi.mock('../../src/engine/halt-record.js', async (importOriginal) => {
       captured.trace.push(`supersede:${args[2]}`);
       // No remote exists in this fixture; keep the publication step local.
       return actual.supersedeHaltRecord(args[0], args[1], args[2], {
-        gh: async () => { throw new Error('no GitHub in this test'); },
+        gh: async () => {
+          throw new Error('no GitHub in this test');
+        },
       });
     }),
   };
@@ -127,7 +136,11 @@ import { clearMarker, REKICK_SENTINEL } from '../../src/engine/daemon-rekick.js'
 import { HALT_MARKER } from '../../src/engine/halt-marker.js';
 import { readHaltRecordRef } from '../../src/engine/halt-record-ref.js';
 import { __resetResolveCacheForTests, writeOperatorPark } from '../../src/engine/park-marker.js';
-import { journalRefFor, readRestackJournal, writeRestackJournalBlob } from '../../src/engine/restack/restack-journal.js';
+import {
+  journalRefFor,
+  readRestackJournal,
+  writeRestackJournalBlob,
+} from '../../src/engine/restack/restack-journal.js';
 import type { ConductorEvent } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { allInstalledProviderDiscoveryRunner } from './boot-test-helpers.js';
@@ -193,12 +206,23 @@ async function daemonStack() {
   await git('worktree', 'add', '-q', worktree, 'feat/daemon-demo');
   cwd = worktree;
   await mkdir(join(worktree, '.ai-conductor'), { recursive: true });
-  await writeFile(join(worktree, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  max_slices: 3\n  route_whole_feature_fixes: false\n');
-  await writeSliceTopologyFixture(worktree, {
-    version: 1, slug: 'demo', runId: 'dispatch', status: 'done', entries: [],
-    sliceMembership: { taskSlices: { a: 1, b: 2, c: 3 }, titles: ['one', 'two', 'leaf'] },
-    storyOwnership: { S1: 1, S2: 2, S3: 3 },
-  }, envelopeFilesystem);
+  await writeFile(
+    join(worktree, '.ai-conductor', 'config.yml'),
+    'stacked_prs:\n  enabled: true\n  max_slices: 3\n  route_whole_feature_fixes: false\n',
+  );
+  await writeSliceTopologyFixture(
+    worktree,
+    {
+      version: 1,
+      slug: 'demo',
+      runId: 'dispatch',
+      status: 'done',
+      entries: [],
+      sliceMembership: { taskSlices: { a: 1, b: 2, c: 3 }, titles: ['one', 'two', 'leaf'] },
+      storyOwnership: { S1: 1, S2: 2, S3: 3 },
+    },
+    envelopeFilesystem,
+  );
 
   /** The operator's commit `X` on child 1, made from the primary checkout. */
   const appendOperatorCommit = async () => {
@@ -259,38 +283,65 @@ async function bootDaemon(project: string) {
 
 function recordEvents(events: ConductorEventEmitter, types: readonly ConductorEvent['type'][]): ConductorEvent[] {
   const seen: ConductorEvent[] = [];
-  for (const type of types) events.on(type, (event) => { seen.push(event); });
+  for (const type of types)
+    events.on(type, (event) => {
+      seen.push(event);
+    });
   return seen;
 }
 
-const RESTACK_EVENTS: readonly ConductorEvent['type'][] = ['restack_planned', 'restack_applied', 'restack_refused', 'restack_recovered'];
+const RESTACK_EVENTS: readonly ConductorEvent['type'][] = [
+  'restack_planned',
+  'restack_applied',
+  'restack_refused',
+  'restack_recovered',
+];
 
 describe('stack preflight through the real daemon dispatch', () => {
   // Covers: task:9
-  type CursorCause = 'positions-changed' | 'positions-ref-unreadable' | 'plan-missing' | 'plan-invalid' | 'detached-head' | 'git-error';
+  type CursorCause =
+    'positions-changed' | 'positions-ref-unreadable' | 'plan-missing' | 'plan-invalid' | 'detached-head' | 'git-error';
   const unresolvableCursorCases: readonly [CursorCause, (subject: Stack) => Promise<void>][] = [
-    ['positions-changed', async (subject) => {
-      const path = join(subject.worktree, '.docs', 'plans', 'demo.md');
-      await writeFile(path, (await readFile(path, 'utf8')).replace('| 3 | leaf | c |', '| 4 | leaf | c |'));
-    }],
-    ['positions-ref-unreadable', async (subject) => {
-      await subject.git('update-ref', '-d', 'refs/conductor/demo/positions');
-    }],
-    ['plan-missing', async (subject) => {
-      await unlink(join(subject.worktree, '.docs', 'plans', 'demo.md'));
-    }],
-    ['plan-invalid', async (subject) => {
-      await writeFile(join(subject.worktree, '.docs', 'plans', 'demo.md'), '# broken\n\n## Slices\n\nnot a table\n');
-    }],
-    ['detached-head', async (subject) => {
-      await subject.git('checkout', '-q', '--detach');
-    }],
-    ['git-error', async (subject) => {
-      // The durable-state probe treats an unreadable child-state boundary as
-      // `git-error`; this real filesystem fault exercises the daemon's same
-      // halt path while the focused preflight unit test injects Git failures.
-      await writeFile(join(subject.worktree, '.pipeline', 'children'), 'not a directory\n');
-    }],
+    [
+      'positions-changed',
+      async (subject) => {
+        const path = join(subject.worktree, '.docs', 'plans', 'demo.md');
+        await writeFile(path, (await readFile(path, 'utf8')).replace('| 3 | leaf | c |', '| 4 | leaf | c |'));
+      },
+    ],
+    [
+      'positions-ref-unreadable',
+      async (subject) => {
+        await subject.git('update-ref', '-d', 'refs/conductor/demo/positions');
+      },
+    ],
+    [
+      'plan-missing',
+      async (subject) => {
+        await unlink(join(subject.worktree, '.docs', 'plans', 'demo.md'));
+      },
+    ],
+    [
+      'plan-invalid',
+      async (subject) => {
+        await writeFile(join(subject.worktree, '.docs', 'plans', 'demo.md'), '# broken\n\n## Slices\n\nnot a table\n');
+      },
+    ],
+    [
+      'detached-head',
+      async (subject) => {
+        await subject.git('checkout', '-q', '--detach');
+      },
+    ],
+    [
+      'git-error',
+      async (subject) => {
+        // The durable-state probe treats an unreadable child-state boundary as
+        // `git-error`; this real filesystem fault exercises the daemon's same
+        // halt path while the focused preflight unit test injects Git failures.
+        await writeFile(join(subject.worktree, '.pipeline', 'children'), 'not a directory\n');
+      },
+    ],
   ];
 
   it.each(unresolvableCursorCases)(
@@ -378,7 +429,9 @@ describe('stack preflight through the real daemon dispatch', () => {
     // the chained base-refresh follow-on is planned.
     const crashing = new ConductorEventEmitter();
     let crashed!: () => void;
-    const reachedCrash = new Promise<void>((resolve) => { crashed = resolve; });
+    const reachedCrash = new Promise<void>((resolve) => {
+      crashed = resolve;
+    });
     crashing.on('restack_planned', (event) => {
       if (event.type !== 'restack_planned' || event.cause !== 'base-refresh') return;
       crashed();
@@ -386,7 +439,13 @@ describe('stack preflight through the real daemon dispatch', () => {
     });
     void daemon.dispatch(subject, crashing);
     await reachedCrash;
-    expect(captured.trace).toEqual(['recovery:none', 'supersede:stack-preflight', 'recovery:none', 'restack:feature-repair', 'restack:base-refresh']);
+    expect(captured.trace).toEqual([
+      'recovery:none',
+      'supersede:stack-preflight',
+      'recovery:none',
+      'restack:feature-repair',
+      'restack:base-refresh',
+    ]);
     // The preflight consumed REKICK before starting the follow-on.
     expect(existsSync(join(subject.worktree, REKICK_SENTINEL))).toBe(false);
     const stranded = await readRestackJournal(subject.worktree, 'demo');
@@ -405,7 +464,12 @@ describe('stack preflight through the real daemon dispatch', () => {
 
     expect(captured.trace[0]).toBe('recovery:recovered');
     expect(captured.trace.filter((entry) => entry.startsWith('restack:'))).toEqual([]);
-    expect(seen.map((event) => event.type)).toEqual(['restack_applied', 'restack_applied', 'restack_applied', 'restack_recovered']);
+    expect(seen.map((event) => event.type)).toEqual([
+      'restack_applied',
+      'restack_applied',
+      'restack_applied',
+      'restack_recovered',
+    ]);
     // No second re-kick: without REKICK the lifecycle does not invoke
     // resumeRebaseFirst at all.
     expect(captured.rekickAtResume).toEqual([]);
@@ -447,16 +511,24 @@ describe('stack preflight live-HALT gating through the real daemon dispatch', ()
     await expect(subject.git('show', 'feat/daemon-demo:operator.txt')).rejects.toBeDefined();
 
     // Stage a resume authorization bound to the live halt generation.
-    await writeFile(join(pipeline, 'kickback-ledger.json'), JSON.stringify({
-      version: 1,
-      gates: {
-        restack: {
-          count: 1, cumulative: 3, treeHash: null, lastReason: 'cascade cap', priorVerdict: false, resolvedBefore: 0,
-          capEvidence: { gate: 'restack', consumed: 3, limit: 3, latestReason: 'cascade cap', haltGeneration: 'g1' },
-          resumeAuthorization: { adjustmentId: 'adj-1', haltGeneration: 'g1', consumed: false },
+    await writeFile(
+      join(pipeline, 'kickback-ledger.json'),
+      JSON.stringify({
+        version: 1,
+        gates: {
+          restack: {
+            count: 1,
+            cumulative: 3,
+            treeHash: null,
+            lastReason: 'cascade cap',
+            priorVerdict: false,
+            resolvedBefore: 0,
+            capEvidence: { gate: 'restack', consumed: 3, limit: 3, latestReason: 'cascade cap', haltGeneration: 'g1' },
+            resumeAuthorization: { adjustmentId: 'adj-1', haltGeneration: 'g1', consumed: false },
+          },
         },
-      },
-    }));
+      }),
+    );
     captured.trace = [];
     await daemon.consumeResumeAuthorizations();
     expect(existsSync(join(pipeline, 'HALT'))).toBe(false);
@@ -473,9 +545,13 @@ describe('stack preflight live-HALT gating through the real daemon dispatch', ()
     expect(captured.trace).toContain('restack:feature-repair');
     // The repair moved closed/c1 to X (the daemon's halt clear also queued a
     // re-kick, so a base-refresh follow-on may rewrite the stack afterwards).
-    expect(applied).toContainEqual(expect.objectContaining({ type: 'restack_applied', cause: 'feature-repair', child: 1, newTip: x }));
+    expect(applied).toContainEqual(
+      expect.objectContaining({ type: 'restack_applied', cause: 'feature-repair', child: 1, newTip: x }),
+    );
     expect(applied.filter((event) => event.type === 'restack_refused')).toEqual([]);
-    expect(await subject.git('rev-parse', 'refs/conductor/demo/closed/c1')).toBe(await subject.git('rev-parse', 'feat/c1/demo'));
+    expect(await subject.git('rev-parse', 'refs/conductor/demo/closed/c1')).toBe(
+      await subject.git('rev-parse', 'feat/c1/demo'),
+    );
     expect(await subject.git('show', 'feat/daemon-demo:operator.txt')).toBe('X');
     expect(existsSync(join(pipeline, 'HALT'))).toBe(false);
   });
@@ -516,9 +592,14 @@ describe('stack preflight live-HALT gating through the real daemon dispatch', ()
     await daemon.dispatch(subject, new ConductorEventEmitter());
     expect(await readFile(join(subject.worktree, HALT_MARKER), 'utf8')).toContain('dirty-overlap');
     await expect(readHaltRecordRef(subject.worktree, 'demo')).resolves.toMatchObject({
-      kind: 'record', source: 'ref', text: expect.stringMatching(/^Status:\s*halted\s*$/m),
+      kind: 'record',
+      source: 'ref',
+      text: expect.stringMatching(/^Status:\s*halted\s*$/m),
     });
-    expect(await readRestackJournal(subject.worktree, 'demo')).toMatchObject({ kind: 'journal', journal: { state: 'aborted' } });
+    expect(await readRestackJournal(subject.worktree, 'demo')).toMatchObject({
+      kind: 'journal',
+      journal: { state: 'aborted' },
+    });
 
     // The operator resolves the overlap; the halt is cleared.
     await subject.git('checkout', '--', 'base.txt');
@@ -535,7 +616,9 @@ describe('stack preflight live-HALT gating through the real daemon dispatch', ()
     expect(supersede).toBeGreaterThanOrEqual(0);
     expect(repair).toBeGreaterThan(supersede);
     await expect(readHaltRecordRef(subject.worktree, 'demo')).resolves.toMatchObject({
-      kind: 'record', source: 'ref', text: expect.stringMatching(/^Status:\s*resolved\s*$/m),
+      kind: 'record',
+      source: 'ref',
+      text: expect.stringMatching(/^Status:\s*resolved\s*$/m),
     });
     // No journal or staging ref survived to the repair's entry.
     expect(captured.restackEntryRefs[0]).toBe('');
@@ -543,7 +626,9 @@ describe('stack preflight live-HALT gating through the real daemon dispatch', ()
     expect(existsSync(join(subject.worktree, HALT_MARKER))).toBe(false);
     // The clear queued a re-kick, so a base-refresh follow-on ran after the
     // repair; the repair itself moved closed/c1 to X.
-    expect(seen).toContainEqual(expect.objectContaining({ type: 'restack_applied', cause: 'feature-repair', child: 1, newTip: x }));
+    expect(seen).toContainEqual(
+      expect.objectContaining({ type: 'restack_applied', cause: 'feature-repair', child: 1, newTip: x }),
+    );
     expect(await subject.git('show', 'feat/daemon-demo:base.txt')).toBe('X');
   });
 });

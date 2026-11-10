@@ -66,9 +66,7 @@ export type ExecutorChildDispatchAdmission =
  * `dist-versions/<id>/engine`; source and other unpublished runs degrade to
  * `dev`, matching shipped-record's existing non-blocking behavior.
  */
-export function resolveExecutorChildEngineVersion(
-  moduleDir = dirname(fileURLToPath(import.meta.url)),
-): string {
+export function resolveExecutorChildEngineVersion(moduleDir = dirname(fileURLToPath(import.meta.url))): string {
   return versionIdFromEngineDir(moduleDir) ?? 'dev';
 }
 
@@ -87,7 +85,10 @@ export interface ExecutorChildRunInput extends ExecutorChildBaseRunInput {
 export function withExecutorBrokerProxies(
   port: ExecutorIpcPort,
   deps: Omit<ExecutorChildDeps, 'run' | 'createWorktree'> & {
-    createWorktree(order: WorkOrder, lifecycle: ReturnType<typeof createWorktreeLifecycleProxy>): Promise<{ path: string }>;
+    createWorktree(
+      order: WorkOrder,
+      lifecycle: ReturnType<typeof createWorktreeLifecycleProxy>,
+    ): Promise<{ path: string }>;
     run(input: ExecutorChildRunInput): Promise<FeatureExecutionOutcome>;
     liveBoundaryEnabled?: boolean;
     /** Test-only in-process forks must not replace their supervisor's console. */
@@ -173,8 +174,11 @@ export async function runExecutorChild(port: ExecutorIpcPort, deps: ExecutorChil
       stop(parsed.message.reason);
     } else if (parsed.message.kind === 'yield') {
       yieldRequested = true;
-    } else if (parsed.message.kind === 'event' && parsed.message.scope === 'feature'
-      && parsed.message.payload.type === 'renderer_error') {
+    } else if (
+      parsed.message.kind === 'event' &&
+      parsed.message.scope === 'feature' &&
+      parsed.message.payload.type === 'renderer_error'
+    ) {
       if (persistSupervisorFeatureEvent) persistSupervisorFeatureEvent(parsed.message.payload);
       else pendingSupervisorFeatureEvents.push(parsed.message.payload);
     }
@@ -215,31 +219,42 @@ export async function runExecutorChild(port: ExecutorIpcPort, deps: ExecutorChil
               supervisorFeaturePersistence = supervisorFeaturePersistence
                 .then(() => events.emit(event))
                 .catch((error: unknown) => {
-                  deps.log?.(`[executor] could not persist supervisor renderer error: ${error instanceof Error ? error.message : String(error)}`);
+                  deps.log?.(
+                    `[executor] could not persist supervisor renderer error: ${error instanceof Error ? error.message : String(error)}`,
+                  );
                 });
             };
             for (const event of pendingSupervisorFeatureEvents.splice(0)) persistSupervisorFeatureEvent(event);
-            for (const type of Object.keys((await import('./event-sinks.js')).EVENT_SINKS) as Array<import('../types/events.js').ConductorEvent['type']>) {
+            for (const type of Object.keys((await import('./event-sinks.js')).EVENT_SINKS) as Array<
+              import('../types/events.js').ConductorEvent['type']
+            >) {
               events.on(type, (event) => {
                 if (supervisorOnlyEvents.delete(event)) return;
-                port.send({ kind: 'event', scope: event.type === 'feature_shipped' || event.type === 'provider_suppressed' ? 'root' : 'feature', payload: event });
+                port.send({
+                  kind: 'event',
+                  scope: event.type === 'feature_shipped' || event.type === 'provider_suppressed' ? 'root' : 'feature',
+                  payload: event,
+                });
               });
             }
             await events.emit({
-              type: 'executor_started', slug: order.slug, engineVersionId,
+              type: 'executor_started',
+              slug: order.slug,
+              engineVersionId,
               protocolVersion: EXECUTOR_PROTOCOL_VERSION,
-              supervisorEngineVersionId: deps.supervisorEngineVersionId ?? order.supervisorEngineVersionId ?? order.engineVersionId,
+              supervisorEngineVersionId:
+                deps.supervisorEngineVersionId ?? order.supervisorEngineVersionId ?? order.engineVersionId,
             });
             const outcome = controller.signal.aborted
               ? { slug: order.slug, status: 'parked' as const, reason: String(controller.signal.reason ?? 'stopped') }
               : await deps.run({
-                order,
-                engineVersionId,
-                effectiveConcurrency,
-                events,
-                signal: controller.signal,
-                preemptionRequested: () => yieldRequested,
-              });
+                  order,
+                  engineVersionId,
+                  effectiveConcurrency,
+                  events,
+                  signal: controller.signal,
+                  preemptionRequested: () => yieldRequested,
+                });
             await sendOutcome(outcome);
             if (deps.waitForSupervisorVisualizerClose === true) {
               await new Promise<void>((resolve) => {
@@ -252,8 +267,14 @@ export async function runExecutorChild(port: ExecutorIpcPort, deps: ExecutorChil
             await admission?.release?.();
           }
         } catch (error) {
-          await sendOutcome({ slug: order.slug, status: 'error', reason: error instanceof Error ? error.message : String(error) });
-        } finally { resolve(); }
+          await sendOutcome({
+            slug: order.slug,
+            status: 'error',
+            reason: error instanceof Error ? error.message : String(error),
+          });
+        } finally {
+          resolve();
+        }
       })();
     };
     port.on('message', receive);

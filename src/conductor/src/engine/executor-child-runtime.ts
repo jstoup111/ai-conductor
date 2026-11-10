@@ -19,13 +19,21 @@ import { discoverPlugins, registerBuiltins } from './plugin-loader.js';
 import { discoverInstalledProviders } from './provider-discovery.js';
 import { createProviderRuntimeSet } from './provider-runtime.js';
 import { ProviderSessionStore } from './provider-session.js';
-import { normalizeProviderSelection, validateProviderInstallation, validateRegisteredProviderSelections } from './provider-selection.js';
+import {
+  normalizeProviderSelection,
+  validateProviderInstallation,
+  validateRegisteredProviderSelections,
+} from './provider-selection.js';
 import {
   resolveProviderModelTiers,
   validateConfiguredProviderModels,
   type ProviderModelProbeRunner,
 } from './provider-model-probe.js';
-import { createCandidateSafetyBoundary, providerExecutionEventCallbacks, type ProviderExecutionContext } from './provider-execution.js';
+import {
+  createCandidateSafetyBoundary,
+  providerExecutionEventCallbacks,
+  type ProviderExecutionContext,
+} from './provider-execution.js';
 import { createManagedSessionObservationPreparer } from '../execution/managed-session-preparation.js';
 import { createSessionEventIdentity } from '../execution/session-event-identity.js';
 import { resolveHarnessVersion } from './version-report.js';
@@ -109,7 +117,7 @@ export async function makeExecutorChildDispatchAdmission(
   { projectRoot }: Pick<MakeExecutorChildRunOptions, 'projectRoot'>,
   order: WorkOrder,
 ): Promise<ExecutorChildDispatchAdmission> {
-  if (await hasDurableChildState(projectRoot, order.slug) !== true) return { kind: 'admitted' };
+  if ((await hasDurableChildState(projectRoot, order.slug)) !== true) return { kind: 'admitted' };
 
   const leaseResult = await acquireFeatureDispatchLease(projectRoot, order.slug, 'daemon dispatch');
   if (leaseResult.kind !== 'acquired') {
@@ -140,10 +148,7 @@ export async function makeExecutorChildDispatchAdmission(
  * process-service ownership explicit lets an in-memory test fork share the
  * one resolver installed for its host process.
  */
-export function createExecutorChildRuntime({
-  projectRoot,
-  processServices,
-}: CreateExecutorChildRuntimeOptions) {
+export function createExecutorChildRuntime({ projectRoot, processServices }: CreateExecutorChildRuntimeOptions) {
   return {
     admitDispatch: (order: WorkOrder) => makeExecutorChildDispatchAdmission({ projectRoot }, order),
     // Reuse the daemon seam, which verifies the WorkOrder before its first
@@ -228,9 +233,10 @@ export function makeExecutorChildFeatureRunner(
     createWorktree: async () => input.worktree,
     // WorkOrder is dispatcher authority. Thread it to the shared preparation
     // seam so it uses the claim-time base rather than resolving a later base.
-    prepareWorktree: lifecycle.prepareWorktree === undefined
-      ? undefined
-      : (worktree, log, events) => lifecycle.prepareWorktree!(worktree, log, events, input.order),
+    prepareWorktree:
+      lifecycle.prepareWorktree === undefined
+        ? undefined
+        : (worktree, log, events) => lifecycle.prepareWorktree!(worktree, log, events, input.order),
     // The child entrypoint already owns this feature's event persistence and
     // forwarding; bind that bus as the runner scope so setup, triage,
     // shipment and termination events reach the child spine (ADR D4).
@@ -250,17 +256,22 @@ export function makeExecutorChildFeatureRunner(
     },
     deferTerminalEffects: true,
   });
-  return () => run({
-    slug: input.order.slug,
-    ...(input.order.tier ? { tier: input.order.tier } : {}),
-    ...(input.order.sourceRef ? { sourceRef: input.order.sourceRef } : {}),
-    ...(input.order.track ? { track: input.order.track } : {}),
-    ...(input.order.band ? { band: input.order.band } : {}),
-    ...(input.order.resolutionMode ? { resolutionMode: input.order.resolutionMode } : {}),
-    ...(input.order.applicabilityDeclarations ? { applicabilityDeclarations: input.order.applicabilityDeclarations } : {}),
-    ...(input.order.applicabilityBaseContentSha256 ? { applicabilityBaseContentSha256: input.order.applicabilityBaseContentSha256 } : {}),
-    ...(input.order.applicabilityIgnored ? { applicabilityIgnored: input.order.applicabilityIgnored } : {}),
-  });
+  return () =>
+    run({
+      slug: input.order.slug,
+      ...(input.order.tier ? { tier: input.order.tier } : {}),
+      ...(input.order.sourceRef ? { sourceRef: input.order.sourceRef } : {}),
+      ...(input.order.track ? { track: input.order.track } : {}),
+      ...(input.order.band ? { band: input.order.band } : {}),
+      ...(input.order.resolutionMode ? { resolutionMode: input.order.resolutionMode } : {}),
+      ...(input.order.applicabilityDeclarations
+        ? { applicabilityDeclarations: input.order.applicabilityDeclarations }
+        : {}),
+      ...(input.order.applicabilityBaseContentSha256
+        ? { applicabilityBaseContentSha256: input.order.applicabilityBaseContentSha256 }
+        : {}),
+      ...(input.order.applicabilityIgnored ? { applicabilityIgnored: input.order.applicabilityIgnored } : {}),
+    });
 }
 
 /**
@@ -268,13 +279,15 @@ export function makeExecutorChildFeatureRunner(
  * root mutation and all shared coordination.  This is intentionally a
  * one-order runner: it never parses daemon argv or starts a daemon loop.
  */
-export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
-  worktree: { path: string; branch: string };
-  projectRoot: string;
-  supervisorEngineVersionId: string;
-  /** Injectable only for the child boot's provider-tier catalog probe. */
-  providerModelProbeRunner?: ProviderModelProbeRunner;
-}): Promise<FeatureExecutionOutcome> {
+export async function runExecutorChildFeature(
+  input: ExecutorChildRunInput & {
+    worktree: { path: string; branch: string };
+    projectRoot: string;
+    supervisorEngineVersionId: string;
+    /** Injectable only for the child boot's provider-tier catalog probe. */
+    providerModelProbeRunner?: ProviderModelProbeRunner;
+  },
+): Promise<FeatureExecutionOutcome> {
   const { order, events, signal, worktree, projectRoot } = input;
   if (signal.aborted) return { slug: order.slug, status: 'parked', reason: String(signal.reason ?? 'stopped') };
 
@@ -331,8 +344,8 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
     provider: configuredProviders[0]!,
   });
   providerExecution.managedSessionContext = managedSessionContext;
-  providerExecution.prepareManagedSessionObservation = createManagedSessionObservationPreparer(
-    (observation) => probeManagedObservationDestination({
+  providerExecution.prepareManagedSessionObservation = createManagedSessionObservationPreparer((observation) =>
+    probeManagedObservationDestination({
       ...observation,
       runProcess: async (executable, args) => {
         const result = await execFile(executable, [...args]);
@@ -365,7 +378,9 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
     log: input.log ?? (() => {}),
     registerConductor: (conductor) => {
       activeConductor = conductor;
-      return () => { activeConductor = undefined; };
+      return () => {
+        activeConductor = undefined;
+      };
     },
     registerAbortController: (controller) => {
       waitControllers.add(controller);
@@ -384,8 +399,14 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
     await activeConductor?.closeOpenExecutionsForShutdown();
   };
   let shutdown: Promise<void> | undefined;
-  const beginShutdown = () => shutdown ??= closeForShutdown();
-  signal.addEventListener('abort', () => { void beginShutdown(); }, { once: true });
+  const beginShutdown = () => (shutdown ??= closeForShutdown());
+  signal.addEventListener(
+    'abort',
+    () => {
+      void beginShutdown();
+    },
+    { once: true },
+  );
   const runnerDeps = makeFeatureRunnerDeps({
     projectRoot,
     worktreeBase: join(projectRoot, '.worktrees'),

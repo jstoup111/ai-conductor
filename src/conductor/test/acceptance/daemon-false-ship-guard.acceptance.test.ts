@@ -154,12 +154,17 @@ describe('daemon false-ship guard — real makeRunFeature entry point', () => {
   it('missing finish-choice marker with a prUrl present is still a failed ship, and skips label/enroll side effects', async () => {
     const rec = freshRecorders();
     const run = makeRunFeature(
-      makeDeps(worktreeDir, projectRoot, {
-        done: true,
-        halted: false,
-        finishChoice: undefined,
-        prUrl: 'https://github.com/o/r/pull/1',
-      }, rec),
+      makeDeps(
+        worktreeDir,
+        projectRoot,
+        {
+          done: true,
+          halted: false,
+          finishChoice: undefined,
+          prUrl: 'https://github.com/o/r/pull/1',
+        },
+        rec,
+      ),
     );
 
     const out = await run(ITEM);

@@ -107,7 +107,9 @@ describe('engine/daemon-runner dispatch admission', () => {
     seams.parked.mockClear();
 
     try {
-      await expect(makeRunFeature({ ...runnerDeps(root, runConductor), dispatchAdmission: 'admitted' })(ITEM)).resolves.toMatchObject({
+      await expect(
+        makeRunFeature({ ...runnerDeps(root, runConductor), dispatchAdmission: 'admitted' })(ITEM),
+      ).resolves.toMatchObject({
         slug: ITEM.slug,
         status: 'halted',
       });

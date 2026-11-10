@@ -6,10 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import {
-  detectShippedRecordCommand,
-  dispatchShippedRecord,
-} from '../../src/engine/shipped-record-cli.js';
+import { detectShippedRecordCommand, dispatchShippedRecord } from '../../src/engine/shipped-record-cli.js';
 import { makeRunFeature, type FeatureRunnerDeps, type WorktreeOutcome } from '../../src/engine/daemon-runner.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
 import { BuildReviewDispositionStore } from '../../src/engine/build-review-dispositions.js';
@@ -109,17 +106,31 @@ describe('conduct shipped-record — record committed on the implementation bran
 
   it('publishes merged build-review metrics in the committed shipped record', async () => {
     await mkdir(join(repo, '.pipeline'), { recursive: true });
-    await writeFile(join(repo, '.pipeline/events.jsonl'), [
-      { type: 'build_review_rubric_result', ts: 1, rubric: 'scope', lapId: 'lap-1', verdict: 'FAIL' },
-      { type: 'build_review_rubric_skipped', ts: 2, rubric: 'tautology', lapId: 'lap-1', reason: 'disabled' },
-    ].map((event) => JSON.stringify(event)).join('\n') + '\n');
-    await writeFile(join(repo, '.pipeline/pipeline-events.jsonl'), JSON.stringify(
-      { type: 'build_review_outer_verdict', ts: 3, lapId: 'lap-1', rawVerdict: 'FAIL', effectiveVerdict: 'PASS' },
-    ) + '\n');
+    await writeFile(
+      join(repo, '.pipeline/events.jsonl'),
+      [
+        { type: 'build_review_rubric_result', ts: 1, rubric: 'scope', lapId: 'lap-1', verdict: 'FAIL' },
+        { type: 'build_review_rubric_skipped', ts: 2, rubric: 'tautology', lapId: 'lap-1', reason: 'disabled' },
+      ]
+        .map((event) => JSON.stringify(event))
+        .join('\n') + '\n',
+    );
+    await writeFile(
+      join(repo, '.pipeline/pipeline-events.jsonl'),
+      JSON.stringify({
+        type: 'build_review_outer_verdict',
+        ts: 3,
+        lapId: 'lap-1',
+        rawVerdict: 'FAIL',
+        effectiveVerdict: 'PASS',
+      }) + '\n',
+    );
 
     expect(await runShippedRecord(SLUG, 'https://github.com/acme/repo/pull/42')).toBe(0);
     const content = await readFile(join(repo, `.docs/shipped/${SLUG}.md`), 'utf-8');
-    expect(content).toContain('## Build Review\nlaps_to_pass: 1\nskipped: 1\ncache_hits: 0\ninfrastructure_failures: 0\nrubrics:\n  scope: failures: 1, judged: 1\nskip_reasons:\n  disabled: 1');
+    expect(content).toContain(
+      '## Build Review\nlaps_to_pass: 1\nskipped: 1\ncache_hits: 0\ninfrastructure_failures: 0\nrubrics:\n  scope: failures: 1, judged: 1\nskip_reasons:\n  disabled: 1',
+    );
   });
 
   it('merge-local finish: the record (pr: local) is committed before the merge and lands in the merged commits', async () => {
@@ -145,9 +156,7 @@ describe('conduct shipped-record — record committed on the implementation bran
 
     const warnLines = warns.filter((l) => l.includes('shipped-record write failed'));
     expect(warnLines).toHaveLength(1);
-    expect(warnLines[0]).toContain(
-      'shipped-record write failed — dedup degraded to local cache for no-such-slug',
-    );
+    expect(warnLines[0]).toContain('shipped-record write failed — dedup degraded to local cache for no-such-slug');
 
     await expect(readFile(join(repo, '.docs/shipped/no-such-slug.md'), 'utf-8')).rejects.toThrow();
     expect(await git(['log', '--format=%s'])).not.toContain('shipped record: no-such-slug');
@@ -202,31 +211,31 @@ describe('conduct shipped-record — record committed on the implementation bran
       activeInterval: { startedAtMs: 100, durationMs: 200 },
     };
     await mkdir(join(repo, '.pipeline'), { recursive: true });
-    await writeFile(ledgerPath, [
-      { type: 'step_started', step: 'build' },
-      firstDispatch,
-    ].map((event) => JSON.stringify(event)).join('\n') + '\n');
+    await writeFile(
+      ledgerPath,
+      [{ type: 'step_started', step: 'build' }, firstDispatch].map((event) => JSON.stringify(event)).join('\n') + '\n',
+    );
 
     expect(await runShippedRecord(SLUG, pr)).toBe(0);
     const committedRecord = await readFile(join(repo, `.docs/shipped/${SLUG}.md`), 'utf-8');
     expect(committedRecord).toContain('dispatches: 1');
     expect(committedRecord).toContain('active_ms: 100');
 
-    await writeFile(ledgerPath, [
-      { type: 'step_started', step: 'build' },
-      firstDispatch,
-      { type: 'step_started', step: 'build' },
-      laterDispatch,
-    ].map((event) => JSON.stringify(event)).join('\n') + '\n');
+    await writeFile(
+      ledgerPath,
+      [{ type: 'step_started', step: 'build' }, firstDispatch, { type: 'step_started', step: 'build' }, laterDispatch]
+        .map((event) => JSON.stringify(event))
+        .join('\n') + '\n',
+    );
     const outs: string[] = [];
     vi.spyOn(console, 'log').mockImplementation((message: unknown) => {
       outs.push(String(message));
     });
 
     expect(await runShippedRecord(SLUG, pr)).toBe(0);
-    expect((await git(['log', '--format=%s'])).split('\n').filter(
-      (subject) => subject === `shipped record: ${SLUG}`,
-    )).toHaveLength(2);
+    expect(
+      (await git(['log', '--format=%s'])).split('\n').filter((subject) => subject === `shipped record: ${SLUG}`),
+    ).toHaveLength(2);
     expect(outs.filter((line) => line.includes('✓ shipped record committed:'))).toHaveLength(1);
     const refreshedRecord = await readFile(join(repo, `.docs/shipped/${SLUG}.md`), 'utf-8');
     expect(refreshedRecord).toContain('dispatches: 2');
@@ -234,18 +243,13 @@ describe('conduct shipped-record — record committed on the implementation bran
 
     outs.length = 0;
     expect(await runShippedRecord(SLUG, pr)).toBe(0);
-    expect((await git(['log', '--format=%s'])).split('\n').filter(
-      (subject) => subject === `shipped record: ${SLUG}`,
-    )).toHaveLength(2);
+    expect(
+      (await git(['log', '--format=%s'])).split('\n').filter((subject) => subject === `shipped record: ${SLUG}`),
+    ).toHaveLength(2);
     expect(outs.filter((line) => line.includes('✓ shipped record already committed:'))).toHaveLength(1);
     expect(await git(['status', '--porcelain'])).toBe('');
-    const { stdout: committedBytes } = await execFile('git', [
-      'show',
-      `HEAD:.docs/shipped/${SLUG}.md`,
-    ], { cwd: repo });
-    expect(await readFile(join(repo, `.docs/shipped/${SLUG}.md`), 'utf-8')).toBe(
-      committedBytes,
-    );
+    const { stdout: committedBytes } = await execFile('git', ['show', `HEAD:.docs/shipped/${SLUG}.md`], { cwd: repo });
+    expect(await readFile(join(repo, `.docs/shipped/${SLUG}.md`), 'utf-8')).toBe(committedBytes);
   });
 
   it('commits once when HEAD has the resolved plan and stories but no shipped-record counterpart', async () => {
@@ -258,9 +262,9 @@ describe('conduct shipped-record — record committed on the implementation bran
 
     const recordPath = `.docs/shipped/${SLUG}.md`;
     const { stdout: committedRecord } = await execFile('git', ['show', `HEAD:${recordPath}`], { cwd: repo });
-    expect((await git(['log', '--format=%s'])).split('\n').filter(
-      (subject) => subject === `shipped record: ${SLUG}`,
-    )).toHaveLength(1);
+    expect(
+      (await git(['log', '--format=%s'])).split('\n').filter((subject) => subject === `shipped record: ${SLUG}`),
+    ).toHaveLength(1);
     expect(committedRecord).toContain('## Cost');
     expect(committedRecord).toContain('## Time');
     expect(errs).toEqual([]);
@@ -323,12 +327,10 @@ describe('conduct shipped-record — record committed on the implementation bran
 
     expect(await runShippedRecord(SLUG, pr)).toBe(0);
 
-    const { stdout: committedRecord } = await execFile('git', [
-      'show', `HEAD:.docs/shipped/${SLUG}.md`,
-    ], { cwd: repo });
-    expect((await git(['log', '--format=%s'])).split('\n').filter(
-      (subject) => subject === `shipped record: ${SLUG}`,
-    )).toHaveLength(2);
+    const { stdout: committedRecord } = await execFile('git', ['show', `HEAD:.docs/shipped/${SLUG}.md`], { cwd: repo });
+    expect(
+      (await git(['log', '--format=%s'])).split('\n').filter((subject) => subject === `shipped record: ${SLUG}`),
+    ).toHaveLength(2);
     expect(committedRecord).toContain('## Accepted build-review risk');
     expect(committedRecord).toContain(`Finding: \`${accepted.finding.id}\``);
     expect(errs).toEqual([]);
@@ -352,28 +354,25 @@ describe('conduct shipped-record — record committed on the implementation bran
       activeInterval: { startedAtMs: 100, durationMs: 200 },
     };
     await mkdir(join(repo, '.pipeline'), { recursive: true });
-    await writeFile(ledgerPath, [
-      { type: 'step_started', step: 'build' },
-      firstDispatch,
-    ].map((event) => JSON.stringify(event)).join('\n') + '\n');
+    await writeFile(
+      ledgerPath,
+      [{ type: 'step_started', step: 'build' }, firstDispatch].map((event) => JSON.stringify(event)).join('\n') + '\n',
+    );
 
     expect(await runShippedRecord(SLUG, firstPr)).toBe(0);
 
-    await writeFile(ledgerPath, [
-      { type: 'step_started', step: 'build' },
-      firstDispatch,
-      { type: 'step_started', step: 'build' },
-      laterDispatch,
-    ].map((event) => JSON.stringify(event)).join('\n') + '\n');
+    await writeFile(
+      ledgerPath,
+      [{ type: 'step_started', step: 'build' }, firstDispatch, { type: 'step_started', step: 'build' }, laterDispatch]
+        .map((event) => JSON.stringify(event))
+        .join('\n') + '\n',
+    );
 
     expect(await runShippedRecord(SLUG, replacementPr)).toBe(0);
-    expect((await git(['log', '--format=%s'])).split('\n').filter(
-      (subject) => subject === `shipped record: ${SLUG}`,
-    )).toHaveLength(2);
-    const { stdout: committedRecord } = await execFile('git', [
-      'show',
-      `HEAD:.docs/shipped/${SLUG}.md`,
-    ], { cwd: repo });
+    expect(
+      (await git(['log', '--format=%s'])).split('\n').filter((subject) => subject === `shipped record: ${SLUG}`),
+    ).toHaveLength(2);
+    const { stdout: committedRecord } = await execFile('git', ['show', `HEAD:.docs/shipped/${SLUG}.md`], { cwd: repo });
     expect(committedRecord).toContain(`pr: ${replacementPr}`);
     expect(committedRecord).toContain('dispatches: 2');
     expect(committedRecord).toContain('active_ms: 300');
@@ -383,22 +382,25 @@ describe('conduct shipped-record — record committed on the implementation bran
     { kind: 'invalid' as const, message: 'current reduced-coverage state is invalid' },
     { kind: 'lock' as const, message: 'reduced-coverage state lease is unavailable' },
     { kind: 'filesystem' as const, message: 'reduced-coverage state I/O failed' },
-  ])('blocks publication when reduced-coverage state is $kind rather than omitting its evidence', async ({ kind, message }) => {
-    vi.spyOn(BuildReviewDispositionStore.prototype, 'listReducedCoverage').mockResolvedValue({
-      ok: false,
-      kind,
-      message,
-    });
-    const errors: string[] = [];
-    vi.spyOn(console, 'error').mockImplementation((message: unknown) => {
-      errors.push(String(message));
-    });
+  ])(
+    'blocks publication when reduced-coverage state is $kind rather than omitting its evidence',
+    async ({ kind, message }) => {
+      vi.spyOn(BuildReviewDispositionStore.prototype, 'listReducedCoverage').mockResolvedValue({
+        ok: false,
+        kind,
+        message,
+      });
+      const errors: string[] = [];
+      vi.spyOn(console, 'error').mockImplementation((message: unknown) => {
+        errors.push(String(message));
+      });
 
-    expect(await runShippedRecord(SLUG, 'https://github.com/acme/repo/pull/42')).toBe(1);
-    expect(errors.join('\n')).toContain(message);
-    await expect(readFile(join(repo, `.docs/shipped/${SLUG}.md`), 'utf-8')).rejects.toThrow();
-    expect(await git(['log', '--format=%s'])).not.toContain(`shipped record: ${SLUG}`);
-  });
+      expect(await runShippedRecord(SLUG, 'https://github.com/acme/repo/pull/42')).toBe(1);
+      expect(errors.join('\n')).toContain(message);
+      await expect(readFile(join(repo, `.docs/shipped/${SLUG}.md`), 'utf-8')).rejects.toThrow();
+      expect(await git(['log', '--format=%s'])).not.toContain(`shipped record: ${SLUG}`);
+    },
+  );
 
   it('treats explicitly unreadable reduced-coverage state as absent evidence and still commits the record', async () => {
     vi.spyOn(BuildReviewDispositionStore.prototype, 'listReducedCoverage').mockResolvedValue({
@@ -511,9 +513,7 @@ describe('daemon ship path — writes NO shipped record (ADR Decision 1 complian
 
     // No record, no commit — local main stays even with its origin so
     // fastForwardRoot's --ff-only advance keeps working after every ship.
-    await expect(
-      readFile(join(mainCheckout, `.docs/shipped/${SLUG}.md`), 'utf-8'),
-    ).rejects.toThrow();
+    await expect(readFile(join(mainCheckout, `.docs/shipped/${SLUG}.md`), 'utf-8')).rejects.toThrow();
     const { stdout: logOut } = await execFile('git', ['log', '--format=%s'], {
       cwd: mainCheckout,
     });

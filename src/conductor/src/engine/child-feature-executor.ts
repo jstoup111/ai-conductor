@@ -41,7 +41,11 @@ export interface ChildFeatureExecutorDeps {
   log?: (line: string) => void;
 }
 
-interface RunningChild { child: ForkedExecutor; order: WorkOrder; attachment: ExecutorBrokerAttachment; }
+interface RunningChild {
+  child: ForkedExecutor;
+  order: WorkOrder;
+  attachment: ExecutorBrokerAttachment;
+}
 
 function errorOutcome(order: WorkOrder, reason: string): FeatureExecutionOutcome {
   return { slug: order.slug, status: 'error', reason };
@@ -51,21 +55,30 @@ function errorOutcome(order: WorkOrder, reason: string): FeatureExecutionOutcome
  * Process-isolated executor adapter. The supervisor owns root events, durable
  * executor references and all terminal effects; the child owns its worktree.
  */
-export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps): FeatureExecutor & { stopAll(): Promise<void>; requestYield(slug: string): boolean } {
-  const fork = deps.fork ?? ((modulePath, args, options) => nodeFork(modulePath, args, options) as unknown as ForkedExecutor);
+export function createChildProcessFeatureExecutor(
+  deps: ChildFeatureExecutorDeps,
+): FeatureExecutor & { stopAll(): Promise<void>; requestYield(slug: string): boolean } {
+  const fork =
+    deps.fork ?? ((modulePath, args, options) => nodeFork(modulePath, args, options) as unknown as ForkedExecutor);
   const running = new Set<RunningChild>();
   const startTimeoutMs = deps.dispatchStartTimeoutMs ?? 30_000;
   const teardownTimeoutMs = deps.teardownTimeoutMs ?? 15_000;
   let stopAllPromise: Promise<void> | undefined;
 
-  const launch = async (order: WorkOrder, useSupervisorBuild: boolean, priorFailure?: string): Promise<FeatureExecutionOutcome> => {
+  const launch = async (
+    order: WorkOrder,
+    useSupervisorBuild: boolean,
+    priorFailure?: string,
+  ): Promise<FeatureExecutionOutcome> => {
     const engineDir = deps.engineDirForOrder(order, useSupervisorBuild);
     // A fallback child executes the supervisor build, not the original failed
     // pin.  Publish that actual identity into its work order and durable
     // record, otherwise status and shipped telemetry lie about the executor.
     const launchedOrder: WorkOrder = {
       ...order,
-      ...(useSupervisorBuild ? { engineVersionId: deps.supervisorEngineVersionId as WorkOrder['engineVersionId'] } : {}),
+      ...(useSupervisorBuild
+        ? { engineVersionId: deps.supervisorEngineVersionId as WorkOrder['engineVersionId'] }
+        : {}),
       supervisorEngineVersionId: deps.supervisorEngineVersionId as WorkOrder['engineVersionId'],
     };
     const modulePath = join(engineDir, 'index.js');
@@ -81,7 +94,9 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
         remainder = lines.pop() ?? '';
         for (const line of lines) deps.log?.(`[executor ${order.slug} ${level}] ${line}`);
       });
-      stream.on('end', () => { if (remainder) deps.log?.(`[executor ${order.slug} ${level}] ${remainder}`); });
+      stream.on('end', () => {
+        if (remainder) deps.log?.(`[executor ${order.slug} ${level}] ${remainder}`);
+      });
       stream.resume();
     };
     forwardOutput(child.stdout, 'stdout');
@@ -106,7 +121,10 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
       }, teardownTimeoutMs);
     };
     const recordPublished = writeExecutorRecord(deps.projectRoot, order.slug, {
-      pid: child.pid ?? -1, engineDir, engineVersionId: launchedOrder.engineVersionId, startedAt: new Date().toISOString(),
+      pid: child.pid ?? -1,
+      engineDir,
+      engineVersionId: launchedOrder.engineVersionId,
+      startedAt: new Date().toISOString(),
     }).catch((error: unknown) => {
       recordFailure = error instanceof Error ? error : new Error(String(error));
       deps.log?.(`[executor ${order.slug}] could not publish executor record: ${recordFailure.message}`);
@@ -120,10 +138,12 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
     let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = async (result: FeatureExecutionOutcome): Promise<FeatureExecutionOutcome> => {
       if (ended) return outcome ?? result;
-      ended = true; outcome = result;
+      ended = true;
+      outcome = result;
       if (timer) clearTimeout(timer);
       if (terminationTimer) clearTimeout(terminationTimer);
-      await attachment.close(); running.delete(entry);
+      await attachment.close();
+      running.delete(entry);
       // A record write started at fork may complete after an early child exit.
       // Serialize removal after it so records only disappear following the
       // actual exit and cannot be resurrected by that racing write.
@@ -133,14 +153,15 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
     };
     const done = new Promise<FeatureExecutionOutcome>((resolve) => {
       child.once('exit', (code, signal) => {
-        const reason = outcome?.reason ?? (code === 134 || signal === 'SIGABRT' ? 'executor exited from V8 heap exhaustion' : `executor exited before outcome (code ${code ?? 'null'}, signal ${signal ?? 'none'})`);
+        const reason =
+          outcome?.reason ??
+          (code === 134 || signal === 'SIGABRT'
+            ? 'executor exited from V8 heap exhaustion'
+            : `executor exited before outcome (code ${code ?? 'null'}, signal ${signal ?? 'none'})`);
         void finish(outcome ?? errorOutcome(order, reason)).then(resolve);
       });
     });
-    const rejectHandshake = (
-      reason: string,
-      actualProtocolVersion?: number,
-    ): void => {
+    const rejectHandshake = (reason: string, actualProtocolVersion?: number): void => {
       if (handshake !== undefined) return;
       handshake = 'failed';
       handshakeFailure = reason;
@@ -198,13 +219,18 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
         return;
       }
       if (message.kind === 'outcome') {
-        if (outcome) { deps.log?.(`[executor ${order.slug}] ignored duplicate outcome`); return; }
+        if (outcome) {
+          deps.log?.(`[executor ${order.slug}] ignored duplicate outcome`);
+          return;
+        }
         outcome = message.outcome;
         // Close the supervisor visualizer while the child still owns its
         // feature persister; shutdown-time renderer errors must be durable.
         void Promise.resolve(attachment.close()).finally(() => {
           child.send({ kind: 'stop', reason: 'supervisor visualizer closed' });
-          void delay(teardownTimeoutMs).then(() => { if (!ended) requestTermination(); });
+          void delay(teardownTimeoutMs).then(() => {
+            if (!ended) requestTermination();
+          });
         });
       }
     });
@@ -237,7 +263,9 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
         rekickSignal: existsSync(join(worktreePath, '.pipeline', 'REKICK')),
       });
       await deps.rootEvents.emit({
-        type: 'feature_dispatch_started', slug: order.slug, kind,
+        type: 'feature_dispatch_started',
+        slug: order.slug,
+        kind,
         ...tier,
         engineVersionId: order.engineVersionId,
         ...(order.pinFallbackReason === undefined ? {} : { pinFallbackReason: order.pinFallbackReason }),
@@ -263,18 +291,17 @@ export function createChildProcessFeatureExecutor(deps: ChildFeatureExecutorDeps
       } finally {
         deps.rootEvents.off('loop_halt', onLoopHalt);
       }
-      const outcome = result.status === 'done'
-        ? 'complete'
-        : result.status === 'halted'
-          ? 'halted'
-          : 'terminated';
+      const outcome = result.status === 'done' ? 'complete' : result.status === 'halted' ? 'halted' : 'terminated';
       await deps.rootEvents.emit({
-        type: 'feature_dispatch_ended', slug: order.slug, outcome, ...tier,
+        type: 'feature_dispatch_ended',
+        slug: order.slug,
+        outcome,
+        ...tier,
         ...(outcome === 'halted'
           ? {
-            haltClass: await readHaltSidecarClassification(join(deps.projectRoot, '.worktrees', order.slug)),
-            step: haltingStep ?? 'unknown',
-          }
+              haltClass: await readHaltSidecarClassification(join(deps.projectRoot, '.worktrees', order.slug)),
+              step: haltingStep ?? 'unknown',
+            }
           : {}),
       });
       return result;

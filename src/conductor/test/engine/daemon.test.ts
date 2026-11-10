@@ -12,10 +12,7 @@ import {
   type DaemonDeps,
   type FeatureOutcome,
 } from '../../src/engine/daemon.js';
-import {
-  makeRunFeature,
-  type FeatureRunnerDeps,
-} from '../../src/engine/daemon-runner.js';
+import { makeRunFeature, type FeatureRunnerDeps } from '../../src/engine/daemon-runner.js';
 import { isOperatorParked, removeOperatorPark, writeAutoPark } from '../../src/engine/park-marker.js';
 import { preflightBuildAuthCheck } from '../../src/engine/self-host/build-auth-preflight.js';
 import { buildAuthRemediationMessage } from '../../src/engine/self-host/build-auth-message.js';
@@ -43,11 +40,7 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-function makeSetupTriageParkingRunner(
-  projectRoot: string,
-  reason: () => string,
-  onTriage: () => void,
-) {
+function makeSetupTriageParkingRunner(projectRoot: string, reason: () => string, onTriage: () => void) {
   return makeRunFeature({
     dispatchAdmission: 'acquire',
     createWorktree: async (slug) => {
@@ -106,34 +99,41 @@ describe('engine/daemon — runDaemon', () => {
     let resolveLow!: (outcome: FeatureOutcome) => void;
     let resolveMedium!: (outcome: FeatureOutcome) => void;
     let requestObserved!: () => void;
-    const requested = new Promise<void>((resolve) => { requestObserved = resolve; });
+    const requested = new Promise<void>((resolve) => {
+      requestObserved = resolve;
+    });
     const requests: string[] = [];
     let stop = false;
-    const daemon = runDaemon({
-      discoverBacklog: async () => discovery++ < 2
-        ? [
-            { slug: 'low', band: 'low', resolutionMode: 'banded' },
-            { slug: 'medium', band: 'medium', resolutionMode: 'banded' },
-          ]
-        : [
-            { slug: 'critical', band: 'critical', resolutionMode: 'banded' },
-            { slug: 'low', band: 'low', resolutionMode: 'banded' },
-            { slug: 'medium', band: 'medium', resolutionMode: 'banded' },
-          ],
-      runFeature: async (item) => new Promise<FeatureOutcome>((resolve) => {
-        if (item.slug === 'low') resolveLow = resolve;
-        else if (item.slug === 'medium') resolveMedium = resolve;
-        else resolve({ slug: item.slug, status: 'done' });
-      }),
-      requestYield: (slug) => {
-        requests.push(slug);
-        stop = true;
-        requestObserved();
-        return true;
+    const daemon = runDaemon(
+      {
+        discoverBacklog: async () =>
+          discovery++ < 2
+            ? [
+                { slug: 'low', band: 'low', resolutionMode: 'banded' },
+                { slug: 'medium', band: 'medium', resolutionMode: 'banded' },
+              ]
+            : [
+                { slug: 'critical', band: 'critical', resolutionMode: 'banded' },
+                { slug: 'low', band: 'low', resolutionMode: 'banded' },
+                { slug: 'medium', band: 'medium', resolutionMode: 'banded' },
+              ],
+        runFeature: async (item) =>
+          new Promise<FeatureOutcome>((resolve) => {
+            if (item.slug === 'low') resolveLow = resolve;
+            else if (item.slug === 'medium') resolveMedium = resolve;
+            else resolve({ slug: item.slug, status: 'done' });
+          }),
+        requestYield: (slug) => {
+          requests.push(slug);
+          stop = true;
+          requestObserved();
+          return true;
+        },
+        sleep: async () => {},
+        shouldStop: () => stop,
       },
-      sleep: async () => {},
-      shouldStop: () => stop,
-    }, { concurrency: 2, once: false, idlePollMs: 0 });
+      { concurrency: 2, once: false, idlePollMs: 0 },
+    );
 
     await requested;
     resolveLow({ slug: 'low', status: 'preempted' });
@@ -147,7 +147,9 @@ describe('engine/daemon — runDaemon', () => {
     let release: ((outcome: FeatureOutcome) => void) | undefined;
     let stop = false;
     let observedBusyTick: (() => void) | undefined;
-    const busyTick = new Promise<void>((resolve) => { observedBusyTick = resolve; });
+    const busyTick = new Promise<void>((resolve) => {
+      observedBusyTick = resolve;
+    });
     const discoverBacklog = vi.fn(async () => [{ slug: 'full-pool' }]);
     const getDiscoverySnapshot = vi.fn(async () => ({
       counts: { eligible: 1, waiting: 2, blocked: 3, gated: 4, parked: 5 },
@@ -160,29 +162,35 @@ describe('engine/daemon — runDaemon', () => {
     let ghChecks = 0;
     let episodeChecks = 0;
 
-    const daemon = runDaemon({
-      discoverBacklog,
-      getDiscoverySnapshot,
-      isPaused: async () => ++pauseChecks > 1,
-      isBuildAuthMissing: async () => ++authChecks > 1,
-      getGhVersionFloorDiagnostic: async () => ++ghChecks > 1 ? 'gh too old' : null,
-      rateLimitEpisode: {
-        active: () => ++episodeChecks > 1,
-        enter: () => {},
-        clear: async () => {},
-        nextWaitSeconds: () => 0,
+    const daemon = runDaemon(
+      {
+        discoverBacklog,
+        getDiscoverySnapshot,
+        isPaused: async () => ++pauseChecks > 1,
+        isBuildAuthMissing: async () => ++authChecks > 1,
+        getGhVersionFloorDiagnostic: async () => (++ghChecks > 1 ? 'gh too old' : null),
+        rateLimitEpisode: {
+          active: () => ++episodeChecks > 1,
+          enter: () => {},
+          clear: async () => {},
+          nextWaitSeconds: () => 0,
+        },
+        runFeature: async () =>
+          new Promise<FeatureOutcome>((resolve) => {
+            release = resolve;
+          }),
+        onTick: (snapshot) => {
+          ticks.push({ busy: snapshot.slots.busy, blocked: snapshot.blocked, pollDurationMs: snapshot.pollDurationMs });
+          if (snapshot.slots.busy === 1) {
+            stop = true;
+            observedBusyTick?.();
+          }
+        },
+        shouldStop: () => stop,
+        sleep: async () => {},
       },
-      runFeature: async () => new Promise<FeatureOutcome>((resolve) => { release = resolve; }),
-      onTick: (snapshot) => {
-        ticks.push({ busy: snapshot.slots.busy, blocked: snapshot.blocked, pollDurationMs: snapshot.pollDurationMs });
-        if (snapshot.slots.busy === 1) {
-          stop = true;
-          observedBusyTick?.();
-        }
-      },
-      shouldStop: () => stop,
-      sleep: async () => {},
-    }, { concurrency: 1, once: false, idlePollMs: 0 });
+      { concurrency: 1, once: false, idlePollMs: 0 },
+    );
 
     await busyTick;
     release?.({ slug: 'full-pool', status: 'done' });
@@ -190,8 +198,16 @@ describe('engine/daemon — runDaemon', () => {
 
     expect(discoverBacklog).toHaveBeenCalledTimes(2);
     expect(ticks).toEqual([
-      { busy: 0, blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false }, pollDurationMs: 17 },
-      { busy: 1, blocked: { paused: true, build_auth_missing: true, gh_version: true, episode_active: true }, pollDurationMs: 17 },
+      {
+        busy: 0,
+        blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false },
+        pollDurationMs: 17,
+      },
+      {
+        busy: 1,
+        blocked: { paused: true, build_auth_missing: true, gh_version: true, episode_active: true },
+        pollDurationMs: 17,
+      },
     ]);
     expect({ pauseChecks, authChecks, ghChecks, episodeChecks }).toEqual({
       pauseChecks: 2,
@@ -204,23 +220,28 @@ describe('engine/daemon — runDaemon', () => {
   it('applies setup-triage auto-park requests only after collecting the executor outcome', async () => {
     const terminalEffects: FeatureOutcome[] = [];
 
-    await runDaemon({
-      discoverBacklog: staticBacklog([{ slug: 'setup-triage-park' }]),
-      runFeature: async () => ({
+    await runDaemon(
+      {
+        discoverBacklog: staticBacklog([{ slug: 'setup-triage-park' }]),
+        runFeature: async () => ({
+          slug: 'setup-triage-park',
+          status: 'error',
+          terminalEffects: { autoPark: { reason: 'setup triage failed' } },
+        }),
+        onFeatureTerminalEffects: async (outcome) => {
+          terminalEffects.push(outcome);
+        },
+      },
+      { concurrency: 1, once: true },
+    );
+
+    expect(terminalEffects).toEqual([
+      {
         slug: 'setup-triage-park',
         status: 'error',
         terminalEffects: { autoPark: { reason: 'setup triage failed' } },
-      }),
-      onFeatureTerminalEffects: async (outcome) => {
-        terminalEffects.push(outcome);
       },
-    }, { concurrency: 1, once: true });
-
-    expect(terminalEffects).toEqual([{
-      slug: 'setup-triage-park',
-      status: 'error',
-      terminalEffects: { autoPark: { reason: 'setup triage failed' } },
-    }]);
+    ]);
   });
 
   it('uses injected claims to make repeated fill passes dispatch an eligible feature once', async () => {
@@ -235,17 +256,20 @@ describe('engine/daemon — runDaemon', () => {
     });
     let dispatches = 0;
 
-    const daemon = runDaemon({
-      discoverBacklog: staticBacklog(items(1)),
-      runFeature: async (item) => {
-        dispatches += 1;
-        observedDispatch?.();
-        expect(claims.list()).toEqual([item.slug]);
-        await feature;
-        return { slug: item.slug, status: 'done' };
-      },
-      claims,
-    } as DaemonDeps, { concurrency: 3, once: true });
+    const daemon = runDaemon(
+      {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: async (item) => {
+          dispatches += 1;
+          observedDispatch?.();
+          expect(claims.list()).toEqual([item.slug]);
+          await feature;
+          return { slug: item.slug, status: 'done' };
+        },
+        claims,
+      } as DaemonDeps,
+      { concurrency: 3, once: true },
+    );
 
     await dispatched;
     expect(claims.list()).toEqual(['f0']);
@@ -266,25 +290,34 @@ describe('engine/daemon — runDaemon', () => {
     let discovery = 0;
     const backlog = items(3);
 
-    const result = await runDaemon({
-      discoverBacklog: async () => {
-        const rotation = discovery++ % backlog.length;
-        return [...backlog.slice(rotation), ...backlog.slice(0, rotation)];
-      },
-      runFeature: async (item) => {
-        expect(claims.list()).toContain(item.slug);
-        calls.set(item.slug, (calls.get(item.slug) ?? 0) + 1);
-        return { slug: item.slug, status: 'done' };
-      },
-      claims,
-    } as DaemonDeps, { concurrency: 3, once: true });
+    const result = await runDaemon(
+      {
+        discoverBacklog: async () => {
+          const rotation = discovery++ % backlog.length;
+          return [...backlog.slice(rotation), ...backlog.slice(0, rotation)];
+        },
+        runFeature: async (item) => {
+          expect(claims.list()).toContain(item.slug);
+          calls.set(item.slug, (calls.get(item.slug) ?? 0) + 1);
+          return { slug: item.slug, status: 'done' };
+        },
+        claims,
+      } as DaemonDeps,
+      { concurrency: 3, once: true },
+    );
 
     expect({
       calls: [...calls.entries()].sort(),
-      processed: result.processed.map(({ slug, status }) => ({ slug, status })).sort((a, b) => a.slug.localeCompare(b.slug)),
+      processed: result.processed
+        .map(({ slug, status }) => ({ slug, status }))
+        .sort((a, b) => a.slug.localeCompare(b.slug)),
       activeClaims: claims.list(),
     }).toEqual({
-      calls: [['f0', 1], ['f1', 1], ['f2', 1]],
+      calls: [
+        ['f0', 1],
+        ['f1', 1],
+        ['f2', 1],
+      ],
       processed: [
         { slug: 'f0', status: 'done' },
         { slug: 'f1', status: 'done' },
@@ -304,17 +337,23 @@ describe('engine/daemon — runDaemon', () => {
       return { slug: item.slug, status: 'done' as const };
     };
     const beforeRestartClaims = new InMemoryWorkClaims();
-    const beforeRestart = await runDaemon({
-      discoverBacklog: staticBacklog(items(2)),
-      runFeature: (item) => runFeature(item, beforeRestartClaims),
-      claims: beforeRestartClaims,
-    } as DaemonDeps, { concurrency: 3, once: true });
+    const beforeRestart = await runDaemon(
+      {
+        discoverBacklog: staticBacklog(items(2)),
+        runFeature: (item) => runFeature(item, beforeRestartClaims),
+        claims: beforeRestartClaims,
+      } as DaemonDeps,
+      { concurrency: 3, once: true },
+    );
     const afterRestartClaims = new InMemoryWorkClaims();
-    const afterRestart = await runDaemon({
-      discoverBacklog: async () => items(3).filter((item) => !completed.has(item.slug)),
-      runFeature: (item) => runFeature(item, afterRestartClaims),
-      claims: afterRestartClaims,
-    } as DaemonDeps, { concurrency: 3, once: true });
+    const afterRestart = await runDaemon(
+      {
+        discoverBacklog: async () => items(3).filter((item) => !completed.has(item.slug)),
+        runFeature: (item) => runFeature(item, afterRestartClaims),
+        claims: afterRestartClaims,
+      } as DaemonDeps,
+      { concurrency: 3, once: true },
+    );
 
     expect({
       beforeRestart: beforeRestart.processed.map((outcome) => outcome.slug).sort(),
@@ -324,7 +363,11 @@ describe('engine/daemon — runDaemon', () => {
     }).toEqual({
       beforeRestart: ['f0', 'f1'],
       afterRestart: ['f2'],
-      calls: [['f0', 1], ['f1', 1], ['f2', 1]],
+      calls: [
+        ['f0', 1],
+        ['f1', 1],
+        ['f2', 1],
+      ],
       claims: [[], []],
     });
   });
@@ -485,9 +528,7 @@ describe('engine/daemon — runDaemon', () => {
       discoverBacklog: staticBacklog(items(2)),
       runFeature: async (item) => {
         dispatches.push(item.slug);
-        return item.slug === 'f0'
-          ? { slug: item.slug, status: 'parked' }
-          : { slug: item.slug, status: 'done' };
+        return item.slug === 'f0' ? { slug: item.slug, status: 'parked' } : { slug: item.slug, status: 'done' };
       },
       watchHaltCleared,
       onHaltWritten,
@@ -526,19 +567,22 @@ describe('engine/daemon — runDaemon', () => {
     const terminalEffects = vi.fn(async () => {});
     const logs: string[] = [];
     let stop = false;
-    const result = await runDaemon({
-      discoverBacklog: staticBacklog([{ slug: 'yielded' }]),
-      runFeature: async () => {
-        stop = true;
-        return { slug: 'yielded', status: 'preempted' as const };
+    const result = await runDaemon(
+      {
+        discoverBacklog: staticBacklog([{ slug: 'yielded' }]),
+        runFeature: async () => {
+          stop = true;
+          return { slug: 'yielded', status: 'preempted' as const };
+        },
+        claims,
+        watchHaltCleared,
+        onHaltWritten,
+        onFeatureTerminalEffects: terminalEffects,
+        featureLog: (slug) => (message) => logs.push(`${slug}:${message}`),
+        shouldStop: () => stop,
       },
-      claims,
-      watchHaltCleared,
-      onHaltWritten,
-      onFeatureTerminalEffects: terminalEffects,
-      featureLog: (slug) => (message) => logs.push(`${slug}:${message}`),
-      shouldStop: () => stop,
-    }, { concurrency: 1, once: false });
+      { concurrency: 1, once: false },
+    );
 
     expect({
       processed: result.processed,
@@ -551,8 +595,15 @@ describe('engine/daemon — runDaemon', () => {
       operatorStopLogs: logs.filter((line) => line.includes('intentional operator stop')),
       completionLogs: logs.filter((line) => line.includes('done yielded')),
     }).toEqual({
-      processed: [], claims: [], parked: [], completed: false, watchRegistrations: 0,
-      haltStamps: 0, terminalEffects: 0, operatorStopLogs: [], completionLogs: [],
+      processed: [],
+      claims: [],
+      parked: [],
+      completed: false,
+      watchRegistrations: 0,
+      haltStamps: 0,
+      terminalEffects: 0,
+      operatorStopLogs: [],
+      completionLogs: [],
     });
   });
 
@@ -591,28 +642,27 @@ describe('engine/daemon — runDaemon', () => {
         enrollWatch: async () => {},
       } satisfies FeatureRunnerDeps);
 
-      const result = await runDaemon({
-        discoverBacklog: staticBacklog([
-          { slug: 'feature-a' },
-          { slug: 'feature-b' },
-          { slug: 'feature-c' },
-        ]),
-        runFeature: async (item) => {
-          dispatches.push(item.slug);
-          if (item.slug === 'feature-a') return runParkedFeature(item);
-          if (item.slug === 'feature-b') {
-            featureBAttemptDispatches += 1;
-            await featureBRetry;
-            featureBAttemptDispatches += 1;
-            return { slug: item.slug, status: 'done' as const };
-          }
+      const result = await runDaemon(
+        {
+          discoverBacklog: staticBacklog([{ slug: 'feature-a' }, { slug: 'feature-b' }, { slug: 'feature-c' }]),
+          runFeature: async (item) => {
+            dispatches.push(item.slug);
+            if (item.slug === 'feature-a') return runParkedFeature(item);
+            if (item.slug === 'feature-b') {
+              featureBAttemptDispatches += 1;
+              await featureBRetry;
+              featureBAttemptDispatches += 1;
+              return { slug: item.slug, status: 'done' as const };
+            }
 
-          // C can only start after A's parked result releases its pool slot.
-          releaseFeatureBRetry?.();
-          return { slug: item.slug, status: 'done' as const };
+            // C can only start after A's parked result releases its pool slot.
+            releaseFeatureBRetry?.();
+            return { slug: item.slug, status: 'done' as const };
+          },
+          log: (message) => logs.push(message),
         },
-        log: (message) => logs.push(message),
-      }, { concurrency: 2, once: true });
+        { concurrency: 2, once: true },
+      );
 
       expect({
         dispatches,
@@ -738,16 +788,23 @@ describe('engine/daemon — runDaemon', () => {
         const runFeature = makeSetupTriageParkingRunner(
           projectRoot,
           () => 'first setup failure',
-          () => { triageCalls++; },
+          () => {
+            triageCalls++;
+          },
         );
 
-        await runDaemon({
-          discoverBacklog: staticBacklog([item]),
-          runFeature,
-          isParked: (slug) => isOperatorParked(projectRoot, slug),
-          onFeatureTerminalEffects: (outcome) => applyTerminalEffects(projectRoot, outcome),
-          sleep: async () => { await waitForImmediate(); },
-        }, { concurrency: 1, once: false, maxIdlePolls: 3 });
+        await runDaemon(
+          {
+            discoverBacklog: staticBacklog([item]),
+            runFeature,
+            isParked: (slug) => isOperatorParked(projectRoot, slug),
+            onFeatureTerminalEffects: (outcome) => applyTerminalEffects(projectRoot, outcome),
+            sleep: async () => {
+              await waitForImmediate();
+            },
+          },
+          { concurrency: 1, once: false, maxIdlePolls: 3 },
+        );
 
         expect(triageCalls).toBe(1);
         await expect(isOperatorParked(projectRoot, item.slug)).resolves.toBe(true);
@@ -763,17 +820,24 @@ describe('engine/daemon — runDaemon', () => {
         const runFeature = makeSetupTriageParkingRunner(
           projectRoot,
           () => 'setup still broken',
-          () => { triageCalls++; },
+          () => {
+            triageCalls++;
+          },
         );
         await applyTerminalEffects(projectRoot, await runFeature(item));
 
-        await runDaemon({
-          discoverBacklog: staticBacklog([item]),
-          runFeature,
-          isParked: (slug) => isOperatorParked(projectRoot, slug),
-          onFeatureTerminalEffects: (outcome) => applyTerminalEffects(projectRoot, outcome),
-          sleep: async () => { await waitForImmediate(); },
-        }, { concurrency: 1, once: false, maxIdlePolls: 2 });
+        await runDaemon(
+          {
+            discoverBacklog: staticBacklog([item]),
+            runFeature,
+            isParked: (slug) => isOperatorParked(projectRoot, slug),
+            onFeatureTerminalEffects: (outcome) => applyTerminalEffects(projectRoot, outcome),
+            sleep: async () => {
+              await waitForImmediate();
+            },
+          },
+          { concurrency: 1, once: false, maxIdlePolls: 2 },
+        );
 
         expect(triageCalls).toBe(1);
       } finally {
@@ -788,18 +852,25 @@ describe('engine/daemon — runDaemon', () => {
         const runFeature = makeSetupTriageParkingRunner(
           projectRoot,
           () => 'setup still broken',
-          () => { triageCalls++; },
+          () => {
+            triageCalls++;
+          },
         );
         await applyTerminalEffects(projectRoot, await runFeature(item));
         await rm(join(projectRoot, '.worktrees', item.slug, '.pipeline', 'HALT'), { force: true });
 
-        await runDaemon({
-          discoverBacklog: staticBacklog([item]),
-          runFeature,
-          isParked: (slug) => isOperatorParked(projectRoot, slug),
-          onFeatureTerminalEffects: (outcome) => applyTerminalEffects(projectRoot, outcome),
-          sleep: async () => { await waitForImmediate(); },
-        }, { concurrency: 1, once: false, maxIdlePolls: 2 });
+        await runDaemon(
+          {
+            discoverBacklog: staticBacklog([item]),
+            runFeature,
+            isParked: (slug) => isOperatorParked(projectRoot, slug),
+            onFeatureTerminalEffects: (outcome) => applyTerminalEffects(projectRoot, outcome),
+            sleep: async () => {
+              await waitForImmediate();
+            },
+          },
+          { concurrency: 1, once: false, maxIdlePolls: 2 },
+        );
 
         expect(triageCalls).toBe(1);
       } finally {
@@ -815,7 +886,9 @@ describe('engine/daemon — runDaemon', () => {
         const runFeature = makeSetupTriageParkingRunner(
           projectRoot,
           () => failureReason,
-          () => { triageCalls++; },
+          () => {
+            triageCalls++;
+          },
         );
         await applyTerminalEffects(projectRoot, await runFeature(item));
 
@@ -823,17 +896,23 @@ describe('engine/daemon — runDaemon', () => {
         await rm(join(projectRoot, '.worktrees', item.slug, '.pipeline', 'HALT'), { force: true });
         failureReason = 'different setup failure';
 
-        await runDaemon({
-          discoverBacklog: staticBacklog([item]),
-          runFeature,
-          isParked: (slug) => isOperatorParked(projectRoot, slug),
-          onFeatureTerminalEffects: (outcome) => applyTerminalEffects(projectRoot, outcome),
-          sleep: async () => { await waitForImmediate(); },
-        }, { concurrency: 1, once: true });
+        await runDaemon(
+          {
+            discoverBacklog: staticBacklog([item]),
+            runFeature,
+            isParked: (slug) => isOperatorParked(projectRoot, slug),
+            onFeatureTerminalEffects: (outcome) => applyTerminalEffects(projectRoot, outcome),
+            sleep: async () => {
+              await waitForImmediate();
+            },
+          },
+          { concurrency: 1, once: true },
+        );
 
         expect(triageCalls).toBe(2);
-        await expect(readFile(join(projectRoot, '.daemon', 'parked', item.slug), 'utf-8'))
-          .resolves.toContain('different setup failure');
+        await expect(readFile(join(projectRoot, '.daemon', 'parked', item.slug), 'utf-8')).resolves.toContain(
+          'different setup failure',
+        );
       } finally {
         await rm(projectRoot, { recursive: true, force: true });
       }
@@ -870,9 +949,7 @@ describe('engine/daemon — runDaemon', () => {
           status: 'error',
           reason: 'original terminal failure',
         }),
-        logs: expect.arrayContaining([
-          expect.stringMatching(/unrecoverable-state: HALT marker write failed for f0/),
-        ]),
+        logs: expect.arrayContaining([expect.stringMatching(/unrecoverable-state: HALT marker write failed for f0/)]),
       });
     } finally {
       await rm(worktree, { recursive: true, force: true });
@@ -979,7 +1056,7 @@ describe('engine/daemon — runDaemon', () => {
           throw new Error('featureExecution executor should own this dispatch');
         },
         featureExecution: {
-          createWorkOrder: async () => ({ slug } as WorkOrder),
+          createWorkOrder: async () => ({ slug }) as WorkOrder,
           executor: {
             execute: async () => {
               order.push('executor');
@@ -1031,10 +1108,7 @@ describe('engine/daemon — runDaemon', () => {
   describe('retryable HALT dispatch boundary (Task 1)', () => {
     const slug = 'retryable-halt';
 
-    async function runRetryableDispatch(
-      haltClass: 'mechanical' | 'legacy',
-      opts: { haltCleared?: string } = {},
-    ) {
+    async function runRetryableDispatch(haltClass: 'mechanical' | 'legacy', opts: { haltCleared?: string } = {}) {
       const root = await mkdtemp(join(tmpdir(), 'daemon-retryable-halt-'));
       const pipeline = join(root, '.pipeline');
       const haltBody = `blocked prerequisite (${haltClass})\n`;
@@ -1055,31 +1129,34 @@ describe('engine/daemon — runDaemon', () => {
       let observed: Record<string, string | undefined> | undefined;
 
       try {
-        await runDaemon({
-          claims,
-          discoverBacklog: staticBacklog([{ slug }]),
-          isHalted: async () => true,
-          isProgressReKickEligible: async () => true,
-          readHaltClass: async () => haltClass,
-          clearRetryableHalt,
-          featureLog: () => (line) => logs.push(line),
-          featureExecution: {
-            createWorkOrder: async () => ({ slug } as WorkOrder),
-            executor: {
-              execute: async () => {
-                observed = {};
-                for (const name of ['HALT', 'HALT.class', 'HALT.rekicked', 'HALT.cleared']) {
-                  const path = join(pipeline, name);
-                  observed[name] = await exists(path) ? await readFile(path, 'utf-8') : undefined;
-                }
-                return { slug, status: 'done' };
+        await runDaemon(
+          {
+            claims,
+            discoverBacklog: staticBacklog([{ slug }]),
+            isHalted: async () => true,
+            isProgressReKickEligible: async () => true,
+            readHaltClass: async () => haltClass,
+            clearRetryableHalt,
+            featureLog: () => (line) => logs.push(line),
+            featureExecution: {
+              createWorkOrder: async () => ({ slug }) as WorkOrder,
+              executor: {
+                execute: async () => {
+                  observed = {};
+                  for (const name of ['HALT', 'HALT.class', 'HALT.rekicked', 'HALT.cleared']) {
+                    const path = join(pipeline, name);
+                    observed[name] = (await exists(path)) ? await readFile(path, 'utf-8') : undefined;
+                  }
+                  return { slug, status: 'done' };
+                },
               },
             },
+            runFeature: async () => {
+              throw new Error('featureExecution executor must be used');
+            },
           },
-          runFeature: async () => {
-            throw new Error('featureExecution executor must be used');
-          },
-        }, { concurrency: 1, once: true });
+          { concurrency: 1, once: true },
+        );
 
         return { clearRetryableHalt, haltBody, logs, observed };
       } finally {
@@ -1090,17 +1167,20 @@ describe('engine/daemon — runDaemon', () => {
     it.each([
       ['mechanical', 'operator over-scope decision\n'],
       ['legacy', undefined],
-    ] as const)('clears a resumed %s HALT before the injected executor observes the worktree', async (haltClass, haltCleared) => {
-      const result = await runRetryableDispatch(haltClass, { haltCleared });
+    ] as const)(
+      'clears a resumed %s HALT before the injected executor observes the worktree',
+      async (haltClass, haltCleared) => {
+        const result = await runRetryableDispatch(haltClass, { haltCleared });
 
-      expect(result.clearRetryableHalt).toHaveBeenCalledTimes(1);
-      expect(result.observed).toEqual({
-        HALT: undefined,
-        'HALT.class': undefined,
-        'HALT.rekicked': result.haltBody,
-        'HALT.cleared': haltCleared,
-      });
-    });
+        expect(result.clearRetryableHalt).toHaveBeenCalledTimes(1);
+        expect(result.observed).toEqual({
+          HALT: undefined,
+          'HALT.class': undefined,
+          'HALT.rekicked': result.haltBody,
+          'HALT.cleared': haltCleared,
+        });
+      },
+    );
 
     it('logs the mechanical class exactly once when clearing before a resumed dispatch', async () => {
       const result = await runRetryableDispatch('mechanical');
@@ -1130,25 +1210,28 @@ describe('engine/daemon — runDaemon', () => {
       let reads = 0;
 
       try {
-        await runDaemon({
-          claims,
-          discoverBacklog: staticBacklog([{ slug }]),
-          isHalted: async () => true,
-          isProgressReKickEligible: async () => true,
-          // The selection-time progress guard is independently fail-closed for
-          // retained classes. Return mechanical once to reach dispatch, then
-          // prove the dispatch boundary itself retains the live marker.
-          readHaltClass: async () => (++reads === 1 ? 'mechanical' : disposition) as never,
-          clearRetryableHalt,
-          featureExecution: {
-            createWorkOrder: async () => ({ slug } as WorkOrder),
-            executor: { execute },
+        await runDaemon(
+          {
+            claims,
+            discoverBacklog: staticBacklog([{ slug }]),
+            isHalted: async () => true,
+            isProgressReKickEligible: async () => true,
+            // The selection-time progress guard is independently fail-closed for
+            // retained classes. Return mechanical once to reach dispatch, then
+            // prove the dispatch boundary itself retains the live marker.
+            readHaltClass: async () => (++reads === 1 ? 'mechanical' : disposition) as never,
+            clearRetryableHalt,
+            featureExecution: {
+              createWorkOrder: async () => ({ slug }) as WorkOrder,
+              executor: { execute },
+            },
+            runFeature: async () => {
+              throw new Error('featureExecution executor must be used');
+            },
+            sleep: async () => {},
           },
-          runFeature: async () => {
-            throw new Error('featureExecution executor must be used');
-          },
-          sleep: async () => {},
-        }, { concurrency: 1, once: false, maxIdlePolls: 1 });
+          { concurrency: 1, once: false, maxIdlePolls: 1 },
+        );
 
         expect(clearRetryableHalt).not.toHaveBeenCalled();
         expect(execute).not.toHaveBeenCalled();
@@ -1171,29 +1254,32 @@ describe('engine/daemon — runDaemon', () => {
       const watchHaltCleared = vi.fn(() => vi.fn());
       let progressChecks = 0;
 
-      await runDaemon({
-        claims,
-        discoverBacklog: staticBacklog([{ slug }]),
-        isHalted: async () => true,
-        // Admit the one dispatch under test; subsequent polling is deliberately
-        // ineligible so it cannot turn this failure-boundary assertion into a
-        // retry-loop test (owned by the later loop task).
-        isProgressReKickEligible: async () => ++progressChecks === 1,
-        readHaltClass: async () => 'mechanical',
-        clearRetryableHalt: async () => {
-          throw new Error('REKICK is read-only');
+      await runDaemon(
+        {
+          claims,
+          discoverBacklog: staticBacklog([{ slug }]),
+          isHalted: async () => true,
+          // Admit the one dispatch under test; subsequent polling is deliberately
+          // ineligible so it cannot turn this failure-boundary assertion into a
+          // retry-loop test (owned by the later loop task).
+          isProgressReKickEligible: async () => ++progressChecks === 1,
+          readHaltClass: async () => 'mechanical',
+          clearRetryableHalt: async () => {
+            throw new Error('REKICK is read-only');
+          },
+          watchHaltCleared,
+          featureLog: () => (line) => logs.push(line),
+          featureExecution: {
+            createWorkOrder: async () => ({ slug }) as WorkOrder,
+            executor: { execute },
+          },
+          runFeature: async () => {
+            throw new Error('featureExecution executor must be used');
+          },
+          sleep: async () => {},
         },
-        watchHaltCleared,
-        featureLog: () => (line) => logs.push(line),
-        featureExecution: {
-          createWorkOrder: async () => ({ slug } as WorkOrder),
-          executor: { execute },
-        },
-        runFeature: async () => {
-          throw new Error('featureExecution executor must be used');
-        },
-        sleep: async () => {},
-      }, { concurrency: 1, once: false, maxIdlePolls: 1 });
+        { concurrency: 1, once: false, maxIdlePolls: 1 },
+      );
 
       expect(execute).not.toHaveBeenCalled();
       expect(claims.isParked(slug)).toBe(true);
@@ -1216,33 +1302,36 @@ describe('engine/daemon — runDaemon', () => {
       const productionClearRetryableHalt = vi.fn(async (): Promise<void> => {
         // The production clear treats a concurrently absent marker as a no-op:
         // do not manufacture archive, sentinel, or audit artifacts.
-        if (!await exists(join(pipeline, 'HALT'))) return;
+        if (!(await exists(join(pipeline, 'HALT')))) return;
         throw new Error('fixture requires HALT to vanish before the clear');
       });
 
       try {
-        await runDaemon({
-          claims,
-          discoverBacklog: staticBacklog([{ slug }]),
-          isHalted: async () => {
-            haltedChecks += 1;
-            if (haltedChecks === 2) {
-              await rm(join(pipeline, 'HALT'));
-              await rm(join(pipeline, 'HALT.class'));
-            }
-            return true;
+        await runDaemon(
+          {
+            claims,
+            discoverBacklog: staticBacklog([{ slug }]),
+            isHalted: async () => {
+              haltedChecks += 1;
+              if (haltedChecks === 2) {
+                await rm(join(pipeline, 'HALT'));
+                await rm(join(pipeline, 'HALT.class'));
+              }
+              return true;
+            },
+            isProgressReKickEligible: async () => true,
+            readHaltClass: async () => 'mechanical',
+            clearRetryableHalt: productionClearRetryableHalt,
+            featureExecution: {
+              createWorkOrder: async () => ({ slug }) as WorkOrder,
+              executor: { execute },
+            },
+            runFeature: async () => {
+              throw new Error('featureExecution executor must be used');
+            },
           },
-          isProgressReKickEligible: async () => true,
-          readHaltClass: async () => 'mechanical',
-          clearRetryableHalt: productionClearRetryableHalt,
-          featureExecution: {
-            createWorkOrder: async () => ({ slug } as WorkOrder),
-            executor: { execute },
-          },
-          runFeature: async () => {
-            throw new Error('featureExecution executor must be used');
-          },
-        }, { concurrency: 1, once: true });
+          { concurrency: 1, once: true },
+        );
 
         expect(productionClearRetryableHalt).toHaveBeenCalledTimes(1);
         expect(execute).toHaveBeenCalledTimes(1);
@@ -1265,22 +1354,25 @@ describe('engine/daemon — runDaemon', () => {
       const execute = vi.fn(async () => ({ slug, status: 'done' as const }));
 
       try {
-        await runDaemon({
-          discoverBacklog: staticBacklog([{ slug }]),
-          isParked: async () => true,
-          isHalted: async () => true,
-          isProgressReKickEligible: async () => true,
-          readHaltClass: async () => 'mechanical',
-          clearRetryableHalt,
-          featureExecution: {
-            createWorkOrder: async () => ({ slug } as WorkOrder),
-            executor: { execute },
+        await runDaemon(
+          {
+            discoverBacklog: staticBacklog([{ slug }]),
+            isParked: async () => true,
+            isHalted: async () => true,
+            isProgressReKickEligible: async () => true,
+            readHaltClass: async () => 'mechanical',
+            clearRetryableHalt,
+            featureExecution: {
+              createWorkOrder: async () => ({ slug }) as WorkOrder,
+              executor: { execute },
+            },
+            runFeature: async () => {
+              throw new Error('featureExecution executor must be used');
+            },
+            sleep: async () => {},
           },
-          runFeature: async () => {
-            throw new Error('featureExecution executor must be used');
-          },
-          sleep: async () => {},
-        }, { concurrency: 1, once: false, maxIdlePolls: 1 });
+          { concurrency: 1, once: false, maxIdlePolls: 1 },
+        );
 
         expect(clearRetryableHalt).not.toHaveBeenCalled();
         expect(execute).not.toHaveBeenCalled();
@@ -1296,22 +1388,25 @@ describe('engine/daemon — runDaemon', () => {
       claims.park(slug);
       const execute = vi.fn(async () => ({ slug, status: 'done' as const }));
 
-      await runDaemon({
-        claims,
-        discoverBacklog: staticBacklog([{ slug }]),
-        isHalted: async () => true,
-        isFreshRetryableHalt: async () => true,
-        isProgressReKickEligible: async () => false,
-        readHaltClass: async () => 'mechanical',
-        clearRetryableHalt: async () => {},
-        featureExecution: {
-          createWorkOrder: async () => ({ slug } as WorkOrder),
-          executor: { execute },
+      await runDaemon(
+        {
+          claims,
+          discoverBacklog: staticBacklog([{ slug }]),
+          isHalted: async () => true,
+          isFreshRetryableHalt: async () => true,
+          isProgressReKickEligible: async () => false,
+          readHaltClass: async () => 'mechanical',
+          clearRetryableHalt: async () => {},
+          featureExecution: {
+            createWorkOrder: async () => ({ slug }) as WorkOrder,
+            executor: { execute },
+          },
+          runFeature: async () => {
+            throw new Error('featureExecution executor must be used');
+          },
         },
-        runFeature: async () => {
-          throw new Error('featureExecution executor must be used');
-        },
-      }, { concurrency: 1, once: true });
+        { concurrency: 1, once: true },
+      );
 
       expect(execute).toHaveBeenCalledTimes(1);
     });
@@ -1322,23 +1417,28 @@ describe('engine/daemon — runDaemon', () => {
       const execute = vi.fn(async () => ({ slug, status: 'done' as const }));
       let sleeps = 0;
 
-      const result = await runDaemon({
-        claims,
-        discoverBacklog: staticBacklog([{ slug }]),
-        isHalted: async () => true,
-        isFreshRetryableHalt: async () => false,
-        isProgressReKickEligible: async () => false,
-        readHaltClass: async () => 'mechanical',
-        clearRetryableHalt: async () => {},
-        featureExecution: {
-          createWorkOrder: async () => ({ slug } as WorkOrder),
-          executor: { execute },
+      const result = await runDaemon(
+        {
+          claims,
+          discoverBacklog: staticBacklog([{ slug }]),
+          isHalted: async () => true,
+          isFreshRetryableHalt: async () => false,
+          isProgressReKickEligible: async () => false,
+          readHaltClass: async () => 'mechanical',
+          clearRetryableHalt: async () => {},
+          featureExecution: {
+            createWorkOrder: async () => ({ slug }) as WorkOrder,
+            executor: { execute },
+          },
+          runFeature: async () => {
+            throw new Error('featureExecution executor must be used');
+          },
+          sleep: async () => {
+            sleeps += 1;
+          },
         },
-        runFeature: async () => {
-          throw new Error('featureExecution executor must be used');
-        },
-        sleep: async () => { sleeps += 1; },
-      }, { concurrency: 1, once: false, maxIdlePolls: 10 });
+        { concurrency: 1, once: false, maxIdlePolls: 10 },
+      );
 
       expect({ dispatches: execute.mock.calls.length, sleeps, stoppedReason: result.stoppedReason }).toEqual({
         dispatches: 0,
@@ -1352,47 +1452,53 @@ describe('engine/daemon — runDaemon', () => {
       ['unclassified', false],
       ['stack-tip-diverged', true],
       ['unknown-future-class', true],
-    ] as const)('does not admit retained %s HALTs even when both re-kick predicates say yes', async (disposition, hasClassSidecar) => {
-      const root = await mkdtemp(join(tmpdir(), 'daemon-prompt-retained-halt-'));
-      const pipeline = join(root, '.pipeline');
-      const haltBody = `retained prompt halt (${disposition})\n`;
-      await mkdir(pipeline, { recursive: true });
-      await writeFile(join(pipeline, 'HALT'), haltBody);
-      if (hasClassSidecar) await writeFile(join(pipeline, 'HALT.class'), disposition);
-      const claims = new InMemoryWorkClaims();
-      claims.park(slug);
-      const execute = vi.fn(async () => ({ slug, status: 'done' as const }));
+    ] as const)(
+      'does not admit retained %s HALTs even when both re-kick predicates say yes',
+      async (disposition, hasClassSidecar) => {
+        const root = await mkdtemp(join(tmpdir(), 'daemon-prompt-retained-halt-'));
+        const pipeline = join(root, '.pipeline');
+        const haltBody = `retained prompt halt (${disposition})\n`;
+        await mkdir(pipeline, { recursive: true });
+        await writeFile(join(pipeline, 'HALT'), haltBody);
+        if (hasClassSidecar) await writeFile(join(pipeline, 'HALT.class'), disposition);
+        const claims = new InMemoryWorkClaims();
+        claims.park(slug);
+        const execute = vi.fn(async () => ({ slug, status: 'done' as const }));
 
-      try {
-        await runDaemon({
-          claims,
-          discoverBacklog: staticBacklog([{ slug }]),
-          isHalted: async () => true,
-          isFreshRetryableHalt: async () => true,
-          isProgressReKickEligible: async () => true,
-          readHaltClass: async () => disposition as never,
-          clearRetryableHalt: async () => {},
-          featureExecution: {
-            createWorkOrder: async () => ({ slug } as WorkOrder),
-            executor: { execute },
-          },
-          runFeature: async () => {
-            throw new Error('featureExecution executor must be used');
-          },
-          sleep: async () => {},
-        }, { concurrency: 1, once: false, maxIdlePolls: 1 });
+        try {
+          await runDaemon(
+            {
+              claims,
+              discoverBacklog: staticBacklog([{ slug }]),
+              isHalted: async () => true,
+              isFreshRetryableHalt: async () => true,
+              isProgressReKickEligible: async () => true,
+              readHaltClass: async () => disposition as never,
+              clearRetryableHalt: async () => {},
+              featureExecution: {
+                createWorkOrder: async () => ({ slug }) as WorkOrder,
+                executor: { execute },
+              },
+              runFeature: async () => {
+                throw new Error('featureExecution executor must be used');
+              },
+              sleep: async () => {},
+            },
+            { concurrency: 1, once: false, maxIdlePolls: 1 },
+          );
 
-        expect(execute).not.toHaveBeenCalled();
-        await expect(readFile(join(pipeline, 'HALT'), 'utf-8')).resolves.toBe(haltBody);
-        if (hasClassSidecar) {
-          await expect(readFile(join(pipeline, 'HALT.class'), 'utf-8')).resolves.toBe(disposition);
-        } else {
-          await expect(exists(join(pipeline, 'HALT.class'))).resolves.toBe(false);
+          expect(execute).not.toHaveBeenCalled();
+          await expect(readFile(join(pipeline, 'HALT'), 'utf-8')).resolves.toBe(haltBody);
+          if (hasClassSidecar) {
+            await expect(readFile(join(pipeline, 'HALT.class'), 'utf-8')).resolves.toBe(disposition);
+          } else {
+            await expect(exists(join(pipeline, 'HALT.class'))).resolves.toBe(false);
+          }
+        } finally {
+          await rm(root, { recursive: true, force: true });
         }
-      } finally {
-        await rm(root, { recursive: true, force: true });
-      }
-    });
+      },
+    );
 
     it('shares the re-kick ceiling with fresh retryable HALT admissions', async () => {
       const claims = new InMemoryWorkClaims();
@@ -1400,25 +1506,28 @@ describe('engine/daemon — runDaemon', () => {
       const logs: string[] = [];
       const execute = vi.fn(async () => ({ slug, status: 'halted' as const }));
 
-      await runDaemon({
-        claims,
-        discoverBacklog: staticBacklog([{ slug }]),
-        isHalted: async () => true,
-        isFreshRetryableHalt: async () => true,
-        isProgressReKickEligible: async () => false,
-        readHaltClass: async () => 'mechanical',
-        clearRetryableHalt: async () => {},
-        progressReKickDispatchCeiling: 3,
-        log: (line) => logs.push(line),
-        featureExecution: {
-          createWorkOrder: async () => ({ slug } as WorkOrder),
-          executor: { execute },
+      await runDaemon(
+        {
+          claims,
+          discoverBacklog: staticBacklog([{ slug }]),
+          isHalted: async () => true,
+          isFreshRetryableHalt: async () => true,
+          isProgressReKickEligible: async () => false,
+          readHaltClass: async () => 'mechanical',
+          clearRetryableHalt: async () => {},
+          progressReKickDispatchCeiling: 3,
+          log: (line) => logs.push(line),
+          featureExecution: {
+            createWorkOrder: async () => ({ slug }) as WorkOrder,
+            executor: { execute },
+          },
+          runFeature: async () => {
+            throw new Error('featureExecution executor must be used');
+          },
+          sleep: async () => {},
         },
-        runFeature: async () => {
-          throw new Error('featureExecution executor must be used');
-        },
-        sleep: async () => {},
-      }, { concurrency: 1, once: false, maxIdlePolls: 1 });
+        { concurrency: 1, once: false, maxIdlePolls: 1 },
+      );
 
       expect(execute).toHaveBeenCalledTimes(3);
       expect(logs.filter((line) => line.includes('dispatch ceiling (3) reached'))).toHaveLength(1);
@@ -1429,27 +1538,34 @@ describe('engine/daemon — runDaemon', () => {
       claims.park(slug);
       const calls: string[] = [];
 
-      await runDaemon({
-        claims,
-        discoverBacklog: staticBacklog([{ slug }]),
-        isHalted: async () => true,
-        isFreshRetryableHalt: async () => true,
-        readHaltClass: async () => 'mechanical',
-        clearRetryableHalt: async () => { calls.push('clear'); },
-        stampDispatchBaseline: async () => { calls.push('stamp'); },
-        featureExecution: {
-          createWorkOrder: async () => ({ slug } as WorkOrder),
-          executor: {
-            execute: async () => {
-              calls.push('execute');
-              return { slug, status: 'done' };
+      await runDaemon(
+        {
+          claims,
+          discoverBacklog: staticBacklog([{ slug }]),
+          isHalted: async () => true,
+          isFreshRetryableHalt: async () => true,
+          readHaltClass: async () => 'mechanical',
+          clearRetryableHalt: async () => {
+            calls.push('clear');
+          },
+          stampDispatchBaseline: async () => {
+            calls.push('stamp');
+          },
+          featureExecution: {
+            createWorkOrder: async () => ({ slug }) as WorkOrder,
+            executor: {
+              execute: async () => {
+                calls.push('execute');
+                return { slug, status: 'done' };
+              },
             },
           },
+          runFeature: async () => {
+            throw new Error('featureExecution executor must be used');
+          },
         },
-        runFeature: async () => {
-          throw new Error('featureExecution executor must be used');
-        },
-      }, { concurrency: 1, once: true });
+        { concurrency: 1, once: true },
+      );
 
       expect(calls).toEqual(['clear', 'stamp', 'execute']);
     });
@@ -1458,23 +1574,28 @@ describe('engine/daemon — runDaemon', () => {
       const logs: string[] = [];
       const execute = vi.fn(async () => ({ slug, status: 'done' as const }));
 
-      await runDaemon({
-        discoverBacklog: staticBacklog([{ slug }]),
-        stampDispatchBaseline: async () => {
-          throw new Error('task evidence write failed');
+      await runDaemon(
+        {
+          discoverBacklog: staticBacklog([{ slug }]),
+          stampDispatchBaseline: async () => {
+            throw new Error('task evidence write failed');
+          },
+          log: (line) => logs.push(line),
+          featureExecution: {
+            createWorkOrder: async () => ({ slug }) as WorkOrder,
+            executor: { execute },
+          },
+          runFeature: async () => {
+            throw new Error('featureExecution executor must be used');
+          },
         },
-        log: (line) => logs.push(line),
-        featureExecution: {
-          createWorkOrder: async () => ({ slug } as WorkOrder),
-          executor: { execute },
-        },
-        runFeature: async () => {
-          throw new Error('featureExecution executor must be used');
-        },
-      }, { concurrency: 1, once: true });
+        { concurrency: 1, once: true },
+      );
 
       expect(execute).toHaveBeenCalledTimes(1);
-      expect(logs.filter((line) => line.includes(`baseline stamp failed for ${slug} — task evidence write failed`))).toHaveLength(1);
+      expect(
+        logs.filter((line) => line.includes(`baseline stamp failed for ${slug} — task evidence write failed`)),
+      ).toHaveLength(1);
     });
 
     it('bounds an identical retryable stop to its original dispatch and one prompt re-dispatch', async () => {
@@ -1485,28 +1606,36 @@ describe('engine/daemon — runDaemon', () => {
       let archivedHalt: string | undefined;
       let dispatches = 0;
 
-      await runDaemon({
-        claims,
-        discoverBacklog: staticBacklog([{ slug }]),
-        isHalted: async () => liveHalt,
-        readHaltClass: async () => 'mechanical',
-        isFreshRetryableHalt: async () => liveHalt && haltBody !== archivedHalt,
-        isProgressReKickEligible: async () => false,
-        clearRetryableHalt: async () => { archivedHalt = haltBody; liveHalt = false; },
-        log: (line) => logs.push(line),
-        featureExecution: {
-          createWorkOrder: async () => ({ slug } as WorkOrder),
-          executor: {
-            execute: async () => {
-              dispatches++;
-              liveHalt = true;
-              return { slug, status: 'halted' };
+      await runDaemon(
+        {
+          claims,
+          discoverBacklog: staticBacklog([{ slug }]),
+          isHalted: async () => liveHalt,
+          readHaltClass: async () => 'mechanical',
+          isFreshRetryableHalt: async () => liveHalt && haltBody !== archivedHalt,
+          isProgressReKickEligible: async () => false,
+          clearRetryableHalt: async () => {
+            archivedHalt = haltBody;
+            liveHalt = false;
+          },
+          log: (line) => logs.push(line),
+          featureExecution: {
+            createWorkOrder: async () => ({ slug }) as WorkOrder,
+            executor: {
+              execute: async () => {
+                dispatches++;
+                liveHalt = true;
+                return { slug, status: 'halted' };
+              },
             },
           },
+          runFeature: async () => {
+            throw new Error('featureExecution executor must be used');
+          },
+          sleep: async () => {},
         },
-        runFeature: async () => { throw new Error('featureExecution executor must be used'); },
-        sleep: async () => {},
-      }, { concurrency: 1, once: false, maxIdlePolls: 10 });
+        { concurrency: 1, once: false, maxIdlePolls: 10 },
+      );
 
       expect(dispatches).toBe(2);
       expect(logs.filter((line) => line.includes(`resume ${slug}`))).toHaveLength(1);
@@ -1520,29 +1649,37 @@ describe('engine/daemon — runDaemon', () => {
       let archivedHalt: string | undefined;
       let dispatches = 0;
 
-      await runDaemon({
-        claims,
-        discoverBacklog: staticBacklog([{ slug }]),
-        isHalted: async () => liveHalt,
-        readHaltClass: async () => 'mechanical',
-        isFreshRetryableHalt: async () => liveHalt && haltBody !== archivedHalt,
-        isProgressReKickEligible: async () => false,
-        clearRetryableHalt: async () => { archivedHalt = haltBody; liveHalt = false; },
-        progressReKickDispatchCeiling: 4,
-        log: (line) => logs.push(line),
-        featureExecution: {
-          createWorkOrder: async () => ({ slug } as WorkOrder),
-          executor: {
-            execute: async () => {
-              haltBody = `volatile halt ${++dispatches}\n`;
-              liveHalt = true;
-              return { slug, status: 'halted' };
+      await runDaemon(
+        {
+          claims,
+          discoverBacklog: staticBacklog([{ slug }]),
+          isHalted: async () => liveHalt,
+          readHaltClass: async () => 'mechanical',
+          isFreshRetryableHalt: async () => liveHalt && haltBody !== archivedHalt,
+          isProgressReKickEligible: async () => false,
+          clearRetryableHalt: async () => {
+            archivedHalt = haltBody;
+            liveHalt = false;
+          },
+          progressReKickDispatchCeiling: 4,
+          log: (line) => logs.push(line),
+          featureExecution: {
+            createWorkOrder: async () => ({ slug }) as WorkOrder,
+            executor: {
+              execute: async () => {
+                haltBody = `volatile halt ${++dispatches}\n`;
+                liveHalt = true;
+                return { slug, status: 'halted' };
+              },
             },
           },
+          runFeature: async () => {
+            throw new Error('featureExecution executor must be used');
+          },
+          sleep: async () => {},
         },
-        runFeature: async () => { throw new Error('featureExecution executor must be used'); },
-        sleep: async () => {},
-      }, { concurrency: 1, once: false, maxIdlePolls: 10 });
+        { concurrency: 1, once: false, maxIdlePolls: 10 },
+      );
 
       // The ceiling bounds re-dispatches; the original dispatch is not a re-kick.
       expect(dispatches).toBe(5);
@@ -1559,33 +1696,43 @@ describe('engine/daemon — runDaemon', () => {
       let dispatches = 0;
       const progressChecks: boolean[] = [];
 
-      await runDaemon({
-        claims,
-        discoverBacklog: staticBacklog([{ slug }]),
-        isHalted: async () => liveHalt,
-        readHaltClass: async () => 'mechanical',
-        isFreshRetryableHalt: async () => liveHalt && haltBody !== archivedHalt,
-        isProgressReKickEligible: async () => {
-          const eligible = resolved > baseline;
-          progressChecks.push(eligible);
-          return eligible;
-        },
-        clearRetryableHalt: async () => { archivedHalt = haltBody; liveHalt = false; },
-        stampDispatchBaseline: async () => { baseline = resolved; },
-        featureExecution: {
-          createWorkOrder: async () => ({ slug } as WorkOrder),
-          executor: {
-            execute: async () => {
-              dispatches++;
-              // Simulates a stack-preflight refusal: no step runs and no task resolves.
-              liveHalt = true;
-              return { slug, status: 'halted' };
+      await runDaemon(
+        {
+          claims,
+          discoverBacklog: staticBacklog([{ slug }]),
+          isHalted: async () => liveHalt,
+          readHaltClass: async () => 'mechanical',
+          isFreshRetryableHalt: async () => liveHalt && haltBody !== archivedHalt,
+          isProgressReKickEligible: async () => {
+            const eligible = resolved > baseline;
+            progressChecks.push(eligible);
+            return eligible;
+          },
+          clearRetryableHalt: async () => {
+            archivedHalt = haltBody;
+            liveHalt = false;
+          },
+          stampDispatchBaseline: async () => {
+            baseline = resolved;
+          },
+          featureExecution: {
+            createWorkOrder: async () => ({ slug }) as WorkOrder,
+            executor: {
+              execute: async () => {
+                dispatches++;
+                // Simulates a stack-preflight refusal: no step runs and no task resolves.
+                liveHalt = true;
+                return { slug, status: 'halted' };
+              },
             },
           },
+          runFeature: async () => {
+            throw new Error('featureExecution executor must be used');
+          },
+          sleep: async () => {},
         },
-        runFeature: async () => { throw new Error('featureExecution executor must be used'); },
-        sleep: async () => {},
-      }, { concurrency: 1, once: false, maxIdlePolls: 10 });
+        { concurrency: 1, once: false, maxIdlePolls: 10 },
+      );
 
       expect({ dispatches, baseline }).toEqual({ dispatches: 2, baseline: 2 });
       expect(progressChecks.length).toBeGreaterThan(0);
@@ -1600,26 +1747,34 @@ describe('engine/daemon — runDaemon', () => {
       let archivedHalt: string | undefined;
       const executedSteps: string[] = [];
 
-      await runDaemon({
-        claims,
-        discoverBacklog: staticBacklog([{ slug }]),
-        isHalted: async () => liveHalt,
-        readHaltClass: async () => 'mechanical',
-        isFreshRetryableHalt: async () => true,
-        clearRetryableHalt: async () => { archivedHalt = haltBody; liveHalt = false; },
-        featureExecution: {
-          createWorkOrder: async () => ({ slug } as WorkOrder),
-          executor: {
-            execute: async () => {
-              // The real stack preflight refuses only a still-live unauthorized HALT.
-              expect(liveHalt).toBe(false);
-              executedSteps.push('test_suite');
-              return { slug, status: 'done' };
+      await runDaemon(
+        {
+          claims,
+          discoverBacklog: staticBacklog([{ slug }]),
+          isHalted: async () => liveHalt,
+          readHaltClass: async () => 'mechanical',
+          isFreshRetryableHalt: async () => true,
+          clearRetryableHalt: async () => {
+            archivedHalt = haltBody;
+            liveHalt = false;
+          },
+          featureExecution: {
+            createWorkOrder: async () => ({ slug }) as WorkOrder,
+            executor: {
+              execute: async () => {
+                // The real stack preflight refuses only a still-live unauthorized HALT.
+                expect(liveHalt).toBe(false);
+                executedSteps.push('test_suite');
+                return { slug, status: 'done' };
+              },
             },
           },
+          runFeature: async () => {
+            throw new Error('featureExecution executor must be used');
+          },
         },
-        runFeature: async () => { throw new Error('featureExecution executor must be used'); },
-      }, { concurrency: 1, once: true });
+        { concurrency: 1, once: true },
+      );
 
       expect({ archivedHalt, liveHalt, executedSteps }).toEqual({
         archivedHalt: haltBody,
@@ -2398,9 +2553,7 @@ describe('engine/daemon — runDaemon', () => {
     const res = await runDaemon(deps, { concurrency: 1, once: true });
     expect(res).toEqual({ processed: [], stoppedReason: 'repo_root_missing' });
     expect(runFeature).not.toHaveBeenCalled();
-    expect(
-      logs.filter((m) => m.includes('repo root missing') && m.includes('/gone/repo'))
-    ).toHaveLength(1);
+    expect(logs.filter((m) => m.includes('repo root missing') && m.includes('/gone/repo'))).toHaveLength(1);
   });
 
   it('idle/identity-parked daemon: stops with repo_root_missing (not idle_timeout) when repo vanishes mid-poll', async () => {
@@ -2437,9 +2590,7 @@ describe('engine/daemon — runDaemon', () => {
     expect(res.processed).toHaveLength(0); // no work dispatched
     expect(slept).toBeGreaterThan(0); // did sleep during idle polling
     expect(slept).toBeLessThan(10); // but not maxIdlePolls times (stopped early)
-    expect(
-      logs.filter((m) => m.includes('repo root missing') && m.includes('/gone/repo'))
-    ).toHaveLength(1);
+    expect(logs.filter((m) => m.includes('repo root missing') && m.includes('/gone/repo'))).toHaveLength(1);
   });
 
   it('in-flight drain: collects in-flight outcome after repo_root_missing detected', async () => {
@@ -2514,9 +2665,7 @@ describe('engine/daemon — runDaemon', () => {
     expect(res.processed).toHaveLength(1);
     expect(res.stoppedReason).toBe('backlog_drained');
     expect(runFeature).toHaveBeenCalledOnce();
-    expect(
-      logs.filter((m) => m.includes('repo root missing'))
-    ).toHaveLength(0);
+    expect(logs.filter((m) => m.includes('repo root missing'))).toHaveLength(0);
   });
 
   // ── Task T5: Event-driven re-dispatch on HALT clear ───────────────────────
@@ -2582,9 +2731,7 @@ describe('engine/daemon — runDaemon', () => {
       // Daemon should complete without hitting the never-resolving sleep
       const res = await Promise.race([
         daemonPromise,
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('daemon timeout')), 500)
-        ),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('daemon timeout')), 500)),
       ]);
 
       // Verify the happy path: parked once, then re-dispatched after clear
@@ -2640,9 +2787,7 @@ describe('engine/daemon — runDaemon', () => {
 
       await Promise.race([
         daemonPromise,
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('daemon timeout')), 500)
-        ),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('daemon timeout')), 500)),
       ]);
 
       // Verify event order: dispatch 1 → onCleared fired → dispatch 2 (NO sleep before dispatch:2)
@@ -2720,9 +2865,7 @@ describe('engine/daemon — runDaemon', () => {
 
       const res = await Promise.race([
         daemonPromise,
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('daemon timeout')), 500)
-        ),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('daemon timeout')), 500)),
       ]);
 
       // No halt, so no watch
@@ -2743,7 +2886,7 @@ describe('engine/daemon — runDaemon', () => {
       active: () => true, // Episode is active → suppress dispatch
       enter: () => {},
       clear: () => Promise.resolve(),
-          nextWaitSeconds: () => 60,
+      nextWaitSeconds: () => 60,
     };
 
     let sleptCount = 0;
@@ -3638,9 +3781,7 @@ describe('engine/daemon — runDaemon', () => {
         // unblocks dispatch, then the idle-poll counter trips on the NEXT
         // idle encounter (nothing left in the backlog) to end the run.
         runDaemon(deps, { concurrency: 1, once: false, maxIdlePolls: 1 }),
-        new Promise<any>((_, reject) =>
-          setTimeout(() => reject(new Error('daemon timeout')), 500),
-        ),
+        new Promise<any>((_, reject) => setTimeout(() => reject(new Error('daemon timeout')), 500)),
       ]);
 
       expect(events).toContain('watcher:fired');
@@ -3932,25 +4073,28 @@ describe('engine/daemon — runDaemon', () => {
     it('restarts at the idle boundary for a recorded mismatch even when the current staleness sample is current', async () => {
       const requestRestart = vi.fn(async () => ({ fired: true }));
 
-      const result = await runDaemon({
-        discoverBacklog: async () => [],
-        runFeature: async () => {
-          throw new Error('an empty backlog must not dispatch');
+      const result = await runDaemon(
+        {
+          discoverBacklog: async () => [],
+          runFeature: async () => {
+            throw new Error('an empty backlog must not dispatch');
+          },
+          staleEngineChecker: {
+            check: () => 'current',
+            capturedIdentity: () => 'engine-before',
+            targetIdentity: () => 'engine-after',
+          },
+          protocolMismatchPending: () => true,
+          requestRestart,
         },
-        staleEngineChecker: {
-          check: () => 'current',
-          capturedIdentity: () => 'engine-before',
-          targetIdentity: () => 'engine-after',
+        {
+          concurrency: 1,
+          once: false,
+          isSelfHost: true,
+          autoRestartOnStaleEngine: true,
+          maxIdlePolls: 0,
         },
-        protocolMismatchPending: () => true,
-        requestRestart,
-      }, {
-        concurrency: 1,
-        once: false,
-        isSelfHost: true,
-        autoRestartOnStaleEngine: true,
-        maxIdlePolls: 0,
-      });
+      );
 
       expect({
         stopReason: result.stoppedReason,
@@ -3966,38 +4110,45 @@ describe('engine/daemon — runDaemon', () => {
       let mismatchPending = false;
       let releaseFirst!: () => void;
       let signalFirstDispatch!: () => void;
-      const firstReleased = new Promise<void>((resolve) => { releaseFirst = resolve; });
-      const firstDispatched = new Promise<void>((resolve) => { signalFirstDispatch = resolve; });
+      const firstReleased = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      const firstDispatched = new Promise<void>((resolve) => {
+        signalFirstDispatch = resolve;
+      });
       const started: string[] = [];
       const requestRestart = vi.fn(async () => ({ fired: true }));
 
-      const daemon = runDaemon({
-        discoverBacklog: staticBacklog([{ slug: 'first' }, { slug: 'must-not-claim' }]),
-        runFeature: async (item) => {
-          started.push(item.slug);
-          if (item.slug === 'first') {
-            signalFirstDispatch();
+      const daemon = runDaemon(
+        {
+          discoverBacklog: staticBacklog([{ slug: 'first' }, { slug: 'must-not-claim' }]),
+          runFeature: async (item) => {
+            started.push(item.slug);
+            if (item.slug === 'first') {
+              signalFirstDispatch();
+              await firstReleased;
+            }
+            return { slug: item.slug, status: 'done' as const };
+          },
+          staleEngineChecker: {
+            check: () => 'current',
+            capturedIdentity: () => 'engine-before',
+            targetIdentity: () => 'engine-after',
+          },
+          protocolMismatchPending: () => mismatchPending,
+          requestRestart,
+          sleep: async () => {
             await firstReleased;
-          }
-          return { slug: item.slug, status: 'done' as const };
+          },
         },
-        staleEngineChecker: {
-          check: () => 'current',
-          capturedIdentity: () => 'engine-before',
-          targetIdentity: () => 'engine-after',
+        {
+          concurrency: 1,
+          once: false,
+          isSelfHost: true,
+          autoRestartOnStaleEngine: true,
+          maxIdlePolls: 0,
         },
-        protocolMismatchPending: () => mismatchPending,
-        requestRestart,
-        sleep: async () => {
-          await firstReleased;
-        },
-      }, {
-        concurrency: 1,
-        once: false,
-        isSelfHost: true,
-        autoRestartOnStaleEngine: true,
-        maxIdlePolls: 0,
-      });
+      );
 
       await firstDispatched;
       mismatchPending = true;
@@ -4022,31 +4173,34 @@ describe('engine/daemon — runDaemon', () => {
       const logs: string[] = [];
       const requestRestart = vi.fn(async () => ({ fired: true }));
 
-      const result = await runDaemon({
-        discoverBacklog: staticBacklog([{ slug: 'fallback-child' }, { slug: 'must-not-claim' }]),
-        runFeature: async (item) => {
-          started.push(item.slug);
-          if (item.slug === 'fallback-child') {
-            await Promise.resolve();
-            mismatchPending = true;
-          }
-          return { slug: item.slug, status: 'done' as const };
+      const result = await runDaemon(
+        {
+          discoverBacklog: staticBacklog([{ slug: 'fallback-child' }, { slug: 'must-not-claim' }]),
+          runFeature: async (item) => {
+            started.push(item.slug);
+            if (item.slug === 'fallback-child') {
+              await Promise.resolve();
+              mismatchPending = true;
+            }
+            return { slug: item.slug, status: 'done' as const };
+          },
+          staleEngineChecker: {
+            check: () => 'current',
+            capturedIdentity: () => 'engine-before',
+            targetIdentity: () => 'engine-after',
+          },
+          protocolMismatchPending: () => mismatchPending,
+          requestRestart,
+          log: (line) => logs.push(line),
         },
-        staleEngineChecker: {
-          check: () => 'current',
-          capturedIdentity: () => 'engine-before',
-          targetIdentity: () => 'engine-after',
+        {
+          concurrency: 1,
+          once: false,
+          isSelfHost: true,
+          autoRestartOnStaleEngine: true,
+          maxIdlePolls: 0,
         },
-        protocolMismatchPending: () => mismatchPending,
-        requestRestart,
-        log: (line) => logs.push(line),
-      }, {
-        concurrency: 1,
-        once: false,
-        isSelfHost: true,
-        autoRestartOnStaleEngine: true,
-        maxIdlePolls: 0,
-      });
+      );
 
       expect({
         started,
@@ -4069,48 +4223,55 @@ describe('engine/daemon — runDaemon', () => {
       const started: string[] = [];
       const logs: string[] = [];
       let releaseLong!: () => void;
-      const longReleased = new Promise<void>((resolve) => { releaseLong = resolve; });
+      const longReleased = new Promise<void>((resolve) => {
+        releaseLong = resolve;
+      });
       let releaseFallback!: () => void;
-      const fallbackReleased = new Promise<void>((resolve) => { releaseFallback = resolve; });
+      const fallbackReleased = new Promise<void>((resolve) => {
+        releaseFallback = resolve;
+      });
       let sleeps = 0;
       const requestRestart = vi.fn(async () => ({ fired: true }));
 
-      const result = await runDaemon({
-        discoverBacklog: staticBacklog([{ slug: 'long' }, { slug: 'fallback-child' }, { slug: 'must-not-claim' }]),
-        runFeature: async (item) => {
-          started.push(item.slug);
-          if (item.slug === 'must-not-claim') releaseLong();
-          if (item.slug === 'long') await longReleased;
-          if (item.slug === 'fallback-child') {
-            if (path === 'busy-poll') await fallbackReleased;
-            else await new Promise<void>((resolve) => setTimeout(resolve, 5));
-            mismatchPending = true;
-          }
-          return { slug: item.slug, status: 'done' as const };
+      const result = await runDaemon(
+        {
+          discoverBacklog: staticBacklog([{ slug: 'long' }, { slug: 'fallback-child' }, { slug: 'must-not-claim' }]),
+          runFeature: async (item) => {
+            started.push(item.slug);
+            if (item.slug === 'must-not-claim') releaseLong();
+            if (item.slug === 'long') await longReleased;
+            if (item.slug === 'fallback-child') {
+              if (path === 'busy-poll') await fallbackReleased;
+              else await new Promise<void>((resolve) => setTimeout(resolve, 5));
+              mismatchPending = true;
+            }
+            return { slug: item.slug, status: 'done' as const };
+          },
+          staleEngineChecker: {
+            check: () => 'current',
+            capturedIdentity: () => 'engine-before',
+            targetIdentity: () => 'engine-after',
+          },
+          protocolMismatchPending: () => mismatchPending,
+          requestRestart,
+          sleep: async () => {
+            sleeps += 1;
+            if (sleeps === 1) releaseFallback();
+            await new Promise<void>((resolve) => setTimeout(resolve, 0));
+          },
+          log: (line) => {
+            logs.push(line);
+            if (line === '[daemon] drain started: stale-engine') releaseLong();
+          },
         },
-        staleEngineChecker: {
-          check: () => 'current',
-          capturedIdentity: () => 'engine-before',
-          targetIdentity: () => 'engine-after',
+        {
+          concurrency: 2,
+          once: false,
+          isSelfHost: true,
+          autoRestartOnStaleEngine: true,
+          maxIdlePolls: path === 'busy-poll' ? 1 : 0,
         },
-        protocolMismatchPending: () => mismatchPending,
-        requestRestart,
-        sleep: async () => {
-          sleeps += 1;
-          if (sleeps === 1) releaseFallback();
-          await new Promise<void>((resolve) => setTimeout(resolve, 0));
-        },
-        log: (line) => {
-          logs.push(line);
-          if (line === '[daemon] drain started: stale-engine') releaseLong();
-        },
-      }, {
-        concurrency: 2,
-        once: false,
-        isSelfHost: true,
-        autoRestartOnStaleEngine: true,
-        maxIdlePolls: path === 'busy-poll' ? 1 : 0,
-      });
+      );
 
       return {
         started,

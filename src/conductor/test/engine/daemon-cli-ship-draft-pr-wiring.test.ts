@@ -6,13 +6,8 @@ describe('daemon-cli SHIP draft PR branch wiring', () => {
     const source = await readFile(new URL('../../src/engine/daemon-feature-lifecycle.ts', import.meta.url), 'utf8');
 
     const wiresBranch =
-      /new\s+Conductor\s*\(\s*\{(?:(?!^\s*\}\s*\);)[\s\S]){0,8000}?\bworktreeBranch\s*:\s*wt\.branch\b/m.test(
-        source,
-      );
+      /new\s+Conductor\s*\(\s*\{(?:(?!^\s*\}\s*\);)[\s\S]){0,8000}?\bworktreeBranch\s*:\s*wt\.branch\b/m.test(source);
 
-    expect(
-      wiresBranch,
-      'expected new Conductor({...}) to include worktreeBranch: wt.branch',
-    ).toBe(true);
+    expect(wiresBranch, 'expected new Conductor({...}) to include worktreeBranch: wt.branch').toBe(true);
   });
 });

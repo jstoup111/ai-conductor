@@ -29,7 +29,7 @@ describe('stack preflight entry-point wiring', () => {
 
   it('runs resume preflight before the cursor and rebase-operation classification', async () => {
     const conductor = await source('conductor.ts');
-    const resume = conductor.indexOf("} else if (this.resume) {");
+    const resume = conductor.indexOf('} else if (this.resume) {');
     const preflight = conductor.indexOf('const preflight = await this.stackPreflight', resume);
     const cursor = conductor.indexOf('await this.activateChildRegionStateForResume(state)', resume);
     const classification = conductor.indexOf('let rebaseClassification = await classifyRebaseOperation', resume);
@@ -38,6 +38,8 @@ describe('stack preflight entry-point wiring', () => {
     expect(preflight).toBeGreaterThan(resume);
     expect(cursor).toBeGreaterThan(preflight);
     expect(classification).toBeGreaterThan(cursor);
-    expect(conductor.slice(preflight, cursor)).toContain("await supersedeHaltRecord(this.projectRoot, resumeSlug, 'stack-preflight')");
+    expect(conductor.slice(preflight, cursor)).toContain(
+      "await supersedeHaltRecord(this.projectRoot, resumeSlug, 'stack-preflight')",
+    );
   });
 });

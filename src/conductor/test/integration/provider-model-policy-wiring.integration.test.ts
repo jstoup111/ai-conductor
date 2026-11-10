@@ -5,10 +5,7 @@ import ts from 'typescript';
 import { expect, it } from 'vitest';
 
 it('does not retain run-global model-policy authority in the conductor', async () => {
-  const source = await readFile(
-    new URL('../../src/engine/conductor.ts', import.meta.url),
-    'utf8',
-  );
+  const source = await readFile(new URL('../../src/engine/conductor.ts', import.meta.url), 'utf8');
 
   expect(source).not.toMatch(/\bthis\.modelPolicy\b/);
   expect(source).toMatch(
@@ -16,45 +13,26 @@ it('does not retain run-global model-policy authority in the conductor', async (
   );
 });
 
-function isConstBinding(
-  declaration: ts.VariableDeclaration | undefined,
-): declaration is ts.VariableDeclaration {
-  return declaration !== undefined &&
-    (declaration.parent.flags & ts.NodeFlags.Const) !== 0;
+function isConstBinding(declaration: ts.VariableDeclaration | undefined): declaration is ts.VariableDeclaration {
+  return declaration !== undefined && (declaration.parent.flags & ts.NodeFlags.Const) !== 0;
 }
 
-function objectBindsPolicy(
-  node: ts.Node | undefined,
-  policyName: string | undefined,
-): boolean {
+function objectBindsPolicy(node: ts.Node | undefined, policyName: string | undefined): boolean {
   if (!node || !policyName || !ts.isObjectLiteralExpression(node)) return false;
 
   return node.properties.some((property) => {
-    if (
-      ts.isPropertyAssignment(property) &&
-      property.name.getText() === 'modelPolicy'
-    ) {
-      return ts.isIdentifier(property.initializer) &&
-        property.initializer.text === policyName;
+    if (ts.isPropertyAssignment(property) && property.name.getText() === 'modelPolicy') {
+      return ts.isIdentifier(property.initializer) && property.initializer.text === policyName;
     }
-    return ts.isShorthandPropertyAssignment(property) &&
-      property.name.text === 'modelPolicy' &&
-      policyName === 'modelPolicy';
+    return (
+      ts.isShorthandPropertyAssignment(property) && property.name.text === 'modelPolicy' && policyName === 'modelPolicy'
+    );
   });
 }
 
 it('composes one ordered provider context across the interactive run after registry freeze', async () => {
-  const source = await readFile(
-    new URL('../../src/index.ts', import.meta.url),
-    'utf8',
-  );
-  const sourceFile = ts.createSourceFile(
-    'index.ts',
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS,
-  );
+  const source = await readFile(new URL('../../src/index.ts', import.meta.url), 'utf8');
+  const sourceFile = ts.createSourceFile('index.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const declarations: ts.VariableDeclaration[] = [];
   const calls: ts.CallExpression[] = [];
   const constructions: ts.NewExpression[] = [];
@@ -67,102 +45,70 @@ it('composes one ordered provider context across the interactive run after regis
   visit(sourceFile);
 
   const binding = (name: string) =>
-    declarations.find(
-      (declaration) =>
-        ts.isIdentifier(declaration.name) && declaration.name.text === name,
-    );
+    declarations.find((declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === name);
   const contextBinding = binding('providerExecution');
   const contextObject =
-    contextBinding?.initializer &&
-    ts.isObjectLiteralExpression(contextBinding.initializer)
+    contextBinding?.initializer && ts.isObjectLiteralExpression(contextBinding.initializer)
       ? contextBinding.initializer
       : undefined;
   const contextProperties = new Map(
-    contextObject?.properties
-      .flatMap((property) => ts.isPropertyAssignment(property)
+    contextObject?.properties.flatMap((property) =>
+      ts.isPropertyAssignment(property)
         ? [[property.name.getText(sourceFile), property.initializer.getText(sourceFile)] as const]
         : ts.isSpreadAssignment(property)
           ? [['...providerExecutionEventCallbacks', property.expression.getText(sourceFile)] as const]
-          : []) ?? [],
+          : [],
+    ) ?? [],
   );
   const compatibilityRuntime = binding('compatibilityRuntime');
-  const runnerConstruction = constructions.find(
-    (node) => node.expression.getText(sourceFile) === 'DefaultStepRunner',
-  );
-  const conductorConstruction = constructions.find(
-    (node) => node.expression.getText(sourceFile) === 'Conductor',
-  );
+  const runnerConstruction = constructions.find((node) => node.expression.getText(sourceFile) === 'DefaultStepRunner');
+  const conductorConstruction = constructions.find((node) => node.expression.getText(sourceFile) === 'Conductor');
   const runnerOptions =
-    runnerConstruction?.arguments?.[3] &&
-    ts.isObjectLiteralExpression(runnerConstruction.arguments[3])
+    runnerConstruction?.arguments?.[3] && ts.isObjectLiteralExpression(runnerConstruction.arguments[3])
       ? runnerConstruction.arguments[3]
       : undefined;
   const conductorOptions =
-    conductorConstruction?.arguments?.[0] &&
-    ts.isObjectLiteralExpression(conductorConstruction.arguments[0])
+    conductorConstruction?.arguments?.[0] && ts.isObjectLiteralExpression(conductorConstruction.arguments[0])
       ? conductorConstruction.arguments[0]
       : undefined;
-  const propertyText = (
-    object: ts.ObjectLiteralExpression | undefined,
-    name: string,
-  ) =>
-    object?.properties.find((property) => property.name?.getText(sourceFile) === name)
-      ?.getText(sourceFile);
-  const preludeCall = calls.find(
-    (call) => call.expression.getText(sourceFile) === 'runProjectPrelude',
-  );
+  const propertyText = (object: ts.ObjectLiteralExpression | undefined, name: string) =>
+    object?.properties.find((property) => property.name?.getText(sourceFile) === name)?.getText(sourceFile);
+  const preludeCall = calls.find((call) => call.expression.getText(sourceFile) === 'runProjectPrelude');
   const validationCall = calls.find(
-    (call) =>
-      call.expression.getText(sourceFile) ===
-      'validateRegisteredProviderSelections',
+    (call) => call.expression.getText(sourceFile) === 'validateRegisteredProviderSelections',
   );
   const markInitializedCall = calls.find(
     (call) => call.expression.getText(sourceFile) === 'options.registry.markInitialized',
   );
-  const subscriberStart = calls.find(
-    (call) => call.expression.getText(sourceFile) === 'subscriber.start',
-  );
-  const runtimeCalls = calls.filter(
-    (call) => call.expression.getText(sourceFile) === 'createProviderRuntimeSet',
-  );
+  const subscriberStart = calls.find((call) => call.expression.getText(sourceFile) === 'subscriber.start');
+  const runtimeCalls = calls.filter((call) => call.expression.getText(sourceFile) === 'createProviderRuntimeSet');
   const validationOptions =
-    validationCall?.arguments[0] &&
-    ts.isObjectLiteralExpression(validationCall.arguments[0])
+    validationCall?.arguments[0] && ts.isObjectLiteralExpression(validationCall.arguments[0])
       ? validationCall.arguments[0]
       : undefined;
   const sessionConstructions = constructions.filter(
     (node) => node.expression.getText(sourceFile) === 'ProviderSessionStore',
   );
-  const compact = (text: string | undefined) =>
-    text?.replace(/\s+/g, '').replace(/,\)/g, ')');
+  const compact = (text: string | undefined) => text?.replace(/\s+/g, '').replace(/,\)/g, ')');
 
   expect({
     selectedProviderKeyBindings: declarations.filter(
-      (declaration) =>
-        ts.isIdentifier(declaration.name) &&
-        declaration.name.text === 'selectedProviderKey',
+      (declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === 'selectedProviderKey',
     ).length,
-    configuredProviderNormalization:
-      binding('configuredProviders')?.initializer?.getText(sourceFile),
+    configuredProviderNormalization: binding('configuredProviders')?.initializer?.getText(sourceFile),
     validationConfig: propertyText(validationOptions, 'config'),
-    validationRegistry: propertyText(
-      validationOptions,
-      'registeredProviders',
-    ),
+    validationRegistry: propertyText(validationOptions, 'registeredProviders'),
     runtimeRegistry: runtimeCalls[0]?.arguments[0]?.getText(sourceFile),
     contextIsConst: isConstBinding(contextBinding),
     contextProperties: Object.fromEntries(contextProperties),
-    compatibilityRuntime: compact(
-      compatibilityRuntime?.initializer?.getText(sourceFile),
-    ),
+    compatibilityRuntime: compact(compatibilityRuntime?.initializer?.getText(sourceFile)),
     runtimeSetConstructionCount: runtimeCalls.length,
     sessionStoreConstructionCount: sessionConstructions.length,
     runnerProvider: runnerConstruction?.arguments?.[0]?.getText(sourceFile),
     runnerContext: propertyText(runnerOptions, 'providerExecution'),
     conductorContext: propertyText(conductorOptions, 'providerExecution'),
     preludeContext:
-      preludeCall?.arguments[4] &&
-      ts.isObjectLiteralExpression(preludeCall.arguments[4])
+      preludeCall?.arguments[4] && ts.isObjectLiteralExpression(preludeCall.arguments[4])
         ? propertyText(preludeCall.arguments[4], 'providerExecution')
         : undefined,
     startupOrder:
@@ -175,11 +121,9 @@ it('composes one ordered provider context across the interactive run after regis
       contextBinding.getStart() < subscriberStart.getStart(),
   }).toEqual({
     selectedProviderKeyBindings: 0,
-    configuredProviderNormalization:
-      'normalizeProviderSelection(config?.llm_provider)',
+    configuredProviderNormalization: 'normalizeProviderSelection(config?.llm_provider)',
     validationConfig: 'config: options.config ?? {}',
-    validationRegistry:
-      "registeredProviders: options.registry.list('llm_provider')",
+    validationRegistry: "registeredProviders: options.registry.list('llm_provider')",
     runtimeRegistry: 'registry',
     contextIsConst: true,
     contextProperties: {
@@ -192,11 +136,10 @@ it('composes one ordered provider context across the interactive run after regis
       '...providerExecutionEventCallbacks': 'providerExecutionEventCallbacks(events)',
       withCandidateSafety: 'createCandidateSafetyBoundary()',
     },
-    compatibilityRuntime:
-      'providerExecution.runtimes.get(providerExecution.configuredProviders[0])'.replace(
-        /\s+/g,
-        '',
-      ),
+    compatibilityRuntime: 'providerExecution.runtimes.get(providerExecution.configuredProviders[0])'.replace(
+      /\s+/g,
+      '',
+    ),
     runtimeSetConstructionCount: 1,
     sessionStoreConstructionCount: 1,
     runnerProvider: 'compatibilityRuntime.provider',
@@ -213,13 +156,7 @@ it('composes isolated provider execution state for every daemon feature after on
     readFile(new URL('../../src/engine/daemon-feature-lifecycle.ts', import.meta.url), 'utf8'),
     readFile(new URL('../../src/engine/daemon-runner.ts', import.meta.url), 'utf8'),
   ]);
-  const daemonFile = ts.createSourceFile(
-    'daemon-cli.ts',
-    daemonSource,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS,
-  );
+  const daemonFile = ts.createSourceFile('daemon-cli.ts', daemonSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const declarations: ts.VariableDeclaration[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isVariableDeclaration(node)) declarations.push(node);
@@ -227,46 +164,36 @@ it('composes isolated provider execution state for every daemon feature after on
   };
   visit(daemonFile);
   const binding = (name: string) =>
-    declarations.find(
-      (declaration) =>
-        ts.isIdentifier(declaration.name) && declaration.name.text === name,
-    );
+    declarations.find((declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === name);
   const factory = binding('createProviderExecution')?.initializer;
-  const factoryFunction =
-    factory && ts.isArrowFunction(factory) ? factory : undefined;
+  const factoryFunction = factory && ts.isArrowFunction(factory) ? factory : undefined;
   const factoryState =
     factoryFunction?.body && ts.isParenthesizedExpression(factoryFunction.body)
       ? factoryFunction.body.expression
       : undefined;
-  const factoryProperties =
-    factoryState && ts.isObjectLiteralExpression(factoryState)
-      ? factoryState.properties
-      : [];
+  const factoryProperties = factoryState && ts.isObjectLiteralExpression(factoryState) ? factoryState.properties : [];
   const factoryProperty = (name: string) =>
-    factoryProperties.find(
-      (property) => property.name?.getText(daemonFile) === name,
-    );
+    factoryProperties.find((property) => property.name?.getText(daemonFile) === name);
   const runtimeProperty = factoryProperty('runtimes');
   const sessionsProperty = factoryProperty('sessions');
   const featureRun = binding('beginFeatureRun')?.initializer;
-  const featureRunFunction =
-    featureRun && ts.isArrowFunction(featureRun) ? featureRun : undefined;
-  const featureReturn = featureRunFunction?.body && ts.isBlock(featureRunFunction.body)
-    ? featureRunFunction.body.statements.find(ts.isReturnStatement)?.expression
-    : undefined;
+  const featureRunFunction = featureRun && ts.isArrowFunction(featureRun) ? featureRun : undefined;
+  const featureReturn =
+    featureRunFunction?.body && ts.isBlock(featureRunFunction.body)
+      ? featureRunFunction.body.statements.find(ts.isReturnStatement)?.expression
+      : undefined;
   const featureProperties =
-    featureReturn && ts.isObjectLiteralExpression(featureReturn)
-      ? featureReturn.properties
-      : [];
+    featureReturn && ts.isObjectLiteralExpression(featureReturn) ? featureReturn.properties : [];
   const featureExecution = featureProperties.find(
     (property) => property.name?.getText(daemonFile) === 'providerExecution',
   );
-  const featureProviderExecution = featureRunFunction?.body && ts.isBlock(featureRunFunction.body)
-    ? featureRunFunction.body.statements
-      .filter(ts.isVariableStatement)
-      .flatMap((statement) => statement.declarationList.declarations)
-      .find((declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === 'providerExecution')
-    : undefined;
+  const featureProviderExecution =
+    featureRunFunction?.body && ts.isBlock(featureRunFunction.body)
+      ? featureRunFunction.body.statements
+          .filter(ts.isVariableStatement)
+          .flatMap((statement) => statement.declarationList.declarations)
+          .find((declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === 'providerExecution')
+      : undefined;
   const compact = daemonSource.replace(/\s+/g, ' ');
   const featureBody = runnerSource.slice(
     runnerSource.indexOf('return async (item: BacklogItem)'),
@@ -276,9 +203,7 @@ it('composes isolated provider execution state for every daemon feature after on
     lifecycleSource.indexOf('export async function runDaemonFeatureConductor'),
     lifecycleSource.indexOf('export async function runDaemonSetupTriage'),
   );
-  const setupBody = lifecycleSource.slice(
-    lifecycleSource.indexOf('export async function runDaemonSetupTriage'),
-  );
+  const setupBody = lifecycleSource.slice(lifecycleSource.indexOf('export async function runDaemonSetupTriage'));
   const rebaseBody = daemonSource.slice(
     daemonSource.indexOf('const resolver: RebaseResolver'),
     daemonSource.indexOf('// Run the full resolution pipeline'),
@@ -289,35 +214,27 @@ it('composes isolated provider execution state for every daemon feature after on
   );
 
   expect({
-    globalSelectedProviderBindings:
-      daemonSource.match(/\bconst selectedProviderKey\b/g)?.length ?? 0,
-    globalProviderPolicyLookups:
-      daemonSource.match(/\bresolveProviderModelPolicy\(/g)?.length ?? 0,
-    configuredOrder:
-      compact.includes(
-        'const configuredProviders = normalizeProviderSelection(config?.llm_provider);',
-      ),
+    globalSelectedProviderBindings: daemonSource.match(/\bconst selectedProviderKey\b/g)?.length ?? 0,
+    globalProviderPolicyLookups: daemonSource.match(/\bresolveProviderModelPolicy\(/g)?.length ?? 0,
+    configuredOrder: compact.includes('const configuredProviders = normalizeProviderSelection(config?.llm_provider);'),
     validatesFrozenRegistryBeforeFactory:
       daemonSource.indexOf('registry.markInitialized()') <
         daemonSource.indexOf('validateRegisteredProviderSelections({') &&
-        daemonSource.indexOf('validateRegisteredProviderSelections({') <
+      daemonSource.indexOf('validateRegisteredProviderSelections({') <
         daemonSource.indexOf('const createProviderExecution'),
     factoryDefaultsToGlobalRuntimeLogger:
       factoryFunction?.parameters[1]?.initializer?.getText(daemonFile) === 'log' &&
       runtimeProperty !== undefined &&
       ts.isPropertyAssignment(runtimeProperty) &&
       ts.isCallExpression(runtimeProperty.initializer) &&
-      runtimeProperty.initializer.expression.getText(daemonFile) ===
-        'createProviderRuntimeSet' &&
-      runtimeProperty.initializer.arguments[0]?.getText(daemonFile) ===
-        'registry' &&
+      runtimeProperty.initializer.expression.getText(daemonFile) === 'createProviderRuntimeSet' &&
+      runtimeProperty.initializer.arguments[0]?.getText(daemonFile) === 'registry' &&
       runtimeProperty.initializer.arguments[1]?.getText(daemonFile) ===
         factoryFunction.parameters[1]?.name.getText(daemonFile) &&
       sessionsProperty !== undefined &&
       ts.isPropertyAssignment(sessionsProperty) &&
       ts.isNewExpression(sessionsProperty.initializer) &&
-      sessionsProperty.initializer.expression.getText(daemonFile) ===
-        'ProviderSessionStore',
+      sessionsProperty.initializer.expression.getText(daemonFile) === 'ProviderSessionStore',
     featureInjectsScopedRuntimeLogger:
       featureExecution !== undefined &&
       featureProviderExecution?.initializer !== undefined &&
@@ -327,18 +244,10 @@ it('composes isolated provider execution state for every daemon feature after on
     factoryInjectedAtFeatureBoundary:
       /providerExecution:\s*createProviderExecution/.test(daemonSource) &&
       (featureBody.match(/deps\.providerExecution\?\.\(\)/g)?.length ?? 0) === 1,
-    mainRunnerContext:
-      /featureDesc:\s*item\.slug,[\s\S]*?providerExecution,[\s\S]*?\}\s*,?\s*\);/.test(
-        mainRunBody,
-      ),
-    conductorContext:
-      /const conductor = new Conductor\(\{[\s\S]*?providerExecution,[\s\S]*?\}\);/.test(
-        mainRunBody,
-      ),
+    mainRunnerContext: /featureDesc:\s*item\.slug,[\s\S]*?providerExecution,[\s\S]*?\}\s*,?\s*\);/.test(mainRunBody),
+    conductorContext: /const conductor = new Conductor\(\{[\s\S]*?providerExecution,[\s\S]*?\}\);/.test(mainRunBody),
     setupRecoveryContext:
-      /featureDesc:\s*`setup-fix-\$\{item\.slug\}`,[\s\S]*?providerExecution,[\s\S]*?\}\s*,?\s*\);/.test(
-        setupBody,
-      ),
+      /featureDesc:\s*`setup-fix-\$\{item\.slug\}`,[\s\S]*?providerExecution,[\s\S]*?\}\s*,?\s*\);/.test(setupBody),
     rebaseRecoveryContext:
       (rebaseBody.match(
         /const providerExecution = await createSlugScopedProviderExecution\(\s*entry\.slug,\s*ctx\.projectRoot,\s*dispatchId,\s*\);/g,
@@ -370,17 +279,13 @@ it('composes isolated provider execution state for every daemon feature after on
 });
 
 it('freezes one daemon registry without retaining legacy global provider authority', async () => {
-  const source = (await Promise.all([
-    readFile(new URL('../../src/daemon-cli.ts', import.meta.url), 'utf8'),
-    readFile(new URL('../../src/engine/daemon-feature-lifecycle.ts', import.meta.url), 'utf8'),
-  ])).join('\n');
-  const sourceFile = ts.createSourceFile(
-    'daemon-cli.ts',
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS,
-  );
+  const source = (
+    await Promise.all([
+      readFile(new URL('../../src/daemon-cli.ts', import.meta.url), 'utf8'),
+      readFile(new URL('../../src/engine/daemon-feature-lifecycle.ts', import.meta.url), 'utf8'),
+    ])
+  ).join('\n');
+  const sourceFile = ts.createSourceFile('daemon-cli.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const declarations: ts.VariableDeclaration[] = [];
   const bindingNames: string[] = [];
   const calls: ts.CallExpression[] = [];
@@ -404,24 +309,17 @@ it('freezes one daemon registry without retaining legacy global provider authori
       ts.isIdentifier(declaration.name) &&
       declaration.initializer !== undefined &&
       ts.isNewExpression(declaration.initializer) &&
-      declaration.initializer.expression.getText(sourceFile) ===
-        'PluginRegistry',
+      declaration.initializer.expression.getText(sourceFile) === 'PluginRegistry',
   );
-  const registryBinding = registryBindings.length === 1
-    ? registryBindings[0]
-    : undefined;
-  const registryName =
-    registryBinding && ts.isIdentifier(registryBinding.name)
-      ? registryBinding.name.text
-      : undefined;
-  const providerLookups = calls.filter((call) =>
-    call.expression.getText(sourceFile) === 'registry.get' &&
-    call.typeArguments?.length === 1 &&
-    call.typeArguments[0].getText(sourceFile) === 'LLMProvider'
+  const registryBinding = registryBindings.length === 1 ? registryBindings[0] : undefined;
+  const registryName = registryBinding && ts.isIdentifier(registryBinding.name) ? registryBinding.name.text : undefined;
+  const providerLookups = calls.filter(
+    (call) =>
+      call.expression.getText(sourceFile) === 'registry.get' &&
+      call.typeArguments?.length === 1 &&
+      call.typeArguments[0].getText(sourceFile) === 'LLMProvider',
   );
-  const providerLookup = providerLookups.length === 1
-    ? providerLookups[0]
-    : undefined;
+  const providerLookup = providerLookups.length === 1 ? providerLookups[0] : undefined;
   const providerLookupUsesSelectedKey =
     providerLookup !== undefined &&
     providerLookup.arguments.length === 2 &&
@@ -430,12 +328,8 @@ it('freezes one daemon registry without retaining legacy global provider authori
     ts.isIdentifier(providerLookup.arguments[1]) &&
     registryName !== undefined &&
     providerLookup.expression.getText(sourceFile) === `${registryName}.get`;
-  const pluginDiscoveryCalls = calls.filter(
-    (call) => call.expression.getText(sourceFile) === 'discoverPlugins',
-  );
-  const pluginDiscoveryCall = pluginDiscoveryCalls.length === 1
-    ? pluginDiscoveryCalls[0]
-    : undefined;
+  const pluginDiscoveryCalls = calls.filter((call) => call.expression.getText(sourceFile) === 'discoverPlugins');
+  const pluginDiscoveryCall = pluginDiscoveryCalls.length === 1 ? pluginDiscoveryCalls[0] : undefined;
   const pluginDiscoveryDirectlyAwaited =
     pluginDiscoveryCall !== undefined &&
     ts.isAwaitExpression(pluginDiscoveryCall.parent) &&
@@ -449,15 +343,11 @@ it('freezes one daemon registry without retaining legacy global provider authori
     ts.isIdentifier(pluginDiscoveryCall.arguments[2]) &&
     pluginDiscoveryCall.arguments[2].text === registryName;
   const globalPluginsDirName =
-    discoveryUsesExactRegistry &&
-    pluginDiscoveryCall &&
-    ts.isIdentifier(pluginDiscoveryCall.arguments[0])
+    discoveryUsesExactRegistry && pluginDiscoveryCall && ts.isIdentifier(pluginDiscoveryCall.arguments[0])
       ? pluginDiscoveryCall.arguments[0].text
       : undefined;
   const projectPluginsDirName =
-    discoveryUsesExactRegistry &&
-    pluginDiscoveryCall &&
-    ts.isIdentifier(pluginDiscoveryCall.arguments[1])
+    discoveryUsesExactRegistry && pluginDiscoveryCall && ts.isIdentifier(pluginDiscoveryCall.arguments[1])
       ? pluginDiscoveryCall.arguments[1].text
       : undefined;
   const globalPluginsDirBindings = declarations.filter(
@@ -472,61 +362,42 @@ it('freezes one daemon registry without retaining legacy global provider authori
       ts.isIdentifier(declaration.name) &&
       declaration.name.text === projectPluginsDirName,
   );
-  const globalPluginsDirBinding = globalPluginsDirBindings.length === 1
-    ? globalPluginsDirBindings[0]
-    : undefined;
-  const projectPluginsDirBinding = projectPluginsDirBindings.length === 1
-    ? projectPluginsDirBindings[0]
-    : undefined;
-  const directoryBindingUses = (
-    declaration: ts.VariableDeclaration | undefined,
-    root: 'home' | 'project',
-  ): boolean => {
+  const globalPluginsDirBinding = globalPluginsDirBindings.length === 1 ? globalPluginsDirBindings[0] : undefined;
+  const projectPluginsDirBinding = projectPluginsDirBindings.length === 1 ? projectPluginsDirBindings[0] : undefined;
+  const directoryBindingUses = (declaration: ts.VariableDeclaration | undefined, root: 'home' | 'project'): boolean => {
     if (
       !isConstBinding(declaration) ||
       !declaration.initializer ||
       !ts.isCallExpression(declaration.initializer) ||
       declaration.initializer.expression.getText(sourceFile) !== 'join'
-    ) return false;
+    )
+      return false;
     const args = declaration.initializer.arguments;
     if (args.length !== 3) return false;
-    const firstArg = ts.isParenthesizedExpression(args[0])
-      ? args[0].expression
-      : args[0];
+    const firstArg = ts.isParenthesizedExpression(args[0]) ? args[0].expression : args[0];
     const rootMatches =
       root === 'project'
         ? ts.isIdentifier(firstArg) && firstArg.text === 'projectRoot'
         : ts.isBinaryExpression(firstArg) &&
-          (
-            firstArg.operatorToken.kind ===
-              ts.SyntaxKind.BarBarToken ||
-            firstArg.operatorToken.kind ===
-              ts.SyntaxKind.QuestionQuestionToken
-          ) &&
+          (firstArg.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
+            firstArg.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken) &&
           firstArg.left.getText(sourceFile) === 'process.env.HOME' &&
           ts.isStringLiteral(firstArg.right) &&
           firstArg.right.text === '';
-    return rootMatches &&
+    return (
+      rootMatches &&
       ts.isStringLiteral(args[1]) &&
       args[1].text === '.ai-conductor' &&
       ts.isStringLiteral(args[2]) &&
-      args[2].text === 'plugins';
+      args[2].text === 'plugins'
+    );
   };
-  const registerBuiltinsCalls = calls.filter(
-    (call) => call.expression.getText(sourceFile) === 'registerBuiltins',
-  );
-  const registerBuiltinsCall = registerBuiltinsCalls.length === 1
-    ? registerBuiltinsCalls[0]
-    : undefined;
+  const registerBuiltinsCalls = calls.filter((call) => call.expression.getText(sourceFile) === 'registerBuiltins');
+  const registerBuiltinsCall = registerBuiltinsCalls.length === 1 ? registerBuiltinsCalls[0] : undefined;
   const markInitializedCalls = calls.filter(
-    (call) =>
-      registryName !== undefined &&
-      call.expression.getText(sourceFile) ===
-        `${registryName}.markInitialized`,
+    (call) => registryName !== undefined && call.expression.getText(sourceFile) === `${registryName}.markInitialized`,
   );
-  const markInitializedCall = markInitializedCalls.length === 1
-    ? markInitializedCalls[0]
-    : undefined;
+  const markInitializedCall = markInitializedCalls.length === 1 ? markInitializedCalls[0] : undefined;
   const providerBinding =
     providerLookupUsesSelectedKey &&
     providerLookup &&
@@ -534,31 +405,18 @@ it('freezes one daemon registry without retaining legacy global provider authori
     providerLookup.parent.initializer === providerLookup
       ? providerLookup.parent
       : undefined;
-  const providerName = providerBinding && ts.isIdentifier(providerBinding.name)
-    ? providerBinding.name.text
-    : undefined;
+  const providerName = providerBinding && ts.isIdentifier(providerBinding.name) ? providerBinding.name.text : undefined;
   const selectedKey =
-    providerLookupUsesSelectedKey &&
-    providerLookup &&
-    ts.isIdentifier(providerLookup.arguments[1])
+    providerLookupUsesSelectedKey && providerLookup && ts.isIdentifier(providerLookup.arguments[1])
       ? providerLookup.arguments[1].text
       : undefined;
   const selectedKeyBindings = declarations.filter(
     (declaration) =>
-      selectedKey !== undefined &&
-      ts.isIdentifier(declaration.name) &&
-      declaration.name.text === selectedKey,
+      selectedKey !== undefined && ts.isIdentifier(declaration.name) && declaration.name.text === selectedKey,
   );
-  const providerNameBindings = bindingNames.filter(
-    (name) => providerName !== undefined && name === providerName,
-  );
-  const policyLookups = calls.filter(
-    (call) =>
-      call.expression.getText(sourceFile) === 'resolveProviderModelPolicy',
-  );
-  const policyLookup = policyLookups.length === 1
-    ? policyLookups[0]
-    : undefined;
+  const providerNameBindings = bindingNames.filter((name) => providerName !== undefined && name === providerName);
+  const policyLookups = calls.filter((call) => call.expression.getText(sourceFile) === 'resolveProviderModelPolicy');
+  const policyLookup = policyLookups.length === 1 ? policyLookups[0] : undefined;
   const policyLookupUsesSelectedKeyAndLog =
     policyLookup !== undefined &&
     selectedKey !== undefined &&
@@ -574,47 +432,34 @@ it('freezes one daemon registry without retaining legacy global provider authori
     policyLookup.parent.initializer === policyLookup
       ? policyLookup.parent
       : undefined;
-  const policyName = policyBinding && ts.isIdentifier(policyBinding.name)
-    ? policyBinding.name.text
-    : undefined;
-  const policyNameBindings = bindingNames.filter(
-    (name) => policyName !== undefined && name === policyName,
-  );
+  const policyName = policyBinding && ts.isIdentifier(policyBinding.name) ? policyBinding.name.text : undefined;
+  const policyNameBindings = bindingNames.filter((name) => policyName !== undefined && name === policyName);
   const runnerConstructions = constructions.filter(
     (node) => node.expression.getText(sourceFile) === 'DefaultStepRunner',
   );
-  const conductorConstructions = constructions.filter(
-    (node) => node.expression.getText(sourceFile) === 'Conductor',
-  );
-  const runtimeSetCalls = calls.filter(
-    (call) => call.expression.getText(sourceFile) === 'createProviderRuntimeSet',
-  );
-  const runtimeSetCall = runtimeSetCalls.length === 1
-    ? runtimeSetCalls[0]
-    : undefined;
+  const conductorConstructions = constructions.filter((node) => node.expression.getText(sourceFile) === 'Conductor');
+  const runtimeSetCalls = calls.filter((call) => call.expression.getText(sourceFile) === 'createProviderRuntimeSet');
+  const runtimeSetCall = runtimeSetCalls.length === 1 ? runtimeSetCalls[0] : undefined;
   const runProviderBinding = declarations.find(
     (declaration) =>
       ts.isIdentifier(declaration.name) &&
       declaration.name.text === 'runProvider' &&
       declaration.initializer !== undefined &&
-      declaration.initializer.getText(sourceFile) ===
-        'selectedRuntime.provider',
+      declaration.initializer.getText(sourceFile) === 'selectedRuntime.provider',
   );
   const runPolicyBinding = declarations.find(
     (declaration) =>
       ts.isIdentifier(declaration.name) &&
       declaration.name.text === 'runModelPolicy' &&
       declaration.initializer !== undefined &&
-      declaration.initializer.getText(sourceFile) ===
-        'selectedRuntime.policy',
+      declaration.initializer.getText(sourceFile) === 'selectedRuntime.policy',
   );
   const runnerKind = (construction: ts.NewExpression): string | undefined => {
     const options = construction.arguments?.[3];
     if (!options || !ts.isObjectLiteralExpression(options)) return undefined;
     const featureDesc = options.properties.find(
       (property): property is ts.PropertyAssignment =>
-        ts.isPropertyAssignment(property) &&
-        property.name.getText(sourceFile) === 'featureDesc',
+        ts.isPropertyAssignment(property) && property.name.getText(sourceFile) === 'featureDesc',
     );
     if (!featureDesc) return undefined;
     const text = featureDesc.initializer.getText(sourceFile);
@@ -628,9 +473,7 @@ it('freezes one daemon registry without retaining legacy global provider authori
     const kind = runnerKind(construction);
     return kind ? [kind] : [];
   });
-  const auxiliaryRunners = runnerConstructions.filter(
-    (construction) => runnerKind(construction) !== 'main',
-  );
+  const auxiliaryRunners = runnerConstructions.filter((construction) => runnerKind(construction) !== 'main');
 
   expect({
     registryConstructedOnceWithoutShadowing:
@@ -644,12 +487,10 @@ it('freezes one daemon registry without retaining legacy global provider authori
     pluginDirectoriesDerivedFromHomeAndProject:
       directoryBindingUses(globalPluginsDirBinding, 'home') &&
       globalPluginsDirName !== undefined &&
-      bindingNames.filter((name) => name === globalPluginsDirName).length ===
-        1 &&
+      bindingNames.filter((name) => name === globalPluginsDirName).length === 1 &&
       directoryBindingUses(projectPluginsDirBinding, 'project') &&
       projectPluginsDirName !== undefined &&
-      bindingNames.filter((name) => name === projectPluginsDirName).length ===
-        1,
+      bindingNames.filter((name) => name === projectPluginsDirName).length === 1,
     registrationAndFreezeCounts: {
       registerBuiltins: registerBuiltinsCalls.length,
       markInitialized: markInitializedCalls.length,
@@ -666,14 +507,10 @@ it('freezes one daemon registry without retaining legacy global provider authori
       registerBuiltinsCall !== undefined &&
       markInitializedCall !== undefined &&
       runtimeSetCall !== undefined &&
-      registryBinding.getStart(sourceFile) <
-        pluginDiscoveryCall.getStart(sourceFile) &&
-      pluginDiscoveryCall.getStart(sourceFile) <
-        registerBuiltinsCall.getStart(sourceFile) &&
-      registerBuiltinsCall.getStart(sourceFile) <
-        markInitializedCall.getStart(sourceFile) &&
-      markInitializedCall.getStart(sourceFile) <
-        runtimeSetCall.getStart(sourceFile),
+      registryBinding.getStart(sourceFile) < pluginDiscoveryCall.getStart(sourceFile) &&
+      pluginDiscoveryCall.getStart(sourceFile) < registerBuiltinsCall.getStart(sourceFile) &&
+      registerBuiltinsCall.getStart(sourceFile) < markInitializedCall.getStart(sourceFile) &&
+      markInitializedCall.getStart(sourceFile) < runtimeSetCall.getStart(sourceFile),
     selectedKeyAuthorityAbsent: selectedKeyBindings.length === 0,
     globalProviderLookupAuthorityAbsent: providerLookups.length === 0,
     globalPolicyLookupAuthorityAbsent: policyLookups.length === 0,
@@ -693,16 +530,12 @@ it('freezes one daemon registry without retaining legacy global provider authori
           construction.arguments[0].text !== providerName ||
           !objectBindsPolicy(construction.arguments?.[3], policyName),
       ),
-    legacyMainRuntimeBindingsAbsent:
-      runProviderBinding === undefined && runPolicyBinding === undefined,
+    legacyMainRuntimeBindingsAbsent: runProviderBinding === undefined && runPolicyBinding === undefined,
     runnerKinds: runnerKinds.sort(),
     conductorConstructionCount: conductorConstructions.length,
     conductorAvoidsLegacyRuntimePolicyBinding:
       conductorConstructions.length === 1 &&
-      !objectBindsPolicy(
-        conductorConstructions[0].arguments?.[0],
-        'runModelPolicy',
-      ),
+      !objectBindsPolicy(conductorConstructions[0].arguments?.[0], 'runModelPolicy'),
   }).toEqual({
     registryConstructedOnceWithoutShadowing: true,
     pluginDiscoveryCount: 1,
@@ -722,12 +555,7 @@ it('freezes one daemon registry without retaining legacy global provider authori
     runnerConstructionCount: 4,
     auxiliaryRunnersAvoidLegacyProviderAndPolicy: true,
     legacyMainRuntimeBindingsAbsent: true,
-    runnerKinds: [
-      'ci-fix-resolution',
-      'main',
-      'rebase-resolution',
-      'setup-fix',
-    ],
+    runnerKinds: ['ci-fix-resolution', 'main', 'rebase-resolution', 'setup-fix'],
     conductorConstructionCount: 1,
     conductorAvoidsLegacyRuntimePolicyBinding: true,
   });
@@ -738,14 +566,16 @@ it('binds every production step-resolution call to the policy owned by its execu
   const sourceUrls: URL[] = [];
   const collectSources = async (directory: URL): Promise<void> => {
     const entries = await readdir(directory, { withFileTypes: true });
-    await Promise.all(entries.map(async (entry) => {
-      const entryUrl = new URL(entry.name + (entry.isDirectory() ? '/' : ''), directory);
-      if (entry.isDirectory()) {
-        await collectSources(entryUrl);
-      } else if (entry.name.endsWith('.ts') && !entry.name.endsWith('.d.ts')) {
-        sourceUrls.push(entryUrl);
-      }
-    }));
+    await Promise.all(
+      entries.map(async (entry) => {
+        const entryUrl = new URL(entry.name + (entry.isDirectory() ? '/' : ''), directory);
+        if (entry.isDirectory()) {
+          await collectSources(entryUrl);
+        } else if (entry.name.endsWith('.ts') && !entry.name.endsWith('.d.ts')) {
+          sourceUrls.push(entryUrl);
+        }
+      }),
+    );
   };
   await collectSources(productionRoot);
 
@@ -754,14 +584,13 @@ it('binds every production step-resolution call to the policy owned by its execu
   // that can contain one of the three resolver names, however; making every
   // production file a root forces TypeScript to type-check unrelated modules
   // and exceeds Vitest's normal test budget under suite load.
-  const resolverReferencePattern =
-    /resolveStepConfig|resolveProviderNativeStepConfig|resolveProviderNeutralStepConfig/;
+  const resolverReferencePattern = /resolveStepConfig|resolveProviderNativeStepConfig|resolveProviderNeutralStepConfig/;
   const resolverCandidateUrls = (
-    await Promise.all(sourceUrls.map(async (sourceUrl) =>
-      resolverReferencePattern.test(await readFile(sourceUrl, 'utf8'))
-        ? sourceUrl
-        : undefined,
-    ))
+    await Promise.all(
+      sourceUrls.map(async (sourceUrl) =>
+        resolverReferencePattern.test(await readFile(sourceUrl, 'utf8')) ? sourceUrl : undefined,
+      ),
+    )
   ).filter((sourceUrl): sourceUrl is URL => sourceUrl !== undefined);
 
   const configPath = fileURLToPath(new URL('../../tsconfig.json', import.meta.url));
@@ -782,20 +611,19 @@ it('binds every production step-resolution call to the policy owned by its execu
   const resolverSource = program.getSourceFile(
     fileURLToPath(new URL('../../src/engine/resolved-config.ts', import.meta.url)),
   );
-  const resolverModule = resolverSource &&
-    checker.getSymbolAtLocation(resolverSource);
+  const resolverModule = resolverSource && checker.getSymbolAtLocation(resolverSource);
   if (!resolverModule) throw new Error('resolved-config module not found');
   const resolverSymbols = new Set(
-    checker.getExportsOfModule(resolverModule).filter(
-      (symbol) =>
-        symbol.name === 'resolveStepConfig' ||
-        symbol.name === 'resolveProviderNativeStepConfig' ||
-        symbol.name === 'resolveProviderNeutralStepConfig',
-    ),
+    checker
+      .getExportsOfModule(resolverModule)
+      .filter(
+        (symbol) =>
+          symbol.name === 'resolveStepConfig' ||
+          symbol.name === 'resolveProviderNativeStepConfig' ||
+          symbol.name === 'resolveProviderNeutralStepConfig',
+      ),
   );
-  const directResolverSymbols = new Set(
-    [...resolverSymbols].filter((symbol) => symbol.name !== 'resolveStepConfig'),
-  );
+  const directResolverSymbols = new Set([...resolverSymbols].filter((symbol) => symbol.name !== 'resolveStepConfig'));
   const resolverNames = new Set([...resolverSymbols].map((symbol) => symbol.name));
   const canonicalSymbol = (node: ts.Node): ts.Symbol | undefined => {
     let symbol = checker.getSymbolAtLocation(node);
@@ -805,24 +633,19 @@ it('binds every production step-resolution call to the policy owned by its execu
     return symbol;
   };
   const isResolverDeclarationName = (node: ts.Identifier): boolean =>
-    [...resolverSymbols].some((resolverSymbol) => resolverSymbol.declarations?.some(
-      (declaration) =>
-        'name' in declaration &&
-        declaration.name === node,
-    )) ?? false;
+    [...resolverSymbols].some((resolverSymbol) =>
+      resolverSymbol.declarations?.some((declaration) => 'name' in declaration && declaration.name === node),
+    ) ?? false;
   const isImportOrExportBinding = (node: ts.Identifier): boolean => {
     let current: ts.Node | undefined = node;
-    while (
-      current &&
-      !ts.isSourceFile(current) &&
-      !ts.isStatement(current)
-    ) {
+    while (current && !ts.isSourceFile(current) && !ts.isStatement(current)) {
       if (
         ts.isImportSpecifier(current) ||
         ts.isImportClause(current) ||
         ts.isNamespaceImport(current) ||
         ts.isExportSpecifier(current)
-      ) return true;
+      )
+        return true;
       current = current.parent;
     }
     return false;
@@ -841,80 +664,48 @@ it('binds every production step-resolution call to the policy owned by its execu
     return current;
   };
   const referenceExpression = (node: ts.Identifier): ts.Expression => {
-    if (
-      ts.isPropertyAccessExpression(node.parent) &&
-      node.parent.name === node
-    ) {
+    if (ts.isPropertyAccessExpression(node.parent) && node.parent.name === node) {
       return node.parent;
     }
     return node;
   };
-  const callForReference = (
-    expression: ts.Expression,
-  ): ts.CallExpression | undefined => {
+  const callForReference = (expression: ts.Expression): ts.CallExpression | undefined => {
     let current: ts.Expression = expression;
     while (
       current.parent &&
-      (
-        ts.isParenthesizedExpression(current.parent) ||
+      (ts.isParenthesizedExpression(current.parent) ||
         ts.isAsExpression(current.parent) ||
         ts.isTypeAssertionExpression(current.parent) ||
         ts.isNonNullExpression(current.parent) ||
-        ts.isSatisfiesExpression(current.parent)
-      )
+        ts.isSatisfiesExpression(current.parent))
     ) {
       current = current.parent;
     }
     return ts.isCallExpression(current.parent) &&
-        unwrapExpression(current.parent.expression) === unwrapExpression(current)
+      unwrapExpression(current.parent.expression) === unwrapExpression(current)
       ? current.parent
       : undefined;
   };
-  const isComputedResolverAccess = (
-    node: ts.Node,
-  ): node is ts.ElementAccessExpression =>
+  const isComputedResolverAccess = (node: ts.Node): node is ts.ElementAccessExpression =>
     ts.isElementAccessExpression(node) &&
     node.argumentExpression !== undefined &&
-    (
-      ts.isStringLiteral(node.argumentExpression) ||
-      ts.isNoSubstitutionTemplateLiteral(node.argumentExpression)
-    ) &&
+    (ts.isStringLiteral(node.argumentExpression) || ts.isNoSubstitutionTemplateLiteral(node.argumentExpression)) &&
     resolverNames.has(node.argumentExpression.text);
-  const enclosingFunction = (
-    node: ts.Node,
-  ): ts.FunctionDeclaration | ts.MethodDeclaration | undefined => {
+  const enclosingFunction = (node: ts.Node): ts.FunctionDeclaration | ts.MethodDeclaration | undefined => {
     let current: ts.Node | undefined = node.parent;
-    while (
-      current &&
-      !ts.isFunctionDeclaration(current) &&
-      !ts.isMethodDeclaration(current)
-    ) {
+    while (current && !ts.isFunctionDeclaration(current) && !ts.isMethodDeclaration(current)) {
       current = current.parent;
     }
-    return current &&
-        (ts.isFunctionDeclaration(current) || ts.isMethodDeclaration(current))
-      ? current
-      : undefined;
+    return current && (ts.isFunctionDeclaration(current) || ts.isMethodDeclaration(current)) ? current : undefined;
   };
-  const enclosingClass = (
-    node: ts.Node,
-  ): ts.ClassDeclaration | ts.ClassExpression | undefined => {
+  const enclosingClass = (node: ts.Node): ts.ClassDeclaration | ts.ClassExpression | undefined => {
     let current: ts.Node | undefined = node.parent;
-    while (
-      current &&
-      !ts.isClassDeclaration(current) &&
-      !ts.isClassExpression(current)
-    ) {
+    while (current && !ts.isClassDeclaration(current) && !ts.isClassExpression(current)) {
       current = current.parent;
     }
-    return current &&
-        (ts.isClassDeclaration(current) || ts.isClassExpression(current))
-      ? current
-      : undefined;
+    return current && (ts.isClassDeclaration(current) || ts.isClassExpression(current)) ? current : undefined;
   };
-  const parameterContaining = (
-    declaration: ts.Declaration,
-  ): ts.ParameterDeclaration | undefined => {
+  const parameterContaining = (declaration: ts.Declaration): ts.ParameterDeclaration | undefined => {
     let current: ts.Node | undefined = declaration;
     while (current && !ts.isParameter(current)) current = current.parent;
     return current && ts.isParameter(current) ? current : undefined;
@@ -926,28 +717,29 @@ it('binds every production step-resolution call to the policy owned by its execu
   };
   const isBuildReviewPolicyParameter = (node: ts.Expression): boolean => {
     if (!ts.isIdentifier(node) || node.text !== 'policy') return false;
-    return canonicalSymbol(node)?.declarations?.some((declaration) => {
-      const parameter = parameterContaining(declaration);
-      return parameter?.parent.name?.getText() === 'resolveBuildReviewConfig';
-    }) ?? false;
+    return (
+      canonicalSymbol(node)?.declarations?.some((declaration) => {
+        const parameter = parameterContaining(declaration);
+        return parameter?.parent.name?.getText() === 'resolveBuildReviewConfig';
+      }) ?? false
+    );
   };
   const isInheritedBuildReviewPolicy = (node: ts.Expression): boolean => {
     if (!ts.isIdentifier(node) || node.text !== 'inheritedPolicy') return false;
-    return canonicalSymbol(node)?.declarations?.some(
-      (declaration): declaration is ts.VariableDeclaration =>
-        ts.isVariableDeclaration(declaration) &&
-        ts.isIdentifier(declaration.name) &&
-        declaration.name.text === 'inheritedPolicy' &&
-        declaration.initializer !== undefined &&
-        ts.isConditionalExpression(declaration.initializer) &&
-        isBuildReviewPolicyParameter(declaration.initializer.whenTrue) &&
-        isProviderModelPolicyResolution(declaration.initializer.whenFalse),
-    ) ?? false;
+    return (
+      canonicalSymbol(node)?.declarations?.some(
+        (declaration): declaration is ts.VariableDeclaration =>
+          ts.isVariableDeclaration(declaration) &&
+          ts.isIdentifier(declaration.name) &&
+          declaration.name.text === 'inheritedPolicy' &&
+          declaration.initializer !== undefined &&
+          ts.isConditionalExpression(declaration.initializer) &&
+          isBuildReviewPolicyParameter(declaration.initializer.whenTrue) &&
+          isProviderModelPolicyResolution(declaration.initializer.whenFalse),
+      ) ?? false
+    );
   };
-  const policyProvenance = (
-    argument: ts.Expression | undefined,
-    call: ts.CallExpression,
-  ): string => {
+  const policyProvenance = (argument: ts.Expression | undefined, call: ts.CallExpression): string => {
     if (!argument) return '<missing>';
     const expression = unwrapExpression(argument);
     const scope = enclosingFunction(call);
@@ -960,62 +752,54 @@ it('binds every production step-resolution call to the policy owned by its execu
       const type = checker.typeToString(checker.getTypeAtLocation(expression));
       if (declaration) return `parameter:${expression.text}:${type}`;
 
-      const optionBinding = symbol?.declarations?.find(
-        (candidate): candidate is ts.BindingElement => {
-          if (
-            !scope ||
-            !ts.isBindingElement(candidate) ||
-            !ts.isObjectBindingPattern(candidate.parent) ||
-            !ts.isVariableDeclaration(candidate.parent.parent)
-          ) return false;
-          const variable = candidate.parent.parent;
-          const source = variable.initializer &&
-            unwrapExpression(variable.initializer);
-          if (!source || !ts.isIdentifier(source)) return false;
-          const sourceSymbol = canonicalSymbol(source);
-          const parameter = scope.parameters.find(
-            (scopeParameter) =>
-              ts.isIdentifier(scopeParameter.name) &&
-              canonicalSymbol(scopeParameter.name) === sourceSymbol &&
-              checker.typeToString(
-                  checker.getTypeAtLocation(scopeParameter.name),
-                ) === 'VerifierDispatchOptions',
-          );
-          const defaultPolicy = candidate.initializer &&
-            unwrapExpression(candidate.initializer);
-          const defaultSymbol = defaultPolicy &&
-              ts.isIdentifier(defaultPolicy)
-            ? canonicalSymbol(defaultPolicy)
-            : undefined;
-          const canonicalClaudeDefault = defaultSymbol?.declarations?.some(
-            (defaultDeclaration) =>
-              ts.isVariableDeclaration(defaultDeclaration) &&
-              ts.isIdentifier(defaultDeclaration.name) &&
-              defaultDeclaration.name.text === 'CLAUDE_MODEL_POLICY' &&
-              /\/engine\/provider-model-policy(?:-defaults)?\.ts$/.test(
-                defaultDeclaration.getSourceFile().fileName,
-              ),
-          );
-          return parameter !== undefined && canonicalClaudeDefault === true;
-        },
-      );
+      const optionBinding = symbol?.declarations?.find((candidate): candidate is ts.BindingElement => {
+        if (
+          !scope ||
+          !ts.isBindingElement(candidate) ||
+          !ts.isObjectBindingPattern(candidate.parent) ||
+          !ts.isVariableDeclaration(candidate.parent.parent)
+        )
+          return false;
+        const variable = candidate.parent.parent;
+        const source = variable.initializer && unwrapExpression(variable.initializer);
+        if (!source || !ts.isIdentifier(source)) return false;
+        const sourceSymbol = canonicalSymbol(source);
+        const parameter = scope.parameters.find(
+          (scopeParameter) =>
+            ts.isIdentifier(scopeParameter.name) &&
+            canonicalSymbol(scopeParameter.name) === sourceSymbol &&
+            checker.typeToString(checker.getTypeAtLocation(scopeParameter.name)) === 'VerifierDispatchOptions',
+        );
+        const defaultPolicy = candidate.initializer && unwrapExpression(candidate.initializer);
+        const defaultSymbol =
+          defaultPolicy && ts.isIdentifier(defaultPolicy) ? canonicalSymbol(defaultPolicy) : undefined;
+        const canonicalClaudeDefault = defaultSymbol?.declarations?.some(
+          (defaultDeclaration) =>
+            ts.isVariableDeclaration(defaultDeclaration) &&
+            ts.isIdentifier(defaultDeclaration.name) &&
+            defaultDeclaration.name.text === 'CLAUDE_MODEL_POLICY' &&
+            /\/engine\/provider-model-policy(?:-defaults)?\.ts$/.test(defaultDeclaration.getSourceFile().fileName),
+        );
+        return parameter !== undefined && canonicalClaudeDefault === true;
+      });
       if (optionBinding && type === 'ProviderModelPolicy') {
         return `option:${expression.text}:${type}`;
       }
 
-      const stepPolicyBinding = symbol?.declarations?.find(
-        (candidate): candidate is ts.VariableDeclaration => {
-          if (
-            !ts.isVariableDeclaration(candidate) ||
-            !candidate.initializer ||
-            !ts.isCallExpression(candidate.initializer)
-          ) return false;
-          const callee = unwrapExpression(candidate.initializer.expression);
-          return ts.isPropertyAccessExpression(callee) &&
-            callee.expression.kind === ts.SyntaxKind.ThisKeyword &&
-            callee.name.text === 'modelPolicyForStep';
-        },
-      );
+      const stepPolicyBinding = symbol?.declarations?.find((candidate): candidate is ts.VariableDeclaration => {
+        if (
+          !ts.isVariableDeclaration(candidate) ||
+          !candidate.initializer ||
+          !ts.isCallExpression(candidate.initializer)
+        )
+          return false;
+        const callee = unwrapExpression(candidate.initializer.expression);
+        return (
+          ts.isPropertyAccessExpression(callee) &&
+          callee.expression.kind === ts.SyntaxKind.ThisKeyword &&
+          callee.name.text === 'modelPolicyForStep'
+        );
+      });
       if (stepPolicyBinding && type === 'ProviderModelPolicy') {
         return `step-resolver:Conductor.modelPolicyForStep:${type}`;
       }
@@ -1033,19 +817,18 @@ it('binds every production step-resolution call to the policy owned by its execu
         ? `rubric-provider-selection:resolveProviderModelPolicy:${type}`
         : `unproven:${expression.getText()}:${type}`;
     }
-    if (
-      ts.isPropertyAccessExpression(expression) &&
-      expression.expression.kind === ts.SyntaxKind.ThisKeyword
-    ) {
+    if (ts.isPropertyAccessExpression(expression) && expression.expression.kind === ts.SyntaxKind.ThisKeyword) {
       const symbol = canonicalSymbol(expression.name);
       const owner = enclosingClass(call);
       const declaration = symbol?.declarations?.find((candidate) => {
         if (ts.isPropertyDeclaration(candidate)) {
           return candidate.parent === owner;
         }
-        return ts.isParameter(candidate) &&
+        return (
+          ts.isParameter(candidate) &&
           ts.isConstructorDeclaration(candidate.parent) &&
-          candidate.parent.parent === owner;
+          candidate.parent.parent === owner
+        );
       });
       const type = checker.typeToString(checker.getTypeAtLocation(expression));
       const ownerName = owner?.name?.text ?? '<anonymous>';
@@ -1053,9 +836,7 @@ it('binds every production step-resolution call to the policy owned by its execu
         ? `property:${ownerName}.${expression.name.text}:${type}`
         : `unproven:${expression.getText()}:${type}`;
     }
-    return `unproven:${expression.getText()}:${
-      checker.typeToString(checker.getTypeAtLocation(expression))
-    }`;
+    return `unproven:${expression.getText()}:${checker.typeToString(checker.getTypeAtLocation(expression))}`;
   };
 
   const callSites: Array<{
@@ -1071,23 +852,15 @@ it('binds every production step-resolution call to the policy owned by its execu
     file: string,
     requiresCanonicalSymbol: boolean,
   ): void => {
-    if (
-      requiresCanonicalSymbol &&
-      !resolverSymbols.has(canonicalSymbol(expression) as ts.Symbol)
-    ) {
+    if (requiresCanonicalSymbol && !resolverSymbols.has(canonicalSymbol(expression) as ts.Symbol)) {
       unexpectedReferences.push(
-        `${file}:computed-unresolved:${
-          sourceFile.getLineAndCharacterOfPosition(expression.getStart()).line +
-          1
-        }`,
+        `${file}:computed-unresolved:${sourceFile.getLineAndCharacterOfPosition(expression.getStart()).line + 1}`,
       );
       return;
     }
     const call = callForReference(expression);
     if (!call) {
-      unexpectedReferences.push(
-        `${file}:${sourceFile.getLineAndCharacterOfPosition(expression.getStart()).line + 1}`,
-      );
+      unexpectedReferences.push(`${file}:${sourceFile.getLineAndCharacterOfPosition(expression.getStart()).line + 1}`);
       return;
     }
     const scopeNode = enclosingFunction(call);
@@ -1105,9 +878,7 @@ it('binds every production step-resolution call to the policy owned by its execu
     if (!directResolverSymbols.has(symbol)) return true;
     return enclosingFunction(node)?.name?.getText() === 'resolveBuildReviewConfig';
   };
-  for (const sourceUrl of sourceUrls.sort(
-    (left, right) => left.pathname.localeCompare(right.pathname),
-  )) {
+  for (const sourceUrl of sourceUrls.sort((left, right) => left.pathname.localeCompare(right.pathname))) {
     const filePath = fileURLToPath(sourceUrl);
     const sourceFile = program.getSourceFile(filePath);
     if (!sourceFile) continue;
@@ -1121,12 +892,7 @@ it('binds every production step-resolution call to the policy owned by its execu
         !isResolverDeclarationName(node) &&
         !isImportOrExportBinding(node)
       ) {
-        recordResolverReference(
-          referenceExpression(node),
-          sourceFile,
-          file,
-          false,
-        );
+        recordResolverReference(referenceExpression(node), sourceFile, file, false);
       }
       ts.forEachChild(node, visit);
     };
@@ -1168,74 +934,61 @@ it('binds every production step-resolution call to the policy owned by its execu
   const computedMutationReferences: string[] = [];
   const visitComputedMutation = (node: ts.Node): void => {
     if (isComputedResolverAccess(node)) {
-      computedMutationReferences.push(
-        callForReference(node) ? 'computed-call' : 'computed-non-call',
-      );
+      computedMutationReferences.push(callForReference(node) ? 'computed-call' : 'computed-non-call');
     }
     ts.forEachChild(node, visitComputedMutation);
   };
   visitComputedMutation(computedMutation);
 
-  expect(
-    {
-      callSites: callSites.sort((left, right) =>
-        `${left.file}#${left.scope}`.localeCompare(
-          `${right.file}#${right.scope}`,
-        )
-      ),
-      computedMutationReferences,
-      unexpectedReferences: unexpectedReferences.sort(),
-    },
-  ).toEqual({
+  expect({
+    callSites: callSites.sort((left, right) =>
+      `${left.file}#${left.scope}`.localeCompare(`${right.file}#${right.scope}`),
+    ),
+    computedMutationReferences,
+    unexpectedReferences: unexpectedReferences.sort(),
+  }).toEqual({
     callSites: [
       {
         file: 'engine/conductor.ts',
         scope: 'planRemediation',
         argumentCount: 5,
-        policyProvenance:
-          'step-resolver:Conductor.modelPolicyForStep:ProviderModelPolicy',
+        policyProvenance: 'step-resolver:Conductor.modelPolicyForStep:ProviderModelPolicy',
       },
       {
         file: 'engine/conductor.ts',
         scope: 'reconcileCurrentPrdWidening',
         argumentCount: 5,
-        policyProvenance:
-          'step-resolver:Conductor.modelPolicyForStep:ProviderModelPolicy',
+        policyProvenance: 'step-resolver:Conductor.modelPolicyForStep:ProviderModelPolicy',
       },
       {
         file: 'engine/conductor.ts',
         scope: 'run',
         argumentCount: 5,
-        policyProvenance:
-          'step-resolver:Conductor.modelPolicyForStep:ProviderModelPolicy',
+        policyProvenance: 'step-resolver:Conductor.modelPolicyForStep:ProviderModelPolicy',
       },
       {
         file: 'engine/conductor.ts',
         scope: 'run',
         argumentCount: 5,
-        policyProvenance:
-          'step-resolver:Conductor.modelPolicyForStep:ProviderModelPolicy',
+        policyProvenance: 'step-resolver:Conductor.modelPolicyForStep:ProviderModelPolicy',
       },
       {
         file: 'engine/conductor.ts',
         scope: 'runParallelGroupViaCore',
         argumentCount: 5,
-        policyProvenance:
-          'step-resolver:Conductor.modelPolicyForStep:ProviderModelPolicy',
+        policyProvenance: 'step-resolver:Conductor.modelPolicyForStep:ProviderModelPolicy',
       },
       {
         file: 'engine/resolved-config.ts',
         scope: 'resolveBuildReviewConfig',
         argumentCount: 5,
-        policyProvenance:
-          'rubric-provider-selection:resolveProviderModelPolicy:ProviderModelPolicy',
+        policyProvenance: 'rubric-provider-selection:resolveProviderModelPolicy:ProviderModelPolicy',
       },
       {
         file: 'engine/resolved-config.ts',
         scope: 'resolveBuildReviewConfig',
         argumentCount: 5,
-        policyProvenance:
-          'rubric-provider-selection:resolveProviderModelPolicy:ProviderModelPolicy',
+        policyProvenance: 'rubric-provider-selection:resolveProviderModelPolicy:ProviderModelPolicy',
       },
       {
         file: 'engine/resume-entry.ts',
@@ -1247,8 +1000,7 @@ it('binds every production step-resolution call to the policy owned by its execu
         file: 'engine/step-runners.ts',
         scope: 'resolvedConfigFor',
         argumentCount: 5,
-        policyProvenance:
-          'property:DefaultStepRunner.modelPolicy:ProviderModelPolicy',
+        policyProvenance: 'property:DefaultStepRunner.modelPolicy:ProviderModelPolicy',
       },
     ],
     computedMutationReferences: [
