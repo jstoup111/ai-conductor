@@ -298,11 +298,12 @@ describe('placeFoldCommits (real local Git)', () => {
     expect(stableHunk?.hunk.patch).not.toContain("owner = 'folded'");
   });
 
-  it('re-materializes a frozen block append on its owner instead of hunk-splitting it', async () => {
+  const block = '### Task rem-prd-audit-T1: Repair\n**Done when:**\n- fixed\n**Child:** 1\n**Round:** r1\n';
+
+  async function frozenFixture(plan: string) {
     const subject = await placementFixture();
-    const block = '### Task rem-prd-audit-T1: Repair\n**Done when:**\n- fixed\n**Child:** 1\n**Round:** r1\n';
     await mkdir(join(subject.repo, '.docs', 'plans'), { recursive: true });
-    await writeFile(join(subject.repo, '.docs', 'plans', 'demo.md'), `# Demo\n\n${block}`);
+    await writeFile(join(subject.repo, '.docs', 'plans', 'demo.md'), plan);
     await writeFile(join(subject.repo, 'src/server/identity.ts'), 'export function startPlaying(name: string, secret: string) {}\n');
     await subject.git(['add', '.docs/plans/demo.md', 'src/server/identity.ts']);
     await subject.git(['commit', '-qm', `append frozen remediation${trailers('r1', 'c1')}`]);
@@ -314,13 +315,19 @@ describe('placeFoldCommits (real local Git)', () => {
       placements: { [hostOne]: { state: 'deferred', leafEntryTip: frozen as never, exitTip: frozen as never } },
     }, { git: makeGitRunner(subject.repo) });
     if (created.kind !== 'created') throw new Error('could not create frozen allocation');
-
-    await expect(placeFoldCommits({
+    const planned = placeFoldCommits({
       worktree: subject.repo,
       slug,
       commits: [{ sha: frozen as never, roundId: parseRoundId('r2')!, owner: hostOne }],
       git: makeGitRunner(subject.repo),
-    })).resolves.toEqual({
+    });
+    return { frozen, plan: await planned };
+  }
+
+  it('re-materializes a frozen block on its owner and places the non-block lines sharing its hunk', async () => {
+    const { frozen, plan } = await frozenFixture(`# Demo\n\n${block}`);
+
+    expect(plan).toEqual({
       kind: 'planned',
       commits: [{
         sha: frozen,
@@ -329,11 +336,25 @@ describe('placeFoldCommits (real local Git)', () => {
         parts: [
           { kind: 'blocks', child: hostOne, paths: [], reason: 'owner', blocks: [{ id: 'rem-prd-audit-T1', body: block }] },
           expect.objectContaining({
+            kind: 'hunks', child: hostOne, path: '.docs/plans/demo.md', reason: 'owner',
+            hunk: expect.objectContaining({ path: '.docs/plans/demo.md', patch: expect.stringMatching(/^\+# Demo$/m) }),
+          }),
+          expect.objectContaining({
             kind: 'hunks', child: hostOne, path: 'src/server/identity.ts', reason: 'owner',
             hunk: expect.objectContaining({ path: 'src/server/identity.ts' }),
           }),
         ],
       }],
     });
+    if (plan.kind !== 'planned') return;
+    const residual = plan.commits[0]!.parts.find((part) => part.kind === 'hunks' && part.path === '.docs/plans/demo.md');
+    expect(residual?.kind === 'hunks' ? residual.hunk.patch : '').not.toContain('rem-prd-audit-T1');
+  });
+
+  it('refuses a frozen block whose hunk interleaves non-block lines it cannot split out', async () => {
+    const interleaved = block.replace('**Done when:**\n', '**Done when:**\n- operator note\n');
+    const { frozen, plan } = await frozenFixture(`# Demo\n\n${interleaved}`);
+
+    expect(plan).toEqual({ kind: 'refused', reason: 'fold-residual-unexpressible', commit: frozen, paths: ['.docs/plans/demo.md'] });
   });
 });
