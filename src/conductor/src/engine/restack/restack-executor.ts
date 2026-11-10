@@ -505,6 +505,32 @@ async function abortJournal(worktree: string, journal: StoredRestackJournal, git
   }
 }
 
+interface JournaledRestackLifecycle {
+  journal?: StoredRestackJournal;
+  moves: readonly RestackMoveRef[];
+  terminal: boolean;
+}
+
+/**
+ * Keep the live journal's terminal release in one owner. Both ordinary
+ * restacks and folds stage different histories, but any non-terminal exit
+ * must leave an aborted journal (and, after a move, the old refs) behind.
+ */
+async function runJournaledRestack<T>(
+  worktree: string,
+  git: GitRunner,
+  run: (lifecycle: JournaledRestackLifecycle) => Promise<T>,
+): Promise<T> {
+  const lifecycle: JournaledRestackLifecycle = { moves: [], terminal: false };
+  try {
+    return await run(lifecycle);
+  } finally {
+    if (!lifecycle.terminal && lifecycle.journal !== undefined) {
+      await abortJournal(worktree, lifecycle.journal, git, lifecycle.moves);
+    }
+  }
+}
+
 interface ReplayConflict {
   readonly commit: CommitSha;
   readonly paths: readonly string[];
@@ -778,21 +804,25 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
   const created = await createRestackJournal(options.worktree, options.slug, draft, options.events, { git });
   if (created.kind === 'refused') return { kind: 'refused', reason: created.reason };
   if (created.kind === 'unavailable') return { kind: 'unavailable', detail: created.detail };
-  let journal = created.journal;
-  const foldRounds = [...new Set(folded.commits.map((source) => source.roundId))];
-  await options.events?.emit({
-    type: 'restack_planned', opId: draft.opId, cause: 'fold', children: planned.ranges.map((range) => range.child),
-    ...(foldRounds.length === 1 ? { roundId: foldRounds[0]! } : {}),
-  });
-  await options.events?.emit({
-    type: 'fold_planned', opId: draft.opId,
-    commits: folded.commits.map((source) => ({
-      sha: source.sha, roundId: source.roundId, owner: source.owner,
-      placements: source.parts.flatMap((part) => part.child === 'leaf' ? [] : [{
-        child: part.child, paths: part.kind === 'hunks' ? [part.path] : [], reason: part.reason,
-      }]),
-    })),
-  });
+  return runJournaledRestack(options.worktree, git, async (lifecycle) => {
+    let journal = created.journal;
+    let moves: RestackMoveRef[] = [];
+    let terminal = false;
+    try {
+      const foldRounds = [...new Set(folded.commits.map((source) => source.roundId))];
+      await options.events?.emit({
+        type: 'restack_planned', opId: draft.opId, cause: 'fold', children: planned.ranges.map((range) => range.child),
+        ...(foldRounds.length === 1 ? { roundId: foldRounds[0]! } : {}),
+      });
+      await options.events?.emit({
+        type: 'fold_planned', opId: draft.opId,
+        commits: folded.commits.map((source) => ({
+          sha: source.sha, roundId: source.roundId, owner: source.owner,
+          placements: source.parts.flatMap((part) => part.child === 'leaf' ? [] : [{
+            child: part.child, paths: part.kind === 'hunks' ? [part.path] : [], reason: part.reason,
+          }]),
+        })),
+      });
 
   const byChild = new Map<ChildId, Array<{ source: FoldCommitPlan; parts: FoldPart[] }>>();
   for (const source of folded.commits) for (const part of source.parts) {
@@ -854,7 +884,7 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
     return haltedResult(options.worktree);
   }
   journal = await transitionState(options.worktree, journal, 'ready', git);
-  const moves: RestackMoveRef[] = planned.ranges.flatMap((range) => {
+  moves = planned.ranges.flatMap((range) => {
     const branch = branchRefForRange(options.slug, range);
     const old = journal.journal.refs.find((entry) => entry.ref === branch)?.oldSha;
     const next = staged.get(range.child);
@@ -865,7 +895,15 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
   });
   const checkedOut = await checkedOutRef(git);
   const preMove = await checkRestackPreMove(options.worktree, moves, checkedOut, { git });
-  if (preMove.kind !== 'clear') return { kind: 'unavailable', detail: preMove.kind === 'unavailable' ? preMove.detail : preMove.detail };
+  if (preMove.kind === 'refused') {
+    await haltRestack(options.worktree, preMove.reason, options.events, { detail: preMove.detail });
+    return haltedResult(options.worktree);
+  }
+  if (preMove.kind === 'seal-refused') {
+    await writeSealHalt(options.worktree, preMove.detail, options.events);
+    return haltedResult(options.worktree);
+  }
+  if (preMove.kind === 'unavailable') throw new Error(preMove.detail);
   // Prepare every route replacement while its old blob is still the CAS value
   // carried into the fold's applied transaction.  These writes are authority
   // state and must not be left for a second transaction after journal cleanup.
@@ -896,7 +934,14 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
   if (moved.kind !== 'moved') return { kind: 'unavailable', detail: moved.kind === 'unavailable' ? moved.detail : moved.detail };
   journal = moved.journal;
   const verified = await verifyRestackMove(options.worktree, journal, moves, { git });
-  if (verified.kind !== 'verified') return { kind: 'unavailable', detail: verified.kind === 'unavailable' ? verified.detail : verified.detail };
+  if (verified.kind === 'failed') {
+    const rolledBack = await rollbackRestackMove(options.worktree, journal, moves, { git });
+    if (rolledBack.kind !== 'aborted') throw new Error(rolledBack.detail);
+    await haltRestack(options.worktree, 'verification-failed', options.events, { detail: verified.detail });
+    terminal = true;
+    return haltedResult(options.worktree);
+  }
+  if (verified.kind === 'unavailable') throw new Error(verified.detail);
   const checked = moves.find((move) => move.ref === checkedOut);
   if (!checked) return { kind: 'unavailable', detail: 'checked-out leaf was not moved by fold' };
   await syncRestackedWorktree(options.worktree, checked.oldSha, checked.newSha, { git });
@@ -924,7 +969,16 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
     const move = moves.find((entry) => entry.child === range.child && entry.ref.startsWith('refs/heads/'))!;
     await options.events?.emit({ type: 'restack_applied', opId: draft.opId, cause: 'fold', child: range.child, oldTip: range.oldTip, newTip: move.newSha, wouldInvalidate: [], parentOverlapPaths: [], adaptedPaths: [] });
   }
+  terminal = true;
   return { kind: 'applied', opId: draft.opId };
+    } catch (error) {
+      return { kind: 'unavailable', detail: error instanceof Error ? error.message : String(error) };
+    } finally {
+      lifecycle.journal = journal;
+      lifecycle.moves = moves;
+      lifecycle.terminal = terminal;
+    }
+  });
 }
 
 /**
@@ -934,6 +988,19 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
  */
 export async function runRestack(options: RunRestackOptions): Promise<RunRestackResult> {
   const git = options.git ?? makeGitRunner(options.worktree);
+  if (options.cause === 'fold') return runFoldRestack(options, git);
+  return runJournaledRestack(
+    options.worktree,
+    git,
+    async (lifecycle) => runOrdinaryRestack(options, git, lifecycle),
+  );
+}
+
+async function runOrdinaryRestack(
+  options: RunRestackOptions,
+  git: GitRunner,
+  lifecycle: JournaledRestackLifecycle,
+): Promise<RunRestackResult> {
   let journal: StoredRestackJournal | undefined;
   let moves: RestackMoveRef[] = [];
   let terminal = false;
@@ -951,10 +1018,6 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
       await writeSealHalt(options.worktree, seal.reason, options.events);
       terminal = true;
       return haltedResult(options.worktree);
-    }
-    if (options.cause === 'fold') {
-      terminal = true;
-      return await runFoldRestack(options, git);
     }
     // The caller has already superseded the committed halt record and consumed
     // any matching authorization.  Do one narrow, terminal-only recheck here
@@ -1430,6 +1493,8 @@ export async function runRestack(options: RunRestackOptions): Promise<RunRestack
   } catch (error) {
     return { kind: 'unavailable', detail: error instanceof Error ? error.message : String(error) };
   } finally {
-    if (!terminal && journal !== undefined) await abortJournal(options.worktree, journal, git, moves);
+    lifecycle.journal = journal;
+    lifecycle.moves = moves;
+    lifecycle.terminal = terminal;
   }
 }
