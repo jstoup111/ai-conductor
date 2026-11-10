@@ -6567,6 +6567,32 @@ export class Conductor {
     return { kind: 'settled' };
   }
 
+  /**
+   * Make a clean or effective-PASS build review terminal only after its
+   * durable remediation state has settled. Every success path shares this
+   * authority so a routed exit cannot run ahead of an invalid settlement.
+   */
+  private async settleCleanBuildReviewSuccess(
+    state: ConductState,
+    settlementLatch: { settled: boolean },
+  ): Promise<'settled' | 'halted'> {
+    if (settlementLatch.settled) return 'settled';
+    const settlement = await this.settleRemediationCasesOnCleanBuildReview();
+    if (settlement.kind === 'invalid') {
+      await this.haltSerialExecution({
+        reason: `build_review clean-PASS durable settlement halted: ${settlement.reason}`,
+        haltClass: 'needs-human',
+        persistState: async () => {
+          await this.persistPendingStateChanges(state, 'persist conductor transition');
+        },
+      });
+      return 'halted';
+    }
+    await this.persistAdjudicatedBuildReviewSettlement(state);
+    settlementLatch.settled = true;
+    return 'settled';
+  }
+
   /** Best-effort compact remediation context from existing build-review evidence. */
   private async buildReviewPointerLines(verdictRaw: unknown): Promise<readonly string[]> {
     const aggregate = parseBuildReviewAggregate(verdictRaw);
@@ -15016,7 +15042,7 @@ export class Conductor {
         // An adjudication-settled build_review is a clean PASS for the rest of
         // the loop.  Keep that fact through the shared success tail so it
         // emits the same completion event and closes any active child region.
-        let buildReviewAdjudicationSettled = false;
+        const buildReviewAdjudicationSettlement = { settled: false };
         settledBuildReviewFailure: {
           if (!succeeded) {
             if (failedStepResult?.refusal) {
@@ -15397,19 +15423,11 @@ export class Conductor {
                             effective.effective.uncoveredInfrastructureFailureRubrics.length === 0 &&
                             (effective.effective.uncoveredScopeIncompleteRubrics?.length ?? 0) === 0)
                         ) {
-                          const settlement = await this.settleRemediationCasesOnCleanBuildReview();
-                          if (settlement.kind === 'invalid') {
-                            await this.haltSerialExecution({
-                              reason: `build_review clean-PASS durable settlement halted: ${settlement.reason}`,
-                              haltClass: 'needs-human',
-                              persistState: async () => {
-                                await this.persistPendingStateChanges(state, 'persist conductor transition');
-                              },
-                            });
+                          if (
+                            (await this.settleCleanBuildReviewSuccess(state, buildReviewAdjudicationSettlement)) ===
+                            'halted'
+                          )
                             return;
-                          }
-                          await this.persistAdjudicatedBuildReviewSettlement(state);
-                          buildReviewAdjudicationSettled = true;
                           succeeded = true;
                           break settledBuildReviewFailure;
                         }
@@ -15679,19 +15697,11 @@ export class Conductor {
                           return;
                         }
                         if (outcome.kind === 'settled') {
-                          const settlement = await this.settleRemediationCasesOnCleanBuildReview();
-                          if (settlement.kind === 'invalid') {
-                            await this.haltSerialExecution({
-                              reason: `build_review clean-PASS durable settlement halted: ${settlement.reason}`,
-                              haltClass: 'needs-human',
-                              persistState: async () => {
-                                await this.persistPendingStateChanges(state, 'persist conductor transition');
-                              },
-                            });
+                          if (
+                            (await this.settleCleanBuildReviewSuccess(state, buildReviewAdjudicationSettlement)) ===
+                            'halted'
+                          )
                             return;
-                          }
-                          await this.persistAdjudicatedBuildReviewSettlement(state);
-                          buildReviewAdjudicationSettled = true;
                           // A settled raw failure continues through the normal
                           // success tail, rather than selecting this lap again.
                           succeeded = true;
@@ -16864,24 +16874,11 @@ export class Conductor {
           // A clean build_review lap settles its durable remediation cases
           // before the PASS becomes terminal, so no repaired work order stays
           // BUILD-eligible for a later lap to replay.
-          if (step.name === 'build_review' && !buildReviewAdjudicationSettled) {
-            const settlement = await this.settleRemediationCasesOnCleanBuildReview();
-            if (settlement.kind === 'invalid') {
-              // adr-2026-08-11 decision 1: a halt reaches the operator through
-              // the persisted spine, never a bare marker write. Writing the
-              // marker alone left the active execution open and emitted no
-              // `loop_halt` — and the daemon's fallback emitter is suppressed
-              // precisely because a marker now exists, so the halt was
-              // invisible to every spine consumer.
-              await this.haltSerialExecution({
-                reason: `build_review clean-PASS durable settlement halted: ${settlement.reason}`,
-                haltClass: 'needs-human',
-                persistState: async () => {
-                  await this.persistPendingStateChanges(state, 'persist conductor transition');
-                },
-              });
-              return;
-            }
+          if (
+            step.name === 'build_review' &&
+            (await this.settleCleanBuildReviewSuccess(state, buildReviewAdjudicationSettlement)) === 'halted'
+          ) {
+            return;
           }
 
           // For complexity + worktree, 'done' (and tier / worktree fields) are
@@ -17061,8 +17058,8 @@ export class Conductor {
           if (
             step.name === 'build_review' &&
             activeChild !== undefined &&
-            (activeChildRequiresClosure || (buildReviewAdjudicationSettled && !activeChild.isLeaf)) &&
-            (buildReviewAdjudicationSettled ||
+            (activeChildRequiresClosure || (buildReviewAdjudicationSettlement.settled && !activeChild.isLeaf)) &&
+            (buildReviewAdjudicationSettlement.settled ||
               CHILD_REGION_STEPS.every((regionStep) => {
                 const status = getStepStatus(state, regionStep);
                 return status === 'done' || status === 'skipped';
@@ -17120,7 +17117,7 @@ export class Conductor {
               steps,
               indexOf,
               buildRoutedForward,
-              buildReviewAdjudicationSettled,
+              buildReviewAdjudicationSettlement.settled,
             );
           } catch (transitionErr) {
             // Tag the escaped rejection with which step-transition it happened

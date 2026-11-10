@@ -3061,6 +3061,46 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     ).toEqual([]);
   });
 
+  // Covers: task:2, task:3
+  it('halts an effective-PASS settlement before requesting a routed exit or advancing a child region', async () => {
+    const first = {
+      child: parseChildId(1)!,
+      position: parseChildId(1)!,
+      isLeaf: false,
+      branch: 'feat/c1/adjudicated-feature',
+    };
+    const requestRoutedExit = vi.fn();
+    const advanceChildRegion = vi.fn(async () => ({ kind: 'completed' as const }));
+    const run = await fixture({
+      stacked: true,
+      advisory: true,
+      buildReviewChild: first.child,
+      cleanPassSettlement: { kind: 'invalid', reason: 'case store malformed-state' },
+      seedPipeline: async (root) => {
+        await mkdir(join(root, '.pipeline', 'children', '1'), { recursive: true });
+        await writeState(join(root, '.pipeline', 'children', '1', 'conduct-state.json'), {
+          feature_desc: 'adjudicated-feature',
+          acceptance_specs: 'done',
+          build: 'done',
+          test_suite: 'done',
+          build_review: 'pending',
+        } as never);
+      },
+      childRegionLifecycle: {
+        resolveActiveChild: async () => ({ kind: 'active' as const, ...first }),
+        enterChildRegion: async () => ({ kind: 'completed' as const }),
+        requestRoutedExit: requestRoutedExit as never,
+        advanceChildRegion,
+      },
+    });
+
+    expect(await run.haltMarker()).toContain(
+      'build_review clean-PASS durable settlement halted: case store malformed-state',
+    );
+    expect(requestRoutedExit).not.toHaveBeenCalled();
+    expect(advanceChildRegion).not.toHaveBeenCalled();
+  });
+
   // Covers: S9.5, task:rem-prd-audit-rem-prd-audit-R17d
   it.each(['failed', 'reserved'] as const)(
     'does not retire an absent %s action case on a reduced-coverage lap',
