@@ -112,9 +112,21 @@ export function summarizeRun(record: RunRecord, currentDigests?: readonly Artifa
   // An explicit draft/reconfirmation is authoritative even where optional
   // earlier DECIDE steps were not recorded. For an accept-only mid-run record,
   // however, do not pretend it reached delivery merely because no draft exists.
-  const nextStep = RUN_STEP_ORDER.find((step) =>
+  const explicitNextStep = RUN_STEP_ORDER.find((step) =>
     invalidSteps.has(step) || record.needsReconfirm.includes(step) || record.steps[step]?.state === 'draft',
-  ) ?? RUN_STEP_ORDER.find((step) => record.steps[step]?.state !== 'accepted') ?? 'delivery';
+  );
+  // DECIDE records are sparse: PRD and diagram/review steps can be omitted by
+  // the selected track or tier.  Once there is no saved draft or invalidated
+  // acceptance, continue from the step after the last accepted checkpoint
+  // rather than mistaking an omitted optional step for the current one.
+  const lastRecordedAcceptance = [...RUN_STEP_ORDER].reverse().find((step) => record.steps[step]?.state === 'accepted');
+  const technicalTrack = record.notes.explore?.decisions.some((decision) => /\btechnical\b/i.test(decision)) === true;
+  const nextRecordedStep = (after: number): RunStepId | 'delivery' =>
+    RUN_STEP_ORDER.slice(after + 1).find((step) => !(technicalTrack && step === 'prd')) ?? 'delivery';
+  const nextStep = explicitNextStep
+    ?? (lastRecordedAcceptance === undefined
+      ? nextRecordedStep(-1)
+      : nextRecordedStep(RUN_STEP_ORDER.indexOf(lastRecordedAcceptance)));
   return {
     nextStep,
     acceptedSteps,
@@ -364,10 +376,12 @@ export function stepForArtifactPath(path: string): RunStepId | undefined {
   if (path.startsWith('.docs/specs/')) return 'prd';
   if (path.startsWith('.docs/architecture/')) return 'architecture_diagram';
   if (path.startsWith('.docs/decisions/architecture-review-')) return 'architecture_review';
+  if (path.startsWith('.docs/decisions/adr-')) return 'architecture_review';
   if (path.startsWith('.docs/stories/')) return 'stories';
   if (path.startsWith('.docs/conflicts/')) return 'conflict_check';
   if (path.startsWith('.docs/plans/')) return 'plan';
   if (path.startsWith('.docs/coherence/')) return 'coherence_check';
+  if (path.startsWith('.docs/coherence-waivers/')) return 'coherence_check';
   if (path.startsWith('.docs/plan-review/')) return 'plan_review';
   return undefined;
 }

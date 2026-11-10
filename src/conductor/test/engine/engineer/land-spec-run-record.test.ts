@@ -72,8 +72,10 @@ async function writeRecord(worktreePath: string, accepted: readonly ArtifactDige
   const acceptance = { actor: 'operator', provider: 'codex', decisions: [], openQuestions: [] };
   const explore = recordAcceptance(base, { ...acceptance, step: 'explore', at: '2026-11-08T12:00:00.000Z', artifacts: accepted.filter(({ path }) => path.startsWith('.docs/track/')) });
   const complexity = recordAcceptance(explore, { ...acceptance, step: 'complexity', at: '2026-11-08T12:01:00.000Z', artifacts: accepted.filter(({ path }) => path.startsWith('.docs/complexity/')) });
-  const storiesAccepted = recordAcceptance(complexity, { ...acceptance, step: 'stories', at: '2026-11-08T12:02:00.000Z', artifacts: accepted.filter(({ path }) => path.startsWith('.docs/stories/')) });
-  const record = recordAcceptance(storiesAccepted, { ...acceptance, step: 'plan', at: '2026-11-08T12:03:00.000Z', artifacts: accepted.filter(({ path }) => path.startsWith('.docs/plans/')) });
+  const reviewed = recordAcceptance(complexity, { ...acceptance, step: 'architecture_review', at: '2026-11-08T12:02:00.000Z', artifacts: accepted.filter(({ path }) => path.startsWith('.docs/decisions/')) });
+  const storiesAccepted = recordAcceptance(reviewed, { ...acceptance, step: 'stories', at: '2026-11-08T12:03:00.000Z', artifacts: accepted.filter(({ path }) => path.startsWith('.docs/stories/')) });
+  const planned = recordAcceptance(storiesAccepted, { ...acceptance, step: 'plan', at: '2026-11-08T12:04:00.000Z', artifacts: accepted.filter(({ path }) => path.startsWith('.docs/plans/')) });
+  const record = recordAcceptance(planned, { ...acceptance, step: 'coherence_check', at: '2026-11-08T12:05:00.000Z', artifacts: accepted.filter(({ path }) => path.startsWith('.docs/coherence-waivers/')) });
   await mkdir(join(worktreePath, '.docs', 'composer-runs'), { recursive: true });
   await writeFile(join(worktreePath, RECORD_PATH), serializeRunRecord(record));
 }
@@ -84,6 +86,8 @@ async function currentDigests(worktreePath: string): Promise<ArtifactDigest[]> {
     `.docs/complexity/${SLUG}.md`,
     `.docs/stories/${SLUG}.md`,
     `.docs/plans/${SLUG}.md`,
+    `.docs/decisions/adr-2026-11-10-${SLUG}.md`,
+    `.docs/coherence-waivers/${SLUG}.md`,
   ];
   return Promise.all(paths.map(async (path) => digestArtifact(path, await readFile(join(worktreePath, path)))));
 }
@@ -95,12 +99,16 @@ async function seedWorktree(): Promise<string> {
     mkdir(join(worktreePath, '.docs', 'complexity'), { recursive: true }),
     mkdir(join(worktreePath, '.docs', 'stories'), { recursive: true }),
     mkdir(join(worktreePath, '.docs', 'plans'), { recursive: true }),
+    mkdir(join(worktreePath, '.docs', 'decisions'), { recursive: true }),
+    mkdir(join(worktreePath, '.docs', 'coherence-waivers'), { recursive: true }),
   ]);
   await Promise.all([
     writeFile(join(worktreePath, '.docs', 'track', `${SLUG}.md`), '# Track\n\nTrack: technical\n'),
     writeFile(join(worktreePath, '.docs', 'complexity', `${SLUG}.md`), '# Complexity\n\nTier: S\n'),
     writeFile(join(worktreePath, '.docs', 'stories', `${SLUG}.md`), stories),
     writeFile(join(worktreePath, '.docs', 'plans', `${SLUG}.md`), plan),
+    writeFile(join(worktreePath, '.docs', 'decisions', `adr-2026-11-10-${SLUG}.md`), '# ADR\n\n**Status:** Approved\n\n## Decision\n\n1. **Use the fixture.**\n\n## Assumptions\n\nNo load-bearing assumptions.\n'),
+    writeFile(join(worktreePath, '.docs', 'coherence-waivers', `${SLUG}.md`), 'Waives: none\n\nRationale: fixture\n'),
   ]);
   return worktreePath;
 }
@@ -149,6 +157,29 @@ describe('landSpec Composer run-record gate', () => {
 
     await expect(git(['show', `HEAD:${RECORD_PATH}`], worktreePath)).rejects.toMatchObject({ code: 128 });
     expect(await git(['show', '--name-status', '--format=', 'HEAD'], worktreePath)).toContain(`D\t${RECORD_PATH}`);
+  });
+
+  it('Covers: Task 7 lands accepted ADR and coherence-waiver artifacts with a run record present', async () => {
+    const worktreePath = await seedWorktree();
+    await writeRecord(worktreePath, await currentDigests(worktreePath));
+    await checkpoint(worktreePath);
+
+    await expect(landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, worktreePath, undefined, options())).resolves.toMatchObject({ slug: SLUG });
+  });
+
+  it('Covers: Task 7 lands accepted ADR artifacts after their owning step is reconfirmed', async () => {
+    const worktreePath = await seedWorktree();
+    await writeRecord(worktreePath, await currentDigests(worktreePath));
+    const prior = parseRunRecord(await readFile(join(worktreePath, RECORD_PATH), 'utf8'));
+    const reconfirmed = recordAcceptance({ ...prior, needsReconfirm: ['architecture_review'] }, {
+      step: 'architecture_review', actor: 'operator', provider: 'codex', at: '2026-11-10T12:00:00.000Z',
+      artifacts: prior.steps.architecture_review?.state === 'accepted' ? prior.steps.architecture_review.artifacts : [],
+      decisions: [], openQuestions: [],
+    });
+    await writeFile(join(worktreePath, RECORD_PATH), serializeRunRecord(reconfirmed));
+    await checkpoint(worktreePath);
+
+    await expect(landSpec({ name: 'repo', canonicalPath: repoPath }, IDEA, worktreePath, undefined, options())).resolves.toMatchObject({ slug: SLUG });
   });
 
   it('Covers: Task 7 uses the strip parent record to refuse a post-strip edit', async () => {

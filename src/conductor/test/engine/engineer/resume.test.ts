@@ -56,7 +56,7 @@ describe('Composer resume', () => {
     const landed: RunRecord = { ...record, steps: { explore: record.steps.explore, prd: record.steps.prd }, needsReconfirm: [] };
     // A partial accept-only record is still mid-run. A stripped landed record
     // reaches delivery through resumeComposerRun's ENOENT handling instead.
-    expect(contextForRun(landed).nextStep).toBe('complexity');
+    expect(contextForRun(landed).nextStep).toBe('architecture_diagram');
   });
 
   it('does not expose a needs-reconfirm plan as accepted in resume context', () => {
