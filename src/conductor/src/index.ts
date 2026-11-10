@@ -1215,7 +1215,7 @@ async function dispatchCliCommand(): Promise<void> {
   // mirroring the finish-record dispatch pattern above.
   const mtRecordCmd = detectManualTestRecordCommand(process.argv);
   if (mtRecordCmd) {
-    const code = await dispatchManualTestRecord(mtRecordCmd, process.cwd(), makeProductionManualTestRecordRunners());
+    const code = await dispatchManualTestRecord(mtRecordCmd, process.cwd(), makeProductionManualTestRecordRunners({ git: makeProductionGit() }));
     process.exit(code);
   }
 

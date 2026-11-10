@@ -5,7 +5,7 @@
 
 import { isAbsolute, join } from 'node:path';
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { execa } from 'execa';
+import type { GitRunner } from './pr-labels.js';
 import {
   hasManualTestWarnRows,
   MANUAL_TEST_SKIP_SENTINEL,
@@ -89,8 +89,8 @@ export interface ManualTestRecordRunners {
   readStdin: () => Promise<string>;
 }
 
-/** Production runners: real fs/promises. */
-export function makeProductionManualTestRecordRunners(): ManualTestRecordRunners {
+/** Production runners: real fs/promises; git is injected by the composition root. */
+export function makeProductionManualTestRecordRunners(deps: { git: GitRunner }): ManualTestRecordRunners {
   return {
     readFile: (path: string) => readFile(path, 'utf-8'),
     mkdir: (path: string) => mkdir(path, { recursive: true }),
@@ -99,8 +99,8 @@ export function makeProductionManualTestRecordRunners(): ManualTestRecordRunners
     rm: (path: string) => rm(path, { force: true }).then(() => undefined),
     resolveToplevel: async (cwd: string) => {
       try {
-        const result = await execa('git', ['rev-parse', '--show-toplevel'], { cwd, reject: false });
-        return result.exitCode === 0 && result.stdout.trim() ? result.stdout.trim() : undefined;
+        const result = await deps.git(['rev-parse', '--show-toplevel'], { cwd });
+        return (result.exitCode ?? 0) === 0 && result.stdout.trim() ? result.stdout.trim() : undefined;
       } catch {
         return undefined;
       }
@@ -210,7 +210,7 @@ async function appendAttemptSection(
 export async function dispatchManualTestRecord(
   cmd: ManualTestRecordDispatch,
   cwd: string,
-  runners: ManualTestRecordRunners = makeProductionManualTestRecordRunners(),
+  runners: ManualTestRecordRunners,
 ): Promise<number> {
   if (cmd.kind === 'guide') {
     console.error(MANUAL_TEST_RECORD_USAGE);
