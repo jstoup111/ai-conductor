@@ -17766,6 +17766,54 @@ export class Conductor {
   }
 
   private async runRebaseStepBody(state: ConductState): Promise<StepRunResult> {
+    const stackSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+    // Folding is a local stack repair, not a remote/default-branch rebase.
+    // It must therefore run in interactive and test dispatches as well as in
+    // the daemon path below.  Keep the ordinary base rebase daemon-only.
+    const git = makeGitRunner(this.projectRoot);
+
+    if (stackSlug && await hasDurableChildState(this.projectRoot, stackSlug)) {
+      if (await publishedStackRefusal(this.projectRoot, stackSlug, { git })) {
+        await this.events.emit(emitRestackRefused({ reason: 'published-stack' }));
+        return { success: true };
+      }
+      const preflight = await this.stackPreflight({
+        worktree: this.projectRoot,
+        slug: stackSlug,
+        events: this.events,
+        resolver: this.stepRunner.resolveRebaseConflict
+          ? (ctx) => this.stepRunner.resolveRebaseConflict!(ctx)
+          : undefined,
+        resolverCap: resolveRebaseResolutionAttempts(this.config),
+      });
+      if (preflight.kind === 'halted' || preflight.kind === 'unavailable') {
+        const reason = `stack preflight ${preflight.kind}: ${preflight.detail}`;
+        return { success: false, output: reason };
+      }
+
+      // Deferred audit work is intentionally left on the leaf until FINISH.
+      // The recorded execution mode, not the current config toggle, is the
+      // authority for the recovery.
+      if (!await routedRoundOpen(this.projectRoot, stackSlug, { git })
+        && await deferredPlacementsExist(this.projectRoot, stackSlug, { git })) {
+        const folded = await runRestack({
+          worktree: this.projectRoot,
+          slug: stackSlug,
+          cause: 'fold',
+          events: this.events,
+          git,
+          resolver: this.stepRunner.resolveRebaseConflict
+            ? (ctx) => this.stepRunner.resolveRebaseConflict!(ctx)
+            : undefined,
+          resolverCap: resolveRebaseResolutionAttempts(this.config),
+        });
+        if (folded.kind !== 'applied') {
+          const detail = folded.kind === 'unavailable' ? folded.detail : folded.kind === 'halted' ? folded.detail : folded.kind;
+          return { success: false, output: `stack fold ${folded.kind}: ${detail}` };
+        }
+      }
+    }
+
     // Phase 9.0: the native rebase-on-latest is a DAEMON finish-time mechanism.
     // In non-daemon runs (interactive `/conduct` and the entire test suite) we
     // must NOT invoke git here: a real `git rebase origin/<default>` against the
@@ -17788,7 +17836,6 @@ export class Conductor {
       return { success: true };
     }
 
-    const git = makeGitRunner(this.projectRoot);
     const localBase = await this.discoverLocalBase(git);
 
     // A stacked feature is one history, not a collection of independently
@@ -17797,49 +17844,11 @@ export class Conductor {
     // `applyRestackTransition` owns the resulting verdict/operation write;
     // this boundary records the FINISH completion and emits the ordinary
     // rebase observation for that whole-stack operation.
-    const stackSlug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
     if (stackSlug && await hasDurableChildState(this.projectRoot, stackSlug)) {
       if (await publishedStackRefusal(this.projectRoot, stackSlug, { git })) {
         await this.events.emit(emitRestackRefused({ reason: 'published-stack' }));
         return { success: true };
       }
-      const preflight = await this.stackPreflight({
-        worktree: this.projectRoot,
-        slug: stackSlug,
-        events: this.events,
-        resolver: this.stepRunner.resolveRebaseConflict
-          ? (ctx) => this.stepRunner.resolveRebaseConflict!(ctx)
-          : undefined,
-        resolverCap: resolveRebaseResolutionAttempts(this.config),
-      });
-      if (preflight.kind === 'halted' || preflight.kind === 'unavailable') {
-        const reason = `stack preflight ${preflight.kind}: ${preflight.detail}`;
-        return { success: false, output: reason };
-      }
-
-      // Deferred audit work is intentionally left on the leaf until FINISH.
-      // Fold it before either the interactive no-op path or a base-refresh
-      // refusal; the recorded execution mode, not the current config toggle,
-      // is the authority for this recovery.
-      if (!await routedRoundOpen(this.projectRoot, stackSlug, { git })
-        && await deferredPlacementsExist(this.projectRoot, stackSlug, { git })) {
-        const folded = await runRestack({
-          worktree: this.projectRoot,
-          slug: stackSlug,
-          cause: 'fold',
-          events: this.events,
-          git,
-          resolver: this.stepRunner.resolveRebaseConflict
-            ? (ctx) => this.stepRunner.resolveRebaseConflict!(ctx)
-            : undefined,
-          resolverCap: resolveRebaseResolutionAttempts(this.config),
-        });
-        if (folded.kind !== 'applied') {
-          const detail = folded.kind === 'unavailable' ? folded.detail : folded.kind === 'halted' ? folded.detail : folded.kind;
-          return { success: false, output: `stack fold ${folded.kind}: ${detail}` };
-        }
-      }
-
       const base = await resolveBase(git, localBase);
       const defaultTip = await git(['rev-parse', '--verify', base.ref]);
       const oldLeaf = await git(['rev-parse', '--verify', 'HEAD']);
