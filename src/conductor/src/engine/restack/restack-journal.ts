@@ -22,7 +22,7 @@ import {
 } from './restack-types.js';
 import type { CommitterStamp } from './restack-replay.js';
 import type { ConsumedConflictRefs } from './restack-conflict-record.js';
-import type { FoldCommitPlan, FoldPart } from './fold-plan.js';
+import type { FoldCommitPlan, FoldPart } from './fold-types.js';
 
 export interface RestackJournalOwner {
   readonly host: string;
