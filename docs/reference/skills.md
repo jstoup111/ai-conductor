@@ -709,8 +709,8 @@ the aggregate gate. Scoped success alone never satisfies that gate.
   `requires: [verify-claims]`, no model pin.
 - **Engine step** — `manual_test` (index 17, SHIP, prerequisite `test_suite`, skipped at tier S).
   Checkpoint and loop gate, and the only step that opts into `configDisableAllowed`.
-- **Inputs** — story acceptance criteria; the running application; the absolute worktree `.pipeline`
-  path supplied in the step's system prompt.
+- **Inputs** — story acceptance criteria; the running application; the feature worktree, from which
+  the recorder derives `.pipeline` (`--pipeline-dir <absolute path>` overrides).
 - **Outputs** — `.pipeline/manual-test-results.md`, written solely by `ai-conductor manual-test-record`,
   append-only as numbered attempt sections with per-criterion `PASS`, `WARN`, or `FAIL` results;
   `.pipeline/manual-test-fail-evidence.json`.
