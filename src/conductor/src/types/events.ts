@@ -389,6 +389,8 @@ export interface ProviderAttemptEvent {
   step: StepName;
   /** Optional so historical event records retain their legacy interpretation. */
   executionContext?: ExecutionContext;
+  /** Resolver attribution for a journalled stack rebuild. */
+  restack?: { readonly opId: RestackOpId; readonly cause: RestackCause; readonly roundId?: RoundId };
   provider: string;
   /** Sanitized Codex authentication source; omitted for other providers. */
   authenticationSource?: 'api-key' | 'cached-login';
@@ -2276,6 +2278,19 @@ type ConductorEventBody =
       opId: RestackOpId;
       cause: RestackCause;
       children: ChildId[];
+      /** The routed round which originated a feature-repair restack. */
+      roundId?: RoundId;
+    }
+  | {
+      /** Durable fold correspondence, emitted before any stack ref moves. */
+      type: 'fold_planned';
+      opId: RestackOpId;
+      commits: Array<{
+        sha: CommitSha;
+        roundId: RoundId;
+        owner: ChildId;
+        placements: Array<{ child: ChildId; paths: string[]; reason: 'owner' | 'introduced-above-owner' }>;
+      }>;
     }
   | {
       type: 'restack_applied';

@@ -131,6 +131,7 @@ export interface ResolveRestackConflictOptions {
   readonly operatorDecision?: { answer: string; commit: string; paths: readonly string[] };
   readonly resolver: RestackResolver;
   readonly cap: number;
+  readonly restack?: NonNullable<ResolutionContext['restack']>;
   /** Rooted at the feature worktree; used only for the add/remove/prune operations. */
   readonly git?: GitRunner;
   /** Test seam for the Git runner rooted at the detached resolver checkout. */
@@ -349,6 +350,7 @@ export async function resolveRestackConflict(options: ResolveRestackConflictOpti
         const result = await options.resolver({
           ...context,
           environment,
+          ...(options.restack === undefined ? {} : { restack: options.restack }),
           ...(options.operatorDecision === undefined ? {} : { operatorDecision: options.operatorDecision }),
         });
         if (result.resolved) {
