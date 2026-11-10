@@ -1156,6 +1156,57 @@ function checkpointPublication(
   };
 }
 
+/** Rebuild the durable intake entry when a checkpoint or resume crosses a process boundary. */
+async function recordDecidingIntakeLedger(
+  engineerDir: string | undefined,
+  input: { sourceRef?: string; branch: string; draftPrUrl?: string },
+): Promise<void> {
+  if (!input.sourceRef) return;
+  const ledger = createLedger(join(engineerDir ?? resolveEngineerDir({}), 'ledger.json'));
+  const existing = await ledger.get(GITHUB_ISSUES_SOURCE, input.sourceRef);
+  if (!existing) await ledger.record({ source: GITHUB_ISSUES_SOURCE, sourceRef: input.sourceRef });
+  await ledger.transition(GITHUB_ISSUES_SOURCE, input.sourceRef, 'deciding', {
+    branch: input.branch,
+    ...(input.draftPrUrl ? { draftPrUrl: input.draftPrUrl } : {}),
+  });
+}
+
+/** Bind every local checkpoint caller to one ownership, publication, and ledger policy. */
+async function prepareCheckpointDeps(input: {
+  target: Parameters<typeof checkpointPublication>[0];
+  branch: string;
+  worktree: string;
+  gh: NonNullable<DispatchEngineerOpts['gh']>;
+  git: GitRunner;
+  events: ConductorEventEmitter;
+  provider?: string;
+  engineerDir?: string;
+  sourceRef?: string;
+  resolveOwner?: () => Promise<OwnerResolution>;
+}): Promise<CheckpointDeps> {
+  const slug = input.branch.replace(/^spec\//, '');
+  const sourceRef = input.sourceRef ?? await composerSourceRef(input.worktree, slug);
+  const markerOwner = await composerCommittedMarkerOwner(input.git, input.worktree, input.branch, slug);
+  const owner = await (input.resolveOwner ?? (async () => resolveDaemonOwner(await readMachineOwnerConfig(), input.gh, input.worktree)))();
+  const localOnly = Boolean(markerOwner && (!owner.resolved || markerOwner !== owner.id));
+  return {
+    git: async (args) => {
+      const result = await input.git([...args], { cwd: input.worktree });
+      return { exitCode: result.exitCode ?? 0, stdout: result.stdout, stderr: '' };
+    },
+    resolveOwner: async () => owner,
+    emit: async (event) => input.events.emitOrThrow(event),
+    provider: input.provider,
+    sourceRef,
+    localOnly,
+    localOnlyOwner: markerOwner,
+    publication: input.target.remote && input.branch.startsWith('spec/')
+      ? checkpointPublication(input.target, input.branch, input.worktree, input.gh, input.git, input.events, async ({ branch, prUrl }) =>
+        recordDecidingIntakeLedger(input.engineerDir, { sourceRef, branch, draftPrUrl: prUrl }))
+      : undefined,
+  };
+}
+
 /**
  * Per-subcommand `--help`/`-h` text (#524). Each entry states: what the subcommand
  * does, its flags (required vs optional), what durable state it mutates (or that
@@ -1605,27 +1656,11 @@ export async function dispatchEngineer(
               let saved: Awaited<ReturnType<typeof checkpointComposerRun>> | undefined;
               let saveFailed = false;
               const checkpointDraft = async (step: typeof summary.nextStep) => {
-                const sourceRef = await composerSourceRef(touched.worktreePath, touched.slug);
-                const owner = await resolveDaemonOwner(await readMachineOwnerConfig(), gh, touched.worktreePath);
-                const committedOwner = await composerCommittedMarkerOwner(git, touched.worktreePath, branch, touched.slug);
-                return checkpointComposerRun({ worktree: touched.worktreePath, step, state: 'draft' }, {
-                  git: async (args) => {
-                    const result = await git([...args], { cwd: touched.worktreePath });
-                    return { exitCode: result.exitCode ?? 0, stdout: result.stdout, stderr: '' };
-                  },
-                  resolveOwner: async () => owner,
-                  emit: async (event) => events.emitOrThrow(event),
-                  provider: touched.provider,
-                  sourceRef,
-                  localOnly: Boolean(committedOwner && (!owner.resolved || committedOwner !== owner.id)),
-                  localOnlyOwner: committedOwner,
-                  publication: target.remote ? checkpointPublication(target, branch, touched.worktreePath, gh, git, events, async ({ branch: publishedBranch, prUrl }) => {
-                    if (!sourceRef) return;
-                    const ledger = createLedger(join(engineerDir ?? resolveEngineerDir({}), 'ledger.json'));
-                    if (!await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef)) await ledger.record({ source: GITHUB_ISSUES_SOURCE, sourceRef });
-                    await ledger.transition(GITHUB_ISSUES_SOURCE, sourceRef, 'deciding', { branch: publishedBranch, draftPrUrl: prUrl });
-                  }) : undefined,
+                const deps = await prepareCheckpointDeps({
+                  target, branch, worktree: touched.worktreePath, gh, git, events,
+                  provider: touched.provider, engineerDir,
                 });
+                return checkpointComposerRun({ worktree: touched.worktreePath, step, state: 'draft' }, deps);
               };
               if (dirtyDocs) try {
                 saved = await checkpointDraft(summary.nextStep);
@@ -2193,35 +2228,15 @@ export async function dispatchEngineer(
             try {
               const branchResult = await git(['branch', '--show-current'], { cwd: worktree });
               const branch = branchResult.stdout.trim();
-              const slug = branch.replace(/^spec\//, '');
-              const sourceRef = await composerSourceRef(worktree, slug);
-              const markerOwner = await composerCommittedMarkerOwner(git, worktree, branch, slug);
-              const owner = await (opts.resolveCheckpointOwner ?? (async () => resolveDaemonOwner(await readMachineOwnerConfig(), gh, worktree)))();
-              const localOnly = Boolean(markerOwner && (!owner.resolved || markerOwner !== owner.id));
-              const publication = target.remote && branch.startsWith('spec/')
-                ? checkpointPublication(target, branch, worktree, gh, git, events, async ({ branch: publishedBranch, prUrl }) => {
-                  if (!sourceRef) return;
-                  const ledger = createLedger(join(engineerDir ?? resolveEngineerDir({}), 'ledger.json'));
-                  const existing = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
-                  if (!existing) await ledger.record({ source: GITHUB_ISSUES_SOURCE, sourceRef });
-                  await ledger.transition(GITHUB_ISSUES_SOURCE, sourceRef, 'deciding', { branch: publishedBranch, draftPrUrl: prUrl });
-                })
-                : undefined;
+              const deps = await prepareCheckpointDeps({
+                target, branch, worktree, gh, git, events,
+                provider: (opts.env ?? process.env).AI_CONDUCTOR_AUTHORING_PROVIDER,
+                engineerDir,
+                resolveOwner: opts.resolveCheckpointOwner,
+              });
               return await checkpointComposerRun(
                 { worktree, step, state, ...(notesFile ? { notesFile } : {}) },
-                {
-                  git: async (args) => {
-                    const result = await git([...args], { cwd: worktree });
-                    return { exitCode: result.exitCode ?? 0, stdout: result.stdout, stderr: '' };
-                  },
-                  resolveOwner: async () => owner,
-                  emit: async (event) => events.emitOrThrow(event),
-                  provider: (opts.env ?? process.env).AI_CONDUCTOR_AUTHORING_PROVIDER,
-                  sourceRef,
-                  localOnly,
-                  localOnlyOwner: markerOwner,
-                  publication,
-                },
+                deps,
               );
             } finally {
               persister.stop();
@@ -2474,11 +2489,7 @@ export async function dispatchEngineer(
                   // launcher resumes a run after a process boundary.
                   const intakeRef = sourceRef
                     ?? (dispatch.target.includes('#') ? dispatch.target : undefined);
-                  if (!intakeRef) return;
-                  const ledger = createLedger(join(engineerDir ?? resolveEngineerDir({}), 'ledger.json'));
-                  const existing = await ledger.get(GITHUB_ISSUES_SOURCE, intakeRef);
-                  if (!existing) await ledger.record({ source: GITHUB_ISSUES_SOURCE, sourceRef: intakeRef });
-                  await ledger.transition(GITHUB_ISSUES_SOURCE, intakeRef, 'deciding', { branch, draftPrUrl });
+                  await recordDecidingIntakeLedger(engineerDir, { sourceRef: intakeRef, branch, draftPrUrl });
                 },
                 emit: async (event) => events.emitOrThrow({
                   type: 'composer_run_resumed', slug: event.slug, provider: dispatch.provider ?? DEFAULT_PROVIDER,
@@ -2502,26 +2513,11 @@ export async function dispatchEngineer(
               const dirty = await git(['status', '--porcelain', '--untracked-files=all', '--', '.docs'], { cwd: resumed.worktree });
               if (dirty.stdout.trim() && (!current || summarizeRun(current).nextStep !== 'delivery')) {
                 const nextStep = current ? summarizeRun(current).nextStep : 'explore';
-                const committedOwner = await composerCommittedMarkerOwner(git, resumed.worktree, branch, slug);
-                await checkpointComposerRun({ worktree: resumed.worktree, step: nextStep, state: 'draft' }, {
-                  git: async (args) => {
-                    const result = await git([...args], { cwd: resumed.worktree });
-                    return { exitCode: result.exitCode ?? 0, stdout: result.stdout, stderr: '' };
-                  },
+                const deps = await prepareCheckpointDeps({
+                  target, branch, worktree: resumed.worktree, gh, git, events, provider, engineerDir,
                   resolveOwner: async () => owner,
-                  emit: async (event) => events.emitOrThrow(event),
-                  provider,
-                  sourceRef: await composerSourceRef(resumed.worktree, slug),
-                  localOnly: Boolean(committedOwner && committedOwner !== owner.id),
-                  localOnlyOwner: committedOwner,
-                  publication: target.remote ? checkpointPublication(target, branch, resumed.worktree, gh, git, events, async ({ branch: publishedBranch, prUrl }) => {
-                    const sourceRef = await composerSourceRef(resumed.worktree, slug);
-                    if (!sourceRef) return;
-                    const ledger = createLedger(join(engineerDir ?? resolveEngineerDir({}), 'ledger.json'));
-                    if (!await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef)) await ledger.record({ source: GITHUB_ISSUES_SOURCE, sourceRef });
-                    await ledger.transition(GITHUB_ISSUES_SOURCE, sourceRef, 'deciding', { branch: publishedBranch, draftPrUrl: prUrl });
-                  }) : undefined,
                 });
+                await checkpointComposerRun({ worktree: resumed.worktree, step: nextStep, state: 'draft' }, deps);
                 current = parseRunRecord(await readFile(join(resumed.worktree, '.docs', 'composer-runs', `${slug}.json`), 'utf8'));
               }
               if (current && summarizeRun(current).nextStep !== 'delivery') {

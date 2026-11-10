@@ -63,6 +63,7 @@ function options() {
 async function writeRecord(worktreePath: string, accepted: readonly ArtifactDigest[]): Promise<void> {
   const base: RunRecord = {
     schemaVersion: 1,
+    track: 'technical',
     slug: SLUG,
     steps: {},
     needsReconfirm: [],

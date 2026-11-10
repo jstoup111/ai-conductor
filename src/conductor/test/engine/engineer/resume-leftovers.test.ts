@@ -5,6 +5,7 @@ import { renderComposerLocalStatePrompt } from '../../../src/engine/engineer-cli
 
 const record = JSON.stringify({
   schemaVersion: 1,
+  track: 'technical',
   slug: 'demo',
   steps: { explore: { state: 'draft' } },
   needsReconfirm: [],

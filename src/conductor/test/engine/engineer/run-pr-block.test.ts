@@ -4,7 +4,7 @@ import { renderRunBlock, upsertRunBlock } from '../../../src/engine/engineer/run
 import { resumeComposerRun } from '../../../src/engine/engineer/resume.js';
 import type { RunRecord } from '../../../src/engine/engineer/run-record.js';
 
-const record: RunRecord = { schemaVersion: 1, slug: 'demo', steps: { explore: { state: 'accepted', actor: 'A', provider: 'codex', at: '2026-11-08T00:00:00.000Z', artifacts: [] }, prd: { state: 'draft' } }, needsReconfirm: [], ownerHistory: [], notes: { explore: { decisions: ['technical'], openQuestions: ['Which API?'] } } };
+const record: RunRecord = { schemaVersion: 1, slug: 'demo', track: 'technical', steps: { explore: { state: 'accepted', actor: 'A', provider: 'codex', at: '2026-11-08T00:00:00.000Z', artifacts: [] }, prd: { state: 'draft' } }, needsReconfirm: [], ownerHistory: [], notes: { explore: { decisions: ['technical'], openQuestions: ['Which API?'] } } };
 
 describe('Composer PR run block', () => {
   it('Covers: Task 6 renders every Composer summary field from the durable record', () => {
