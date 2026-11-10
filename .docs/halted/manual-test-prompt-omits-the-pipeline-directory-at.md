@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-11-10T14:09:26.739Z
 Slug: manual-test-prompt-omits-the-pipeline-directory-at
 Class: needs-human
 Halting step: prd_audit
