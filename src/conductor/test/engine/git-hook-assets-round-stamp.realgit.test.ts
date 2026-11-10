@@ -162,6 +162,11 @@ describe('prepare-commit-msg round stamp (real local Git)', () => {
     await expect(commit(root, 'no-marker.txt', 'feat: no marker')).resolves.not.toMatch(/^Round:/m);
   });
 
+  it('permits an unrelated commit when the round-stamp launcher is unavailable', async () => {
+    const root = await routedFixture({ failRoundStamp: true });
+    await expect(commit(root, 'no-marker-launcher-failure.txt', 'feat: no marker')).resolves.not.toMatch(/^Round:/m);
+  });
+
   it('adds one Task and Round trailer for the marker host and refuses a non-host commit', async () => {
     const root = await routedFixture();
     await writeRepairMarker(root, 1, 'r1');
