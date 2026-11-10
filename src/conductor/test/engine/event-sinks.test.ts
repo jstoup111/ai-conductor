@@ -126,6 +126,7 @@ it('keeps deliberate Composer provider switches distinct from fallback and retry
       : undefined;
   }))).filter((path): path is string => path !== undefined);
 
+  expect(switchedEmitters).not.toHaveLength(0);
   expect(switchedEmitters.every((path) => path === 'engineer-cli.ts')).toBe(true);
 });
 

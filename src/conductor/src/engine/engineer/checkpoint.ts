@@ -60,6 +60,7 @@ export interface CheckpointDeps {
     /** Called only after a branch has a durable draft PR. */
     published?(input: { slug: string; branch: string; prUrl: string }): Promise<void>;
     defaultBase?: string;
+    resolveDefaultBase?(): Promise<string>;
   };
 }
 
@@ -90,7 +91,7 @@ async function publishCheckpoint(
   try {
     await publication.push(branch);
   } catch (error) {
-    throw new Error(`compose checkpoint: local checkpoint was saved but push failed: ${error instanceof Error ? error.message : String(error)}. Retry with compose resume ${branch}`);
+    throw new Error(`compose checkpoint: checkpoint was not saved remotely (it is saved locally): ${error instanceof Error ? error.message : String(error)}. Retry publication with compose checkpoint --worktree ${worktree} --step <step> --state ${state}`);
   }
   let pr = await publication.findOpenPullRequest(branch);
   const warnings: string[] = [];
@@ -105,7 +106,7 @@ async function publishCheckpoint(
     const refs = sourceRef ? `\n\nRefs ${sourceRef}` : '';
     pr = await publication.createDraftPullRequest({
       branch,
-      base: publication.defaultBase ?? 'main',
+      base: await publication.resolveDefaultBase?.() ?? publication.defaultBase ?? 'main',
       title: `DECIDE: ${slug}`,
       body: `${metadata}${refs}\n\n${upsertRunBlock('', block)}`,
       draft: true,
@@ -244,16 +245,24 @@ export async function checkpointComposerRun(request: CheckpointRequest, deps: Ch
   if (request.state === 'accepted') {
     const paths = dirtyDocs.length > 0 ? dirtyDocs : draftPaths;
     const priorArtifacts = record.steps[step]?.state === 'accepted' ? record.steps[step].artifacts : [];
-    const artifacts = paths.length > 0 ? await Promise.all(paths
-      .filter((path) => !path.startsWith('.docs/composer-runs/') && !path.startsWith('.docs/intake/'))
-      .map(async (path) => digestArtifact(path, Buffer.from(await fs.readFile(join(request.worktree, path)))))) : priorArtifacts;
+    const changedArtifacts = paths.length > 0 ? await Promise.all(paths
+      .filter((path) => stepForArtifactPath(path) === step && path !== '.docs/coherence/.gitkeep')
+      .map(async (path) => digestArtifact(path, Buffer.from(await fs.readFile(join(request.worktree, path)))))) : [];
+    // A checkpoint often carries one changed file from a multi-artifact step. Keep
+    // the unchanged accepted digests instead of silently dropping them.
+    const byPath = new Map(priorArtifacts.map((artifact) => [artifact.path, artifact]));
+    for (const artifact of changedArtifacts) byPath.set(artifact.path, artifact);
+    const artifacts = changedArtifacts.length > 0 ? [...byPath.values()] : priorArtifacts;
     record = recordAcceptance(record, { step, actor: owner.id, provider, at: (deps.now ?? (() => new Date().toISOString()))(), artifacts, ...notes });
   } else {
     record = { ...recordDraft(record, step), notes: { ...record.notes, [step]: notes } };
   }
 
+  const checkpointAt = (deps.now ?? (() => new Date().toISOString()))();
+  record = { ...record, lastCheckpoint: { actor: owner.id, provider, at: checkpointAt } };
+
   if (!record.ownerHistory.some((entry) => entry.actor === owner.id)) {
-    record = { ...record, ownerHistory: [...record.ownerHistory, { actor: owner.id, at: (deps.now ?? (() => new Date().toISOString()))() }] };
+    record = { ...record, ownerHistory: [...record.ownerHistory, { actor: owner.id, at: checkpointAt }] };
   }
   await fs.mkdir(join(request.worktree, '.docs', 'composer-runs'));
   await fs.writeFile(recordPath, serializeRunRecord(record));

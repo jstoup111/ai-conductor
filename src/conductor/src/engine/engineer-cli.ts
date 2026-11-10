@@ -36,7 +36,9 @@ import { readMachineOwnerConfig } from './owner-gate/machine-identity.js';
 import { resolveDaemonOwner } from './owner-gate/identity.js';
 import { findExistingSpecPullRequest, openSpecPr, type HandoffDeps } from './engineer/handoff.js';
 import { checkpointComposerRun, type CheckpointDeps } from './engineer/checkpoint.js';
-import { resumeComposerRun, type ResumeTarget } from './engineer/resume.js';
+import { parseRunRecord, summarizeRun } from './engineer/run-record.js';
+import { parseResumeTarget, resumeComposerRun, type ResumeTarget } from './engineer/resume.js';
+import { resolveBoundaryProvider, type BoundaryChoice } from './engineer/launch-boundary.js';
 import { ensureWorktree } from './worktree-shared.js';
 import { isSpecSlug } from './engineer/spec-branch.js';
 import {
@@ -730,6 +732,10 @@ export interface DispatchEngineerOpts {
    * that returns false when stdin is not a TTY (so non-interactive runs don't loop).
    */
   confirmAnother?: () => boolean | Promise<boolean>;
+  /** Composer run boundary choice after a host leaves a touched run. */
+  chooseComposerBoundary?: (input: { slug: string; step: string; provider: BuiltInProviderId; choices: readonly BoundaryChoice[]; providers: readonly BuiltInProviderId[] }) => { choice: BoundaryChoice; switchTo?: BuiltInProviderId } | Promise<{ choice: BoundaryChoice; switchTo?: BuiltInProviderId }>;
+  /** Test seam for PATH installation checks; production resolves the executable without probing a version. */
+  providerInstalled?: (executable: string) => Promise<boolean>;
 }
 
 /** Render computed dependency evidence for the operator before the final JSON handoff. */
@@ -844,6 +850,38 @@ function promptAnother(): Promise<boolean> {
     process.stdin.resume();
     process.stdin.on('data', onData);
   });
+}
+
+/** Read the same-schema CLI producer ledger and find only this launcher run. */
+async function findComposerLaunchRun(
+  projects: readonly { name: string; path: string }[],
+  launchId: string,
+): Promise<{ project: { name: string; path: string }; slug: string; worktreePath: string; provider: BuiltInProviderId } | undefined> {
+  for (const project of projects) {
+    let text: string;
+    try { text = await readFile(join(project.path, '.pipeline', 'composer-events.jsonl'), 'utf8'); } catch { continue; }
+    const events = text.split('\n').flatMap((line) => {
+      try { return line ? [JSON.parse(line) as Record<string, unknown>] : []; } catch { return []; }
+    });
+    const started = [...events].reverse().find((event) =>
+      (event.type === 'composer_run_started' || event.type === 'composer_run_resumed')
+      && event.launchId === launchId
+      && typeof event.slug === 'string'
+      && typeof event.worktreePath === 'string',
+    );
+    if (started) return {
+      project, slug: started.slug as string, worktreePath: started.worktreePath as string,
+      provider: (typeof started.provider === 'string' ? started.provider : DEFAULT_PROVIDER) as BuiltInProviderId,
+    };
+  }
+  return undefined;
+}
+
+async function executableOnPath(executable: string): Promise<boolean> {
+  // `which` is an installation lookup, not a provider/version probe. It runs
+  // before attaching a worktree or emitting a resume event.
+  const result = await execa('which', [executable], { reject: false });
+  return result.exitCode === 0;
 }
 
 /** Parse owner/repo from a remote URL (SSH or HTTPS). */
@@ -975,7 +1013,20 @@ function checkpointPublication(
     return Number(match[1]);
   };
   return {
-    defaultBase: 'main',
+    // A repository is free to call its default branch anything. Keep this on
+    // the existing repository-bound read path rather than smuggling a guessed
+    // base into the publication primitive.
+    resolveDefaultBase: async () => {
+      const stdout = await runTrackerRepositoryRead(
+        gh, worktree, 'pull-request.read', repository, { kind: 'repository' },
+        ['repo', 'view', repository, '--json', 'defaultBranchRef'],
+      );
+      const parsed = JSON.parse(stdout || '{}') as { defaultBranchRef?: { name?: unknown } };
+      if (typeof parsed.defaultBranchRef?.name !== 'string' || parsed.defaultBranchRef.name.length === 0) {
+        throw new Error(`compose checkpoint: could not resolve the default branch for ${repository}`);
+      }
+      return parsed.defaultBranchRef.name;
+    },
     push: async (requestedBranch) => {
       const result = await executeRemoteGit(
         ['push', '-u', 'origin', `HEAD:refs/heads/${requestedBranch}`],
@@ -1447,6 +1498,68 @@ export async function dispatchEngineer(
           }
           printGuide(print);
           return 1;
+        }
+        // A host can create or resume exactly one run under this correlation id.
+        // Its event is the durable hand-off from the interactive process back to
+        // the launcher; do not infer a run from the first worktree on disk.
+        try {
+          const reader = createRegistryReader(registryPath ? { registryPath } : {});
+          const touched = await findComposerLaunchRun(await reader.listProjects(), launchId);
+          if (touched) {
+            const target = await resolveTargetRepo(touched.project.path, reader);
+            const events = new ConductorEventEmitter();
+            const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
+            persister.start();
+            try {
+              const branch = `spec/${touched.slug}`;
+              let saved: Awaited<ReturnType<typeof checkpointComposerRun>> | undefined;
+              try {
+                saved = await checkpointComposerRun({ worktree: touched.worktreePath, step: 'prd', state: 'draft' }, {
+                  git: async (args) => {
+                    const result = await git([...args], { cwd: touched.worktreePath });
+                    return { exitCode: result.exitCode ?? 0, stdout: result.stdout, stderr: '' };
+                  },
+                  resolveOwner: async () => resolveDaemonOwner(await readMachineOwnerConfig(), gh, touched.worktreePath),
+                  emit: async (event) => events.emitOrThrow(event),
+                  provider: touched.provider,
+                  publication: target.remote ? checkpointPublication(target, branch, touched.worktreePath, gh, git, events, async () => {}) : undefined,
+                });
+              } catch (error) {
+                // The local commit is deliberately durable before publication.
+                // Continue to the boundary so the operator can retry or hand off.
+                printErr(`compose: draft is saved locally only. ${error instanceof Error ? error.message : String(error)}`);
+              }
+              let record;
+              try { record = parseRunRecord(await readFile(join(touched.worktreePath, '.docs', 'composer-runs', `${touched.slug}.json`), 'utf8')); } catch { record = undefined; }
+              if (record) {
+                const summary = summarizeRun(record);
+                const activeProvider = (record.lastCheckpoint?.provider ?? touched.provider) as BuiltInProviderId;
+                print(`Composer run ${touched.slug}: current step ${summary.nextStep}; active provider ${activeProvider}. Choices: continue, switch, hand off.`);
+                const boundary = opts.chooseComposerBoundary
+                  ? await opts.chooseComposerBoundary({ slug: touched.slug, step: summary.nextStep, provider: activeProvider, choices: ['continue', 'switch', 'handoff'], providers: BUILT_IN_PROVIDERS.filter((provider) => provider.capabilities.interactiveLaunch).map((provider) => provider.id) })
+                  : { choice: (opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY)))() ? 'continue' as const : 'handoff' as const };
+                const action = resolveBoundaryProvider({ choice: boundary.choice, activeProvider, switchTo: boundary.switchTo, hasRemote: Boolean(target.remote) });
+                if (action.action === 'handoff') {
+                  const owner = await resolveDaemonOwner(await readMachineOwnerConfig(), gh, touched.worktreePath);
+                  await events.emitOrThrow({ type: 'composer_run_handed_off', slug: touched.slug, actor: owner.resolved ? owner.id : 'unresolved', ...(saved?.prUrl ? { prUrl: saved.prUrl } : {}) });
+                  print(`Composer run handed off${saved?.prUrl ? `: ${saved.prUrl}` : ''}. Resume with compose resume ${branch}.`);
+                } else {
+                  if (action.provider !== activeProvider) {
+                    const owner = await resolveDaemonOwner(await readMachineOwnerConfig(), gh, touched.worktreePath);
+                    await events.emitOrThrow({ type: 'composer_provider_switched', slug: touched.slug, step: summary.nextStep, fromProvider: activeProvider, toProvider: action.provider, actor: owner.resolved ? owner.id : 'unresolved' });
+                  }
+                  const nextHost = requireProviderCapability(action.provider, 'interactiveLaunch');
+                  const nextExecutable = resolveProviderExecutable(action.provider);
+                  if (!(await (opts.providerInstalled ?? executableOnPath)(nextExecutable))) throw new Error(`compose boundary: provider ${action.provider} is not installed.`);
+                  const name = await resolveSkillName(skillNameRoot, 'composer');
+                  const prompt = `${nextHost.invocationPrefix}${name} --resume ${touched.worktreePath} --step ${summary.nextStep}\nResume context: ${JSON.stringify({ drafts: summary.drafts, acceptedArtifacts: summary.acceptedSteps.flatMap((step) => step.artifacts.map((artifact) => artifact.path)), decisions: summary.decisions, openQuestions: summary.openQuestions })}`;
+                  lastCode = await (opts.spawnHost ?? spawnInteractiveHost)(nextExecutable, nextHost.interactiveLaunch.argv({ prompt, permissionMode: 'default' }), touched.worktreePath, { ...launchEnv, AI_CONDUCTOR_AUTHORING_PROVIDER: action.provider, AI_CONDUCTOR_COMPOSE_LAUNCH_ID: launchId });
+                }
+              }
+            } finally { persister.stop(); }
+          }
+        } catch (error) {
+          printErr(`compose boundary: ${error instanceof Error ? error.message : String(error)}`);
         }
         pendingIdea = undefined; // CLI idea is one-shot — next session is intake/chat driven.
         if (!(await confirmAnother())) return lastCode;
@@ -1979,18 +2092,24 @@ export async function dispatchEngineer(
         const host = requireProviderCapability(provider, 'interactiveLaunch');
         const executable = resolveProviderExecutable(provider);
         const nested = Boolean((opts.env ?? process.env).CLAUDECODE || (opts.env ?? process.env).CODEX_THREAD_ID);
-        if (nested) throw new Error('compose resume: already inside an interactive host; run $composer directly instead of nesting a host.');
-        if (!executable) throw new Error(`compose resume: provider ${provider} is not installed.`);
+        if (nested) throw new Error(`compose resume: already inside an interactive host (${host.displayName}); run ${host.invocationPrefix}composer directly instead of nesting a host.`);
+        if (!opts.spawnHost && !(await (opts.providerInstalled ?? executableOnPath)(executable))) throw new Error(`compose resume: provider ${provider} is not installed.`);
         const launchId = (opts.env ?? process.env).AI_CONDUCTOR_COMPOSE_LAUNCH_ID ?? crypto.randomUUID();
         const result = opts.resume
           ? await opts.resume(dispatch)
           : await (async () => {
             const reader = createRegistryReader(registryPath ? { registryPath } : {});
             const projects = await reader.listProjects();
+            const selector = parseResumeTarget(dispatch.target);
             const project = dispatch.project ? projects.find((item) => item.name === dispatch.project) : projects.length === 1 ? projects[0] : undefined;
             if (!project) throw new Error(dispatch.project
               ? `project "${dispatch.project}" is not registered; register it before resuming.`
               : 'resume requires --project when more than one project is registered.');
+            const selectedRepository = dependencyRepository(project).toLowerCase();
+            const selectorRepository = selector.kind === 'intake' ? selector.repository : selector.kind === 'pr' ? selector.repository : undefined;
+            if (selectorRepository && selectedRepository !== selectorRepository.toLowerCase()) {
+              throw new Error(`compose resume: repository ${selectorRepository} is not registered for this target; register it with conduct register <path>.`);
+            }
             const target = await resolveTargetRepo(project.path, reader);
             const repository = dependencyRepository(project);
             const resolveBranch = async (selector: ResumeTarget) => {
@@ -2004,12 +2123,17 @@ export async function dispatchEngineer(
                 const parsed = JSON.parse(stdout || '{}') as { headRefName?: string; url?: string };
                 return parsed.headRefName?.startsWith('spec/') ? { branch: parsed.headRefName, draftPrUrl: parsed.url } : undefined;
               }
+              const local = await createLedger(join(engineerDir ?? resolveEngineerDir({}), 'ledger.json')).get(GITHUB_ISSUES_SOURCE, `${selector.repository}#${selector.number}`);
+              if (local?.branch?.startsWith('spec/')) return { branch: local.branch, draftPrUrl: local.draftPrUrl };
               const stdout = await runTrackerRepositoryRead(
                 gh, target.canonicalPath, 'pull-request.read', selector.repository,
                 { kind: 'repository' },
-                ['pr', 'list', '--repo', selector.repository, '--state', 'open', '--json', 'headRefName,url'],
+                ['pr', 'list', '--repo', selector.repository, '--state', 'open', '--json', 'headRefName,url,body'],
               );
-              const found = (JSON.parse(stdout || '[]') as Array<{ headRefName?: string; url?: string }>).find((item) => item.headRefName?.startsWith('spec/'));
+              const sourceRef = `${selector.repository}#${selector.number}`;
+              const found = (JSON.parse(stdout || '[]') as Array<{ headRefName?: string; url?: string; body?: string }>).find((item) =>
+                item.headRefName?.startsWith('spec/') && new RegExp(`(?:^|\\n)Refs\\s+${sourceRef.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}(?:\\s|$)`, 'm').test(item.body ?? ''),
+              );
               return found?.headRefName ? { branch: found.headRefName, draftPrUrl: found.url } : undefined;
             };
             const owner = await (opts.resolveResumeOwner ?? (async () => resolveDaemonOwner(await readMachineOwnerConfig(), gh, target.canonicalPath)))();
@@ -2025,13 +2149,24 @@ export async function dispatchEngineer(
                 } : undefined,
                 attach: async (branch) => {
                   const slug = branch.slice('spec/'.length);
+                  if (!target.remote) {
+                    const existing = await git(['show-ref', '--verify', `refs/heads/${branch}`], { cwd: target.canonicalPath });
+                    if ((existing.exitCode ?? 0) !== 0) throw new Error(`compose resume: no saved Composer run found for ${dispatch.target} (searched existing local ${branch})`);
+                  }
                   const result = await ensureWorktree({ root: target.canonicalPath, path: join(target.canonicalPath, '.worktrees', `engineer-${slug}`), branch, resolveBase: async () => 'HEAD' });
                   return { worktree: result.path };
                 },
                 recordDeciding: async ({ branch, draftPrUrl }) => {
-                  // Resuming without an intake origin is still a valid local run.
-                  // Existing source entries are updated by checkpoint publication.
-                  void branch; void draftPrUrl;
+                  // Reconstruct durable intake state from the branch when the
+                  // launcher resumes a run after a process boundary.
+                  // A plain branch has no intake identity to reconstruct; do
+                  // not create a user-level ledger merely to discover that.
+                  if (!dispatch.target.includes('#')) return;
+                  const sourceRef = dispatch.target;
+                  const ledger = createLedger(join(engineerDir ?? resolveEngineerDir({}), 'ledger.json'));
+                  const existing = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
+                  if (!existing) await ledger.record({ source: GITHUB_ISSUES_SOURCE, sourceRef });
+                  await ledger.transition(GITHUB_ISSUES_SOURCE, sourceRef, 'deciding', { branch, draftPrUrl });
                 },
                 emit: async (event) => events.emitOrThrow({
                   type: 'composer_run_resumed', slug: event.slug, provider: dispatch.provider ?? DEFAULT_PROVIDER,
@@ -2041,7 +2176,9 @@ export async function dispatchEngineer(
                 }),
               });
               const composerName = await resolveSkillName(opts.skillNameRoot ?? null, 'composer');
-              const prompt = `${host.invocationPrefix}${composerName} --resume ${resumed.worktree} --step ${resumed.context.nextStep}`;
+              // This is deliberately part of the host prompt, before spawn:
+              // printing it after the host exits cannot resume its context.
+              const prompt = `${host.invocationPrefix}${composerName} --resume ${resumed.worktree} --step ${resumed.context.nextStep}\nResume context: ${JSON.stringify(resumed.context)}`;
               await (opts.spawnHost ?? spawnInteractiveHost)(executable, host.interactiveLaunch.argv({ prompt, permissionMode: 'default' }), resumed.worktree, { ...(opts.env ?? process.env), AI_CONDUCTOR_AUTHORING_PROVIDER: provider, AI_CONDUCTOR_COMPOSE_LAUNCH_ID: launchId });
               return resumed;
             } finally { persister.stop(); }
