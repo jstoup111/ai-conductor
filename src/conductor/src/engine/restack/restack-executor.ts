@@ -36,6 +36,7 @@ import {
 } from './restack-move.js';
 import { planRestackRanges } from './restack-plan.js';
 import { collectFoldSet, placeFoldCommits, type FoldCommitPlan, type FoldPart } from './fold-plan.js';
+import { withDaemonCoAuthorTrailer } from '../bot-co-author.js';
 import { adaptedPathsFor, checkPathOwnership, checkResolvedTipOwnership, parentOverlapPaths } from './restack-ownership.js';
 import { replayChildRange, RemBlockBodyMismatchError, type CommitterStamp } from './restack-replay.js';
 import { authorOf, messageOf } from './restack-commit-metadata.js';
@@ -621,7 +622,7 @@ async function writeFoldCommit(
   if (!treeSha) throw new Error(`cannot write fold tree for ${source.sha}`);
   const [author, message] = await Promise.all([authorOf(git, source.sha), messageOf(git, source.sha)]);
   const commit = await git(['commit-tree', treeSha, '-p', parent], {
-    input: `${message.trimEnd()}\n\nFolded-from: ${source.sha}\n`,
+    input: withDaemonCoAuthorTrailer(`${message.trimEnd()}\n\nFolded-from: ${source.sha}\n`),
     env: foldCommitEnvironment(author, stamp),
   });
   const tip = commit.exitCode === 0 ? parseCommitSha(commit.stdout.trim()) : undefined;
@@ -648,7 +649,7 @@ async function replayLeafWithoutFoldSources(
     const tree = merged.exitCode === 0 ? parseCommitSha(merged.stdout.trim().split('\n', 1)[0] ?? '') : undefined;
     if (!tree) throw new Error(`unresolved-restack-conflict folding leaf commit ${commit}`);
     const [author, message] = await Promise.all([authorOf(git, commit), messageOf(git, commit)]);
-    const written = await git(['commit-tree', tree, '-p', tip], { input: message, env: foldCommitEnvironment(author, stamp) });
+    const written = await git(['commit-tree', tree, '-p', tip], { input: withDaemonCoAuthorTrailer(message), env: foldCommitEnvironment(author, stamp) });
     const next = written.exitCode === 0 ? parseCommitSha(written.stdout.trim()) : undefined;
     if (!next) throw new Error(`cannot replay leaf commit ${commit}: ${written.stderr}`);
     rewrites.set(commit, next);
