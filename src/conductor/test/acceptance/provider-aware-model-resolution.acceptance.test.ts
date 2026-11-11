@@ -37,9 +37,7 @@ interface AcceptancePolicy {
   requiresConfiguredModels: boolean;
   stepModels: Record<StepName, string>;
   stepEfforts: Record<StepName, EffortLevel>;
-  stepTierOverrides: Partial<
-    Record<StepName, Partial<Record<ComplexityTier, TierOverride>>>
-  >;
+  stepTierOverrides: Partial<Record<StepName, Partial<Record<ComplexityTier, TierOverride>>>>;
   effortOrder: readonly EffortLevel[];
   modelEscalationOrder: readonly string[];
   modelFallbackLadder: readonly string[];
@@ -209,10 +207,7 @@ function resolveWithPolicy(
     config?: HarnessConfig,
     options?: Record<string, unknown>,
   ) => Resolved;
-  const phase =
-    step === 'bootstrap' || step === 'assess'
-      ? 'UNDERSTAND'
-      : phaseForStep(step);
+  const phase = step === 'bootstrap' || step === 'assess' ? 'UNDERSTAND' : phaseForStep(step);
   return resolver(step, phase, policy, config, { ...options, tier });
 }
 
@@ -263,9 +258,7 @@ describe('#902 built-in provider policy matrix', () => {
       expect(resolveWithPolicy(policy, 'plan', 'M').effort).toBe('high');
       expect(resolveWithPolicy(policy, 'plan', 'L').effort).toBe('xhigh');
 
-      const bootstrapValues = (['S', 'M', 'L'] as const).map(
-        (tier) => resolveWithPolicy(policy, 'bootstrap', tier),
-      );
+      const bootstrapValues = (['S', 'M', 'L'] as const).map((tier) => resolveWithPolicy(policy, 'bootstrap', tier));
       expect(new Set(bootstrapValues.map((value) => `${value.model}:${value.effort}`)).size).toBe(1);
     }
 
@@ -305,9 +298,9 @@ describe('#902 provider-native retry escalation', () => {
     expect(CODEX_MODEL_POLICY.modelEscalationOrder.at(-1)).toBe('gpt-6-astra');
 
     for (const attempt of [3, 4]) {
-      expect(
-        escalateAttempt('gpt-5.6-sol', 'high', attempt, true, CODEX_MODEL_POLICY),
-      ).toMatchObject({ model: 'gpt-6-astra' });
+      expect(escalateAttempt('gpt-5.6-sol', 'high', attempt, true, CODEX_MODEL_POLICY)).toMatchObject({
+        model: 'gpt-6-astra',
+      });
     }
   });
 
@@ -358,13 +351,7 @@ describe('#902 provider-native retry escalation', () => {
       for (const step of ['explore', 'prd'] as const) {
         const resolved = resolveWithPolicy(policy, step);
         expect(resolved.effort).toBe('high');
-        expect(escalateAttempt(
-          resolved.model,
-          resolved.effort,
-          2,
-          true,
-          policy,
-        ).effort).toBe('xhigh');
+        expect(escalateAttempt(resolved.model, resolved.effort, 2, true, policy).effort).toBe('xhigh');
       }
     }
   });
@@ -396,11 +383,7 @@ describe('#902 real execution paths', () => {
     const dir = await mkdtemp(join(tmpdir(), 'provider-policy-attribution-'));
     tempDirs.push(dir);
     const planPath = join(dir, 'plan.md');
-    await writeFile(
-      planPath,
-      '# Plan\n\n### Task 1: Example\n\n**Files:** src/example.ts\n',
-      'utf8',
-    );
+    await writeFile(planPath, '# Plan\n\n### Task 1: Example\n\n**Files:** src/example.ts\n', 'utf8');
 
     const providerDispatch = vi.fn().mockResolvedValue({
       success: true,
@@ -413,9 +396,7 @@ describe('#902 real execution paths', () => {
     });
     const gitRunner: GitRunner = vi.fn(async (args: string[]) => ({
       exitCode: 0,
-      stdout: args[0] === 'rev-parse'
-        ? 'abc1234567890def1234567890def1234567890'
-        : '',
+      stdout: args[0] === 'rev-parse' ? 'abc1234567890def1234567890def1234567890' : '',
       stderr: '',
     })) as unknown as GitRunner;
 
@@ -436,12 +417,16 @@ describe('#902 real execution paths', () => {
   it('inline and daemon composition roots carry policy to every runner and conductor', async () => {
     const indexSource = await readFile(new URL('../../src/index.ts', import.meta.url), 'utf8');
     const daemonSource = await readFile(new URL('../../src/daemon-cli.ts', import.meta.url), 'utf8');
+    const lifecycleSource = await readFile(
+      new URL('../../src/engine/daemon-feature-lifecycle.ts', import.meta.url),
+      'utf8',
+    );
 
     expect(indexSource).toContain('createProviderRuntimeSet');
     expect(daemonSource).toContain('createProviderRuntimeSet');
 
     const indexRunnerBlocks = indexSource.split('new DefaultStepRunner(').slice(1);
-    const daemonRunnerBlocks = daemonSource.split('new DefaultStepRunner(').slice(1);
+    const daemonRunnerBlocks = [daemonSource, lifecycleSource].join('\n').split('new DefaultStepRunner(').slice(1);
     expect(indexRunnerBlocks).toHaveLength(1);
     expect(daemonRunnerBlocks).toHaveLength(4);
     for (const block of [...indexRunnerBlocks, ...daemonRunnerBlocks]) {
@@ -449,7 +434,7 @@ describe('#902 real execution paths', () => {
     }
 
     const indexConductorBlock = indexSource.split('new Conductor(')[1]?.split(');')[0] ?? '';
-    const daemonConductorBlock = daemonSource.split('new Conductor(')[1]?.split(');')[0] ?? '';
+    const daemonConductorBlock = lifecycleSource.split('new Conductor(')[1]?.split(');')[0] ?? '';
     expect(indexConductorBlock).toContain('modelPolicy');
     expect(daemonConductorBlock).toContain('modelPolicy');
   });
@@ -460,7 +445,7 @@ describe('#902 unknown-provider compatibility policy', () => {
     const modulePath = ['../../src/engine', 'provider-model-policy.js'].join('/');
     let policyModule: Record<string, unknown> | undefined;
     try {
-      policyModule = await import(/* @vite-ignore */ modulePath) as Record<string, unknown>;
+      policyModule = (await import(/* @vite-ignore */ modulePath)) as Record<string, unknown>;
     } catch {
       // Missing module is the expected pre-implementation RED cause. Keep the
       // failure inside the test rather than turning it into collection ERROR.
@@ -475,9 +460,10 @@ describe('#902 unknown-provider compatibility policy', () => {
     if (typeof lookup !== 'function') return;
 
     const warnings: string[] = [];
-    const compatibilityPolicy = (
-      lookup as (key: string, warn: (line: string) => void) => AcceptancePolicy
-    )('recorder', (line) => warnings.push(line));
+    const compatibilityPolicy = (lookup as (key: string, warn: (line: string) => void) => AcceptancePolicy)(
+      'recorder',
+      (line) => warnings.push(line),
+    );
 
     expect(warnings).toHaveLength(1);
     expect(compatibilityPolicy.stepModels).toEqual(CLAUDE_MODELS);
@@ -498,13 +484,11 @@ describe('#902 unknown-provider compatibility policy', () => {
     expect(provider.invoke).toHaveBeenCalledOnce();
 
     const knownWarnings: string[] = [];
-    (lookup as (key: string, warn: (line: string) => void) => AcceptancePolicy)(
-      'claude',
-      (line) => knownWarnings.push(line),
+    (lookup as (key: string, warn: (line: string) => void) => AcceptancePolicy)('claude', (line) =>
+      knownWarnings.push(line),
     );
-    (lookup as (key: string, warn: (line: string) => void) => AcceptancePolicy)(
-      'codex',
-      (line) => knownWarnings.push(line),
+    (lookup as (key: string, warn: (line: string) => void) => AcceptancePolicy)('codex', (line) =>
+      knownWarnings.push(line),
     );
     expect(knownWarnings).toEqual([]);
   });
@@ -516,9 +500,7 @@ describe('#902 generated provider documentation', () => {
     expect(table).toContain(
       '| Skill/Agent | Execution path | Claude model | Claude effort | Codex model | Codex effort | Pi model | Pi effort | Why |',
     );
-    expect(table).toMatch(
-      /\| memory \| autonomous engine \| haiku \| low \| gpt-5\.6-luna \| low \|/,
-    );
+    expect(table).toMatch(/\| memory \| autonomous engine \| haiku \| low \| gpt-5\.6-luna \| low \|/);
     expect(table).toMatch(
       /\| plan \| autonomous engine \| opus \| medium \(S\), high \(M\), xhigh \(L\) \| gpt-5\.6-sol \| medium \(S\), high \(M\), xhigh \(L\) \|/,
     );

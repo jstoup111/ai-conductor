@@ -6,10 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { Conductor } from '../../src/engine/conductor.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
-import {
-  CLAUDE_MODEL_POLICY,
-  CODEX_MODEL_POLICY,
-} from '../../src/engine/provider-model-policy.js';
+import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
@@ -20,11 +17,7 @@ import { renderDaemonEvent } from '../../src/daemon-cli.js';
 import { ciRepairOutcomeDiagnostic } from '../../src/engine/daemon-ci-fix.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { InvokeOptions, LLMProvider } from '../../src/execution/llm-provider.js';
-import type {
-  ConductorEvent,
-  ConductState,
-  StepName,
-} from '../../src/types/index.js';
+import type { ConductorEvent, ConductState, StepName } from '../../src/types/index.js';
 
 type WithFeatureEventPersistence = <T>(input: {
   worktreePath: string;
@@ -33,29 +26,20 @@ type WithFeatureEventPersistence = <T>(input: {
 }) => Promise<T>;
 
 async function readRelevantEvents(worktreePath: string): Promise<ConductorEvent[]> {
-  const raw = await readFile(
-    join(worktreePath, '.pipeline', 'events.jsonl'),
-    'utf-8',
-  ).catch(() => '');
+  const raw = await readFile(join(worktreePath, '.pipeline', 'events.jsonl'), 'utf-8').catch(() => '');
   if (!raw) return [];
   return raw
     .trim()
     .split('\n')
     .map((line) => JSON.parse(line) as ConductorEvent)
-    .filter((event) =>
-      ['provider_attempt', 'provider_fallback', 'step_completed'].includes(
-        event.type,
-      ),
-    );
+    .filter((event) => ['provider_attempt', 'provider_fallback', 'step_completed'].includes(event.type));
 }
 
 describe('daemon feature provider-event persistence', () => {
   const roots: string[] = [];
 
   afterEach(async () => {
-    await Promise.all(
-      roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
-    );
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
   });
 
   it('persists a real fallback lifecycle only in its owning feature ledger while forwarding globally', async () => {
@@ -64,11 +48,7 @@ describe('daemon feature provider-event persistence', () => {
     roots.push(featureA, featureB);
     const globalEvents = new ConductorEventEmitter();
     const globallyObserved: ConductorEvent[] = [];
-    for (const type of [
-      'provider_attempt',
-      'provider_fallback',
-      'step_completed',
-    ] as const) {
+    for (const type of ['provider_attempt', 'provider_fallback', 'step_completed'] as const) {
       globalEvents.on(type, (event) => {
         globallyObserved.push(event);
       });
@@ -157,18 +137,11 @@ describe('daemon feature provider-event persistence', () => {
           config: { llm_provider: ['codex', 'claude'] },
           onAttempt: (
             step: StepName,
-            attempt: Omit<
-              Extract<ConductorEvent, { type: 'provider_attempt' }>,
-              'type' | 'step'
-            >,
-          ) =>
-            featureEvents.emit({ type: 'provider_attempt', step, ...attempt }),
+            attempt: Omit<Extract<ConductorEvent, { type: 'provider_attempt' }>, 'type' | 'step'>,
+          ) => featureEvents.emit({ type: 'provider_attempt', step, ...attempt }),
           warn: (
             _message: string,
-            transition: Extract<
-              ConductorEvent,
-              { type: 'provider_fallback' | 'session_policy' }
-            >,
+            transition: Extract<ConductorEvent, { type: 'provider_fallback' | 'session_policy' }>,
           ) => featureEvents.emit(transition),
         };
         const statePath = join(featureA, '.pipeline', 'conduct-state.json');
@@ -184,17 +157,12 @@ describe('daemon feature provider-event persistence', () => {
         }
         state.prd = 'skipped';
         await writeState(statePath, state);
-        const runner = new DefaultStepRunner(
-          runtimes.get('codex').provider,
-          'legacy-session',
-          featureA,
-          {
-            config: providerExecution.config,
-            modelPolicy: CODEX_MODEL_POLICY,
-            mode: 'auto',
-            providerExecution,
-          },
-        );
+        const runner = new DefaultStepRunner(runtimes.get('codex').provider, 'legacy-session', featureA, {
+          config: providerExecution.config,
+          modelPolicy: CODEX_MODEL_POLICY,
+          mode: 'auto',
+          providerExecution,
+        });
         const conductor = new Conductor({
           stateFilePath: statePath,
           stepRunner: runner,
@@ -253,9 +221,7 @@ describe('daemon feature provider-event persistence', () => {
         featureBEvents !== globalEvents &&
         featureAEvents !== featureBEvents,
       outcomes: outcomes.map((outcome) =>
-        outcome.status === 'fulfilled'
-          ? outcome.status
-          : `${outcome.status}:${String(outcome.reason)}`,
+        outcome.status === 'fulfilled' ? outcome.status : `${outcome.status}:${String(outcome.reason)}`,
       ),
       featureA: await readRelevantEvents(featureA),
       featureB: await readRelevantEvents(featureB),
@@ -413,8 +379,9 @@ describe('daemon feature provider-event persistence', () => {
   });
 
   it('wires the feature-local persistence scope through the real daemon composition root', async () => {
-    const daemonSource = await readFile(
-      fileURLToPath(new URL('../../src/daemon-cli.ts', import.meta.url)),
+    const daemonSource = await readFile(fileURLToPath(new URL('../../src/daemon-cli.ts', import.meta.url)), 'utf-8');
+    const lifecycleSource = await readFile(
+      fileURLToPath(new URL('../../src/engine/daemon-feature-lifecycle.ts', import.meta.url)),
       'utf-8',
     );
     const depsSource = await readFile(
@@ -423,27 +390,18 @@ describe('daemon feature provider-event persistence', () => {
     );
 
     expect({
-      importsScopeFactory: daemonSource.includes(
-        'startFeatureEventPersistence',
-      ),
+      importsScopeFactory: daemonSource.includes('startFeatureEventPersistence'),
       createsFeatureScope: daemonSource.includes('const beginFeatureRun'),
-      bindsProviderSinksToFeatureBus:
-        daemonSource.includes('createProviderExecution(featureEvents, featureLog)'),
+      bindsProviderSinksToFeatureBus: daemonSource.includes('createProviderExecution(featureEvents, featureLog)'),
       passesScopeIntoRunnerDeps: daemonSource.includes('beginFeatureRun,'),
       runConductorAcceptsFeatureBus:
-        /const runConductorInWorktree = async \([\s\S]*?featureEvents: ConductorEventEmitter/.test(
-          daemonSource,
+        /export async function runDaemonFeatureConductor\([\s\S]*?featureEvents: ConductorEventEmitter/.test(
+          lifecycleSource,
         ),
-      conductorUsesFeatureBus:
-        /events:\s*featureEvents/.test(daemonSource),
-      auditUsesFeatureBus:
-        /auditWriter\.subscribe\(featureEvents\)/.test(daemonSource),
-      rebaseUsesFeatureBus:
-        /resumeRebaseFirst\(\{[\s\S]*?events:\s*featureEvents/.test(
-          daemonSource,
-        ),
-      depsForwardsScope:
-        /beginFeatureRun:\s*cfg\.beginFeatureRun/.test(depsSource),
+      conductorUsesFeatureBus: /events:\s*featureEvents/.test(lifecycleSource),
+      auditUsesFeatureBus: /auditWriter\.subscribe\(featureEvents\)/.test(lifecycleSource),
+      rebaseUsesFeatureBus: /resumeRebaseFirst\(\{[\s\S]*?events:\s*featureEvents/.test(lifecycleSource),
+      depsForwardsScope: /beginFeatureRun:\s*cfg\.beginFeatureRun/.test(depsSource),
       depsForwardsFeatureBus:
         /runConductor:\s*\(\s*wt,\s*item,\s*providerExecution,\s*featureEvents,\s*log,\s*sessionId\s*\)\s*=>\s*cfg\.runConductorInWorktree\(\s*wt,\s*item,\s*providerExecution,\s*featureEvents,\s*log,\s*sessionId\s*\)/.test(
           depsSource,
@@ -481,19 +439,31 @@ describe('daemon feature provider-event persistence', () => {
     });
     // A failing renderer is an observational subscriber and cannot make emit
     // reject or prevent the persisted event from being available to a reader.
-    events.on('ci_repair_diagnostic', () => { throw new Error('renderer unavailable'); });
-    await expect(events.emit(ciRepairOutcomeDiagnostic(
-      { prUrl: 'https://github.com/acme/widget/pull/7', slug: 'widget', repoCwd: root },
-      { kind: 'published', provider: 'claude' },
-    ))).resolves.toBeUndefined();
+    events.on('ci_repair_diagnostic', () => {
+      throw new Error('renderer unavailable');
+    });
+    await expect(
+      events.emit(
+        ciRepairOutcomeDiagnostic(
+          { prUrl: 'https://github.com/acme/widget/pull/7', slug: 'widget', repoCwd: root },
+          { kind: 'published', provider: 'claude' },
+        ),
+      ),
+    ).resolves.toBeUndefined();
     persistence.stop();
 
-    const read = async () => (await readFile(join(root, '.daemon', 'events.jsonl'), 'utf-8'))
-      .trim().split('\n').map((line) => JSON.parse(line) as ConductorEvent);
+    const read = async () =>
+      (await readFile(join(root, '.daemon', 'events.jsonl'), 'utf-8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line) as ConductorEvent);
     const firstReader = await read();
     const restartedReader = await read();
     expect(firstReader).toEqual(restartedReader);
-    const diagnostics = firstReader.filter((event): event is Extract<ConductorEvent, { type: 'ci_repair_diagnostic' }> => event.type === 'ci_repair_diagnostic');
+    const diagnostics = firstReader.filter(
+      (event): event is Extract<ConductorEvent, { type: 'ci_repair_diagnostic' }> =>
+        event.type === 'ci_repair_diagnostic',
+    );
     expect(diagnostics.map((event) => [event.type, event.slug, event.stage, event.reason, event.provider])).toEqual([
       ['ci_repair_diagnostic', 'widget', 'readiness', 'provider-unavailable', 'codex'],
       ['ci_repair_diagnostic', 'widget', 'publication', 'verified-publication', 'claude'],

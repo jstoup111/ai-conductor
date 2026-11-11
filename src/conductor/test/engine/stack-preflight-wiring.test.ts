@@ -11,17 +11,17 @@ async function source(name: string): Promise<string> {
 
 describe('stack preflight entry-point wiring', () => {
   it('runs daemon preflight after the operator-park boundary and before the one-shot re-kick', async () => {
-    const daemon = await source('../daemon-cli.ts');
-    const parked = daemon.indexOf('const parked = await isOperatorParked');
+    const daemon = await source('daemon-feature-lifecycle.ts');
+    const parked = daemon.indexOf('let parked = false');
     const preflight = daemon.indexOf('const stackPreflight = await runDaemonRekickStackPreflight');
-    const rebase = daemon.indexOf('const resume = await resumeRebaseFirst');
+    const rebase = daemon.indexOf('const resume = isRekick');
 
     expect(parked).toBeGreaterThanOrEqual(0);
     expect(preflight).toBeGreaterThan(parked);
     expect(rebase).toBeGreaterThan(preflight);
 
     const dispatch = daemon.slice(preflight, rebase);
-    expect(dispatch).toContain("baseRefreshDue: existsSync(rekickPath)");
+    expect(dispatch).toContain('baseRefreshDue: isRekick');
     expect(dispatch).toContain('consumeRekick: async () =>');
     expect(dispatch).toContain('await unlinkFile(rekickPath)');
     expect(dispatch).toContain("stackPreflight.kind === 'halted'");
@@ -29,7 +29,7 @@ describe('stack preflight entry-point wiring', () => {
 
   it('runs resume preflight before the cursor and rebase-operation classification', async () => {
     const conductor = await source('conductor.ts');
-    const resume = conductor.indexOf("} else if (this.resume) {");
+    const resume = conductor.indexOf('} else if (this.resume) {');
     const preflight = conductor.indexOf('const preflight = await this.stackPreflight', resume);
     const cursor = conductor.indexOf('await this.activateChildRegionStateForResume(state)', resume);
     const classification = conductor.indexOf('let rebaseClassification = await classifyRebaseOperation', resume);
@@ -38,6 +38,8 @@ describe('stack preflight entry-point wiring', () => {
     expect(preflight).toBeGreaterThan(resume);
     expect(cursor).toBeGreaterThan(preflight);
     expect(classification).toBeGreaterThan(cursor);
-    expect(conductor.slice(preflight, cursor)).toContain("await supersedeHaltRecord(this.projectRoot, resumeSlug, 'stack-preflight')");
+    expect(conductor.slice(preflight, cursor)).toContain(
+      "await supersedeHaltRecord(this.projectRoot, resumeSlug, 'stack-preflight')",
+    );
   });
 });

@@ -6,11 +6,15 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { restackResolverForStepRunner } from '../../../src/daemon-cli.js';
+import { restackResolverForStepRunner } from '../../../src/engine/daemon-feature-lifecycle.js';
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
-import { resolveRestackConflict, type RestackResolutionContext, type RestackResolver } from '../../../src/engine/restack/restack-resolver.js';
+import {
+  resolveRestackConflict,
+  type RestackResolutionContext,
+  type RestackResolver,
+} from '../../../src/engine/restack/restack-resolver.js';
 import { parseCommitSha, type CommitSha } from '../../../src/engine/restack/restack-types.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { sealStack } from './restack-sweepG2-fixture.js';
@@ -20,7 +24,10 @@ const repositories: string[] = [];
 
 interface Fixture {
   readonly repo: string;
-  readonly git: (args: string[], env?: NodeJS.ProcessEnv) => Promise<{ readonly stdout: string; readonly stderr: string }>;
+  readonly git: (
+    args: string[],
+    env?: NodeJS.ProcessEnv,
+  ) => Promise<{ readonly stdout: string; readonly stderr: string }>;
   readonly newDefault: CommitSha;
   readonly oldParent: CommitSha;
   readonly oldTip: CommitSha;
@@ -42,10 +49,11 @@ async function createFixture({
 } = {}): Promise<Fixture> {
   const repo = await mkdtemp(join(tmpdir(), 'restack-tip-authority-'));
   repositories.push(repo);
-  const git = (args: string[], env?: NodeJS.ProcessEnv) => execFile('git', args, {
-    cwd: repo,
-    ...(env === undefined ? {} : { env: { ...process.env, ...env } }),
-  });
+  const git = (args: string[], env?: NodeJS.ProcessEnv) =>
+    execFile('git', args, {
+      cwd: repo,
+      ...(env === undefined ? {} : { env: { ...process.env, ...env } }),
+    });
   const commit = async (subject: string, path: string, content: string) => {
     await writeFile(join(repo, path), content);
     await git(['add', path]);
@@ -68,11 +76,13 @@ async function createFixture({
   const oldParent = sha((await git(['rev-parse', 'HEAD'])).stdout);
   const leafCommits: CommitSha[] = [];
   for (let index = 1; index <= 8; index += 1) {
-    leafCommits.push(await commit(
-      duplicateSubjects && index >= 7 ? 'child three duplicate' : `child three ${index}`,
-      index === 1 ? 'conflict.txt' : `three-${index}.txt`,
-      index === 1 ? 'child\n' : `${index}\n`,
-    ));
+    leafCommits.push(
+      await commit(
+        duplicateSubjects && index >= 7 ? 'child three duplicate' : `child three ${index}`,
+        index === 1 ? 'conflict.txt' : `three-${index}.txt`,
+        index === 1 ? 'child\n' : `${index}\n`,
+      ),
+    );
   }
   const oldTip = sha((await git(['rev-parse', 'HEAD'])).stdout);
   await git(['checkout', '-q', 'main']);
@@ -102,8 +112,14 @@ async function runWithResolver(
     if (event.type === 'restack_applied') applied.push({ child: event.child, newTip: event.newTip });
   });
   const result = await runRestack({
-    worktree: subject.repo, slug: 'demo', cause: 'base-refresh', newDefault: subject.newDefault,
-    resolver, resolverCap: 1, events, git: makeGitRunner(subject.repo),
+    worktree: subject.repo,
+    slug: 'demo',
+    cause: 'base-refresh',
+    newDefault: subject.newDefault,
+    resolver,
+    resolverCap: 1,
+    events,
+    git: makeGitRunner(subject.repo),
   });
   expect(result.kind).toBe('applied');
   return applied;
@@ -151,9 +167,12 @@ describe('restack resolver tip authority (real local Git)', () => {
     const parent = (await subject.git(['rev-parse', 'feat/c2/demo'])).stdout.trim();
     const tip = (await subject.git(['rev-parse', 'feat/daemon-demo'])).stdout.trim();
     expect(tip).not.toBe(parent);
-    expect(await subjects(subject, `${parent}..${tip}`)).toEqual(await subjects(subject, `${subject.oldParent}..${subject.oldTip}`));
-    expect((await subject.git(['log', '--format=%cn%x00%ce', `${parent}..${tip}`])).stdout.trim().split('\n'))
-      .toEqual(Array.from({ length: 8 }, () => 'Fixture Committer\0fixture@example.test'));
+    expect(await subjects(subject, `${parent}..${tip}`)).toEqual(
+      await subjects(subject, `${subject.oldParent}..${subject.oldTip}`),
+    );
+    expect((await subject.git(['log', '--format=%cn%x00%ce', `${parent}..${tip}`])).stdout.trim().split('\n')).toEqual(
+      Array.from({ length: 8 }, () => 'Fixture Committer\0fixture@example.test'),
+    );
     expect(applied).toContainEqual(expect.objectContaining({ child: 3, newTip: tip }));
   });
 

@@ -1,31 +1,34 @@
 import chalk from 'chalk';
 import { runSighupPersistence } from './engine/sighup-persistence.js';
 import { v4 as uuidv4 } from 'uuid';
+import {
+  createWorkOrderGitRunner,
+  prepareDaemonFeatureManagedSessionContext,
+  runDaemonFeatureConductor,
+  runDaemonSetupTriage,
+  type DaemonFeatureLifecycleContext,
+} from './engine/daemon-feature-lifecycle.js';
 import { basename, join, dirname, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { existsSync, realpathSync } from 'node:fs';
-import { access, mkdir, readFile, readlink, unlink as unlinkFile, writeFile } from 'node:fs/promises';
+import { existsSync, realpathSync, readFileSync } from 'node:fs';
+import { access, mkdir, readFile, readlink } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
-import { formatRetryReason, formatProgressDelta, formatRetryCounter, displayBuildPosition, formatCommitAge } from './engine/format-retry-line.js';
+import {
+  formatRetryReason,
+  formatProgressDelta,
+  formatRetryCounter,
+  displayBuildPosition,
+  formatCommitAge,
+} from './engine/format-retry-line.js';
 import { formatHeartbeatAge } from './engine/step-heartbeat.js';
 import { FULL_SUITE_OUTPUT_LOG } from './engine/full-suite-evidence.js';
-import {
-  formatDiagnosticDuration,
-  formatFeatureUsageTotal,
-} from './execution/provider-diagnostics.js';
-import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
+import { formatDiagnosticDuration, formatFeatureUsageTotal } from './execution/provider-diagnostics.js';
 import { leafBranchFor } from './engine/feature-branch-identity.js';
 import { emitEngineerSignal, resolveEngineerDir } from './engine/engineer-store.js';
-import {
-  makeAutoresolveEligibility,
-  resolveConflictingPr,
-  summarizeSuiteFailure,
-} from './engine/autoresolve.js';
-import {
-  isEligibleForCiFix,
-} from './engine/ci-fix.js';
+import { makeAutoresolveEligibility, resolveConflictingPr, summarizeSuiteFailure } from './engine/autoresolve.js';
+import { isEligibleForCiFix } from './engine/ci-fix.js';
 import {
   ciRepairOutcomeDiagnostic,
   ciRepairPreDispatchDisposition,
@@ -57,30 +60,24 @@ import type { TerminalRendererOptions } from './ui/terminal-renderer.js';
 import type { UIRenderer } from './ui/types.js';
 import { ALL_STEPS } from './engine/steps.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
-import type { StepRunner } from './engine/step-runner-types.js';
-import type { RestackResolver } from './engine/restack/restack-resolver.js';
 import { createProviderRuntimeSet } from './engine/provider-runtime.js';
 import { ProviderSessionStore } from './engine/provider-session.js';
 import type { ProviderExecutionContext } from './engine/provider-execution.js';
 import { createCandidateSafetyBoundary, providerExecutionEventCallbacks } from './engine/provider-execution.js';
 import { CODEX_PROVIDER, providerDescriptor } from './execution/provider-catalog.js';
-import {
-  prepareManagedSessionContext,
-  provisionManagedSessionProducerRoot,
-  type ManagedSessionContext,
-} from './execution/managed-session-context.js';
+import { type ManagedSessionContext } from './execution/managed-session-context.js';
 import { createManagedSessionObservationPreparer } from './execution/managed-session-preparation.js';
 import { createSessionEventIdentity } from './execution/session-event-identity.js';
-import { createProviderAvailability, restoreProviderAvailabilityFromDaemonLedger } from './engine/provider-availability.js';
+import {
+  createProviderAvailability,
+  restoreProviderAvailabilityFromDaemonLedger,
+} from './engine/provider-availability.js';
 import {
   normalizeProviderSelection,
   validateProviderInstallation,
   validateRegisteredProviderSelections,
 } from './engine/provider-selection.js';
-import {
-  discoverInstalledProviders,
-  type ProviderVersionProbeRunner,
-} from './engine/provider-discovery.js';
+import { discoverInstalledProviders, type ProviderVersionProbeRunner } from './engine/provider-discovery.js';
 import {
   resolveProviderModelTiers,
   validateConfiguredProviderModels,
@@ -89,13 +86,6 @@ import {
 import { ensureInstallFresh, relinkSkillsForSelfBuild, resolveHarnessRoot } from './engine/install-freshness.js';
 import { skillNameRootFor } from './engine/skill-names.js';
 import { Conductor } from './engine/conductor.js';
-import { createProvenanceGuardedFinishPresentationRepair } from './engine/finish-presentation-repair.js';
-import type { OperatorParkedTermination } from './engine/conductor-options.js';
-import { createProductionAcceptanceRedExec } from './engine/acceptance-red-runner.js';
-import {
-  createProductionFinishPublicationCoordinator,
-  createProductionReleaseReadinessObserver,
-} from './engine/finish-publication-production.js';
 import { makeProductionGit as makeFinishPublicationGit } from './engine/pr-labels.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import {
@@ -115,7 +105,11 @@ import {
 } from './engine/event-sinks.js';
 import { composeDaemonLineBodies, DAEMON_EVENT_DEPTH } from './engine/daemon-line-shape.js';
 import { resolveExecutionIdentity } from './engine/execution-identity.js';
-import { formatGithubCredentialFallback, formatGithubOperationRefusal, formatGithubOperationTarget } from './engine/github-operations.js';
+import {
+  formatGithubCredentialFallback,
+  formatGithubOperationRefusal,
+  formatGithubOperationTarget,
+} from './engine/github-operations.js';
 import { formatBotCoAuthorSkipped } from './engine/bot-co-author.js';
 import { installDaemonProcessServices } from './engine/daemon-process-bootstrap.js';
 import { wireDaemonOtel, wireOtelVisualizer } from './engine/otel/wire.js';
@@ -146,25 +140,21 @@ import {
 } from './engine/daemon-log.js';
 import type { ConductorEvent } from './types/index.js';
 import { runDaemon, type BacklogItem, type DaemonResult, type FeatureOutcome } from './engine/daemon.js';
-import {
-  createDaemonTeardown,
-  type DaemonTeardown,
-  type DaemonTeardownOptions,
-} from './engine/daemon-teardown.js';
+import { createDaemonTeardown, type DaemonTeardown, type DaemonTeardownOptions } from './engine/daemon-teardown.js';
 import { discoverBacklog, fastForwardRoot, gitTreeSource, type DiscoveryLogger } from './engine/daemon-backlog.js';
-import {
-  createRefreshThrottle,
-  createStalenessWarner,
-  probeStampedShaBehindOrigin,
-} from './engine/engine-refresh.js';
+import { createRefreshThrottle, createStalenessWarner, probeStampedShaBehindOrigin } from './engine/engine-refresh.js';
 import { makeIsProcessed, resolveEngineVersion } from './engine/shipped-record.js';
 import { installedHarnessVersionForConfig, resolveHarnessVersion } from './engine/version-report.js';
 import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
 import { type GhRunner } from './engine/owner-gate/identity.js';
-import { createGithubTrackerClient, createGuardedGithubOperationRunner, makeProductionGh, runTrackerUrlRead, type TrackerClient } from './engine/tracker-client.js';
-import { bindMutationToPullRequest } from './engine/ship-draft-pr.js';
+import {
+  createGithubTrackerClient,
+  createGuardedGithubOperationRunner,
+  makeProductionGh,
+  runTrackerUrlRead,
+  type TrackerClient,
+} from './engine/tracker-client.js';
 import { createGithubIntakeAuthorization } from './engine/engineer/intake/github-issues.js';
-import { resolveFeatureRemoteMutation } from './engine/remote-git-operations.js';
 import { createDaemonHaltPrOperations } from './engine/daemon-halt-pr-operations.js';
 import { GH_VERSION_FLOOR, probeGhVersion } from './engine/gh-version-floor.js';
 import { makeMachineOwnerResolver } from './engine/owner-gate/machine-identity.js';
@@ -180,20 +170,17 @@ import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js'
 import { hasDurableChildState } from './engine/child-cursor.js';
 import { acquireFeatureDispatchLease } from './engine/feature-dispatch-lease.js';
 import { createInProcessFeatureExecutor } from './engine/feature-executor.js';
-import { createChildProcessFeatureExecutor } from './engine/child-feature-executor.js';
+import { createChildProcessFeatureExecutor, type ChildFeatureExecutorDeps } from './engine/child-feature-executor.js';
 import { createExecutorBroker } from './engine/executor-broker.js';
 import { sweepExecutorRecordsOnBoot } from './engine/executor-records.js';
-import { buildWorkOrder, type WorkOrder, type WorkOrderGitRunner } from './engine/work-order.js';
+import { buildWorkOrder, type WorkOrder } from './engine/work-order.js';
 import { resolveEnginePin } from './engine/engine-pin.js';
 import { resolveEngineStoreRoot } from './engine/engine-store.js';
 import { createDaemonOrderingReaders } from './engine/daemon-ordering-readers.js';
 import { cleanupHaltPresentation, parseIssueRef, resolveSpecPrUrl } from './engine/pr-labels.js';
 import { createStaleEngineChecker } from './engine/engine-identity.js';
 import { initStaleEngineState } from './engine/stale-engine-init.js';
-import {
-  isSuppressed,
-  writeRestartMarker,
-} from './engine/restart-intent.js';
+import { isSuppressed, writeRestartMarker } from './engine/restart-intent.js';
 import {
   isHalted,
   isProcessed,
@@ -214,26 +201,11 @@ import { WorktreeLifecycleQueue } from './engine/worktree.js';
 import { isOperatorParked, reconcileStrandedParkMarkers, writeAutoPark } from './engine/park-marker.js';
 import { amendDeferredAutoParkHaltAtWorktree } from './engine/auto-park-halt.js';
 import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
-import { getStepStatus, readState } from './engine/state.js';
+import { readState } from './engine/state.js';
 import { supersedeHaltRecord } from './engine/halt-record.js';
-import {
-  runStackPreflight,
-  type RunStackPreflightOptions,
-  type StackPreflightResult,
-} from './engine/restack/stack-preflight.js';
-import {
-  createStepStatusWriteRefusalDiagnostics,
-  resolveConductorStateStore,
-} from './engine/conductor-deps.js';
-import { seedDaemonDispatchState } from './engine/daemon-state.js';
 import { makeGitRunner, originDefaultBranch, type RebaseResolver } from './engine/rebase.js';
-import { prepareWorktree } from './engine/worktree-prepare.js';
-import { runSetupFailureTriage, type GitRunner } from './engine/setup-triage.js';
-import {
-  readBaseSha,
-  readPersistedBaseSha,
-  writePersistedBaseSha,
-} from './engine/daemon-sha.js';
+import type { GitRunner } from './engine/setup-triage.js';
+import { readBaseSha, readPersistedBaseSha, writePersistedBaseSha } from './engine/daemon-sha.js';
 import {
   scanInheritedState,
   renderDashboard,
@@ -254,7 +226,6 @@ import { writeGatedSnapshot } from './engine/gated-snapshot.js';
 import { announceGatedPr, announceGatedIssue } from './engine/gate-writeback.js';
 import {
   rekickSweep,
-  resumeRebaseFirst,
   listHaltedWorktrees,
   readHaltReason,
   hasRebaseInProgress,
@@ -283,16 +254,9 @@ import { RepairQueue, type RepairCompletion, type RepairRequest } from './engine
 import type { PrMergeState } from './engine/pr-labels.js';
 import { reconcileHaltPrs, type PrSweepOutcome } from './engine/halt-pr-reconciliation.js';
 import { isPaused } from './engine/pause-marker.js';
-import {
-  readRestartPending,
-  consumeOnBoot,
-  recordRestartPendingDrain,
-} from './engine/restart-marker.js';
+import { readRestartPending, consumeOnBoot, recordRestartPendingDrain } from './engine/restart-marker.js';
 import { create as createRateLimitEpisode } from './engine/rate-limit-episode.js';
-import {
-  createEpisodeHaltTracker,
-  type EpisodeHaltTracker,
-} from './engine/episode-halt-tracker.js';
+import { createEpisodeHaltTracker, type EpisodeHaltTracker } from './engine/episode-halt-tracker.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const execFile = promisify(execFileCb);
@@ -307,9 +271,7 @@ export async function sweepEpisodeHalts(
   log: (message: string) => void,
   isParkedDep?: (slug: string) => Promise<boolean>,
 ): Promise<void> {
-  const stamped = await episodeHaltTracker.getEpisodeHalts((slug) =>
-    isHalted(worktreeBase, slug),
-  );
+  const stamped = await episodeHaltTracker.getEpisodeHalts((slug) => isHalted(worktreeBase, slug));
   for (const slug of stamped) {
     // Operator intent outranks automatic recovery (same rule as rekickSweep).
     if (isParkedDep && (await isParkedDep(slug))) {
@@ -329,23 +291,6 @@ export async function sweepEpisodeHalts(
   }
 }
 
-/** One git adapter for WorkOrder build and its executor-side verification. */
-export function createWorkOrderGitRunner(projectRoot: string): WorkOrderGitRunner {
-  return async (args) => {
-    try {
-      const { stdout, stderr } = await execFile('git', [...args], { cwd: projectRoot });
-      return { exitCode: 0, stdout, stderr };
-    } catch (error) {
-      const failure = error as { code?: number; stdout?: string; stderr?: string };
-      return {
-        exitCode: typeof failure.code === 'number' ? failure.code : 1,
-        stdout: failure.stdout ?? '',
-        stderr: failure.stderr ?? '',
-      };
-    }
-  };
-}
-
 /** Resolve the two documents carried into a daemon work order at its pinned base. */
 export async function resolveDaemonWorkOrderDocumentRefs(
   projectRoot: string,
@@ -355,12 +300,8 @@ export async function resolveDaemonWorkOrderDocumentRefs(
 ): Promise<readonly string[]> {
   const source = gitRefManifestSource(projectRoot, baseSha);
   const [stories, plan] = await Promise.all([
-    resolveFeatureArtifact(source, slug, 'stories', async () => [
-      legacy.storiesPath ?? `.docs/stories/${slug}.md`,
-    ]),
-    resolveFeatureArtifact(source, slug, 'plan', async () => [
-      legacy.planPath ?? `.docs/plans/${slug}.md`,
-    ]),
+    resolveFeatureArtifact(source, slug, 'stories', async () => [legacy.storiesPath ?? `.docs/stories/${slug}.md`]),
+    resolveFeatureArtifact(source, slug, 'plan', async () => [legacy.planPath ?? `.docs/plans/${slug}.md`]),
   ]);
   return [...stories.paths, ...plan.paths];
 }
@@ -372,12 +313,9 @@ export async function readDaemonMergeTime(
   slug: string,
   baseRef: string,
 ): Promise<string | null> {
-  const plan = await resolveFeatureArtifact(
-    gitRefManifestSource(projectRoot, baseRef),
-    slug,
-    'plan',
-    async () => [`.docs/plans/${slug}.md`],
-  );
+  const plan = await resolveFeatureArtifact(gitRefManifestSource(projectRoot, baseRef), slug, 'plan', async () => [
+    `.docs/plans/${slug}.md`,
+  ]);
   const path = plan.paths[0];
   if (path === undefined || (plan.origin === 'manifest' && plan.missing.includes(path))) return null;
   return firstAppearanceTime(git, baseRef, path);
@@ -393,7 +331,9 @@ export function workOrderToBacklogItem(order: WorkOrder): BacklogItem {
     ...(order.band ? { band: order.band } : {}),
     ...(order.resolutionMode ? { resolutionMode: order.resolutionMode } : {}),
     ...(order.applicabilityDeclarations ? { applicabilityDeclarations: order.applicabilityDeclarations } : {}),
-    ...(order.applicabilityBaseContentSha256 ? { applicabilityBaseContentSha256: order.applicabilityBaseContentSha256 } : {}),
+    ...(order.applicabilityBaseContentSha256
+      ? { applicabilityBaseContentSha256: order.applicabilityBaseContentSha256 }
+      : {}),
     ...(order.applicabilityIgnored ? { applicabilityIgnored: order.applicabilityIgnored } : {}),
   };
 }
@@ -428,8 +368,10 @@ export interface ScaledDaemonTeardown extends DaemonTeardown {
   executorSettled(): void;
 }
 
-export interface ScaledDaemonTeardownOptions<T = ReturnType<typeof setTimeout>>
-  extends Omit<DaemonTeardownOptions<T>, 'timeoutMs'> {
+export interface ScaledDaemonTeardownOptions<T = ReturnType<typeof setTimeout>> extends Omit<
+  DaemonTeardownOptions<T>,
+  'timeoutMs'
+> {
   /** The existing grace period granted to one in-flight executor. */
   perExecutorTimeoutMs: number;
   /** The live drain set; it is read each time the bound is armed. */
@@ -522,9 +464,7 @@ export function engineEntryPathForRepo(projectRoot: string): string {
  * traversal to find the package-owned floating `dist` link.
  */
 export function conductorRootForModuleDir(moduleDir: string): string {
-  return basename(dirname(moduleDir)) === 'dist-versions'
-    ? dirname(dirname(moduleDir))
-    : dirname(moduleDir);
+  return basename(dirname(moduleDir)) === 'dist-versions' ? dirname(dirname(moduleDir)) : dirname(moduleDir);
 }
 
 /** Sidecar filename stamped by `publish-engine.mjs` at finalize (Task 4). */
@@ -592,15 +532,9 @@ const productionDaemonProcessAdapter: DaemonProcessAdapter = {
 /** Matches the bounded OTel export lifecycle window. */
 export const DAEMON_OTEL_SIGHUP_STOP_TIMEOUT_MS = 5_000;
 
-export type AwaitDaemonOtelStop = (
-  operation: Promise<void>,
-  timeoutMs: number,
-) => Promise<void | 'timed-out'>;
+export type AwaitDaemonOtelStop = (operation: Promise<void>, timeoutMs: number) => Promise<void | 'timed-out'>;
 
-async function awaitDaemonOtelStop(
-  operation: Promise<void>,
-  timeoutMs: number,
-): Promise<void | 'timed-out'> {
+async function awaitDaemonOtelStop(operation: Promise<void>, timeoutMs: number): Promise<void | 'timed-out'> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
@@ -632,11 +566,16 @@ export function installDaemonOtelSighupHandler(options: {
     if (handling) return;
     handling = true;
     try {
-      await awaitStop(Promise.resolve().then(async () => {
-        await runSighupPersistence();
-        await Promise.allSettled([...options.activeDispatchVisualizers ?? []].map((visualizer) => visualizer.stop()));
-        await options.daemonOtel?.stop();
-      }), DAEMON_OTEL_SIGHUP_STOP_TIMEOUT_MS);
+      await awaitStop(
+        Promise.resolve().then(async () => {
+          await runSighupPersistence();
+          await Promise.allSettled(
+            [...(options.activeDispatchVisualizers ?? [])].map((visualizer) => visualizer.stop()),
+          );
+          await options.daemonOtel?.stop();
+        }),
+        DAEMON_OTEL_SIGHUP_STOP_TIMEOUT_MS,
+      );
     } catch {
       // SIGHUP must retain its normal respawn/termination behavior even when
       // the exporter itself fails while releasing the durable spool lease.
@@ -651,6 +590,14 @@ export function installDaemonOtelSighupHandler(options: {
 
 export interface DaemonModeOptions {
   projectRoot: string;
+  /**
+   * Engine paths used to create immutable dispatch pins. Production derives
+   * both from this module; tests can provide a complete temporary store.
+   */
+  engineRoot?: {
+    conductorRoot: string;
+    ownEngineDir: string;
+  };
   /** Parallel workers (>= 1). */
   concurrency: number;
   /** Stop after this many features (default: drain the backlog once). */
@@ -725,6 +672,8 @@ export interface DaemonModeOptions {
   runDaemon?: typeof runDaemon;
   /** Injectable retryable-HALT dependency factory for daemon composition tests. */
   buildRetryableHaltDeps?: typeof buildRetryableHaltDeps;
+  /** Injectable child-process fork boundary for daemon lifecycle tests. */
+  executorFork?: ChildFeatureExecutorDeps['fork'];
   /**
    * Task 3: Show completed (PROCESSED) features in the startup dashboard's
    * console output. Defaults to false/undefined — the persisted log sink
@@ -738,9 +687,7 @@ export interface DaemonModeOptions {
  * configured candidate order. Startup owns this one daemon-scoped observation
  * so feature dispatches share a stable capability result.
  */
-export function collectReadOnlyReviewCapabilityProviders(
-  config?: HarnessConfig,
-): readonly string[] {
+export function collectReadOnlyReviewCapabilityProviders(config?: HarnessConfig): readonly string[] {
   const providers: string[] = [];
   const seen = new Set<string>();
   for (const entry of resolveBuildReviewConfig(config).catalog) {
@@ -757,11 +704,7 @@ export function collectReadOnlyReviewCapabilityProviders(
 
 interface HaltClassMigrationStartupDeps {
   ensureWorktreeBase: (worktreeBase: string) => Promise<void>;
-  migrateHaltClasses: (
-    projectRoot: string,
-    worktreeBase: string,
-    log: (message: string) => void,
-  ) => Promise<void>;
+  migrateHaltClasses: (projectRoot: string, worktreeBase: string, log: (message: string) => void) => Promise<void>;
   log: (message: string) => void;
 }
 
@@ -960,8 +903,7 @@ export function buildProgressReKickDeps(
   progressReKickDispatchCeiling: number;
 } {
   const block = config?.build_progress_halt;
-  const progressReKickDispatchCeiling =
-    block?.dispatch_ceiling ?? BUILD_PROGRESS_HALT_DEFAULTS.dispatch_ceiling;
+  const progressReKickDispatchCeiling = block?.dispatch_ceiling ?? BUILD_PROGRESS_HALT_DEFAULTS.dispatch_ceiling;
 
   if (!block?.enabled) {
     return { progressReKickDispatchCeiling };
@@ -1013,13 +955,10 @@ export function buildRetryableHaltDeps(
       } catch {
         return false;
       }
-      const retention = await resolveHaltRetention(
-        () => readRawHaltClass(root),
-        { retainUnclassified: true },
-      );
+      const retention = await resolveHaltRetention(() => readRawHaltClass(root), { retainUnclassified: true });
       if (retention.retained) return false;
       try {
-        return haltBody !== await readFile(join(root, '.pipeline/HALT.rekicked'), 'utf-8');
+        return haltBody !== (await readFile(join(root, '.pipeline/HALT.rekicked'), 'utf-8'));
       } catch {
         return true;
       }
@@ -1028,93 +967,6 @@ export function buildRetryableHaltDeps(
       await stampDispatchBaseline(worktreePath(slug), countResolvedTasks);
     },
   };
-}
-
-/**
- * Construct the setup retry used by both setup-triage stages. Triage must
- * re-run setup even when a prior dispatch left a valid success marker.
- *
- * `force: true` only bypasses the gate. The verification run is a real,
- * observable preparation, so it carries the same two things an ordinary
- * dispatch prepare does (adr-2026-08-26-setup-once-per-worktree-marker,
- * decisions 3 and 4):
- *
- * - the **resolved base SHA**, so a forced run that SUCCEEDS rewrites the
- *   marker and the next dispatch can skip setup. Without it `prepareWorktree`
- *   writes no marker and triage's repair is invisible to the gate. It is
- *   resolved from `base` — a required parameter, not an option — through the
- *   same `resolveDaemonBaseSha` the dispatch path uses, so the two can never
- *   stamp different bases, and so a caller cannot silently omit it.
- * - the **feature emitter**, so the `forced` reason rides the event spine into
- *   the feature's own `events.jsonl` and its rendered daemon log line, instead
- *   of falling back to a raw log write.
- *
- * The base is resolved per invocation: triage may commit a quarantine between
- * two verification runs, and each run stamps the base as it stands when it runs.
- */
-export function createForcedSetupPrepare(
-  prepare: typeof prepareWorktree,
-  log: ((message: string) => void) | undefined,
-  verbose: boolean,
-  base: {
-    projectRoot: string;
-    baseBranch: string;
-    /** Dispatcher's immutable WorkOrder base; legacy callers resolve lazily. */
-    baseSha?: string;
-    events?: ConductorEventEmitter;
-    /**
-     * The other half of the `dispatchStart` contract. `dispatchStart` and
-     * `dispatchStartTimeoutSeconds` are a matched pair: opting in without the
-     * resolved timeout drops the project's configured
-     * `dispatch_start_timeout_seconds` and silently bounds the hook at
-     * `worktree-prepare.ts`'s hardcoded default instead. Bound here so both
-     * triage stages share one value with the ordinary dispatch path.
-     */
-    dispatchStartTimeoutSeconds?: number;
-  },
-): (worktreePath: string) => Promise<void> {
-  return async (worktreePath) => {
-    const baseSha = base.baseSha ?? await resolveDaemonBaseSha(base.projectRoot, base.baseBranch);
-    await prepare(worktreePath, log, {
-      verbose,
-      force: true,
-      baseSha,
-      events: base.events,
-      dispatchStart: true,
-      dispatchStartTimeoutSeconds: base.dispatchStartTimeoutSeconds,
-    });
-  };
-}
-
-/**
- * Establish the one immutable context for a daemon feature dispatch. The
- * daemon owns both roots and the dispatch identity, so this deliberately
- * accepts no cwd-derived input.
- */
-export async function prepareDaemonFeatureManagedSessionContext(input: {
-  readonly projectRoot: string;
-  readonly worktreeRoot: string;
-  readonly featureSlug: string;
-  readonly dispatchId: string;
-  readonly provider: string;
-}): Promise<ManagedSessionContext> {
-  const provisioned = await provisionManagedSessionProducerRoot(input.worktreeRoot, input.dispatchId);
-  if (!provisioned.ok) {
-    throw new Error(`daemon managed-session context refused: ${provisioned.code}`);
-  }
-  const prepared = await prepareManagedSessionContext({
-    projectRoot: input.projectRoot,
-    worktreeRoot: input.worktreeRoot,
-    producerRoot: provisioned.path,
-    scope: { kind: 'feature', featureSlug: input.featureSlug },
-    dispatchId: input.dispatchId,
-    provider: input.provider,
-    daemonFeature: true,
-  });
-  if (!prepared.ok) {
-    throw new Error(`daemon managed-session context refused: ${prepared.code}`);
-  }
-  return prepared.context;
 }
 
 /**
@@ -1130,7 +982,12 @@ export function createDaemonSweepBinding(
   options: Omit<SweepOpts, 'onEvent'>,
   events: ConductorEventEmitter,
 ): SweepOpts {
-  return { ...options, onEvent: (event) => { void events.emit(event); } };
+  return {
+    ...options,
+    onEvent: (event) => {
+      void events.emit(event);
+    },
+  };
 }
 
 /** The small composition boundary for the deferred, observational startup dashboard. */
@@ -1139,7 +996,13 @@ export interface StartupDashboardBindingOptions {
   worktreeBase: string;
   processedDir: string;
   showCompleted?: boolean;
-  discoveryPartitions?: () => { waiting: import('./engine/daemon-dashboard.js').WaitingEntry[]; blocked: import('./engine/daemon-backlog.js').BlockedSpecItem[]; gated: import('./engine/daemon-backlog.js').GatedItem[] } | undefined;
+  discoveryPartitions?: () =>
+    | {
+        waiting: import('./engine/daemon-dashboard.js').WaitingEntry[];
+        blocked: import('./engine/daemon-backlog.js').BlockedSpecItem[];
+        gated: import('./engine/daemon-backlog.js').GatedItem[];
+      }
+    | undefined;
   consoleStream?: { isTTY?: boolean; columns?: number };
   log: (message: string) => void;
   discoverTick: (options: { refresh: boolean }) => Promise<BacklogItem[]>;
@@ -1167,10 +1030,15 @@ export interface ParkedCandidateEnrichmentOptions {
 }
 
 /** Add dashboard-only parked metadata, avoiding marker reads for non-parked candidates. */
-export async function enrichParkedCandidate(options: ParkedCandidateEnrichmentOptions): Promise<ParkedEntry | undefined> {
-  if (!await options.isOperatorParked(options.projectRoot, options.slug, (error) =>
-    options.log(`anomaly checking if ${options.slug} is parked: ${error.message}`),
-  )) return undefined;
+export async function enrichParkedCandidate(
+  options: ParkedCandidateEnrichmentOptions,
+): Promise<ParkedEntry | undefined> {
+  if (
+    !(await options.isOperatorParked(options.projectRoot, options.slug, (error) =>
+      options.log(`anomaly checking if ${options.slug} is parked: ${error.message}`),
+    ))
+  )
+    return undefined;
 
   const provenance = await options.getProvenanceType(options.projectRoot, options.slug);
   let reason: string | undefined;
@@ -1218,10 +1086,18 @@ export function createStartupDashboardBinding(options: StartupDashboardBindingOp
         worktreeBase: options.worktreeBase,
         processedDir: options.processedDir,
         discover: () => {
-          if (cachedStartupDiscovery === undefined) return Promise.reject(new Error('startup discovery did not complete'));
-          return Promise.resolve(cachedPartitions === undefined
-            ? cachedStartupDiscovery
-            : { items: cachedStartupDiscovery, waiting: cachedPartitions.waiting, blocked: cachedPartitions.blocked, gated: cachedPartitions.gated });
+          if (cachedStartupDiscovery === undefined)
+            return Promise.reject(new Error('startup discovery did not complete'));
+          return Promise.resolve(
+            cachedPartitions === undefined
+              ? cachedStartupDiscovery
+              : {
+                  items: cachedStartupDiscovery,
+                  waiting: cachedPartitions.waiting,
+                  blocked: cachedPartitions.blocked,
+                  gated: cachedPartitions.gated,
+                },
+          );
         },
         log: options.log,
         prStateProbe: options.prStateProbe,
@@ -1233,18 +1109,23 @@ export function createStartupDashboardBinding(options: StartupDashboardBindingOp
         ...state.processed.map((entry) => entry.slug),
         ...(state.waiting ?? []).map((entry) => entry.slug),
         ...(state.blocked ?? []).map((entry) => entry.slug),
-        ...(state.gated ?? []).flatMap((entry) => entry.kind === 'spec' ? [entry.slug] : []),
-        ...await options.listOperatorParkedSlugs(options.projectRoot),
+        ...(state.gated ?? []).flatMap((entry) => (entry.kind === 'spec' ? [entry.slug] : [])),
+        ...(await options.listOperatorParkedSlugs(options.projectRoot)),
       ]);
       const reconciliation = await options.reconcileParkedFeatures({
         projectRoot: options.projectRoot,
         autoCleanup: false,
         reclaimMergedWorktrees: false,
       });
-      const annotations = new Map(reconciliation.entries.map(({ slug, classification }) => [
-        slug,
-        classification === 'orphan' ? 'orphan' : classification === 'merged' ? 'merged-ready' : undefined,
-      ] as const));
+      const annotations = new Map(
+        reconciliation.entries.map(
+          ({ slug, classification }) =>
+            [
+              slug,
+              classification === 'orphan' ? 'orphan' : classification === 'merged' ? 'merged-ready' : undefined,
+            ] as const,
+        ),
+      );
       const parked: ParkedEntry[] = [];
       for (const slug of candidateSlugs) {
         const entry = await enrichParkedCandidate({
@@ -1262,15 +1143,16 @@ export function createStartupDashboardBinding(options: StartupDashboardBindingOp
         renderDashboard(dashboardState, { mode: 'full' }),
         options.showCompleted
           ? renderDashboard(dashboardState, { mode: 'full', includeCompleted: true })
-          : renderDashboard(dashboardState, { mode: 'compact', rowBudget: resolveRowBudget(options.consoleStream ?? process.stdout) }),
+          : renderDashboard(dashboardState, {
+              mode: 'compact',
+              rowBudget: resolveRowBudget(options.consoleStream ?? process.stdout),
+            }),
       );
     },
   };
 }
 
-type RepairClaimDisposition =
-  | { readonly kind: 'admit' }
-  | { readonly kind: 'drop'; readonly reason: string };
+type RepairClaimDisposition = { readonly kind: 'admit' } | { readonly kind: 'drop'; readonly reason: string };
 
 function assertNever(value: never): never {
   throw new Error(`unhandled repair claim state: ${String(value)}`);
@@ -1280,10 +1162,7 @@ function assertNever(value: never): never {
  * Claim-time admission is deliberately stricter than sweep-time eligibility:
  * a queued repair may be stale by the time a worker slot becomes available.
  */
-export function repairClaimDisposition(
-  request: RepairRequest,
-  state: PrMergeState,
-): RepairClaimDisposition {
+export function repairClaimDisposition(request: RepairRequest, state: PrMergeState): RepairClaimDisposition {
   if (state.readFailure || state.contextFailure) return { kind: 'drop', reason: 'state unreadable' };
 
   switch (state.state) {
@@ -1301,13 +1180,17 @@ export function repairClaimDisposition(
             : { kind: 'drop', reason: `mergeable ${state.mergeable.toLowerCase()}` };
         case 'ci-fix':
           switch (state.checksOutcome) {
-            case 'failed': return { kind: 'admit' };
+            case 'failed':
+              return { kind: 'admit' };
             case 'pending':
             case 'green':
-            case 'none': return { kind: 'drop', reason: `checks ${state.checksOutcome}` };
-            default: return assertNever(state.checksOutcome);
+            case 'none':
+              return { kind: 'drop', reason: `checks ${state.checksOutcome}` };
+            default:
+              return assertNever(state.checksOutcome);
           }
-        default: return assertNever(request);
+        default:
+          return assertNever(request);
       }
     default:
       return assertNever(state.state);
@@ -1323,11 +1206,25 @@ export function createClaimTimeRepairRunner(options: {
   applyOutcome?: (completion: RepairCompletion, previous: WatchEntry) => Promise<void>;
   now?: () => Date;
   /** Injectable only for the fail-closed claim-persistence boundary. */
-  updateWatch?: (projectRoot: string, mutate: (entries: WatchEntry[]) => unknown, options?: { strictWrite?: boolean }) => Promise<unknown>;
+  updateWatch?: (
+    projectRoot: string,
+    mutate: (entries: WatchEntry[]) => unknown,
+    options?: { strictWrite?: boolean },
+  ) => Promise<unknown>;
 }): (request: RepairRequest) => Promise<void> {
-  const { projectRoot, tracker, log, isWorkClaimActive, requeue, applyOutcome = async () => {}, now = () => new Date() } = options;
-  const persistWatch = options.updateWatch ?? ((root: string, mutate: (entries: WatchEntry[]) => unknown) =>
-    updateWatch(root, mutate as never, { strictWrite: true }) as Promise<unknown>);
+  const {
+    projectRoot,
+    tracker,
+    log,
+    isWorkClaimActive,
+    requeue,
+    applyOutcome = async () => {},
+    now = () => new Date(),
+  } = options;
+  const persistWatch =
+    options.updateWatch ??
+    ((root: string, mutate: (entries: WatchEntry[]) => unknown) =>
+      updateWatch(root, mutate as never, { strictWrite: true }) as Promise<unknown>);
   return async (request) => {
     let state: PrMergeState;
     try {
@@ -1349,17 +1246,18 @@ export function createClaimTimeRepairRunner(options: {
     // Claim time, rather than sweep time, owns attempt accounting. A restart
     // after this serialized write intentionally consumes an attempt; a
     // queued/held/stale request does not.
-    const claim = await persistWatch(projectRoot, (entries) => {
+    const claim = (await persistWatch(projectRoot, (entries) => {
       const previous = entries.find((entry) => entry.prUrl === request.prUrl);
       if (!previous) return { entries, result: { kind: 'missing' as const }, write: false };
-      const entry = request.kind === 'ci-fix'
-        ? { ...previous, ciFixAttempts: (previous.ciFixAttempts ?? 0) + 1, lastCiFixAt: now().toISOString() }
-        : { ...previous, resolveAttempts: (previous.resolveAttempts ?? 0) + 1, lastResolveAt: now().toISOString() };
+      const entry =
+        request.kind === 'ci-fix'
+          ? { ...previous, ciFixAttempts: (previous.ciFixAttempts ?? 0) + 1, lastCiFixAt: now().toISOString() }
+          : { ...previous, resolveAttempts: (previous.resolveAttempts ?? 0) + 1, lastResolveAt: now().toISOString() };
       return {
-        entries: entries.map((candidate) => candidate.prUrl === request.prUrl ? entry : candidate),
+        entries: entries.map((candidate) => (candidate.prUrl === request.prUrl ? entry : candidate)),
         result: { kind: 'claimed' as const, entry, previous },
       };
-    }) as { kind: 'missing' } | { kind: 'claimed'; entry: WatchEntry; previous: WatchEntry } | undefined;
+    })) as { kind: 'missing' } | { kind: 'claimed'; entry: WatchEntry; previous: WatchEntry } | undefined;
     if (!claim || claim.kind === 'missing') {
       log(`[daemon] dropping repair ${request.prUrl}: watch entry missing`);
       return;
@@ -1389,36 +1287,14 @@ export function attachFeatureEventRenderer(
   };
 }
 
-/**
- * Run the stack repair boundary that precedes every daemon re-kick.
- *
- * Keeping this small boundary exported lets the dispatch-level test exercise
- * the same call that protects `runConductorInWorktree`, rather than proving
- * only `runStackPreflight` in isolation.
- */
-export async function runDaemonRekickStackPreflight(
-  options: RunStackPreflightOptions,
-  log: (message: string) => void,
-): Promise<StackPreflightResult> {
-  const result = await runStackPreflight(options);
-  if (result.kind === 'halted' || result.kind === 'unavailable') {
-    log(`stack preflight ${options.slug}: ${result.kind} — ${result.detail}`);
-  }
-  return result;
-}
-
-/** The daemon's provider seam for resolver dispatches, including restack hand-offs. */
-export function restackResolverForStepRunner(
-  stepRunner: Pick<StepRunner, 'resolveRebaseConflict'>,
-): RestackResolver | undefined {
-  return stepRunner.resolveRebaseConflict === undefined
-    ? undefined
-    : (context) => stepRunner.resolveRebaseConflict!(context);
-}
-
 export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResult | undefined> {
   const { projectRoot, showCompleted } = opts;
+  const engineRoot = opts.engineRoot ?? {
+    conductorRoot: conductorRootForModuleDir(__dirname),
+    ownEngineDir: __dirname,
+  };
   const installedHarnessVersion = await installedHarnessVersionForConfig(__dirname);
+  const daemonHarnessVersion = await resolveHarnessVersion(__dirname);
   const configResult = await loadMergedConfig(projectRoot, installedHarnessVersion);
   if (!configResult.ok && configResult.error.type !== 'missing') {
     throw new Error(`Config error: ${configResult.error.message}`);
@@ -1436,8 +1312,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // real default (main/master/trunk) rather than hardcoding 'main'; dispatcher
   // maintenance fast-forwards this branch at its refresh policy boundary (see
   // fastForwardRoot).
-  const baseBranch =
-    opts.baseBranch ?? (await originDefaultBranch(makeGitRunner(projectRoot))) ?? 'main';
+  const baseBranch = opts.baseBranch ?? (await originDefaultBranch(makeGitRunner(projectRoot))) ?? 'main';
   // Tee every daemon log line to a file so the daemon stays observable via
   // `conduct daemon logs` even when no one is attached to its tmux session. Console
   // (the session PTY) gets the colorized line
@@ -1463,8 +1338,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
 
   const log = createDaemonModeLogger({
     formatActivityLine: formatDaemonActivityLine,
-    writeLive: (line) =>
-      console.log(`${chalk.dim('[daemon]')}${line.slice('[daemon]'.length)}`),
+    writeLive: (line) => console.log(`${chalk.dim('[daemon]')}${line.slice('[daemon]'.length)}`),
     // The persisted record gets a leading ISO-8601 UTC timestamp so activity
     // read back via `conduct daemon logs` can be correlated in time; the
     // console stays uncluttered for live watching.
@@ -1494,7 +1368,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     const holder = await readPidRecord(projectRoot);
     if (holder && holder.pid) {
       log(
-        `another daemon is already running (pid ${holder.pid})${holder.engineDir ? ` engineDir ${holder.engineDir}` : ''} for ${projectRoot}; exiting`
+        `another daemon is already running (pid ${holder.pid})${holder.engineDir ? ` engineDir ${holder.engineDir}` : ''} for ${projectRoot}; exiting`,
       );
     } else {
       log(`another daemon is already running for ${projectRoot}; exiting`);
@@ -1623,9 +1497,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     // Daemon conductors intentionally have no per-conductor SIGTERM listener.
     // Close their real lifecycle ledgers before the scheduler drain can release
     // this process; each closure joins an in-flight terminal if one exists.
-    await Promise.all(
-      [...activeConductors].map((conductor) => conductor.closeOpenExecutionsForShutdown()),
-    );
+    await Promise.all([...activeConductors].map((conductor) => conductor.closeOpenExecutionsForShutdown()));
     // Request the drain — runDaemon observes shouldStop() at its next loop
     // boundary and stops with stoppedReason 'signal_teardown'; the normal
     // completion path below then releases the lock and exits.
@@ -1654,9 +1526,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     const blockingSlug = consumedRestartIntent.blockingSlug
       ? ` (was waiting behind ${consumedRestartIntent.blockingSlug})`
       : '';
-    const requestedBy = consumedRestartIntent.requestedBy
-      ? ` by ${consumedRestartIntent.requestedBy}`
-      : '';
+    const requestedBy = consumedRestartIntent.requestedBy ? ` by ${consumedRestartIntent.requestedBy}` : '';
     log(`restart marker consumed${blockingSlug}${requestedBy} at boot.`);
   }
 
@@ -1670,12 +1540,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // One daemon process owns both dispatcher root mutations and every
   // in-process self-host executor's fingerprint window.
   const liveBoundaryCoordinator = isSelfHost ? new LiveBoundaryCoordinator() : undefined;
-  const coordinatedRootMutation = <T>(
-    mutation: () => Promise<T>,
-    deferLog: (reason: string) => void,
-  ): Promise<T> => liveBoundaryCoordinator
-    ? liveBoundaryCoordinator.runMutation(mutation, deferLog)
-    : mutation();
+  const coordinatedRootMutation = <T,>(mutation: () => Promise<T>, deferLog: (reason: string) => void): Promise<T> =>
+    liveBoundaryCoordinator ? liveBoundaryCoordinator.runMutation(mutation, deferLog) : mutation();
   if (isSelfHost) {
     log('self-host mode active — harness self-build guardrails enabled for this daemon.');
   }
@@ -1744,7 +1610,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // absent from this ledger, so a restart never relies on a feature worktree.
   const daemonSuppressionLedger = await readFile(join(projectRoot, '.daemon', 'events.jsonl'), 'utf8').catch(() => '');
   restoreProviderAvailabilityFromDaemonLedger({
-    availability: providerAvailability, ledger: daemonSuppressionLedger, now: Date.now(),
+    availability: providerAvailability,
+    ledger: daemonSuppressionLedger,
+    now: Date.now(),
   });
   // Task 20: track which parks were episode-caused so the episode-end sweep
   // (runDaemon's active→inactive transition hook) can recover exactly those.
@@ -1771,11 +1639,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     readStateFn: readState,
     projectRoot,
   };
-  registerBuiltins(
-    registry,
-    config?.codex_doctor_timeout_seconds,
-    new Set(providerDiscovery.installed),
-  );
+  registerBuiltins(registry, config?.codex_doctor_timeout_seconds, new Set(providerDiscovery.installed));
   // Register terminal for the renderer registry, but preserve the daemon's
   // daemon-log-only global subscription.
   const subscriber = registerTerminalBuiltins(registry, events, rendererOpts, [], false);
@@ -1812,36 +1676,39 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     async stop() {},
   };
   subscriber.start([daemonLogRenderer]);
-  const readOnlyReviewCapabilityProbe =
-    opts.probeReadOnlyReviewCapability ?? probeReadOnlyReviewCapability;
-  const readOnlyReviewCapabilities = Object.freeze(Object.fromEntries(await Promise.all(
-    collectReadOnlyReviewCapabilityProviders(config).map(async (provider) => {
-      const capability = await readOnlyReviewCapabilityProbe({
-        provider,
-        platform: process.platform,
-        scratchDir: join(projectRoot, '.pipeline', 'read-only-review-probe'),
-        runProcess: async (executable, args) => {
-          const result = await execFile(executable, [...args]);
-          return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
-        },
-      });
-      await events.emit({ type: 'build_review_read_only_capability', ...capability });
-      return [provider, capability] as const;
-    }),
-  ))) as Readonly<Record<string, ReadOnlyReviewCapability>>;
+  const readOnlyReviewCapabilityProbe = opts.probeReadOnlyReviewCapability ?? probeReadOnlyReviewCapability;
+  const readOnlyReviewCapabilities = Object.freeze(
+    Object.fromEntries(
+      await Promise.all(
+        collectReadOnlyReviewCapabilityProviders(config).map(async (provider) => {
+          const capability = await readOnlyReviewCapabilityProbe({
+            provider,
+            platform: process.platform,
+            scratchDir: join(projectRoot, '.pipeline', 'read-only-review-probe'),
+            runProcess: async (executable, args) => {
+              const result = await execFile(executable, [...args]);
+              return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
+            },
+          });
+          await events.emit({ type: 'build_review_read_only_capability', ...capability });
+          return [provider, capability] as const;
+        }),
+      ),
+    ),
+  ) as Readonly<Record<string, ReadOnlyReviewCapability>>;
   const configuredProviders = normalizeProviderSelection(config?.llm_provider);
-  const createProviderExecution = (
-    eventTarget = events,
-    runtimeLog = log,
-  ): ProviderExecutionContext => ({
+  const createProviderExecution = (eventTarget = events, runtimeLog = log): ProviderExecutionContext => ({
     configuredProviders,
     runtimes: createProviderRuntimeSet(registry, runtimeLog, config),
     sessions: new ProviderSessionStore(),
     config,
     providerAvailability,
-    onProviderSuppressed: (provider, deadline) => events.emit({
-      type: 'provider_suppressed', provider, deadline,
-    }),
+    onProviderSuppressed: (provider, deadline) =>
+      events.emit({
+        type: 'provider_suppressed',
+        provider,
+        deadline,
+      }),
     // The per-feature Conductor composes self-host authority around this
     // resolved-candidate boundary; keep it present for every daemon context.
     withCandidateSafety: createCandidateSafetyBoundary(),
@@ -1860,11 +1727,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     dispatchId: string,
   ): Promise<ProviderExecutionContext> => {
     const scopedEvents = new ConductorEventEmitter();
-    const scopedLog = createFeatureDaemonLogger(
-      slug,
-      (message) => log(message, true),
-      formatDaemonFeatureTag(slug),
-    );
+    const scopedLog = createFeatureDaemonLogger(slug, (message) => log(message, true), formatDaemonFeatureTag(slug));
     subscribeScopedProviderRendering(scopedEvents, scopedLog);
     subscribeRecoverySessionOccurrences(scopedEvents, scopedLog);
     const providerExecution = createProviderExecution(scopedEvents, scopedLog);
@@ -1880,16 +1743,18 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     return {
       ...providerExecution,
       managedSessionContext,
-      prepareManagedSessionObservation: createManagedSessionObservationPreparer((input) => probeManagedObservationDestination({
-            ...input,
-            runProcess: async (executable, args) => {
-              const result = await execFile(executable, [...args]);
-              return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
-            },
-          })),
+      prepareManagedSessionObservation: createManagedSessionObservationPreparer((input) =>
+        probeManagedObservationDestination({
+          ...input,
+          runProcess: async (executable, args) => {
+            const result = await execFile(executable, [...args]);
+            return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
+          },
+        }),
+      ),
     };
   };
-  
+
   // Repair providers can write in a transient worktree, but their producer
   // records are projected through the retained feature's persistence scope.
   // Deriving this subscription from EVENT_SINKS keeps refusals and bypasses
@@ -1910,11 +1775,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   const featureLogFor = (slug: string): ((message: string) => void) => {
     let featureLog = featureLogs.get(slug);
     if (!featureLog) {
-      featureLog = createFeatureDaemonLogger(
-        slug,
-        (message) => log(message, true),
-        formatDaemonFeatureTag(slug),
-      );
+      featureLog = createFeatureDaemonLogger(slug, (message) => log(message, true), formatDaemonFeatureTag(slug));
       featureLogs.set(slug, featureLog);
     }
     return featureLog;
@@ -1946,8 +1807,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       throw error;
     }
     const pipelineDir = join(worktree.path, '.pipeline');
-    const persistedSessionId = await readFile(join(pipelineDir, 'conduct-session-id'), 'utf8')
-      .catch(() => undefined);
+    const persistedSessionId = await readFile(join(pipelineDir, 'conduct-session-id'), 'utf8').catch(() => undefined);
     const visualizerContext = {
       pipelineDir,
       runId: persistedSessionId?.trim() || sessionId,
@@ -1995,13 +1855,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       providerExecution: {
         ...providerExecution,
         managedSessionContext,
-        prepareManagedSessionObservation: createManagedSessionObservationPreparer((input) => probeManagedObservationDestination({
-              ...input,
-              runProcess: async (executable, args) => {
-                const result = await execFile(executable, [...args]);
-                return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
-              },
-            })),
+        prepareManagedSessionObservation: createManagedSessionObservationPreparer((input) =>
+          probeManagedObservationDestination({
+            ...input,
+            runProcess: async (executable, args) => {
+              const result = await execFile(executable, [...args]);
+              return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
+            },
+          }),
+        ),
       },
       log: featureLog,
       stop,
@@ -2011,26 +1873,43 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // in-process bus. Attach the same visualizer there, but use the immutable
   // WorkOrder pin rather than this supervisor's loaded engine version.
   const attachChildFeatureOtelVisualizer = (
-    slug: string,
-    engineVersionId: string,
+    trace: { slug: string; engineVersionId: string; sourceRef?: string },
     featureEvents: ConductorEventEmitter,
-  ): (() => void) => {
+  ): (() => Promise<void>) => {
+    const pipelineDir = join(projectRoot, '.worktrees', trace.slug, '.pipeline');
+    const persistedRunId = (() => {
+      try {
+        return readFileSync(join(pipelineDir, 'conduct-session-id'), 'utf8').trim();
+      } catch {
+        return '';
+      }
+    })();
+    const visualizerContext = {
+      pipelineDir,
+      runId: persistedRunId || createSessionEventIdentity(),
+      feature: trace.slug,
+      project: projectRoot,
+      branch: leafBranchFor(trace.slug),
+      engineVersion: trace.engineVersionId,
+      metrics: false,
+      harnessVersion: daemonHarnessVersion,
+      ...(trace.sourceRef ? { sourceRef: trace.sourceRef } : {}),
+    };
     const visualizer = daemonOtel?.spoolRuntime
-      ? wireOtelVisualizer(config ?? {}, {
-          pipelineDir: join(projectRoot, '.worktrees', slug, '.pipeline'), runId: `executor-${slug}`,
-          feature: slug, project: projectRoot, branch: leafBranchFor(slug), engineVersion: engineVersionId,
-          metrics: false, harnessVersion: 'unknown',
-        }, featureEvents, daemonOtel.spoolRuntime)
-      : wireOtelVisualizer(config ?? {}, {
-          pipelineDir: join(projectRoot, '.worktrees', slug, '.pipeline'), runId: `executor-${slug}`,
-          feature: slug, project: projectRoot, branch: leafBranchFor(slug), engineVersion: engineVersionId,
-          metrics: false, harnessVersion: 'unknown',
-        }, featureEvents);
+      ? wireOtelVisualizer(
+          config ?? {},
+          {
+            ...visualizerContext,
+          },
+          featureEvents,
+          daemonOtel.spoolRuntime,
+        )
+      : wireOtelVisualizer(config ?? {}, visualizerContext, featureEvents);
     if (visualizer) activeDispatchVisualizers.add(visualizer);
-    return () => {
+    return async () => {
       if (!visualizer) return;
       activeDispatchVisualizers.delete(visualizer);
-      void visualizer.stop();
+      await visualizer.stop();
     };
   };
   // Resolve the active memory provider once at run start so all steps see the
@@ -2042,6 +1921,29 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     for (const w of memoryResolveCtx.warnings) log(`WARNING: ${w}`);
   }
 
+  const lifecycleContext = (featureEvents: ConductorEventEmitter): DaemonFeatureLifecycleContext => ({
+    projectRoot,
+    config,
+    baseBranch,
+    isSelfHost,
+    effectiveDaemonConcurrency: daemonConcurrency.concurrency,
+    worktreeLifecycle,
+    rateLimitEpisode,
+    readOnlyReviewCapabilities,
+    liveBoundaryCoordinator,
+    ownerGh,
+    createProviderExecution,
+    events,
+    log,
+    registerConductor: (conductor) => {
+      activeConductors.add(conductor);
+      return () => activeConductors.delete(conductor);
+    },
+    registerAbortController: (controller) => allWaitSignals.add(controller),
+    isShutdownRequested: () => shutdownRequested,
+    flushFeatureEvents: featureEventFlushers.get(featureEvents) ?? (async () => {}),
+    engineVersionId: resolveEngineVersion(__dirname),
+  });
   const runConductorInWorktree = async (
     wt: FeatureWorktree,
     item: BacklogItem,
@@ -2049,336 +1951,35 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     featureEvents: ConductorEventEmitter = events,
     featureLog = log,
     sessionId = uuidv4(),
-  ) => {
-    const pipelineDir = join(wt.path, '.pipeline');
-    await mkdir(pipelineDir, { recursive: true });
-    const selectedRuntime = providerExecution.runtimes.get(
-      providerExecution.configuredProviders[0],
-    );
-
-    const stateFilePath = join(pipelineDir, 'conduct-state.json');
-    const stateStore = resolveConductorStateStore(
-      stateFilePath,
-      undefined,
-      createStepStatusWriteRefusalDiagnostics(featureEvents),
-    );
-    const baseState = await seedDaemonDispatchState(pipelineDir, item, stateStore);
-
-    const stepRunner = new DefaultStepRunner(
-      selectedRuntime.provider,
-      sessionId,
-      wt.path,
-      {
-        featureDesc: item.slug,
-        projectRoot,
-        pipelineDir,
-        config,
-        modelPolicy: selectedRuntime.policy,
-        mode: 'auto',
-        providerExecution,
-        events: featureEvents,
-        log: featureLog,
-        worktreeLifecycle,
-        skillNameRoot: skillNameRootFor({ isSelfHost, worktreePath: wt.path, harnessRoot: await resolveHarnessRoot() }),
-      },
-    );
-
-    // Wire AuditTrailWriter: appends friction/positive-evidence records to
-    // <worktree>/.pipeline/audit-trail/events.jsonl, rooted at the worktree
-    // path (never process.cwd() or the daemon's projectRoot) so the audit
-    // trail preserves this feature's run history inside its own worktree.
-    // Daemon runs the engine in-process, so one writer per run covers all
-    // steps for this worktree.
-    const auditWriter = new AuditTrailWriter(wt.path);
-    auditWriter.subscribe(featureEvents);
-
-    const finishPublicationGit = makeFinishPublicationGit();
-    const finishPublicationGh = makeProductionGh();
-    const conductor = new Conductor({
-      stateFilePath,
-      stateStore,
-      stepRunner,
-      events: featureEvents,
-      mode: 'auto',
-      config,
-      modelPolicy: selectedRuntime.policy,
+  ) =>
+    runDaemonFeatureConductor(
+      lifecycleContext(featureEvents),
+      wt,
+      item,
       providerExecution,
-      effectiveDaemonConcurrency: daemonConcurrency.concurrency,
-      projectRoot: wt.path,
-      acceptanceRedExec: createProductionAcceptanceRedExec(),
-      // Daemon FINISH shares the same engine-owned coordinator as foreground
-      // conduct; its git/GitHub boundaries remain injectable at this root.
-      finishPublication: createProductionFinishPublicationCoordinator({
-        projectRoot: wt.path,
-        stateFilePath,
-        baseBranch,
-        prTemplateBytes: config?.pr_template_bytes,
-        git: finishPublicationGit,
-        gh: finishPublicationGh,
-        events: featureEvents,
-        flushSessionEvents: featureEventFlushers.get(featureEvents),
-        repairPresentation: createProvenanceGuardedFinishPresentationRepair({
-          projectRoot: wt.path,
-          git: finishPublicationGit,
-          gh: finishPublicationGh,
-          baseBranch,
-          log: featureLog,
-          events: featureEvents,
-        }),
-        observeReleaseReadiness: createProductionReleaseReadinessObserver({
-          projectRoot: wt.path,
-          config,
-        }),
-      }),
-      worktreeBranch: wt.branch,
-      log: featureLog,
-      // Self-host guardrails (Phase 6): activate the bundle only when this daemon
-      // is building the harness itself. `baseBranch` feeds the release-artifact
-      // migration classifier (`<base>...HEAD`).
-      selfHost: isSelfHost,
-      liveBoundaryCoordinator,
-      baseBranch,
-      verifyArtifacts: true,
-      // Resume from the first unsatisfied step rather than hardcoding the entry
-      // point. The engine fast-forwards artifact-satisfied DECIDE work before
-      // entering BUILD. A re-dispatch with recorded BUILD/SHIP progress resumes
-      // at its real next step (e.g. prd_audit / finish), rather than re-entering
-      // at acceptance_specs every cycle. (`fromStep` forced acceptance_specs
-      // and, being explicitly targeted, re-ran it on every resume.)
-      resume: true,
-      // Enable daemon-specific lifecycle behavior in the in-process conductor.
-      daemon: true,
-      featureSlug: item.slug,
-      operatorParkBoundary: () =>
-        isOperatorParked(projectRoot, item.slug, (error) =>
-          featureLog(`operator park marker read failed: ${error.message}`),
-        ),
-      rateLimitEpisode,
-      readOnlyReviewCapabilities,
-      // Task 22: Register in-flight wait AbortControllers with daemon-level handler
-      // so process-level SIGTERM can abort all waits across N concurrent conductors.
-      registerAbortController: (controller) => allWaitSignals.add(controller),
-    });
-
-    activeConductors.add(conductor);
-    try {
-
-    // FR-12 (ADR-013): a re-kick dropped a `.pipeline/REKICK` sentinel. Integrate
-    // the advanced base FIRST — run 9.0's rebase-onto-latest BEFORE the conductor
-    // resumes the pending gate, so a gate halt (e.g. prd-audit) re-verifies on the
-    // new base instead of the stale one. One-shot (sentinel consumed). A
-    // re-conflict re-parks via 9.0's existing HALT path — skip `conductor.run()`.
-    const ranManualTest = getStepStatus(baseState, 'manual_test') !== 'skipped';
-    // Task 8 (operator-park): a human-placed halt must survive re-kick sweeps
-    // unconditionally — that includes NOT consuming a pending `.pipeline/REKICK`
-    // sentinel. Checked BEFORE `resumeRebaseFirst` (which is one-shot: it
-    // deletes the sentinel up front regardless of outcome) so a parked
-    // worktree's sentinel is left completely untouched for a human to inspect
-    // or for the eventual un-park to resume normally.
-    const parked = await isOperatorParked(projectRoot, item.slug);
-    if (parked) {
-      featureLog(`re-kick resume ${item.slug}: skipped — operator-parked (sentinel preserved)`);
-      const termination: OperatorParkedTermination = {
-        kind: 'operator-parked',
-        boundary: { kind: 'pre-first-unit' },
-      };
-      return termination;
-    }
-
-    // A stacked feature's closure refs are durable state, not a conductor
-    // concern.  Recover/repair them before the ordinary re-kick path consumes
-    // REKICK or judges the active child.  In particular, a repair which has a
-    // chained base refresh owns consumption of REKICK through its journal;
-    // otherwise resumeRebaseFirst retains its historical one-shot behavior.
-    const rekickPath = join(pipelineDir, 'REKICK');
-    const stackPreflight = await runDaemonRekickStackPreflight({
-      worktree: wt.path,
-      slug: item.slug,
-      baseRefreshDue: existsSync(rekickPath),
-      consumeRekick: async () => {
-        await unlinkFile(rekickPath).catch((error: unknown) => {
-          const code = (error as NodeJS.ErrnoException).code;
-          if (code !== 'ENOENT') throw error;
-        });
-      },
-      rearmRekick: async () => {
-        await writeFile(rekickPath, '');
-      },
-      events: featureEvents,
-      resolver: restackResolverForStepRunner(stepRunner),
-      resolverCap: resolveRebaseResolutionAttempts(config),
-      // Authorizations are consumed by the daemon's pre-dispatch maintenance
-      // boundary. A record left by an already-cleared halt can be resolved
-      // here, after recovery; never supersede a still-live halt record.
-      prepareResume: async () => {
-        if (await access(join(wt.path, HALT_MARKER)).then(() => true).catch(() => false)) return;
-        try {
-          await supersedeHaltRecord(wt.path, item.slug, 'stack-preflight');
-        } catch (error) {
-          featureLog(`stack preflight could not supersede halt record: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      },
-    }, featureLog);
-    if (stackPreflight.kind === 'halted' || stackPreflight.kind === 'unavailable') {
-      return;
-    }
-    const resume = await resumeRebaseFirst({
-      worktreePath: wt.path,
-      localBase: baseBranch,
-      events: featureEvents,
-      ranManualTest,
-      // #300: give the play-forward conflict the SAME gated /rebase attempts the
-      // finish-time step gets, before parking for a human.
-      resolveAttempts: resolveRebaseResolutionAttempts(config),
-      resolveConflict: stepRunner.resolveRebaseConflict
-        ? (ctx) => stepRunner.resolveRebaseConflict(ctx)
-        : undefined,
-      // ADR-2026-07-09-mid-run-merged-pr-guard: pass the gh runner and recorded PR URL
-      // so the guard can check if the feature was merged out-of-band before rebasing.
-      runGh: ownerGh,
-      prUrl: baseState.pr_url,
-      slug: item.slug,
-      log: featureLog,
-    });
-    if (resume === 'halted') return; // re-parked: HALT re-written, do not resume the gate
-    if (resume === 'already_shipped') {
-      // The merged record was verified on merged history. Do not manufacture
-      // local success markers; let the ordinary completion boundary converge.
-      featureLog(`merged shipment evidence verified for ${item.slug}; continuing normal completion`);
-    }
-
-    if (shutdownRequested) return;
-    const conductorTermination = await conductor.run();
-    if (conductorTermination) {
-      return conductorTermination;
-    }
-
-    // Link & close the originating issue (intake specs only): once the
-    // implementation PR exists, add `Closes owner/repo#N` to its body so GitHub
-    // auto-closes the issue when the PR merges to the default branch. Best-effort
-    // and idempotent — a gh failure or a halted build (no pr_url) never affects
-    // the feature outcome.
-    const finalState = await readState(stateFilePath);
-    const implementationPrUrl = finalState.ok ? finalState.value.pr_url : undefined;
-    const ghRunner = makeProductionGh();
-    // The resolved context is bound to the feature branch ref; the `Closes`
-    // edit targets the implementation PR, so rebind to it or the owner gate
-    // refuses the edit as `invalid-target` (#2703).
-    const featureMutation = item.sourceRef && implementationPrUrl
-      ? await resolveFeatureRemoteMutation({
-        cwd: wt.path,
-        slug: item.slug,
-        branch: wt.branch,
-        git: (args) => finishPublicationGit(args, { cwd: wt.path }),
-        gh: ghRunner,
-      })
-      : undefined;
-    const closeIssueMutation = featureMutation && implementationPrUrl
-      ? bindMutationToPullRequest(featureMutation, implementationPrUrl)
-      : undefined;
-    await closeIssueOnImplementationMerge({
-      gh: ghRunner,
-      operations: closeIssueMutation
-        ? createGuardedGithubOperationRunner(ghRunner, {
-          cwd: wt.path,
-          mutation: closeIssueMutation,
-          events: featureEvents,
-        })
-        : undefined,
-      sourceRef: item.sourceRef,
-      prUrl: implementationPrUrl,
-      cwd: wt.path,
-      slug: item.slug,
-      log: featureLog,
-    });
-    } finally {
-      activeConductors.delete(conductor);
-    }
-
-  };
-
-  // Task 15: Production wiring of setup-failure triage in daemon-cli.
-  // Construct runSetupTriage with real deps: git runner for worktree,
-  // prepareWorktree for retry, and fix-session dispatcher that constructs
-  // fresh DefaultStepRunner per dispatch (uuid session).
+      featureEvents,
+      featureLog,
+      sessionId,
+    );
   const runSetupTriage = async (
-    error: any, // SetupFailureError
+    error: any,
     worktree: FeatureWorktree,
     item: BacklogItem,
     providerExecution = createProviderExecution(),
     featureLog = log,
     featureEvents?: ConductorEventEmitter,
     workOrderBaseSha?: string,
-  ) => {
-    // Kill-switch for testing: prevent actual LLM dispatch
-    if (process.env.CONDUCT_SETUP_TRIAGE_KILLSWITCH) {
-      return { kind: 'park' as const, outputTail: 'setup-triage disabled by env killswitch' };
-    }
-
-    // Create a git runner rooted at the worktree path
-    const git: GitRunner = makeGitRunner(worktree.path);
-
-    // Inject prepareWorktree for retry after quarantine. The base binding is
-    // what makes a successful verification rewrite the setup marker, and the
-    // feature emitter is what puts its `forced` reason on this feature's own
-    // event spine — both stages' `runPrepare` is this one callback.
-    const runPrepare = createForcedSetupPrepare(
-      prepareWorktree,
-      featureLog,
-      config?.daemon_verbose ?? false,
-      {
-        projectRoot,
-        baseBranch,
-        baseSha: workOrderBaseSha,
-        events: featureEvents,
-        // Same resolved value the ordinary dispatch path threads into
-        // makeFeatureRunnerDeps below, so triage's hook and dispatch's hook
-        // can never be bounded differently.
-        dispatchStartTimeoutSeconds: resolveDispatchStartTimeoutSeconds(config),
-      },
-    );
-
-    // The injected callback is called only by stage 2 of the engine-owned
-    // ladder, after stage 1 proves setup still fails at a clean HEAD.
-    const dispatchFixSession = async () => {
-      // Construct a fresh DefaultStepRunner for this fix session
-      const sessionId = uuidv4();
-      const selectedRuntime = providerExecution.runtimes.get(
-        providerExecution.configuredProviders[0],
-      );
-      const stepRunner = new DefaultStepRunner(
-        selectedRuntime.provider,
-        sessionId,
-        worktree.path,
-        {
-          featureDesc: `setup-fix-${item.slug}`,
-          config,
-          modelPolicy: selectedRuntime.policy,
-        mode: 'auto',
-        providerExecution,
-        log: featureLog,
-        skillNameRoot: skillNameRootFor({ isSelfHost, worktreePath: worktree.path, harnessRoot: await resolveHarnessRoot() }),
-        },
-      );
-      featureLog(`[setup-triage] fix-session dispatched for ${item.slug} (session ${sessionId})`);
-      return stepRunner.resolveSetupFailure({
-        worktreePath: worktree.path,
-        outputTail: error.outputTail ?? '',
-        slug: item.slug,
-      });
-    };
-
-    return runSetupFailureTriage(
-      git,
-      worktree.path,
-      item.slug,
+  ) =>
+    runDaemonSetupTriage(
+      lifecycleContext(featureEvents ?? events),
       error,
-      runPrepare,
-      dispatchFixSession,
-      { log: featureLog },
+      worktree,
+      item,
+      providerExecution,
+      featureLog,
       featureEvents,
+      workOrderBaseSha,
     );
-  };
 
   // The same registry backs dispatcher claims and every maintenance liveness
   // check. A sweep may observe a terminal PR while its executor still owns the
@@ -2408,25 +2009,26 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     worktreeLifecycle,
   });
   const createWorkOrder = async (item: BacklogItem) => {
-    const baseSha = item.baseSha ?? await resolveDaemonBaseSha(projectRoot, baseBranch);
+    const baseSha = item.baseSha ?? (await resolveDaemonBaseSha(projectRoot, baseBranch));
     if (!baseSha) {
       throw new Error(`daemon work claim ${item.slug} could not resolve pinned base SHA`);
     }
-    const conductorRoot = conductorRootForModuleDir(__dirname);
     const enginePin = await resolveEnginePin({
-      conductorRoot,
-      storeRoot: resolveEngineStoreRoot({ conductorRoot }),
+      conductorRoot: engineRoot.conductorRoot,
+      storeRoot: resolveEngineStoreRoot({ conductorRoot: engineRoot.conductorRoot }),
       // A versioned install has its forkable index.js directly in __dirname.
-      ownEngineDir: __dirname,
+      ownEngineDir: engineRoot.ownEngineDir,
     });
     return buildWorkOrder(
       {
         repository: basename(projectRoot),
         slug: item.slug,
         baseSha,
+        baseBranch,
         enginePin,
         effectiveConcurrency: daemonConcurrency.concurrency,
         selfHost: isSelfHost,
+        readOnlyReviewCapabilities,
         documentRefs: await resolveDaemonWorkOrderDocumentRefs(projectRoot, baseSha, item.slug, item),
         tier: item.tier,
         sourceRef: item.sourceRef,
@@ -2447,29 +2049,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       return makeRunFeature({
         ...deps,
         deferTerminalEffects: true,
-        runSetupTriage: (
-          error,
-          worktree,
-          item,
-          providerExecution,
-          featureLog,
-          featureEvents,
-        ) => runSetupTriage(
-          error,
-          worktree,
-          item,
-          providerExecution,
-          featureLog,
-          featureEvents,
-          order.baseSha,
-        ),
+        runSetupTriage: (error, worktree, item, providerExecution, featureLog, featureEvents) =>
+          runSetupTriage(error, worktree, item, providerExecution, featureLog, featureEvents, order.baseSha),
         createWorktree: (slug) => deps.createWorktree(slug, order),
         prepareWorktree: (wt, log, events) => deps.prepareWorktree!(wt, log, events, order),
       })(item);
     },
   });
-  const conductorRoot = conductorRootForModuleDir(__dirname);
-  const engineStoreRoot = resolveEngineStoreRoot({ conductorRoot });
+  const engineStoreRoot = resolveEngineStoreRoot({ conductorRoot: engineRoot.conductorRoot });
   let protocolMismatchPending = false;
   const executorBroker = createExecutorBroker({
     rateLimitEpisode,
@@ -2486,10 +2073,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     projectRoot,
     // The order carries only a stable version id. Resolve it from the immutable
     // store at fork time, never through the floating dist link.
-    engineDirForOrder: (order, useSupervisorBuild) => useSupervisorBuild
-      ? __dirname
-      : realpathSync(join(engineStoreRoot, order.engineVersionId)),
-    supervisorEngineVersionId: resolveEngineVersion(__dirname),
+    engineDirForOrder: (order, useSupervisorBuild) =>
+      useSupervisorBuild ? engineRoot.ownEngineDir : realpathSync(join(engineStoreRoot, order.engineVersionId)),
+    supervisorEngineVersionId: resolveEngineVersion(engineRoot.ownEngineDir),
     rootEvents: events,
     attachBroker: executorBroker.attach,
     dispatchStartTimeoutMs: resolveDispatchStartTimeoutSeconds(config) * 1_000,
@@ -2500,6 +2086,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       return isArmed;
     },
     log,
+    ...(opts.executorFork === undefined ? {} : { fork: opts.executorFork }),
   });
   const childMode = (config?.executor_isolation ?? 'child') === 'child';
   const executor = childMode ? childExecutor : inProcessExecutor;
@@ -2520,10 +2107,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // Continuous with no ceiling at all runs unbounded — surface that loudly
   // rather than silently looping forever (Phase 7 "hard ceilings" intent).
   const hasCeiling =
-    opts.maxItems != null ||
-    opts.maxCostTokens != null ||
-    opts.maxRuntimeSeconds != null ||
-    opts.maxIdlePolls != null;
+    opts.maxItems != null || opts.maxCostTokens != null || opts.maxRuntimeSeconds != null || opts.maxIdlePolls != null;
   if (continuous && !hasCeiling) {
     log(
       'WARNING: --continuous with no ceiling (--max-items/--max-cost/--max-runtime/--max-idle-polls) runs unbounded; Ctrl-C to stop.',
@@ -2667,34 +2251,33 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // nothing to resume, and re-dispatching it is the "path does not exist"
       // loop this dedup was added to prevent.
       featureWorktreePresent: async (slug) =>
-        access(join(projectRoot, '.worktrees', slug)).then(() => true).catch(() => false),
+        access(join(projectRoot, '.worktrees', slug))
+          .then(() => true)
+          .catch(() => false),
       finishOutcomeRecorded: async (slug) =>
         access(join(projectRoot, '.worktrees', slug, '.pipeline', 'finish-choice'))
           .then(() => true)
           .catch(() => false),
-      fastForwardRoot: (root, sourceLog) => coordinatedRootMutation(
-        () => fastForwardRoot(root, sourceLog),
-        (reason) => log(`[daemon] root refresh deferred: ${reason}`),
-      ),
+      fastForwardRoot: (root, sourceLog) =>
+        coordinatedRootMutation(
+          () => fastForwardRoot(root, sourceLog),
+          (reason) => log(`[daemon] root refresh deferred: ${reason}`),
+        ),
       discoverBacklog: async (root, processed, discoveryLog, discoveryOpts) => {
         const scanBaseBranch = discoveryOpts.baseBranch ?? baseBranch;
         const baseSha = await resolveDaemonBaseSha(root, scanBaseBranch);
         if (!baseSha) throw new Error('daemon backlog scan could not resolve pinned base SHA');
-        return discoverBacklog(
-          root,
-          processed,
-          discoveryLog,
-          {
-            ...discoveryOpts,
-            // The entire scan, including marker bytes and decider attribution,
-            // reads the immutable claim base rather than a moving branch name.
-            baseBranch: baseSha,
-            baseSha,
-            featureApplicabilityEnabled: resolveFeatureApplicabilityConfig(config).enabled,
-            featureApplicabilityCustomStepNames: Object.keys(config?.steps ?? {})
-              .filter((name) => !ALL_STEPS.some((step) => step.name === name)),
-          },
-        );
+        return discoverBacklog(root, processed, discoveryLog, {
+          ...discoveryOpts,
+          // The entire scan, including marker bytes and decider attribution,
+          // reads the immutable claim base rather than a moving branch name.
+          baseBranch: baseSha,
+          baseSha,
+          featureApplicabilityEnabled: resolveFeatureApplicabilityConfig(config).enabled,
+          featureApplicabilityCustomStepNames: Object.keys(config?.steps ?? {}).filter(
+            (name) => !ALL_STEPS.some((step) => step.name === name),
+          ),
+        });
       },
       resolveDaemonOwner: makeMachineOwnerResolver(ownerGh, projectRoot),
       readStamp: (slug, baseRef) => readSpecOwnerStamp(ownerGit, baseRef, slug),
@@ -2787,9 +2370,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     // (FR-2). Read errors are logged as anomalies rather than thrown — the
     // sweep already fails toward parked on error (see daemon-rekick.ts).
     isOperatorParked: (slug) =>
-      isOperatorParked(projectRoot, slug, (err) =>
-        log(`anomaly checking if ${slug} is parked: ${err.message}`),
-      ),
+      isOperatorParked(projectRoot, slug, (err) => log(`anomaly checking if ${slug} is parked: ${err.message}`)),
     hasDurableChildState: (slug) => hasDurableChildState(join(worktreeBase, slug), slug),
     acquireFeatureDispatchLease: (slug) => acquireFeatureDispatchLease(projectRoot, slug, 'daemon re-kick'),
   };
@@ -2799,22 +2380,23 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // relink rebuilds the harness skill symlinks before self-host dispatches
   // triggerSelfRestart is injected from opts (respawn pane in session-hosted mode)
   const requestRestart = createRestartRequester(projectRoot, log, lock, process, {
-    relink: () => coordinatedRootMutation(
-      () => relinkSkillsForSelfBuild({ log }),
-      (reason) => log(`[daemon] root relink deferred: ${reason}`),
-    ),
+    relink: () =>
+      coordinatedRootMutation(
+        () => relinkSkillsForSelfBuild({ log }),
+        (reason) => log(`[daemon] root relink deferred: ${reason}`),
+      ),
     triggerSelfRestart: opts.triggerSelfRestart,
   });
 
   // Task 11: Create the suppression check wrapper that binds projectRoot
-  const suppressionChecker = (currentIdentity: string | null) =>
-    isSuppressed(currentIdentity, projectRoot, log);
+  const suppressionChecker = (currentIdentity: string | null) => isSuppressed(currentIdentity, projectRoot, log);
 
   const watch = opts.watch ?? true;
-  const watchHaltCleared = watch !== false
-    ? (slug: string, onCleared: () => void) =>
-        makeWatchHaltClearedSeam(worktreeBase, { recordRemote: { events } })(slug, onCleared)
-    : undefined;
+  const watchHaltCleared =
+    watch !== false
+      ? (slug: string, onCleared: () => void) =>
+          makeWatchHaltClearedSeam(worktreeBase, { recordRemote: { events } })(slug, onCleared)
+      : undefined;
 
   // Maintenance discovers repairs; the dispatcher owns their pool claims and
   // invokes these captured sanctioned call-sites at claim time.
@@ -2826,19 +2408,25 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     {
       claims: workClaims,
       repairPriority: (slug) => priorityResolver.bandForSlug?.(slug),
-      repairs: { queue: repairQueue, run: createClaimTimeRepairRunner({
-        projectRoot,
-        tracker,
-        log,
-        isWorkClaimActive,
-        requeue: (request) => { repairQueue.enqueue(request); },
-        applyOutcome: (completion, previous) => applyPooledRepairOutcome({
+      repairs: {
+        queue: repairQueue,
+        run: createClaimTimeRepairRunner({
           projectRoot,
-          previous,
-          ...completion,
+          tracker,
           log,
+          isWorkClaimActive,
+          requeue: (request) => {
+            repairQueue.enqueue(request);
+          },
+          applyOutcome: (completion, previous) =>
+            applyPooledRepairOutcome({
+              projectRoot,
+              previous,
+              ...completion,
+              log,
+            }),
         }),
-      }) },
+      },
       emitMaintenancePhase: (event) => events.emit(event),
       discoverBacklog: discoverAndCacheStartup,
       isHalted: (slug) => isHalted(worktreeBase, slug),
@@ -2850,7 +2438,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           events,
           log,
           ...(token.state === 'ok' ? { daemonBuildToken: token.token } : {}),
-          startFeatureEventScope: (worktreePath, featureSlug) => startFeatureEventPersistence(worktreePath, events, featureSlug),
+          startFeatureEventScope: (worktreePath, featureSlug) =>
+            startFeatureEventPersistence(worktreePath, events, featureSlug),
         });
       },
       // Task 14: wire the filesystem watcher for HALT marker removal.
@@ -2887,9 +2476,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       getGhVersionFloorDiagnostic: async () => {
         const verdict = await (opts.probeGhVersion ?? probeGhVersion)();
         if (verdict.kind === 'ok') return null;
-        const found = 'version' in verdict
-          ? `${verdict.version.major}.${verdict.version.minor}.${verdict.version.patch}`
-          : verdict.kind;
+        const found =
+          'version' in verdict
+            ? `${verdict.version.major}.${verdict.version.minor}.${verdict.version.patch}`
+            : verdict.kind;
         return `gh ${found} cannot satisfy the required ${GH_VERSION_FLOOR.major}.${GH_VERSION_FLOOR.minor}.${GH_VERSION_FLOOR.patch}; upgrade gh before dispatch resumes.`;
       },
       // Task 14 (FR-6): supply the shared remediation message (Task 7) so the
@@ -2908,12 +2498,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // which also fires the watchHaltCleared wake for immediate re-dispatch.
       // NOTE: this binding must stay wired — removing it silently no-ops
       // episode-caused HALT recovery (daemon.ts guards with ?.()).
-      onHaltWritten: async (slug, episodeCaused) =>
-        episodeHaltTracker.onHaltWritten(slug, episodeCaused),
+      onHaltWritten: async (slug, episodeCaused) => episodeHaltTracker.onHaltWritten(slug, episodeCaused),
       sweepEpisodeHalts: async (isParkedDep) => {
         await recoverEpisodeHalts({
-          stampedHalts: () =>
-            episodeHaltTracker.getEpisodeHalts((slug) => isHalted(worktreeBase, slug)),
+          stampedHalts: () => episodeHaltTracker.getEpisodeHalts((slug) => isHalted(worktreeBase, slug)),
           isOperatorParked: isParkedDep,
           // Sealed Story 3: share the base-advance sweep's retention predicate
           // so an episode that coincided with a human halt cannot clear it.
@@ -2965,13 +2553,16 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           try {
             await writeAutoPark(projectRoot, outcome.slug, effects.autoPark.reason);
           } catch (err) {
-            featureLog(`[daemon-runner] auto-park write failed for ${outcome.slug}: ${err instanceof Error ? err.message : String(err)}`);
-            await amendDeferredAutoParkHaltAtWorktree(join(worktreeBase, outcome.slug), outcome.slug, err)
-              .catch((amendmentError) => {
+            featureLog(
+              `[daemon-runner] auto-park write failed for ${outcome.slug}: ${err instanceof Error ? err.message : String(err)}`,
+            );
+            await amendDeferredAutoParkHaltAtWorktree(join(worktreeBase, outcome.slug), outcome.slug, err).catch(
+              (amendmentError) => {
                 featureLog(
                   `[daemon-runner] auto-park HALT amendment failed for ${outcome.slug}: ${amendmentError instanceof Error ? amendmentError.message : String(amendmentError)}`,
                 );
-              });
+              },
+            );
           }
         }
         if (effects.cleanupHaltPresentation && deps.projectRoot && deps.runGh) {
@@ -3013,10 +2604,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // (#309) hides. projectRoot is the harness root under self-host, so
       // src/conductor is its build package.
       rebuildEngine: isSelfHost
-        ? () => coordinatedRootMutation(
-          () => rebuildEngineFromSource(join(projectRoot, 'src', 'conductor')),
-          (reason) => log(`[daemon] engine rebuild deferred: ${reason}`),
-        )
+        ? () =>
+            coordinatedRootMutation(
+              () => rebuildEngineFromSource(join(projectRoot, 'src', 'conductor')),
+              (reason) => log(`[daemon] engine rebuild deferred: ${reason}`),
+            )
         : undefined,
       // Fast-forward the harness checkout to origin before each dispatch
       // (self-host only, NP4) so rebuildEngine above builds from
@@ -3029,8 +2621,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // (current, advanced) never warn.
       refreshEngineSource: isSelfHost
         ? (() => {
-            const minIntervalMs =
-              (config?.engine_refresh_min_interval_seconds ?? 300) * 1000;
+            const minIntervalMs = (config?.engine_refresh_min_interval_seconds ?? 300) * 1000;
             const throttle = createRefreshThrottle(minIntervalMs, Date.now);
             recordEngineSourceRefresh = () => throttle.markRan();
             const warner = createStalenessWarner(log);
@@ -3046,9 +2637,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
               );
               if (
                 outcome.status === 'skipped' &&
-                (outcome.cause === 'dirty' ||
-                  outcome.cause === 'diverged' ||
-                  outcome.cause === 'fetch-failed') &&
+                (outcome.cause === 'dirty' || outcome.cause === 'diverged' || outcome.cause === 'fetch-failed') &&
                 outcome.originHead
               ) {
                 warner.warn(outcome.cause, outcome.originHead, baseBranch);
@@ -3068,8 +2657,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // (Task 8) so the ancestry check reflects exactly what this daemon
       // booted with, not a re-read mid-run.
       probeEngineStaleness: (() => {
-        const minIntervalMs =
-          (config?.engine_refresh_min_interval_seconds ?? 300) * 1000;
+        const minIntervalMs = (config?.engine_refresh_min_interval_seconds ?? 300) * 1000;
         const throttle = createRefreshThrottle(minIntervalMs, Date.now);
         const warner = createStalenessWarner(log);
         const git = makeGitRunner(projectRoot);
@@ -3089,10 +2677,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // the backlog reads. A scheduler-approved refresh fast-forwards it first
       // so the SHA reflects origin's latest (driving ADR-013 re-kick on advance).
       resolveBaseSha: async ({ refresh }) => {
-        if (refresh) await coordinatedRootMutation(
-          () => fastForwardRoot(projectRoot, log, undefined, discoveryLogger),
-          (reason) => log(`[daemon] root refresh deferred: ${reason}`),
-        );
+        if (refresh)
+          await coordinatedRootMutation(
+            () => fastForwardRoot(projectRoot, log, undefined, discoveryLogger),
+            (reason) => log(`[daemon] root refresh deferred: ${reason}`),
+          );
         return readBaseSha(makeGitRunner(projectRoot), baseBranch);
       },
       readPersistedBaseSha: () => readPersistedBaseSha(projectRoot),
@@ -3185,7 +2774,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
           reclaimMergedWorktrees,
           isFeatureInFlight,
           inFlightSlugs: () => featureSlugs(workClaims),
-          onEvent: (event) => { void events.emit(event); },
+          onEvent: (event) => {
+            void events.emit(event);
+          },
           getIssueState: tracker.getIssueState.bind(tracker),
           requestRecordRepair: makeRecordRepairRequester({ cwd: projectRoot, log, events }),
           disposeHaltWatcher,
@@ -3198,292 +2789,343 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // NOTE: this binding must stay wired — removing it silently no-ops all
       // startup and idle-poll sweeps in production (daemon.ts guards with ?.()).
       sweepMergeableLabels: async ({ isFeatureInFlight }) => {
-        await sweepMergeableLabels(createDaemonSweepBinding({
-          projectRoot,
-          log,
-          tracker,
-          teardownWorktree: deps.teardownWorktree,
-          canRemoveWorktree,
-          repairs: {
-            queue: repairQueue,
-          },
-          isRepairRunning: (prUrl) => workClaims.list().includes(encodeClaimKey({ kind: 'repair', prUrl })),
-          isFeatureInFlight,
-          // Task 17: dispatch autoresolve for the first eligible CONFLICTING
-          // PR after the label pass, gated on `mergeable_autoresolve.enabled`
-          // so a disabled/absent config leaves the sweep unchanged (AC4).
-          autoresolve: {
-            enabled: config?.mergeable_autoresolve?.enabled ?? false,
-            isEligible: makeAutoresolveEligibility(config, isWorkClaimActive, log),
-            dispatch: async (entry) => {
-              log(`[mergeable-sweep] autoresolve dispatch: ${entry.prUrl} (attempt ${entry.resolveAttempts})`);
+        await sweepMergeableLabels(
+          createDaemonSweepBinding(
+            {
+              projectRoot,
+              log,
+              tracker,
+              teardownWorktree: deps.teardownWorktree,
+              canRemoveWorktree,
+              repairs: {
+                queue: repairQueue,
+              },
+              isRepairRunning: (prUrl) => workClaims.list().includes(encodeClaimKey({ kind: 'repair', prUrl })),
+              isFeatureInFlight,
+              // Task 17: dispatch autoresolve for the first eligible CONFLICTING
+              // PR after the label pass, gated on `mergeable_autoresolve.enabled`
+              // so a disabled/absent config leaves the sweep unchanged (AC4).
+              autoresolve: {
+                enabled: config?.mergeable_autoresolve?.enabled ?? false,
+                isEligible: makeAutoresolveEligibility(config, isWorkClaimActive, log),
+                dispatch: async (entry) => {
+                  log(`[mergeable-sweep] autoresolve dispatch: ${entry.prUrl} (attempt ${entry.resolveAttempts})`);
 
-              try {
-                // Fetch the branch name from the PR
-                const prViewStdout = await runTrackerUrlRead(
-                  makeProductionGh(), entry.repoCwd, 'pull-request', entry.prUrl,
-                  ['pr', 'view', entry.prUrl, '--json', 'headRefName', '--jq', '.headRefName'],
-                );
-
-                const branch = (prViewStdout || '').toString().trim();
-                if (!branch) {
-                  log(`[autoresolve] empty branch name for ${entry.prUrl}`);
-                  return { kind: 'escalated' };
-                }
-
-                // Create a gh runner (wrapper around gh commands)
-                const productionGh = makeProductionGh();
-                const ghRunner = async (args: string[], opts: { credential?: 'operator' | 'write' } = {}) =>
-                  productionGh(args, { cwd: entry.repoCwd, ...opts });
-
-                // Create a suite runner (executes the suite command in the worktree)
-                const runSuite = async (projectRoot: string) => {
-                  const cmd = config?.mergeable_autoresolve?.suiteCommand;
-                  if (!cmd) {
-                    return { exitCode: 0, durationMs: 0, configured: false };
-                  }
-
-                  const startMs = Date.now();
                   try {
-                    await execFile('sh', ['-c', cmd], {
-                      cwd: projectRoot,
-                      encoding: 'utf-8',
-                      // A full suite prints well over the 1 MiB default; an
-                      // overflow must not masquerade as a test failure.
-                      maxBuffer: 64 * 1024 * 1024,
-                    });
-                    return {
-                      exitCode: 0,
-                      durationMs: Date.now() - startMs,
-                      configured: true,
-                    };
-                  } catch (err: any) {
-                    // execFile reports a non-zero exit as a numeric `code`, a
-                    // kill as `signal`, and spawn failures as string codes.
-                    const exitCode = typeof err.code === 'number' ? err.code : err.signal ? 128 : 1;
-                    const cause = typeof err.code === 'number'
-                      ? ''
-                      : `runner: ${err.signal ? `killed by ${err.signal}` : String(err.code ?? err.message ?? 'unknown error')}\n`;
-                    return {
-                      exitCode,
-                      durationMs: Date.now() - startMs,
-                      configured: true,
-                      summary: summarizeSuiteFailure(`${cause}${String(err.stdout ?? '')}`, String(err.stderr ?? '')),
-                    };
-                  }
-                };
+                    // Fetch the branch name from the PR
+                    const prViewStdout = await runTrackerUrlRead(
+                      makeProductionGh(),
+                      entry.repoCwd,
+                      'pull-request',
+                      entry.prUrl,
+                      ['pr', 'view', entry.prUrl, '--json', 'headRefName', '--jq', '.headRefName'],
+                    );
 
-                // Resolution events belong to the feature being refreshed, not
-                // the daemon's aggregate ledger. The forwarding emitter keeps
-                // daemon observers live while persisting the canonical copy in
-                // this feature worktree.
-                return await withFeatureEventPersistence({
-                  worktreePath: join(projectRoot, '.worktrees', entry.slug), globalEvents: events, featureSlug: entry.slug,
-                  run: async (featureEvents) => {
-                subscribeRecoverySessionOccurrences(
-                  featureEvents,
-                  createFeatureDaemonLogger(
-                    entry.slug,
-                    (message) => log(message, true),
-                    formatDaemonFeatureTag(entry.slug),
-                  ),
-                );
-                  // Create a real Tier-2 resolver that dispatches to the /rebase skill
-                  // FR-7: wire stepRunner and events for rebase resolution dispatch
-                  let attempt = 0;
-                  const attemptCap = resolveRebaseResolutionAttempts(config);
-                  const resolver: RebaseResolver = async (ctx) => {
-                  attempt += 1;
-                  try {
-                    await featureEvents.emit({ type: 'rebase_resolution_attempt', index: attempt, cap: attemptCap });
-                  } catch {
-                    /* best-effort: event emission must not block resolution */
-                  }
-                  try {
-                    return await withSessionEventTail({
-                      // Rebase constructs a transient repair worktree. Tail
-                      // its producer root, while featureScope retains the
-                      // canonical ledger and feature-scoped renderer.
-                      projectRoot: ctx.projectRoot,
-                      events: featureEvents,
-                      featureSlug: entry.slug,
-                      run: async () => {
-                        const sessionId = uuidv4();
-                        const dispatchId = createSessionEventIdentity();
-                        const providerExecution = await createSlugScopedProviderExecution(
-                          entry.slug,
-                          ctx.projectRoot,
-                          dispatchId,
-                        );
-                        const selectedRuntime = providerExecution.runtimes.get(
-                          providerExecution.configuredProviders[0],
-                        );
-                        const stepRunner = new DefaultStepRunner(
-                          selectedRuntime.provider,
-                          sessionId,
-                          ctx.projectRoot,
-                          {
-                            featureDesc: `rebase-resolution-${entry.slug}`,
-                            config,
-                            modelPolicy: selectedRuntime.policy,
-                            mode: 'auto',
-                            providerExecution,
-                            log: createFeatureDaemonLogger(
-                              entry.slug,
-                              (message) => log(message, true),
-                              formatDaemonFeatureTag(entry.slug),
-                            ),
-                            skillNameRoot: skillNameRootFor({ isSelfHost, worktreePath: ctx.projectRoot, harnessRoot: await resolveHarnessRoot() }),
-                          },
-                        );
-                        return stepRunner.resolveRebaseConflict(ctx);
-                      },
-                    });
-                  } catch (err) {
-                    return {
-                      resolved: false,
-                      reason: err instanceof Error ? err.message : String(err),
-                    };
-                  }
-                  };
+                    const branch = (prViewStdout || '').toString().trim();
+                    if (!branch) {
+                      log(`[autoresolve] empty branch name for ${entry.prUrl}`);
+                      return { kind: 'escalated' };
+                    }
 
-                  // Run the full resolution pipeline
-                  const outcome = await resolveConflictingPr(
-                  entry,
-                  branch,
-                  {
-                    enabled: config?.mergeable_autoresolve?.enabled ?? false,
-                    suiteCommand: config?.mergeable_autoresolve?.suiteCommand ?? '',
-                    cooldownMinutes: config?.mergeable_autoresolve?.cooldownMinutes ?? 60,
-                    attemptCap,
-                  },
-                    { runGh: ghRunner, runSuite, resolver, log, isFeatureInFlight: isWorkClaimActive, worktreeLifecycle, events: featureEvents },
-                  );
+                    // Create a gh runner (wrapper around gh commands)
+                    const productionGh = makeProductionGh();
+                    const ghRunner = async (args: string[], opts: { credential?: 'operator' | 'write' } = {}) =>
+                      productionGh(args, { cwd: entry.repoCwd, ...opts });
 
-                  log(`[autoresolve] outcome for ${entry.prUrl}: ${outcome.kind}`);
-                  return { kind: outcome.kind };
-                  },
-                });
-              } catch (err: any) {
-                log(`[autoresolve] error resolving ${entry.prUrl}: ${err?.message || err}`);
-                return { kind: 'escalated' };
-              }
-            },
-          },
-          // Task 23: dispatch ci-fix for the first eligible failed-CI PR after
-          // the label pass, gated on `ci_watch.enabled` (default true — fail-safe
-          // per CiWatchConfig) so a disabled config leaves the sweep unchanged
-          // (AC3), and mirrors the `autoresolve` binding above (AC4).
-          ciFix: {
-            enabled: config?.ci_watch?.enabled ?? true,
-            isEligible: (entry, state) =>
-              isEligibleForCiFix(entry, state, config, new Date(), log),
-            diagnostic: async (entry, state) => {
-              const reason = classifyCiContextFailure(state);
-              await events.emit({ type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
-                stage: 'context', reason, disposition: 'deferred' });
-            },
-            dispatch: async (entry, state) => {
-              if (!ciFixEnabled) return { kind: 'not-started' };
-              return await withFeatureEventPersistence({
-                worktreePath: join(projectRoot, '.worktrees', entry.slug), globalEvents: events, featureSlug: entry.slug,
-                run: async (featureEvents) => {
-              subscribeRecoverySessionOccurrences(
-                featureEvents,
-                createFeatureDaemonLogger(
-                  entry.slug,
-                  (message) => log(message, true),
-                  formatDaemonFeatureTag(entry.slug),
-                ),
-              );
-              const dispatchCiFix = createDaemonCiFixDispatch({
-                tracker: createGithubTrackerClient(makeProductionGh()),
-                // Feature-scoped transport: pin gh to the entry's repo so the remote
-                // mutation guard resolves against the feature's repository.
-                gh: (args, opts) => makeProductionGh()(args, { ...opts, cwd: entry.repoCwd }),
-                liveness: { isFeatureInFlight: isWorkClaimActive, worktreeLifecycle, log },
-                events,
-                log,
-                diagnostic: async ({ stage, reason, provider }) => {
-                  void events.emit({ type: 'ci_repair_diagnostic', prUrl: entry.prUrl, slug: entry.slug,
-                    stage, reason,
-                    disposition: ciRepairPreDispatchDisposition(stage), provider });
-                },
-                createDispatcher: () => ({
-                // Route the ci-fix dispatch through resolveCiFailure (T4):
-                // adapt a real DefaultStepRunner into productionCiFixRunner's
-                // dispatcher seam instead of wiring the bare exec-based
-                // runner directly — mirrors the resolveRebaseConflict /
-                // DefaultStepRunner pattern used for rebase resolution above.
-                  resolveCiFailure: async (ctx: { worktreePath: string; hint: string; entry: typeof entry }) => {
-                    return withSessionEventTail({
-                      // CI repair owns a transient checkout just like rebase;
-                      // delivery still belongs to the retained feature scope.
-                      projectRoot: ctx.worktreePath,
-                      events: featureEvents,
-                      featureSlug: ctx.entry.slug,
-                      run: async () => {
-                        const sessionId = uuidv4();
-                        const dispatchId = createSessionEventIdentity();
-                        const providerExecution = await createSlugScopedProviderExecution(
-                          ctx.entry.slug,
-                          ctx.worktreePath,
-                          dispatchId,
-                        );
-                        const selectedRuntime = providerExecution.runtimes.get(
-                          providerExecution.configuredProviders[0],
-                        );
-                        const stepRunner = new DefaultStepRunner(
-                          selectedRuntime.provider,
-                          sessionId,
-                          ctx.worktreePath,
-                          {
-                            featureDesc: `ci-fix-resolution-${ctx.entry.slug}`,
-                            config,
-                            modelPolicy: selectedRuntime.policy,
-                            mode: 'auto',
-                            providerExecution,
-                            log: createFeatureDaemonLogger(
-                              ctx.entry.slug,
-                              (message) => log(message, true),
-                              formatDaemonFeatureTag(ctx.entry.slug),
-                            ),
-                            skillNameRoot: skillNameRootFor({ isSelfHost, worktreePath: ctx.worktreePath, harnessRoot: await resolveHarnessRoot() }),
-                          },
-                        );
-                        return stepRunner.resolveCiFailure({
-                          worktreePath: ctx.worktreePath,
-                          prUrl: ctx.entry.prUrl,
-                          hint: ctx.hint,
-                          slug: ctx.entry.slug,
+                    // Create a suite runner (executes the suite command in the worktree)
+                    const runSuite = async (projectRoot: string) => {
+                      const cmd = config?.mergeable_autoresolve?.suiteCommand;
+                      if (!cmd) {
+                        return { exitCode: 0, durationMs: 0, configured: false };
+                      }
+
+                      const startMs = Date.now();
+                      try {
+                        await execFile('sh', ['-c', cmd], {
+                          cwd: projectRoot,
+                          encoding: 'utf-8',
+                          // A full suite prints well over the 1 MiB default; an
+                          // overflow must not masquerade as a test failure.
+                          maxBuffer: 64 * 1024 * 1024,
                         });
+                        return {
+                          exitCode: 0,
+                          durationMs: Date.now() - startMs,
+                          configured: true,
+                        };
+                      } catch (err: any) {
+                        // execFile reports a non-zero exit as a numeric `code`, a
+                        // kill as `signal`, and spawn failures as string codes.
+                        const exitCode = typeof err.code === 'number' ? err.code : err.signal ? 128 : 1;
+                        const cause =
+                          typeof err.code === 'number'
+                            ? ''
+                            : `runner: ${err.signal ? `killed by ${err.signal}` : String(err.code ?? err.message ?? 'unknown error')}\n`;
+                        return {
+                          exitCode,
+                          durationMs: Date.now() - startMs,
+                          configured: true,
+                          summary: summarizeSuiteFailure(
+                            `${cause}${String(err.stdout ?? '')}`,
+                            String(err.stderr ?? ''),
+                          ),
+                        };
+                      }
+                    };
+
+                    // Resolution events belong to the feature being refreshed, not
+                    // the daemon's aggregate ledger. The forwarding emitter keeps
+                    // daemon observers live while persisting the canonical copy in
+                    // this feature worktree.
+                    return await withFeatureEventPersistence({
+                      worktreePath: join(projectRoot, '.worktrees', entry.slug),
+                      globalEvents: events,
+                      featureSlug: entry.slug,
+                      run: async (featureEvents) => {
+                        subscribeRecoverySessionOccurrences(
+                          featureEvents,
+                          createFeatureDaemonLogger(
+                            entry.slug,
+                            (message) => log(message, true),
+                            formatDaemonFeatureTag(entry.slug),
+                          ),
+                        );
+                        // Create a real Tier-2 resolver that dispatches to the /rebase skill
+                        // FR-7: wire stepRunner and events for rebase resolution dispatch
+                        let attempt = 0;
+                        const attemptCap = resolveRebaseResolutionAttempts(config);
+                        const resolver: RebaseResolver = async (ctx) => {
+                          attempt += 1;
+                          try {
+                            await featureEvents.emit({
+                              type: 'rebase_resolution_attempt',
+                              index: attempt,
+                              cap: attemptCap,
+                            });
+                          } catch {
+                            /* best-effort: event emission must not block resolution */
+                          }
+                          try {
+                            return await withSessionEventTail({
+                              // Rebase constructs a transient repair worktree. Tail
+                              // its producer root, while featureScope retains the
+                              // canonical ledger and feature-scoped renderer.
+                              projectRoot: ctx.projectRoot,
+                              events: featureEvents,
+                              featureSlug: entry.slug,
+                              run: async () => {
+                                const sessionId = uuidv4();
+                                const dispatchId = createSessionEventIdentity();
+                                const providerExecution = await createSlugScopedProviderExecution(
+                                  entry.slug,
+                                  ctx.projectRoot,
+                                  dispatchId,
+                                );
+                                const selectedRuntime = providerExecution.runtimes.get(
+                                  providerExecution.configuredProviders[0],
+                                );
+                                const stepRunner = new DefaultStepRunner(
+                                  selectedRuntime.provider,
+                                  sessionId,
+                                  ctx.projectRoot,
+                                  {
+                                    featureDesc: `rebase-resolution-${entry.slug}`,
+                                    config,
+                                    modelPolicy: selectedRuntime.policy,
+                                    mode: 'auto',
+                                    providerExecution,
+                                    log: createFeatureDaemonLogger(
+                                      entry.slug,
+                                      (message) => log(message, true),
+                                      formatDaemonFeatureTag(entry.slug),
+                                    ),
+                                    skillNameRoot: skillNameRootFor({
+                                      isSelfHost,
+                                      worktreePath: ctx.projectRoot,
+                                      harnessRoot: await resolveHarnessRoot(),
+                                    }),
+                                  },
+                                );
+                                return stepRunner.resolveRebaseConflict(ctx);
+                              },
+                            });
+                          } catch (err) {
+                            return {
+                              resolved: false,
+                              reason: err instanceof Error ? err.message : String(err),
+                            };
+                          }
+                        };
+
+                        // Run the full resolution pipeline
+                        const outcome = await resolveConflictingPr(
+                          entry,
+                          branch,
+                          {
+                            enabled: config?.mergeable_autoresolve?.enabled ?? false,
+                            suiteCommand: config?.mergeable_autoresolve?.suiteCommand ?? '',
+                            cooldownMinutes: config?.mergeable_autoresolve?.cooldownMinutes ?? 60,
+                            attemptCap,
+                          },
+                          {
+                            runGh: ghRunner,
+                            runSuite,
+                            resolver,
+                            log,
+                            isFeatureInFlight: isWorkClaimActive,
+                            worktreeLifecycle,
+                            events: featureEvents,
+                          },
+                        );
+
+                        log(`[autoresolve] outcome for ${entry.prUrl}: ${outcome.kind}`);
+                        return { kind: outcome.kind };
                       },
                     });
-                  },
-                }),
-              });
-              const outcome = await dispatchCiFix(entry, state);
-              if (outcome.kind === 'needs-human') {
-                log(`[ci-fix] setup-only provider exhaustion for ${entry.prUrl}; parking for human recovery`);
-              }
-              if (outcome.kind === 'failed' || outcome.kind === 'published') {
-                await events.emit(ciRepairOutcomeDiagnostic(entry, outcome));
-              }
-              return outcome;
+                  } catch (err: any) {
+                    log(`[autoresolve] error resolving ${entry.prUrl}: ${err?.message || err}`);
+                    return { kind: 'escalated' };
+                  }
                 },
-              });
+              },
+              // Task 23: dispatch ci-fix for the first eligible failed-CI PR after
+              // the label pass, gated on `ci_watch.enabled` (default true — fail-safe
+              // per CiWatchConfig) so a disabled config leaves the sweep unchanged
+              // (AC3), and mirrors the `autoresolve` binding above (AC4).
+              ciFix: {
+                enabled: config?.ci_watch?.enabled ?? true,
+                isEligible: (entry, state) => isEligibleForCiFix(entry, state, config, new Date(), log),
+                diagnostic: async (entry, state) => {
+                  const reason = classifyCiContextFailure(state);
+                  await events.emit({
+                    type: 'ci_repair_diagnostic',
+                    prUrl: entry.prUrl,
+                    slug: entry.slug,
+                    stage: 'context',
+                    reason,
+                    disposition: 'deferred',
+                  });
+                },
+                dispatch: async (entry, state) => {
+                  if (!ciFixEnabled) return { kind: 'not-started' };
+                  return await withFeatureEventPersistence({
+                    worktreePath: join(projectRoot, '.worktrees', entry.slug),
+                    globalEvents: events,
+                    featureSlug: entry.slug,
+                    run: async (featureEvents) => {
+                      subscribeRecoverySessionOccurrences(
+                        featureEvents,
+                        createFeatureDaemonLogger(
+                          entry.slug,
+                          (message) => log(message, true),
+                          formatDaemonFeatureTag(entry.slug),
+                        ),
+                      );
+                      const dispatchCiFix = createDaemonCiFixDispatch({
+                        tracker: createGithubTrackerClient(makeProductionGh()),
+                        // Feature-scoped transport: pin gh to the entry's repo so the remote
+                        // mutation guard resolves against the feature's repository.
+                        gh: (args, opts) => makeProductionGh()(args, { ...opts, cwd: entry.repoCwd }),
+                        liveness: { isFeatureInFlight: isWorkClaimActive, worktreeLifecycle, log },
+                        events,
+                        log,
+                        diagnostic: async ({ stage, reason, provider }) => {
+                          void events.emit({
+                            type: 'ci_repair_diagnostic',
+                            prUrl: entry.prUrl,
+                            slug: entry.slug,
+                            stage,
+                            reason,
+                            disposition: ciRepairPreDispatchDisposition(stage),
+                            provider,
+                          });
+                        },
+                        createDispatcher: () => ({
+                          // Route the ci-fix dispatch through resolveCiFailure (T4):
+                          // adapt a real DefaultStepRunner into productionCiFixRunner's
+                          // dispatcher seam instead of wiring the bare exec-based
+                          // runner directly — mirrors the resolveRebaseConflict /
+                          // DefaultStepRunner pattern used for rebase resolution above.
+                          resolveCiFailure: async (ctx: {
+                            worktreePath: string;
+                            hint: string;
+                            entry: typeof entry;
+                          }) => {
+                            return withSessionEventTail({
+                              // CI repair owns a transient checkout just like rebase;
+                              // delivery still belongs to the retained feature scope.
+                              projectRoot: ctx.worktreePath,
+                              events: featureEvents,
+                              featureSlug: ctx.entry.slug,
+                              run: async () => {
+                                const sessionId = uuidv4();
+                                const dispatchId = createSessionEventIdentity();
+                                const providerExecution = await createSlugScopedProviderExecution(
+                                  ctx.entry.slug,
+                                  ctx.worktreePath,
+                                  dispatchId,
+                                );
+                                const selectedRuntime = providerExecution.runtimes.get(
+                                  providerExecution.configuredProviders[0],
+                                );
+                                const stepRunner = new DefaultStepRunner(
+                                  selectedRuntime.provider,
+                                  sessionId,
+                                  ctx.worktreePath,
+                                  {
+                                    featureDesc: `ci-fix-resolution-${ctx.entry.slug}`,
+                                    config,
+                                    modelPolicy: selectedRuntime.policy,
+                                    mode: 'auto',
+                                    providerExecution,
+                                    log: createFeatureDaemonLogger(
+                                      ctx.entry.slug,
+                                      (message) => log(message, true),
+                                      formatDaemonFeatureTag(ctx.entry.slug),
+                                    ),
+                                    skillNameRoot: skillNameRootFor({
+                                      isSelfHost,
+                                      worktreePath: ctx.worktreePath,
+                                      harnessRoot: await resolveHarnessRoot(),
+                                    }),
+                                  },
+                                );
+                                return stepRunner.resolveCiFailure({
+                                  worktreePath: ctx.worktreePath,
+                                  prUrl: ctx.entry.prUrl,
+                                  hint: ctx.hint,
+                                  slug: ctx.entry.slug,
+                                });
+                              },
+                            });
+                          },
+                        }),
+                      });
+                      const outcome = await dispatchCiFix(entry, state);
+                      if (outcome.kind === 'needs-human') {
+                        log(`[ci-fix] setup-only provider exhaustion for ${entry.prUrl}; parking for human recovery`);
+                      }
+                      if (outcome.kind === 'failed' || outcome.kind === 'published') {
+                        await events.emit(ciRepairOutcomeDiagnostic(entry, outcome));
+                      }
+                      return outcome;
+                    },
+                  });
+                },
+              },
+              operations: (entry) => {
+                const target = parseIssueRef(entry.prUrl);
+                if (!target) return undefined;
+                return haltPrOperations({
+                  number: Number(target.number),
+                  url: entry.prUrl,
+                  headRefName: leafBranchFor(entry.slug),
+                });
+              },
             },
-          },
-          operations: (entry) => {
-            const target = parseIssueRef(entry.prUrl);
-            if (!target) return undefined;
-            return haltPrOperations({
-              number: Number(target.number),
-              url: entry.prUrl,
-              headRefName: leafBranchFor(entry.slug),
-            });
-          },
-        }, events));
+            events,
+          ),
+        );
       },
       // Task T28: check for pending restart marker at idle boundary.
       hasRestartPending: async () => {
@@ -3496,12 +3138,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       // Task T28: trigger self-restart when marker is pending (injected from supervisor/bare-run).
       triggerSelfRestart: opts.triggerSelfRestart,
       // Queued supervisor restarts rebuild/relink only for the harness self-host.
-      ...(isSelfHost ? {
-        relink: () => coordinatedRootMutation(
-          () => relinkSkillsForSelfBuild({ log }),
-          (reason) => log(`[daemon] root relink deferred: ${reason}`),
-        ),
-      } : {}),
+      ...(isSelfHost
+        ? {
+            relink: () =>
+              coordinatedRootMutation(
+                () => relinkSkillsForSelfBuild({ log }),
+                (reason) => log(`[daemon] root relink deferred: ${reason}`),
+              ),
+          }
+        : {}),
       // Task T30: consume restart marker in bare-run mode (when triggerSelfRestart absent).
       consumeRestartPending: async () => {
         return await consumeOnBoot(projectRoot);
@@ -3519,11 +3164,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       concurrency: daemonConcurrency.concurrency,
       maxItems: opts.maxItems,
       maxTotalCostTokens: opts.maxCostTokens,
-      maxRuntimeMs:
-        opts.maxRuntimeSeconds != null ? opts.maxRuntimeSeconds * 1000 : undefined,
+      maxRuntimeMs: opts.maxRuntimeSeconds != null ? opts.maxRuntimeSeconds * 1000 : undefined,
       once: !continuous,
-      idlePollMs:
-        opts.idlePollSeconds != null ? opts.idlePollSeconds * 1000 : undefined,
+      idlePollMs: opts.idlePollSeconds != null ? opts.idlePollSeconds * 1000 : undefined,
       maxIdlePolls: opts.maxIdlePolls,
       // Task 12: wire stale-engine detection gate inputs
       isSelfHost,
@@ -3544,9 +3187,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   process.off('SIGTERM', daemonSigtermHandler);
   log(`finished: ${result.processed.length} feature(s) (${result.stoppedReason})`);
   for (const o of result.processed) {
-    log(
-      `  ${o.slug}: ${o.status}${o.prUrl ? ` ${o.prUrl}` : ''}${o.reason ? ` — ${o.reason}` : ''}`,
-    );
+    log(`  ${o.slug}: ${o.status}${o.prUrl ? ` ${o.prUrl}` : ''}${o.reason ? ` — ${o.reason}` : ''}`);
   }
 
   // Normal completion: drop the crash backstop, restore the console tee,
@@ -3592,16 +3233,8 @@ export function resetRenderedReclaimRetentions(): void {
  * here keeps their live provider identity on the same surface as a feature
  * dispatch without forwarding it to the untagged daemon logger.
  */
-export function subscribeScopedProviderRendering(
-  events: ConductorEventEmitter,
-  log: (msg: string) => void,
-): void {
-  for (const type of [
-    'provider_attempt',
-    'provider_fallback',
-    'session_policy',
-    'provider_attempt_started',
-  ] as const) {
+export function subscribeScopedProviderRendering(events: ConductorEventEmitter, log: (msg: string) => void): void {
+  for (const type of ['provider_attempt', 'provider_fallback', 'session_policy', 'provider_attempt_started'] as const) {
     events.on(type, (event) => renderDaemonEvent(event, log));
   }
 }
@@ -3617,7 +3250,8 @@ export function renderDaemonEvent(event: ConductorEvent, log: (msg: string) => v
   // isn't there) degrades to a dropped line, not a process crash.
   try {
     renderDaemonEventUnsafe(event, (message) => {
-      for (const body of composeDaemonLineBodies(message, DAEMON_EVENT_DEPTH[event.type as RenderedEventType])) log(body);
+      for (const body of composeDaemonLineBodies(message, DAEMON_EVENT_DEPTH[event.type as RenderedEventType]))
+        log(body);
     });
   } catch {
     // Best-effort: rendering a daemon.log line must never disrupt the run.
@@ -3630,14 +3264,17 @@ function buildReviewLapTag(lapId: string): string {
 
 /** Render a configured branch as its stable parent/member subject, never as a policy step. */
 function renderedExecutionSubject(event: ConductorEvent, legacyStep: string): string {
-  return resolveExecutionIdentity({
-    scope: {
-      featureId: forwardedFeatureOf(event) ?? ('slug' in event && typeof event.slug === 'string' ? event.slug : 'daemon'),
-      runId: 'daemon-renderer',
-    },
-    legacyStep,
-    executionContext: 'executionContext' in event ? event.executionContext : undefined,
-  })?.subjectLabel ?? legacyStep;
+  return (
+    resolveExecutionIdentity({
+      scope: {
+        featureId:
+          forwardedFeatureOf(event) ?? ('slug' in event && typeof event.slug === 'string' ? event.slug : 'daemon'),
+        runId: 'daemon-renderer',
+      },
+      legacyStep,
+      executionContext: 'executionContext' in event ? event.executionContext : undefined,
+    })?.subjectLabel ?? legacyStep
+  );
 }
 
 function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => void): void {
@@ -3647,20 +3284,27 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
   const dot = '';
   switch (event.type) {
     case 'executor_protocol_mismatch':
-      log(`${dot} executor ${event.slug} protocol mismatch: ${event.reason}${event.restartRequested ? ' (restart requested)' : ''}`);
+      log(
+        `${dot} executor ${event.slug} protocol mismatch: ${event.reason}${event.restartRequested ? ' (restart requested)' : ''}`,
+      );
       break;
     case 'executor_started':
-      log(`${dot} executor ${event.slug} started on ${event.engineVersionId} (protocol ${event.protocolVersion}; supervisor ${event.supervisorEngineVersionId})`);
+      log(
+        `${dot} executor ${event.slug} started on ${event.engineVersionId} (protocol ${event.protocolVersion}; supervisor ${event.supervisorEngineVersionId})`,
+      );
       break;
     case 'test_suite_verification':
       if (event.executionSummary) {
-        log(`${dot} test suite ${event.executionSummary.attemptedEntryCount}/${event.executionSummary.plannedEntryCount}: ${event.executionSummary.entries.map((entry) => `#${entry.index + 1} ${entry.result} (${entry.durationMs}ms)`).join(', ')}`);
+        log(
+          `${dot} test suite ${event.executionSummary.attemptedEntryCount}/${event.executionSummary.plannedEntryCount}: ${event.executionSummary.entries.map((entry) => `#${entry.index + 1} ${entry.result} (${entry.durationMs}ms)`).join(', ')}`,
+        );
       }
       break;
     case 'setup_repair': {
-      const rejection = event.disposition === 'rejected'
-        ? ` (${event.reason}${event.quarantineRef ? `; ${event.quarantineRef}` : ''})`
-        : '';
+      const rejection =
+        event.disposition === 'rejected'
+          ? ` (${event.reason}${event.quarantineRef ? `; ${event.quarantineRef}` : ''})`
+          : '';
       log(`${dot} setup repair ${event.disposition}${rejection}`);
       break;
     }
@@ -3673,9 +3317,7 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       break;
     }
     case 'operator_rewind':
-      log(
-        `${chalk.yellow('↶ REWIND:')} ${event.target} (operator; demoted ${event.demoted.join(', ') || 'none'})`,
-      );
+      log(`${chalk.yellow('↶ REWIND:')} ${event.target} (operator; demoted ${event.demoted.join(', ') || 'none'})`);
       break;
     case 'plan_growth': {
       const byGate = Object.entries(event.byGate)
@@ -3683,18 +3325,24 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
         .join(', ');
       log(
         `${dot} ${chalk.yellow('PLAN GROWTH:')} authored ${event.authored}; ` +
-        `added ${event.added}${byGate ? ` (${byGate})` : ''}; ` +
-        `remaining ${event.remaining}/${event.added + event.remaining}`,
+          `added ${event.added}${byGate ? ` (${byGate})` : ''}; ` +
+          `remaining ${event.remaining}/${event.added + event.remaining}`,
       );
       break;
     }
     case 'build_review_cache_discarded':
-      log(`${dot} ${chalk.yellow(`build_review cache discarded: ${event.rubric} (${event.reason}; cached ${event.cachedEngineStamp ?? 'pre-identity'} -> current ${event.currentEngineStamp})`)}`);
+      log(
+        `${dot} ${chalk.yellow(`build_review cache discarded: ${event.rubric} (${event.reason}; cached ${event.cachedEngineStamp ?? 'pre-identity'} -> current ${event.currentEngineStamp})`)}`,
+      );
       break;
     case 'remediation_adjudication_completed':
-      log(`${dot} build_review adjudication completed (${event.caseIds.length} settled case${event.caseIds.length === 1 ? '' : 's'})`);
+      log(
+        `${dot} build_review adjudication completed (${event.caseIds.length} settled case${event.caseIds.length === 1 ? '' : 's'})`,
+      );
       for (const stop of event.decisionStops ?? []) {
-        log(`${dot} ${chalk.yellow(`build_review decision stop: case ${stop.caseId} needs a ${stop.owner ?? 'consistency'} decision (${stop.sourceIds.length} source${stop.sourceIds.length === 1 ? '' : 's'}) — ${stop.rationale}`)}`);
+        log(
+          `${dot} ${chalk.yellow(`build_review decision stop: case ${stop.caseId} needs a ${stop.owner ?? 'consistency'} decision (${stop.sourceIds.length} source${stop.sourceIds.length === 1 ? '' : 's'}) — ${stop.rationale}`)}`,
+        );
       }
       break;
     case 'remediation_case_refuted':
@@ -3705,21 +3353,31 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       break;
     case 'build_review_read_only_capability': {
       const reason = event.status === 'unavailable' ? ` — ${event.reason}` : '';
-      log(`${dot} ${event.status === 'unavailable' ? chalk.yellow('⚠') : chalk.green('✓')} build_review read-only capability ${event.status}: ${event.provider} on ${event.platform}${reason}`);
+      log(
+        `${dot} ${event.status === 'unavailable' ? chalk.yellow('⚠') : chalk.green('✓')} build_review read-only capability ${event.status}: ${event.provider} on ${event.platform}${reason}`,
+      );
       break;
     }
     case 'build_review_policy_resolved': {
       const provenance = event.pluginId === undefined ? event.source : `${event.source}/${event.pluginId}`;
-      const candidate = event.provenance === undefined ? event.provider
-        : `${event.provenance.candidate.provider}/${event.provenance.candidate.model}/${event.provenance.candidate.effort}`;
-      log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} policy resolved: ${candidate} ${provenance}`);
+      const candidate =
+        event.provenance === undefined
+          ? event.provider
+          : `${event.provenance.candidate.provider}/${event.provenance.candidate.model}/${event.provenance.candidate.effort}`;
+      log(
+        `${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} policy resolved: ${candidate} ${provenance}`,
+      );
       break;
     }
     case 'build_review_policy_failed':
-      log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} policy ${event.stage} failed: ${event.reason}`);
+      log(
+        `${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} policy ${event.stage} failed: ${event.reason}`,
+      );
       break;
     case 'build_review_cache_hit':
-      log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} cache hit${event.customReuse === undefined ? '' : ` (custom reuse from ${event.customReuse.originalLapId})`}`);
+      log(
+        `${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} cache hit${event.customReuse === undefined ? '' : ` (custom reuse from ${event.customReuse.originalLapId})`}`,
+      );
       break;
     case 'build_review_rubric_result':
       log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} ${event.verdict}`);
@@ -3729,37 +3387,53 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       break;
     case 'build_review_outer_verdict': {
       for (const finding of event.suppressedFindings ?? []) {
-        log(`${dot} build_review suppressed ${finding.rubric}:${finding.findingId} (confidence ${finding.confidence} < floor ${finding.floor})`);
+        log(
+          `${dot} build_review suppressed ${finding.rubric}:${finding.findingId} (confidence ${finding.confidence} < floor ${finding.floor})`,
+        );
       }
       for (const finding of event.advisoryFindings ?? []) {
-        log(`${dot} build_review advisory ${finding.rubric}:${finding.findingId} (severity ${finding.severity} < threshold ${finding.threshold})`);
+        log(
+          `${dot} build_review advisory ${finding.rubric}:${finding.findingId} (severity ${finding.severity} < threshold ${finding.threshold})`,
+        );
       }
       const raw = event.rawVerdict === event.effectiveVerdict ? '' : ` (raw: ${event.rawVerdict})`;
       const reason = event.reason ? ` — ${event.reason}` : '';
       const unresolvedMarkers = event.unresolvedMarkers
         ? ` — unresolved markers: ${event.unresolvedMarkers.length}`
         : '';
-      log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] outer verdict: ${event.effectiveVerdict}${raw}${reason}${unresolvedMarkers}`);
+      log(
+        `${dot}   build_review [${buildReviewLapTag(event.lapId)}] outer verdict: ${event.effectiveVerdict}${raw}${reason}${unresolvedMarkers}`,
+      );
       break;
     }
     case 'build_review_rubric_infrastructure_failure': {
       const excerpt = event.excerpt ? ` — ${event.excerpt}` : '';
-      log(`${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} infrastructure failure: ${event.reason}${excerpt}`);
+      log(
+        `${dot}   build_review [${buildReviewLapTag(event.lapId)}] ${event.rubric} infrastructure failure: ${event.reason}${excerpt}`,
+      );
       break;
     }
     case 'contained_live_checkout_drift':
       log(`${dot} ${chalk.dim(`self-host contained; concurrent operator drift: ${event.summary}`)}`);
       break;
     case 'self_host_containment_verdict':
-      log(`${dot} ${chalk.dim(event.contained
-        ? `self-host containment verified: ${event.evidence}`
-        : `self-host containment unavailable: ${event.reason}`)}`);
+      log(
+        `${dot} ${chalk.dim(
+          event.contained
+            ? `self-host containment verified: ${event.evidence}`
+            : `self-host containment unavailable: ${event.reason}`,
+        )}`,
+      );
       break;
     case 'self_host_boundary_fingerprint':
-      log(`${dot} ${chalk.dim(`self-host boundary fingerprint: ${event.surfaces.map((surface) => `${surface.label} ${surface.elapsedMs}ms/${surface.fileCount} files`).join('; ')}`)}`);
+      log(
+        `${dot} ${chalk.dim(`self-host boundary fingerprint: ${event.surfaces.map((surface) => `${surface.label} ${surface.elapsedMs}ms/${surface.fileCount} files`).join('; ')}`)}`,
+      );
       break;
     case 'self_host_dispatch_admission':
-      log(`${dot} ${event.step} self-host dispatch ${event.state}${event.state === 'queued' ? ' — waiting for root-mutation admission' : ''}`);
+      log(
+        `${dot} ${event.step} self-host dispatch ${event.state}${event.state === 'queued' ? ' — waiting for root-mutation admission' : ''}`,
+      );
       break;
     case 'step_started':
       log(`${dot} ${chalk.cyan('▶')} ${renderedExecutionSubject(event, event.step)}`);
@@ -3776,21 +3450,19 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
             treeAnnotation = ` (tree ${event.treeBefore.slice(0, 7)}..${event.treeAfter.slice(0, 7)})`;
           }
         }
-        log(`${dot}   ${renderedExecutionSubject(event, event.step)} ${chalk.green('✓')} ${chalk.green(event.status)}${treeAnnotation}`);
+        log(
+          `${dot}   ${renderedExecutionSubject(event, event.step)} ${chalk.green('✓')} ${chalk.green(event.status)}${treeAnnotation}`,
+        );
       }
       break;
     case 'parallel_started':
       log(`${dot} ${chalk.cyan('▶')} ${event.step} [${event.branches.join(', ')}]`);
       break;
     case 'parallel_completed':
-      log(
-        `${dot}   ${event.step} [${event.branches.join(', ')}] ${chalk.green('✓')} ${chalk.green('done')}`,
-      );
+      log(`${dot}   ${event.step} [${event.branches.join(', ')}] ${chalk.green('✓')} ${chalk.green('done')}`);
       break;
     case 'when_skip': {
-      const undefinedNote = event.undefinedKey
-        ? ` (key "${event.undefinedKey}" undefined → false)`
-        : '';
+      const undefinedNote = event.undefinedKey ? ` (key "${event.undefinedKey}" undefined → false)` : '';
       log(`${dot} ${chalk.dim(`⊘ ${event.step} skipped: ${event.expression}${undefinedNote}`)}`);
       break;
     }
@@ -3798,16 +3470,19 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       // A failed suite's error carries raw suite output; keep only its summary
       // line here, since the complete output is persisted beside the evidence.
       const [summary = '', ...omitted] = event.step === 'test_suite' ? event.error.split('\n') : [event.error];
-      const error = omitted.length > 0
-        ? `${summary} (+${omitted.length} more lines omitted; full output in ${FULL_SUITE_OUTPUT_LOG})`
-        : summary;
+      const error =
+        omitted.length > 0
+          ? `${summary} (+${omitted.length} more lines omitted; full output in ${FULL_SUITE_OUTPUT_LOG})`
+          : summary;
       log(
         `${dot} ${chalk.red('✗')} ${chalk.red(`${renderedExecutionSubject(event, event.step)} failed (try ${event.retryCount}): ${error}`)}`,
       );
       break;
     }
     case 'step_interrupted':
-      log(`${dot} ${chalk.yellow('⏸')} ${chalk.yellow(`${renderedExecutionSubject(event, event.step)} interrupted: ${event.reason}`)}`);
+      log(
+        `${dot} ${chalk.yellow('⏸')} ${chalk.yellow(`${renderedExecutionSubject(event, event.step)} interrupted: ${event.reason}`)}`,
+      );
       break;
     case 'step_refused':
       log(
@@ -3823,16 +3498,22 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       log(`${dot} ${chalk.magenta('⊘')} ${chalk.magenta(`${event.step} inapplicable: ${event.reason}`)}`);
       break;
     case 'step_inapplicable_ignored':
-      log(`${dot} ${chalk.yellow('⊘')} ${chalk.yellow(`step applicability ignored (${event.cause}${event.step ? `: ${event.step}` : ''})`)}`);
+      log(
+        `${dot} ${chalk.yellow('⊘')} ${chalk.yellow(`step applicability ignored (${event.cause}${event.step ? `: ${event.step}` : ''})`)}`,
+      );
       break;
     case 'step_inapplicable_refused':
-      log(`${dot} ${chalk.yellow('✋')} ${chalk.yellow(`${event.step} applicability refused (${event.priorStatus}): ${event.reason}`)}`);
+      log(
+        `${dot} ${chalk.yellow('✋')} ${chalk.yellow(`${event.step} applicability refused (${event.priorStatus}): ${event.reason}`)}`,
+      );
       break;
     case 'github_operation_refused':
       log(`${dot} ${chalk.yellow('✋')} ${chalk.yellow(formatGithubOperationRefusal(event))}`);
       break;
     case 'github_operation_failed':
-      log(`${dot} ${chalk.red('✗')} ${chalk.red(`GitHub operation failed: ${event.operation} on ${formatGithubOperationTarget(event.target)} — ${event.error}`)}`);
+      log(
+        `${dot} ${chalk.red('✗')} ${chalk.red(`GitHub operation failed: ${event.operation} on ${formatGithubOperationTarget(event.target)} — ${event.error}`)}`,
+      );
       break;
     case 'session_command_refused':
       log(`${dot} ${chalk.yellow('✋')} ${chalk.yellow(formatSessionOccurrence(event))}`);
@@ -3856,12 +3537,16 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       log(`${dot} ${chalk.yellow('↻')} ${chalk.yellow(formatBotCoAuthorSkipped(event))}`);
       break;
     case 'tracker_backend_unavailable':
-      log(`${dot} ${chalk.yellow('⚠')} ${chalk.yellow(`tracker backend unavailable: ${event.project} selected ${event.backend} (${event.reason})`)}`);
+      log(
+        `${dot} ${chalk.yellow('⚠')} ${chalk.yellow(`tracker backend unavailable: ${event.project} selected ${event.backend} (${event.reason})`)}`,
+      );
       break;
     case 'step_retry': {
       const delta = formatProgressDelta(event.resolvedBefore, event.resolvedAfter);
       const deltaFragment = delta ? ' ' + delta : '';
-      log(`${dot} ${chalk.yellow('↻')} ${renderedExecutionSubject(event, event.step)} retry (try ${formatRetryCounter(event.attempt, event.maxAttempts, event.progressAttempt, event.progressAttemptCeiling)}: ${formatRetryReason(event.reason)})${deltaFragment}`);
+      log(
+        `${dot} ${chalk.yellow('↻')} ${renderedExecutionSubject(event, event.step)} retry (try ${formatRetryCounter(event.attempt, event.maxAttempts, event.progressAttempt, event.progressAttemptCeiling)}: ${formatRetryReason(event.reason)})${deltaFragment}`,
+      );
       break;
     }
     case 'provider_attempt': {
@@ -3884,7 +3569,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       // provider was skipped and what recovery is available.
       if (!event.invoked) {
         const recovery = event.setupRecoveryAction ? `; recovery: ${event.setupRecoveryAction}` : '';
-        log(`${dot}   ${event.step} skipped ${chalk.cyan(event.provider)} (${event.skipReason ?? (event.outcome === 'unavailable' ? 'unavailable' : 'not-invoked')}: ${event.reason ?? 'unavailable'}${recovery})`);
+        log(
+          `${dot}   ${event.step} skipped ${chalk.cyan(event.provider)} (${event.skipReason ?? (event.outcome === 'unavailable' ? 'unavailable' : 'not-invoked')}: ${event.reason ?? 'unavailable'}${recovery})`,
+        );
         break;
       }
       const model = event.model ? chalk.dim(` (${event.model})`) : '';
@@ -3896,9 +3583,10 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       if (usage?.durationMs !== undefined) facts.push(formatDiagnosticDuration(usage.durationMs));
       if (usage?.costUsd !== undefined) facts.push(`$${usage.costUsd.toFixed(2)}`);
       const detail = facts.length > 0 ? chalk.dim(` — ${facts.join(', ')}`) : '';
-      const glyph =
-        event.outcome === 'success' ? chalk.green('✓') : chalk.yellow(`✗ ${event.outcome}`);
-      log(`${dot}   ${renderedExecutionSubject(event, event.step)} via ${chalk.cyan(event.provider)}${model} ${glyph}${detail}`);
+      const glyph = event.outcome === 'success' ? chalk.green('✓') : chalk.yellow(`✗ ${event.outcome}`);
+      log(
+        `${dot}   ${renderedExecutionSubject(event, event.step)} via ${chalk.cyan(event.provider)}${model} ${glyph}${detail}`,
+      );
       break;
     }
     case 'provider_attempt_started':
@@ -3920,17 +3608,25 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       break;
     }
     case 'scratch_cleanup_reclaimed':
-      log(`${dot} ${chalk.green('✓')} scratch reclaimed ${event.path} (${event.repository}/${event.featureSlug}, run ${event.runId}, attempt ${event.attempt}: ${event.reason})`);
+      log(
+        `${dot} ${chalk.green('✓')} scratch reclaimed ${event.path} (${event.repository}/${event.featureSlug}, run ${event.runId}, attempt ${event.attempt}: ${event.reason})`,
+      );
       break;
     case 'scratch_cleanup_retained':
-      log(`${dot} ${chalk.yellow('↷')} scratch retained ${event.path} (${event.repository}/${event.featureSlug}, run ${event.runId}, attempt ${event.attempt}: ${event.reason})`);
+      log(
+        `${dot} ${chalk.yellow('↷')} scratch retained ${event.path} (${event.repository}/${event.featureSlug}, run ${event.runId}, attempt ${event.attempt}: ${event.reason})`,
+      );
       break;
     case 'scratch_cleanup_failed':
-      log(`${dot} ${chalk.red('✗')} scratch cleanup failed ${event.path} (${event.repository}/${event.featureSlug}, run ${event.runId}, attempt ${event.attempt}: ${event.reason})`);
+      log(
+        `${dot} ${chalk.red('✗')} scratch cleanup failed ${event.path} (${event.repository}/${event.featureSlug}, run ${event.runId}, attempt ${event.attempt}: ${event.reason})`,
+      );
       break;
     case 'worktree_reclaim_reclaimed':
       renderedReclaimRetentions.delete(event.slug);
-      log(`${dot} ${chalk.green('✓')} worktree reclaimed ${event.slug}${event.branch === undefined ? '' : ` (${[event.branch, event.proof].filter(Boolean).join('; ')})`}`);
+      log(
+        `${dot} ${chalk.green('✓')} worktree reclaimed ${event.slug}${event.branch === undefined ? '' : ` (${[event.branch, event.proof].filter(Boolean).join('; ')})`}`,
+      );
       break;
     case 'worktree_reclaim_failed': {
       const detail = [event.branch, event.refusal].filter(Boolean).join('; ');
@@ -3955,11 +3651,7 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       );
       break;
     case 'session_policy':
-      log(
-        chalk.yellow(
-          `${dot}   ${event.step}: ${event.provider} session policy — ${event.reason}`,
-        ),
-      );
+      log(chalk.yellow(`${dot}   ${event.step}: ${event.provider} session policy — ${event.reason}`));
       break;
     case 'gate_verdict':
       if (event.satisfied) {
@@ -4035,7 +3727,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       );
       break;
     case 'rate_limit':
-      log(`${dot} ${chalk.yellow('⏳')} ${chalk.yellow(`${event.reason === 'usage-exhausted' ? 'usage exhausted' : 'rate limited'}: waiting ${event.waitSeconds}s`)}`);
+      log(
+        `${dot} ${chalk.yellow('⏳')} ${chalk.yellow(`${event.reason === 'usage-exhausted' ? 'usage exhausted' : 'rate limited'}: waiting ${event.waitSeconds}s`)}`,
+      );
       break;
     case 'session_reset':
       log(`${dot} ${chalk.dim(`session reset: ${event.reason}`)}`);
@@ -4057,9 +3751,10 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       );
       break;
     case 'finish_publication_blocked': {
-      const condition = typeof event.condition === 'string'
-        ? event.condition
-        : `${event.condition.code} (steps: ${event.condition.steps.join(', ')})`;
+      const condition =
+        typeof event.condition === 'string'
+          ? event.condition
+          : `${event.condition.code} (steps: ${event.condition.steps.join(', ')})`;
       log(`${dot} ${chalk.red('✋')} ${chalk.red(`FINISH publication blocked: ${condition}`)}`);
       break;
     }
@@ -4072,8 +3767,12 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
             : event.disposition === 'retry_build'
               ? 'FINISH publication: route to BUILD'
               : 'FINISH publication: human action required';
-      const glyph = event.disposition === 'complete' ? chalk.green('✓') :
-        event.disposition === 'human_required' ? chalk.red('✋') : chalk.yellow('↩');
+      const glyph =
+        event.disposition === 'complete'
+          ? chalk.green('✓')
+          : event.disposition === 'human_required'
+            ? chalk.red('✋')
+            : chalk.yellow('↩');
       log(`${dot} ${glyph} ${event.disposition === 'complete' ? chalk.green(line) : chalk.yellow(line)}`);
       break;
     }
@@ -4085,10 +3784,8 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
             ? event.boundary.member === undefined
               ? `declined attempt ${event.boundary.attempt} for step ${event.boundary.step}`
               : `declined attempt ${event.boundary.attempt} for group step ${event.boundary.step} member ${event.boundary.member}`
-          : `settled after ${event.boundary.kind} ${event.boundary.name}`;
-      log(
-        `${dot} ${chalk.cyan('⏸')} ${chalk.cyan(`operator park[${event.featureSlug}]: ${boundary}`)}`,
-      );
+            : `settled after ${event.boundary.kind} ${event.boundary.name}`;
+      log(`${dot} ${chalk.cyan('⏸')} ${chalk.cyan(`operator park[${event.featureSlug}]: ${boundary}`)}`);
       break;
     }
     case 'preemption_boundary': {
@@ -4110,13 +3807,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
           `${dot} ${chalk.red('✗')} ${chalk.red(`${event.step} verdict ${artifact} invalidated — stale verdict rejected`)}`,
         );
       } else if (event.outcome === 'preserved_surface_miss') {
-        log(
-          `${dot} ${chalk.dim(`${event.step} verdict ${artifact} preserved — surface miss`)}`,
-        );
+        log(`${dot} ${chalk.dim(`${event.step} verdict ${artifact} preserved — surface miss`)}`);
       } else {
-        log(
-          `${dot} ${chalk.dim(`${event.step} verdict ${artifact} rewritten — current`)}`,
-        );
+        log(`${dot} ${chalk.dim(`${event.step} verdict ${artifact} rewritten — current`)}`);
       }
       break;
     }
@@ -4125,23 +3818,19 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       // These values are closed event classifications, not evidence payloads.
       // Keep the daemon log equally closed so a malformed forwarded event
       // cannot echo a host path, command output, or credential-like value.
-      const member = event.member === 'test_suite'
-          ? 'test_suite'
-          : 'unknown-member';
-      const decision = event.decision === 'reuse'
-        ? 'reuse'
-        : event.decision === 'recompute'
-          ? 'recompute'
-          : 'unknown-decision';
-      const basis = event.basis === 'fingerprint-match'
-        ? 'fingerprint-match'
-        : event.basis === 'recorded-head-versus-current-head'
-          ? 'recorded-head-versus-current-head'
-          : event.basis === 'fingerprint-mismatch'
-            ? 'fingerprint-mismatch'
-            : event.basis === 'fresh-evidence-required'
-              ? 'fresh-evidence-required'
-              : 'unknown-basis';
+      const member = event.member === 'test_suite' ? 'test_suite' : 'unknown-member';
+      const decision =
+        event.decision === 'reuse' ? 'reuse' : event.decision === 'recompute' ? 'recompute' : 'unknown-decision';
+      const basis =
+        event.basis === 'fingerprint-match'
+          ? 'fingerprint-match'
+          : event.basis === 'recorded-head-versus-current-head'
+            ? 'recorded-head-versus-current-head'
+            : event.basis === 'fingerprint-mismatch'
+              ? 'fingerprint-mismatch'
+              : event.basis === 'fresh-evidence-required'
+                ? 'fresh-evidence-required'
+                : 'unknown-basis';
       log(`${dot} ${chalk.dim(`BUILD member ${member} settled: ${decision} (${basis})`)}`);
       break;
     }
@@ -4150,21 +3839,18 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       // grading — routine telemetry, not a warning, so it stays dim
       // regardless of `fresh` (mirrors session_reset's styling).
       const base = event.mergeBase.slice(0, 12);
-      const filtered = event.filteredCommits === undefined || event.filteredCommits.length === 0
-        ? ''
-        : `; filtered ${event.filteredCommits.length} commits`;
-      log(
-        `${dot} ${chalk.dim(`build_review base ${base} — fresh: ${event.fresh}${filtered}`)}`,
-      );
+      const filtered =
+        event.filteredCommits === undefined || event.filteredCommits.length === 0
+          ? ''
+          : `; filtered ${event.filteredCommits.length} commits`;
+      log(`${dot} ${chalk.dim(`build_review base ${base} — fresh: ${event.fresh}${filtered}`)}`);
       break;
     }
     case 'build_review_stale_mirage_regrade': {
       // Task 7: a stale-mirage FAIL was discarded and build_review is
       // re-running against fresh inputs — routine, not a warning.
       const base = event.mergeBase ? event.mergeBase.slice(0, 12) : '(unknown)';
-      log(
-        `${dot} ${chalk.dim(`build_review stale-mirage regrade (base ${base}, count ${event.regradeCount})`)}`,
-      );
+      log(`${dot} ${chalk.dim(`build_review stale-mirage regrade (base ${base}, count ${event.regradeCount})`)}`);
       break;
     }
     case 'build_review_scope_incomplete': {
@@ -4187,13 +3873,13 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
         : '';
       const prunedBaseDeletedPaths = event.deletedBy
         ? `; pruned base-deleted paths: ${Object.entries(event.deletedBy)
-          .map(([path, commit]) => `${path}@${commit.slice(0, 12)}`)
-          .join(', ')}`
+            .map(([path, commit]) => `${path}@${commit.slice(0, 12)}`)
+            .join(', ')}`
         : '';
       log(
         `${dot} ${chalk.dim(
-          `seal rebaselined ${from}..${to} (${event.trigger}) — ${event.paths.length} path(s)`
-          + `${excludedBaseAheadPaths}${excludedOperatorResealedPaths}${prunedBaseDeletedPaths}`,
+          `seal rebaselined ${from}..${to} (${event.trigger}) — ${event.paths.length} path(s)` +
+            `${excludedBaseAheadPaths}${excludedOperatorResealedPaths}${prunedBaseDeletedPaths}`,
         )}`,
       );
       break;
@@ -4205,7 +3891,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       const provenance = [
         event.mergeBase ? `merge base: ${event.mergeBase.slice(0, 12)}` : undefined,
         event.headTouchedPath === undefined ? undefined : `HEAD touched path: ${event.headTouchedPath}`,
-      ].filter((value): value is string => value !== undefined).join('; ');
+      ]
+        .filter((value): value is string => value !== undefined)
+        .join('; ');
       log(
         `${dot} ${chalk.yellow(
           `seal rebaseline refused${path} — ${event.verdictCondition} (${event.condition})${provenance ? `; ${provenance}` : ''}`,
@@ -4224,11 +3912,12 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       break;
     }
     case 'remediation_sealed_artifact_redirect': {
-      const directingEvidence = event.directingClause === undefined
-        ? ''
-        : event.directingSource === undefined
-          ? ` — "${event.directingClause}"`
-          : ` — ${event.directingSource}: "${event.directingClause}"`;
+      const directingEvidence =
+        event.directingClause === undefined
+          ? ''
+          : event.directingSource === undefined
+            ? ` — "${event.directingClause}"`
+            : ` — ${event.directingSource}: "${event.directingClause}"`;
       log(
         `${dot} ${chalk.yellow(
           `↩ remediation gap ${event.gapId} → plan — sealed artifact ${event.artifact}${directingEvidence}`,
@@ -4255,7 +3944,11 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
           ? ` — task ${event.currentTaskId}`
           : '';
       const slug = event.featureSlug ? ` · ${event.featureSlug}` : '';
-      const position = displayBuildPosition(event.resolved, event.total, Boolean(event.currentTaskId || event.currentTaskName));
+      const position = displayBuildPosition(
+        event.resolved,
+        event.total,
+        Boolean(event.currentTaskId || event.currentTaskName),
+      );
       const commitAge = formatCommitAge(event.lastCommitAt, Date.now());
       const commit = commitAge ? ` · last commit ${commitAge}` : '';
       log(`${dot} ${chalk.cyan('▶')} ${event.step} ${position}/${event.total}${task}${slug}${commit}`);
@@ -4281,9 +3974,10 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       const position = displayBuildPosition(event.resolved, event.total, Boolean(event.currentTaskId));
       const commitAge = formatCommitAge(event.lastCommitAt, Date.now());
       const commit = commitAge ? ` · last commit ${commitAge}` : '';
-      const activity = event.lastActivityAt === undefined
-        ? ''
-        : ` · provider activity ${formatHeartbeatAge(Math.max(0, Date.now() - event.lastActivityAt))} ago`;
+      const activity =
+        event.lastActivityAt === undefined
+          ? ''
+          : ` · provider activity ${formatHeartbeatAge(Math.max(0, Date.now() - event.lastActivityAt))} ago`;
       log(
         `${dot} ${chalk.yellow('⚠')} ${chalk.yellow(`${event.step} quiet ${event.quietMinutes}m (${position}/${event.total})${commit}${activity}`)}${slug}`,
       );

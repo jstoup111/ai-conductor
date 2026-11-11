@@ -11,12 +11,7 @@ import {
   type WatchEntry,
   type SweepOpts,
 } from './mergeable-sweep.js';
-import {
-  cleanupHaltPresentation,
-  guardedPrRunner,
-  makeProductionGh,
-  type GhRunner,
-} from './pr-labels.js';
+import { cleanupHaltPresentation, guardedPrRunner, makeProductionGh, type GhRunner } from './pr-labels.js';
 import type { FinishChoice } from './artifacts.js';
 import type { TriageOutcome } from './setup-triage.js';
 import { SetupFailureError } from './worktree-prepare.js';
@@ -45,7 +40,8 @@ function timingReasonClass(reason: string | undefined): import('../types/events.
     reason === 'active-evidence-incomplete' ||
     reason === 'provider-outside-active-union' ||
     reason === 'provider-evidence-incomplete'
-  ) return reason;
+  )
+    return reason;
   return 'ledger-unreadable';
 }
 
@@ -93,7 +89,13 @@ export interface FeatureRunScope {
   stop: () => void | Promise<void>;
 }
 
-export function classifyDispatchKind({ wasExisting, rekickSignal }: { wasExisting: boolean; rekickSignal: boolean }): 'initial' | 'resume' | 'rekick' {
+export function classifyDispatchKind({
+  wasExisting,
+  rekickSignal,
+}: {
+  wasExisting: boolean;
+  rekickSignal: boolean;
+}): 'initial' | 'resume' | 'rekick' {
   if (rekickSignal) return 'rekick';
   return wasExisting ? 'resume' : 'initial';
 }
@@ -104,6 +106,12 @@ export function classifyDispatchKind({ wasExisting, rekickSignal }: { wasExistin
  * Claude, or gh.
  */
 export interface FeatureRunnerDeps {
+  /**
+   * Admission ownership for a durable child dispatch. The ordinary daemon
+   * runner acquires and releases its own lease; a child that was already
+   * admitted by its supervisor must not acquire that same lease again.
+   */
+  dispatchAdmission: 'acquire' | 'admitted';
   /** `git worktree add` a fresh branch+dir for the feature, cut from the
    *  fast-forwarded default branch — so the vetted stories+plan physically exist
    *  in it already (no separate materialization/copy step). */
@@ -154,10 +162,7 @@ export interface FeatureRunnerDeps {
   /** Fresh provider routing state allocated once for each feature run. */
   providerExecution?: () => ProviderExecutionContext;
   /** Feature-local provider/event state, opened after worktree creation. */
-  beginFeatureRun?: (
-    worktree: FeatureWorktree,
-    item: BacklogItem,
-  ) => FeatureRunScope | Promise<FeatureRunScope>;
+  beginFeatureRun?: (worktree: FeatureWorktree, item: BacklogItem) => FeatureRunScope | Promise<FeatureRunScope>;
   /**
    * The resolved active memory provider for this run (adr-2026-06-29-per-project-memory-provider-selection).
    * Computed once at run start via `resolveMemoryProvider` — all memory-using
@@ -190,10 +195,7 @@ export interface FeatureRunnerDeps {
    * Produces a fresh, branch-bound guarded GitHub runner for terminal PR
    * cleanup. Reads remain on `runGh`; every cleanup mutation uses this runner.
    */
-  haltPrOperations?: (input: {
-    readonly prUrl: string;
-    readonly branch: string;
-  }) => GithubOperationRunner | undefined;
+  haltPrOperations?: (input: { readonly prUrl: string; readonly branch: string }) => GithubOperationRunner | undefined;
   /**
    * FR-9: enroll a shipped PR in the mergeable watch registry.
    * Defaults to the real enrollWatch; injected in tests to assert call order and
@@ -309,8 +311,7 @@ async function shipmentFailureReason(
     const verdict = deps.shipmentEvidence
       ? await deps.shipmentEvidence(input)
       : await evaluateShipmentEvidence(input, {
-          githubRunner: (implementationPr) =>
-            resolveImplementationPrBinding(gh, worktree.path, implementationPr),
+          githubRunner: (implementationPr) => resolveImplementationPrBinding(gh, worktree.path, implementationPr),
         });
     if (verdict.kind === 'valid') return null;
     if (verdict.kind !== 'refusal') {
@@ -347,9 +348,7 @@ async function shipmentFailureReason(
  *   - a thrown primitive is caught here too (belt-and-suspenders; the pool also
  *     guards), worktree kept for inspection.
  */
-export function makeRunFeature(
-  deps: FeatureRunnerDeps,
-): (item: BacklogItem) => Promise<FeatureOutcome> {
+export function makeRunFeature(deps: FeatureRunnerDeps): (item: BacklogItem) => Promise<FeatureOutcome> {
   const log = deps.log ?? (() => {});
   const gh = deps.runGh ?? makeProductionGh();
   const enroll = deps.enrollWatch ?? enrollWatchImpl;
@@ -384,9 +383,7 @@ export function makeRunFeature(
               branch: worktree.branch,
             })
           : undefined;
-        const cleanupRunner = operations === undefined
-          ? gh
-          : guardedPrRunner(gh, operations);
+        const cleanupRunner = operations === undefined ? gh : guardedPrRunner(gh, operations);
         const result = await cleanup(
           cleanupRunner,
           deps.projectRoot,
@@ -433,13 +430,18 @@ export function makeRunFeature(
       // A durable child stack has shared mutable state outside its disposable
       // worktree. Inspect that state from the root and acquire before the
       // first worktree mutation; flat features retain their lock-free path.
-      if (deps.daemon && deps.projectRoot && await hasDurableChildState(deps.projectRoot, item.slug) === true) {
+      if (
+        deps.dispatchAdmission === 'acquire' &&
+        deps.daemon &&
+        deps.projectRoot &&
+        (await hasDurableChildState(deps.projectRoot, item.slug)) === true
+      ) {
         const leaseResult = await acquireFeatureDispatchLease(deps.projectRoot, item.slug, 'daemon dispatch');
         if (leaseResult.kind !== 'acquired') {
           if (leaseResult.kind === 'live-owner') {
             featureLog(
               `[daemon-runner] dispatch skipped ${item.slug} — feature-lease-held ` +
-              `(${leaseResult.owner.purpose}, pid ${leaseResult.owner.pid})`,
+                `(${leaseResult.owner.purpose}, pid ${leaseResult.owner.pid})`,
             );
           } else {
             featureLog(`[daemon-runner] dispatch skipped ${item.slug} — feature-lease-held`);
@@ -456,7 +458,9 @@ export function makeRunFeature(
       // stories+plan are already committed in it — no materialization/copy needed.
       worktree = await deps.createWorktree(item.slug);
       featureRun = await deps.beginFeatureRun?.(worktree, item);
-      featureRun?.events.on('loop_halt', (event) => { if (event.type === 'loop_halt') haltingStep = event.step; });
+      featureRun?.events.on('loop_halt', (event) => {
+        if (event.type === 'loop_halt') haltingStep = event.step;
+      });
       featureLog = featureRun?.log ?? log;
       // The re-kick sentinel is durable dispatcher state.  A newly created
       // worktree has neither it nor prior pipeline state; an existing scope
@@ -470,13 +474,13 @@ export function makeRunFeature(
         ...(item.tier !== undefined && { tier: item.tier }),
         kind: classifyDispatchKind({ wasExisting: worktree.wasExisting ?? false, rekickSignal: rekick }),
       });
-      endDispatch = async (
-        outcome: 'complete' | 'halted' | 'terminated',
-      ): Promise<void> => {
+      endDispatch = async (outcome: 'complete' | 'halted' | 'terminated'): Promise<void> => {
         if (dispatchEnded) return;
         dispatchEnded = true;
         const event: Extract<import('../types/events.js').ConductorEvent, { type: 'feature_dispatch_ended' }> = {
-          type: 'feature_dispatch_ended', slug: item.slug, outcome,
+          type: 'feature_dispatch_ended',
+          slug: item.slug,
+          outcome,
           ...(item.tier !== undefined && { tier: item.tier }),
         };
         if (outcome === 'halted') {
@@ -487,25 +491,29 @@ export function makeRunFeature(
       };
       const emitShipped = async (): Promise<void> => {
         const state = await readState(join(worktree!.path, '.pipeline', 'conduct-state.json'));
-        const runStartedAt = state.ok && typeof state.value.run_started_at === 'number' && Number.isFinite(state.value.run_started_at)
-          ? state.value.run_started_at : undefined;
+        const runStartedAt =
+          state.ok && typeof state.value.run_started_at === 'number' && Number.isFinite(state.value.run_started_at)
+            ? state.value.run_started_at
+            : undefined;
         const rollup = await computeTimingRollup(worktree!.path);
         await (featureRun?.rootEvents ?? featureRun?.events)?.emit({
-          type: 'feature_shipped', slug: item.slug, ...(item.tier !== undefined && { tier: item.tier }),
+          type: 'feature_shipped',
+          slug: item.slug,
+          ...(item.tier !== undefined && { tier: item.tier }),
           ...(runStartedAt === undefined ? {} : { runStartedAt }),
-          active: rollup.state === 'measured'
-            ? { state: 'exact', activeMs: rollup.activeMs }
-            : rollup.state === 'partial'
-              ? {
-                  state: 'partial',
-                  ...(rollup.activeMs === undefined ? {} : { activeMs: rollup.activeMs }),
-                  reason: timingReasonClass(rollup.reason),
-                }
-              : { state: 'unavailable' },
+          active:
+            rollup.state === 'measured'
+              ? { state: 'exact', activeMs: rollup.activeMs }
+              : rollup.state === 'partial'
+                ? {
+                    state: 'partial',
+                    ...(rollup.activeMs === undefined ? {} : { activeMs: rollup.activeMs }),
+                    reason: timingReasonClass(rollup.reason),
+                  }
+                : { state: 'unavailable' },
         });
       };
-      providerExecution =
-        featureRun?.providerExecution ?? deps.providerExecution?.();
+      providerExecution = featureRun?.providerExecution ?? deps.providerExecution?.();
       // Prepare the worktree before the build: write WORKTREE_NAMESPACE and run
       // the project's bin/setup. A project that ships no bin/setup still gets
       // the namespace written; a setup failure throws and is handled like any
@@ -515,14 +523,11 @@ export function makeRunFeature(
           await deps.prepareWorktree(worktree, featureLog, featureRun?.events);
         } catch (prepareErr) {
           // Check if error is a SetupFailureError (by name and presence of outputTail)
-          const isSetupFailure = prepareErr instanceof Error &&
-            (prepareErr.name === 'SetupFailureError' || (prepareErr.constructor?.name === 'SetupFailureError')) &&
+          const isSetupFailure =
+            prepareErr instanceof Error &&
+            (prepareErr.name === 'SetupFailureError' || prepareErr.constructor?.name === 'SetupFailureError') &&
             typeof (prepareErr as any).outputTail === 'string';
-          if (
-            isSetupFailure &&
-            deps.daemon &&
-            deps.runSetupTriage
-          ) {
+          if (isSetupFailure && deps.daemon && deps.runSetupTriage) {
             // Daemon mode with triage handler: classify and route the failure
             // The feature emitter travels with the log: triage's forced setup
             // re-runs emit `project_setup` onto this feature's own spine
@@ -538,9 +543,7 @@ export function makeRunFeature(
             );
             if (triageOutcome.kind === 'park') {
               // Triage returned park: error outcome, worktree kept
-              featureLog(
-                `[daemon-runner] triage outcome: park, erroring feature — ${triageOutcome.outputTail}`,
-              );
+              featureLog(`[daemon-runner] triage outcome: park, erroring feature — ${triageOutcome.outputTail}`);
               await terminateFeature({
                 worktreePath: worktree.path,
                 reason: triageOutcome.outputTail,
@@ -549,7 +552,7 @@ export function makeRunFeature(
                 log: featureLog,
                 triageEvidence: triageOutcome,
                 slug: item.slug,
-              events: featureRun?.events,
+                events: featureRun?.events,
               });
               await deps.teardownWorktree(worktree, true);
               return {
@@ -607,19 +610,10 @@ export function makeRunFeature(
       // a declarative terminal effect (adr-2026-08-27 decision 1); the
       // worktree's events.jsonl content is captured here — AFTER readOutcome
       // and BEFORE any teardown. Manual runs (daemon=false) emit nothing.
-      const engineerSignal = deps.daemon
-        ? await captureEngineerSignal(worktree, item, outcome)
-        : undefined;
+      const engineerSignal = deps.daemon ? await captureEngineerSignal(worktree, item, outcome) : undefined;
 
       if (outcome.done) {
-        const shipmentFailure = await shipmentFailureReason(
-          deps,
-          worktree,
-          item,
-          outcome,
-          gh,
-          featureRun?.events,
-        );
+        const shipmentFailure = await shipmentFailureReason(deps, worktree, item, outcome, gh, featureRun?.events);
         if (shipmentFailure === null) {
           // Happy path: outcome is a verified ship (done=true, finishChoice='pr', prUrl != null).
           // Root/.daemon writes are intentionally returned to the dispatcher.
@@ -637,15 +631,22 @@ export function makeRunFeature(
           featureLog(`✓ ${item.slug} shipped${outcome.prUrl ? ` → ${outcome.prUrl}` : ''}`);
           await emitShipped();
           await endDispatch('complete');
-          const terminalEffects = await runTerminalEffects({
-            ...(outcome.prUrl ? {
-              cleanupHaltPresentation: { prUrl: outcome.prUrl },
-              enrollWatch: { prUrl: outcome.prUrl },
-            } : {}),
-            markProcessed: { prUrl: outcome.prUrl },
-            sweep: true,
-            ...(engineerSignal ? { engineerSignal } : {}),
-          }, item, featureLog, worktree);
+          const terminalEffects = await runTerminalEffects(
+            {
+              ...(outcome.prUrl
+                ? {
+                    cleanupHaltPresentation: { prUrl: outcome.prUrl },
+                    enrollWatch: { prUrl: outcome.prUrl },
+                  }
+                : {}),
+              markProcessed: { prUrl: outcome.prUrl },
+              sweep: true,
+              ...(engineerSignal ? { engineerSignal } : {}),
+            },
+            item,
+            featureLog,
+            worktree,
+          );
           return {
             slug: item.slug,
             status: 'done',
@@ -671,8 +672,8 @@ export function makeRunFeature(
           park: false,
           log: featureLog,
           slug: item.slug,
-        events: featureRun?.events,
-              });
+          events: featureRun?.events,
+        });
 
         // Escalate the false ship: push the branch and open a draft needs-remediation PR
         // (so even the failure path preserves the work on origin). Best-effort: logs any
@@ -695,7 +696,12 @@ export function makeRunFeature(
         await deps.teardownWorktree(worktree, true);
         featureLog(`✋ ${item.slug} false-ship halted — worktree kept (${reason})`);
         await endDispatch('halted');
-        const terminalEffects = await runTerminalEffects({ sweep: true, ...(engineerSignal ? { engineerSignal } : {}) }, item, featureLog, worktree);
+        const terminalEffects = await runTerminalEffects(
+          { sweep: true, ...(engineerSignal ? { engineerSignal } : {}) },
+          item,
+          featureLog,
+          worktree,
+        );
         return {
           slug: item.slug,
           status: 'halted',
@@ -709,7 +715,12 @@ export function makeRunFeature(
         await endDispatch('halted');
         await deps.teardownWorktree(worktree, true); // keep for the human
         featureLog(`✋ ${item.slug} halted — worktree kept (${outcome.reason ?? 'see .pipeline/HALT'})`);
-        const terminalEffects = await runTerminalEffects({ sweep: true, ...(engineerSignal ? { engineerSignal } : {}) }, item, featureLog, worktree);
+        const terminalEffects = await runTerminalEffects(
+          { sweep: true, ...(engineerSignal ? { engineerSignal } : {}) },
+          item,
+          featureLog,
+          worktree,
+        );
         return {
           slug: item.slug,
           status: 'halted',
@@ -723,9 +734,7 @@ export function makeRunFeature(
       const noMarkerReason = outcome.reason ?? 'loop ended without DONE or HALT marker';
       // If triage evidence is present (and it's a park outcome), preserve it in the HALT note.
       const triageEvidenceForHalt =
-        outcome.triageEvidence && outcome.triageEvidence.kind === 'park'
-          ? outcome.triageEvidence
-          : undefined;
+        outcome.triageEvidence && outcome.triageEvidence.kind === 'park' ? outcome.triageEvidence : undefined;
       await terminateFeature({
         worktreePath: worktree.path,
         projectRoot: deps.projectRoot,
@@ -734,11 +743,16 @@ export function makeRunFeature(
         log: featureLog,
         triageEvidence: triageEvidenceForHalt,
         slug: item.slug,
-      events: featureRun?.events,
-              });
+        events: featureRun?.events,
+      });
       await deps.teardownWorktree(worktree, true);
       await endDispatch('terminated');
-      const terminalEffects = await runTerminalEffects({ sweep: true, ...(engineerSignal ? { engineerSignal } : {}) }, item, featureLog, worktree);
+      const terminalEffects = await runTerminalEffects(
+        { sweep: true, ...(engineerSignal ? { engineerSignal } : {}) },
+        item,
+        featureLog,
+        worktree,
+      );
       return {
         slug: item.slug,
         status: 'error',
@@ -752,9 +766,8 @@ export function makeRunFeature(
       // (the daemon log otherwise shows a bare `error`). This non-parked path remains
       // re-dispatchable once the operator clears the HALT.
       const reason = err instanceof Error ? err.message : String(err);
-      const haltRoot = worktree?.path ?? (
-        deps.projectRoot ? join(deps.projectRoot, '.worktrees', item.slug) : undefined
-      );
+      const haltRoot =
+        worktree?.path ?? (deps.projectRoot ? join(deps.projectRoot, '.worktrees', item.slug) : undefined);
       if (haltRoot) {
         await terminateFeature({
           worktreePath: haltRoot,
@@ -763,8 +776,8 @@ export function makeRunFeature(
           park: false,
           log: featureLog,
           slug: item.slug,
-        events: featureRun?.events,
-              });
+          events: featureRun?.events,
+        });
       }
       if (worktree) {
         await deps.teardownWorktree(worktree, true).catch(() => {});
@@ -815,16 +828,12 @@ export async function terminateFeature({
   slug,
   events,
 }: TerminateFeatureOptions): Promise<void> {
-  const autoParkWriteOutcome: AutoParkWriteOutcome = park && slug && deferAutoPark
-    ? 'deferred'
-    : 'not-requested';
+  const autoParkWriteOutcome: AutoParkWriteOutcome = park && slug && deferAutoPark ? 'deferred' : 'not-requested';
   const haltReason = reason;
 
-  const deferredAutoParkPresentation = autoParkWriteOutcome === 'deferred'
-    ? deferredAutoParkHaltPresentation(slug!, 'pending')
-    : undefined;
-  const heading = deferredAutoParkPresentation?.heading
-    ?? 'feature errored — will re-dispatch on the next scan';
+  const deferredAutoParkPresentation =
+    autoParkWriteOutcome === 'deferred' ? deferredAutoParkHaltPresentation(slug!, 'pending') : undefined;
+  const heading = deferredAutoParkPresentation?.heading ?? 'feature errored — will re-dispatch on the next scan';
   let note = `${heading}\n${haltReason}\n`;
 
   const triage = triageEvidence as any;
@@ -851,48 +860,53 @@ export async function terminateFeature({
 
   const resumeProcedure = deferredAutoParkPresentation
     ? deferredAutoParkPresentation.resumeProcedure
-    :
-      `  1. Fix the cause of the error above (project setup / config / environment / a crashed step).\n` +
+    : `  1. Fix the cause of the error above (project setup / config / environment / a crashed step).\n` +
       `  2. rm .pipeline/HALT\n` +
       `  3. Re-queue the feature (restart the daemon if it was excluded this run).\n`;
-  note +=
-    `\nResume procedure:\n` +
-    resumeProcedure;
+  note += `\nResume procedure:\n` + resumeProcedure;
   const markerWrite = await writeHaltMarker(worktreePath, note, 'needs-human', events);
   if (markerWrite.status === 'failed') {
-    log?.(`[daemon-runner] unrecoverable-state: HALT marker write failed for ${slug ?? worktreePath}: ${markerWrite.reason}`);
+    log?.(
+      `[daemon-runner] unrecoverable-state: HALT marker write failed for ${slug ?? worktreePath}: ${markerWrite.reason}`,
+    );
     return;
   }
   if (markerWrite.status === 'partial') {
     log?.(
       `[daemon-runner] unrecoverable-state: HALT was written for ${slug ?? worktreePath}, but HALT.class write failed at ${markerWrite.path}: ${markerWrite.reason}`,
     );
-    await readFile(markerWrite.writtenPath, 'utf-8').then((body) => {
-      if (body !== note) throw new Error('HALT marker verification failed after HALT.class write failure');
-    }).catch((err) => {
-      log?.(
-        `[daemon-runner] unrecoverable-state: written HALT verification failed for ${slug ?? worktreePath}: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    });
-    await readFile(markerWrite.path, 'utf-8').then(() => {
-      throw new Error('HALT.class unexpectedly exists after its write failure');
-    }).catch((err) => {
-      log?.(
-        `[daemon-runner] unrecoverable-state: HALT.class failure path verified for ${slug ?? worktreePath}: ${markerWrite.path} (${err instanceof Error ? err.message : String(err)})`,
-      );
-    });
+    await readFile(markerWrite.writtenPath, 'utf-8')
+      .then((body) => {
+        if (body !== note) throw new Error('HALT marker verification failed after HALT.class write failure');
+      })
+      .catch((err) => {
+        log?.(
+          `[daemon-runner] unrecoverable-state: written HALT verification failed for ${slug ?? worktreePath}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+    await readFile(markerWrite.path, 'utf-8')
+      .then(() => {
+        throw new Error('HALT.class unexpectedly exists after its write failure');
+      })
+      .catch((err) => {
+        log?.(
+          `[daemon-runner] unrecoverable-state: HALT.class failure path verified for ${slug ?? worktreePath}: ${markerWrite.path} (${err instanceof Error ? err.message : String(err)})`,
+        );
+      });
     return;
   }
   await Promise.all([
     readFile(join(worktreePath, '.pipeline', 'HALT'), 'utf-8'),
     readFile(join(worktreePath, '.pipeline', 'HALT.class'), 'utf-8'),
-  ]).then(([body, haltClass]) => {
-    if (body !== note || haltClass !== 'needs-human') throw new Error('marker verification failed');
-  }).catch((err) => {
-    log?.(
-      `[daemon-runner] unrecoverable-state: HALT marker write failed for ${slug ?? worktreePath}: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  });
+  ])
+    .then(([body, haltClass]) => {
+      if (body !== note || haltClass !== 'needs-human') throw new Error('marker verification failed');
+    })
+    .catch((err) => {
+      log?.(
+        `[daemon-runner] unrecoverable-state: HALT marker write failed for ${slug ?? worktreePath}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
 }
 
 /**

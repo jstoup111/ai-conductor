@@ -25,7 +25,7 @@ describe('daemon-cli post-run tail (Task 10 — no rehabilitateHaltPr call)', ()
      * is still present, and PASS after removal.
      */
 
-    const daemonCliPath = join(__dirname, '../../src/daemon-cli.ts');
+    const daemonCliPath = join(__dirname, '../../src/engine/daemon-feature-lifecycle.ts');
     const content = readFileSync(daemonCliPath, 'utf-8');
 
     // Verify that daemon-cli.ts does NOT contain an import of rehabilitateHaltPr
@@ -47,18 +47,20 @@ describe('daemon-cli post-run tail (Task 10 — no rehabilitateHaltPr call)', ()
      * successful.
      */
 
-    const daemonCliPath = join(__dirname, '../../src/daemon-cli.ts');
+    const daemonCliPath = join(__dirname, '../../src/engine/daemon-feature-lifecycle.ts');
     const content = readFileSync(daemonCliPath, 'utf-8');
 
     // Should still contain closeIssueOnImplementationMerge call
     expect(content).toMatch(/await\s+closeIssueOnImplementationMerge\s*\(/);
-    expect(content).toMatch(/featureMutation\s*=\s*item\.sourceRef\s*&&\s*implementationPrUrl[\s\S]*?resolveFeatureRemoteMutation\s*\(/);
+    expect(content).toMatch(
+      /featureMutation\s*=\s*item\.sourceRef\s*&&\s*implementationPrUrl[\s\S]*?resolveFeatureRemoteMutation\s*\(/,
+    );
     // #2703: the branch-ref context must be rebound to the implementation PR,
     // or the owner gate refuses the `Closes` edit as `invalid-target`.
-    expect(content).toMatch(/closeIssueMutation\s*=\s*featureMutation\s*&&\s*implementationPrUrl\s*\?\s*bindMutationToPullRequest\(featureMutation,\s*implementationPrUrl\)/);
     expect(content).toMatch(
-      /operations:\s*closeIssueMutation\s*\?\s*createGuardedGithubOperationRunner\(/,
+      /closeIssueMutation\s*=\s*featureMutation\s*&&\s*implementationPrUrl\s*\?\s*bindMutationToPullRequest\(featureMutation,\s*implementationPrUrl\)/,
     );
+    expect(content).toMatch(/operations:\s*closeIssueMutation\s*\?\s*createGuardedGithubOperationRunner\(/);
 
     // Should NOT contain rehabilitateHaltPr call
     expect(content).not.toMatch(/await\s+rehabilitateHaltPr\s*\(/);
@@ -74,6 +76,8 @@ describe('daemon-cli post-run tail (Task 10 — no rehabilitateHaltPr call)', ()
     const sweepEnd = content.indexOf('hasRestartPending: async () =>', sweepStart);
     const sweep = content.slice(sweepStart, sweepEnd);
 
-    expect(sweep).toMatch(/operations:\s*\(entry\)\s*=>\s*{[\s\S]*?parseIssueRef\(entry\.prUrl\)[\s\S]*?haltPrOperations\(/);
+    expect(sweep).toMatch(
+      /operations:\s*\(entry\)\s*=>\s*{[\s\S]*?parseIssueRef\(entry\.prUrl\)[\s\S]*?haltPrOperations\(/,
+    );
   });
 });

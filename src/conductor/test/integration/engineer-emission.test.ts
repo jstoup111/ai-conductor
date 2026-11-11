@@ -27,7 +27,10 @@ const SIGNALS_LOG = 'signals.jsonl';
 async function readSignalLines(engineerDir: string): Promise<string[]> {
   try {
     const raw = await readFile(join(engineerDir, SIGNALS_LOG), 'utf-8');
-    return raw.split('\n').map((l) => l.trim()).filter(Boolean);
+    return raw
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
   } catch {
     return [];
   }
@@ -54,7 +57,13 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
     await mkdir(pipelineDir, { recursive: true });
     const lines = [
       { type: 'step_started', step: 'build', index: 0, ts: '2026-06-25T00:00:00.000Z' },
-      { type: 'step_completed', step: 'build', status: 'done', ts: '2026-06-25T00:00:05.000Z', tokenUsage: { input: 100, output: 50 } },
+      {
+        type: 'step_completed',
+        step: 'build',
+        status: 'done',
+        ts: '2026-06-25T00:00:05.000Z',
+        tokenUsage: { input: 100, output: 50 },
+      },
       { type: 'kickback', from: 'build', to: 'plan', count: 1, ts: '2026-06-25T00:00:02.000Z' },
     ];
     await writeFile(join(pipelineDir, 'events.jsonl'), lines.map((l) => JSON.stringify(l)).join('\n') + '\n', 'utf-8');
@@ -70,6 +79,7 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
   ): FeatureRunnerDeps {
     const wt = extra.wtPath ?? worktreePath;
     const base: Omit<FeatureRunnerDeps, 'daemon' | 'project'> = {
+      dispatchAdmission: 'acquire',
       createWorktree: async () => {
         await seedEvents(wt);
         return { path: wt, branch: `feat/${ITEM.slug}` } as FeatureWorktree;
@@ -106,7 +116,9 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
   // ─── FR-1 (happy): daemon done → exactly one signal line ───────────────────
 
   it('daemon done → appends exactly one signal line (outcome=done)', async () => {
-    const run = makeRunFeature(deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' }, { daemon: true }));
+    const run = makeRunFeature(
+      deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' }, { daemon: true }),
+    );
     const out = await run(ITEM);
     expect(out.status).toBe('done');
     const lines = await readSignalLines(engineerDir);
@@ -134,7 +146,9 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
   // ─── FR-1 (negative): exactly one record per completion ────────────────────
 
   it('a single completion appends exactly one record (no duplicate)', async () => {
-    const run = makeRunFeature(deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' }, { daemon: true }));
+    const run = makeRunFeature(
+      deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' }, { daemon: true }),
+    );
     await run(ITEM);
     const lines = await readSignalLines(engineerDir);
     expect(lines.length).toBe(1);
@@ -147,13 +161,17 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
     // the emission machinery is wired (and fails RED until it is), so the
     // "manual = 0 lines" assertion can't pass vacuously just because nothing
     // ever emits.
-    const daemonRun = makeRunFeature(deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' }, { daemon: true }));
+    const daemonRun = makeRunFeature(
+      deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' }, { daemon: true }),
+    );
     await daemonRun(ITEM);
     expect(await readSignalLines(engineerDir)).toHaveLength(1);
 
     // Now the manual run, against a clean store, must emit nothing.
     await rm(join(engineerDir, SIGNALS_LOG), { force: true });
-    const manualRun = makeRunFeature(deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' }, { daemon: false }));
+    const manualRun = makeRunFeature(
+      deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' }, { daemon: false }),
+    );
     const out = await manualRun(ITEM);
     expect(out.status).toBe('done');
     expect(await readSignalLines(engineerDir)).toHaveLength(0);
@@ -162,7 +180,9 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
   // ─── FR-5 (happy): done → structured signal, no narrativeRef ──────────────
 
   it('daemon done → structured signal written without narrativeRef', async () => {
-    const run = makeRunFeature(deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' }, { daemon: true }));
+    const run = makeRunFeature(
+      deps({ done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' }, { daemon: true }),
+    );
     await run(ITEM);
     const lines = await readSignalLines(engineerDir);
     expect(lines).toHaveLength(1);
