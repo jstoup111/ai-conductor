@@ -7,6 +7,14 @@ import { execa } from 'execa';
 
 const seams = vi.hoisted(() => ({ abortAll: vi.fn(), nodeFork: vi.fn() }));
 
+// The daemon loop checks its build credential before dispatch. These tests own
+// dispatch wiring, so they supply a deterministic credential boundary rather
+// than depending on a developer or CI host token.
+vi.mock('../../src/engine/self-host/daemon-build-token.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/engine/self-host/daemon-build-token.js')>()),
+  readDaemonBuildToken: async () => ({ state: 'ok' as const, token: 'test-daemon-token' }),
+}));
+
 vi.mock('node:child_process', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:child_process')>()),
   fork: seams.nodeFork,
