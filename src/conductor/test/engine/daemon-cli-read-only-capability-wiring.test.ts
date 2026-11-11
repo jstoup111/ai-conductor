@@ -17,6 +17,14 @@ const seams = vi.hoisted(() => ({
   prepareWorktree: vi.fn(),
 }));
 
+// The daemon loop checks its build credential before dispatch. These tests own
+// dispatch wiring, so they supply a deterministic credential boundary rather
+// than depending on a developer or CI host token.
+vi.mock('../../src/engine/self-host/daemon-build-token.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/engine/self-host/daemon-build-token.js')>()),
+  readDaemonBuildToken: async () => ({ state: 'ok' as const, token: 'test-daemon-token' }),
+}));
+
 vi.mock('../../src/engine/worktree-prepare.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/worktree-prepare.js')>();
   return { ...actual, prepareWorktree: seams.prepareWorktree };
