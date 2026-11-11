@@ -72,6 +72,10 @@ it('daemon setup-fix dispatch carries the selected provider model policy', async
 });
 
 it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned provider execution', async () => {
+  const childRuntimeSource = await readFile(
+    new URL('../../src/engine/executor-child-runtime.ts', import.meta.url),
+    'utf8',
+  );
   const source = (
     await Promise.all([
       readFile(new URL('../../src/daemon-cli.ts', import.meta.url), 'utf8'),
@@ -213,6 +217,10 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
     factoryState,
     contextOwner,
     contextFlow,
+    childRuntimeOwnsFeatureProviderExecution:
+      /const providerExecution: ProviderExecutionContext = \{[\s\S]*?runtimes: createProviderRuntimeSet\(registry, console\.warn, config\)[\s\S]*?makeExecutorChildFeatureRunner\(\s*\{ order, worktree, events, providerExecution, log: input\.log \}/.test(
+        childRuntimeSource,
+      ),
   }).toEqual({
     runners: {
       feature: {
@@ -228,7 +236,7 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
         providerExecution: 'providerExecution',
       },
     },
-    depsFactory: 'createProviderExecution',
+    depsFactory: undefined,
     factoryState: {
       configuredProviders: 'configuredProviders',
       runtimes: 'createProviderRuntimeSet(registry, runtimeLog, config)',
@@ -247,6 +255,7 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
       // and emitted on the dispatcher side of the seam with the feature log.
       'captureEngineerSignal:outcome',
     ],
+    childRuntimeOwnsFeatureProviderExecution: true,
   });
 });
 

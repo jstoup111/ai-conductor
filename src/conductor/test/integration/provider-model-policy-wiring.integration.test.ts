@@ -151,10 +151,10 @@ it('composes one ordered provider context across the interactive run after regis
 });
 
 it('composes isolated provider execution state for every daemon feature after one registry freeze', async () => {
-  const [daemonSource, lifecycleSource, runnerSource] = await Promise.all([
+  const [daemonSource, lifecycleSource, childRuntimeSource] = await Promise.all([
     readFile(new URL('../../src/daemon-cli.ts', import.meta.url), 'utf8'),
     readFile(new URL('../../src/engine/daemon-feature-lifecycle.ts', import.meta.url), 'utf8'),
-    readFile(new URL('../../src/engine/daemon-runner.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../../src/engine/executor-child-runtime.ts', import.meta.url), 'utf8'),
   ]);
   const daemonFile = ts.createSourceFile('daemon-cli.ts', daemonSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const declarations: ts.VariableDeclaration[] = [];
@@ -176,29 +176,7 @@ it('composes isolated provider execution state for every daemon feature after on
     factoryProperties.find((property) => property.name?.getText(daemonFile) === name);
   const runtimeProperty = factoryProperty('runtimes');
   const sessionsProperty = factoryProperty('sessions');
-  const featureRun = binding('beginFeatureRun')?.initializer;
-  const featureRunFunction = featureRun && ts.isArrowFunction(featureRun) ? featureRun : undefined;
-  const featureReturn =
-    featureRunFunction?.body && ts.isBlock(featureRunFunction.body)
-      ? featureRunFunction.body.statements.find(ts.isReturnStatement)?.expression
-      : undefined;
-  const featureProperties =
-    featureReturn && ts.isObjectLiteralExpression(featureReturn) ? featureReturn.properties : [];
-  const featureExecution = featureProperties.find(
-    (property) => property.name?.getText(daemonFile) === 'providerExecution',
-  );
-  const featureProviderExecution =
-    featureRunFunction?.body && ts.isBlock(featureRunFunction.body)
-      ? featureRunFunction.body.statements
-          .filter(ts.isVariableStatement)
-          .flatMap((statement) => statement.declarationList.declarations)
-          .find((declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === 'providerExecution')
-      : undefined;
   const compact = daemonSource.replace(/\s+/g, ' ');
-  const featureBody = runnerSource.slice(
-    runnerSource.indexOf('return async (item: BacklogItem)'),
-    runnerSource.indexOf('async function captureEngineerSignal'),
-  );
   const mainRunBody = lifecycleSource.slice(
     lifecycleSource.indexOf('export async function runDaemonFeatureConductor'),
     lifecycleSource.indexOf('export async function runDaemonSetupTriage'),
@@ -236,14 +214,12 @@ it('composes isolated provider execution state for every daemon feature after on
       ts.isNewExpression(sessionsProperty.initializer) &&
       sessionsProperty.initializer.expression.getText(daemonFile) === 'ProviderSessionStore',
     featureInjectsScopedRuntimeLogger:
-      featureExecution !== undefined &&
-      featureProviderExecution?.initializer !== undefined &&
-      ts.isCallExpression(featureProviderExecution.initializer) &&
-      featureProviderExecution.initializer.expression.getText(daemonFile) === 'createProviderExecution' &&
-      featureProviderExecution.initializer.arguments[1]?.getText(daemonFile) === 'featureLog',
+      /runtimes:\s*createProviderRuntimeSet\(registry, console\.warn, config\)/.test(childRuntimeSource) &&
+      /\.\.\.\(input\.log \? \{ diagnosticLog: input\.log \} : \{\}\)/.test(childRuntimeSource),
     factoryInjectedAtFeatureBoundary:
-      /providerExecution:\s*createProviderExecution/.test(daemonSource) &&
-      (featureBody.match(/deps\.providerExecution\?\.\(\)/g)?.length ?? 0) === 1,
+      /makeExecutorChildFeatureRunner\(\s*\{ order, worktree, events, providerExecution, log: input\.log \},/.test(
+        childRuntimeSource,
+      ) && /providerExecution:\s*input\.providerExecution/.test(childRuntimeSource),
     mainRunnerContext: /featureDesc:\s*item\.slug,[\s\S]*?providerExecution,[\s\S]*?\}\s*,?\s*\);/.test(mainRunBody),
     conductorContext: /const conductor = new Conductor\(\{[\s\S]*?providerExecution,[\s\S]*?\}\);/.test(mainRunBody),
     setupRecoveryContext:

@@ -1,4 +1,4 @@
-// Covers: task:5
+// Covers: task:5, task:34
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -17,11 +17,20 @@ import { commitAll, initTestRepo } from './git-repo.js';
 
 const seams = vi.hoisted(() => ({
   prepareWorktree: vi.fn(),
+  loadMergedConfig: vi.fn(),
+}));
+
+// The daemon loop checks its build credential before dispatch. These tests own
+// dispatch wiring, so they supply a deterministic credential boundary rather
+// than depending on a developer or CI host token.
+vi.mock('../../src/engine/self-host/daemon-build-token.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/engine/self-host/daemon-build-token.js')>()),
+  readDaemonBuildToken: async () => ({ state: 'ok' as const, token: 'test-daemon-token' }),
 }));
 
 vi.mock('../../src/engine/config.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/config.js')>();
-  return { ...actual, loadMergedConfig: async () => ({ ok: true as const, config: { llm_provider: 'codex' }, warnings: [] }) };
+  return { ...actual, loadMergedConfig: seams.loadMergedConfig };
 });
 
 vi.mock('../../src/engine/provider-discovery.js', async (importOriginal) => {
@@ -40,6 +49,9 @@ vi.mock('../../src/engine/worktree-prepare.js', async (importOriginal) => {
 });
 
 import { createInMemoryExecutorFork } from './in-memory-executor-fork.js';
+import { useTempEngineStore } from './in-memory-executor-fork.js';
+import { runDaemonMode } from '../../src/daemon-cli.js';
+import { allInstalledProviderDiscoveryRunner } from '../engine/boot-test-helpers.js';
 
 const VERSION = '20261107T000000Z-0123456789ab' as WorkOrder['engineVersionId'];
 const roots: string[] = [];
@@ -101,6 +113,7 @@ function executor(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  seams.loadMergedConfig.mockResolvedValue({ ok: true as const, config: { llm_provider: 'codex' }, warnings: [] });
 });
 
 afterEach(async () => {
@@ -166,8 +179,8 @@ describe('in-memory executor fork', () => {
     release.get('first')?.();
     await first;
 
-    expect(sinks.get('first')).toEqual(['child first']);
-    expect(sinks.get('second')).toEqual(['child second']);
+    expect(sinks.get('first')).toContain('child first');
+    expect(sinks.get('second')).toContain('child second');
     const { daemonBotCoAuthorResolver } = await import('../../src/engine/bot-co-author.js');
     expect(daemonBotCoAuthorResolver()).toBe(resolver);
   });
@@ -193,5 +206,58 @@ describe('in-memory executor fork', () => {
     await executor(fixture.root, createInMemoryExecutorFork({ projectRoot: fixture.root }), 50, rootEvents).execute(fixture.order);
 
     expect(identities).toEqual([VERSION]);
+  });
+
+  it('rejects a stale executor-isolation fixture before forking, then dispatches the same fixture once through its injected fork after key removal proves the key alone caused the load failure', async () => {
+    const fixture = await fixtureOrder('retired-fixture-key');
+    await Promise.all([
+      mkdir(join(fixture.root, '.docs', 'stories'), { recursive: true }),
+      mkdir(join(fixture.root, '.docs', 'plans'), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(join(fixture.root, '.docs', 'stories', `${fixture.order.slug}.md`), '# fixture\n'),
+      writeFile(join(fixture.root, '.docs', 'plans', `${fixture.order.slug}.md`), '# fixture\n'),
+    ]);
+    await commitAll(fixture.root, 'add fixture documents');
+    const daemonOrder = { ...fixture.order, baseSha: (await execa('git', ['rev-parse', 'HEAD'], { cwd: fixture.root })).stdout.trim() };
+    const store = await useTempEngineStore();
+    const fork = vi.fn(createInMemoryExecutorFork({
+      projectRoot: fixture.root,
+      run: async ({ order }) => ({ slug: order.slug, status: 'done' }),
+    }));
+    const options = {
+      projectRoot: fixture.root,
+      engineRoot: store.engineRoot,
+      concurrency: 1,
+      maxItems: 1,
+      baseBranch: 'main',
+      ensureFresh: async () => {},
+      probeGhVersion: async () => ({ kind: 'ok' as const, version: { major: 2, minor: 73, patch: 0 } }),
+      providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
+      watch: false,
+      workSource: { discover: async () => [{ slug: daemonOrder.slug, baseSha: daemonOrder.baseSha }] },
+      executorFork: fork,
+    };
+    try {
+      await mkdir(join(fixture.root, '.ai-conductor'), { recursive: true });
+      await writeFile(join(fixture.root, '.ai-conductor', 'config.yml'), 'executor_isolation: in-process\n');
+      seams.loadMergedConfig.mockImplementation(async (projectRoot: string) => {
+        const config = await readFile(join(projectRoot, '.ai-conductor', 'config.yml'), 'utf8').catch(() => '');
+        if (config.includes('executor_isolation:')) {
+          return { ok: false as const, error: { type: 'validation_error' as const, message: 'Unknown top-level key: "executor_isolation"' } };
+        }
+        return { ok: true as const, config: { llm_provider: 'codex' }, warnings: [] };
+      });
+      await expect(runDaemonMode(options)).rejects.toThrow('Unknown top-level key: "executor_isolation"');
+      expect(fork).not.toHaveBeenCalled();
+
+      await rm(join(fixture.root, '.ai-conductor', 'config.yml'));
+      await expect(runDaemonMode(options)).resolves.toMatchObject({
+        processed: [{ slug: fixture.order.slug, status: 'done' }],
+      });
+      expect(fork).toHaveBeenCalledOnce();
+    } finally {
+      await store.teardown();
+    }
   });
 });

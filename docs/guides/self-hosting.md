@@ -446,8 +446,8 @@ maintenance job, which runs whether or not features are in flight:
    `dist-versions/<id>` rather than the floating symlink. A failed build logs
    `[daemon] background engine rebuild failed (<reason>); a later pass will retry` and the current
    engine stays in use.
-3. **Pin each dispatch.** With [`executor_isolation: child`](../reference/configuration.md#executor_isolation)
-   (the default), each claimed feature runs in a child process forked from the build `dist` names at
+3. **Pin each dispatch.** Each claimed feature runs in a
+   [child executor process](../reference/configuration.md#daemon-feature-executors) forked from the build `dist` names at
    claim time. A merged engine change reaches the next claim without a restart; features already in
    flight finish on the build they started with.
 4. **Restart the stale supervisor.** With `auto_restart_on_stale_engine: true` (armed in this repo's

@@ -31,41 +31,9 @@ vi.mock('../../src/engine/otel/transport.js', () => ({ buildExporters, isExportR
 vi.mock('../../src/engine/self-host/daemon-build-token.js', () => ({
   readDaemonBuildToken: vi.fn(async () => ({ state: 'ok' as const, token: 'test-daemon-token' })),
 }));
-vi.mock('../../src/engine/daemon-runner.js', () => ({
-  makeRunFeature: (deps: {
-    beginFeatureRun: (
-      worktree: { path: string; branch: string },
-      item: { slug: string },
-    ) => Promise<Record<string, unknown>>;
-  }) => async (item: { slug: string }) => {
-    const scope = await deps.beginFeatureRun(
-      { path: fixture.worktreePath, branch: `feat/${item.slug}` },
-      item,
-    );
-    const events = scope.events as { emit: (event: ConductorEvent) => Promise<void> };
-    await events.emit({ type: 'step_started', step: 'build', index: 0 });
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      await events.emit({
-        type: 'provider_attempt',
-        step: 'build',
-        provider: 'claude',
-        outcome: 'success',
-        invoked: true,
-        tokenUsage: { input: 10, output: 2, costUsd: 0.25 },
-      });
-      if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(60_000);
-    }
-    await events.emit({ type: 'step_completed', step: 'build', status: 'done' });
-    // Periodic exports use fake time, while meter shutdown awaits the SDK's
-    // real completion path.
-    vi.useRealTimers();
-    await (scope.stop as () => Promise<void>)();
-    return { slug: item.slug, status: 'halted', reason: 'test dispatch complete' };
-  },
-}));
-
 import { runDaemonMode } from '../../src/daemon-cli.js';
 import { allInstalledProviderDiscoveryRunner } from '../engine/boot-test-helpers.js';
+import { createInMemoryExecutorFork, useTempEngineStore } from '../fixtures/in-memory-executor-fork.js';
 
 const execFile = promisify(execFileCb);
 
@@ -118,7 +86,7 @@ async function runExportDaemon(metricExporter: PushMetricExporter): Promise<{
   await writeFile(join(repo, '.docs', 'plans', 'feature-a.md'), '# feature-a\n');
   await writeFile(
     join(repo, '.ai-conductor/config.yml'),
-    'executor_isolation: in-process\notel:\n  exporter: otlp\n  endpoint: http://fake-collector:4318\n',
+    'otel:\n  exporter: otlp\n  endpoint: http://fake-collector:4318\n',
   );
   await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
   await execFile('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
@@ -132,17 +100,45 @@ async function runExportDaemon(metricExporter: PushMetricExporter): Promise<{
     metricExporter,
   });
 
-  const daemonResult = await runDaemonMode({
-    projectRoot: repo,
-    concurrency: 1,
-    maxItems: 1,
-    baseBranch: 'main',
-    ensureFresh: async () => {},
-    probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
-    providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
-    watch: false,
-    workSource: { discover: async () => [{ slug: 'feature-a' }] },
-  });
+  const store = await useTempEngineStore();
+  let daemonResult;
+  try {
+    daemonResult = await runDaemonMode({
+      projectRoot: repo,
+      engineRoot: store.engineRoot,
+      concurrency: 1,
+      maxItems: 1,
+      baseBranch: 'main',
+      ensureFresh: async () => {},
+      probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+      providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
+      watch: false,
+      workSource: { discover: async () => [{ slug: 'feature-a' }] },
+      executorFork: createInMemoryExecutorFork({
+        projectRoot: repo,
+        createWorktree: async () => ({ path: fixture.worktreePath }),
+        run: async ({ events, order }) => {
+          await events.emit({ type: 'step_started', step: 'build', index: 0 });
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            await events.emit({
+              type: 'provider_attempt',
+              step: 'build',
+              provider: 'claude',
+              outcome: 'success',
+              invoked: true,
+              tokenUsage: { input: 10, output: 2, costUsd: 0.25 },
+            });
+            if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(60_000);
+          }
+          await events.emit({ type: 'step_completed', step: 'build', status: 'done' });
+          vi.useRealTimers();
+          return { slug: order.slug, status: 'halted', reason: 'test dispatch complete' };
+        },
+      }),
+    });
+  } finally {
+    await store.teardown();
+  }
 
   const [rawFeatureEvents, rawDaemonEvents] = await Promise.all([
     readFile(join(fixture.worktreePath, '.pipeline/events.jsonl'), 'utf8'),
@@ -183,8 +179,9 @@ function terminalVerdicts(events: ConductorEvent[]): Array<Record<string, unknow
 describe('acceptance: failed telemetry export is visible without changing daemon outcome', () => {
   it('contains a rejected daemon per-dispatch flush and preserves the dispatch outcome', async () => {
     const result = await runExportDaemon(rejectingLifecycleMetricExporter());
-    const lifecycleWarnings = result.events.filter((event): event is Extract<ConductorEvent, { type: 'renderer_error' }> =>
-      event.type === 'renderer_error' && event.error === '[otel] metric export failed: flush rejected',
+    const lifecycleWarnings = result.events.filter(
+      (event): event is Extract<ConductorEvent, { type: 'renderer_error' }> =>
+        event.type === 'renderer_error' && event.error === '[otel] metric export failed: flush rejected',
     );
 
     expect(lifecycleWarnings).toHaveLength(1);
@@ -193,9 +190,7 @@ describe('acceptance: failed telemetry export is visible without changing daemon
       status: 'halted',
       reason: 'test dispatch complete',
     });
-    expect(terminalVerdicts(result.events)).toEqual([
-      { type: 'step_completed', step: 'build', status: 'done' },
-    ]);
+    expect(terminalVerdicts(result.events)).toEqual([{ type: 'step_completed', step: 'build', status: 'done' }]);
   });
 
   it('logs and persists one matching otel failure across repeated export attempts', async () => {
@@ -215,9 +210,7 @@ describe('acceptance: failed telemetry export is visible without changing daemon
     expect(failureLines).toHaveLength(1);
     expect(failureLines[0]).toContain('otel');
     expect(failureLines[0]).toContain('collector refused metrics');
-    expect(terminalVerdicts(failed.events)).toEqual([
-      { type: 'step_completed', step: 'build', status: 'done' },
-    ]);
+    expect(terminalVerdicts(failed.events)).toEqual([{ type: 'step_completed', step: 'build', status: 'done' }]);
     expect(failed.outcome).toEqual(succeeded.outcome);
   });
 });

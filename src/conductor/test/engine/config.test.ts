@@ -1,4 +1,4 @@
-// Covers: task:1, task:2, task:2.1, task:4, task:5, task:6, task:8, task:9, task:3, pi-per-step-model-selection-via-wrapped-providers:task:5, task:1, pi-runs-stay-contained-despite-pi-having-no-permis:task:12
+// Covers: task:1, task:2, task:2.1, task:4, task:5, task:6, task:8, task:9, task:3, task:33, pi-per-step-model-selection-via-wrapped-providers:task:5, task:1, pi-runs-stay-contained-despite-pi-having-no-permis:task:12
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, writeFile, rm, mkdir, symlink } from 'fs/promises';
 import { join } from 'path';
@@ -10,6 +10,7 @@ const originalUserConfigDir = process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
 import {
   loadConfig,
   loadMergedConfig,
+  emitDeprecatedConfigKeyEvents,
   validateConfig,
   DEPRECATED_BUILD_REVIEW_RUBRIC_IDS,
   disabledStepNames,
@@ -18,6 +19,7 @@ import {
   resolveMemoryProvider,
   resolveValidationConcurrency,
 } from '../../src/engine/config.js';
+import { ConductorEventEmitter } from '../../src/engine/conductor-event-emitter.js';
 import {
   DEFAULT_TEST_QUALITY_MAX_PROJECTION_BYTES,
   resolveBuildReviewConfig,
@@ -33,10 +35,7 @@ import {
   REDUCED_BUILD_REVIEW_COVERAGE_HEADING,
 } from '../../src/engine/build-review-accepted-risk.js';
 import { PR_BODY_FLOOR_MARKER } from '../../src/engine/halt-pr-rehabilitation.js';
-import {
-  HALT_PR_BANNER_SENTINEL,
-  NEEDS_REMEDIATION_BODY_MARKER,
-} from '../../src/engine/pr-labels.js';
+import { HALT_PR_BANNER_SENTINEL, NEEDS_REMEDIATION_BODY_MARKER } from '../../src/engine/pr-labels.js';
 import { collectProviderModelSelections } from '../../src/engine/provider-model-config.js';
 import { buildStepRegistry } from '../../src/engine/steps.js';
 
@@ -77,29 +76,28 @@ describe('config', () => {
       });
 
       it('keeps undeclared rubrics at their defaults beside a declared one', async () => {
-        expect(await loadedRubricEnablement('build_review:\n  rubrics:\n    testQuality:\n      enabled: true\n'))
-          .toEqual({ ...defaults, testQuality: true });
+        expect(
+          await loadedRubricEnablement('build_review:\n  rubrics:\n    testQuality:\n      enabled: true\n'),
+        ).toEqual({ ...defaults, testQuality: true });
       });
 
       it('honors an explicit opt-out of a default-on rubric', async () => {
-        expect(await loadedRubricEnablement('build_review:\n  rubrics:\n    security:\n      enabled: false\n'))
-          .toEqual({ ...defaults, security: false });
+        expect(
+          await loadedRubricEnablement('build_review:\n  rubrics:\n    security:\n      enabled: false\n'),
+        ).toEqual({ ...defaults, security: false });
       });
     });
 
     describe('pull request template regions', () => {
-      const configWithCustomSteps = (steps: string) => steps === '' ? '{}\n' : `steps:\n${steps}`;
+      const configWithCustomSteps = (steps: string) => (steps === '' ? '{}\n' : `steps:\n${steps}`);
       const customStep = (
         name: string,
         after = 'manual_test',
         options: { enforcement?: 'gating' | 'advisory'; completionArtifact?: boolean } = {},
       ) =>
         `  ${name}:\n    after: ${after}\n    skill: skills/${name}/SKILL.md\n    enforcement: ${options.enforcement ?? 'gating'}\n${options.completionArtifact === false ? '' : `    completion_artifact: .pipeline/${name}\n`}`;
-      const region = (name: string, content = `${name} content`) => [
-        `<!-- ai-conductor:step ${name} -->`,
-        content,
-        '<!-- /ai-conductor:step -->',
-      ].join('\n');
+      const region = (name: string, content = `${name} content`) =>
+        [`<!-- ai-conductor:step ${name} -->`, content, '<!-- /ai-conductor:step -->'].join('\n');
 
       const writeCustomSkill = async (name: string) => {
         const skillDir = join(tmpDir, 'skills', name);
@@ -192,18 +190,78 @@ describe('config', () => {
       it.each([
         ['a built-in owner', region('finish'), '', ['finish', 'built-in steps cannot own a region']],
         ['an undeclared owner', region('release-disposiiton'), '', ['release-disposiiton', 'undeclared step']],
-        ['a BUILD-phase owner', region('compliance-attest'), customStep('compliance-attest', 'build'), ['compliance-attest', 'must run in the SHIP phase']],
-        ['an owner ordered after finish', region('late-attest'), customStep('late-attest', 'finish'), ['late-attest', 'must run before finish']],
-        ['a duplicate owner', `${region('compliance-attest')}\n${region('compliance-attest')}`, customStep('compliance-attest'), ['compliance-attest', 'owns more than one region']],
-        ['an unclosed owner', '<!-- ai-conductor:step compliance-attest -->\nAttested', customStep('compliance-attest'), ['compliance-attest', 'unclosed']],
-        ['nested owners', '<!-- ai-conductor:step compliance-attest -->\n<!-- ai-conductor:step release-disposition -->\n<!-- /ai-conductor:step -->\n<!-- /ai-conductor:step -->', customStep('compliance-attest') + customStep('release-disposition', 'compliance-attest'), ['compliance-attest', 'release-disposition', 'nested inside']],
-        ['engine-owned heading', region('compliance-attest', REDUCED_BUILD_REVIEW_COVERAGE_HEADING), customStep('compliance-attest'), ['compliance-attest', REDUCED_BUILD_REVIEW_COVERAGE_HEADING]],
-        ['engine-owned accepted-risk heading', region('compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_HEADING), customStep('compliance-attest'), ['compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_HEADING]],
-        ['engine-owned accepted-risk marker', region('compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_START), customStep('compliance-attest'), ['compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_START]],
-        ['engine-owned accepted-risk end marker', region('compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_END), customStep('compliance-attest'), ['compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_END]],
-        ['engine-owned floor marker', region('compliance-attest', PR_BODY_FLOOR_MARKER), customStep('compliance-attest'), ['compliance-attest', PR_BODY_FLOOR_MARKER]],
-        ['engine-owned remediation-body marker', region('compliance-attest', NEEDS_REMEDIATION_BODY_MARKER), customStep('compliance-attest'), ['compliance-attest', NEEDS_REMEDIATION_BODY_MARKER]],
-        ['engine-owned halt sentinel', region('compliance-attest', HALT_PR_BANNER_SENTINEL), customStep('compliance-attest'), ['compliance-attest', HALT_PR_BANNER_SENTINEL]],
+        [
+          'a BUILD-phase owner',
+          region('compliance-attest'),
+          customStep('compliance-attest', 'build'),
+          ['compliance-attest', 'must run in the SHIP phase'],
+        ],
+        [
+          'an owner ordered after finish',
+          region('late-attest'),
+          customStep('late-attest', 'finish'),
+          ['late-attest', 'must run before finish'],
+        ],
+        [
+          'a duplicate owner',
+          `${region('compliance-attest')}\n${region('compliance-attest')}`,
+          customStep('compliance-attest'),
+          ['compliance-attest', 'owns more than one region'],
+        ],
+        [
+          'an unclosed owner',
+          '<!-- ai-conductor:step compliance-attest -->\nAttested',
+          customStep('compliance-attest'),
+          ['compliance-attest', 'unclosed'],
+        ],
+        [
+          'nested owners',
+          '<!-- ai-conductor:step compliance-attest -->\n<!-- ai-conductor:step release-disposition -->\n<!-- /ai-conductor:step -->\n<!-- /ai-conductor:step -->',
+          customStep('compliance-attest') + customStep('release-disposition', 'compliance-attest'),
+          ['compliance-attest', 'release-disposition', 'nested inside'],
+        ],
+        [
+          'engine-owned heading',
+          region('compliance-attest', REDUCED_BUILD_REVIEW_COVERAGE_HEADING),
+          customStep('compliance-attest'),
+          ['compliance-attest', REDUCED_BUILD_REVIEW_COVERAGE_HEADING],
+        ],
+        [
+          'engine-owned accepted-risk heading',
+          region('compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_HEADING),
+          customStep('compliance-attest'),
+          ['compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_HEADING],
+        ],
+        [
+          'engine-owned accepted-risk marker',
+          region('compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_START),
+          customStep('compliance-attest'),
+          ['compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_START],
+        ],
+        [
+          'engine-owned accepted-risk end marker',
+          region('compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_END),
+          customStep('compliance-attest'),
+          ['compliance-attest', BUILD_REVIEW_ACCEPTED_RISK_END],
+        ],
+        [
+          'engine-owned floor marker',
+          region('compliance-attest', PR_BODY_FLOOR_MARKER),
+          customStep('compliance-attest'),
+          ['compliance-attest', PR_BODY_FLOOR_MARKER],
+        ],
+        [
+          'engine-owned remediation-body marker',
+          region('compliance-attest', NEEDS_REMEDIATION_BODY_MARKER),
+          customStep('compliance-attest'),
+          ['compliance-attest', NEEDS_REMEDIATION_BODY_MARKER],
+        ],
+        [
+          'engine-owned halt sentinel',
+          region('compliance-attest', HALT_PR_BANNER_SENTINEL),
+          customStep('compliance-attest'),
+          ['compliance-attest', HALT_PR_BANNER_SENTINEL],
+        ],
       ])('rejects %s', async (_caseName, template, steps, expectedMessageParts) => {
         for (const name of ['compliance-attest', 'release-disposition', 'late-attest']) {
           await writeCustomSkill(name);
@@ -254,10 +312,7 @@ steps:
 
     it('rejects retired and arbitrary undeclared step names as custom steps missing after', async () => {
       const loadUndeclaredStep = async (name: string) => {
-        await writeFile(
-          join(tmpDir, '.ai-conductor', 'config.yml'),
-          `steps:\n  ${name}:\n    max_retries: 2\n`,
-        );
+        await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), `steps:\n  ${name}:\n    max_retries: 2\n`);
         const result = await loadConfig(tmpDir);
         expect(result.ok).toBe(false);
         if (result.ok) throw new Error('expected config validation failure');
@@ -285,44 +340,32 @@ steps:
       expect(result.ok).toBe(true);
     });
 
-    it.each([
-      '^1.2.0',
-      '~1.5.0',
-      '>=1.0.0 <2.0.0',
-      '1.5.0',
-      '>=0.99.0',
-    ])('loads a satisfied harness version constraint: %s', async (constraint) => {
-      await writeFile(
-        join(tmpDir, '.ai-conductor', 'config.yml'),
-        `harness_version: "${constraint}"\n`,
-      );
+    it.each(['^1.2.0', '~1.5.0', '>=1.0.0 <2.0.0', '1.5.0', '>=0.99.0'])(
+      'loads a satisfied harness version constraint: %s',
+      async (constraint) => {
+        await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), `harness_version: "${constraint}"\n`);
 
-      await expect(loadConfig(tmpDir, '1.5.0')).resolves.toMatchObject({ ok: true });
-    });
+        await expect(loadConfig(tmpDir, '1.5.0')).resolves.toMatchObject({ ok: true });
+      },
+    );
 
-    it.each([
-      '^2.0.0',
-      '~1.4.0',
-      '>=2.0.0 <3.0.0',
-      '1.4.0',
-      '>=1.6.0',
-    ])('rejects an unsatisfied harness version constraint: %s', async (constraint) => {
-      await writeFile(
-        join(tmpDir, '.ai-conductor', 'config.yml'),
-        `harness_version: "${constraint}"\n`,
-      );
+    it.each(['^2.0.0', '~1.4.0', '>=2.0.0 <3.0.0', '1.4.0', '>=1.6.0'])(
+      'rejects an unsatisfied harness version constraint: %s',
+      async (constraint) => {
+        await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), `harness_version: "${constraint}"\n`);
 
-      const result = await loadConfig(tmpDir, '1.5.0');
+        const result = await loadConfig(tmpDir, '1.5.0');
 
-      expect(result).toMatchObject({
-        ok: false,
-        error: {
-          type: 'version_mismatch',
-          message: expect.stringContaining('1.5.0'),
-        },
-      });
-      if (!result.ok) expect(result.error.message).toContain(constraint);
-    });
+        expect(result).toMatchObject({
+          ok: false,
+          error: {
+            type: 'version_mismatch',
+            message: expect.stringContaining('1.5.0'),
+          },
+        });
+        if (!result.ok) expect(result.error.message).toContain(constraint);
+      },
+    );
 
     it('loads OTel attributes without an unknown-key warning', async () => {
       await writeFile(
@@ -409,11 +452,14 @@ steps:
       });
     });
 
-    it.each(['1.5.0', '0.0.1'])('does not apply a version check when harness_version is absent (%s)', async (installedVersion) => {
-      await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), '{}\n');
+    it.each(['1.5.0', '0.0.1'])(
+      'does not apply a version check when harness_version is absent (%s)',
+      async (installedVersion) => {
+        await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), '{}\n');
 
-      await expect(loadConfig(tmpDir, installedVersion)).resolves.toMatchObject({ ok: true });
-    });
+        await expect(loadConfig(tmpDir, installedVersion)).resolves.toMatchObject({ ok: true });
+      },
+    );
 
     it('parses valid .ai-conductor/config.yml (new flat schema)', async () => {
       // Note: we write skill paths here pointing at files we don't create, so
@@ -460,16 +506,14 @@ steps:
       expect({
         ordinary: ordinary.ok
           ? {
-              auto_restart_on_stale_engine:
-                ordinary.config.auto_restart_on_stale_engine,
+              auto_restart_on_stale_engine: ordinary.config.auto_restart_on_stale_engine,
               build_review: ordinary.config.build_review,
               build_progress_halt: ordinary.config.build_progress_halt,
             }
           : ordinary,
         deferred: deferred.ok
           ? {
-              auto_restart_on_stale_engine:
-                deferred.config.auto_restart_on_stale_engine,
+              auto_restart_on_stale_engine: deferred.config.auto_restart_on_stale_engine,
               build_review: deferred.config.build_review,
               build_progress_halt: deferred.config.build_progress_halt,
             }
@@ -550,34 +594,10 @@ steps:
       });
 
       it.each([
-        [
-          'an unsupported backend',
-          { backend: 'gitlab' },
-          'tracker.backend',
-          'github',
-          'jira',
-        ],
-        [
-          'an unsupported Jira transport',
-          { backend: 'jira', transport: 'ftp' },
-          'tracker.transport',
-          'api',
-          'mcp',
-        ],
-        [
-          'an invalid Jira site URL',
-          { backend: 'jira', site: 'not a url' },
-          'tracker.site',
-          'https',
-          undefined,
-        ],
-        [
-          'an unknown tracker key',
-          { backend: 'jira', token: 'secret' },
-          'tracker.token',
-          undefined,
-          undefined,
-        ],
+        ['an unsupported backend', { backend: 'gitlab' }, 'tracker.backend', 'github', 'jira'],
+        ['an unsupported Jira transport', { backend: 'jira', transport: 'ftp' }, 'tracker.transport', 'api', 'mcp'],
+        ['an invalid Jira site URL', { backend: 'jira', site: 'not a url' }, 'tracker.site', 'https', undefined],
+        ['an unknown tracker key', { backend: 'jira', token: 'secret' }, 'tracker.token', undefined, undefined],
       ])('rejects %s with a path-named error', (_name, tracker, path, acceptedOne, acceptedTwo) => {
         const result = validateConfig({ tracker });
 
@@ -649,10 +669,7 @@ steps:
           : result,
         original: input,
         originalHasTopLevelDefault: Object.hasOwn(input, 'auto_restart_on_stale_engine'),
-        originalHasNestedDefault: Object.hasOwn(
-          input.mergeable_autoresolve,
-          'cooldownMinutes',
-        ),
+        originalHasNestedDefault: Object.hasOwn(input.mergeable_autoresolve, 'cooldownMinutes'),
       }).toEqual({
         normalized: {
           auto_restart_on_stale_engine: false,
@@ -722,12 +739,8 @@ steps:
         },
       }).toEqual({
         outcomes: {
-          clamped: [
-            'attribution_audit_sample_pct out of range [0, 100]; clamped to 100.',
-          ],
-          fallback: [
-            'build_review.enabled has invalid value "banana", omitting.',
-          ],
+          clamped: ['attribution_audit_sample_pct out of range [0, 100]; clamped to 100.'],
+          fallback: ['build_review.enabled has invalid value "banana", omitting.'],
           topLevelRejection: true,
           nestedRejection: true,
         },
@@ -816,11 +829,9 @@ steps:
         original: input,
         identities: {
           originalDefaultsRetained: input.defaults === originalDefaults,
-          originalFallbackLadderRetained:
-            input.model_fallback_ladder === originalFallbackLadder,
+          originalFallbackLadderRetained: input.model_fallback_ladder === originalFallbackLadder,
           returnedDefaultsIsolated: returnedDefaults !== originalDefaults,
-          returnedFallbackLadderIsolated:
-            returnedFallbackLadder !== originalFallbackLadder,
+          returnedFallbackLadderIsolated: returnedFallbackLadder !== originalFallbackLadder,
         },
       }).toEqual({
         original: snapshot,
@@ -847,16 +858,14 @@ steps:
       expect({
         deferred: deferred.ok
           ? {
-              auto_restart_on_stale_engine:
-                deferred.config.auto_restart_on_stale_engine,
+              auto_restart_on_stale_engine: deferred.config.auto_restart_on_stale_engine,
               build_review: deferred.config.build_review,
               mergeable_autoresolve: deferred.config.mergeable_autoresolve,
             }
           : deferred,
         ordinary: ordinary.ok
           ? {
-              auto_restart_on_stale_engine:
-                ordinary.config.auto_restart_on_stale_engine,
+              auto_restart_on_stale_engine: ordinary.config.auto_restart_on_stale_engine,
               build_review: ordinary.config.build_review,
               mergeable_autoresolve: ordinary.config.mergeable_autoresolve,
             }
@@ -982,8 +991,12 @@ steps:
     });
 
     it.each([
-      ['daemon_heap_dump_threshold_mb', 0], ['daemon_heap_dump_threshold_mb', 1.5], ['daemon_heap_dump_threshold_mb', 'big'],
-      ['daemon_heap_dump_retention', 0], ['daemon_heap_dump_retention', -2], ['daemon_heap_dump_retention', 2.5],
+      ['daemon_heap_dump_threshold_mb', 0],
+      ['daemon_heap_dump_threshold_mb', 1.5],
+      ['daemon_heap_dump_threshold_mb', 'big'],
+      ['daemon_heap_dump_retention', 0],
+      ['daemon_heap_dump_retention', -2],
+      ['daemon_heap_dump_retention', 2.5],
     ] as const)('rejects %s %j outside the accepted integer range [1, ∞)', (key, value) => {
       const result = validateConfig({ [key]: value as never });
 
@@ -1267,12 +1280,7 @@ steps:
         },
       });
 
-      const outcomes = ([
-        'gating',
-        'structural',
-        'advisory',
-        undefined,
-      ] as const).map((enforcement) => {
+      const outcomes = (['gating', 'structural', 'advisory', undefined] as const).map((enforcement) => {
         const result = validateConfig(customStep(enforcement));
         return result.ok ? 'accepted' : result.error.message;
       });
@@ -1287,10 +1295,7 @@ steps:
 
     it('accepts custom step with valid after target and existing SKILL.md', async () => {
       await mkdir(join(tmpDir, 'skills', 'custom-lint'), { recursive: true });
-      await writeFile(
-        join(tmpDir, 'skills', 'custom-lint', 'SKILL.md'),
-        '---\nname: custom-lint\n---\n',
-      );
+      await writeFile(join(tmpDir, 'skills', 'custom-lint', 'SKILL.md'), '---\nname: custom-lint\n---\n');
 
       const result = validateConfig(
         {
@@ -1559,9 +1564,9 @@ steps:
   describe('conductor block validation', () => {
     it('accepts tagged/main/stable update_channel', () => {
       expect(
-        (['tagged', 'stable', 'main'] as const).map((update_channel) => (
-          validateConfig({ conductor: { update_channel } }).ok
-        )),
+        (['tagged', 'stable', 'main'] as const).map(
+          (update_channel) => validateConfig({ conductor: { update_channel } }).ok,
+        ),
       ).toEqual([true, true, true]);
     });
 
@@ -1592,13 +1597,19 @@ steps:
 
   describe('OTel credential references', () => {
     it('accepts a command header in project-source configuration', () => {
-      expect(validateConfig({
-        otel: {
-          exporter: 'otlp',
-          endpoint: 'http://localhost:4318',
-          headers: { Authorization: { command: ['security', 'find-generic-password'] } },
-        },
-      }, '/repo', { source: 'project' })).toMatchObject({ ok: true });
+      expect(
+        validateConfig(
+          {
+            otel: {
+              exporter: 'otlp',
+              endpoint: 'http://localhost:4318',
+              headers: { Authorization: { command: ['security', 'find-generic-password'] } },
+            },
+          },
+          '/repo',
+          { source: 'project' },
+        ),
+      ).toMatchObject({ ok: true });
     });
   });
 
@@ -1659,18 +1670,43 @@ steps:
       [
         'accepts omitted and finite positive entry timeouts',
         'test_suite:\n  commands:\n    - command: npm run test:unit\n    - command: npm run test:integration\n      timeout_seconds: 45\n',
-        [
-          { command: 'npm run test:unit' },
-          { command: 'npm run test:integration', timeout_seconds: 45 },
-        ],
+        [{ command: 'npm run test:unit' }, { command: 'npm run test:integration', timeout_seconds: 45 }],
       ],
-      ['rejects a zero entry timeout without default substitution', 'test_suite:\n  commands:\n    - command: npm test\n      timeout_seconds: 0\n', /test_suite\.commands\[0\]\.timeout_seconds/],
-      ['rejects a negative entry timeout without default substitution', 'test_suite:\n  commands:\n    - command: npm test\n      timeout_seconds: -1\n', /test_suite\.commands\[0\]\.timeout_seconds/],
-      ['rejects a YAML NaN entry timeout without default substitution', 'test_suite:\n  commands:\n    - command: npm test\n      timeout_seconds: .nan\n', /test_suite\.commands\[0\]\.timeout_seconds/],
-      ['rejects a YAML positive infinity entry timeout without default substitution', 'test_suite:\n  commands:\n    - command: npm test\n      timeout_seconds: .inf\n', /test_suite\.commands\[0\]\.timeout_seconds/],
-      ['rejects a YAML negative infinity entry timeout without default substitution', 'test_suite:\n  commands:\n    - command: npm test\n      timeout_seconds: -.inf\n', /test_suite\.commands\[0\]\.timeout_seconds/],
-      ['rejects a string entry timeout without default substitution', 'test_suite:\n  commands:\n    - command: npm test\n      timeout_seconds: slow\n', /test_suite\.commands\[0\]\.timeout_seconds/],
-      ['rejects a null entry timeout without default substitution', 'test_suite:\n  commands:\n    - command: npm test\n      timeout_seconds: null\n', /test_suite\.commands\[0\]\.timeout_seconds/],
+      [
+        'rejects a zero entry timeout without default substitution',
+        'test_suite:\n  commands:\n    - command: npm test\n      timeout_seconds: 0\n',
+        /test_suite\.commands\[0\]\.timeout_seconds/,
+      ],
+      [
+        'rejects a negative entry timeout without default substitution',
+        'test_suite:\n  commands:\n    - command: npm test\n      timeout_seconds: -1\n',
+        /test_suite\.commands\[0\]\.timeout_seconds/,
+      ],
+      [
+        'rejects a YAML NaN entry timeout without default substitution',
+        'test_suite:\n  commands:\n    - command: npm test\n      timeout_seconds: .nan\n',
+        /test_suite\.commands\[0\]\.timeout_seconds/,
+      ],
+      [
+        'rejects a YAML positive infinity entry timeout without default substitution',
+        'test_suite:\n  commands:\n    - command: npm test\n      timeout_seconds: .inf\n',
+        /test_suite\.commands\[0\]\.timeout_seconds/,
+      ],
+      [
+        'rejects a YAML negative infinity entry timeout without default substitution',
+        'test_suite:\n  commands:\n    - command: npm test\n      timeout_seconds: -.inf\n',
+        /test_suite\.commands\[0\]\.timeout_seconds/,
+      ],
+      [
+        'rejects a string entry timeout without default substitution',
+        'test_suite:\n  commands:\n    - command: npm test\n      timeout_seconds: slow\n',
+        /test_suite\.commands\[0\]\.timeout_seconds/,
+      ],
+      [
+        'rejects a null entry timeout without default substitution',
+        'test_suite:\n  commands:\n    - command: npm test\n      timeout_seconds: null\n',
+        /test_suite\.commands\[0\]\.timeout_seconds/,
+      ],
     ])('%s', async (_name, yaml, expected) => {
       await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), yaml);
 
@@ -1754,9 +1790,21 @@ steps:
       ['a string entry', 'test_suite:\n  commands:\n    - npm test\n', /test_suite\.commands.*\[0\]/],
       ['an array entry', 'test_suite:\n  commands:\n    - [npm, test]\n', /test_suite\.commands.*\[0\]/],
       ['an entry missing command', 'test_suite:\n  commands:\n    - {}\n', /test_suite\.commands.*\[0\].*command/],
-      ['an entry with a blank command', 'test_suite:\n  commands:\n    - command: "   "\n', /test_suite\.commands.*\[0\].*command/],
-      ['an entry with a non-string command', 'test_suite:\n  commands:\n    - command: 42\n', /test_suite\.commands.*\[0\].*command/],
-      ['an entry with an unknown key', 'test_suite:\n  commands:\n    - command: npm test\n      retries: 2\n', /test_suite\.commands.*\[0\].*retries/],
+      [
+        'an entry with a blank command',
+        'test_suite:\n  commands:\n    - command: "   "\n',
+        /test_suite\.commands.*\[0\].*command/,
+      ],
+      [
+        'an entry with a non-string command',
+        'test_suite:\n  commands:\n    - command: 42\n',
+        /test_suite\.commands.*\[0\].*command/,
+      ],
+      [
+        'an entry with an unknown key',
+        'test_suite:\n  commands:\n    - command: npm test\n      retries: 2\n',
+        /test_suite\.commands.*\[0\].*retries/,
+      ],
     ])('rejects commands with %s', async (_name, yaml, message) => {
       await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), yaml);
 
@@ -1795,10 +1843,7 @@ steps:
           join(home, '.ai-conductor', 'config.yml'),
           'test_suite:\n  commands:\n    - command: npm run test:unit\n',
         );
-        await writeFile(
-          join(tmpDir, '.ai-conductor', 'config.yml'),
-          'test_suite:\n  command: npm test\n',
-        );
+        await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), 'test_suite:\n  command: npm test\n');
 
         const result = await loadMergedConfig(tmpDir);
 
@@ -1835,10 +1880,7 @@ steps:
           ok: true,
           config: {
             test_suite: {
-              commands: [
-                { command: 'npm run test:unit' },
-                { command: 'npm run test:integration' },
-              ],
+              commands: [{ command: 'npm run test:unit' }, { command: 'npm run test:integration' }],
             },
           },
         });
@@ -2054,9 +2096,7 @@ steps:
         ok: false,
         error: {
           type: 'validation_error',
-          message: expect.stringMatching(
-            new RegExp(`test_suite\\.verification\\.drift_budget\\.source.*${bound}`),
-          ),
+          message: expect.stringMatching(new RegExp(`test_suite\\.verification\\.drift_budget\\.source.*${bound}`)),
         },
       });
     });
@@ -2086,13 +2126,19 @@ steps:
         error: { message: expect.stringMatching(/changed_command must be configured/) },
       });
 
-      await writeFile(config, 'test_suite:\n  command: npm test\n  changed_command: npm test\n  verification:\n    mode: changed\n');
+      await writeFile(
+        config,
+        'test_suite:\n  command: npm test\n  changed_command: npm test\n  verification:\n    mode: changed\n',
+      );
       expect(await loadConfig(tmpDir)).toMatchObject({
         ok: false,
         error: { message: expect.stringMatching(/\{base\}/) },
       });
 
-      await writeFile(config, 'test_suite:\n  command: npm test\n  changed_command: npm test -- --changed {base}\n  verification:\n    mode: changed\n');
+      await writeFile(
+        config,
+        'test_suite:\n  command: npm test\n  changed_command: npm test -- --changed {base}\n  verification:\n    mode: changed\n',
+      );
       expect(await loadConfig(tmpDir)).toMatchObject({
         ok: true,
         config: { test_suite: { verification: { mode: 'changed' } } },
@@ -2120,7 +2166,10 @@ steps:
         ok: false,
         error: { message: expect.stringMatching(/full_suite "sometimes" must be/) },
       });
-      await writeFile(config, 'test_suite:\n  command: npm test\n  verification:\n    mode: aggregate\n    full_suite: once\n');
+      await writeFile(
+        config,
+        'test_suite:\n  command: npm test\n  verification:\n    mode: aggregate\n    full_suite: once\n',
+      );
       expect(await loadConfig(tmpDir)).toMatchObject({
         ok: false,
         error: { message: expect.stringMatching(/full_suite is only valid when .*"changed"/) },
@@ -2145,10 +2194,7 @@ steps:
     });
 
     it('defaults absent verification to aggregate mode with an all-none drift budget', async () => {
-      await writeFile(
-        join(tmpDir, '.ai-conductor', 'config.yml'),
-        'test_suite:\n  command: npm test\n',
-      );
+      await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), 'test_suite:\n  command: npm test\n');
 
       const result = await loadConfig(tmpDir);
 
@@ -2244,10 +2290,7 @@ steps:
     });
 
     it('loads a test_suite without scoped_command as undefined', async () => {
-      await writeFile(
-        join(tmpDir, '.ai-conductor', 'config.yml'),
-        'test_suite:\n  command: npm test\n',
-      );
+      await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), 'test_suite:\n  command: npm test\n');
 
       const result = await loadConfig(tmpDir);
 
@@ -2296,26 +2339,10 @@ steps:
       ['an unknown key', { command: 'npm test', retries: 2 }, /test_suite.*retries/],
       ['a missing command', {}, /test_suite\.command/],
       ['a blank command', { command: '   ' }, /test_suite\.command/],
-      [
-        'a non-numeric timeout',
-        { command: 'npm test', timeout_seconds: 'slow' },
-        /test_suite\.timeout_seconds/,
-      ],
-      [
-        'a zero timeout',
-        { command: 'npm test', timeout_seconds: 0 },
-        /test_suite\.timeout_seconds/,
-      ],
-      [
-        'a negative timeout',
-        { command: 'npm test', timeout_seconds: -1 },
-        /test_suite\.timeout_seconds/,
-      ],
-      [
-        'a non-string inputs entry',
-        { command: 'npm test', inputs: ['package.json', 42] },
-        /test_suite\.inputs/,
-      ],
+      ['a non-numeric timeout', { command: 'npm test', timeout_seconds: 'slow' }, /test_suite\.timeout_seconds/],
+      ['a zero timeout', { command: 'npm test', timeout_seconds: 0 }, /test_suite\.timeout_seconds/],
+      ['a negative timeout', { command: 'npm test', timeout_seconds: -1 }, /test_suite\.timeout_seconds/],
+      ['a non-string inputs entry', { command: 'npm test', inputs: ['package.json', 42] }, /test_suite\.inputs/],
       [
         'a non-string environment entry',
         { command: 'npm test', environment: ['CI', false] },
@@ -2442,10 +2469,7 @@ steps:
     });
 
     it('project scalars replace user scalars', () => {
-      const merged = mergeConfigs(
-        { defaults: { model: 'sonnet' } },
-        { defaults: { model: 'opus' } },
-      );
+      const merged = mergeConfigs({ defaults: { model: 'sonnet' } }, { defaults: { model: 'opus' } });
       expect(merged.defaults?.model).toBe('opus');
     });
 
@@ -2473,10 +2497,7 @@ steps:
     });
 
     it('user-only keys pass through untouched', () => {
-      const merged = mergeConfigs(
-        { conductor: { update_channel: 'main', current_version: '1.0.0' } },
-        {},
-      );
+      const merged = mergeConfigs({ conductor: { update_channel: 'main', current_version: '1.0.0' } }, {});
       expect(merged.conductor?.update_channel).toBe('main');
       expect(merged.conductor?.current_version).toBe('1.0.0');
     });
@@ -2513,10 +2534,7 @@ steps:
 
   describe('visualizers config field', () => {
     it('loads configured visualizer names and leaves an absent key undefined', async () => {
-      await writeFile(
-        join(tmpDir, '.ai-conductor', 'config.yml'),
-        'visualizers:\n  - first\n  - second\n',
-      );
+      await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), 'visualizers:\n  - first\n  - second\n');
 
       const configured = await loadConfig(tmpDir);
       await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), '{}\n');
@@ -2620,10 +2638,7 @@ steps:
       });
 
       it('loadConfig REJECTS a committed project config that carries spec_owner', async () => {
-        await writeFile(
-          join(tmpDir, '.ai-conductor', 'config.yml'),
-          'spec_owner: jstoup111\n',
-        );
+        await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), 'spec_owner: jstoup111\n');
         const result = await loadConfig(tmpDir);
         expect(result.ok).toBe(false);
         if (result.ok) return;
@@ -2632,10 +2647,7 @@ steps:
       });
 
       it('loadConfig still succeeds for a project config with no spec_owner (no regression)', async () => {
-        await writeFile(
-          join(tmpDir, '.ai-conductor', 'config.yml'),
-          'defaults:\n  model: sonnet\n',
-        );
+        await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), 'defaults:\n  model: sonnet\n');
         const result = await loadConfig(tmpDir);
         expect(result.ok).toBe(true);
       });
@@ -2693,8 +2705,7 @@ steps:
           : auditSampleResult.error.message,
       }).toEqual({
         retiredKeyOutcomes: {
-          attribution_enforcement_cutover:
-            'Unknown top-level key: "attribution_enforcement_cutover"',
+          attribution_enforcement_cutover: 'Unknown top-level key: "attribution_enforcement_cutover"',
           attribution_judge_cutover: 'Unknown top-level key: "attribution_judge_cutover"',
         },
         auditSamplePct: 25,
@@ -2708,8 +2719,12 @@ steps:
 
       expect(result).toMatchObject({
         ok: true,
-        warnings: ['conflict_check is retired and ignored (adr-2026-08-09-repo-wide-adr-sweep-staged-behind-default-off-flag).'],
-        deprecatedKeys: [{ key: 'conflict_check', adr: 'adr-2026-08-09-repo-wide-adr-sweep-staged-behind-default-off-flag' }],
+        warnings: [
+          'conflict_check is retired and ignored (adr-2026-08-09-repo-wide-adr-sweep-staged-behind-default-off-flag).',
+        ],
+        deprecatedKeys: [
+          { key: 'conflict_check', adr: 'adr-2026-08-09-repo-wide-adr-sweep-staged-behind-default-off-flag' },
+        ],
       });
       expect(result.ok && 'conflict_check' in result.config).toBe(false);
     });
@@ -2860,11 +2875,7 @@ steps:
 
       // A fresh ctx for config A should see no contamination from config B.
       const ctxA = { warnings: [] as string[] };
-      const aAgain = await resolveMemoryProvider(
-        { memory_provider: 'local' } as any,
-        registry,
-        ctxA,
-      );
+      const aAgain = await resolveMemoryProvider({ memory_provider: 'local' } as any, registry, ctxA);
       expect(aAgain).toBe(LOCAL);
       expect(ctxA.warnings).toEqual([]);
     });
@@ -2876,11 +2887,7 @@ steps:
       // Three independent resolutions of the same bad name, each with a fresh ctx.
       const results = await Promise.all(
         [1, 2, 3].map(() =>
-          resolveMemoryProvider(
-            { memory_provider: 'bad-name' } as any,
-            registry,
-            { warnings: [] },
-          ).then((p) => p),
+          resolveMemoryProvider({ memory_provider: 'bad-name' } as any, registry, { warnings: [] }).then((p) => p),
         ),
       );
 
@@ -3060,31 +3067,38 @@ steps:
     });
   });
 
-  describe('executor_isolation and supervisor_max_stale_hours config fields', () => {
-    it('defaults executor_isolation to child without a warning', () => {
+  describe('executor_isolation removal and supervisor_max_stale_hours config fields', () => {
+    it('omits the retired key without a warning or deprecated-key event', async () => {
       const result = validateConfig({});
       expect(result.ok).toBe(true);
       if (!result.ok) return;
-      expect(result.config.executor_isolation).toBe('child');
+      expect(result.config).not.toHaveProperty('executor_isolation');
       expect(result.warnings).toHaveLength(0);
+      const events = new ConductorEventEmitter();
+      const emitted: unknown[] = [];
+      events.on('config_deprecated_key', (event) => {
+        emitted.push(event);
+      });
+      await emitDeprecatedConfigKeyEvents(result, events);
+      expect(emitted).toEqual([]);
     });
 
-    it.each(['child', 'in-process'] as const)('accepts executor_isolation %s', (executor_isolation) => {
-      const result = validateConfig({ executor_isolation });
-      expect(result.ok).toBe(true);
-      if (!result.ok) return;
-      expect(result.config.executor_isolation).toBe(executor_isolation);
-      expect(result.warnings).toHaveLength(0);
-    });
-
-    it.each(['thread', true, 1, null])('rejects invalid executor_isolation %#', (executor_isolation) => {
-      const result = validateConfig({ executor_isolation });
-      expect(result.ok).toBe(false);
-      if (result.ok) return;
-      expect(result.error.message).toMatch(/executor_isolation/);
-      expect(result.error.message).toMatch(/child/);
-      expect(result.error.message).toMatch(/in-process/);
-    });
+    it.each(['in-process', 'child', 'thread', '', true, 1, null, {}])(
+      'rejects executor_isolation %# as an unknown top-level key',
+      async (executor_isolation) => {
+        const result = validateConfig({ executor_isolation });
+        expect(result.ok).toBe(false);
+        if (result.ok) return;
+        expect(result.error.message).toBe('Unknown top-level key: "executor_isolation"');
+        const events = new ConductorEventEmitter();
+        const emitted: unknown[] = [];
+        events.on('config_deprecated_key', (event) => {
+          emitted.push(event);
+        });
+        await emitDeprecatedConfigKeyEvents(result, events);
+        expect(emitted).toEqual([]);
+      },
+    );
 
     it('defaults supervisor_max_stale_hours to 24 without a warning', () => {
       const result = validateConfig({});
@@ -3094,15 +3108,18 @@ steps:
       expect(result.warnings).toHaveLength(0);
     });
 
-    it.each([0, -1, 'twenty-four'])('warns and defaults invalid supervisor_max_stale_hours %#', (supervisor_max_stale_hours) => {
-      const result = validateConfig({ supervisor_max_stale_hours });
-      expect(result.ok).toBe(true);
-      if (!result.ok) return;
-      expect(result.config.supervisor_max_stale_hours).toBe(24);
-      expect(result.warnings).toHaveLength(1);
-      expect(result.warnings[0]).toMatch(/supervisor_max_stale_hours/);
-      expect(result.warnings[0]).toMatch(/24/);
-    });
+    it.each([0, -1, 'twenty-four'])(
+      'warns and defaults invalid supervisor_max_stale_hours %#',
+      (supervisor_max_stale_hours) => {
+        const result = validateConfig({ supervisor_max_stale_hours });
+        expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.config.supervisor_max_stale_hours).toBe(24);
+        expect(result.warnings).toHaveLength(1);
+        expect(result.warnings[0]).toMatch(/supervisor_max_stale_hours/);
+        expect(result.warnings[0]).toMatch(/24/);
+      },
+    );
   });
 
   describe('plan_review config field', () => {
@@ -3113,18 +3130,15 @@ steps:
       });
     });
 
-    it.each([0, -1, 1.5, 'large'])(
-      'rejects non-positive-integer max_prompt_chars %#',
-      (max_prompt_chars) => {
-        expect(validateConfig({ plan_review: { max_prompt_chars } })).toEqual({
-          ok: false,
-          error: {
-            type: 'validation_error',
-            message: 'plan_review.max_prompt_chars must be a positive integer',
-          },
-        });
-      },
-    );
+    it.each([0, -1, 1.5, 'large'])('rejects non-positive-integer max_prompt_chars %#', (max_prompt_chars) => {
+      expect(validateConfig({ plan_review: { max_prompt_chars } })).toEqual({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: 'plan_review.max_prompt_chars must be a positive integer',
+        },
+      });
+    });
 
     it('rejects unknown plan_review keys', () => {
       expect(validateConfig({ plan_review: { max_chars: 1 } })).toEqual({
@@ -3258,8 +3272,16 @@ steps:
     it.each([
       ['prd_audit', { XL: 3 }, 'prd_audit.max_remediation_laps.XL is an unknown tier'],
       ['prd_audit', { M: 2.5 }, 'prd_audit.max_remediation_laps.M must be a positive integer'],
-      ['architecture_review_as_built', { XL: 3 }, 'architecture_review_as_built.max_remediation_laps.XL is an unknown tier'],
-      ['architecture_review_as_built', { M: 2.5 }, 'architecture_review_as_built.max_remediation_laps.M must be a positive integer'],
+      [
+        'architecture_review_as_built',
+        { XL: 3 },
+        'architecture_review_as_built.max_remediation_laps.XL is an unknown tier',
+      ],
+      [
+        'architecture_review_as_built',
+        { M: 2.5 },
+        'architecture_review_as_built.max_remediation_laps.M must be a positive integer',
+      ],
     ] as const)('rejects an invalid remediation lap map for %s', (gate, max_remediation_laps, message) => {
       expect(validateConfig({ [gate]: { max_remediation_laps } })).toEqual({
         ok: false,
@@ -3388,8 +3410,7 @@ steps:
 
       expect(resolved.rubrics.implementationQuality.min_severity).toBe('major');
       expect(resolved.rubrics.security).not.toHaveProperty('min_severity');
-      expect(resolved.catalog.find((entry) => entry.id === 'eventSpine')?.policy.min_severity)
-        .toBe('minor');
+      expect(resolved.catalog.find((entry) => entry.id === 'eventSpine')?.policy.min_severity).toBe('minor');
     });
 
     it.each([
@@ -3398,7 +3419,11 @@ steps:
         'build_review.rubrics.implementationQuality.min_severity must be critical|major|minor|nit',
       ],
       [
-        { build_review: { custom_rubrics: { eventSpine: { skill: 'event-spine', question: 'Check event spine.', min_severity: 2 } } } },
+        {
+          build_review: {
+            custom_rubrics: { eventSpine: { skill: 'event-spine', question: 'Check event spine.', min_severity: 2 } },
+          },
+        },
         'build_review.custom_rubrics.eventSpine.min_severity must be critical|major|minor|nit',
       ],
       [
@@ -3444,7 +3469,12 @@ steps:
       });
 
       expect(DEPRECATED_BUILD_REVIEW_RUBRIC_IDS).toEqual([
-        'scope', 'completeness', 'rootCause', 'causalIntegrity', 'tautology', 'wiring',
+        'scope',
+        'completeness',
+        'rootCause',
+        'causalIntegrity',
+        'tautology',
+        'wiring',
       ]);
       expect(retiredScope.ok && retiredScope.warnings).toEqual([
         'build_review.rubrics.scope is retired and ignored (adr-2026-08-22-build-review-opt-in-rubric-container).',
@@ -3524,20 +3554,17 @@ steps:
     });
 
     it.each([
-      [
-        { enabled: 'no' },
-        'build_review.rubrics.security.enabled must be a boolean',
-      ],
-      [
-        { effort: 'extreme' },
-        'build_review.rubrics.security.effort must be low|medium|high|xhigh|max',
-      ],
-    ])('rejects invalid security rubric policy %# before any build-review lap can be configured', (security, message) => {
-      expect(validateConfig({ build_review: { rubrics: { security } } })).toEqual({
-        ok: false,
-        error: { type: 'validation_error', message },
-      });
-    });
+      [{ enabled: 'no' }, 'build_review.rubrics.security.enabled must be a boolean'],
+      [{ effort: 'extreme' }, 'build_review.rubrics.security.effort must be low|medium|high|xhigh|max'],
+    ])(
+      'rejects invalid security rubric policy %# before any build-review lap can be configured',
+      (security, message) => {
+        expect(validateConfig({ build_review: { rubrics: { security } } })).toEqual({
+          ok: false,
+          error: { type: 'validation_error', message },
+        });
+      },
+    );
 
     it.each([
       [{ enabled: 'yes' }, 'build_review.rubrics.implementationQuality.enabled must be a boolean'],
@@ -3550,9 +3577,11 @@ steps:
     });
 
     it('resolves the shipped projection byte bound when test-quality leaves it unset', () => {
-      expect(resolveBuildReviewConfig({
-        build_review: { rubrics: { testQuality: { enabled: true } } },
-      }).rubrics.testQuality.max_projection_bytes).toBe(DEFAULT_TEST_QUALITY_MAX_PROJECTION_BYTES);
+      expect(
+        resolveBuildReviewConfig({
+          build_review: { rubrics: { testQuality: { enabled: true } } },
+        }).rubrics.testQuality.max_projection_bytes,
+      ).toBe(DEFAULT_TEST_QUALITY_MAX_PROJECTION_BYTES);
     });
 
     it.each([0, -1, 1.5, '1MB'] as const)(
@@ -3574,8 +3603,15 @@ steps:
 
     it.each(['rubrics', 'custom_rubrics'] as const)('resolves an independent review deadline from %s', (key) => {
       const id = key === 'rubrics' ? 'testQuality' : 'moneySafety';
-      const policy = { enabled: true, timeout_seconds: 3600, ...(key === 'custom_rubrics' ? { skill: 'money-safety', question: 'Check money.' } : {}) };
-      const result = validateConfig({ test_suite: { command: "make test", timeout_seconds: 120 }, build_review: { [key]: { [id]: policy } } });
+      const policy = {
+        enabled: true,
+        timeout_seconds: 3600,
+        ...(key === 'custom_rubrics' ? { skill: 'money-safety', question: 'Check money.' } : {}),
+      };
+      const result = validateConfig({
+        test_suite: { command: 'make test', timeout_seconds: 120 },
+        build_review: { [key]: { [id]: policy } },
+      });
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       const resolved = resolveBuildReviewConfig(result.config);
@@ -3585,9 +3621,18 @@ steps:
     it.each([0, -1, Infinity, NaN, '120', 3_000_000])('rejects invalid rubric timeout %j', (timeout_seconds) => {
       for (const key of ['rubrics', 'custom_rubrics']) {
         const id = key === 'rubrics' ? 'testQuality' : 'moneySafety';
-        expect(validateConfig({ build_review: { [key]: { [id]: { timeout_seconds,
-          ...(key === 'custom_rubrics' ? { skill: 'money-safety', question: 'Check money.' } : {}),
-        } } } }).ok).toBe(false);
+        expect(
+          validateConfig({
+            build_review: {
+              [key]: {
+                [id]: {
+                  timeout_seconds,
+                  ...(key === 'custom_rubrics' ? { skill: 'money-safety', question: 'Check money.' } : {}),
+                },
+              },
+            },
+          }).ok,
+        ).toBe(false);
       }
     });
 
@@ -3649,11 +3694,13 @@ steps:
       const result = validateConfig({
         build_review: { enabled: false, perTaskFloor: false },
       });
-      expect(result.ok && {
-        build_review: result.config.build_review,
-        warnings: result.warnings,
-        deprecatedKeys: result.deprecatedKeys,
-      }).toEqual({
+      expect(
+        result.ok && {
+          build_review: result.config.build_review,
+          warnings: result.warnings,
+          deprecatedKeys: result.deprecatedKeys,
+        },
+      ).toEqual({
         build_review: {
           enabled: false,
           maxParallel: 4,
@@ -3664,11 +3711,15 @@ steps:
             implementationQuality: { enabled: true },
           },
         },
-        warnings: ['build_review.perTaskFloor is retired and ignored (adr-2026-08-22-build-review-opt-in-rubric-container).'],
-        deprecatedKeys: [{
-          key: 'build_review.perTaskFloor',
-          adr: 'adr-2026-08-22-build-review-opt-in-rubric-container',
-        }],
+        warnings: [
+          'build_review.perTaskFloor is retired and ignored (adr-2026-08-22-build-review-opt-in-rubric-container).',
+        ],
+        deprecatedKeys: [
+          {
+            key: 'build_review.perTaskFloor',
+            adr: 'adr-2026-08-22-build-review-opt-in-rubric-container',
+          },
+        ],
       });
     });
 
@@ -3677,10 +3728,12 @@ steps:
         build_review: { scopeContainmentEnforced: true },
       });
 
-      expect(result.ok && {
-        build_review: result.config.build_review,
-        warnings: result.warnings,
-      }).toEqual({
+      expect(
+        result.ok && {
+          build_review: result.config.build_review,
+          warnings: result.warnings,
+        },
+      ).toEqual({
         build_review: expect.objectContaining({ enabled: true, scopeContainmentEnforced: true }),
         warnings: [],
       });
@@ -3715,10 +3768,12 @@ steps:
         build_review: { enabled: false, scopeContainmentEnforced: 'yes' },
       });
 
-      expect(result.ok && {
-        build_review: result.config.build_review,
-        warnings: result.warnings,
-      }).toEqual({
+      expect(
+        result.ok && {
+          build_review: result.config.build_review,
+          warnings: result.warnings,
+        },
+      ).toEqual({
         build_review: expect.objectContaining({ enabled: false }),
         warnings: [expect.stringMatching(/build_review\.scopeContainmentEnforced/)],
       });
@@ -3728,10 +3783,12 @@ steps:
       const result = validateConfig({
         build_review: { enabled: false, perTaskFlooor: true },
       });
-      expect(result.ok && {
-        build_review: result.config.build_review,
-        warnings: result.warnings,
-      }).toEqual({
+      expect(
+        result.ok && {
+          build_review: result.config.build_review,
+          warnings: result.warnings,
+        },
+      ).toEqual({
         build_review: expect.objectContaining({ enabled: false }),
         warnings: [expect.stringMatching(/perTaskFlooor/)],
       });
@@ -3741,10 +3798,12 @@ steps:
       const result = validateConfig({
         build_review: { enabled: false, a: 1, b: 2 },
       });
-      expect(result.ok && {
-        build_review: result.config.build_review,
-        warnings: result.warnings,
-      }).toEqual({
+      expect(
+        result.ok && {
+          build_review: result.config.build_review,
+          warnings: result.warnings,
+        },
+      ).toEqual({
         build_review: expect.objectContaining({ enabled: false }),
         warnings: [expect.stringMatching(/"a"/), expect.stringMatching(/"b"/)],
       });
@@ -3814,8 +3873,16 @@ steps:
     });
 
     it.each([
-      ['finish', "tier == 'L'", 'Cannot condition gating step: "finish" with when:. Only advisory steps and gating steps that allow config disabling may be conditional.'],
-      ['rebase', "tier == 'L'", 'Cannot condition structural step: "rebase" with when:. Structural steps can never be conditional.'],
+      [
+        'finish',
+        "tier == 'L'",
+        'Cannot condition gating step: "finish" with when:. Only advisory steps and gating steps that allow config disabling may be conditional.',
+      ],
+      [
+        'rebase',
+        "tier == 'L'",
+        'Cannot condition structural step: "rebase" with when:. Structural steps can never be conditional.',
+      ],
     ])('rejects when: on non-disableable %s steps without evaluating the expression', (name, when, message) => {
       const result = validateConfig({ steps: { [name]: { when } } });
 
@@ -3988,10 +4055,12 @@ steps:
       const result = validateConfig({
         ci_watch: { enabled: false, cooldownMinutes: 'thirty' },
       });
-      expect(result.ok && {
-        ci_watch: result.config.ci_watch,
-        warnings: result.warnings,
-      }).toEqual({
+      expect(
+        result.ok && {
+          ci_watch: result.config.ci_watch,
+          warnings: result.warnings,
+        },
+      ).toEqual({
         ci_watch: { enabled: false },
         warnings: [expect.stringMatching(/ci_watch\.cooldownMinutes/)],
       });
@@ -4007,10 +4076,12 @@ steps:
 
     it('preserves enabled and cooldownMinutes with no warnings', () => {
       const result = validateConfig({ ci_watch: { enabled: true, cooldownMinutes: 15 } });
-      expect(result.ok && {
-        ci_watch: result.config.ci_watch,
-        warnings: result.warnings,
-      }).toEqual({
+      expect(
+        result.ok && {
+          ci_watch: result.config.ci_watch,
+          warnings: result.warnings,
+        },
+      ).toEqual({
         ci_watch: { enabled: true, cooldownMinutes: 15 },
         warnings: [],
       });
@@ -4018,10 +4089,12 @@ steps:
 
     it('defaults enabled while preserving a zero cooldownMinutes with no warnings', () => {
       const result = validateConfig({ ci_watch: { cooldownMinutes: 0 } });
-      expect(result.ok && {
-        ci_watch: result.config.ci_watch,
-        warnings: result.warnings,
-      }).toEqual({
+      expect(
+        result.ok && {
+          ci_watch: result.config.ci_watch,
+          warnings: result.warnings,
+        },
+      ).toEqual({
         ci_watch: { enabled: true, cooldownMinutes: 0 },
         warnings: [],
       });
@@ -4029,10 +4102,12 @@ steps:
 
     it('omits a negative cooldownMinutes and warns', () => {
       const result = validateConfig({ ci_watch: { enabled: true, cooldownMinutes: -5 } });
-      expect(result.ok && {
-        ci_watch: result.config.ci_watch,
-        warnings: result.warnings,
-      }).toEqual({
+      expect(
+        result.ok && {
+          ci_watch: result.config.ci_watch,
+          warnings: result.warnings,
+        },
+      ).toEqual({
         ci_watch: { enabled: true },
         warnings: [expect.stringMatching(/ci_watch\.cooldownMinutes/)],
       });
@@ -4040,10 +4115,12 @@ steps:
 
     it('defaults an invalid enabled value and warns', () => {
       const result = validateConfig({ ci_watch: { enabled: 'banana' } });
-      expect(result.ok && {
-        ci_watch: result.config.ci_watch,
-        warnings: result.warnings,
-      }).toEqual({
+      expect(
+        result.ok && {
+          ci_watch: result.config.ci_watch,
+          warnings: result.warnings,
+        },
+      ).toEqual({
         ci_watch: { enabled: true },
         warnings: [expect.stringMatching(/ci_watch\.enabled/)],
       });
@@ -4069,10 +4146,12 @@ steps:
       const result = validateConfig({
         ci_watch: { enabled: false, a: 1, b: 2 },
       });
-      expect(result.ok && {
-        ci_watch: result.config.ci_watch,
-        warnings: result.warnings,
-      }).toEqual({
+      expect(
+        result.ok && {
+          ci_watch: result.config.ci_watch,
+          warnings: result.warnings,
+        },
+      ).toEqual({
         ci_watch: { enabled: false },
         warnings: [expect.stringMatching(/"a"/), expect.stringMatching(/"b"/)],
       });
@@ -4162,15 +4241,18 @@ steps:
 
   describe('coverage_binding config retirement', () => {
     it('loads legacy top-level and step settings with warnings and no registry entry', async () => {
-      await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), [
-        'coverage_binding:',
-        '  judge:',
-        '    enabled: true',
-        'steps:',
-        '  coverage_binding:',
-        '    llm_provider: codex',
-        '',
-      ].join('\n'));
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        [
+          'coverage_binding:',
+          '  judge:',
+          '    enabled: true',
+          'steps:',
+          '  coverage_binding:',
+          '    llm_provider: codex',
+          '',
+        ].join('\n'),
+      );
 
       const result = await loadConfig(tmpDir);
       expect(result).toMatchObject({
@@ -4194,7 +4276,7 @@ steps:
     it('does not reinterpret custom steps missing after as retired built-ins', () => {
       expect(validateConfig({ steps: { my_step: { skill: 'skills/my-step/SKILL.md' } } })).toEqual({
         ok: false,
-        error: { type: 'validation_error', message: "Custom step \"my_step\" requires 'after: <existing-step>'" },
+        error: { type: 'validation_error', message: 'Custom step "my_step" requires \'after: <existing-step>\'' },
       });
     });
   });
@@ -4229,7 +4311,11 @@ steps:
           { model: 'anthropic/claude-opus-4-5', configPath: 'llm_providers.pi.model_escalation_order[0]' },
           { model: 'openai/gpt-5.6-sol', configPath: 'llm_providers.pi.model_fallback_ladder[0]' },
           { model: 'anthropic/claude-haiku-4-5', configPath: 'steps.build.model', step: 'build' },
-          { model: 'anthropic/claude-opus-4-5', configPath: 'build_review.rubrics.testQuality.model', step: 'build_review:testQuality' },
+          {
+            model: 'anthropic/claude-opus-4-5',
+            configPath: 'build_review.rubrics.testQuality.model',
+            step: 'build_review:testQuality',
+          },
         ]),
       });
       expect(selections.claude.configured).toBe(true);
@@ -4247,14 +4333,20 @@ steps:
         build_review: { rubrics: { testQuality: { model: 'anthropic/claude-sonnet-4-5' } } },
       });
 
-      expect(selections.pi.models).toEqual(expect.arrayContaining([
-        { model: 'claude-opus-4-5', configPath: 'steps.plan.model', step: 'plan' },
-        { model: 'anthropic/claude-opus-4-5', configPath: 'steps.plan.by_tier.L.model', step: 'plan' },
-        { model: 'google/gemini-2.5-flash', configPath: 'defaults.model' },
-        { model: 'openai/gpt-5.6-sol', configPath: 'phases.BUILD.model' },
-        { model: 'openai/gpt-5.6-pro', configPath: 'phases.BUILD.by_tier.L.model' },
-        { model: 'anthropic/claude-sonnet-4-5', configPath: 'build_review.rubrics.testQuality.model', step: 'build_review:testQuality' },
-      ]));
+      expect(selections.pi.models).toEqual(
+        expect.arrayContaining([
+          { model: 'claude-opus-4-5', configPath: 'steps.plan.model', step: 'plan' },
+          { model: 'anthropic/claude-opus-4-5', configPath: 'steps.plan.by_tier.L.model', step: 'plan' },
+          { model: 'google/gemini-2.5-flash', configPath: 'defaults.model' },
+          { model: 'openai/gpt-5.6-sol', configPath: 'phases.BUILD.model' },
+          { model: 'openai/gpt-5.6-pro', configPath: 'phases.BUILD.by_tier.L.model' },
+          {
+            model: 'anthropic/claude-sonnet-4-5',
+            configPath: 'build_review.rubrics.testQuality.model',
+            step: 'build_review:testQuality',
+          },
+        ]),
+      );
       expect(selections.claude.models).toEqual([]);
     });
 
@@ -4267,16 +4359,24 @@ steps:
 
       expect(selections.pi.configured).toBe(true);
       expect(selections.pi.models).toEqual([]);
-      expect(selections.claude.models).toEqual(expect.arrayContaining([
-        { model: 'sonnet', configPath: 'steps.build.model', step: 'build' },
-        { model: 'opus', configPath: 'defaults.model' },
-      ]));
+      expect(selections.claude.models).toEqual(
+        expect.arrayContaining([
+          { model: 'sonnet', configPath: 'steps.build.model', step: 'build' },
+          { model: 'opus', configPath: 'defaults.model' },
+        ]),
+      );
     });
 
     it('rejects a malformed model on a step inheriting run-level pi', () => {
       const result = validateConfig({
         llm_provider: 'pi',
-        llm_providers: { pi: { model: 'anthropic/claude-sonnet-4-5', model_escalation_order: ['anthropic/claude-sonnet-4-5'], model_fallback_ladder: ['anthropic/claude-sonnet-4-5'] } },
+        llm_providers: {
+          pi: {
+            model: 'anthropic/claude-sonnet-4-5',
+            model_escalation_order: ['anthropic/claude-sonnet-4-5'],
+            model_fallback_ladder: ['anthropic/claude-sonnet-4-5'],
+          },
+        },
         steps: { plan: { model: 'claude-opus-4-5' } },
       });
 
@@ -4303,9 +4403,22 @@ steps:
     });
 
     it.each([
-      ['model', { model_escalation_order: ['anthropic/claude-opus-4-5'], model_fallback_ladder: ['openai/gpt-5.6-sol'] }],
-      ['model_escalation_order', { model: 'anthropic/claude-sonnet-4-5', model_fallback_ladder: ['openai/gpt-5.6-sol'] }],
-      ['model_fallback_ladder', { model: 'anthropic/claude-sonnet-4-5', model_escalation_order: ['anthropic/claude-opus-4-5'], model_fallback_ladder: [] }],
+      [
+        'model',
+        { model_escalation_order: ['anthropic/claude-opus-4-5'], model_fallback_ladder: ['openai/gpt-5.6-sol'] },
+      ],
+      [
+        'model_escalation_order',
+        { model: 'anthropic/claude-sonnet-4-5', model_fallback_ladder: ['openai/gpt-5.6-sol'] },
+      ],
+      [
+        'model_fallback_ladder',
+        {
+          model: 'anthropic/claude-sonnet-4-5',
+          model_escalation_order: ['anthropic/claude-opus-4-5'],
+          model_fallback_ladder: [],
+        },
+      ],
     ])('requires llm_providers.pi.%s when pi is configured', (_key, pi) => {
       const result = validateConfig({ llm_provider: 'pi', llm_providers: { pi } });
 
@@ -4336,14 +4449,8 @@ steps:
         llm_providers: {
           pi: {
             model: 'anthropic/claude-opus-4-5',
-            model_escalation_order: [
-              'anthropic/claude-sonnet-4-5',
-              'anthropic/claude-opus-4-5',
-            ],
-            model_fallback_ladder: [
-              'anthropic/claude-opus-4-5',
-              'openai/gpt-5.6-sol',
-            ],
+            model_escalation_order: ['anthropic/claude-sonnet-4-5', 'anthropic/claude-opus-4-5'],
+            model_fallback_ladder: ['anthropic/claude-opus-4-5', 'openai/gpt-5.6-sol'],
           },
         },
       });
@@ -4354,14 +4461,8 @@ steps:
           llm_providers: {
             pi: {
               model: 'anthropic/claude-opus-4-5',
-              model_escalation_order: [
-                'anthropic/claude-sonnet-4-5',
-                'anthropic/claude-opus-4-5',
-              ],
-              model_fallback_ladder: [
-                'anthropic/claude-opus-4-5',
-                'openai/gpt-5.6-sol',
-              ],
+              model_escalation_order: ['anthropic/claude-sonnet-4-5', 'anthropic/claude-opus-4-5'],
+              model_fallback_ladder: ['anthropic/claude-opus-4-5', 'openai/gpt-5.6-sol'],
             },
           },
         },
@@ -4429,7 +4530,10 @@ steps:
       it.each(['claude', 'codex'])('rejects the key as not applicable to provider %s', (provider) => {
         expect(validateConfig({ llm_providers: { [provider]: { subagents: true } } })).toMatchObject({
           ok: false,
-          error: { type: 'validation_error', message: `llm_providers.${provider}.subagents is not applicable to provider ${provider}` },
+          error: {
+            type: 'validation_error',
+            message: `llm_providers.${provider}.subagents is not applicable to provider ${provider}`,
+          },
         });
       });
     });
