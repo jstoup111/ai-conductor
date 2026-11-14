@@ -26,9 +26,7 @@ ROW_ALIASES=(
   'tdd|tdd-red,tdd-green|phase rows'
 )
 
-# engineer remains temporarily while its pending removal is completed.
 SKILL_NO_ROW_ALLOWLIST=(
-  'engineer|pending removal of the retired engineer skill'
   'coverage-binding|plan §7a coverage-judge policy with no engine step'
 )
 
