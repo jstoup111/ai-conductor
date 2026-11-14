@@ -1,20 +1,21 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-11-14T06:50:14.384Z
+Status: halted
 Slug: late-gate-fixes-restack-the-whole-stack-every-repa
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-late-gate-fixes-restack-the-whole-stack-every-repa
-Head SHA: 0325ccfc78e94969e4b07358415430bb266bb883
-Halted at: 2026-11-11T00:28:46.686Z
+Head SHA: f5b7b714773d5e3ae91ad0b375ce204651f5c002
+Halted at: 2026-11-14T06:59:40.675Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-build_review adjudication halted: semantic remediation case repeat 674e18c3-fbdc-47b4-927c-c4a4e9ed18ee; resolve with ai-conductor build-review resolve-case --feature late-gate-fixes-restack-the-whole-stack-every-repa --case 674e18c3-fbdc-47b4-927c-c4a4e9ed18ee --rationale "<why>"
+build_review mechanical fault allowance exhausted: 3 of 3 shared faults consumed.
+Current lap lap-f5b7b714773d5e3ae91ad0b375ce204651f5c002: implementationQuality closed cause malformed-artifact (invalid-provider-result: build_review grader invocation ended without a result.).
+1. Record a reduced-coverage decision: ai-conductor build-review record-reduced-coverage --feature <feature-slug> --lap lap-f5b7b714773d5e3ae91ad0b375ce204651f5c002 --rubric implementationQuality --rationale "<rationale>".
+2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.
 ```
