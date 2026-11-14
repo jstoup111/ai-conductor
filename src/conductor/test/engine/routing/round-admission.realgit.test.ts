@@ -1,5 +1,5 @@
 // Covers: tasks:40,41,42,101,102, task:1, task:3, task:8, task:12, task:rem-as-built-W13
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -7,13 +7,21 @@ import { describe, expect, it } from 'vitest';
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { admitRound, reconcileRounds } from '../../../src/engine/routing/round-admission.js';
+import { admitQueuedRevalidation } from '../../../src/engine/routing/queue-admission.js';
+import { openOperatorRound } from '../../../src/engine/routing/operator-round.js';
 import { createRouteRecord, readRepairMarker, readRouteRecord, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
-import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
+import { closureRefFor, repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { parseCommitSha } from '../../../src/engine/restack/restack-types.js';
 import { parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
+import { leafBranchFor } from '../../../src/engine/feature-branch-identity.js';
+import { Conductor } from '../../../src/engine/conductor.js';
+import { ALL_STEPS } from '../../../src/engine/steps.js';
+import { persistPrdAuditVerdict } from '../../../src/engine/prd-audit-verdict-store.js';
 import { writeSliceTopologyFixture } from '../slice-topology-fixture.js';
+import { persistFixtureProjectedRemediationPlan } from '../remediation-plan-fixtures.js';
+import { writeKickbackLedger } from '../../kickback-ledger-test-support.js';
 
 const c1 = parseChildId(1)!;
 const c2 = parseChildId(2)!;
@@ -36,8 +44,9 @@ async function fixture() {
   await git(['init', '-q', '-b', 'main']);
   await git(['config', 'user.email', 'routing@example.test']);
   await git(['config', 'user.name', 'Routing']);
+  await writeFile(join(repo, '.gitignore'), '.pipeline/\n');
   await writeFile(join(repo, 'base.txt'), 'base\n');
-  await git(['add', 'base.txt']);
+  await git(['add', '.gitignore', 'base.txt']);
   await git(['commit', '-qm', 'base']);
   await git(['checkout', '-qb', 'feat/daemon-demo']);
   await writeSliceTopologyFixture(repo, {
@@ -63,6 +72,84 @@ async function writeQueue(subject: Awaited<ReturnType<typeof fixture>>): Promise
   await subject.git(['update-ref', revalidationQueueRefFor('demo'), blob]);
 }
 
+async function operatorFixture() {
+  const subject = await fixture();
+  await subject.git(['checkout', '-qb', 'feat/c1/demo']);
+  await writeFile(join(subject.repo, 'child.txt'), 'closed child\n');
+  await subject.git(['add', 'child.txt']);
+  await subject.git(['commit', '-qm', 'closed child']);
+  const closure = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
+  await subject.git(['update-ref', closureRefFor('demo', c1), closure]);
+  await writeFile(join(subject.repo, 'reviewer.txt'), 'reviewer edit\n');
+  await subject.git(['add', 'reviewer.txt']);
+  await subject.git(['commit', '-qm', 'reviewer edit']);
+  await subject.git(['checkout', '-q', leafBranchFor('demo')]);
+  await mkdir(join(subject.repo, '.pipeline', 'children', '1'), { recursive: true });
+  await writeFile(join(subject.repo, '.pipeline', 'children', '1', 'conduct-state.json'), JSON.stringify({
+    acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+  }));
+  return subject;
+}
+
+async function admitFixablePrdAudit(foldRoutedFixes: boolean | undefined) {
+  const subject = await fixture();
+  await subject.git(['checkout', '-qb', 'feat/c1/demo']);
+  await subject.git(['update-ref', closureRefFor('demo', c1), 'HEAD']);
+  await subject.git(['checkout', '-qb', 'feat/c2/demo']);
+  await subject.git(['update-ref', closureRefFor('demo', c2), 'HEAD']);
+  await subject.git(['checkout', '-q', leafBranchFor('demo')]);
+  await writeFile(join(subject.repo, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [
+    { id: 'T1', status: 'completed' }, { id: 'T2', status: 'completed' }, { id: 'T3', status: 'completed' },
+  ] }));
+  await persistPrdAuditVerdict(subject.repo, {
+    complete: true,
+    judgment: {
+      version: 'v1',
+      criterionJudgments: [{
+        criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'FIXABLE',
+        evidence: 'Fixture identifies child one work.', rationale: 'Repair the child one task.',
+        requirementAssociations: [], evidenceTaskIds: ['T1'], ownerTaskId: 'T1',
+      }],
+      noOwnerObservations: [],
+    },
+    diagnostics: [], recordedDispositions: [],
+  }, { attemptId: 'fixture-prd-audit', codeStamp: null });
+  await writeKickbackLedger(subject.repo, { version: 1, gates: {}, growth: { authored: 3, added: 0, byGate: {} } });
+  const conductor = new Conductor({
+    projectRoot: subject.repo,
+    stateFilePath: join(subject.repo, '.pipeline', 'conduct-state.json'),
+    featureSlug: 'demo',
+    events: new ConductorEventEmitter(),
+    config: {
+      stacked_prs: { enabled: true, max_slices: 3, route_whole_feature_fixes: true, ...(foldRoutedFixes === undefined ? {} : { fold_routed_fixes: foldRoutedFixes }) },
+      prd_audit: { max_remediation_laps: 1, max_appended_tasks: 5, max_appended_ratio: 1 },
+    } as never,
+    stepRunner: {
+      run: async (step, _state, options) => {
+        if (step === 'remediate') {
+          await persistFixtureProjectedRemediationPlan(subject.repo, options, [{
+            id: 'S1.1', disposition: 'existing-task', category: null, rationale: 'Repair the child one task.',
+            tasks: [], boundTaskIds: ['T1'],
+          }]);
+        }
+        return { success: true };
+      },
+    },
+    childRegionLifecycle: {
+      resolveActiveChild: async () => ({
+        kind: 'active', child: c3, position: c3, isLeaf: true, branch: leafBranchFor('demo'),
+      }) as never,
+    },
+  });
+  await expect((conductor as unknown as { planRemediation: Function }).planRemediation(
+    { feature_desc: 'demo', session_started_at: Date.now() - 1_000 },
+    ALL_STEPS,
+    'route child one PRD finding',
+    { source: 'prd_audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
+  )).resolves.toMatchObject({ kind: 'route', target: 'build' });
+  return subject;
+}
+
 async function routingRefSnapshot(subject: Awaited<ReturnType<typeof fixture>>): Promise<string> {
   return (await subject.git(['for-each-ref', '--format=%(refname) %(objectname)', 'refs/conductor/demo/'])).stdout;
 }
@@ -72,6 +159,104 @@ function openAudit(record: RouteRecord, hosts: RouteRecord['hosts'], currentHost
 }
 
 describe('routed-round admission (real local Git)', () => {
+  // Covers: task:3
+  it('persists leaf execution on an audit record and its repair marker', async () => {
+    const subject = await fixture();
+    try {
+      const created = await createRouteRecord(subject.repo, 'demo', { ...input, execution: 'leaf' });
+      if (created.kind !== 'created') throw new Error(created.kind);
+
+      await expect(admitRound(subject.repo, 'demo', created.record, c1)).resolves.toMatchObject({
+        kind: 'admitted', record: { execution: 'leaf' },
+      });
+      await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
+        kind: 'record', record: { execution: 'leaf' },
+      });
+      await expect(readRepairMarker(subject.repo, 'demo')).resolves.toMatchObject({
+        kind: 'marker', marker: { host: c1, roundId, execution: 'leaf' },
+      });
+    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+  });
+
+  // Covers: task:3
+  it('keeps an audit record and marker on owner execution when folding is disabled', async () => {
+    const subject = await fixture();
+    try {
+      const created = await createRouteRecord(subject.repo, 'demo', input);
+      if (created.kind !== 'created') throw new Error(created.kind);
+
+      await expect(admitRound(subject.repo, 'demo', created.record, c1)).resolves.toMatchObject({ kind: 'admitted' });
+      const stored = await readRouteRecord(subject.repo, 'demo', roundId);
+      const marker = await readRepairMarker(subject.repo, 'demo');
+      if (stored.kind !== 'record' || marker.kind !== 'marker') throw new Error('admission was not durable');
+      expect(stored.record).not.toHaveProperty('execution');
+      expect(marker.marker).not.toHaveProperty('execution');
+    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+  });
+
+  // Covers: task:3
+  it.each([
+    ['unset', undefined, 'leaf'],
+    ['false', false, undefined],
+  ] as const)('freezes %s fold mode through a child-owned FIXABLE PRD audit', async (_setting, foldRoutedFixes, execution) => {
+    const subject = await admitFixablePrdAudit(foldRoutedFixes);
+    try {
+      const stored = await readRouteRecord(subject.repo, 'demo', roundId);
+      const marker = await readRepairMarker(subject.repo, 'demo');
+      if (stored.kind !== 'record' || marker.kind !== 'marker') throw new Error('audit admission was not durable');
+      expect(stored.record.items).toEqual([expect.objectContaining({ owner: c1, host: c1 })]);
+      expect(await subject.git(['symbolic-ref', '--short', 'HEAD']).then((result) => result.stdout.trim())).toBe(leafBranchFor('demo'));
+      if (execution === undefined) {
+        expect(stored.record).not.toHaveProperty('execution');
+        expect(marker.marker).not.toHaveProperty('execution');
+      } else {
+        expect(stored.record.execution).toBe(execution);
+        expect(marker.marker.execution).toBe(execution);
+      }
+    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+  });
+
+  // Covers: task:3
+  it('keeps operator and revalidate rounds on owner execution', async () => {
+    const operator = await operatorFixture();
+    try {
+      await expect(openOperatorRound({
+        worktree: operator.repo,
+        slug: 'demo',
+        roundId,
+        host: c1,
+        reason: 'land reviewer edits',
+        operator: 'operator@example.test',
+        carried: [],
+        emitter: new ConductorEventEmitter(),
+        git: operator.git,
+      })).resolves.toMatchObject({ kind: 'opened' });
+      const operatorRecord = await readRouteRecord(operator.repo, 'demo', roundId);
+      const operatorMarker = await readRepairMarker(operator.repo, 'demo');
+      if (operatorRecord.kind !== 'record' || operatorMarker.kind !== 'marker') throw new Error('operator admission was not durable');
+      expect(operatorRecord.record.kind).toBe('operator');
+      expect(operatorRecord.record).not.toHaveProperty('execution');
+      expect(operatorMarker.marker).not.toHaveProperty('execution');
+    } finally { await rm(operator.repo, { recursive: true, force: true }); }
+
+    const revalidate = await fixture();
+    try {
+      await writeQueue(revalidate);
+      await expect(admitQueuedRevalidation({
+        worktree: revalidate.repo,
+        slug: 'demo',
+        reconciled: { kind: 'quiescent' },
+        git: revalidate.git,
+      })).resolves.toMatchObject({ kind: 'admitted', host: c1 });
+      const revalidateRecord = await readRouteRecord(revalidate.repo, 'demo', roundId);
+      const revalidateMarker = await readRepairMarker(revalidate.repo, 'demo');
+      if (revalidateRecord.kind !== 'record' || revalidateMarker.kind !== 'marker') throw new Error('revalidate admission was not durable');
+      expect(revalidateRecord.record.kind).toBe('revalidate');
+      expect(revalidateRecord.record).not.toHaveProperty('execution');
+      expect(revalidateMarker.marker).not.toHaveProperty('execution');
+    } finally { await rm(revalidate.repo, { recursive: true, force: true }); }
+  });
+
   // Covers: task:rem-prd-audit-rem-prd-audit-rem-vg6-s6-1
   it('reports quiescent when closed route history has neither a marker nor queued work', async () => {
     const subject = await fixture();

@@ -247,6 +247,16 @@ async function hasOnlyRoundOrHaltCommits(
   } catch { return { ok: false }; }
 }
 
+/** A Folded-from trailer is durable proof that this child is revalidating a
+ * folded placement rather than an ordinary routed repair. */
+async function foldedSourceForChild(git: GitRunner, slug: string, child: ChildId): Promise<string | undefined> {
+  const branch = childBranchFor(slug, child);
+  if (!branch.ok) return undefined;
+  const log = await git(['log', '--format=%B', `refs/heads/${branch.branch}`]);
+  if (log.exitCode !== 0) return undefined;
+  return /^Folded-from:\s*([0-9a-f]{7,64})\s*$/mi.exec(log.stdout)?.[1];
+}
+
 /**
  * Atomically preserve a rejected host tip, restore its immutable closure and
  * advance the routing marker.  Tree synchronization deliberately happens in
@@ -405,6 +415,12 @@ export async function settleRoutedBuildClaim(input: SettleRoutedBuildClaimInput)
   const leaf = input.leaf ?? await resolveSealedLeaf(input.worktree);
   const stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
   if (stored.kind !== 'record') return { kind: 'needs-human', detail: `routed prerequisite claim work order is ${stored.kind}` };
+  // Leaf-executed audit work already runs at the stack's highest available
+  // prerequisite context. A builder cannot move that host farther upward, so
+  // its claim is an ordinary failed attempt rather than a reroute request.
+  if (stored.record.execution === 'leaf') {
+    return { kind: 'failed', detail: 'routed prerequisite claim cannot reroute a leaf-executed host' };
+  }
   const prerequisitePaths = [...new Set(
     stored.record.items
       .filter((item) => item.host === input.host)
@@ -414,6 +430,15 @@ export async function settleRoutedBuildClaim(input: SettleRoutedBuildClaimInput)
     claim: parsed.claim, host: input.host, slug: input.slug, leaf, git, prerequisitePaths,
   });
   if (verified.kind !== 'verified') return { kind: 'failed', detail: `routed prerequisite claim ${verified.kind}: ${verified.detail}` };
+  if (stored.record.kind === 'revalidate') {
+    const foldedFrom = await foldedSourceForChild(git, input.slug, input.host);
+    if (foldedFrom !== undefined) {
+      return {
+        kind: 'needs-human',
+        detail: `fold-prerequisite-missing: Folded-from ${foldedFrom}; child ${input.host} requires prerequisite from child ${verified.destination}`,
+      };
+    }
+  }
   const moved = await rerouteRound({
     worktree: input.worktree, slug: input.slug, roundId: input.roundId,
     from: input.host, to: verified.destination, leaf,

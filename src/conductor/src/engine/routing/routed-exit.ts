@@ -5,6 +5,7 @@ import { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import { EventPersister } from '../event-persister.js';
 import { resolveActiveChild, resolveSealedLeaf } from '../child-cursor.js';
 import type { RestackResolver } from '../restack/restack-resolver.js';
+import type { CommitSha } from '../restack/restack-types.js';
 import { runRestack, type RunRestackResult } from '../restack/restack-executor.js';
 import { haltRestack } from '../restack/restack-move.js';
 import { writeHaltMarker } from '../halt-marker.js';
@@ -22,7 +23,7 @@ import {
 } from './route-record-store.js';
 import { resolveGitRef } from './git-ref-resolver.js';
 import { closureRefFor } from './routing-refs.js';
-import { assertNever, type HostState, type RevalidationQueueRecord, type RouteRecord, type RoundId } from './route-types.js';
+import { assertNever, parseRoundId, type HostState, type RevalidationQueueRecord, type RouteRecord, type RoundId } from './route-types.js';
 import { leafBranchFor } from '../feature-branch-identity.js';
 import { switchToChild } from '../child-lifecycle.js';
 import { applyStateChanges, readState } from '../state.js';
@@ -173,7 +174,8 @@ export async function advanceRound(
       ], { git });
       return wrote.kind === 'updated' ? { kind: 'closed' } : { kind: 'unavailable', detail: `round close ${wrote.kind}` };
     }
-    return returnToLeaf(worktree, slug, stored, { git });
+    const foldLeafHead = stored.record.kind === 'revalidate' ? await hasFoldLeafReturn(worktree, slug, git) : undefined;
+    return returnToLeaf(worktree, slug, stored, { git, ...(foldLeafHead === undefined ? {} : { mode: 'fold' as const, foldLeafHead }) });
   }
   const admitted = transitionHost(stored, next.host, 'admitted', { credit: false });
   if (admitted.kind !== 'updated') return { kind: 'unavailable', detail: `cannot admit routed host ${next.host}` };
@@ -182,7 +184,11 @@ export async function advanceRound(
   const record = { ...admitted.record, currentHostIndex: next.index, entry: undefined };
   const wrote = await writeRoutingTransaction(worktree, slug, [
     { kind: 'update-record', previous: stored, record },
-    { kind: 'create-marker', marker: { host: next.host, roundId: stored.record.roundId } },
+    { kind: 'create-marker', marker: {
+      host: next.host,
+      roundId: stored.record.roundId,
+      ...(stored.record.execution === 'leaf' ? { execution: 'leaf' as const } : {}),
+    } },
   ], { git });
   return wrote.kind === 'updated'
     ? { kind: 'admitted', host: next.host }
@@ -200,6 +206,19 @@ async function hasOtherOpenRound(worktree: string, slug: string, roundId: RoundI
     if (other.record.phase !== 'closed') return true;
   }
   return false;
+}
+
+/** Revalidation rounds are separate from the route that recorded a fold. */
+async function hasFoldLeafReturn(worktree: string, slug: string, git: GitRunner): Promise<CommitSha | undefined> {
+  const refs = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
+  if (refs.exitCode !== 0) return undefined;
+  for (const ref of refs.stdout.split('\n').filter(Boolean)) {
+    const roundId = parseRoundId(ref.split('/').at(-1) ?? '');
+    if (roundId === undefined) continue;
+    const stored = await readRouteRecord(worktree, slug, roundId, { git });
+    if (stored.kind === 'record' && stored.record.leafReturn !== undefined) return stored.record.leafReturn.head;
+  }
+  return undefined;
 }
 
 async function restageLeafGates(worktree: string): Promise<string | undefined> {
@@ -236,7 +255,7 @@ export async function returnToLeaf(
   worktree: string,
   slug: string,
   stored: StoredRouteRecord,
-  options: { readonly git?: GitRunner; readonly events?: ConductorEventEmitter; readonly abandon?: boolean } = {},
+  options: { readonly git?: GitRunner; readonly events?: ConductorEventEmitter; readonly abandon?: boolean; /** A fold has already rebuilt the stack and may preserve unchanged leaf gates. */ readonly mode?: 'fold'; readonly foldLeafHead?: CommitSha } = {},
 ): Promise<Extract<AdvanceRoundResult, { readonly kind: 'closed' | 'leaf-returned' | 'unavailable' }>> {
   const git = options.git ?? makeGitRunner(worktree);
   if (stored.record.phase === 'closed') return { kind: 'closed' };
@@ -269,7 +288,17 @@ export async function returnToLeaf(
   // An operator abandon restores the host's prior region and deliberately
   // discards its landing. Returning from that path is bookkeeping only: the
   // leaf's prior whole-feature validation remains authoritative.
-  if (!options.abandon) {
+  // Folding records the leaf head before replay.  When its rebuilt leaf has
+  // the same tree, whole-feature verdicts still describe the exact surface
+  // under review and need not be re-pended merely for history surgery.
+  const foldedTreeUnchanged = options.mode === 'fold' && currentStored.record.leafReturn !== undefined
+    ? await (async () => {
+      const before = await git(['rev-parse', `${options.foldLeafHead ?? currentStored.record.leafReturn!.head}^{tree}`]);
+      const after = await git(['rev-parse', `${resolved}^{tree}`]);
+      return before.exitCode === 0 && after.exitCode === 0 && before.stdout.trim() === after.stdout.trim();
+    })()
+    : false;
+  if (!options.abandon && !foldedTreeUnchanged) {
     const restageFailure = await restageLeafGates(worktree);
     if (restageFailure !== undefined) return { kind: 'unavailable', detail: restageFailure };
   }
@@ -374,20 +403,47 @@ export async function requestRoutedExit(input: RequestRoutedExitInput): Promise<
     return halted(`routed exit host ${input.host}: repair marker is unavailable or belongs to another round`);
   }
 
-  // The leaf is already the whole-feature branch.  Its successful BUILD
-  // region settles the marker in one CAS; replaying it would carry the fix
-  // above the stack it is meant to return to.
+  // The actual leaf already owns the whole-feature branch. It never enters a
+  // deferred fold set, even when this audit executes every host on the leaf.
   const closure = await resolveGitRef(git, closureRefFor(input.slug, input.host));
   if (typeof closure !== 'string') {
     const done = transitionHost(stored, input.host, 'done', { credit: false });
     if (done.kind !== 'updated') return halted(`routed exit host ${input.host}: cannot mark leaf host done`);
+    const placements = Object.fromEntries(Object.entries(done.record.placements ?? {})
+      .filter(([key]) => key !== String(input.host)));
+    const { placements: _previousPlacements, ...withoutPlacements } = done.record;
+    const record = Object.keys(placements).length === 0
+      ? withoutPlacements
+      : { ...withoutPlacements, placements };
     const wrote = await writeRoutingTransaction(input.worktree, input.slug, [
-      { kind: 'update-record', previous: stored, record: done.record },
+      { kind: 'update-record', previous: stored, record },
       { kind: 'delete-marker', old: marker.blob },
     ], { git });
     return wrote.kind === 'updated'
       ? { kind: 'no-commit-done' }
       : halted(`routed exit host ${input.host}: leaf compare-and-swap ${wrote.kind}`);
+  }
+
+  // Fold-mode audit hosts execute on the leaf. Their work is deliberately
+  // left there until FINISH folds the recorded boundary range back onto its
+  // owner; a normal feature-repair restack here would defeat that invariant.
+  if (stored.record.execution === 'leaf') {
+    const placement = stored.record.placements?.[input.host];
+    const head = await resolveGitRef(git, 'HEAD');
+    if (typeof head !== 'string') return halted(`routed exit host ${input.host}: cannot resolve leaf exit tip`);
+    const unchanged = placement === undefined || placement.leafEntryTip === head;
+    const done = transitionHost(stored, input.host, 'done', { credit: false });
+    if (done.kind !== 'updated') return halted(`routed exit host ${input.host}: cannot mark leaf-executed host done`);
+    const record = unchanged || placement === undefined
+      ? { ...done.record, placements: Object.fromEntries(Object.entries(done.record.placements ?? {}).filter(([key]) => key !== String(input.host))) }
+      : { ...done.record, placements: { ...done.record.placements, [input.host]: { ...placement, state: 'deferred' as const, exitTip: head } } };
+    const wrote = await writeRoutingTransaction(input.worktree, input.slug, [
+      { kind: 'update-record', previous: stored, record },
+      { kind: 'delete-marker', old: marker.blob },
+    ], { git });
+    return wrote.kind === 'updated'
+      ? { kind: 'no-commit-done' }
+      : halted(`routed exit host ${input.host}: leaf deferred compare-and-swap ${wrote.kind}`);
   }
 
   const evidence = await hostNoOpEvidence(input.worktree, input.slug, stored, input.host);

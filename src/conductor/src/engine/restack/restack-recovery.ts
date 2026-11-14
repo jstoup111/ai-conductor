@@ -45,7 +45,7 @@ import { haltRecordPathFor } from './halt-record-bookkeeping.js';
 import { readHaltRecordRef } from '../halt-record-ref.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
 import { publishedStackRefusal } from '../stack-publication.js';
-import { routedRoundOpen } from '../routing/round-admission.js';
+import { deferredPlacementsExist, routedRoundOpen } from '../routing/round-admission.js';
 import { emitRestackRefused } from './restack-events.js';
 import {
   isLegalJournalTransition,
@@ -55,6 +55,7 @@ import {
   type CommitSha,
   type JournalState,
   type RefName,
+  type RestackCause,
 } from './restack-types.js';
 
 /** Result of attempting recovery of the one durable journal for a feature. */
@@ -93,6 +94,30 @@ function ref(raw: string): RefName {
   const value = parseRefName(raw);
   if (!value) throw new Error(`invalid restack ref: ${raw}`);
   return value;
+}
+
+function assertNever(value: never): never {
+  throw new Error(`unhandled restack cause: ${String(value)}`);
+}
+
+function isFeatureRepair(cause: RestackCause): boolean {
+  switch (cause) {
+    case 'feature-repair': return true;
+    case 'base-refresh':
+    case 'fold': return false;
+    default: return assertNever(cause);
+  }
+}
+
+function oldDefaultForTransition(journal: StoredRestackJournal): CommitSha | undefined {
+  const first = journal.journal.ranges[0];
+  if (!first) return undefined;
+  switch (journal.journal.cause) {
+    case 'feature-repair': return journal.journal.newDefault ?? first.oldParent;
+    case 'base-refresh':
+    case 'fold': return first.oldParent;
+    default: return assertNever(journal.journal.cause);
+  }
 }
 
 async function runGit(git: GitRunner, args: string[], input?: string) {
@@ -360,7 +385,7 @@ async function unenteredLeafOwner(
     : [{ child: consumedRange.child, oldParent: consumedRange.oldParent, oldTip: consumedRange.oldTip, newParent: consumed.parent, tip: consumedTip }];
   const rewrittenMatches = (await resolveUnenteredLeafOwner(git, range.oldTip, exactRewrites, correspondences)).matches;
   if (rewrittenMatches.length > 0) return rewrittenMatches.length === 1 ? rewrittenMatches[0] : undefined;
-  if (journal.journal.cause !== 'feature-repair') return undefined;
+  if (!isFeatureRepair(journal.journal.cause)) return undefined;
   // Every child through the highest origin is adopted unchanged, whether or
   // not it originated the repair; an adopted owner maps the leaf to itself.
   const lastOriginIndex = Math.max(-1, ...journal.journal.ranges.map((candidate, index) =>
@@ -410,6 +435,8 @@ interface MergeAudit {
 
 type ResumePlannedResult =
   | { readonly kind: 'resumed'; readonly journal: StoredRestackJournal; readonly mergeAudit?: MergeAudit }
+  /** A fold's source-to-placement replay is not expressible as generic ranges. */
+  | { readonly kind: 'fold-rollback'; readonly journal: StoredRestackJournal }
   | {
     readonly kind: 'ownership-refused';
     readonly journal: StoredRestackJournal;
@@ -470,10 +497,20 @@ async function resumePlanned(
 ): Promise<ResumePlannedResult> {
   if (!await refsStillAtOldValues(journal, git)) return { kind: 'unavailable' };
   let current = journal;
+  // A FoldPlan describes placement commits which generic ChildRanges cannot
+  // reproduce.  Before the move, all production refs still name their old
+  // values, so retire this abandoned operation instead of replaying it as a
+  // normal restack and accidentally retaining the folded sources on the leaf.
+  switch (current.journal.cause) {
+    case 'fold': return { kind: 'fold-rollback', journal: current };
+    case 'feature-repair':
+    case 'base-refresh': break;
+    default: return assertNever(current.journal.cause);
+  }
   let parent = current.journal.newDefault ?? current.journal.ranges[0]?.oldParent;
   if (!parent) return { kind: 'unavailable' };
   const mergeAudit = { flattenedMerges: [] as CommitSha[], ancestryOnlyMerges: [] as CommitSha[], sideLineageCount: 0 };
-  const lastOriginIndex = current.journal.cause === 'feature-repair'
+  const lastOriginIndex = isFeatureRepair(current.journal.cause)
     ? Math.max(-1, ...current.journal.ranges.map((range, index) => current.journal.originatingChildren?.includes(range.child) ? index : -1))
     : -1;
   for (const [rangeIndex, range] of current.journal.ranges.entries()) {
@@ -499,10 +536,10 @@ async function resumePlanned(
     // originating child. Only descendants beyond that point are rebuilt.
     // A lower child that no longer descends from its adopted parent is
     // replayed onto it, exactly as the executor does.
-    const adoptable = current.journal.cause === 'feature-repair' && rangeIndex <= lastOriginIndex
+    const adoptable = isFeatureRepair(current.journal.cause) && rangeIndex <= lastOriginIndex
       ? await resolveSha(git, branchRefForRange(current.slug, range))
       : undefined;
-    if (current.journal.cause === 'feature-repair' && rangeIndex <= lastOriginIndex && !adoptable) return { kind: 'unavailable' };
+    if (isFeatureRepair(current.journal.cause) && rangeIndex <= lastOriginIndex && !adoptable) return { kind: 'unavailable' };
     const parentContained = adoptable === undefined || rangeIndex === 0
       ? true
       : await runGit(git, ['merge-base', '--is-ancestor', parent, adoptable]);
@@ -741,12 +778,21 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
             ? { kind: 'cleaned' }
             : { kind: 'unavailable', detail: 'cannot remove applied restack journal' };
         }
-        if (journal.journal.followOnCause === 'base-refresh' && await routedRoundOpen(options.worktree, options.slug, { git })) {
-          await options.rearmRekick?.();
-          await options.events?.emit(emitRestackRefused({ reason: 'deferred-base-refresh' }));
-          return await cleanJournal(options.worktree, journal, git)
-            ? { kind: 'cleaned' }
-            : { kind: 'unavailable', detail: 'cannot remove deferred applied restack journal' };
+        switch (journal.journal.followOnCause) {
+          case 'base-refresh':
+            if (await routedRoundOpen(options.worktree, options.slug, { git }) || await deferredPlacementsExist(options.worktree, options.slug, { git })) {
+              await options.rearmRekick?.();
+              await options.events?.emit(emitRestackRefused({ reason: 'deferred-base-refresh' }));
+              return await cleanJournal(options.worktree, journal, git)
+                ? { kind: 'cleaned' }
+                : { kind: 'unavailable', detail: 'cannot remove deferred applied restack journal' };
+            }
+            break;
+          case 'feature-repair':
+          case 'fold':
+            break;
+          default:
+            return assertNever(journal.journal.followOnCause);
         }
         if (await publishedStackRefusal(options.worktree, options.slug, { git })) {
           await haltRestack(options.worktree, 'published-stack', options.events, {
@@ -789,6 +835,14 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
         return { kind: 'recovered', fromState };
       }
       let resumed = await resumePlanned(options.worktree, journal, git, options);
+      if (resumed.kind === 'fold-rollback') {
+        const aborted = await transition(options.worktree, resumed.journal, 'aborted', git);
+        if (!aborted || !await cleanJournal(options.worktree, aborted, git)) {
+          return { kind: 'unavailable', detail: 'cannot roll back planned fold journal' };
+        }
+        await options.events?.emit({ type: 'restack_recovered', opId: resumed.journal.journal.opId, fromState });
+        return { kind: 'recovered', fromState };
+      }
       // A resolution with no matching record belongs to an interrupted or
       // superseded hand-off. Retire only that answer, preserve another
       // child's record, then resume the untouched planned journal normally.
@@ -985,14 +1039,14 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
       }
       const activeMove = moves.find((move) => move.ref === checkedOut);
       if (!activeMove?.child) return { kind: 'unavailable', detail: 'cannot identify active child for recovered transition' };
+      const transitionOldDefault = oldDefaultForTransition(journal);
+      if (!transitionOldDefault) return { kind: 'unavailable', detail: 'cannot identify recovered restack default' };
       const transitionResult = await applyRestackTransition({
         worktree: options.worktree,
         cause: journal.journal.cause,
         opId: journal.journal.opId,
-        oldDefault: journal.journal.cause === 'feature-repair'
-          ? journal.journal.newDefault ?? journal.journal.ranges[0]!.oldParent
-          : journal.journal.ranges[0]!.oldParent,
-        newDefault: journal.journal.newDefault ?? journal.journal.ranges[0]!.oldParent,
+        oldDefault: transitionOldDefault,
+        newDefault: journal.journal.newDefault ?? transitionOldDefault,
         activeChild: activeMove.child,
         ranges: journal.journal.ranges,
         moves,

@@ -38,11 +38,13 @@ export interface DispatchDimensions {
   provider?: string;
   tier?: string;
   fallback?: boolean;
+  /** Closed restack cause; never carries unbounded operation or round ids. */
+  restack_cause?: 'feature-repair' | 'base-refresh' | 'fold';
 }
 
 export type StepTerminalOutcome = 'success' | 'failure' | 'interrupted' | 'refusal';
 
-const STEP_DIMENSION_KEYS = ['model', 'effort', 'provider', 'tier'] as const;
+const STEP_DIMENSION_KEYS = ['model', 'effort', 'provider', 'tier', 'restack_cause'] as const;
 const DISPATCH_DIMENSION_KEYS = [...STEP_DIMENSION_KEYS, 'fallback'] as const;
 type DimensionKeys = readonly (keyof DispatchDimensions)[];
 
@@ -75,6 +77,7 @@ export function dispatchDimensionsFrom(
     ...(preferredProvider !== undefined && provider !== undefined
       ? { fallback: preferredProvider !== provider }
       : {}),
+    ...(event.type === 'provider_attempt' && event.restack !== undefined ? { restack_cause: event.restack.cause } : {}),
   };
 }
 

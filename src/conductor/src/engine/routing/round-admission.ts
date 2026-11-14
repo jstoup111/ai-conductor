@@ -27,9 +27,52 @@ export type AdmitRoundResult = { readonly kind: 'admitted'; readonly record: Rou
 /** Admission may deliver its durable route occurrences only after its marker transaction commits. */
 export type AdmitRoundDependencies = RouteRecordStoreDependencies & {
   readonly persist?: PersistOutboxEvent;
+  /** Audit-only execution mode frozen at admission by the remediation setting. */
+  readonly execution?: 'leaf';
 };
 
 export type RoundAdmissionFenceResult = Extract<AdmitRoundResult, { readonly kind: 'refused' }> & { readonly fence: true };
+
+/** Closed rounds with unfurled leaf ranges still own the stack until fold. */
+export async function deferredPlacementsExist(
+  worktree: string,
+  slug: string,
+  dependencies: RouteRecordStoreDependencies = {},
+): Promise<boolean> {
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  const listed = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
+  if (listed.exitCode !== 0) return true;
+  for (const ref of listed.stdout.split('\n').filter(Boolean)) {
+    const id = parseRoundId(ref.split('/').at(-1) ?? '');
+    if (!id) return true;
+    const stored = await readRouteRecord(worktree, slug, id, { git });
+    if (stored.kind !== 'record') return true;
+    if (Object.values(stored.record.placements ?? {}).some((placement) => placement.state === 'deferred')) return true;
+  }
+  return false;
+}
+
+/** Stable operator-facing identities for publication and fold refusals. */
+export async function deferredPlacementDescriptions(
+  worktree: string,
+  slug: string,
+  dependencies: RouteRecordStoreDependencies = {},
+): Promise<readonly string[] | undefined> {
+  const git = dependencies.git ?? makeGitRunner(worktree);
+  const listed = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
+  if (listed.exitCode !== 0) return undefined;
+  const descriptions: string[] = [];
+  for (const ref of listed.stdout.split('\n').filter(Boolean)) {
+    const roundId = parseRoundId(ref.split('/').at(-1) ?? '');
+    if (!roundId) return undefined;
+    const stored = await readRouteRecord(worktree, slug, roundId, { git });
+    if (stored.kind !== 'record') return undefined;
+    for (const [host, placement] of Object.entries(stored.record.placements ?? {})) {
+      if (placement.state === 'deferred') descriptions.push(`host ${host} round ${roundId}`);
+    }
+  }
+  return descriptions;
+}
 
 /**
  * Reject a new admission while another active round could still make progress.
@@ -105,14 +148,21 @@ export async function admitRound(
   if (hostTransition.kind !== 'updated' || !isLegalRoundPhaseTransition(stored.record.phase, 'open')) {
     return { kind: 'refused', detail: `routing round ${record.roundId} is not prepared for host ${firstHost}` };
   }
-  let next: RouteRecord = { ...hostTransition.record, phase: 'open' };
+  let next: RouteRecord = {
+    ...hostTransition.record,
+    phase: 'open',
+    ...(stored.record.kind === 'audit' && dependencies.execution === 'leaf' ? { execution: 'leaf' as const } : {}),
+  };
   if (next.kind === 'operator' && next.operator !== undefined) {
     next = withOutboxEvent(next, operatorRoundEvent(next.roundId, next.operator, firstHost, 'opened'));
   }
   next = withOutboxEvent(next, remediationRoutedEvent(next));
   const wrote = await writeRoutingTransaction(worktree, slug, [
     { kind: 'update-record', previous: stored, record: next },
-    { kind: 'create-marker', marker: { host: firstHost, roundId: record.roundId } },
+    {
+      kind: 'create-marker',
+      marker: { host: firstHost, roundId: record.roundId, ...(next.execution === 'leaf' ? { execution: 'leaf' as const } : {}) },
+    },
   ], dependencies);
   if (wrote.kind !== 'updated') return { kind: 'refused', detail: `routing admission refused: ${wrote.kind}` };
 

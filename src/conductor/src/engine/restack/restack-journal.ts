@@ -22,6 +22,7 @@ import {
 } from './restack-types.js';
 import type { CommitterStamp } from './restack-replay.js';
 import type { ConsumedConflictRefs } from './restack-conflict-record.js';
+import type { FoldCommitPlan, FoldPart } from './fold-types.js';
 
 export interface RestackJournalOwner {
   readonly host: string;
@@ -74,6 +75,8 @@ export interface DeliveredRestackDecision {
 export interface RestackJournalDraft {
   readonly opId: RestackOpId;
   readonly cause: RestackCause;
+  /** Immutable source-to-target correspondence for a leaf fold. */
+  readonly foldPlan?: readonly FoldCommitPlan[];
   readonly followOnCause?: RestackCause;
   readonly committer: CommitterStamp;
   /** The exact target default used by this operation, never re-resolved on recovery. */
@@ -151,7 +154,7 @@ const journalStates = new Set<JournalState>([
   'planned', 'ready', 'moved', 'synced', 'applied', 'aborted', 'rolling-back',
 ]);
 const childStatuses = new Set<ChildStatus>(['pending', 'replayed', 'resolved']);
-const causes = new Set<RestackCause>(['feature-repair', 'base-refresh']);
+const causes = new Set<RestackCause>(['feature-repair', 'base-refresh', 'fold']);
 
 export function journalRefFor(slug: string): RefName {
   return `refs/conductor/${slug}/restack/journal` as RefName;
@@ -304,6 +307,38 @@ function parseQueueInvalidation(value: unknown): readonly RevalidationQueueEntry
   return parseRevalidationQueueRecord(JSON.stringify({ generation: 0, entries: value, outbox: [] }))?.entries;
 }
 
+/** Fold plans are durable recovery input, so reject a malformed correspondence. */
+function parseFoldPlan(value: unknown): readonly FoldCommitPlan[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const commits: FoldCommitPlan[] = [];
+  for (const item of value) {
+    if (!isRecord(item) || typeof item.sha !== 'string' || typeof item.roundId !== 'string' || typeof item.owner !== 'number' || !Array.isArray(item.parts)) return undefined;
+    const sha = parseCommitSha(item.sha);
+    const roundId = parseRoundId(item.roundId);
+    const owner = parseChildId(item.owner);
+    if (!sha || !roundId || !owner) return undefined;
+    const parts: FoldPart[] = [];
+    for (const raw of item.parts) {
+      if (!isRecord(raw) || typeof raw.kind !== 'string' || (raw.reason !== 'owner' && raw.reason !== 'introduced-above-owner')) return undefined;
+      const child = raw.child === 'leaf' ? 'leaf' : typeof raw.child === 'number' ? parseChildId(raw.child) : undefined;
+      if (!child) return undefined;
+      if (raw.kind === 'whole') {
+        if (child === 'leaf' || raw.reason !== 'owner' || !Array.isArray(raw.paths) || raw.paths.length !== 0) return undefined;
+        parts.push({ kind: 'whole', child, paths: [], reason: 'owner' });
+      } else if (raw.kind === 'blocks') {
+        if (child === 'leaf' || raw.reason !== 'owner' || !Array.isArray(raw.paths) || raw.paths.length !== 0 || !Array.isArray(raw.blocks)
+          || !raw.blocks.every((block) => isRecord(block) && typeof block.id === 'string' && typeof block.body === 'string')) return undefined;
+        parts.push({ kind: 'blocks', child, paths: [], reason: 'owner', blocks: raw.blocks.map((block) => ({ id: (block as Record<string, string>).id, body: (block as Record<string, string>).body })) });
+      } else if (raw.kind === 'hunks') {
+        if (typeof raw.path !== 'string' || !isRecord(raw.hunk) || typeof raw.hunk.path !== 'string' || typeof raw.hunk.patch !== 'string' || typeof raw.hunk.wholeFile !== 'boolean') return undefined;
+        parts.push({ kind: 'hunks', child, path: raw.path, hunk: { path: raw.hunk.path, patch: raw.hunk.patch, wholeFile: raw.hunk.wholeFile }, reason: raw.reason });
+      } else return undefined;
+    }
+    commits.push({ sha, roundId, owner, parts });
+  }
+  return commits;
+}
+
 function parseJournal(value: unknown): RestackJournal | undefined {
   if (!isRecord(value) || typeof value.opId !== 'string' || value.opId === '' || typeof value.state !== 'string') return undefined;
   const cause = parseCause(value.cause);
@@ -329,6 +364,7 @@ function parseJournal(value: unknown): RestackJournal | undefined {
   const queueInvalidation = value.queueInvalidation === undefined ? undefined : parseQueueInvalidation(value.queueInvalidation);
   const consumedResolution = value.consumedResolution === undefined ? undefined : parseConsumedResolution(value.consumedResolution);
   const deliveredDecision = value.deliveredDecision === undefined ? undefined : parseDeliveredDecision(value.deliveredDecision);
+  const foldPlan = value.foldPlan === undefined ? undefined : parseFoldPlan(value.foldPlan);
   if (!cause || (value.followOnCause !== undefined && !followOnCause) || !journalStates.has(value.state as JournalState) || !owner || !committer
     || !isStringArray(value.dirtyPaths) || !refs || !ranges || !children
     || (value.newDefault !== undefined && !newDefault)
@@ -341,7 +377,8 @@ function parseJournal(value: unknown): RestackJournal | undefined {
     || (value.queueNew !== undefined && !queueNew)
     || (value.queueInvalidation !== undefined && !queueInvalidation)
     || (value.consumedResolution !== undefined && !consumedResolution)
-    || (value.deliveredDecision !== undefined && !deliveredDecision)) return undefined;
+    || (value.deliveredDecision !== undefined && !deliveredDecision)
+    || (value.foldPlan !== undefined && !foldPlan)) return undefined;
   return {
     opId: value.opId as RestackOpId,
     cause,
@@ -358,6 +395,7 @@ function parseJournal(value: unknown): RestackJournal | undefined {
     ...(queueInvalidation === undefined ? {} : { queueInvalidation }),
     ...(consumedResolution === undefined ? {} : { consumedResolution }),
     ...(deliveredDecision === undefined ? {} : { deliveredDecision }),
+    ...(foldPlan === undefined ? {} : { foldPlan }),
     dirtyPaths: [...value.dirtyPaths],
     refs,
     ranges,

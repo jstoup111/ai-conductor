@@ -8,7 +8,8 @@ import type { TimingRollup } from './timing-rollup.js';
 import { upsertBuildReviewAcceptedRisk } from './build-review-accepted-risk.js';
 import type { BuildReviewDispositionRecord } from './build-review-dispositions.js';
 import type { RemediationCaseStoreReadResult } from './remediation-case-store.js';
-import type { BuildReviewMetrics } from './build-tail-rollup.js';
+import type { BuildReviewMetrics, BuildTailEvent } from './build-tail-rollup.js';
+import type { ProviderAttemptEvent } from '../types/events.js';
 
 /**
  * Result of hashing a plan/stories pair into a canonical spec identity.
@@ -278,6 +279,59 @@ export function appendTimingSection(
     reasonLine +
     measuredLines
   );
+}
+
+/**
+ * Render the resolver cost attributable to stack reconstruction.  This is a
+ * presentation-only projection of the event spine: `## Cost` remains the
+ * authoritative feature total consumed by KPI reporting.
+ */
+export function appendRestackSection(
+  existingContent: string,
+  events: readonly BuildTailEvent[],
+  stacked: boolean,
+): string {
+  if (!stacked) return existingContent;
+
+  const rows = new Map<string, { runs: number; costUsd: number }>();
+  const add = (label: string, costUsd: number) => {
+    const row = rows.get(label) ?? { runs: 0, costUsd: 0 };
+    row.runs += 1;
+    row.costUsd += costUsd;
+    rows.set(label, row);
+  };
+  for (const rawEvent of events) {
+    if (rawEvent.type !== 'provider_attempt' || rawEvent.step !== 'rebase') continue;
+    const event = rawEvent as Pick<ProviderAttemptEvent, 'tokenUsage' | 'restack'>;
+    const costUsd = event.tokenUsage?.costUsd;
+    if (typeof costUsd !== 'number' || !Number.isFinite(costUsd)) continue;
+    const restack = event.restack;
+    const label = restack === undefined
+      ? 'unattributed'
+      : restack.cause === 'fold'
+        ? 'fold'
+        : restack.cause === 'base-refresh'
+          ? 'base-refresh'
+          : restack.roundId ?? 'feature-repair';
+    add(label, costUsd);
+  }
+  const rendered = [...rows.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([label, row]) => `${label}: runs: ${row.runs}, cost_usd: $${row.costUsd.toFixed(2)}`);
+  if (rendered.length === 0) rendered.push('total: runs: 0, cost_usd: $0.00');
+  const section = `## Restack\n${rendered.join('\n')}\n`;
+  const existing = /^## Restack\s*$[\s\S]*?(?=^##\s|(?![\s\S]))/m;
+  const withoutPrevious = existingContent.replace(existing, '');
+  // Children is the stable stack summary.  Older records have no Children
+  // block, in which case Time is the nearest equivalent summary.
+  const after = /(^## (?:Children|Time)\s*$[\s\S]*?)(?=^##\s|(?![\s\S]))/gm;
+  const matches = [...withoutPrevious.matchAll(after)];
+  const target = matches.find((match) => match[0].startsWith('## Children')) ?? matches.find((match) => match[0].startsWith('## Time'));
+  if (target?.index !== undefined) {
+    const at = target.index + target[0].length;
+    return `${withoutPrevious.slice(0, at)}\n${section}${withoutPrevious.slice(at)}`;
+  }
+  return `${withoutPrevious}${withoutPrevious.endsWith('\n') ? '\n' : '\n\n'}${section}`;
 }
 
 /** Appends the same validated accepted-risk section used by retained PRs. */

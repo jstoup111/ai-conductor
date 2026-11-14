@@ -1292,6 +1292,7 @@ async function dispatchCliCommand(): Promise<void> {
     process.exit(await runRoundStamp({
       projectRoot,
       commitMessagePath: roundStampCmd.commitMessagePath,
+      verify: roundStampCmd.verify,
     }));
   }
 

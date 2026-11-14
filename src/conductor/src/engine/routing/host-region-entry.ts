@@ -190,7 +190,8 @@ export async function resolveHostEntryTarget(
   git: GitRunner,
   slug: string,
   host: ChildId,
-): Promise<{ readonly target: ChildLifecycleTarget; readonly pinnedBase: CommitSha; readonly tree: CommitSha } | { readonly detail: string }> {
+  record: Pick<RouteRecord, 'execution'>,
+): Promise<{ readonly target: ChildLifecycleTarget; readonly pinnedBase: CommitSha; readonly tree: CommitSha; readonly isLeaf: boolean } | { readonly detail: string }> {
   let closure: CommitSha | undefined;
   try {
     const result = await git(['rev-parse', '-q', '--verify', closureRefFor(slug, host)]);
@@ -210,10 +211,12 @@ export async function resolveHostEntryTarget(
   const resolvedTree = await resolveGitRef(git, `${pinnedBase}^{tree}`);
   if (typeof resolvedTree !== 'string') return { detail: `cannot resolve tree for host ${host} base ${pinnedBase}` };
   const tree = resolvedTree;
-  if (isLeaf) return { target: { child: host, position: host, branch: leafBranchFor(slug) }, pinnedBase, tree };
+  if (isLeaf || record.execution === 'leaf') {
+    return { target: { child: host, position: host, branch: leafBranchFor(slug) }, pinnedBase, tree, isLeaf };
+  }
   const branch = childBranchFor(slug, host);
   if (!branch.ok) return { detail: branch.reason };
-  return { target: { child: host, position: host, branch: branch.branch }, pinnedBase, tree };
+  return { target: { child: host, position: host, branch: branch.branch }, pinnedBase, tree, isLeaf };
 }
 
 async function verifyOrSwitch(
@@ -303,7 +306,7 @@ export async function restageHostRegion(
 }
 
 export type PinHostEntryResult =
-  | { readonly kind: 'pinned'; readonly stored: Awaited<ReturnType<typeof readRouteRecord>> & { readonly kind: 'record' }; readonly target: ChildLifecycleTarget; readonly pinnedBase: CommitSha }
+  | { readonly kind: 'pinned'; readonly stored: Awaited<ReturnType<typeof readRouteRecord>> & { readonly kind: 'record' }; readonly target: ChildLifecycleTarget; readonly pinnedBase: CommitSha; readonly isLeaf: boolean }
   | { readonly kind: 'refused'; readonly detail: string };
 
 /**
@@ -318,7 +321,7 @@ export async function pinHostEntry(
   host: ChildId,
   git: GitRunner,
 ): Promise<PinHostEntryResult> {
-  const resolved = await resolveHostEntryTarget(git, slug, host);
+  const resolved = await resolveHostEntryTarget(git, slug, host, stored.record);
   if ('detail' in resolved) return { kind: 'refused', detail: resolved.detail };
   let current = stored;
   let pinnedBase = current.record.entry?.host === host ? current.record.entry.pinnedBase : undefined;
@@ -353,7 +356,7 @@ export async function pinHostEntry(
     if (reread.kind !== 'record') return { kind: 'refused', detail: `routing record ${current.record.roundId} is unavailable after pin` };
     current = reread;
   }
-  return { kind: 'pinned', stored: current, target: resolved.target, pinnedBase: pinnedBase! };
+  return { kind: 'pinned', stored: current, target: resolved.target, pinnedBase: pinnedBase!, isLeaf: resolved.isLeaf };
 }
 
 async function bindHostObligations(
@@ -512,6 +515,24 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
   const resolvedEntryHead = await resolveGitRef(git, 'HEAD');
   if (typeof resolvedEntryHead !== 'string') return { kind: 'refused', detail: `cannot resolve host ${input.host} tip at region entry` };
   const entryHead = resolvedEntryHead;
+  // Persist a non-leaf host's boundary before frozen blocks can move HEAD.
+  // The actual leaf already owns the whole-feature branch and is never folded.
+  if (stored.record.execution === 'leaf' && !pinned.isLeaf && stored.record.placements?.[input.host] === undefined) {
+    const record = {
+      ...stored.record,
+      placements: {
+        ...stored.record.placements,
+        [input.host]: { state: 'deferred' as const, leafEntryTip: entryHead },
+      },
+    };
+    const placed = await writeRoutingTransaction(input.worktree, input.slug, [
+      { kind: 'update-record', previous: stored, record },
+    ], { git });
+    if (placed.kind !== 'updated') return { kind: 'refused', detail: `cannot persist leaf placement boundary: ${placed.kind}` };
+    const reread = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
+    if (reread.kind !== 'record') return { kind: 'refused', detail: `routing record ${input.roundId} is unavailable after placement boundary` };
+    stored = reread;
+  }
   const allocation = stored.record.allocation[input.host];
   if (!allocation) return { kind: 'refused', detail: `routing round ${input.roundId} has no frozen allocation for host ${input.host}` };
   const appended = await writeFrozenBlocks({
@@ -574,8 +595,9 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
   const recordWithBindings = { ...stored, record: bound.record };
   const repairing = transitionHost(recordWithBindings, input.host, 'repairing', { credit: true });
   if (repairing.kind !== 'updated') return { kind: 'refused', detail: `routing round ${input.roundId} host ${input.host} cannot enter repairing` };
+  const record = repairing.record;
   const transitioned = await writeRoutingTransaction(input.worktree, input.slug, [
-    { kind: 'update-record', previous: stored, record: repairing.record },
+    { kind: 'update-record', previous: stored, record },
   ], { git });
   if (transitioned.kind !== 'updated') return { kind: 'refused', detail: `cannot enter repairing: ${transitioned.kind}` };
   const credit = await grantRoutedRepairCredit({
