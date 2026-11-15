@@ -17,16 +17,22 @@ const captures = {
   'pi-1.0.0-e7-usage-exhausted.jsonl': '429: {"message":"You exceeded your current quota, please check your plan and billing details.","type":"insufficient_quota","param":null,"code":"insufficient_quota"}',
   'pi-1.0.0-e8-rate-limit-anthropic.jsonl': '429 {"type":"error","error":{"type":"rate_limit_error","message":"Number of request tokens has exceeded your per-minute rate limit"}}',
   'pi-1.0.0-e9-server-error.jsonl': '500: {"message":"The server had an error while processing your request.","type":"server_error","param":null,"code":null}',
+  'pi-1.0.0-e10-unknown-model-openrouter.jsonl': '400: {"message":"nonexistent-model-xyz is not a valid model ID","code":400}',
+  'pi-1.0.0-e11-insufficient-balance-deepseek.jsonl': '402: {"message":"Insufficient Balance (request_id: 00000000-0000-0000-0000-000000000000)","type":"insufficient_balance_error","param":null,"code":"invalid_request_error"}',
 } as const;
 
 describe('Pi 1.0.0 failure captures', () => {
+  // Covers: task:1
   it('keeps every capture and the anchored, multiline signature table', async () => {
     const texts = await Promise.all(Object.keys(captures).map(fixture));
     expect(texts).toHaveLength(Object.keys(captures).length);
     for (const [name, evidence] of Object.entries(captures)) {
       const text = await fixture(name);
-      const captured = name.endsWith('.stderr.txt') ? text : parsePiJsonl(text).terminalAssistantErrorMessage;
-      expect(captured?.startsWith(evidence)).toBe(true);
+      if (name.endsWith('.stderr.txt')) {
+        expect(text.startsWith(evidence)).toBe(true);
+      } else {
+        expect(parsePiJsonl(text).terminalAssistantErrorMessage).toBe(evidence);
+      }
     }
     const classified = [
       ...texts.map((text, index) => index === 0 ? text : parsePiJsonl(text).terminalAssistantErrorMessage ?? ''),
