@@ -43,13 +43,13 @@ As the harness operator, I want a branch deletion that would orphan commits refu
 
 **Requirement:** adr-2026-09-23-engine-git-guard-on-agent-path D12
 
-As the harness operator, I want git's own housekeeping and every non-deleting ref update to pass the new hook, so that the backstop does not break builds.
+As the harness operator, I want git's own housekeeping and every non-deleting ref update to pass the new hook, so that the backstop does not break builds. A stacked child branch update that gains an entered higher child's own work is the exception and is aborted (adr-2026-11-15-stack-children-never-gain-higher-child-commits).
 
 ### Happy Path
 
 - Given a prepared worktree with loose branch refs including one with a unique tip, when unguarded git runs `git pack-refs --all` there, then the command exits zero and every branch resolves to its previous tip.
 - Given a prepared worktree with loose branch refs including one with a unique tip, when unguarded git runs `git gc` there, then the command exits zero, its output contains no `failed to run pack-refs` error, and every branch resolves to its previous tip.
-- Given a prepared worktree on a feature branch, when unguarded git runs `git commit`, `git commit --amend`, `git rebase «base»`, `git reset --keep «target»`, or `git branch -f «other» «target»` there, then each command exits with the same status it has with no hooks installed.
+- Given a prepared worktree on a feature branch, when unguarded git runs `git commit`, `git commit --amend`, `git rebase «base»`, `git reset --keep «target»`, or `git branch -f «other» «target»` there, then each command exits with the same status it has with no hooks installed (on a stacked child branch `feat/c«k»/«slug»`, a command whose incoming commits include an entered higher child's own work is refused instead, per adr-2026-11-15-stack-children-never-gain-higher-child-commits).
 
 ### Negative Paths
 

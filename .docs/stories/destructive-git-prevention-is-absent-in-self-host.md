@@ -28,7 +28,7 @@ As the harness operator, I want an agent's force push or hard reset in the featu
 
 - **Given** a guarded agent shell in the feature worktree, **When** the agent runs `git push --force-with-lease` (alone or with `--force-if-includes`) or a plain `git push`, **Then** the push reaches the real git unchanged and its exit status and output are git's own.
 - **Given** a guarded agent shell in the feature worktree, **When** the agent runs `git push --force-with-lease --force` (a lease option followed by a bare force), **Then** the command is refused because a lease option never excuses a bare force.
-- **Given** a guarded agent shell in the feature worktree, **When** the agent runs `git reset --keep «target»`, `git reset --soft «target»`, or `git reset --mixed «target»`, **Then** the command reaches the real git unchanged.
+- **Given** a guarded agent shell in the feature worktree, **When** the agent runs `git reset --keep «target»`, `git reset --soft «target»`, or `git reset --mixed «target»`, **Then** the command reaches the real git unchanged (on a stacked child branch `feat/c«k»/«slug»`, a command whose incoming commits include an entered higher child's own work is refused instead, per adr-2026-11-15-stack-children-never-gain-higher-child-commits).
 
 ### Done When
 
