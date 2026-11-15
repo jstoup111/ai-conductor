@@ -2772,7 +2772,12 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
         onBuildDispatch: async (root) => {
           await writeFile(
             join(root, '.pipeline/task-status.json'),
-            JSON.stringify({ tasks: [{ id: '1', status: 'completed' }, { id: '32', status: 'completed' }] }),
+            JSON.stringify({
+              tasks: [
+                { id: '1', status: 'completed' },
+                { id: '32', status: 'completed' },
+              ],
+            }),
             'utf8',
           );
         },
