@@ -1904,7 +1904,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     log,
     ...(opts.executorFork === undefined ? {} : { fork: opts.executorFork }),
   });
-  const executor = childExecutor;
+  const executor = {
+    async execute(order: WorkOrder) {
+      try {
+        return await childExecutor.execute(order);
+      } finally {
+        await daemonOtel?.flush();
+      }
+    },
+  };
   stopChildExecutors = () => childExecutor.stopAll();
   abortChildBroker = () => executorBroker.abortAll();
   // Reap a predecessor's durable child references before the scheduler can
