@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "slug": "manual-test-report-left-in-product-worktree-blocks",
+  "artifacts": [
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/manual-test-report-left-in-product-worktree-blocks.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/manual-test-report-left-in-product-worktree-blocks.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/manual-test-report-left-in-product-worktree-blocks.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/manual-test-report-left-in-product-worktree-blocks.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/manual-test-report-left-in-product-worktree-blocks.md"
+    }
+  ]
+}
