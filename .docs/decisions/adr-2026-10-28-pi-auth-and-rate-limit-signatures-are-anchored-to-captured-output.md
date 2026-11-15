@@ -126,6 +126,23 @@ HTTP 403 and 402, a 5xx status, upstream model-not-found under an explicit `--pr
 wording that arrives without an HTTP status stay unclassified. None of them has a verified shape,
 and D5 of adr-2026-09-24 requires one.
 
+> **Amended 2026-11-15 by #3505 (operator decision, James Stoup, composer DECIDE):** Upstream
+> model-not-found under an explicit `--provider` now has one verified shape, and D1 gains one
+> signature for it. Pi 1.0.0 was run on 2026-11-15 as in the Evidence section, but with a real
+> credential and `--model nonexistent-model-xyz`. Both runs exited 0, printed `Warning: Model
+> "nonexistent-model-xyz" not found for provider "<p>". Using custom model id.` on stderr, and ended
+> in an error stop with zero usage. E10, OpenRouter: `400: {"message":"nonexistent-model-xyz is not
+> a valid model ID","code":400}`. E11, DeepSeek: `402: {"message":"Insufficient Balance (request_id:
+> 00000000-0000-0000-0000-000000000000)","type":"insufficient_balance_error","param":null,"code":"invalid_request_error"}`,
+> with the real request id masked to zeros, a balance refusal that came before any model check. The added signature is `400: {"message":"`
+> followed by a model id and `is not a valid model ID"` (E10), matched under D1's rules but only in
+> the terminal `errorMessage` of an exit-0 error stop, the one D2 channel it was captured on. It maps to `modelUnavailable: true`, in D3's existing unknown-model position, so it
+> is checked after every auth and limit signature and before the missing-structured-result check.
+> Like the D4 classes, its `output` is a fixed sentence naming Pi and never the provider's body.
+> The pre-request stderr warning is not a signal, because Pi proceeds with the custom id. Every other
+> upstream's unknown-model rejection, the E11 402, HTTP 403, and a 5xx stay unclassified. E10 and E11
+> are committed under D8. Every other statement in D1 to D8 is unchanged.
+
 ### D2. Only Pi-owned channels are classified
 
 The classified text is the terminal assistant message's `errorMessage` when Pi exits 0 with

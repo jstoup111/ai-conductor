@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "slug": "pi-upstream-model-not-found-under-an-explicit-prov",
+  "artifacts": [
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/pi-upstream-model-not-found-under-an-explicit-prov.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-28-pi-auth-and-rate-limit-signatures-are-anchored-to-captured-output.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/pi-upstream-model-not-found-under-an-explicit-prov.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/pi-upstream-model-not-found-under-an-explicit-prov.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/pi-upstream-model-not-found-under-an-explicit-prov.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/pi-upstream-model-not-found-under-an-explicit-prov.md"
+    }
+  ]
+}
