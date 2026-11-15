@@ -11,7 +11,7 @@ import { readKickbackLedger } from '../../../src/engine/kickback-ledger.js';
 import { readBuildOutcome } from '../../../src/engine/build-outcome.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { admitRound } from '../../../src/engine/routing/round-admission.js';
-import { createRouteRecord, readRouteRecord, writeRouteRecord } from '../../../src/engine/routing/route-record-store.js';
+import { createRouteRecord, readRepairMarker, readRouteRecord, writeRouteRecord } from '../../../src/engine/routing/route-record-store.js';
 import { emptyUnsettledReceipt, parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { ALL_STEPS } from '../../../src/engine/steps.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
@@ -80,6 +80,8 @@ async function subject(options: {
   activeChild?: number;
   maxRetries?: number;
   operatorParkAfterBuild?: boolean;
+  haltMarkerContent?: string;
+  verifyArtifacts?: boolean;
 } = {}) {
   const root = await mkdtemp(join(tmpdir(), 'conductor-routed-settlement-halt-'));
   roots.push(root);
@@ -88,7 +90,9 @@ async function subject(options: {
   await git(['config', 'user.email', 'halt@example.test']);
   await git(['config', 'user.name', 'Halt']);
   await writeFile(join(root, 'base.txt'), 'base\n');
-  await git(['add', 'base.txt']);
+  await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+  await writeFile(join(root, '.docs', 'plans', 'demo.md'), '# Plan: demo\n\n### Task 1\n\nFixture task.\n');
+  await git(['add', 'base.txt', '.docs/plans/demo.md']);
   await git(['commit', '-qm', 'base']);
   await mkdir(join(root, '.pipeline'), { recursive: true });
   await writeFile(join(root, '.pipeline', 'conduct-state.json'), JSON.stringify({
@@ -135,13 +139,16 @@ async function subject(options: {
   let parkAfterBuild = false;
   const build = vi.fn(async (_options?: StepRunOptions) => {
     parkAfterBuild = options.operatorParkAfterBuild ?? true;
+    if (options.haltMarkerContent !== undefined) {
+      await writeFile(join(root, '.pipeline', 'halt-user-input-required'), options.haltMarkerContent);
+    }
     return { success: true, ...(options.buildResult === undefined ? {} : { finalStructuredResult: options.buildResult }) };
   });
   const runner: StepRunner = { run: async (step, _state, options) => step === 'build' ? build(options) : { success: true } };
   const events = new ConductorEventEmitter();
   const conductor = new Conductor({
     projectRoot: root, stateFilePath: join(root, '.pipeline', 'conduct-state.json'), featureSlug: 'demo',
-    mode: 'auto', daemon: true, resume: true, fromStep: 'build', verifyArtifacts: false, maxRetries: options.maxRetries ?? 1,
+    mode: 'auto', daemon: true, resume: true, fromStep: 'build', verifyArtifacts: options.verifyArtifacts ?? false, maxRetries: options.maxRetries ?? 1,
     events, stepRunner: runner,
     operatorParkBoundary: async () => parkAfterBuild,
     config: { defaults: { model: 'test', effort: 'low', max_retries: 1, escalate: false }, prd_audit: { max_remediation_laps: 2, max_appended_tasks: options.configGrowthCap ?? 4, max_appended_ratio: 1 }, stacked_prs: { enabled: true, route_whole_feature_fixes: true } } as never,
@@ -439,6 +446,40 @@ describe('routed BUILD settlement cap halt', () => {
       reason: 'routed prerequisite claim is malformed: child is missing; blocked-by-prerequisite requires an integer child from 1 to 9',
     }));
     expect(stalls).not.toContainEqual(expect.objectContaining({ type: 'build_stall', reason: 'halt_marker' }));
+  });
+
+  it.each([
+    ['a malformed claim', { outcome: 'blocked-by-prerequisite', paths: ['src/a.ts'] }],
+    ['a well-formed claim', { outcome: 'blocked-by-prerequisite', child: 2, symbols: ['parseB'] }],
+  ])('routes a builder input marker through stall handling before settling %s', async (_name, claim) => {
+    const markerContent = 'Need user decision: sync the worktree';
+    const fixture = await subject({
+      cap: 15,
+      activeChild: child,
+      buildResult: claim,
+      haltMarkerContent: markerContent,
+      verifyArtifacts: true,
+      operatorParkAfterBuild: false,
+    });
+    const beforeHead = (await fixture.git(['rev-parse', 'HEAD'])).stdout.trim();
+    const beforeMarker = await readRepairMarker(fixture.root, 'demo', { git: fixture.git });
+    const stalls: unknown[] = [];
+    const cleared: unknown[] = [];
+    const retries: unknown[] = [];
+    fixture.events.on('build_stall', (event) => { stalls.push(event); });
+    fixture.events.on('halt_cleared', (event) => { cleared.push(event); });
+    fixture.events.on('step_retry', (event) => { retries.push(event); });
+
+    await fixture.conductor.run();
+
+    expect(claimSeam.calls).toEqual([]);
+    expect(stalls).toContainEqual(expect.objectContaining({ type: 'build_stall', reason: 'halt_marker' }));
+    expect(cleared).toContainEqual(expect.objectContaining({ type: 'halt_cleared', step: 'build' }));
+    await expect(readFile(join(fixture.root, '.pipeline', 'build-stall-question.md'), 'utf8')).resolves.toBe(markerContent);
+    await expect(readFile(join(fixture.root, '.pipeline', 'halt-user-input-required'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(retries).not.toContainEqual(expect.objectContaining({ type: 'step_retry', reason: expect.stringMatching(/^routed prerequisite claim/) }));
+    expect((await fixture.git(['rev-parse', 'HEAD'])).stdout.trim()).toBe(beforeHead);
+    await expect(readRepairMarker(fixture.root, 'demo', { git: fixture.git })).resolves.toEqual(beforeMarker);
   });
 
   it.each([
