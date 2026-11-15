@@ -184,3 +184,13 @@ Task 5 ───> Task 6
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-refusal-764b7098-3851-4084-a679-9bab61beeb47: Restore .memory/index.md, .memory/gotchas/daemon-exclusive-execution-deps.md, .memory/gotchas/done-when-evidence-task-marker.md, and .memory/gotchas/lifecycle-order-integration-test.md byte-for-byte from base 1cc7745a69. Do not re-add .memory/patterns/child-broker-coordination-then-detach.md. The net `git diff 1cc7745a69 HEAD -- .memory` must be empty. Change no other files.
+**Gate:** prd-audit
+**Rationale:** Removal-only rework of refused NC-1. Verified: `git diff --stat 1cc7745a69 HEAD -- .memory` shows exactly four deletions (.memory/index.md, .memory/gotchas/daemon-exclusive-execution-deps.md, .memory/gotchas/done-when-evidence-task-marker.md, .memory/gotchas/lifecycle-order-integration-test.md), all introduced by commit e462d8914f. The approved plan .docs/plans/child-executed-features-lose-closing-otel-telemetr.md (Tasks 1-6) never mentions memory files, so no plan task justifies any .memory change. The repair restores those four files byte-for-byte from base 1cc7745a69 (e.g. `git checkout 1cc7745a69 -- <the four paths>`) and leaves .memory/patterns/child-broker-coordination-then-detach.md absent, because no plan task justifies it either. The result is an empty net .memory diff against base. No code, test, or OTel behavior changes, so the completed Tasks 1-6 behavior and coverage are unaffected. This adds no new behavior.
+**Criterion:** NC-1
+**Governing clause:** Refused NC-1 (decision 764b7098-3851-4084-a679-9bab61beeb47 r1)
+**Done when:**
+- [test] NC-1 is satisfied by this task.
+- Refused NC-1 (decision 764b7098-3851-4084-a679-9bab61beeb47 r1) is satisfied by this task.
+- The repair for task rem-prd-audit-refusal-764b7098-3851-4084-a679-9bab61beeb47 is committed and its targeted tests pass.
