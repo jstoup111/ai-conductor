@@ -17,12 +17,26 @@ import type { ConductState, ConductorEvent, StepName } from '../../src/types/ind
 import * as liveBoundary from '../../src/engine/self-host/live-boundary.js';
 
 const BUILD_ONLY: ConductState = {
-  worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
-  stories: 'done', conflict_check: 'done', plan: 'done', architecture_diagram: 'done',
-  architecture_review: 'done', acceptance_specs: 'done', test_suite: 'done',
-  build_review: 'done', manual_test: 'done', prd_audit: 'done',
-  architecture_review_as_built: 'done', rebase: 'done', finish: 'done',
-  complexity_tier: 'M', track: 'technical', feature_desc: 'live-boundary-events',
+  worktree: 'done',
+  memory: 'done',
+  explore: 'done',
+  complexity: 'done',
+  stories: 'done',
+  conflict_check: 'done',
+  plan: 'done',
+  architecture_diagram: 'done',
+  architecture_review: 'done',
+  acceptance_specs: 'done',
+  test_suite: 'done',
+  build_review: 'done',
+  manual_test: 'done',
+  prd_audit: 'done',
+  architecture_review_as_built: 'done',
+  rebase: 'done',
+  finish: 'done',
+  complexity_tier: 'M',
+  track: 'technical',
+  feature_desc: 'live-boundary-events',
 } as ConductState;
 
 const fullSuiteVerifierStub = () => ({
@@ -43,10 +57,17 @@ describe('self-host live-boundary events', () => {
     liveCheckout = await mkdtemp(join(tmpdir(), 'conductor-live-checkout-'));
     providerHome = await mkdtemp(join(tmpdir(), 'conductor-live-provider-'));
     fakeBin = await mkdtemp(join(tmpdir(), 'conductor-live-bin-'));
-    await Promise.all([mkdir(join(projectRoot, '.pipeline'), { recursive: true }), mkdir(join(liveCheckout, '.claude'))]);
+    await Promise.all([
+      mkdir(join(projectRoot, '.pipeline'), { recursive: true }),
+      mkdir(join(liveCheckout, '.claude')),
+    ]);
     await writeFile(join(liveCheckout, 'VERSION'), '0.1.0\n');
     await writeFile(join(liveCheckout, '.claude', 'settings.local.json'), '{}\n');
-    await writeFile(join(fakeBin, 'bwrap'), '#!/bin/sh\nwhile [ "$#" -gt 0 ]; do if [ "$1" = "--" ]; then shift; exec "$@"; fi; shift; done\nexit 2\n', { mode: 0o755 });
+    await writeFile(
+      join(fakeBin, 'bwrap'),
+      '#!/bin/sh\nwhile [ "$#" -gt 0 ]; do if [ "$1" = "--" ]; then shift; exec "$@"; fi; shift; done\nexit 2\n',
+      { mode: 0o755 },
+    );
     priorConfigDir = process.env.CLAUDE_CONFIG_DIR;
     priorPath = process.env.PATH;
     process.env.CLAUDE_CONFIG_DIR = providerHome;
@@ -56,42 +77,104 @@ describe('self-host live-boundary events', () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
-    if (priorConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = priorConfigDir;
-    if (priorPath === undefined) delete process.env.PATH; else process.env.PATH = priorPath;
+    if (priorConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = priorConfigDir;
+    if (priorPath === undefined) delete process.env.PATH;
+    else process.env.PATH = priorPath;
     await chmod(liveCheckout, 0o755).catch(() => {});
-    await Promise.all([projectRoot, liveCheckout, providerHome, fakeBin].map(root => rm(root, { recursive: true, force: true })));
+    await Promise.all(
+      [projectRoot, liveCheckout, providerHome, fakeBin].map((root) => rm(root, { recursive: true, force: true })),
+    );
   });
 
   let lastPrepared: { originalCatalogHome?: string; scratchRoot?: string; env: NodeJS.ProcessEnv } | undefined;
-  function harness(work: () => Promise<StepRunResult>, options: { selfHost?: boolean; maxRetries?: number; candidateAttempts?: number } = {}) {
-    const runtimes = new ProviderRuntimeSet([{ key: 'claude', provider: { invoke: vi.fn(), }, policy: CLAUDE_MODEL_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder) }] as never);
-    const providerExecution: ProviderExecutionContext = { runtimes, sessions: {} as never, configuredProviders: ['claude'] };
-    const runner: StepRunner = { run: async (step: StepName) => {
-      if (options.selfHost === false) return work();
-      const candidateAttempts = options.candidateAttempts ?? 1;
-      for (let attempt = 1; attempt <= candidateAttempts; attempt += 1) {
-        const prepared = await providerExecution.prepareCandidateSelfHost?.({ step, providerKey: 'claude', model: 'opus', effort: 'high' } as never, runtimes.get('claude') as never, { step, runId: 'live-boundary-events', attempt });
-        if (!prepared) throw new Error('self-host candidate preparation was not installed');
-        lastPrepared = prepared;
-        try {
-          const result = await work();
-          if (result.success || attempt === candidateAttempts) return result;
-        } finally { await prepared.teardown(); }
-      }
-      throw new Error('candidate preparation did not run');
-    } };
+  function harness(
+    work: () => Promise<StepRunResult>,
+    options: { selfHost?: boolean; maxRetries?: number; candidateAttempts?: number } = {},
+  ) {
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'claude',
+        provider: { invoke: vi.fn() },
+        policy: CLAUDE_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+      },
+    ] as never);
+    const providerExecution: ProviderExecutionContext = {
+      runtimes,
+      sessions: {} as never,
+      configuredProviders: ['claude'],
+    };
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        if (options.selfHost === false) return work();
+        const candidateAttempts = options.candidateAttempts ?? 1;
+        for (let attempt = 1; attempt <= candidateAttempts; attempt += 1) {
+          const prepared = await providerExecution.prepareCandidateSelfHost?.(
+            { step, providerKey: 'claude', model: 'opus', effort: 'high' } as never,
+            runtimes.get('claude') as never,
+            { step, runId: 'live-boundary-events', attempt },
+          );
+          if (!prepared) throw new Error('self-host candidate preparation was not installed');
+          lastPrepared = prepared;
+          try {
+            const result = await work();
+            if (result.success || attempt === candidateAttempts) return result;
+          } finally {
+            await prepared.teardown();
+          }
+        }
+        throw new Error('candidate preparation did not run');
+      },
+    };
     const events = new ConductorEventEmitter();
     const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
     persister.start();
     const guardrails: SelfHostGuardrails = {
-      resolveHarnessRoot: vi.fn(async () => liveCheckout), resolveInstalledHarnessRoot: vi.fn(async () => ({ status: 'ok' as const, root: liveCheckout })), relink: vi.fn(async () => {}),
-      provisionSandbox: vi.fn(async () => ({ configDir: join(projectRoot, '.pipeline', 'sandbox'), childEnv: () => ({}), teardown: vi.fn(async () => {}) })) as never,
-      versionGate: vi.fn(async () => ({ ok: true as const })), releaseGate: vi.fn(async () => ({ ok: true as const })),
+      resolveHarnessRoot: vi.fn(async () => liveCheckout),
+      resolveInstalledHarnessRoot: vi.fn(async () => ({ status: 'ok' as const, root: liveCheckout })),
+      relink: vi.fn(async () => {}),
+      provisionSandbox: vi.fn(async () => ({
+        configDir: join(projectRoot, '.pipeline', 'sandbox'),
+        childEnv: () => ({}),
+        teardown: vi.fn(async () => {}),
+      })) as never,
+      versionGate: vi.fn(async () => ({ ok: true as const })),
+      releaseGate: vi.fn(async () => ({ ok: true as const })),
     };
-    return { conductor: new Conductor({ stateFilePath: join(projectRoot, 'conduct-state.json'), stepRunner: runner, events, projectRoot, fromStep: 'build', mode: 'auto', daemon: true, selfHost: options.selfHost ?? true, verifyArtifacts: false, maxRetries: options.maxRetries ?? 1, baseBranch: 'main', selfHostGuardrails: guardrails, escalateBuildFailure: async () => ({}), providerExecution, fullSuiteVerifier: fullSuiteVerifierStub(), sleepFn: vi.fn(async () => {}), config: { harness_self_host: { build_auth: { mode: 'api-key' } } } as never }), eventEmitter: events, persister };
+    return {
+      conductor: new Conductor({
+        stateFilePath: join(projectRoot, 'conduct-state.json'),
+        stepRunner: runner,
+        events,
+        projectRoot,
+        fromStep: 'build',
+        mode: 'auto',
+        daemon: true,
+        selfHost: options.selfHost ?? true,
+        verifyArtifacts: false,
+        maxRetries: options.maxRetries ?? 1,
+        baseBranch: 'main',
+        selfHostGuardrails: guardrails,
+        escalateBuildFailure: async () => ({}),
+        providerExecution,
+        fullSuiteVerifier: fullSuiteVerifierStub(),
+        sleepFn: vi.fn(async () => {}),
+        config: { harness_self_host: { build_auth: { mode: 'api-key' } } } as never,
+      }),
+      eventEmitter: events,
+      persister,
+    };
   }
 
-  async function events() { return (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line)); }
+  async function events() {
+    return (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line));
+  }
 
   it('persists one contained-drift record and one contained verdict after concurrent operator drift', async () => {
     await chmod(liveCheckout, 0o555);
@@ -100,19 +183,31 @@ describe('self-host live-boundary events', () => {
       await writeFile(join(liveCheckout, '.claude', 'settings.local.json'), '{"operator":true}\n');
       return { success: true, output: 'done' };
     });
-    await conductor.run(); persister.stop();
+    await conductor.run();
+    persister.stop();
     const recorded = await events();
-    expect(recorded.filter(event => event.type === 'contained_live_checkout_drift')).toEqual([expect.objectContaining({ evidence: expect.any(String), attribution: 'concurrent-operator', summary: expect.stringContaining('changed .claude/settings.local.json') })]);
-    expect(recorded.filter(event => event.type === 'self_host_containment_verdict')).toEqual([expect.objectContaining({ contained: true, evidence: expect.any(String) })]);
+    expect(recorded.filter((event) => event.type === 'contained_live_checkout_drift')).toEqual([
+      expect.objectContaining({
+        evidence: expect.any(String),
+        attribution: 'concurrent-operator',
+        summary: expect.stringContaining('changed .claude/settings.local.json'),
+      }),
+    ]);
+    expect(recorded.filter((event) => event.type === 'self_host_containment_verdict')).toEqual([
+      expect.objectContaining({ contained: true, evidence: expect.any(String) }),
+    ]);
   });
 
   it('persists one containment verdict but no drift record when the live checkout stays clean', async () => {
     await chmod(liveCheckout, 0o555);
     const { conductor, persister } = harness(async () => ({ success: true, output: 'done' }));
-    await conductor.run(); persister.stop();
+    await conductor.run();
+    persister.stop();
     const recorded = await events();
-    expect(recorded.filter(event => event.type === 'contained_live_checkout_drift')).toEqual([]);
-    expect(recorded.filter(event => event.type === 'self_host_containment_verdict')).toEqual([expect.objectContaining({ contained: true, evidence: expect.any(String) })]);
+    expect(recorded.filter((event) => event.type === 'contained_live_checkout_drift')).toEqual([]);
+    expect(recorded.filter((event) => event.type === 'self_host_containment_verdict')).toEqual([
+      expect.objectContaining({ contained: true, evidence: expect.any(String) }),
+    ]);
   });
 
   // Covers: task:4
@@ -132,8 +227,16 @@ describe('self-host live-boundary events', () => {
     expect(emitted).toEqual([
       expect.objectContaining({
         surfaces: expect.arrayContaining([
-          expect.objectContaining({ label: 'live checkout', elapsedMs: expect.any(Number), fileCount: expect.any(Number) }),
-          expect.objectContaining({ label: 'provider state', elapsedMs: expect.any(Number), fileCount: expect.any(Number) }),
+          expect.objectContaining({
+            label: 'live checkout',
+            elapsedMs: expect.any(Number),
+            fileCount: expect.any(Number),
+          }),
+          expect.objectContaining({
+            label: 'provider state',
+            elapsedMs: expect.any(Number),
+            fileCount: expect.any(Number),
+          }),
         ]),
       }),
     ]);
@@ -141,20 +244,25 @@ describe('self-host live-boundary events', () => {
       expect(Number.isInteger(surface.elapsedMs)).toBe(true);
       expect(Number.isInteger(surface.fileCount)).toBe(true);
     }
-    expect((await events()).filter(event => event.type === 'self_host_boundary_fingerprint'))
-      .toEqual([expect.objectContaining({ type: emitted[0].type, surfaces: emitted[0].surfaces })]);
+    expect((await events()).filter((event) => event.type === 'self_host_boundary_fingerprint')).toEqual([
+      expect.objectContaining({ type: emitted[0].type, surfaces: emitted[0].surfaces }),
+    ]);
   });
 
   it('emits no fingerprint for a non-self-host dispatch', async () => {
     const emitted: ConductorEvent[] = [];
-    const { conductor, eventEmitter, persister } = harness(async () => ({ success: true, output: 'done' }), { selfHost: false });
-    eventEmitter.on('self_host_boundary_fingerprint', (event) => { emitted.push(event); });
+    const { conductor, eventEmitter, persister } = harness(async () => ({ success: true, output: 'done' }), {
+      selfHost: false,
+    });
+    eventEmitter.on('self_host_boundary_fingerprint', (event) => {
+      emitted.push(event);
+    });
 
     await conductor.run();
     persister.stop();
 
     expect(emitted).toEqual([]);
-    expect((await events()).filter(event => event.type === 'self_host_boundary_fingerprint')).toEqual([]);
+    expect((await events()).filter((event) => event.type === 'self_host_boundary_fingerprint')).toEqual([]);
   });
 
   // Covers: task:4
@@ -165,8 +273,12 @@ describe('self-host live-boundary events', () => {
     const failedSteps: ConductorEvent[] = [];
     vi.spyOn(liveBoundary, 'fingerprintLiveCheckoutSurface').mockRejectedValue(failure);
     const { conductor, eventEmitter, persister } = harness(provider, { maxRetries: 0 });
-    eventEmitter.on('self_host_boundary_fingerprint', (event) => { emitted.push(event); });
-    eventEmitter.on('step_failed', (event) => { failedSteps.push(event); });
+    eventEmitter.on('self_host_boundary_fingerprint', (event) => {
+      emitted.push(event);
+    });
+    eventEmitter.on('step_failed', (event) => {
+      failedSteps.push(event);
+    });
 
     await conductor.run();
     persister.stop();
@@ -174,7 +286,7 @@ describe('self-host live-boundary events', () => {
     expect(provider).not.toHaveBeenCalled();
     expect(emitted).toEqual([]);
     expect(failedSteps).toEqual([expect.objectContaining({ step: 'build', retryCount: 0, error: '' })]);
-    expect((await events()).filter(event => event.type === 'self_host_boundary_fingerprint')).toEqual([]);
+    expect((await events()).filter((event) => event.type === 'self_host_boundary_fingerprint')).toEqual([]);
   });
 
   // Covers: task:4
@@ -182,8 +294,12 @@ describe('self-host live-boundary events', () => {
     const containment: ConductorEvent[] = [];
     const provider = vi.fn(async (): Promise<StepRunResult> => ({ success: true, output: 'done' }));
     const { conductor, eventEmitter, persister } = harness(provider);
-    eventEmitter.on('self_host_boundary_fingerprint', () => { throw new Error('subscriber failed'); });
-    eventEmitter.on('self_host_containment_verdict', (event) => { containment.push(event); });
+    eventEmitter.on('self_host_boundary_fingerprint', () => {
+      throw new Error('subscriber failed');
+    });
+    eventEmitter.on('self_host_containment_verdict', (event) => {
+      containment.push(event);
+    });
 
     await conductor.run();
     persister.stop();
@@ -196,18 +312,25 @@ describe('self-host live-boundary events', () => {
   it('emits one fingerprint for two candidate preparations in one dispatch', async () => {
     const emitted: ConductorEvent[] = [];
     let attempts = 0;
-    const { conductor, eventEmitter, persister } = harness(async () => {
-      attempts += 1;
-      return attempts === 1 ? { success: false, output: 'first candidate failed' } : { success: true, output: 'done' };
-    }, { candidateAttempts: 2 });
-    eventEmitter.on('self_host_boundary_fingerprint', (event) => { emitted.push(event); });
+    const { conductor, eventEmitter, persister } = harness(
+      async () => {
+        attempts += 1;
+        return attempts === 1
+          ? { success: false, output: 'first candidate failed' }
+          : { success: true, output: 'done' };
+      },
+      { candidateAttempts: 2 },
+    );
+    eventEmitter.on('self_host_boundary_fingerprint', (event) => {
+      emitted.push(event);
+    });
 
     await conductor.run();
     persister.stop();
 
     expect(attempts).toBe(2);
     expect(emitted).toHaveLength(1);
-    expect((await events()).filter(event => event.type === 'self_host_boundary_fingerprint')).toHaveLength(1);
+    expect((await events()).filter((event) => event.type === 'self_host_boundary_fingerprint')).toHaveLength(1);
   });
 
   // Covers: task:4
@@ -215,10 +338,13 @@ describe('self-host live-boundary events', () => {
     const fingerprint = vi.spyOn(liveBoundary, 'fingerprintLiveCheckoutSurface');
     const verify = vi.spyOn(liveBoundary, 'verifyLiveBoundary');
     let attempts = 0;
-    const { conductor, persister } = harness(async () => {
-      attempts += 1;
-      return attempts === 4 ? { success: true, output: 'done' } : { success: false, output: 'retry' };
-    }, { candidateAttempts: 4 });
+    const { conductor, persister } = harness(
+      async () => {
+        attempts += 1;
+        return attempts === 4 ? { success: true, output: 'done' } : { success: false, output: 'retry' };
+      },
+      { candidateAttempts: 4 },
+    );
 
     await conductor.run();
     persister.stop();
@@ -226,22 +352,27 @@ describe('self-host live-boundary events', () => {
     expect(attempts).toBe(4);
     expect(fingerprint).toHaveBeenCalledOnce();
     expect(verify).toHaveBeenCalledOnce();
-    expect((await events()).filter(event => event.type === 'self_host_boundary_fingerprint')).toEqual([
-      expect.objectContaining({ surfaces: expect.arrayContaining([
-        expect.objectContaining({ label: 'live checkout' }),
-        expect.objectContaining({ label: 'provider state' }),
-      ]) }),
+    expect((await events()).filter((event) => event.type === 'self_host_boundary_fingerprint')).toEqual([
+      expect.objectContaining({
+        surfaces: expect.arrayContaining([
+          expect.objectContaining({ label: 'live checkout' }),
+          expect.objectContaining({ label: 'provider state' }),
+        ]),
+      }),
     ]);
   });
 
   // Covers: task:5
   it('halts at the next boundary when the second candidate adds to the live checkout', async () => {
     let attempts = 0;
-    const { conductor, persister } = harness(async () => {
-      attempts += 1;
-      if (attempts === 2) await writeFile(join(liveCheckout, 'second-candidate.txt'), 'drift');
-      return attempts === 1 ? { success: false, output: 'retry' } : { success: true, output: 'done' };
-    }, { candidateAttempts: 2 });
+    const { conductor, persister } = harness(
+      async () => {
+        attempts += 1;
+        if (attempts === 2) await writeFile(join(liveCheckout, 'second-candidate.txt'), 'drift');
+        return attempts === 1 ? { success: false, output: 'retry' } : { success: true, output: 'done' };
+      },
+      { candidateAttempts: 2 },
+    );
 
     await conductor.run();
     persister.stop();
@@ -249,7 +380,7 @@ describe('self-host live-boundary events', () => {
     const state = await readState(join(projectRoot, 'conduct-state.json'));
     const recorded = await events();
     expect(state.ok && state.value.build).toBe('done');
-    expect(recorded.filter(event => event.type === 'loop_halt')).toHaveLength(1);
+    expect(recorded.filter((event) => event.type === 'loop_halt')).toHaveLength(1);
     expect(await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8')).toContain('added second-candidate.txt');
   });
 
@@ -257,21 +388,24 @@ describe('self-host live-boundary events', () => {
   it('records one contained drift and verdict for two candidate preparations without a HALT', async () => {
     await chmod(liveCheckout, 0o555);
     let attempts = 0;
-    const { conductor, persister } = harness(async () => {
-      attempts += 1;
-      if (attempts === 2) {
-        await chmod(liveCheckout, 0o755);
-        await writeFile(join(liveCheckout, '.claude', 'settings.local.json'), '{"operator":true}\n');
-      }
-      return attempts === 1 ? { success: false, output: 'retry' } : { success: true, output: 'done' };
-    }, { candidateAttempts: 2 });
+    const { conductor, persister } = harness(
+      async () => {
+        attempts += 1;
+        if (attempts === 2) {
+          await chmod(liveCheckout, 0o755);
+          await writeFile(join(liveCheckout, '.claude', 'settings.local.json'), '{"operator":true}\n');
+        }
+        return attempts === 1 ? { success: false, output: 'retry' } : { success: true, output: 'done' };
+      },
+      { candidateAttempts: 2 },
+    );
 
     await conductor.run();
     persister.stop();
 
     const recorded = await events();
-    expect(recorded.filter(event => event.type === 'contained_live_checkout_drift')).toHaveLength(1);
-    expect(recorded.filter(event => event.type === 'self_host_containment_verdict')).toHaveLength(1);
+    expect(recorded.filter((event) => event.type === 'contained_live_checkout_drift')).toHaveLength(1);
+    expect(recorded.filter((event) => event.type === 'self_host_containment_verdict')).toHaveLength(1);
     await expect(readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
@@ -285,23 +419,27 @@ describe('self-host live-boundary events', () => {
       return actualFingerprint(args);
     });
     let dispatches = 0;
-    const { conductor, persister } = harness(async () => {
-      dispatches += 1;
-      return dispatches === 1 ? { success: false, output: 'retry' } : { success: true, output: 'done' };
-    }, { maxRetries: 2 });
+    const { conductor, persister } = harness(
+      async () => {
+        dispatches += 1;
+        return dispatches === 1 ? { success: false, output: 'retry' } : { success: true, output: 'done' };
+      },
+      { maxRetries: 2 },
+    );
 
     await conductor.run();
     persister.stop();
 
     const recorded = await events();
-    expect(recorded.filter(event => event.type === 'self_host_boundary_fingerprint')).toHaveLength(2);
-    expect(recorded.filter(event => event.type === 'loop_halt')).toEqual([]);
+    expect(recorded.filter((event) => event.type === 'self_host_boundary_fingerprint')).toHaveLength(2);
+    expect(recorded.filter((event) => event.type === 'loop_halt')).toEqual([]);
     await expect(readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('maps the original provider catalog home onto the prepared candidate explicitly', async () => {
     const { conductor, persister } = harness(async () => ({ success: true, output: 'done' }));
-    await conductor.run(); persister.stop();
+    await conductor.run();
+    persister.stop();
     // The prepared env replaces the home; installed global/plugin discovery
     // needs the original root named by preparation, not guessed afterwards.
     expect(lastPrepared?.originalCatalogHome).toBe(providerHome);

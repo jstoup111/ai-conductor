@@ -26,8 +26,15 @@ interface Surface {
   semanticEmptyJson?: readonly string[];
   manifest: readonly Entry[];
 }
-interface Entry { path: string; digest: string; }
-interface Manifest { entries: readonly Entry[]; elapsedMs: number; fileCount: number; }
+interface Entry {
+  path: string;
+  digest: string;
+}
+interface Manifest {
+  entries: readonly Entry[];
+  elapsedMs: number;
+  fileCount: number;
+}
 export interface LiveBoundarySnapshot {
   readonly surfaces: readonly Surface[];
   readonly measurements: readonly { label: string; elapsedMs: number; fileCount: number }[];
@@ -78,8 +85,13 @@ export interface LiveBoundarySnapshot {
  * the accepted residual gap in this guard.
  */
 export const LIVE_CHECKOUT_VOLATILE: readonly string[] = [
-  '.git', '.daemon', '.worktrees', '.pipeline', '.claude/worktrees',
-  'src/conductor/dist-versions', 'src/conductor/.vitest-tmp',
+  '.git',
+  '.daemon',
+  '.worktrees',
+  '.pipeline',
+  '.claude/worktrees',
+  'src/conductor/dist-versions',
+  'src/conductor/.vitest-tmp',
 ];
 const LIVE_CHECKOUT_VOLATILE_DIRECTORY_BASENAMES: readonly string[] = ['node_modules'];
 
@@ -139,26 +151,26 @@ const LIVE_CHECKOUT_VOLATILE_DIRECTORY_BASENAMES: readonly string[] = ['node_mod
  * excluded, so managed-settings content stays fingerprinted.
  */
 const CLAUDE_PROVIDER_STATE_VOLATILE: readonly string[] = [
-  'history.jsonl',                    // append-only prompt/response log for every session on the machine
-  '.last-cleanup',                    // background cleanup job's last-run timestamp
-  'plugins/known_marketplaces.json',  // marketplace list cache refreshed by CLI startup/polling
-  'plugins/marketplaces',             // per-marketplace catalog (marketplace.json, .gcs-sha) the
-                                       // CLI re-syncs on its own schedule — same cache-churn
-                                       // category as known_marketplaces.json above, not operator
-                                       // config; verified 2026-07-29 as the sole diff (2 changed,
-                                       // 0 added/removed) behind a false live-boundary halt
-  'shell-snapshots',                  // per-session recorded shell env for the Bash tool
-  'backups',                          // rolling `.claude.json.backup.*` snapshots the CLI writes on its own save cycle
-  'sessions',                         // per-process session index files, one per running Claude process
-  'session-env',                      // per-session scratch env directories; churns continuously with any session
-  'projects',                         // per-project session transcripts, appended on every turn of every session
-  'tasks',                            // background task/loop bookkeeping (.lock/.highwatermark), unrelated to the build
-  '.last-update-result.json',         // auto-updater's last-run result stamp
-  'stats-cache.json',                 // usage/statistics aggregation cache
-  'mcp-needs-auth-cache.json',        // cache of which MCP servers still need an auth prompt
-  'cache',                            // misc read-through caches (issue lists, changelog mirrors, etc.)
-  'file-history',                     // per-session snapshots of every file any concurrent session edits
-  'paste-cache',                      // per-session scratch for large pasted inputs
+  'history.jsonl', // append-only prompt/response log for every session on the machine
+  '.last-cleanup', // background cleanup job's last-run timestamp
+  'plugins/known_marketplaces.json', // marketplace list cache refreshed by CLI startup/polling
+  'plugins/marketplaces', // per-marketplace catalog (marketplace.json, .gcs-sha) the
+  // CLI re-syncs on its own schedule — same cache-churn
+  // category as known_marketplaces.json above, not operator
+  // config; verified 2026-07-29 as the sole diff (2 changed,
+  // 0 added/removed) behind a false live-boundary halt
+  'shell-snapshots', // per-session recorded shell env for the Bash tool
+  'backups', // rolling `.claude.json.backup.*` snapshots the CLI writes on its own save cycle
+  'sessions', // per-process session index files, one per running Claude process
+  'session-env', // per-session scratch env directories; churns continuously with any session
+  'projects', // per-project session transcripts, appended on every turn of every session
+  'tasks', // background task/loop bookkeeping (.lock/.highwatermark), unrelated to the build
+  '.last-update-result.json', // auto-updater's last-run result stamp
+  'stats-cache.json', // usage/statistics aggregation cache
+  'mcp-needs-auth-cache.json', // cache of which MCP servers still need an auth prompt
+  'cache', // misc read-through caches (issue lists, changelog mirrors, etc.)
+  'file-history', // per-session snapshots of every file any concurrent session edits
+  'paste-cache', // per-session scratch for large pasted inputs
   'skills/synced/**/.last-complete-round', // claude.ai skill-sync round marker; see below
   // Plugin-sync BOOKKEEPING under ~/.claude/plugins — catalog/directory caches,
   // sweep stamps, bucket markers, and per-bucket sync metadata — that the CLI
@@ -177,60 +189,60 @@ const CLAUDE_PROVIDER_STATE_VOLATILE: readonly string[] = [
   'plugins/synced/.bucket-*',
   'plugins/synced/**/.marketplaces.json',
   'plugins/synced/**/.last-complete-round',
-  'policy-limits.json.stamp.json',    // fetch stamp the CLI rewrites on its own policy-limits refresh
-                                       // cycle; verified 2026-09-25 as the sole diff ("changed
-                                       // policy-limits.json.stamp.json", 3 occurrences) behind a false
-                                       // halt of custom-build-review-rubrics-cannot-run-off-linux-o.
-                                       // Only the stamp is excluded: `policy-limits.json` itself is
-                                       // policy config and stays fingerprinted.
+  'policy-limits.json.stamp.json', // fetch stamp the CLI rewrites on its own policy-limits refresh
+  // cycle; verified 2026-09-25 as the sole diff ("changed
+  // policy-limits.json.stamp.json", 3 occurrences) behind a false
+  // halt of custom-build-review-rubrics-cannot-run-off-linux-o.
+  // Only the stamp is excluded: `policy-limits.json` itself is
+  // policy config and stays fingerprinted.
   'policy-limits.json.stamp.json.tmp.*', // atomic-write temp files the same refresh leaves behind
-  'policy-limits.json.signature.json',     // signature sidecar the CLI rewrites on its policy-limits
+  'policy-limits.json.signature.json', // signature sidecar the CLI rewrites on its policy-limits
   'policy-limits.json.signature-iat.json', // refresh; verified 2026-10-20 as the sole diff behind 4
-                                           // false halts across two self-host features (#3323).
-                                           // `policy-limits.json` itself stays fingerprinted.
-  'remote-settings.json.synced-at',   // epoch-ms stamp the CLI rewrites on every remote-settings
-                                       // sync; verified 2026-10-14 as the sole diff ("changed
-                                       // remote-settings.json.synced-at") behind 2 false halts.
-                                       // `remote-settings.json` itself stays fingerprinted (#3096).
+  // false halts across two self-host features (#3323).
+  // `policy-limits.json` itself stays fingerprinted.
+  'remote-settings.json.synced-at', // epoch-ms stamp the CLI rewrites on every remote-settings
+  // sync; verified 2026-10-14 as the sole diff ("changed
+  // remote-settings.json.synced-at") behind 2 false halts.
+  // `remote-settings.json` itself stays fingerprinted (#3096).
 ];
 
 /** Codex counterpart of `CLAUDE_PROVIDER_STATE_VOLATILE` — same leak-detector caveat applies. */
 const CODEX_PROVIDER_STATE_VOLATILE: readonly string[] = [
-  'history.jsonl',        // append-only prompt/response log for every session on the machine
-  'sessions',              // per-day session transcripts under sessions/YYYY/MM/DD
-  'shell_snapshots',       // per-session recorded shell env for the exec tool
-  'cache',                 // read-through app-directory/server-info/tools/plugin-catalog caches
-  'plugins/cache',         // installed-plugin cache refreshed on CLI startup
+  'history.jsonl', // append-only prompt/response log for every session on the machine
+  'sessions', // per-day session transcripts under sessions/YYYY/MM/DD
+  'shell_snapshots', // per-session recorded shell env for the exec tool
+  'cache', // read-through app-directory/server-info/tools/plugin-catalog caches
+  'plugins/cache', // installed-plugin cache refreshed on CLI startup
   'plugins/.remote-plugin-install-staging', // transient staging dir for plugin installs
-  'mcp-oauth-locks',       // ephemeral lock files for the MCP oauth flow, not credential material
-  'thread-writer-locks',   // one zero-byte lock per OPEN Codex thread, created and deleted by the
-                           // CLI as threads come and go. Same category as mcp-oauth-locks above:
-                           // no config, no hook wiring, no credential material — the file's very
-                           // existence is the whole signal, and its content is always empty.
-                           // Verified 2026-08-10 as the sole diff ("4 added, 0 removed, 0 changed")
-                           // behind a false halt that discarded a build whose step had already
-                           // succeeded. Because the locks vanish when their thread closes, the halt
-                           // fired only when a concurrent session happened to hold a thread open at
-                           // a dispatch boundary — intermittent, and unattributable from the reason.
-  '.tmp',                  // plugin-sync staging/lock files written by the CLI's own updater
-  'tmp',                   // scratch dir (e.g. `arg0`) written by the CLI at startup
-  'packages/standalone',   // self-update installer bookkeeping (current release, install lock)
-  'models_cache.json',     // cache of available models, refreshed periodically
-  'session_index.jsonl',   // append-only {id, thread_name, updated_at} index of every Codex thread on
-                           // the machine — a session log like history.jsonl, no config, hooks, or
-                           // credentials. Every Codex session appends on thread start/rename, so any
-                           // concurrent session (a sibling daemon feature or the operator) trips the
-                           // guard. Verified 2026-10-10 as the sole diff ("0 added, 0 removed,
-                           // 1 changed: changed session_index.jsonl") behind 12 false halts across
-                           // 10 features in one day (codex-cli 0.160.1).
+  'mcp-oauth-locks', // ephemeral lock files for the MCP oauth flow, not credential material
+  'thread-writer-locks', // one zero-byte lock per OPEN Codex thread, created and deleted by the
+  // CLI as threads come and go. Same category as mcp-oauth-locks above:
+  // no config, no hook wiring, no credential material — the file's very
+  // existence is the whole signal, and its content is always empty.
+  // Verified 2026-08-10 as the sole diff ("4 added, 0 removed, 0 changed")
+  // behind a false halt that discarded a build whose step had already
+  // succeeded. Because the locks vanish when their thread closes, the halt
+  // fired only when a concurrent session happened to hold a thread open at
+  // a dispatch boundary — intermittent, and unattributable from the reason.
+  '.tmp', // plugin-sync staging/lock files written by the CLI's own updater
+  'tmp', // scratch dir (e.g. `arg0`) written by the CLI at startup
+  'packages/standalone', // self-update installer bookkeeping (current release, install lock)
+  'models_cache.json', // cache of available models, refreshed periodically
+  'session_index.jsonl', // append-only {id, thread_name, updated_at} index of every Codex thread on
+  // the machine — a session log like history.jsonl, no config, hooks, or
+  // credentials. Every Codex session appends on thread start/rename, so any
+  // concurrent session (a sibling daemon feature or the operator) trips the
+  // guard. Verified 2026-10-10 as the sole diff ("0 added, 0 removed,
+  // 1 changed: changed session_index.jsonl") behind 12 false halts across
+  // 10 features in one day (codex-cli 0.160.1).
   'app-server-daemon/daemon-updater.stderr.log', // JSONL log the background self-updater appends
-                           // to every hour (installer_fetch/installer_run/package_selected). Only
-                           // this log: the daemon's pid files and socket link stay fingerprinted.
-                           // Verified 2026-11-20 as the sole diff behind 9 false halts across 5
-                           // features — any self-host build spanning the updater's hourly tick halted.
+  // to every hour (installer_fetch/installer_run/package_selected). Only
+  // this log: the daemon's pid files and socket link stay fingerprinted.
+  // Verified 2026-11-20 as the sole diff behind 9 false halts across 5
+  // features — any self-host build spanning the updater's hourly tick halted.
   'tui-thread-reference-capabilities', // one zero-byte marker per Codex thread id, added as threads
-                           // open — same category as thread-writer-locks. Verified 2026-11-20 as
-                           // the sole diff ("1 added") behind 3 false halts.
+  // open — same category as thread-writer-locks. Verified 2026-11-20 as
+  // the sole diff ("1 added") behind 3 false halts.
   // Codex's own SQLite stores at the provider-state ROOT — `goals_1`, `logs_2`,
   // `memories_1`, `state_5` today — plus their WAL sidecars, written continuously
   // by any running session. Matched by pattern rather than enumerated because the
@@ -240,7 +252,10 @@ const CODEX_PROVIDER_STATE_VOLATILE: readonly string[] = [
   // the list is patched. `*` matches a root-level basename only (see
   // `isExcluded`), so nothing under a subdirectory is affected and the live
   // checkout surface — which declares no patterns — is untouched.
-  '*.sqlite', '*.sqlite-shm', '*.sqlite-wal', '*.sqlite-journal',
+  '*.sqlite',
+  '*.sqlite-shm',
+  '*.sqlite-wal',
+  '*.sqlite-journal',
 ];
 
 /**
@@ -309,7 +324,10 @@ function providerStateSemanticEmptyJson(provider: ProviderWith<'selfHost'> | und
  * basenames and never (say) `skills/evil/state_9.sqlite`.
  */
 function matchesSegmentPattern(path: string, pattern: string): boolean {
-  const source = pattern.split('*').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[^/]*');
+  const source = pattern
+    .split('*')
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+    .join('[^/]*');
   return new RegExp(`^${source}$`).test(path);
 }
 
@@ -339,11 +357,13 @@ function matchesNestedBasename(path: string, prefix: string, basename: string): 
  * pattern; every other entry keeps the exact-or-prefix semantics it always had.
  */
 function isExcluded(path: string, exclude: readonly string[]): boolean {
-  return exclude.some(ex => ex.includes('/**/')
-    ? matchesNestedBasename(path, ex.slice(0, ex.indexOf('/**/')), ex.slice(ex.indexOf('/**/') + 4))
-    : ex.includes('*')
-    ? matchesSegmentPattern(path, ex)
-    : path === ex || path.startsWith(`${ex}/`));
+  return exclude.some((ex) =>
+    ex.includes('/**/')
+      ? matchesNestedBasename(path, ex.slice(0, ex.indexOf('/**/')), ex.slice(ex.indexOf('/**/') + 4))
+      : ex.includes('*')
+        ? matchesSegmentPattern(path, ex)
+        : path === ex || path.startsWith(`${ex}/`),
+  );
 }
 
 /**
@@ -386,12 +406,17 @@ async function manifest(
   // `.git` is neither hashed nor a source of transient mid-run read errors.
   const walk = async (dir: string): Promise<string[]> => {
     const entries = (await readdir(dir, { withFileTypes: true }))
-      .filter(entry => !(entry.isDirectory() && excludeDirectoryBasenames.includes(entry.name)))
-      .filter(entry => !isExcluded(relative(root, join(dir, entry.name)), exclude));
+      .filter((entry) => !(entry.isDirectory() && excludeDirectoryBasenames.includes(entry.name)))
+      .filter((entry) => !isExcluded(relative(root, join(dir, entry.name)), exclude));
     // `async` on the callback is load-bearing for lint, not for behaviour: it makes
     // every element a promise so `Promise.all` is not handed a mixed array.
-    return (await Promise.all(entries.sort((a, b) => a.name.localeCompare(b.name)).map(async entry =>
-      entry.isDirectory() ? walk(join(dir, entry.name)) : [join(dir, entry.name)]))).flat();
+    return (
+      await Promise.all(
+        entries
+          .sort((a, b) => a.name.localeCompare(b.name))
+          .map(async (entry) => (entry.isDirectory() ? walk(join(dir, entry.name)) : [join(dir, entry.name)])),
+      )
+    ).flat();
   };
   let files: string[];
   try {
@@ -406,15 +431,20 @@ async function manifest(
     }
     throw error;
   }
-  const entries = await Promise.all(files.map(async file => {
-    const path = relative(root, file);
-    const bytes = await entryContent(file);
-    const digest = Buffer.isBuffer(bytes) && semanticEmptyJson.includes(path) && isSemanticEmptyJson(bytes)
-      ? createHash('sha256').update('semantic-empty-json').digest('hex')
-      : createHash('sha256').update(bytes).digest('hex');
-    return { path, digest };
-  }));
-  const filteredEntries = entries.filter(entry => !exclude.includes(entry.path)).sort((a, b) => a.path.localeCompare(b.path));
+  const entries = await Promise.all(
+    files.map(async (file) => {
+      const path = relative(root, file);
+      const bytes = await entryContent(file);
+      const digest =
+        Buffer.isBuffer(bytes) && semanticEmptyJson.includes(path) && isSemanticEmptyJson(bytes)
+          ? createHash('sha256').update('semantic-empty-json').digest('hex')
+          : createHash('sha256').update(bytes).digest('hex');
+      return { path, digest };
+    }),
+  );
+  const filteredEntries = entries
+    .filter((entry) => !exclude.includes(entry.path))
+    .sort((a, b) => a.path.localeCompare(b.path));
   return {
     entries: filteredEntries,
     elapsedMs: Math.max(0, Math.round(performance.now() - startedAt)),
@@ -455,9 +485,7 @@ export async function fingerprintProviderStateSurface(args: {
   surface: Surface;
   measurement: { label: string; elapsedMs: number; fileCount: number };
 }> {
-  const provider = args.provider
-    ? requireProviderCapability(args.provider, 'selfHost')
-    : undefined;
+  const provider = args.provider ? requireProviderCapability(args.provider, 'selfHost') : undefined;
   const excluded = [
     ...providerStateVolatile(provider),
     ...(provider ? [provider.selfHostShape.selectedAuthPath] : []),
@@ -489,20 +517,16 @@ export async function fingerprintProviderStateSurface(args: {
 }
 
 export async function fingerprintLiveBoundary(args: {
-  liveCheckout: string; unrelatedProviderState: string;
-  provider?: BuiltInProviderId; selectedAuthPaths?: readonly string[];
+  liveCheckout: string;
+  unrelatedProviderState: string;
+  provider?: BuiltInProviderId;
+  selectedAuthPaths?: readonly string[];
 }): Promise<LiveBoundarySnapshot> {
   const liveCheckout = await fingerprintLiveCheckoutSurface(args.liveCheckout);
   const providerState = await fingerprintProviderStateSurface(args);
   return {
-    surfaces: [
-      liveCheckout.surface,
-      providerState.surface,
-    ],
-    measurements: [
-      liveCheckout.measurement,
-      providerState.measurement,
-    ],
+    surfaces: [liveCheckout.surface, providerState.surface],
+    measurements: [liveCheckout.measurement, providerState.measurement],
   };
 }
 
@@ -531,12 +555,19 @@ const MAX_REPORTED_PATHS = 8;
  * operator's live environment, an addition is usually unlisted churn from a
  * concurrent session, and a digest change is a rewrite.
  */
-function diffManifests(before: readonly Entry[], after: readonly Entry[]): {
-  added: string[]; removed: string[]; changed: string[];
+function diffManifests(
+  before: readonly Entry[],
+  after: readonly Entry[],
+): {
+  added: string[];
+  removed: string[];
+  changed: string[];
 } {
-  const priorDigests = new Map(before.map(entry => [entry.path, entry.digest]));
-  const currentDigests = new Map(after.map(entry => [entry.path, entry.digest]));
-  const added: string[] = []; const removed: string[] = []; const changed: string[] = [];
+  const priorDigests = new Map(before.map((entry) => [entry.path, entry.digest]));
+  const currentDigests = new Map(after.map((entry) => [entry.path, entry.digest]));
+  const added: string[] = [];
+  const removed: string[] = [];
+  const changed: string[] = [];
   for (const [path, digest] of currentDigests) {
     if (!priorDigests.has(path)) added.push(path);
     else if (priorDigests.get(path) !== digest) changed.push(path);
@@ -554,9 +585,7 @@ async function classifyLiveCheckoutDiff(
   root: string,
   paths: readonly string[],
 ): Promise<Map<string, 'operator-edit' | 'unexplained'>> {
-  const classifications = new Map<string, 'operator-edit' | 'unexplained'>(
-    paths.map(path => [path, 'unexplained']),
-  );
+  const classifications = new Map<string, 'operator-edit' | 'unexplained'>(paths.map((path) => [path, 'unexplained']));
   try {
     const { stdout } = await execFile('git', ['-C', root, 'status', '--porcelain=v1', '-z', '--', ...paths]);
     for (const record of stdout.split('\0').filter(Boolean)) {
@@ -588,9 +617,9 @@ async function classifyLiveCheckoutDiff(
 function describeDiff(diff: { added: string[]; removed: string[]; changed: string[] }): string {
   const total = diff.added.length + diff.removed.length + diff.changed.length;
   const labelled = [
-    ...diff.added.map(path => `added ${path}`),
-    ...diff.removed.map(path => `removed ${path}`),
-    ...diff.changed.map(path => `changed ${path}`),
+    ...diff.added.map((path) => `added ${path}`),
+    ...diff.removed.map((path) => `removed ${path}`),
+    ...diff.changed.map((path) => `changed ${path}`),
   ];
   const shown = labelled.slice(0, MAX_REPORTED_PATHS).map(redactSafetyText);
   const elided = total - shown.length;
@@ -608,17 +637,19 @@ export async function verifyLiveBoundary(
 }> {
   let containedDrift: { evidence: string; summary: string } | undefined;
   for (const surface of snapshot.surfaces) {
-    const current = (await manifest(
-      surface.root,
-      surface.exclude,
-      surface.excludeDirectoryBasenames ?? [],
-      surface.semanticEmptyJson ?? [],
-    )).entries;
+    const current = (
+      await manifest(
+        surface.root,
+        surface.exclude,
+        surface.excludeDirectoryBasenames ?? [],
+        surface.semanticEmptyJson ?? [],
+      )
+    ).entries;
     if (JSON.stringify(current) !== JSON.stringify(surface.manifest)) {
       const diff = diffManifests(surface.manifest, current);
       if (surface.label === 'provider state') {
-        const baseline = new Set(surface.manifest.map(entry => entry.path));
-        diff.removed = diff.removed.filter(path => !isOrphanedPluginRemoval(path, baseline));
+        const baseline = new Set(surface.manifest.map((entry) => entry.path));
+        diff.removed = diff.removed.filter((path) => !isOrphanedPluginRemoval(path, baseline));
         if (diff.added.length + diff.removed.length + diff.changed.length === 0) continue;
       }
       if (surface.label === 'live checkout') {
@@ -631,7 +662,7 @@ export async function verifyLiveBoundary(
         }
         const paths = [...diff.added, ...diff.removed, ...diff.changed];
         const classifications = await classifyLiveCheckoutDiff(surface.root, paths);
-        if (paths.every(path => classifications.get(path) === 'operator-edit')) continue;
+        if (paths.every((path) => classifications.get(path) === 'operator-edit')) continue;
         return {
           ok: false,
           reason: `${surface.label} changed during self-host execution — ${describeDiff(diff)}. Containment was not in force: ${containmentVerdict.reason}.`,
