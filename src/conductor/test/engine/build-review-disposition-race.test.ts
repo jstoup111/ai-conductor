@@ -190,7 +190,7 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
     };
   }
 
-  it('drops the kickback and re-lands build_review when every finding is accepted at routing time', async () => {
+  it('drops the kickback and settles build_review when every finding is accepted at routing time', async () => {
     const resolver = vi.fn(async () => effective({ accepted: ['sha256:accepted-test-quality-finding'], unresolved: [] }));
 
     const { dispatched, kickbacks, buildReviewRuns, projectRoot } = await fixture(resolver);
@@ -199,8 +199,8 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
     // The raw FAIL never routed rework: no build dispatch, no kickback event.
     expect(dispatched).not.toContain('build');
     expect(kickbacks).toEqual([]);
-    // build_review re-ran and settled from the disposition-aware join.
-    expect(buildReviewRuns()).toBe(2);
+    // The disposition-aware join settles this same review as a clean PASS.
+    expect(buildReviewRuns()).toBe(1);
     // The kickback budget was not consumed by the dropped raw FAIL.
     expect(JSON.parse(await readFile(join(projectRoot, '.pipeline/kickback-ledger.json'), 'utf8'))).toEqual({ version: 1, gates: {} });
   });
@@ -333,23 +333,23 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
 
   // ── Effective PASS overrides every raw-FAIL exit ──────────────────────────
 
-  async function expectEffectivePassToReenter(options?: Parameters<typeof fixture>[1]) {
+  async function expectEffectivePassToSettle(options?: Parameters<typeof fixture>[1]) {
     const resolver = vi.fn(async () => effective({ accepted: ['sha256:accepted'], unresolved: [] }));
     const { dispatched, kickbacks, buildReviewRuns, projectRoot, treeHash, buildReviewMergeBase } = await fixture(resolver, options);
     expect(resolver).toHaveBeenCalled();
     expect(dispatched).not.toContain('build');
     expect(kickbacks).toEqual([]);
-    expect(buildReviewRuns()).toBe(2);
+    expect(buildReviewRuns()).toBe(1);
     await expect(readFile(join(projectRoot, '.pipeline/HALT'), 'utf8')).rejects.toThrow();
     return { projectRoot, treeHash, buildReviewMergeBase };
   }
 
-  it('re-enters build_review instead of the stale-mirage disposition HALT when an effective PASS overrides a second stale mirage', async () => {
-    const { buildReviewMergeBase } = await expectEffectivePassToReenter({ staleMirage: 'halt' });
+  it('settles build_review instead of the stale-mirage disposition HALT when an effective PASS overrides a second stale mirage', async () => {
+    const { buildReviewMergeBase } = await expectEffectivePassToSettle({ staleMirage: 'halt' });
     expect(buildReviewMergeBase).toBeTruthy();
   });
 
-  it('re-enters build_review instead of invalidating a stale-mirage verdict when the effective verdict is PASS', async () => {
+  it('settles build_review instead of invalidating a stale-mirage verdict when the effective verdict is PASS', async () => {
     const resolver = vi.fn(async () => effective({ accepted: ['sha256:accepted'], unresolved: [] }));
     const { dispatched, kickbacks, buildReviewRuns, staleMirageRegrades, buildReviewMergeBase } = await fixture(
       resolver,
@@ -358,19 +358,19 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
 
     expect(dispatched).not.toContain('build');
     expect(kickbacks).toEqual([]);
-    expect(buildReviewRuns()).toBe(2);
+    expect(buildReviewRuns()).toBe(1);
     // The effective-PASS guard must stop the observable regrade transition.
     expect(staleMirageRegrades).toEqual([]);
     expect(buildReviewMergeBase).toBeTruthy();
   });
 
-  it('re-enters build_review instead of the kickback-to-build no-op HALT when the effective verdict is PASS', async () => {
+  it('settles build_review instead of the kickback-to-build no-op HALT when the effective verdict is PASS', async () => {
     // The D2 baseline must exactly match the tree and resolved task movement
     // observed at re-entry; otherwise it is classified as productive work.
     const resolver = vi.fn(async () => effective({ accepted: ['sha256:accepted'], unresolved: [] }));
     const { buildReviewRuns, projectRoot } = await fixture(resolver, { seedNoOpEscalation: true });
 
-    expect(buildReviewRuns()).toBe(2);
+    expect(buildReviewRuns()).toBe(1);
     expect(JSON.parse(await readFile(join(projectRoot, '.pipeline/kickback-ledger.json'), 'utf8'))).toMatchObject({
       gates: {
         build_review: {
@@ -383,11 +383,11 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
     await expect(readFile(join(projectRoot, '.pipeline/HALT'), 'utf8')).rejects.toThrow();
   });
 
-  it('re-enters build_review instead of the cumulative-cap HALT when the effective verdict is PASS, restoring the ledger', async () => {
+  it('settles build_review instead of the cumulative-cap HALT when the effective verdict is PASS, restoring the ledger', async () => {
     const seeded = {
       count: 1, cumulative: 5, treeHash: 'prior', lastReason: 'prior', priorVerdict: true, resolvedBefore: 0,
     };
-    const { projectRoot } = await expectEffectivePassToReenter({
+    const { projectRoot } = await expectEffectivePassToSettle({
       kickbackLedger: { version: 1, gates: { build_review: seeded } },
     });
     // The budget consumed for the dropped raw FAIL was written back.
@@ -396,12 +396,12 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
     });
   });
 
-  it('re-enters build_review instead of the per-gate unresolved HALT when the effective verdict is PASS', async () => {
+  it('settles build_review instead of the per-gate unresolved HALT when the effective verdict is PASS', async () => {
     const resolver = vi.fn(async () => effective({ accepted: ['sha256:accepted'], unresolved: [] }));
     const { buildReviewRuns, projectRoot } = await fixture(resolver, { seedPerGateLimit: true });
 
     expect(resolver).toHaveBeenCalledTimes(1);
-    expect(buildReviewRuns()).toBe(2);
+    expect(buildReviewRuns()).toBe(1);
     await expect(readFile(join(projectRoot, '.pipeline/HALT'), 'utf8')).rejects.toThrow();
   });
 });

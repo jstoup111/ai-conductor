@@ -196,7 +196,7 @@ describe('Conductor resume rebase-operation fence', () => {
     await expect(readVerdict(projectRoot, 'test_suite')).resolves.toMatchObject({
       preservation: { gate: 'test_suite', operationId: 'rebase-operation-1' },
     });
-    await expect(readVerdict(projectRoot, 'build_review')).resolves.toMatchObject({ satisfied: false });
+    await expect(readVerdict(projectRoot, 'build_review')).resolves.toMatchObject({ satisfied: true });
 
     const gateDirectory = join(projectRoot, '.pipeline', 'gates');
     const before = await Promise.all(['rebase', 'test_suite', 'build_review'].map(async (gate) =>
