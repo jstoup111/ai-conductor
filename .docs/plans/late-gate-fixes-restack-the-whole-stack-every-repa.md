@@ -1399,3 +1399,29 @@ implementation PR carries the waiver or migration block that the gate requires.
 **Done when:**
 - adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish decision 5 is satisfied by this task.
 - The repair for task rem-as-built-rem-asb-13 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem2-S3.1: In restack-executor.ts runFoldRestack, replay fold ranges onto child 1's existing parent (as the ordinary feature-repair path does) instead of defaultTip(git). Add a test that a fold with an advanced origin/HEAD leaves child 1's base unchanged, with identity.ts on child 1 and ten-players.ts on child 3.
+**Gate:** prd-audit
+**Rationale:** Verified: restack-executor.ts:962 runFoldRestack replays onto `await defaultTip(git)` (origin/HEAD). Ordinary feature-repair restacks keep the stack on child 1's existing parent. A fold must not silently rebase the stack onto a new default. This is a conforming implementation defect within the owner task's scope, and placement itself is correct.
+**Criterion:** S3.1
+**Parent task:** rem-prd-audit-rem-S3.1
+**Done when:**
+- [test] S3.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem2-S3.1 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-rem2-S7.1: After fold replay routes conflicts through options.resolver (rem2-asb-3), add a test where a fold replay conflicts. Assert that the resolver's provider_attempt carries restack {opId: the fold opId, cause: 'fold', roundId}.
+**Gate:** prd-audit
+**Rationale:** A fold-cause provider_attempt is impossible because fold replay never invokes the resolver. The implementation fix is planned under as-built finding e8c2f69a:3 (task rem2-asb-3). This task adds the missing criterion test once that path exists.
+**Criterion:** S7.1
+**Parent task:** rem-prd-audit-rem-S7.1
+**Done when:**
+- [test] S7.1 is satisfied by this task.
+- The repair for task rem-prd-audit-rem2-S7.1 is committed and its targeted tests pass.
+
+### Task rem-as-built-rem2-asb-3: In restack-executor.ts, route fold leaf replay (replayLeafWithoutFoldSources) and child replayChildRange conflicts through resolveRestackConflict with options.resolver and resolverCap, as the ordinary path at :1741 does. Classify restack-replay.ts's 'merge-tree failed' as a conflict, not unavailable. Add tests for a resolved fold conflict and a cap-exhausted fold conflict.
+**Gate:** as-built
+**Rationale:** Verified: the resolver is invoked only at restack-executor.ts:1741 (ordinary path). Fold leaf and child replay halt or throw without options.resolver, and the merge-tree-failed message mismatches the fold handler's prefix. D8 mandates the existing resolver for fold conflicts. Prior case dce799f9 covered fold journaling and application, not resolver routing, so this needs a new concrete repair.
+**Governing clause:** adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish decision 8
+**Done when:**
+- adr-2026-11-08-routed-audit-fixes-fold-onto-owners-before-publish decision 8 is satisfied by this task.
+- The repair for task rem-as-built-rem2-asb-3 is committed and its targeted tests pass.
