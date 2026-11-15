@@ -1183,6 +1183,70 @@ describe('PiProvider captured failure classification', () => {
     }
   });
 
+  // Covers: task:4
+  it('reserves model unavailability for the explicit legacy exit-one diagnostic', async () => {
+    const preserved = [
+      ['pi-1.0.0-e2-invalid-key-deepseek.jsonl', { authFailure: true }],
+      ['pi-1.0.0-e3-invalid-key-openrouter.jsonl', { authFailure: true }],
+      ['pi-1.0.0-e4-invalid-key-anthropic.jsonl', { authFailure: true }],
+      ['pi-1.0.0-e5-oauth-refresh-failed.jsonl', { authFailure: true }],
+      ['pi-1.0.0-e6-rate-limit.jsonl', { rateLimited: true }],
+      ['pi-1.0.0-e7-usage-exhausted.jsonl', { rateLimited: true, usageExhausted: true }],
+      ['pi-1.0.0-e8-rate-limit-anthropic.jsonl', { rateLimited: true }],
+      ['pi-1.0.0-e9-server-error.jsonl', {}],
+      ['pi-1.0.0-e11-insufficient-balance-deepseek.jsonl', {}],
+    ] as const;
+    for (const [name] of preserved) {
+      spawn.mockResolvedValueOnce({ stdout: await readFixture(name), stderr: '', exitCode: 0 } as ExecaResult);
+    }
+    spawn.mockResolvedValueOnce({
+      stdout: '',
+      stderr: 'Error: Model "x" not found. Use --list-models to see available models.',
+      exitCode: 1,
+    } as ExecaResult).mockResolvedValueOnce({
+      stdout: errorStream('401: {"message":"x is not a valid model ID","code":401}'),
+      stderr: '',
+      exitCode: 0,
+    } as ExecaResult).mockResolvedValueOnce({
+      stdout: errorStream('429: {"message":"x is not a valid model ID","code":429}'),
+      stderr: '',
+      exitCode: 0,
+    } as ExecaResult).mockResolvedValueOnce({
+      stdout: '',
+      stderr: '400: {"message":"x is not a valid model ID","code":400}',
+      exitCode: 1,
+    } as ExecaResult);
+
+    const results = [];
+    for (const [_name, expected] of preserved) {
+      const result = await invoke();
+      results.push(result);
+      expect(result).toMatchObject({ success: false, ...expected });
+      expect(result).not.toHaveProperty('modelUnavailable');
+    }
+    for (const result of [results[4], results[6]]) {
+      expect(result).not.toHaveProperty('usageExhausted');
+    }
+    for (const result of [results[7], results[8]]) {
+      for (const property of ['modelUnavailable', 'authFailure', 'rateLimited', 'usageExhausted']) {
+        expect(result).not.toHaveProperty(property);
+      }
+    }
+    expect(await invoke()).toMatchObject({ success: false, modelUnavailable: true });
+    for (const [result, expected] of [
+      [await invoke(), { authFailure: true }],
+      [await invoke(), { rateLimited: true }],
+    ]) {
+      expect(result).toMatchObject({ success: false, ...expected });
+      expect(result).not.toHaveProperty('modelUnavailable');
+    }
+    const stderr400 = await invoke();
+    expect(stderr400).toMatchObject({ success: false });
+    for (const property of ['modelUnavailable', 'authFailure', 'rateLimited', 'usageExhausted']) {
+      expect(stderr400).not.toHaveProperty(property);
+    }
+  });
+
   // Covers: task:2
   it('classifies captured OpenRouter unknown-model error stops without exposing their upstream diagnostic', async () => {
     spawn.mockResolvedValueOnce({ stdout: await readFixture('pi-1.0.0-e10-unknown-model-openrouter.jsonl'), stderr: '', exitCode: 0 } as ExecaResult)
