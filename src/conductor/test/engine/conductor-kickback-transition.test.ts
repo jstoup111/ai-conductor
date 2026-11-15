@@ -452,6 +452,40 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     await expect(readFile(statePath, 'utf8')).resolves.not.toMatch(/"build": "done"/);
   });
 
+  // Covers: task:3
+  it('refuses a legacy wiring_check no-op cycle with no review work order', async () => {
+    const { build } = await runBuild(
+      undefined,
+      {
+        version: 1,
+        gates: { wiring_check: { ...entry(), priorVerdict: false } },
+        growth: { authored: 4, added: 0, byGate: {} },
+      },
+      {
+        treeHash: 'tree-wiring-legacy',
+        buildOutcome: {
+          version: 1,
+          records: [
+            {
+              outcome: 'no-movement',
+              terminalOutcome: 'done',
+              gate: 'wiring_check',
+              verdict: false,
+              rung: { model: 'test-model', effort: 'medium' },
+              treeBefore: 'tree-wiring-legacy',
+              treeAfter: 'tree-wiring-legacy',
+              headBefore: 'head-before',
+              headAfter: 'head-after',
+            },
+          ],
+        },
+      },
+    );
+
+    expect(build).not.toHaveBeenCalled();
+    await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('needs-human');
+  });
+
   it.each([
     ['moved tree', 'tree-2', 'medium'],
     ['null tree', null, 'medium'],

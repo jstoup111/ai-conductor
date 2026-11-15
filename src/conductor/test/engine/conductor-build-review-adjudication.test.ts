@@ -1052,6 +1052,7 @@ async function advanceR2AfterBuildReview(options: {
     build_review: 'pending',
   });
   const starts: StepName[] = [];
+  let haltAtNextDispatch: string | undefined;
   const events = new ConductorEventEmitter();
   const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
   persister.start();
@@ -1101,6 +1102,7 @@ async function advanceR2AfterBuildReview(options: {
           await writeFile(pipelinePathFor(subject.repo, 'build-review.json', c1), JSON.stringify(raw));
           return { success: true };
         }
+        haltAtNextDispatch = await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8').catch(() => '');
         throw new Error(`stop after routed r2 selection: ${step}`);
       },
     },
@@ -1161,6 +1163,7 @@ async function advanceR2AfterBuildReview(options: {
           }
         : { kind: next.kind },
     starts,
+    haltAtNextDispatch,
     halt: await readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8').catch(() => ''),
   };
 }
@@ -2904,6 +2907,142 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     await expect(restarted.readJson('.pipeline/build-outcome.json')).resolves.toMatchObject({
       records: [expect.objectContaining({ terminalOutcome: 'failed', deliveredCaseIds: ['c2'] })],
     });
+  });
+
+  // Covers: task:3
+  it('refuses a subset of cases already delivered to the prior no-op BUILD', async () => {
+    const first = await fixture();
+    const order = (await first.readJson('.pipeline/build-review-work-order.json')) as Record<string, unknown>;
+    const cases = (await first.readJson('.pipeline/remediation-cases.json')) as Record<string, unknown>;
+    const ledger = await first.readJson('.pipeline/kickback-ledger.json');
+    const treeHash = 'tree-review-subset';
+    const treeSpy = vi.spyOn(projectPrelude, 'currentTreeHash').mockResolvedValue(treeHash);
+
+    try {
+      const restarted = await fixture({
+        startFrom: 'build',
+        seedPipeline: async (root) => {
+          await writeFile(
+            join(root, '.pipeline/build-review-work-order.json'),
+            JSON.stringify({
+              ...order,
+              feature: { ...(order.feature as object), repository: root },
+              cases: (order.cases as Array<Record<string, unknown>>).map((row) => ({ ...row, caseId: 'c1' })),
+              attemptedCaseIds: (order.attemptedCaseIds as string[] | undefined)?.map(() => 'c1'),
+            }),
+            'utf8',
+          );
+          await writeFile(
+            join(root, '.pipeline/remediation-cases.json'),
+            JSON.stringify({
+              ...cases,
+              feature: { ...(cases.feature as object), repository: root },
+              cases: (cases.cases as Array<Record<string, unknown>>).map((row) => ({ ...row, id: 'c1' })),
+            }),
+            'utf8',
+          );
+          await writeFile(join(root, '.pipeline/kickback-ledger.json'), JSON.stringify(ledger), 'utf8');
+          await writeFile(
+            join(root, '.pipeline/build-outcome.json'),
+            JSON.stringify({
+              version: 1,
+              records: [
+                {
+                  outcome: 'no-movement',
+                  terminalOutcome: 'done',
+                  gate: 'build_review',
+                  verdict: false,
+                  rung: { model: 'test-model', effort: 'medium' },
+                  treeBefore: treeHash,
+                  treeAfter: treeHash,
+                  headBefore: 'head-before',
+                  headAfter: 'head-after',
+                  deliveredCaseIds: ['c1', 'c2'],
+                },
+              ],
+            }),
+            'utf8',
+          );
+        },
+      });
+      expect(restarted.dispatched).not.toContain('build');
+      await expect(readFile(join(restarted.projectRoot, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+    } finally {
+      treeSpy.mockRestore();
+    }
+  });
+
+  // Covers: task:3
+  it('dispatches BUILD for a legacy no-op record when review work is now present', async () => {
+    const first = await fixture();
+    const order = (await first.readJson('.pipeline/build-review-work-order.json')) as Record<string, unknown>;
+    const cases = (await first.readJson('.pipeline/remediation-cases.json')) as Record<string, unknown>;
+    const ledger = await first.readJson('.pipeline/kickback-ledger.json');
+    const treeHash = 'tree-legacy-review-case';
+    const treeSpy = vi.spyOn(projectPrelude, 'currentTreeHash').mockResolvedValue(treeHash);
+    let haltAtBuild: string | undefined;
+    try {
+      const restarted = await fixture({
+        startFrom: 'build',
+        onBuildDispatch: async (root) => {
+          haltAtBuild = await readFile(join(root, '.pipeline/HALT'), 'utf8').catch(() => '');
+        },
+        seedPipeline: async (root) => {
+          await writeFile(
+            join(root, '.pipeline/build-review-work-order.json'),
+            JSON.stringify({
+              ...order,
+              feature: { ...(order.feature as object), repository: root },
+              cases: (order.cases as Array<Record<string, unknown>>).map((row) => ({ ...row, caseId: 'c1' })),
+              attemptedCaseIds: (order.attemptedCaseIds as string[] | undefined)?.map(() => 'c1'),
+            }),
+            'utf8',
+          );
+          await writeFile(
+            join(root, '.pipeline/remediation-cases.json'),
+            JSON.stringify({
+              ...cases,
+              feature: { ...(cases.feature as object), repository: root },
+              cases: (cases.cases as Array<Record<string, unknown>>).map((row) => ({ ...row, id: 'c1' })),
+            }),
+            'utf8',
+          );
+          await writeFile(join(root, '.pipeline/kickback-ledger.json'), JSON.stringify(ledger), 'utf8');
+          await writeFile(
+            join(root, '.pipeline/build-outcome.json'),
+            JSON.stringify({
+              version: 1,
+              records: [
+                {
+                  outcome: 'no-movement',
+                  terminalOutcome: 'done',
+                  gate: 'build_review',
+                  verdict: false,
+                  rung: { model: 'test-model', effort: 'medium' },
+                  treeBefore: treeHash,
+                  treeAfter: treeHash,
+                  headBefore: 'head-before',
+                  headAfter: 'head-after',
+                },
+              ],
+            }),
+            'utf8',
+          );
+        },
+      });
+      expect(restarted.dispatched.filter((step) => step === 'build')).toEqual(['build']);
+      expect(haltAtBuild).toBe('');
+    } finally {
+      treeSpy.mockRestore();
+    }
+  });
+
+  // Covers: task:3
+  it('advances after a clean build_review pass without writing a no-op HALT', async () => {
+    const clean = await advanceR2AfterBuildReview({ adjudicated: false });
+
+    expect(clean.starts).toEqual(['build_review', 'acceptance_specs']);
+    expect(clean.haltAtNextDispatch).toBe('');
   });
 
   it('treats an all-resolved durable action order as absent on a fresh BUILD entry', async () => {
