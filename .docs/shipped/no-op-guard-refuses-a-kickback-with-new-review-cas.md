@@ -4,6 +4,19 @@ spec_hash: f8fe52b69bdf3b07f4bebed5a78b64bb94e274e5e6680c562fdaeb1988fa1222
 pr: https://github.com/jstoup111/ai-conductor/pull/3715
 shipped: 2026-11-15
 engine_version: 20261115T195756Z-7a81fed9e811
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "No story or task asks for these formatting changes. They change only whitespace and operator placement. They change no runtime behavior, operator-visible output, CLI result, or persisted state."
+    accepted: false
+    authority: engine
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-2
+    summary: "These are test-harness changes that every adjudication test now inherits. They exist so the seeded prior record's rung matches the guard's computed rung and so the sidecar write-failure case (S2.4) can be injected. They serve the planned task 2-4 proofs and do not change production behavior."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
