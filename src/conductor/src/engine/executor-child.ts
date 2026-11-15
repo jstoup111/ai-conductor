@@ -38,6 +38,8 @@ export interface ExecutorChildDeps {
   /** Production children keep persistence open until their visualizer stops. */
   waitForSupervisorVisualizerClose?: boolean;
   log?: (line: string) => void;
+  /** Test seam for an in-memory child that cannot own the host global console. */
+  teeConsole?: (port: ExecutorIpcPort) => () => void;
   exit?: (code: number) => void;
 }
 
@@ -96,7 +98,7 @@ export function withExecutorBrokerProxies(
   },
 ): ExecutorChildDeps {
   const client = createExecutorRequestClient(port);
-  const restoreConsole = deps.forwardConsole === false ? () => {} : teeExecutorConsole(port);
+  const restoreConsole = deps.forwardConsole === false ? () => {} : (deps.teeConsole ?? teeExecutorConsole)(port);
   const run = deps.run;
   return {
     ...deps,

@@ -1,4 +1,4 @@
-// Covers: task:1
+// Covers: task:1, task:35
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, stat, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -15,7 +15,6 @@ import {
   createDaemonModeLogger,
   createFeatureDaemonLogger,
   createOwnershipAwareDaemonLogger,
-  withDaemonLogFeatureOwnership,
 } from '../../src/engine/daemon-log.js';
 import { renderDaemonEvent, stripAnsi } from '../../src/daemon-cli.js';
 import type { ConductorEvent } from '../../src/types/index.js';
@@ -108,14 +107,8 @@ describe('engine/daemon-log', () => {
       await mkdir(join(dir, '.daemon'), { recursive: true });
       // Fill the log to just under the 1 MB rotation cap.
       const filler = 'x'.repeat(999_990) + '\n';
-      const kickbackLine = formatDaemonLogLine(
-        '[daemon] KICKBACK: prd_audit re-opened build (1)',
-      );
-      await writeFile(
-        join(dir, '.daemon', 'daemon.log'),
-        filler + kickbackLine + '\n',
-        'utf8',
-      );
+      const kickbackLine = formatDaemonLogLine('[daemon] KICKBACK: prd_audit re-opened build (1)');
+      await writeFile(join(dir, '.daemon', 'daemon.log'), filler + kickbackLine + '\n', 'utf8');
 
       // Trigger rotation with a subsequent write (rotation happens on open,
       // since the file now exceeds the cap).
@@ -226,9 +219,7 @@ describe('engine/daemon-log', () => {
   describe('formatDaemonLogLine (timestamps)', () => {
     it('prefixes an ISO-8601 UTC timestamp before the [daemon] line', () => {
       const at = new Date('2026-07-01T14:23:05.123Z');
-      expect(formatDaemonLogLine('[daemon] holding lock', at)).toBe(
-        '2026-07-01T14:23:05.123Z [daemon] holding lock',
-      );
+      expect(formatDaemonLogLine('[daemon] holding lock', at)).toBe('2026-07-01T14:23:05.123Z [daemon] holding lock');
     });
 
     it('produces a leading, sortable, greppable timestamp field', () => {
@@ -291,16 +282,13 @@ describe('engine/daemon-log', () => {
 
       createFeatureDaemonLogger('feature-a', logger)('stdout first line\nstderr continuation');
 
-      expect(live).toEqual([
-        '[daemon][feature-a] stdout first line',
-        '[daemon][feature-a] │ stderr continuation',
-      ]);
+      expect(live).toEqual(['[daemon][feature-a] stdout first line', '[daemon][feature-a] │ stderr continuation']);
       expect(persisted).toEqual(live);
     });
   });
 
   describe('daemon ownership attribution', () => {
-    it('keeps interleaved console tee and global-subscriber output owned by its executor slug', async () => {
+    it('keeps supervisor console output and ownership-aware daemon events unattributed through the plain daemon logger while feature work is in flight', async () => {
       const live: string[] = [];
       const persisted: string[] = [];
       const baseLog = createDaemonModeLogger({
@@ -310,44 +298,20 @@ describe('engine/daemon-log', () => {
       const globalSubscriberLog = createOwnershipAwareDaemonLogger(baseLog);
 
       await Promise.all([
-        withDaemonLogFeatureOwnership('feature-a', async () => {
-          await Promise.resolve();
-          persisted.push(formatDaemonConsoleTeeLine('warn', 'warning from feature-a'));
-          renderDaemonEvent(
-            { type: 'step_started', step: 'build', index: 0 },
-            globalSubscriberLog,
-          );
-          baseLog('▶ start feature-a');
-          baseLog('▶ start feature-a');
-        }),
-        withDaemonLogFeatureOwnership('feature-b', async () => {
-          persisted.push(formatDaemonConsoleTeeLine('error', 'error from feature-b'));
-          await Promise.resolve();
-          renderDaemonEvent(
-            { type: 'step_started', step: 'build', index: 0 },
-            globalSubscriberLog,
-          );
-          baseLog('▶ start feature-b');
-          baseLog('▶ start feature-b');
-        }),
+        Promise.resolve().then(() => baseLog('▶ start feature-a', true)),
+        Promise.resolve().then(() => baseLog('▶ start feature-b', true)),
       ]);
 
       persisted.push(formatDaemonConsoleTeeLine('warn', 'daemon-global warning'));
-      renderDaemonEvent(
-        { type: 'step_started', step: 'build', index: 0 },
-        globalSubscriberLog,
-      );
+      renderDaemonEvent({ type: 'step_started', step: 'build', index: 0 }, globalSubscriberLog);
 
-      expect(persisted).toContain('[daemon][feature-a] [warn] warning from feature-a');
-      expect(persisted).toContain('[daemon][feature-b] [error] error from feature-b');
       expect(persisted).toContain('[daemon] [warn] daemon-global warning');
       expect(persisted.at(-1)).not.toContain('[feature-');
 
-      expect(live).toContain('[daemon][feature-a] · ▶ build');
-      expect(live).toContain('[daemon][feature-b] · ▶ build');
       expect(live).toContain('[daemon] · ▶ build');
-      expect(live.filter((line) => line === '[daemon] ▶ start feature-a')).toHaveLength(1);
-      expect(live.filter((line) => line === '[daemon] ▶ start feature-b')).toHaveLength(1);
+      expect(formatDaemonConsoleTeeLine('warn', 'warning during feature work')).toBe(
+        '[daemon] [warn] warning during feature work',
+      );
     });
   });
 

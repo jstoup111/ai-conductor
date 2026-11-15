@@ -1052,9 +1052,6 @@ describe('engine/daemon — runDaemon', () => {
         readHaltClass: async () => 'mechanical',
         clearRetryableHalt,
         stampDispatchBaseline,
-        runFeature: async () => {
-          throw new Error('featureExecution executor should own this dispatch');
-        },
         featureExecution: {
           createWorkOrder: async () => ({ slug }) as WorkOrder,
           executor: {
@@ -1151,9 +1148,6 @@ describe('engine/daemon — runDaemon', () => {
                 },
               },
             },
-            runFeature: async () => {
-              throw new Error('featureExecution executor must be used');
-            },
           },
           { concurrency: 1, once: true },
         );
@@ -1225,9 +1219,6 @@ describe('engine/daemon — runDaemon', () => {
               createWorkOrder: async () => ({ slug }) as WorkOrder,
               executor: { execute },
             },
-            runFeature: async () => {
-              throw new Error('featureExecution executor must be used');
-            },
             sleep: async () => {},
           },
           { concurrency: 1, once: false, maxIdlePolls: 1 },
@@ -1272,9 +1263,6 @@ describe('engine/daemon — runDaemon', () => {
           featureExecution: {
             createWorkOrder: async () => ({ slug }) as WorkOrder,
             executor: { execute },
-          },
-          runFeature: async () => {
-            throw new Error('featureExecution executor must be used');
           },
           sleep: async () => {},
         },
@@ -1326,9 +1314,6 @@ describe('engine/daemon — runDaemon', () => {
               createWorkOrder: async () => ({ slug }) as WorkOrder,
               executor: { execute },
             },
-            runFeature: async () => {
-              throw new Error('featureExecution executor must be used');
-            },
           },
           { concurrency: 1, once: true },
         );
@@ -1366,9 +1351,6 @@ describe('engine/daemon — runDaemon', () => {
               createWorkOrder: async () => ({ slug }) as WorkOrder,
               executor: { execute },
             },
-            runFeature: async () => {
-              throw new Error('featureExecution executor must be used');
-            },
             sleep: async () => {},
           },
           { concurrency: 1, once: false, maxIdlePolls: 1 },
@@ -1401,9 +1383,6 @@ describe('engine/daemon — runDaemon', () => {
             createWorkOrder: async () => ({ slug }) as WorkOrder,
             executor: { execute },
           },
-          runFeature: async () => {
-            throw new Error('featureExecution executor must be used');
-          },
         },
         { concurrency: 1, once: true },
       );
@@ -1429,9 +1408,6 @@ describe('engine/daemon — runDaemon', () => {
           featureExecution: {
             createWorkOrder: async () => ({ slug }) as WorkOrder,
             executor: { execute },
-          },
-          runFeature: async () => {
-            throw new Error('featureExecution executor must be used');
           },
           sleep: async () => {
             sleeps += 1;
@@ -1479,9 +1455,6 @@ describe('engine/daemon — runDaemon', () => {
                 createWorkOrder: async () => ({ slug }) as WorkOrder,
                 executor: { execute },
               },
-              runFeature: async () => {
-                throw new Error('featureExecution executor must be used');
-              },
               sleep: async () => {},
             },
             { concurrency: 1, once: false, maxIdlePolls: 1 },
@@ -1521,9 +1494,6 @@ describe('engine/daemon — runDaemon', () => {
             createWorkOrder: async () => ({ slug }) as WorkOrder,
             executor: { execute },
           },
-          runFeature: async () => {
-            throw new Error('featureExecution executor must be used');
-          },
           sleep: async () => {},
         },
         { concurrency: 1, once: false, maxIdlePolls: 1 },
@@ -1560,9 +1530,6 @@ describe('engine/daemon — runDaemon', () => {
               },
             },
           },
-          runFeature: async () => {
-            throw new Error('featureExecution executor must be used');
-          },
         },
         { concurrency: 1, once: true },
       );
@@ -1584,9 +1551,6 @@ describe('engine/daemon — runDaemon', () => {
           featureExecution: {
             createWorkOrder: async () => ({ slug }) as WorkOrder,
             executor: { execute },
-          },
-          runFeature: async () => {
-            throw new Error('featureExecution executor must be used');
           },
         },
         { concurrency: 1, once: true },
@@ -1629,9 +1593,6 @@ describe('engine/daemon — runDaemon', () => {
               },
             },
           },
-          runFeature: async () => {
-            throw new Error('featureExecution executor must be used');
-          },
           sleep: async () => {},
         },
         { concurrency: 1, once: false, maxIdlePolls: 10 },
@@ -1672,9 +1633,6 @@ describe('engine/daemon — runDaemon', () => {
                 return { slug, status: 'halted' };
               },
             },
-          },
-          runFeature: async () => {
-            throw new Error('featureExecution executor must be used');
           },
           sleep: async () => {},
         },
@@ -1726,9 +1684,6 @@ describe('engine/daemon — runDaemon', () => {
               },
             },
           },
-          runFeature: async () => {
-            throw new Error('featureExecution executor must be used');
-          },
           sleep: async () => {},
         },
         { concurrency: 1, once: false, maxIdlePolls: 10 },
@@ -1768,9 +1723,6 @@ describe('engine/daemon — runDaemon', () => {
                 return { slug, status: 'done' };
               },
             },
-          },
-          runFeature: async () => {
-            throw new Error('featureExecution executor must be used');
           },
         },
         { concurrency: 1, once: true },

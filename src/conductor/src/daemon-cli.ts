@@ -4,9 +4,6 @@ import { v4 as uuidv4 } from 'uuid';
 import {
   createWorkOrderGitRunner,
   prepareDaemonFeatureManagedSessionContext,
-  runDaemonFeatureConductor,
-  runDaemonSetupTriage,
-  type DaemonFeatureLifecycleContext,
 } from './engine/daemon-feature-lifecycle.js';
 import { basename, join, dirname, isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -65,7 +62,6 @@ import { ProviderSessionStore } from './engine/provider-session.js';
 import type { ProviderExecutionContext } from './engine/provider-execution.js';
 import { createCandidateSafetyBoundary, providerExecutionEventCallbacks } from './engine/provider-execution.js';
 import { CODEX_PROVIDER, providerDescriptor } from './execution/provider-catalog.js';
-import { type ManagedSessionContext } from './execution/managed-session-context.js';
 import { createManagedSessionObservationPreparer } from './execution/managed-session-preparation.js';
 import { createSessionEventIdentity } from './execution/session-event-identity.js';
 import {
@@ -116,12 +112,7 @@ import { wireDaemonOtel, wireOtelVisualizer } from './engine/otel/wire.js';
 import { resolveOtelConfig, resolveWorkerName } from './engine/otel/otel-config.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
 import { LiveBoundaryCoordinator } from './engine/self-host/live-boundary-coordinator.js';
-import {
-  emitDeprecatedConfigKeyEvents,
-  loadMergedConfig,
-  resolveMemoryProvider,
-  BUILD_PROGRESS_HALT_DEFAULTS,
-} from './engine/config.js';
+import { emitDeprecatedConfigKeyEvents, loadMergedConfig, BUILD_PROGRESS_HALT_DEFAULTS } from './engine/config.js';
 import type { HarnessConfig } from './types/config.js';
 import { readLastResolvedCount, stampDispatchBaseline } from './engine/task-evidence.js';
 import { countResolvedTasks } from './engine/task-progress.js';
@@ -135,11 +126,10 @@ import {
   createFeatureDaemonLogger,
   createOwnershipAwareDaemonLogger,
   formatDaemonConsoleTeeLine,
-  withDaemonLogFeatureOwnership,
   type DaemonLogSink,
 } from './engine/daemon-log.js';
 import type { ConductorEvent } from './types/index.js';
-import { runDaemon, type BacklogItem, type DaemonResult, type FeatureOutcome } from './engine/daemon.js';
+import { runDaemon, type BacklogItem, type DaemonResult } from './engine/daemon.js';
 import { createDaemonTeardown, type DaemonTeardown, type DaemonTeardownOptions } from './engine/daemon-teardown.js';
 import { discoverBacklog, fastForwardRoot, gitTreeSource, type DiscoveryLogger } from './engine/daemon-backlog.js';
 import { createRefreshThrottle, createStalenessWarner, probeStampedShaBehindOrigin } from './engine/engine-refresh.js';
@@ -166,10 +156,8 @@ import {
   formatDaemonConcurrencyWarning,
   resolveDaemonCommandConcurrency,
 } from './engine/daemon-command.js';
-import { makeRunFeature, type FeatureWorktree } from './engine/daemon-runner.js';
 import { hasDurableChildState } from './engine/child-cursor.js';
 import { acquireFeatureDispatchLease } from './engine/feature-dispatch-lease.js';
-import { createInProcessFeatureExecutor } from './engine/feature-executor.js';
 import { createChildProcessFeatureExecutor, type ChildFeatureExecutorDeps } from './engine/child-feature-executor.js';
 import { createExecutorBroker } from './engine/executor-broker.js';
 import { sweepExecutorRecordsOnBoot } from './engine/executor-records.js';
@@ -666,13 +654,11 @@ export interface DaemonModeOptions {
   processAdapter?: DaemonProcessAdapter;
   /** Injectable bounded wait seam; production uses the OTel export timeout. */
   awaitDaemonOtelStop?: AwaitDaemonOtelStop;
-  /** Injectable executor boundary for daemon composition tests. */
-  runFeature?: (item: BacklogItem) => Promise<FeatureOutcome>;
   /** Injectable scheduler boundary for daemon composition tests. */
   runDaemon?: typeof runDaemon;
   /** Injectable retryable-HALT dependency factory for daemon composition tests. */
   buildRetryableHaltDeps?: typeof buildRetryableHaltDeps;
-  /** Injectable child-process fork boundary for daemon lifecycle tests. */
+  /** Injectable process boundary for child-executor composition tests. */
   executorFork?: ChildFeatureExecutorDeps['fork'];
   /**
    * Task 3: Show completed (PROCESSED) features in the startup dashboard's
@@ -975,7 +961,7 @@ export function buildRetryableHaltDeps(
  * (verifyArtifacts + the engine's unconditional fresh-session-per-step),
  * opening a PR on finish, and tearing
  * the worktree down on success. Unattended; ceilings + supervision live in
- * runDaemon / makeRunFeature.
+ * runDaemon's child executor.
  */
 /** Construct the production daemon sweep input, including its event-spine binding. */
 export function createDaemonSweepBinding(
@@ -1445,14 +1431,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // can abort, close ledgers, and coordinate the drain.
   const allWaitSignals = new Set<AbortController>();
   const activeConductors = new Set<Conductor>();
-  // The in-process path contributes a conductor to this set, while the
-  // injectable composition-test executor deliberately does not. Count the
-  // runDaemon executor boundary instead so the scaled drain budget covers
-  // every live worker through the one dispatch seam.
+  // Count the runDaemon executor boundary so the scaled drain budget covers
+  // every live child through the one dispatch seam.
   let activeExecutorCount = 0;
-  let shutdownRequested = false;
-  // Assigned when child isolation is selected below.  Keep the signal handler
-  // independent from adapter construction order while still stopping children
+  // Assigned when the child executor is composed below. Keep the signal
+  // handler independent from construction order while still stopping children
   // before the scheduler begins its drain and before the daemon lock releases.
   let stopChildExecutors: (() => Promise<void>) | undefined;
   let abortChildBroker: (() => void) | undefined;
@@ -1487,7 +1470,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // releases the lock. No direct process.exit here: the only force-exit
   // path is the teardown's bounded onForceRelease backstop above.
   const daemonSigtermHandler = async () => {
-    shutdownRequested = true;
     // Abort all in-flight rate-limit waits across all conductors
     for (const controller of allWaitSignals) {
       controller.abort();
@@ -1668,7 +1650,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     async handle(event) {
       // Events forwarded from a feature-scoped bus (see ForwardingEventEmitter)
       // are already rendered, tagged, by that feature's own listeners
-      // (beginFeatureRun below). Rendering them here would double-print them,
+      // (the child broker). Rendering them here would double-print them,
       // once tagged and once untagged.
       if (isForwardedFromFeature(event)) return;
       renderDaemonEvent(event, globalSubscriberLog);
@@ -1717,7 +1699,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   });
   // Slug-aware recovery dispatchers (rebase-autoresolve, ci-fix) know the
   // feature slug but have no persistent per-feature event bus like
-  // beginFeatureRun's featureEvents. Give them their own scoped bus + logger
+  // child feature events. Give them their own scoped bus + logger
   // so their provider_fallback transitions and subprocess diagnostics render
   // tagged with the slug (e.g. `[daemon][<slug>] ...`) instead of falling
   // back to the untagged global logger.
@@ -1771,7 +1753,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // worktree scope exists. Cache the scoped logger by slug so those lifecycle
   // records and the worktree-owned records share one immutable attribution.
   const featureLogs = new Map<string, (message: string) => void>();
-  const featureEventFlushers = new WeakMap<ConductorEventEmitter, () => Promise<void>>();
   const featureLogFor = (slug: string): ((message: string) => void) => {
     let featureLog = featureLogs.get(slug);
     if (!featureLog) {
@@ -1780,97 +1761,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     }
     return featureLog;
   };
-  const beginFeatureRun = async (worktree: FeatureWorktree, item: BacklogItem) => {
-    const sessionId = createSessionEventIdentity();
-    const persistence = startFeatureEventPersistence(worktree.path, events, item.slug);
-    const featureEvents = persistence.events;
-    featureEventFlushers.set(featureEvents, persistence.flush);
-    const featureLog = featureLogFor(item.slug);
-    const providerExecution = createProviderExecution(featureEvents, featureLog);
-    const provider = providerExecution.configuredProviders[0];
-    let managedSessionContext: ManagedSessionContext;
-    try {
-      if (!provider) throw new Error('daemon feature dispatch requires a configured provider');
-      managedSessionContext = await prepareDaemonFeatureManagedSessionContext({
-        projectRoot,
-        worktreeRoot: worktree.path,
-        featureSlug: item.slug,
-        dispatchId: sessionId,
-        provider,
-      });
-    } catch (error) {
-      // Context preparation is an early feature exit too. A provider may
-      // already have settled an observation while preparation was failing, so
-      // preserve the feature persistence lifetime through its final drain
-      // rather than detaching the tail synchronously.
-      await persistence.drain();
-      throw error;
-    }
-    const pipelineDir = join(worktree.path, '.pipeline');
-    const persistedSessionId = await readFile(join(pipelineDir, 'conduct-session-id'), 'utf8').catch(() => undefined);
-    const visualizerContext = {
-      pipelineDir,
-      runId: persistedSessionId?.trim() || sessionId,
-      feature: item.slug,
-      project: projectRoot,
-      branch: worktree.branch,
-      engineVersion: resolveEngineVersion(__dirname),
-      metrics: false,
-      harnessVersion: await resolveHarnessVersion(__dirname),
-      ...(item.sourceRef ? { sourceRef: item.sourceRef } : {}),
-    };
-    const visualizer = daemonOtel?.spoolRuntime
-      ? wireOtelVisualizer(config ?? {}, visualizerContext, featureEvents, daemonOtel.spoolRuntime)
-      : wireOtelVisualizer(config ?? {}, visualizerContext, featureEvents);
-    if (visualizer) activeDispatchVisualizers.add(visualizer);
-    const detachFeatureEventRenderer = attachFeatureEventRenderer(featureEvents, featureLog);
-    let stopPromise: Promise<void> | undefined;
-    const stop = (): Promise<void> => {
-      if (stopPromise) return stopPromise;
-      stopPromise = (async () => {
-        // OTel shutdown can itself report a renderer error. Stop it while the
-        // feature persister remains subscribed, then drain producers before
-        // detaching feature renderers.
-        try {
-          await visualizer?.stop();
-          await persistence.drain();
-        } finally {
-          try {
-            await daemonOtel?.flush();
-          } finally {
-            if (visualizer) activeDispatchVisualizers.delete(visualizer);
-            detachFeatureEventRenderer();
-            featureEventFlushers.delete(featureEvents);
-            persistence.stop();
-          }
-        }
-      })();
-      return stopPromise;
-    };
-    return {
-      ...persistence,
-      rootEvents: events,
-      sessionId,
-      visualizer,
-      providerExecution: {
-        ...providerExecution,
-        managedSessionContext,
-        prepareManagedSessionObservation: createManagedSessionObservationPreparer((input) =>
-          probeManagedObservationDestination({
-            ...input,
-            runProcess: async (executable, args) => {
-              const result = await execFile(executable, [...args]);
-              return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
-            },
-          }),
-        ),
-      },
-      log: featureLog,
-      stop,
-    };
-  };
-  // Child feature events arrive on a proxy bus rather than beginFeatureRun's
-  // in-process bus. Attach the same visualizer there, but use the immutable
+  // Child feature events arrive on a proxy bus. Attach the visualizer there,
+  // using the immutable
   // WorkOrder pin rather than this supervisor's loaded engine version.
   const attachChildFeatureOtelVisualizer = (
     trace: { slug: string; engineVersionId: string; sourceRef?: string },
@@ -1912,75 +1804,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       await visualizer.stop();
     };
   };
-  // Resolve the active memory provider once at run start so all steps see the
-  // same single provider (adr-2026-06-29-per-project-memory-provider-selection / FR-10). Uses a per-run ctx so warnings are
-  // bounded and no module-level state is mutated (resolver is pure over config).
-  const memoryResolveCtx = { warnings: [] as string[] };
-  const memoryProvider = await resolveMemoryProvider(config ?? {}, registry, memoryResolveCtx);
-  if (memoryResolveCtx.warnings.length > 0) {
-    for (const w of memoryResolveCtx.warnings) log(`WARNING: ${w}`);
-  }
-
-  const lifecycleContext = (featureEvents: ConductorEventEmitter): DaemonFeatureLifecycleContext => ({
-    projectRoot,
-    config,
-    baseBranch,
-    isSelfHost,
-    effectiveDaemonConcurrency: daemonConcurrency.concurrency,
-    worktreeLifecycle,
-    rateLimitEpisode,
-    readOnlyReviewCapabilities,
-    liveBoundaryCoordinator,
-    ownerGh,
-    createProviderExecution,
-    events,
-    log,
-    registerConductor: (conductor) => {
-      activeConductors.add(conductor);
-      return () => activeConductors.delete(conductor);
-    },
-    registerAbortController: (controller) => allWaitSignals.add(controller),
-    isShutdownRequested: () => shutdownRequested,
-    flushFeatureEvents: featureEventFlushers.get(featureEvents) ?? (async () => {}),
-    engineVersionId: resolveEngineVersion(__dirname),
-  });
-  const runConductorInWorktree = async (
-    wt: FeatureWorktree,
-    item: BacklogItem,
-    providerExecution = createProviderExecution(),
-    featureEvents: ConductorEventEmitter = events,
-    featureLog = log,
-    sessionId = uuidv4(),
-  ) =>
-    runDaemonFeatureConductor(
-      lifecycleContext(featureEvents),
-      wt,
-      item,
-      providerExecution,
-      featureEvents,
-      featureLog,
-      sessionId,
-    );
-  const runSetupTriage = async (
-    error: any,
-    worktree: FeatureWorktree,
-    item: BacklogItem,
-    providerExecution = createProviderExecution(),
-    featureLog = log,
-    featureEvents?: ConductorEventEmitter,
-    workOrderBaseSha?: string,
-  ) =>
-    runDaemonSetupTriage(
-      lifecycleContext(featureEvents ?? events),
-      error,
-      worktree,
-      item,
-      providerExecution,
-      featureLog,
-      featureEvents,
-      workOrderBaseSha,
-    );
-
   // The same registry backs dispatcher claims and every maintenance liveness
   // check. A sweep may observe a terminal PR while its executor still owns the
   // worktree; that worktree must remain until the claim is released.
@@ -1989,25 +1812,22 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   const isWorkClaimActive = makeWorkClaimLivenessPredicate(workClaims);
   const canRemoveWorktree = makeWorktreeRemovalPredicate(isWorkClaimActive, log);
   const workOrderGit = createWorkOrderGitRunner(projectRoot);
-
-  const deps = makeFeatureRunnerDeps({
+  // Root-owned terminal effects and maintenance retain their shared adapters;
+  // feature execution itself has no supervisor conductor path.
+  const maintenanceDeps = makeFeatureRunnerDeps({
     projectRoot,
     worktreeBase,
     baseBranch,
-    effectiveConcurrency: daemonConcurrency.concurrency,
-    runConductorInWorktree,
-    providerExecution: createProviderExecution,
-    beginFeatureRun,
-    memoryProvider,
     events,
     log,
     verbose: config?.daemon_verbose ?? false,
     dispatchStartTimeoutSeconds: resolveDispatchStartTimeoutSeconds(config),
     teardownTimeoutSeconds: resolveTeardownTimeoutSeconds(config),
-    runSetupTriage,
     workOrderGit,
     worktreeLifecycle,
+    effectiveConcurrency: daemonConcurrency.concurrency,
   });
+
   const createWorkOrder = async (item: BacklogItem) => {
     const baseSha = item.baseSha ?? (await resolveDaemonBaseSha(projectRoot, baseBranch));
     if (!baseSha) {
@@ -2042,20 +1862,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       workOrderGit,
     );
   };
-  const inProcessExecutor = createInProcessFeatureExecutor({
-    withFeatureOwnership: withDaemonLogFeatureOwnership,
-    run: async (order) => {
-      const item = workOrderToBacklogItem(order);
-      return makeRunFeature({
-        ...deps,
-        deferTerminalEffects: true,
-        runSetupTriage: (error, worktree, item, providerExecution, featureLog, featureEvents) =>
-          runSetupTriage(error, worktree, item, providerExecution, featureLog, featureEvents, order.baseSha),
-        createWorktree: (slug) => deps.createWorktree(slug, order),
-        prepareWorktree: (wt, log, events) => deps.prepareWorktree!(wt, log, events, order),
-      })(item);
-    },
-  });
   const engineStoreRoot = resolveEngineStoreRoot({ conductorRoot: engineRoot.conductorRoot });
   let protocolMismatchPending = false;
   const executorBroker = createExecutorBroker({
@@ -2088,21 +1894,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     log,
     ...(opts.executorFork === undefined ? {} : { fork: opts.executorFork }),
   });
-  const childMode = (config?.executor_isolation ?? 'child') === 'child';
-  const executor = childMode ? childExecutor : inProcessExecutor;
-  if (childMode) {
-    stopChildExecutors = () => childExecutor.stopAll();
-    abortChildBroker = () => executorBroker.abortAll();
-  } else {
-    log('[daemon] executor isolation: in-process; per-dispatch engine pinning is disabled');
-  }
+  const executor = childExecutor;
+  stopChildExecutors = () => childExecutor.stopAll();
+  abortChildBroker = () => executorBroker.abortAll();
   // Reap a predecessor's durable child references before the scheduler can
   // claim work. This makes successor takeover deterministic rather than
   // allowing a new claim to overlap a still-running old executor.
   await sweepExecutorRecordsOnBoot(projectRoot);
-  const executeFeature = opts.runFeature ?? makeRunFeature(deps);
-  const runFeature = (item: BacklogItem): Promise<FeatureOutcome> => executeFeature(item);
-
   const continuous = opts.continuous ?? false;
   // Continuous with no ceiling at all runs unbounded — surface that loudly
   // rather than silently looping forever (Phase 7 "hard ceilings" intent).
@@ -2517,11 +2315,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
         void events.emit({ type: 'daemon_backlog_snapshot', ...snapshot });
       },
       getDiscoverySnapshot: async (parkedSlugs) => workSource.snapshot?.(parkedSlugs),
-      runFeature,
-      // Only child executors have a separately running conductor to yield.
-      // The rollback in-process executor deliberately receives no preemption
-      // signal, preserving its existing single-process scheduling semantics.
-      ...(childMode ? { requestYield: (slug: string) => childExecutor.requestYield(slug) } : {}),
+      // The child executor has a separately running conductor to yield.
+      requestYield: (slug: string) => childExecutor.requestYield(slug),
       onExecutorStarted: () => {
         activeExecutorCount += 1;
       },
@@ -2565,11 +2360,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
             );
           }
         }
-        if (effects.cleanupHaltPresentation && deps.projectRoot && deps.runGh) {
+        if (effects.cleanupHaltPresentation && maintenanceDeps.projectRoot && maintenanceDeps.runGh) {
           try {
-            const result = await (deps.cleanupHaltPresentation ?? cleanupHaltPresentation)(
-              deps.runGh,
-              deps.projectRoot,
+            const result = await (maintenanceDeps.cleanupHaltPresentation ?? cleanupHaltPresentation)(
+              maintenanceDeps.runGh,
+              maintenanceDeps.projectRoot,
               effects.cleanupHaltPresentation.prUrl,
               featureLog,
             );
@@ -2578,22 +2373,20 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
             featureLog(`[daemon-runner] clear-on-success error: ${err instanceof Error ? err.message : String(err)}`);
           }
         }
-        if (effects.enrollWatch && deps.projectRoot) {
+        if (effects.enrollWatch && maintenanceDeps.projectRoot) {
           try {
-            await (deps.enrollWatch ?? enrollWatch)(deps.projectRoot, {
+            await (maintenanceDeps.enrollWatch ?? enrollWatch)(maintenanceDeps.projectRoot, {
               prUrl: effects.enrollWatch.prUrl,
               slug: outcome.slug,
-              repoCwd: deps.projectRoot,
+              repoCwd: maintenanceDeps.projectRoot,
             });
           } catch (err) {
             featureLog(`[daemon-runner] enrollWatch error: ${err instanceof Error ? err.message : String(err)}`);
           }
         }
-        if (effects.markProcessed) await deps.markProcessed(outcome.slug, effects.markProcessed.prUrl);
+        if (effects.markProcessed) await maintenanceDeps.markProcessed(outcome.slug, effects.markProcessed.prUrl);
       },
-      // An explicit runFeature is the composition-test executor boundary. The
-      // normal production path continues through the WorkOrder executor.
-      ...(opts.runFeature ? {} : { featureExecution: { createWorkOrder, executor } }),
+      featureExecution: { createWorkOrder, executor },
       featureLog: featureLogFor,
       log: daemonCoreLog,
       staleEngineChecker,
@@ -2795,7 +2588,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
               projectRoot,
               log,
               tracker,
-              teardownWorktree: deps.teardownWorktree,
+              teardownWorktree: maintenanceDeps.teardownWorktree,
               canRemoveWorktree,
               repairs: {
                 queue: repairQueue,

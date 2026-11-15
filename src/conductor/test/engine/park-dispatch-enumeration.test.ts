@@ -3,11 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import {
-  runDaemon,
-  type BacklogItem,
-  type DaemonDeps,
-} from '../../src/engine/daemon.js';
+import { runDaemon, type BacklogItem } from '../../src/engine/daemon.js';
 import type { FeatureExecutor } from '../../src/engine/feature-executor.js';
 import type { WorkClaims } from '../../src/engine/work-claims.js';
 import type { WorkOrder } from '../../src/engine/work-order.js';
@@ -22,6 +18,7 @@ const item: BacklogItem = {
 };
 
 describe('Task 5 — park guard covers the claim path', () => {
+  // Covers: task:27
   it('enumerates the sole claim path and refuses a post-selection park before executor work starts', async () => {
     const source = await readFile(DAEMON_SRC, 'utf-8');
     const dispatch = source.match(
@@ -72,9 +69,8 @@ describe('Task 5 — park guard covers the claim path', () => {
         claims,
         discoverBacklog: async () => [item],
         isParked: async () => ++parkChecks > 1,
-        runFeature: vi.fn(),
         featureExecution: { createWorkOrder, executor },
-      } as DaemonDeps,
+      },
       { concurrency: 1, once: true },
     );
 

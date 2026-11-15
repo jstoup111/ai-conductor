@@ -379,7 +379,11 @@ describe('daemon feature provider-event persistence', () => {
   });
 
   it('wires the feature-local persistence scope through the real daemon composition root', async () => {
-    const daemonSource = await readFile(fileURLToPath(new URL('../../src/daemon-cli.ts', import.meta.url)), 'utf-8');
+    const [daemonSource, childSource, runtimeSource] = await Promise.all([
+      readFile(fileURLToPath(new URL('../../src/daemon-cli.ts', import.meta.url)), 'utf-8'),
+      readFile(fileURLToPath(new URL('../../src/engine/executor-child.ts', import.meta.url)), 'utf-8'),
+      readFile(fileURLToPath(new URL('../../src/engine/executor-child-runtime.ts', import.meta.url)), 'utf-8'),
+    ]);
     const lifecycleSource = await readFile(
       fileURLToPath(new URL('../../src/engine/daemon-feature-lifecycle.ts', import.meta.url)),
       'utf-8',
@@ -390,10 +394,16 @@ describe('daemon feature provider-event persistence', () => {
     );
 
     expect({
-      importsScopeFactory: daemonSource.includes('startFeatureEventPersistence'),
-      createsFeatureScope: daemonSource.includes('const beginFeatureRun'),
-      bindsProviderSinksToFeatureBus: daemonSource.includes('createProviderExecution(featureEvents, featureLog)'),
-      passesScopeIntoRunnerDeps: daemonSource.includes('beginFeatureRun,'),
+      childOwnsFeatureLedger:
+        childSource.includes("new EventPersister(join(pipeline, 'events.jsonl'), events)") &&
+        childSource.includes('persister.start()'),
+      childForwardsFeatureEvents:
+        /port\.send\(\{\s*kind: 'event',\s*scope: event\.type === 'feature_shipped' \|\| event\.type === 'provider_suppressed' \? 'root' : 'feature',\s*payload: event,?\s*\}\)/.test(
+          childSource,
+        ),
+      childRunnerBindsFeatureBus:
+        runtimeSource.includes('events: input.events') && runtimeSource.includes('beginFeatureRun: async () => ({'),
+      supervisorAttachesProxyRenderer: daemonSource.includes('attachFeatureEventRenderer: (slug, featureEvents)'),
       runConductorAcceptsFeatureBus:
         /export async function runDaemonFeatureConductor\([\s\S]*?featureEvents: ConductorEventEmitter/.test(
           lifecycleSource,
@@ -402,21 +412,16 @@ describe('daemon feature provider-event persistence', () => {
       auditUsesFeatureBus: /auditWriter\.subscribe\(featureEvents\)/.test(lifecycleSource),
       rebaseUsesFeatureBus: /resumeRebaseFirst\(\{[\s\S]*?events:\s*featureEvents/.test(lifecycleSource),
       depsForwardsScope: /beginFeatureRun:\s*cfg\.beginFeatureRun/.test(depsSource),
-      depsForwardsFeatureBus:
-        /runConductor:\s*\(\s*wt,\s*item,\s*providerExecution,\s*featureEvents,\s*log,\s*sessionId\s*\)\s*=>\s*cfg\.runConductorInWorktree\(\s*wt,\s*item,\s*providerExecution,\s*featureEvents,\s*log,\s*sessionId\s*\)/.test(
-          depsSource,
-        ),
     }).toEqual({
-      importsScopeFactory: true,
-      createsFeatureScope: true,
-      bindsProviderSinksToFeatureBus: true,
-      passesScopeIntoRunnerDeps: true,
+      childOwnsFeatureLedger: true,
+      childForwardsFeatureEvents: true,
+      childRunnerBindsFeatureBus: true,
+      supervisorAttachesProxyRenderer: true,
       runConductorAcceptsFeatureBus: true,
       conductorUsesFeatureBus: true,
       auditUsesFeatureBus: true,
       rebaseUsesFeatureBus: true,
       depsForwardsScope: true,
-      depsForwardsFeatureBus: true,
     });
   });
 

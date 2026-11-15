@@ -269,9 +269,8 @@ ai-conductor daemon park <slug>
 ### Stale engine
 
 When the daemon builds the harness itself, its background maintenance job fast-forwards the engine
-source and rebuilds, busy or idle. With the default
-[`executor_isolation: child`](../reference/configuration.md#executor_isolation), each new claim runs
-the build `dist` names at claim time, so only the supervisor and already-running features can be
+source and rebuilds, busy or idle. Because each new claim runs in a
+[child executor](../reference/configuration.md#daemon-feature-executors) on the build `dist` names at claim time, so only the supervisor and already-running features can be
 stale. A stale supervisor restarts at its next natural idle, logging
 `[daemon] stale supervisor at idle — captured: <id>, target: <id> — restarting before next task`.
 If it stays stale longer than
@@ -310,8 +309,11 @@ ai-conductor daemon restart
 
 If boot fails with `executor <slug> (pid <n>) survived successor takeover`, a predecessor's child is
 still running. Confirm `<n>` is that executor (`ps -o args= -p <n>` names
-`dist-versions/<id>/index.js executor-child`), stop it, and start the daemon again. To roll back
-per-dispatch pinning, set `executor_isolation: in-process` and restart.
+`dist-versions/<id>/index.js executor-child`), stop it, and start the daemon again.
+
+If config loading fails with `Unknown top-level key: "executor_isolation"`, the removed rollback key
+is still set. Delete that line from `.ai-conductor/config.yml` and start the daemon again; per-dispatch
+pinning has no rollback mode.
 
 **Confirm:** `ai-conductor daemon status` prints the expected `version:` id for the repo, no
 `SUPERVISOR ENGINE` line is marked `(older than current)`, and the log stops repeating the staleness
