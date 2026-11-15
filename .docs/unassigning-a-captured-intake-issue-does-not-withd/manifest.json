@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "slug": "unassigning-a-captured-intake-issue-does-not-withd",
+  "artifacts": [
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/unassigning-a-captured-intake-issue-does-not-withd.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/unassigning-a-captured-intake-issue-does-not-withd.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/unassigning-a-captured-intake-issue-does-not-withd.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/unassigning-a-captured-intake-issue-does-not-withd.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/unassigning-a-captured-intake-issue-does-not-withd.md"
+    }
+  ]
+}
