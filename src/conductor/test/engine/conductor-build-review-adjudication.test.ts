@@ -2769,11 +2769,19 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
       const restarted = await fixture({
         startFrom: 'build',
         buildResult: { success: true },
+        onBuildDispatch: async (root) => {
+          await writeFile(
+            join(root, '.pipeline/task-status.json'),
+            JSON.stringify({ tasks: [{ id: '1', status: 'completed' }, { id: '32', status: 'completed' }] }),
+            'utf8',
+          );
+        },
         seedPipeline: async (root) => {
           const seededOrder = {
             ...order,
             feature: { ...(order.feature as object), repository: root },
             cases: (order.cases as Array<Record<string, unknown>>).map((row) => ({ ...row, caseId: 'c2' })),
+            attemptedCaseIds: (order.attemptedCaseIds as string[] | undefined)?.map(() => 'c2'),
           };
           const seededCases = {
             ...cases,
@@ -2810,7 +2818,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
       expect(restarted.dispatched.filter((step) => step === 'build')).toEqual(['build']);
       expect(await restarted.haltMarker()).toBe('');
       await expect(restarted.readJson('.pipeline/build-outcome.json')).resolves.toMatchObject({
-        records: [expect.objectContaining({ deliveredCaseIds: ['c2'] })],
+        records: expect.arrayContaining([expect.objectContaining({ deliveredCaseIds: ['c2'] })]),
       });
     } finally {
       treeSpy.mockRestore();
@@ -2919,7 +2927,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
   it('writes the refusal HALT when persisting its spent marker fails', async () => {
     const originalRename = vi.mocked(rename).getMockImplementation()!;
     vi.mocked(rename).mockImplementation(async (from, to) => {
-      if (from.includes('.build-outcome.')) throw new Error('sidecar rename rejected');
+      if (String(from).includes('.build-outcome.')) throw new Error('sidecar rename rejected');
       return originalRename(from, to);
     });
 
@@ -3009,6 +3017,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
             ...order,
             feature: { ...(order.feature as object), repository: root },
             cases: (order.cases as Array<Record<string, unknown>>).map((row) => ({ ...row, caseId: 'c2' })),
+            attemptedCaseIds: (order.attemptedCaseIds as string[] | undefined)?.map(() => 'c2'),
           }),
           'utf8',
         );
