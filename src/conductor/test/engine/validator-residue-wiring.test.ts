@@ -49,6 +49,8 @@ async function fixture(): Promise<{ dir: string; statePath: string }> {
   await execa('git', ['config', 'status.showUntrackedFiles', 'all'], { cwd: dir });
   await writeFile(join(dir, '.gitignore'), '.pipeline/\n.daemon/\nconduct-state.json\n');
   await writeFile(join(dir, 'README.md'), '# fixture\n');
+  await mkdir(join(dir, 'src'), { recursive: true });
+  await writeFile(join(dir, 'src/app.ts'), 'export const app = 1;\n');
   await execa('git', ['add', '.'], { cwd: dir });
   await execa('git', ['commit', '-qm', 'initial'], { cwd: dir });
   await execa('git', ['branch', '-m', 'feat/validator-residue-wiring'], { cwd: dir });
@@ -78,6 +80,7 @@ function conductor(
   log?: (line: string) => void,
   fromStep: 'manual_test' | 'build' = 'manual_test',
   verifyArtifacts = false,
+  maxRetries = 1,
 ): Conductor {
   return new Conductor({
     projectRoot: dir,
@@ -89,7 +92,7 @@ function conductor(
     mode: 'auto',
     daemon: true,
     verifyArtifacts,
-    config: { defaults: { max_retries: 1 } },
+    config: { defaults: { max_retries: maxRetries } },
     log,
   });
 }
@@ -238,5 +241,81 @@ describe('serial validation residue wiring', () => {
     await conductor(dir, statePath, runner).run();
 
     await expect(access(join(dir, '.pipeline/validator-residue'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+});
+
+describe('grouped validation residue wiring', () => {
+  async function groupFixture(): Promise<{ dir: string; statePath: string }> {
+    const result = await fixture();
+    const state = await readFile(result.statePath, 'utf8').then((raw) => JSON.parse(raw) as ConductState);
+    state.manual_test = 'pending';
+    state.prd_audit = 'pending';
+    state.architecture_review_as_built = 'pending';
+    await writeState(result.statePath, state);
+    return result;
+  }
+
+  // Covers: task:4
+  it('quarantines grouped validator output before the join while preserving preexisting and tracked dirt', async () => {
+    const { dir, statePath } = await groupFixture();
+    await writeFile(join(dir, 'scratch.txt'), 'preexisting\n');
+    const events: ConductorEvent[] = [];
+    const emitter = new ConductorEventEmitter();
+    emitter.on('validator_residue_quarantined', (event) => events.push(event));
+    emitter.on('gate_verdict', (event) => events.push(event));
+    const runner: StepRunner = { run: vi.fn(async (step) => {
+      if (step === 'architecture_review_as_built') {
+        await mkdir(join(dir, 'docs/reports/as-built'), { recursive: true });
+        await writeFile(join(dir, 'docs/reports/as-built/report.html'), '<html>as built</html>\n');
+        await writeFile(join(dir, 'src/app.ts'), 'export const app = 2;\n');
+      }
+      if (step === 'manual_test') {
+        await mkdir(join(dir, '.pipeline'), { recursive: true });
+        await writeFile(join(dir, '.pipeline/manual-test-results.md'), '| Story | Result |\n| --- | --- |\n| 1 | PASS |\n');
+      }
+      return { success: true };
+    }) };
+
+    await conductor(dir, statePath, runner, emitter).run();
+
+    expect(events.filter((event) => event.type === 'validator_residue_quarantined')).toHaveLength(1);
+    const residue = events.find((event) => event.type === 'validator_residue_quarantined') as Extract<ConductorEvent, { type: 'validator_residue_quarantined' }>;
+    expect(residue).toMatchObject({ source: 'validation', paths: ['docs/reports/as-built/report.html'] });
+    await expect(readFile(join(dir, residue.directory, 'docs/reports/as-built/report.html'), 'utf8')).resolves.toBe('<html>as built</html>\n');
+    expect(events.findIndex((event) => event.type === 'validator_residue_quarantined')).toBeLessThan(
+      events.findIndex((event) => event.type === 'gate_verdict'),
+    );
+    expect(residue.paths).not.toContain('scratch.txt');
+    expect(residue.paths).not.toContain('src/app.ts');
+    await expect(execa('git', ['status', '--porcelain'], { cwd: dir })).resolves.toMatchObject({
+      stdout: ' M src/app.ts\n?? scratch.txt',
+    });
+  });
+
+  // Covers: task:4
+  it('quarantines output created by a retried grouped manual-test member', async () => {
+    const { dir, statePath } = await groupFixture();
+    let manualAttempts = 0;
+    const events: ConductorEvent[] = [];
+    const emitter = new ConductorEventEmitter();
+    emitter.on('validator_residue_quarantined', (event) => events.push(event));
+    const runner: StepRunner = { run: vi.fn(async (step) => {
+      if (step === 'manual_test') {
+        manualAttempts += 1;
+        if (manualAttempts === 1) throw new Error('fixture retry');
+        await mkdir(join(dir, 'docs/reports/retry'), { recursive: true });
+        await writeFile(join(dir, 'docs/reports/retry/report.html'), '<html>retry</html>\n');
+        await mkdir(join(dir, '.pipeline'), { recursive: true });
+        await writeFile(join(dir, '.pipeline/manual-test-results.md'), '| Story | Result |\n| --- | --- |\n| 1 | PASS |\n');
+      }
+      return { success: true };
+    }) };
+
+    await conductor(dir, statePath, runner, emitter, undefined, 'manual_test', false, 2).run();
+
+    expect(manualAttempts).toBe(2);
+    const residue = events.find((event) => event.type === 'validator_residue_quarantined') as Extract<ConductorEvent, { type: 'validator_residue_quarantined' }>;
+    expect(residue).toMatchObject({ source: 'validation', paths: ['docs/reports/retry/report.html'] });
+    await expect(readFile(join(dir, residue.directory, 'docs/reports/retry/report.html'), 'utf8')).resolves.toBe('<html>retry</html>\n');
   });
 });
