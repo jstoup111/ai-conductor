@@ -64,11 +64,19 @@ describe('Task 18: daemon OTel SIGHUP wiring', () => {
       spoolFilesAtKill = existsSync(traceDirectory) ? readdirSync(traceDirectory) : [];
       probe.calls.push(`kill:${pid}:${signal}`);
     });
-    const config = { otel: {
-      exporter: 'otlp', endpoint: 'http://127.0.0.1:1', spool: { enabled: true },
-    } } as const;
+    const config = {
+      otel: {
+        exporter: 'otlp',
+        endpoint: 'http://127.0.0.1:1',
+        spool: { enabled: true },
+      },
+    } as const;
     const daemonOtel = wireDaemonOtel(config, {
-      mainRoot: root, project: root, projectName: 'test', rootEvents: new ConductorEventEmitter(), env: otelFixtureEnv,
+      mainRoot: root,
+      project: root,
+      projectName: 'test',
+      rootEvents: new ConductorEventEmitter(),
+      env: otelFixtureEnv,
     });
     expect(daemonOtel).not.toBeNull();
     const stop = daemonOtel!.stop.bind(daemonOtel);
@@ -77,10 +85,21 @@ describe('Task 18: daemon OTel SIGHUP wiring', () => {
       probe.calls.push('otel-stop');
     };
     const events = new ConductorEventEmitter();
-    const visualizer = wireOtelVisualizer(config, {
-      pipelineDir: join(root, '.pipeline'), runId: 'run', feature: 'feature', project: root,
-      branch: 'feature', engineVersion: 'test', harnessVersion: 'test', env: otelFixtureEnv,
-    }, events, daemonOtel!.spoolRuntime);
+    const visualizer = wireOtelVisualizer(
+      config,
+      {
+        pipelineDir: join(root, '.pipeline'),
+        runId: 'run',
+        feature: 'feature',
+        project: root,
+        branch: 'feature',
+        engineVersion: 'test',
+        harnessVersion: 'test',
+        env: otelFixtureEnv,
+      },
+      events,
+      daemonOtel!.spoolRuntime,
+    );
     if (!visualizer) throw new Error('expected dispatch visualizer');
     await events.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
     await events.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
@@ -108,9 +127,15 @@ describe('Task 18: daemon OTel SIGHUP wiring', () => {
   it('awaits every registered conductor persistence hook before stopping OTel and re-raising SIGHUP', async () => {
     const probe = processProbe();
     const order: string[] = [];
-    const release = registerSighupPersistence(async () => { order.push('persist'); });
-    const failing = registerSighupPersistence(async () => { throw new Error('persist failed'); });
-    const stop = vi.fn(async () => { order.push('stop'); });
+    const release = registerSighupPersistence(async () => {
+      order.push('persist');
+    });
+    const failing = registerSighupPersistence(async () => {
+      throw new Error('persist failed');
+    });
+    const stop = vi.fn(async () => {
+      order.push('stop');
+    });
 
     installDaemonOtelSighupHandler({
       daemonOtel: { stop },
@@ -130,13 +155,28 @@ describe('Task 18: daemon OTel SIGHUP wiring', () => {
     const root = await mkdtemp(join(tmpdir(), 'daemon-sighup-dispatch-span-'));
     const config = { otel: { exporter: 'otlp' as const, endpoint: 'http://127.0.0.1:1', spool: { enabled: true } } };
     const daemon = wireDaemonOtel(config, {
-      mainRoot: root, project: root, projectName: 'test', rootEvents: new ConductorEventEmitter(), env: otelFixtureEnv,
+      mainRoot: root,
+      project: root,
+      projectName: 'test',
+      rootEvents: new ConductorEventEmitter(),
+      env: otelFixtureEnv,
     });
     const events = new ConductorEventEmitter();
-    const visualizer = wireOtelVisualizer(config, {
-      pipelineDir: join(root, '.pipeline'), runId: 'run', feature: 'feature', project: root,
-      branch: 'feature', engineVersion: 'test', harnessVersion: 'test', env: otelFixtureEnv,
-    }, events, daemon?.spoolRuntime);
+    const visualizer = wireOtelVisualizer(
+      config,
+      {
+        pipelineDir: join(root, '.pipeline'),
+        runId: 'run',
+        feature: 'feature',
+        project: root,
+        branch: 'feature',
+        engineVersion: 'test',
+        harnessVersion: 'test',
+        env: otelFixtureEnv,
+      },
+      events,
+      daemon?.spoolRuntime,
+    );
     if (!visualizer) throw new Error('expected dispatch visualizer');
     const activeDispatchVisualizers = new Set([{ stop: visualizer.stop.bind(visualizer) }]);
     await events.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
@@ -187,7 +227,9 @@ describe('Task 18: daemon OTel SIGHUP wiring', () => {
   it('keeps an ending dispatch visualizer active until its pending stop lets SIGHUP re-raise', async () => {
     const probe = processProbe();
     let resolveStop!: () => void;
-    const stopped = new Promise<void>((resolve) => { resolveStop = resolve; });
+    const stopped = new Promise<void>((resolve) => {
+      resolveStop = resolve;
+    });
     const stop = vi.fn(() => stopped);
     const visualizer = { stop };
     const activeDispatchVisualizers = new Set([visualizer]);
@@ -217,9 +259,7 @@ describe('Task 18: daemon OTel SIGHUP wiring', () => {
   it('does not stop or await an already-settled dispatch visualizer when SIGHUP arrives later', async () => {
     const probe = processProbe();
     const neverSettles = new Promise<void>(() => {});
-    const stop = vi.fn()
-      .mockResolvedValueOnce(undefined)
-      .mockReturnValueOnce(neverSettles);
+    const stop = vi.fn().mockResolvedValueOnce(undefined).mockReturnValueOnce(neverSettles);
     const visualizer = { stop };
     const activeDispatchVisualizers = new Set([visualizer]);
 

@@ -66,9 +66,10 @@ vi.mock('../../src/engine/otel/wire.js', async (importOriginal) => {
       return {
         name: `recording-otel-${slug}`,
         start: () => {},
-        stop: () => (stopped ??= Promise.resolve().then(() => {
-          seams.visualizerStops.set(slug, (seams.visualizerStops.get(slug) ?? 0) + 1);
-        })),
+        stop: () =>
+          (stopped ??= Promise.resolve().then(() => {
+            seams.visualizerStops.set(slug, (seams.visualizerStops.get(slug) ?? 0) + 1);
+          })),
       };
     }),
   };
