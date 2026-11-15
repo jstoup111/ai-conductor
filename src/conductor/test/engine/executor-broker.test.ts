@@ -259,6 +259,47 @@ describe('executor broker', () => {
     await expect(wait).rejects.toThrow(/aborted/);
   });
 
+  // Covers: task:1
+  it('keeps an aborted child attachment forwarding events until its own close', async () => {
+    const stopped: string[] = [];
+    const channel = pair();
+    const broker = createExecutorBroker({
+      rateLimitEpisode: createRateLimitEpisode({ now: () => 1_000 }),
+      providerAvailability: createProviderAvailability({ now: () => 1_000 }),
+      worktreeLifecycle: new WorktreeLifecycleQueue(),
+      rootEvents: new ConductorEventEmitter(),
+      featureLogFor: () => () => {},
+      attachFeatureOtelVisualizer: (trace) => () => {
+        stopped.push(trace.slug);
+      },
+    });
+    const proxy = createRateLimitEpisodeProxy(createExecutorRequestClient(channel.child), () => 1_000);
+    const attachment = broker.attach('b', channel.supervisor, 'v1');
+    const received: unknown[] = [];
+    attachment.events.on('bot_co_author_skipped', (event) => received.push(event));
+    channel.flush();
+    proxy.enter(2_000);
+    channel.flush();
+
+    const clear = proxy.clear();
+    channel.flush();
+    broker.abortAll();
+    channel.flush();
+    await expect(clear).rejects.toThrow('executor broker aborted');
+    expect(stopped).toEqual([]);
+
+    channel.child.send({
+      kind: 'event',
+      scope: 'feature',
+      payload: { type: 'bot_co_author_skipped', reason: 'token-unavailable' },
+    });
+    channel.flush();
+    expect(received).toEqual([{ type: 'bot_co_author_skipped', reason: 'token-unavailable' }]);
+
+    await attachment.close();
+    expect(stopped).toEqual(['b']);
+  });
+
   it('rejects a child rate-limit clear when its supervisor channel disconnects', async () => {
     const fixture = brokerFixture();
     const channel = pair();
