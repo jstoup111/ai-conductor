@@ -7,6 +7,7 @@ import { execa } from 'execa';
 import { switchToChild, noOpChildLifecycleEvents } from '../../src/engine/child-lifecycle.js';
 import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
 import { listUntrackedPaths, quarantineValidatorResidue } from '../../src/engine/validator-residue.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 
 // Covers: task:1
 describe('validator residue quarantine', () => {
@@ -14,7 +15,7 @@ describe('validator residue quarantine', () => {
   let git: ReturnType<typeof makeGitRunner>;
 
   const runGit = async (args: string[]) => execa('git', args, { cwd: repository });
-  const child = { child: 1 as const, position: 1 as const, branch: 'validator-child' };
+  const child = { child: parseChildId(1)!, position: parseChildId(1)!, branch: 'validator-child' };
 
   beforeEach(async () => {
     repository = await mkdtemp(join(tmpdir(), 'validator-residue-'));
