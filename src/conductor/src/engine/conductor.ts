@@ -12875,7 +12875,7 @@ export class Conductor {
               step.name === 'build' &&
               routedPrerequisiteClaim !== undefined &&
               routedClaimSlug !== undefined &&
-              !await haltMarkerExists(this.projectRoot)
+              !(await haltMarkerExists(this.projectRoot))
             ) {
               const settled = await settleRoutedBuildClaim({
                 structuredResult: result.finalStructuredResult,
