@@ -980,6 +980,87 @@ async function fixture(options: FixtureOptions = {}) {
   };
 }
 
+interface RestartSeedOptions {
+  /** Case identities in the current work order, in its durable order. */
+  readonly workOrderCaseIds: readonly string[];
+  /** Omit for the legacy record that predates review-case delivery stamps. */
+  readonly deliveredCaseIds?: readonly string[];
+  readonly refusalSpent?: boolean;
+  readonly tasksCompleted?: boolean;
+  readonly treeHash: string;
+  /** BUILD-failure stamping starts without a prior no-movement outcome. */
+  readonly priorNoMovementRecord?: boolean;
+}
+
+/**
+ * Recreate the durable state a fresh BUILD process receives after the first
+ * adjudication lap. Case ids and repository paths are deliberately rebound:
+ * the new fixture has a different project root but represents the same
+ * accepted work order.
+ */
+async function seedRestartFromFirstRun(
+  first: { readonly readJson: (relative: string) => Promise<unknown> },
+  options: RestartSeedOptions,
+): Promise<(root: string) => Promise<void>> {
+  const order = (await first.readJson('.pipeline/build-review-work-order.json')) as Record<string, unknown>;
+  const cases = (await first.readJson('.pipeline/remediation-cases.json')) as Record<string, unknown>;
+  const ledger = await first.readJson('.pipeline/kickback-ledger.json');
+  const caseIdFor = (index: number) => options.workOrderCaseIds[index] ?? options.workOrderCaseIds.at(-1)!;
+
+  return async (root) => {
+    const seededOrder = {
+      ...order,
+      feature: { ...(order.feature as object), repository: root },
+      cases: (order.cases as Array<Record<string, unknown>>).map((row, index) => ({
+        ...row,
+        caseId: caseIdFor(index),
+      })),
+      attemptedCaseIds: (order.attemptedCaseIds as string[] | undefined)?.map((_, index) => caseIdFor(index)),
+    };
+    const seededCases = {
+      ...cases,
+      feature: { ...(cases.feature as object), repository: root },
+      cases: (cases.cases as Array<Record<string, unknown>>).map((row, index) => ({ ...row, id: caseIdFor(index) })),
+    };
+    const priorRecord = {
+      outcome: 'no-movement',
+      terminalOutcome: 'done',
+      gate: 'build_review',
+      verdict: false,
+      rung: { model: 'test-model', effort: 'medium' },
+      treeBefore: options.treeHash,
+      treeAfter: options.treeHash,
+      headBefore: 'head-before',
+      headAfter: 'head-after',
+      ...(options.deliveredCaseIds === undefined ? {} : { deliveredCaseIds: options.deliveredCaseIds }),
+      ...(options.refusalSpent === undefined ? {} : { refusalSpent: options.refusalSpent }),
+    };
+
+    await writeFile(join(root, '.pipeline/build-review-work-order.json'), JSON.stringify(seededOrder), 'utf8');
+    await writeFile(join(root, '.pipeline/remediation-cases.json'), JSON.stringify(seededCases), 'utf8');
+    await writeFile(join(root, '.pipeline/kickback-ledger.json'), JSON.stringify(ledger), 'utf8');
+    if (options.priorNoMovementRecord !== false) {
+      await writeFile(
+        join(root, '.pipeline/build-outcome.json'),
+        JSON.stringify({ version: 1, records: [priorRecord] }),
+        'utf8',
+      );
+    }
+    if (options.tasksCompleted) {
+      await writeFile(
+        join(root, '.pipeline/task-status.json'),
+        JSON.stringify({
+          tasks: [
+            { id: '1', status: 'completed' },
+            { id: '32', status: 'completed' },
+          ],
+        }),
+        'utf8',
+      );
+    }
+  };
+}
+
 /**
  * Unlike the shared adjudication fixture, this creates the child overlays that
  * a routed restack reads from Git.  Keep the two completion variants on this
@@ -2759,9 +2840,11 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
   // Covers: task:2, task:4
   it('dispatches BUILD for a build_review case the prior no-op build was not delivered', async () => {
     const first = await fixture();
-    const order = (await first.readJson('.pipeline/build-review-work-order.json')) as Record<string, unknown>;
-    const cases = (await first.readJson('.pipeline/remediation-cases.json')) as Record<string, unknown>;
-    const ledger = await first.readJson('.pipeline/kickback-ledger.json');
+    const seedPipeline = await seedRestartFromFirstRun(first, {
+      workOrderCaseIds: ['c2'],
+      deliveredCaseIds: ['c1'],
+      treeHash: 'tree-review-cases',
+    });
     const treeHash = 'tree-review-cases';
     const treeSpy = vi.spyOn(projectPrelude, 'currentTreeHash').mockResolvedValue(treeHash);
 
@@ -2781,43 +2864,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
             'utf8',
           );
         },
-        seedPipeline: async (root) => {
-          const seededOrder = {
-            ...order,
-            feature: { ...(order.feature as object), repository: root },
-            cases: (order.cases as Array<Record<string, unknown>>).map((row) => ({ ...row, caseId: 'c2' })),
-            attemptedCaseIds: (order.attemptedCaseIds as string[] | undefined)?.map(() => 'c2'),
-          };
-          const seededCases = {
-            ...cases,
-            feature: { ...(cases.feature as object), repository: root },
-            cases: (cases.cases as Array<Record<string, unknown>>).map((row) => ({ ...row, id: 'c2' })),
-          };
-          await writeFile(join(root, '.pipeline/build-review-work-order.json'), JSON.stringify(seededOrder), 'utf8');
-          await writeFile(join(root, '.pipeline/remediation-cases.json'), JSON.stringify(seededCases), 'utf8');
-          await writeFile(join(root, '.pipeline/kickback-ledger.json'), JSON.stringify(ledger), 'utf8');
-          await writeFile(
-            join(root, '.pipeline/build-outcome.json'),
-            JSON.stringify({
-              version: 1,
-              records: [
-                {
-                  outcome: 'no-movement',
-                  terminalOutcome: 'done',
-                  gate: 'build_review',
-                  verdict: false,
-                  rung: { model: 'test-model', effort: 'medium' },
-                  treeBefore: treeHash,
-                  treeAfter: treeHash,
-                  headBefore: 'head-before',
-                  headAfter: 'head-after',
-                  deliveredCaseIds: ['c1'],
-                },
-              ],
-            }),
-            'utf8',
-          );
-        },
+        seedPipeline,
       });
 
       expect(restarted.dispatched.filter((step) => step === 'build')).toEqual(['build']);
@@ -2833,9 +2880,12 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
   // Covers: task:2, task:4
   it('spends a refusal so clearing its HALT retries BUILD once before a fresh refusal', async () => {
     const first = await fixture();
-    const order = (await first.readJson('.pipeline/build-review-work-order.json')) as Record<string, unknown>;
-    const cases = (await first.readJson('.pipeline/remediation-cases.json')) as Record<string, unknown>;
-    const ledger = await first.readJson('.pipeline/kickback-ledger.json');
+    const seedPipeline = await seedRestartFromFirstRun(first, {
+      workOrderCaseIds: ['c2'],
+      deliveredCaseIds: ['c2'],
+      tasksCompleted: true,
+      treeHash: 'tree-same-review-case',
+    });
     const treeHash = 'tree-same-review-case';
     const treeSpy = vi.spyOn(projectPrelude, 'currentTreeHash').mockResolvedValue(treeHash);
 
@@ -2843,59 +2893,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
       const restarted = await fixture({
         startFrom: 'build',
         buildResult: { success: true },
-        seedPipeline: async (root) => {
-          await writeFile(
-            join(root, '.pipeline/build-review-work-order.json'),
-            JSON.stringify({
-              ...order,
-              feature: { ...(order.feature as object), repository: root },
-              cases: (order.cases as Array<Record<string, unknown>>).map((row) => ({ ...row, caseId: 'c2' })),
-              attemptedCaseIds: (order.attemptedCaseIds as string[] | undefined)?.map(() => 'c2'),
-            }),
-            'utf8',
-          );
-          await writeFile(
-            join(root, '.pipeline/remediation-cases.json'),
-            JSON.stringify({
-              ...cases,
-              feature: { ...(cases.feature as object), repository: root },
-              cases: (cases.cases as Array<Record<string, unknown>>).map((row) => ({ ...row, id: 'c2' })),
-            }),
-            'utf8',
-          );
-          await writeFile(join(root, '.pipeline/kickback-ledger.json'), JSON.stringify(ledger), 'utf8');
-          await writeFile(
-            join(root, '.pipeline/task-status.json'),
-            JSON.stringify({
-              tasks: [
-                { id: '1', status: 'completed' },
-                { id: '32', status: 'completed' },
-              ],
-            }),
-            'utf8',
-          );
-          await writeFile(
-            join(root, '.pipeline/build-outcome.json'),
-            JSON.stringify({
-              version: 1,
-              records: [
-                {
-                  outcome: 'no-movement',
-                  terminalOutcome: 'done',
-                  gate: 'build_review',
-                  verdict: false,
-                  rung: { model: 'test-model', effort: 'medium' },
-                  treeBefore: treeHash,
-                  treeAfter: treeHash,
-                  headBefore: 'head-before',
-                  headAfter: 'head-after',
-                  deliveredCaseIds: ['c2'],
-                },
-              ],
-            }),
-            'utf8',
-          );
-        },
+        seedPipeline,
       });
 
       expect(restarted.dispatched).not.toContain('build');
@@ -2938,58 +2936,19 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
 
     try {
       const first = await fixture();
-      const order = (await first.readJson('.pipeline/build-review-work-order.json')) as Record<string, unknown>;
-      const cases = (await first.readJson('.pipeline/remediation-cases.json')) as Record<string, unknown>;
-      const ledger = await first.readJson('.pipeline/kickback-ledger.json');
+      const seedPipeline = await seedRestartFromFirstRun(first, {
+        workOrderCaseIds: ['c2'],
+        deliveredCaseIds: ['c2'],
+        tasksCompleted: true,
+        treeHash: 'tree-refusal-sidecar-write-failure',
+      });
       const treeHash = 'tree-refusal-sidecar-write-failure';
       const treeSpy = vi.spyOn(projectPrelude, 'currentTreeHash').mockResolvedValue(treeHash);
 
       try {
         const restarted = await fixture({
           startFrom: 'build',
-          seedPipeline: async (root) => {
-            await writeFile(
-              join(root, '.pipeline/build-review-work-order.json'),
-              JSON.stringify({
-                ...order,
-                feature: { ...(order.feature as object), repository: root },
-                cases: (order.cases as Array<Record<string, unknown>>).map((row) => ({ ...row, caseId: 'c2' })),
-                attemptedCaseIds: (order.attemptedCaseIds as string[] | undefined)?.map(() => 'c2'),
-              }),
-              'utf8',
-            );
-            await writeFile(
-              join(root, '.pipeline/remediation-cases.json'),
-              JSON.stringify({
-                ...cases,
-                feature: { ...(cases.feature as object), repository: root },
-                cases: (cases.cases as Array<Record<string, unknown>>).map((row) => ({ ...row, id: 'c2' })),
-              }),
-              'utf8',
-            );
-            await writeFile(join(root, '.pipeline/kickback-ledger.json'), JSON.stringify(ledger), 'utf8');
-            await writeFile(
-              join(root, '.pipeline/build-outcome.json'),
-              JSON.stringify({
-                version: 1,
-                records: [
-                  {
-                    outcome: 'no-movement',
-                    terminalOutcome: 'done',
-                    gate: 'build_review',
-                    verdict: false,
-                    rung: { model: 'test-model', effort: 'medium' },
-                    treeBefore: treeHash,
-                    treeAfter: treeHash,
-                    headBefore: 'head-before',
-                    headAfter: 'head-after',
-                    deliveredCaseIds: ['c2'],
-                  },
-                ],
-              }),
-              'utf8',
-            );
-          },
+          seedPipeline,
         });
 
         expect(restarted.dispatched).not.toContain('build');
@@ -3008,35 +2967,16 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
   // Covers: task:2
   it('records delivered review cases when BUILD fails', async () => {
     const first = await fixture();
-    const order = (await first.readJson('.pipeline/build-review-work-order.json')) as Record<string, unknown>;
-    const cases = (await first.readJson('.pipeline/remediation-cases.json')) as Record<string, unknown>;
-    const ledger = await first.readJson('.pipeline/kickback-ledger.json');
+    const seedPipeline = await seedRestartFromFirstRun(first, {
+      workOrderCaseIds: ['c2'],
+      treeHash: 'tree-failed-build-delivery',
+      priorNoMovementRecord: false,
+    });
 
     const restarted = await fixture({
       startFrom: 'build',
       buildResult: { success: false, output: 'failed build' },
-      seedPipeline: async (root) => {
-        await writeFile(
-          join(root, '.pipeline/build-review-work-order.json'),
-          JSON.stringify({
-            ...order,
-            feature: { ...(order.feature as object), repository: root },
-            cases: (order.cases as Array<Record<string, unknown>>).map((row) => ({ ...row, caseId: 'c2' })),
-            attemptedCaseIds: (order.attemptedCaseIds as string[] | undefined)?.map(() => 'c2'),
-          }),
-          'utf8',
-        );
-        await writeFile(
-          join(root, '.pipeline/remediation-cases.json'),
-          JSON.stringify({
-            ...cases,
-            feature: { ...(cases.feature as object), repository: root },
-            cases: (cases.cases as Array<Record<string, unknown>>).map((row) => ({ ...row, id: 'c2' })),
-          }),
-          'utf8',
-        );
-        await writeFile(join(root, '.pipeline/kickback-ledger.json'), JSON.stringify(ledger), 'utf8');
-      },
+      seedPipeline,
     });
 
     await expect(restarted.readJson('.pipeline/build-outcome.json')).resolves.toMatchObject({
@@ -3047,58 +2987,18 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
   // Covers: task:3
   it('refuses a subset of cases already delivered to the prior no-op BUILD', async () => {
     const first = await fixture();
-    const order = (await first.readJson('.pipeline/build-review-work-order.json')) as Record<string, unknown>;
-    const cases = (await first.readJson('.pipeline/remediation-cases.json')) as Record<string, unknown>;
-    const ledger = await first.readJson('.pipeline/kickback-ledger.json');
+    const seedPipeline = await seedRestartFromFirstRun(first, {
+      workOrderCaseIds: ['c1'],
+      deliveredCaseIds: ['c1', 'c2'],
+      treeHash: 'tree-review-subset',
+    });
     const treeHash = 'tree-review-subset';
     const treeSpy = vi.spyOn(projectPrelude, 'currentTreeHash').mockResolvedValue(treeHash);
 
     try {
       const restarted = await fixture({
         startFrom: 'build',
-        seedPipeline: async (root) => {
-          await writeFile(
-            join(root, '.pipeline/build-review-work-order.json'),
-            JSON.stringify({
-              ...order,
-              feature: { ...(order.feature as object), repository: root },
-              cases: (order.cases as Array<Record<string, unknown>>).map((row) => ({ ...row, caseId: 'c1' })),
-              attemptedCaseIds: (order.attemptedCaseIds as string[] | undefined)?.map(() => 'c1'),
-            }),
-            'utf8',
-          );
-          await writeFile(
-            join(root, '.pipeline/remediation-cases.json'),
-            JSON.stringify({
-              ...cases,
-              feature: { ...(cases.feature as object), repository: root },
-              cases: (cases.cases as Array<Record<string, unknown>>).map((row) => ({ ...row, id: 'c1' })),
-            }),
-            'utf8',
-          );
-          await writeFile(join(root, '.pipeline/kickback-ledger.json'), JSON.stringify(ledger), 'utf8');
-          await writeFile(
-            join(root, '.pipeline/build-outcome.json'),
-            JSON.stringify({
-              version: 1,
-              records: [
-                {
-                  outcome: 'no-movement',
-                  terminalOutcome: 'done',
-                  gate: 'build_review',
-                  verdict: false,
-                  rung: { model: 'test-model', effort: 'medium' },
-                  treeBefore: treeHash,
-                  treeAfter: treeHash,
-                  headBefore: 'head-before',
-                  headAfter: 'head-after',
-                  deliveredCaseIds: ['c1', 'c2'],
-                },
-              ],
-            }),
-            'utf8',
-          );
-        },
+        seedPipeline,
       });
       expect(restarted.dispatched).not.toContain('build');
       await expect(readFile(join(restarted.projectRoot, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
@@ -3110,9 +3010,10 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
   // Covers: task:3
   it('dispatches BUILD for a legacy no-op record when review work is now present', async () => {
     const first = await fixture();
-    const order = (await first.readJson('.pipeline/build-review-work-order.json')) as Record<string, unknown>;
-    const cases = (await first.readJson('.pipeline/remediation-cases.json')) as Record<string, unknown>;
-    const ledger = await first.readJson('.pipeline/kickback-ledger.json');
+    const seedPipeline = await seedRestartFromFirstRun(first, {
+      workOrderCaseIds: ['c1'],
+      treeHash: 'tree-legacy-review-case',
+    });
     const treeHash = 'tree-legacy-review-case';
     const treeSpy = vi.spyOn(projectPrelude, 'currentTreeHash').mockResolvedValue(treeHash);
     let haltAtBuild: string | undefined;
@@ -3122,48 +3023,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
         onBuildDispatch: async (root) => {
           haltAtBuild = await readFile(join(root, '.pipeline/HALT'), 'utf8').catch(() => '');
         },
-        seedPipeline: async (root) => {
-          await writeFile(
-            join(root, '.pipeline/build-review-work-order.json'),
-            JSON.stringify({
-              ...order,
-              feature: { ...(order.feature as object), repository: root },
-              cases: (order.cases as Array<Record<string, unknown>>).map((row) => ({ ...row, caseId: 'c1' })),
-              attemptedCaseIds: (order.attemptedCaseIds as string[] | undefined)?.map(() => 'c1'),
-            }),
-            'utf8',
-          );
-          await writeFile(
-            join(root, '.pipeline/remediation-cases.json'),
-            JSON.stringify({
-              ...cases,
-              feature: { ...(cases.feature as object), repository: root },
-              cases: (cases.cases as Array<Record<string, unknown>>).map((row) => ({ ...row, id: 'c1' })),
-            }),
-            'utf8',
-          );
-          await writeFile(join(root, '.pipeline/kickback-ledger.json'), JSON.stringify(ledger), 'utf8');
-          await writeFile(
-            join(root, '.pipeline/build-outcome.json'),
-            JSON.stringify({
-              version: 1,
-              records: [
-                {
-                  outcome: 'no-movement',
-                  terminalOutcome: 'done',
-                  gate: 'build_review',
-                  verdict: false,
-                  rung: { model: 'test-model', effort: 'medium' },
-                  treeBefore: treeHash,
-                  treeAfter: treeHash,
-                  headBefore: 'head-before',
-                  headAfter: 'head-after',
-                },
-              ],
-            }),
-            'utf8',
-          );
-        },
+        seedPipeline,
       });
       expect(restarted.dispatched.filter((step) => step === 'build')).toEqual(['build']);
       expect(haltAtBuild).toBe('');
