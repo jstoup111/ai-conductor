@@ -422,10 +422,39 @@ async function manifest(
   };
 }
 
-export async function fingerprintLiveBoundary(args: {
-  liveCheckout: string; unrelatedProviderState: string;
-  provider?: BuiltInProviderId; selectedAuthPaths?: readonly string[];
-}): Promise<LiveBoundarySnapshot> {
+export async function fingerprintLiveCheckoutSurface(liveCheckoutRoot: string): Promise<{
+  surface: Surface;
+  measurement: { label: string; elapsedMs: number; fileCount: number };
+}> {
+  const liveCheckout = await manifest(
+    liveCheckoutRoot,
+    LIVE_CHECKOUT_VOLATILE,
+    LIVE_CHECKOUT_VOLATILE_DIRECTORY_BASENAMES,
+  );
+  return {
+    surface: {
+      root: liveCheckoutRoot,
+      label: 'live checkout',
+      exclude: LIVE_CHECKOUT_VOLATILE,
+      excludeDirectoryBasenames: LIVE_CHECKOUT_VOLATILE_DIRECTORY_BASENAMES,
+      manifest: liveCheckout.entries,
+    },
+    measurement: {
+      label: 'live checkout',
+      elapsedMs: liveCheckout.elapsedMs,
+      fileCount: liveCheckout.fileCount,
+    },
+  };
+}
+
+export async function fingerprintProviderStateSurface(args: {
+  unrelatedProviderState: string;
+  provider?: BuiltInProviderId;
+  selectedAuthPaths?: readonly string[];
+}): Promise<{
+  surface: Surface;
+  measurement: { label: string; elapsedMs: number; fileCount: number };
+}> {
   const provider = args.provider
     ? requireProviderCapability(args.provider, 'selfHost')
     : undefined;
@@ -436,26 +465,14 @@ export async function fingerprintLiveBoundary(args: {
   ];
   const excludeDirectoryBasenames = providerStateVolatileDirectoryBasenames(provider);
   const semanticEmptyJson = providerStateSemanticEmptyJson(provider);
-  const liveCheckout = await manifest(
-    args.liveCheckout,
-    LIVE_CHECKOUT_VOLATILE,
-    LIVE_CHECKOUT_VOLATILE_DIRECTORY_BASENAMES,
-  );
   const providerState = await manifest(
     args.unrelatedProviderState,
     excluded,
     excludeDirectoryBasenames,
     semanticEmptyJson,
   );
-  return { surfaces: [
-    {
-      root: args.liveCheckout,
-      label: 'live checkout',
-      exclude: LIVE_CHECKOUT_VOLATILE,
-      excludeDirectoryBasenames: LIVE_CHECKOUT_VOLATILE_DIRECTORY_BASENAMES,
-      manifest: liveCheckout.entries,
-    },
-    {
+  return {
+    surface: {
       root: args.unrelatedProviderState,
       label: 'provider state',
       exclude: excluded,
@@ -463,10 +480,30 @@ export async function fingerprintLiveBoundary(args: {
       semanticEmptyJson,
       manifest: providerState.entries,
     },
-  ], measurements: [
-    { label: 'live checkout', elapsedMs: liveCheckout.elapsedMs, fileCount: liveCheckout.fileCount },
-    { label: 'provider state', elapsedMs: providerState.elapsedMs, fileCount: providerState.fileCount },
-  ] };
+    measurement: {
+      label: 'provider state',
+      elapsedMs: providerState.elapsedMs,
+      fileCount: providerState.fileCount,
+    },
+  };
+}
+
+export async function fingerprintLiveBoundary(args: {
+  liveCheckout: string; unrelatedProviderState: string;
+  provider?: BuiltInProviderId; selectedAuthPaths?: readonly string[];
+}): Promise<LiveBoundarySnapshot> {
+  const liveCheckout = await fingerprintLiveCheckoutSurface(args.liveCheckout);
+  const providerState = await fingerprintProviderStateSurface(args);
+  return {
+    surfaces: [
+      liveCheckout.surface,
+      providerState.surface,
+    ],
+    measurements: [
+      liveCheckout.measurement,
+      providerState.measurement,
+    ],
+  };
 }
 
 /**
