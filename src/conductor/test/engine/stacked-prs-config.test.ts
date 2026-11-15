@@ -13,19 +13,31 @@ describe('stacked_prs config block', () => {
   it('defaults enabled to false and max_slices to 1 when the block is present but empty', () => {
     const result = validateConfig({ stacked_prs: {} });
 
-    expect(result.ok && result.config.stacked_prs).toEqual({ enabled: false, max_slices: 1, route_whole_feature_fixes: true });
+    expect(result.ok && result.config.stacked_prs).toEqual({
+      enabled: false,
+      max_slices: 1,
+      route_whole_feature_fixes: true,
+    });
   });
 
   it('preserves enabled: true and defaults max_slices to 1', () => {
     const result = validateConfig({ stacked_prs: { enabled: true } });
 
-    expect(result.ok && result.config.stacked_prs).toEqual({ enabled: true, max_slices: 1, route_whole_feature_fixes: true });
+    expect(result.ok && result.config.stacked_prs).toEqual({
+      enabled: true,
+      max_slices: 1,
+      route_whole_feature_fixes: true,
+    });
   });
 
   it.each([1, 5, 6, 7, 9])('accepts max_slices %i', (maxSlices) => {
     const result = validateConfig({ stacked_prs: { max_slices: maxSlices } });
 
-    expect(result.ok && result.config.stacked_prs).toEqual({ enabled: false, max_slices: maxSlices, route_whole_feature_fixes: true });
+    expect(result.ok && result.config.stacked_prs).toEqual({
+      enabled: false,
+      max_slices: maxSlices,
+      route_whole_feature_fixes: true,
+    });
   });
 
   it.each([6, 7])('warns when max_slices is %i', (maxSlices) => {
@@ -82,7 +94,11 @@ describe('stacked_prs config block', () => {
 
   it('declares enabled, max_slices, routing, and restack cascade keys as consumer keys', () => {
     expect(CONFIG_CONSUMER_KEY_SETS.stacked_prs).toEqual([
-      'enabled', 'max_slices', 'route_whole_feature_fixes', 'fold_routed_fixes', 'max_restack_cascades',
+      'enabled',
+      'max_slices',
+      'route_whole_feature_fixes',
+      'fold_routed_fixes',
+      'max_restack_cascades',
     ]);
   });
 });

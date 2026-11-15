@@ -65,15 +65,29 @@ async function fixture(options: { readonly stampedOwner?: boolean } = {}) {
     'deferred\n',
   );
   const leaf = await commit('leaf build', 'leaf.txt', 'leaf\n');
-  const route = await createRouteRecord(repo, 'demo', {
-    roundId: parseRoundId('r1')!, kind: 'audit', sealedAuthored: 1, execution: 'leaf',
-    items: [{ findingId: 'finding-c1', kind: 'audit', owner: child(1), host: child(1), reason: 'repair', fallback: [] }],
-    allocation: { [child(1)]: { remTaskIds: [], blockBodies: [] } },
-    placements: { [child(1)]: { state: 'deferred', leafEntryTip: c2, exitTip: foldedSource } },
-  }, { git: makeGitRunner(repo) });
+  const route = await createRouteRecord(
+    repo,
+    'demo',
+    {
+      roundId: parseRoundId('r1')!,
+      kind: 'audit',
+      sealedAuthored: 1,
+      execution: 'leaf',
+      items: [
+        { findingId: 'finding-c1', kind: 'audit', owner: child(1), host: child(1), reason: 'repair', fallback: [] },
+      ],
+      allocation: { [child(1)]: { remTaskIds: [], blockBodies: [] } },
+      placements: { [child(1)]: { state: 'deferred', leafEntryTip: c2, exitTip: foldedSource } },
+    },
+    { git: makeGitRunner(repo) },
+  );
   if (route.kind !== 'created') throw new Error(`could not create deferred fold route: ${route.kind}`);
   await writeSliceTopologyFixture(repo, {
-    version: 1, slug: 'demo', runId: 'fold-run', status: 'done', entries: [],
+    version: 1,
+    slug: 'demo',
+    runId: 'fold-run',
+    status: 'done',
+    entries: [],
     sliceMembership: { taskSlices: { '1': 1, '2': 2, '3': 3 }, titles: ['Child 1', 'Child 2', 'Leaf'] },
     storyOwnership: { S1: 1, S2: 2, S3: 3 },
   });
@@ -88,33 +102,43 @@ async function snapshot(git: (args: string[]) => Promise<{ stdout: string }>) {
     'refs/conductor/demo/closed/c2',
     'refs/heads/feat/daemon-demo',
   ];
-  return Object.fromEntries(await Promise.all(refs.map(async (name) => [name, (await git(['rev-parse', name])).stdout.trim()])));
+  return Object.fromEntries(
+    await Promise.all(refs.map(async (name) => [name, (await git(['rev-parse', name])).stdout.trim()])),
+  );
 }
 
 describe('planned fold recovery (real local Git)', () => {
   it('rolls every ref back rather than generically replaying an interrupted FoldPlan', async () => {
     const subject = await fixture();
     const before = await snapshot(subject.git);
-    const foldPlan: readonly FoldCommitPlan[] = [{
-      sha: subject.foldedSource,
-      roundId: parseRoundId('r1')!,
-      owner: child(1),
-      parts: [{ kind: 'whole', child: child(1), paths: [], reason: 'owner' }],
-    }];
-    const created = await createRestackJournal(subject.repo, 'demo', {
-      opId: 'planned-fold-recovery' as RestackOpId,
-      cause: 'fold',
-      foldPlan,
-      committer: { name: 'Fold recovery', email: 'fold-recovery@example.test', date: '2030-01-02T03:04:05Z' },
-      dirtyPaths: [],
-      refs: Object.entries(before).map(([ref, oldSha]) => ({ ref: ref as never, oldSha: oldSha as CommitSha })),
-      ranges: [
-        { child: child(1), oldParent: subject.base, oldTip: subject.c1, kind: 'closed' },
-        { child: child(2), oldParent: subject.c1, oldTip: subject.c2, kind: 'closed' },
-        { child: child(3), oldParent: subject.c2, oldTip: subject.leaf, kind: 'leaf-active' },
-      ],
-      children: [child(1), child(2), child(3)].map((value) => ({ child: value, status: 'pending' as const })),
-    }, undefined, { git: makeGitRunner(subject.repo) });
+    const foldPlan: readonly FoldCommitPlan[] = [
+      {
+        sha: subject.foldedSource,
+        roundId: parseRoundId('r1')!,
+        owner: child(1),
+        parts: [{ kind: 'whole', child: child(1), paths: [], reason: 'owner' }],
+      },
+    ];
+    const created = await createRestackJournal(
+      subject.repo,
+      'demo',
+      {
+        opId: 'planned-fold-recovery' as RestackOpId,
+        cause: 'fold',
+        foldPlan,
+        committer: { name: 'Fold recovery', email: 'fold-recovery@example.test', date: '2030-01-02T03:04:05Z' },
+        dirtyPaths: [],
+        refs: Object.entries(before).map(([ref, oldSha]) => ({ ref: ref as never, oldSha: oldSha as CommitSha })),
+        ranges: [
+          { child: child(1), oldParent: subject.base, oldTip: subject.c1, kind: 'closed' },
+          { child: child(2), oldParent: subject.c1, oldTip: subject.c2, kind: 'closed' },
+          { child: child(3), oldParent: subject.c2, oldTip: subject.leaf, kind: 'leaf-active' },
+        ],
+        children: [child(1), child(2), child(3)].map((value) => ({ child: value, status: 'pending' as const })),
+      },
+      undefined,
+      { git: makeGitRunner(subject.repo) },
+    );
     if (created.kind !== 'created') throw new Error(`could not create planned fold journal: ${created.kind}`);
 
     // The journal write is durable; process death happens before staging or a move.
@@ -122,25 +146,29 @@ describe('planned fold recovery (real local Git)', () => {
     const abandonedBlob = await writeRestackJournalBlob(subject.repo, abandoned, { git: makeGitRunner(subject.repo) });
     await subject.git(['update-ref', journalRefFor('demo'), abandonedBlob, created.journal.blob]);
 
-    await expect(recoverRestackJournal({ worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo) }))
-      .resolves.toEqual({ kind: 'recovered', fromState: 'planned' });
+    await expect(
+      recoverRestackJournal({ worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo) }),
+    ).resolves.toEqual({ kind: 'recovered', fromState: 'planned' });
 
     expect(await snapshot(subject.git)).toEqual(before);
     expect(await readRestackJournal(subject.repo, 'demo')).toEqual({ kind: 'missing' });
-    expect((await subject.git(['log', '--format=%B', 'feat/c1/demo', 'feat/daemon-demo'])).stdout)
-      .not.toContain('Folded-from:');
+    expect((await subject.git(['log', '--format=%B', 'feat/c1/demo', 'feat/daemon-demo'])).stdout).not.toContain(
+      'Folded-from:',
+    );
   });
 
   it('leaves every ref untouched when a fold refuses its invalid owner before moving', async () => {
     const subject = await fixture();
     const before = await snapshot(subject.git);
 
-    await expect(runRestack({ worktree: subject.repo, slug: 'demo', cause: 'fold', git: makeGitRunner(subject.repo) }))
-      .resolves.toMatchObject({ kind: 'halted' });
+    await expect(
+      runRestack({ worktree: subject.repo, slug: 'demo', cause: 'fold', git: makeGitRunner(subject.repo) }),
+    ).resolves.toMatchObject({ kind: 'halted' });
 
     expect(await snapshot(subject.git)).toEqual(before);
-    await expect(recoverRestackJournal({ worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo) }))
-      .resolves.not.toMatchObject({ kind: 'live-owner' });
+    await expect(
+      recoverRestackJournal({ worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo) }),
+    ).resolves.not.toMatchObject({ kind: 'live-owner' });
   });
 
   it('aborts its journal and leaves every ref untouched when the folded leaf tree differs', async () => {
@@ -155,12 +183,14 @@ describe('planned fold recovery (real local Git)', () => {
       return result;
     };
 
-    await expect(runRestack({ worktree: subject.repo, slug: 'demo', cause: 'fold', git: mismatchedTree }))
-      .resolves.toMatchObject({ kind: 'halted' });
+    await expect(
+      runRestack({ worktree: subject.repo, slug: 'demo', cause: 'fold', git: mismatchedTree }),
+    ).resolves.toMatchObject({ kind: 'halted' });
 
     expect(await snapshot(subject.git)).toEqual(before);
-    await expect(recoverRestackJournal({ worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo) }))
-      .resolves.not.toMatchObject({ kind: 'live-owner' });
+    await expect(
+      recoverRestackJournal({ worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo) }),
+    ).resolves.not.toMatchObject({ kind: 'live-owner' });
   });
 
   it('rolls back every ref and releases its journal when fold move verification fails', async () => {
@@ -170,18 +200,25 @@ describe('planned fold recovery (real local Git)', () => {
     let moved = false;
     const verificationFailure = async (...args: Parameters<typeof native>) => {
       const result = await native(...args);
-      if (args[0][0] === 'update-ref' && args[0][1] === '--stdin' && args[1]?.input?.includes('update refs/heads/feat/c1/demo ')) moved = true;
+      if (
+        args[0][0] === 'update-ref' &&
+        args[0][1] === '--stdin' &&
+        args[1]?.input?.includes('update refs/heads/feat/c1/demo ')
+      )
+        moved = true;
       if (moved && args[0].join(' ') === 'rev-parse --verify refs/heads/feat/c1/demo') {
         return { ...result, stdout: `${subject.c1}\n` };
       }
       return result;
     };
 
-    await expect(runRestack({ worktree: subject.repo, slug: 'demo', cause: 'fold', git: verificationFailure }))
-      .resolves.toMatchObject({ kind: 'halted' });
+    await expect(
+      runRestack({ worktree: subject.repo, slug: 'demo', cause: 'fold', git: verificationFailure }),
+    ).resolves.toMatchObject({ kind: 'halted' });
 
     expect(await snapshot(subject.git)).toEqual(before);
-    await expect(recoverRestackJournal({ worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo) }))
-      .resolves.not.toMatchObject({ kind: 'live-owner' });
+    await expect(
+      recoverRestackJournal({ worktree: subject.repo, slug: 'demo', git: makeGitRunner(subject.repo) }),
+    ).resolves.not.toMatchObject({ kind: 'live-owner' });
   });
 });

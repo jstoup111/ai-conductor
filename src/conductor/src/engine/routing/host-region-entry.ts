@@ -17,11 +17,27 @@ import type { StateMutation } from '../conduct-state-store.js';
 import { readRestackJournal } from '../restack/restack-journal.js';
 import { grantRoutedRepairCredit } from './round-receipt.js';
 import { resolveGitRef } from './git-ref-resolver.js';
-import { readRevalidationQueue, readRouteRecord, routingFenceOpen, transitionHost, writeRoutingTransaction } from './route-record-store.js';
+import {
+  readRevalidationQueue,
+  readRouteRecord,
+  routingFenceOpen,
+  transitionHost,
+  writeRoutingTransaction,
+} from './route-record-store.js';
 import { closureRefFor } from './routing-refs.js';
 import { redRefFor } from './routing-refs.js';
-import { parseRoutedAcceptanceRunContract, parseRoutedRedRecord, type RoutedAcceptanceRunContract } from './red-record.js';
-import { assertNever, isDerivedAlreadyCompleteHost, type RouteRecord, type RoutedObligation, type RoundId } from './route-types.js';
+import {
+  parseRoutedAcceptanceRunContract,
+  parseRoutedRedRecord,
+  type RoutedAcceptanceRunContract,
+} from './red-record.js';
+import {
+  assertNever,
+  isDerivedAlreadyCompleteHost,
+  type RouteRecord,
+  type RoutedObligation,
+  type RoundId,
+} from './route-types.js';
 import type { ConductState } from '../../types/state.js';
 
 export type EnterHostRegionResult =
@@ -57,8 +73,7 @@ export interface VerifyGreenAcceptanceInput {
 }
 
 export type VerifyGreenAcceptanceResult =
-  | { readonly kind: 'verified'; readonly headSha: string }
-  | { readonly kind: 'refused'; readonly reason: string };
+  { readonly kind: 'verified'; readonly headSha: string } | { readonly kind: 'refused'; readonly reason: string };
 
 const VERIFY_GREEN_RECORD = 'acceptance-verify-green.json';
 
@@ -104,13 +119,17 @@ export async function verifyGreenAcceptance(input: VerifyGreenAcceptanceInput): 
   const recordPath = join(childDir, VERIFY_GREEN_RECORD);
   let contract: RoutedAcceptanceRunContract | undefined;
   try {
-    contract = parseRoutedAcceptanceRunContract(JSON.parse(await readFile(join(childDir, 'acceptance-specs-run.json'), 'utf8')));
+    contract = parseRoutedAcceptanceRunContract(
+      JSON.parse(await readFile(join(childDir, 'acceptance-specs-run.json'), 'utf8')),
+    );
   } catch {
     // The worktree overlay is disposable; the close-time red ref retains the
     // executable pair needed after recreation.
   }
   if (contract === undefined) {
-    try { contract = await durableRedContract(git, input.slug, input.host); } catch {
+    try {
+      contract = await durableRedContract(git, input.slug, input.host);
+    } catch {
       return { kind: 'refused', reason: `child ${input.host} acceptance run contract is missing or invalid` };
     }
   }
@@ -125,21 +144,39 @@ export async function verifyGreenAcceptance(input: VerifyGreenAcceptanceInput): 
   let observed: Record<string, unknown>;
   try {
     const value = await input.exec(contract.command, resolve(input.worktree, contract.cwd));
-    observed = typeof value === 'object' && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : {};
+    observed =
+      typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
   } catch (error) {
-    return { kind: 'refused', reason: `child ${input.host} verify-green execution failed: ${error instanceof Error ? error.message : String(error)}` };
+    return {
+      kind: 'refused',
+      reason: `child ${input.host} verify-green execution failed: ${error instanceof Error ? error.message : String(error)}`,
+    };
   }
   const executed = observed.executed;
   const passed = observed.passed;
   const failed = observed.failed;
   const skipped = observed.skipped;
   const errors = observed.errors;
-  if (!(typeof executed === 'number' && executed >= 1 && typeof passed === 'number' && passed === executed &&
-    failed === 0 && skipped === 0 && errors === 0)) {
-    return { kind: 'refused', reason: `child ${input.host} verify-green requires every spec to pass (executed >= 1, failed/skipped/errors == 0)` };
+  if (!(
+    typeof executed === 'number' &&
+    executed >= 1 &&
+    typeof passed === 'number' &&
+    passed === executed &&
+    failed === 0 &&
+    skipped === 0 &&
+    errors === 0
+  )) {
+    return {
+      kind: 'refused',
+      reason: `child ${input.host} verify-green requires every spec to pass (executed >= 1, failed/skipped/errors == 0)`,
+    };
   }
   let marker: string | undefined;
-  try { marker = await readFile(join(childDir, 'acceptance-specs-red.json'), 'utf8'); } catch { /* legacy marker is optional */ }
+  try {
+    marker = await readFile(join(childDir, 'acceptance-specs-red.json'), 'utf8');
+  } catch {
+    /* legacy marker is optional */
+  }
   try {
     const ref = redRefFor(input.slug, input.host);
     const refResult = await git(['rev-parse', '-q', '--verify', ref]);
@@ -154,7 +191,12 @@ export async function verifyGreenAcceptance(input: VerifyGreenAcceptanceInput): 
   return recordVerifiedGreen(git, childDir, recordPath, input);
 }
 
-async function dispositionOnlyVerified(childDir: string, git: GitRunner, slug: string, host: ChildId): Promise<boolean> {
+async function dispositionOnlyVerified(
+  childDir: string,
+  git: GitRunner,
+  slug: string,
+  host: ChildId,
+): Promise<boolean> {
   try {
     const marker = await readFile(join(childDir, 'acceptance-specs-red.json'), 'utf8');
     if ((JSON.parse(marker) as Record<string, unknown>).outcome !== 'disposition-only') return false;
@@ -175,10 +217,14 @@ async function recordVerifiedGreen(
   input: VerifyGreenAcceptanceInput,
 ): Promise<VerifyGreenAcceptanceResult> {
   const resolvedHead = await resolveGitRef(git, 'HEAD');
-  if (typeof resolvedHead !== 'string') return { kind: 'refused', reason: `cannot resolve child ${input.host} host tip for verify-green` };
+  if (typeof resolvedHead !== 'string')
+    return { kind: 'refused', reason: `cannot resolve child ${input.host} host tip for verify-green` };
   const head = resolvedHead;
   await mkdir(childDir, { recursive: true });
-  await writeFile(recordPath, JSON.stringify({ roundId: input.roundId, host: input.host, headSha: head, done: true }) + '\n');
+  await writeFile(
+    recordPath,
+    JSON.stringify({ roundId: input.roundId, host: input.host, headSha: head, done: true }) + '\n',
+  );
   return { kind: 'verified', headSha: head };
 }
 
@@ -191,7 +237,15 @@ export async function resolveHostEntryTarget(
   slug: string,
   host: ChildId,
   record: Pick<RouteRecord, 'execution'>,
-): Promise<{ readonly target: ChildLifecycleTarget; readonly pinnedBase: CommitSha; readonly tree: CommitSha; readonly isLeaf: boolean } | { readonly detail: string }> {
+): Promise<
+  | {
+      readonly target: ChildLifecycleTarget;
+      readonly pinnedBase: CommitSha;
+      readonly tree: CommitSha;
+      readonly isLeaf: boolean;
+    }
+  | { readonly detail: string }
+> {
   let closure: CommitSha | undefined;
   try {
     const result = await git(['rev-parse', '-q', '--verify', closureRefFor(slug, host)]);
@@ -205,7 +259,7 @@ export async function resolveHostEntryTarget(
     return { detail: `cannot resolve host ${host} closure` };
   }
   const isLeaf = closure === undefined;
-  const resolvedBase = closure ?? await resolveGitRef(git, `refs/heads/${leafBranchFor(slug)}`);
+  const resolvedBase = closure ?? (await resolveGitRef(git, `refs/heads/${leafBranchFor(slug)}`));
   if (typeof resolvedBase !== 'string') return { detail: `cannot resolve host ${host} closure or leaf tip` };
   const pinnedBase = resolvedBase;
   const resolvedTree = await resolveGitRef(git, `${pinnedBase}^{tree}`);
@@ -226,7 +280,8 @@ async function verifyOrSwitch(
 ): Promise<{ readonly kind: 'completed' } | { readonly kind: 'refused'; readonly detail: string }> {
   try {
     const current = await git(['symbolic-ref', '--short', 'HEAD']);
-    if (current.exitCode !== 0) return { kind: 'refused', detail: 'cannot determine current branch before host switch' };
+    if (current.exitCode !== 0)
+      return { kind: 'refused', detail: 'cannot determine current branch before host switch' };
     if (current.stdout.trim() === target.branch) return { kind: 'completed' };
   } catch {
     return { kind: 'refused', detail: 'cannot determine current branch before host switch' };
@@ -234,7 +289,10 @@ async function verifyOrSwitch(
   const switched = await switchToChild(input.worktree, target, input.emitter, undefined, { git });
   return switched.kind === 'completed'
     ? switched
-    : { kind: 'refused', detail: 'reason' in switched ? switched.reason : `cannot switch to host branch ${target.branch}` };
+    : {
+        kind: 'refused',
+        detail: 'reason' in switched ? switched.reason : `cannot switch to host branch ${target.branch}`,
+      };
 }
 
 export async function restageHostRegion(
@@ -248,15 +306,19 @@ export async function restageHostRegion(
     case 'audit': {
       const state = createRoutedConductStateStore(worktree, host);
       const current = await state.read();
-      if (!current.ok) return { kind: 'refused', detail: `cannot read host ${host} region state: ${current.error.message}` };
+      if (!current.ok)
+        return { kind: 'refused', detail: `cannot read host ${host} region state: ${current.error.message}` };
       const result = await state.applyBatch({
         name: `restage routed host ${host} region`,
-        mutations: (['acceptance_specs', 'build', 'test_suite', 'build_review'] as const).map((step) => ({
-          field: step,
-          expected: current.value[step],
-          next: 'pending',
-          intent: `restage routed host ${host} ${step}`,
-        } as StateMutation<ConductState>)),
+        mutations: (['acceptance_specs', 'build', 'test_suite', 'build_review'] as const).map(
+          (step) =>
+            ({
+              field: step,
+              expected: current.value[step],
+              next: 'pending',
+              intent: `restage routed host ${host} ${step}`,
+            }) as StateMutation<ConductState>,
+        ),
       });
       return 'message' in result
         ? { kind: 'refused', detail: `cannot restage host ${host} region: ${result.message}` }
@@ -264,49 +326,89 @@ export async function restageHostRegion(
     }
     case 'revalidate': {
       const queue = await readRevalidationQueue(worktree, slug, { git });
-      const entry = queue.kind === 'queue' ? queue.queue.entries.find((candidate) => candidate.child === host) : undefined;
+      const entry =
+        queue.kind === 'queue' ? queue.queue.entries.find((candidate) => candidate.child === host) : undefined;
       if (!entry) return { kind: 'refused', detail: `revalidate host ${host} has no queued entry` };
       const state = createRoutedConductStateStore(worktree, host);
       const current = await state.read();
-      if (!current.ok) return { kind: 'refused', detail: `cannot read host ${host} region state: ${current.error.message}` };
+      if (!current.ok)
+        return { kind: 'refused', detail: `cannot read host ${host} region state: ${current.error.message}` };
       const mutations = entry.gates
         .filter((step) => current.value[step] !== 'pending')
-        .map((step) => ({ field: step, expected: current.value[step], next: 'pending', intent: `restage revalidate host ${host} ${step}` } as StateMutation<ConductState>));
+        .map(
+          (step) =>
+            ({
+              field: step,
+              expected: current.value[step],
+              next: 'pending',
+              intent: `restage revalidate host ${host} ${step}`,
+            }) as StateMutation<ConductState>,
+        );
       if (mutations.length === 0) return { kind: 'restaged' };
       const result = await state.applyBatch({ name: `restage revalidate host ${host} region`, mutations });
-      return 'message' in result ? { kind: 'refused', detail: `cannot restage revalidate host ${host}: ${result.message}` } : { kind: 'restaged' };
+      return 'message' in result
+        ? { kind: 'refused', detail: `cannot restage revalidate host ${host}: ${result.message}` }
+        : { kind: 'restaged' };
     }
     case 'operator': {
       const operator = record.operator;
       if (operator === undefined) return { kind: 'refused', detail: `operator host ${host} has no operator context` };
       const state = createRoutedConductStateStore(worktree, host);
       const current = await state.read();
-      if (!current.ok) return { kind: 'refused', detail: `cannot read host ${host} region state: ${current.error.message}` };
+      if (!current.ok)
+        return { kind: 'refused', detail: `cannot read host ${host} region state: ${current.error.message}` };
       const orderedSteps = ['acceptance_specs', 'build', 'test_suite', 'build_review'] as const;
-      const restageSteps = operator.origin === 'land'
-        ? (['acceptance_specs', 'test_suite', 'build_review'] as const)
-        : orderedSteps.slice(orderedSteps.indexOf(operator.entryStep));
-      const missingPriorSteps = operator.origin === 'rewind'
-        ? orderedSteps.slice(0, orderedSteps.indexOf(operator.entryStep))
-          .filter((step) => current.value[step] === undefined)
-          .map((step) => ({ field: step, expected: undefined, next: 'done', intent: `restore closed rewind host ${host} ${step}` } as StateMutation<ConductState>))
-        : [];
+      const restageSteps =
+        operator.origin === 'land'
+          ? (['acceptance_specs', 'test_suite', 'build_review'] as const)
+          : orderedSteps.slice(orderedSteps.indexOf(operator.entryStep));
+      const missingPriorSteps =
+        operator.origin === 'rewind'
+          ? orderedSteps
+              .slice(0, orderedSteps.indexOf(operator.entryStep))
+              .filter((step) => current.value[step] === undefined)
+              .map(
+                (step) =>
+                  ({
+                    field: step,
+                    expected: undefined,
+                    next: 'done',
+                    intent: `restore closed rewind host ${host} ${step}`,
+                  }) as StateMutation<ConductState>,
+              )
+          : [];
       const mutations = [
         ...missingPriorSteps,
         ...restageSteps
-        .filter((step) => current.value[step] !== 'pending')
-        .map((step) => ({ field: step, expected: current.value[step], next: 'pending', intent: `restage operator host ${host} ${step}` } as StateMutation<ConductState>)),
+          .filter((step) => current.value[step] !== 'pending')
+          .map(
+            (step) =>
+              ({
+                field: step,
+                expected: current.value[step],
+                next: 'pending',
+                intent: `restage operator host ${host} ${step}`,
+              }) as StateMutation<ConductState>,
+          ),
       ];
       if (mutations.length === 0) return { kind: 'restaged' };
       const result = await state.applyBatch({ name: `restage operator host ${host} region`, mutations });
-      return 'message' in result ? { kind: 'refused', detail: `cannot restage operator host ${host}: ${result.message}` } : { kind: 'restaged' };
+      return 'message' in result
+        ? { kind: 'refused', detail: `cannot restage operator host ${host}: ${result.message}` }
+        : { kind: 'restaged' };
     }
   }
   return assertNever(record.kind);
 }
 
 export type PinHostEntryResult =
-  | { readonly kind: 'pinned'; readonly stored: Awaited<ReturnType<typeof readRouteRecord>> & { readonly kind: 'record' }; readonly target: ChildLifecycleTarget; readonly pinnedBase: CommitSha; readonly isLeaf: boolean }
+  | {
+      readonly kind: 'pinned';
+      readonly stored: Awaited<ReturnType<typeof readRouteRecord>> & { readonly kind: 'record' };
+      readonly target: ChildLifecycleTarget;
+      readonly pinnedBase: CommitSha;
+      readonly isLeaf: boolean;
+    }
   | { readonly kind: 'refused'; readonly detail: string };
 
 /**
@@ -327,33 +429,57 @@ export async function pinHostEntry(
   let pinnedBase = current.record.entry?.host === host ? current.record.entry.pinnedBase : undefined;
   if (current.record.entry?.host !== host) {
     const queue = await readRevalidationQueue(worktree, slug, { git });
-    const queued = queue.kind === 'queue' ? queue.queue.entries.find((candidate) => candidate.child === host) : undefined;
+    const queued =
+      queue.kind === 'queue' ? queue.queue.entries.find((candidate) => candidate.child === host) : undefined;
     const pinContext = (() => {
       switch (current.record.kind) {
         case 'revalidate':
           return !queued || queue.kind !== 'queue'
             ? { kind: 'refused' as const }
-            : { kind: 'ready' as const, revalidation: { queueBlob: queue.blob, generation: queue.queue.generation, closureSha: queued.closureSha } };
+            : {
+                kind: 'ready' as const,
+                revalidation: {
+                  queueBlob: queue.blob,
+                  generation: queue.queue.generation,
+                  closureSha: queued.closureSha,
+                },
+              };
         case 'audit':
-          return { kind: 'ready' as const, revalidation: queued && queue.kind === 'queue' ? { queueBlob: queue.blob, generation: queue.queue.generation, closureSha: queued.closureSha } : undefined };
+          return {
+            kind: 'ready' as const,
+            revalidation:
+              queued && queue.kind === 'queue'
+                ? { queueBlob: queue.blob, generation: queue.queue.generation, closureSha: queued.closureSha }
+                : undefined,
+          };
         case 'operator':
           return { kind: 'ready' as const, revalidation: undefined };
       }
       return assertNever(current.record.kind);
     })();
-    if (pinContext.kind === 'refused') return { kind: 'refused', detail: `revalidate host ${host} has no queued entry to pin` };
+    if (pinContext.kind === 'refused')
+      return { kind: 'refused', detail: `revalidate host ${host} has no queued entry to pin` };
     const { revalidation } = pinContext;
     const next = {
       ...current.record,
-      entry: { host, pinnedBase: resolved.pinnedBase, tree: resolved.tree, ...(revalidation === undefined ? {} : { revalidation }) },
+      entry: {
+        host,
+        pinnedBase: resolved.pinnedBase,
+        tree: resolved.tree,
+        ...(revalidation === undefined ? {} : { revalidation }),
+      },
     };
-    const wrote = await writeRoutingTransaction(worktree, slug, [
-      { kind: 'update-record', previous: current, record: next },
-    ], { git });
+    const wrote = await writeRoutingTransaction(
+      worktree,
+      slug,
+      [{ kind: 'update-record', previous: current, record: next }],
+      { git },
+    );
     if (wrote.kind !== 'updated') return { kind: 'refused', detail: `cannot pin routing host entry: ${wrote.kind}` };
     pinnedBase = resolved.pinnedBase;
     const reread = await readRouteRecord(worktree, slug, current.record.roundId, { git });
-    if (reread.kind !== 'record') return { kind: 'refused', detail: `routing record ${current.record.roundId} is unavailable after pin` };
+    if (reread.kind !== 'record')
+      return { kind: 'refused', detail: `routing record ${current.record.roundId} is unavailable after pin` };
     current = reread;
   }
   return { kind: 'pinned', stored: current, target: resolved.target, pinnedBase: pinnedBase!, isLeaf: resolved.isLeaf };
@@ -365,7 +491,9 @@ async function bindHostObligations(
   planPath: string,
   branch: string,
   head: CommitSha,
-): Promise<{ readonly kind: 'bound'; readonly record: RouteRecord } | { readonly kind: 'refused'; readonly detail: string }> {
+): Promise<
+  { readonly kind: 'bound'; readonly record: RouteRecord } | { readonly kind: 'refused'; readonly detail: string }
+> {
   if (record.entry === undefined || record.entry.host !== input.host) {
     return { kind: 'refused', detail: `routing host ${input.host} entry is missing its durable tree baseline` };
   }
@@ -437,10 +565,12 @@ async function reconcileHostObligations(
 export function hostCarriesTasklessObligation(record: RouteRecord, host: ChildId): boolean {
   const allocation = record.allocation[host];
   const hostedItems = record.items.filter((item) => item.host === host);
-  return allocation !== undefined
-    && allocation.remTaskIds.length === 0
-    && hostedItems.length > 0
-    && hostedItems.every((item) => item.taskIds === undefined);
+  return (
+    allocation !== undefined &&
+    allocation.remTaskIds.length === 0 &&
+    hostedItems.length > 0 &&
+    hostedItems.every((item) => item.taskIds === undefined)
+  );
 }
 
 /**
@@ -452,7 +582,10 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
   const git = input.git ?? makeGitRunner(input.worktree);
   const journal = await readRestackJournal(input.worktree, input.slug, { git });
   if (!terminalJournal(journal)) {
-    return { kind: 'refused', detail: journal.kind === 'unreadable' ? 'restack journal is unreadable' : 'restack journal is non-terminal' };
+    return {
+      kind: 'refused',
+      detail: journal.kind === 'unreadable' ? 'restack journal is unreadable' : 'restack journal is non-terminal',
+    };
   }
 
   let loaded = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
@@ -465,7 +598,7 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
         `operator-round-undeclared: landing ${input.roundId} on child ${input.host} is awaiting ` +
         // ai-conductor:session-command-context=operator-only
         'ai-conductor stack land --done or ai-conductor stack land --abandon',
-        // /ai-conductor:session-command-context
+      // /ai-conductor:session-command-context
     };
   }
   const hostState = stored.record.hosts[input.host];
@@ -487,7 +620,7 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
 
   const switched = await verifyOrSwitch(input, resolved.target, git);
   if (switched.kind === 'refused') return switched;
-  const planPath = input.planPath ?? await resolveFeaturePlanPath(input.worktree, input.slug);
+  const planPath = input.planPath ?? (await resolveFeaturePlanPath(input.worktree, input.slug));
   if (!planPath) return { kind: 'refused', detail: `cannot resolve routed host plan for ${input.slug}` };
   if (stored.record.hosts[input.host] === 'repairing') {
     const reconciled = await reconcileHostObligations(input, stored.record, planPath);
@@ -497,7 +630,10 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
         childBase: { slug: input.slug, child: input.host },
       });
     } catch (error) {
-      return { kind: 'refused', detail: `cannot reconcile routed task status: ${error instanceof Error ? error.message : String(error)}` };
+      return {
+        kind: 'refused',
+        detail: `cannot reconcile routed task status: ${error instanceof Error ? error.message : String(error)}`,
+      };
     }
     const credit = await grantRoutedRepairCredit({
       projectRoot: input.worktree,
@@ -513,7 +649,8 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
   if (restaged.kind === 'refused') return restaged;
 
   const resolvedEntryHead = await resolveGitRef(git, 'HEAD');
-  if (typeof resolvedEntryHead !== 'string') return { kind: 'refused', detail: `cannot resolve host ${input.host} tip at region entry` };
+  if (typeof resolvedEntryHead !== 'string')
+    return { kind: 'refused', detail: `cannot resolve host ${input.host} tip at region entry` };
   const entryHead = resolvedEntryHead;
   // Persist a non-leaf host's boundary before frozen blocks can move HEAD.
   // The actual leaf already owns the whole-feature branch and is never folded.
@@ -525,16 +662,25 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
         [input.host]: { state: 'deferred' as const, leafEntryTip: entryHead },
       },
     };
-    const placed = await writeRoutingTransaction(input.worktree, input.slug, [
-      { kind: 'update-record', previous: stored, record },
-    ], { git });
-    if (placed.kind !== 'updated') return { kind: 'refused', detail: `cannot persist leaf placement boundary: ${placed.kind}` };
+    const placed = await writeRoutingTransaction(
+      input.worktree,
+      input.slug,
+      [{ kind: 'update-record', previous: stored, record }],
+      { git },
+    );
+    if (placed.kind !== 'updated')
+      return { kind: 'refused', detail: `cannot persist leaf placement boundary: ${placed.kind}` };
     const reread = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
-    if (reread.kind !== 'record') return { kind: 'refused', detail: `routing record ${input.roundId} is unavailable after placement boundary` };
+    if (reread.kind !== 'record')
+      return { kind: 'refused', detail: `routing record ${input.roundId} is unavailable after placement boundary` };
     stored = reread;
   }
   const allocation = stored.record.allocation[input.host];
-  if (!allocation) return { kind: 'refused', detail: `routing round ${input.roundId} has no frozen allocation for host ${input.host}` };
+  if (!allocation)
+    return {
+      kind: 'refused',
+      detail: `routing round ${input.roundId} has no frozen allocation for host ${input.host}`,
+    };
   const appended = await writeFrozenBlocks({
     worktree: input.worktree,
     planPath,
@@ -555,7 +701,10 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
       childBase: { slug: input.slug, child: input.host },
     });
   } catch (error) {
-    return { kind: 'refused', detail: `cannot seed routed task status: ${error instanceof Error ? error.message : String(error)}` };
+    return {
+      kind: 'refused',
+      detail: `cannot seed routed task status: ${error instanceof Error ? error.message : String(error)}`,
+    };
   }
 
   // An audit route can arrive after every task it projected to this host has
@@ -568,13 +717,15 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
     switch (stored.record.kind) {
       case 'audit':
         if (hostCarriesTasklessObligation(stored.record, input.host)) return false;
-        return (await (input.checkCompletion ?? checkStepCompletion)(input.worktree, 'build', {
-          ...input.completionContext,
-          projectRoot: input.worktree,
-          planPath,
-          featureDesc: input.slug,
-          activeChild: input.host,
-        })).done;
+        return (
+          await (input.checkCompletion ?? checkStepCompletion)(input.worktree, 'build', {
+            ...input.completionContext,
+            projectRoot: input.worktree,
+            planPath,
+            featureDesc: input.slug,
+            activeChild: input.host,
+          })
+        ).done;
       case 'revalidate':
       case 'operator':
         return false;
@@ -590,21 +741,28 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
     };
   }
   loaded = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
-  if (loaded.kind !== 'record') return { kind: 'refused', detail: `routing record ${input.roundId} is unavailable before repairing transition` };
+  if (loaded.kind !== 'record')
+    return { kind: 'refused', detail: `routing record ${input.roundId} is unavailable before repairing transition` };
   stored = loaded;
   const recordWithBindings = { ...stored, record: bound.record };
   const repairing = transitionHost(recordWithBindings, input.host, 'repairing', { credit: true });
-  if (repairing.kind !== 'updated') return { kind: 'refused', detail: `routing round ${input.roundId} host ${input.host} cannot enter repairing` };
+  if (repairing.kind !== 'updated')
+    return { kind: 'refused', detail: `routing round ${input.roundId} host ${input.host} cannot enter repairing` };
   const record = repairing.record;
-  const transitioned = await writeRoutingTransaction(input.worktree, input.slug, [
-    { kind: 'update-record', previous: stored, record },
-  ], { git });
-  if (transitioned.kind !== 'updated') return { kind: 'refused', detail: `cannot enter repairing: ${transitioned.kind}` };
+  const transitioned = await writeRoutingTransaction(
+    input.worktree,
+    input.slug,
+    [{ kind: 'update-record', previous: stored, record }],
+    { git },
+  );
+  if (transitioned.kind !== 'updated')
+    return { kind: 'refused', detail: `cannot enter repairing: ${transitioned.kind}` };
   const credit = await grantRoutedRepairCredit({
     projectRoot: input.worktree,
     child: input.host,
     roundId: input.roundId,
   });
-  if (credit.kind === 'refused') return { kind: 'refused', detail: `cannot grant routed repair credit: ${credit.detail}` };
+  if (credit.kind === 'refused')
+    return { kind: 'refused', detail: `cannot grant routed repair credit: ${credit.detail}` };
   return { kind: 'entered', pinnedBase: pinnedBase! };
 }

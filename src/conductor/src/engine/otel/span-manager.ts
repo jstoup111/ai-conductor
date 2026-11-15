@@ -20,14 +20,7 @@
  * All methods are synchronous — they only call OTel span APIs that enqueue
  * to the BatchSpanProcessor. No await, no network call (R1).
  */
-import {
-  Tracer,
-  Span,
-  SpanStatusCode,
-  trace,
-  ROOT_CONTEXT,
-  Context,
-} from '@opentelemetry/api';
+import { Tracer, Span, SpanStatusCode, trace, ROOT_CONTEXT, Context } from '@opentelemetry/api';
 import type { ConductorEvent } from '../../types/events.js';
 import type { ResolvedOtelProvenance } from './otel-config.js';
 import type { DispatchMeteringObservation } from '../dispatch-metering.js';
@@ -113,9 +106,8 @@ export class SpanManager {
       if (typeof event.headSha === 'string' && event.headSha.length > 0) {
         this.runSpan.setAttribute('vcs.head.sha', event.headSha);
       }
-      const baseSha = typeof event.baseSha === 'string' && event.baseSha.length > 0
-        ? event.baseSha
-        : this.latestBaseSha;
+      const baseSha =
+        typeof event.baseSha === 'string' && event.baseSha.length > 0 ? event.baseSha : this.latestBaseSha;
       if (baseSha !== undefined) this.runSpan.setAttribute('vcs.base.sha', baseSha);
     }
     if (this.provenance.pr) {
@@ -181,9 +173,7 @@ export class SpanManager {
     const identity = this.resolve(event.step, event.executionContext);
     const state = identity ? this.openSteps.get(identity.correlationKey) : undefined;
     if (!state) {
-      this.warn(
-        `step_completed for '${event.step}' received but no open span exists — ignoring`,
-      );
+      this.warn(`step_completed for '${event.step}' received but no open span exists — ignoring`);
       return;
     }
     const durationMs = this.now() - state.startTimeMs;
@@ -209,9 +199,7 @@ export class SpanManager {
     const identity = this.resolve(event.step, event.executionContext);
     const state = identity ? this.openSteps.get(identity.correlationKey) : undefined;
     if (!state) {
-      this.warn(
-        `step_failed for '${event.step}' received but no open span exists — ignoring`,
-      );
+      this.warn(`step_failed for '${event.step}' received but no open span exists — ignoring`);
       return;
     }
     const durationMs = this.now() - state.startTimeMs;
@@ -234,9 +222,7 @@ export class SpanManager {
     const identity = this.resolve(event.step, event.executionContext);
     const state = identity ? this.openSteps.get(identity.correlationKey) : undefined;
     if (!state) {
-      this.warn(
-        `step_interrupted for '${event.step}' received but no open span exists — ignoring`,
-      );
+      this.warn(`step_interrupted for '${event.step}' received but no open span exists — ignoring`);
       return;
     }
     const durationMs = this.now() - state.startTimeMs;
@@ -256,9 +242,7 @@ export class SpanManager {
     const identity = this.resolve(event.step, event.executionContext);
     const state = identity ? this.openSteps.get(identity.correlationKey) : undefined;
     if (!state) {
-      this.warn(
-        `step_refused for '${event.step}' received but no open span exists — ignoring`,
-      );
+      this.warn(`step_refused for '${event.step}' received but no open span exists — ignoring`);
       return;
     }
     const durationMs = this.now() - state.startTimeMs;
@@ -292,8 +276,9 @@ export class SpanManager {
     observation: DispatchMeteringObservation,
   ): void {
     const identity = this.resolve(event.step, event.executionContext);
-    const state = (identity ? this.openSteps.get(identity.correlationKey) : undefined)
-      ?? (event.executionContext === undefined ? this.soleOpenLifecycleSpan(event.step) : undefined);
+    const state =
+      (identity ? this.openSteps.get(identity.correlationKey) : undefined) ??
+      (event.executionContext === undefined ? this.soleOpenLifecycleSpan(event.step) : undefined);
     if (!state) {
       if (event.executionContext === undefined && this.recordOutOfBandAttempt(event, observation)) return;
       this.warn(`provider_attempt for '${event.step}' received but no open span exists — ignoring`);

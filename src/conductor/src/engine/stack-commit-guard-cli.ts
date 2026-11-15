@@ -6,7 +6,12 @@ import { execa } from 'execa';
 import { loadConfig } from './config.js';
 import { childBranchFor, leafBranchFor, parseFeatureBranch } from './feature-branch-identity.js';
 import { hasDurableChildState, loadSliceTopology, type SliceTopology } from './slice-topology.js';
-import { readRepairMarker, readRouteRecord, type ReadRepairMarkerResult, type ReadRouteRecordResult } from './routing/route-record-store.js';
+import {
+  readRepairMarker,
+  readRouteRecord,
+  type ReadRepairMarkerResult,
+  type ReadRouteRecordResult,
+} from './routing/route-record-store.js';
 import { assertNever, routingSettingOn, type RoundId } from './routing/route-types.js';
 
 export interface StackCommitGuardDependencies {
@@ -101,7 +106,11 @@ export async function runStackCommitGuard(deps: StackCommitGuardDependencies): P
   if (marker.kind === 'absent') return 0;
   if (marker.kind !== 'marker') return refuse(print, 'routed repair marker is unreadable; refusing commit');
 
-  const stored = await (deps.readRouteRecord ?? readRouteRecord)(deps.projectRoot, identity.slug, marker.marker.roundId);
+  const stored = await (deps.readRouteRecord ?? readRouteRecord)(
+    deps.projectRoot,
+    identity.slug,
+    marker.marker.roundId,
+  );
   if (stored.kind !== 'record') {
     return refuse(print, `unreadable route record for active marker ${marker.marker.roundId}; refusing commit`);
   }
@@ -112,7 +121,11 @@ export async function runStackCommitGuard(deps: StackCommitGuardDependencies): P
   const hostIsLeaf = marker.marker.host === topology.positions[topology.positions.length - 1];
   const executionIsLeaf = marker.marker.execution === 'leaf' || hostIsLeaf;
   const host = childBranchFor(identity.slug, marker.marker.host);
-  const hostBranch = executionIsLeaf ? leafBranchFor(identity.slug) : host.ok ? host.branch : `child ${marker.marker.host}`;
+  const hostBranch = executionIsLeaf
+    ? leafBranchFor(identity.slug)
+    : host.ok
+      ? host.branch
+      : `child ${marker.marker.host}`;
   const isHost = executionIsLeaf
     ? identity.kind === 'leaf'
     : identity.kind === 'child' && identity.child === marker.marker.host;
@@ -135,8 +148,11 @@ export async function runStackCommitGuard(deps: StackCommitGuardDependencies): P
   }
 
   const env = deps.env ?? process.env;
-  if (stored.record.kind === 'operator' && stored.record.operator?.declaration !== undefined
-    && env.CONDUCT_DAEMON_SESSION !== '1') {
+  if (
+    stored.record.kind === 'operator' &&
+    stored.record.operator?.declaration !== undefined &&
+    env.CONDUCT_DAEMON_SESSION !== '1'
+  ) {
     return refuse(
       print,
       `declared landing ${marker.marker.roundId} accepts host commits only from CONDUCT_DAEMON_SESSION=1; declaration is recorded at ${stored.record.operator.declaration.at}.`,

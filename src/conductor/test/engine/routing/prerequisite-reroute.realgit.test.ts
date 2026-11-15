@@ -564,21 +564,42 @@ describe('verified prerequisite reroute (real local Git)', () => {
     try {
       const stored = await readRouteRecord(subject.repo, 'demo', roundId);
       if (stored.kind !== 'record') throw new Error('missing routed work order');
-      await expect(writeRoutingTransaction(subject.repo, 'demo', [{
-        kind: 'update-record', previous: stored, record: { ...stored.record, execution: 'leaf' },
-      }], { git: subject.git })).resolves.toEqual({ kind: 'updated' });
+      await expect(
+        writeRoutingTransaction(
+          subject.repo,
+          'demo',
+          [
+            {
+              kind: 'update-record',
+              previous: stored,
+              record: { ...stored.record, execution: 'leaf' },
+            },
+          ],
+          { git: subject.git },
+        ),
+      ).resolves.toEqual({ kind: 'updated' });
 
       prerequisiteMocks.rerouteRound.mockClear();
-      await expect(settleRoutedBuildClaim({
-        structuredResult: { outcome: 'blocked-by-prerequisite', child: 3, symbols: ['parseB'] },
-        worktree: subject.repo, slug: 'demo', roundId, host: c1, leaf: c3, git: subject.git,
-      })).resolves.toMatchObject({ kind: 'failed' });
+      await expect(
+        settleRoutedBuildClaim({
+          structuredResult: { outcome: 'blocked-by-prerequisite', child: 3, symbols: ['parseB'] },
+          worktree: subject.repo,
+          slug: 'demo',
+          roundId,
+          host: c1,
+          leaf: c3,
+          git: subject.git,
+        }),
+      ).resolves.toMatchObject({ kind: 'failed' });
 
       expect(prerequisiteMocks.rerouteRound).not.toHaveBeenCalled();
       await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
-        kind: 'record', record: { hosts: { 1: 'repairing' }, items: [{ fallback: [] }] },
+        kind: 'record',
+        record: { hosts: { 1: 'repairing' }, items: [{ fallback: [] }] },
       });
-    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+    } finally {
+      await rm(subject.repo, { recursive: true, force: true });
+    }
   });
 
   it('refuses a BUILD claim when its admitted destination prerequisite path is absent', async () => {

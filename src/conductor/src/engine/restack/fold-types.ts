@@ -33,15 +33,21 @@ export interface FoldHunk {
 }
 
 export type FoldPart =
-  | { readonly kind: 'hunks'; readonly child: ChildId | 'leaf'; readonly path: string; readonly hunk: FoldHunk; readonly reason: FoldPartReason }
+  | {
+      readonly kind: 'hunks';
+      readonly child: ChildId | 'leaf';
+      readonly path: string;
+      readonly hunk: FoldHunk;
+      readonly reason: FoldPartReason;
+    }
   | { readonly kind: 'whole'; readonly child: ChildId; readonly paths: readonly []; readonly reason: 'owner' }
   | {
-    readonly kind: 'blocks';
-    readonly child: ChildId;
-    readonly paths: readonly [];
-    readonly reason: 'owner';
-    readonly blocks: readonly { readonly id: string; readonly body: string }[];
-  };
+      readonly kind: 'blocks';
+      readonly child: ChildId;
+      readonly paths: readonly [];
+      readonly reason: 'owner';
+      readonly blocks: readonly { readonly id: string; readonly body: string }[];
+    };
 
 export interface FoldCommitPlan extends FoldSourceCommit {
   readonly parts: readonly FoldPart[];
@@ -51,15 +57,15 @@ export interface FoldCommitPlan extends FoldSourceCommit {
 export type FoldPlan =
   | { readonly kind: 'planned'; readonly commits: readonly FoldCommitPlan[] }
   | {
-    readonly kind: 'refused';
-    readonly reason: 'fold-unplaced-path' | 'fold-residual-unexpressible';
-    readonly commit: CommitSha;
-    readonly paths: readonly string[];
-  }
+      readonly kind: 'refused';
+      readonly reason: 'fold-unplaced-path' | 'fold-residual-unexpressible';
+      readonly commit: CommitSha;
+      readonly paths: readonly string[];
+    }
   | {
-    readonly kind: 'refused';
-    readonly reason: 'fold-misrouted';
-    readonly host: ChildId;
-    readonly findingIds: readonly string[];
-    readonly acceptingChildren: readonly ChildId[];
-  };
+      readonly kind: 'refused';
+      readonly reason: 'fold-misrouted';
+      readonly host: ChildId;
+      readonly findingIds: readonly string[];
+      readonly acceptingChildren: readonly ChildId[];
+    };

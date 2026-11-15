@@ -23,72 +23,122 @@ export function isLegalHostTransition(from: HostState, to: HostState): boolean {
   switch (from) {
     case 'pending':
       switch (to) {
-        case 'pending': return false;
-        case 'admitted': return true;
-        case 'repairing': return false;
-        case 'reroute-moved': return false;
-        case 'built': return false;
-        case 'restacked': return false;
-        case 'done': return false;
-        case 'rerouted': return false;
-        case 'abandoning': return false;
-        case 'abandoned': return false;
+        case 'pending':
+          return false;
+        case 'admitted':
+          return true;
+        case 'repairing':
+          return false;
+        case 'reroute-moved':
+          return false;
+        case 'built':
+          return false;
+        case 'restacked':
+          return false;
+        case 'done':
+          return false;
+        case 'rerouted':
+          return false;
+        case 'abandoning':
+          return false;
+        case 'abandoned':
+          return false;
       }
       return assertNever(to);
     case 'admitted':
       switch (to) {
-        case 'pending': return false;
-        case 'admitted': return false;
-        case 'repairing': return true;
-        case 'reroute-moved': return false;
-        case 'built': return false;
-        case 'restacked': return false;
-        case 'done': return false;
-        case 'rerouted': return false;
-        case 'abandoning': return true;
-        case 'abandoned': return false;
+        case 'pending':
+          return false;
+        case 'admitted':
+          return false;
+        case 'repairing':
+          return true;
+        case 'reroute-moved':
+          return false;
+        case 'built':
+          return false;
+        case 'restacked':
+          return false;
+        case 'done':
+          return false;
+        case 'rerouted':
+          return false;
+        case 'abandoning':
+          return true;
+        case 'abandoned':
+          return false;
       }
       return assertNever(to);
     case 'repairing':
       switch (to) {
-        case 'pending': return false;
-        case 'admitted': return false;
-        case 'repairing': return false;
-        case 'reroute-moved': return true;
-        case 'built': return true;
-        case 'restacked': return false;
-        case 'done': return true;
-        case 'rerouted': return false;
-        case 'abandoning': return true;
-        case 'abandoned': return false;
+        case 'pending':
+          return false;
+        case 'admitted':
+          return false;
+        case 'repairing':
+          return false;
+        case 'reroute-moved':
+          return true;
+        case 'built':
+          return true;
+        case 'restacked':
+          return false;
+        case 'done':
+          return true;
+        case 'rerouted':
+          return false;
+        case 'abandoning':
+          return true;
+        case 'abandoned':
+          return false;
       }
       return assertNever(to);
     case 'reroute-moved':
       switch (to) {
-        case 'pending': return false;
-        case 'admitted': return false;
-        case 'repairing': return false;
-        case 'reroute-moved': return false;
-        case 'built': return false;
-        case 'restacked': return false;
-        case 'done': return false;
-        case 'rerouted': return true;
-        case 'abandoning': return false;
-        case 'abandoned': return false;
+        case 'pending':
+          return false;
+        case 'admitted':
+          return false;
+        case 'repairing':
+          return false;
+        case 'reroute-moved':
+          return false;
+        case 'built':
+          return false;
+        case 'restacked':
+          return false;
+        case 'done':
+          return false;
+        case 'rerouted':
+          return true;
+        case 'abandoning':
+          return false;
+        case 'abandoned':
+          return false;
       }
       return assertNever(to);
     case 'built':
       switch (to) {
-        case 'pending': return false;
-        case 'admitted': return false;
-        case 'repairing': return false;
-        case 'reroute-moved': return false;
-        case 'built': return false;
-        case 'restacked': return true;
-        case 'done': return false;
-        case 'rerouted': return false;
-        case 'abandoning': return false;
-        case 'abandoned': return false;
+        case 'pending':
+          return false;
+        case 'admitted':
+          return false;
+        case 'repairing':
+          return false;
+        case 'reroute-moved':
+          return false;
+        case 'built':
+          return false;
+        case 'restacked':
+          return true;
+        case 'done':
+          return false;
+        case 'rerouted':
+          return false;
+        case 'abandoning':
+          return false;
+        case 'abandoned':
+          return false;
       }
       return assertNever(to);
     case 'restacked':
@@ -96,30 +146,50 @@ export function isLegalHostTransition(from: HostState, to: HostState): boolean {
     case 'rerouted':
     case 'abandoned':
       switch (to) {
-        case 'pending': return false;
-        case 'admitted': return false;
-        case 'repairing': return false;
-        case 'reroute-moved': return false;
-        case 'built': return false;
-        case 'restacked': return false;
-        case 'done': return false;
-        case 'rerouted': return false;
-        case 'abandoning': return false;
-        case 'abandoned': return false;
+        case 'pending':
+          return false;
+        case 'admitted':
+          return false;
+        case 'repairing':
+          return false;
+        case 'reroute-moved':
+          return false;
+        case 'built':
+          return false;
+        case 'restacked':
+          return false;
+        case 'done':
+          return false;
+        case 'rerouted':
+          return false;
+        case 'abandoning':
+          return false;
+        case 'abandoned':
+          return false;
       }
       return assertNever(to);
     case 'abandoning':
       switch (to) {
-        case 'pending': return false;
-        case 'admitted': return false;
-        case 'repairing': return false;
-        case 'reroute-moved': return false;
-        case 'built': return false;
-        case 'restacked': return false;
-        case 'done': return false;
-        case 'rerouted': return false;
-        case 'abandoning': return false;
-        case 'abandoned': return true;
+        case 'pending':
+          return false;
+        case 'admitted':
+          return false;
+        case 'repairing':
+          return false;
+        case 'reroute-moved':
+          return false;
+        case 'built':
+          return false;
+        case 'restacked':
+          return false;
+        case 'done':
+          return false;
+        case 'rerouted':
+          return false;
+        case 'abandoning':
+          return false;
+        case 'abandoned':
+          return true;
       }
       return assertNever(to);
   }
@@ -131,23 +201,32 @@ export function isLegalRoundPhaseTransition(from: RoundPhase, to: RoundPhase): b
   switch (from) {
     case 'prepared':
       switch (to) {
-        case 'prepared': return false;
-        case 'open': return true;
-        case 'closed': return false;
+        case 'prepared':
+          return false;
+        case 'open':
+          return true;
+        case 'closed':
+          return false;
       }
       return assertNever(to);
     case 'open':
       switch (to) {
-        case 'prepared': return false;
-        case 'open': return false;
-        case 'closed': return true;
+        case 'prepared':
+          return false;
+        case 'open':
+          return false;
+        case 'closed':
+          return true;
       }
       return assertNever(to);
     case 'closed':
       switch (to) {
-        case 'prepared': return false;
-        case 'open': return false;
-        case 'closed': return false;
+        case 'prepared':
+          return false;
+        case 'open':
+          return false;
+        case 'closed':
+          return false;
       }
       return assertNever(to);
   }
@@ -160,7 +239,10 @@ export function routingSettingOn(config: { readonly stacked_prs?: StackedPrsConf
 }
 
 /** A caller supplies its cursor; flat and unsliced features are never eligible. */
-export function routingEligible(cursor: { readonly kind: string }, config: { readonly stacked_prs?: StackedPrsConfig } | undefined): boolean {
+export function routingEligible(
+  cursor: { readonly kind: string },
+  config: { readonly stacked_prs?: StackedPrsConfig } | undefined,
+): boolean {
   return routingSettingOn(config) && (cursor.kind === 'active' || cursor.kind === 'repair-pending');
 }
 
@@ -229,7 +311,7 @@ export type FrozenAllocation = Readonly<Record<ChildId, FrozenHostAllocation>>;
 
 /** The only whole-feature remediation gates that can consume a route lap. */
 export const WHOLE_FEATURE_BUDGET_GATES = ['prd_audit', 'architecture_review_as_built'] as const;
-export type WholeFeatureBudgetGate = typeof WHOLE_FEATURE_BUDGET_GATES[number];
+export type WholeFeatureBudgetGate = (typeof WHOLE_FEATURE_BUDGET_GATES)[number];
 
 /** A taskless retry is deliberately separate from whole-feature lap charges. */
 export type TasklessReceiptGate = 'manual_test';
@@ -379,7 +461,7 @@ export interface RevalidationQueueEntry {
   readonly state: 'queued';
 }
 
-export type RegionGate = typeof CHILD_REGION_STEPS[number];
+export type RegionGate = (typeof CHILD_REGION_STEPS)[number];
 
 /** The two commands that can open an operator-owned routing round. */
 export type OperatorRoundOrigin = 'land' | 'rewind';
@@ -424,7 +506,16 @@ export interface RevalidationQueueRecord {
 }
 
 const hostStates = new Set<HostState>([
-  'pending', 'admitted', 'repairing', 'reroute-moved', 'built', 'restacked', 'done', 'rerouted', 'abandoning', 'abandoned',
+  'pending',
+  'admitted',
+  'repairing',
+  'reroute-moved',
+  'built',
+  'restacked',
+  'done',
+  'rerouted',
+  'abandoning',
+  'abandoned',
 ]);
 const roundPhases = new Set<RoundPhase>(['prepared', 'open', 'closed']);
 const routeKinds = new Set<RouteKind>(['audit', 'revalidate', 'operator']);
@@ -454,26 +545,30 @@ function parseChild(value: unknown): ChildId | undefined {
 }
 
 function parseHostState(value: unknown): HostState | undefined {
-  return typeof value === 'string' && hostStates.has(value as HostState) ? value as HostState : undefined;
+  return typeof value === 'string' && hostStates.has(value as HostState) ? (value as HostState) : undefined;
 }
 
 function parseRouteKind(value: unknown): RouteKind | undefined {
-  return typeof value === 'string' && routeKinds.has(value as RouteKind) ? value as RouteKind : undefined;
+  return typeof value === 'string' && routeKinds.has(value as RouteKind) ? (value as RouteKind) : undefined;
 }
 
 function parseRoundPhase(value: unknown): RoundPhase | undefined {
-  return typeof value === 'string' && roundPhases.has(value as RoundPhase) ? value as RoundPhase : undefined;
+  return typeof value === 'string' && roundPhases.has(value as RoundPhase) ? (value as RoundPhase) : undefined;
 }
 
-function parseStringArray(value: unknown, predicate: (entry: string) => boolean = () => true): readonly string[] | undefined {
-  return Array.isArray(value) && value.every((entry) => typeof entry === 'string' && entry.length > 0 && predicate(entry))
+function parseStringArray(
+  value: unknown,
+  predicate: (entry: string) => boolean = () => true,
+): readonly string[] | undefined {
+  return Array.isArray(value) &&
+    value.every((entry) => typeof entry === 'string' && entry.length > 0 && predicate(entry))
     ? value
     : undefined;
 }
 
 function parseNonEmptyStringArray(value: unknown): readonly [string, ...string[]] | undefined {
   const parsed = parseStringArray(value);
-  return parsed !== undefined && parsed.length > 0 ? parsed as readonly [string, ...string[]] : undefined;
+  return parsed !== undefined && parsed.length > 0 ? (parsed as readonly [string, ...string[]]) : undefined;
 }
 
 function nonNegativeInteger(value: unknown): number | undefined {
@@ -488,7 +583,8 @@ function parseReceiptCharges<Key extends string>(
   const charges: Partial<Record<Key, number>> = {};
   for (const [gate, count] of Object.entries(value)) {
     const parsed = nonNegativeInteger(count);
-    if (!nonEmptyString(gate) || parsed === undefined || (allowed !== undefined && !allowed.includes(gate as Key))) return undefined;
+    if (!nonEmptyString(gate) || parsed === undefined || (allowed !== undefined && !allowed.includes(gate as Key)))
+      return undefined;
     charges[gate as Key] = parsed;
   }
   return charges;
@@ -518,18 +614,31 @@ function parseReceipt(value: unknown): RoundReceipt | undefined {
   const parsed: Record<string, unknown> = {};
   for (const key of Object.keys(value)) {
     switch (key) {
-      case 'laps': parsed.laps = laps; break;
-      case 'growth': parsed.growth = growth; break;
-      case 'taskless': parsed.taskless = taskless; break;
-      case 'echo': parsed.echo = echo; break;
-      case 'settlementId': if (settlementId !== undefined) parsed.settlementId = settlementId; break;
-      case 'acks': parsed.acks = acks; break;
-      default: return undefined;
+      case 'laps':
+        parsed.laps = laps;
+        break;
+      case 'growth':
+        parsed.growth = growth;
+        break;
+      case 'taskless':
+        parsed.taskless = taskless;
+        break;
+      case 'echo':
+        parsed.echo = echo;
+        break;
+      case 'settlementId':
+        if (settlementId !== undefined) parsed.settlementId = settlementId;
+        break;
+      case 'acks':
+        parsed.acks = acks;
+        break;
+      default:
+        return undefined;
     }
   }
   return settlementId === undefined
-    ? parsed as unknown as UnsettledRoundReceipt
-    : parsed as unknown as SettledRoundReceipt;
+    ? (parsed as unknown as UnsettledRoundReceipt)
+    : (parsed as unknown as SettledRoundReceipt);
 }
 
 function parseHostEntry(value: unknown): HostEntry | undefined {
@@ -540,8 +649,15 @@ function parseHostEntry(value: unknown): HostEntry | undefined {
   const revalidation = value.revalidation;
   if (revalidation !== undefined) {
     const generation = isRecord(revalidation) ? revalidation.generation : undefined;
-    if (!isRecord(revalidation) || typeof revalidation.queueBlob !== 'string' || typeof revalidation.closureSha !== 'string'
-      || typeof generation !== 'number' || !Number.isSafeInteger(generation) || generation < 0) return undefined;
+    if (
+      !isRecord(revalidation) ||
+      typeof revalidation.queueBlob !== 'string' ||
+      typeof revalidation.closureSha !== 'string' ||
+      typeof generation !== 'number' ||
+      !Number.isSafeInteger(generation) ||
+      generation < 0
+    )
+      return undefined;
     const queueBlob = parseCommitSha(revalidation.queueBlob);
     const closureSha = parseCommitSha(revalidation.closureSha);
     if (!host || !pinnedBase || !tree || !queueBlob || !closureSha) return undefined;
@@ -577,8 +693,13 @@ function parseReroutePhase(value: unknown): ReroutePhase | undefined {
 }
 
 function parseLeafReturn(value: unknown): { readonly branch: string; readonly head: CommitSha } | undefined {
-  if (!isRecord(value) || typeof value.branch !== 'string' || !isValidGitBranchName(value.branch)
-    || typeof value.head !== 'string') return undefined;
+  if (
+    !isRecord(value) ||
+    typeof value.branch !== 'string' ||
+    !isValidGitBranchName(value.branch) ||
+    typeof value.head !== 'string'
+  )
+    return undefined;
   const head = parseCommitSha(value.head);
   return head === undefined ? undefined : { branch: value.branch, head };
 }
@@ -588,11 +709,20 @@ function parseOperatorSection(value: unknown): OperatorRouteSection | undefined 
   const origin = value.origin === 'land' || value.origin === 'rewind' ? value.origin : undefined;
   const reason = nonEmptyString(value.reason);
   const operator = nonEmptyString(value.operator);
-  const entryStep = typeof value.entryStep === 'string' && regionGates.has(value.entryStep as RegionGate)
-    ? value.entryStep as RegionGate
-    : undefined;
-  if (!origin || !reason || !operator || !entryStep || !Array.isArray(value.carried) || !isRecord(value.otherTips)
-    || !isRecord(value.priorRegion)) return undefined;
+  const entryStep =
+    typeof value.entryStep === 'string' && regionGates.has(value.entryStep as RegionGate)
+      ? (value.entryStep as RegionGate)
+      : undefined;
+  if (
+    !origin ||
+    !reason ||
+    !operator ||
+    !entryStep ||
+    !Array.isArray(value.carried) ||
+    !isRecord(value.otherTips) ||
+    !isRecord(value.priorRegion)
+  )
+    return undefined;
 
   let park: { readonly token: string } | undefined;
   if (value.park !== undefined) {
@@ -626,8 +756,11 @@ function parseOperatorSection(value: unknown): OperatorRouteSection | undefined 
     if (typeof status !== 'string' || !stepStatuses.has(status as StepStatus)) return undefined;
     statuses[gate] = status as StepStatus;
   }
-  if (Object.keys(value.priorRegion.statuses).some((key) => !regionGates.has(key as RegionGate))
-    || !isRecord(value.priorRegion.verdicts)) return undefined;
+  if (
+    Object.keys(value.priorRegion.statuses).some((key) => !regionGates.has(key as RegionGate)) ||
+    !isRecord(value.priorRegion.verdicts)
+  )
+    return undefined;
   const verdicts: Record<string, string> = {};
   for (const [file, bytes] of Object.entries(value.priorRegion.verdicts)) {
     if (!nonEmptyString(file) || typeof bytes !== 'string') return undefined;
@@ -640,9 +773,10 @@ function parseOperatorSection(value: unknown): OperatorRouteSection | undefined 
 
   let declaration: OperatorRouteSection['declaration'];
   if (value.declaration !== undefined) {
-    const tip = isRecord(value.declaration) && typeof value.declaration.tip === 'string'
-      ? parseCommitSha(value.declaration.tip)
-      : undefined;
+    const tip =
+      isRecord(value.declaration) && typeof value.declaration.tip === 'string'
+        ? parseCommitSha(value.declaration.tip)
+        : undefined;
     const at = isRecord(value.declaration) ? nonEmptyString(value.declaration.at) : undefined;
     if (!tip || !at || Number.isNaN(Date.parse(at))) return undefined;
     declaration = { tip, at };
@@ -650,23 +784,31 @@ function parseOperatorSection(value: unknown): OperatorRouteSection | undefined 
 
   let abandon: OperatorRouteSection['abandon'];
   if (value.abandon !== undefined) {
-    const rejectedTip = isRecord(value.abandon) && typeof value.abandon.rejectedTip === 'string'
-      ? parseCommitSha(value.abandon.rejectedTip)
-      : undefined;
-    const resetTip = isRecord(value.abandon) && typeof value.abandon.resetTip === 'string'
-      ? parseCommitSha(value.abandon.resetTip)
-      : undefined;
-    const stage = isRecord(value.abandon) && (value.abandon.stage === 'moved' || value.abandon.stage === 'synced')
-      ? value.abandon.stage
-      : undefined;
+    const rejectedTip =
+      isRecord(value.abandon) && typeof value.abandon.rejectedTip === 'string'
+        ? parseCommitSha(value.abandon.rejectedTip)
+        : undefined;
+    const resetTip =
+      isRecord(value.abandon) && typeof value.abandon.resetTip === 'string'
+        ? parseCommitSha(value.abandon.resetTip)
+        : undefined;
+    const stage =
+      isRecord(value.abandon) && (value.abandon.stage === 'moved' || value.abandon.stage === 'synced')
+        ? value.abandon.stage
+        : undefined;
     if (!rejectedTip || !resetTip || !stage) return undefined;
     abandon = { rejectedTip, resetTip, stage };
   }
 
   return {
-    origin, reason, operator, entryStep,
+    origin,
+    reason,
+    operator,
+    entryStep,
     ...(park === undefined ? {} : { park }),
-    carried, otherTips, priorRegion,
+    carried,
+    otherTips,
+    priorRegion,
     ...(declaration === undefined ? {} : { declaration }),
     ...(abandon === undefined ? {} : { abandon }),
   };
@@ -676,15 +818,23 @@ function parseOutboxEntry(value: unknown): OutboxEntry | undefined {
   if (!isRecord(value)) return undefined;
   const eventId = nonEmptyString(value.eventId);
   const occurredAt = nonEmptyString(value.occurredAt);
-  if (!eventId || !occurredAt || Number.isNaN(Date.parse(occurredAt)) || !isRecord(value.event) || !nonEmptyString(value.event.type)
-    || value.event.eventId !== eventId || value.event.occurredAt !== occurredAt) return undefined;
+  if (
+    !eventId ||
+    !occurredAt ||
+    Number.isNaN(Date.parse(occurredAt)) ||
+    !isRecord(value.event) ||
+    !nonEmptyString(value.event.type) ||
+    value.event.eventId !== eventId ||
+    value.event.occurredAt !== occurredAt
+  )
+    return undefined;
   return { eventId, occurredAt, event: value.event };
 }
 
 function parseOutbox(value: unknown): readonly OutboxEntry[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const entries = value.map(parseOutboxEntry);
-  return entries.some((entry) => entry === undefined) ? undefined : entries as OutboxEntry[];
+  return entries.some((entry) => entry === undefined) ? undefined : (entries as OutboxEntry[]);
 }
 
 function parseRoutedItem(value: unknown): RoutedItem | undefined {
@@ -698,17 +848,24 @@ function parseRoutedItem(value: unknown): RoutedItem | undefined {
   const fallback = value.fallback.map(parseChild);
   if (fallback.some((child) => child === undefined)) return undefined;
   if (value.rationale !== undefined && typeof value.rationale !== 'string') return undefined;
-  const prerequisitePaths = value.prerequisitePaths === undefined
-    ? undefined
-    : parseStringArray(value.prerequisitePaths);
+  const prerequisitePaths =
+    value.prerequisitePaths === undefined ? undefined : parseStringArray(value.prerequisitePaths);
   if (value.prerequisitePaths !== undefined && !prerequisitePaths) return undefined;
   const base: RoutedItemBase = {
-    findingId, kind, owner, host, reason, fallback: fallback as ChildId[],
+    findingId,
+    kind,
+    owner,
+    host,
+    reason,
+    fallback: fallback as ChildId[],
     ...(value.rationale === undefined ? {} : { rationale: value.rationale }),
     ...(prerequisitePaths === undefined ? {} : { prerequisitePaths }),
   };
   if (value.existingTask !== true) {
-    return value.existingTask === undefined && value.taskIds === undefined && value.obligation === undefined && value.restage === undefined
+    return value.existingTask === undefined &&
+      value.taskIds === undefined &&
+      value.obligation === undefined &&
+      value.restage === undefined
       ? base
       : undefined;
   }
@@ -729,12 +886,25 @@ function parsePendingAsBuiltRouteFindings(value: unknown): readonly PendingAsBui
   if (!Array.isArray(value)) return undefined;
   const findings: PendingAsBuiltRouteFinding[] = [];
   for (const item of value) {
-    if (!isRecord(item) || item.gate !== 'architecture_review_as_built' || item.class !== 'REMEDIABLE' || item.outcome !== 'remediated') return undefined;
+    if (
+      !isRecord(item) ||
+      item.gate !== 'architecture_review_as_built' ||
+      item.class !== 'REMEDIABLE' ||
+      item.outcome !== 'remediated'
+    )
+      return undefined;
     const finding = nonEmptyString(item.finding);
     const governingClause = nonEmptyString(item.governingClause);
     const summary = nonEmptyString(item.summary);
     if (!finding || !governingClause || !summary) return undefined;
-    findings.push({ gate: 'architecture_review_as_built', finding, class: 'REMEDIABLE', governingClause, summary, outcome: 'remediated' });
+    findings.push({
+      gate: 'architecture_review_as_built',
+      finding,
+      class: 'REMEDIABLE',
+      governingClause,
+      summary,
+      outcome: 'remediated',
+    });
   }
   return findings;
 }
@@ -747,9 +917,18 @@ function parseAllocation(value: unknown): FrozenAllocation | undefined {
     if (!child || !isRecord(rawAllocation)) return undefined;
     const remTaskIds = parseStringArray(rawAllocation.remTaskIds, (id) => id.startsWith('rem-'));
     const blockBodies = parseStringArray(rawAllocation.blockBodies);
-    if (!remTaskIds || !blockBodies || remTaskIds.length !== blockBodies.length ||
-      (rawAllocation.retryHint !== undefined && typeof rawAllocation.retryHint !== 'string')) return undefined;
-    allocation[child] = { remTaskIds, blockBodies, ...(rawAllocation.retryHint === undefined ? {} : { retryHint: rawAllocation.retryHint }) };
+    if (
+      !remTaskIds ||
+      !blockBodies ||
+      remTaskIds.length !== blockBodies.length ||
+      (rawAllocation.retryHint !== undefined && typeof rawAllocation.retryHint !== 'string')
+    )
+      return undefined;
+    allocation[child] = {
+      remTaskIds,
+      blockBodies,
+      ...(rawAllocation.retryHint === undefined ? {} : { retryHint: rawAllocation.retryHint }),
+    };
   }
   return allocation;
 }
@@ -775,14 +954,20 @@ function parseHostPlacements(
   for (const [rawChild, rawPlacement] of Object.entries(value)) {
     const child = parseChildId(rawChild);
     if (!child || hosts[child] === undefined || !isRecord(rawPlacement)) return undefined;
-    const leafEntryTip = typeof rawPlacement.leafEntryTip === 'string'
-      ? parseCommitSha(rawPlacement.leafEntryTip)
-      : undefined;
-    const exitTip = rawPlacement.exitTip === undefined
-      ? undefined
-      : typeof rawPlacement.exitTip === 'string' ? parseCommitSha(rawPlacement.exitTip) : undefined;
-    if ((rawPlacement.state !== 'deferred' && rawPlacement.state !== 'placed') || !leafEntryTip
-      || (rawPlacement.exitTip !== undefined && !exitTip)) return undefined;
+    const leafEntryTip =
+      typeof rawPlacement.leafEntryTip === 'string' ? parseCommitSha(rawPlacement.leafEntryTip) : undefined;
+    const exitTip =
+      rawPlacement.exitTip === undefined
+        ? undefined
+        : typeof rawPlacement.exitTip === 'string'
+          ? parseCommitSha(rawPlacement.exitTip)
+          : undefined;
+    if (
+      (rawPlacement.state !== 'deferred' && rawPlacement.state !== 'placed') ||
+      !leafEntryTip ||
+      (rawPlacement.exitTip !== undefined && !exitTip)
+    )
+      return undefined;
     placements[child] = {
       state: rawPlacement.state,
       leafEntryTip,
@@ -812,10 +997,10 @@ export function isDerivedAlreadyCompleteHost(record: RouteRecord, host: ChildId)
 }
 
 /** The current host is indexed by ascending child position in durable records. */
-export function currentHostOf(
-  record: Pick<RouteRecord, 'hosts' | 'currentHostIndex'>,
-): ChildId | undefined {
-  const host = Object.keys(record.hosts).map(Number).sort((left, right) => left - right)[record.currentHostIndex];
+export function currentHostOf(record: Pick<RouteRecord, 'hosts' | 'currentHostIndex'>): ChildId | undefined {
+  const host = Object.keys(record.hosts)
+    .map(Number)
+    .sort((left, right) => left - right)[record.currentHostIndex];
   return host === undefined ? undefined : parseChildId(host);
 }
 
@@ -855,7 +1040,13 @@ function hasConsistentFallback(
   const sources = new Set<number>();
   for (const movement of fallback) {
     const source = hosts[movement.from];
-    if (source === undefined || !isMovedHostState(source) || hosts[movement.to] === undefined || movement.to <= movement.from) return false;
+    if (
+      source === undefined ||
+      !isMovedHostState(source) ||
+      hosts[movement.to] === undefined ||
+      movement.to <= movement.from
+    )
+      return false;
     sources.add(movement.from);
   }
   return Object.entries(hosts).every(([child, state]) => !isMovedHostState(state) || sources.has(Number(child)));
@@ -887,24 +1078,41 @@ function hasConsistentRouteLifecycle(state: RouteLifecycleState): boolean {
     case 'prepared':
       // Creation is the only writer of a prepared round; admission opens it
       // in the same transaction that moves its first host out of pending.
-      return currentHostIndex === 0 && Object.values(hosts).every((hostState) => hostState === 'pending')
-        && entry === undefined && fallback === undefined && reroute === undefined;
+      return (
+        currentHostIndex === 0 &&
+        Object.values(hosts).every((hostState) => hostState === 'pending') &&
+        entry === undefined &&
+        fallback === undefined &&
+        reroute === undefined
+      );
     case 'open':
       // Exactly one host is in flight: no other host may be active.
       if (others.some(isActiveHostState)) return false;
       if (reroute !== undefined) {
         // Between the reroute transaction and its tree sync: one source is
         // moving, and the destination is the pending, unentered current host.
-        return movingHosts === 1 && current === 'pending' && entry === undefined
-          && reroute.destination === currentHost && fallback !== undefined && fallback.length > 0;
+        return (
+          movingHosts === 1 &&
+          current === 'pending' &&
+          entry === undefined &&
+          reroute.destination === currentHost &&
+          fallback !== undefined &&
+          fallback.length > 0
+        );
       }
       if (movingHosts > 0) return false;
       return isActiveHostState(current) || isCompletedHostState(current);
     case 'closed':
       // ADR decision 6: a round closes when its last host is restacked, done
       // or rerouted, so no host is in flight, built, or awaiting a reroute sync.
-      return reroute === undefined && (current === 'restacked' || current === 'done' || current === 'abandoned')
-        && others.every((hostState) => hostState === 'restacked' || hostState === 'done' || hostState === 'rerouted' || hostState === 'abandoned');
+      return (
+        reroute === undefined &&
+        (current === 'restacked' || current === 'done' || current === 'abandoned') &&
+        others.every(
+          (hostState) =>
+            hostState === 'restacked' || hostState === 'done' || hostState === 'rerouted' || hostState === 'abandoned',
+        )
+      );
   }
   return assertNever(phase);
 }
@@ -914,7 +1122,7 @@ export function parseRoundId(value: string): RoundId | undefined {
   const match = ROUND_ID.exec(value);
   if (!match) return undefined;
   const sequence = Number(match[1]);
-  return Number.isSafeInteger(sequence) && sequence <= MAX_ROUTE_ROUNDS ? value as RoundId : undefined;
+  return Number.isSafeInteger(sequence) && sequence <= MAX_ROUTE_ROUNDS ? (value as RoundId) : undefined;
 }
 
 /** Parses a durable route-record JSON blob without throwing. */
@@ -927,41 +1135,72 @@ export function parseRouteRecord(blob: string): RouteRecord | undefined {
   const allocation = parseAllocation(value.allocation);
   const hosts = parseHosts(value.hosts);
   const execution = value.execution === undefined ? undefined : value.execution === 'leaf' ? 'leaf' : undefined;
-  const placements = value.placements === undefined || hosts === undefined
-    ? undefined
-    : parseHostPlacements(value.placements, hosts);
-  const hostReasons = value.hostReasons === undefined || hosts === undefined ? undefined : parseHostReasons(value.hostReasons, hosts);
+  const placements =
+    value.placements === undefined || hosts === undefined ? undefined : parseHostPlacements(value.placements, hosts);
+  const hostReasons =
+    value.hostReasons === undefined || hosts === undefined ? undefined : parseHostReasons(value.hostReasons, hosts);
   const outbox = parseOutbox(value.outbox);
   const receipt = parseReceipt(value.receipt);
   const sealedAuthored = value.sealedAuthored === undefined ? undefined : nonNegativeInteger(value.sealedAuthored);
-  const pendingAsBuiltFindings = value.pendingAsBuiltFindings === undefined
-    ? undefined
-    : parsePendingAsBuiltRouteFindings(value.pendingAsBuiltFindings);
+  const pendingAsBuiltFindings =
+    value.pendingAsBuiltFindings === undefined
+      ? undefined
+      : parsePendingAsBuiltRouteFindings(value.pendingAsBuiltFindings);
   const entry = value.entry === undefined ? undefined : parseHostEntry(value.entry);
-  const fallback = value.fallback === undefined ? undefined : Array.isArray(value.fallback) ? value.fallback.map(parseRouteFallback) : undefined;
+  const fallback =
+    value.fallback === undefined
+      ? undefined
+      : Array.isArray(value.fallback)
+        ? value.fallback.map(parseRouteFallback)
+        : undefined;
   const reroute = value.reroute === undefined ? undefined : parseReroutePhase(value.reroute);
   const leafReturn = value.leafReturn === undefined ? undefined : parseLeafReturn(value.leafReturn);
   const operator = value.operator === undefined ? undefined : parseOperatorSection(value.operator);
   const currentHostIndex = value.currentHostIndex;
-  if (!roundId || !kind || !phase || !Array.isArray(value.items) || !allocation || !hosts || typeof currentHostIndex !== 'number' || !Number.isInteger(currentHostIndex)
-    || currentHostIndex < 0 || currentHostIndex >= Object.keys(hosts).length || !receipt || !outbox
-    || (receipt.settlementId !== undefined && (Object.keys(receipt.acks).length === 0 || Object.keys(receipt.acks).some((ack) => hosts[Number(ack) as ChildId] === undefined)))
-    || (value.entry !== undefined && !entry) || (fallback?.some((item) => item === undefined) ?? false)
-    || (value.fallback !== undefined && fallback === undefined) || (value.reroute !== undefined && !reroute)
-    || (value.sealedAuthored !== undefined && sealedAuthored === undefined)
-    || (value.pendingAsBuiltFindings !== undefined && pendingAsBuiltFindings === undefined)
-    || (value.leafReturn !== undefined && leafReturn === undefined)
-    || (value.operator !== undefined && operator === undefined)
-    || (value.execution !== undefined && execution === undefined)
-    || (value.placements !== undefined && placements === undefined)
-    || (execution !== undefined && kind !== 'audit')
-    || (placements !== undefined && execution !== 'leaf')
-    || (value.hostReasons !== undefined && hostReasons === undefined)
-    || (kind === 'operator' && (operator === undefined || Object.keys(hosts).length !== 1))
-    || (kind !== 'operator' && operator !== undefined)) return undefined;
-  if (!hasConsistentRouteLifecycle({
-    phase, hosts, currentHostIndex, entry, fallback: fallback as RouteFallback[] | undefined, reroute,
-  })) return undefined;
+  if (
+    !roundId ||
+    !kind ||
+    !phase ||
+    !Array.isArray(value.items) ||
+    !allocation ||
+    !hosts ||
+    typeof currentHostIndex !== 'number' ||
+    !Number.isInteger(currentHostIndex) ||
+    currentHostIndex < 0 ||
+    currentHostIndex >= Object.keys(hosts).length ||
+    !receipt ||
+    !outbox ||
+    (receipt.settlementId !== undefined &&
+      (Object.keys(receipt.acks).length === 0 ||
+        Object.keys(receipt.acks).some((ack) => hosts[Number(ack) as ChildId] === undefined))) ||
+    (value.entry !== undefined && !entry) ||
+    (fallback?.some((item) => item === undefined) ?? false) ||
+    (value.fallback !== undefined && fallback === undefined) ||
+    (value.reroute !== undefined && !reroute) ||
+    (value.sealedAuthored !== undefined && sealedAuthored === undefined) ||
+    (value.pendingAsBuiltFindings !== undefined && pendingAsBuiltFindings === undefined) ||
+    (value.leafReturn !== undefined && leafReturn === undefined) ||
+    (value.operator !== undefined && operator === undefined) ||
+    (value.execution !== undefined && execution === undefined) ||
+    (value.placements !== undefined && placements === undefined) ||
+    (execution !== undefined && kind !== 'audit') ||
+    (placements !== undefined && execution !== 'leaf') ||
+    (value.hostReasons !== undefined && hostReasons === undefined) ||
+    (kind === 'operator' && (operator === undefined || Object.keys(hosts).length !== 1)) ||
+    (kind !== 'operator' && operator !== undefined)
+  )
+    return undefined;
+  if (
+    !hasConsistentRouteLifecycle({
+      phase,
+      hosts,
+      currentHostIndex,
+      entry,
+      fallback: fallback as RouteFallback[] | undefined,
+      reroute,
+    })
+  )
+    return undefined;
   const items = value.items.map(parseRoutedItem);
   if (items.some((item) => item === undefined)) return undefined;
   const record: RouteRecord = {
@@ -1004,7 +1243,14 @@ export function parseRepairMarker(blob: string): RepairMarker | undefined {
 /** Parses the durable revalidation queue and its at-least-once event outbox. */
 export function parseRevalidationQueueRecord(blob: string): RevalidationQueueRecord | undefined {
   const value = parseBlob(blob);
-  if (!value || typeof value.generation !== 'number' || !Number.isInteger(value.generation) || value.generation < 0 || !Array.isArray(value.entries)) return undefined;
+  if (
+    !value ||
+    typeof value.generation !== 'number' ||
+    !Number.isInteger(value.generation) ||
+    value.generation < 0 ||
+    !Array.isArray(value.entries)
+  )
+    return undefined;
   const entries = value.entries.map((entry): RevalidationQueueEntry | undefined => {
     if (!isRecord(entry)) return undefined;
     const child = parseChild(entry.child);
@@ -1014,9 +1260,26 @@ export function parseRevalidationQueueRecord(blob: string): RevalidationQueueRec
     const oldParent = typeof entry.replay.oldParent === 'string' ? parseCommitSha(entry.replay.oldParent) : undefined;
     const newParent = typeof entry.replay.newParent === 'string' ? parseCommitSha(entry.replay.newParent) : undefined;
     const gates = entry.gates.map((gate): RegionGate | undefined =>
-      typeof gate === 'string' && regionGates.has(gate as RegionGate) ? gate as RegionGate : undefined);
-    if (!child || !position || !closureSha || !oldParent || !newParent || entry.state !== 'queued' || gates.some((gate) => gate === undefined)) return undefined;
-    return { child, position, closureSha, gates: gates as RegionGate[], replay: { oldParent, newParent }, state: 'queued' };
+      typeof gate === 'string' && regionGates.has(gate as RegionGate) ? (gate as RegionGate) : undefined,
+    );
+    if (
+      !child ||
+      !position ||
+      !closureSha ||
+      !oldParent ||
+      !newParent ||
+      entry.state !== 'queued' ||
+      gates.some((gate) => gate === undefined)
+    )
+      return undefined;
+    return {
+      child,
+      position,
+      closureSha,
+      gates: gates as RegionGate[],
+      replay: { oldParent, newParent },
+      state: 'queued',
+    };
   });
   const outbox = parseOutbox(value.outbox);
   if (entries.some((entry) => entry === undefined) || !outbox) return undefined;
@@ -1024,7 +1287,8 @@ export function parseRevalidationQueueRecord(blob: string): RevalidationQueueRec
   const children = new Set<ChildId>();
   let previousPosition: ChildId | undefined;
   for (const entry of parsedEntries) {
-    if (children.has(entry.child) || (previousPosition !== undefined && entry.position <= previousPosition)) return undefined;
+    if (children.has(entry.child) || (previousPosition !== undefined && entry.position <= previousPosition))
+      return undefined;
     children.add(entry.child);
     previousPosition = entry.position;
   }

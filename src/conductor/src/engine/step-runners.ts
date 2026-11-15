@@ -2152,9 +2152,10 @@ export class DefaultStepRunner implements StepRunner {
           prepareCandidateSelfHost:
             this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
           prepareManagedSessionObservation: this.providerExecutionContext?.prepareManagedSessionObservation,
-          onAttempt: request.restack === undefined
-            ? this.providerAttempt
-            : async (step, attempt) => this.providerAttempt?.(step, { ...attempt, restack: request.restack }),
+          onAttempt:
+            request.restack === undefined
+              ? this.providerAttempt
+              : async (step, attempt) => this.providerAttempt?.(step, { ...attempt, restack: request.restack }),
           onCandidateStart: this.providerCandidateStart,
           warn: this.providerWarn,
           options,

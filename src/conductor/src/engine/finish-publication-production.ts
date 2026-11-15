@@ -1281,7 +1281,10 @@ async function establishChildPrs(input: {
   if (await deferredPlacementsExist(input.root, input.slug, { git: stackGit })) {
     const deferred = await deferredPlacementDescriptions(input.root, input.slug, { git: stackGit });
     const detail = deferred === undefined || deferred.length === 0 ? `feature ${input.slug}` : deferred.join(', ');
-    throw new StackPublicationHaltError('stack_publication_precondition_failed', `deferred routed placement remains (${detail}); run the fold rebase before publication`);
+    throw new StackPublicationHaltError(
+      'stack_publication_precondition_failed',
+      `deferred routed placement remains (${detail}); run the fold rebase before publication`,
+    );
   }
   const children = await readStackPublicationChildren(input.root, input.slug, { git: stackGit });
   if (children === 'unreadable') throw new Error('stack child positions are unreadable');

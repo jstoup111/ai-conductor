@@ -113,9 +113,15 @@ async function operatorFixture() {
   await subject.git(['commit', '-qm', 'reviewer edit']);
   await subject.git(['checkout', '-q', leafBranchFor('demo')]);
   await mkdir(join(subject.repo, '.pipeline', 'children', '1'), { recursive: true });
-  await writeFile(join(subject.repo, '.pipeline', 'children', '1', 'conduct-state.json'), JSON.stringify({
-    acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
-  }));
+  await writeFile(
+    join(subject.repo, '.pipeline', 'children', '1', 'conduct-state.json'),
+    JSON.stringify({
+      acceptance_specs: 'done',
+      build: 'done',
+      test_suite: 'done',
+      build_review: 'done',
+    }),
+  );
   return subject;
 }
 
@@ -126,22 +132,41 @@ async function admitFixablePrdAudit(foldRoutedFixes: boolean | undefined) {
   await subject.git(['checkout', '-qb', 'feat/c2/demo']);
   await subject.git(['update-ref', closureRefFor('demo', c2), 'HEAD']);
   await subject.git(['checkout', '-q', leafBranchFor('demo')]);
-  await writeFile(join(subject.repo, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [
-    { id: 'T1', status: 'completed' }, { id: 'T2', status: 'completed' }, { id: 'T3', status: 'completed' },
-  ] }));
-  await persistPrdAuditVerdict(subject.repo, {
-    complete: true,
-    judgment: {
-      version: 'v1',
-      criterionJudgments: [{
-        criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'FIXABLE',
-        evidence: 'Fixture identifies child one work.', rationale: 'Repair the child one task.',
-        requirementAssociations: [], evidenceTaskIds: ['T1'], ownerTaskId: 'T1',
-      }],
-      noOwnerObservations: [],
+  await writeFile(
+    join(subject.repo, '.pipeline', 'task-status.json'),
+    JSON.stringify({
+      tasks: [
+        { id: 'T1', status: 'completed' },
+        { id: 'T2', status: 'completed' },
+        { id: 'T3', status: 'completed' },
+      ],
+    }),
+  );
+  await persistPrdAuditVerdict(
+    subject.repo,
+    {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: [
+          {
+            criterion: { storyId: '1', ordinal: 1 },
+            criterionId: 'S1.1',
+            grade: 'FIXABLE',
+            evidence: 'Fixture identifies child one work.',
+            rationale: 'Repair the child one task.',
+            requirementAssociations: [],
+            evidenceTaskIds: ['T1'],
+            ownerTaskId: 'T1',
+          },
+        ],
+        noOwnerObservations: [],
+      },
+      diagnostics: [],
+      recordedDispositions: [],
     },
-    diagnostics: [], recordedDispositions: [],
-  }, { attemptId: 'fixture-prd-audit', codeStamp: null });
+    { attemptId: 'fixture-prd-audit', codeStamp: null },
+  );
   await writeKickbackLedger(subject.repo, { version: 1, gates: {}, growth: { authored: 3, added: 0, byGate: {} } });
   const conductor = new Conductor({
     projectRoot: subject.repo,
@@ -149,32 +174,50 @@ async function admitFixablePrdAudit(foldRoutedFixes: boolean | undefined) {
     featureSlug: 'demo',
     events: new ConductorEventEmitter(),
     config: {
-      stacked_prs: { enabled: true, max_slices: 3, route_whole_feature_fixes: true, ...(foldRoutedFixes === undefined ? {} : { fold_routed_fixes: foldRoutedFixes }) },
+      stacked_prs: {
+        enabled: true,
+        max_slices: 3,
+        route_whole_feature_fixes: true,
+        ...(foldRoutedFixes === undefined ? {} : { fold_routed_fixes: foldRoutedFixes }),
+      },
       prd_audit: { max_remediation_laps: 1, max_appended_tasks: 5, max_appended_ratio: 1 },
     } as never,
     stepRunner: {
       run: async (step, _state, options) => {
         if (step === 'remediate') {
-          await persistFixtureProjectedRemediationPlan(subject.repo, options, [{
-            id: 'S1.1', disposition: 'existing-task', category: null, rationale: 'Repair the child one task.',
-            tasks: [], boundTaskIds: ['T1'],
-          }]);
+          await persistFixtureProjectedRemediationPlan(subject.repo, options, [
+            {
+              id: 'S1.1',
+              disposition: 'existing-task',
+              category: null,
+              rationale: 'Repair the child one task.',
+              tasks: [],
+              boundTaskIds: ['T1'],
+            },
+          ]);
         }
         return { success: true };
       },
     },
     childRegionLifecycle: {
-      resolveActiveChild: async () => ({
-        kind: 'active', child: c3, position: c3, isLeaf: true, branch: leafBranchFor('demo'),
-      }) as never,
+      resolveActiveChild: async () =>
+        ({
+          kind: 'active',
+          child: c3,
+          position: c3,
+          isLeaf: true,
+          branch: leafBranchFor('demo'),
+        }) as never,
     },
   });
-  await expect((conductor as unknown as { planRemediation: Function }).planRemediation(
-    { feature_desc: 'demo', session_started_at: Date.now() - 1_000 },
-    ALL_STEPS,
-    'route child one PRD finding',
-    { source: 'prd_audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
-  )).resolves.toMatchObject({ kind: 'route', target: 'build' });
+  await expect(
+    (conductor as unknown as { planRemediation: Function }).planRemediation(
+      { feature_desc: 'demo', session_started_at: Date.now() - 1_000 },
+      ALL_STEPS,
+      'route child one PRD finding',
+      { source: 'prd_audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
+    ),
+  ).resolves.toMatchObject({ kind: 'route', target: 'build' });
   return subject;
 }
 
@@ -287,15 +330,20 @@ describe('routed-round admission (real local Git)', () => {
       if (created.kind !== 'created') throw new Error(created.kind);
 
       await expect(admitRound(subject.repo, 'demo', created.record, c1)).resolves.toMatchObject({
-        kind: 'admitted', record: { execution: 'leaf' },
+        kind: 'admitted',
+        record: { execution: 'leaf' },
       });
       await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
-        kind: 'record', record: { execution: 'leaf' },
+        kind: 'record',
+        record: { execution: 'leaf' },
       });
       await expect(readRepairMarker(subject.repo, 'demo')).resolves.toMatchObject({
-        kind: 'marker', marker: { host: c1, roundId, execution: 'leaf' },
+        kind: 'marker',
+        marker: { host: c1, roundId, execution: 'leaf' },
       });
-    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+    } finally {
+      await rm(subject.repo, { recursive: true, force: true });
+    }
   });
 
   // Covers: task:3
@@ -311,70 +359,89 @@ describe('routed-round admission (real local Git)', () => {
       if (stored.kind !== 'record' || marker.kind !== 'marker') throw new Error('admission was not durable');
       expect(stored.record).not.toHaveProperty('execution');
       expect(marker.marker).not.toHaveProperty('execution');
-    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+    } finally {
+      await rm(subject.repo, { recursive: true, force: true });
+    }
   });
 
   // Covers: task:3
   it.each([
     ['unset', undefined, 'leaf'],
     ['false', false, undefined],
-  ] as const)('freezes %s fold mode through a child-owned FIXABLE PRD audit', async (_setting, foldRoutedFixes, execution) => {
-    const subject = await admitFixablePrdAudit(foldRoutedFixes);
-    try {
-      const stored = await readRouteRecord(subject.repo, 'demo', roundId);
-      const marker = await readRepairMarker(subject.repo, 'demo');
-      if (stored.kind !== 'record' || marker.kind !== 'marker') throw new Error('audit admission was not durable');
-      expect(stored.record.items).toEqual([expect.objectContaining({ owner: c1, host: c1 })]);
-      expect(await subject.git(['symbolic-ref', '--short', 'HEAD']).then((result) => result.stdout.trim())).toBe(leafBranchFor('demo'));
-      if (execution === undefined) {
-        expect(stored.record).not.toHaveProperty('execution');
-        expect(marker.marker).not.toHaveProperty('execution');
-      } else {
-        expect(stored.record.execution).toBe(execution);
-        expect(marker.marker.execution).toBe(execution);
+  ] as const)(
+    'freezes %s fold mode through a child-owned FIXABLE PRD audit',
+    async (_setting, foldRoutedFixes, execution) => {
+      const subject = await admitFixablePrdAudit(foldRoutedFixes);
+      try {
+        const stored = await readRouteRecord(subject.repo, 'demo', roundId);
+        const marker = await readRepairMarker(subject.repo, 'demo');
+        if (stored.kind !== 'record' || marker.kind !== 'marker') throw new Error('audit admission was not durable');
+        expect(stored.record.items).toEqual([expect.objectContaining({ owner: c1, host: c1 })]);
+        expect(await subject.git(['symbolic-ref', '--short', 'HEAD']).then((result) => result.stdout.trim())).toBe(
+          leafBranchFor('demo'),
+        );
+        if (execution === undefined) {
+          expect(stored.record).not.toHaveProperty('execution');
+          expect(marker.marker).not.toHaveProperty('execution');
+        } else {
+          expect(stored.record.execution).toBe(execution);
+          expect(marker.marker.execution).toBe(execution);
+        }
+      } finally {
+        await rm(subject.repo, { recursive: true, force: true });
       }
-    } finally { await rm(subject.repo, { recursive: true, force: true }); }
-  });
+    },
+  );
 
   // Covers: task:3
   it('keeps operator and revalidate rounds on owner execution', async () => {
     const operator = await operatorFixture();
     try {
-      await expect(openOperatorRound({
-        worktree: operator.repo,
-        slug: 'demo',
-        roundId,
-        host: c1,
-        reason: 'land reviewer edits',
-        operator: 'operator@example.test',
-        carried: [],
-        emitter: new ConductorEventEmitter(),
-        git: operator.git,
-      })).resolves.toMatchObject({ kind: 'opened' });
+      await expect(
+        openOperatorRound({
+          worktree: operator.repo,
+          slug: 'demo',
+          roundId,
+          host: c1,
+          reason: 'land reviewer edits',
+          operator: 'operator@example.test',
+          carried: [],
+          emitter: new ConductorEventEmitter(),
+          git: operator.git,
+        }),
+      ).resolves.toMatchObject({ kind: 'opened' });
       const operatorRecord = await readRouteRecord(operator.repo, 'demo', roundId);
       const operatorMarker = await readRepairMarker(operator.repo, 'demo');
-      if (operatorRecord.kind !== 'record' || operatorMarker.kind !== 'marker') throw new Error('operator admission was not durable');
+      if (operatorRecord.kind !== 'record' || operatorMarker.kind !== 'marker')
+        throw new Error('operator admission was not durable');
       expect(operatorRecord.record.kind).toBe('operator');
       expect(operatorRecord.record).not.toHaveProperty('execution');
       expect(operatorMarker.marker).not.toHaveProperty('execution');
-    } finally { await rm(operator.repo, { recursive: true, force: true }); }
+    } finally {
+      await rm(operator.repo, { recursive: true, force: true });
+    }
 
     const revalidate = await fixture();
     try {
       await writeQueue(revalidate);
-      await expect(admitQueuedRevalidation({
-        worktree: revalidate.repo,
-        slug: 'demo',
-        reconciled: { kind: 'quiescent' },
-        git: revalidate.git,
-      })).resolves.toMatchObject({ kind: 'admitted', host: c1 });
+      await expect(
+        admitQueuedRevalidation({
+          worktree: revalidate.repo,
+          slug: 'demo',
+          reconciled: { kind: 'quiescent' },
+          git: revalidate.git,
+        }),
+      ).resolves.toMatchObject({ kind: 'admitted', host: c1 });
       const revalidateRecord = await readRouteRecord(revalidate.repo, 'demo', roundId);
       const revalidateMarker = await readRepairMarker(revalidate.repo, 'demo');
-      if (revalidateRecord.kind !== 'record' || revalidateMarker.kind !== 'marker') throw new Error('revalidate admission was not durable');
+      if (revalidateRecord.kind !== 'record' || revalidateMarker.kind !== 'marker')
+        throw new Error('revalidate admission was not durable');
       expect(revalidateRecord.record.kind).toBe('revalidate');
       expect(revalidateRecord.record).not.toHaveProperty('execution');
       expect(revalidateMarker.marker).not.toHaveProperty('execution');
-    } finally { await rm(revalidate.repo, { recursive: true, force: true }); }
+    } finally {
+      await rm(revalidate.repo, { recursive: true, force: true });
+    }
   });
 
   // Covers: task:rem-prd-audit-rem-prd-audit-rem-vg6-s6-1

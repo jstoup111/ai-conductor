@@ -86,7 +86,9 @@ async function commit(root: string, file: string, message: string): Promise<stri
   return git(root, ['log', '-1', '--format=%B']);
 }
 
-async function routedFixture(options: { readonly failRoundStamp?: boolean; readonly leafPosition?: 2 | 3 } = {}): Promise<string> {
+async function routedFixture(
+  options: { readonly failRoundStamp?: boolean; readonly leafPosition?: 2 | 3 } = {},
+): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'round-stamp-hook-'));
   roots.push(root);
   await git(root, ['init', '-q', '-b', 'main']);
@@ -95,18 +97,35 @@ async function routedFixture(options: { readonly failRoundStamp?: boolean; reado
   await mkdir(join(root, '.ai-conductor'), { recursive: true });
   await writeFile(join(root, '.gitignore'), '.pipeline/\n');
   const leafPosition = options.leafPosition ?? 2;
-  await writeFile(join(root, '.ai-conductor', 'config.yml'), `stacked_prs:\n  enabled: true\n  max_slices: ${leafPosition}\n  route_whole_feature_fixes: true\n`);
+  await writeFile(
+    join(root, '.ai-conductor', 'config.yml'),
+    `stacked_prs:\n  enabled: true\n  max_slices: ${leafPosition}\n  route_whole_feature_fixes: true\n`,
+  );
   await git(root, ['add', '.gitignore', '.ai-conductor/config.yml']);
   await git(root, ['commit', '-qm', 'base']);
-  await writeSliceTopologyFixture(root, leafPosition === 3 ? {
-    version: 1, slug: 'demo', runId: 'round-stamp', status: 'done', entries: [],
-    sliceMembership: { taskSlices: { T1: 1, T2: 2, T3: 3 }, titles: ['child', 'middle', 'leaf'] },
-    storyOwnership: { S1: 1, S2: 2, S3: 3 },
-  } : {
-    version: 1, slug: 'demo', runId: 'round-stamp', status: 'done', entries: [],
-    sliceMembership: { taskSlices: { T1: 1, T2: 2 }, titles: ['child', 'leaf'] },
-    storyOwnership: { S1: 1, S2: 2 },
-  }, envelopeFilesystem);
+  await writeSliceTopologyFixture(
+    root,
+    leafPosition === 3
+      ? {
+          version: 1,
+          slug: 'demo',
+          runId: 'round-stamp',
+          status: 'done',
+          entries: [],
+          sliceMembership: { taskSlices: { T1: 1, T2: 2, T3: 3 }, titles: ['child', 'middle', 'leaf'] },
+          storyOwnership: { S1: 1, S2: 2, S3: 3 },
+        }
+      : {
+          version: 1,
+          slug: 'demo',
+          runId: 'round-stamp',
+          status: 'done',
+          entries: [],
+          sliceMembership: { taskSlices: { T1: 1, T2: 2 }, titles: ['child', 'leaf'] },
+          storyOwnership: { S1: 1, S2: 2 },
+        },
+    envelopeFilesystem,
+  );
   await git(root, ['checkout', '-qb', 'feat/c1/demo']);
   await writeFile(join(root, 'child.txt'), 'child\n');
   await git(root, ['add', 'child.txt']);
@@ -122,7 +141,10 @@ async function routedFixture(options: { readonly failRoundStamp?: boolean; reado
   await git(root, ['checkout', '-q', 'feat/c1/demo']);
   await mkdir(join(root, '.pipeline'), { recursive: true });
   await writeFile(join(root, '.pipeline', 'current-task'), 'T1\n');
-  await writeFile(join(root, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{ id: 'T1', status: 'in_progress' }] }));
+  await writeFile(
+    join(root, '.pipeline', 'task-status.json'),
+    JSON.stringify({ tasks: [{ id: 'T1', status: 'in_progress' }] }),
+  );
   await installHooks(root, options.failRoundStamp);
   return root;
 }
@@ -150,10 +172,13 @@ describe('prepare-commit-msg round stamp (real local Git)', () => {
     const message = join(root, '.pipeline', 'commit-message');
     await writeFile(message, 'feat: leaf repair\n');
 
-    await expect(execFile('node', [engineIndex, 'round-stamp', '--verify', message], { cwd: root }))
-      .rejects.toMatchObject({ code: 1 });
+    await expect(
+      execFile('node', [engineIndex, 'round-stamp', '--verify', message], { cwd: root }),
+    ).rejects.toMatchObject({ code: 1 });
 
-    await expect(commit(root, 'unreadable-marker.txt', 'feat: leaf repair')).rejects.toThrow(/marker is unreadable|missing its Round/);
+    await expect(commit(root, 'unreadable-marker.txt', 'feat: leaf repair')).rejects.toThrow(
+      /marker is unreadable|missing its Round/,
+    );
     await expect(git(root, ['rev-parse', 'HEAD'])).resolves.toBe(before);
   });
 
@@ -230,7 +255,10 @@ describe('prepare-commit-msg round stamp (real local Git)', () => {
     await git(n1, ['config', 'user.name', 'Round stamp']);
     await mkdir(join(n1, '.ai-conductor'), { recursive: true });
     await writeFile(join(n1, '.gitignore'), '.pipeline/\n');
-    await writeFile(join(n1, '.ai-conductor', 'config.yml'), 'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: true\n');
+    await writeFile(
+      join(n1, '.ai-conductor', 'config.yml'),
+      'stacked_prs:\n  enabled: true\n  route_whole_feature_fixes: true\n',
+    );
     await git(n1, ['add', '.gitignore', '.ai-conductor/config.yml']);
     await git(n1, ['commit', '-qm', 'base']);
     await git(n1, ['checkout', '-qb', 'feat/daemon-demo']);

@@ -276,7 +276,11 @@ export async function admitRound(
       { kind: 'update-record', previous: stored, record: next },
       {
         kind: 'create-marker',
-        marker: { host: firstHost, roundId: record.roundId, ...(next.execution === 'leaf' ? { execution: 'leaf' as const } : {}) },
+        marker: {
+          host: firstHost,
+          roundId: record.roundId,
+          ...(next.execution === 'leaf' ? { execution: 'leaf' as const } : {}),
+        },
       },
     ],
     dependencies,

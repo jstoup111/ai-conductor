@@ -24,8 +24,7 @@ import type { DispatchMeteringObservation } from '../dispatch-metering.js';
 
 /** Explicit duration histogram boundaries, from 10 ms through 8 hours. */
 export const DURATION_BUCKET_BOUNDARIES_MS = [
-  10, 25, 50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000,
-  30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000,
+  10, 25, 50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000, 30_000, 60_000, 120_000, 300_000, 600_000, 900_000, 1_800_000,
   3_600_000, 7_200_000, 14_400_000, 28_800_000,
 ];
 
@@ -48,9 +47,12 @@ const STEP_DIMENSION_KEYS = ['model', 'effort', 'provider', 'tier', 'restack_cau
 const DISPATCH_DIMENSION_KEYS = [...STEP_DIMENSION_KEYS, 'fallback'] as const;
 type DimensionKeys = readonly (keyof DispatchDimensions)[];
 
-type DispatchDimensionEvent = Extract<ConductorEvent, {
-  type: 'provider_attempt' | 'step_completed' | 'step_failed' | 'step_retry';
-}>;
+type DispatchDimensionEvent = Extract<
+  ConductorEvent,
+  {
+    type: 'provider_attempt' | 'step_completed' | 'step_failed' | 'step_retry';
+  }
+>;
 
 /** Project event and dispatch-observation fields into metric-safe dimensions. */
 export function dispatchDimensionsFrom(
@@ -58,15 +60,19 @@ export function dispatchDimensionsFrom(
   observation?: DispatchMeteringObservation,
 ): DispatchDimensions {
   const eventModel = 'model' in event ? event.model : undefined;
-  const eventProvider = event.type === 'step_completed'
-    ? event.actualProvider
-    : 'actualProvider' in event && event.actualProvider !== undefined
+  const eventProvider =
+    event.type === 'step_completed'
       ? event.actualProvider
-      : 'provider' in event ? event.provider : undefined;
+      : 'actualProvider' in event && event.actualProvider !== undefined
+        ? event.actualProvider
+        : 'provider' in event
+          ? event.provider
+          : undefined;
   const provider = eventProvider ?? observation?.provider;
-  const preferredProvider = 'preferredProvider' in event
-    ? event.preferredProvider ?? observation?.preferredProvider
-    : observation?.preferredProvider;
+  const preferredProvider =
+    'preferredProvider' in event
+      ? (event.preferredProvider ?? observation?.preferredProvider)
+      : observation?.preferredProvider;
   return {
     ...(eventModel !== undefined || observation?.model !== undefined
       ? { model: eventModel ?? observation?.model }
@@ -74,9 +80,7 @@ export function dispatchDimensionsFrom(
     ...('effort' in event && event.effort !== undefined ? { effort: event.effort } : {}),
     ...(provider !== undefined ? { provider } : {}),
     ...('tier' in event && event.tier !== undefined ? { tier: event.tier } : {}),
-    ...(preferredProvider !== undefined && provider !== undefined
-      ? { fallback: preferredProvider !== provider }
-      : {}),
+    ...(preferredProvider !== undefined && provider !== undefined ? { fallback: preferredProvider !== provider } : {}),
     ...(event.type === 'provider_attempt' && event.restack !== undefined ? { restack_cause: event.restack.cause } : {}),
   };
 }
@@ -109,7 +113,9 @@ export class MetricsRecorder {
   ) {
     this.instruments = instruments ?? createInstruments(meter);
     this.customAttrs = Object.fromEntries(
-      Object.entries(customAttrs).filter(([key]) => !RESERVED_CONDUCTOR_LABEL_KEYS.includes(key as typeof RESERVED_CONDUCTOR_LABEL_KEYS[number])),
+      Object.entries(customAttrs).filter(
+        ([key]) => !RESERVED_CONDUCTOR_LABEL_KEYS.includes(key as (typeof RESERVED_CONDUCTOR_LABEL_KEYS)[number]),
+      ),
     );
   }
 
@@ -119,27 +125,45 @@ export class MetricsRecorder {
   }
 
   onStepClose(
-    step: string, durationMs: number, retryCount: number, tokenUsage?: TokenUsage,
-    recordDispatch?: boolean, dimensions?: DispatchDimensions,
+    step: string,
+    durationMs: number,
+    retryCount: number,
+    tokenUsage?: TokenUsage,
+    recordDispatch?: boolean,
+    dimensions?: DispatchDimensions,
   ): void;
   /** @deprecated Pass `recordDispatch` and `dimensions` without a model argument. */
   onStepClose(
-    step: string, durationMs: number, retryCount: number, tokenUsage?: TokenUsage,
-    legacyModel?: string, recordDispatch?: boolean, dimensions?: DispatchDimensions,
+    step: string,
+    durationMs: number,
+    retryCount: number,
+    tokenUsage?: TokenUsage,
+    legacyModel?: string,
+    recordDispatch?: boolean,
+    dimensions?: DispatchDimensions,
   ): void;
   onStepClose(
-    step: string, durationMs: number, retryCount: number, tokenUsage?: TokenUsage,
+    step: string,
+    durationMs: number,
+    retryCount: number,
+    tokenUsage?: TokenUsage,
     recordDispatchOrLegacyModel?: boolean | string,
     dimensionsOrRecordDispatch?: DispatchDimensions | boolean,
     legacyDimensions?: DispatchDimensions,
   ): void {
     const legacySignature = typeof dimensionsOrRecordDispatch === 'boolean';
-    const recordDispatch = typeof recordDispatchOrLegacyModel === 'boolean'
-      ? recordDispatchOrLegacyModel
-      : legacySignature ? dimensionsOrRecordDispatch : true;
-    const dimensions = typeof recordDispatchOrLegacyModel === 'boolean'
-      ? dimensionsOrRecordDispatch as DispatchDimensions | undefined
-      : legacySignature ? legacyDimensions : dimensionsOrRecordDispatch as DispatchDimensions | undefined;
+    const recordDispatch =
+      typeof recordDispatchOrLegacyModel === 'boolean'
+        ? recordDispatchOrLegacyModel
+        : legacySignature
+          ? dimensionsOrRecordDispatch
+          : true;
+    const dimensions =
+      typeof recordDispatchOrLegacyModel === 'boolean'
+        ? (dimensionsOrRecordDispatch as DispatchDimensions | undefined)
+        : legacySignature
+          ? legacyDimensions
+          : (dimensionsOrRecordDispatch as DispatchDimensions | undefined);
     const attrs = this.withDimensions({ step }, dimensions, STEP_DIMENSION_KEYS);
     this.instruments.durationHistogram.record(durationMs, this.withIdentity(attrs));
     if (retryCount > 0) this.instruments.retriesCounter.add(retryCount, this.withIdentity(attrs));
@@ -150,31 +174,40 @@ export class MetricsRecorder {
   /** @deprecated Pass `dimensions` without a model argument. */
   onDispatch(step: string, tokenUsage?: TokenUsage, legacyModel?: string, dimensions?: DispatchDimensions): void;
   onDispatch(
-    step: string, tokenUsage?: TokenUsage, dimensionsOrLegacyModel?: DispatchDimensions | string,
+    step: string,
+    tokenUsage?: TokenUsage,
+    dimensionsOrLegacyModel?: DispatchDimensions | string,
     legacyDimensions?: DispatchDimensions,
   ): void {
-    const dimensions = legacyDimensions ?? (
-      typeof dimensionsOrLegacyModel === 'string' ? undefined : dimensionsOrLegacyModel
+    const dimensions =
+      legacyDimensions ?? (typeof dimensionsOrLegacyModel === 'string' ? undefined : dimensionsOrLegacyModel);
+    this.instruments.dispatchesCounter.add(
+      1,
+      this.withIdentity(
+        this.withDimensions({ step, metering: classifyMetering(tokenUsage) }, dimensions, DISPATCH_DIMENSION_KEYS),
+      ),
     );
-    this.instruments.dispatchesCounter.add(1, this.withIdentity(this.withDimensions(
-      { step, metering: classifyMetering(tokenUsage) }, dimensions, DISPATCH_DIMENSION_KEYS,
-    )));
   }
   onRetry(step: string, dimensions?: DispatchDimensions): void {
-    this.instruments.retriesCounter.add(1, this.withIdentity(this.withDimensions(
-      { step }, dimensions, STEP_DIMENSION_KEYS,
-    )));
+    this.instruments.retriesCounter.add(
+      1,
+      this.withIdentity(this.withDimensions({ step }, dimensions, STEP_DIMENSION_KEYS)),
+    );
   }
   onStepTerminal(step: string, outcome: StepTerminalOutcome, dimensions?: DispatchDimensions): void {
-    this.instruments.stepOutcomesCounter.add(1, this.withIdentity(this.withDimensions(
-      { step, outcome }, dimensions, STEP_DIMENSION_KEYS,
-    )));
+    this.instruments.stepOutcomesCounter.add(
+      1,
+      this.withIdentity(this.withDimensions({ step, outcome }, dimensions, STEP_DIMENSION_KEYS)),
+    );
   }
 
   onFeatureCostSnapshot(event: Extract<ConductorEvent, { type: 'feature_cost_snapshot' }>): void {
     if (!Number.isFinite(event.costUsd)) return;
     const tierAttrs: Record<string, string> = event.tier === undefined ? {} : { tier: event.tier };
-    this.instruments.featureCostGauge.record(event.costUsd, this.withIdentity({ cost_complete: event.costComplete, ...tierAttrs }));
+    this.instruments.featureCostGauge.record(
+      event.costUsd,
+      this.withIdentity({ cost_complete: event.costComplete, ...tierAttrs }),
+    );
     for (const bucket of event.byDimension) {
       if (!Number.isFinite(bucket.costUsd)) continue;
       const attributes: Record<string, string> = { step: bucket.step, ...tierAttrs };
@@ -197,10 +230,14 @@ export class MetricsRecorder {
   }
 
   onFeatureUsageTotal(event: Extract<ConductorEvent, { type: 'feature_usage_total' }>): void {
-    if (Number.isFinite(event.costUsd)) this.instruments.featureCostGauge.record(event.costUsd, this.withIdentity({
-      cost_complete: event.unmeteredDispatches === 0 && (event.costUnmeteredDispatches ?? 0) === 0,
-      ...(event.tier === undefined ? {} : { tier: event.tier }),
-    }));
+    if (Number.isFinite(event.costUsd))
+      this.instruments.featureCostGauge.record(
+        event.costUsd,
+        this.withIdentity({
+          cost_complete: event.unmeteredDispatches === 0 && (event.costUnmeteredDispatches ?? 0) === 0,
+          ...(event.tier === undefined ? {} : { tier: event.tier }),
+        }),
+      );
   }
 
   onRunClose(outcome: RunOutcome, tier?: string): void {
@@ -216,12 +253,15 @@ export class MetricsRecorder {
     for (const state of BACKLOG_STATES) {
       this.instruments.daemonBacklogGauge.record(snapshot.counts[state], this.withIdentity({ state }));
       const age = snapshot.oldestAgeSeconds[state];
-      if (typeof age === 'number' && Number.isFinite(age)) this.instruments.daemonOldestAgeGauge.record(age, this.withIdentity({ state }));
+      if (typeof age === 'number' && Number.isFinite(age))
+        this.instruments.daemonOldestAgeGauge.record(age, this.withIdentity({ state }));
     }
     this.instruments.daemonSlotsGauge.record(snapshot.slots.busy, this.withIdentity({ state: 'busy' }));
     this.instruments.daemonSlotsGauge.record(snapshot.slots.free, this.withIdentity({ state: 'free' }));
-    for (const feature of snapshot.inFlight) this.instruments.daemonInflightGauge.record(1, this.withIdentity({ feature }));
-    for (const reason of BLOCK_REASONS) this.instruments.daemonBlockedGauge.record(snapshot.blocked[reason] ? 1 : 0, this.withIdentity({ reason }));
+    for (const feature of snapshot.inFlight)
+      this.instruments.daemonInflightGauge.record(1, this.withIdentity({ feature }));
+    for (const reason of BLOCK_REASONS)
+      this.instruments.daemonBlockedGauge.record(snapshot.blocked[reason] ? 1 : 0, this.withIdentity({ reason }));
     this.instruments.daemonPollHistogram.record(snapshot.pollDurationMs, this.withIdentity({}));
     this.instruments.daemonUpGauge.record(1, this.withIdentity({}));
   }
@@ -248,7 +288,8 @@ export class MetricsRecorder {
       state: active.state,
       ...(active.reason === undefined ? {} : { reason: active.reason }),
     };
-    if (typeof wallMs === 'number' && Number.isFinite(wallMs)) this.instruments.featureWallHistogram.record(wallMs, this.withIdentity(tier === undefined ? {} : { tier }));
+    if (typeof wallMs === 'number' && Number.isFinite(wallMs))
+      this.instruments.featureWallHistogram.record(wallMs, this.withIdentity(tier === undefined ? {} : { tier }));
     if (typeof active.activeMs === 'number' && Number.isFinite(active.activeMs)) {
       this.instruments.featureActiveHistogram.record(active.activeMs, this.withIdentity(attrs));
     } else {
@@ -256,10 +297,16 @@ export class MetricsRecorder {
     }
   }
   onGateVerdict(step: string, outcome: 'pass' | 'fail', tier?: string): void {
-    this.instruments.gateVerdictsCounter.add(1, this.withIdentity(tier === undefined ? { step, outcome } : { step, outcome, tier }));
+    this.instruments.gateVerdictsCounter.add(
+      1,
+      this.withIdentity(tier === undefined ? { step, outcome } : { step, outcome, tier }),
+    );
   }
   onKickback(from: string, to: string, tier?: string): void {
-    this.instruments.gateKickbacksCounter.add(1, this.withIdentity(tier === undefined ? { from, to } : { from, to, tier }));
+    this.instruments.gateKickbacksCounter.add(
+      1,
+      this.withIdentity(tier === undefined ? { from, to } : { from, to, tier }),
+    );
   }
   /**
    * Applicability occurrences carry only bounded labels. Reason, decider and
@@ -272,7 +319,9 @@ export class MetricsRecorder {
     if (attrs.priorStatus !== undefined) bounded.priorStatus = attrs.priorStatus;
     this.instruments.stepApplicabilityCounter.add(1, this.withIdentity(bounded));
   }
-  onStall(reason: string): void { this.instruments.daemonStallsCounter.add(1, this.withIdentity({ reason })); }
+  onStall(reason: string): void {
+    this.instruments.daemonStallsCounter.add(1, this.withIdentity({ reason }));
+  }
 
   private static readonly TOKEN_KINDS = ['input', 'output', 'cacheRead', 'cacheCreation'] as const;
   private withDimensions(
@@ -288,7 +337,9 @@ export class MetricsRecorder {
     }
     return merged;
   }
-  private withIdentity(attrs: Attributes): Attributes { return { ...this.customAttrs, ...attrs, ...this.identityAttrs }; }
+  private withIdentity(attrs: Attributes): Attributes {
+    return { ...this.customAttrs, ...attrs, ...this.identityAttrs };
+  }
 }
 
 const BACKLOG_STATES = ['eligible', 'waiting', 'blocked', 'gated', 'parked'] as const;
@@ -296,29 +347,72 @@ const BLOCK_REASONS = ['paused', 'build_auth_missing', 'gh_version', 'episode_ac
 
 interface MetricInstruments {
   memorySetupCounter: Counter;
-  durationHistogram: Histogram; retriesCounter: Counter; stepOutcomesCounter: Counter; dispatchesCounter: Counter;
-  featureCostGauge: Gauge; featureStepCostGauge: Gauge; featureStepTokensGauge: Gauge;
+  durationHistogram: Histogram;
+  retriesCounter: Counter;
+  stepOutcomesCounter: Counter;
+  dispatchesCounter: Counter;
+  featureCostGauge: Gauge;
+  featureStepCostGauge: Gauge;
+  featureStepTokensGauge: Gauge;
   runOutcomesCounter: Counter;
-  daemonBacklogGauge: Gauge; daemonOldestAgeGauge: Gauge; daemonSlotsGauge: Gauge; daemonInflightGauge: Gauge;
-  daemonUpGauge: Gauge; daemonBlockedGauge: Gauge; daemonPollHistogram: Histogram; daemonStallsCounter: Counter;
-  featureDispatchesCounter: Counter; featureHaltsCounter: Counter; featureShippedCounter: Counter;
-  featureWallHistogram: Histogram; featureActiveHistogram: Histogram; featureActiveMissingCounter: Counter; gateVerdictsCounter: Counter; gateKickbacksCounter: Counter;
+  daemonBacklogGauge: Gauge;
+  daemonOldestAgeGauge: Gauge;
+  daemonSlotsGauge: Gauge;
+  daemonInflightGauge: Gauge;
+  daemonUpGauge: Gauge;
+  daemonBlockedGauge: Gauge;
+  daemonPollHistogram: Histogram;
+  daemonStallsCounter: Counter;
+  featureDispatchesCounter: Counter;
+  featureHaltsCounter: Counter;
+  featureShippedCounter: Counter;
+  featureWallHistogram: Histogram;
+  featureActiveHistogram: Histogram;
+  featureActiveMissingCounter: Counter;
+  gateVerdictsCounter: Counter;
+  gateKickbacksCounter: Counter;
   stepApplicabilityCounter: Counter;
 }
 
 function createInstruments(meter: Meter): MetricInstruments {
-  const histogram = (name: string, description: string, unit = 'ms') => meter.createHistogram(name, { description, unit, advice: { explicitBucketBoundaries: DURATION_BUCKET_BOUNDARIES_MS } });
+  const histogram = (name: string, description: string, unit = 'ms') =>
+    meter.createHistogram(name, {
+      description,
+      unit,
+      advice: { explicitBucketBoundaries: DURATION_BUCKET_BOUNDARIES_MS },
+    });
   const counter = (name: string, description: string) => meter.createCounter(name, { description });
-  const gauge = (name: string, description: string, unit?: string) => meter.createGauge(name, { description, ...(unit ? { unit } : {}) });
+  const gauge = (name: string, description: string, unit?: string) =>
+    meter.createGauge(name, { description, ...(unit ? { unit } : {}) });
   return {
-    memorySetupCounter: counter('conductor.memory.setup', 'Memory setup observations by prior state and canonical placement'),
-    durationHistogram: histogram('conductor.step.duration', 'Duration of conductor steps in milliseconds; quantiles saturate above 8 h (largest finite bucket boundary)'),
+    memorySetupCounter: counter(
+      'conductor.memory.setup',
+      'Memory setup observations by prior state and canonical placement',
+    ),
+    durationHistogram: histogram(
+      'conductor.step.duration',
+      'Duration of conductor steps in milliseconds; quantiles saturate above 8 h (largest finite bucket boundary)',
+    ),
     retriesCounter: counter('conductor.step.retries', 'Number of retries per conductor step'),
     stepOutcomesCounter: counter('conductor.step.outcomes', 'Number of conductor step terminal outcomes'),
-    dispatchesCounter: counter('conductor.step.dispatches', 'Number of conductor step dispatches classified by metering status'),
-    featureCostGauge: gauge('conductor.feature.cost', 'Authoritative shipped-record cost for a conductor feature', 'usd'),
-    featureStepCostGauge: gauge('conductor.feature.step.cost', 'Authoritative cumulative feature cost by dimension', 'usd'),
-    featureStepTokensGauge: gauge('conductor.feature.step.tokens', 'Authoritative cumulative feature tokens by dimension'),
+    dispatchesCounter: counter(
+      'conductor.step.dispatches',
+      'Number of conductor step dispatches classified by metering status',
+    ),
+    featureCostGauge: gauge(
+      'conductor.feature.cost',
+      'Authoritative shipped-record cost for a conductor feature',
+      'usd',
+    ),
+    featureStepCostGauge: gauge(
+      'conductor.feature.step.cost',
+      'Authoritative cumulative feature cost by dimension',
+      'usd',
+    ),
+    featureStepTokensGauge: gauge(
+      'conductor.feature.step.tokens',
+      'Authoritative cumulative feature tokens by dimension',
+    ),
     runOutcomesCounter: counter('conductor.run.outcomes', 'Number of conductor runs by terminal outcome'),
     daemonBacklogGauge: gauge('conductor.daemon.backlog', 'Backlog entries by state'),
     daemonOldestAgeGauge: gauge('conductor.daemon.backlog.oldest_age', 'Oldest backlog age by state', 's'),
@@ -333,9 +427,15 @@ function createInstruments(meter: Meter): MetricInstruments {
     featureShippedCounter: counter('conductor.feature.shipped', 'Feature shipments'),
     featureWallHistogram: histogram('conductor.feature.duration.wall', 'Feature wall duration in milliseconds'),
     featureActiveHistogram: histogram('conductor.feature.duration.active', 'Feature active duration in milliseconds'),
-    featureActiveMissingCounter: counter('conductor.feature.duration.active.missing', 'Feature shipments without a measured active duration'),
+    featureActiveMissingCounter: counter(
+      'conductor.feature.duration.active.missing',
+      'Feature shipments without a measured active duration',
+    ),
     gateVerdictsCounter: counter('conductor.gate.verdicts', 'Gate verdicts'),
     gateKickbacksCounter: counter('conductor.gate.kickbacks', 'Gate kickbacks'),
-    stepApplicabilityCounter: counter('conductor.step.applicability', 'Step applicability declarations honored, ignored, or refused'),
+    stepApplicabilityCounter: counter(
+      'conductor.step.applicability',
+      'Step applicability declarations honored, ignored, or refused',
+    ),
   };
 }
