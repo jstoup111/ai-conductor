@@ -45,11 +45,22 @@ In **daemon mode only**, route a `halt_marker` build stall through the existing
    *during* build): set the loop-local `retryHint` to the remediation hint carrying the
    answer, then `attempt--; continue;` — the same no-burn idiom as `sessionExpired`
    (`conductor.ts:1497-1509`) and auth-park (`conductor.ts:1511-1582`).
+
+   > **Amended 2026-11-15 by #3659:** A `no-work-owed` verdict that the engine's no-work-owed
+   > check contradicts is consumed the same way: BUILD resumes in the retry loop with an
+   > engine-written hint naming the pending work. The remediation dispatch that produced the
+   > verdict already charged the `remediationRounds` budget of decision 6, which bounds repeats. See
+   > adr-2026-11-15-build-settles-without-dispatch-when-no-work-is-owed decision 7.
 4. **Human-scoped → HALT carrying the question verbatim.** A `halt` outcome
    (architectural-clarity / product-scope) writes `.pipeline/HALT` whose first line is
    the agent's question (plus the disposition detail), then breaks. The existing
    preserve-specific-reason mechanism (`conductor.ts:2229-2236`) guarantees the generic
    "retries exhausted" writer will not overwrite it.
+
+   > **Amended 2026-11-15 by #3659:** The stall remediation has a third outcome besides
+   > `route` and `halt`. A `no-work-owed` verdict that the engine's no-work-owed check confirms
+   > settles BUILD as done and writes no HALT. The halt categories and this decision's HALT
+   > content are unchanged.
 5. **Fail-safe (unconditional).** If the remediation dispatch fails, returns `none`, or
    the `remediationRounds` budget is exhausted, the flow degrades to today's HALT — but
    `.pipeline/HALT` still carries the question verbatim. Under no path may the question
@@ -70,6 +81,11 @@ In **daemon mode only**, route a `halt_marker` build stall through the existing
    > build-stall source only; for every other source `build` still requires new tasks. The plan
    > is read through the engine's typed plan reader, not `readRemediationPlan`. Decisions 1–6 are
    > unchanged.
+
+   > **Amended 2026-11-15 by #3659:** The engine-owned plan schema accepts the verdict
+   > `no-work-owed` for the build-stall sources only. The stall-question input also carries the
+   > earlier `loop_halt` reasons for the same step and execution child, labelled as no longer in
+   > force. Decisions 1, 2, 5 and 6 are unchanged.
 
 **Out of scope:** the implicit `no_task_progress` stall (belongs to #280); interactive
 mode (the `runInteractive('build')` REPL path is unchanged); the daemon auto-park layer
