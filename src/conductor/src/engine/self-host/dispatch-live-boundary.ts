@@ -9,13 +9,15 @@ import {
 import type { ContainmentVerdict } from './live-containment.js';
 import type { OpenAdmittedWindow, LiveBoundaryWindow } from './live-boundary-coordinator.js';
 
-type FingerprintEvent = Extract<ConductorEvent, { type: 'self_host_boundary_fingerprint' }>;
+type DispatchLiveBoundaryEvent = Extract<ConductorEvent, {
+  type: 'self_host_boundary_fingerprint' | 'self_host_containment_verdict' | 'contained_live_checkout_drift';
+}>;
 type SurfaceResult = Awaited<ReturnType<typeof fingerprintLiveCheckoutSurface>>;
 type ProviderSurfaceResult = Awaited<ReturnType<typeof fingerprintProviderStateSurface>>;
 
 export interface DispatchLiveBoundaryOptions {
   openWindow?: OpenAdmittedWindow;
-  emit(event: FingerprintEvent): void | Promise<void>;
+  emit(event: DispatchLiveBoundaryEvent): void | Promise<void>;
   onViolation?(reason: string): void;
   fingerprintLiveCheckout?: typeof fingerprintLiveCheckoutSurface;
   fingerprintProviderState?: typeof fingerprintProviderStateSurface;
@@ -32,7 +34,7 @@ export interface DispatchLiveBoundaryAcquire {
 
 export interface DispatchLiveBoundaryLease {
   containment: ContainmentVerdict;
-  release(): void;
+  release(): Promise<void>;
 }
 
 /** One shared live-boundary snapshot for all candidates in an admitted dispatch. */
@@ -92,11 +94,11 @@ export class DispatchLiveBoundary {
     let released = false;
     return {
       containment,
-      release: () => {
+      release: async () => {
         if (released) return;
         released = true;
         this.leases -= 1;
-        void this.verifyIfReady();
+        await this.verifyIfReady();
       },
     };
     } finally {
@@ -143,7 +145,24 @@ export class DispatchLiveBoundary {
     if (!this.ended || this.leases !== 0 || this.verified || this.liveSurfaces.size + this.providerSurfaces.size === 0) return;
     this.verified = true;
     try {
-      await this.verify(await this.snapshot(), await this.containment!);
+      const containment = await this.containment!;
+      const result = await this.verify(await this.snapshot(), containment);
+      if (containment.contained) {
+        await this.options.emit({ type: 'self_host_containment_verdict', contained: true, evidence: containment.evidence });
+      } else {
+        await this.options.emit({ type: 'self_host_containment_verdict', contained: false, reason: containment.reason });
+      }
+      if (result.containedDrift) {
+        await this.options.emit({
+          type: 'contained_live_checkout_drift',
+          evidence: result.containedDrift.evidence,
+          attribution: 'concurrent-operator',
+          summary: result.containedDrift.summary,
+        });
+      }
+      if (!result.ok) this.options.onViolation?.(result.reason ?? 'Live boundary could not be verified.');
+    } catch {
+      this.options.onViolation?.('Live boundary could not be verified.');
     } finally {
       this.window?.close();
       this.window = undefined;
