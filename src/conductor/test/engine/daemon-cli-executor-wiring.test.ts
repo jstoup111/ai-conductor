@@ -131,6 +131,37 @@ describe('daemon executor-isolation composition', () => {
     expect(order).toEqual(['feature_dispatch_ended', 'flush', 'scheduler_completion']);
   });
 
+  // Covers: task:6
+  it('returns the child outcome unchanged without flushing when daemon OTel is disabled', async () => {
+    const root = await project();
+    const child = executor();
+    const flush = vi.fn(async () => {});
+    const outcome = { slug: 'child-feature', status: 'done' as const };
+    child.execute.mockResolvedValue(outcome);
+    seams.childFactory.mockReturnValue(child);
+    seams.wireDaemonOtel.mockReturnValue(null);
+    const schedulerOutcomes: FeatureExecutionOutcome[] = [];
+
+    await runDaemonMode({
+      projectRoot: root,
+      concurrency: 1,
+      baseBranch: 'main',
+      ensureFresh: async () => {},
+      probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+      providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
+      workSource: { discover: async () => [{ slug: outcome.slug }] },
+      watch: false,
+      runDaemon: async (deps) => {
+        const [item] = await deps.discoverBacklog();
+        schedulerOutcomes.push(await deps.featureExecution!.executor.execute(workOrder(item!.slug)));
+        return { processed: schedulerOutcomes, stoppedReason: 'backlog_drained' };
+      },
+    });
+
+    expect(schedulerOutcomes).toEqual([outcome]);
+    expect(flush).not.toHaveBeenCalled();
+  });
+
   // Covers: task:28
   it('passes an injected child fork to the sole daemon executor', async () => {
     const root = await project();
