@@ -116,6 +116,7 @@ describe('routed build prerequisite claim schema', () => {
     const untrustedOutcome = `${'~'.repeat(2_500)}\n${'~'.repeat(2_500)}`;
     const outcome = parseBuilderClaim({ outcome: untrustedOutcome });
     expect(outcome).toEqual({ kind: 'malformed', detail: 'outcome is not completed or blocked-by-prerequisite' });
+    if (outcome.kind !== 'malformed') throw new Error('expected untrusted outcome to be malformed');
     expect(outcome.detail).not.toMatch(/[\n~]/);
     expect(
       parseBuilderClaim({ outcome: 'blocked-by-prerequisite', child: 2, symbols: ['parseB'], ['x'.repeat(70)]: true }),
