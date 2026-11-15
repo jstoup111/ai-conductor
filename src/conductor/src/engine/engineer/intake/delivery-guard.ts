@@ -29,7 +29,14 @@ export type IssueState = 'open' | 'closed' | 'unknown';
  */
 export async function getIssueState(gh: GhRunner, repo: string, issue: string): Promise<IssueState> {
   try {
-    const stdout = await runTrackerRepositoryRead(gh, process.cwd(), 'issue.read', repo, { kind: 'issue', number: Number(issue) }, ['issue', 'view', issue, '--repo', repo, '--json', 'state', '-q', '.state']);
+    const stdout = await runTrackerRepositoryRead(
+      gh,
+      process.cwd(),
+      'issue.read',
+      repo,
+      { kind: 'issue', number: Number(issue) },
+      ['issue', 'view', issue, '--repo', repo, '--json', 'state', '-q', '.state'],
+    );
 
     const trimmed = (stdout || '').trim();
     let state: string | undefined;
@@ -72,7 +79,13 @@ export type PrState = 'open' | 'open-draft' | 'merged' | 'closed-unmerged' | 'un
 export async function verifyPrState(gh: GhRunner, url: string): Promise<PrState> {
   try {
     // Shell out to gh pr view with JSON output for state and mergedAt.
-    const stdout = await runTrackerUrlRead(gh, process.cwd(), 'pull-request', url, ['pr', 'view', url, '--json', 'state,mergedAt,isDraft']);
+    const stdout = await runTrackerUrlRead(gh, process.cwd(), 'pull-request', url, [
+      'pr',
+      'view',
+      url,
+      '--json',
+      'state,mergedAt,isDraft',
+    ]);
 
     // Parse the JSON response.
     const pr = JSON.parse(stdout || '{}') as { state?: string; mergedAt?: string | null; isDraft?: boolean };
@@ -207,8 +220,10 @@ export function createDeliveryGuardedQueue(
   }
 
   function isBenignEnoent(error: unknown): boolean {
-    return error instanceof Error
-      && (('code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') || error.message.includes('ENOENT'));
+    return (
+      error instanceof Error &&
+      (('code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT') || error.message.includes('ENOENT'))
+    );
   }
 
   /** Acknowledge a discarded envelope, retaining it for release only on a real failure. */
@@ -241,8 +256,10 @@ export function createDeliveryGuardedQueue(
     // This is the sole draft-specific disposition: an open draft remains an
     // in-flight DECIDE run, so only its duplicate envelope is discarded.
     if (isDraftUrl && prState === 'open-draft') {
-      if (!await acknowledge(candidate, sourceRef, `Failed to drop in-flight draft duplicate ${sourceRef}`)) return;
-      logger.info(`Duplicate envelope for in-flight draft ${sourceRef}, dropping (recovery: engineer forget ${sourceRef})`);
+      if (!(await acknowledge(candidate, sourceRef, `Failed to drop in-flight draft duplicate ${sourceRef}`))) return;
+      logger.info(
+        `Duplicate envelope for in-flight draft ${sourceRef}, dropping (recovery: engineer forget ${sourceRef})`,
+      );
       return;
     }
 
@@ -251,11 +268,13 @@ export function createDeliveryGuardedQueue(
       try {
         await ledger.transition(source, sourceRef, 'done', { prUrl: url, branch: entry.branch });
       } catch (error) {
-        process.stderr.write(`[delivery-guard] Failed to heal entry ${sourceRef}: ${error instanceof Error ? error.message : String(error)}\n`);
+        process.stderr.write(
+          `[delivery-guard] Failed to heal entry ${sourceRef}: ${error instanceof Error ? error.message : String(error)}\n`,
+        );
         held.push(candidate);
         return;
       }
-      if (!await acknowledge(candidate, sourceRef, `Failed to ack delivered entry ${sourceRef}`)) return;
+      if (!(await acknowledge(candidate, sourceRef, `Failed to ack delivered entry ${sourceRef}`))) return;
       logger.info(`Healed stale entry ${sourceRef}: ${entry.status} → done`);
       return;
     }
@@ -271,7 +290,9 @@ export function createDeliveryGuardedQueue(
         await ledger.reopen(source, sourceRef);
         logger.info(`Reopening ${sourceRef}`);
       } catch (error) {
-        process.stderr.write(`[delivery-guard] Failed to reopen entry ${sourceRef}: ${error instanceof Error ? error.message : String(error)}\n`);
+        process.stderr.write(
+          `[delivery-guard] Failed to reopen entry ${sourceRef}: ${error instanceof Error ? error.message : String(error)}\n`,
+        );
       }
       held.push(candidate);
       return;
@@ -280,119 +301,130 @@ export function createDeliveryGuardedQueue(
     try {
       await ledger.transition(source, sourceRef, 'needs-manual', { prUrl: url });
     } catch (error) {
-      process.stderr.write(`[delivery-guard] Failed to park entry ${sourceRef} as needs-manual: ${error instanceof Error ? error.message : String(error)}\n`);
+      process.stderr.write(
+        `[delivery-guard] Failed to park entry ${sourceRef} as needs-manual: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
       held.push(candidate);
       return;
     }
-    if (!await acknowledge(candidate, sourceRef, `Failed to ack parked entry ${sourceRef}`)) return;
+    if (!(await acknowledge(candidate, sourceRef, `Failed to ack parked entry ${sourceRef}`))) return;
     logger.info(`Parking ${sourceRef} as needs-manual (attempts cap reached)`);
   }
 
   async function innerClaim(): Promise<Envelope | null> {
     const candidate = await queue.claim();
-      if (!candidate) {
-        // Before returning null, release all held candidates
-        for (const c of held) {
-          await queue.release(c);
-        }
-        held.length = 0;
-        return null;
+    if (!candidate) {
+      // Before returning null, release all held candidates
+      for (const c of held) {
+        await queue.release(c);
       }
+      held.length = 0;
+      return null;
+    }
 
-      const source = String(candidate.source ?? '');
-      const sourceRef = String(candidate.sourceRef ?? '');
+    const source = String(candidate.source ?? '');
+    const sourceRef = String(candidate.sourceRef ?? '');
 
-      // Check if ledger has an entry for this candidate
-      const entry = await ledger.get(source, sourceRef);
+    // Check if ledger has an entry for this candidate
+    const entry = await ledger.get(source, sourceRef);
 
-      // An issue can be re-captured on a second machine while its first Composer
-      // run is still a draft.  Claim must discover that durable remote fact before
-      // it serves a brand-new candidate.  Failure is deliberately conservative:
-      // leave the candidate pending rather than creating competing spec branches.
-      // Pending is not a decision: it may be a locally recorded candidate from
-      // a prior poll, so it must receive the same cross-reference lookup as an
-      // absent entry before we serve it to create a competing branch.
-      if ((!entry || entry.status === 'pending' || entry.status === 'unseen') && source === 'github-issues' && deps.findCrossReferencedDraft) {
-        try {
-          const inFlight = await deps.findCrossReferencedDraft(sourceRef);
-          if (inFlight) {
-            await ledger.record({ source, sourceRef });
-            await ledger.transition(source, sourceRef, 'deciding', { branch: inFlight.branch, draftPrUrl: inFlight.url });
-            if (!await acknowledge(candidate, sourceRef, `Failed to drop cross-referenced draft duplicate ${sourceRef}`)) return innerClaim();
+    // An issue can be re-captured on a second machine while its first Composer
+    // run is still a draft.  Claim must discover that durable remote fact before
+    // it serves a brand-new candidate.  Failure is deliberately conservative:
+    // leave the candidate pending rather than creating competing spec branches.
+    // Pending is not a decision: it may be a locally recorded candidate from
+    // a prior poll, so it must receive the same cross-reference lookup as an
+    // absent entry before we serve it to create a competing branch.
+    if (
+      (!entry || entry.status === 'pending' || entry.status === 'unseen') &&
+      source === 'github-issues' &&
+      deps.findCrossReferencedDraft
+    ) {
+      try {
+        const inFlight = await deps.findCrossReferencedDraft(sourceRef);
+        if (inFlight) {
+          await ledger.record({ source, sourceRef });
+          await ledger.transition(source, sourceRef, 'deciding', { branch: inFlight.branch, draftPrUrl: inFlight.url });
+          if (
+            !(await acknowledge(candidate, sourceRef, `Failed to drop cross-referenced draft duplicate ${sourceRef}`))
+          )
             return innerClaim();
-          }
-        } catch {
-          held.push(candidate);
           return innerClaim();
         }
+      } catch {
+        held.push(candidate);
+        return innerClaim();
       }
+    }
 
-      // Healthy path: no ledger entry (non-recording source) or pending status
-      if (!entry || entry.status === 'pending' || entry.status === 'unseen') {
-        // Task 5: for github-issues envelopes with a parseable sourceRef,
-        // probe issue state before delivering. Open (or unparseable/unknown)
-        // falls through to normal delivery — only Task 6 will drop closed.
-        if (source === 'github-issues') {
-          const parsed = parseSourceRef(sourceRef);
-          if (!parsed) {
-            logger.info(`Unparseable sourceRef ${sourceRef}, skipping issue-state probe`);
-          }
-          if (parsed) {
-            const issueState = await getIssueState(deps.gh, parsed.repo, parsed.issue);
-            if (issueState === 'closed') {
-              // Closed issue — forget the ledger entry and drop the candidate,
-              // then continue scanning for the next one.
-              await ledger.forget(source, sourceRef);
+    // Healthy path: no ledger entry (non-recording source) or pending status
+    if (!entry || entry.status === 'pending' || entry.status === 'unseen') {
+      // Task 5: for github-issues envelopes with a parseable sourceRef,
+      // probe issue state before delivering. Open (or unparseable/unknown)
+      // falls through to normal delivery — only Task 6 will drop closed.
+      if (source === 'github-issues') {
+        const parsed = parseSourceRef(sourceRef);
+        if (!parsed) {
+          logger.info(`Unparseable sourceRef ${sourceRef}, skipping issue-state probe`);
+        }
+        if (parsed) {
+          const issueState = await getIssueState(deps.gh, parsed.repo, parsed.issue);
+          if (issueState === 'closed') {
+            // Closed issue — forget the ledger entry and drop the candidate,
+            // then continue scanning for the next one.
+            await ledger.forget(source, sourceRef);
 
-              if (!await acknowledge(candidate, sourceRef, `Failed to ack closed-issue candidate ${sourceRef}`)) return innerClaim();
-
-              logger.info(`Dropped closed issue ${sourceRef}`);
+            if (!(await acknowledge(candidate, sourceRef, `Failed to ack closed-issue candidate ${sourceRef}`)))
               return innerClaim();
-            }
+
+            logger.info(`Dropped closed issue ${sourceRef}`);
+            return innerClaim();
           }
         }
-
-        // Passthrough unchanged — no ledger writes, no gh calls
-        return candidate;
       }
 
-      // Task 7: In-flight duplicate envelope detection
-      // If entry is claimed but has no prUrl yet, it means work is in progress
-      // but hasn't been handed off to a PR. A duplicate envelope should be
-      // dropped without mutating the ledger entry.
-      if (entry.status === 'claimed' && !entry.prUrl) {
-        // This is an in-flight duplicate — drop it
-        if (!await acknowledge(candidate, sourceRef, `Failed to drop in-flight duplicate ${sourceRef}`)) return innerClaim();
+      // Passthrough unchanged — no ledger writes, no gh calls
+      return candidate;
+    }
 
-        // Log the duplicate drop with recovery path
-        logger.info(
-          `Duplicate envelope for in-flight entry ${sourceRef}, dropping (recovery: engineer forget ${sourceRef})`,
-        );
-
-        // Continue scanning for the next candidate
+    // Task 7: In-flight duplicate envelope detection
+    // If entry is claimed but has no prUrl yet, it means work is in progress
+    // but hasn't been handed off to a PR. A duplicate envelope should be
+    // dropped without mutating the ledger entry.
+    if (entry.status === 'claimed' && !entry.prUrl) {
+      // This is an in-flight duplicate — drop it
+      if (!(await acknowledge(candidate, sourceRef, `Failed to drop in-flight duplicate ${sourceRef}`)))
         return innerClaim();
-      }
 
-      // A draft spec PR records an in-flight DECIDE run, not delivery evidence.
-      // Unlike a regular prUrl, an open draft must remain deciding until it is
-      // readied or merged. Its queue envelope is a duplicate claim and can be
-      // dropped safely while the ledger remains untouched.
-      if (entry.draftPrUrl && !entry.prUrl) {
-        await reconcilePrLifecycle(candidate, source, sourceRef, entry, entry.draftPrUrl, true);
-        return innerClaim();
-      }
-
-      // Task 3 & 4: Check if entry can be auto-healed (has prUrl and PR is open/merged)
-      if (entry.prUrl) {
-        await reconcilePrLifecycle(candidate, source, sourceRef, entry, entry.prUrl, false);
-        return innerClaim();
-      }
-
-      // Not healable — hold it for later release pattern
-      held.push(candidate);
+      // Log the duplicate drop with recovery path
+      logger.info(
+        `Duplicate envelope for in-flight entry ${sourceRef}, dropping (recovery: engineer forget ${sourceRef})`,
+      );
 
       // Continue scanning for the next candidate
       return innerClaim();
+    }
+
+    // A draft spec PR records an in-flight DECIDE run, not delivery evidence.
+    // Unlike a regular prUrl, an open draft must remain deciding until it is
+    // readied or merged. Its queue envelope is a duplicate claim and can be
+    // dropped safely while the ledger remains untouched.
+    if (entry.draftPrUrl && !entry.prUrl) {
+      await reconcilePrLifecycle(candidate, source, sourceRef, entry, entry.draftPrUrl, true);
+      return innerClaim();
+    }
+
+    // Task 3 & 4: Check if entry can be auto-healed (has prUrl and PR is open/merged)
+    if (entry.prUrl) {
+      await reconcilePrLifecycle(candidate, source, sourceRef, entry, entry.prUrl, false);
+      return innerClaim();
+    }
+
+    // Not healable — hold it for later release pattern
+    held.push(candidate);
+
+    // Continue scanning for the next candidate
+    return innerClaim();
   }
 
   return {

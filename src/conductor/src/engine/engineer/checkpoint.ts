@@ -48,8 +48,13 @@ export interface CheckpointDeps {
   readonly fs?: CheckpointFileSystem;
   readonly writeMarker?: (worktree: string, slug: string, owner: string) => Promise<void>;
   readonly emit: (event: {
-    type: 'composer_run_checkpointed'; slug: string; step: string; state: 'accepted' | 'draft';
-    published: boolean; provider: string; actor: string;
+    type: 'composer_run_checkpointed';
+    slug: string;
+    step: string;
+    state: 'accepted' | 'draft';
+    published: boolean;
+    provider: string;
+    actor: string;
   }) => Promise<void>;
   readonly now?: () => string;
   readonly provider?: string;
@@ -63,7 +68,13 @@ export interface CheckpointDeps {
   readonly publication?: {
     push(branch: string): Promise<void>;
     findOpenPullRequest(branch: string): Promise<{ url: string; body: string } | undefined>;
-    createDraftPullRequest(input: { branch: string; base: string; title: string; body: string; draft: true }): Promise<{ url: string; body: string }>;
+    createDraftPullRequest(input: {
+      branch: string;
+      base: string;
+      title: string;
+      body: string;
+      draft: true;
+    }): Promise<{ url: string; body: string }>;
     editPullRequest?(input: { url: string; body: string }): Promise<void>;
     /** Called only after a branch has a durable draft PR. */
     published?(input: { slug: string; branch: string; prUrl: string }): Promise<void>;
@@ -88,7 +99,15 @@ async function publishCheckpoint(
   state: CheckpointRequest['state'],
   record: RunRecord,
   deps: CheckpointDeps,
-  event: { type: 'composer_run_checkpointed'; slug: string; step: string; state: 'accepted' | 'draft'; published: boolean; provider: string; actor: string },
+  event: {
+    type: 'composer_run_checkpointed';
+    slug: string;
+    step: string;
+    state: 'accepted' | 'draft';
+    published: boolean;
+    provider: string;
+    actor: string;
+  },
 ): Promise<CheckpointResult> {
   const publication = deps.publication;
   if (!publication) {
@@ -101,10 +120,14 @@ async function publishCheckpoint(
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     if (/non-fast-forward|fetch first|rejected/i.test(detail)) {
-      throw new Error(`compose checkpoint: checkpoint was not saved remotely (it is saved locally): ${detail}. Reconcile with compose resume ${branch}.`);
+      throw new Error(
+        `compose checkpoint: checkpoint was not saved remotely (it is saved locally): ${detail}. Reconcile with compose resume ${branch}.`,
+      );
     }
     const flag = state === 'accepted' ? '--accept' : '--draft';
-    throw new Error(`compose checkpoint: checkpoint was not saved remotely (it is saved locally): ${detail}. Retry publication with compose checkpoint --worktree ${worktree} --step ${event.step} ${flag}`);
+    throw new Error(
+      `compose checkpoint: checkpoint was not saved remotely (it is saved locally): ${detail}. Retry publication with compose checkpoint --worktree ${worktree} --step ${event.step} ${flag}`,
+    );
   }
   let pr = await publication.findOpenPullRequest(branch);
   const warnings: string[] = [];
@@ -114,22 +137,28 @@ async function publishCheckpoint(
     try {
       const marker = await (deps.fs ?? defaultFs).readFile(join(worktree, '.docs', 'intake', `${slug}.md`));
       sourceRef = /^Source-Ref:\s*(.+)$/m.exec(marker)?.[1]?.trim();
-    } catch { /* hand-authored runs have no intake marker */ }
+    } catch {
+      /* hand-authored runs have no intake marker */
+    }
     sourceRef ??= record.sourceRef;
     const metadata = '## Release metadata\n\nRelease-Disposition: no-note';
     const refs = sourceRef ? `\n\nRefs ${sourceRef}` : '';
     pr = await publication.createDraftPullRequest({
       branch,
-      base: await publication.resolveDefaultBase?.() ?? publication.defaultBase ?? 'main',
+      base: (await publication.resolveDefaultBase?.()) ?? publication.defaultBase ?? 'main',
       title: `DECIDE: ${slug}`,
       body: `${metadata}${refs}\n\n${upsertRunBlock('', block)}`,
       draft: true,
     });
   } else if (publication.editPullRequest) {
-    try { await publication.editPullRequest({ url: pr.url, body: upsertRunBlock(pr.body, block) }); } catch {
+    try {
+      await publication.editPullRequest({ url: pr.url, body: upsertRunBlock(pr.body, block) });
+    } catch {
       // A presentation failure never invalidates the durable commit/push.  The
       // next checkpoint deliberately retries this edit even when it is clean.
-      warnings.push('Composer PR run block could not be refreshed; the checkpoint is saved and will retry on the next checkpoint.');
+      warnings.push(
+        'Composer PR run block could not be refreshed; the checkpoint is saved and will retry on the next checkpoint.',
+      );
     }
   }
   await publication.published?.({ slug, branch, prUrl: pr.url });
@@ -143,7 +172,15 @@ async function publishOrKeepCheckpointLocal(
   state: CheckpointRequest['state'],
   record: RunRecord,
   deps: CheckpointDeps,
-  event: { type: 'composer_run_checkpointed'; slug: string; step: string; state: 'accepted' | 'draft'; published: boolean; provider: string; actor: string },
+  event: {
+    type: 'composer_run_checkpointed';
+    slug: string;
+    step: string;
+    state: 'accepted' | 'draft';
+    published: boolean;
+    provider: string;
+    actor: string;
+  },
   committed: boolean,
 ): Promise<CheckpointResult> {
   if (deps.localOnly) {
@@ -164,7 +201,9 @@ async function publishOrKeepCheckpointLocal(
 const defaultFs: CheckpointFileSystem = {
   readFile: (path) => readFile(path, 'utf8'),
   writeFile: (path, contents) => writeFile(path, contents, 'utf8'),
-  mkdir: async (path) => { await mkdir(path, { recursive: true }); },
+  mkdir: async (path) => {
+    await mkdir(path, { recursive: true });
+  },
 };
 
 function emptyRecord(slug: string, track: Track): RunRecord {
@@ -218,18 +257,27 @@ async function notesFor(request: CheckpointRequest, fs: CheckpointFileSystem): P
   if (!request.notesFile) return { decisions: [], openQuestions: [] };
   const serialized = await fs.readFile(request.notesFile);
   let value: unknown;
-  try { value = JSON.parse(serialized); } catch { throw new Error('compose checkpoint: --notes-file must contain JSON'); }
+  try {
+    value = JSON.parse(serialized);
+  } catch {
+    throw new Error('compose checkpoint: --notes-file must contain JSON');
+  }
   if (
-    value === null || typeof value !== 'object' || Array.isArray(value)
-    || !Array.isArray((value as StepNotes).decisions) || !Array.isArray((value as StepNotes).openQuestions)
-    || (value as StepNotes).decisions.some((entry) => typeof entry !== 'string')
-    || (value as StepNotes).openQuestions.some((entry) => typeof entry !== 'string')
-  ) throw new Error('compose checkpoint: --notes-file must contain decisions and openQuestions string arrays');
+    value === null ||
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    !Array.isArray((value as StepNotes).decisions) ||
+    !Array.isArray((value as StepNotes).openQuestions) ||
+    (value as StepNotes).decisions.some((entry) => typeof entry !== 'string') ||
+    (value as StepNotes).openQuestions.some((entry) => typeof entry !== 'string')
+  )
+    throw new Error('compose checkpoint: --notes-file must contain decisions and openQuestions string arrays');
   return value as StepNotes;
 }
 
 function requireStep(step: string): RunStepId {
-  if (!(RUN_STEP_ORDER as readonly string[]).includes(step)) throw new Error(`compose checkpoint: unknown DECIDE step "${step}"`);
+  if (!(RUN_STEP_ORDER as readonly string[]).includes(step))
+    throw new Error(`compose checkpoint: unknown DECIDE step "${step}"`);
   return step as RunStepId;
 }
 
@@ -246,11 +294,15 @@ async function resolveSlug(git: CheckpointGitRunner): Promise<string> {
  * Save a DECIDE boundary. A committed record remains local if guarded publication
  * fails, so a retry never re-accepts a step.
  */
-export async function checkpointComposerRun(request: CheckpointRequest, deps: CheckpointDeps): Promise<CheckpointResult> {
+export async function checkpointComposerRun(
+  request: CheckpointRequest,
+  deps: CheckpointDeps,
+): Promise<CheckpointResult> {
   const step = requireStep(request.step);
   const fs = deps.fs ?? defaultFs;
   const owner = await deps.resolveOwner();
-  if (!owner.resolved) throw new Error('compose checkpoint: machine identity is unresolved; configure spec_owner or authenticate with gh');
+  if (!owner.resolved)
+    throw new Error('compose checkpoint: machine identity is unresolved; configure spec_owner or authenticate with gh');
 
   const slug = await resolveSlug(deps.git);
   const status = await deps.git(['status', '--porcelain', '--untracked-files=all']);
@@ -271,22 +323,24 @@ export async function checkpointComposerRun(request: CheckpointRequest, deps: Ch
   const track = await trackForCheckpoint(request.worktree, slug, fs);
   let record = emptyRecord(slug, track);
   let recordExists = true;
-  try { record = parseRunRecord(await fs.readFile(recordPath)); } catch (error) {
+  try {
+    record = parseRunRecord(await fs.readFile(recordPath));
+  } catch (error) {
     recordExists = false;
     if (!(error instanceof Error) || !error.message.startsWith('ENOENT')) throw error;
   }
   const acceptingSavedDraft = request.state === 'accepted' && record.steps[step]?.state === 'draft';
   // A resumed draft is already committed, so it has no dirty files. Recover its
   // paths from the checkpoint commit before recording the explicit acceptance.
-  const draftPaths = acceptingSavedDraft && dirtyDocs.length === 0
-    ? (await deps.git(['show', '--format=', '--name-only', 'HEAD', '--', '.docs'])).stdout
-      .split('\n')
-      .map((path) => path.trim())
-      .filter((path) => stepForArtifactPath(path) === step)
-    : [];
-  const reconfirming = request.state === 'accepted'
-    && record.needsReconfirm.includes(step)
-    && record.steps[step]?.state === 'accepted';
+  const draftPaths =
+    acceptingSavedDraft && dirtyDocs.length === 0
+      ? (await deps.git(['show', '--format=', '--name-only', 'HEAD', '--', '.docs'])).stdout
+          .split('\n')
+          .map((path) => path.trim())
+          .filter((path) => stepForArtifactPath(path) === step)
+      : [];
+  const reconfirming =
+    request.state === 'accepted' && record.needsReconfirm.includes(step) && record.steps[step]?.state === 'accepted';
   // A clean retry must still publish the previously committed checkpoint.  A
   // clean reconfirmation is the one exception: it changes the run record only.
   if (dirtyDocs.length === 0 && draftPaths.length === 0 && !reconfirming) {
@@ -299,17 +353,35 @@ export async function checkpointComposerRun(request: CheckpointRequest, deps: Ch
   const notes = await notesFor(request, fs);
   if (request.state === 'accepted') {
     const paths = dirtyDocs.length > 0 ? dirtyDocs : draftPaths;
-    const priorArtifacts = record.lastAcceptedArtifacts?.[step]
-      ?? (record.steps[step]?.state === 'accepted' ? record.steps[step].artifacts : []);
-    const changedArtifacts = paths.length > 0 ? await Promise.all(paths
-      .filter((path) => stepForArtifactPath(path) === step && path !== '.docs/coherence/.gitkeep' && !path.startsWith('.docs/plan-review/'))
-      .map(async (path) => digestArtifact(path, Buffer.from(await fs.readFile(join(request.worktree, path)))))) : [];
+    const priorArtifacts =
+      record.lastAcceptedArtifacts?.[step] ??
+      (record.steps[step]?.state === 'accepted' ? record.steps[step].artifacts : []);
+    const changedArtifacts =
+      paths.length > 0
+        ? await Promise.all(
+            paths
+              .filter(
+                (path) =>
+                  stepForArtifactPath(path) === step &&
+                  path !== '.docs/coherence/.gitkeep' &&
+                  !path.startsWith('.docs/plan-review/'),
+              )
+              .map(async (path) => digestArtifact(path, Buffer.from(await fs.readFile(join(request.worktree, path))))),
+          )
+        : [];
     // A checkpoint often carries one changed file from a multi-artifact step. Keep
     // the unchanged accepted digests instead of silently dropping them.
     const byPath = new Map(priorArtifacts.map((artifact) => [artifact.path, artifact]));
     for (const artifact of changedArtifacts) byPath.set(artifact.path, artifact);
     const artifacts = changedArtifacts.length > 0 ? [...byPath.values()] : priorArtifacts;
-    record = recordAcceptance(record, { step, actor: owner.id, provider, at: (deps.now ?? (() => new Date().toISOString()))(), artifacts, ...notes });
+    record = recordAcceptance(record, {
+      step,
+      actor: owner.id,
+      provider,
+      at: (deps.now ?? (() => new Date().toISOString()))(),
+      artifacts,
+      ...notes,
+    });
   } else {
     record = { ...recordDraft(record, step), notes: { ...record.notes, [step]: notes } };
   }
@@ -328,9 +400,12 @@ export async function checkpointComposerRun(request: CheckpointRequest, deps: Ch
   await fs.mkdir(join(request.worktree, '.docs', 'composer-runs'));
   await fs.writeFile(recordPath, serializeRunRecord(record));
   if (!deps.localOnly) {
-    await (deps.writeMarker ?? (async (worktree, markerSlug, markerOwner) => {
-      await writeIntakeMarker(worktree, markerSlug, deps.sourceRef, markerOwner);
-    }))(request.worktree, slug, owner.id);
+    await (
+      deps.writeMarker ??
+      (async (worktree, markerSlug, markerOwner) => {
+        await writeIntakeMarker(worktree, markerSlug, deps.sourceRef, markerOwner);
+      })
+    )(request.worktree, slug, owner.id);
   }
 
   const add = await deps.git(['add', '--', '.docs']);
@@ -340,7 +415,8 @@ export async function checkpointComposerRun(request: CheckpointRequest, deps: Ch
   const staged = await deps.git(['diff', '--cached', '--name-only']);
   // `1` remains accepted for older injected test runners that model the old
   // quiet-diff convention; production's rejecting runner can only return zero.
-  if (staged.exitCode !== 0 && staged.exitCode !== 1) throw new Error(`compose checkpoint: could not inspect staged changes: ${staged.stderr}`);
+  if (staged.exitCode !== 0 && staged.exitCode !== 1)
+    throw new Error(`compose checkpoint: could not inspect staged changes: ${staged.stderr}`);
   const committed = staged.stdout.trim().length > 0 || staged.exitCode === 1;
   if (committed) {
     const commit = await deps.git(['commit', '-m', withDaemonCoAuthorTrailer(`composer checkpoint: ${slug} ${step}`)]);

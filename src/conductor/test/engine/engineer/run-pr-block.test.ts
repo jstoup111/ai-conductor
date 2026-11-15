@@ -4,7 +4,18 @@ import { renderRunBlock, upsertRunBlock } from '../../../src/engine/engineer/run
 import { resumeComposerRun } from '../../../src/engine/engineer/resume.js';
 import type { RunRecord } from '../../../src/engine/engineer/run-record.js';
 
-const record: RunRecord = { schemaVersion: 1, slug: 'demo', track: 'technical', steps: { explore: { state: 'accepted', actor: 'A', provider: 'codex', at: '2026-11-08T00:00:00.000Z', artifacts: [] }, prd: { state: 'draft' } }, needsReconfirm: [], ownerHistory: [], notes: { explore: { decisions: ['technical'], openQuestions: ['Which API?'] } } };
+const record: RunRecord = {
+  schemaVersion: 1,
+  slug: 'demo',
+  track: 'technical',
+  steps: {
+    explore: { state: 'accepted', actor: 'A', provider: 'codex', at: '2026-11-08T00:00:00.000Z', artifacts: [] },
+    prd: { state: 'draft' },
+  },
+  needsReconfirm: [],
+  ownerHistory: [],
+  notes: { explore: { decisions: ['technical'], openQuestions: ['Which API?'] } },
+};
 
 describe('Composer PR run block', () => {
   it('Covers: Task 6 renders every Composer summary field from the durable record', () => {
@@ -43,10 +54,37 @@ describe('Composer PR run block', () => {
 
   it('Covers: Task 6 saves on a refresh warning and retries the PR edit at the next checkpoint', async () => {
     const { checkpointComposerRun } = await import('../../../src/engine/engineer/checkpoint.js');
-    const edit = vi.fn(async () => { throw new Error('rate limited'); });
-    const git = async (args: readonly string[]) => ({ exitCode: args[0] === 'diff' ? 1 : 0, stdout: args[0] === 'branch' ? 'spec/demo\n' : args[0] === 'status' ? '?? .docs/track/demo.md' : '', stderr: '' });
-    const fs = { readFile: async (path: string) => path.endsWith('demo.md') ? '# demo\n' : (() => { throw new Error('ENOENT'); })(), writeFile: async () => {}, mkdir: async () => {} };
-    const deps: any = { git, fs, resolveOwner: async () => ({ resolved: true, id: 'A' }), writeMarker: async () => {}, emit: async () => {}, publication: { push: async () => {}, findOpenPullRequest: async () => ({ url: 'https://github.com/o/r/pull/1', body: 'intro' }), createDraftPullRequest: async () => ({ url: '', body: '' }), editPullRequest: edit } };
+    const edit = vi.fn(async () => {
+      throw new Error('rate limited');
+    });
+    const git = async (args: readonly string[]) => ({
+      exitCode: args[0] === 'diff' ? 1 : 0,
+      stdout: args[0] === 'branch' ? 'spec/demo\n' : args[0] === 'status' ? '?? .docs/track/demo.md' : '',
+      stderr: '',
+    });
+    const fs = {
+      readFile: async (path: string) =>
+        path.endsWith('demo.md')
+          ? '# demo\n'
+          : (() => {
+              throw new Error('ENOENT');
+            })(),
+      writeFile: async () => {},
+      mkdir: async () => {},
+    };
+    const deps: any = {
+      git,
+      fs,
+      resolveOwner: async () => ({ resolved: true, id: 'A' }),
+      writeMarker: async () => {},
+      emit: async () => {},
+      publication: {
+        push: async () => {},
+        findOpenPullRequest: async () => ({ url: 'https://github.com/o/r/pull/1', body: 'intro' }),
+        createDraftPullRequest: async () => ({ url: '', body: '' }),
+        editPullRequest: edit,
+      },
+    };
     const first = await checkpointComposerRun({ worktree: '/worktree', step: 'explore', state: 'accepted' }, deps);
     const second = await checkpointComposerRun({ worktree: '/worktree', step: 'explore', state: 'accepted' }, deps);
     expect(first).toMatchObject({ published: true, warnings: [expect.stringMatching(/saved.*retry/i)] });
@@ -55,9 +93,16 @@ describe('Composer PR run block', () => {
   });
 
   it('Covers: Task 6 ignores a hand-edited PR block when it resumes from the durable run record', async () => {
-    const handEditedBody = upsertRunBlock('Release-Disposition: no-note', '<!-- ai-conductor:composer-run:start -->\nCurrent step: delivery\n<!-- ai-conductor:composer-run:end -->');
+    const handEditedBody = upsertRunBlock(
+      'Release-Disposition: no-note',
+      '<!-- ai-conductor:composer-run:start -->\nCurrent step: delivery\n<!-- ai-conductor:composer-run:end -->',
+    );
     expect(handEditedBody).toContain('Current step: delivery');
-    const resumed = await resumeComposerRun('spec/demo', { attach: async () => ({ worktree: '/tmp/demo' }), readRunRecord: async () => JSON.stringify(record), resolveBranch: async () => undefined });
+    const resumed = await resumeComposerRun('spec/demo', {
+      attach: async () => ({ worktree: '/tmp/demo' }),
+      readRunRecord: async () => JSON.stringify(record),
+      resolveBranch: async () => undefined,
+    });
     expect(resumed.context).toMatchObject({ nextStep: 'prd', decisions: ['technical'], openQuestions: ['Which API?'] });
   });
 });

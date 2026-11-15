@@ -102,7 +102,7 @@ export interface RunRecord {
 export function summarizeRun(record: RunRecord, currentDigests?: readonly ArtifactDigest[]): RunSummary {
   const classification = currentDigests === undefined ? undefined : classifyArtifacts(record, currentDigests);
   const invalidSteps = new Set<RunStepId>([
-    ...(classification?.draft.flatMap((artifact) => artifact.step === undefined ? [] : [artifact.step]) ?? []),
+    ...(classification?.draft.flatMap((artifact) => (artifact.step === undefined ? [] : [artifact.step])) ?? []),
     ...(classification?.needsReconfirm ?? []),
     ...record.needsReconfirm,
   ]);
@@ -115,8 +115,8 @@ export function summarizeRun(record: RunRecord, currentDigests?: readonly Artifa
   // An explicit draft/reconfirmation is authoritative even where optional
   // earlier DECIDE steps were not recorded. For an accept-only mid-run record,
   // however, do not pretend it reached delivery merely because no draft exists.
-  const explicitNextStep = RUN_STEP_ORDER.find((step) =>
-    invalidSteps.has(step) || record.needsReconfirm.includes(step) || record.steps[step]?.state === 'draft',
+  const explicitNextStep = RUN_STEP_ORDER.find(
+    (step) => invalidSteps.has(step) || record.needsReconfirm.includes(step) || record.steps[step]?.state === 'draft',
   );
   // DECIDE records are sparse: PRD and diagram/review steps can be omitted by
   // the selected track or tier.  Once there is no saved draft or invalidated
@@ -125,8 +125,9 @@ export function summarizeRun(record: RunRecord, currentDigests?: readonly Artifa
   const lastRecordedAcceptance = [...RUN_STEP_ORDER].reverse().find((step) => record.steps[step]?.state === 'accepted');
   const nextRecordedStep = (after: number): RunStepId | 'delivery' =>
     RUN_STEP_ORDER.slice(after + 1).find((step) => !(record.track === 'technical' && step === 'prd')) ?? 'delivery';
-  const nextStep = explicitNextStep
-    ?? (lastRecordedAcceptance === undefined
+  const nextStep =
+    explicitNextStep ??
+    (lastRecordedAcceptance === undefined
       ? nextRecordedStep(-1)
       : nextRecordedStep(RUN_STEP_ORDER.indexOf(lastRecordedAcceptance)));
   return {
@@ -136,7 +137,9 @@ export function summarizeRun(record: RunRecord, currentDigests?: readonly Artifa
     ...(lastActivity ? { lastActor: lastActivity.actor, lastAt: lastActivity.at } : {}),
     decisions: RUN_STEP_ORDER.flatMap((step) => record.notes[step]?.decisions ?? []),
     openQuestions: RUN_STEP_ORDER.flatMap((step) => record.notes[step]?.openQuestions ?? []),
-    drafts: RUN_STEP_ORDER.filter((step) => invalidSteps.has(step) || record.steps[step]?.state === 'draft' || record.needsReconfirm.includes(step)),
+    drafts: RUN_STEP_ORDER.filter(
+      (step) => invalidSteps.has(step) || record.steps[step]?.state === 'draft' || record.needsReconfirm.includes(step),
+    ),
   };
 }
 
@@ -180,7 +183,8 @@ function parseTrack(value: unknown): Track {
 }
 
 function requiredString(value: unknown, field: string): string {
-  if (typeof value !== 'string' || value.length === 0) throw new Error(`Run record ${field} must be a non-empty string`);
+  if (typeof value !== 'string' || value.length === 0)
+    throw new Error(`Run record ${field} must be a non-empty string`);
   return value;
 }
 
@@ -189,7 +193,8 @@ function parseArtifact(value: unknown): ArtifactDigest {
   const path = requiredString(value.path, 'artifact path');
   const sha256 = requiredString(value.sha256, 'artifact sha256');
   if (!SHA256_HEX.test(sha256)) throw new Error('Run record artifact sha256 must be a lowercase SHA-256 hex digest');
-  if (Object.keys(value).some((key) => key !== 'path' && key !== 'sha256')) throw new Error('Run record artifact has unknown fields');
+  if (Object.keys(value).some((key) => key !== 'path' && key !== 'sha256'))
+    throw new Error('Run record artifact has unknown fields');
   return { path, sha256 };
 }
 
@@ -236,7 +241,8 @@ function parseLastAcceptedArtifacts(value: unknown): Readonly<Partial<Record<Run
   if (!isObject(value)) throw new Error('Run record lastAcceptedArtifacts must be an object');
   const artifacts: Partial<Record<RunStepId, readonly ArtifactDigest[]>> = {};
   for (const [step, entry] of Object.entries(value)) {
-    if (!isStepId(step) || !Array.isArray(entry)) throw new Error('Run record lastAcceptedArtifacts must be keyed by a known step');
+    if (!isStepId(step) || !Array.isArray(entry))
+      throw new Error('Run record lastAcceptedArtifacts must be keyed by a known step');
     artifacts[step] = entry.map(parseArtifact);
   }
   return artifacts;
@@ -246,7 +252,11 @@ function parseNotes(value: unknown): Readonly<Partial<Record<RunStepId, StepNote
   if (!isObject(value)) throw new Error('Run record notes must be an object');
   const notes: Partial<Record<RunStepId, StepNotes>> = {};
   for (const [step, entry] of Object.entries(value)) {
-    if (!isStepId(step) || !isObject(entry) || Object.keys(entry).some((key) => key !== 'decisions' && key !== 'openQuestions')) {
+    if (
+      !isStepId(step) ||
+      !isObject(entry) ||
+      Object.keys(entry).some((key) => key !== 'decisions' && key !== 'openQuestions')
+    ) {
       throw new Error('Run record notes must be keyed by a known step');
     }
     notes[step] = {
@@ -275,7 +285,11 @@ function parseCheckpoint(value: unknown): RunCheckpoint {
   }
   const at = requiredString(value.at, 'last checkpoint time');
   if (Number.isNaN(Date.parse(at))) throw new Error('Run record last checkpoint time must be a timestamp');
-  return { actor: requiredString(value.actor, 'last checkpoint actor'), provider: requiredString(value.provider, 'last checkpoint provider'), at };
+  return {
+    actor: requiredString(value.actor, 'last checkpoint actor'),
+    provider: requiredString(value.provider, 'last checkpoint provider'),
+    at,
+  };
 }
 
 /** Parse the sole supported run-record schema, failing closed on unknown state. */
@@ -287,20 +301,41 @@ export function parseRunRecord(serialized: string): RunRecord {
     throw new Error(`Run record is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (!isObject(value)) throw new Error('Run record must be an object');
-  if (value.schemaVersion !== RUN_RECORD_SCHEMA_VERSION) throw new Error(`Unsupported run record schemaVersion ${String(value.schemaVersion)}`);
-  if (Object.keys(value).some((key) => !['schemaVersion', 'slug', 'track', 'sourceRef', 'steps', 'lastAcceptedArtifacts', 'needsReconfirm', 'ownerHistory', 'notes', 'lastCheckpoint'].includes(key))) {
+  if (value.schemaVersion !== RUN_RECORD_SCHEMA_VERSION)
+    throw new Error(`Unsupported run record schemaVersion ${String(value.schemaVersion)}`);
+  if (
+    Object.keys(value).some(
+      (key) =>
+        ![
+          'schemaVersion',
+          'slug',
+          'track',
+          'sourceRef',
+          'steps',
+          'lastAcceptedArtifacts',
+          'needsReconfirm',
+          'ownerHistory',
+          'notes',
+          'lastCheckpoint',
+        ].includes(key),
+    )
+  ) {
     throw new Error('Run record has unknown fields');
   }
-  if (value.sourceRef !== undefined && typeof value.sourceRef !== 'string') throw new Error('Run record sourceRef must be a string');
+  if (value.sourceRef !== undefined && typeof value.sourceRef !== 'string')
+    throw new Error('Run record sourceRef must be a string');
   const needsReconfirm = parseTextList(value.needsReconfirm, 'needsReconfirm');
-  if (needsReconfirm.some((step) => !isStepId(step))) throw new Error('Run record needsReconfirm must name known steps');
+  if (needsReconfirm.some((step) => !isStepId(step)))
+    throw new Error('Run record needsReconfirm must name known steps');
   return {
     schemaVersion: RUN_RECORD_SCHEMA_VERSION,
     slug: requiredString(value.slug, 'slug'),
     track: parseTrack(value.track),
     ...(value.sourceRef === undefined ? {} : { sourceRef: value.sourceRef }),
     steps: parseSteps(value.steps),
-    ...(value.lastAcceptedArtifacts === undefined ? {} : { lastAcceptedArtifacts: parseLastAcceptedArtifacts(value.lastAcceptedArtifacts) }),
+    ...(value.lastAcceptedArtifacts === undefined
+      ? {}
+      : { lastAcceptedArtifacts: parseLastAcceptedArtifacts(value.lastAcceptedArtifacts) }),
     needsReconfirm: [...new Set(needsReconfirm)] as readonly RunStepId[],
     ownerHistory: parseOwnerHistory(value.ownerHistory),
     notes: parseNotes(value.notes),
@@ -320,8 +355,9 @@ export function digestArtifact(path: string, bytes: Uint8Array): ArtifactDigest 
 }
 
 function sameArtifacts(left: readonly ArtifactDigest[], right: readonly ArtifactDigest[]): boolean {
-  return left.length === right.length && left.every((artifact, index) =>
-    artifact.path === right[index]?.path && artifact.sha256 === right[index]?.sha256,
+  return (
+    left.length === right.length &&
+    left.every((artifact, index) => artifact.path === right[index]?.path && artifact.sha256 === right[index]?.sha256)
   );
 }
 
@@ -333,8 +369,8 @@ function laterAcceptedSteps(record: RunRecord, step: RunStepId): RunStepId[] {
 /** Record one explicit operator acceptance without mutating the prior durable state. */
 export function recordAcceptance(record: RunRecord, input: RecordAcceptanceInput): RunRecord {
   const previous = record.steps[input.step];
-  const lastAccepted = record.lastAcceptedArtifacts?.[input.step]
-    ?? (previous?.state === 'accepted' ? previous.artifacts : undefined);
+  const lastAccepted =
+    record.lastAcceptedArtifacts?.[input.step] ?? (previous?.state === 'accepted' ? previous.artifacts : undefined);
   const changed = lastAccepted !== undefined && !sameArtifacts(lastAccepted, input.artifacts);
   const needsReconfirm = new Set(record.needsReconfirm);
   needsReconfirm.delete(input.step);
@@ -400,9 +436,7 @@ export function stepForArtifactPath(path: string): RunStepId | undefined {
 function acceptedArtifacts(record: RunRecord): readonly (ArtifactDigest & { readonly step: RunStepId })[] {
   return RUN_STEP_ORDER.flatMap((step) => {
     const recordStep = record.steps[step];
-    return recordStep?.state === 'accepted'
-      ? recordStep.artifacts.map((artifact) => ({ ...artifact, step }))
-      : [];
+    return recordStep?.state === 'accepted' ? recordStep.artifacts.map((artifact) => ({ ...artifact, step })) : [];
   });
 }
 
@@ -410,7 +444,10 @@ function acceptedArtifacts(record: RunRecord): readonly (ArtifactDigest & { read
  * Classify the current change-set against recorded acceptance. A changed accepted
  * step invalidates all later accepted steps until they are explicitly reconfirmed.
  */
-export function classifyArtifacts(record: RunRecord, currentDigests: readonly ArtifactDigest[]): ArtifactClassification {
+export function classifyArtifacts(
+  record: RunRecord,
+  currentDigests: readonly ArtifactDigest[],
+): ArtifactClassification {
   const acceptedByDigest = acceptedArtifacts(record);
   const acceptedByPath = new Map<string, RunStepId>();
   for (const artifact of acceptedByDigest) acceptedByPath.set(artifact.path, artifact.step);
@@ -427,7 +464,9 @@ export function classifyArtifacts(record: RunRecord, currentDigests: readonly Ar
 
   const matched: (ArtifactDigest & { readonly step: RunStepId })[] = [];
   for (const artifact of currentDigests) {
-    const accepted = acceptedByDigest.find((candidate) => candidate.path === artifact.path && candidate.sha256 === artifact.sha256);
+    const accepted = acceptedByDigest.find(
+      (candidate) => candidate.path === artifact.path && candidate.sha256 === artifact.sha256,
+    );
     if (accepted !== undefined) {
       matched.push(accepted);
       continue;

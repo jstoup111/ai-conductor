@@ -14,7 +14,11 @@ export function renderRunBlock(record: RunRecord): string {
     `Active provider: ${record.lastCheckpoint?.provider ?? summary.lastAcceptedStep?.provider ?? 'unrecorded'}`,
     `Last actor: ${summary.lastActor ? `${summary.lastActor} at ${summary.lastAt}` : 'none'}`,
     'Accepted steps:',
-    ...(summary.acceptedSteps.length === 0 ? ['- none'] : summary.acceptedSteps.map((step) => `- ${step.step}: accepted by ${step.actor} via ${step.provider} at ${step.at}`)),
+    ...(summary.acceptedSteps.length === 0
+      ? ['- none']
+      : summary.acceptedSteps.map(
+          (step) => `- ${step.step}: accepted by ${step.actor} via ${step.provider} at ${step.at}`,
+        )),
     'Open questions:',
     ...(summary.openQuestions.length === 0 ? ['- none'] : summary.openQuestions.map((question) => `- ${question}`)),
     `Next step: ${summary.nextStep}`,

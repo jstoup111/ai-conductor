@@ -52,7 +52,9 @@ function makeGh(prState: 'OPEN' | 'MERGED' | 'CLOSED' = 'OPEN') {
   const gh = async (args: string[]) => {
     calls.push(args);
     if (args[0] === 'pr' && args[1] === 'view') {
-      return { stdout: JSON.stringify({ state: prState, mergedAt: prState === 'MERGED' ? '2026-07-04T00:00:00.000Z' : null }) };
+      return {
+        stdout: JSON.stringify({ state: prState, mergedAt: prState === 'MERGED' ? '2026-07-04T00:00:00.000Z' : null }),
+      };
     }
     // For dependency checking (issue list with linked_by filter), return empty
     if (args[0] === 'issue' && args[1] === 'list') {
