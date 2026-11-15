@@ -14,7 +14,8 @@ export function resolveBoundaryProvider(input: {
   hasRemote: boolean;
 }): { action: 'resume'; provider: BuiltInProviderId } | { action: 'handoff' } {
   if (input.choice === 'handoff') {
-    if (!input.hasRemote) throw new Error('compose handoff: this Composer run exists only locally and cannot be handed off.');
+    if (!input.hasRemote)
+      throw new Error('compose handoff: this Composer run exists only locally and cannot be handed off.');
     return { action: 'handoff' };
   }
   const provider = input.choice === 'switch' ? input.switchTo : input.activeProvider;

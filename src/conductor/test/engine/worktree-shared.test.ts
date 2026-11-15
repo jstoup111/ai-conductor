@@ -2,11 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 vi.mock('execa', () => ({ execa: vi.fn() }));
 import { execa } from 'execa';
-import {
-  ensureWorktree,
-  removeWorktree,
-  worktreeStatus,
-} from '../../src/engine/worktree-shared.js';
+import { ensureWorktree, removeWorktree, worktreeStatus } from '../../src/engine/worktree-shared.js';
 
 const mockExeca = vi.mocked(execa);
 const ROOT = '/repo';
@@ -19,11 +15,7 @@ const BRANCH = 'spec/add-auth';
  * their respective `show-ref` lookups resolve.
  * `addCalls` records every `worktree add`; `baseResolved` records resolveBase calls.
  */
-function routeGit(opts: {
-  worktreeListed: boolean;
-  branchExists: boolean;
-  remoteBranchExists?: boolean;
-}) {
+function routeGit(opts: { worktreeListed: boolean; branchExists: boolean; remoteBranchExists?: boolean }) {
   const addCalls: string[][] = [];
   const removeCalls: string[][] = [];
   mockExeca.mockImplementation((async (...callArgs: unknown[]) => {
@@ -86,9 +78,7 @@ describe('worktree-shared/ensureWorktree', () => {
     const res = await ensureWorktree({ root: ROOT, path: PATH, branch: BRANCH, resolveBase });
 
     expect(res).toEqual({ path: PATH, branch: BRANCH, reconcile: 'fetched' });
-    expect(addCalls).toEqual([
-      ['worktree', 'add', '--track', '-b', BRANCH, PATH, `origin/${BRANCH}`],
-    ]);
+    expect(addCalls).toEqual([['worktree', 'add', '--track', '-b', BRANCH, PATH, `origin/${BRANCH}`]]);
     expect(resolveBase).not.toHaveBeenCalled();
   });
 
@@ -125,9 +115,7 @@ describe('worktree-shared/ensureWorktree', () => {
     });
 
     expect(res.reconcile).toBe('created');
-    expect(addCalls).toEqual([
-      ['worktree', 'add', '-b', 'feat/daemon-a/b', path, 'main'],
-    ]);
+    expect(addCalls).toEqual([['worktree', 'add', '-b', 'feat/daemon-a/b', path, 'main']]);
   });
 });
 

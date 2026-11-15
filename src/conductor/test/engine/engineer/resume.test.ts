@@ -12,7 +12,25 @@ import type { RunRecord } from '../../../src/engine/engineer/run-record.js';
 
 const execFile = promisify(execFileCb);
 
-const record: RunRecord = { schemaVersion: 1, slug: 'demo', track: 'technical', steps: { explore: { state: 'accepted', actor: 'A', provider: 'codex', at: '2026-11-08T00:00:00.000Z', artifacts: [{ path: '.docs/track/demo.md', sha256: 'a'.repeat(64) }] }, prd: { state: 'accepted', actor: 'A', provider: 'codex', at: '2026-11-08T00:01:00.000Z', artifacts: [] }, architecture_diagram: { state: 'draft' } }, needsReconfirm: [], ownerHistory: [], notes: { explore: { decisions: ['technical'], openQuestions: ['why?'] } } };
+const record: RunRecord = {
+  schemaVersion: 1,
+  slug: 'demo',
+  track: 'technical',
+  steps: {
+    explore: {
+      state: 'accepted',
+      actor: 'A',
+      provider: 'codex',
+      at: '2026-11-08T00:00:00.000Z',
+      artifacts: [{ path: '.docs/track/demo.md', sha256: 'a'.repeat(64) }],
+    },
+    prd: { state: 'accepted', actor: 'A', provider: 'codex', at: '2026-11-08T00:01:00.000Z', artifacts: [] },
+    architecture_diagram: { state: 'draft' },
+  },
+  needsReconfirm: [],
+  ownerHistory: [],
+  notes: { explore: { decisions: ['technical'], openQuestions: ['why?'] } },
+};
 describe('Composer resume', () => {
   it('parses PR, branch and intake targets', () => {
     expect(parseResumeTarget('17')).toEqual({ kind: 'pr', number: 17 });
@@ -21,8 +39,19 @@ describe('Composer resume', () => {
   });
   it('uses the record for the first unaccepted step and emits a resume transition', async () => {
     const emitted: unknown[] = [];
-    const result = await resumeComposerRun('spec/demo', { attach: async () => ({ worktree: '/tmp/demo' }), readRunRecord: async () => JSON.stringify(record), resolveBranch: async () => undefined, emit: async (event) => { emitted.push(event); } });
-    expect(result.context).toMatchObject({ nextStep: 'architecture_diagram', lastActor: 'A', decisions: ['technical'] });
+    const result = await resumeComposerRun('spec/demo', {
+      attach: async () => ({ worktree: '/tmp/demo' }),
+      readRunRecord: async () => JSON.stringify(record),
+      resolveBranch: async () => undefined,
+      emit: async (event) => {
+        emitted.push(event);
+      },
+    });
+    expect(result.context).toMatchObject({
+      nextStep: 'architecture_diagram',
+      lastActor: 'A',
+      decisions: ['technical'],
+    });
     expect(emitted).toHaveLength(1);
     expect(contextForRun(record).drafts).toContain('architecture_diagram');
   });
@@ -53,7 +82,11 @@ describe('Composer resume', () => {
       lastActor: 'A',
       lastAt: '2026-11-08T00:01:00.000Z',
     });
-    const landed: RunRecord = { ...record, steps: { explore: record.steps.explore, prd: record.steps.prd }, needsReconfirm: [] };
+    const landed: RunRecord = {
+      ...record,
+      steps: { explore: record.steps.explore, prd: record.steps.prd },
+      needsReconfirm: [],
+    };
     // A partial accept-only record is still mid-run. A stripped landed record
     // reaches delivery through resumeComposerRun's ENOENT handling instead.
     expect(contextForRun(landed).nextStep).toBe('architecture_diagram');
@@ -65,7 +98,9 @@ describe('Composer resume', () => {
     const result = await resumeComposerRun('spec/demo', {
       resolveBranch: async () => ({ branch: 'spec/demo' }),
       attach: async () => ({ worktree: '/tmp/landed-demo' }),
-      readRunRecord: async () => { throw new Error('ENOENT .docs/composer-runs/demo.json'); },
+      readRunRecord: async () => {
+        throw new Error('ENOENT .docs/composer-runs/demo.json');
+      },
       recordDeciding: deciding,
       emit: emitted,
     });
@@ -101,15 +136,34 @@ describe('Composer resume', () => {
 
   it('Covers: Task 12 leaves worktrees untouched for unknown targets and failed fetches, while no-remote attach skips fetch', async () => {
     const attach = vi.fn(async () => ({ worktree: '/should-not-exist' }));
-    await expect(resumeComposerRun('not a target', { resolveBranch: async () => undefined, attach, readRunRecord: async () => JSON.stringify(record) })).rejects.toThrow(/searched PR, spec branch, and intake reference/);
+    await expect(
+      resumeComposerRun('not a target', {
+        resolveBranch: async () => undefined,
+        attach,
+        readRunRecord: async () => JSON.stringify(record),
+      }),
+    ).rejects.toThrow(/searched PR, spec branch, and intake reference/);
     expect(attach).not.toHaveBeenCalled();
 
     const failedAttach = vi.fn(async () => ({ worktree: '/should-not-exist' }));
-    await expect(resumeComposerRun('spec/demo', { resolveBranch: async () => undefined, fetch: async () => { throw new Error('network unavailable'); }, attach: failedAttach, readRunRecord: async () => JSON.stringify(record) })).rejects.toThrow('network unavailable');
+    await expect(
+      resumeComposerRun('spec/demo', {
+        resolveBranch: async () => undefined,
+        fetch: async () => {
+          throw new Error('network unavailable');
+        },
+        attach: failedAttach,
+        readRunRecord: async () => JSON.stringify(record),
+      }),
+    ).rejects.toThrow('network unavailable');
     expect(failedAttach).not.toHaveBeenCalled();
 
     const localFetch = vi.fn(async () => {});
-    const local = await resumeComposerRun('spec/demo', { resolveBranch: async () => undefined, attach: async () => ({ worktree: '/local/.worktrees/engineer-demo' }), readRunRecord: async () => JSON.stringify(record) });
+    const local = await resumeComposerRun('spec/demo', {
+      resolveBranch: async () => undefined,
+      attach: async () => ({ worktree: '/local/.worktrees/engineer-demo' }),
+      readRunRecord: async () => JSON.stringify(record),
+    });
     expect(localFetch).not.toHaveBeenCalled();
     expect(local.context.nextStep).toBe('architecture_diagram');
   });
@@ -121,8 +175,12 @@ describe('Composer resume', () => {
       resolveBranch: async () => ({ branch: 'spec/demo', draftPrUrl: 'https://github.com/acme/demo/pull/17' }),
       attach: async () => ({ worktree: '/tmp/demo' }),
       readRunRecord: async () => JSON.stringify(record),
-      recordDeciding: async (entry) => { transitions.push(entry); },
-      emit: async (event) => { emitted.push(event); },
+      recordDeciding: async (entry) => {
+        transitions.push(entry);
+      },
+      emit: async (event) => {
+        emitted.push(event);
+      },
     });
     expect(transitions).toEqual([{ branch: 'spec/demo', draftPrUrl: 'https://github.com/acme/demo/pull/17' }]);
     expect(emitted).toHaveLength(1);
@@ -146,32 +204,66 @@ describe('Composer resume', () => {
       // This fixture owns launch wiring, not digest verification; use an
       // accepted step with no artifact bytes to keep it independent of a
       // synthetic digest.
-      await writeFile(join(root, '.docs', 'composer-runs', 'demo.json'), JSON.stringify({
-        ...record,
-        steps: { ...record.steps, explore: { ...record.steps.explore!, artifacts: [] } },
-      }));
+      await writeFile(
+        join(root, '.docs', 'composer-runs', 'demo.json'),
+        JSON.stringify({
+          ...record,
+          steps: { ...record.steps, explore: { ...record.steps.explore!, artifacts: [] } },
+        }),
+      );
       await execFile('git', ['add', '.docs'], { cwd: root });
       await execFile('git', ['commit', '-m', 'run'], { cwd: root });
       await execFile('git', ['checkout', 'main'], { cwd: root });
-      await writeFile(registryPath, JSON.stringify([{ schemaVersion: 1, name: 'demo', path: root, status: 'registered', registeredAt: '2026-11-08T00:00:00.000Z' }]));
+      await writeFile(
+        registryPath,
+        JSON.stringify([
+          {
+            schemaVersion: 1,
+            name: 'demo',
+            path: root,
+            status: 'registered',
+            registeredAt: '2026-11-08T00:00:00.000Z',
+          },
+        ]),
+      );
       const localGit = async (args: string[], options?: { cwd?: string }) => {
         const result = await execFile('git', args, { cwd: options?.cwd ?? root });
         return { exitCode: 0, stdout: result.stdout };
       };
-      const code = await dispatchEngineer({ kind: 'resume', target: 'spec/demo', provider: 'codex', project: 'demo' }, {
-        registryPath, spawnHost: spawned, print: () => {}, printErr: (line) => errors.push(line),
-        env: {}, resolveResumeOwner: async () => ({ resolved: true, id: 'A' }),
-        git: localGit,
-        probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
-      });
+      const code = await dispatchEngineer(
+        { kind: 'resume', target: 'spec/demo', provider: 'codex', project: 'demo' },
+        {
+          registryPath,
+          spawnHost: spawned,
+          print: () => {},
+          printErr: (line) => errors.push(line),
+          env: {},
+          resolveResumeOwner: async () => ({ resolved: true, id: 'A' }),
+          git: localGit,
+          probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+        },
+      );
       expect(code).toBe(0);
       expect(spawned).toHaveBeenCalledOnce();
-      expect(spawned.mock.calls[0][1]).toEqual(expect.arrayContaining([expect.stringContaining('$composer --resume'), expect.stringContaining('/.worktrees/engineer-demo'), expect.stringContaining('--step architecture_diagram')]));
+      expect(spawned.mock.calls[0][1]).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('$composer --resume'),
+          expect.stringContaining('/.worktrees/engineer-demo'),
+          expect.stringContaining('--step architecture_diagram'),
+        ]),
+      );
       const nestedSpawn = vi.fn(async () => 0);
-      const nested = await dispatchEngineer({ kind: 'resume', target: 'spec/demo', provider: 'codex', project: 'demo' }, {
-        registryPath, spawnHost: nestedSpawn, print: () => {}, printErr: (line) => errors.push(line), env: { CODEX_THREAD_ID: 'already-here' },
-        probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
-      });
+      const nested = await dispatchEngineer(
+        { kind: 'resume', target: 'spec/demo', provider: 'codex', project: 'demo' },
+        {
+          registryPath,
+          spawnHost: nestedSpawn,
+          print: () => {},
+          printErr: (line) => errors.push(line),
+          env: { CODEX_THREAD_ID: 'already-here' },
+          probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+        },
+      );
       expect(nested).toBe(1);
       expect(nestedSpawn).not.toHaveBeenCalled();
       expect(errors.join('\n')).toMatch(/already inside a Codex session/);

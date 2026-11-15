@@ -56,9 +56,7 @@ describe('verifyPrState — PR state probe', () => {
 
   it('MERGED state with mergedAt → returns "merged"', async () => {
     const { verifyPrState } = await loadDeliveryGuard();
-    const { runner } = makeFakeGh(
-      JSON.stringify({ state: 'MERGED', mergedAt: '2026-07-05T10:00:00Z' }),
-    );
+    const { runner } = makeFakeGh(JSON.stringify({ state: 'MERGED', mergedAt: '2026-07-05T10:00:00Z' }));
 
     const result = await verifyPrState(runner, 'https://github.com/owner/repo/pull/2');
 
@@ -67,9 +65,7 @@ describe('verifyPrState — PR state probe', () => {
 
   it('CLOSED state with mergedAt null → returns "closed-unmerged"', async () => {
     const { verifyPrState } = await loadDeliveryGuard();
-    const { runner } = makeFakeGh(
-      JSON.stringify({ state: 'CLOSED', mergedAt: null }),
-    );
+    const { runner } = makeFakeGh(JSON.stringify({ state: 'CLOSED', mergedAt: null }));
 
     const result = await verifyPrState(runner, 'https://github.com/owner/repo/pull/3');
 
@@ -318,9 +314,7 @@ describe('Task 3: createDeliveryGuardedQueue — auto-heal delivered entries', (
     const candidate2 = makeEnvelope('idea-2');
     const { queue } = makeFakeQueueWithEnvelopes([candidate1, candidate2]);
     const { ledger, transitionCalls } = makeFakeLedger();
-    const { runner: gh } = makeFakeGh(
-      JSON.stringify({ state: 'MERGED', mergedAt: '2026-07-05T10:00:00Z' }),
-    );
+    const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'MERGED', mergedAt: '2026-07-05T10:00:00Z' }));
 
     // Pre-populate ledger with a claimed entry that has prUrl
     (ledger as any).get = async (source: string, sourceRef: string) => {
@@ -664,9 +658,7 @@ describe('Task 5: createDeliveryGuardedQueue — closed-unmerged reopen semantic
     const candidate2 = makeEnvelope('idea-2');
     const { queue } = makeFakeQueueWithEnvelopes([candidate1, candidate2]);
     const { ledger, transitionCalls } = makeFakeLedger();
-    const { runner: gh } = makeFakeGh(
-      JSON.stringify({ state: 'CLOSED', mergedAt: null }),
-    );
+    const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'CLOSED', mergedAt: null }));
 
     let reopenCalls: string[] = [];
     const originalReopen = (ledger as any).reopen;
@@ -711,9 +703,7 @@ describe('Task 5: createDeliveryGuardedQueue — closed-unmerged reopen semantic
     const candidate2 = makeEnvelope('idea-2');
     const { queue } = makeFakeQueueWithEnvelopes([candidate1, candidate2]);
     const { ledger, transitionCalls } = makeFakeLedger();
-    const { runner: gh } = makeFakeGh(
-      JSON.stringify({ state: 'CLOSED', mergedAt: null }),
-    );
+    const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'CLOSED', mergedAt: null }));
 
     let reopenCalls: string[] = [];
     (ledger as any).reopen = async (source: string, sourceRef: string) => {
@@ -753,9 +743,7 @@ describe('Task 5: createDeliveryGuardedQueue — closed-unmerged reopen semantic
     const candidate2 = makeEnvelope('idea-2');
     const { queue, releasedEnvelopes } = makeFakeQueueWithEnvelopes([candidate1, candidate2]);
     const { ledger, transitionCalls } = makeFakeLedger();
-    const { runner: gh } = makeFakeGh(
-      JSON.stringify({ state: 'CLOSED', mergedAt: null }),
-    );
+    const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'CLOSED', mergedAt: null }));
 
     let reopenCalls: string[] = [];
     (ledger as any).reopen = async (source: string, sourceRef: string) => {
@@ -803,9 +791,7 @@ describe('Task 5: createDeliveryGuardedQueue — closed-unmerged reopen semantic
     const candidate2 = makeEnvelope('idea-2');
     const { queue, releasedEnvelopes } = makeFakeQueueWithEnvelopes([candidate1, candidate2]);
     const { ledger, transitionCalls } = makeFakeLedger();
-    const { runner: gh } = makeFakeGh(
-      JSON.stringify({ state: 'CLOSED', mergedAt: null }),
-    );
+    const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'CLOSED', mergedAt: null }));
 
     let reopenCalls: string[] = [];
     (ledger as any).reopen = async (source: string, sourceRef: string) => {
@@ -893,9 +879,7 @@ describe('Task 6: createDeliveryGuardedQueue — unknown PR state fails safe', (
     expect(transitionCalls).toHaveLength(0);
 
     // Verify log includes sourceRef
-    expect(logMessages.some((msg) => msg.includes('idea-1') && msg.toLowerCase().includes('unknown'))).toBe(
-      true,
-    );
+    expect(logMessages.some((msg) => msg.includes('idea-1') && msg.toLowerCase().includes('unknown'))).toBe(true);
 
     // Verify claim() returns null when queue is exhausted
     const second = await guarded.claim();
@@ -1127,10 +1111,7 @@ describe('Task 6: createDeliveryGuardedQueue — closed issue dropped, scan cont
     const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
     const closedCandidate = makeEnvelope('owner/repo#42', 'github-issues');
     const openCandidate = makeEnvelope('idea-1', 'test-source');
-    const { queue, releasedEnvelopes } = makeFakeQueueWithEnvelopes([
-      closedCandidate,
-      openCandidate,
-    ]);
+    const { queue, releasedEnvelopes } = makeFakeQueueWithEnvelopes([closedCandidate, openCandidate]);
     const { ledger, transitionCalls } = makeFakeLedger();
     (ledger as any).get = async (source: string, sourceRef: string) => {
       if (source === 'github-issues' && sourceRef === 'owner/repo#42') {
@@ -1913,22 +1894,20 @@ describe('Task 9: createDeliveryGuardedQueue — draft spec PR delivery guard', 
     const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
     const draftCandidate = makeEnvelope('draft-spec');
     const healthyCandidate = makeEnvelope('healthy');
-    const { queue, releasedEnvelopes } = makeFakeQueueWithEnvelopes([
-      draftCandidate,
-      healthyCandidate,
-    ]);
+    const { queue, releasedEnvelopes } = makeFakeQueueWithEnvelopes([draftCandidate, healthyCandidate]);
     const { ledger, transitionCalls } = makeFakeLedger();
     const draftPrUrl = 'https://github.com/owner/repo/pull/9';
-    (ledger as any).get = async (_source: string, sourceRef: string) => sourceRef === 'draft-spec'
-      ? {
-          source: draftCandidate.source,
-          sourceRef,
-          status: 'deciding',
-          branch: 'spec/draft-spec',
-          draftPrUrl,
-          attempts: 0,
-        }
-      : undefined;
+    (ledger as any).get = async (_source: string, sourceRef: string) =>
+      sourceRef === 'draft-spec'
+        ? {
+            source: draftCandidate.source,
+            sourceRef,
+            status: 'deciding',
+            branch: 'spec/draft-spec',
+            draftPrUrl,
+            attempts: 0,
+          }
+        : undefined;
     const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'OPEN', isDraft: true }));
 
     const claimed = await createDeliveryGuardedQueue(queue as any, ledger as any, { gh }).claim();
@@ -1955,16 +1934,17 @@ describe('Task 9: createDeliveryGuardedQueue — draft spec PR delivery guard', 
     const { queue } = makeFakeQueueWithEnvelopes([draftCandidate, healthyCandidate]);
     const { ledger, transitionCalls } = makeFakeLedger();
     const draftPrUrl = `https://github.com/owner/repo/pull/${state}`;
-    (ledger as any).get = async (_source: string, sourceRef: string) => sourceRef === draftCandidate.sourceRef
-      ? {
-          source: draftCandidate.source,
-          sourceRef,
-          status: 'deciding',
-          branch: 'spec/draft',
-          draftPrUrl,
-          attempts: 0,
-        }
-      : undefined;
+    (ledger as any).get = async (_source: string, sourceRef: string) =>
+      sourceRef === draftCandidate.sourceRef
+        ? {
+            source: draftCandidate.source,
+            sourceRef,
+            status: 'deciding',
+            branch: 'spec/draft',
+            draftPrUrl,
+            attempts: 0,
+          }
+        : undefined;
     const { runner: gh } = makeFakeGh(JSON.stringify({ state, mergedAt, isDraft: false }));
 
     const claimed = await createDeliveryGuardedQueue(queue as any, ledger as any, { gh }).claim();
@@ -1988,15 +1968,16 @@ describe('Task 9: createDeliveryGuardedQueue — draft spec PR delivery guard', 
     const { queue } = makeFakeQueueWithEnvelopes([draftCandidate, healthyCandidate]);
     const { ledger } = makeFakeLedger();
     const reopenCalls: Array<[string, string]> = [];
-    (ledger as any).get = async (_source: string, sourceRef: string) => sourceRef === 'closed-draft'
-      ? {
-          source: draftCandidate.source,
-          sourceRef,
-          status: 'deciding',
-          draftPrUrl: 'https://github.com/owner/repo/pull/closed',
-          attempts: 0,
-        }
-      : undefined;
+    (ledger as any).get = async (_source: string, sourceRef: string) =>
+      sourceRef === 'closed-draft'
+        ? {
+            source: draftCandidate.source,
+            sourceRef,
+            status: 'deciding',
+            draftPrUrl: 'https://github.com/owner/repo/pull/closed',
+            attempts: 0,
+          }
+        : undefined;
     (ledger as any).reopen = async (source: string, sourceRef: string) => {
       reopenCalls.push([source, sourceRef]);
     };

@@ -42,10 +42,7 @@ import { writeIntakeMarker } from './engineer/intake-marker.js';
 import { resolveBoundaryProvider, type BoundaryChoice } from './engineer/launch-boundary.js';
 import { ensureWorktree } from './worktree-shared.js';
 import { isSpecSlug } from './engineer/spec-branch.js';
-import {
-  createEngineerWorktree,
-  removeEngineerWorktree,
-} from './engineer/worktree-authoring.js';
+import { createEngineerWorktree, removeEngineerWorktree } from './engineer/worktree-authoring.js';
 import { INTAKE_OUTCOMES_RELATIVE_PATH, readStagedIntakeOutcomes } from './engineer/outcome-staging.js';
 import { ensureRunning, type EnsureRunningOpts } from './daemon-lock.js';
 // The CLI is the composition root for the github-issues intake adapter used by
@@ -61,7 +58,10 @@ import {
   HANDLED_LABEL,
 } from './engineer/intake/github-issues.js';
 import { createTerminalGithubOperationConfirmation } from './github-operation-terminal-confirmation.js';
-import { requestExplicitGithubOperationApproval, type InteractiveGithubOperationConfirmation } from './github-operation-approval.js';
+import {
+  requestExplicitGithubOperationApproval,
+  type InteractiveGithubOperationConfirmation,
+} from './github-operation-approval.js';
 import {
   createIntakeBackendComposite,
   type IntakeBackend,
@@ -71,11 +71,7 @@ import { resolveTrackerSelection } from './tracker-selection.js';
 import { reportRouted, reportDone } from './engineer/intake/writeback.js';
 import { makeProductionGit, type GitRunner } from './pr-labels.js';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
-import {
-  claimUnblocked,
-  resolveClaimBands,
-  type DependencyClaimQueue,
-} from './engineer/intake/dependency-claim.js';
+import { claimUnblocked, resolveClaimBands, type DependencyClaimQueue } from './engineer/intake/dependency-claim.js';
 import type { Envelope } from './engineer/intake/port.js';
 import { createBlockerResolver } from './blocker-resolver.js';
 import { createOrderingSource } from './ordering-source.js';
@@ -87,21 +83,24 @@ import { resolveStaleClaimWindowMs } from './resolved-config.js';
 import { parseSourceRef } from './engineer/intake/source-ref.js';
 import { splitOwnerRepo } from './engineer/source-ref.js';
 import { createDependencyLinks, runMigration } from './engineer/issue-dep-migration.js';
-import { createGithubTrackerClient, createGuardedGithubOperationRunner, GithubTrackerOperationRefusalError, makeProductionGh, runTrackerAmbientRead, runTrackerGraphqlRead, runTrackerRepositoryRead, type GhRunner, type TrackerClient } from './tracker-client.js';
 import {
-  sweepDependencyDrift,
-  type DependencyDriftResult,
-} from './engineer/dependency-reconciler.js';
+  createGithubTrackerClient,
+  createGuardedGithubOperationRunner,
+  GithubTrackerOperationRefusalError,
+  makeProductionGh,
+  runTrackerAmbientRead,
+  runTrackerGraphqlRead,
+  runTrackerRepositoryRead,
+  type GhRunner,
+  type TrackerClient,
+} from './tracker-client.js';
+import { sweepDependencyDrift, type DependencyDriftResult } from './engineer/dependency-reconciler.js';
 import type { GithubOperationEventEmitter } from './github-operations.js';
 import { bindMutationToPullRequest } from './ship-draft-pr.js';
 import { executeGithubOperation } from './github-operations.js';
 import { executeRemoteGit } from './remote-git-operations.js';
 import type { OwnerResolution } from './owner-gate/identity.js';
-import {
-  GH_VERSION_FLOOR,
-  probeGhVersion,
-  type GhVersionFloorVerdict,
-} from './gh-version-floor.js';
+import { GH_VERSION_FLOOR, probeGhVersion, type GhVersionFloorVerdict } from './gh-version-floor.js';
 import {
   BUILT_IN_PROVIDERS,
   DEFAULT_PROVIDER,
@@ -117,7 +116,12 @@ import { PluginRegistry } from './plugin-registry.js';
 import { registerBuiltInLlmProviders } from './builtin-llm-providers.js';
 import { createProviderRuntimeSet } from './provider-runtime.js';
 import { ProviderSessionStore } from './provider-session.js';
-import { acknowledgePlanReviewChanges, acceptPlanReviewFinding, runPlanReview, type RunPlanReviewInput } from './plan-review-runner.js';
+import {
+  acknowledgePlanReviewChanges,
+  acceptPlanReviewFinding,
+  runPlanReview,
+  type RunPlanReviewInput,
+} from './plan-review-runner.js';
 import { labelComposerPane, type PaneLabelRunner } from './engineer/pane-label.js';
 import {
   gitRefManifestSource,
@@ -136,13 +140,29 @@ type EngineerDispatchDescriptor =
   | { kind: 'worktree'; project: string; idea: string; sourceRef?: string; body?: string }
   | { kind: 'phase'; worktree: string; phase: string }
   | {
-    kind: 'land'; project: string; idea: string; worktree: string; sourceRef?: string;
-    dependsOn?: string[]; declinedDependencies?: string[]; skipDependencyCheck?: string;
-  }
+      kind: 'land';
+      project: string;
+      idea: string;
+      worktree: string;
+      sourceRef?: string;
+      dependsOn?: string[];
+      declinedDependencies?: string[];
+      skipDependencyCheck?: string;
+    }
   | { kind: 'handoff'; project: string; branch: string; worktree: string; sourceRef?: string }
   | { kind: 'checkpoint'; worktree: string; step: string; state: 'accepted' | 'draft'; notesFile?: string }
   | { kind: 'resume'; target: string; provider?: string; project?: string }
-  | { kind: 'plan-review'; project: string; worktree: string; sourceRef?: string; accept?: string; acknowledge?: true; reason?: string; maxPromptChars?: number; invalidMaxPromptChars?: true }
+  | {
+      kind: 'plan-review';
+      project: string;
+      worktree: string;
+      sourceRef?: string;
+      accept?: string;
+      acknowledge?: true;
+      reason?: string;
+      maxPromptChars?: number;
+      invalidMaxPromptChars?: true;
+    }
   | { kind: 'poll' }
   | { kind: 'claim' }
   | { kind: 'forget'; sourceRef: string; resolvedBy?: string }
@@ -163,8 +183,22 @@ export type EngineerDispatch = EngineerDispatchDescriptor & {
 
 /** Single source of truth for the known deterministic subcommands (#524). */
 export const ENGINEER_SUBCOMMANDS = [
-  'projects', 'dep-audit', 'worktree', 'phase', 'land', 'handoff', 'checkpoint', 'resume', 'plan-review', 'poll', 'claim', 'forget', 'unclaim', 'requeue',
-  'resolve', 'migrate-issue-deps',
+  'projects',
+  'dep-audit',
+  'worktree',
+  'phase',
+  'land',
+  'handoff',
+  'checkpoint',
+  'resume',
+  'plan-review',
+  'poll',
+  'claim',
+  'forget',
+  'unclaim',
+  'requeue',
+  'resolve',
+  'migrate-issue-deps',
 ] as const;
 
 /** Resolve the authored feature identity from the engineer worktree's spec branch. */
@@ -302,12 +336,21 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
     const declinedDependencies = parseRepeatableFlag(argv, '--decline-dependency');
     const skipDependencyCheck = parseOptionalFlagPreservingEmpty(argv, '--skip-dependency-check');
     const unk = findUnknownFlag(argv, [
-      '--project', '--idea', '--worktree', '--source-ref', '--depends-on',
-      '--decline-dependency', '--skip-dependency-check',
+      '--project',
+      '--idea',
+      '--worktree',
+      '--source-ref',
+      '--depends-on',
+      '--decline-dependency',
+      '--skip-dependency-check',
     ]);
     if (unk) return { kind: 'reject', sub: 'land', flag: unk };
     return {
-      kind: 'land', project, idea, worktree, sourceRef,
+      kind: 'land',
+      project,
+      idea,
+      worktree,
+      sourceRef,
       // Keep the established descriptor shape for callers that do not use
       // dependency decisions; the fields are additive only when supplied.
       ...(dependsOn.length === 0 ? {} : { dependsOn }),
@@ -338,7 +381,13 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
     if (!worktree || !step || accept === draft) return { kind: 'guide' };
     const unk = findUnknownFlag(argv, ['--worktree', '--step', '--accept', '--draft', '--notes-file']);
     if (unk) return { kind: 'reject', sub: 'checkpoint', flag: unk };
-    return { kind: 'checkpoint', worktree, step, state: accept ? 'accepted' : 'draft', ...(notesFile ? { notesFile } : {}) };
+    return {
+      kind: 'checkpoint',
+      worktree,
+      step,
+      state: accept ? 'accepted' : 'draft',
+      ...(notesFile ? { notesFile } : {}),
+    };
   }
 
   if (subCmd === 'resume') {
@@ -361,12 +410,34 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
     const reason = parseFlag(argv, '--reason') ?? undefined;
     const maxPromptCharsRaw = parseFlag(argv, '--max-prompt-chars');
     const maxPromptChars = maxPromptCharsRaw === null ? undefined : Number(maxPromptCharsRaw);
-    const invalidMaxPromptChars = maxPromptCharsRaw !== null &&
+    const invalidMaxPromptChars =
+      maxPromptCharsRaw !== null &&
       (maxPromptChars === undefined || !Number.isInteger(maxPromptChars) || maxPromptChars <= 0);
     if (accept && acknowledge) return { kind: 'guide' };
-    const unk = findUnknownFlag(argv, ['--project', '--worktree', '--source-ref', '--accept', '--acknowledge', '--reason', '--max-prompt-chars']);
+    const unk = findUnknownFlag(argv, [
+      '--project',
+      '--worktree',
+      '--source-ref',
+      '--accept',
+      '--acknowledge',
+      '--reason',
+      '--max-prompt-chars',
+    ]);
     if (unk) return { kind: 'reject', sub: 'plan-review', flag: unk };
-    return { kind: 'plan-review', project, worktree, sourceRef, ...(accept ? { accept } : {}), ...(acknowledge ? { acknowledge } : {}), ...(reason ? { reason } : {}), ...(invalidMaxPromptChars ? { invalidMaxPromptChars: true } : maxPromptChars === undefined ? {} : { maxPromptChars }) };
+    return {
+      kind: 'plan-review',
+      project,
+      worktree,
+      sourceRef,
+      ...(accept ? { accept } : {}),
+      ...(acknowledge ? { acknowledge } : {}),
+      ...(reason ? { reason } : {}),
+      ...(invalidMaxPromptChars
+        ? { invalidMaxPromptChars: true }
+        : maxPromptChars === undefined
+          ? {}
+          : { maxPromptChars }),
+    };
   }
 
   if (subCmd === 'poll') {
@@ -396,9 +467,7 @@ function parseEngineerCommand(argv: string[]): EngineerDispatchDescriptor | null
     }
     const unk = findUnknownFlag(argv, ['--resolved-by']);
     if (unk) return { kind: 'reject', sub: 'forget', flag: unk };
-    return resolvedBy
-      ? { kind: 'forget', sourceRef, resolvedBy }
-      : { kind: 'forget', sourceRef };
+    return resolvedBy ? { kind: 'forget', sourceRef, resolvedBy } : { kind: 'forget', sourceRef };
   }
 
   if (subCmd === 'unclaim') {
@@ -578,7 +647,11 @@ async function persistClaimRecord(
   try {
     const dir = join(engDir, 'claims');
     await mkdir(dir, { recursive: true });
-    await writeFile(claimRecordPath(engDir, sourceRef), JSON.stringify({ sourceRef, body: body ?? null, inbound }), 'utf8');
+    await writeFile(
+      claimRecordPath(engDir, sourceRef),
+      JSON.stringify({ sourceRef, body: body ?? null, inbound }),
+      'utf8',
+    );
   } catch {
     // Best-effort — degrade to no staging at worktree time (matches the chat-origin
     // negative path in worktree-authoring.ts).
@@ -674,17 +747,30 @@ export interface DispatchEngineerOpts {
   /** Injected git runner (for tests). */
   git?: GitRunner;
   /** Task 3 local-checkpoint seam; production uses checkpointComposerRun. */
-  checkpoint?: (request: { worktree: string; step: string; state: 'accepted' | 'draft'; notesFile?: string; provider?: string }) => Promise<{ slug: string; state: 'accepted' | 'draft'; committed: boolean; published: boolean; prUrl?: string }>;
+  checkpoint?: (request: {
+    worktree: string;
+    step: string;
+    state: 'accepted' | 'draft';
+    notesFile?: string;
+    provider?: string;
+  }) => Promise<{ slug: string; state: 'accepted' | 'draft'; committed: boolean; published: boolean; prUrl?: string }>;
   /** Machine-owner seam for deterministic checkpoint tests; production resolves the local machine identity. */
   resolveCheckpointOwner?: () => Promise<OwnerResolution>;
   /** Resume boundary seam. */
-  resume?: (request: { target: string; provider?: string; project?: string }) => Promise<{ worktree: string; context: unknown }>;
+  resume?: (request: {
+    target: string;
+    provider?: string;
+    project?: string;
+  }) => Promise<{ worktree: string; context: unknown }>;
   /** Machine-owner seam for deterministic resume tests; production resolves the local machine identity. */
   resolveResumeOwner?: () => Promise<OwnerResolution>;
   /** Explicit take-over approval for a foreign Composer run. */
   confirmComposerTakeover?: (input: { previousOwner: string; branch: string }) => boolean | Promise<boolean>;
   /** Choice for dirty/local-ahead Composer resume worktrees. */
-  chooseComposerLocalState?: (input: { dirtyDocs: readonly string[]; unpushedCommits: readonly string[] }) => 'keep-local' | 'discard-local' | Promise<'keep-local' | 'discard-local'>;
+  chooseComposerLocalState?: (input: {
+    dirtyDocs: readonly string[];
+    unpushedCommits: readonly string[];
+  }) => 'keep-local' | 'discard-local' | Promise<'keep-local' | 'discard-local'>;
   /** Task 16 handoff-publication seam; production derives this from current machine evidence. */
   handoffPublication?: HandoffDeps['publication'];
   /** Injected ensureRunning launch spy (for tests). */
@@ -740,7 +826,15 @@ export interface DispatchEngineerOpts {
    */
   confirmAnother?: () => boolean | Promise<boolean>;
   /** Composer run boundary choice after a host leaves a touched run. */
-  chooseComposerBoundary?: (input: { slug: string; step: string; provider: BuiltInProviderId; choices: readonly BoundaryChoice[]; providers: readonly BuiltInProviderId[] }) => { choice: BoundaryChoice; switchTo?: BuiltInProviderId } | Promise<{ choice: BoundaryChoice; switchTo?: BuiltInProviderId }>;
+  chooseComposerBoundary?: (input: {
+    slug: string;
+    step: string;
+    provider: BuiltInProviderId;
+    choices: readonly BoundaryChoice[];
+    providers: readonly BuiltInProviderId[];
+  }) =>
+    | { choice: BoundaryChoice; switchTo?: BuiltInProviderId }
+    | Promise<{ choice: BoundaryChoice; switchTo?: BuiltInProviderId }>;
   /** Test seam for PATH installation checks; production resolves the executable without probing a version. */
   providerInstalled?: (executable: string) => Promise<boolean>;
 }
@@ -773,12 +867,12 @@ function renderLandDependencyDecision(
 }
 
 function forgetAuthorizationRefusalExplanation(error: unknown, attached: boolean): string {
-  if (!(error instanceof GithubTrackerOperationRefusalError)
-    || error.reason !== 'explicit-authorization-required') return '';
+  if (!(error instanceof GithubTrackerOperationRefusalError) || error.reason !== 'explicit-authorization-required')
+    return '';
 
   return attached
     ? ' The operator declined the interactive approval.'
-    : ' The machine owner is not confirmed as this issue\'s sole assignee, and approval requires that you rerun the same command from an interactive terminal.';
+    : " The machine owner is not confirmed as this issue's sole assignee, and approval requires that you rerun the same command from an interactive terminal.";
 }
 
 /**
@@ -808,23 +902,34 @@ async function composerSourceRef(worktree: string, slug: string): Promise<string
   try {
     const marker = await readFile(join(worktree, '.docs', 'intake', `${slug}.md`), 'utf8');
     return /^Source-Ref:\s*(.+)$/m.exec(marker)?.[1]?.trim();
-  } catch { return undefined; }
+  } catch {
+    return undefined;
+  }
 }
 
-async function composerCommittedMarkerOwner(git: GitRunner, worktree: string, branch: string, slug: string): Promise<string | undefined> {
+async function composerCommittedMarkerOwner(
+  git: GitRunner,
+  worktree: string,
+  branch: string,
+  slug: string,
+): Promise<string | undefined> {
   try {
     const marker = await git(['show', `${branch}:.docs/intake/${slug}.md`], { cwd: worktree });
     if ((marker.exitCode ?? 0) !== 0) return undefined;
     return /^Owner:\s*(.+)$/m.exec(marker.stdout)?.[1]?.trim();
-  } catch { return undefined; }
+  } catch {
+    return undefined;
+  }
 }
 
 function formatDependencyDrift(result: DependencyDriftResult): string {
   if (result.kind === 'repository-indeterminate') {
     return `Dependency drift audit: indeterminate (${result.cause})`;
   }
-  const findings = <T>(name: string, values: readonly T[], render: (value: T) => string): string =>
-    values.length === 0 ? `${name}: 0 findings` : `${name}: ${values.length} finding(s)\n${values.map((value) => `  ${render(value)}`).join('\n')}`;
+  const findings = <T,>(name: string, values: readonly T[], render: (value: T) => string): string =>
+    values.length === 0
+      ? `${name}: 0 findings`
+      : `${name}: ${values.length} finding(s)\n${values.map((value) => `  ${render(value)}`).join('\n')}`;
   return [
     findings('unlinked', result.unlinked, (finding) => `${finding.source} → ${finding.target}`),
     findings('stale', result.stale, (finding) => `${finding.source} → ${finding.target}`),
@@ -877,7 +982,9 @@ function promptAnother(): Promise<boolean> {
 }
 
 /** One terminal decision at a durable Composer boundary; non-TTY keeps handoff safe. */
-function promptComposerBoundary(input: { providers: readonly BuiltInProviderId[] }): Promise<{ choice: BoundaryChoice; switchTo?: BuiltInProviderId }> {
+function promptComposerBoundary(input: {
+  providers: readonly BuiltInProviderId[];
+}): Promise<{ choice: BoundaryChoice; switchTo?: BuiltInProviderId }> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return Promise.resolve({ choice: 'handoff' });
   process.stdout.write(`Choose continue, switch <${input.providers.join('|')}>, or handoff: `);
   return new Promise((resolve) => {
@@ -885,7 +992,8 @@ function promptComposerBoundary(input: { providers: readonly BuiltInProviderId[]
       process.stdin.off('data', onData);
       process.stdin.pause();
       const [choice, target] = chunk.toString().trim().toLowerCase().split(/\s+/, 2);
-      if (choice === 'switch') resolve({ choice: 'switch', ...(target ? { switchTo: target as BuiltInProviderId } : {}) });
+      if (choice === 'switch')
+        resolve({ choice: 'switch', ...(target ? { switchTo: target as BuiltInProviderId } : {}) });
       else if (choice === 'handoff' || choice === 'hand-off') resolve({ choice: 'handoff' });
       else resolve({ choice: 'continue' });
     };
@@ -899,10 +1007,12 @@ function promptComposerTakeover(previousOwner: string, branch: string): Promise<
   process.stdout.write(`Run ${branch} is owned by ${previousOwner}. Take over publishing? [y/N] `);
   return new Promise((resolve) => {
     const onData = (chunk: Buffer): void => {
-      process.stdin.off('data', onData); process.stdin.pause();
+      process.stdin.off('data', onData);
+      process.stdin.pause();
       resolve(['y', 'yes'].includes(chunk.toString().trim().toLowerCase()));
     };
-    process.stdin.resume(); process.stdin.on('data', onData);
+    process.stdin.resume();
+    process.stdin.on('data', onData);
   });
 }
 
@@ -918,15 +1028,21 @@ export function renderComposerLocalStatePrompt(input: {
   return `Local Composer work (${local}).${remote} Keep local or discard to backup? [keep/discard] `;
 }
 
-function promptComposerLocalState(input: { dirtyDocs: readonly string[]; unpushedCommits: readonly string[]; remote?: { step: string; lastActor?: string; lastAt?: string; tip: string } }): Promise<'keep-local' | 'discard-local' | undefined> {
+function promptComposerLocalState(input: {
+  dirtyDocs: readonly string[];
+  unpushedCommits: readonly string[];
+  remote?: { step: string; lastActor?: string; lastAt?: string; tip: string };
+}): Promise<'keep-local' | 'discard-local' | undefined> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return Promise.resolve(undefined);
   process.stdout.write(renderComposerLocalStatePrompt(input));
   return new Promise((resolve) => {
     const onData = (chunk: Buffer): void => {
-      process.stdin.off('data', onData); process.stdin.pause();
+      process.stdin.off('data', onData);
+      process.stdin.pause();
       resolve(chunk.toString().trim().toLowerCase().startsWith('discard') ? 'discard-local' : 'keep-local');
     };
-    process.stdin.resume(); process.stdin.on('data', onData);
+    process.stdin.resume();
+    process.stdin.on('data', onData);
   });
 }
 
@@ -937,19 +1053,33 @@ async function findComposerLaunchRun(
 ): Promise<{ project: { name: string; path: string }; slug: string; worktreePath: string } | undefined> {
   for (const project of projects) {
     let text: string;
-    try { text = await readFile(join(project.path, '.pipeline', 'composer-events.jsonl'), 'utf8'); } catch { continue; }
+    try {
+      text = await readFile(join(project.path, '.pipeline', 'composer-events.jsonl'), 'utf8');
+    } catch {
+      continue;
+    }
     const events = text.split('\n').flatMap((line) => {
-      try { return line ? [JSON.parse(line) as Record<string, unknown>] : []; } catch { return []; }
+      try {
+        return line ? [JSON.parse(line) as Record<string, unknown>] : [];
+      } catch {
+        return [];
+      }
     });
-    const started = [...events].reverse().find((event) =>
-      (event.type === 'composer_run_started' || event.type === 'composer_run_resumed')
-      && event.launchId === launchId
-      && typeof event.slug === 'string'
-      && typeof event.worktreePath === 'string',
-    );
-    if (started) return {
-      project, slug: started.slug as string, worktreePath: started.worktreePath as string,
-    };
+    const started = [...events]
+      .reverse()
+      .find(
+        (event) =>
+          (event.type === 'composer_run_started' || event.type === 'composer_run_resumed') &&
+          event.launchId === launchId &&
+          typeof event.slug === 'string' &&
+          typeof event.worktreePath === 'string',
+      );
+    if (started)
+      return {
+        project,
+        slug: started.slug as string,
+        worktreePath: started.worktreePath as string,
+      };
   }
   return undefined;
 }
@@ -1016,24 +1146,23 @@ export function initialSpecPublication(
         readCommittedRecords: async ({ ref }: { readonly ref: string }) => {
           let paths: readonly string[];
           try {
-            paths = (await resolveFeatureArtifact(
-              gitRefManifestSource(cwd, ref),
-              slug,
-              'intake',
-              async () => [featureMarker],
-            )).paths;
+            paths = (
+              await resolveFeatureArtifact(gitRefManifestSource(cwd, ref), slug, 'intake', async () => [featureMarker])
+            ).paths;
           } catch (error) {
             // A vanished or unavailable ref remains unreadable at the existing
             // injected Git seam. Preserve malformed manifests as fail-closed.
             if (error instanceof MalformedFeatureManifestError) throw error;
             paths = [featureMarker];
           }
-          return Promise.all(paths.map(async (path) => {
-            const { stdout } = await git(['show', `${ref}:${path}`], { cwd });
-            // The mutation-provenance request keeps the stable legacy identity,
-            // while this reader obtains its committed bytes from the manifest path.
-            return { path: featureMarker, content: stdout };
-          }));
+          return Promise.all(
+            paths.map(async (path) => {
+              const { stdout } = await git(['show', `${ref}:${path}`], { cwd });
+              // The mutation-provenance request keeps the stable legacy identity,
+              // while this reader obtains its committed bytes from the manifest path.
+              return { path: featureMarker, content: stdout };
+            }),
+          );
         },
       },
     },
@@ -1095,7 +1224,11 @@ function checkpointPublication(
     // base into the publication primitive.
     resolveDefaultBase: async () => {
       const stdout = await runTrackerRepositoryRead(
-        gh, worktree, 'pull-request.read', repository, { kind: 'repository' },
+        gh,
+        worktree,
+        'pull-request.read',
+        repository,
+        { kind: 'repository' },
         ['repo', 'view', repository, '--json', 'defaultBranchRef'],
       );
       const parsed = JSON.parse(stdout || '{}') as { defaultBranchRef?: { name?: unknown } };
@@ -1117,7 +1250,11 @@ function checkpointPublication(
     findOpenPullRequest: async (requestedBranch) => {
       try {
         const stdout = await runTrackerRepositoryRead(
-          gh, worktree, 'pull-request.read', repository, { kind: 'repository' },
+          gh,
+          worktree,
+          'pull-request.read',
+          repository,
+          { kind: 'repository' },
           ['pr', 'view', requestedBranch, '--repo', repository, '--json', 'url,body'],
         );
         const parsed = JSON.parse(stdout || '{}') as { url?: unknown; body?: unknown };
@@ -1131,25 +1268,42 @@ function checkpointPublication(
       }
     },
     createDraftPullRequest: async (input) => {
-      const result = await executeGithubOperation({
-        operation: 'pull-request.create', repository, resource: { kind: 'repository' },
-        context: { actor: 'composer-checkpoint' },
-        payload: { title: input.title, body: input.body, head: input.branch, base: input.base, draft: true },
-      }, guarded.operations);
+      const result = await executeGithubOperation(
+        {
+          operation: 'pull-request.create',
+          repository,
+          resource: { kind: 'repository' },
+          context: { actor: 'composer-checkpoint' },
+          payload: { title: input.title, body: input.body, head: input.branch, base: input.base, draft: true },
+        },
+        guarded.operations,
+      );
       if (result.kind === 'executed') {
-        const url = result.url ?? (result.target.kind === 'pull-request'
-          ? `https://github.com/${result.target.repository}/pull/${result.target.number}` : undefined);
+        const url =
+          result.url ??
+          (result.target.kind === 'pull-request'
+            ? `https://github.com/${result.target.repository}/pull/${result.target.number}`
+            : undefined);
         if (url) return { url, body: input.body };
       }
       if (result.kind === 'refused') throw new Error(`guarded draft PR creation refused: ${result.reason}`);
-      throw new Error(result.kind === 'failed' ? result.error : 'guarded draft PR creation did not identify a pull request');
+      throw new Error(
+        result.kind === 'failed' ? result.error : 'guarded draft PR creation did not identify a pull request',
+      );
     },
     editPullRequest: async ({ url, body }) => {
-      const result = await executeGithubOperation({
-        operation: 'pull-request.edit', repository, resource: { kind: 'pull-request', number: prNumber(url) },
-        context: { actor: 'composer-checkpoint' }, payload: { body },
-      }, guarded.presentation?.(url) ?? guarded.operations);
-      if (result.kind !== 'executed') throw new Error(result.kind === 'failed' ? result.error : 'guarded PR refresh was refused');
+      const result = await executeGithubOperation(
+        {
+          operation: 'pull-request.edit',
+          repository,
+          resource: { kind: 'pull-request', number: prNumber(url) },
+          context: { actor: 'composer-checkpoint' },
+          payload: { body },
+        },
+        guarded.presentation?.(url) ?? guarded.operations,
+      );
+      if (result.kind !== 'executed')
+        throw new Error(result.kind === 'failed' ? result.error : 'guarded PR refresh was refused');
     },
     published: onPublished,
   };
@@ -1184,9 +1338,11 @@ async function prepareCheckpointDeps(input: {
   resolveOwner?: () => Promise<OwnerResolution>;
 }): Promise<CheckpointDeps> {
   const slug = input.branch.replace(/^spec\//, '');
-  const sourceRef = input.sourceRef ?? await composerSourceRef(input.worktree, slug);
+  const sourceRef = input.sourceRef ?? (await composerSourceRef(input.worktree, slug));
   const markerOwner = await composerCommittedMarkerOwner(input.git, input.worktree, input.branch, slug);
-  const owner = await (input.resolveOwner ?? (async () => resolveDaemonOwner(await readMachineOwnerConfig(), input.gh, input.worktree)))();
+  const owner = await (
+    input.resolveOwner ?? (async () => resolveDaemonOwner(await readMachineOwnerConfig(), input.gh, input.worktree))
+  )();
   const localOnly = Boolean(markerOwner && (!owner.resolved || markerOwner !== owner.id));
   return {
     git: async (args) => {
@@ -1199,10 +1355,19 @@ async function prepareCheckpointDeps(input: {
     sourceRef,
     localOnly,
     localOnlyOwner: markerOwner,
-    publication: input.target.remote && input.branch.startsWith('spec/')
-      ? checkpointPublication(input.target, input.branch, input.worktree, input.gh, input.git, input.events, async ({ branch, prUrl }) =>
-        recordDecidingIntakeLedger(input.engineerDir, { sourceRef, branch, draftPrUrl: prUrl }))
-      : undefined,
+    publication:
+      input.target.remote && input.branch.startsWith('spec/')
+        ? checkpointPublication(
+            input.target,
+            input.branch,
+            input.worktree,
+            input.gh,
+            input.git,
+            input.events,
+            async ({ branch, prUrl }) =>
+              recordDecidingIntakeLedger(input.engineerDir, { sourceRef, branch, draftPrUrl: prUrl }),
+          )
+        : undefined,
   };
 }
 
@@ -1233,8 +1398,14 @@ async function handleComposerHostExit(input: {
 }> {
   const recordPath = join(input.worktree, '.docs', 'composer-runs', `${input.slug}.json`);
   let record: ReturnType<typeof parseRunRecord> | undefined;
-  try { record = parseRunRecord(await readFile(recordPath, 'utf8')); } catch { record = undefined; }
-  const status = await input.git(['status', '--porcelain', '--untracked-files=all', '--', '.docs'], { cwd: input.worktree });
+  try {
+    record = parseRunRecord(await readFile(recordPath, 'utf8'));
+  } catch {
+    record = undefined;
+  }
+  const status = await input.git(['status', '--porcelain', '--untracked-files=all', '--', '.docs'], {
+    cwd: input.worktree,
+  });
   const dirtyDocs = (status.exitCode ?? 0) === 0 && status.stdout.trim().length > 0;
   let saved: Awaited<ReturnType<typeof checkpointComposerRun>> | undefined;
   let saveFailed = false;
@@ -1248,13 +1419,19 @@ async function handleComposerHostExit(input: {
       saved = input.checkpoint
         ? await input.checkpoint({ worktree: input.worktree, step, state: 'draft', provider: input.provider })
         : await (async () => {
-          const deps = await prepareCheckpointDeps({
-            target: input.target, branch: input.branch, worktree: input.worktree,
-            gh: input.gh, git: input.git, events: input.events, provider: input.provider,
-            engineerDir: input.engineerDir, resolveOwner: input.resolveOwner,
-          });
-          return checkpointComposerRun({ worktree: input.worktree, step, state: 'draft' }, deps);
-        })();
+            const deps = await prepareCheckpointDeps({
+              target: input.target,
+              branch: input.branch,
+              worktree: input.worktree,
+              gh: input.gh,
+              git: input.git,
+              events: input.events,
+              provider: input.provider,
+              engineerDir: input.engineerDir,
+              resolveOwner: input.resolveOwner,
+            });
+            return checkpointComposerRun({ worktree: input.worktree, step, state: 'draft' }, deps);
+          })();
       saveFailed = saved.published === false && Boolean(input.target.remote);
     } catch (error) {
       // The local commit is deliberately durable before publication. Continue
@@ -1264,7 +1441,11 @@ async function handleComposerHostExit(input: {
     }
   }
 
-  try { record = parseRunRecord(await readFile(recordPath, 'utf8')); } catch { record = undefined; }
+  try {
+    record = parseRunRecord(await readFile(recordPath, 'utf8'));
+  } catch {
+    record = undefined;
+  }
   const summary = record && summarizeRun(record).nextStep !== 'delivery' ? summarizeRun(record) : undefined;
   return { record, ...(summary ? { summary } : {}), ...(saved ? { saved } : {}), saveFailed };
 }
@@ -1495,10 +1676,7 @@ export async function prePollIntake(deps: {
  * are deterministic and spawn no host: no Node readline REPL and no headless subprocess
  * subprocess for routing or authoring (those happen in-chat in the launched session).
  */
-export async function dispatchEngineer(
-  dispatch: EngineerDispatch,
-  opts: DispatchEngineerOpts = {},
-): Promise<number> {
+export async function dispatchEngineer(dispatch: EngineerDispatch, opts: DispatchEngineerOpts = {}): Promise<number> {
   const print = opts.print ?? ((s: string) => process.stdout.write(s + '\n'));
   const printErr = opts.printErr ?? ((s: string) => process.stderr.write(s + '\n'));
   const gh = opts.gh ?? makeProductionGh();
@@ -1508,12 +1686,17 @@ export async function dispatchEngineer(
 
   // This is a machine precondition, not an intake failure: refuse before any
   // command can create a worktree, branch, or claim record.
-  const canSkipCapabilityProbe = dispatch.kind === 'guide' || dispatch.kind === 'reject' || dispatch.kind === 'help' || dispatch.kind === 'launch-usage';
+  const canSkipCapabilityProbe =
+    dispatch.kind === 'guide' ||
+    dispatch.kind === 'reject' ||
+    dispatch.kind === 'help' ||
+    dispatch.kind === 'launch-usage';
   const ghVersion = canSkipCapabilityProbe
     ? ({ kind: 'ok' } as const)
-    : await (opts.probeGhVersion ?? (opts.gh || opts.launchInteractive
-      ? async () => ({ kind: 'ok' } as const)
-      : probeGhVersion))();
+    : await (
+        opts.probeGhVersion ??
+        (opts.gh || opts.launchInteractive ? async () => ({ kind: 'ok' }) as const : probeGhVersion)
+      )();
   if (ghVersion.kind !== 'ok') {
     if (ghVersion.kind === 'absent') {
       printErr('engineer: gh is not installed; install gh before entering DECIDE or engineer workflows.');
@@ -1521,10 +1704,12 @@ export async function dispatchEngineer(
       const { major, minor, patch } = ghVersion.version;
       printErr(
         `engineer: gh ${major}.${minor}.${patch} is below the required ` +
-        `${GH_VERSION_FLOOR.major}.${GH_VERSION_FLOOR.minor}.${GH_VERSION_FLOOR.patch}; upgrade gh before entering DECIDE or engineer workflows.`,
+          `${GH_VERSION_FLOOR.major}.${GH_VERSION_FLOOR.minor}.${GH_VERSION_FLOOR.patch}; upgrade gh before entering DECIDE or engineer workflows.`,
       );
     } else {
-      printErr(`engineer: cannot verify gh capability (${ghVersion.kind}); install or repair gh before entering DECIDE or engineer workflows.`);
+      printErr(
+        `engineer: cannot verify gh capability (${ghVersion.kind}); install or repair gh before entering DECIDE or engineer workflows.`,
+      );
     }
     return 1;
   }
@@ -1544,1756 +1729,2165 @@ export async function dispatchEngineer(
 
   try {
     switch (dispatch.kind) {
-    case 'launch-usage': {
-      printErr(`compose: ${dispatch.flag} requires a provider id`);
-      printGuide(print);
-      return 1;
-    }
+      case 'launch-usage': {
+        printErr(`compose: ${dispatch.flag} requires a provider id`);
+        printGuide(print);
+        return 1;
+      }
 
-    // ── launch ──────────────────────────────────────────────────────────────────
-    // Bare `ai-conductor compose`: drop the operator into the interactive /composer loop.
-    case 'launch': {
-      const launchingDirectory = process.cwd();
-      const confirmAnother = opts.confirmAnother ?? promptAnother;
-      const launchEnv = opts.env ?? process.env;
-      const skillNameRoot = opts.skillNameRoot === undefined
-        ? await resolveHarnessRoot()
-        : opts.skillNameRoot;
-      const composerName = await resolveSkillName(skillNameRoot, 'composer');
+      // ── launch ──────────────────────────────────────────────────────────────────
+      // Bare `ai-conductor compose`: drop the operator into the interactive /composer loop.
+      case 'launch': {
+        const launchingDirectory = process.cwd();
+        const confirmAnother = opts.confirmAnother ?? promptAnother;
+        const launchEnv = opts.env ?? process.env;
+        const skillNameRoot = opts.skillNameRoot === undefined ? await resolveHarnessRoot() : opts.skillNameRoot;
+        const composerName = await resolveSkillName(skillNameRoot, 'composer');
 
-      // Real-spawn path only: don't nest any interactive host session. When a launcher
-      // is injected (tests), there is no real nesting, so skip this guard.
-      if (!opts.launchInteractive) {
-        const guardEnv = opts.insideClaudeSession === true
-          ? { ...launchEnv, CLAUDECODE: '1' }
-          : opts.insideClaudeSession === false ? {} : launchEnv;
-        const nestedHost = BUILT_IN_PROVIDERS.find((candidate) =>
-          'interactiveLaunch' in candidate
-          && candidate.interactiveLaunch.sessionMarkers.some((marker) => Boolean(guardEnv[marker])),
-        );
-        if (nestedHost && 'interactiveLaunch' in nestedHost) {
-          print(
-            `You are already inside a ${nestedHost.displayName} session — run ${nestedHost.invocationPrefix}${composerName} directly to start ` +
-              'the idea→spec loop (no need to launch a nested session).',
+        // Real-spawn path only: don't nest any interactive host session. When a launcher
+        // is injected (tests), there is no real nesting, so skip this guard.
+        if (!opts.launchInteractive) {
+          const guardEnv =
+            opts.insideClaudeSession === true
+              ? { ...launchEnv, CLAUDECODE: '1' }
+              : opts.insideClaudeSession === false
+                ? {}
+                : launchEnv;
+          const nestedHost = BUILT_IN_PROVIDERS.find(
+            (candidate) =>
+              'interactiveLaunch' in candidate &&
+              candidate.interactiveLaunch.sessionMarkers.some((marker) => Boolean(guardEnv[marker])),
           );
-          return 0;
-        }
-      }
-
-      if (!(opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY)))()) {
-        printErr('compose: an interactive terminal is required to launch the composer session.');
-        return 1;
-      }
-
-      const loadedConfig = opts.launchInteractive
-        ? undefined
-        : await (opts.loadLaunchConfig ?? loadLaunchConfig)(launchingDirectory);
-      if (loadedConfig && !loadedConfig.ok) {
-        printErr(`compose: ${loadedConfig.error.message}`);
-        return 1;
-      }
-      let host: ReturnType<typeof requireProviderCapability<'interactiveLaunch'>> | undefined;
-      try {
-        host = loadedConfig
-          ? requireProviderCapability(
-            resolveComposeLaunchHost({ providerFlag: dispatch.provider, config: loadedConfig.config }),
-            'interactiveLaunch',
-          )
-          : undefined;
-      } catch (error: unknown) {
-        printErr(error instanceof Error ? error.message : String(error));
-        return 1;
-      }
-      const executable = host ? resolveProviderExecutable(host.id) : undefined;
-      // One host session owns one correlation id. Worktree/resume primitives
-      // inherit it; a later, untouched idea must never rediscover this run.
-      let launchId = launchEnv.AI_CONDUCTOR_COMPOSE_LAUNCH_ID ?? crypto.randomUUID();
-      const launchOne = opts.launchInteractive ?? ((idea?: string) => {
-        const prompt = `${host!.invocationPrefix}${composerName}${idea?.trim() ? ` ${idea.trim()}` : ''}`;
-        return (opts.spawnHost ?? spawnInteractiveHost)(
-          executable!,
-          host!.interactiveLaunch.argv({
-            prompt,
-            permissionMode: launchEnv.CONDUCT_ENGINEER_PERMISSION_MODE === 'plan'
-              ? 'default'
-              : launchEnv.CONDUCT_ENGINEER_PERMISSION_MODE ?? 'default',
-          }),
-          launchingDirectory,
-          { ...launchEnv, AI_CONDUCTOR_AUTHORING_PROVIDER: host!.id, AI_CONDUCTOR_COMPOSE_LAUNCH_ID: launchId },
-        );
-      });
-
-      // Intake pre-poll: prime the durable inbox before launching so the spawned
-      // /composer session can `claim` a github-issue idea. Defaults to a real sweep
-      // only on the production spawn path (launchInteractive not injected) so tests
-      // that stub the launcher never hit the network. A CLI-supplied idea drives a
-      // specific idea and skips polling. Best-effort — a poll failure never blocks
-      // the launch.
-      // Single-writer gate (ADR Q2): when a background brain loop is already
-      // running, it owns intake polling — the interactive launcher's pre-poll
-      // defers to it rather than racing to enqueue/dedup against the same ledger.
-      const brainAlive = (opts.brainLoopAlive ?? brainLoopAlive)();
-      const prePoll =
-        opts.prePoll ??
-        (opts.launchInteractive || brainAlive
-          ? undefined
-          : () =>
-              prePollIntake({
-                engineerDir: engineerDir ?? resolveEngineerDir({}),
-                registryPath,
-                gh,
-                printErr,
-                events: opts.events,
-              }));
-
-      // Outer loop: one fresh interactive host session per idea, so each idea
-      // starts with clean context. Durable state (registry, lessons, processed
-      // markers) is file-backed, so a fresh process loses nothing. The skill delivers
-      // a single idea's spec then asks the operator to `/quit`; on exit we offer to
-      // launch the next idea in a brand-new session. (The model cannot self-`/quit`
-      // an interactive session, so the operator presses `/quit` once per idea.)
-      //
-      // The CLI-supplied idea is one-shot: it drives only the FIRST session; later
-      // loop iterations fall back to intake/chat (pendingIdea cleared after use).
-      let pendingIdea = dispatch.idea;
-      let lastCode = 0;
-      for (;;) {
-        // Preserve a caller-supplied id for its first host, then give every
-        // subsequent fresh host a new correlation boundary.
-        if (pendingIdea === undefined) launchId = crypto.randomUUID();
-        if (!pendingIdea && prePoll) {
-          try {
-            const n = await prePoll();
-            if (n > 0) print(`Intake: ${n} issue(s) queued.`);
-          } catch (err: unknown) {
-            // Best-effort: intake must never block the interactive loop.
-            if (err instanceof CorruptLedgerError) {
-              return reportCorruptLedger(err);
-            } else {
-              printErr(
-                `engineer: intake pre-poll failed (${err instanceof Error ? err.message : String(err)}) — continuing.`,
-              );
-            }
-          }
-        }
-        try {
-          lastCode = await launchOne(pendingIdea);
-        } catch (err: unknown) {
-          const msg = err instanceof Error ? err.message : String(err);
-          if ((err as NodeJS.ErrnoException | undefined)?.code === 'ENOENT' && host) {
-            printErr(
-              `engineer: could not launch ${host.id} executable ${executable ?? host.defaultExecutable} (${msg}). ` +
-                `Install it or set ${host.executableOverrideEnv}; if already in a session, run ` +
-                `${host.invocationPrefix}${composerName} directly.`,
+          if (nestedHost && 'interactiveLaunch' in nestedHost) {
+            print(
+              `You are already inside a ${nestedHost.displayName} session — run ${nestedHost.invocationPrefix}${composerName} directly to start ` +
+                'the idea→spec loop (no need to launch a nested session).',
             );
-          } else {
-            const displayName = host?.displayName ?? requireProviderCapability(DEFAULT_PROVIDER, 'interactiveLaunch').displayName;
-            printErr(`engineer: could not launch an interactive ${displayName} session (${msg}).`);
+            return 0;
           }
-          printGuide(print);
+        }
+
+        if (!(opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY)))()) {
+          printErr('compose: an interactive terminal is required to launch the composer session.');
           return 1;
         }
-        // A host can create or resume exactly one run under this correlation id.
-        // Its event is the durable hand-off from the interactive process back to
-        // the launcher; do not infer a run from the first worktree on disk.
+
+        const loadedConfig = opts.launchInteractive
+          ? undefined
+          : await (opts.loadLaunchConfig ?? loadLaunchConfig)(launchingDirectory);
+        if (loadedConfig && !loadedConfig.ok) {
+          printErr(`compose: ${loadedConfig.error.message}`);
+          return 1;
+        }
+        let host: ReturnType<typeof requireProviderCapability<'interactiveLaunch'>> | undefined;
         try {
-          const reader = createRegistryReader(registryPath ? { registryPath } : {});
-          const touched = await findComposerLaunchRun(await reader.listProjects(), launchId);
-          if (touched) {
-            const target = await resolveTargetRepo(touched.project.path, reader);
-            const events = new ConductorEventEmitter();
-            const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
-            persister.start();
+          host = loadedConfig
+            ? requireProviderCapability(
+                resolveComposeLaunchHost({ providerFlag: dispatch.provider, config: loadedConfig.config }),
+                'interactiveLaunch',
+              )
+            : undefined;
+        } catch (error: unknown) {
+          printErr(error instanceof Error ? error.message : String(error));
+          return 1;
+        }
+        const executable = host ? resolveProviderExecutable(host.id) : undefined;
+        // One host session owns one correlation id. Worktree/resume primitives
+        // inherit it; a later, untouched idea must never rediscover this run.
+        let launchId = launchEnv.AI_CONDUCTOR_COMPOSE_LAUNCH_ID ?? crypto.randomUUID();
+        const launchOne =
+          opts.launchInteractive ??
+          ((idea?: string) => {
+            const prompt = `${host!.invocationPrefix}${composerName}${idea?.trim() ? ` ${idea.trim()}` : ''}`;
+            return (opts.spawnHost ?? spawnInteractiveHost)(
+              executable!,
+              host!.interactiveLaunch.argv({
+                prompt,
+                permissionMode:
+                  launchEnv.CONDUCT_ENGINEER_PERMISSION_MODE === 'plan'
+                    ? 'default'
+                    : (launchEnv.CONDUCT_ENGINEER_PERMISSION_MODE ?? 'default'),
+              }),
+              launchingDirectory,
+              { ...launchEnv, AI_CONDUCTOR_AUTHORING_PROVIDER: host!.id, AI_CONDUCTOR_COMPOSE_LAUNCH_ID: launchId },
+            );
+          });
+
+        // Intake pre-poll: prime the durable inbox before launching so the spawned
+        // /composer session can `claim` a github-issue idea. Defaults to a real sweep
+        // only on the production spawn path (launchInteractive not injected) so tests
+        // that stub the launcher never hit the network. A CLI-supplied idea drives a
+        // specific idea and skips polling. Best-effort — a poll failure never blocks
+        // the launch.
+        // Single-writer gate (ADR Q2): when a background brain loop is already
+        // running, it owns intake polling — the interactive launcher's pre-poll
+        // defers to it rather than racing to enqueue/dedup against the same ledger.
+        const brainAlive = (opts.brainLoopAlive ?? brainLoopAlive)();
+        const prePoll =
+          opts.prePoll ??
+          (opts.launchInteractive || brainAlive
+            ? undefined
+            : () =>
+                prePollIntake({
+                  engineerDir: engineerDir ?? resolveEngineerDir({}),
+                  registryPath,
+                  gh,
+                  printErr,
+                  events: opts.events,
+                }));
+
+        // Outer loop: one fresh interactive host session per idea, so each idea
+        // starts with clean context. Durable state (registry, lessons, processed
+        // markers) is file-backed, so a fresh process loses nothing. The skill delivers
+        // a single idea's spec then asks the operator to `/quit`; on exit we offer to
+        // launch the next idea in a brand-new session. (The model cannot self-`/quit`
+        // an interactive session, so the operator presses `/quit` once per idea.)
+        //
+        // The CLI-supplied idea is one-shot: it drives only the FIRST session; later
+        // loop iterations fall back to intake/chat (pendingIdea cleared after use).
+        let pendingIdea = dispatch.idea;
+        let lastCode = 0;
+        for (;;) {
+          // Preserve a caller-supplied id for its first host, then give every
+          // subsequent fresh host a new correlation boundary.
+          if (pendingIdea === undefined) launchId = crypto.randomUUID();
+          if (!pendingIdea && prePoll) {
             try {
-              const branch = `spec/${touched.slug}`;
-              let exited = await handleComposerHostExit({
-                target, branch, worktree: touched.worktreePath, slug: touched.slug, gh, git, events,
-                provider: host!.id, engineerDir, checkpoint: opts.checkpoint, printErr,
-              });
-              if (exited.summary) {
-                let { summary, saved, saveFailed } = exited;
-                let activeProvider = (exited.record?.lastCheckpoint?.provider ?? host!.id) as BuiltInProviderId;
-                print(`Composer run ${touched.slug}: current step ${summary.nextStep}; active provider ${activeProvider}. Choices: continue, switch, hand off.`);
-                const providers = BUILT_IN_PROVIDERS.filter((provider) => supportsProviderCapability(provider, 'interactiveLaunch')).map((provider) => provider.id);
-                // Refused/failed switch attempts return to this exact durable
-                // boundary instead of silently falling through to another idea.
-                for (;;) {
-                  const boundary = opts.chooseComposerBoundary
-                    ? await opts.chooseComposerBoundary({ slug: touched.slug, step: summary.nextStep, provider: activeProvider, choices: ['continue', 'switch', 'handoff'], providers })
-                    : await promptComposerBoundary({ providers });
-                  let action;
-                  try { action = resolveBoundaryProvider({ choice: boundary.choice, activeProvider, switchTo: boundary.switchTo, hasRemote: Boolean(target.remote) }); }
-                  catch (error) {
-                    printErr(`compose boundary: ${error instanceof Error ? error.message : String(error)}`);
-                    if (!(opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY)))()) break;
-                    continue;
-                  }
-                  if (action.action === 'handoff') {
-                    if (saveFailed) {
-                      printErr('compose boundary: handoff is unavailable until the local checkpoint is published; choose continue to retry.');
-                      if (!(opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY)))()) break;
+              const n = await prePoll();
+              if (n > 0) print(`Intake: ${n} issue(s) queued.`);
+            } catch (err: unknown) {
+              // Best-effort: intake must never block the interactive loop.
+              if (err instanceof CorruptLedgerError) {
+                return reportCorruptLedger(err);
+              } else {
+                printErr(
+                  `engineer: intake pre-poll failed (${err instanceof Error ? err.message : String(err)}) — continuing.`,
+                );
+              }
+            }
+          }
+          try {
+            lastCode = await launchOne(pendingIdea);
+          } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            if ((err as NodeJS.ErrnoException | undefined)?.code === 'ENOENT' && host) {
+              printErr(
+                `engineer: could not launch ${host.id} executable ${executable ?? host.defaultExecutable} (${msg}). ` +
+                  `Install it or set ${host.executableOverrideEnv}; if already in a session, run ` +
+                  `${host.invocationPrefix}${composerName} directly.`,
+              );
+            } else {
+              const displayName =
+                host?.displayName ?? requireProviderCapability(DEFAULT_PROVIDER, 'interactiveLaunch').displayName;
+              printErr(`engineer: could not launch an interactive ${displayName} session (${msg}).`);
+            }
+            printGuide(print);
+            return 1;
+          }
+          // A host can create or resume exactly one run under this correlation id.
+          // Its event is the durable hand-off from the interactive process back to
+          // the launcher; do not infer a run from the first worktree on disk.
+          try {
+            const reader = createRegistryReader(registryPath ? { registryPath } : {});
+            const touched = await findComposerLaunchRun(await reader.listProjects(), launchId);
+            if (touched) {
+              const target = await resolveTargetRepo(touched.project.path, reader);
+              const events = new ConductorEventEmitter();
+              const persister = new EventPersister(
+                join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'),
+                events,
+              );
+              persister.start();
+              try {
+                const branch = `spec/${touched.slug}`;
+                let exited = await handleComposerHostExit({
+                  target,
+                  branch,
+                  worktree: touched.worktreePath,
+                  slug: touched.slug,
+                  gh,
+                  git,
+                  events,
+                  provider: host!.id,
+                  engineerDir,
+                  checkpoint: opts.checkpoint,
+                  printErr,
+                });
+                if (exited.summary) {
+                  let { summary, saved, saveFailed } = exited;
+                  let activeProvider = (exited.record?.lastCheckpoint?.provider ?? host!.id) as BuiltInProviderId;
+                  print(
+                    `Composer run ${touched.slug}: current step ${summary.nextStep}; active provider ${activeProvider}. Choices: continue, switch, hand off.`,
+                  );
+                  const providers = BUILT_IN_PROVIDERS.filter((provider) =>
+                    supportsProviderCapability(provider, 'interactiveLaunch'),
+                  ).map((provider) => provider.id);
+                  // Refused/failed switch attempts return to this exact durable
+                  // boundary instead of silently falling through to another idea.
+                  for (;;) {
+                    const boundary = opts.chooseComposerBoundary
+                      ? await opts.chooseComposerBoundary({
+                          slug: touched.slug,
+                          step: summary.nextStep,
+                          provider: activeProvider,
+                          choices: ['continue', 'switch', 'handoff'],
+                          providers,
+                        })
+                      : await promptComposerBoundary({ providers });
+                    let action;
+                    try {
+                      action = resolveBoundaryProvider({
+                        choice: boundary.choice,
+                        activeProvider,
+                        switchTo: boundary.switchTo,
+                        hasRemote: Boolean(target.remote),
+                      });
+                    } catch (error) {
+                      printErr(`compose boundary: ${error instanceof Error ? error.message : String(error)}`);
+                      if (!(opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY)))())
+                        break;
                       continue;
                     }
-                  const owner = await resolveDaemonOwner(await readMachineOwnerConfig(), gh, touched.worktreePath);
-                  const repository = target.remote ? parseGhRepo(target.remote) : undefined;
-                  const existing = repository ? await findExistingSpecPullRequest(
-                    async (args, options) => {
-                      const result = await gh(args, { ...options, cwd: options?.cwd ?? touched.worktreePath });
-                      return { ...result, stderr: '' };
-                    },
-                    repository, branch, touched.worktreePath,
-                  ) : undefined;
-                  const prUrl = saved?.prUrl ?? existing?.url;
-                  await events.emitOrThrow({ type: 'composer_run_handed_off', slug: touched.slug, actor: owner.resolved ? owner.id : 'unresolved', ...(prUrl ? { prUrl } : {}) });
-                  print(`Composer run handed off${prUrl ? `: ${prUrl}` : ''}. Resume with compose resume ${branch}.`);
-                    break;
-                  }
-                  try {
-                    const nextHost = requireProviderCapability(action.provider, 'interactiveLaunch');
-                    const nextExecutable = resolveProviderExecutable(action.provider);
-                    if (!(await (opts.providerInstalled ?? executableOnPath)(nextExecutable))) throw new Error(`provider ${action.provider} is not installed.`);
-                    if (action.provider !== activeProvider) {
-                    const owner = await resolveDaemonOwner(await readMachineOwnerConfig(), gh, touched.worktreePath);
-                    await events.emitOrThrow({ type: 'composer_provider_switched', slug: touched.slug, step: summary.nextStep, fromProvider: activeProvider, toProvider: action.provider, actor: owner.resolved ? owner.id : 'unresolved' });
+                    if (action.action === 'handoff') {
+                      if (saveFailed) {
+                        printErr(
+                          'compose boundary: handoff is unavailable until the local checkpoint is published; choose continue to retry.',
+                        );
+                        if (
+                          !(opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY)))()
+                        )
+                          break;
+                        continue;
+                      }
+                      const owner = await resolveDaemonOwner(await readMachineOwnerConfig(), gh, touched.worktreePath);
+                      const repository = target.remote ? parseGhRepo(target.remote) : undefined;
+                      const existing = repository
+                        ? await findExistingSpecPullRequest(
+                            async (args, options) => {
+                              const result = await gh(args, { ...options, cwd: options?.cwd ?? touched.worktreePath });
+                              return { ...result, stderr: '' };
+                            },
+                            repository,
+                            branch,
+                            touched.worktreePath,
+                          )
+                        : undefined;
+                      const prUrl = saved?.prUrl ?? existing?.url;
+                      await events.emitOrThrow({
+                        type: 'composer_run_handed_off',
+                        slug: touched.slug,
+                        actor: owner.resolved ? owner.id : 'unresolved',
+                        ...(prUrl ? { prUrl } : {}),
+                      });
+                      print(
+                        `Composer run handed off${prUrl ? `: ${prUrl}` : ''}. Resume with compose resume ${branch}.`,
+                      );
+                      break;
                     }
-                    const name = await resolveSkillName(skillNameRoot, 'composer');
-                    const prompt = `${nextHost.invocationPrefix}${name} --resume ${touched.worktreePath} --step ${summary.nextStep}\nResume context: ${JSON.stringify({ drafts: summary.drafts, acceptedArtifacts: summary.acceptedSteps.flatMap((step) => step.artifacts.map((artifact) => artifact.path)), decisions: summary.decisions, openQuestions: summary.openQuestions })}`;
-                    lastCode = await (opts.spawnHost ?? spawnInteractiveHost)(nextExecutable, nextHost.interactiveLaunch.argv({ prompt, permissionMode: 'default' }), touched.worktreePath, { ...launchEnv, AI_CONDUCTOR_AUTHORING_PROVIDER: action.provider, AI_CONDUCTOR_COMPOSE_LAUNCH_ID: launchId });
-                    exited = await handleComposerHostExit({
-                      target, branch, worktree: touched.worktreePath, slug: touched.slug, gh, git, events,
-                      provider: action.provider, engineerDir, checkpoint: opts.checkpoint, printErr,
-                    });
-                    if (!exited.summary) break;
-                    ({ summary, saved, saveFailed } = exited);
-                    activeProvider = (exited.record?.lastCheckpoint?.provider ?? action.provider) as BuiltInProviderId;
-                  } catch (error) { printErr(`compose boundary: ${error instanceof Error ? error.message : String(error)}`); }
+                    try {
+                      const nextHost = requireProviderCapability(action.provider, 'interactiveLaunch');
+                      const nextExecutable = resolveProviderExecutable(action.provider);
+                      if (!(await (opts.providerInstalled ?? executableOnPath)(nextExecutable)))
+                        throw new Error(`provider ${action.provider} is not installed.`);
+                      if (action.provider !== activeProvider) {
+                        const owner = await resolveDaemonOwner(
+                          await readMachineOwnerConfig(),
+                          gh,
+                          touched.worktreePath,
+                        );
+                        await events.emitOrThrow({
+                          type: 'composer_provider_switched',
+                          slug: touched.slug,
+                          step: summary.nextStep,
+                          fromProvider: activeProvider,
+                          toProvider: action.provider,
+                          actor: owner.resolved ? owner.id : 'unresolved',
+                        });
+                      }
+                      const name = await resolveSkillName(skillNameRoot, 'composer');
+                      const prompt = `${nextHost.invocationPrefix}${name} --resume ${touched.worktreePath} --step ${summary.nextStep}\nResume context: ${JSON.stringify({ drafts: summary.drafts, acceptedArtifacts: summary.acceptedSteps.flatMap((step) => step.artifacts.map((artifact) => artifact.path)), decisions: summary.decisions, openQuestions: summary.openQuestions })}`;
+                      lastCode = await (opts.spawnHost ?? spawnInteractiveHost)(
+                        nextExecutable,
+                        nextHost.interactiveLaunch.argv({ prompt, permissionMode: 'default' }),
+                        touched.worktreePath,
+                        {
+                          ...launchEnv,
+                          AI_CONDUCTOR_AUTHORING_PROVIDER: action.provider,
+                          AI_CONDUCTOR_COMPOSE_LAUNCH_ID: launchId,
+                        },
+                      );
+                      exited = await handleComposerHostExit({
+                        target,
+                        branch,
+                        worktree: touched.worktreePath,
+                        slug: touched.slug,
+                        gh,
+                        git,
+                        events,
+                        provider: action.provider,
+                        engineerDir,
+                        checkpoint: opts.checkpoint,
+                        printErr,
+                      });
+                      if (!exited.summary) break;
+                      ({ summary, saved, saveFailed } = exited);
+                      activeProvider = (exited.record?.lastCheckpoint?.provider ??
+                        action.provider) as BuiltInProviderId;
+                    } catch (error) {
+                      printErr(`compose boundary: ${error instanceof Error ? error.message : String(error)}`);
+                    }
+                  }
                 }
+              } finally {
+                persister.stop();
               }
-            } finally { persister.stop(); }
-          }
-        } catch (error) {
-          printErr(`compose boundary: ${error instanceof Error ? error.message : String(error)}`);
-        }
-        pendingIdea = undefined; // CLI idea is one-shot — next session is intake/chat driven.
-        if (!(await confirmAnother())) return lastCode;
-        print(''); // visual spacer before the next fresh session
-      }
-    }
-
-    // ── guide ─────────────────────────────────────────────────────────────────
-    case 'guide': {
-      printGuide(print);
-      return 0;
-    }
-
-    // ── reject ────────────────────────────────────────────────────────────────
-    // Unknown flag on a zero/boolean-flag subcommand (#524 Story 3): fail fast
-    // rather than silently ignoring the flag and running the subcommand anyway.
-    case 'reject': {
-      printErr(
-        `compose ${dispatch.sub}: unknown flag '${dispatch.flag}' — run \`compose ${dispatch.sub} --help\` for usage.`,
-      );
-      return 1;
-    }
-
-    // ── help ──────────────────────────────────────────────────────────────────
-    // Per-subcommand `--help`/`-h` (#524): zero side effects, single print.
-    case 'help': {
-      print(SUBCOMMAND_HELP[dispatch.topic as keyof typeof SUBCOMMAND_HELP] ?? '');
-      return 0;
-    }
-
-    // ── phase ─────────────────────────────────────────────────────────────────
-    case 'phase': {
-      if (!/^[a-z0-9-]+$/.test(dispatch.phase)) {
-        printErr(`compose phase: invalid phase '${dispatch.phase}'.`);
-        return 1;
-      }
-      const slug = await (opts.resolvePlanReviewFeatureSlug ?? resolvePlanReviewFeatureSlug)(dispatch.worktree);
-      if (!slug) {
-        printErr(`compose phase: worktree '${dispatch.worktree}' must be on a canonical spec/<slug> branch.`);
-        return 1;
-      }
-      if (!opts.paneLabelRunner) return 0;
-      await labelComposerPane({
-        slug,
-        phase: dispatch.phase,
-        env: opts.env ?? process.env,
-        run: opts.paneLabelRunner,
-        warn: printErr,
-      });
-      return 0;
-    }
-
-    // ── projects ──────────────────────────────────────────────────────────────
-    case 'projects': {
-      const reader = createRegistryReader(registryPath ? { registryPath } : {});
-      const projects = await reader.listProjects();
-      print(JSON.stringify(projects));
-      return 0;
-    }
-
-    // ── dep-audit ──────────────────────────────────────────────────────────────
-    // Resolve the local registry before constructing the tracker so an unknown
-    // project is a local refusal with no network/read-side effect.
-    case 'dep-audit': {
-      const reader = createRegistryReader(registryPath ? { registryPath } : {});
-      const projects = await reader.listProjects();
-      const record = projects.find((project) => project.name === dispatch.project);
-      if (!record) {
-        printErr(`compose dep-audit: project "${dispatch.project}" not found in registry.`);
-        return 1;
-      }
-      const repository = dependencyRepository(record);
-      const tracker = opts.createDependencyTracker ?? (() => createGithubTrackerClient(gh));
-      const result = await sweepDependencyDrift({ repository, tracker: tracker(), cwd: record.path });
-      print(formatDependencyDrift(result));
-      return 0;
-    }
-
-    // ── worktree ────────────────────────────────────────────────────────────────
-    // `ai-conductor engineer worktree --project <n> --idea "<i>"`: create the per-idea
-    // isolated worktree the skill authors + lands in. Strict-abort (FR-7): a failure
-    // makes zero mutation to the primary tree and returns exit 1. Prints
-    // `{ slug, branch, worktreePath, reconcile }` on success.
-    case 'worktree': {
-      const { project: projectName, idea, sourceRef, body } = dispatch;
-      const reader = createRegistryReader(registryPath ? { registryPath } : {});
-      const allProjects = await reader.listProjects();
-      const record = allProjects.find((p) => p.name === projectName);
-      if (!record) {
-        printErr(`engineer worktree: project "${projectName}" not found in registry.`);
-        return 1;
-      }
-
-      let target: Awaited<ReturnType<typeof resolveTargetRepo>>;
-      try {
-        target = await resolveTargetRepo(record.path, reader);
-      } catch (err: unknown) {
-        printErr(`engineer worktree: ${err instanceof Error ? err.message : String(err)}`);
-        return 1;
-      }
-
-      // FR-13: when --source-ref is given without an explicit --body, resolve the
-      // Desired-outcome body from the claim record persisted at claim time. An
-      // explicit --body always wins. A missing/unreadable record degrades to no
-      // staging (matches worktree-authoring.ts's chat-origin negative path) — never throws.
-      let resolvedBody = body;
-      let inbound: Envelope['inbound'];
-      if (sourceRef) {
-        const engDir = engineerDir ?? resolveEngineerDir({});
-        const record = await loadClaimRecord(engDir, sourceRef);
-        if (resolvedBody == null) resolvedBody = record?.body ?? undefined;
-        inbound = record?.inbound;
-
-        // An unclaimed GitHub issue has no local record yet. Resolve its body through
-        // the canonical tracker seam so the injected runner remains the sole external
-        // boundary for this deterministic command.
-        if (resolvedBody == null) {
-          try {
-            const fetched = await fetchSanitizedIssueBody(gh, sourceRef, target.canonicalPath);
-            if (fetched) {
-              resolvedBody = fetched.text;
-              inbound = fetched.inbound;
             }
-          } catch {
-            // Tracker reachability must not prevent offline worktree creation.
-            // Leave the body unresolved so staging remains a no-op.
+          } catch (error) {
+            printErr(`compose boundary: ${error instanceof Error ? error.message : String(error)}`);
           }
-        }
-
-        if (resolvedBody == null) {
-          printErr(
-            `engineer worktree: no intake outcome layer was staged for ${sourceRef}; ` +
-            `the source body could not be resolved. Supply it with --body to stage ${INTAKE_OUTCOMES_RELATIVE_PATH}.`,
-          );
+          pendingIdea = undefined; // CLI idea is one-shot — next session is intake/chat driven.
+          if (!(await confirmAnother())) return lastCode;
+          print(''); // visual spacer before the next fresh session
         }
       }
 
-      try {
-        const wt = await createEngineerWorktree(target.canonicalPath, idea, (m) => printErr(m), {
-          sourceRef,
-          body: resolvedBody,
-        });
-        if (opts.paneLabelRunner) {
-          await labelComposerPane({
-            slug: wt.slug,
-            phase: 'worktree',
-            env: opts.env ?? process.env,
-            run: opts.paneLabelRunner,
-            warn: printErr,
-          });
-        }
-        // The occurrence rides the one telemetry spine. This CLI process owns no
-        // long-lived bus, so it builds the spine for the duration of the emit —
-        // a ConductorEventEmitter with EventPersister attached to the canonical
-        // `<worktree>/.pipeline/events.jsonl` — exactly as the `operator_rewind`
-        // emit in `engine/rewind.ts` does. No sibling ledger and no bespoke
-        // format: one union, one reader path. Best-effort — a persistence failure
-        // reports on stderr and never fails worktree creation.
-        if (sourceRef && inbound) {
-          const events = new ConductorEventEmitter();
-          const persister = new EventPersister(
-            join(wt.worktreePath, '.pipeline', 'events.jsonl'),
-            events,
-          );
-          try {
-            persister.start();
-            await events.emitOrThrow({
-              type: 'intake_inbound_sanitized',
-              sourceRef,
-              neutralizations: inbound.neutralizations,
-              digest: inbound.digest,
-            });
-          } catch (err) {
-            printErr(`engineer worktree: could not record inbound intake event: ${err instanceof Error ? err.message : String(err)}`);
-          } finally {
-            persister.stop();
-          }
-        }
-        const launchId = (opts.env ?? process.env).AI_CONDUCTOR_COMPOSE_LAUNCH_ID;
-        if (launchId) {
-          const events = new ConductorEventEmitter();
-          const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
-          persister.start();
-          try {
-            const owner = await resolveDaemonOwner(await readMachineOwnerConfig(), gh, target.canonicalPath);
-            await events.emitOrThrow({
-              type: 'composer_run_started', slug: wt.slug, worktreePath: wt.worktreePath, launchId,
-              provider: (opts.env ?? process.env).AI_CONDUCTOR_AUTHORING_PROVIDER ?? DEFAULT_PROVIDER,
-              actor: owner.resolved ? owner.id : 'unresolved',
-            });
-          } finally { persister.stop(); }
-        }
-        print(JSON.stringify({ kind: 'worktree', ...wt }));
+      // ── guide ─────────────────────────────────────────────────────────────────
+      case 'guide': {
+        printGuide(print);
         return 0;
-      } catch (err: unknown) {
-        printErr(`engineer worktree: ${err instanceof Error ? err.message : String(err)}`);
-        return 1;
-      }
-    }
-
-    case 'plan-review': {
-      const { project: projectName, worktree, accept, acknowledge, reason, maxPromptChars, invalidMaxPromptChars } = dispatch;
-      if (invalidMaxPromptChars) { printErr('engineer plan-review: --max-prompt-chars must be a positive integer'); return 1; }
-      if (maxPromptChars !== undefined && (accept || acknowledge)) { printErr('engineer plan-review: --max-prompt-chars applies only to a review run'); return 1; }
-      await labelPrimitivePane(worktree, 'plan-review', opts, printErr);
-      const reader = createRegistryReader(registryPath ? { registryPath } : {});
-      const record = (await reader.listProjects()).find((project) => project.name === projectName);
-      if (!record) { printErr(`engineer plan-review: project "${projectName}" not found in registry.`); return 1; }
-      let target: Awaited<ReturnType<typeof resolveTargetRepo>>;
-      try { target = await resolveTargetRepo(record.path, reader); }
-      catch (error) { printErr(`engineer plan-review: ${error instanceof Error ? error.message : String(error)}`); return 1; }
-      const configResult = await loadMergedConfig(worktree);
-      if (!configResult.ok) { printErr(`engineer plan-review: ${configResult.error.message}`); return 1; }
-      const planStem = await resolvePlanReviewFeatureSlug(worktree);
-      if (!planStem) {
-        printErr(`engineer plan-review: worktree must be on a canonical spec/<slug> branch to resolve its active feature plan.`);
-        return 1;
-      }
-      try { await access(join(worktree, '.docs', 'plans', `${planStem}.md`)); }
-      catch { printErr(`engineer plan-review: active feature plan .docs/plans/${planStem}.md is required in the worktree.`); return 1; }
-      const events = new ConductorEventEmitter();
-      const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
-      persister.start();
-      try {
-        if (accept) await acceptPlanReviewFinding({ worktreePath: worktree, planStem, findingId: accept, reason: reason ?? '', emit: async (event) => events.emitOrThrow(event) });
-        else if (acknowledge) await acknowledgePlanReviewChanges({ worktreePath: worktree, canonicalPath: target.canonicalPath, planStem, reason: reason ?? '' });
-        else {
-          const registry = new PluginRegistry();
-          registerBuiltInLlmProviders(registry, { codexDoctorTimeoutMs: (configResult.config.codex_doctor_timeout_seconds ?? 10) * 1_000 });
-          registry.markInitialized();
-          const configuredProviders = Array.isArray(configResult.config.llm_provider) ? configResult.config.llm_provider : configResult.config.llm_provider ? [configResult.config.llm_provider] : undefined;
-          let ledgerError: string | undefined;
-          const safeEmit = async (event: any) => { try { await events.emitOrThrow(event); } catch (error) { ledgerError ??= error instanceof Error ? error.message : String(error); } };
-          const artifact = await (opts.runPlanReview ?? runPlanReview)({ worktreePath: worktree, canonicalPath: target.canonicalPath, planStem, config: configResult.config, runtimes: createProviderRuntimeSet(registry, undefined, configResult.config), sessions: new ProviderSessionStore(), configuredProviders, env: opts.env, providerExecutor: opts.providerExecutor, emit: safeEmit, onNotice: printErr, maxPromptChars: maxPromptChars ?? configResult.config.plan_review?.max_prompt_chars });
-          if (ledgerError) printErr(`engineer plan-review: event ledger write failed: ${ledgerError}`);
-          if (!artifact.findings.some((finding) => finding.severity === 'blocking')) print('plan review clean');
-        }
-        return 0;
-      } catch (error) {
-        printErr(`engineer plan-review: ${error instanceof Error ? error.message : String(error)}`);
-        return 1;
-      } finally { persister.stop(); }
-    }
-
-    // ── land ──────────────────────────────────────────────────────────────────
-    case 'land': {
-      const {
-        project: projectName, idea, worktree, sourceRef,
-        dependsOn = [], declinedDependencies = [], skipDependencyCheck,
-      } = dispatch;
-      await labelPrimitivePane(worktree, 'land', opts, printErr);
-      const reader = createRegistryReader(registryPath ? { registryPath } : {});
-      const allProjects = await reader.listProjects();
-      const record = allProjects.find((p) => p.name === projectName);
-      if (!record) {
-        printErr(`engineer land: project "${projectName}" not found in registry.`);
-        return 1;
       }
 
-      let target: Awaited<ReturnType<typeof resolveTargetRepo>>;
-      try {
-        target = await resolveTargetRepo(record.path, reader);
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        printErr(`engineer land: ${msg}`);
-        return 1;
-      }
-
-      // Owner-gate (adr-2026-06-30-*): the daemon that later builds this spec
-      // resolves ITS owner from the machine config (`spec_owner`), so stamp the
-      // spec with the SAME source here. Read the machine config for `ownerConfig`
-      // (D1) and thread the in-scope `gh` runner for the login fallback; landSpec
-      // resolves configured spec_owner → gh login → un-owned (omits the `Owner:`
-      // line). Reading from the user config never crashes the land.
-      // ADR-1 naming: `ownerConfig`/`specOwner`, never a bare `owner`.
-      const ownerConfig = await readMachineOwnerConfig();
-
-      // Fail-fast identity check (Slice B Story 1): resolve the identity chain
-      // BEFORE entering landSpec. If unresolved, exit immediately with actionable
-      // error and do NOT proceed to landSpec (which would commit a spec with no
-      // owner stamping).
-      const identity = await resolveDaemonOwner(ownerConfig, gh, target.canonicalPath);
-      if (!identity.resolved) {
+      // ── reject ────────────────────────────────────────────────────────────────
+      // Unknown flag on a zero/boolean-flag subcommand (#524 Story 3): fail fast
+      // rather than silently ignoring the flag and running the subcommand anyway.
+      case 'reject': {
         printErr(
-          'Cannot land spec: identity unresolved. Resolve one of:\n' +
-          '  1. Set spec_owner in ~/.ai-conductor/config.yml\n' +
-          '  2. Authenticate via: gh auth login',
+          `compose ${dispatch.sub}: unknown flag '${dispatch.flag}' — run \`compose ${dispatch.sub} --help\` for usage.`,
         );
         return 1;
       }
 
-      let result: Awaited<ReturnType<typeof landSpec>>;
-      try {
-        result = await landSpec(
-          { name: target.name, canonicalPath: target.canonicalPath },
-          idea,
-          worktree,
-          sourceRef,
-          {
-            ownerConfig,
-            gh,
-            dependencyGit: async (args) => {
-              try {
-                const result = await git(args, { cwd: target.canonicalPath });
-                return { exitCode: 0, stdout: result.stdout, stderr: '' };
-              } catch (error) {
-                return {
-                  exitCode: 1,
-                  stdout: '',
-                  stderr: error instanceof Error ? error.message : String(error),
-                };
-              }
-            },
-            acceptedDependencies: dependsOn,
-            declinedDependencies,
-            skipDependencyCheck,
-          },
-        );
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (err instanceof LandGateError && err.dependency) {
-          renderLandDependencyDecision(err.dependency, print);
-        }
-        // Keep-on-failure (FR-6): the per-idea worktree is retained for inspection —
-        // report WHERE it is so retention is actionable, not silent clutter.
-        printErr(`engineer land: ${msg}`);
-        printErr(`engineer land: worktree kept for inspection at "${worktree}".`);
-        if (err instanceof TargetPathMissingError) {
+      // ── help ──────────────────────────────────────────────────────────────────
+      // Per-subcommand `--help`/`-h` (#524): zero side effects, single print.
+      case 'help': {
+        print(SUBCOMMAND_HELP[dispatch.topic as keyof typeof SUBCOMMAND_HELP] ?? '');
+        return 0;
+      }
+
+      // ── phase ─────────────────────────────────────────────────────────────────
+      case 'phase': {
+        if (!/^[a-z0-9-]+$/.test(dispatch.phase)) {
+          printErr(`compose phase: invalid phase '${dispatch.phase}'.`);
           return 1;
         }
-        try {
-          const rejection = classifyLandGateRejection(err);
-          const events = new ConductorEventEmitter();
-          // D2 of adr-2026-08-08: one writer per ledger file. The compose loop is a
-          // separate process from the engine, so it owns its own sibling ledger
-          // (`composer-events.jsonl`, same ConductorEvent schema) at the target
-          // root; readers merge by `ts`.
-          const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
-          persister.start();
-          try {
-            await events.emitOrThrow({
-              type: 'land_gate_rejected',
-              ...rejection,
-              project: target.name,
-              worktreePath: worktree,
-              ...(sourceRef ? { sourceRef } : {}),
-            });
-          } finally {
-            persister.stop();
-          }
-        } catch (recordingError) {
-          printErr(`engineer land: could not record rejection event: ${recordingError instanceof Error ? recordingError.message : String(recordingError)}`);
+        const slug = await (opts.resolvePlanReviewFeatureSlug ?? resolvePlanReviewFeatureSlug)(dispatch.worktree);
+        if (!slug) {
+          printErr(`compose phase: worktree '${dispatch.worktree}' must be on a canonical spec/<slug> branch.`);
+          return 1;
         }
-        return 1;
-      }
-
-      if (result.manifestChanged) {
-        try {
-          const events = new ConductorEventEmitter();
-          const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
-          persister.start();
-          try {
-            await events.emitOrThrow({
-              type: 'feature_artifacts_registered',
-              slug: result.slug,
-              added: result.added.map(({ kind, path }) => ({ kind, path })),
-            });
-          } finally {
-            persister.stop();
-          }
-        } catch (error) {
-          printErr(`engineer land: could not record artifact registration event: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }
-
-      // Intake write-back (FR-36): when this idea originated from a github issue,
-      // comment "Routed to <repo>" and advance the ledger to `routed`. Advisory —
-      // a gh failure never fails a successful land.
-      if (sourceRef) {
-        const engDir = engineerDir ?? resolveEngineerDir({});
-        const { ledger, adapter } = buildIntake({
-          engineerDir: engDir, registryPath, gh, printErr, resolveActor: opts.intakeResolveActor, events: opts.events,
-          operatorSession: true,
+        if (!opts.paneLabelRunner) return 0;
+        await labelComposerPane({
+          slug,
+          phase: dispatch.phase,
+          env: opts.env ?? process.env,
+          run: opts.paneLabelRunner,
+          warn: printErr,
         });
-        await reportRouted(
-          { source: GITHUB_ISSUES_SOURCE, sourceRef, port: adapter, ledger },
-          target.name,
-        );
+        return 0;
       }
 
-      if (result.dependency) {
-        renderLandDependencyDecision(result.dependency, print);
+      // ── projects ──────────────────────────────────────────────────────────────
+      case 'projects': {
+        const reader = createRegistryReader(registryPath ? { registryPath } : {});
+        const projects = await reader.listProjects();
+        print(JSON.stringify(projects));
+        return 0;
       }
 
-      // The dependency decision is deliberately post-commit.  A failed or
-      // refused GitHub write must leave the landed spec intact, be reported in
-      // the decision event, and never be mistaken for a pre-commit land gate.
-      if (sourceRef && result.dependency) {
-        const { proposals, decision } = result.dependency;
-        const writes: Array<{ target: string; status: string; reason?: string }> = [];
+      // ── dep-audit ──────────────────────────────────────────────────────────────
+      // Resolve the local registry before constructing the tracker so an unknown
+      // project is a local refusal with no network/read-side effect.
+      case 'dep-audit': {
+        const reader = createRegistryReader(registryPath ? { registryPath } : {});
+        const projects = await reader.listProjects();
+        const record = projects.find((project) => project.name === dispatch.project);
+        if (!record) {
+          printErr(`compose dep-audit: project "${dispatch.project}" not found in registry.`);
+          return 1;
+        }
+        const repository = dependencyRepository(record);
+        const tracker = opts.createDependencyTracker ?? (() => createGithubTrackerClient(gh));
+        const result = await sweepDependencyDrift({ repository, tracker: tracker(), cwd: record.path });
+        print(formatDependencyDrift(result));
+        return 0;
+      }
+
+      // ── worktree ────────────────────────────────────────────────────────────────
+      // `ai-conductor engineer worktree --project <n> --idea "<i>"`: create the per-idea
+      // isolated worktree the skill authors + lands in. Strict-abort (FR-7): a failure
+      // makes zero mutation to the primary tree and returns exit 1. Prints
+      // `{ slug, branch, worktreePath, reconcile }` on success.
+      case 'worktree': {
+        const { project: projectName, idea, sourceRef, body } = dispatch;
+        const reader = createRegistryReader(registryPath ? { registryPath } : {});
+        const allProjects = await reader.listProjects();
+        const record = allProjects.find((p) => p.name === projectName);
+        if (!record) {
+          printErr(`engineer worktree: project "${projectName}" not found in registry.`);
+          return 1;
+        }
+
+        let target: Awaited<ReturnType<typeof resolveTargetRepo>>;
         try {
-          if (decision.kind === 'proceed') {
-            const operations = createGuardedGithubOperationRunner(gh, {
-              cwd: target.canonicalPath,
-              intake: createGithubIntakeAuthorization({
-                gh,
-                cwd: target.canonicalPath,
-                resolveActor: async () => identity,
-              }),
-            });
-            for (const dependency of decision.accepted) {
-              try {
-                const [write] = await createDependencyLinks([{
-                  source: sourceRef,
-                  target: dependency,
-                  kind: 'depends-on',
-                  blocked_by: true,
-                }], {
-                  gh,
-                  operations,
-                  actor: identity.id,
-                  cwd: target.canonicalPath,
-                });
-                if (write) writes.push({ target: dependency, status: write.status });
-                else writes.push({ target: dependency, status: 'failed', reason: 'dependency link produced no result' });
-              } catch (error) {
-                const reason = error instanceof Error ? error.message : String(error);
-                writes.push({ target: dependency, status: 'failed', reason });
-                printErr(`engineer land: dependency write failed for ${dependency}: ${reason}`);
+          target = await resolveTargetRepo(record.path, reader);
+        } catch (err: unknown) {
+          printErr(`engineer worktree: ${err instanceof Error ? err.message : String(err)}`);
+          return 1;
+        }
+
+        // FR-13: when --source-ref is given without an explicit --body, resolve the
+        // Desired-outcome body from the claim record persisted at claim time. An
+        // explicit --body always wins. A missing/unreadable record degrades to no
+        // staging (matches worktree-authoring.ts's chat-origin negative path) — never throws.
+        let resolvedBody = body;
+        let inbound: Envelope['inbound'];
+        if (sourceRef) {
+          const engDir = engineerDir ?? resolveEngineerDir({});
+          const record = await loadClaimRecord(engDir, sourceRef);
+          if (resolvedBody == null) resolvedBody = record?.body ?? undefined;
+          inbound = record?.inbound;
+
+          // An unclaimed GitHub issue has no local record yet. Resolve its body through
+          // the canonical tracker seam so the injected runner remains the sole external
+          // boundary for this deterministic command.
+          if (resolvedBody == null) {
+            try {
+              const fetched = await fetchSanitizedIssueBody(gh, sourceRef, target.canonicalPath);
+              if (fetched) {
+                resolvedBody = fetched.text;
+                inbound = fetched.inbound;
               }
+            } catch {
+              // Tracker reachability must not prevent offline worktree creation.
+              // Leave the body unresolved so staging remains a no-op.
             }
           }
-        } catch (error) {
-          // Keep a durable decision record even if construction of the guarded
-          // write seam itself fails unexpectedly.
-          const reason = error instanceof Error ? error.message : String(error);
-          printErr(`engineer land: dependency write setup failed: ${reason}`);
-          for (const dependency of decision.kind === 'proceed' ? decision.accepted : []) {
-            writes.push({ target: dependency, status: 'failed', reason });
+
+          if (resolvedBody == null) {
+            printErr(
+              `engineer worktree: no intake outcome layer was staged for ${sourceRef}; ` +
+                `the source body could not be resolved. Supply it with --body to stage ${INTAKE_OUTCOMES_RELATIVE_PATH}.`,
+            );
           }
         }
 
         try {
-          const events = new ConductorEventEmitter();
-          const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
-          persister.start();
-          try {
-            await events.emitOrThrow({
-              type: 'land_dependency_decided',
-              repository: parseSourceRef(sourceRef)?.repo ?? sourceRef,
-              sourceRef,
-              proposals: proposals.kind === 'computed' ? proposals.proposals.map((proposal) => proposal.target) : [],
-              accepted: decision.kind === 'proceed' ? decision.accepted : [],
-              declined: decision.kind === 'proceed' ? decision.declined : [],
-              skipped: decision.kind === 'proceed' ? decision.skipped : null,
-              writes,
+          const wt = await createEngineerWorktree(target.canonicalPath, idea, (m) => printErr(m), {
+            sourceRef,
+            body: resolvedBody,
+          });
+          if (opts.paneLabelRunner) {
+            await labelComposerPane({
+              slug: wt.slug,
+              phase: 'worktree',
+              env: opts.env ?? process.env,
+              run: opts.paneLabelRunner,
+              warn: printErr,
             });
-          } finally {
-            persister.stop();
           }
-        } catch (error) {
-          printErr(`engineer land: could not record dependency decision event: ${error instanceof Error ? error.message : String(error)}`);
-        }
-      }
-      print(JSON.stringify(result));
-      return 0;
-    }
-
-    // ── checkpoint ────────────────────────────────────────────────────────────
-    case 'checkpoint': {
-      const { worktree, step, state, notesFile } = dispatch;
-      try {
-        const result = opts.checkpoint
-          ? await opts.checkpoint({ worktree, step, state, ...(notesFile ? { notesFile } : {}) })
-          : await (async () => {
-            const reader = createRegistryReader(registryPath ? { registryPath } : {});
-            const projects = await reader.listProjects();
-            const project = projects.find((candidate) => worktree === candidate.path || worktree.startsWith(`${candidate.path}/.worktrees/`));
-            if (!project) throw new Error(`compose checkpoint: worktree "${worktree}" is not beneath a registered project; register the repository first with conduct register.`);
-            const target = await resolveTargetRepo(project.path, reader);
+          // The occurrence rides the one telemetry spine. This CLI process owns no
+          // long-lived bus, so it builds the spine for the duration of the emit —
+          // a ConductorEventEmitter with EventPersister attached to the canonical
+          // `<worktree>/.pipeline/events.jsonl` — exactly as the `operator_rewind`
+          // emit in `engine/rewind.ts` does. No sibling ledger and no bespoke
+          // format: one union, one reader path. Best-effort — a persistence failure
+          // reports on stderr and never fails worktree creation.
+          if (sourceRef && inbound) {
             const events = new ConductorEventEmitter();
-            const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
-            persister.start();
+            const persister = new EventPersister(join(wt.worktreePath, '.pipeline', 'events.jsonl'), events);
             try {
-              const branchResult = await git(['branch', '--show-current'], { cwd: worktree });
-              const branch = branchResult.stdout.trim();
-              const deps = await prepareCheckpointDeps({
-                target, branch, worktree, gh, git, events,
-                provider: (opts.env ?? process.env).AI_CONDUCTOR_AUTHORING_PROVIDER,
-                engineerDir,
-                resolveOwner: opts.resolveCheckpointOwner,
+              persister.start();
+              await events.emitOrThrow({
+                type: 'intake_inbound_sanitized',
+                sourceRef,
+                neutralizations: inbound.neutralizations,
+                digest: inbound.digest,
               });
-              return await checkpointComposerRun(
-                { worktree, step, state, ...(notesFile ? { notesFile } : {}) },
-                deps,
+            } catch (err) {
+              printErr(
+                `engineer worktree: could not record inbound intake event: ${err instanceof Error ? err.message : String(err)}`,
               );
             } finally {
               persister.stop();
             }
-          })();
-        print(JSON.stringify({ kind: 'checkpoint', ...result }));
-        return 0;
-      } catch (error: unknown) {
-        printErr(`engineer checkpoint: ${error instanceof Error ? error.message : String(error)}`);
-        return 1;
-      }
-    }
-
-    // ── resume ────────────────────────────────────────────────────────────────
-    case 'resume': {
-      try {
-        // Host capability and nesting are entry conditions, not post-attach
-        // cleanup.  Refusal here must leave the remote and worktree untouched.
-        const provider = (dispatch.provider ?? DEFAULT_PROVIDER) as BuiltInProviderId;
-        const host = requireProviderCapability(provider, 'interactiveLaunch');
-        const executable = resolveProviderExecutable(provider);
-        const environment = opts.env ?? process.env;
-        const nestedHost = BUILT_IN_PROVIDERS.find((candidate) =>
-          'interactiveLaunch' in candidate
-          && candidate.interactiveLaunch.sessionMarkers.some((marker) => Boolean(environment[marker])),
-        );
-        if (nestedHost) {
-          const detected = nestedHost.displayName;
-          throw new Error(`You are already inside a ${detected} session — run ${host.invocationPrefix}composer directly to resume (no need to launch a nested session).`);
-        }
-        if (!opts.spawnHost && !(await (opts.providerInstalled ?? executableOnPath)(executable))) throw new Error(`compose resume: provider ${provider} is not installed.`);
-        const launchId = (opts.env ?? process.env).AI_CONDUCTOR_COMPOSE_LAUNCH_ID ?? crypto.randomUUID();
-        const result = opts.resume
-          ? await opts.resume(dispatch)
-          : await (async () => {
-            const reader = createRegistryReader(registryPath ? { registryPath } : {});
-            const projects = await reader.listProjects();
-            const selector = parseResumeTarget(dispatch.target);
-            const selectorRepository = selector.kind === 'intake' ? selector.repository : selector.kind === 'pr' ? selector.repository : undefined;
-            const project = dispatch.project
-              ? projects.find((item) => item.name === dispatch.project)
-              : selectorRepository
-                ? projects.find((item) => dependencyRepository(item).toLowerCase() === selectorRepository.toLowerCase())
-                : projects.length === 1 ? projects[0] : undefined;
-            if (!project) throw new Error(dispatch.project
-              ? `project "${dispatch.project}" is not registered; register it with conduct register <path> before resuming.`
-              : selectorRepository
-                ? `compose resume: repository ${selectorRepository} is not registered; register it with conduct register <path>.`
-                : projects.length === 0
-                  ? 'compose resume: no registered projects; register the repository with conduct register <path>.'
-                  : 'compose resume: target has no repository qualifier; searched registered projects and require --project.');
-            const selectedRepository = dependencyRepository(project).toLowerCase();
-            if (selectorRepository && selectedRepository !== selectorRepository.toLowerCase()) {
-              throw new Error(`compose resume: repository ${selectorRepository} is not registered for this target; register it with conduct register <path>.`);
-            }
-            const target = await resolveTargetRepo(project.path, reader);
-            const repository = dependencyRepository(project);
-            const resolveBranch = async (selector: ResumeTarget) => {
-              if (selector.kind === 'branch') {
-                if (!target.remote) return { branch: selector.branch };
-                try {
-                  const stdout = await runTrackerRepositoryRead(
-                    gh, target.canonicalPath, 'pull-request.read', repository, { kind: 'repository' },
-                    ['pr', 'view', selector.branch, '--repo', repository, '--json', 'url'],
-                  );
-                  const parsed = JSON.parse(stdout || '{}') as { url?: unknown };
-                  return {
-                    branch: selector.branch,
-                    ...(typeof parsed.url === 'string' ? { draftPrUrl: parsed.url } : {}),
-                  };
-                } catch (error) {
-                  const message = error instanceof Error ? error.message : String(error);
-                  if (/no pull requests? found|could not resolve to a pull request|not found/i.test(message)) return { branch: selector.branch };
-                  throw error;
-                }
-              }
-              if (selector.kind === 'pr') {
-                const stdout = await runTrackerRepositoryRead(
-                  gh, target.canonicalPath, 'pull-request.read', repository,
-                  { kind: 'pull-request', number: selector.number },
-                  ['pr', 'view', String(selector.number), '--repo', repository, '--json', 'headRefName,url,body'],
-                );
-                const parsed = JSON.parse(stdout || '{}') as { headRefName?: string; url?: string; body?: string };
-                return parsed.headRefName?.startsWith('spec/') ? { branch: parsed.headRefName, draftPrUrl: parsed.url } : undefined;
-              }
-              const local = await createLedger(join(engineerDir ?? resolveEngineerDir({}), 'ledger.json')).get(GITHUB_ISSUES_SOURCE, `${selector.repository}#${selector.number}`);
-              if (local?.branch?.startsWith('spec/')) return { branch: local.branch, draftPrUrl: local.draftPrUrl };
-              const stdout = await runTrackerRepositoryRead(
-                gh, target.canonicalPath, 'pull-request.read', selector.repository,
-                { kind: 'repository' },
-                ['pr', 'list', '--repo', selector.repository, '--state', 'open', '--json', 'headRefName,url,body'],
-              );
-              const sourceRef = `${selector.repository}#${selector.number}`;
-              const found = (JSON.parse(stdout || '[]') as Array<{ headRefName?: string; url?: string; body?: string }>).find((item) =>
-                item.headRefName?.startsWith('spec/') && new RegExp(`(?:^|\\n)Refs\\s+${sourceRef.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}(?:\\s|$)`, 'm').test(item.body ?? ''),
-              );
-              return found?.headRefName ? { branch: found.headRefName, draftPrUrl: found.url } : undefined;
-            };
-            const owner = await (opts.resolveResumeOwner ?? (async () => resolveDaemonOwner(await readMachineOwnerConfig(), gh, target.canonicalPath)))();
-            if (!owner.resolved) throw new Error('compose resume: machine identity is unresolved; configure spec_owner or authenticate with gh');
+          }
+          const launchId = (opts.env ?? process.env).AI_CONDUCTOR_COMPOSE_LAUNCH_ID;
+          if (launchId) {
             const events = new ConductorEventEmitter();
-            const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
+            const persister = new EventPersister(
+              join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'),
+              events,
+            );
             persister.start();
             try {
-              const resumed = await resumeComposerRun(dispatch.target, {
-                resolveBranch,
-                fetch: target.remote ? async (branch) => {
-                  const fetched = await git(['fetch', 'origin', branch], { cwd: target.canonicalPath });
-                  if ((fetched.exitCode ?? 0) !== 0) throw new Error(`could not fetch origin ${branch}: ${fetched.stdout}`);
-                } : undefined,
-                localState: async (branch) => {
-                  const slug = branch.slice('spec/'.length);
-                  const path = join(target.canonicalPath, '.worktrees', `engineer-${slug}`);
-                  const hasWorktree = await access(path).then(() => true, () => false);
-                  const localRef = hasWorktree ? 'HEAD' : branch;
-                  const status = hasWorktree
-                    ? await git(['status', '--porcelain', '--untracked-files=all'], { cwd: path })
-                    : { stdout: '' };
-                  const dirtyDocs = status.stdout.split('\n').filter(Boolean).map((line) => line.slice(3));
-                  const ahead = target.remote
-                    ? await git(['log', '--format=%h', `origin/${branch}..${localRef}`], { cwd: hasWorktree ? path : target.canonicalPath })
-                    : { stdout: '' };
-                  const unpushedCommits = ahead.stdout.split('\n').filter(Boolean);
-                  const fastForwardable = !target.remote ? true : await (async () => {
-                    const [base, remoteHead] = await Promise.all([
-                      git(['merge-base', `origin/${branch}`, localRef], { cwd: hasWorktree ? path : target.canonicalPath }),
-                      git(['rev-parse', `origin/${branch}`], { cwd: hasWorktree ? path : target.canonicalPath }),
-                    ]);
-                    return base.stdout.trim() === remoteHead.stdout.trim();
-                  })();
-                  // An abandoned worktree must not leave a clean local branch
-                  // behind its fetched remote. Advance it before ensureWorktree
-                  // attaches that branch; a branch with local commits remains a
-                  // visible leftover and is never rewritten implicitly.
-                  if (!hasWorktree && target.remote && unpushedCommits.length === 0 && !fastForwardable) {
-                    await git(['branch', '-f', branch, `origin/${branch}`], { cwd: target.canonicalPath });
-                  }
-                  const remote = target.remote ? await (async () => {
-                    const [tip, serialized] = await Promise.all([
-                      git(['rev-parse', `origin/${branch}`], { cwd: target.canonicalPath }),
-                      git(['show', `origin/${branch}:.docs/composer-runs/${slug}.json`], { cwd: target.canonicalPath }),
-                    ]);
-                    try {
-                      const summary = summarizeRun(parseRunRecord(serialized.stdout));
-                      return { step: summary.nextStep, lastActor: summary.lastActor, lastAt: summary.lastAt, tip: tip.stdout.trim() };
-                    } catch {
-                      return { step: 'unknown', tip: tip.stdout.trim() };
-                    }
-                  })() : undefined;
-                  const interactive = (opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY)))();
-                  const choice = dirtyDocs.length || unpushedCommits.length
-                    ? opts.chooseComposerLocalState
-                      ? await opts.chooseComposerLocalState({ dirtyDocs, unpushedCommits })
-                      : await promptComposerLocalState({ dirtyDocs, unpushedCommits, remote })
-                    : undefined;
-                  return {
-                    leftovers: { dirtyDocs, unpushedCommits }, interactive, choice,
-                    // A local-only branch has no remote to diverge from. For a
-                    // remote branch, any local-only commits must be discarded
-                    // unless the operator explicitly selected keep after a
-                    // fast-forwardable comparison supplied by the git graph.
-                    fastForwardable,
-                    discard: async () => {
-                      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-                      if (dirtyDocs.length > 0 && hasWorktree) {
-                        await git(['add', '-A'], { cwd: path });
-                        await git(['commit', '-m', withDaemonCoAuthorTrailer(`composer WIP backup: ${slug}`)], { cwd: path });
-                      }
-                      const cwd = hasWorktree ? path : target.canonicalPath;
-                      await git(['branch', `composer-backup/${slug}-${stamp}`, localRef], { cwd });
-                      if (target.remote) {
-                        if (hasWorktree) await git(['reset', '--hard', `origin/${branch}`], { cwd });
-                        else await git(['branch', '-f', branch, `origin/${branch}`], { cwd });
-                      }
-                    },
-                  };
-                },
-                attach: async (branch) => {
-                  const slug = branch.slice('spec/'.length);
-                  if (!target.remote) {
-                    const existing = await git(['show-ref', '--verify', `refs/heads/${branch}`], { cwd: target.canonicalPath });
-                    if ((existing.exitCode ?? 0) !== 0) throw new Error(`compose resume: no saved Composer run found for ${dispatch.target} (searched existing local ${branch})`);
-                  }
-                  const result = await ensureWorktree({ root: target.canonicalPath, path: join(target.canonicalPath, '.worktrees', `engineer-${slug}`), branch, resolveBase: async () => 'HEAD' });
-                  return { worktree: result.path };
-                },
-                ownership: async ({ worktree, slug, branch }) => {
-                  const committedOwner = await composerCommittedMarkerOwner(git, worktree, branch, slug);
-                  const daemonSession = Boolean((opts.env ?? process.env).CONDUCT_DAEMON_SESSION);
-                  const interactive = (opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY)))();
-                  if (!committedOwner || committedOwner === owner.id) return 'unchanged';
-                  const approved = !daemonSession && interactive
-                    ? opts.confirmComposerTakeover
-                      ? await opts.confirmComposerTakeover({ previousOwner: committedOwner, branch })
-                      : await promptComposerTakeover(committedOwner, branch)
-                    : false;
-                  const mode = resumeOwnershipMode({ committedOwner, machineOwner: owner.id, daemonSession, interactive, approved });
-                  if (mode !== 'taken-over') {
-                    printErr(`compose resume: run remains owned by ${committedOwner} and stays local until interactive take-over.`);
-                    return 'local-only';
-                  }
-                  const repository = target.remote ? parseGhRepo(target.remote)?.toLowerCase() : undefined;
-                  if (!repository) throw new Error('compose resume: take-over publication requires a GitHub remote.');
-                  const approvalRequest = {
-                    operation: 'remote-ref.push' as const,
-                    access: 'remote-ref-write' as const,
-                    target: { repository, kind: 'remote-ref' as const, ref: `refs/heads/${branch}` },
-                    context: { actor: owner.id },
-                  };
-                  const confirmation = opts.githubOperationConfirmation
-                    ?? createTerminalGithubOperationConfirmation();
-                  const approval = await requestExplicitGithubOperationApproval(approvalRequest, confirmation);
-                  if (approval.kind !== 'approved') {
-                    printErr(`compose resume: take-over publication was refused; ${committedOwner} remains the owner and this run stays local until interactive take-over.`);
-                    return 'local-only';
-                  }
-                  await writeIntakeMarker(worktree, slug, undefined, owner.id);
-                  const recordPath = join(worktree, '.docs', 'composer-runs', `${slug}.json`);
-                  try {
-                    const record = parseRunRecord(await readFile(recordPath, 'utf8'));
-                    await writeFile(recordPath, serializeRunRecord({
-                      ...record,
-                      ownerHistory: [...record.ownerHistory, { actor: owner.id, at: new Date().toISOString() }],
-                    }), 'utf8');
-                  } catch (error) {
-                    if (!(error instanceof Error) || !/ENOENT/.test(error.message)) throw error;
-                  }
-                  const add = await git(['add', '--', '.docs/intake', '.docs/composer-runs'], { cwd: worktree });
-                  if ((add.exitCode ?? 0) !== 0) throw new Error(`compose resume: could not stage take-over: ${add.stdout}`);
-                  const commit = await git(['commit', '-m', withDaemonCoAuthorTrailer(`composer take-over: ${slug} ${committedOwner} to ${owner.id}`)], { cwd: worktree });
-                  if ((commit.exitCode ?? 0) !== 0) throw new Error(`compose resume: could not commit take-over: ${commit.stdout}`);
-                  const publication = initialSpecPublication(target, branch, worktree, gh, git, events);
-                  const pushed = await executeRemoteGit(
-                    ['push', '-u', 'origin', `HEAD:refs/heads/${branch}`],
-                    {
-                      ...publication.remote,
-                      explicitApproval: { capability: approval.capability, request: approvalRequest },
-                    },
-                  );
-                  if (pushed.kind !== 'executed') {
-                    printErr(`compose resume: take-over commit remains local; ${committedOwner} remains the remote owner until an approved take-over push succeeds.`);
-                    return 'local-only';
-                  }
-                  return 'taken-over';
-                },
-                sourceRef: composerSourceRef,
-                readArtifact: async (worktree, path) => readFile(join(worktree, path)),
-                recordDeciding: async ({ branch, draftPrUrl, sourceRef }) => {
-                  // Reconstruct durable intake state from the branch when the
-                  // launcher resumes a run after a process boundary.
-                  const intakeRef = sourceRef
-                    ?? (dispatch.target.includes('#') ? dispatch.target : undefined);
-                  await recordDecidingIntakeLedger(engineerDir, { sourceRef: intakeRef, branch, draftPrUrl });
-                },
-                emit: async (event) => events.emitOrThrow({
-                  type: 'composer_run_resumed', slug: event.slug, provider: dispatch.provider ?? DEFAULT_PROVIDER,
-                  actor: owner.resolved ? owner.id : 'unresolved', previousActor: event.previousActor,
-                  previousProvider: event.previousProvider, ownership: event.ownership,
-                  worktreePath: event.worktreePath, launchId,
-                }),
+              const owner = await resolveDaemonOwner(await readMachineOwnerConfig(), gh, target.canonicalPath);
+              await events.emitOrThrow({
+                type: 'composer_run_started',
+                slug: wt.slug,
+                worktreePath: wt.worktreePath,
+                launchId,
+                provider: (opts.env ?? process.env).AI_CONDUCTOR_AUTHORING_PROVIDER ?? DEFAULT_PROVIDER,
+                actor: owner.resolved ? owner.id : 'unresolved',
               });
-              const composerName = await resolveSkillName(opts.skillNameRoot ?? null, 'composer');
-              // This is deliberately part of the host prompt, before spawn:
-              // printing it after the host exits cannot resume its context.
-              const prompt = `${host.invocationPrefix}${composerName} --resume ${resumed.worktree} --step ${resumed.context.nextStep}\nResume context: ${JSON.stringify(resumed.context)}`;
-              await (opts.spawnHost ?? spawnInteractiveHost)(executable, host.interactiveLaunch.argv({ prompt, permissionMode: 'default' }), resumed.worktree, { ...(opts.env ?? process.env), AI_CONDUCTOR_AUTHORING_PROVIDER: provider, AI_CONDUCTOR_COMPOSE_LAUNCH_ID: launchId });
-              const branch = resumed.context.branch;
-              const slug = resumed.context.slug;
-              const exited = await handleComposerHostExit({
-                target, branch, worktree: resumed.worktree, slug, gh, git, events, provider,
-                engineerDir, resolveOwner: async () => owner, checkpoint: opts.checkpoint, printErr,
-              });
-              if (exited.summary) {
-                print(`Composer run ${slug}: current step ${exited.summary.nextStep}; active provider ${(exited.record?.lastCheckpoint?.provider ?? provider)}. Choices: continue, switch, hand off.`);
-              }
-              return resumed;
-            } finally { persister.stop(); }
-          })();
-        print(JSON.stringify({ kind: 'resume', ...result }));
-        return 0;
-      } catch (error) {
-        printErr(`engineer resume: ${error instanceof Error ? error.message : String(error)}`);
-        return 1;
-      }
-    }
-
-    // ── handoff ───────────────────────────────────────────────────────────────
-    case 'handoff': {
-      const { project: projectName, branch, worktree, sourceRef } = dispatch;
-      await labelPrimitivePane(worktree, 'handoff', opts, printErr);
-      const reader = createRegistryReader(registryPath ? { registryPath } : {});
-      const allProjects = await reader.listProjects();
-      const record = allProjects.find((p) => p.name === projectName);
-      if (!record) {
-        printErr(`engineer handoff: project "${projectName}" not found in registry.`);
-        return 1;
+            } finally {
+              persister.stop();
+            }
+          }
+          print(JSON.stringify({ kind: 'worktree', ...wt }));
+          return 0;
+        } catch (err: unknown) {
+          printErr(`engineer worktree: ${err instanceof Error ? err.message : String(err)}`);
+          return 1;
+        }
       }
 
-      let target: Awaited<ReturnType<typeof resolveTargetRepo>>;
-      try {
-        target = await resolveTargetRepo(record.path, reader);
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        printErr(`engineer handoff: ${msg}`);
-        return 1;
-      }
-
-      let handoffResult: Awaited<ReturnType<typeof openSpecPr>>;
-      // Compose handoff is a separate CLI process, so it owns this canonical
-      // composer ledger for its guarded publication lifetime.
-      const events = new ConductorEventEmitter();
-      const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
-      try {
+      case 'plan-review': {
+        const {
+          project: projectName,
+          worktree,
+          accept,
+          acknowledge,
+          reason,
+          maxPromptChars,
+          invalidMaxPromptChars,
+        } = dispatch;
+        if (invalidMaxPromptChars) {
+          printErr('engineer plan-review: --max-prompt-chars must be a positive integer');
+          return 1;
+        }
+        if (maxPromptChars !== undefined && (accept || acknowledge)) {
+          printErr('engineer plan-review: --max-prompt-chars applies only to a review run');
+          return 1;
+        }
+        await labelPrimitivePane(worktree, 'plan-review', opts, printErr);
+        const reader = createRegistryReader(registryPath ? { registryPath } : {});
+        const record = (await reader.listProjects()).find((project) => project.name === projectName);
+        if (!record) {
+          printErr(`engineer plan-review: project "${projectName}" not found in registry.`);
+          return 1;
+        }
+        let target: Awaited<ReturnType<typeof resolveTargetRepo>>;
+        try {
+          target = await resolveTargetRepo(record.path, reader);
+        } catch (error) {
+          printErr(`engineer plan-review: ${error instanceof Error ? error.message : String(error)}`);
+          return 1;
+        }
+        const configResult = await loadMergedConfig(worktree);
+        if (!configResult.ok) {
+          printErr(`engineer plan-review: ${configResult.error.message}`);
+          return 1;
+        }
+        const planStem = await resolvePlanReviewFeatureSlug(worktree);
+        if (!planStem) {
+          printErr(
+            `engineer plan-review: worktree must be on a canonical spec/<slug> branch to resolve its active feature plan.`,
+          );
+          return 1;
+        }
+        try {
+          await access(join(worktree, '.docs', 'plans', `${planStem}.md`));
+        } catch {
+          printErr(`engineer plan-review: active feature plan .docs/plans/${planStem}.md is required in the worktree.`);
+          return 1;
+        }
+        const events = new ConductorEventEmitter();
+        const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
         persister.start();
-        const publication = opts.handoffPublication
-          ?? (target.remote ? initialSpecPublication(target, branch, worktree, gh, git, events) : undefined);
-        handoffResult = await openSpecPr(target, branch, {
-          gitRunner: git,
-          runner: async (args, runnerOpts) => {
-            const cwd = runnerOpts?.cwd ?? worktree;
-            const r = await gh(args, { cwd });
-            return { stdout: r.stdout, stderr: '' };
-          },
-          findExistingSpecPr: () => findExistingSpecPullRequest(
-            async (args, runnerOpts) => {
-              const cwd = runnerOpts?.cwd ?? worktree;
-              const r = await gh(args, { cwd });
-              return { stdout: r.stdout, stderr: '' };
-            },
-            publication!.repository,
-            branch,
-            worktree,
-          ),
-          // gh runs in the per-idea worktree (checked out on spec/<slug>) — FR-4.
-          worktreePath: worktree,
-          ledgerOpts: engineerDir ? { engineerDir } : {},
-          // Link the spec PR to its issue with a non-closing `Refs` (does not
-          // close — the daemon's implementation PR closes it on merge).
+        try {
+          if (accept)
+            await acceptPlanReviewFinding({
+              worktreePath: worktree,
+              planStem,
+              findingId: accept,
+              reason: reason ?? '',
+              emit: async (event) => events.emitOrThrow(event),
+            });
+          else if (acknowledge)
+            await acknowledgePlanReviewChanges({
+              worktreePath: worktree,
+              canonicalPath: target.canonicalPath,
+              planStem,
+              reason: reason ?? '',
+            });
+          else {
+            const registry = new PluginRegistry();
+            registerBuiltInLlmProviders(registry, {
+              codexDoctorTimeoutMs: (configResult.config.codex_doctor_timeout_seconds ?? 10) * 1_000,
+            });
+            registry.markInitialized();
+            const configuredProviders = Array.isArray(configResult.config.llm_provider)
+              ? configResult.config.llm_provider
+              : configResult.config.llm_provider
+                ? [configResult.config.llm_provider]
+                : undefined;
+            let ledgerError: string | undefined;
+            const safeEmit = async (event: any) => {
+              try {
+                await events.emitOrThrow(event);
+              } catch (error) {
+                ledgerError ??= error instanceof Error ? error.message : String(error);
+              }
+            };
+            const artifact = await (opts.runPlanReview ?? runPlanReview)({
+              worktreePath: worktree,
+              canonicalPath: target.canonicalPath,
+              planStem,
+              config: configResult.config,
+              runtimes: createProviderRuntimeSet(registry, undefined, configResult.config),
+              sessions: new ProviderSessionStore(),
+              configuredProviders,
+              env: opts.env,
+              providerExecutor: opts.providerExecutor,
+              emit: safeEmit,
+              onNotice: printErr,
+              maxPromptChars: maxPromptChars ?? configResult.config.plan_review?.max_prompt_chars,
+            });
+            if (ledgerError) printErr(`engineer plan-review: event ledger write failed: ${ledgerError}`);
+            if (!artifact.findings.some((finding) => finding.severity === 'blocking')) print('plan review clean');
+          }
+          return 0;
+        } catch (error) {
+          printErr(`engineer plan-review: ${error instanceof Error ? error.message : String(error)}`);
+          return 1;
+        } finally {
+          persister.stop();
+        }
+      }
+
+      // ── land ──────────────────────────────────────────────────────────────────
+      case 'land': {
+        const {
+          project: projectName,
+          idea,
+          worktree,
           sourceRef,
-          publication,
-          events,
-          // Post-create writes are non-fatal; never let a refusal pass silently (#2703).
-          log: (msg: string) => printErr(`engineer handoff: ${msg}`),
-        });
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        printErr(`engineer handoff: PR open failed: ${msg}`);
-        // Handoff FAILED (e.g. no PR URL parsed): keep the worktree for inspection
-        // (FR-6) — do NOT remove it. Work is preserved on the branch; report the
-        // retained worktree path so retention is actionable.
-        printErr(`engineer handoff: worktree kept for inspection at "${worktree}".`);
-
-        // Task 9: Record branch evidence in the ledger if sourceRef is present.
-        // This enables the operator to retry via `engineer resolve` if the write-back
-        // fails. Non-fatal: if the ledger write fails, continue with exit 0.
-        if (sourceRef) {
-          try {
-            const engDir = engineerDir ?? resolveEngineerDir({});
-            const ledger = createLedger(join(engDir, 'ledger.json'));
-            const entry = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
-            if (entry) {
-              await ledger.transition(GITHUB_ISSUES_SOURCE, sourceRef, entry.status, {
-                branch,
-                ...(entry.prUrl ? { prUrl: entry.prUrl } : {}),
-              });
-            }
-          } catch (e: unknown) {
-            if (e instanceof CorruptLedgerError) {
-              throw e;
-            } else {
-              printErr(
-                `Failed to record branch evidence: ${e instanceof Error ? e.message : String(e)}`,
-              );
-            }
-            // Continue — handoff still succeeds
-          }
+          dependsOn = [],
+          declinedDependencies = [],
+          skipDependencyCheck,
+        } = dispatch;
+        await labelPrimitivePane(worktree, 'land', opts, printErr);
+        const reader = createRegistryReader(registryPath ? { registryPath } : {});
+        const allProjects = await reader.listProjects();
+        const record = allProjects.find((p) => p.name === projectName);
+        if (!record) {
+          printErr(`engineer land: project "${projectName}" not found in registry.`);
+          return 1;
         }
-        return 1;
-      } finally {
-        persister.stop();
-      }
 
-      if (handoffResult.kind === 'pr-refused') {
-        printErr(
-          `engineer handoff: publication refused (${handoffResult.reason}); ` +
-          `worktree kept for inspection at "${worktree}".`,
-        );
-        return 1;
-      }
-
-      const alreadyDelivered = handoffResult.kind === 'pr-opened' && handoffResult.alreadyDelivered === true;
-
-      // The PR opened (or was skipped on no-remote) — the cycle succeeded, so remove
-      // the per-idea worktree (FR-5). The spec/<slug> branch + commit persist; a
-      // removal failure is REPORTED, never swallowed (FR-5 negative).
-      if (!alreadyDelivered) {
+        let target: Awaited<ReturnType<typeof resolveTargetRepo>>;
         try {
-          await removeEngineerWorktree(target.canonicalPath, worktree);
+          target = await resolveTargetRepo(record.path, reader);
         } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          printErr(`engineer land: ${msg}`);
+          return 1;
+        }
+
+        // Owner-gate (adr-2026-06-30-*): the daemon that later builds this spec
+        // resolves ITS owner from the machine config (`spec_owner`), so stamp the
+        // spec with the SAME source here. Read the machine config for `ownerConfig`
+        // (D1) and thread the in-scope `gh` runner for the login fallback; landSpec
+        // resolves configured spec_owner → gh login → un-owned (omits the `Owner:`
+        // line). Reading from the user config never crashes the land.
+        // ADR-1 naming: `ownerConfig`/`specOwner`, never a bare `owner`.
+        const ownerConfig = await readMachineOwnerConfig();
+
+        // Fail-fast identity check (Slice B Story 1): resolve the identity chain
+        // BEFORE entering landSpec. If unresolved, exit immediately with actionable
+        // error and do NOT proceed to landSpec (which would commit a spec with no
+        // owner stamping).
+        const identity = await resolveDaemonOwner(ownerConfig, gh, target.canonicalPath);
+        if (!identity.resolved) {
           printErr(
-            `⚠ Spec delivered, but the per-idea worktree "${worktree}" could not be removed: ` +
-              `${err instanceof Error ? err.message : String(err)}. Remove it manually.`,
-          );
-        }
-      }
-
-      if (handoffResult.kind === 'pr-opened') {
-        // Intake write-back (FR-36): a real spec PR was opened — comment its URL,
-        // apply `engineer:handled`, and advance the ledger to `done`. Advisory —
-        // a gh failure never reverts a delivered PR. Only on a PR (not local-commit,
-        // which has no URL to report).
-        if (sourceRef && !alreadyDelivered) {
-          const engDir = engineerDir ?? resolveEngineerDir({});
-          const { ledger, adapter } = buildIntake({
-            engineerDir: engDir, registryPath, gh, printErr, resolveActor: opts.intakeResolveActor, events: opts.events,
-            operatorSession: true,
-          });
-          await reportDone(
-            { source: GITHUB_ISSUES_SOURCE, sourceRef, port: adapter, ledger },
-            handoffResult.url,
-            branch,
-          );
-        }
-        print(JSON.stringify({ kind: 'pr-opened', url: handoffResult.url }));
-      } else {
-        // pr-skipped — record authored key manually (openSpecPr already records on skip).
-        // Task 9: Also record branch evidence in the ledger if sourceRef is present.
-        if (sourceRef) {
-          try {
-            const engDir = engineerDir ?? resolveEngineerDir({});
-            const ledger = createLedger(join(engDir, 'ledger.json'));
-            const entry = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
-            if (entry) {
-              await ledger.transition(GITHUB_ISSUES_SOURCE, sourceRef, entry.status, {
-                branch,
-                ...(entry.prUrl ? { prUrl: entry.prUrl } : {}),
-              });
-            }
-          } catch (e: unknown) {
-            if (e instanceof CorruptLedgerError) {
-              throw e;
-            } else {
-              printErr(
-                `Failed to record branch evidence: ${e instanceof Error ? e.message : String(e)}`,
-              );
-            }
-            // Continue — handoff still succeeds
-          }
-        }
-
-        print(
-          JSON.stringify({
-            kind: 'local-commit',
-            branch,
-            repoPath: target.canonicalPath,
-            reason: (handoffResult as { kind: 'pr-skipped'; reason: string }).reason,
-          }),
-        );
-      }
-
-      // Fire-and-forget ensureRunning. NEVER blocks on failure — but never silent:
-      // the ADR-014 launch path hosts the daemon in a tmux session, so a tmux-less
-      // host throws TmuxNotInstalledError here. Swallowing it would author the spec
-      // while launching no daemon (specs pile up unbuilt with no signal). Surface
-      // the reason on stderr; the handoff still succeeds.
-      if (!alreadyDelivered) {
-        try {
-          const launchFn = opts.ensureRunningLaunch;
-          if (launchFn) {
-            await Promise.resolve(launchFn(target.canonicalPath));
-          } else {
-            await ensureRunning(target.canonicalPath, {
-              ...opts.ensureRunningOpts,
-              onReclaim: (message) => printErr(message),
-            });
-          }
-        } catch (err) {
-          const reason = err instanceof Error ? err.message : String(err);
-          printErr(
-            `⚠ Spec authored, but the build daemon was not started for "${target.name}": ${reason}`,
-          );
-        }
-      }
-
-      return 0;
-    }
-
-    // ── poll ────────────────────────────────────────────────────────────────────
-    // `ai-conductor engineer poll`: poll the github-issues source across registered
-    // repos and enqueue new envelopes into the durable inbox. NO routing, NO
-    // processing, NO setInterval/detached spawn — a single synchronous sweep. The
-    // ledger dedups, so a double-poll enqueues nothing new.
-    case 'poll': {
-      const engDir = engineerDir ?? resolveEngineerDir({});
-      const { queue, adapter } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr, events: opts.events });
-
-      const envelopes = await adapter.poll();
-      for (const e of envelopes) {
-        await queue.enqueue(e);
-      }
-      print(JSON.stringify({ kind: 'poll', enqueued: envelopes.length, sourceRefs: envelopes.map((e) => e.sourceRef) }));
-      return 0;
-    }
-
-    // ── claim ─────────────────────────────────────────────────────────────────
-    // `ai-conductor compose claim`: atomically dequeue the oldest pending idea so the
-    // /composer skill can route it. claim+ack removes it from the inbox (the ledger
-    // is the durable record); the ledger advances to `claimed`. On an empty inbox,
-    // reports {empty:true} — the skill then falls back to a CLI idea arg or chat.
-    //
-    // The file queue is wrapped with createDeliveryGuardedQueue (Task 8, TR-1) to detect
-    // and heal stale entries (duplicate envelopes, delivered PRs) transparently.
-    case 'claim': {
-      const engDir = engineerDir ?? resolveEngineerDir({});
-      const { ledger, queue: productionQueue } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr, events: opts.events });
-      const queue: IntakeQueue = opts.intakeFileQueue ?? productionQueue;
-
-      // Resolve the project-level config (`.ai-conductor/config.yml` at cwd) so an
-      // operator's `stale_claim_window_hours` override reaches the reap pass below —
-      // same load path as index.ts's top-level `loadConfig(projectRoot)`. Best-effort:
-      // an absent/invalid config falls back to resolveStaleClaimWindowMs's default.
-      const claimConfigResult = await loadConfig(process.cwd());
-      const claimConfig = claimConfigResult.ok ? claimConfigResult.config : undefined;
-
-      try {
-        return await withIntakeClaimLease(engDir, async () => {
-        const reconciliation = await reconcileStrandedClaims({ queue, ledger });
-        if (reconciliation.released.length > 0) {
-          printErr(`released ${reconciliation.released.length} stranded intake claim(s)`);
-        }
-
-        // Wrap the queue with the delivery guard decorator (Task 8: integration point).
-        // The guard is transparent to claimUnblocked; it only filters/heals problematic
-        // candidates via ledger + gh state checks.
-        const guardedQueue = createDeliveryGuardedQueue(queue, ledger, {
-          gh,
-          logger: { info: (msg) => printErr(msg) },
-          config: claimConfig,
-          findCrossReferencedDraft: async (sourceRef) => {
-            const parsedRef = parseSourceRef(sourceRef);
-            const repository = parsedRef && splitOwnerRepo(parsedRef.repo);
-            if (!parsedRef || !repository) return undefined;
-            // GitHub's crossReferencedBy connection is the source of truth: PR
-            // title/body text is neither complete nor safe to parse as routing state.
-            const query = 'query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){timelineItems(first:100,itemTypes:[CROSS_REFERENCED_EVENT]){nodes{... on CrossReferencedEvent{source{... on PullRequest{url headRefName state isDraft}}}}}}}}';
-            const stdout = await runTrackerGraphqlRead(gh, process.cwd(), {
-              query,
-              variables: { owner: repository.owner, repo: repository.repo, number: Number(parsedRef.issue) },
-            });
-            const nodes = (JSON.parse(stdout || '{}') as any).data?.repository?.issue?.timelineItems?.nodes ?? [];
-            const pr = nodes.map((node: any) => node?.source).find((value: any) => value?.state === 'OPEN' && value?.isDraft === true && typeof value?.headRefName === 'string' && value.headRefName.startsWith('spec/'));
-            return pr ? { branch: pr.headRefName, url: pr.url } : undefined;
-          },
-        });
-
-        // Fresh resolver per claim call — createBlockerResolver()'s memo is scoped
-        // to a single walk, so reusing one across calls would leak stale verdicts
-        // (see daemon-backlog.ts:210-221 for the same rule on the daemon side).
-        const source = createOrderingSource({
-          run: (args) => gh(args, { cwd: process.cwd() }),
-          cwd: process.cwd(),
-          events: opts.events,
-        });
-        const resolver = createBlockerResolver({ source });
-        // Claim-time label read — no cache: a relabel between claims must be
-        // honored on the very next claim (TR-1 happy 3). A throwing reader is
-        // handled inside claimUnblocked (falls back to drain order, warns once
-        // via `log`) — never caught here.
-        const outcome = await claimUnblocked({
-          queue: guardedQueue as unknown as DependencyClaimQueue,
-          resolveDependency: (sourceRef) => resolver.resolve(sourceRef ?? ''),
-          resolveBands: (refs) => resolveClaimBands(source, refs),
-          log: (...args: unknown[]) => printErr(args.map((a) => String(a)).join(' ')),
-        });
-
-        if (outcome.kind === 'empty') {
-          print(JSON.stringify({ kind: 'claim', empty: true }));
-          return 0;
-        }
-        if (outcome.kind === 'all-blocked') {
-          print(
-            JSON.stringify({
-              kind: 'claim',
-              allBlocked: true,
-              entries: outcome.entries.map(({ envelope: e, verdict }) => {
-                const entryEnvelope = e as unknown as Envelope;
-                return {
-                  text: entryEnvelope.text,
-                  source: entryEnvelope.source,
-                  sourceRef: entryEnvelope.sourceRef,
-                  verdict,
-                };
-              }),
-            }),
-          );
-          return 0;
-        }
-
-        // claimUnblocked's ClaimableEnvelope is a structural subset of the real
-        // Envelope produced by the file queue — narrow back to the concrete type
-        // for ack()/ledger.transition() below.
-        const envelope = outcome.envelope as unknown as Envelope;
-        // Remove from the inbox now that we own it — the ledger carries lifecycle from here.
-        await queue.ack(envelope);
-        try {
-          await ledger.transition(envelope.source, envelope.sourceRef, 'claimed');
-        } catch (error: unknown) {
-          if (error instanceof CorruptLedgerError) throw error;
-          // Entry may be absent for a non-recording source — advisory transition.
-        }
-        // FR-13: persist a claim record so `engineer worktree --source-ref` can later
-        // resolve the Desired-outcome body without the skill ever passing --body itself.
-        await persistClaimRecord(engDir, envelope.sourceRef, envelope.text, envelope.inbound);
-        print(
-          JSON.stringify({
-            kind: 'claim',
-            text: envelope.text,
-            body: envelope.text,
-            source: envelope.source,
-            sourceRef: envelope.sourceRef,
-            inbound: envelope.inbound,
-          }),
-        );
-        return 0;
-        }, { waitTimeoutMs: opts.intakeClaimLeaseWaitMs ?? INTAKE_CLAIM_LEASE_WAIT_MS });
-      } catch (error: unknown) {
-        if (error instanceof CorruptLedgerError) return reportCorruptLedger(error);
-        printErr(`engineer claim: ${error instanceof Error ? error.message : String(error)}`);
-        return 1;
-      }
-    }
-
-    // ── forget ──────────────────────────────────────────────────────────────────
-    // `ai-conductor engineer forget <sourceRef>`: drop the ledger entry so the issue
-    // is re-capturable, and strip the `engineer:handled` label so poll sees it again.
-    // An absent ref is reported (found:false) and is NOT an error.
-    case 'forget': {
-      const { sourceRef } = dispatch;
-      const attached = (opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY)))();
-      const confirmation = opts.githubOperationConfirmation
-        ?? createTerminalGithubOperationConfirmation({ isTerminal: () => attached });
-      const engDir = engineerDir ?? resolveEngineerDir({});
-      const ledger = createLedger(join(engDir, 'ledger.json'));
-      const resolveIssue = async (
-        parsedForget: NonNullable<ReturnType<typeof parseSourceRef>>,
-        resolvedBy: string,
-      ): Promise<boolean> => {
-        const tracker = createGithubTrackerClient(gh, {
-          intake: createGithubIntakeAuthorization({
-            gh, cwd: process.cwd(), resolveActor: opts.intakeResolveActor, confirmation, operatorSession: true,
-          }),
-          events: opts.events,
-        });
-        try {
-          await tracker.commentOnIntakeIssue(
-            parsedForget.repo,
-            Number(parsedForget.issue),
-            `Resolved by ${resolvedBy}`,
-            process.cwd(),
-          );
-        } catch (err: unknown) {
-          printErr(
-            `engineer forget: failed to comment on ${sourceRef}: ${err instanceof Error ? err.message : String(err)}; ` +
-            `ledger entry retained.${forgetAuthorizationRefusalExplanation(err, attached)}`,
-          );
-          return false;
-        }
-        try {
-          await tracker.closeIntakeIssue(parsedForget.repo, String(parsedForget.issue), process.cwd());
-        } catch (err: unknown) {
-          printErr(
-            `engineer forget: failed to close ${sourceRef}: ${err instanceof Error ? err.message : String(err)}; ` +
-            `close the issue by hand, then rerun \`engineer forget ${sourceRef}\` without --resolved-by.` +
-            forgetAuthorizationRefusalExplanation(err, attached),
-          );
-          return false;
-        }
-        return true;
-      };
-
-      const entry = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
-      if (!entry) {
-        if (!dispatch.resolvedBy) {
-          print(JSON.stringify({ kind: 'forget', sourceRef, found: false }));
-          return 0;
-        }
-
-        const parsedForget = parseSourceRef(sourceRef);
-        if (!parsedForget) {
-          printErr(
-            `engineer forget: cannot record resolution for ${sourceRef}: it is not a GitHub issue reference; ` +
-            'rerun without --resolved-by to remove only the source label.',
+            'Cannot land spec: identity unresolved. Resolve one of:\n' +
+              '  1. Set spec_owner in ~/.ai-conductor/config.yml\n' +
+              '  2. Authenticate via: gh auth login',
           );
           return 1;
         }
 
-        if (!await resolveIssue(parsedForget, dispatch.resolvedBy)) return 1;
-        print(JSON.stringify({
-          kind: 'forget', sourceRef, found: false, removed: false, closed: true, resolvedBy: dispatch.resolvedBy,
-        }));
+        let result: Awaited<ReturnType<typeof landSpec>>;
+        try {
+          result = await landSpec(
+            { name: target.name, canonicalPath: target.canonicalPath },
+            idea,
+            worktree,
+            sourceRef,
+            {
+              ownerConfig,
+              gh,
+              dependencyGit: async (args) => {
+                try {
+                  const result = await git(args, { cwd: target.canonicalPath });
+                  return { exitCode: 0, stdout: result.stdout, stderr: '' };
+                } catch (error) {
+                  return {
+                    exitCode: 1,
+                    stdout: '',
+                    stderr: error instanceof Error ? error.message : String(error),
+                  };
+                }
+              },
+              acceptedDependencies: dependsOn,
+              declinedDependencies,
+              skipDependencyCheck,
+            },
+          );
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (err instanceof LandGateError && err.dependency) {
+            renderLandDependencyDecision(err.dependency, print);
+          }
+          // Keep-on-failure (FR-6): the per-idea worktree is retained for inspection —
+          // report WHERE it is so retention is actionable, not silent clutter.
+          printErr(`engineer land: ${msg}`);
+          printErr(`engineer land: worktree kept for inspection at "${worktree}".`);
+          if (err instanceof TargetPathMissingError) {
+            return 1;
+          }
+          try {
+            const rejection = classifyLandGateRejection(err);
+            const events = new ConductorEventEmitter();
+            // D2 of adr-2026-08-08: one writer per ledger file. The compose loop is a
+            // separate process from the engine, so it owns its own sibling ledger
+            // (`composer-events.jsonl`, same ConductorEvent schema) at the target
+            // root; readers merge by `ts`.
+            const persister = new EventPersister(
+              join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'),
+              events,
+            );
+            persister.start();
+            try {
+              await events.emitOrThrow({
+                type: 'land_gate_rejected',
+                ...rejection,
+                project: target.name,
+                worktreePath: worktree,
+                ...(sourceRef ? { sourceRef } : {}),
+              });
+            } finally {
+              persister.stop();
+            }
+          } catch (recordingError) {
+            printErr(
+              `engineer land: could not record rejection event: ${recordingError instanceof Error ? recordingError.message : String(recordingError)}`,
+            );
+          }
+          return 1;
+        }
+
+        if (result.manifestChanged) {
+          try {
+            const events = new ConductorEventEmitter();
+            const persister = new EventPersister(
+              join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'),
+              events,
+            );
+            persister.start();
+            try {
+              await events.emitOrThrow({
+                type: 'feature_artifacts_registered',
+                slug: result.slug,
+                added: result.added.map(({ kind, path }) => ({ kind, path })),
+              });
+            } finally {
+              persister.stop();
+            }
+          } catch (error) {
+            printErr(
+              `engineer land: could not record artifact registration event: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        }
+
+        // Intake write-back (FR-36): when this idea originated from a github issue,
+        // comment "Routed to <repo>" and advance the ledger to `routed`. Advisory —
+        // a gh failure never fails a successful land.
+        if (sourceRef) {
+          const engDir = engineerDir ?? resolveEngineerDir({});
+          const { ledger, adapter } = buildIntake({
+            engineerDir: engDir,
+            registryPath,
+            gh,
+            printErr,
+            resolveActor: opts.intakeResolveActor,
+            events: opts.events,
+            operatorSession: true,
+          });
+          await reportRouted({ source: GITHUB_ISSUES_SOURCE, sourceRef, port: adapter, ledger }, target.name);
+        }
+
+        if (result.dependency) {
+          renderLandDependencyDecision(result.dependency, print);
+        }
+
+        // The dependency decision is deliberately post-commit.  A failed or
+        // refused GitHub write must leave the landed spec intact, be reported in
+        // the decision event, and never be mistaken for a pre-commit land gate.
+        if (sourceRef && result.dependency) {
+          const { proposals, decision } = result.dependency;
+          const writes: Array<{ target: string; status: string; reason?: string }> = [];
+          try {
+            if (decision.kind === 'proceed') {
+              const operations = createGuardedGithubOperationRunner(gh, {
+                cwd: target.canonicalPath,
+                intake: createGithubIntakeAuthorization({
+                  gh,
+                  cwd: target.canonicalPath,
+                  resolveActor: async () => identity,
+                }),
+              });
+              for (const dependency of decision.accepted) {
+                try {
+                  const [write] = await createDependencyLinks(
+                    [
+                      {
+                        source: sourceRef,
+                        target: dependency,
+                        kind: 'depends-on',
+                        blocked_by: true,
+                      },
+                    ],
+                    {
+                      gh,
+                      operations,
+                      actor: identity.id,
+                      cwd: target.canonicalPath,
+                    },
+                  );
+                  if (write) writes.push({ target: dependency, status: write.status });
+                  else
+                    writes.push({ target: dependency, status: 'failed', reason: 'dependency link produced no result' });
+                } catch (error) {
+                  const reason = error instanceof Error ? error.message : String(error);
+                  writes.push({ target: dependency, status: 'failed', reason });
+                  printErr(`engineer land: dependency write failed for ${dependency}: ${reason}`);
+                }
+              }
+            }
+          } catch (error) {
+            // Keep a durable decision record even if construction of the guarded
+            // write seam itself fails unexpectedly.
+            const reason = error instanceof Error ? error.message : String(error);
+            printErr(`engineer land: dependency write setup failed: ${reason}`);
+            for (const dependency of decision.kind === 'proceed' ? decision.accepted : []) {
+              writes.push({ target: dependency, status: 'failed', reason });
+            }
+          }
+
+          try {
+            const events = new ConductorEventEmitter();
+            const persister = new EventPersister(
+              join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'),
+              events,
+            );
+            persister.start();
+            try {
+              await events.emitOrThrow({
+                type: 'land_dependency_decided',
+                repository: parseSourceRef(sourceRef)?.repo ?? sourceRef,
+                sourceRef,
+                proposals: proposals.kind === 'computed' ? proposals.proposals.map((proposal) => proposal.target) : [],
+                accepted: decision.kind === 'proceed' ? decision.accepted : [],
+                declined: decision.kind === 'proceed' ? decision.declined : [],
+                skipped: decision.kind === 'proceed' ? decision.skipped : null,
+                writes,
+              });
+            } finally {
+              persister.stop();
+            }
+          } catch (error) {
+            printErr(
+              `engineer land: could not record dependency decision event: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        }
+        print(JSON.stringify(result));
         return 0;
       }
 
-      const parsedForget = parseSourceRef(sourceRef);
-      const closed = Boolean(dispatch.resolvedBy && parsedForget);
-      if (dispatch.resolvedBy && !parsedForget) {
-        printErr(
-          `engineer forget: cannot record resolution for ${sourceRef}: it is not a GitHub issue reference; ` +
-          'rerun without --resolved-by to remove only the source label.',
-        );
-        return 1;
-      }
-      if (dispatch.resolvedBy && parsedForget) {
-        if (!await resolveIssue(parsedForget, dispatch.resolvedBy)) return 1;
-      }
-
-      await ledger.forget(GITHUB_ISSUES_SOURCE, sourceRef);
-
-      // Best-effort label strip; a gh failure must not fail `forget` (the ledger
-      // entry is already gone, which is the authoritative dedup state).
-      if (parsedForget) {
+      // ── checkpoint ────────────────────────────────────────────────────────────
+      case 'checkpoint': {
+        const { worktree, step, state, notesFile } = dispatch;
         try {
-          const tracker = createGithubTrackerClient(gh, {
-            intake: createGithubIntakeAuthorization({
-              gh, cwd: process.cwd(), resolveActor: opts.intakeResolveActor, confirmation, operatorSession: true,
-            }),
-            events: opts.events,
-          });
-          await tracker.removeIntakeIssueLabel(
-            parsedForget.repo,
-            Number(parsedForget.issue),
-            HANDLED_LABEL,
-            process.cwd(),
-          );
-        } catch (err: unknown) {
-          printErr(
-            `engineer forget: label strip failed for ${sourceRef}: ${err instanceof Error ? err.message : String(err)}` +
-            forgetAuthorizationRefusalExplanation(err, attached),
-          );
+          const result = opts.checkpoint
+            ? await opts.checkpoint({ worktree, step, state, ...(notesFile ? { notesFile } : {}) })
+            : await (async () => {
+                const reader = createRegistryReader(registryPath ? { registryPath } : {});
+                const projects = await reader.listProjects();
+                const project = projects.find(
+                  (candidate) => worktree === candidate.path || worktree.startsWith(`${candidate.path}/.worktrees/`),
+                );
+                if (!project)
+                  throw new Error(
+                    `compose checkpoint: worktree "${worktree}" is not beneath a registered project; register the repository first with conduct register.`,
+                  );
+                const target = await resolveTargetRepo(project.path, reader);
+                const events = new ConductorEventEmitter();
+                const persister = new EventPersister(
+                  join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'),
+                  events,
+                );
+                persister.start();
+                try {
+                  const branchResult = await git(['branch', '--show-current'], { cwd: worktree });
+                  const branch = branchResult.stdout.trim();
+                  const deps = await prepareCheckpointDeps({
+                    target,
+                    branch,
+                    worktree,
+                    gh,
+                    git,
+                    events,
+                    provider: (opts.env ?? process.env).AI_CONDUCTOR_AUTHORING_PROVIDER,
+                    engineerDir,
+                    resolveOwner: opts.resolveCheckpointOwner,
+                  });
+                  return await checkpointComposerRun(
+                    { worktree, step, state, ...(notesFile ? { notesFile } : {}) },
+                    deps,
+                  );
+                } finally {
+                  persister.stop();
+                }
+              })();
+          print(JSON.stringify({ kind: 'checkpoint', ...result }));
+          return 0;
+        } catch (error: unknown) {
+          printErr(`engineer checkpoint: ${error instanceof Error ? error.message : String(error)}`);
+          return 1;
         }
       }
 
-      print(JSON.stringify({
-        kind: 'forget',
-        sourceRef,
-        found: true,
-        removed: true,
-        closed,
-        ...(closed ? { resolvedBy: dispatch.resolvedBy } : {}),
-      }));
-      return 0;
-    }
+      // ── resume ────────────────────────────────────────────────────────────────
+      case 'resume': {
+        try {
+          // Host capability and nesting are entry conditions, not post-attach
+          // cleanup.  Refusal here must leave the remote and worktree untouched.
+          const provider = (dispatch.provider ?? DEFAULT_PROVIDER) as BuiltInProviderId;
+          const host = requireProviderCapability(provider, 'interactiveLaunch');
+          const executable = resolveProviderExecutable(provider);
+          const environment = opts.env ?? process.env;
+          const nestedHost = BUILT_IN_PROVIDERS.find(
+            (candidate) =>
+              'interactiveLaunch' in candidate &&
+              candidate.interactiveLaunch.sessionMarkers.some((marker) => Boolean(environment[marker])),
+          );
+          if (nestedHost) {
+            const detected = nestedHost.displayName;
+            throw new Error(
+              `You are already inside a ${detected} session — run ${host.invocationPrefix}composer directly to resume (no need to launch a nested session).`,
+            );
+          }
+          if (!opts.spawnHost && !(await (opts.providerInstalled ?? executableOnPath)(executable)))
+            throw new Error(`compose resume: provider ${provider} is not installed.`);
+          const launchId = (opts.env ?? process.env).AI_CONDUCTOR_COMPOSE_LAUNCH_ID ?? crypto.randomUUID();
+          const result = opts.resume
+            ? await opts.resume(dispatch)
+            : await (async () => {
+                const reader = createRegistryReader(registryPath ? { registryPath } : {});
+                const projects = await reader.listProjects();
+                const selector = parseResumeTarget(dispatch.target);
+                const selectorRepository =
+                  selector.kind === 'intake'
+                    ? selector.repository
+                    : selector.kind === 'pr'
+                      ? selector.repository
+                      : undefined;
+                const project = dispatch.project
+                  ? projects.find((item) => item.name === dispatch.project)
+                  : selectorRepository
+                    ? projects.find(
+                        (item) => dependencyRepository(item).toLowerCase() === selectorRepository.toLowerCase(),
+                      )
+                    : projects.length === 1
+                      ? projects[0]
+                      : undefined;
+                if (!project)
+                  throw new Error(
+                    dispatch.project
+                      ? `project "${dispatch.project}" is not registered; register it with conduct register <path> before resuming.`
+                      : selectorRepository
+                        ? `compose resume: repository ${selectorRepository} is not registered; register it with conduct register <path>.`
+                        : projects.length === 0
+                          ? 'compose resume: no registered projects; register the repository with conduct register <path>.'
+                          : 'compose resume: target has no repository qualifier; searched registered projects and require --project.',
+                  );
+                const selectedRepository = dependencyRepository(project).toLowerCase();
+                if (selectorRepository && selectedRepository !== selectorRepository.toLowerCase()) {
+                  throw new Error(
+                    `compose resume: repository ${selectorRepository} is not registered for this target; register it with conduct register <path>.`,
+                  );
+                }
+                const target = await resolveTargetRepo(project.path, reader);
+                const repository = dependencyRepository(project);
+                const resolveBranch = async (selector: ResumeTarget) => {
+                  if (selector.kind === 'branch') {
+                    if (!target.remote) return { branch: selector.branch };
+                    try {
+                      const stdout = await runTrackerRepositoryRead(
+                        gh,
+                        target.canonicalPath,
+                        'pull-request.read',
+                        repository,
+                        { kind: 'repository' },
+                        ['pr', 'view', selector.branch, '--repo', repository, '--json', 'url'],
+                      );
+                      const parsed = JSON.parse(stdout || '{}') as { url?: unknown };
+                      return {
+                        branch: selector.branch,
+                        ...(typeof parsed.url === 'string' ? { draftPrUrl: parsed.url } : {}),
+                      };
+                    } catch (error) {
+                      const message = error instanceof Error ? error.message : String(error);
+                      if (/no pull requests? found|could not resolve to a pull request|not found/i.test(message))
+                        return { branch: selector.branch };
+                      throw error;
+                    }
+                  }
+                  if (selector.kind === 'pr') {
+                    const stdout = await runTrackerRepositoryRead(
+                      gh,
+                      target.canonicalPath,
+                      'pull-request.read',
+                      repository,
+                      { kind: 'pull-request', number: selector.number },
+                      ['pr', 'view', String(selector.number), '--repo', repository, '--json', 'headRefName,url,body'],
+                    );
+                    const parsed = JSON.parse(stdout || '{}') as { headRefName?: string; url?: string; body?: string };
+                    return parsed.headRefName?.startsWith('spec/')
+                      ? { branch: parsed.headRefName, draftPrUrl: parsed.url }
+                      : undefined;
+                  }
+                  const local = await createLedger(join(engineerDir ?? resolveEngineerDir({}), 'ledger.json')).get(
+                    GITHUB_ISSUES_SOURCE,
+                    `${selector.repository}#${selector.number}`,
+                  );
+                  if (local?.branch?.startsWith('spec/')) return { branch: local.branch, draftPrUrl: local.draftPrUrl };
+                  const stdout = await runTrackerRepositoryRead(
+                    gh,
+                    target.canonicalPath,
+                    'pull-request.read',
+                    selector.repository,
+                    { kind: 'repository' },
+                    ['pr', 'list', '--repo', selector.repository, '--state', 'open', '--json', 'headRefName,url,body'],
+                  );
+                  const sourceRef = `${selector.repository}#${selector.number}`;
+                  const found = (
+                    JSON.parse(stdout || '[]') as Array<{ headRefName?: string; url?: string; body?: string }>
+                  ).find(
+                    (item) =>
+                      item.headRefName?.startsWith('spec/') &&
+                      new RegExp(
+                        `(?:^|\\n)Refs\\s+${sourceRef.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}(?:\\s|$)`,
+                        'm',
+                      ).test(item.body ?? ''),
+                  );
+                  return found?.headRefName ? { branch: found.headRefName, draftPrUrl: found.url } : undefined;
+                };
+                const owner = await (
+                  opts.resolveResumeOwner ??
+                  (async () => resolveDaemonOwner(await readMachineOwnerConfig(), gh, target.canonicalPath))
+                )();
+                if (!owner.resolved)
+                  throw new Error(
+                    'compose resume: machine identity is unresolved; configure spec_owner or authenticate with gh',
+                  );
+                const events = new ConductorEventEmitter();
+                const persister = new EventPersister(
+                  join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'),
+                  events,
+                );
+                persister.start();
+                try {
+                  const resumed = await resumeComposerRun(dispatch.target, {
+                    resolveBranch,
+                    fetch: target.remote
+                      ? async (branch) => {
+                          const fetched = await git(['fetch', 'origin', branch], { cwd: target.canonicalPath });
+                          if ((fetched.exitCode ?? 0) !== 0)
+                            throw new Error(`could not fetch origin ${branch}: ${fetched.stdout}`);
+                        }
+                      : undefined,
+                    localState: async (branch) => {
+                      const slug = branch.slice('spec/'.length);
+                      const path = join(target.canonicalPath, '.worktrees', `engineer-${slug}`);
+                      const hasWorktree = await access(path).then(
+                        () => true,
+                        () => false,
+                      );
+                      const localRef = hasWorktree ? 'HEAD' : branch;
+                      const status = hasWorktree
+                        ? await git(['status', '--porcelain', '--untracked-files=all'], { cwd: path })
+                        : { stdout: '' };
+                      const dirtyDocs = status.stdout
+                        .split('\n')
+                        .filter(Boolean)
+                        .map((line) => line.slice(3));
+                      const ahead = target.remote
+                        ? await git(['log', '--format=%h', `origin/${branch}..${localRef}`], {
+                            cwd: hasWorktree ? path : target.canonicalPath,
+                          })
+                        : { stdout: '' };
+                      const unpushedCommits = ahead.stdout.split('\n').filter(Boolean);
+                      const fastForwardable = !target.remote
+                        ? true
+                        : await (async () => {
+                            const [base, remoteHead] = await Promise.all([
+                              git(['merge-base', `origin/${branch}`, localRef], {
+                                cwd: hasWorktree ? path : target.canonicalPath,
+                              }),
+                              git(['rev-parse', `origin/${branch}`], {
+                                cwd: hasWorktree ? path : target.canonicalPath,
+                              }),
+                            ]);
+                            return base.stdout.trim() === remoteHead.stdout.trim();
+                          })();
+                      // An abandoned worktree must not leave a clean local branch
+                      // behind its fetched remote. Advance it before ensureWorktree
+                      // attaches that branch; a branch with local commits remains a
+                      // visible leftover and is never rewritten implicitly.
+                      if (!hasWorktree && target.remote && unpushedCommits.length === 0 && !fastForwardable) {
+                        await git(['branch', '-f', branch, `origin/${branch}`], { cwd: target.canonicalPath });
+                      }
+                      const remote = target.remote
+                        ? await (async () => {
+                            const [tip, serialized] = await Promise.all([
+                              git(['rev-parse', `origin/${branch}`], { cwd: target.canonicalPath }),
+                              git(['show', `origin/${branch}:.docs/composer-runs/${slug}.json`], {
+                                cwd: target.canonicalPath,
+                              }),
+                            ]);
+                            try {
+                              const summary = summarizeRun(parseRunRecord(serialized.stdout));
+                              return {
+                                step: summary.nextStep,
+                                lastActor: summary.lastActor,
+                                lastAt: summary.lastAt,
+                                tip: tip.stdout.trim(),
+                              };
+                            } catch {
+                              return { step: 'unknown', tip: tip.stdout.trim() };
+                            }
+                          })()
+                        : undefined;
+                      const interactive = (
+                        opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY))
+                      )();
+                      const choice =
+                        dirtyDocs.length || unpushedCommits.length
+                          ? opts.chooseComposerLocalState
+                            ? await opts.chooseComposerLocalState({ dirtyDocs, unpushedCommits })
+                            : await promptComposerLocalState({ dirtyDocs, unpushedCommits, remote })
+                          : undefined;
+                      return {
+                        leftovers: { dirtyDocs, unpushedCommits },
+                        interactive,
+                        choice,
+                        // A local-only branch has no remote to diverge from. For a
+                        // remote branch, any local-only commits must be discarded
+                        // unless the operator explicitly selected keep after a
+                        // fast-forwardable comparison supplied by the git graph.
+                        fastForwardable,
+                        discard: async () => {
+                          const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+                          if (dirtyDocs.length > 0 && hasWorktree) {
+                            await git(['add', '-A'], { cwd: path });
+                            await git(['commit', '-m', withDaemonCoAuthorTrailer(`composer WIP backup: ${slug}`)], {
+                              cwd: path,
+                            });
+                          }
+                          const cwd = hasWorktree ? path : target.canonicalPath;
+                          await git(['branch', `composer-backup/${slug}-${stamp}`, localRef], { cwd });
+                          if (target.remote) {
+                            if (hasWorktree) await git(['reset', '--hard', `origin/${branch}`], { cwd });
+                            else await git(['branch', '-f', branch, `origin/${branch}`], { cwd });
+                          }
+                        },
+                      };
+                    },
+                    attach: async (branch) => {
+                      const slug = branch.slice('spec/'.length);
+                      if (!target.remote) {
+                        const existing = await git(['show-ref', '--verify', `refs/heads/${branch}`], {
+                          cwd: target.canonicalPath,
+                        });
+                        if ((existing.exitCode ?? 0) !== 0)
+                          throw new Error(
+                            `compose resume: no saved Composer run found for ${dispatch.target} (searched existing local ${branch})`,
+                          );
+                      }
+                      const result = await ensureWorktree({
+                        root: target.canonicalPath,
+                        path: join(target.canonicalPath, '.worktrees', `engineer-${slug}`),
+                        branch,
+                        resolveBase: async () => 'HEAD',
+                      });
+                      return { worktree: result.path };
+                    },
+                    ownership: async ({ worktree, slug, branch }) => {
+                      const committedOwner = await composerCommittedMarkerOwner(git, worktree, branch, slug);
+                      const daemonSession = Boolean((opts.env ?? process.env).CONDUCT_DAEMON_SESSION);
+                      const interactive = (
+                        opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY))
+                      )();
+                      if (!committedOwner || committedOwner === owner.id) return 'unchanged';
+                      const approved =
+                        !daemonSession && interactive
+                          ? opts.confirmComposerTakeover
+                            ? await opts.confirmComposerTakeover({ previousOwner: committedOwner, branch })
+                            : await promptComposerTakeover(committedOwner, branch)
+                          : false;
+                      const mode = resumeOwnershipMode({
+                        committedOwner,
+                        machineOwner: owner.id,
+                        daemonSession,
+                        interactive,
+                        approved,
+                      });
+                      if (mode !== 'taken-over') {
+                        printErr(
+                          `compose resume: run remains owned by ${committedOwner} and stays local until interactive take-over.`,
+                        );
+                        return 'local-only';
+                      }
+                      const repository = target.remote ? parseGhRepo(target.remote)?.toLowerCase() : undefined;
+                      if (!repository)
+                        throw new Error('compose resume: take-over publication requires a GitHub remote.');
+                      const approvalRequest = {
+                        operation: 'remote-ref.push' as const,
+                        access: 'remote-ref-write' as const,
+                        target: { repository, kind: 'remote-ref' as const, ref: `refs/heads/${branch}` },
+                        context: { actor: owner.id },
+                      };
+                      const confirmation =
+                        opts.githubOperationConfirmation ?? createTerminalGithubOperationConfirmation();
+                      const approval = await requestExplicitGithubOperationApproval(approvalRequest, confirmation);
+                      if (approval.kind !== 'approved') {
+                        printErr(
+                          `compose resume: take-over publication was refused; ${committedOwner} remains the owner and this run stays local until interactive take-over.`,
+                        );
+                        return 'local-only';
+                      }
+                      await writeIntakeMarker(worktree, slug, undefined, owner.id);
+                      const recordPath = join(worktree, '.docs', 'composer-runs', `${slug}.json`);
+                      try {
+                        const record = parseRunRecord(await readFile(recordPath, 'utf8'));
+                        await writeFile(
+                          recordPath,
+                          serializeRunRecord({
+                            ...record,
+                            ownerHistory: [...record.ownerHistory, { actor: owner.id, at: new Date().toISOString() }],
+                          }),
+                          'utf8',
+                        );
+                      } catch (error) {
+                        if (!(error instanceof Error) || !/ENOENT/.test(error.message)) throw error;
+                      }
+                      const add = await git(['add', '--', '.docs/intake', '.docs/composer-runs'], { cwd: worktree });
+                      if ((add.exitCode ?? 0) !== 0)
+                        throw new Error(`compose resume: could not stage take-over: ${add.stdout}`);
+                      const commit = await git(
+                        [
+                          'commit',
+                          '-m',
+                          withDaemonCoAuthorTrailer(`composer take-over: ${slug} ${committedOwner} to ${owner.id}`),
+                        ],
+                        { cwd: worktree },
+                      );
+                      if ((commit.exitCode ?? 0) !== 0)
+                        throw new Error(`compose resume: could not commit take-over: ${commit.stdout}`);
+                      const publication = initialSpecPublication(target, branch, worktree, gh, git, events);
+                      const pushed = await executeRemoteGit(['push', '-u', 'origin', `HEAD:refs/heads/${branch}`], {
+                        ...publication.remote,
+                        explicitApproval: { capability: approval.capability, request: approvalRequest },
+                      });
+                      if (pushed.kind !== 'executed') {
+                        printErr(
+                          `compose resume: take-over commit remains local; ${committedOwner} remains the remote owner until an approved take-over push succeeds.`,
+                        );
+                        return 'local-only';
+                      }
+                      return 'taken-over';
+                    },
+                    sourceRef: composerSourceRef,
+                    readArtifact: async (worktree, path) => readFile(join(worktree, path)),
+                    recordDeciding: async ({ branch, draftPrUrl, sourceRef }) => {
+                      // Reconstruct durable intake state from the branch when the
+                      // launcher resumes a run after a process boundary.
+                      const intakeRef = sourceRef ?? (dispatch.target.includes('#') ? dispatch.target : undefined);
+                      await recordDecidingIntakeLedger(engineerDir, { sourceRef: intakeRef, branch, draftPrUrl });
+                    },
+                    emit: async (event) =>
+                      events.emitOrThrow({
+                        type: 'composer_run_resumed',
+                        slug: event.slug,
+                        provider: dispatch.provider ?? DEFAULT_PROVIDER,
+                        actor: owner.resolved ? owner.id : 'unresolved',
+                        previousActor: event.previousActor,
+                        previousProvider: event.previousProvider,
+                        ownership: event.ownership,
+                        worktreePath: event.worktreePath,
+                        launchId,
+                      }),
+                  });
+                  const composerName = await resolveSkillName(opts.skillNameRoot ?? null, 'composer');
+                  // This is deliberately part of the host prompt, before spawn:
+                  // printing it after the host exits cannot resume its context.
+                  const prompt = `${host.invocationPrefix}${composerName} --resume ${resumed.worktree} --step ${resumed.context.nextStep}\nResume context: ${JSON.stringify(resumed.context)}`;
+                  await (opts.spawnHost ?? spawnInteractiveHost)(
+                    executable,
+                    host.interactiveLaunch.argv({ prompt, permissionMode: 'default' }),
+                    resumed.worktree,
+                    {
+                      ...(opts.env ?? process.env),
+                      AI_CONDUCTOR_AUTHORING_PROVIDER: provider,
+                      AI_CONDUCTOR_COMPOSE_LAUNCH_ID: launchId,
+                    },
+                  );
+                  const branch = resumed.context.branch;
+                  const slug = resumed.context.slug;
+                  const exited = await handleComposerHostExit({
+                    target,
+                    branch,
+                    worktree: resumed.worktree,
+                    slug,
+                    gh,
+                    git,
+                    events,
+                    provider,
+                    engineerDir,
+                    resolveOwner: async () => owner,
+                    checkpoint: opts.checkpoint,
+                    printErr,
+                  });
+                  if (exited.summary) {
+                    print(
+                      `Composer run ${slug}: current step ${exited.summary.nextStep}; active provider ${exited.record?.lastCheckpoint?.provider ?? provider}. Choices: continue, switch, hand off.`,
+                    );
+                  }
+                  return resumed;
+                } finally {
+                  persister.stop();
+                }
+              })();
+          print(JSON.stringify({ kind: 'resume', ...result }));
+          return 0;
+        } catch (error) {
+          printErr(`engineer resume: ${error instanceof Error ? error.message : String(error)}`);
+          return 1;
+        }
+      }
 
-    // ── unclaim ─────────────────────────────────────────────────────────────
-    // `ai-conductor engineer unclaim <sourceRef>` — single-idea recovery (FR-5):
-    // requeue a claimed ledger entry back to pending, preserving capturedAt.
-    // An absent ref is reported (found:false) and is NOT an error (Story 5, FR-7).
-    // A non-claimed (terminal) or already PR-delivered entry refuses and directs
-    // the operator to resolve/forget instead (Story 4, FR-6) — also NOT an error.
-    case 'unclaim': {
-      const { sourceRef } = dispatch;
-      const engDir = engineerDir ?? resolveEngineerDir({});
-      const ledger = createLedger(join(engDir, 'ledger.json'));
+      // ── handoff ───────────────────────────────────────────────────────────────
+      case 'handoff': {
+        const { project: projectName, branch, worktree, sourceRef } = dispatch;
+        await labelPrimitivePane(worktree, 'handoff', opts, printErr);
+        const reader = createRegistryReader(registryPath ? { registryPath } : {});
+        const allProjects = await reader.listProjects();
+        const record = allProjects.find((p) => p.name === projectName);
+        if (!record) {
+          printErr(`engineer handoff: project "${projectName}" not found in registry.`);
+          return 1;
+        }
 
-      const entry = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
-      if (!entry) {
-        print(JSON.stringify({ kind: 'unclaim', sourceRef, found: false }));
+        let target: Awaited<ReturnType<typeof resolveTargetRepo>>;
+        try {
+          target = await resolveTargetRepo(record.path, reader);
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          printErr(`engineer handoff: ${msg}`);
+          return 1;
+        }
+
+        let handoffResult: Awaited<ReturnType<typeof openSpecPr>>;
+        // Compose handoff is a separate CLI process, so it owns this canonical
+        // composer ledger for its guarded publication lifetime.
+        const events = new ConductorEventEmitter();
+        const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
+        try {
+          persister.start();
+          const publication =
+            opts.handoffPublication ??
+            (target.remote ? initialSpecPublication(target, branch, worktree, gh, git, events) : undefined);
+          handoffResult = await openSpecPr(target, branch, {
+            gitRunner: git,
+            runner: async (args, runnerOpts) => {
+              const cwd = runnerOpts?.cwd ?? worktree;
+              const r = await gh(args, { cwd });
+              return { stdout: r.stdout, stderr: '' };
+            },
+            findExistingSpecPr: () =>
+              findExistingSpecPullRequest(
+                async (args, runnerOpts) => {
+                  const cwd = runnerOpts?.cwd ?? worktree;
+                  const r = await gh(args, { cwd });
+                  return { stdout: r.stdout, stderr: '' };
+                },
+                publication!.repository,
+                branch,
+                worktree,
+              ),
+            // gh runs in the per-idea worktree (checked out on spec/<slug>) — FR-4.
+            worktreePath: worktree,
+            ledgerOpts: engineerDir ? { engineerDir } : {},
+            // Link the spec PR to its issue with a non-closing `Refs` (does not
+            // close — the daemon's implementation PR closes it on merge).
+            sourceRef,
+            publication,
+            events,
+            // Post-create writes are non-fatal; never let a refusal pass silently (#2703).
+            log: (msg: string) => printErr(`engineer handoff: ${msg}`),
+          });
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : String(err);
+          printErr(`engineer handoff: PR open failed: ${msg}`);
+          // Handoff FAILED (e.g. no PR URL parsed): keep the worktree for inspection
+          // (FR-6) — do NOT remove it. Work is preserved on the branch; report the
+          // retained worktree path so retention is actionable.
+          printErr(`engineer handoff: worktree kept for inspection at "${worktree}".`);
+
+          // Task 9: Record branch evidence in the ledger if sourceRef is present.
+          // This enables the operator to retry via `engineer resolve` if the write-back
+          // fails. Non-fatal: if the ledger write fails, continue with exit 0.
+          if (sourceRef) {
+            try {
+              const engDir = engineerDir ?? resolveEngineerDir({});
+              const ledger = createLedger(join(engDir, 'ledger.json'));
+              const entry = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
+              if (entry) {
+                await ledger.transition(GITHUB_ISSUES_SOURCE, sourceRef, entry.status, {
+                  branch,
+                  ...(entry.prUrl ? { prUrl: entry.prUrl } : {}),
+                });
+              }
+            } catch (e: unknown) {
+              if (e instanceof CorruptLedgerError) {
+                throw e;
+              } else {
+                printErr(`Failed to record branch evidence: ${e instanceof Error ? e.message : String(e)}`);
+              }
+              // Continue — handoff still succeeds
+            }
+          }
+          return 1;
+        } finally {
+          persister.stop();
+        }
+
+        if (handoffResult.kind === 'pr-refused') {
+          printErr(
+            `engineer handoff: publication refused (${handoffResult.reason}); ` +
+              `worktree kept for inspection at "${worktree}".`,
+          );
+          return 1;
+        }
+
+        const alreadyDelivered = handoffResult.kind === 'pr-opened' && handoffResult.alreadyDelivered === true;
+
+        // The PR opened (or was skipped on no-remote) — the cycle succeeded, so remove
+        // the per-idea worktree (FR-5). The spec/<slug> branch + commit persist; a
+        // removal failure is REPORTED, never swallowed (FR-5 negative).
+        if (!alreadyDelivered) {
+          try {
+            await removeEngineerWorktree(target.canonicalPath, worktree);
+          } catch (err: unknown) {
+            printErr(
+              `⚠ Spec delivered, but the per-idea worktree "${worktree}" could not be removed: ` +
+                `${err instanceof Error ? err.message : String(err)}. Remove it manually.`,
+            );
+          }
+        }
+
+        if (handoffResult.kind === 'pr-opened') {
+          // Intake write-back (FR-36): a real spec PR was opened — comment its URL,
+          // apply `engineer:handled`, and advance the ledger to `done`. Advisory —
+          // a gh failure never reverts a delivered PR. Only on a PR (not local-commit,
+          // which has no URL to report).
+          if (sourceRef && !alreadyDelivered) {
+            const engDir = engineerDir ?? resolveEngineerDir({});
+            const { ledger, adapter } = buildIntake({
+              engineerDir: engDir,
+              registryPath,
+              gh,
+              printErr,
+              resolveActor: opts.intakeResolveActor,
+              events: opts.events,
+              operatorSession: true,
+            });
+            await reportDone(
+              { source: GITHUB_ISSUES_SOURCE, sourceRef, port: adapter, ledger },
+              handoffResult.url,
+              branch,
+            );
+          }
+          print(JSON.stringify({ kind: 'pr-opened', url: handoffResult.url }));
+        } else {
+          // pr-skipped — record authored key manually (openSpecPr already records on skip).
+          // Task 9: Also record branch evidence in the ledger if sourceRef is present.
+          if (sourceRef) {
+            try {
+              const engDir = engineerDir ?? resolveEngineerDir({});
+              const ledger = createLedger(join(engDir, 'ledger.json'));
+              const entry = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
+              if (entry) {
+                await ledger.transition(GITHUB_ISSUES_SOURCE, sourceRef, entry.status, {
+                  branch,
+                  ...(entry.prUrl ? { prUrl: entry.prUrl } : {}),
+                });
+              }
+            } catch (e: unknown) {
+              if (e instanceof CorruptLedgerError) {
+                throw e;
+              } else {
+                printErr(`Failed to record branch evidence: ${e instanceof Error ? e.message : String(e)}`);
+              }
+              // Continue — handoff still succeeds
+            }
+          }
+
+          print(
+            JSON.stringify({
+              kind: 'local-commit',
+              branch,
+              repoPath: target.canonicalPath,
+              reason: (handoffResult as { kind: 'pr-skipped'; reason: string }).reason,
+            }),
+          );
+        }
+
+        // Fire-and-forget ensureRunning. NEVER blocks on failure — but never silent:
+        // the ADR-014 launch path hosts the daemon in a tmux session, so a tmux-less
+        // host throws TmuxNotInstalledError here. Swallowing it would author the spec
+        // while launching no daemon (specs pile up unbuilt with no signal). Surface
+        // the reason on stderr; the handoff still succeeds.
+        if (!alreadyDelivered) {
+          try {
+            const launchFn = opts.ensureRunningLaunch;
+            if (launchFn) {
+              await Promise.resolve(launchFn(target.canonicalPath));
+            } else {
+              await ensureRunning(target.canonicalPath, {
+                ...opts.ensureRunningOpts,
+                onReclaim: (message) => printErr(message),
+              });
+            }
+          } catch (err) {
+            const reason = err instanceof Error ? err.message : String(err);
+            printErr(`⚠ Spec authored, but the build daemon was not started for "${target.name}": ${reason}`);
+          }
+        }
+
         return 0;
       }
 
-      if (entry.status !== 'claimed' || entry.prUrl) {
-        const reason = entry.prUrl
-          ? 'entry already has an associated PR — use `engineer resolve` or `engineer forget` instead'
-          : `entry is "${entry.status}", not "claimed" — use \`engineer resolve\` or \`engineer forget\` instead`;
+      // ── poll ────────────────────────────────────────────────────────────────────
+      // `ai-conductor engineer poll`: poll the github-issues source across registered
+      // repos and enqueue new envelopes into the durable inbox. NO routing, NO
+      // processing, NO setInterval/detached spawn — a single synchronous sweep. The
+      // ledger dedups, so a double-poll enqueues nothing new.
+      case 'poll': {
+        const engDir = engineerDir ?? resolveEngineerDir({});
+        const { queue, adapter } = buildIntake({
+          engineerDir: engDir,
+          registryPath,
+          gh,
+          printErr,
+          events: opts.events,
+        });
+
+        const envelopes = await adapter.poll();
+        for (const e of envelopes) {
+          await queue.enqueue(e);
+        }
+        print(
+          JSON.stringify({ kind: 'poll', enqueued: envelopes.length, sourceRefs: envelopes.map((e) => e.sourceRef) }),
+        );
+        return 0;
+      }
+
+      // ── claim ─────────────────────────────────────────────────────────────────
+      // `ai-conductor compose claim`: atomically dequeue the oldest pending idea so the
+      // /composer skill can route it. claim+ack removes it from the inbox (the ledger
+      // is the durable record); the ledger advances to `claimed`. On an empty inbox,
+      // reports {empty:true} — the skill then falls back to a CLI idea arg or chat.
+      //
+      // The file queue is wrapped with createDeliveryGuardedQueue (Task 8, TR-1) to detect
+      // and heal stale entries (duplicate envelopes, delivered PRs) transparently.
+      case 'claim': {
+        const engDir = engineerDir ?? resolveEngineerDir({});
+        const { ledger, queue: productionQueue } = buildIntake({
+          engineerDir: engDir,
+          registryPath,
+          gh,
+          printErr,
+          events: opts.events,
+        });
+        const queue: IntakeQueue = opts.intakeFileQueue ?? productionQueue;
+
+        // Resolve the project-level config (`.ai-conductor/config.yml` at cwd) so an
+        // operator's `stale_claim_window_hours` override reaches the reap pass below —
+        // same load path as index.ts's top-level `loadConfig(projectRoot)`. Best-effort:
+        // an absent/invalid config falls back to resolveStaleClaimWindowMs's default.
+        const claimConfigResult = await loadConfig(process.cwd());
+        const claimConfig = claimConfigResult.ok ? claimConfigResult.config : undefined;
+
+        try {
+          return await withIntakeClaimLease(
+            engDir,
+            async () => {
+              const reconciliation = await reconcileStrandedClaims({ queue, ledger });
+              if (reconciliation.released.length > 0) {
+                printErr(`released ${reconciliation.released.length} stranded intake claim(s)`);
+              }
+
+              // Wrap the queue with the delivery guard decorator (Task 8: integration point).
+              // The guard is transparent to claimUnblocked; it only filters/heals problematic
+              // candidates via ledger + gh state checks.
+              const guardedQueue = createDeliveryGuardedQueue(queue, ledger, {
+                gh,
+                logger: { info: (msg) => printErr(msg) },
+                config: claimConfig,
+                findCrossReferencedDraft: async (sourceRef) => {
+                  const parsedRef = parseSourceRef(sourceRef);
+                  const repository = parsedRef && splitOwnerRepo(parsedRef.repo);
+                  if (!parsedRef || !repository) return undefined;
+                  // GitHub's crossReferencedBy connection is the source of truth: PR
+                  // title/body text is neither complete nor safe to parse as routing state.
+                  const query =
+                    'query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){timelineItems(first:100,itemTypes:[CROSS_REFERENCED_EVENT]){nodes{... on CrossReferencedEvent{source{... on PullRequest{url headRefName state isDraft}}}}}}}}';
+                  const stdout = await runTrackerGraphqlRead(gh, process.cwd(), {
+                    query,
+                    variables: { owner: repository.owner, repo: repository.repo, number: Number(parsedRef.issue) },
+                  });
+                  const nodes = (JSON.parse(stdout || '{}') as any).data?.repository?.issue?.timelineItems?.nodes ?? [];
+                  const pr = nodes
+                    .map((node: any) => node?.source)
+                    .find(
+                      (value: any) =>
+                        value?.state === 'OPEN' &&
+                        value?.isDraft === true &&
+                        typeof value?.headRefName === 'string' &&
+                        value.headRefName.startsWith('spec/'),
+                    );
+                  return pr ? { branch: pr.headRefName, url: pr.url } : undefined;
+                },
+              });
+
+              // Fresh resolver per claim call — createBlockerResolver()'s memo is scoped
+              // to a single walk, so reusing one across calls would leak stale verdicts
+              // (see daemon-backlog.ts:210-221 for the same rule on the daemon side).
+              const source = createOrderingSource({
+                run: (args) => gh(args, { cwd: process.cwd() }),
+                cwd: process.cwd(),
+                events: opts.events,
+              });
+              const resolver = createBlockerResolver({ source });
+              // Claim-time label read — no cache: a relabel between claims must be
+              // honored on the very next claim (TR-1 happy 3). A throwing reader is
+              // handled inside claimUnblocked (falls back to drain order, warns once
+              // via `log`) — never caught here.
+              const outcome = await claimUnblocked({
+                queue: guardedQueue as unknown as DependencyClaimQueue,
+                resolveDependency: (sourceRef) => resolver.resolve(sourceRef ?? ''),
+                resolveBands: (refs) => resolveClaimBands(source, refs),
+                log: (...args: unknown[]) => printErr(args.map((a) => String(a)).join(' ')),
+              });
+
+              if (outcome.kind === 'empty') {
+                print(JSON.stringify({ kind: 'claim', empty: true }));
+                return 0;
+              }
+              if (outcome.kind === 'all-blocked') {
+                print(
+                  JSON.stringify({
+                    kind: 'claim',
+                    allBlocked: true,
+                    entries: outcome.entries.map(({ envelope: e, verdict }) => {
+                      const entryEnvelope = e as unknown as Envelope;
+                      return {
+                        text: entryEnvelope.text,
+                        source: entryEnvelope.source,
+                        sourceRef: entryEnvelope.sourceRef,
+                        verdict,
+                      };
+                    }),
+                  }),
+                );
+                return 0;
+              }
+
+              // claimUnblocked's ClaimableEnvelope is a structural subset of the real
+              // Envelope produced by the file queue — narrow back to the concrete type
+              // for ack()/ledger.transition() below.
+              const envelope = outcome.envelope as unknown as Envelope;
+              // Remove from the inbox now that we own it — the ledger carries lifecycle from here.
+              await queue.ack(envelope);
+              try {
+                await ledger.transition(envelope.source, envelope.sourceRef, 'claimed');
+              } catch (error: unknown) {
+                if (error instanceof CorruptLedgerError) throw error;
+                // Entry may be absent for a non-recording source — advisory transition.
+              }
+              // FR-13: persist a claim record so `engineer worktree --source-ref` can later
+              // resolve the Desired-outcome body without the skill ever passing --body itself.
+              await persistClaimRecord(engDir, envelope.sourceRef, envelope.text, envelope.inbound);
+              print(
+                JSON.stringify({
+                  kind: 'claim',
+                  text: envelope.text,
+                  body: envelope.text,
+                  source: envelope.source,
+                  sourceRef: envelope.sourceRef,
+                  inbound: envelope.inbound,
+                }),
+              );
+              return 0;
+            },
+            { waitTimeoutMs: opts.intakeClaimLeaseWaitMs ?? INTAKE_CLAIM_LEASE_WAIT_MS },
+          );
+        } catch (error: unknown) {
+          if (error instanceof CorruptLedgerError) return reportCorruptLedger(error);
+          printErr(`engineer claim: ${error instanceof Error ? error.message : String(error)}`);
+          return 1;
+        }
+      }
+
+      // ── forget ──────────────────────────────────────────────────────────────────
+      // `ai-conductor engineer forget <sourceRef>`: drop the ledger entry so the issue
+      // is re-capturable, and strip the `engineer:handled` label so poll sees it again.
+      // An absent ref is reported (found:false) and is NOT an error.
+      case 'forget': {
+        const { sourceRef } = dispatch;
+        const attached = (opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY)))();
+        const confirmation =
+          opts.githubOperationConfirmation ?? createTerminalGithubOperationConfirmation({ isTerminal: () => attached });
+        const engDir = engineerDir ?? resolveEngineerDir({});
+        const ledger = createLedger(join(engDir, 'ledger.json'));
+        const resolveIssue = async (
+          parsedForget: NonNullable<ReturnType<typeof parseSourceRef>>,
+          resolvedBy: string,
+        ): Promise<boolean> => {
+          const tracker = createGithubTrackerClient(gh, {
+            intake: createGithubIntakeAuthorization({
+              gh,
+              cwd: process.cwd(),
+              resolveActor: opts.intakeResolveActor,
+              confirmation,
+              operatorSession: true,
+            }),
+            events: opts.events,
+          });
+          try {
+            await tracker.commentOnIntakeIssue(
+              parsedForget.repo,
+              Number(parsedForget.issue),
+              `Resolved by ${resolvedBy}`,
+              process.cwd(),
+            );
+          } catch (err: unknown) {
+            printErr(
+              `engineer forget: failed to comment on ${sourceRef}: ${err instanceof Error ? err.message : String(err)}; ` +
+                `ledger entry retained.${forgetAuthorizationRefusalExplanation(err, attached)}`,
+            );
+            return false;
+          }
+          try {
+            await tracker.closeIntakeIssue(parsedForget.repo, String(parsedForget.issue), process.cwd());
+          } catch (err: unknown) {
+            printErr(
+              `engineer forget: failed to close ${sourceRef}: ${err instanceof Error ? err.message : String(err)}; ` +
+                `close the issue by hand, then rerun \`engineer forget ${sourceRef}\` without --resolved-by.` +
+                forgetAuthorizationRefusalExplanation(err, attached),
+            );
+            return false;
+          }
+          return true;
+        };
+
+        const entry = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
+        if (!entry) {
+          if (!dispatch.resolvedBy) {
+            print(JSON.stringify({ kind: 'forget', sourceRef, found: false }));
+            return 0;
+          }
+
+          const parsedForget = parseSourceRef(sourceRef);
+          if (!parsedForget) {
+            printErr(
+              `engineer forget: cannot record resolution for ${sourceRef}: it is not a GitHub issue reference; ` +
+                'rerun without --resolved-by to remove only the source label.',
+            );
+            return 1;
+          }
+
+          if (!(await resolveIssue(parsedForget, dispatch.resolvedBy))) return 1;
+          print(
+            JSON.stringify({
+              kind: 'forget',
+              sourceRef,
+              found: false,
+              removed: false,
+              closed: true,
+              resolvedBy: dispatch.resolvedBy,
+            }),
+          );
+          return 0;
+        }
+
+        const parsedForget = parseSourceRef(sourceRef);
+        const closed = Boolean(dispatch.resolvedBy && parsedForget);
+        if (dispatch.resolvedBy && !parsedForget) {
+          printErr(
+            `engineer forget: cannot record resolution for ${sourceRef}: it is not a GitHub issue reference; ` +
+              'rerun without --resolved-by to remove only the source label.',
+          );
+          return 1;
+        }
+        if (dispatch.resolvedBy && parsedForget) {
+          if (!(await resolveIssue(parsedForget, dispatch.resolvedBy))) return 1;
+        }
+
+        await ledger.forget(GITHUB_ISSUES_SOURCE, sourceRef);
+
+        // Best-effort label strip; a gh failure must not fail `forget` (the ledger
+        // entry is already gone, which is the authoritative dedup state).
+        if (parsedForget) {
+          try {
+            const tracker = createGithubTrackerClient(gh, {
+              intake: createGithubIntakeAuthorization({
+                gh,
+                cwd: process.cwd(),
+                resolveActor: opts.intakeResolveActor,
+                confirmation,
+                operatorSession: true,
+              }),
+              events: opts.events,
+            });
+            await tracker.removeIntakeIssueLabel(
+              parsedForget.repo,
+              Number(parsedForget.issue),
+              HANDLED_LABEL,
+              process.cwd(),
+            );
+          } catch (err: unknown) {
+            printErr(
+              `engineer forget: label strip failed for ${sourceRef}: ${err instanceof Error ? err.message : String(err)}` +
+                forgetAuthorizationRefusalExplanation(err, attached),
+            );
+          }
+        }
+
         print(
           JSON.stringify({
-            kind: 'unclaim',
+            kind: 'forget',
             sourceRef,
             found: true,
-            acted: false,
-            status: entry.status,
-            reason,
+            removed: true,
+            closed,
+            ...(closed ? { resolvedBy: dispatch.resolvedBy } : {}),
           }),
         );
         return 0;
       }
 
-      const { acted } = await ledger.requeueClaimed(GITHUB_ISSUES_SOURCE, sourceRef);
-      if (acted) {
-        await enqueueRecoveredEnvelope(createFileQueue(join(engDir, 'inbox')), entry);
-      }
+      // ── unclaim ─────────────────────────────────────────────────────────────
+      // `ai-conductor engineer unclaim <sourceRef>` — single-idea recovery (FR-5):
+      // requeue a claimed ledger entry back to pending, preserving capturedAt.
+      // An absent ref is reported (found:false) and is NOT an error (Story 5, FR-7).
+      // A non-claimed (terminal) or already PR-delivered entry refuses and directs
+      // the operator to resolve/forget instead (Story 4, FR-6) — also NOT an error.
+      case 'unclaim': {
+        const { sourceRef } = dispatch;
+        const engDir = engineerDir ?? resolveEngineerDir({});
+        const ledger = createLedger(join(engDir, 'ledger.json'));
 
-      print(JSON.stringify({ kind: 'unclaim', sourceRef, found: true, acted }));
-      return 0;
-    }
-
-    // ── requeue ───────────────────────────────────────────────────────────────
-    // `ai-conductor engineer requeue --stale [--older-than <dur>]` — bulk recovery
-    // of the whole stranded claimed class (Story 6, FR-8). Before requeueing each
-    // eligible entry, probe its GitHub issue liveness (Story 7, FR-9): closed →
-    // forget (drop); open → requeueClaimed. A liveness read that errors, returns
-    // unknown, or can't be attempted (unparseable sourceRef) NEVER forgets
-    // (fail-safe, Story 7 negative) — the error is surfaced per-entry and the
-    // batch continues for the rest of the run.
-    case 'requeue': {
-      const engDir = engineerDir ?? resolveEngineerDir({});
-      const ledger = createLedger(join(engDir, 'ledger.json'));
-      const queue = createFileQueue(join(engDir, 'inbox'));
-
-      // Same project-level config load as the `claim` case, so an operator's
-      // `stale_claim_window_hours` override also governs the bulk requeue default
-      // (an explicit `--older-than` still takes precedence per-invocation).
-      const requeueConfigResult = await loadConfig(process.cwd());
-      const requeueConfig = requeueConfigResult.ok ? requeueConfigResult.config : undefined;
-
-      const parsedOlderThan = parseDurationMs(dispatch.olderThan);
-      if (dispatch.olderThan !== undefined && parsedOlderThan === null) {
-        printErr(
-          `engineer requeue: invalid --older-than "${dispatch.olderThan}" (expected a non-negative duration such as 30m, 24h, or 2d)`,
-        );
-        return 1;
-      }
-      const windowMs = parsedOlderThan ?? resolveStaleClaimWindowMs(requeueConfig);
-      const now = Date.now();
-
-      const entries = await ledger.list();
-      const requeued: string[] = [];
-      const dropped: string[] = [];
-      const errors: Array<{ sourceRef: string; error: string }> = [];
-
-      for (const entry of entries) {
-        if (!isStaleClaim(entry, now, windowMs)) continue;
-
-        const parsed = parseSourceRef(entry.sourceRef);
-        if (!parsed) {
-          errors.push({
-            sourceRef: entry.sourceRef,
-            error: `unparseable sourceRef "${entry.sourceRef}" — cannot confirm issue liveness`,
-          });
-          continue;
+        const entry = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
+        if (!entry) {
+          print(JSON.stringify({ kind: 'unclaim', sourceRef, found: false }));
+          return 0;
         }
 
-        let issueState: 'open' | 'closed' | 'unknown';
-        try {
-          issueState = await getIssueState(gh, parsed.repo, parsed.issue);
-        } catch (err: unknown) {
-          errors.push({
-            sourceRef: entry.sourceRef,
-            error: err instanceof Error ? err.message : String(err),
-          });
-          continue;
+        if (entry.status !== 'claimed' || entry.prUrl) {
+          const reason = entry.prUrl
+            ? 'entry already has an associated PR — use `engineer resolve` or `engineer forget` instead'
+            : `entry is "${entry.status}", not "claimed" — use \`engineer resolve\` or \`engineer forget\` instead`;
+          print(
+            JSON.stringify({
+              kind: 'unclaim',
+              sourceRef,
+              found: true,
+              acted: false,
+              status: entry.status,
+              reason,
+            }),
+          );
+          return 0;
         }
 
-        if (issueState === 'unknown') {
-          // Fail-safe (Story 7 negative): never forget on an unconfirmed-closed
-          // signal — surface the error and continue with the rest of the batch.
-          errors.push({
-            sourceRef: entry.sourceRef,
-            error: 'issue liveness state unknown — not forgotten (fail-safe)',
-          });
-          continue;
-        }
-
-        if (issueState === 'closed') {
-          await ledger.forget(entry.source, entry.sourceRef);
-          dropped.push(entry.sourceRef);
-          continue;
-        }
-
-        const { acted } = await ledger.requeueClaimed(entry.source, entry.sourceRef);
+        const { acted } = await ledger.requeueClaimed(GITHUB_ISSUES_SOURCE, sourceRef);
         if (acted) {
-          await enqueueRecoveredEnvelope(queue, entry, now);
-          requeued.push(entry.sourceRef);
+          await enqueueRecoveredEnvelope(createFileQueue(join(engDir, 'inbox')), entry);
         }
-      }
 
-      print(
-        JSON.stringify({
-          kind: 'requeue',
-          requeued,
-          dropped,
-          errors,
-          count: requeued.length,
-        }),
-      );
-      return 0;
-    }
-
-    // ── resolve ─────────────────────────────────────────────────────────────
-    // `ai-conductor engineer resolve <sourceRef> --pr-url <url> [--branch <b>]`:
-    // mark a claimed entry as delivered when write-back fails (recovery from the
-    // stranded state where the spec was authored/handed off but not recorded as done).
-    // If entry doesn't exist: return {kind:'resolve', found:false} exit 0 (soft failure).
-    // If entry exists: transition to 'done' with prUrl + optional branch override.
-    // Branch is optional; if not provided, preserve existing entry.meta.branch.
-    // Output: {kind:'resolve', sourceRef, priorStatus, prUrl, branch} for operator verification.
-    // Exit code always 0 (resolve is advisory, never a hard failure).
-    case 'resolve': {
-      const { sourceRef, prUrl, branch: newBranch } = dispatch;
-
-      // Validate --pr-url format: must be http(s)://
-      if (!prUrl.match(/^https?:\/\//)) {
-        printErr(`resolve: invalid --pr-url "${prUrl}" (must be http(s)://…)`);
-        return 1;
-      }
-
-      const engDir = engineerDir ?? resolveEngineerDir({});
-      const ledger = createLedger(join(engDir, 'ledger.json'));
-
-      // Attempt to get the entry; if absent, return found:false (soft failure).
-      const entry = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
-      if (!entry) {
-        print(JSON.stringify({ kind: 'resolve', sourceRef, found: false }));
+        print(JSON.stringify({ kind: 'unclaim', sourceRef, found: true, acted }));
         return 0;
       }
 
-      // Entry exists: prepare the transition.
-      // Preserve existing branch unless --branch provided.
-      const priorStatus = entry.status;
-      const existingBranch = entry.branch ?? '';
-      const branch = newBranch !== undefined ? newBranch : existingBranch;
+      // ── requeue ───────────────────────────────────────────────────────────────
+      // `ai-conductor engineer requeue --stale [--older-than <dur>]` — bulk recovery
+      // of the whole stranded claimed class (Story 6, FR-8). Before requeueing each
+      // eligible entry, probe its GitHub issue liveness (Story 7, FR-9): closed →
+      // forget (drop); open → requeueClaimed. A liveness read that errors, returns
+      // unknown, or can't be attempted (unparseable sourceRef) NEVER forgets
+      // (fail-safe, Story 7 negative) — the error is surfaced per-entry and the
+      // batch continues for the rest of the run.
+      case 'requeue': {
+        const engDir = engineerDir ?? resolveEngineerDir({});
+        const ledger = createLedger(join(engDir, 'ledger.json'));
+        const queue = createFileQueue(join(engDir, 'inbox'));
 
-      // Transition the entry to 'done' with prUrl + branch evidence.
-      await ledger.transition(GITHUB_ISSUES_SOURCE, sourceRef, 'done', { prUrl, branch });
+        // Same project-level config load as the `claim` case, so an operator's
+        // `stale_claim_window_hours` override also governs the bulk requeue default
+        // (an explicit `--older-than` still takes precedence per-invocation).
+        const requeueConfigResult = await loadConfig(process.cwd());
+        const requeueConfig = requeueConfigResult.ok ? requeueConfigResult.config : undefined;
 
-      // Output: all 4 fields for operator verification.
-      print(
-        JSON.stringify({
-          kind: 'resolve',
-          sourceRef,
-          priorStatus,
-          prUrl,
-          branch,
-        }),
-      );
+        const parsedOlderThan = parseDurationMs(dispatch.olderThan);
+        if (dispatch.olderThan !== undefined && parsedOlderThan === null) {
+          printErr(
+            `engineer requeue: invalid --older-than "${dispatch.olderThan}" (expected a non-negative duration such as 30m, 24h, or 2d)`,
+          );
+          return 1;
+        }
+        const windowMs = parsedOlderThan ?? resolveStaleClaimWindowMs(requeueConfig);
+        const now = Date.now();
 
-      return 0;
-    }
+        const entries = await ledger.list();
+        const requeued: string[] = [];
+        const dropped: string[] = [];
+        const errors: Array<{ sourceRef: string; error: string }> = [];
 
-    // ── migrate-issue-deps ────────────────────────────────────────────────────
-    // `ai-conductor engineer migrate-issue-deps [--confirm]`: one-time prose→link
-    // migration over the current repo's open issues. Scans, classifies prose
-    // into deterministic edges + manual-review items, prints the full proposal,
-    // and only WRITES anything when `--confirm` is passed — a bare run is a
-    // pure dry-run (GET-checks only, zero POSTs; see createDependencyLinks).
-    case 'migrate-issue-deps': {
-      const cwd = process.cwd();
-      let nameWithOwner: string;
-      try {
-        const stdout = await runTrackerAmbientRead(gh, cwd, 'ambient.repository.read', ['repo', 'view', '--json', 'nameWithOwner']);
-        nameWithOwner = String((JSON.parse(stdout || '{}') as { nameWithOwner?: unknown }).nameWithOwner ?? '');
-      } catch (err: unknown) {
-        printErr(`engineer migrate-issue-deps: could not resolve repo (${err instanceof Error ? err.message : String(err)})`);
-        return 1;
-      }
-      if (!nameWithOwner) {
-        printErr('engineer migrate-issue-deps: could not resolve repo (no nameWithOwner)');
-        return 1;
-      }
+        for (const entry of entries) {
+          if (!isStaleClaim(entry, now, windowMs)) continue;
 
-      let issues: Array<{ number: number; body: string }>;
-      try {
-        const stdout = await runTrackerRepositoryRead(
-          gh, cwd, 'repository.read', nameWithOwner, { kind: 'repository' },
-          ['issue', 'list', '--state', 'open', '--json', 'number,body', '--limit', '500', '-R', nameWithOwner],
+          const parsed = parseSourceRef(entry.sourceRef);
+          if (!parsed) {
+            errors.push({
+              sourceRef: entry.sourceRef,
+              error: `unparseable sourceRef "${entry.sourceRef}" — cannot confirm issue liveness`,
+            });
+            continue;
+          }
+
+          let issueState: 'open' | 'closed' | 'unknown';
+          try {
+            issueState = await getIssueState(gh, parsed.repo, parsed.issue);
+          } catch (err: unknown) {
+            errors.push({
+              sourceRef: entry.sourceRef,
+              error: err instanceof Error ? err.message : String(err),
+            });
+            continue;
+          }
+
+          if (issueState === 'unknown') {
+            // Fail-safe (Story 7 negative): never forget on an unconfirmed-closed
+            // signal — surface the error and continue with the rest of the batch.
+            errors.push({
+              sourceRef: entry.sourceRef,
+              error: 'issue liveness state unknown — not forgotten (fail-safe)',
+            });
+            continue;
+          }
+
+          if (issueState === 'closed') {
+            await ledger.forget(entry.source, entry.sourceRef);
+            dropped.push(entry.sourceRef);
+            continue;
+          }
+
+          const { acted } = await ledger.requeueClaimed(entry.source, entry.sourceRef);
+          if (acted) {
+            await enqueueRecoveredEnvelope(queue, entry, now);
+            requeued.push(entry.sourceRef);
+          }
+        }
+
+        print(
+          JSON.stringify({
+            kind: 'requeue',
+            requeued,
+            dropped,
+            errors,
+            count: requeued.length,
+          }),
         );
-        issues = JSON.parse(stdout || '[]') as Array<{ number: number; body: string }>;
-      } catch (err: unknown) {
-        printErr(`engineer migrate-issue-deps: could not list issues (${err instanceof Error ? err.message : String(err)})`);
-        return 1;
-      }
-
-      // Delegate to runMigration with formatted issues and confirmation callback
-      const formattedIssues = issues.map((issue) => ({
-        ref: `${nameWithOwner}#${issue.number}`,
-        body: issue.body ?? '',
-      }));
-
-      // Each source issue is authorized independently through the intake
-      // assignment seam; reading a dependency conveys no write authority.
-      const resolveActor = opts.intakeResolveActor ?? (async () =>
-        resolveDaemonOwner(await readMachineOwnerConfig(), gh, cwd));
-      let actor = 'unresolved';
-      try {
-        const identity = await resolveActor();
-        if (identity.resolved) actor = identity.id;
-      } catch {
-        // The guarded seam remains authoritative and will refuse the write.
-      }
-      const operations = createGuardedGithubOperationRunner(gh, {
-        cwd,
-        intake: createGithubIntakeAuthorization({ gh, cwd, resolveActor }),
-        events: opts.events,
-      });
-      const result = await runMigration({
-        gh,
-        operations,
-        actor,
-        issues: formattedIssues,
-        confirm: async () => Promise.resolve(dispatch.confirm),
-      });
-
-      // Print the proposal (proposed edges + manual review items)
-      print(`migrate-issue-deps: proposal over ${nameWithOwner} (${issues.length} open issue(s))`);
-      for (const proposed of result.proposed) {
-        print(`  ${proposed.issue} blocked_by ${proposed.blockedBy}  [${proposed.kind}]`);
-      }
-      if (result.manualReview.length > 0) {
-        print(`  ${result.manualReview.length} item(s) need manual review (not auto-proposed):`);
-        for (const item of result.manualReview) {
-          print(`    ${item.issue} — ${item.reason}: ${item.excerpt}`);
-        }
-      }
-
-      // If not confirmed, print dry-run message and return
-      if (!dispatch.confirm) {
-        print('Dry run — no links written. Re-run with --confirm to apply.');
         return 0;
       }
 
-      // Print the results (created + already-present)
-      const created = result.created.length;
-      const alreadyPresent = result.alreadyPresent.length;
-      print(`migrate-issue-deps: ${created} link(s) created, ${alreadyPresent} already present.`);
-      return 0;
-    }
+      // ── resolve ─────────────────────────────────────────────────────────────
+      // `ai-conductor engineer resolve <sourceRef> --pr-url <url> [--branch <b>]`:
+      // mark a claimed entry as delivered when write-back fails (recovery from the
+      // stranded state where the spec was authored/handed off but not recorded as done).
+      // If entry doesn't exist: return {kind:'resolve', found:false} exit 0 (soft failure).
+      // If entry exists: transition to 'done' with prUrl + optional branch override.
+      // Branch is optional; if not provided, preserve existing entry.meta.branch.
+      // Output: {kind:'resolve', sourceRef, priorStatus, prUrl, branch} for operator verification.
+      // Exit code always 0 (resolve is advisory, never a hard failure).
+      case 'resolve': {
+        const { sourceRef, prUrl, branch: newBranch } = dispatch;
+
+        // Validate --pr-url format: must be http(s)://
+        if (!prUrl.match(/^https?:\/\//)) {
+          printErr(`resolve: invalid --pr-url "${prUrl}" (must be http(s)://…)`);
+          return 1;
+        }
+
+        const engDir = engineerDir ?? resolveEngineerDir({});
+        const ledger = createLedger(join(engDir, 'ledger.json'));
+
+        // Attempt to get the entry; if absent, return found:false (soft failure).
+        const entry = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
+        if (!entry) {
+          print(JSON.stringify({ kind: 'resolve', sourceRef, found: false }));
+          return 0;
+        }
+
+        // Entry exists: prepare the transition.
+        // Preserve existing branch unless --branch provided.
+        const priorStatus = entry.status;
+        const existingBranch = entry.branch ?? '';
+        const branch = newBranch !== undefined ? newBranch : existingBranch;
+
+        // Transition the entry to 'done' with prUrl + branch evidence.
+        await ledger.transition(GITHUB_ISSUES_SOURCE, sourceRef, 'done', { prUrl, branch });
+
+        // Output: all 4 fields for operator verification.
+        print(
+          JSON.stringify({
+            kind: 'resolve',
+            sourceRef,
+            priorStatus,
+            prUrl,
+            branch,
+          }),
+        );
+
+        return 0;
+      }
+
+      // ── migrate-issue-deps ────────────────────────────────────────────────────
+      // `ai-conductor engineer migrate-issue-deps [--confirm]`: one-time prose→link
+      // migration over the current repo's open issues. Scans, classifies prose
+      // into deterministic edges + manual-review items, prints the full proposal,
+      // and only WRITES anything when `--confirm` is passed — a bare run is a
+      // pure dry-run (GET-checks only, zero POSTs; see createDependencyLinks).
+      case 'migrate-issue-deps': {
+        const cwd = process.cwd();
+        let nameWithOwner: string;
+        try {
+          const stdout = await runTrackerAmbientRead(gh, cwd, 'ambient.repository.read', [
+            'repo',
+            'view',
+            '--json',
+            'nameWithOwner',
+          ]);
+          nameWithOwner = String((JSON.parse(stdout || '{}') as { nameWithOwner?: unknown }).nameWithOwner ?? '');
+        } catch (err: unknown) {
+          printErr(
+            `engineer migrate-issue-deps: could not resolve repo (${err instanceof Error ? err.message : String(err)})`,
+          );
+          return 1;
+        }
+        if (!nameWithOwner) {
+          printErr('engineer migrate-issue-deps: could not resolve repo (no nameWithOwner)');
+          return 1;
+        }
+
+        let issues: Array<{ number: number; body: string }>;
+        try {
+          const stdout = await runTrackerRepositoryRead(
+            gh,
+            cwd,
+            'repository.read',
+            nameWithOwner,
+            { kind: 'repository' },
+            ['issue', 'list', '--state', 'open', '--json', 'number,body', '--limit', '500', '-R', nameWithOwner],
+          );
+          issues = JSON.parse(stdout || '[]') as Array<{ number: number; body: string }>;
+        } catch (err: unknown) {
+          printErr(
+            `engineer migrate-issue-deps: could not list issues (${err instanceof Error ? err.message : String(err)})`,
+          );
+          return 1;
+        }
+
+        // Delegate to runMigration with formatted issues and confirmation callback
+        const formattedIssues = issues.map((issue) => ({
+          ref: `${nameWithOwner}#${issue.number}`,
+          body: issue.body ?? '',
+        }));
+
+        // Each source issue is authorized independently through the intake
+        // assignment seam; reading a dependency conveys no write authority.
+        const resolveActor =
+          opts.intakeResolveActor ?? (async () => resolveDaemonOwner(await readMachineOwnerConfig(), gh, cwd));
+        let actor = 'unresolved';
+        try {
+          const identity = await resolveActor();
+          if (identity.resolved) actor = identity.id;
+        } catch {
+          // The guarded seam remains authoritative and will refuse the write.
+        }
+        const operations = createGuardedGithubOperationRunner(gh, {
+          cwd,
+          intake: createGithubIntakeAuthorization({ gh, cwd, resolveActor }),
+          events: opts.events,
+        });
+        const result = await runMigration({
+          gh,
+          operations,
+          actor,
+          issues: formattedIssues,
+          confirm: async () => Promise.resolve(dispatch.confirm),
+        });
+
+        // Print the proposal (proposed edges + manual review items)
+        print(`migrate-issue-deps: proposal over ${nameWithOwner} (${issues.length} open issue(s))`);
+        for (const proposed of result.proposed) {
+          print(`  ${proposed.issue} blocked_by ${proposed.blockedBy}  [${proposed.kind}]`);
+        }
+        if (result.manualReview.length > 0) {
+          print(`  ${result.manualReview.length} item(s) need manual review (not auto-proposed):`);
+          for (const item of result.manualReview) {
+            print(`    ${item.issue} — ${item.reason}: ${item.excerpt}`);
+          }
+        }
+
+        // If not confirmed, print dry-run message and return
+        if (!dispatch.confirm) {
+          print('Dry run — no links written. Re-run with --confirm to apply.');
+          return 0;
+        }
+
+        // Print the results (created + already-present)
+        const created = result.created.length;
+        const alreadyPresent = result.alreadyPresent.length;
+        print(`migrate-issue-deps: ${created} link(s) created, ${alreadyPresent} already present.`);
+        return 0;
+      }
     }
   } catch (error: unknown) {
     if (error instanceof CorruptLedgerError) return reportCorruptLedger(error);

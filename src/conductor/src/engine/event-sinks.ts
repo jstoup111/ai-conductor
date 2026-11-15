@@ -290,13 +290,11 @@ export type RenderedEventType = {
 }[keyof typeof EVENT_SINKS];
 
 export type OtelTracedEventType = {
-  [Type in OtelEventType]: (typeof EVENT_SINKS)[Type] extends { readonly otelTrace: false }
-    ? never : Type;
+  [Type in OtelEventType]: (typeof EVENT_SINKS)[Type] extends { readonly otelTrace: false } ? never : Type;
 }[OtelEventType];
 
 function eventTypesFor(sink: keyof Omit<SinkDeclaration, 'otelTrace'>): ConductorEvent['type'][] {
-  return (Object.keys(EVENT_SINKS) as ConductorEvent['type'][])
-    .filter((type) => EVENT_SINKS[type][sink]);
+  return (Object.keys(EVENT_SINKS) as ConductorEvent['type'][]).filter((type) => EVENT_SINKS[type][sink]);
 }
 
 export function persistedEventTypes(): ConductorEvent['type'][] {
@@ -311,8 +309,9 @@ export function renderedEventTypes(): ConductorEvent['type'][] {
   return eventTypesFor('render');
 }
 
-type RenderedSessionOccurrence = Extract<ConductorEvent,
-  { type: 'session_command_refused' }
+type RenderedSessionOccurrence = Extract<
+  ConductorEvent,
+  | { type: 'session_command_refused' }
   | { type: 'github_bypass_attempt' }
   | { type: 'github_bypass_result' }
   | { type: 'github_possible_bypass' }
@@ -333,9 +332,8 @@ const SESSION_OCCURRENCE_TYPES: readonly RenderedSessionOccurrence['type'][] = [
  * so a declared renderable occurrence cannot disappear from their daemon log.
  */
 export function renderedSessionOccurrenceTypes(): RenderedSessionOccurrence['type'][] {
-  return renderedEventTypes().filter(
-    (type): type is RenderedSessionOccurrence['type'] =>
-      (SESSION_OCCURRENCE_TYPES as readonly ConductorEvent['type'][]).includes(type),
+  return renderedEventTypes().filter((type): type is RenderedSessionOccurrence['type'] =>
+    (SESSION_OCCURRENCE_TYPES as readonly ConductorEvent['type'][]).includes(type),
   );
 }
 

@@ -37,14 +37,30 @@ describe('composer run records', () => {
   });
 
   it('uses the explicit track to skip PRD and never routes from prose notes', () => {
-    const technical = recordAcceptance({ ...emptyRecord(), track: 'technical' }, {
-      step: 'complexity', actor: 'operator', provider: 'codex', at: '2026-11-10T00:00:00.000Z',
-      artifacts: [], decisions: [], openQuestions: [],
-    });
-    const productMentioningTechnical = recordAcceptance({ ...emptyRecord(), notes: { explore: { decisions: ['Compare technical approaches'], openQuestions: [] } } }, {
-      step: 'complexity', actor: 'operator', provider: 'codex', at: '2026-11-10T00:00:00.000Z',
-      artifacts: [], decisions: [], openQuestions: [],
-    });
+    const technical = recordAcceptance(
+      { ...emptyRecord(), track: 'technical' },
+      {
+        step: 'complexity',
+        actor: 'operator',
+        provider: 'codex',
+        at: '2026-11-10T00:00:00.000Z',
+        artifacts: [],
+        decisions: [],
+        openQuestions: [],
+      },
+    );
+    const productMentioningTechnical = recordAcceptance(
+      { ...emptyRecord(), notes: { explore: { decisions: ['Compare technical approaches'], openQuestions: [] } } },
+      {
+        step: 'complexity',
+        actor: 'operator',
+        provider: 'codex',
+        at: '2026-11-10T00:00:00.000Z',
+        artifacts: [],
+        decisions: [],
+        openQuestions: [],
+      },
+    );
 
     expect(summarizeRun(technical).nextStep).toBe('architecture_diagram');
     expect(summarizeRun(productMentioningTechnical).nextStep).toBe('prd');
@@ -138,15 +154,16 @@ describe('composer run records', () => {
     const stories = digestArtifact('.docs/stories/composer-run.md', Buffer.from('accepted stories'));
     const editedStories = digestArtifact('.docs/stories/composer-run.md', Buffer.from('edited stories'));
     const plan = digestArtifact('.docs/plans/composer-run.md', Buffer.from('accepted plan'));
-    const accept = (record: RunRecord, step: 'stories' | 'plan', artifacts: readonly typeof stories[]) => recordAcceptance(record, {
-      step,
-      actor: 'operator-7',
-      provider: 'codex',
-      at: '2026-11-08T14:12:00.000Z',
-      artifacts,
-      decisions: [],
-      openQuestions: [],
-    });
+    const accept = (record: RunRecord, step: 'stories' | 'plan', artifacts: readonly (typeof stories)[]) =>
+      recordAcceptance(record, {
+        step,
+        actor: 'operator-7',
+        provider: 'codex',
+        at: '2026-11-08T14:12:00.000Z',
+        artifacts,
+        decisions: [],
+        openQuestions: [],
+      });
 
     const accepted = accept(accept(emptyRecord(), 'stories', [stories]), 'plan', [plan]);
     const savedDraft = recordDraft(accepted, 'stories');
@@ -166,41 +183,57 @@ describe('composer run records', () => {
   });
 
   it('rejects unknown schema versions and step states, and never serializes an owner marker', () => {
-    expect(() => parseRunRecord(JSON.stringify({
-      schemaVersion: 2,
-      slug: 'composer-run',
-      steps: {},
-      needsReconfirm: [],
-      ownerHistory: [],
-      track: 'product',
-      notes: {},
-    }))).toThrow(/schemaVersion/);
-    expect(() => parseRunRecord(JSON.stringify({
-      schemaVersion: 1,
-      slug: 'composer-run',
-      steps: { explore: { state: 'pending' } },
-      needsReconfirm: [],
-      ownerHistory: [],
-      track: 'product',
-      notes: {},
-    }))).toThrow(/state/);
-    expect(() => parseRunRecord(JSON.stringify({
-      schemaVersion: 1,
-      slug: 'composer-run',
-      steps: {},
-      needsReconfirm: [],
-      ownerHistory: [],
-      notes: {},
-    }))).toThrow(/track/);
-    expect(() => parseRunRecord(JSON.stringify({
-      schemaVersion: 1,
-      slug: 'composer-run',
-      track: 'other',
-      steps: {},
-      needsReconfirm: [],
-      ownerHistory: [],
-      notes: {},
-    }))).toThrow(/track/);
+    expect(() =>
+      parseRunRecord(
+        JSON.stringify({
+          schemaVersion: 2,
+          slug: 'composer-run',
+          steps: {},
+          needsReconfirm: [],
+          ownerHistory: [],
+          track: 'product',
+          notes: {},
+        }),
+      ),
+    ).toThrow(/schemaVersion/);
+    expect(() =>
+      parseRunRecord(
+        JSON.stringify({
+          schemaVersion: 1,
+          slug: 'composer-run',
+          steps: { explore: { state: 'pending' } },
+          needsReconfirm: [],
+          ownerHistory: [],
+          track: 'product',
+          notes: {},
+        }),
+      ),
+    ).toThrow(/state/);
+    expect(() =>
+      parseRunRecord(
+        JSON.stringify({
+          schemaVersion: 1,
+          slug: 'composer-run',
+          steps: {},
+          needsReconfirm: [],
+          ownerHistory: [],
+          notes: {},
+        }),
+      ),
+    ).toThrow(/track/);
+    expect(() =>
+      parseRunRecord(
+        JSON.stringify({
+          schemaVersion: 1,
+          slug: 'composer-run',
+          track: 'other',
+          steps: {},
+          needsReconfirm: [],
+          ownerHistory: [],
+          notes: {},
+        }),
+      ),
+    ).toThrow(/track/);
     expect(serializeRunRecord(emptyRecord())).not.toContain('Owner:');
   });
 });

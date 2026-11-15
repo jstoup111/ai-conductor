@@ -5,9 +5,7 @@ import { checkpointComposerRun } from '../../../src/engine/engineer/checkpoint.j
 type FileMap = Map<string, string>;
 
 function fixture(options: { dirty?: string[]; owner?: string; provider?: string; branch?: string } = {}) {
-  const files: FileMap = new Map([
-    ['.docs/track/demo.md', '# Track\n\nTrack: technical\n'],
-  ]);
+  const files: FileMap = new Map([['.docs/track/demo.md', '# Track\n\nTrack: technical\n']]);
   const calls: Array<readonly string[]> = [];
   const events: unknown[] = [];
   const dirty = options.dirty ?? ['?? .docs/track/demo.md'];
@@ -19,21 +17,35 @@ function fixture(options: { dirty?: string[]; owner?: string; provider?: string;
     return { exitCode: 0, stdout: '', stderr: '' };
   });
   return {
-    files, calls, events, git,
+    files,
+    calls,
+    events,
+    git,
     deps: {
       git,
-      resolveOwner: async () => options.owner === undefined ? { resolved: true as const, id: 'machine-owner' } : options.owner ? { resolved: true as const, id: options.owner } : { resolved: false as const },
+      resolveOwner: async () =>
+        options.owner === undefined
+          ? { resolved: true as const, id: 'machine-owner' }
+          : options.owner
+            ? { resolved: true as const, id: options.owner }
+            : { resolved: false as const },
       fs: {
         readFile: async (path: string) => {
           const content = files.get(path.replace('/worktree/', ''));
           if (content === undefined) throw new Error(`ENOENT ${path}`);
           return content;
         },
-        writeFile: async (path: string, content: string) => { files.set(path.replace('/worktree/', ''), content); },
+        writeFile: async (path: string, content: string) => {
+          files.set(path.replace('/worktree/', ''), content);
+        },
         mkdir: async () => {},
       },
-      writeMarker: async (_worktree: string, slug: string, owner: string) => { files.set(`.docs/intake/${slug}.md`, `Owner: ${owner}\n`); },
-      emit: async (event: unknown) => { events.push(event); },
+      writeMarker: async (_worktree: string, slug: string, owner: string) => {
+        files.set(`.docs/intake/${slug}.md`, `Owner: ${owner}\n`);
+      },
+      emit: async (event: unknown) => {
+        events.push(event);
+      },
       now: () => '2026-11-08T12:00:00.000Z',
       provider: options.provider,
     },
@@ -53,7 +65,16 @@ describe('checkpointComposerRun', () => {
     });
     expect(f.calls).toContainEqual(['add', '--', '.docs']);
     expect(f.calls).toContainEqual(['commit', '-m', 'composer checkpoint: demo explore']);
-    expect(f.events).toEqual([expect.objectContaining({ type: 'composer_run_checkpointed', slug: 'demo', step: 'explore', state: 'accepted', provider: 'codex', actor: 'machine-owner' })]);
+    expect(f.events).toEqual([
+      expect.objectContaining({
+        type: 'composer_run_checkpointed',
+        slug: 'demo',
+        step: 'explore',
+        state: 'accepted',
+        provider: 'codex',
+        actor: 'machine-owner',
+      }),
+    ]);
   });
 
   it('Covers: Task 3 draft has no accepting actor or accepted digests; an empty docs stage makes no commit or push', async () => {
@@ -68,16 +89,18 @@ describe('checkpointComposerRun', () => {
 
   it('Covers: Task 3 refuses non-docs dirt before staging, marker, commit, or push', async () => {
     const f = fixture({ dirty: [' M src/unsafe.ts', '?? .docs/track/demo.md'] });
-    await expect(checkpointComposerRun({ worktree: '/worktree', step: 'explore', state: 'accepted' }, f.deps))
-      .rejects.toThrow('src/unsafe.ts');
+    await expect(
+      checkpointComposerRun({ worktree: '/worktree', step: 'explore', state: 'accepted' }, f.deps),
+    ).rejects.toThrow('src/unsafe.ts');
     expect(f.calls.some(([command]) => command === 'add' || command === 'commit' || command === 'push')).toBe(false);
     expect(f.files.has('.docs/intake/demo.md')).toBe(false);
   });
 
   it('Covers: Task 3 refuses unresolved machine identity before every write', async () => {
     const f = fixture({ owner: '' });
-    await expect(checkpointComposerRun({ worktree: '/worktree', step: 'explore', state: 'accepted' }, f.deps))
-      .rejects.toThrow('identity is unresolved');
+    await expect(
+      checkpointComposerRun({ worktree: '/worktree', step: 'explore', state: 'accepted' }, f.deps),
+    ).rejects.toThrow('identity is unresolved');
     expect(f.files.size).toBe(1);
     expect(f.calls.some(([command]) => command === 'add' || command === 'commit' || command === 'push')).toBe(false);
   });

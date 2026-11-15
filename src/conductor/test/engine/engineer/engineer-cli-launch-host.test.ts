@@ -29,11 +29,13 @@ function launchOptions(
 
 async function renamedSkillRoot(entries: Record<string, string>): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'composer-skill-names-'));
-  await Promise.all(Object.entries(entries).map(async ([directory, name]) => {
-    const skillDir = join(root, 'skills', directory);
-    await mkdir(skillDir, { recursive: true });
-    await writeFile(join(skillDir, 'SKILL.md'), `---\nname: ${name}\n---\n`);
-  }));
+  await Promise.all(
+    Object.entries(entries).map(async ([directory, name]) => {
+      const skillDir = join(root, 'skills', directory);
+      await mkdir(skillDir, { recursive: true });
+      await writeFile(join(skillDir, 'SKILL.md'), `---\nname: ${name}\n---\n`);
+    }),
+  );
   return root;
 }
 
@@ -52,26 +54,44 @@ describe('dispatchEngineer interactive host launch', () => {
     const missingSpawn = vi.fn(async () => Promise.reject(missing));
 
     try {
-      await dispatchEngineer({ kind: 'launch', provider: 'claude' }, {
-        ...launchOptions({ ok: true, config: {}, warnings: [] }, claudeSpawn), skillNameRoot: root,
-      });
-      await dispatchEngineer({ kind: 'launch', provider: 'codex' }, {
-        ...launchOptions({ ok: true, config: {}, warnings: [] }, codexSpawn), skillNameRoot: root,
-      });
-      await dispatchEngineer({ kind: 'launch' }, {
-        ...launchOptions({ ok: true, config: {}, warnings: [] }, codexSpawn, { CODEX_THREAD_ID: 'thread' }),
-        skillNameRoot: root,
-        print: nestedPrint,
-      });
-      await dispatchEngineer({ kind: 'launch', provider: 'codex' }, {
-        ...launchOptions({ ok: true, config: {}, warnings: [] }, missingSpawn), skillNameRoot: root, printErr,
-      });
+      await dispatchEngineer(
+        { kind: 'launch', provider: 'claude' },
+        {
+          ...launchOptions({ ok: true, config: {}, warnings: [] }, claudeSpawn),
+          skillNameRoot: root,
+        },
+      );
+      await dispatchEngineer(
+        { kind: 'launch', provider: 'codex' },
+        {
+          ...launchOptions({ ok: true, config: {}, warnings: [] }, codexSpawn),
+          skillNameRoot: root,
+        },
+      );
+      await dispatchEngineer(
+        { kind: 'launch' },
+        {
+          ...launchOptions({ ok: true, config: {}, warnings: [] }, codexSpawn, { CODEX_THREAD_ID: 'thread' }),
+          skillNameRoot: root,
+          print: nestedPrint,
+        },
+      );
+      await dispatchEngineer(
+        { kind: 'launch', provider: 'codex' },
+        {
+          ...launchOptions({ ok: true, config: {}, warnings: [] }, missingSpawn),
+          skillNameRoot: root,
+          printErr,
+        },
+      );
 
       expect(claudeSpawn.mock.calls[0]?.[1]).toEqual(['--permission-mode', 'default', '/ac-composer']);
       expect(codexSpawn.mock.calls[0]?.[1]).toEqual(['$ac-composer']);
       expect(nestedPrint.mock.calls.flat().join('\n')).toContain('$ac-composer');
       expect(printErr.mock.calls.flat().join('\n')).toContain('$ac-composer');
-      expect(`${nestedPrint.mock.calls.flat().join('\n')}\n${printErr.mock.calls.flat().join('\n')}`).not.toMatch(/\$(?:composer)(?:\s|$)|\/(?:composer)(?:\s|$)/);
+      expect(`${nestedPrint.mock.calls.flat().join('\n')}\n${printErr.mock.calls.flat().join('\n')}`).not.toMatch(
+        /\$(?:composer)(?:\s|$)|\/(?:composer)(?:\s|$)/,
+      );
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -91,12 +111,30 @@ describe('dispatchEngineer interactive host launch', () => {
     );
 
     expect([claudeSpawn.mock.calls, codexSpawn.mock.calls]).toEqual([
-      [['claude', ['--permission-mode', 'default', '/composer'], process.cwd(), {
-        INHERITED_KEY: 'preserved', AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String),
-      }]],
-      [['codex', ['$composer'], process.cwd(), {
-        INHERITED_KEY: 'preserved', AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String),
-      }]],
+      [
+        [
+          'claude',
+          ['--permission-mode', 'default', '/composer'],
+          process.cwd(),
+          {
+            INHERITED_KEY: 'preserved',
+            AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude',
+            AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String),
+          },
+        ],
+      ],
+      [
+        [
+          'codex',
+          ['$composer'],
+          process.cwd(),
+          {
+            INHERITED_KEY: 'preserved',
+            AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex',
+            AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String),
+          },
+        ],
+      ],
     ]);
   });
 
@@ -106,9 +144,7 @@ describe('dispatchEngineer interactive host launch', () => {
       process.env.CODEX_EXECUTABLE = '/hosts/replaced-codex';
       return 0;
     });
-    const confirmAnother = vi.fn()
-      .mockResolvedValueOnce(true)
-      .mockResolvedValueOnce(false);
+    const confirmAnother = vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
 
     const code = await dispatchEngineer(
       { kind: 'launch', provider: 'codex', idea: 'add retries' },
@@ -121,8 +157,18 @@ describe('dispatchEngineer interactive host launch', () => {
     expect({ code, spawnCalls: spawnHost.mock.calls, confirmCalls: confirmAnother.mock.calls }).toEqual({
       code: 0,
       spawnCalls: [
-        ['/hosts/initial-codex', ['$composer add retries'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) }],
-        ['/hosts/initial-codex', ['$composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) }],
+        [
+          '/hosts/initial-codex',
+          ['$composer add retries'],
+          process.cwd(),
+          { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) },
+        ],
+        [
+          '/hosts/initial-codex',
+          ['$composer'],
+          process.cwd(),
+          { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) },
+        ],
       ],
       confirmCalls: [[], []],
     });
@@ -142,7 +188,14 @@ describe('dispatchEngineer interactive host launch', () => {
 
     expect({ code, spawnCalls: spawnHost.mock.calls, confirmCalls: confirmAnother.mock.calls }).toEqual({
       code: 23,
-      spawnCalls: [['codex', ['$composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) }]],
+      spawnCalls: [
+        [
+          'codex',
+          ['$composer'],
+          process.cwd(),
+          { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) },
+        ],
+      ],
       confirmCalls: [[]],
     });
   });
@@ -154,23 +207,32 @@ describe('dispatchEngineer interactive host launch', () => {
     const gh = vi.fn(async () => ({ stdout: '' }));
     const print = vi.fn();
 
-    const code = await dispatchEngineer({ kind: 'launch' }, {
-      ...launchOptions({ ok: true, config: {}, warnings: [] }, spawnHost, { CODEX_THREAD_ID: 'thread' }),
-      loadLaunchConfig,
-      prePoll,
-      gh,
-      print,
-    });
+    const code = await dispatchEngineer(
+      { kind: 'launch' },
+      {
+        ...launchOptions({ ok: true, config: {}, warnings: [] }, spawnHost, { CODEX_THREAD_ID: 'thread' }),
+        loadLaunchConfig,
+        prePoll,
+        gh,
+        print,
+      },
+    );
 
-    expect({ code, output: print.mock.calls.flat(), spawnCalls: spawnHost.mock.calls, prePollCalls: prePoll.mock.calls, configCalls: loadLaunchConfig.mock.calls, ghCalls: gh.mock.calls })
-      .toEqual({
-        code: 0,
-        output: expect.arrayContaining([expect.stringContaining('$composer')]),
-        spawnCalls: [],
-        prePollCalls: [],
-        configCalls: [],
-        ghCalls: [],
-      });
+    expect({
+      code,
+      output: print.mock.calls.flat(),
+      spawnCalls: spawnHost.mock.calls,
+      prePollCalls: prePoll.mock.calls,
+      configCalls: loadLaunchConfig.mock.calls,
+      ghCalls: gh.mock.calls,
+    }).toEqual({
+      code: 0,
+      output: expect.arrayContaining([expect.stringContaining('$composer')]),
+      spawnCalls: [],
+      prePollCalls: [],
+      configCalls: [],
+      ghCalls: [],
+    });
   });
 
   it.each([
@@ -181,29 +243,39 @@ describe('dispatchEngineer interactive host launch', () => {
     const prePoll = vi.fn(async () => 0);
     const print = vi.fn();
 
-    const code = await dispatchEngineer({ kind: 'launch' }, {
-      ...launchOptions({ ok: true, config: {}, warnings: [] }, spawnHost, env),
-      prePoll,
-      print,
-    });
+    const code = await dispatchEngineer(
+      { kind: 'launch' },
+      {
+        ...launchOptions({ ok: true, config: {}, warnings: [] }, spawnHost, env),
+        prePoll,
+        print,
+      },
+    );
 
-    expect({ code, output: print.mock.calls.flat(), spawnCalls: spawnHost.mock.calls, prePollCalls: prePoll.mock.calls })
-      .toEqual({
-        code: 0,
-        output: expect.arrayContaining([expect.stringContaining(invocation)]),
-        spawnCalls: [],
-        prePollCalls: [],
-      });
+    expect({
+      code,
+      output: print.mock.calls.flat(),
+      spawnCalls: spawnHost.mock.calls,
+      prePollCalls: prePoll.mock.calls,
+    }).toEqual({
+      code: 0,
+      output: expect.arrayContaining([expect.stringContaining(invocation)]),
+      spawnCalls: [],
+      prePollCalls: [],
+    });
   });
 
   it('uses a detected codex marker even when a different provider flag is supplied', async () => {
     const spawnHost = vi.fn(async () => 0);
     const print = vi.fn();
 
-    const code = await dispatchEngineer({ kind: 'launch', provider: 'claude' }, {
-      ...launchOptions({ ok: true, config: {}, warnings: [] }, spawnHost, { CODEX_THREAD_ID: 'thread' }),
-      print,
-    });
+    const code = await dispatchEngineer(
+      { kind: 'launch', provider: 'claude' },
+      {
+        ...launchOptions({ ok: true, config: {}, warnings: [] }, spawnHost, { CODEX_THREAD_ID: 'thread' }),
+        print,
+      },
+    );
 
     expect({ code, output: print.mock.calls.flat(), spawnCalls: spawnHost.mock.calls }).toEqual({
       code: 0,
@@ -216,11 +288,14 @@ describe('dispatchEngineer interactive host launch', () => {
     const spawnHost = vi.fn(async () => 0);
     const print = vi.fn();
 
-    const code = await dispatchEngineer({ kind: 'launch' }, {
-      ...launchOptions({ ok: true, config: {}, warnings: [] }, spawnHost),
-      insideClaudeSession: true,
-      print,
-    });
+    const code = await dispatchEngineer(
+      { kind: 'launch' },
+      {
+        ...launchOptions({ ok: true, config: {}, warnings: [] }, spawnHost),
+        insideClaudeSession: true,
+        print,
+      },
+    );
 
     expect({ code, output: print.mock.calls.flat(), spawnCalls: spawnHost.mock.calls }).toEqual({
       code: 0,
@@ -261,7 +336,14 @@ describe('dispatchEngineer interactive host launch', () => {
         'engineer: could not launch codex executable codex (spawn codex ENOENT). ' +
           'Install it or set CODEX_EXECUTABLE; if already in a session, run $composer directly.',
       ]),
-      spawnCalls: [['codex', ['$composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) }]],
+      spawnCalls: [
+        [
+          'codex',
+          ['$composer'],
+          process.cwd(),
+          { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) },
+        ],
+      ],
       discoveryCalls: [],
     });
   });
@@ -279,8 +361,19 @@ describe('dispatchEngineer interactive host launch', () => {
 
     expect([code, printErr.mock.calls.flat(), spawnHost.mock.calls]).toEqual([
       1,
-      expect.arrayContaining([expect.stringContaining('/opt/missing/codex'), expect.stringContaining('CODEX_EXECUTABLE'), expect.stringContaining('$composer')]),
-      [['/opt/missing/codex', ['$composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) }]],
+      expect.arrayContaining([
+        expect.stringContaining('/opt/missing/codex'),
+        expect.stringContaining('CODEX_EXECUTABLE'),
+        expect.stringContaining('$composer'),
+      ]),
+      [
+        [
+          '/opt/missing/codex',
+          ['$composer'],
+          process.cwd(),
+          { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) },
+        ],
+      ],
     ]);
   });
 
@@ -292,12 +385,22 @@ describe('dispatchEngineer interactive host launch', () => {
       launchOptions({ ok: true, config: {}, warnings: [] }, spawnHost),
     );
 
-    expect({ code, spawnCalls: spawnHost.mock.calls, discoveryCalls: vi.mocked(discoverInstalledProviders).mock.calls })
-      .toEqual({
-        code: 0,
-        spawnCalls: [['claude', ['--permission-mode', 'default', '/composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) }]],
-        discoveryCalls: [],
-      });
+    expect({
+      code,
+      spawnCalls: spawnHost.mock.calls,
+      discoveryCalls: vi.mocked(discoverInstalledProviders).mock.calls,
+    }).toEqual({
+      code: 0,
+      spawnCalls: [
+        [
+          'claude',
+          ['--permission-mode', 'default', '/composer'],
+          process.cwd(),
+          { AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) },
+        ],
+      ],
+      discoveryCalls: [],
+    });
   });
 
   it('launches compose as an interactive codex session and honours the claude permission-mode override', async () => {
@@ -310,20 +413,38 @@ describe('dispatchEngineer interactive host launch', () => {
     );
     await dispatchEngineer(
       { kind: 'launch', provider: 'claude' },
-      launchOptions({ ok: true, config: {}, warnings: [] }, claudeSpawn, { CONDUCT_ENGINEER_PERMISSION_MODE: 'acceptEdits' }),
+      launchOptions({ ok: true, config: {}, warnings: [] }, claudeSpawn, {
+        CONDUCT_ENGINEER_PERMISSION_MODE: 'acceptEdits',
+      }),
     );
 
     expect([codexSpawn.mock.calls, claudeSpawn.mock.calls]).toEqual([
-      [['codex', ['$composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) }]],
-      [['claude', ['--permission-mode', 'acceptEdits', '/composer'], process.cwd(), { CONDUCT_ENGINEER_PERMISSION_MODE: 'acceptEdits', AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) }]],
+      [
+        [
+          'codex',
+          ['$composer'],
+          process.cwd(),
+          { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) },
+        ],
+      ],
+      [
+        [
+          'claude',
+          ['--permission-mode', 'acceptEdits', '/composer'],
+          process.cwd(),
+          {
+            CONDUCT_ENGINEER_PERMISSION_MODE: 'acceptEdits',
+            AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude',
+            AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String),
+          },
+        ],
+      ],
     ]);
   });
 
   it('keeps the selected host when a later loop spawn is missing', async () => {
     const missing = Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' });
-    const spawnHost = vi.fn()
-      .mockResolvedValueOnce(0)
-      .mockRejectedValueOnce(missing);
+    const spawnHost = vi.fn().mockResolvedValueOnce(0).mockRejectedValueOnce(missing);
     const confirmAnother = vi.fn(async () => true);
     const printErr = vi.fn();
 
@@ -336,19 +457,33 @@ describe('dispatchEngineer interactive host launch', () => {
       },
     );
 
-    expect({ code, diagnostics: printErr.mock.calls.flat(), spawnCalls: spawnHost.mock.calls, confirmCalls: confirmAnother.mock.calls })
-      .toEqual({
-        code: 1,
-        diagnostics: expect.arrayContaining([
-          'engineer: could not launch codex executable codex (spawn codex ENOENT). ' +
-            'Install it or set CODEX_EXECUTABLE; if already in a session, run $composer directly.',
-        ]),
-        spawnCalls: [
-          ['codex', ['$composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) }],
-          ['codex', ['$composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) }],
+    expect({
+      code,
+      diagnostics: printErr.mock.calls.flat(),
+      spawnCalls: spawnHost.mock.calls,
+      confirmCalls: confirmAnother.mock.calls,
+    }).toEqual({
+      code: 1,
+      diagnostics: expect.arrayContaining([
+        'engineer: could not launch codex executable codex (spawn codex ENOENT). ' +
+          'Install it or set CODEX_EXECUTABLE; if already in a session, run $composer directly.',
+      ]),
+      spawnCalls: [
+        [
+          'codex',
+          ['$composer'],
+          process.cwd(),
+          { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) },
         ],
-        confirmCalls: [[]],
-      });
+        [
+          'codex',
+          ['$composer'],
+          process.cwd(),
+          { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) },
+        ],
+      ],
+      confirmCalls: [[]],
+    });
   });
 
   it('refuses a configured provider without interactive launch capability before spawning', async () => {
@@ -362,7 +497,11 @@ describe('dispatchEngineer interactive host launch', () => {
 
     expect([code, printErr.mock.calls.flat(), spawnHost.mock.calls.length]).toEqual([
       1,
-      expect.arrayContaining([expect.stringContaining('pi'), expect.stringContaining('interactiveLaunch'), expect.stringContaining('#1007')]),
+      expect.arrayContaining([
+        expect.stringContaining('pi'),
+        expect.stringContaining('interactiveLaunch'),
+        expect.stringContaining('#1007'),
+      ]),
       0,
     ]);
   });
@@ -414,7 +553,11 @@ describe('dispatchEngineer interactive host launch', () => {
       'claude',
       expect.arrayContaining(['--permission-mode', 'default']),
       process.cwd(),
-      { CONDUCT_ENGINEER_PERMISSION_MODE: 'plan', AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) },
+      {
+        CONDUCT_ENGINEER_PERMISSION_MODE: 'plan',
+        AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude',
+        AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String),
+      },
     );
   });
 
@@ -426,7 +569,10 @@ describe('dispatchEngineer interactive host launch', () => {
       launchOptions({ ok: true, config: { llm_provider: 'codex' }, warnings: [] }, spawnHost),
     );
 
-    expect(spawnHost).toHaveBeenCalledWith('codex', ['$composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) });
+    expect(spawnHost).toHaveBeenCalledWith('codex', ['$composer'], process.cwd(), {
+      AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex',
+      AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String),
+    });
   });
 
   it.each([
@@ -437,16 +583,12 @@ describe('dispatchEngineer interactive host launch', () => {
   ])('uses configuration selection %o', async (config, executable) => {
     const spawnHost = vi.fn(async () => 0);
 
-    await dispatchEngineer({ kind: 'launch' }, launchOptions(
-      { ok: true, config, warnings: [] }, spawnHost,
-    ));
+    await dispatchEngineer({ kind: 'launch' }, launchOptions({ ok: true, config, warnings: [] }, spawnHost));
 
-    expect(spawnHost).toHaveBeenCalledWith(
-      executable,
-      expect.any(Array),
-      process.cwd(),
-      { AI_CONDUCTOR_AUTHORING_PROVIDER: executable, AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) },
-    );
+    expect(spawnHost).toHaveBeenCalledWith(executable, expect.any(Array), process.cwd(), {
+      AI_CONDUCTOR_AUTHORING_PROVIDER: executable,
+      AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String),
+    });
   });
 
   it('lets the launch flag override configuration and shares alias argv behavior', async () => {
@@ -461,8 +603,18 @@ describe('dispatchEngineer interactive host launch', () => {
     );
 
     expect([composeSpawn.mock.calls[0], engineerSpawn.mock.calls[0]]).toEqual([
-      ['claude', ['--permission-mode', 'default', '/composer'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) }],
-      ['codex', ['$composer add retries'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) }],
+      [
+        'claude',
+        ['--permission-mode', 'default', '/composer'],
+        process.cwd(),
+        { AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) },
+      ],
+      [
+        'codex',
+        ['$composer add retries'],
+        process.cwd(),
+        { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) },
+      ],
     ]);
   });
 
@@ -481,8 +633,22 @@ describe('dispatchEngineer interactive host launch', () => {
     );
 
     expect([codexSpawn.mock.calls[0], claudeSpawn.mock.calls[0]]).toEqual([
-      ['/opt/hosts/codex', ['$composer add retries'], process.cwd(), { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) }],
-      ['claude', ['--permission-mode', 'default', '/composer'], process.cwd(), { CONDUCT_ENGINEER_PERMISSION_MODE: 'plan', AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) }],
+      [
+        '/opt/hosts/codex',
+        ['$composer add retries'],
+        process.cwd(),
+        { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) },
+      ],
+      [
+        'claude',
+        ['--permission-mode', 'default', '/composer'],
+        process.cwd(),
+        {
+          CONDUCT_ENGINEER_PERMISSION_MODE: 'plan',
+          AI_CONDUCTOR_AUTHORING_PROVIDER: 'claude',
+          AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String),
+        },
+      ],
     ]);
   });
 
@@ -490,16 +656,19 @@ describe('dispatchEngineer interactive host launch', () => {
     const launchInteractive = vi.fn(async () => 7);
     const spawnHost = vi.fn(async () => 0);
 
-    const code = await dispatchEngineer({ kind: 'launch' }, {
-      launchInteractive,
-      spawnHost,
-      loadLaunchConfig: async () => {
-        throw new Error('must not load config for the legacy seam');
+    const code = await dispatchEngineer(
+      { kind: 'launch' },
+      {
+        launchInteractive,
+        spawnHost,
+        loadLaunchConfig: async () => {
+          throw new Error('must not load config for the legacy seam');
+        },
+        confirmAnother: () => false,
+        probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+        isAttachedTerminal: () => true,
       },
-      confirmAnother: () => false,
-      probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
-      isAttachedTerminal: () => true,
-    });
+    );
 
     expect([code, launchInteractive.mock.calls.length, spawnHost.mock.calls.length]).toEqual([7, 1, 0]);
   });
@@ -518,20 +687,26 @@ describe('dispatchEngineer interactive host launch', () => {
     const spawnHost = vi.fn(async () => 0);
 
     try {
-      await dispatchEngineer({ kind: 'launch' }, {
-        spawnHost,
-        env: {},
-        prePoll: async () => 0,
-        confirmAnother: () => false,
-        probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
-        isAttachedTerminal: () => true,
-      });
+      await dispatchEngineer(
+        { kind: 'launch' },
+        {
+          spawnHost,
+          env: {},
+          prePoll: async () => 0,
+          confirmAnother: () => false,
+          probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+          isAttachedTerminal: () => true,
+        },
+      );
     } finally {
       process.chdir(originalDirectory);
       await rm(root, { recursive: true, force: true });
     }
 
-    expect(spawnHost).toHaveBeenCalledWith('codex', ['$composer'], project, { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) });
+    expect(spawnHost).toHaveBeenCalledWith('codex', ['$composer'], project, {
+      AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex',
+      AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String),
+    });
   });
 
   it('accepts user-only configuration keys when the launching project has none', async () => {
@@ -541,58 +716,79 @@ describe('dispatchEngineer interactive host launch', () => {
     const home = join(root, 'home');
     await mkdir(project, { recursive: true });
     await mkdir(join(home, '.ai-conductor'), { recursive: true });
-    await writeFile(join(home, '.ai-conductor', 'config.yml'), [
-      'llm_provider: codex',
-      'conductor:',
-      '  update_channel: stable',
-      'spec_owner: operator',
-      'github_bot:',
-      '  token_file: ~/bot-token',
-      '',
-    ].join('\n'));
+    await writeFile(
+      join(home, '.ai-conductor', 'config.yml'),
+      [
+        'llm_provider: codex',
+        'conductor:',
+        '  update_channel: stable',
+        'spec_owner: operator',
+        'github_bot:',
+        '  token_file: ~/bot-token',
+        '',
+      ].join('\n'),
+    );
     vi.stubEnv('HOME', home);
     vi.stubEnv('AI_CONDUCTOR_USER_CONFIG_DIR', undefined);
     process.chdir(project);
     const spawnHost = vi.fn(async () => 0);
 
     try {
-      const code = await dispatchEngineer({ kind: 'launch' }, {
-        spawnHost,
-        env: {},
-        prePoll: async () => 0,
-        confirmAnother: () => false,
-        probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
-        isAttachedTerminal: () => true,
-      });
+      const code = await dispatchEngineer(
+        { kind: 'launch' },
+        {
+          spawnHost,
+          env: {},
+          prePoll: async () => 0,
+          confirmAnother: () => false,
+          probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+          isAttachedTerminal: () => true,
+        },
+      );
       expect(code).toBe(0);
     } finally {
       process.chdir(originalDirectory);
       await rm(root, { recursive: true, force: true });
     }
 
-    expect(spawnHost).toHaveBeenCalledWith('codex', ['$composer'], project, { AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex', AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String) });
-  });
-
-  it.each(['claude', 'codex'] as const)('refuses %s without an attached terminal before configuration, polling, or spawning', async (provider) => {
-    const spawnHost = vi.fn(async () => 0);
-    const prePoll = vi.fn(async () => 0);
-    const loadLaunchConfig = vi.fn(async () => ({ ok: true as const, config: {}, warnings: [] }));
-    const printErr = vi.fn();
-
-    const code = await dispatchEngineer({ kind: 'launch', provider }, {
-      ...launchOptions({ ok: true, config: {}, warnings: [] }, spawnHost),
-      isAttachedTerminal: () => false,
-      loadLaunchConfig,
-      prePoll,
-      printErr,
+    expect(spawnHost).toHaveBeenCalledWith('codex', ['$composer'], project, {
+      AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex',
+      AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String),
     });
-
-    expect([code, printErr.mock.calls.flat(), spawnHost.mock.calls, prePoll.mock.calls, loadLaunchConfig.mock.calls]).toEqual([
-      1,
-      expect.arrayContaining([expect.stringContaining('interactive terminal is required')]),
-      [],
-      [],
-      [],
-    ]);
   });
+
+  it.each(['claude', 'codex'] as const)(
+    'refuses %s without an attached terminal before configuration, polling, or spawning',
+    async (provider) => {
+      const spawnHost = vi.fn(async () => 0);
+      const prePoll = vi.fn(async () => 0);
+      const loadLaunchConfig = vi.fn(async () => ({ ok: true as const, config: {}, warnings: [] }));
+      const printErr = vi.fn();
+
+      const code = await dispatchEngineer(
+        { kind: 'launch', provider },
+        {
+          ...launchOptions({ ok: true, config: {}, warnings: [] }, spawnHost),
+          isAttachedTerminal: () => false,
+          loadLaunchConfig,
+          prePoll,
+          printErr,
+        },
+      );
+
+      expect([
+        code,
+        printErr.mock.calls.flat(),
+        spawnHost.mock.calls,
+        prePoll.mock.calls,
+        loadLaunchConfig.mock.calls,
+      ]).toEqual([
+        1,
+        expect.arrayContaining([expect.stringContaining('interactive terminal is required')]),
+        [],
+        [],
+        [],
+      ]);
+    },
+  );
 });

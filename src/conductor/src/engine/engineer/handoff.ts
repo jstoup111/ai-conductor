@@ -89,8 +89,8 @@ export interface HandoffDeps {
   /** Optional log sink for the (non-fatal) issue-ref injection. */
   log?: (msg: string) => void;
   /**
- * The guarded initial-publication composition. Absent composition is a typed
- * refusal; it can never fall back to raw GitHub or Git transports.
+   * The guarded initial-publication composition. Absent composition is a typed
+   * refusal; it can never fall back to raw GitHub or Git transports.
    */
   publication?: {
     readonly remote: RemoteGitOperationDependencies;
@@ -210,9 +210,12 @@ export async function findExistingSpecPullRequest(
     } catch {
       return undefined;
     }
-    if (typeof parsed.url !== 'string'
-      || !/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(parsed.url)
-      || typeof parsed.isDraft !== 'boolean') return undefined;
+    if (
+      typeof parsed.url !== 'string' ||
+      !/^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/.test(parsed.url) ||
+      typeof parsed.isDraft !== 'boolean'
+    )
+      return undefined;
     return { url: parsed.url, isDraft: parsed.isDraft };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -252,9 +255,12 @@ async function readyExistingSpecPullRequest(input: {
     },
   ]) {
     const result = await executeGithubOperation(request, input.presentation);
-    if (result.kind === 'refused') throw new Error(`openSpecPr: guarded PR ${request.operation} refused: ${result.reason}`);
-    if (result.kind === 'failed') throw new Error(`openSpecPr: guarded PR ${request.operation} failed: ${result.error}`);
-    if (result.kind === 'partial') throw new Error(`openSpecPr: guarded PR ${request.operation} returned an invalid partial result`);
+    if (result.kind === 'refused')
+      throw new Error(`openSpecPr: guarded PR ${request.operation} refused: ${result.reason}`);
+    if (result.kind === 'failed')
+      throw new Error(`openSpecPr: guarded PR ${request.operation} failed: ${result.error}`);
+    if (result.kind === 'partial')
+      throw new Error(`openSpecPr: guarded PR ${request.operation} returned an invalid partial result`);
   }
 }
 
@@ -272,11 +278,7 @@ async function readyExistingSpecPullRequest(input: {
  *               or `{ kind: 'pr-refused'; reason }` when authorization is absent
  *               or denied.
  */
-export async function openSpecPr(
-  target: TargetRepo,
-  branch: string,
-  deps: HandoffDeps,
-): Promise<OpenSpecPrResult> {
+export async function openSpecPr(target: TargetRepo, branch: string, deps: HandoffDeps): Promise<OpenSpecPrResult> {
   const { runner, gitRunner, ledgerOpts } = deps;
   // cwd = the per-idea worktree (checked out on `spec/<slug>`) so gh pushes and opens
   // the PR from that branch. Falls back to the canonical path for legacy callers.
@@ -292,9 +294,7 @@ export async function openSpecPr(
   }
 
   if (!gitRunner) {
-    throw new Error(
-      `openSpecPr: gitRunner is required to push branch "${branch}" for remote target "${target.name}"`,
-    );
+    throw new Error(`openSpecPr: gitRunner is required to push branch "${branch}" for remote target "${target.name}"`);
   }
 
   const createArgs = await buildSpecPrCreateArgs({ cwd, branch, git: gitRunner });
@@ -329,19 +329,23 @@ export async function openSpecPr(
     return { kind: 'pr-opened', url: existing.url };
   }
 
-  const created = await executeGithubOperation({
-    operation: 'pull-request.create',
-    repository: deps.publication.repository,
-    resource: { kind: 'repository' },
-    context: { actor: 'engineer-handoff' },
-    payload: { title: payload.title, body: payload.body, head: branch, base: 'main' },
-  }, deps.publication.operations);
+  const created = await executeGithubOperation(
+    {
+      operation: 'pull-request.create',
+      repository: deps.publication.repository,
+      resource: { kind: 'repository' },
+      context: { actor: 'engineer-handoff' },
+      payload: { title: payload.title, body: payload.body, head: branch, base: 'main' },
+    },
+    deps.publication.operations,
+  );
   if (created.kind === 'refused') return { kind: 'pr-refused', reason: created.reason };
   if (created.kind === 'failed') throw new Error(`openSpecPr: guarded PR creation failed: ${created.error}`);
   if (created.kind === 'partial') throw new Error('openSpecPr: PR creation returned an invalid partial result');
-  const url = created.target.kind === 'pull-request'
-    ? `https://github.com/${created.target.repository}/pull/${created.target.number}`
-    : await readCreatedPrUrl(runner, deps.publication.repository, branch, cwd);
+  const url =
+    created.target.kind === 'pull-request'
+      ? `https://github.com/${created.target.repository}/pull/${created.target.number}`
+      : await readCreatedPrUrl(runner, deps.publication.repository, branch, cwd);
   if (!url) throw new Error(`openSpecPr: guarded PR creation did not identify a URL for branch "${branch}".`);
 
   // 3. Record the (project, feature) authored key durably.

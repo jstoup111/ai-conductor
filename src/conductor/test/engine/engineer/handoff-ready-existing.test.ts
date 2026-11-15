@@ -78,9 +78,7 @@ function deps(input: {
       }),
     },
     gitRunner: async (args) => ({
-      stdout: args[0] === 'show' && args[1] === '-s'
-        ? 'Landed spec title\n\nLanded body\n'
-        : '',
+      stdout: args[0] === 'show' && args[1] === '-s' ? 'Landed spec title\n\nLanded body\n' : '',
       stderr: '',
     }),
     runner: async (args) => {
@@ -109,10 +107,16 @@ describe('openSpecPr — existing draft handoff (Task 8)', () => {
   it('pushes, presents, and readies the existing draft without creating another PR', async () => {
     const calls: Array<{ operation: string; payload?: unknown }> = [];
 
-    await expect(openSpecPr(target(), BRANCH, deps({
-      calls,
-      existing: { url: PR_URL, isDraft: true },
-    }))).resolves.toEqual({ kind: 'pr-opened', url: PR_URL });
+    await expect(
+      openSpecPr(
+        target(),
+        BRANCH,
+        deps({
+          calls,
+          existing: { url: PR_URL, isDraft: true },
+        }),
+      ),
+    ).resolves.toEqual({ kind: 'pr-opened', url: PR_URL });
 
     expect(calls).toEqual([
       {
@@ -155,15 +159,27 @@ describe('openSpecPr — existing draft handoff (Task 8)', () => {
   it('leaves the draft retryable when ready fails, then finishes it without creating a duplicate', async () => {
     const calls: Array<{ operation: string; payload?: unknown }> = [];
 
-    await expect(openSpecPr(target(), BRANCH, deps({
-      calls,
-      existing: { url: PR_URL, isDraft: true },
-      failReady: true,
-    }))).rejects.toThrow('ready failed');
-    await expect(openSpecPr(target(), BRANCH, deps({
-      calls,
-      existing: { url: PR_URL, isDraft: true },
-    }))).resolves.toEqual({ kind: 'pr-opened', url: PR_URL });
+    await expect(
+      openSpecPr(
+        target(),
+        BRANCH,
+        deps({
+          calls,
+          existing: { url: PR_URL, isDraft: true },
+          failReady: true,
+        }),
+      ),
+    ).rejects.toThrow('ready failed');
+    await expect(
+      openSpecPr(
+        target(),
+        BRANCH,
+        deps({
+          calls,
+          existing: { url: PR_URL, isDraft: true },
+        }),
+      ),
+    ).resolves.toEqual({ kind: 'pr-opened', url: PR_URL });
 
     expect(calls.filter((call) => call.operation === 'pull-request.create')).toHaveLength(0);
     expect(calls.filter((call) => call.operation === 'pull-request.ready')).toHaveLength(2);
@@ -172,10 +188,16 @@ describe('openSpecPr — existing draft handoff (Task 8)', () => {
   it('recognizes an already-ready retry without another PR mutation', async () => {
     const calls: Array<{ operation: string; payload?: unknown }> = [];
 
-    await expect(openSpecPr(target(), BRANCH, deps({
-      calls,
-      existing: { url: PR_URL, isDraft: false },
-    }))).resolves.toMatchObject({ kind: 'pr-opened', url: PR_URL, alreadyDelivered: true });
+    await expect(
+      openSpecPr(
+        target(),
+        BRANCH,
+        deps({
+          calls,
+          existing: { url: PR_URL, isDraft: false },
+        }),
+      ),
+    ).resolves.toMatchObject({ kind: 'pr-opened', url: PR_URL, alreadyDelivered: true });
 
     expect(calls).toEqual([]);
   });
@@ -191,9 +213,19 @@ describe('openSpecPr — existing draft handoff (Task 8)', () => {
     await git(['add', 'README.md']);
     await git(['commit', '-m', 'initial']);
     await mkdir(engineerDir, { recursive: true });
-    await writeFile(registryPath, JSON.stringify([{
-      schemaVersion: 1, name: 'widget', path: root, remote: `https://github.com/${REPOSITORY}.git`, status: 'registered', registeredAt: '2026-01-01T00:00:00.000Z',
-    }]));
+    await writeFile(
+      registryPath,
+      JSON.stringify([
+        {
+          schemaVersion: 1,
+          name: 'widget',
+          path: root,
+          remote: `https://github.com/${REPOSITORY}.git`,
+          status: 'registered',
+          registeredAt: '2026-01-01T00:00:00.000Z',
+        },
+      ]),
+    );
     const worktree = (await createEngineerWorktree(root, 'ready existing')).worktreePath;
     await mkdir(join(worktree, '.github'), { recursive: true });
     await writeFile(join(worktree, '.github', 'pull_request_template.md'), 'Release-Disposition: no-note\n');
@@ -215,23 +247,38 @@ describe('openSpecPr — existing draft handoff (Task 8)', () => {
       return { stdout: '{}' };
     };
     const launches: string[] = [];
-    const code = await dispatchEngineer({
-      kind: 'handoff', project: 'widget', branch: BRANCH, worktree, sourceRef: 'acme/widget#7',
-    }, {
-      registryPath,
-      engineerDir,
-      gh: gh as never,
-      git: async (args) => ({ stdout: args[0] === 'show' ? 'Landed spec title\n\nLanded body\n' : '', stderr: '' }),
-      handoffPublication: publication(mutations),
-      intakeResolveActor: async () => ({ resolved: true, id: 'owner' }),
-      ensureRunningLaunch: async () => { launches.push('wake'); },
-      print: (message) => { output.push(message); },
-      printErr: () => {},
-    });
+    const code = await dispatchEngineer(
+      {
+        kind: 'handoff',
+        project: 'widget',
+        branch: BRANCH,
+        worktree,
+        sourceRef: 'acme/widget#7',
+      },
+      {
+        registryPath,
+        engineerDir,
+        gh: gh as never,
+        git: async (args) => ({ stdout: args[0] === 'show' ? 'Landed spec title\n\nLanded body\n' : '', stderr: '' }),
+        handoffPublication: publication(mutations),
+        intakeResolveActor: async () => ({ resolved: true, id: 'owner' }),
+        ensureRunningLaunch: async () => {
+          launches.push('wake');
+        },
+        print: (message) => {
+          output.push(message);
+        },
+        printErr: () => {},
+      },
+    );
 
     expect(code).toBe(0);
     expect(output).toEqual([JSON.stringify({ kind: 'pr-opened', url: PR_URL })]);
-    expect(await ledger.get('github-issues', 'acme/widget#7')).toMatchObject({ status: 'done', prUrl: PR_URL, branch: BRANCH });
+    expect(await ledger.get('github-issues', 'acme/widget#7')).toMatchObject({
+      status: 'done',
+      prUrl: PR_URL,
+      branch: BRANCH,
+    });
     expect(mutations.map((mutation) => mutation.operation)).toEqual(['pull-request.edit', 'pull-request.ready']);
     expect(ghCalls.filter((args) => args[0] === 'issue' && args[1] === 'comment')).toHaveLength(1);
     expect(ghCalls.filter((args) => args[0] === 'api' && args.includes('POST'))).toHaveLength(1);
