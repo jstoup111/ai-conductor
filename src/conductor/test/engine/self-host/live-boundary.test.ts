@@ -8,7 +8,9 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
   PROVIDER_STATE_VOLATILE,
+  fingerprintLiveCheckoutSurface,
   fingerprintLiveBoundary,
+  fingerprintProviderStateSurface,
   verifyLiveBoundary,
 } from '../../../src/engine/self-host/live-boundary.js';
 
@@ -202,6 +204,51 @@ describe('live self-host boundary', () => {
         expect(measurement.elapsedMs).toSatisfy(Number.isInteger);
         expect(measurement.elapsedMs).toBeGreaterThanOrEqual(0);
       }
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  // Covers: task:1
+  it('fingerprints each boundary surface identically to the composed snapshot', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-per-surface-fingerprint-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    await Promise.all([
+      writeFile(join(live, 'live.txt'), 'live'),
+      writeFile(join(provider, 'preferences.json'), 'preferences'),
+    ]);
+    const args = { liveCheckout: live, unrelatedProviderState: provider, provider: 'claude' as const };
+    try {
+      const [snapshot, liveSurface, providerSurface] = await Promise.all([
+        fingerprintLiveBoundary(args),
+        fingerprintLiveCheckoutSurface(live),
+        fingerprintProviderStateSurface(args),
+      ]);
+      expect(liveSurface).toEqual({ surface: snapshot.surfaces[0], measurement: snapshot.measurements[0] });
+      expect(providerSurface).toEqual({ surface: snapshot.surfaces[1], measurement: snapshot.measurements[1] });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  // Covers: task:1
+  it('detects provider-state drift in only the second provider surface', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-second-provider-surface-'));
+    const live = join(root, 'live'); const firstProvider = join(root, 'provider-one'); const secondProvider = join(root, 'provider-two');
+    await Promise.all([mkdir(live), mkdir(firstProvider), mkdir(secondProvider)]);
+    const args = { liveCheckout: live, unrelatedProviderState: firstProvider, provider: 'claude' as const };
+    try {
+      const [snapshot, secondSurface] = await Promise.all([
+        fingerprintLiveBoundary(args),
+        fingerprintProviderStateSurface({ ...args, unrelatedProviderState: secondProvider }),
+      ]);
+      await writeFile(join(secondProvider, 'changed.json'), 'changed');
+      const result = await verifyLiveBoundary({
+        ...snapshot,
+        surfaces: [snapshot.surfaces[0]!, snapshot.surfaces[1]!, secondSurface.surface],
+        measurements: [...snapshot.measurements, secondSurface.measurement],
+      });
+      expect(result).toMatchObject({
+        ok: false,
+        reason: expect.stringMatching(/^provider state changed during self-host execution/),
+      });
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
