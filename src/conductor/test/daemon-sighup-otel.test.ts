@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   DAEMON_OTEL_SIGHUP_STOP_TIMEOUT_MS,
   installDaemonOtelSighupHandler,
+  stopDispatchVisualizer,
   type DaemonProcessAdapter,
 } from '../src/daemon-cli.js';
 import { wireDaemonOtel } from '../src/engine/otel/wire.js';
@@ -180,5 +181,61 @@ describe('Task 18: daemon OTel SIGHUP wiring', () => {
     releaseTimeout();
     await handling;
     expect(probe.calls).toEqual(['on:SIGHUP', 'off:SIGHUP', 'kill:481:SIGHUP']);
+  });
+
+  // Covers: task:4
+  it('keeps an ending dispatch visualizer active until its pending stop lets SIGHUP re-raise', async () => {
+    const probe = processProbe();
+    let resolveStop!: () => void;
+    const stopped = new Promise<void>((resolve) => { resolveStop = resolve; });
+    const stop = vi.fn(() => stopped);
+    const visualizer = { stop };
+    const activeDispatchVisualizers = new Set([visualizer]);
+
+    const ending = stopDispatchVisualizer(visualizer, activeDispatchVisualizers);
+    expect(stop).toHaveBeenCalledOnce();
+    expect(activeDispatchVisualizers).toContain(visualizer);
+
+    installDaemonOtelSighupHandler({
+      daemonOtel: null,
+      activeDispatchVisualizers,
+      processAdapter: probe.adapter,
+      awaitStop: async (operation) => operation,
+    });
+    const handling = probe.listeners.get('SIGHUP')!();
+
+    await vi.waitFor(() => expect(stop).toHaveBeenCalledTimes(2));
+    expect(probe.kill).not.toHaveBeenCalled();
+    resolveStop();
+    await Promise.all([ending, handling]);
+
+    expect(activeDispatchVisualizers).not.toContain(visualizer);
+    expect(probe.kill).toHaveBeenCalledWith(481, 'SIGHUP');
+  });
+
+  // Covers: task:4
+  it('does not stop or await an already-settled dispatch visualizer when SIGHUP arrives later', async () => {
+    const probe = processProbe();
+    const neverSettles = new Promise<void>(() => {});
+    const stop = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockReturnValueOnce(neverSettles);
+    const visualizer = { stop };
+    const activeDispatchVisualizers = new Set([visualizer]);
+
+    await stopDispatchVisualizer(visualizer, activeDispatchVisualizers);
+    expect(activeDispatchVisualizers).not.toContain(visualizer);
+
+    installDaemonOtelSighupHandler({
+      daemonOtel: null,
+      activeDispatchVisualizers,
+      processAdapter: probe.adapter,
+      awaitStop: async (operation) => operation,
+    });
+    const handling = probe.listeners.get('SIGHUP')!();
+
+    await vi.waitFor(() => expect(probe.kill).toHaveBeenCalledWith(481, 'SIGHUP'));
+    await handling;
+    expect(stop).toHaveBeenCalledOnce();
   });
 });
