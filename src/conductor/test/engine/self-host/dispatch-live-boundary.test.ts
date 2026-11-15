@@ -21,7 +21,7 @@ function harness(overrides: Partial<ConstructorParameters<typeof DispatchLiveBou
   const fingerprintProviderState = vi.fn(async ({ unrelatedProviderState }: { unrelatedProviderState: string }) =>
     provider(unrelatedProviderState),
   );
-  const verify = vi.fn(async () => ({ ok: true }));
+  const verify = vi.fn(async (_snapshot: Parameters<typeof verifyLiveBoundary>[0]) => ({ ok: true }));
   const probe = vi.fn(async () => ({ contained: true as const, evidence: 'contained' }));
   const events: unknown[] = [];
   const boundary = new DispatchLiveBoundary({
@@ -269,7 +269,8 @@ describe('DispatchLiveBoundary', () => {
     const root = await mkdtemp(join(tmpdir(), 'dispatch-live-boundary-restored-'));
     const liveRoot = join(root, 'live');
     const providerHome = join(root, 'provider');
-    await Promise.all([mkdir(liveRoot), mkdir(providerHome), writeFile(join(liveRoot, 'source.txt'), 'original')]);
+    await mkdir(liveRoot);
+    await Promise.all([mkdir(providerHome), writeFile(join(liveRoot, 'source.txt'), 'original')]);
     const violations: string[] = [];
     const coordinator = new LiveBoundaryCoordinator();
     let boundary!: DispatchLiveBoundary;
