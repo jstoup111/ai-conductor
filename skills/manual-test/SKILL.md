@@ -115,7 +115,9 @@ Use browser automation (Chrome MCP if configured, otherwise manual Capybara-styl
 1. Navigate to each page referenced in stories
 2. Perform the actions described in Given/When/Then
 3. Verify visible output matches expected behavior
-4. Take screenshots of key states as manual-test evidence
+4. Save screenshots, HTML reports, logs, and every other manual-test evidence file under
+   `.pipeline/manual-test-evidence/` in the feature worktree. Create that directory if it is
+   missing; never write manual-test evidence anywhere else in the product tree.
 
 ### 5. Display Results
 
@@ -211,6 +213,8 @@ docker compose down
 
 - [ ] Application started and accessible
 - [ ] Every story (happy + negative paths) tested manually
+- [ ] All evidence files were written under `.pipeline/manual-test-evidence/`, and the run added no
+      file outside `.pipeline/` to the product tree
 - [ ] Results displayed to user
 - [ ] Browser automation availability was checked without installing dependencies; unavailable or
       unlaunchable browser criteria were recorded as WARN with the error and recovery command
