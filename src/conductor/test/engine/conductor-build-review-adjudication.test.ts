@@ -2968,7 +2968,9 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
         });
 
         expect(restarted.dispatched).not.toContain('build');
-        await expect(readFile(join(restarted.projectRoot, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+        await expect(readFile(join(restarted.projectRoot, '.pipeline/HALT.class'), 'utf8')).resolves.toBe(
+          'needs-human',
+        );
         expect(await restarted.haltMarker()).toContain('build_review kickback-to-build refused');
       } finally {
         treeSpy.mockRestore();
