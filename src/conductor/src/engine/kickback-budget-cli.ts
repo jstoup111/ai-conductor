@@ -14,7 +14,7 @@ import { isAcceptableOperatorRationale, resolveCliFeatureWorktree, resolveMachin
 import { HALT_CLASS_MARKER } from './halt-marker.js';
 import { RECOVERABLE_CAP_HALT_CLASS_BY_GATE } from './halt-classification.js';
 import { readKickbackHaltGeneration } from './daemon-rekick.js';
-import { loadConfig } from './config.js';
+import { loadConfig, loadMergedConfig } from './config.js';
 import { kickbackBudgetFallbackLimit, readPlanGrowthBudget, resolveRemediationLapAllowance, type RemediationLapAllowance } from './remediation-caps.js';
 import { readState } from './state.js';
 import { childStateExists, parseChildId, type ChildId } from './child-context.js';
@@ -48,8 +48,13 @@ interface BudgetDefaults {
   restackAllowance: RestackCascadeAllowance;
 }
 
-async function defaultsFor(worktree: string): Promise<BudgetDefaults> {
-  const loaded = await loadConfig(worktree);
+/**
+ * Lap allowances come from the config the dispatching executor enforces: the
+ * user config merged beneath the main checkout's project config, never the
+ * feature worktree's possibly-stale copy (#3502).
+ */
+async function defaultsFor(worktree: string, root: string): Promise<BudgetDefaults> {
+  const loaded = await loadMergedConfig(root);
   const config = loaded.ok ? loaded.config : {} as HarnessConfig;
   const state = await readState(join(worktree, '.pipeline', 'conduct-state.json'));
   const tier = state.ok ? state.value.complexity_tier : undefined;
@@ -114,7 +119,7 @@ async function appendAuthorizationEvent(
   persister.stop();
 }
 
-async function reconcilePendingAdjustments(worktree: string, slug: string, child?: ChildId): Promise<void> {
+async function reconcilePendingAdjustments(worktree: string, root: string, slug: string, child?: ChildId): Promise<void> {
   const ledger = await readKickbackLedger(worktree, child);
   // An unreadable ledger is reported by each caller's own unreadable branch, in
   // its own words; reconciliation simply has nothing it may safely act on.
@@ -122,7 +127,7 @@ async function reconcilePendingAdjustments(worktree: string, slug: string, child
   let eventText = '';
   try { eventText = await readKickbackBudgetAuthorizationEvents(worktree); }
   catch { throw new Error('authorization event ledger is unreadable'); }
-  const { limits: defaults, restackAllowance } = await defaultsFor(worktree);
+  const { limits: defaults, restackAllowance } = await defaultsFor(worktree, root);
   for (const [gate, entry] of Object.entries(ledger.gates)) {
     const pending = entry.pendingAdjustment;
     if (!pending || isUnreadableKickbackGate(ledger, gate)) continue;
@@ -175,7 +180,7 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
   const worktree = await resolveCliFeatureWorktree(command.feature, { cwd: deps.cwd, resolveMainRoot: deps.resolveMainRoot });
   if (!worktree) { print(`kickback-budget: feature '${command.feature}' is unavailable.`); return 1; }
   const reconcile = async (child?: ChildId): Promise<number | undefined> => {
-    try { await reconcilePendingAdjustments(worktree, command.feature, child); return undefined; }
+    try { await reconcilePendingAdjustments(worktree, root, command.feature, child); return undefined; }
     catch (error) { print(`kickback-budget: refused — ${error instanceof Error ? error.message : String(error)}`); return 1; }
   };
   if (command.action === 'inspect') {
@@ -211,7 +216,7 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
     const childLedger = child === undefined ? flatLedger : await readKickbackLedger(worktree, child);
     if (isUnreadableKickbackLedger(flatLedger) || isUnreadableKickbackLedger(childLedger)) { print('kickback-budget: ledger is unreadable.'); return 1; }
     const ledgerFor = (gate: string) => WHOLE_FEATURE_GATES.has(gate) ? flatLedger : childLedger;
-    const { limits: defaults, allowances, restackAllowance } = await defaultsFor(worktree);
+    const { limits: defaults, allowances, restackAllowance } = await defaultsFor(worktree, root);
     // Resolve plan growth from the same authored-task cap as remediation. A
     // read-only inspect deliberately does not reconcile or persist it.
     const planGrowth = await planGrowthViewFor(worktree, root, flatLedger);
@@ -351,7 +356,7 @@ export async function dispatchKickbackBudgetCommand(command: KickbackBudgetDispa
   let committed = false;
   let liveHaltGeneration = '';
   try {
-    const { limits: defaults, restackAllowance } = await defaultsFor(worktree);
+    const { limits: defaults, restackAllowance } = await defaultsFor(worktree, root);
     const remediation = gate !== 'build_review' && gate !== 'restack';
     // D3: machine-scoped identity through the approved user-config → GitHub
     // chain. `GITHUB_ACTOR` is an environment variable any pipeline process can

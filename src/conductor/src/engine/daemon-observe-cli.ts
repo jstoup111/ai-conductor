@@ -28,7 +28,7 @@ import { scanInheritedState } from './daemon-dashboard.js';
 import { formatHeartbeatAge } from './step-heartbeat.js';
 import { kickbackBudgetFallbackLimit, readPlanGrowthBudget, resolveRemediationLapAllowance } from './remediation-caps.js';
 import { readState } from './state.js';
-import { loadConfig } from './config.js';
+import { loadConfig, loadMergedConfig } from './config.js';
 import {
   isUnreadableKickbackGate,
   isUnreadableKickbackLedger,
@@ -755,7 +755,8 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
     const childStatus = activeChild
       ? ` child ${activeChild.child}/${activeChild.total}${activeChild.taskIds.length ? `; tasks ${activeChild.taskIds.join(', ')}` : ''}`
       : stackStatus && 'cause' in stackStatus ? ` stack unavailable: ${stackStatus.cause}` : '';
-    const config = await loadConfig(featureRoot);
+    // Lap allowances use the config the dispatching executor enforces (#3502).
+    const config = await loadMergedConfig(repoPath);
     const growthConfig = await loadConfig(repoPath);
     const ledger = await readKickbackLedger(featureRoot, child);
     try {

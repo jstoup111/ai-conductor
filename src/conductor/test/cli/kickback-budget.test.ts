@@ -1297,8 +1297,11 @@ describe('kickback-budget inspect remediation tier allowance', () => {
     });
     try {
       await writeFile(join(fixture.worktree, '.pipeline', 'conduct-state.json'), JSON.stringify({ complexity_tier: 'M' }));
+      // The engine reads the main checkout's config; a drifted feature branch's value is never reported (#3502).
+      await mkdir(join(fixture.root, '.ai-conductor'), { recursive: true });
+      await writeFile(join(fixture.root, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_remediation_laps:\n    M: 5\n');
       await mkdir(join(fixture.worktree, '.ai-conductor'), { recursive: true });
-      await writeFile(join(fixture.worktree, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_remediation_laps:\n    M: 5\n');
+      await writeFile(join(fixture.worktree, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_remediation_laps: 2\n');
 
       const human: string[] = [];
       expect(await dispatchKickbackBudgetCommand(
@@ -1325,15 +1328,18 @@ describe('kickback-budget inspect remediation tier allowance', () => {
     });
     try {
       await writeFile(join(fixture.worktree, '.pipeline', 'conduct-state.json'), JSON.stringify({ complexity_tier: 'M' }));
+      // A raise stays `raised`, measured from the main checkout's allowance, whatever the worktree carries.
+      await mkdir(join(fixture.root, '.ai-conductor'), { recursive: true });
+      await writeFile(join(fixture.root, '.ai-conductor', 'config.yml'), 'architecture_review_as_built:\n  max_remediation_laps:\n    M: 4\n');
       await mkdir(join(fixture.worktree, '.ai-conductor'), { recursive: true });
-      await writeFile(join(fixture.worktree, '.ai-conductor', 'config.yml'), 'architecture_review_as_built:\n  max_remediation_laps:\n    M: 3\n');
+      await writeFile(join(fixture.worktree, '.ai-conductor', 'config.yml'), 'architecture_review_as_built:\n  max_remediation_laps: 3\n');
 
       const human: string[] = [];
       expect(await dispatchKickbackBudgetCommand(
         { kind: 'kickback-budget', action: 'inspect', feature: 'feature', format: 'human' },
         { cwd: fixture.root, resolveMainRoot: async () => fixture.root, print: (line) => human.push(line) },
       )).toBe(0);
-      expect(human.join('\n')).toContain('Kickback budget (architecture_review_as_built): 1/5 consumed; 4 remaining — tier M allowance 5 (raised from 3)');
+      expect(human.join('\n')).toContain('Kickback budget (architecture_review_as_built): 1/5 consumed; 4 remaining — tier M allowance 5 (raised from 4)');
 
       const json: string[] = [];
       expect(await dispatchKickbackBudgetCommand(

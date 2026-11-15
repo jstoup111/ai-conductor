@@ -599,8 +599,9 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
       expect(halt).toContain('for child 2');
       const childPipeline = join(dir, '.pipeline', 'children', '2');
       await mkdir(childPipeline, { recursive: true });
-      await mkdir(join(dir, '.ai-conductor'), { recursive: true });
-      await writeFile(join(dir, '.ai-conductor', 'config.yml'), 'architecture_review_as_built:\n  max_remediation_laps: 1\n');
+      // Inspect reads the main checkout's config, as the dispatching executor does (#3502).
+      await mkdir(join(root, '.ai-conductor'), { recursive: true });
+      await writeFile(join(root, '.ai-conductor', 'config.yml'), 'architecture_review_as_built:\n  max_remediation_laps: 1\n');
       await writeFile(join(childPipeline, 'kickback-ledger.json'), JSON.stringify({
         version: 1,
         gates: { architecture_review_as_built: entry(0) },

@@ -1493,6 +1493,59 @@ describe('engine/daemon-observe-cli', () => {
         );
       });
 
+      // #3502: a feature branch cut before a main config change carries stale lap keys.
+      it('reports the engine-enforced lap allowance from the main checkout, not the feature worktree config', async () => {
+        const repo = join(root, 'repo-drifted-lap-config');
+        const featureRoot = await writeActivePlan(repo, 'drifted-feature', 19);
+        await writeFile(join(featureRoot, '.pipeline', 'conduct-state.json'), JSON.stringify({
+          build: 'in_progress', complexity_tier: 'L',
+        }), 'utf8');
+        await writeFile(
+          join(featureRoot, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({ version: 1, gates: {
+            prd_audit: { count: 0, cumulative: 0, laps: 1, treeHash: null, lastReason: '', priorVerdict: false, resolvedBefore: 0 },
+          } }),
+          'utf8',
+        );
+        // The stale feature branch still carries the keys main has since removed.
+        await mkdir(join(featureRoot, '.ai-conductor'), { recursive: true });
+        await writeFile(
+          join(featureRoot, '.ai-conductor', 'config.yml'),
+          'prd_audit:\n  max_remediation_laps: 2\narchitecture_review_as_built:\n  max_remediation_laps: 3\n',
+          'utf8',
+        );
+        // The engine loads the user config merged beneath the main checkout's project config.
+        await mkdir(join(repo, '.ai-conductor'), { recursive: true });
+        await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'architecture_review_as_built:\n  max_remediation_laps:\n    L: 5\n', 'utf8');
+        const userConfigDir = join(root, 'user-config');
+        await mkdir(userConfigDir, { recursive: true });
+        await writeFile(join(userConfigDir, 'config.yml'), 'prd_audit:\n  max_remediation_laps:\n    L: 6\n', 'utf8');
+        const previousUserConfigDir = process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
+        process.env.AI_CONDUCTOR_USER_CONFIG_DIR = userConfigDir;
+        try {
+          const status: string[] = [];
+          await runDaemonStatus({ registryPath: await registry([record('repo-drifted-lap-config', repo)]), out: (line) => status.push(line) });
+          const inspect: string[] = [];
+          expect(await dispatchKickbackBudgetCommand(
+            { kind: 'kickback-budget', action: 'inspect', feature: 'drifted-feature', format: 'human' },
+            { cwd: repo, resolveMainRoot: async () => repo, print: (line) => inspect.push(line) },
+          )).toBe(0);
+          const inspectLines = inspect.join('\n').split('\n');
+
+          const prdAudit = 'Kickback budget (prd_audit): 1/6 consumed; 5 remaining — tier L allowance 6 (configured)';
+          const asBuilt = 'Kickback budget (architecture_review_as_built): 0/5 consumed; 5 remaining — tier L allowance 5 (configured)';
+          const statusFor = (gate: string) => status.find((line) => line.includes('KICKBACK BUDGET [drifted-feature]:') && line.includes(`(${gate})`));
+          expect(statusFor('prd_audit')).toContain(prdAudit);
+          expect(statusFor('architecture_review_as_built')).toContain(asBuilt);
+          expect(inspectLines.find((line) => line.startsWith('Kickback budget (prd_audit):'))).toBe(prdAudit);
+          expect(inspectLines.find((line) => line.startsWith('Kickback budget (architecture_review_as_built):'))).toBe(asBuilt);
+          expect([...status, ...inspectLines].join('\n')).not.toMatch(/allowance [23] \(configured\)/);
+        } finally {
+          if (previousUserConfigDir === undefined) delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
+          else process.env.AI_CONDUCTOR_USER_CONFIG_DIR = previousUserConfigDir;
+        }
+      });
+
       // Covers: task:9
       it('reports a malformed remediation-gate entry as unavailable without a tier allowance', async () => {
         const repo = join(root, 'repo-broken-remediation');

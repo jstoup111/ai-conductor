@@ -93,6 +93,8 @@ my per-feature grant is never undone by the new defaults.
 
 ## Story 4: Lap-cap halts and budget views name the tier and allowance
 
+> **Amended 2026-11-15 by #3502:** budget views resolve lap allowances from the config the engine enforces, not the feature worktree's copy.
+
 **Requirement:** #2413 desired outcome 3
 
 As an operator reading a lap-cap halt or checking a feature's budget, I want to see which tier the
@@ -113,11 +115,14 @@ misconfiguration without opening the config or the ledger.
 - Given a feature whose remediation-gate ledger entry fails validation, when the operator runs daemon status, then that gate still reads `budget unavailable (durable entry failed validation)` with no tier or allowance figure.
 - Given a feature whose `conduct-state.json` cannot be read, when the operator runs `kickback-budget inspect`, then the command exits 0 and renders that feature's allowance as `tier unrecorded, treated as M`.
 - Given a feature with a `build_review` budget of 4 consumed of 6, when the operator runs `kickback-budget inspect` or `daemon status`, then the `build_review` line reads `Kickback budget (build_review): 4/6 consumed; 2 remaining` with no tier or allowance suffix, and its JSON view carries no `tier` or `allowanceSource` field.
+- Given a tier-L feature whose worktree config still carries `prd_audit.max_remediation_laps: 2` while the main checkout's project config, merged over the user config, resolves `prd_audit` to 6, when the operator runs `kickback-budget inspect` or `daemon status`, then both report `tier L allowance 6 (configured)`, the value the dispatching executor enforces, and never `allowance 2`.
+- Given a raised `architecture_review_as_built` gate whose worktree config carries a different `max_remediation_laps` from the main checkout, when the operator runs inspect, then the gate still reads `(raised from <n>)`, with `<n>` resolved from the main checkout's merged config.
 
 ### Done When
 - [ ] The tier-and-allowance suffix and JSON fields appear only for `prd_audit` and `architecture_review_as_built`; `build_review` budget output is unchanged.
 - [ ] Every lap-cap halt for either gate, the refusal-rework halt, `kickback-budget inspect` (human and JSON), and `daemon status` render the tier (or `unrecorded, treated as M`), the allowance, and its source (`default`, `configured`, or `raised from <n>`).
 - [ ] Halt, inspect, and daemon status show identical tier and allowance for the same feature and gate.
+- [ ] Inspect and daemon status resolve lap allowances from the user config merged beneath the main checkout's project config, the config the dispatching executor loads, never from the feature worktree's config.
 - [ ] The inspect JSON view for each remediation gate carries `tier` (`"S"`, `"M"`, `"L"`, or `null`) and `allowanceSource`.
 
 ## Story 5: This repository's builds use the tier defaults
