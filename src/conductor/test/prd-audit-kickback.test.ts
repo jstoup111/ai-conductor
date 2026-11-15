@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { execa } from 'execa';
 
 vi.mock('../src/engine/build-review-effective.js', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../src/engine/build-review-effective.js')>(),
+  ...(await importOriginal<typeof import('../src/engine/build-review-effective.js')>()),
   resolveBuildReviewFeatureIdentity: vi.fn(async () => ({
     version: 'v1' as const,
     repository: '/fixture/repository',
@@ -18,7 +18,7 @@ vi.mock('../src/engine/build-review-effective.js', async (importOriginal) => ({
 // Pre-audit reconciliation needs a machine-scoped operator whenever a fixture
 // contains a cleared decision. Individual no-owner cases override this seam.
 vi.mock('../src/engine/owner-gate/machine-identity.js', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../src/engine/owner-gate/machine-identity.js')>(),
+  ...(await importOriginal<typeof import('../src/engine/owner-gate/machine-identity.js')>()),
   readMachineOwnerConfig: vi.fn(async () => ({ spec_owner: 'fixture-operator' })),
 }));
 
@@ -29,10 +29,7 @@ import {
   validationJoinRemediationRoundCap,
   type StepRunner,
 } from '../src/engine/conductor.js';
-import {
-  AcceptedWideningDecisionStore,
-  renderOverScopeDecisionBlock,
-} from '../src/engine/accepted-widenings.js';
+import { AcceptedWideningDecisionStore, renderOverScopeDecisionBlock } from '../src/engine/accepted-widenings.js';
 import { renderPrdAuditScopeHalt } from '../src/engine/prd-widening-recovery.js';
 import type { PrdAuditFinding, PrdAuditGrade } from '../src/engine/artifacts.js';
 import { prdWideningSourceId } from '../src/engine/prd-widening-context.js';
@@ -45,10 +42,7 @@ import type { ConductorEvent } from '../src/types/events.js';
 import { ConductorEventEmitter } from '../src/ui/events.js';
 import { DefaultStepRunner } from '../src/engine/step-runners.js';
 import { PROTECTED_ARTIFACT_SEAL_PATH } from '../src/engine/protected-artifact-seal.js';
-import {
-  appendRecordedShipmentFindings,
-  recordedShipmentFindings,
-} from '../src/engine/shipment-association.js';
+import { appendRecordedShipmentFindings, recordedShipmentFindings } from '../src/engine/shipment-association.js';
 import * as machineIdentity from '../src/engine/owner-gate/machine-identity.js';
 import { persistAsBuiltVerdict, readAsBuiltVerdict } from '../src/engine/as-built-verdict-store.js';
 import type { AsBuiltPolicy } from '../src/engine/as-built-policy.js';
@@ -66,15 +60,26 @@ const AS_BUILT_FIXTURE_POLICY: AsBuiltPolicy = {
 };
 
 async function persistBlockedAsBuiltFixture(root: string): Promise<void> {
-  await persistAsBuiltVerdict(root, {
-    version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
-    findings: [{
-      id: 'AB-1', class: 'REMEDIABLE',
-      reference: { kind: 'plan-task', taskId: '1' },
-      summary: 'Restore the approved architecture boundary.',
-    }],
-    violations: 'fixture violations', resolution: 'fixture resolution',
-  }, { attemptId: 'fixture-run', codeStamp: null, policy: AS_BUILT_FIXTURE_POLICY });
+  await persistAsBuiltVerdict(
+    root,
+    {
+      version: 'v2',
+      verdict: 'BLOCKED',
+      reachability: [],
+      driftNotes: [],
+      findings: [
+        {
+          id: 'AB-1',
+          class: 'REMEDIABLE',
+          reference: { kind: 'plan-task', taskId: '1' },
+          summary: 'Restore the approved architecture boundary.',
+        },
+      ],
+      violations: 'fixture violations',
+      resolution: 'fixture resolution',
+    },
+    { attemptId: 'fixture-run', codeStamp: null, policy: AS_BUILT_FIXTURE_POLICY },
+  );
 }
 
 function planGapReport(criterion: string, summary = 'The approved plan has no task for this behavior.') {
@@ -108,20 +113,11 @@ function overScopeReport(
   const header = includeIntentRelation
     ? '| Criterion | Grade | Plan task | Evidence | Intent relation |'
     : '| Criterion | Grade | Plan task | Evidence |';
-  const separator = includeIntentRelation
-    ? '| --- | --- | --- | --- | --- |'
-    : '| --- | --- | --- | --- |';
+  const separator = includeIntentRelation ? '| --- | --- | --- | --- | --- |' : '| --- | --- | --- | --- |';
   const row = includeIntentRelation
     ? `| ${criterion} | OVER_SCOPE | | ${summary} | ${relation} |`
     : `| ${criterion} | OVER_SCOPE | | ${summary} |`;
-  return [
-    '**PRD:** present',
-    '',
-    '## Verdict Table',
-    header,
-    separator,
-    row,
-  ].join('\n');
+  return ['**PRD:** present', '', '## Verdict Table', header, separator, row].join('\n');
 }
 
 function refusedFixableReport() {
@@ -189,72 +185,99 @@ async function persistGroupedPrdAuditVerdict(
   report: string,
   attemptId: string | undefined,
 ): Promise<void> {
-  const findings: PrdAuditFinding[] = [...report.matchAll(/^\|\s*(S[A-Za-z0-9.-]+\.\d+|NC[.-]\d+)\s*\|\s*(PASS|FIXABLE|PLAN_GAP|OVER_SCOPE)\s*\|\s*([^|]*)\|\s*([^|]*)(?:\|\s*([^|]*))?(?:\|\s*([^|]*))?\|?\s*$/gmi)]
-    .map((match) => ({
-      criterion: match[1]!.toUpperCase(),
-      grade: match[2]!.toUpperCase() as PrdAuditGrade,
-      ...(match[3]!.trim() && match[3]!.trim() !== '—' ? { planTask: match[3]!.trim() } : {}),
-      prdIds: [...report.matchAll(/\bFR-\d+[A-Za-z]?\b/gi)].map((id) => id[0]!.toUpperCase()),
-      evidence: [match[4], match[5], match[6]].find((cell) => cell && !/^(within|outside-harmless|outside-visible)$/i.test(cell.trim()))?.trim() ?? '',
-    }));
-  const relations = new Map(findings
-    .map((finding) => [finding.criterion, report.match(new RegExp(`\\|\\s*${finding.criterion.replace('.', '\\.') }\\s*\\|[^\\n]*(within|outside-harmless|outside-visible)`, 'i'))?.[1]?.toLowerCase()] as const)
-    .filter((entry): entry is readonly [string, 'within' | 'outside-harmless' | 'outside-visible'] => entry[1] === 'within' || entry[1] === 'outside-harmless' || entry[1] === 'outside-visible'));
+  const findings: PrdAuditFinding[] = [
+    ...report.matchAll(
+      /^\|\s*(S[A-Za-z0-9.-]+\.\d+|NC[.-]\d+)\s*\|\s*(PASS|FIXABLE|PLAN_GAP|OVER_SCOPE)\s*\|\s*([^|]*)\|\s*([^|]*)(?:\|\s*([^|]*))?(?:\|\s*([^|]*))?\|?\s*$/gim,
+    ),
+  ].map((match) => ({
+    criterion: match[1]!.toUpperCase(),
+    grade: match[2]!.toUpperCase() as PrdAuditGrade,
+    ...(match[3]!.trim() && match[3]!.trim() !== '—' ? { planTask: match[3]!.trim() } : {}),
+    prdIds: [...report.matchAll(/\bFR-\d+[A-Za-z]?\b/gi)].map((id) => id[0]!.toUpperCase()),
+    evidence:
+      [match[4], match[5], match[6]]
+        .find((cell) => cell && !/^(within|outside-harmless|outside-visible)$/i.test(cell.trim()))
+        ?.trim() ?? '',
+  }));
+  const relations = new Map(
+    findings
+      .map(
+        (finding) =>
+          [
+            finding.criterion,
+            report
+              .match(
+                new RegExp(
+                  `\\|\\s*${finding.criterion.replace('.', '\\.')}\\s*\\|[^\\n]*(within|outside-harmless|outside-visible)`,
+                  'i',
+                ),
+              )?.[1]
+              ?.toLowerCase(),
+          ] as const,
+      )
+      .filter(
+        (entry): entry is readonly [string, 'within' | 'outside-harmless' | 'outside-visible'] =>
+          entry[1] === 'within' || entry[1] === 'outside-harmless' || entry[1] === 'outside-visible',
+      ),
+  );
   // This fixture emulates the provider→validator boundary. A malformed carrier
   // is surfaced as typed incompleteness before any conductor route reads it;
   // the Markdown fixture remains presentation-only after that boundary.
-  const diagnostics: string[] = /\|\s*OS\.1\s*\|/i.test(report)
-    ? ['OS.1: fixture invalid typed evidence']
-    : [];
+  const diagnostics: string[] = /\|\s*OS\.1\s*\|/i.test(report) ? ['OS.1: fixture invalid typed evidence'] : [];
   const criterionJudgments: Array<PrdAuditJudgment['criterionJudgments'][number]> = [];
   const noOwnerObservations: Array<PrdAuditJudgment['noOwnerObservations'][number]> = [];
 
   for (const finding of findings) {
-      if (/^NC\.\d+$/i.test(finding.criterion)) {
-        noOwnerObservations.push({
-          presentationOrdinal: finding.criterion,
-          grade: 'OVER_SCOPE',
-          evidence: finding.evidence || 'Fixture supplies typed audit evidence.',
-          rationale: 'Fixture supplies typed audit evidence.',
-          intentRelation: relations.get(finding.criterion) ?? 'outside-visible',
-        });
-        continue;
-      }
-      const match = /^S(.+)\.(\d+)$/i.exec(finding.criterion);
-      if (!match) {
-        diagnostics.push(`${finding.criterion}: fixture could not derive a criterion reference`);
-        continue;
-      }
-      const criterion = { storyId: match[1]!, ordinal: Number(match[2]) };
-      const base = {
-        criterion,
-        criterionId: finding.criterion,
+    if (/^NC\.\d+$/i.test(finding.criterion)) {
+      noOwnerObservations.push({
+        presentationOrdinal: finding.criterion,
+        grade: 'OVER_SCOPE',
         evidence: finding.evidence || 'Fixture supplies typed audit evidence.',
         rationale: 'Fixture supplies typed audit evidence.',
-        requirementAssociations: finding.prdIds.map((requirementId) => ({
-          path: '.docs/specs/feature.md', requirementId,
-        })),
-        evidenceTaskIds: finding.planTask ? [finding.planTask] : [],
-      };
-      if (finding.grade === 'FIXABLE') {
-        criterionJudgments.push({ ...base, grade: 'FIXABLE', ownerTaskId: finding.planTask ?? '1' });
-      } else if (finding.grade === 'OVER_SCOPE') {
-        criterionJudgments.push({
-          ...base,
-          grade: 'OVER_SCOPE',
-          intentRelation: relations.get(finding.criterion) ?? 'outside-visible',
-        });
-      } else {
-        criterionJudgments.push({ ...base, grade: finding.grade });
-      }
+        intentRelation: relations.get(finding.criterion) ?? 'outside-visible',
+      });
+      continue;
+    }
+    const match = /^S(.+)\.(\d+)$/i.exec(finding.criterion);
+    if (!match) {
+      diagnostics.push(`${finding.criterion}: fixture could not derive a criterion reference`);
+      continue;
+    }
+    const criterion = { storyId: match[1]!, ordinal: Number(match[2]) };
+    const base = {
+      criterion,
+      criterionId: finding.criterion,
+      evidence: finding.evidence || 'Fixture supplies typed audit evidence.',
+      rationale: 'Fixture supplies typed audit evidence.',
+      requirementAssociations: finding.prdIds.map((requirementId) => ({
+        path: '.docs/specs/feature.md',
+        requirementId,
+      })),
+      evidenceTaskIds: finding.planTask ? [finding.planTask] : [],
+    };
+    if (finding.grade === 'FIXABLE') {
+      criterionJudgments.push({ ...base, grade: 'FIXABLE', ownerTaskId: finding.planTask ?? '1' });
+    } else if (finding.grade === 'OVER_SCOPE') {
+      criterionJudgments.push({
+        ...base,
+        grade: 'OVER_SCOPE',
+        intentRelation: relations.get(finding.criterion) ?? 'outside-visible',
+      });
+    } else {
+      criterionJudgments.push({ ...base, grade: finding.grade });
+    }
   }
 
-  await persistPrdAuditVerdict(root, {
-    complete: diagnostics.length === 0,
-    judgment: { version: 'v1', criterionJudgments, noOwnerObservations },
-    diagnostics,
-    recordedDispositions: [],
-  }, { attemptId: attemptId ?? 'fixture-run', codeStamp: null });
+  await persistPrdAuditVerdict(
+    root,
+    {
+      complete: diagnostics.length === 0,
+      judgment: { version: 'v1', criterionJudgments, noOwnerObservations },
+      diagnostics,
+      recordedDispositions: [],
+    },
+    { attemptId: attemptId ?? 'fixture-run', codeStamp: null },
+  );
 }
 
 function storiesForRejectedRowReport() {
@@ -294,62 +317,79 @@ async function createPrdAuditRemediationFixture(input: {
     (_, index) => `### Task ${index + 1}: authored work ${index + 1}\n`,
   ).join('\n');
   await writeFile(planPath, plan);
-  const maxOrdinal = Math.max(0, ...input.criteria.map((criterion) => Number(criterion.match(/^S2\.(\d+)$/)?.[1] ?? 0)));
+  const maxOrdinal = Math.max(
+    0,
+    ...input.criteria.map((criterion) => Number(criterion.match(/^S2\.(\d+)$/)?.[1] ?? 0)),
+  );
   await writeFile(
     join(root, '.docs', 'stories', 'feature.md'),
-    ['# Stories', '', '## Story 2: remediation', '', '#### Happy Path',
+    [
+      '# Stories',
+      '',
+      '## Story 2: remediation',
+      '',
+      '#### Happy Path',
       ...Array.from({ length: maxOrdinal }, (_, index) => `- Given S2.${index + 1}, when repaired, then it holds.`),
     ].join('\n'),
   );
-  await writeFile(
-    join(root, '.pipeline', 'engine-state.json'),
-    JSON.stringify({ activePlanPath: planPath }),
-  );
+  await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
   const malformed = input.report?.includes('| S2.1 | MAYBE |') ?? false;
-  await persistPrdAuditVerdict(root, {
-    complete: !malformed,
-    judgment: {
-      version: 'v1',
-      criterionJudgments: malformed
-        ? []
-        : input.criteria.map((criterion, index) => ({
-          criterion: { storyId: '2', ordinal: Number(criterion.slice('S2.'.length)) },
-          criterionId: criterion,
-          grade: 'FIXABLE' as const,
-          evidence: `Missing ${criterion} behavior`,
-          rationale: `Fixture repair for ${criterion}.`,
-          requirementAssociations: [],
-          evidenceTaskIds: [String(index + 1)],
-          ownerTaskId: String(index + 1),
-        })),
-      noOwnerObservations: [],
+  await persistPrdAuditVerdict(
+    root,
+    {
+      complete: !malformed,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: malformed
+          ? []
+          : input.criteria.map((criterion, index) => ({
+              criterion: { storyId: '2', ordinal: Number(criterion.slice('S2.'.length)) },
+              criterionId: criterion,
+              grade: 'FIXABLE' as const,
+              evidence: `Missing ${criterion} behavior`,
+              rationale: `Fixture repair for ${criterion}.`,
+              requirementAssociations: [],
+              evidenceTaskIds: [String(index + 1)],
+              ownerTaskId: String(index + 1),
+            })),
+        noOwnerObservations: [],
+      },
+      diagnostics: malformed ? ['S2.1: fixture invalid grade'] : [],
+      recordedDispositions: [],
     },
-    diagnostics: malformed ? ['S2.1: fixture invalid grade'] : [],
-    recordedDispositions: [],
-  }, { attemptId: 'fixture-remediation', codeStamp: null });
+    { attemptId: 'fixture-remediation', codeStamp: null },
+  );
   if (input.priorLaps !== undefined || input.priorGrowthAdded !== undefined) {
     await writeKickbackLedger(root, {
       version: 1,
       gates: {
-        ...(input.priorLaps === undefined ? {} : {
-          prd_audit: {
-            count: 0,
-            cumulative: 0,
-            treeHash: null,
-            lastReason: '',
-            priorVerdict: true,
-            resolvedBefore: 0,
-            laps: input.priorLaps,
-          },
-        }),
+        ...(input.priorLaps === undefined
+          ? {}
+          : {
+              prd_audit: {
+                count: 0,
+                cumulative: 0,
+                treeHash: null,
+                lastReason: '',
+                priorVerdict: true,
+                resolvedBefore: 0,
+                laps: input.priorLaps,
+              },
+            }),
       },
-      ...(input.priorGrowthAdded === undefined ? {} : {
-        growth: { authored: input.taskCount, added: input.priorGrowthAdded, byGate: { prd_audit: input.priorGrowthAdded } },
-      }),
+      ...(input.priorGrowthAdded === undefined
+        ? {}
+        : {
+            growth: {
+              authored: input.taskCount,
+              added: input.priorGrowthAdded,
+              byGate: { prd_audit: input.priorGrowthAdded },
+            },
+          }),
     } as never);
   }
 
-    await execa('git', ['init', '-q', '-b', 'main'], { cwd: root });
+  await execa('git', ['init', '-q', '-b', 'main'], { cwd: root });
   await execa('git', ['config', 'user.email', 'fixture@example.test'], { cwd: root });
   await execa('git', ['config', 'user.name', 'Fixture'], { cwd: root });
   await execa('git', ['add', '.docs'], { cwd: root });
@@ -360,13 +400,22 @@ async function createPrdAuditRemediationFixture(input: {
     run: async (step: StepName, _state, options) => {
       remediateDispatches.push(step);
       if (step === 'remediate') {
-        await persistFixtureProjectedRemediationPlan(root, options, input.criteria.map((criterion) => ({
-          id: criterion,
-          disposition: input.existingTask ? 'existing-task' : 'build',
-          category: null,
-          rationale: `Repair ${criterion}.`,
-          tasks: [{ id: input.existingTask ? '1' : (input.repairTaskId ?? `rem-${criterion.toLowerCase()}`), title: `Repair ${criterion}` }],
-        })));
+        await persistFixtureProjectedRemediationPlan(
+          root,
+          options,
+          input.criteria.map((criterion) => ({
+            id: criterion,
+            disposition: input.existingTask ? 'existing-task' : 'build',
+            category: null,
+            rationale: `Repair ${criterion}.`,
+            tasks: [
+              {
+                id: input.existingTask ? '1' : (input.repairTaskId ?? `rem-${criterion.toLowerCase()}`),
+                title: `Repair ${criterion}`,
+              },
+            ],
+          })),
+        );
       }
       return { success: true };
     },
@@ -394,25 +443,22 @@ async function createPrdAuditRemediationFixture(input: {
   await input.beforePlanRemediation?.(root);
   const remediationState = { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState;
   (conductor as unknown as { persistedStateSnapshot: ConductState }).persistedStateSnapshot = { ...remediationState };
-  const outcome = await (conductor as unknown as {
-    planRemediation: (
-      state: ConductState,
-      steps: typeof ALL_STEPS,
-      dispatchContext: string,
-      hintSource: {
-        source: string;
-        evidence: Array<{ gate: StepName; evidenceFile: string }>;
-      },
-    ) => Promise<{ kind: string; target?: string; detail?: string; haltClass?: string }>;
-  }).planRemediation(
-    remediationState,
-    ALL_STEPS,
-    'prd audit blocked',
-    {
-      source: 'prd-audit',
-      evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }],
-    },
-  );
+  const outcome = await (
+    conductor as unknown as {
+      planRemediation: (
+        state: ConductState,
+        steps: typeof ALL_STEPS,
+        dispatchContext: string,
+        hintSource: {
+          source: string;
+          evidence: Array<{ gate: StepName; evidenceFile: string }>;
+        },
+      ) => Promise<{ kind: string; target?: string; detail?: string; haltClass?: string }>;
+    }
+  ).planRemediation(remediationState, ALL_STEPS, 'prd audit blocked', {
+    source: 'prd-audit',
+    evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }],
+  });
 
   return { outcome, plan, planPath, root, gateBlocks, remediateDispatches };
 }
@@ -451,44 +497,66 @@ async function createAsBuiltRemediationCapFixture(input: {
   ]);
   await writeFile(planPath, plan);
   await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
-  await persistAsBuiltVerdict(root, {
-    version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
-    findings: findings.map((finding) => ({
-      id: finding.id,
-      class: 'REMEDIABLE' as const,
-      reference: { kind: 'plan-task' as const, taskId: finding.clause.replace('Task ', '') },
-      summary: finding.summary,
-    })),
-    violations: 'fixture violations', resolution: 'fixture resolution',
-  }, { attemptId: 'fixture-run', codeStamp: null, policy: AS_BUILT_FIXTURE_POLICY });
+  await persistAsBuiltVerdict(
+    root,
+    {
+      version: 'v2',
+      verdict: 'BLOCKED',
+      reachability: [],
+      driftNotes: [],
+      findings: findings.map((finding) => ({
+        id: finding.id,
+        class: 'REMEDIABLE' as const,
+        reference: { kind: 'plan-task' as const, taskId: finding.clause.replace('Task ', '') },
+        summary: finding.summary,
+      })),
+      violations: 'fixture violations',
+      resolution: 'fixture resolution',
+    },
+    { attemptId: 'fixture-run', codeStamp: null, policy: AS_BUILT_FIXTURE_POLICY },
+  );
   if (input.withPrdEvidence) {
     await mkdir(join(root, '.docs', 'stories'), { recursive: true });
-    await writeFile(join(root, '.docs', 'stories', 'feature.md'), [
-      '# Stories', '', '## Story 1: the criterion', '', '### Acceptance Criteria', '',
-      '#### Happy Path',
-      '- Given a request, when handled, then the criterion holds.',
-    ].join('\n'));
-    await persistPrdAuditVerdict(root, {
-      complete: true,
-      judgment: {
-        version: 'v1',
-        criterionJudgments: [{
-          criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'FIXABLE',
-          evidence: 'not implemented', rationale: 'Fixture repair.',
-          requirementAssociations: [{ path: '.docs/specs/feature.md', requirementId: 'FR-1' }],
-          evidenceTaskIds: ['1'], ownerTaskId: '1',
-        }],
-        noOwnerObservations: [],
+    await writeFile(
+      join(root, '.docs', 'stories', 'feature.md'),
+      [
+        '# Stories',
+        '',
+        '## Story 1: the criterion',
+        '',
+        '### Acceptance Criteria',
+        '',
+        '#### Happy Path',
+        '- Given a request, when handled, then the criterion holds.',
+      ].join('\n'),
+    );
+    await persistPrdAuditVerdict(
+      root,
+      {
+        complete: true,
+        judgment: {
+          version: 'v1',
+          criterionJudgments: [
+            {
+              criterion: { storyId: '1', ordinal: 1 },
+              criterionId: 'S1.1',
+              grade: 'FIXABLE',
+              evidence: 'not implemented',
+              rationale: 'Fixture repair.',
+              requirementAssociations: [{ path: '.docs/specs/feature.md', requirementId: 'FR-1' }],
+              evidenceTaskIds: ['1'],
+              ownerTaskId: '1',
+            },
+          ],
+          noOwnerObservations: [],
+        },
+        diagnostics: [],
+        recordedDispositions: [],
       },
-      diagnostics: [],
-      recordedDispositions: [],
-    }, { attemptId: 'fixture-prd', codeStamp: null });
+      { attemptId: 'fixture-prd', codeStamp: null },
+    );
   }
-  if (
-    input.priorLaps !== undefined
-    || input.priorGrowthAdded !== undefined
-    || input.prdAuditPriorLaps !== undefined
-  ) {
+  if (input.priorLaps !== undefined || input.priorGrowthAdded !== undefined || input.prdAuditPriorLaps !== undefined) {
     await writeKickbackLedger(root, {
       version: 1,
       gates: {
@@ -533,38 +601,40 @@ async function createAsBuiltRemediationCapFixture(input: {
   const runner: StepRunner = {
     run: async (_step, _state, options) => {
       const dispositions = [
-          ...(input.withPrdEvidence
-            ? [{
+        ...(input.withPrdEvidence
+          ? [
+              {
                 id: 'S1.1',
                 disposition: 'build',
                 category: null,
                 rationale: 'Satisfy the criterion.',
                 tasks: [{ id: 'prd-fix', title: 'Satisfy S1.1' }],
-              }]
-            : []),
-          ...(input.plannerHaltFindingIds ?? []).map((id) => ({
+              },
+            ]
+          : []),
+        ...(input.plannerHaltFindingIds ?? []).map((id) => ({
           id,
           disposition: 'halt',
           category: 'architectural-clarity',
           rationale: `${id} needs a human decision.`,
           tasks: [],
-          })),
-          ...Object.entries(input.plannerEscalations ?? {}).map(([id, disposition]) => ({
+        })),
+        ...Object.entries(input.plannerEscalations ?? {}).map(([id, disposition]) => ({
           id,
           disposition,
           category: null,
           rationale: `${id} contradicts an approved ADR; more BUILD work would keep cycling.`,
           tasks: input.plannerTasks?.[id] ?? [],
-          })),
-          ...(input.plannerFindingIds ?? findings.map((finding) => finding.id))
-            .filter((id) => !(input.plannerHaltFindingIds ?? []).includes(id))
-            .filter((id) => !(id in (input.plannerEscalations ?? {})))
-            .map((id) => ({
-          id,
-          disposition: 'build',
-          category: null,
-          rationale: `Repair ${id}.`,
-          tasks: input.plannerTasks?.[id] ?? [{ id: `fix-${id.toLowerCase()}`, title: `Repair ${id}.` }],
+        })),
+        ...(input.plannerFindingIds ?? findings.map((finding) => finding.id))
+          .filter((id) => !(input.plannerHaltFindingIds ?? []).includes(id))
+          .filter((id) => !(id in (input.plannerEscalations ?? {})))
+          .map((id) => ({
+            id,
+            disposition: 'build',
+            category: null,
+            rationale: `Repair ${id}.`,
+            tasks: input.plannerTasks?.[id] ?? [{ id: `fix-${id.toLowerCase()}`, title: `Repair ${id}.` }],
           })),
       ];
       try {
@@ -595,23 +665,23 @@ async function createAsBuiltRemediationCapFixture(input: {
       },
     } as never,
   });
-  const outcome = await (conductor as unknown as {
-    planRemediation: (
-      state: ConductState,
-      steps: typeof ALL_STEPS,
-      dispatchContext: string,
-      hintSource: unknown,
-    ) => Promise<{ kind: string; target?: string; detail?: string; haltClass?: string }>;
-  }).planRemediation(
+  const outcome = await (
+    conductor as unknown as {
+      planRemediation: (
+        state: ConductState,
+        steps: typeof ALL_STEPS,
+        dispatchContext: string,
+        hintSource: unknown,
+      ) => Promise<{ kind: string; target?: string; detail?: string; haltClass?: string }>;
+    }
+  ).planRemediation(
     { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
     ALL_STEPS,
     'as-built blocked',
     {
       source: input.withPrdEvidence ? 'validation-group' : 'architecture-review-as-built',
       evidence: [
-        ...(input.withPrdEvidence
-          ? [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }]
-          : []),
+        ...(input.withPrdEvidence ? [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] : []),
         { gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' },
       ],
     },
@@ -645,40 +715,54 @@ async function createRefusalReworkRemediationFixture(input?: {
   await mkdir(join(root, '.docs', 'plans'), { recursive: true });
   await mkdir(join(root, '.docs', 'stories'), { recursive: true });
   await writeFile(planPath, '### Task 1: authored plan work\n');
-  await writeFile(join(root, '.docs', 'stories', 'feature.md'), [
-    '# Stories', '', '## Story 2: the criterion', '', '#### Happy Path',
-    '- Given input, when exercised, then the criterion behavior holds.',
-  ].join('\n'));
+  await writeFile(
+    join(root, '.docs', 'stories', 'feature.md'),
+    [
+      '# Stories',
+      '',
+      '## Story 2: the criterion',
+      '',
+      '#### Happy Path',
+      '- Given input, when exercised, then the criterion behavior holds.',
+    ].join('\n'),
+  );
   await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
   const decisionId = input?.decisionId ?? 'dec-refuse-s21';
-  await writeFile(join(root, '.pipeline', 'accepted-widenings.json'), JSON.stringify({
-    version: 2,
-    feature: { version: 1, repository: '/fixture/repository', feature: 'prd-audit-kickback' },
-    decisions: [{
-      id: decisionId,
-      criterion: 'S2.1',
-      authority: 'refuse',
-      rationale: 'Rethink the refused behavior.',
-      operator: 'operator@example.test',
-      revision: 1,
-    }],
-  }));
-  await persistGroupedPrdAuditVerdict(
-    root,
-    overScopeReport('S2.1', 'outside-visible'),
-    'fixture-refusal-rework',
+  await writeFile(
+    join(root, '.pipeline', 'accepted-widenings.json'),
+    JSON.stringify({
+      version: 2,
+      feature: { version: 1, repository: '/fixture/repository', feature: 'prd-audit-kickback' },
+      decisions: [
+        {
+          id: decisionId,
+          criterion: 'S2.1',
+          authority: 'refuse',
+          rationale: 'Rethink the refused behavior.',
+          operator: 'operator@example.test',
+          revision: 1,
+        },
+      ],
+    }),
   );
+  await persistGroupedPrdAuditVerdict(root, overScopeReport('S2.1', 'outside-visible'), 'fixture-refusal-rework');
 
   const runner: StepRunner = {
     run: async (_step, _state, options) => {
       try {
-        await persistFixtureProjectedRemediationPlan(root, options, (input?.plannerGaps ?? [{
-          id: `refusal-${decisionId}`,
-          disposition: 'build',
-          category: null,
-          rationale: 'Remove the refused behavior.',
-          tasks: [{ id: 'remove-refused-s21', title: 'Remove the refused S2.1 behavior' }],
-        }]) as Parameters<typeof persistFixtureProjectedRemediationPlan>[2]);
+        await persistFixtureProjectedRemediationPlan(
+          root,
+          options,
+          (input?.plannerGaps ?? [
+            {
+              id: `refusal-${decisionId}`,
+              disposition: 'build',
+              category: null,
+              rationale: 'Remove the refused behavior.',
+              tasks: [{ id: 'remove-refused-s21', title: 'Remove the refused S2.1 behavior' }],
+            },
+          ]) as Parameters<typeof persistFixtureProjectedRemediationPlan>[2],
+        );
       } catch (error) {
         if (input?.allowUnprojectedFixture) return { success: true };
         throw error;
@@ -699,14 +783,16 @@ async function createRefusalReworkRemediationFixture(input?: {
     config: { prd_audit: { max_remediation_laps: 1 } } as never,
   });
 
-  const outcome = await (conductor as unknown as {
-    planRemediation: (
-      state: ConductState,
-      steps: typeof ALL_STEPS,
-      dispatchContext: string,
-      hintSource: { source: string; evidence: Array<{ gate: StepName; evidenceFile: string }> },
-    ) => Promise<{ kind: string; target?: string; detail?: string; haltClass?: string }>;
-  }).planRemediation(
+  const outcome = await (
+    conductor as unknown as {
+      planRemediation: (
+        state: ConductState,
+        steps: typeof ALL_STEPS,
+        dispatchContext: string,
+        hintSource: { source: string; evidence: Array<{ gate: StepName; evidenceFile: string }> },
+      ) => Promise<{ kind: string; target?: string; detail?: string; haltClass?: string }>;
+    }
+  ).planRemediation(
     { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
     ALL_STEPS,
     'prd audit refused block',
@@ -776,7 +862,11 @@ async function expectRecoverableRefusalCapHalt(
   expect(halt).toContain(refusedReworkFallbackBody('S2.1'));
   expect(halt).toContain('ai-conductor kickback-budget raise --feature');
   const ledger = JSON.parse(await readFile(join(fixture.root, '.pipeline', 'kickback-ledger.json'), 'utf8'));
-  expect(ledger.gates.prd_audit.capEvidence).toMatchObject({ gate: 'prd_audit', allowance, latestReason: 'Findings: S2.1' });
+  expect(ledger.gates.prd_audit.capEvidence).toMatchObject({
+    gate: 'prd_audit',
+    allowance,
+    latestReason: 'Findings: S2.1',
+  });
   expect(halt).toContain(`Kickback halt generation: ${ledger.gates.prd_audit.capEvidence.haltGeneration}\n`);
   await expect(readFile(fixture.planPath, 'utf8')).resolves.not.toContain('rem-prd-audit-refusal-');
   expect(fixture.calls).not.toContain('build');
@@ -842,7 +932,8 @@ async function runRefusalReworkRun(input: {
     join(root, '.pipeline', 'task-status.json'),
     JSON.stringify({
       tasks: Array.from({ length: 8 }, (_, index) => ({
-        id: `task-${index + 1}`, status: 'completed',
+        id: `task-${index + 1}`,
+        status: 'completed',
       })),
     }),
   );
@@ -850,14 +941,16 @@ async function runRefusalReworkRun(input: {
   const acceptedWidenings = JSON.stringify({
     version: 2,
     feature: { version: 1, repository: '/fixture/repository', feature: 'prd-audit-kickback' },
-    decisions: [{
-      id: decisionId,
-      criterion: 'S2.1',
-      authority: 'refuse',
-      rationale: 'Rethink the refused behavior.',
-      operator: 'operator@example.test',
-      revision: 1,
-    }],
+    decisions: [
+      {
+        id: decisionId,
+        criterion: 'S2.1',
+        authority: 'refuse',
+        rationale: 'Rethink the refused behavior.',
+        operator: 'operator@example.test',
+        revision: 1,
+      },
+    ],
   });
   await writeFile(join(root, '.pipeline', 'accepted-widenings.json'), acceptedWidenings);
 
@@ -879,8 +972,13 @@ async function runRefusalReworkRun(input: {
       version: 1,
       gates: {
         prd_audit: {
-          count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true,
-          resolvedBefore: 0, laps: input.priorLaps,
+          count: 0,
+          cumulative: 0,
+          treeHash: null,
+          lastReason: '',
+          priorVerdict: true,
+          resolvedBefore: 0,
+          laps: input.priorLaps,
         },
       },
     });
@@ -911,8 +1009,9 @@ async function runRefusalReworkRun(input: {
             : '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n',
         );
       } else if (step === 'prd_audit') {
-        const report = input.reports[Math.min(prdAuditDispatches++, input.reports.length - 1)]
-          ?? input.reports[input.reports.length - 1];
+        const report =
+          input.reports[Math.min(prdAuditDispatches++, input.reports.length - 1)] ??
+          input.reports[input.reports.length - 1];
         await persistGroupedPrdAuditVerdict(root, report, options?.runId);
       } else if (step === 'remediate') {
         retryReasons.push(options?.retryReason ?? '');
@@ -927,13 +1026,15 @@ async function runRefusalReworkRun(input: {
           await writeFile(join(root, '.pipeline', 'remediation.json'), '{ not valid json');
           return { success: true };
         }
-        const gaps = input.plannerGaps?.(options?.retryReason ?? '') ?? [{
-          id: `refusal-${decisionId}`,
-          disposition: 'build',
-          category: null,
-          rationale: 'Remove the refused behavior.',
-          tasks: [{ id: 'remove-refused-s21', title: 'Remove the refused S2.1 behavior' }],
-        }];
+        const gaps = input.plannerGaps?.(options?.retryReason ?? '') ?? [
+          {
+            id: `refusal-${decisionId}`,
+            disposition: 'build',
+            category: null,
+            rationale: 'Remove the refused behavior.',
+            tasks: [{ id: 'remove-refused-s21', title: 'Remove the refused S2.1 behavior' }],
+          },
+        ];
         await persistFixtureProjectedRemediationPlan(
           root,
           options,
@@ -945,21 +1046,37 @@ async function runRefusalReworkRun(input: {
           })),
         );
       } else if (step === 'architecture_review_as_built') {
-        await persistAsBuiltVerdict(root, input.asBuilt === 'blocked-remediable' ? {
-          version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
-          findings: [{
-            id: 'AB-1', class: 'REMEDIABLE',
-            reference: { kind: 'plan-task', taskId: '1' },
-            summary: 'Restore the approved architecture boundary.',
-          }],
-          violations: 'fixture violations', resolution: 'fixture resolution',
-        } : {
-          version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],
-        }, {
-          attemptId: options?.runId ?? 'test-run',
-          codeStamp: null,
-          policy: AS_BUILT_FIXTURE_POLICY,
-        });
+        await persistAsBuiltVerdict(
+          root,
+          input.asBuilt === 'blocked-remediable'
+            ? {
+                version: 'v2',
+                verdict: 'BLOCKED',
+                reachability: [],
+                driftNotes: [],
+                findings: [
+                  {
+                    id: 'AB-1',
+                    class: 'REMEDIABLE',
+                    reference: { kind: 'plan-task', taskId: '1' },
+                    summary: 'Restore the approved architecture boundary.',
+                  },
+                ],
+                violations: 'fixture violations',
+                resolution: 'fixture resolution',
+              }
+            : {
+                version: 'v2',
+                verdict: 'APPROVED',
+                reachability: [],
+                driftNotes: [],
+              },
+          {
+            attemptId: options?.runId ?? 'test-run',
+            codeStamp: null,
+            policy: AS_BUILT_FIXTURE_POLICY,
+          },
+        );
       } else if (step === 'build') {
         // The serial-tail observation ends at the BUILD rewind: routing the
         // refusal already proved its kickback target. Terminating with an
@@ -987,13 +1104,14 @@ async function runRefusalReworkRun(input: {
     maxRetries: 1,
     fromStep: 'manual_test',
     config: {
-      prd_audit: input.lapCap === undefined
-        ? (input.recordTierLAtComplexity || input.complexityTier !== undefined ? {} : { max_remediation_laps: 1 })
-        : { max_remediation_laps: input.lapCap },
+      prd_audit:
+        input.lapCap === undefined
+          ? input.recordTierLAtComplexity || input.complexityTier !== undefined
+            ? {}
+            : { max_remediation_laps: 1 }
+          : { max_remediation_laps: input.lapCap },
     } as never,
-    ...(input.recordTierLAtComplexity
-      ? { onComplexityAssessment: async () => 'L' as const }
-      : {}),
+    ...(input.recordTierLAtComplexity ? { onComplexityAssessment: async () => 'L' as const } : {}),
     gh: async () => ({ stdout: 'operator@example.test\n' }),
   });
   if (input.remediationMode === 'stale') {
@@ -1004,7 +1122,16 @@ async function runRefusalReworkRun(input: {
   }
   await input.beforeRun?.(root);
   await conductor.run();
-  return { root, planPath, calls, retryReasons, kickbacks, state: await readState(statePath), acceptedWidenings, decisionId };
+  return {
+    root,
+    planPath,
+    calls,
+    retryReasons,
+    kickbacks,
+    state: await readState(statePath),
+    acceptedWidenings,
+    decisionId,
+  };
 }
 
 describe('prd_audit kickback', () => {
@@ -1030,23 +1157,31 @@ describe('prd_audit kickback', () => {
       '',
     ].join('\n');
     await persistGroupedPrdAuditVerdict(root, report, 'fixture-refusal');
-    await writeFile(join(root, '.pipeline', 'accepted-widenings.json'), JSON.stringify({
-      version: 1,
-      decisions: [{
-        criterion: 'S3.1',
-        summary: 'Visible behavior outside the approved intent.',
-        decision: 'refuse',
-        rationale: 'Rework it inside scope.',
-        operator: 'operator@example.test',
-        decidedAt: '2026-08-24T00:00:00.000Z',
-      }],
-    }));
+    await writeFile(
+      join(root, '.pipeline', 'accepted-widenings.json'),
+      JSON.stringify({
+        version: 1,
+        decisions: [
+          {
+            criterion: 'S3.1',
+            summary: 'Visible behavior outside the approved intent.',
+            decision: 'refuse',
+            rationale: 'Rework it inside scope.',
+            operator: 'operator@example.test',
+            decidedAt: '2026-08-24T00:00:00.000Z',
+          },
+        ],
+      }),
+    );
     // This is a valid pre-offer legacy clear, not a v2 offer reference.
-    await writeFile(join(root, '.pipeline', 'HALT.cleared'), [
-      '```json over-scope-decisions',
-      '[{"criterion":"S9.9","summary":"x","decision":"accept","rationale":"x"}]',
-      '```',
-    ].join('\n'));
+    await writeFile(
+      join(root, '.pipeline', 'HALT.cleared'),
+      [
+        '```json over-scope-decisions',
+        '[{"criterion":"S9.9","summary":"x","decision":"accept","rationale":"x"}]',
+        '```',
+      ].join('\n'),
+    );
 
     const conductor = new Conductor({
       stateFilePath: join(root, '.pipeline/conduct-state.json'),
@@ -1059,35 +1194,46 @@ describe('prd_audit kickback', () => {
       maxRetries: 1,
     });
 
-    const recovery = await (conductor as unknown as {
-      preparePrdWideningBeforeAudit: () => Promise<string | undefined>;
-    }).preparePrdWideningBeforeAudit();
+    const recovery = await (
+      conductor as unknown as {
+        preparePrdWideningBeforeAudit: () => Promise<string | undefined>;
+      }
+    ).preparePrdWideningBeforeAudit();
     expect(recovery).toContain('unknown-criterion');
     expect(recovery).toContain('S9.9');
 
-    const route = await (conductor as unknown as {
-      routeCurrentPrdAuditOverScope: () => Promise<{
-        kind: string;
-        refusals?: Array<{ key: string; decisionId: string; revision: number; rationale: string }>;
-        refused?: Array<{ criterion: string }>;
-        defects?: Array<{ kind: string; criterion?: string }>;
-      }>;
-    }).routeCurrentPrdAuditOverScope();
+    const route = await (
+      conductor as unknown as {
+        routeCurrentPrdAuditOverScope: () => Promise<{
+          kind: string;
+          refusals?: Array<{ key: string; decisionId: string; revision: number; rationale: string }>;
+          refused?: Array<{ criterion: string }>;
+          defects?: Array<{ kind: string; criterion?: string }>;
+        }>;
+      }
+    ).routeCurrentPrdAuditOverScope();
 
     expect(route.kind).toBe('refusal-rework');
-    expect(route.refusals).toEqual([expect.objectContaining({
-      key: 'S3.1',
-      rationale: 'Rework it inside scope.',
-    })]);
+    expect(route.refusals).toEqual([
+      expect.objectContaining({
+        key: 'S3.1',
+        rationale: 'Rework it inside scope.',
+      }),
+    ]);
     expect(route.refused).toEqual([expect.objectContaining({ criterion: 'S3.1' })]);
     expect(route.defects).toBeUndefined();
 
     await expect(readPrdAuditVerdict(root)).resolves.toMatchObject({
       kind: 'present',
       value: {
-        recordedDispositions: [expect.objectContaining({
-          criterionId: 'S3.1', decision: 'refuse', rationale: 'Rework it inside scope.', authority: 'operator@example.test',
-        })],
+        recordedDispositions: [
+          expect.objectContaining({
+            criterionId: 'S3.1',
+            decision: 'refuse',
+            rationale: 'Rework it inside scope.',
+            authority: 'operator@example.test',
+          }),
+        ],
       },
     });
   });
@@ -1104,13 +1250,15 @@ describe('prd_audit kickback', () => {
 
   it('does not persist an unbound refusal answer as a remediation plan', async () => {
     const { outcome, planPath } = await createRefusalReworkRemediationFixture({
-      plannerGaps: [{
-        id: 'refusal-other-decision',
-        disposition: 'build',
-        category: null,
-        rationale: 'Binds a different decision.',
-        tasks: [{ id: 'wrong-bind', title: 'Unrelated work' }],
-      }],
+      plannerGaps: [
+        {
+          id: 'refusal-other-decision',
+          disposition: 'build',
+          category: null,
+          rationale: 'Binds a different decision.',
+          tasks: [{ id: 'wrong-bind', title: 'Unrelated work' }],
+        },
+      ],
       allowUnprojectedFixture: true,
     });
 
@@ -1124,25 +1272,32 @@ describe('prd_audit kickback', () => {
       overScopeReport('S2.1', 'outside-visible'),
       storiesWithCriterion('Happy Path'),
       async (root) => {
-        await writeFile(join(root, '.pipeline', 'accepted-widenings.json'), JSON.stringify({
-          version: 2,
-          feature: { version: 1, repository: '/fixture/repository', feature: 'prd-audit-kickback' },
-          decisions: [{
-            id: 'dec-s21',
-            criterion: 'S2.1',
-            authority: 'refuse',
-            rationale: 'Rethink the refused behavior.',
-            operator: 'operator@example.test',
-            revision: 1,
-          }],
-        }));
+        await writeFile(
+          join(root, '.pipeline', 'accepted-widenings.json'),
+          JSON.stringify({
+            version: 2,
+            feature: { version: 1, repository: '/fixture/repository', feature: 'prd-audit-kickback' },
+            decisions: [
+              {
+                id: 'dec-s21',
+                criterion: 'S2.1',
+                authority: 'refuse',
+                rationale: 'Rethink the refused behavior.',
+                operator: 'operator@example.test',
+                revision: 1,
+              },
+            ],
+          }),
+        );
       },
       { mode: 'default', daemon: false },
     );
 
     expect(fixture.calls).not.toContain('remediate');
     await expect(readFile(join(fixture.root, '.pipeline', 'HALT.class'), 'utf8')).resolves.toBe('over-scope');
-    await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('Refused — rework required: S2.1.');
+    await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'Refused — rework required: S2.1.',
+    );
   });
 
   it('dispatches refusal rework through the serial SHIP tail to BUILD', async () => {
@@ -1157,9 +1312,13 @@ describe('prd_audit kickback', () => {
     expect(fixture.retryReasons[0]).toContain('.pipeline/prd-audit.md');
     const plan = await readFile(fixture.planPath, 'utf8');
     expect(plan).toContain(`### Task rem-prd-audit-refusal-${fixture.decisionId}: Remove the refused S2.1 behavior`);
-    expect(fixture.kickbacks).toContainEqual(expect.objectContaining({
-      from: 'prd_audit', to: 'build', count: 1,
-    }));
+    expect(fixture.kickbacks).toContainEqual(
+      expect.objectContaining({
+        from: 'prd_audit',
+        to: 'build',
+        count: 1,
+      }),
+    );
     const remediateIndex = fixture.calls.indexOf('remediate');
     expect(remediateIndex).toBeGreaterThanOrEqual(0);
     expect(fixture.calls[remediateIndex + 1]).toBe('build');
@@ -1167,11 +1326,14 @@ describe('prd_audit kickback', () => {
     // operator block. The sentinel that stops the fixture at BUILD dispatch
     // leaves a needs-human marker, but never the over-scope fallback.
     await expect(readFile(join(fixture.root, '.pipeline', 'HALT.class'), 'utf8')).resolves.not.toBe('over-scope');
-    await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.not.toContain('Refused — rework required');
+    await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.not.toContain(
+      'Refused — rework required',
+    );
     // Routing reads the durable refusal but never mutates it: the store is
     // byte-identical after the round and still returns the same decision.
-    expect(await readFile(join(fixture.root, '.pipeline', 'accepted-widenings.json'), 'utf8'))
-      .toBe(fixture.acceptedWidenings);
+    expect(await readFile(join(fixture.root, '.pipeline', 'accepted-widenings.json'), 'utf8')).toBe(
+      fixture.acceptedWidenings,
+    );
     const store = new AcceptedWideningDecisionStore(fixture.root, {
       version: 1,
       repository: '/fixture/repository',
@@ -1180,11 +1342,13 @@ describe('prd_audit kickback', () => {
     await expect(store.read()).resolves.toMatchObject({
       kind: 'valid',
       state: {
-        decisions: [expect.objectContaining({
-          id: fixture.decisionId,
-          authority: 'refuse',
-          revision: 1,
-        })],
+        decisions: [
+          expect.objectContaining({
+            id: fixture.decisionId,
+            authority: 'refuse',
+            revision: 1,
+          }),
+        ],
       },
     });
   });
@@ -1196,11 +1360,10 @@ describe('prd_audit kickback', () => {
       mode: 'auto',
       beforeRun: async (root) => {
         await rm(join(root, '.pipeline', 'engine-state.json'));
-        await writeFile(join(root, '.docs', 'plans', 'unrelated.md'), [
-          '### Task 1: unrelated work',
-          '### Task 2: unrelated work',
-          '### Task 3: unrelated work',
-        ].join('\n'));
+        await writeFile(
+          join(root, '.docs', 'plans', 'unrelated.md'),
+          ['### Task 1: unrelated work', '### Task 2: unrelated work', '### Task 3: unrelated work'].join('\n'),
+        );
       },
     });
 
@@ -1217,11 +1380,10 @@ describe('prd_audit kickback', () => {
       mode: 'auto',
       beforeRun: async (root) => {
         await rm(join(root, '.pipeline', 'engine-state.json'));
-        await writeFile(join(root, '.docs', 'plans', 'unrelated.md'), [
-          '### Task 1: unrelated work',
-          '### Task 2: unrelated work',
-          '### Task 3: unrelated work',
-        ].join('\n'));
+        await writeFile(
+          join(root, '.docs', 'plans', 'unrelated.md'),
+          ['### Task 1: unrelated work', '### Task 2: unrelated work', '### Task 3: unrelated work'].join('\n'),
+        );
         await rename(join(root, '.docs', 'plans', 'feature.md'), join(root, '.docs', 'plans', 'other-feature.md'));
       },
     });
@@ -1279,14 +1441,18 @@ describe('prd_audit kickback', () => {
   it('appends and charges every task in an admitted multi-task refusal gap', async () => {
     const fixture = await runRefusalReworkRun({
       reports: [overScopeReport('S2.1', 'outside-visible')],
-      plannerGaps: () => [{
-        id: 'refusal-dec-refuse-s21', disposition: 'build', category: null,
-        rationale: 'Remove the refused behavior.',
-        tasks: [
-          { id: 'remove-refused-s21', title: 'Remove the refused S2.1 behavior' },
-          { id: 'remove-refused-wiring', title: 'Remove the refused S2.1 wiring' },
-        ],
-      }],
+      plannerGaps: () => [
+        {
+          id: 'refusal-dec-refuse-s21',
+          disposition: 'build',
+          category: null,
+          rationale: 'Remove the refused behavior.',
+          tasks: [
+            { id: 'remove-refused-s21', title: 'Remove the refused S2.1 behavior' },
+            { id: 'remove-refused-wiring', title: 'Remove the refused S2.1 wiring' },
+          ],
+        },
+      ],
     });
 
     const plan = await readFile(fixture.planPath, 'utf8');
@@ -1304,16 +1470,21 @@ describe('prd_audit kickback', () => {
       version: 1,
       gates: {
         prd_audit: {
-          count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true,
-          resolvedBefore: 0, laps: 1, effectiveLapCap: 2,
+          count: 0,
+          cumulative: 0,
+          treeHash: null,
+          lastReason: '',
+          priorVerdict: true,
+          resolvedBefore: 0,
+          laps: 1,
+          effectiveLapCap: 2,
         },
       },
     });
 
-    await expect(readRemediationGateAppendBudget(
-      root, { prd_audit: { max_remediation_laps: 1 } } as never,
-      'prd_audit', 1, 1, 1,
-    )).resolves.toMatchObject({ priorLaps: 1, lapCap: 2, taskCount: 1, growthTaskCount: 1 });
+    await expect(
+      readRemediationGateAppendBudget(root, { prd_audit: { max_remediation_laps: 1 } } as never, 'prd_audit', 1, 1, 1),
+    ).resolves.toMatchObject({ priorLaps: 1, lapCap: 2, taskCount: 1, growthTaskCount: 1 });
   });
 
   it('routes an all-refused validation group through one refusal-context remediation dispatch', async () => {
@@ -1334,7 +1505,9 @@ describe('prd_audit kickback', () => {
 
   it('preserves the serial refused-plus-pending halt body in the validation join', async () => {
     const report = [
-      '**PRD:** present', '', '## Verdict Table',
+      '**PRD:** present',
+      '',
+      '## Verdict Table',
       '| Criterion | Grade | Plan task | Evidence | Intent relation |',
       '| --- | --- | --- | --- | --- |',
       '| S2.1 | OVER_SCOPE | | Refused behavior. | outside-visible |',
@@ -1355,15 +1528,22 @@ describe('prd_audit kickback', () => {
       reports: [overScopeReport('S2.1', 'outside-visible')],
       mode: 'auto',
       asBuilt: 'blocked-remediable',
-      plannerGaps: () => [{
-        id: 'refusal-dec-refuse-s21', disposition: 'build', category: null,
-        rationale: 'Remove the refused behavior.',
-        tasks: [{ id: 'remove-refused-s21', title: 'Remove the refused S2.1 behavior' }],
-      }, {
-        id: 'AB-1', disposition: 'build', category: null,
-        rationale: 'Restore the approved architecture boundary.',
-        tasks: [{ id: 'restore-boundary', title: 'Restore the approved architecture boundary' }],
-      }],
+      plannerGaps: () => [
+        {
+          id: 'refusal-dec-refuse-s21',
+          disposition: 'build',
+          category: null,
+          rationale: 'Remove the refused behavior.',
+          tasks: [{ id: 'remove-refused-s21', title: 'Remove the refused S2.1 behavior' }],
+        },
+        {
+          id: 'AB-1',
+          disposition: 'build',
+          category: null,
+          rationale: 'Restore the approved architecture boundary.',
+          tasks: [{ id: 'restore-boundary', title: 'Restore the approved architecture boundary' }],
+        },
+      ],
     });
 
     expect(fixture.calls.filter((call) => call === 'remediate')).toHaveLength(1);
@@ -1391,14 +1571,23 @@ describe('prd_audit kickback', () => {
       overScopeReport('S2.1', 'outside-visible'),
       storiesWithCriterion('Happy Path'),
       async (root) => {
-        await writeFile(join(root, '.pipeline', 'accepted-widenings.json'), JSON.stringify({
-          version: 2,
-          feature: { version: 1, repository: '/fixture/repository', feature: 'prd-audit-kickback' },
-          decisions: [{
-            id: 'dec-s21', criterion: 'S2.1', authority, rationale,
-            operator: 'operator@example.test', revision: 2,
-          }],
-        }));
+        await writeFile(
+          join(root, '.pipeline', 'accepted-widenings.json'),
+          JSON.stringify({
+            version: 2,
+            feature: { version: 1, repository: '/fixture/repository', feature: 'prd-audit-kickback' },
+            decisions: [
+              {
+                id: 'dec-s21',
+                criterion: 'S2.1',
+                authority,
+                rationale,
+                operator: 'operator@example.test',
+                revision: 2,
+              },
+            ],
+          }),
+        );
       },
     );
 
@@ -1434,9 +1623,13 @@ describe('prd_audit kickback', () => {
     expect(fixture.retryReasons[0]).toContain(fixture.decisionId);
     expect(fixture.retryReasons[0]).toContain('.pipeline/prd-audit.md');
     expect(fixture.retryReasons[0]).toContain('S2.2');
-    expect(fixture.kickbacks).toContainEqual(expect.objectContaining({
-      from: 'prd_audit', to: 'build', count: 1,
-    }));
+    expect(fixture.kickbacks).toContainEqual(
+      expect.objectContaining({
+        from: 'prd_audit',
+        to: 'build',
+        count: 1,
+      }),
+    );
     // The provenance still points at the rendered prd-audit verdict carrying
     // the FIXABLE row, alongside the refused block.
     await expect(readFile(join(fixture.root, '.pipeline', 'prd-audit.md'), 'utf8')).resolves.toContain('FIXABLE');
@@ -1470,16 +1663,28 @@ describe('prd_audit kickback', () => {
     }
 
     const lines: string[] = [];
-    expect(await dispatchKickbackBudgetCommand(
-      {
-        kind: 'kickback-budget', action: 'raise', feature: 'feature', gate: 'prd_audit', by: 1,
-        rationale: 'rework the refused behavior', format: 'human',
-      },
-      {
-        cwd: main, resolveMainRoot: async () => main, isInteractive: () => true,
-        resolveOperator: () => 'operator', print: (line) => lines.push(line), appendEvent: () => {},
-      },
-    ), lines.join('\n')).toBe(0);
+    expect(
+      await dispatchKickbackBudgetCommand(
+        {
+          kind: 'kickback-budget',
+          action: 'raise',
+          feature: 'feature',
+          gate: 'prd_audit',
+          by: 1,
+          rationale: 'rework the refused behavior',
+          format: 'human',
+        },
+        {
+          cwd: main,
+          resolveMainRoot: async () => main,
+          isInteractive: () => true,
+          resolveOperator: () => 'operator',
+          print: (line) => lines.push(line),
+          appendEvent: () => {},
+        },
+      ),
+      lines.join('\n'),
+    ).toBe(0);
     const ledger = JSON.parse(await readFile(join(worktree, '.pipeline', 'kickback-ledger.json'), 'utf8'));
     expect(ledger.gates.prd_audit.effectiveLapCap).toBe(1);
     expect(ledger.gates.prd_audit.resumeAuthorization).toMatchObject({
@@ -1492,11 +1697,16 @@ describe('prd_audit kickback', () => {
     const fixture = await runRefusalReworkRun({
       reports: [overScopeReport('S2.1', 'outside-visible')],
       plannerGaps: () => [
-        { id: 'refusal-dec-refuse-s21', disposition: 'build', rationale: 'Remove S2.1.', tasks: [
-          { id: 'remove-s21-a', title: 'Remove S2.1 behavior' },
-          { id: 'remove-s21-b', title: 'Remove S2.1 wiring' },
-          { id: 'remove-s21-c', title: 'Remove S2.1 tests' },
-        ] },
+        {
+          id: 'refusal-dec-refuse-s21',
+          disposition: 'build',
+          rationale: 'Remove S2.1.',
+          tasks: [
+            { id: 'remove-s21-a', title: 'Remove S2.1 behavior' },
+            { id: 'remove-s21-b', title: 'Remove S2.1 wiring' },
+            { id: 'remove-s21-c', title: 'Remove S2.1 tests' },
+          ],
+        },
       ],
     });
 
@@ -1511,8 +1721,18 @@ describe('prd_audit kickback', () => {
   });
 
   it.each([
-    ['a malformed prd_audit gate with readable growth', JSON.stringify({ version: 1, gates: { prd_audit: { laps: 'bad' } }, growth: { authored: 8, added: 0, byGate: {} } })],
-    ['a malformed prd_audit gate with unreadable growth', JSON.stringify({ version: 1, gates: { prd_audit: { laps: 'bad' } }, growth: 'bad' })],
+    [
+      'a malformed prd_audit gate with readable growth',
+      JSON.stringify({
+        version: 1,
+        gates: { prd_audit: { laps: 'bad' } },
+        growth: { authored: 8, added: 0, byGate: {} },
+      }),
+    ],
+    [
+      'a malformed prd_audit gate with unreadable growth',
+      JSON.stringify({ version: 1, gates: { prd_audit: { laps: 'bad' } }, growth: 'bad' }),
+    ],
   ])('fails closed to the refused block for %s', async (_name, ledger) => {
     const fixture = await runRefusalReworkRun({
       reports: [overScopeReport('S2.1', 'outside-visible')],
@@ -1526,10 +1746,23 @@ describe('prd_audit kickback', () => {
 
   it('halts the grouped round as a recoverable prd_audit cap when the durable allowance is spent', async () => {
     const fixture = await runRefusalReworkRun({
-      reports: [overScopeReport('S2.1', 'outside-visible')], mode: 'auto',
-      beforeRun: async (root) => writeKickbackLedger(root, {
-        version: 1, gates: { prd_audit: { count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0, laps: 1 } },
-      }),
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+      mode: 'auto',
+      beforeRun: async (root) =>
+        writeKickbackLedger(root, {
+          version: 1,
+          gates: {
+            prd_audit: {
+              count: 0,
+              cumulative: 0,
+              treeHash: null,
+              lastReason: '',
+              priorVerdict: true,
+              resolvedBefore: 0,
+              laps: 1,
+            },
+          },
+        }),
     });
 
     expect(fixture.calls).not.toContain('remediate');
@@ -1537,17 +1770,31 @@ describe('prd_audit kickback', () => {
   });
 
   it.each([
-    ['a malformed prd_audit record with readable growth', async (root: string) => writeFile(
-      join(root, '.pipeline', 'kickback-ledger.json'),
-      JSON.stringify({ version: 1, gates: { prd_audit: { laps: 'bad' } }, growth: { authored: 8, added: 0, byGate: {} } }),
-    )],
-    ['a malformed prd_audit record with unreadable growth', async (root: string) => writeFile(
-      join(root, '.pipeline', 'kickback-ledger.json'),
-      JSON.stringify({ version: 1, gates: { prd_audit: { laps: 'bad' } }, growth: 'bad' }),
-    )],
+    [
+      'a malformed prd_audit record with readable growth',
+      async (root: string) =>
+        writeFile(
+          join(root, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({
+            version: 1,
+            gates: { prd_audit: { laps: 'bad' } },
+            growth: { authored: 8, added: 0, byGate: {} },
+          }),
+        ),
+    ],
+    [
+      'a malformed prd_audit record with unreadable growth',
+      async (root: string) =>
+        writeFile(
+          join(root, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({ version: 1, gates: { prd_audit: { laps: 'bad' } }, growth: 'bad' }),
+        ),
+    ],
   ])('uses the byte-identical serial refused fallback for grouped %s before dispatch', async (_name, beforeRun) => {
     const fixture = await runRefusalReworkRun({
-      reports: [overScopeReport('S2.1', 'outside-visible')], mode: 'auto', beforeRun,
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+      mode: 'auto',
+      beforeRun,
     });
 
     expect(fixture.calls).not.toContain('remediate');
@@ -1555,29 +1802,49 @@ describe('prd_audit kickback', () => {
     await expectRefusedReworkFallback(fixture);
   });
 
-  it.each([false, true])('uses the serial refused halt before grouped manual-test fallback when its round cap is exhausted (manual FAIL: %s)', async (manualTestFail) => {
-    const serial = await runRefusalReworkRun({
-      reports: [overScopeReport('S2.1', 'outside-visible')], lapCap: 0,
-    });
-    const grouped = await runRefusalReworkRun({
-      reports: [overScopeReport('S2.1', 'outside-visible')], mode: 'auto', lapCap: 0, manualTestFail,
-    });
+  it.each([false, true])(
+    'uses the serial refused halt before grouped manual-test fallback when its round cap is exhausted (manual FAIL: %s)',
+    async (manualTestFail) => {
+      const serial = await runRefusalReworkRun({
+        reports: [overScopeReport('S2.1', 'outside-visible')],
+        lapCap: 0,
+      });
+      const grouped = await runRefusalReworkRun({
+        reports: [overScopeReport('S2.1', 'outside-visible')],
+        mode: 'auto',
+        lapCap: 0,
+        manualTestFail,
+      });
 
-    expect(grouped.calls).not.toContain('remediate');
-    await expectRecoverableRefusalCapHalt(grouped);
-    expect(withoutHaltGeneration(await readFile(join(grouped.root, '.pipeline', 'HALT'), 'utf8'))).toBe(
-      withoutHaltGeneration(await readFile(join(serial.root, '.pipeline', 'HALT'), 'utf8')),
-    );
-    await expect(readFile(grouped.planPath, 'utf8')).resolves.not.toContain('rem-prd-audit-refusal-');
-  });
+      expect(grouped.calls).not.toContain('remediate');
+      await expectRecoverableRefusalCapHalt(grouped);
+      expect(withoutHaltGeneration(await readFile(join(grouped.root, '.pipeline', 'HALT'), 'utf8'))).toBe(
+        withoutHaltGeneration(await readFile(join(serial.root, '.pipeline', 'HALT'), 'utf8')),
+      );
+      await expect(readFile(grouped.planPath, 'utf8')).resolves.not.toContain('rem-prd-audit-refusal-');
+    },
+  );
 
   it('uses a raised durable allowance in the validation join', async () => {
     const fixture = await runRefusalReworkRun({
-      reports: [overScopeReport('S2.1', 'outside-visible')], mode: 'auto',
-      beforeRun: async (root) => writeKickbackLedger(root, {
-        version: 1,
-        gates: { prd_audit: { count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true, resolvedBefore: 0, laps: 1, effectiveLapCap: 2 } },
-      }),
+      reports: [overScopeReport('S2.1', 'outside-visible')],
+      mode: 'auto',
+      beforeRun: async (root) =>
+        writeKickbackLedger(root, {
+          version: 1,
+          gates: {
+            prd_audit: {
+              count: 0,
+              cumulative: 0,
+              treeHash: null,
+              lastReason: '',
+              priorVerdict: true,
+              resolvedBefore: 0,
+              laps: 1,
+              effectiveLapCap: 2,
+            },
+          },
+        }),
     });
 
     expect(fixture.calls.filter((call) => call === 'remediate')).toHaveLength(1);
@@ -1586,13 +1853,15 @@ describe('prd_audit kickback', () => {
   it('writes the refused over-scope block when admission rejects the planner output', async () => {
     const fixture = await runRefusalReworkRun({
       reports: [overScopeReport('S2.1', 'outside-visible')],
-      plannerGaps: () => [{
-        id: 'refusal-other-decision',
-        disposition: 'build',
-        category: null,
-        rationale: 'Binds a different decision.',
-        tasks: [{ id: 'wrong-bind', title: 'Unrelated work' }],
-      }],
+      plannerGaps: () => [
+        {
+          id: 'refusal-other-decision',
+          disposition: 'build',
+          category: null,
+          rationale: 'Binds a different decision.',
+          tasks: [{ id: 'wrong-bind', title: 'Unrelated work' }],
+        },
+      ],
     });
 
     // The planner ran once, bound nothing, and the tail fell back to the
@@ -1692,37 +1961,42 @@ describe('prd_audit kickback', () => {
     // not filesystem permissions (which a privileged test process can bypass).
     const report = overScopeReport('S9.7', 'outside-visible');
     const originalStringify = JSON.stringify;
-    const stringify = vi.spyOn(JSON, 'stringify').mockImplementation(
-      ((value: unknown, replacer?: Parameters<typeof JSON.stringify>[1], space?: Parameters<typeof JSON.stringify>[2]) => {
-        if (
-          typeof value === 'object' && value !== null &&
-          'recordedDispositions' in value &&
-          Array.isArray((value as { recordedDispositions?: unknown }).recordedDispositions) &&
-          (value as { recordedDispositions: unknown[] }).recordedDispositions.length > 0
-        ) {
-          throw new Error('recorded decision is unrenderable');
-        }
-        return originalStringify(value, replacer, space);
-      }) as typeof JSON.stringify,
-    );
+    const stringify = vi.spyOn(JSON, 'stringify').mockImplementation(((
+      value: unknown,
+      replacer?: Parameters<typeof JSON.stringify>[1],
+      space?: Parameters<typeof JSON.stringify>[2],
+    ) => {
+      if (
+        typeof value === 'object' &&
+        value !== null &&
+        'recordedDispositions' in value &&
+        Array.isArray((value as { recordedDispositions?: unknown }).recordedDispositions) &&
+        (value as { recordedDispositions: unknown[] }).recordedDispositions.length > 0
+      ) {
+        throw new Error('recorded decision is unrenderable');
+      }
+      return originalStringify(value, replacer, space);
+    }) as typeof JSON.stringify);
     try {
-      const fixture = await runGroupedPrdAudit(
-        report,
-        storiesWithCriterion('Happy Path'),
-        async (root) => {
-          await writeFile(join(root, '.pipeline', 'accepted-widenings.json'), JSON.stringify({
+      const fixture = await runGroupedPrdAudit(report, storiesWithCriterion('Happy Path'), async (root) => {
+        await writeFile(
+          join(root, '.pipeline', 'accepted-widenings.json'),
+          JSON.stringify({
             version: 1,
-            decisions: [{
-              criterion: 'S9.7',
-              summary: 'A recorded visible widening.',
-              decision: 'accept',
-              rationale: 'The operator explicitly accepted it.',
-              operator: 'operator@example.test',
-              decidedAt: '2026-08-25T00:00:00.000Z',
-            }],
-          }), 'utf8');
-        },
-      );
+            decisions: [
+              {
+                criterion: 'S9.7',
+                summary: 'A recorded visible widening.',
+                decision: 'accept',
+                rationale: 'The operator explicitly accepted it.',
+                operator: 'operator@example.test',
+                decidedAt: '2026-08-25T00:00:00.000Z',
+              },
+            ],
+          }),
+          'utf8',
+        );
+      });
 
       await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
         'recorded findings could not be persisted to .pipeline/prd-audit.json',
@@ -1749,38 +2023,46 @@ describe('prd_audit kickback', () => {
   });
 
   it('tells an operator that pending leaves a prior decision unchanged only for revise-decision offers', () => {
-    const reviseDecision = renderOverScopeDecisionBlock([{
-      kind: 'revise-decision',
-      criterion: 'NC-8',
-      summary: 'A previously refused scope expansion.',
-      relation: 'outside-visible',
-      offerEntryId: 'prd-case-8',
-      originalSource: { id: 'prd-audit:NC-8', snapshot: 'Original refusal evidence.' },
-      originalCaseId: 'prd-case-8',
-      priorDecision: { id: 'decision-8', revision: 1 },
-    }]);
-    const pendingOnly = renderOverScopeDecisionBlock([{
-      criterion: 'NC-9',
-      summary: 'A newly reported scope expansion.',
-      relation: 'outside-visible',
-    }]);
+    const reviseDecision = renderOverScopeDecisionBlock([
+      {
+        kind: 'revise-decision',
+        criterion: 'NC-8',
+        summary: 'A previously refused scope expansion.',
+        relation: 'outside-visible',
+        offerEntryId: 'prd-case-8',
+        originalSource: { id: 'prd-audit:NC-8', snapshot: 'Original refusal evidence.' },
+        originalCaseId: 'prd-case-8',
+        priorDecision: { id: 'decision-8', revision: 1 },
+      },
+    ]);
+    const pendingOnly = renderOverScopeDecisionBlock([
+      {
+        criterion: 'NC-9',
+        summary: 'A newly reported scope expansion.',
+        relation: 'outside-visible',
+      },
+    ]);
 
     expect(reviseDecision).toContain('leaving `decision` as `pending` keeps the prior decision unchanged');
     expect(pendingOnly).not.toContain('keeps the prior decision unchanged');
   });
 
   it('names the payload-preserving halt clear command instead of an unspecified clear (#2576)', () => {
-    const pendingOnly = renderOverScopeDecisionBlock([{ criterion: 'S5.6', summary: 'Widened.', relation: 'outside-visible' }]);
-    const reviseDecision = renderOverScopeDecisionBlock([{
-      kind: 'revise-decision',
-      criterion: 'NC.8',
-      summary: 'A previously refused scope expansion.',
-      relation: 'outside-visible',
-      offerEntryId: 'prd-case-8',
-      originalSource: { id: 'prd-audit:NC.8', snapshot: 'Original refusal evidence.' },
-      originalCaseId: 'prd-case-8',
-      priorDecision: { id: 'decision-8', revision: 1 },
-    }]);
+    const pendingOnly = renderOverScopeDecisionBlock([
+      { criterion: 'S5.6', summary: 'Widened.', relation: 'outside-visible' },
+    ]);
+    const reviseDecision = renderOverScopeDecisionBlock([
+      {
+        kind: 'revise-decision',
+        criterion: 'NC.8',
+        summary: 'A previously refused scope expansion.',
+        relation: 'outside-visible',
+        offerEntryId: 'prd-case-8',
+        originalSource: { id: 'prd-audit:NC.8', snapshot: 'Original refusal evidence.' },
+        originalCaseId: 'prd-case-8',
+        priorDecision: { id: 'decision-8', revision: 1 },
+      },
+    ]);
 
     for (const rendered of [pendingOnly, reviseDecision]) {
       expect(rendered).toContain('ai-conductor halt clear --feature <slug>');
@@ -1801,7 +2083,7 @@ describe('prd_audit kickback', () => {
       configureConductor?: (conductor: Conductor) => void;
     },
   ) {
-    const root = options?.root ?? await mkdtemp(join(tmpdir(), 'prd-audit-group-route-'));
+    const root = options?.root ?? (await mkdtemp(join(tmpdir(), 'prd-audit-group-route-')));
     if (!options?.root) dirs.push(root);
     const statePath = join(root, '.pipeline', 'conduct-state.json');
     await mkdir(join(root, '.pipeline'), { recursive: true });
@@ -1851,25 +2133,37 @@ describe('prd_audit kickback', () => {
               success: true,
               finalStructuredResult: {
                 version: 'v1',
-                results: [{
-                  sourceId: prdWideningSourceId({
-                    criterion: 'NC.1', grade: 'OVER_SCOPE',
-                    evidence: 'A visible behavior exists outside the approved plan.', prdIds: [],
-                  }),
-                  kind: 'same-case', caseId,
-                  reason: 'The current report names the original accepted behavior.',
-                }],
+                results: [
+                  {
+                    sourceId: prdWideningSourceId({
+                      criterion: 'NC.1',
+                      grade: 'OVER_SCOPE',
+                      evidence: 'A visible behavior exists outside the approved plan.',
+                      prdIds: [],
+                    }),
+                    kind: 'same-case',
+                    caseId,
+                    reason: 'The current report names the original accepted behavior.',
+                  },
+                ],
               },
             };
           }
         } else if (step === 'architecture_review_as_built') {
-          await persistAsBuiltVerdict(root, {
-            version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],
-          }, {
-            attemptId: options?.runId ?? 'test-run',
-            codeStamp: null,
-            policy: AS_BUILT_FIXTURE_POLICY,
-          });
+          await persistAsBuiltVerdict(
+            root,
+            {
+              version: 'v2',
+              verdict: 'APPROVED',
+              reachability: [],
+              driftNotes: [],
+            },
+            {
+              attemptId: options?.runId ?? 'test-run',
+              codeStamp: null,
+              policy: AS_BUILT_FIXTURE_POLICY,
+            },
+          );
         }
         return { success: true };
       },
@@ -1903,50 +2197,66 @@ describe('prd_audit kickback', () => {
     await mkdir(join(root, '.pipeline'), { recursive: true });
     await mkdir(join(root, '.docs', 'plans'), { recursive: true });
     await mkdir(join(root, '.docs', 'stories'), { recursive: true });
-    const plan = Array.from(
-      { length: 20 },
-      (_, index) => `### Task ${index + 1}: authored work ${index + 1}\n`,
-    ).join('\n');
-    await writeFile(planPath, plan);
-    await writeFile(join(root, '.docs', 'stories', 'feature.md'), [
-      '# Stories', '', '## Story 2: remediation', '', '#### Happy Path',
-      '- Given S2.1, when repaired, then it holds.',
-      '- Given S2.2, when repaired, then it holds.',
-      '- Given S2.3, when repaired, then it holds.',
-    ].join('\n'));
-    await writeFile(
-      join(root, '.pipeline', 'engine-state.json'),
-      JSON.stringify({ activePlanPath: planPath }),
+    const plan = Array.from({ length: 20 }, (_, index) => `### Task ${index + 1}: authored work ${index + 1}\n`).join(
+      '\n',
     );
-    await persistPrdAuditVerdict(root, {
-      complete: true,
-      judgment: {
-        version: 'v1',
-        criterionJudgments: [
-          ['S2.1', 4, 'Missing first behavior'],
-          ['S2.2', 5, 'Missing second behavior'],
-          ['S2.3', 6, 'Missing third behavior'],
-        ].map(([criterionId, ownerTaskId, evidence]) => ({
-          criterion: { storyId: '2', ordinal: Number(String(criterionId).slice('S2.'.length)) },
-          criterionId: String(criterionId), grade: 'FIXABLE' as const, evidence: String(evidence),
-          rationale: 'Fixture repair.', requirementAssociations: [], evidenceTaskIds: [String(ownerTaskId)], ownerTaskId: String(ownerTaskId),
-        })),
-        noOwnerObservations: [],
+    await writeFile(planPath, plan);
+    await writeFile(
+      join(root, '.docs', 'stories', 'feature.md'),
+      [
+        '# Stories',
+        '',
+        '## Story 2: remediation',
+        '',
+        '#### Happy Path',
+        '- Given S2.1, when repaired, then it holds.',
+        '- Given S2.2, when repaired, then it holds.',
+        '- Given S2.3, when repaired, then it holds.',
+      ].join('\n'),
+    );
+    await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
+    await persistPrdAuditVerdict(
+      root,
+      {
+        complete: true,
+        judgment: {
+          version: 'v1',
+          criterionJudgments: [
+            ['S2.1', 4, 'Missing first behavior'],
+            ['S2.2', 5, 'Missing second behavior'],
+            ['S2.3', 6, 'Missing third behavior'],
+          ].map(([criterionId, ownerTaskId, evidence]) => ({
+            criterion: { storyId: '2', ordinal: Number(String(criterionId).slice('S2.'.length)) },
+            criterionId: String(criterionId),
+            grade: 'FIXABLE' as const,
+            evidence: String(evidence),
+            rationale: 'Fixture repair.',
+            requirementAssociations: [],
+            evidenceTaskIds: [String(ownerTaskId)],
+            ownerTaskId: String(ownerTaskId),
+          })),
+          noOwnerObservations: [],
+        },
+        diagnostics: [],
+        recordedDispositions: [],
       },
-      diagnostics: [],
-      recordedDispositions: [],
-    }, { attemptId: 'fixture-capped-lap', codeStamp: null });
+      { attemptId: 'fixture-capped-lap', codeStamp: null },
+    );
 
     const runner: StepRunner = {
       run: async (step, _state, options) => {
         if (step === 'remediate') {
-          await persistFixtureProjectedRemediationPlan(root, options, ['S2.1', 'S2.2', 'S2.3'].map((criterion) => ({
-            id: criterion,
-            disposition: 'build',
-            category: null,
-            rationale: `Repair ${criterion}.`,
-            tasks: [{ id: `rem-${criterion.toLowerCase()}`, title: `Repair ${criterion}` }],
-          })));
+          await persistFixtureProjectedRemediationPlan(
+            root,
+            options,
+            ['S2.1', 'S2.2', 'S2.3'].map((criterion) => ({
+              id: criterion,
+              disposition: 'build',
+              category: null,
+              rationale: `Repair ${criterion}.`,
+              tasks: [{ id: `rem-${criterion.toLowerCase()}`, title: `Repair ${criterion}` }],
+            })),
+          );
         }
         return { success: true };
       },
@@ -1963,17 +2273,19 @@ describe('prd_audit kickback', () => {
       config: { prd_audit: { max_remediation_laps: 1 } } as never,
     });
 
-    const outcome = await (conductor as unknown as {
-      planRemediation: (
-        state: ConductState,
-        steps: typeof ALL_STEPS,
-        dispatchContext: string,
-        hintSource: {
-          source: string;
-          evidence: Array<{ gate: StepName; evidenceFile: string }>;
-        },
-      ) => Promise<{ kind: string; target?: string }>;
-    }).planRemediation(
+    const outcome = await (
+      conductor as unknown as {
+        planRemediation: (
+          state: ConductState,
+          steps: typeof ALL_STEPS,
+          dispatchContext: string,
+          hintSource: {
+            source: string;
+            evidence: Array<{ gate: StepName; evidenceFile: string }>;
+          },
+        ) => Promise<{ kind: string; target?: string }>;
+      }
+    ).planRemediation(
       { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
       ALL_STEPS,
       'prd audit blocked',
@@ -1985,7 +2297,11 @@ describe('prd_audit kickback', () => {
 
     expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
     const appendedPlan = await readFile(planPath, 'utf8');
-    for (const [criterion, parentTask] of [['S2.1', 4], ['S2.2', 5], ['S2.3', 6]] as const) {
+    for (const [criterion, parentTask] of [
+      ['S2.1', 4],
+      ['S2.2', 5],
+      ['S2.3', 6],
+    ] as const) {
       expect(appendedPlan).toContain(`**Criterion:** ${criterion}`);
       expect(appendedPlan).toContain(`**Parent task:** ${parentTask}`);
       expect(appendedPlan).toContain(`**Done when:**\n- [test] ${criterion} is satisfied by this task.`);
@@ -2004,9 +2320,10 @@ describe('prd_audit kickback', () => {
     const planPath = join(root, '.docs', 'plans', 'feature.md');
     await mkdir(join(root, '.docs', 'plans'), { recursive: true });
     await mkdir(join(root, '.pipeline'), { recursive: true });
-    await writeFile(planPath, [
-      '### Task 1: authored', '### Task 2: authored', '### Task rem-prd: recorded prd addition',
-    ].join('\n'));
+    await writeFile(
+      planPath,
+      ['### Task 1: authored', '### Task 2: authored', '### Task rem-prd: recorded prd addition'].join('\n'),
+    );
     await writeFile(join(root, '.pipeline/engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
     await writeKickbackLedger(root, {
       version: 1,
@@ -2018,9 +2335,14 @@ describe('prd_audit kickback', () => {
       run: async () => ({ success: true }),
     };
     const conductor = new Conductor({
-      stateFilePath: join(root, '.pipeline/conduct-state.json'), stepRunner: runner,
-      events: new ConductorEventEmitter(), projectRoot: root, mode: 'auto', daemon: true,
-      verifyArtifacts: false, maxRetries: 1,
+      stateFilePath: join(root, '.pipeline/conduct-state.json'),
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 1,
       config: {
         architecture_review_as_built: { remediation: { enabled: false } },
       } as never,
@@ -2028,19 +2350,27 @@ describe('prd_audit kickback', () => {
 
     const remediationState = { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState;
     (conductor as unknown as { persistedStateSnapshot: ConductState }).persistedStateSnapshot = { ...remediationState };
-    const outcome = await (conductor as unknown as {
-      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; detail?: string }>;
-    }).planRemediation(
-      remediationState,
-      ALL_STEPS,
-      'as-built blocked',
-      { source: 'as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }] },
-    );
+    const outcome = await (
+      conductor as unknown as {
+        planRemediation: (
+          state: ConductState,
+          steps: typeof ALL_STEPS,
+          dispatchContext: string,
+          hintSource: unknown,
+        ) => Promise<{ kind: string; detail?: string }>;
+      }
+    ).planRemediation(remediationState, ALL_STEPS, 'as-built blocked', {
+      source: 'as-built',
+      evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }],
+    });
 
     expect(outcome).toMatchObject({ kind: 'none' });
     expect(await readFile(planPath, 'utf8')).not.toContain('rem-arch');
     await expect(readGrowth(root, 4)).resolves.toEqual({
-      authored: 2, added: 1, byGate: { prd_audit: 1 }, remaining: 3,
+      authored: 2,
+      added: 1,
+      byGate: { prd_audit: 1 },
+      remaining: 3,
     });
   });
 
@@ -2050,48 +2380,72 @@ describe('prd_audit kickback', () => {
     const planPath = join(root, '.docs', 'plans', 'feature.md');
     await mkdir(join(root, '.docs', 'plans'), { recursive: true });
     await mkdir(join(root, '.pipeline'), { recursive: true });
-    await writeFile(planPath, [
-      '### Task 1: authored',
-      '### Task 2: authored',
-      '### Task 3: authored',
-      '### Task 4: authored',
-    ].join('\n'));
+    await writeFile(
+      planPath,
+      ['### Task 1: authored', '### Task 2: authored', '### Task 3: authored', '### Task 4: authored'].join('\n'),
+    );
     await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
-    await writeFile(join(root, '.pipeline', 'architecture-review-as-built.md'), [
-      'Verdict: BLOCKED',
-      '',
-      '## Blocking Findings',
-      '| Finding | Class | Governing clause | Summary |',
-      '| --- | --- | --- | --- |',
-      '| arch-gap | REMEDIABLE | Task 1 | Repair approved architecture drift. |',
-    ].join('\n'));
+    await writeFile(
+      join(root, '.pipeline', 'architecture-review-as-built.md'),
+      [
+        'Verdict: BLOCKED',
+        '',
+        '## Blocking Findings',
+        '| Finding | Class | Governing clause | Summary |',
+        '| --- | --- | --- | --- |',
+        '| arch-gap | REMEDIABLE | Task 1 | Repair approved architecture drift. |',
+      ].join('\n'),
+    );
     const runner: StepRunner = {
       run: async () => {
-        await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({
-          dispositions: [{
-            id: 'arch-gap', disposition: 'build', category: null, rationale: 'Repair approved architecture drift.',
-            tasks: [{ id: 'rem-arch', title: 'Repair approved architecture drift' }],
-          }],
-        }));
+        await writeFile(
+          join(root, '.pipeline', 'remediation.json'),
+          JSON.stringify({
+            dispositions: [
+              {
+                id: 'arch-gap',
+                disposition: 'build',
+                category: null,
+                rationale: 'Repair approved architecture drift.',
+                tasks: [{ id: 'rem-arch', title: 'Repair approved architecture drift' }],
+              },
+            ],
+          }),
+        );
         return { success: true };
       },
     };
     const conductor = new Conductor({
-      stateFilePath: join(root, '.pipeline/conduct-state.json'), stepRunner: runner,
-      events: new ConductorEventEmitter(), projectRoot: root, mode: 'auto', daemon: true,
-      verifyArtifacts: false, maxRetries: 1,
+      stateFilePath: join(root, '.pipeline/conduct-state.json'),
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 1,
       config: {
         architecture_review_as_built: { remediation: { enabled: true } },
       } as never,
     });
 
-    const outcome = await (conductor as unknown as {
-      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; target?: string; detail?: string }>;
-    }).planRemediation(
+    const outcome = await (
+      conductor as unknown as {
+        planRemediation: (
+          state: ConductState,
+          steps: typeof ALL_STEPS,
+          dispatchContext: string,
+          hintSource: unknown,
+        ) => Promise<{ kind: string; target?: string; detail?: string }>;
+      }
+    ).planRemediation(
       { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
       ALL_STEPS,
       'as-built blocked',
-      { source: 'as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }] },
+      {
+        source: 'as-built',
+        evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }],
+      },
     );
 
     expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
@@ -2111,57 +2465,79 @@ describe('prd_audit kickback', () => {
       mkdir(join(root, '.pipeline'), { recursive: true }),
     ]);
     await writeFile(planPath, '### Task 7: Existing approved work\n');
-    await writeFile(join(root, '.docs', 'decisions', `${adrStem}.md`), [
-      '# ADR: Example architecture',
-      '**Status:** APPROVED',
-      '',
-      '## Decision',
-      '',
-      '1. **Guard the architecture boundary.**',
-    ].join('\n'));
+    await writeFile(
+      join(root, '.docs', 'decisions', `${adrStem}.md`),
+      [
+        '# ADR: Example architecture',
+        '**Status:** APPROVED',
+        '',
+        '## Decision',
+        '',
+        '1. **Guard the architecture boundary.**',
+      ].join('\n'),
+    );
     await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
-    await writeFile(join(root, '.pipeline', 'architecture-review-as-built.md'), [
-      'Verdict: BLOCKED',
-      '',
-      '## Blocking Findings',
-      '| Finding | Class | Governing clause | Summary |',
-      '| --- | --- | --- | --- |',
-      `| AB-ADR | REMEDIABLE | ${adrStem} decision 1 | Add the approved architecture guard |`,
-      '| AB-TASK | REMEDIABLE | Task 7 | Complete the existing approved work |',
-    ].join('\n'));
-
+    await writeFile(
+      join(root, '.pipeline', 'architecture-review-as-built.md'),
+      [
+        'Verdict: BLOCKED',
+        '',
+        '## Blocking Findings',
+        '| Finding | Class | Governing clause | Summary |',
+        '| --- | --- | --- | --- |',
+        `| AB-ADR | REMEDIABLE | ${adrStem} decision 1 | Add the approved architecture guard |`,
+        '| AB-TASK | REMEDIABLE | Task 7 | Complete the existing approved work |',
+      ].join('\n'),
+    );
 
     let remediationRound = 0;
     const runner: StepRunner = {
       run: async () => {
         remediationRound++;
-        await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({
-          dispositions: remediationRound === 1
-            ? [
-                {
-                  id: 'AB-ADR', disposition: 'build', category: null,
-                  rationale: 'Conform to the approved ADR.',
-                  tasks: [{ id: 'adr-guard', title: 'Add the approved architecture guard' }],
-                },
-                {
-                  id: 'AB-TASK', disposition: 'build', category: null,
-                  rationale: 'Conform to the active plan task.',
-                  tasks: [{ id: 'task-guard', title: 'Complete the existing approved work' }],
-                },
-              ]
-            : [{
-                id: 'AB-LATER', disposition: 'build', category: null,
-                rationale: 'Complete the later as-built finding.',
-                tasks: [{ id: 'later-guard', title: 'Complete the later approved work' }],
-              }],
-        }));
+        await writeFile(
+          join(root, '.pipeline', 'remediation.json'),
+          JSON.stringify({
+            dispositions:
+              remediationRound === 1
+                ? [
+                    {
+                      id: 'AB-ADR',
+                      disposition: 'build',
+                      category: null,
+                      rationale: 'Conform to the approved ADR.',
+                      tasks: [{ id: 'adr-guard', title: 'Add the approved architecture guard' }],
+                    },
+                    {
+                      id: 'AB-TASK',
+                      disposition: 'build',
+                      category: null,
+                      rationale: 'Conform to the active plan task.',
+                      tasks: [{ id: 'task-guard', title: 'Complete the existing approved work' }],
+                    },
+                  ]
+                : [
+                    {
+                      id: 'AB-LATER',
+                      disposition: 'build',
+                      category: null,
+                      rationale: 'Complete the later as-built finding.',
+                      tasks: [{ id: 'later-guard', title: 'Complete the later approved work' }],
+                    },
+                  ],
+          }),
+        );
         return { success: true };
       },
     };
     const conductor = new Conductor({
-      stateFilePath: join(root, '.pipeline', 'conduct-state.json'), stepRunner: runner,
-      events: new ConductorEventEmitter(), projectRoot: root, mode: 'auto', daemon: true,
-      verifyArtifacts: false, maxRetries: 1,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 1,
       config: {
         prd_audit: { max_appended_tasks: 3, max_appended_ratio: 3 },
         architecture_review_as_built: {
@@ -2171,43 +2547,74 @@ describe('prd_audit kickback', () => {
       } as never,
     });
 
-    const outcome = await (conductor as unknown as {
-      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; target?: string }>;
-    }).planRemediation(
+    const outcome = await (
+      conductor as unknown as {
+        planRemediation: (
+          state: ConductState,
+          steps: typeof ALL_STEPS,
+          dispatchContext: string,
+          hintSource: unknown,
+        ) => Promise<{ kind: string; target?: string }>;
+      }
+    ).planRemediation(
       { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
       ALL_STEPS,
       'as-built blocked',
-      { source: 'as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }] },
+      {
+        source: 'as-built',
+        evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }],
+      },
     );
 
     expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
     const appended = await readFile(planPath, 'utf8');
     expect(appended.match(/^### Task rem-as-built-/gm)).toHaveLength(2);
 
-    await writeFile(join(root, '.pipeline', 'architecture-review-as-built.md'), [
-      'Verdict: BLOCKED',
-      '',
-      '## Blocking Findings',
-      '| Finding | Class | Governing clause | Summary |',
-      '| --- | --- | --- | --- |',
-      '| AB-LATER | REMEDIABLE | Task 7 | Complete the later approved work |',
-    ].join('\n'));
-    await expect((conductor as unknown as {
-      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; target?: string }>;
-    }).planRemediation(
-      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
-      ALL_STEPS,
-      'as-built blocked again',
-      { source: 'as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }] },
-    )).resolves.toMatchObject({ kind: 'route', target: 'build' });
+    await writeFile(
+      join(root, '.pipeline', 'architecture-review-as-built.md'),
+      [
+        'Verdict: BLOCKED',
+        '',
+        '## Blocking Findings',
+        '| Finding | Class | Governing clause | Summary |',
+        '| --- | --- | --- | --- |',
+        '| AB-LATER | REMEDIABLE | Task 7 | Complete the later approved work |',
+      ].join('\n'),
+    );
+    await expect(
+      (
+        conductor as unknown as {
+          planRemediation: (
+            state: ConductState,
+            steps: typeof ALL_STEPS,
+            dispatchContext: string,
+            hintSource: unknown,
+          ) => Promise<{ kind: string; target?: string }>;
+        }
+      ).planRemediation(
+        { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+        ALL_STEPS,
+        'as-built blocked again',
+        {
+          source: 'as-built',
+          evidence: [
+            { gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' },
+          ],
+        },
+      ),
+    ).resolves.toMatchObject({ kind: 'route', target: 'build' });
 
     // A rebuilt gate replaces its BLOCKED report with its converged verdict.
     // The conductor carries the authorized rows through that replacement and
     // projects every lap only once the re-evaluation is green.
     await writeFile(join(root, '.pipeline', 'architecture-review-as-built.md'), 'Verdict: APPROVED\n');
-    await expect((conductor as unknown as {
-      projectPendingAsBuiltRemediationFindings: () => Promise<string | undefined>;
-    }).projectPendingAsBuiltRemediationFindings()).resolves.toBeUndefined();
+    await expect(
+      (
+        conductor as unknown as {
+          projectPendingAsBuiltRemediationFindings: () => Promise<string | undefined>;
+        }
+      ).projectPendingAsBuiltRemediationFindings(),
+    ).resolves.toBeUndefined();
     const projected = await readFile(join(root, '.pipeline', 'architecture-review-as-built.md'), 'utf8');
     expect(projected).toContain('## Recorded Findings');
     expect(projected).toContain('"finding": "AB-ADR"');
@@ -2220,28 +2627,40 @@ describe('prd_audit kickback', () => {
   it.skip('reloads appended as-built findings into the successful verdict and shipment handoff after restart', async () => {
     const fixture = await createAsBuiltRemediationCapFixture({ appendCap: 3 });
     expect(fixture.outcome).toMatchObject({ kind: 'route', target: 'build' });
-    const pendingAfterFirstLap = (await readKickbackLedger(fixture.root) as {
-      pendingAsBuiltRemediationFindings?: unknown;
-    }).pendingAsBuiltRemediationFindings;
-    await writeFile(join(fixture.root, '.pipeline', 'architecture-review-as-built.md'), [
-      'Verdict: BLOCKED',
-      '',
-      '## Blocking Findings',
-      '| Finding | Class | Governing clause | Summary |',
-      '| --- | --- | --- | --- |',
-      '| AB-3 | REMEDIABLE | Task 3 | Complete the next approved task |',
-    ].join('\n'));
+    const pendingAfterFirstLap = (
+      (await readKickbackLedger(fixture.root)) as {
+        pendingAsBuiltRemediationFindings?: unknown;
+      }
+    ).pendingAsBuiltRemediationFindings;
+    await writeFile(
+      join(fixture.root, '.pipeline', 'architecture-review-as-built.md'),
+      [
+        'Verdict: BLOCKED',
+        '',
+        '## Blocking Findings',
+        '| Finding | Class | Governing clause | Summary |',
+        '| --- | --- | --- | --- |',
+        '| AB-3 | REMEDIABLE | Task 3 | Complete the next approved task |',
+      ].join('\n'),
+    );
     const secondLap = new Conductor({
       stateFilePath: join(fixture.root, '.pipeline', 'conduct-state.json'),
       stepRunner: {
         run: async () => {
-          await writeFile(join(fixture.root, '.pipeline', 'remediation.json'), JSON.stringify({
-            dispositions: [{
-              id: 'AB-3', disposition: 'build', category: null,
-              rationale: 'Complete the next approved task.',
-              tasks: [{ id: 'fix-ab-3', title: 'Complete the next approved task' }],
-            }],
-          }));
+          await writeFile(
+            join(fixture.root, '.pipeline', 'remediation.json'),
+            JSON.stringify({
+              dispositions: [
+                {
+                  id: 'AB-3',
+                  disposition: 'build',
+                  category: null,
+                  rationale: 'Complete the next approved task.',
+                  tasks: [{ id: 'fix-ab-3', title: 'Complete the next approved task' }],
+                },
+              ],
+            }),
+          );
           return { success: true };
         },
       },
@@ -2259,25 +2678,33 @@ describe('prd_audit kickback', () => {
         },
       } as never,
     });
-    await expect((secondLap as unknown as {
-      planRemediation: (
-        state: ConductState,
-        steps: typeof ALL_STEPS,
-        dispatchContext: string,
-        hintSource: unknown,
-      ) => Promise<{ kind: string; target?: string }>;
-    }).planRemediation(
-      { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
-      ALL_STEPS,
-      'as-built blocked after restart',
-      {
-        source: 'architecture-review-as-built',
-        evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }],
-      },
-    )).resolves.toMatchObject({ kind: 'route', target: 'build' });
-    const pendingBeforeSuccess = (await readKickbackLedger(fixture.root) as {
-      pendingAsBuiltRemediationFindings?: unknown;
-    }).pendingAsBuiltRemediationFindings;
+    await expect(
+      (
+        secondLap as unknown as {
+          planRemediation: (
+            state: ConductState,
+            steps: typeof ALL_STEPS,
+            dispatchContext: string,
+            hintSource: unknown,
+          ) => Promise<{ kind: string; target?: string }>;
+        }
+      ).planRemediation(
+        { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
+        ALL_STEPS,
+        'as-built blocked after restart',
+        {
+          source: 'architecture-review-as-built',
+          evidence: [
+            { gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' },
+          ],
+        },
+      ),
+    ).resolves.toMatchObject({ kind: 'route', target: 'build' });
+    const pendingBeforeSuccess = (
+      (await readKickbackLedger(fixture.root)) as {
+        pendingAsBuiltRemediationFindings?: unknown;
+      }
+    ).pendingAsBuiltRemediationFindings;
     const restartState: Record<string, unknown> = {
       feature_desc: 'as-built-restart',
       complexity_tier: 'L',
@@ -2301,13 +2728,20 @@ describe('prd_audit kickback', () => {
       stepRunner: {
         run: async (step, _state, options) => {
           if (step === 'architecture_review_as_built') {
-            await persistAsBuiltVerdict(fixture.root, {
-              version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],
-            }, {
-              attemptId: options?.runId ?? 'test-run',
-              codeStamp: null,
-              policy: AS_BUILT_FIXTURE_POLICY,
-            });
+            await persistAsBuiltVerdict(
+              fixture.root,
+              {
+                version: 'v2',
+                verdict: 'APPROVED',
+                reachability: [],
+                driftNotes: [],
+              },
+              {
+                attemptId: options?.runId ?? 'test-run',
+                codeStamp: null,
+                policy: AS_BUILT_FIXTURE_POLICY,
+              },
+            );
           }
           return { success: true };
         },
@@ -2326,9 +2760,11 @@ describe('prd_audit kickback', () => {
     const shipmentFindings = recordedShipmentFindings({
       asBuilt: finalVerdict.kind === 'present' ? finalVerdict.value : undefined,
     });
-    const pendingAfterSuccess = (await readKickbackLedger(fixture.root) as {
-      pendingAsBuiltRemediationFindings?: unknown;
-    }).pendingAsBuiltRemediationFindings;
+    const pendingAfterSuccess = (
+      (await readKickbackLedger(fixture.root)) as {
+        pendingAsBuiltRemediationFindings?: unknown;
+      }
+    ).pendingAsBuiltRemediationFindings;
 
     expect({
       pendingAfterFirstLap,
@@ -2408,14 +2844,10 @@ describe('prd_audit kickback', () => {
       ],
       pendingAfterSuccess: undefined,
     });
-    const shippedRecord = appendRecordedShipmentFindings([
-      '---',
-      'slug: as-built-restart',
-      'spec_hash: digest',
-      '---',
-      '',
-      '## Cost',
-    ].join('\n'), shipmentFindings);
+    const shippedRecord = appendRecordedShipmentFindings(
+      ['---', 'slug: as-built-restart', 'spec_hash: digest', '---', '', '## Cost'].join('\n'),
+      shipmentFindings,
+    );
     expect(shippedRecord).toContain('findings:');
     expect(shippedRecord).toContain('    finding: AB-1');
     expect(shippedRecord).toContain('    finding: AB-2');
@@ -2432,21 +2864,33 @@ describe('prd_audit kickback', () => {
     ]);
     await writeFile(planPath, [1, 2, 3, 4].map((id) => `### Task ${id}: Authored work`).join('\n'));
     await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({ activePlanPath: planPath }));
-    await writeFile(join(root, '.pipeline', 'architecture-review-as-built.md'), [
-      'Verdict: BLOCKED',
-      '',
-      '## Blocking Findings',
-      '| Finding | Class | Governing clause | Summary |',
-      '| --- | --- | --- | --- |',
-      '| AB-1 | REMEDIABLE | Task 1 | Add the approved guard |',
-    ].join('\n'));
+    await writeFile(
+      join(root, '.pipeline', 'architecture-review-as-built.md'),
+      [
+        'Verdict: BLOCKED',
+        '',
+        '## Blocking Findings',
+        '| Finding | Class | Governing clause | Summary |',
+        '| --- | --- | --- | --- |',
+        '| AB-1 | REMEDIABLE | Task 1 | Add the approved guard |',
+      ].join('\n'),
+    );
     const buildReview = {
-      count: 2, cumulative: 4, treeHash: 'build-tree', lastReason: 'prior build review',
-      priorVerdict: true, resolvedBefore: 3,
+      count: 2,
+      cumulative: 4,
+      treeHash: 'build-tree',
+      lastReason: 'prior build review',
+      priorVerdict: true,
+      resolvedBefore: 3,
     };
     const prdAudit = {
-      count: 1, cumulative: 1, treeHash: 'prd-tree', lastReason: 'prior prd audit',
-      priorVerdict: true, resolvedBefore: 1, laps: 1,
+      count: 1,
+      cumulative: 1,
+      treeHash: 'prd-tree',
+      lastReason: 'prior prd audit',
+      priorVerdict: true,
+      resolvedBefore: 1,
+      laps: 1,
     };
     await writeKickbackLedger(root, {
       version: 1,
@@ -2456,12 +2900,20 @@ describe('prd_audit kickback', () => {
     const initialLedger = await readKickbackLedger(root);
     const runner: StepRunner = {
       run: async () => {
-        await writeFile(join(root, '.pipeline', 'remediation.json'), JSON.stringify({
-          dispositions: [{
-            id: 'AB-1', disposition: 'build', category: null, rationale: 'Add the approved guard.',
-            tasks: [{ id: 'approved-guard', title: 'Add the approved guard' }],
-          }],
-        }));
+        await writeFile(
+          join(root, '.pipeline', 'remediation.json'),
+          JSON.stringify({
+            dispositions: [
+              {
+                id: 'AB-1',
+                disposition: 'build',
+                category: null,
+                rationale: 'Add the approved guard.',
+                tasks: [{ id: 'approved-guard', title: 'Add the approved guard' }],
+              },
+            ],
+          }),
+        );
         return { success: true };
       },
     };
@@ -2471,19 +2923,34 @@ describe('prd_audit kickback', () => {
       if (event.type === 'plan_growth') growthEvents.push(event);
     });
     const conductor = new Conductor({
-      stateFilePath: join(root, '.pipeline', 'conduct-state.json'), stepRunner: runner,
-      events, projectRoot: root, mode: 'auto', daemon: true,
-      verifyArtifacts: false, maxRetries: 1,
+      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+      stepRunner: runner,
+      events,
+      projectRoot: root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 1,
       config: { architecture_review_as_built: { remediation: { enabled: true } } } as never,
     });
 
-    const outcome = await (conductor as unknown as {
-      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; target?: string }>;
-    }).planRemediation(
+    const outcome = await (
+      conductor as unknown as {
+        planRemediation: (
+          state: ConductState,
+          steps: typeof ALL_STEPS,
+          dispatchContext: string,
+          hintSource: unknown,
+        ) => Promise<{ kind: string; target?: string }>;
+      }
+    ).planRemediation(
       { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState,
       ALL_STEPS,
       'as-built blocked',
-      { source: 'as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }] },
+      {
+        source: 'as-built',
+        evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }],
+      },
     );
 
     expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
@@ -2496,9 +2963,13 @@ describe('prd_audit kickback', () => {
     });
     expect(ledger.gates.build_review).toEqual(initialLedger.gates.build_review);
     expect(ledger.gates.prd_audit).toEqual(initialLedger.gates.prd_audit);
-    expect(growthEvents).toEqual([expect.objectContaining({
-      type: 'plan_growth', added: 1, byGate: { architecture_review_as_built: 1 },
-    })]);
+    expect(growthEvents).toEqual([
+      expect.objectContaining({
+        type: 'plan_growth',
+        added: 1,
+        byGate: { architecture_review_as_built: 1 },
+      }),
+    ]);
   });
 
   /**
@@ -2521,9 +2992,7 @@ describe('prd_audit kickback', () => {
     expect(fixture.outcome.detail).toContain('S1.1');
     // And so is every as-built finding that participated in the same round.
     for (const finding of fixture.findings) {
-      expect(fixture.outcome.detail).toContain(
-        `${finding.id} (REMEDIABLE; ${finding.clause}): ${finding.summary}`,
-      );
+      expect(fixture.outcome.detail).toContain(`${finding.id} (REMEDIABLE; ${finding.clause}): ${finding.summary}`);
     }
     await expect(readFile(fixture.planPath, 'utf8')).resolves.toBe(fixture.plan);
   });
@@ -2534,9 +3003,7 @@ describe('prd_audit kickback', () => {
     expect(fixture.outcome).toMatchObject({ kind: 'halt', haltClass: 'kickback-cap' });
     expect(fixture.outcome.detail).toContain('lap cap reached (1/1)');
     for (const finding of fixture.findings) {
-      expect(fixture.outcome.detail).toContain(
-        `${finding.id} (REMEDIABLE; ${finding.clause}): ${finding.summary}`,
-      );
+      expect(fixture.outcome.detail).toContain(`${finding.id} (REMEDIABLE; ${finding.clause}): ${finding.summary}`);
     }
     await expect(readFile(fixture.planPath, 'utf8')).resolves.toBe(fixture.plan);
   });
@@ -2548,9 +3015,7 @@ describe('prd_audit kickback', () => {
     expect(fixture.outcome.detail).toContain('shared plan-growth allowance');
     expect(fixture.outcome.detail).toContain('0 remaining');
     for (const finding of fixture.findings) {
-      expect(fixture.outcome.detail).toContain(
-        `${finding.id} (REMEDIABLE; ${finding.clause}): ${finding.summary}`,
-      );
+      expect(fixture.outcome.detail).toContain(`${finding.id} (REMEDIABLE; ${finding.clause}): ${finding.summary}`);
     }
     await expect(readFile(fixture.planPath, 'utf8')).resolves.toBe(fixture.plan);
   });
@@ -2608,10 +3073,12 @@ describe('prd_audit kickback', () => {
     const fixture = await createAsBuiltRemediationCapFixture({
       plannerEscalations: { 'AB-1': 'architecture_review' },
       plannerTasks: {
-        'AB-1': [{
-          id: 'amend-adr',
-          title: 'Amend .docs/decisions/adr-2026-10-10-other-feature.md decision 12 to add the new reason.',
-        }],
+        'AB-1': [
+          {
+            id: 'amend-adr',
+            title: 'Amend .docs/decisions/adr-2026-10-10-other-feature.md decision 12 to add the new reason.',
+          },
+        ],
       },
     });
 
@@ -2628,10 +3095,12 @@ describe('prd_audit kickback', () => {
   it('halts a build repair redirected to plan by a sealed-artifact edit as an escalation, not as missing', async () => {
     const fixture = await createAsBuiltRemediationCapFixture({
       plannerTasks: {
-        'AB-1': [{
-          id: 'fix-ab-1',
-          title: 'Update .docs/decisions/adr-2026-10-10-other-feature.md decision 12 to name the guard.',
-        }],
+        'AB-1': [
+          {
+            id: 'fix-ab-1',
+            title: 'Update .docs/decisions/adr-2026-10-10-other-feature.md decision 12 to name the guard.',
+          },
+        ],
       },
     });
 
@@ -2671,9 +3140,7 @@ describe('prd_audit kickback', () => {
   });
 
   it('uses gate-specific configured lap caps without changing the generic cap', () => {
-    expect(
-      remediationLapCapForGate('prd_audit', { prd_audit: { max_remediation_laps: 1 } } as never, 0),
-    ).toBe(1);
+    expect(remediationLapCapForGate('prd_audit', { prd_audit: { max_remediation_laps: 1 } } as never, 0)).toBe(1);
     expect(remediationLapCapForGate('architecture_review_as_built', {} as never, 0)).toBe(3);
     expect(
       remediationLapCapForGate(
@@ -2694,8 +3161,14 @@ describe('prd_audit kickback', () => {
       version: 1,
       gates: {
         prd_audit: {
-          count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: false,
-          resolvedBefore: 0, laps: 4, effectiveLapCap: 6,
+          count: 0,
+          cumulative: 0,
+          treeHash: null,
+          lastReason: '',
+          priorVerdict: false,
+          resolvedBefore: 0,
+          laps: 4,
+          effectiveLapCap: 6,
         },
       },
     } as never);
@@ -2718,16 +3191,18 @@ describe('prd_audit kickback', () => {
       {
         complexityTier: 'L',
         configureConductor: (conductor) => {
-          (conductor as unknown as {
-            planRemediation: () => Promise<{
-              kind: 'route' | 'halt';
-              target?: StepName;
-              hint?: string;
-              evidence?: string;
-              detail?: string;
-              haltClass?: string;
-            }>;
-          }).planRemediation = async () => {
+          (
+            conductor as unknown as {
+              planRemediation: () => Promise<{
+                kind: 'route' | 'halt';
+                target?: StepName;
+                hint?: string;
+                evidence?: string;
+                detail?: string;
+                haltClass?: string;
+              }>;
+            }
+          ).planRemediation = async () => {
             remediationDispatches++;
             return remediationDispatches === 4
               ? { kind: 'halt', detail: 'sentinel: fourth remediation round reached', haltClass: 'mechanical' }
@@ -2762,13 +3237,14 @@ describe('prd_audit kickback', () => {
       haltClass: 'mechanical',
       detail: 'PRD audit verdict is incomplete: S2.1: fixture invalid grade',
     });
-    expect(fixture.gateBlocks).toEqual([{
-      step: 'prd_audit',
-      reason: 'PRD audit verdict is incomplete: S2.1: fixture invalid grade',
-    }]);
+    expect(fixture.gateBlocks).toEqual([
+      {
+        step: 'prd_audit',
+        reason: 'PRD audit verdict is incomplete: S2.1: fixture invalid grade',
+      },
+    ]);
     expect(await readFile(fixture.planPath, 'utf8')).toBe(fixture.plan);
   });
-
 
   it('authorizes FIXABLE remediation alongside a within-intent NC finding without a mechanical unknown-criteria halt', async () => {
     const fixture = await createPrdAuditRemediationFixture({
@@ -2816,22 +3292,32 @@ describe('prd_audit kickback', () => {
       run: async () => ({ success: true }),
     };
     const conductor = new Conductor({
-      stateFilePath: join(root, '.pipeline/conduct-state.json'), stepRunner: runner,
-      events: new ConductorEventEmitter(), projectRoot: root, mode: 'auto', daemon: true,
-      verifyArtifacts: false, maxRetries: 1,
+      stateFilePath: join(root, '.pipeline/conduct-state.json'),
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: root,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 1,
       config: { architecture_review_as_built: { remediation: { enabled: false } } } as never,
     });
 
     const remediationState = { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState;
     (conductor as unknown as { persistedStateSnapshot: ConductState }).persistedStateSnapshot = { ...remediationState };
-    const outcome = await (conductor as unknown as {
-      planRemediation: (state: ConductState, steps: typeof ALL_STEPS, dispatchContext: string, hintSource: unknown) => Promise<{ kind: string; detail?: string }>;
-    }).planRemediation(
-      remediationState,
-      ALL_STEPS,
-      'as-built blocked',
-      { source: 'as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }] },
-    );
+    const outcome = await (
+      conductor as unknown as {
+        planRemediation: (
+          state: ConductState,
+          steps: typeof ALL_STEPS,
+          dispatchContext: string,
+          hintSource: unknown,
+        ) => Promise<{ kind: string; detail?: string }>;
+      }
+    ).planRemediation(remediationState, ALL_STEPS, 'as-built blocked', {
+      source: 'as-built',
+      evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.md' }],
+    });
 
     expect(outcome).toMatchObject({ kind: 'none' });
     expect(Object.values((await readKickbackLedger(root)).gates)).not.toContainEqual(
@@ -2909,12 +3395,17 @@ describe('prd_audit kickback', () => {
     });
     expect(ledger.pendingRepair?.taskIds).toHaveLength(1);
     expect(await readFile(fixture.planPath, 'utf8')).toContain('**Criterion:** S2.5');
-    expect((await execa('git', ['log', '-1', '--format=%s'], { cwd: fixture.root })).stdout)
-      .toBe('chore(plan): record appended remediation tasks');
+    expect((await execa('git', ['log', '-1', '--format=%s'], { cwd: fixture.root })).stdout).toBe(
+      'chore(plan): record appended remediation tasks',
+    );
     const taskStatus = JSON.parse(await readFile(join(fixture.root, '.pipeline', 'task-status.json'), 'utf8'));
-    expect(taskStatus.tasks).toContainEqual(expect.objectContaining({
-      id: ledger.pendingRepair!.taskIds[0], name: 'Repair S2.5', status: 'pending',
-    }));
+    expect(taskStatus.tasks).toContainEqual(
+      expect.objectContaining({
+        id: ledger.pendingRepair!.taskIds[0],
+        name: 'Repair S2.5',
+        status: 'pending',
+      }),
+    );
   });
 
   it('still dispatches remediate and appends when the prd_audit lap is under the cap', async () => {
@@ -2966,35 +3457,38 @@ describe('prd_audit kickback', () => {
     expect(appended.match(/^\*\*Criterion:\*\*/gm)).toHaveLength(6);
   });
 
-
   it('joins a negative-path PLAN_GAP as a recorded, satisfied prd_audit member', async () => {
     const stories = [
-      '# Stories', '', '## Story 11: negative boundary', '', '#### Negative Paths',
+      '# Stories',
+      '',
+      '## Story 11: negative boundary',
+      '',
+      '#### Negative Paths',
       '- Given an unsupported condition, when it occurs, then it is recorded.',
     ].join('\n');
     const fixture = await runGroupedPrdAudit(planGapReport('S11.1'), stories);
 
     expect(fixture.calls).not.toContain('remediate');
     expect(fixture.state.ok && fixture.state.value.prd_audit).toBe('done');
-    expect(await readFile(join(fixture.root, '.pipeline', 'prd-audit.md'), 'utf8')).toContain(
-      '- S11.1: PLAN_GAP',
-    );
+    expect(await readFile(join(fixture.root, '.pipeline', 'prd-audit.md'), 'utf8')).toContain('- S11.1: PLAN_GAP');
   });
 
   it('joins a within-intent OVER_SCOPE finding as a recorded, satisfied prd_audit member', async () => {
-    const fixture = await runGroupedPrdAudit(
-      overScopeReport('S9.1', 'within'),
-      storiesWithCriterion('Happy Path'),
-    );
+    const fixture = await runGroupedPrdAudit(overScopeReport('S9.1', 'within'), storiesWithCriterion('Happy Path'));
 
     expect(fixture.calls).not.toContain('remediate');
     expect(fixture.state.ok && fixture.state.value.prd_audit).toBe('done');
     await expect(readPrdAuditVerdict(fixture.root)).resolves.toMatchObject({
       kind: 'present',
       value: {
-        recordedDispositions: [expect.objectContaining({
-          criterionId: 'S9.1', grade: 'OVER_SCOPE', decision: 'record', authority: 'engine',
-        })],
+        recordedDispositions: [
+          expect.objectContaining({
+            criterionId: 'S9.1',
+            grade: 'OVER_SCOPE',
+            decision: 'record',
+            authority: 'engine',
+          }),
+        ],
       },
     });
   });
@@ -3017,9 +3511,14 @@ describe('prd_audit kickback', () => {
     await expect(readPrdAuditVerdict(fixture.root)).resolves.toMatchObject({
       kind: 'present',
       value: {
-        recordedDispositions: [expect.objectContaining({
-          criterionId: 'S13.4', grade: 'OVER_SCOPE', decision: 'record', authority: 'engine',
-        })],
+        recordedDispositions: [
+          expect.objectContaining({
+            criterionId: 'S13.4',
+            grade: 'OVER_SCOPE',
+            decision: 'record',
+            authority: 'engine',
+          }),
+        ],
       },
     });
   });
@@ -3038,10 +3537,7 @@ describe('prd_audit kickback', () => {
   });
 
   it('keeps the grouped prd_audit member unsatisfied when a rejected row rides with a recordable PLAN_GAP', async () => {
-    const fixture = await runGroupedPrdAudit(
-      rejectedRowWithNegativePathPlanGapReport(),
-      storiesForRejectedRowReport(),
-    );
+    const fixture = await runGroupedPrdAudit(rejectedRowWithNegativePathPlanGapReport(), storiesForRejectedRowReport());
 
     expect(fixture.state.ok && fixture.state.value.prd_audit).not.toBe('done');
     await expect(readFile(join(fixture.root, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('OS.1');
@@ -3078,37 +3574,50 @@ describe('prd_audit kickback', () => {
       expect(halt).toContain('"criterion": "NC.1"');
       expect(halt).toContain(`"summary": "${summary}"`);
 
-      const cleared = halt
-        .replace('"decision": "pending"', '"decision": "accept", "rationale": "Approved for this feature."');
+      const cleared = halt.replace(
+        '"decision": "pending"',
+        '"decision": "accept", "rationale": "Approved for this feature."',
+      );
 
-      const second = await runGroupedPrdAudit(report, stories, async (root) => {
-        await writeFile(join(root, '.pipeline', 'HALT.cleared'), cleared);
-        await rm(join(root, '.pipeline', 'HALT'));
-        await rm(join(root, '.pipeline', 'HALT.class'));
-      }, { root: first.root });
+      const second = await runGroupedPrdAudit(
+        report,
+        stories,
+        async (root) => {
+          await writeFile(join(root, '.pipeline', 'HALT.cleared'), cleared);
+          await rm(join(root, '.pipeline', 'HALT'));
+          await rm(join(root, '.pipeline', 'HALT.class'));
+        },
+        { root: first.root },
+      );
       const decisions = await new AcceptedWideningDecisionStore(second.root, {
         version: 1,
         repository: '/fixture/repository',
         feature: 'prd-audit-kickback',
       }).read();
 
-      expect(decisions).toMatchObject({ kind: 'valid', state: { decisions: [expect.objectContaining({
-        criterion: 'NC.1',
-        authority: 'accept',
-        rationale: 'Approved for this feature.',
-        operator: 'operator@example.test',
-        originalSource: {
-          id: prdWideningSourceId({ criterion: 'NC.1', grade: 'OVER_SCOPE', evidence: summary, prdIds: [] }),
-          snapshot: summary,
+      expect(decisions).toMatchObject({
+        kind: 'valid',
+        state: {
+          decisions: [
+            expect.objectContaining({
+              criterion: 'NC.1',
+              authority: 'accept',
+              rationale: 'Approved for this feature.',
+              operator: 'operator@example.test',
+              originalSource: {
+                id: prdWideningSourceId({ criterion: 'NC.1', grade: 'OVER_SCOPE', evidence: summary, prdIds: [] }),
+                snapshot: summary,
+              },
+            }),
+          ],
         },
-      })] } });
+      });
       expect(second.gateBlocks).not.toContainEqual(expect.objectContaining({ step: 'prd_audit' }));
       expect(second.state.ok && second.state.value.prd_audit).toBe('done');
     } finally {
       ownerConfig.mockRestore();
     }
   });
-
 
   it('passes reseal and feature-commit Scope rationale evidence into the prd_audit prompt', async () => {
     const root = await mkdtemp(join(tmpdir(), 'prd-audit-scope-prompt-'));
@@ -3121,12 +3630,11 @@ describe('prd_audit kickback', () => {
     await execa('git', ['commit', '-q', '-m', 'base'], { cwd: root });
     await writeFile(join(root, 'optional.ts'), 'export const optional = true;\n');
     await execa('git', ['add', 'optional.ts'], { cwd: root });
-    await execa('git', [
-      'commit',
-      '-q',
-      '-m',
-      'add optional behavior\n\nScope: optional.ts — supports the optional behavior',
-    ], { cwd: root });
+    await execa(
+      'git',
+      ['commit', '-q', '-m', 'add optional behavior\n\nScope: optional.ts — supports the optional behavior'],
+      { cwd: root },
+    );
     await mkdir(join(root, '.pipeline'), { recursive: true });
     await writeFile(
       join(root, PROTECTED_ARTIFACT_SEAL_PATH),
@@ -3134,20 +3642,27 @@ describe('prd_audit kickback', () => {
         version: 2,
         baselineCommit: 'baseline',
         protectedArtifacts: [],
-        rebaselines: [{
-          fromCommit: 'before',
-          toCommit: 'after',
-          trigger: 'operator-reseal',
-          paths: ['.docs/plans/feature.md'],
-          reason: 'corrected plan',
-        }],
+        rebaselines: [
+          {
+            fromCommit: 'before',
+            toCommit: 'after',
+            trigger: 'operator-reseal',
+            paths: ['.docs/plans/feature.md'],
+            reason: 'corrected plan',
+          },
+        ],
       }),
     );
     const invoke = vi.fn().mockResolvedValue({ success: true, output: '', exitCode: 0 });
-    const runner = new DefaultStepRunner({
-      lifecycleCapability: { synchronousSpawnPermit: true },
-      invoke,
-    }, 'session', root, { pipelineDir: join(root, '.pipeline') });
+    const runner = new DefaultStepRunner(
+      {
+        lifecycleCapability: { synchronousSpawnPermit: true },
+        invoke,
+      },
+      'session',
+      root,
+      { pipelineDir: join(root, '.pipeline') },
+    );
 
     await runner.run('prd_audit', {});
 
@@ -3211,8 +3726,7 @@ describe('prd_audit kickback', () => {
         expect(ledger.growth?.byGate?.architecture_review_as_built).toBeUndefined();
         expect(plan).not.toContain('rem-as-built-');
         expect(
-          (ledger as { pendingAsBuiltRemediationFindings?: unknown[] })
-            .pendingAsBuiltRemediationFindings ?? [],
+          (ledger as { pendingAsBuiltRemediationFindings?: unknown[] }).pendingAsBuiltRemediationFindings ?? [],
         ).toHaveLength(0);
       });
 
@@ -3232,11 +3746,9 @@ describe('prd_audit kickback', () => {
         const ledger = await readKickbackLedger(fixture.root);
         const plan = await readFile(fixture.planPath, 'utf8');
         expect(plan).toContain('rem-as-built-');
-        expect((ledger.gates?.architecture_review_as_built as { laps?: number } | undefined)?.laps ?? 0)
-          .toBe(0);
+        expect((ledger.gates?.architecture_review_as_built as { laps?: number } | undefined)?.laps ?? 0).toBe(0);
         expect(ledger.growth?.byGate?.architecture_review_as_built ?? 0).toBe(0);
-        expect(ledger.pendingRepair?.charges.architecture_review_as_built)
-          .toEqual({ laps: 1, growth: 2 });
+        expect(ledger.pendingRepair?.charges.architecture_review_as_built).toEqual({ laps: 1, growth: 2 });
       });
     }
   });
