@@ -825,7 +825,10 @@ async function replayLeafWithoutFoldSources(
     if (omitted.has(commit)) continue;
     const merged = await git(['merge-tree', '--write-tree', '--merge-base', `${commit}^1`, tip, commit]);
     const tree = merged.exitCode === 0 ? parseCommitSha(merged.stdout.trim().split('\n', 1)[0] ?? '') : undefined;
-    if (!tree) throw new Error(`unresolved-restack-conflict folding leaf commit ${commit}`);
+    // Keep the fold replay on the same conflict seam as ordinary stacked
+    // replay.  The executor parses this stable prefix and hands it to the
+    // bounded resolver instead of treating merge-tree plumbing as unavailable.
+    if (!tree) throw new Error(`merge-tree failed for ${commit}: folding leaf commit`);
     const [author, message] = await Promise.all([authorOf(git, commit), messageOf(git, commit)]);
     const written = await git(['commit-tree', tree, '-p', tip], {
       input: withDaemonCoAuthorTrailer(message),
@@ -1069,13 +1072,41 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
               replay = await replayLeafWithoutFoldSources(git, range, parent, omitted, draft.committer);
             else replay = await replayChildRange(range, parent, draft.committer, git, { haltRecordSlug: options.slug });
           } catch (error) {
-            const detail = error instanceof Error ? error.message : String(error);
-            if (detail.startsWith('unresolved-restack-conflict')) {
-              await abortJournal(options.worktree, journal, git, []);
-              await haltRestackConflict(options.worktree, range.child, detail, options.events);
+            const conflict = await replayConflict(git, options.slug, error);
+            if (!conflict) throw error;
+            const resolution = await resolveRestackConflict({
+              worktree: options.worktree,
+              range,
+              newParent: parent,
+              stamp: draft.committer,
+              haltRecordSlug: options.slug,
+              resolver: options.resolver ?? (async () => ({ resolved: false, reason: 'restack resolver unavailable' })),
+              cap: options.resolverCap ?? resolveRebaseResolutionAttempts(),
+              restack: {
+                opId: draft.opId,
+                cause: 'fold',
+                ...(folded.commits.length === 0 ? {} : { roundId: folded.commits[0]!.roundId }),
+              },
+              git,
+            });
+            if ((resolution.outcome.kind !== 'changed' && resolution.outcome.kind !== 'noop') || !resolution.tip) {
+              await haltUnresolvedConflict(
+                options.worktree,
+                options.slug,
+                journal,
+                range,
+                conflict,
+                options.events,
+                git,
+                parent,
+                'conflict',
+                'reason' in resolution.outcome ? resolution.outcome.reason : undefined,
+                resolution.candidates,
+              );
+              terminal = true;
               return haltedResult(options.worktree);
             }
-            throw error;
+            replay = { tip: resolution.tip, rewrites: resolution.rewrites };
           }
           let tip = replay.tip;
           try {
