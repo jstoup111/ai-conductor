@@ -513,7 +513,14 @@ times in this feature's plan, stories, and coherence mapping — tracked as
 The as-built review runs on every feature (FR-15). Its checks are conditional on artifact presence and
 complexity tier — the reachability sweep and the plan-gap check run at every tier; `adrCompliance` runs
 whenever approved ADRs exist; `diagramDrift` runs where diagrams exist — and each is
-operator-configurable per tier via `architecture_review_as_built.checks.<name>.tiers`. Its verdict is one
+operator-configurable per tier via `architecture_review_as_built.checks.<name>.tiers`. `adrCompliance`
+includes a seam-conformance sweep: each production call the diff adds or reroutes to an external system
+(hosted API, service, database or queue, model provider, or subprocess CLI) must go through the seam an
+APPROVED ADR defines for that system. A bypass is `BLOCKED` — `REMEDIABLE` when the seam already offers
+what the call needs, `DESIGN` when complying needs a new or changed boundary decision — citing the seam
+ADR decision. Systems with no APPROVED seam ADR raise no seam finding; existing code and DRAFT or
+SUPERSEDED ADRs never define one. The DECIDE-time review applies the same seam check to the proposed
+design. Its verdict is one
 of `APPROVED`, `PLAN_GAP`, or `BLOCKED` (FR-16): `PLAN_GAP` means the code faithfully implements the
 approved design and the design itself is the limit. The outcome it is judged against is the sealed
 story criteria under `.docs/stories/` — superseded `.docs/intake/` capture is never the authority — so
