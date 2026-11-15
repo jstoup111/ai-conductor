@@ -459,6 +459,20 @@ this SHIP sweep is unchanged and never relies on BUILD proof as authority.
 - For each enabled check, compare the shipped source with its governing evidence: new structural
   patterns without an ADR, domain-boundary violations, or diagram drift are relevant only when the
   corresponding check is on.
+- **Seam-conformance sweep (part of `adrCompliance`).** Use §4's definitions and run this sweep
+  only when `adrCompliance` is on; when it is off, do not run the sweep and raise no seam finding. Work
+  diff-first: enumerate production call sites the diff adds or reroutes that reach an external
+  system; a changed target, import binding, or client of an existing call counts. When there are
+  no such sites, or they occur only in test code or fixtures, the sweep is satisfied without
+  searching the ADR corpus. For each site, find the APPROVED ADR that defines that system's seam,
+  reading APPROVED ADRs on demand whether or not the plan cites one or the engine pre-selects it.
+  When a site bypasses its seam, issue a BLOCKED finding for every bypassing site with its
+  `file:line`, governed by the seam ADR decision as `<adr-stem> D<n>`; one finding may list every
+  site as the exhaustive-sweep rule permits. Raise no seam-bypass finding for a call that goes
+  through the seam, is inside the seam's own implementation, or goes through a new boundary whose
+  APPROVED ADR is part of the same change and either covers a system no other APPROVED ADR gives a
+  seam or supersedes that seam ADR. Raise none when no APPROVED ADR defines a seam for the external
+  system.
 - **Production reachability sweep (green-but-unwired guard).** For each primitive this
   feature's diff introduces or materially changes — exported functions/modules, hook scripts,
   config keys, emitted events, ADR-promised log lines — trace ONE invocation path from a real
@@ -576,6 +590,8 @@ work) or `DESIGN` (a human architectural decision is required) — with its type
 | Unreachable rung; no plan task or approved entry point covers it | `DESIGN` | the APPROVED ADR decision it conflicts with |
 | Code diverges from an APPROVED ADR decision the plan already requires | `REMEDIABLE` | `<adr-stem> D<n>` |
 | Complying needs a changed or new architectural decision | `DESIGN` | `<adr-stem> D<n>` |
+| External-system call bypasses an APPROVED seam that already offers what the call needs | `REMEDIABLE` | `<seam-adr-stem> D<n>` |
+| External-system call bypasses an APPROVED seam, and complying needs a new or changed boundary decision | `DESIGN` | `<seam-adr-stem> D<n>` |
 | Story criterion or desired outcome unmet | none | out of scope; `/prd-audit` owns it |
 
 Write a plan-task reference as `task <id>` exactly, not `plan task <id>` or `Task <id>`.
@@ -601,3 +617,4 @@ Write a plan-task reference as `task <id>` exactly, not `plan task <id>` or `Tas
       High-impact risk was registered (skip only on truly clean APPROVED)
 - [ ] **As-built mode:** BLOCKED on any enabled APPROVED-ADR violation; resolved by code fix or
       human-approved superseding ADR (never silent downgrade)
+- [ ] **As-built mode:** seam conformance checked for every diff-added or rerouted production call to an external system
