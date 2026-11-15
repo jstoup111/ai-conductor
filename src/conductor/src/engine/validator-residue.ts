@@ -7,6 +7,9 @@ export type ValidatorResidueResult =
   | { readonly kind: 'none' }
   | { readonly kind: 'refused'; readonly reason: string };
 
+export type ValidatorResidueBaselineResult =
+  { readonly kind: 'captured'; readonly paths: string[] } | { readonly kind: 'refused'; readonly reason: string };
+
 export interface QuarantineValidatorResidueInput {
   readonly projectRoot: string;
   readonly git: GitRunner;
@@ -25,6 +28,19 @@ export async function listUntrackedPaths(git: GitRunner): Promise<string[]> {
 }
 
 /**
+ * Capture a pre-dispatch baseline without allowing an unavailable Git probe to
+ * abort the validator itself. Callers log a refusal and skip quarantine while
+ * preserving the validator's ordinary result.
+ */
+export async function captureValidatorResidueBaseline(git: GitRunner): Promise<ValidatorResidueBaselineResult> {
+  try {
+    return { kind: 'captured', paths: await listUntrackedPaths(git) };
+  } catch (error) {
+    return { kind: 'refused', reason: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
  * Move only files that appeared after a validation dispatch into its ignored,
  * per-dispatch residue directory. Confirmation and destination checks occur
  * before the first rename, so a refusal is atomic for the candidate set.
@@ -35,7 +51,13 @@ export async function quarantineValidatorResidue(
   try {
     const current = await listUntrackedPaths(input.git);
     const baseline = new Set(input.baseline);
-    const paths = current.filter((path) => !baseline.has(path));
+    // `.pipeline/` is harness-owned attempt evidence, never product residue.
+    // It is normally ignored by provisioned worktrees, but preserving it here
+    // keeps a missing ignore rule from erasing the validator evidence that the
+    // completion check must read immediately after dispatch.
+    const paths = current.filter(
+      (path) => !baseline.has(path) && path !== '.pipeline' && !path.startsWith('.pipeline/'),
+    );
     if (paths.length === 0) return { kind: 'none' };
 
     const directory = `${VALIDATOR_RESIDUE_DIRECTORY}/${input.source}-${new Date().toISOString().replaceAll(':', '-')}`;
