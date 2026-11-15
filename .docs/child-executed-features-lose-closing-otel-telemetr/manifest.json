@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "slug": "child-executed-features-lose-closing-otel-telemetr",
+  "artifacts": [
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/child-executed-features-lose-closing-otel-telemetr.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/child-executed-features-lose-closing-otel-telemetr.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/child-executed-features-lose-closing-otel-telemetr.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/child-executed-features-lose-closing-otel-telemetr.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/child-executed-features-lose-closing-otel-telemetr.md"
+    }
+  ]
+}
