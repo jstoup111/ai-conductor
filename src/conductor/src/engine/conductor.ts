@@ -537,6 +537,7 @@ import {
   type RebaseOutcome,
   type GitRunner as RebaseGitRunner,
 } from './rebase.js';
+import { listUntrackedPaths, quarantineValidatorResidue } from './validator-residue.js';
 import { applyRebaseTransition, completeInterruptedRebaseOperation } from './rebase-transition.js';
 import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
 import {
@@ -12401,6 +12402,10 @@ export class Conductor {
             // this attempt produced from one it inherited is to record the marker's
             // identity here, before the attempt is dispatched.
             const haltBeforeAttempt = await snapshotHaltMarker(this.projectRoot);
+            const validatorResidueBaseline =
+              getGroupForStep(step.name)?.name === VALIDATION_GROUP.name
+                ? await listUntrackedPaths(makeGitRunner(this.projectRoot))
+                : undefined;
 
             // An operator park declines the whole next provider attempt. Keep this
             // admission check ahead of escalation, telemetry, and every dispatch
@@ -12863,6 +12868,25 @@ export class Conductor {
                 // freshness) — cleared unconditionally right after that check
                 // completes, further down.
               }
+
+            if (validatorResidueBaseline !== undefined) {
+              const residue = await quarantineValidatorResidue({
+                projectRoot: this.projectRoot,
+                git: makeGitRunner(this.projectRoot),
+                baseline: validatorResidueBaseline,
+                source: step.name,
+              });
+              if (residue.kind === 'moved') {
+                await emitTracked({
+                  type: 'validator_residue_quarantined',
+                  source: step.name,
+                  paths: residue.paths,
+                  directory: residue.directory,
+                });
+              } else if (residue.kind === 'refused') {
+                this.log?.(`WARNING: validator residue quarantine refused — ${residue.reason}`);
+              }
+            }
 
             // A self-host dispatch can be cancelled while waiting for admission.
             // That is a declined attempt, not an ordinary runner failure: stop
