@@ -3,11 +3,13 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
+import { ConductorEventEmitter } from '../../../src/engine/conductor-event-emitter.js';
+import { EventPersister } from '../../../src/engine/event-persister.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { runRestack } from '../../../src/engine/restack/restack-executor.js';
 import {
@@ -18,6 +20,11 @@ import {
   type RestackJournal,
 } from '../../../src/engine/restack/restack-journal.js';
 import { recoverRestackJournal } from '../../../src/engine/restack/restack-recovery.js';
+import type {
+  ResolveRestackConflictOptions,
+  RestackConflictResolution,
+  RestackResolver,
+} from '../../../src/engine/restack/restack-resolver.js';
 import { createRouteRecord } from '../../../src/engine/routing/route-record-store.js';
 import type { FoldCommitPlan } from '../../../src/engine/restack/fold-types.js';
 import { parseRoundId } from '../../../src/engine/routing/route-types.js';
@@ -27,8 +34,23 @@ import { writeSliceTopologyFixture } from '../slice-topology-fixture.js';
 const execFile = promisify(execFileCallback);
 const repositories: string[] = [];
 const DEAD_OWNER = { host: 'dead-fold-recovery-host', pid: 1, processStartTime: '0' } as const;
+const foldConflictHarness = vi.hoisted(() => ({
+  resolve: undefined as undefined | ((options: ResolveRestackConflictOptions) => Promise<RestackConflictResolution>),
+}));
+
+vi.mock('../../../src/engine/restack/restack-resolver.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/engine/restack/restack-resolver.js')>();
+  return {
+    ...actual,
+    resolveRestackConflict: (options: ResolveRestackConflictOptions) =>
+      foldConflictHarness.resolve === undefined
+        ? actual.resolveRestackConflict(options)
+        : foldConflictHarness.resolve(options),
+  };
+});
 
 afterEach(async () => {
+  foldConflictHarness.resolve = undefined;
   await Promise.all(repositories.splice(0).map((repo) => rm(repo, { recursive: true, force: true })));
 });
 
@@ -43,6 +65,7 @@ async function fixture(options: { readonly stampedOwner?: boolean } = {}) {
   repositories.push(repo);
   const git = (args: string[]) => execFile('git', args, { cwd: repo });
   const commit = async (message: string, path: string, content: string): Promise<CommitSha> => {
+    await mkdir(dirname(join(repo, path)), { recursive: true });
     await writeFile(join(repo, path), content);
     await git(['add', path]);
     await git(['commit', '-qm', message]);
@@ -53,7 +76,7 @@ async function fixture(options: { readonly stampedOwner?: boolean } = {}) {
   await git(['config', 'user.name', 'Fold recovery']);
   const base = await commit('base', 'base.txt', 'base\n');
   await git(['checkout', '-qb', 'feat/c1/demo']);
-  const c1 = await commit('child one', 'one.txt', 'one\n');
+  const c1 = await commit('child one', 'src/server/identity.ts', 'child identity\n');
   await git(['update-ref', 'refs/conductor/demo/closed/c1', c1]);
   await git(['checkout', '-qb', 'feat/c2/demo']);
   const c2 = await commit('child two', 'two.txt', 'two\n');
@@ -61,10 +84,10 @@ async function fixture(options: { readonly stampedOwner?: boolean } = {}) {
   await git(['checkout', '-qb', 'feat/daemon-demo']);
   const foldedSource = await commit(
     options.stampedOwner ? 'deferred repair\n\nRound: r1\nOwner: c1' : 'deferred repair',
-    'deferred.txt',
-    'deferred\n',
+    'src/server/identity.ts',
+    'deferred identity\n',
   );
-  const leaf = await commit('leaf build', 'leaf.txt', 'leaf\n');
+  const leaf = await commit('leaf build', 'src/server/ten-players.ts', 'ten players\n');
   const route = await createRouteRecord(
     repo,
     'demo',
@@ -262,6 +285,128 @@ describe('planned fold recovery (real local Git)', () => {
 
     expect((await subject.git(['merge-base', subject.base, 'feat/c1/demo'])).stdout.trim()).toBe(subject.base);
     await expect(subject.git(['merge-base', '--is-ancestor', advanced, 'feat/c1/demo'])).rejects.toMatchObject({ code: 1 });
+    expect((await subject.git(['show', 'feat/c1/demo:src/server/identity.ts'])).stdout).toBe('deferred identity\n');
+    expect((await subject.git(['show', 'feat/daemon-demo:src/server/ten-players.ts'])).stdout).toBe('ten players\n');
+  });
+
+  // Covers: task:rem-as-built-rem2-asb-3, task:rem-prd-audit-rem2-S7.1
+  it('resolves a fold replay conflict and persists its fold resolver attribution', async () => {
+    const subject = await fixture({ stampedOwner: true });
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(subject.repo, '.pipeline', 'events.jsonl'), events);
+    persister.start();
+    const resolver: RestackResolver = async ({ restack }) => {
+      await events.emit({
+        type: 'provider_attempt',
+        step: 'rebase',
+        provider: 'test-resolver',
+        outcome: 'success',
+        invoked: true,
+        ...(restack === undefined ? {} : { restack }),
+      });
+      return { resolved: true };
+    };
+    const native = makeGitRunner(subject.repo);
+    const conflict = async (...args: Parameters<typeof native>) => {
+      if (args[0][0] === 'merge-tree' && args[0].at(-1) === subject.c2)
+        return { stdout: '', stderr: 'CONFLICT (content): Merge conflict in two.txt\n', exitCode: 1 };
+      return native(...args);
+    };
+    foldConflictHarness.resolve = async (options) => {
+      expect(options).toMatchObject({ cap: 1, range: { child: child(2) }, restack: { cause: 'fold', roundId: 'r1' } });
+      await options.resolver({
+        conflicts: ['two.txt'],
+        projectRoot: options.worktree,
+        baseRef: options.newParent,
+        environment: {},
+        restack: options.restack,
+      });
+      const merged = await native([
+        'merge-tree', '--write-tree', '--merge-base', options.range.oldParent, options.newParent, options.range.oldTip,
+      ]);
+      if (merged.exitCode !== 0) throw new Error(`could not build resolved fold child: ${merged.stderr}`);
+      const committed = await native(['commit-tree', merged.stdout.trim(), '-p', options.newParent], { input: 'resolved fold child\n' });
+      const tip = committed.stdout.trim() as CommitSha;
+      return {
+        outcome: { kind: 'changed', baseSha: options.newParent, changedCodePaths: [] },
+        tip,
+        rewrites: new Map([[options.range.oldTip, tip]]),
+        candidates: [options.range.oldTip],
+      };
+    };
+
+    let result: Awaited<ReturnType<typeof runRestack>>;
+    try {
+      result = await runRestack({
+        worktree: subject.repo,
+        slug: 'demo',
+        cause: 'fold',
+        events,
+        resolver,
+        resolverCap: 1,
+        git: conflict,
+      });
+    } finally {
+      persister.stop();
+    }
+
+    expect(result!).toMatchObject({ kind: 'applied' });
+    const persisted = (await readFile(join(subject.repo, '.pipeline', 'events.jsonl'), 'utf8'))
+      .split('\n').filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+    const foldPlan = persisted.find((event) => event.type === 'restack_planned' && event.cause === 'fold');
+    expect(foldPlan).toBeDefined();
+    expect(persisted).toContainEqual(expect.objectContaining({
+      type: 'provider_attempt',
+      step: 'rebase',
+      restack: { opId: foldPlan!.opId, cause: 'fold', roundId: 'r1' },
+    }));
+    expect((await subject.git(['show', 'feat/c2/demo:src/server/identity.ts'])).stdout).toBe('deferred identity\n');
+  });
+
+  // Covers: task:rem-as-built-rem2-asb-3
+  it('halts a fold replay conflict after the resolver cap is exhausted without moving refs', async () => {
+    const subject = await fixture({ stampedOwner: true });
+    const before = await snapshot(subject.git);
+    let attempts = 0;
+    const resolver: RestackResolver = async () => {
+      attempts += 1;
+      return { resolved: false, reason: 'cannot resolve fold conflict' };
+    };
+    const native = makeGitRunner(subject.repo);
+    const conflict = async (...args: Parameters<typeof native>) => {
+      if (args[0][0] === 'merge-tree' && args[0].at(-1) === subject.c2)
+        return { stdout: '', stderr: 'CONFLICT (content): Merge conflict in two.txt\n', exitCode: 1 };
+      return native(...args);
+    };
+    foldConflictHarness.resolve = async (options) => {
+      expect(options.cap).toBe(1);
+      const attempt = await options.resolver({
+        conflicts: ['two.txt'],
+        projectRoot: options.worktree,
+        baseRef: options.newParent,
+        environment: {},
+        restack: options.restack,
+      });
+      return {
+        outcome: { kind: 'conflict_halt', conflicts: ['two.txt'], reason: attempt.reason ?? 'resolver cap exhausted' },
+        tip: undefined,
+        rewrites: new Map(),
+        candidates: [options.range.oldTip],
+      };
+    };
+
+    await expect(runRestack({
+      worktree: subject.repo,
+      slug: 'demo',
+      cause: 'fold',
+      resolver,
+      resolverCap: 1,
+      git: conflict,
+    })).resolves.toMatchObject({ kind: 'halted' });
+
+    expect(attempts).toBe(1);
+    expect(await snapshot(subject.git)).toEqual(before);
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('cannot resolve fold conflict');
   });
 
   it('aborts its journal and leaves every ref untouched when the folded leaf tree differs', async () => {
