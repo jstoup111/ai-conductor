@@ -6,7 +6,11 @@ import { execa } from 'execa';
 
 import { switchToChild, noOpChildLifecycleEvents } from '../../src/engine/child-lifecycle.js';
 import { makeGitRunner, type GitRunner } from '../../src/engine/rebase.js';
-import { listUntrackedPaths, quarantineValidatorResidue } from '../../src/engine/validator-residue.js';
+import {
+  captureValidatorResidueBaseline,
+  listUntrackedPaths,
+  quarantineValidatorResidue,
+} from '../../src/engine/validator-residue.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 
 // Covers: task:1
@@ -175,5 +179,26 @@ describe('validator residue quarantine', () => {
       quarantineValidatorResidue({ projectRoot: repository, git, baseline, source: 'manual_test' }),
     ).resolves.toEqual({ kind: 'none' });
     await expect(access(join(repository, '.pipeline/validator-residue'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('never moves harness-owned pipeline evidence when the worktree forgot to ignore it', async () => {
+    const baseline = await listUntrackedPaths(git);
+    await writeFile(join(repository, '.gitignore'), '');
+    await mkdir(join(repository, '.pipeline'), { recursive: true });
+    await writeFile(join(repository, '.pipeline/prd-audit.json'), '{"complete":true}\n');
+
+    await expect(
+      quarantineValidatorResidue({ projectRoot: repository, git, baseline, source: 'prd_audit' }),
+    ).resolves.toEqual({ kind: 'none' });
+    await expect(readFile(join(repository, '.pipeline/prd-audit.json'), 'utf8')).resolves.toBe('{"complete":true}\n');
+  });
+
+  it('reports an unavailable baseline inspection without throwing into the validation flow', async () => {
+    const unavailable: GitRunner = async () => ({ exitCode: 128, stdout: '', stderr: 'not a git repository' });
+
+    await expect(captureValidatorResidueBaseline(unavailable)).resolves.toEqual({
+      kind: 'refused',
+      reason: 'cannot inspect untracked worktree paths',
+    });
   });
 });

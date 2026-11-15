@@ -540,7 +540,7 @@ import {
   type RebaseOutcome,
   type GitRunner as RebaseGitRunner,
 } from './rebase.js';
-import { listUntrackedPaths, quarantineValidatorResidue } from './validator-residue.js';
+import { captureValidatorResidueBaseline, quarantineValidatorResidue } from './validator-residue.js';
 import { applyRebaseTransition, completeInterruptedRebaseOperation } from './rebase-transition.js';
 import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
 import {
@@ -10166,7 +10166,11 @@ export class Conductor {
               // post-join reader to receive that exact attempt identity.
               let settledGroupRunIds = new Map<string, string>();
               const dispatchGroupRound = async (members: typeof membership.dispatchable) => {
-                const validatorResidueBaseline = await listUntrackedPaths(makeGitRunner(this.projectRoot));
+                const baselineResult = await captureValidatorResidueBaseline(makeGitRunner(this.projectRoot));
+                if (baselineResult.kind === 'refused') {
+                  this.log?.(`WARNING: validator residue baseline unavailable — ${baselineResult.reason}`);
+                }
+                const validatorResidueBaseline = baselineResult.kind === 'captured' ? baselineResult.paths : undefined;
                 // The validation join normally dispatches each member directly
                 // through group-core, bypassing the serial `prd_audit` branch
                 // below.  Capture must therefore happen before that fan-out,
@@ -10392,7 +10396,9 @@ export class Conductor {
                   }),
                   cap,
                 );
-                await quarantineValidationResidue('validation', validatorResidueBaseline);
+                if (validatorResidueBaseline !== undefined) {
+                  await quarantineValidationResidue('validation', validatorResidueBaseline);
+                }
                 return outcomes;
               };
 
@@ -12573,10 +12579,15 @@ export class Conductor {
             // this attempt produced from one it inherited is to record the marker's
             // identity here, before the attempt is dispatched.
             const haltBeforeAttempt = await snapshotHaltMarker(this.projectRoot);
-            const validatorResidueBaseline =
+            const validatorResidueBaselineResult =
               getGroupForStep(step.name)?.name === VALIDATION_GROUP.name
-                ? await listUntrackedPaths(makeGitRunner(this.projectRoot))
+                ? await captureValidatorResidueBaseline(makeGitRunner(this.projectRoot))
                 : undefined;
+            if (validatorResidueBaselineResult?.kind === 'refused') {
+              this.log?.(`WARNING: validator residue baseline unavailable — ${validatorResidueBaselineResult.reason}`);
+            }
+            const validatorResidueBaseline =
+              validatorResidueBaselineResult?.kind === 'captured' ? validatorResidueBaselineResult.paths : undefined;
 
             // An operator park declines the whole next provider attempt. Keep this
             // admission check ahead of escalation, telemetry, and every dispatch
