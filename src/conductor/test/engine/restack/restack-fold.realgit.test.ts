@@ -244,6 +244,25 @@ describe('planned fold recovery (real local Git)', () => {
     ).resolves.not.toMatchObject({ kind: 'live-owner' });
   });
 
+  it('keeps child 1 on its existing parent when origin/HEAD advances before the fold', async () => {
+    const subject = await fixture({ stampedOwner: true });
+    await subject.git(['checkout', '-q', 'main']);
+    await writeFile(join(subject.repo, 'advanced.txt'), 'advanced\n');
+    await subject.git(['add', 'advanced.txt']);
+    await subject.git(['commit', '-qm', 'advanced default']);
+    const advanced = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim();
+    await subject.git(['update-ref', 'refs/remotes/origin/main', advanced]);
+    await subject.git(['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']);
+    await subject.git(['checkout', '-q', 'feat/daemon-demo']);
+
+    await expect(
+      runRestack({ worktree: subject.repo, slug: 'demo', cause: 'fold', git: makeGitRunner(subject.repo) }),
+    ).resolves.toMatchObject({ kind: 'applied' });
+
+    expect((await subject.git(['merge-base', subject.base, 'feat/c1/demo'])).stdout.trim()).toBe(subject.base);
+    await expect(subject.git(['merge-base', '--is-ancestor', advanced, 'feat/c1/demo'])).rejects.toMatchObject({ code: 1 });
+  });
+
   it('aborts its journal and leaves every ref untouched when the folded leaf tree differs', async () => {
     const subject = await fixture({ stampedOwner: true });
     const before = await snapshot(subject.git);
