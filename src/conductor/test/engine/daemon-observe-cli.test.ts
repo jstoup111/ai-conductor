@@ -22,7 +22,7 @@ import { dispatchKickbackBudgetCommand } from '../../src/engine/kickback-budget-
 
 const executorVersionSeam = vi.hoisted(() => ({ currentTarget: vi.fn() }));
 vi.mock('../../src/engine/engine-store.js', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../../src/engine/engine-store.js')>(),
+  ...(await importOriginal<typeof import('../../src/engine/engine-store.js')>()),
   currentTarget: executorVersionSeam.currentTarget,
 }));
 
@@ -68,7 +68,9 @@ describe('engine/daemon-observe-cli', () => {
         { type: 'build_review_rubric_result', rubric: 'scope', lapId: 'lap-1', verdict: 'FAIL', ts: 1 },
         { type: 'build_review_rubric_result', rubric: 'scope', lapId: 'lap-2', verdict: 'PASS', ts: 4 },
         { type: 'build_review_outer_verdict', lapId: 'lap-2', effectiveVerdict: 'PASS', ts: 5 },
-      ].map((event) => JSON.stringify(event)).join('\n') + '\n',
+      ]
+        .map((event) => JSON.stringify(event))
+        .join('\n') + '\n',
       'utf8',
     );
     await writeFile(
@@ -77,7 +79,9 @@ describe('engine/daemon-observe-cli', () => {
         { type: 'build_review_rubric_skipped', rubric: 'tautology', lapId: 'lap-1', reason: 'disabled', ts: 2 },
         { type: 'build_review_cache_hit', rubric: 'scope', lapId: 'lap-2', ts: 3 },
         { type: 'build_review_rubric_infrastructure_failure', rubric: 'rootCause', lapId: 'lap-2', ts: 6 },
-      ].map((event) => JSON.stringify(event)).join('\n') + '\n',
+      ]
+        .map((event) => JSON.stringify(event))
+        .join('\n') + '\n',
       'utf8',
     );
     await mkdir(join(worktreeBase, 'broken-ledger', '.pipeline', 'events.jsonl'), { recursive: true });
@@ -98,9 +102,35 @@ describe('engine/daemon-observe-cli', () => {
   });
 
   it('renders present build-review dashboard metrics with skipped coverage explicitly not called pass, and omits absent metrics safely', () => {
-    const base = { generatedAt: '2026-08-14T00:00:00.000Z', daemons: [], worktrees: [], halted: [], inProgress: [], pending: [], parked: [], processed: [], gated: [], waiting: [], eligible: [], ownerGate: { enabled: false, summary: 'off' } } as any;
-    expect(renderDashboard({ ...base, buildReviewMetrics: { lapsToPass: 2, skipped: 1, cacheHits: 3, infrastructureFailures: 0, rubricFailureRates: { scope: { failures: 1, judged: 2 } }, skipReasons: { disabled: 1 } } }))
-      .toContain('BUILD REVIEW: laps-to-pass=2; reduced coverage (skipped, not pass)=1; cache-hits=3; infrastructure-failures=0\n  raw scope: failures=1/2\n  skip reasons: disabled=1');
+    const base = {
+      generatedAt: '2026-08-14T00:00:00.000Z',
+      daemons: [],
+      worktrees: [],
+      halted: [],
+      inProgress: [],
+      pending: [],
+      parked: [],
+      processed: [],
+      gated: [],
+      waiting: [],
+      eligible: [],
+      ownerGate: { enabled: false, summary: 'off' },
+    } as any;
+    expect(
+      renderDashboard({
+        ...base,
+        buildReviewMetrics: {
+          lapsToPass: 2,
+          skipped: 1,
+          cacheHits: 3,
+          infrastructureFailures: 0,
+          rubricFailureRates: { scope: { failures: 1, judged: 2 } },
+          skipReasons: { disabled: 1 },
+        },
+      }),
+    ).toContain(
+      'BUILD REVIEW: laps-to-pass=2; reduced coverage (skipped, not pass)=1; cache-hits=3; infrastructure-failures=0\n  raw scope: failures=1/2\n  skip reasons: disabled=1',
+    );
     expect(renderDashboard(base)).not.toContain('BUILD REVIEW:');
   });
   let root: string;
@@ -264,9 +294,15 @@ describe('engine/daemon-observe-cli', () => {
       const repo = join(root, 'repo');
       await writeExecutor(repo, 'supervisor-fallback', ENGINE_V2);
       await mkdir(join(repo, '.daemon'), { recursive: true });
-      await writeFile(join(repo, '.daemon', 'events.jsonl'), JSON.stringify({
-        type: 'feature_dispatch_started', slug: 'legacy-feature', kind: 'initial',
-      }) + '\n', 'utf8');
+      await writeFile(
+        join(repo, '.daemon', 'events.jsonl'),
+        JSON.stringify({
+          type: 'feature_dispatch_started',
+          slug: 'legacy-feature',
+          kind: 'initial',
+        }) + '\n',
+        'utf8',
+      );
       const out: string[] = [];
 
       await renderExecutorVersionsSection(repo, (line) => out.push(line));
@@ -382,12 +418,14 @@ describe('engine/daemon-observe-cli', () => {
   describe('computeStatusRow — restart-pending + two-layer liveness (FR-9/FR-12, T33)', () => {
     async function writeRestartMarker(
       repo: string,
-      intent: {
-        requestedAt?: string;
-        requestedBy?: string;
-        blockingSlug?: string;
-        drainSlugs?: string[];
-      } | string = {},
+      intent:
+        | {
+            requestedAt?: string;
+            requestedBy?: string;
+            blockingSlug?: string;
+            drainSlugs?: string[];
+          }
+        | string = {},
     ): Promise<void> {
       await mkdir(join(repo, '.daemon'), { recursive: true });
       const body =
@@ -475,7 +513,12 @@ describe('engine/daemon-observe-cli', () => {
     it('distinguishes dead-pane from stopped (no pidfile, no session)', async () => {
       const repo = join(root, 'repo');
       await mkdir(repo, { recursive: true });
-      const row = await computeStatusRow(record('repo', repo), ALIVE, () => false, () => false);
+      const row = await computeStatusRow(
+        record('repo', repo),
+        ALIVE,
+        () => false,
+        () => false,
+      );
       expect(row.state).toBe('stopped');
       expect(row.paneDead).toBe(false);
     });
@@ -529,9 +572,23 @@ describe('engine/daemon-observe-cli', () => {
           join(repo, '.daemon', 'events.jsonl'),
           [
             { type: 'build_review_read_only_capability', provider: 'codex', platform: 'linux', status: 'available' },
-            { type: 'build_review_read_only_capability', provider: 'claude', platform: 'linux', status: 'unavailable', reason: 'restricted mode flags are unavailable' },
-            { type: 'build_review_read_only_capability', provider: 'codex', platform: 'linux', status: 'unavailable', reason: 'sandbox write was not refused' },
-          ].map((event) => JSON.stringify(event)).join('\n') + '\n',
+            {
+              type: 'build_review_read_only_capability',
+              provider: 'claude',
+              platform: 'linux',
+              status: 'unavailable',
+              reason: 'restricted mode flags are unavailable',
+            },
+            {
+              type: 'build_review_read_only_capability',
+              provider: 'codex',
+              platform: 'linux',
+              status: 'unavailable',
+              reason: 'sandbox write was not refused',
+            },
+          ]
+            .map((event) => JSON.stringify(event))
+            .join('\n') + '\n',
           'utf8',
         );
         const execFileSpy = vi.spyOn(cp, 'execFile');
@@ -545,8 +602,12 @@ describe('engine/daemon-observe-cli', () => {
             hasSessionProbe: () => false,
           });
 
-          expect(out.join('\n')).toContain('READ-ONLY REVIEW CAPABILITY: codex on linux — unavailable: sandbox write was not refused');
-          expect(out.join('\n')).toContain('READ-ONLY REVIEW CAPABILITY: claude on linux — unavailable: restricted mode flags are unavailable');
+          expect(out.join('\n')).toContain(
+            'READ-ONLY REVIEW CAPABILITY: codex on linux — unavailable: sandbox write was not refused',
+          );
+          expect(out.join('\n')).toContain(
+            'READ-ONLY REVIEW CAPABILITY: claude on linux — unavailable: restricted mode flags are unavailable',
+          );
           expect(out.join('\n')).not.toContain('codex on linux — available');
           expect(execFileSpy).not.toHaveBeenCalled();
           expect(execSpy).not.toHaveBeenCalled();
@@ -579,18 +640,28 @@ describe('engine/daemon-observe-cli', () => {
           'utf8',
         );
         const out: string[] = [];
-        await runDaemonStatus({ registryPath: await registry([record('repo-old-capability', repo)]), out: (line) => out.push(line), hasSessionProbe: () => false });
+        await runDaemonStatus({
+          registryPath: await registry([record('repo-old-capability', repo)]),
+          out: (line) => out.push(line),
+          hasSessionProbe: () => false,
+        });
         expect(out.join('\n')).toContain('READ-ONLY REVIEW CAPABILITY: codex on linux — available');
       });
     });
 
-    it('renders a dead pane\'s matching SIGKILL exit cause on its status row', async () => {
+    it("renders a dead pane's matching SIGKILL exit cause on its status row", async () => {
       const repo = join(root, 'dead-pane-exit');
       await mkdir(join(repo, '.daemon'), { recursive: true });
       await writePidfile(repo, { pid: 42 });
       await writeFile(
         join(repo, '.daemon', 'exit-events.jsonl'),
-        JSON.stringify({ type: 'daemon_exited', pid: 42, code: null, signal: 'SIGKILL', at: '2026-09-23T12:00:00.000Z' }) + '\n',
+        JSON.stringify({
+          type: 'daemon_exited',
+          pid: 42,
+          code: null,
+          signal: 'SIGKILL',
+          at: '2026-09-23T12:00:00.000Z',
+        }) + '\n',
         'utf8',
       );
       const out: string[] = [];
@@ -615,7 +686,9 @@ describe('engine/daemon-observe-cli', () => {
         [
           { type: 'daemon_exited', pid: 42, code: null, signal: 'SIGKILL', at: '2026-09-23T12:02:00.000Z' },
           { type: 'daemon_exited', pid: 42, code: 1, signal: null, at: '2026-09-23T12:01:00.000Z' },
-        ].map((event) => JSON.stringify(event)).join('\n') + '\n',
+        ]
+          .map((event) => JSON.stringify(event))
+          .join('\n') + '\n',
         'utf8',
       );
       const out: string[] = [];
@@ -638,7 +711,8 @@ describe('engine/daemon-observe-cli', () => {
       await writePidfile(repo, { pid: 46 });
       await writeFile(
         join(repo, '.daemon', 'exit-events.jsonl'),
-        JSON.stringify({ type: 'daemon_exited', pid: 46, code: 9, signal: null, at: '2026-09-23T12:03:00.000Z' }) + '\n',
+        JSON.stringify({ type: 'daemon_exited', pid: 46, code: 9, signal: null, at: '2026-09-23T12:03:00.000Z' }) +
+          '\n',
         'utf8',
       );
       await writeFile(
@@ -681,13 +755,15 @@ describe('engine/daemon-observe-cli', () => {
       expect(out[0]).not.toContain('exit cause');
     });
 
-    it('renders unknown rather than another pid\'s exit cause and reports malformed lines once', async () => {
+    it("renders unknown rather than another pid's exit cause and reports malformed lines once", async () => {
       const repo = join(root, 'unknown-exit');
       await mkdir(join(repo, '.daemon'), { recursive: true });
       await writePidfile(repo, { pid: 44 });
       await writeFile(
         join(repo, '.daemon', 'exit-events.jsonl'),
-        'not json\n' + JSON.stringify({ type: 'daemon_exited', pid: 45, code: 3, signal: null, at: '2026-09-23T12:02:00.000Z' }) + '\n',
+        'not json\n' +
+          JSON.stringify({ type: 'daemon_exited', pid: 45, code: 3, signal: null, at: '2026-09-23T12:02:00.000Z' }) +
+          '\n',
         'utf8',
       );
       const out: string[] = [];
@@ -754,11 +830,7 @@ describe('engine/daemon-observe-cli', () => {
       async function writeGatedSnapshot(repo: string, body: unknown): Promise<void> {
         const daemonDir = join(repo, '.daemon');
         await mkdir(daemonDir, { recursive: true });
-        await writeFile(
-          join(daemonDir, 'gated.json'),
-          typeof body === 'string' ? body : JSON.stringify(body),
-          'utf8',
-        );
+        await writeFile(join(daemonDir, 'gated.json'), typeof body === 'string' ? body : JSON.stringify(body), 'utf8');
       }
 
       it('renders slugs/reasons/remedies and an "as of Nm ago" freshness label using the injected clock', async () => {
@@ -913,7 +985,11 @@ describe('engine/daemon-observe-cli', () => {
             clock: () => new Date('2026-08-05T12:05:00.000Z'),
           });
 
-          expect({ output: out.join('\n'), execFileCalls: execFileSpy.mock.calls, execCalls: execSpy.mock.calls }).toEqual({
+          expect({
+            output: out.join('\n'),
+            execFileCalls: execFileSpy.mock.calls,
+            execCalls: execSpy.mock.calls,
+          }).toEqual({
             output: expect.stringMatching(
               /BLOCKED \(as of 5m ago\):[\s\S]*missing-stories — stories-missing — Create the stories file\.[\s\S]*needs-graph — no-dependency-tree — Add dependency edges\./,
             ),
@@ -967,7 +1043,9 @@ describe('engine/daemon-observe-cli', () => {
         );
         await writeFile(
           join(daemonDir, 'mergeable-watch.jsonl'),
-          watchUrls.map((prUrl, index) => JSON.stringify({ prUrl, slug: `feature-${index}`, repoCwd: repo })).join('\n') + '\n',
+          watchUrls
+            .map((prUrl, index) => JSON.stringify({ prUrl, slug: `feature-${index}`, repoCwd: repo }))
+            .join('\n') + '\n',
           'utf8',
         );
       }
@@ -994,13 +1072,17 @@ describe('engine/daemon-observe-cli', () => {
           draft: 'https://github.test/acme/repo/pull/3',
           removed: 'https://github.test/acme/repo/pull/4',
         };
-        await writeShippedPrFixtures(repo, [
-          readiness(urls.noChecks, 'no-checks'),
-          readiness(urls.ready, 'no-checks'),
-          readiness(urls.draft, 'draft'),
-          readiness(urls.ready, 'ready'),
-          readiness(urls.removed, 'no-checks'),
-        ], [urls.noChecks, urls.ready, urls.draft]);
+        await writeShippedPrFixtures(
+          repo,
+          [
+            readiness(urls.noChecks, 'no-checks'),
+            readiness(urls.ready, 'no-checks'),
+            readiness(urls.draft, 'draft'),
+            readiness(urls.ready, 'ready'),
+            readiness(urls.removed, 'no-checks'),
+          ],
+          [urls.noChecks, urls.ready, urls.draft],
+        );
         const execFileSpy = vi.spyOn(cp, 'execFile');
         const execSpy = vi.spyOn(cp, 'exec');
         const out: string[] = [];
@@ -1011,7 +1093,12 @@ describe('engine/daemon-observe-cli', () => {
             out: (line) => out.push(line),
           });
 
-          expect({ code: result.code, output: out.join('\n'), execFileCalls: execFileSpy.mock.calls, execCalls: execSpy.mock.calls }).toEqual({
+          expect({
+            code: result.code,
+            output: out.join('\n'),
+            execFileCalls: execFileSpy.mock.calls,
+            execCalls: execSpy.mock.calls,
+          }).toEqual({
             code: 0,
             output: expect.stringContaining('SHIPPED PRS:'),
             execFileCalls: [],
@@ -1049,7 +1136,9 @@ describe('engine/daemon-observe-cli', () => {
 
         expect({ code: result.code, output: out.join('\n') }).toEqual({
           code: 0,
-          output: expect.stringMatching(/no shipped PRs need attention[\s\S]*SHIPPED PRS:[\s\S]*pull\/5.*no-checks[\s\S]*shipped-PR readiness unknown/),
+          output: expect.stringMatching(
+            /no shipped PRs need attention[\s\S]*SHIPPED PRS:[\s\S]*pull\/5.*no-checks[\s\S]*shipped-PR readiness unknown/,
+          ),
         });
       });
     });
@@ -1066,9 +1155,33 @@ describe('engine/daemon-observe-cli', () => {
         const repo = join(root, 'repo-ledger');
         await mkdir(repo, { recursive: true });
         await writeLedger(repo, [
-          { ts: 1, feature: 'f', taskId: 't1', fastLaneForm: 'commit', fastLaneSha: 'a', auditVerdict: 'satisfied', agree: true },
-          { ts: 2, feature: 'f', taskId: 't2', fastLaneForm: 'commit', fastLaneSha: 'b', auditVerdict: 'unsatisfied', agree: false },
-          { ts: 3, feature: 'f', taskId: 't3', fastLaneForm: 'commit', fastLaneSha: 'c', auditVerdict: 'satisfied', agree: true },
+          {
+            ts: 1,
+            feature: 'f',
+            taskId: 't1',
+            fastLaneForm: 'commit',
+            fastLaneSha: 'a',
+            auditVerdict: 'satisfied',
+            agree: true,
+          },
+          {
+            ts: 2,
+            feature: 'f',
+            taskId: 't2',
+            fastLaneForm: 'commit',
+            fastLaneSha: 'b',
+            auditVerdict: 'unsatisfied',
+            agree: false,
+          },
+          {
+            ts: 3,
+            feature: 'f',
+            taskId: 't3',
+            fastLaneForm: 'commit',
+            fastLaneSha: 'c',
+            auditVerdict: 'satisfied',
+            agree: true,
+          },
         ]);
         const registryPath = await registry([record('repo-ledger', repo)]);
 
@@ -1112,11 +1225,7 @@ describe('engine/daemon-observe-cli', () => {
     });
 
     describe('plan growth (FR-19)', () => {
-      async function writeActivePlan(
-        repo: string,
-        slug: string,
-        taskCount: number,
-      ): Promise<string> {
+      async function writeActivePlan(repo: string, slug: string, taskCount: number): Promise<string> {
         const featureRoot = join(repo, '.worktrees', slug);
         const planPath = join(featureRoot, '.docs', 'plans', `${slug}.md`);
         await mkdir(join(featureRoot, '.pipeline'), { recursive: true });
@@ -1179,27 +1288,49 @@ describe('engine/daemon-observe-cli', () => {
         const featureRoot = await writeDaemonPlan(repo, slug, tasks('', 26));
         await mkdir(join(repo, '.ai-conductor'), { recursive: true });
         await mkdir(join(featureRoot, '.ai-conductor'), { recursive: true });
-        await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_appended_tasks: 8\n  max_appended_ratio: 0.8\n', 'utf8');
-        await writeFile(join(featureRoot, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_appended_tasks: 10\n  max_appended_ratio: 1\n', 'utf8');
-        await writeFile(join(featureRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
-          version: 1,
-          gates: {},
-          growth: { authored: 20, added: 6, byGate: { prd_audit: 6 } },
-        }), 'utf8');
+        await writeFile(
+          join(repo, '.ai-conductor', 'config.yml'),
+          'prd_audit:\n  max_appended_tasks: 8\n  max_appended_ratio: 0.8\n',
+          'utf8',
+        );
+        await writeFile(
+          join(featureRoot, '.ai-conductor', 'config.yml'),
+          'prd_audit:\n  max_appended_tasks: 10\n  max_appended_ratio: 1\n',
+          'utf8',
+        );
+        await writeFile(
+          join(featureRoot, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({
+            version: 1,
+            gates: {},
+            growth: { authored: 20, added: 6, byGate: { prd_audit: 6 } },
+          }),
+          'utf8',
+        );
         const out: string[] = [];
 
-        await runDaemonStatus({ registryPath: await registry([record('repo-main-growth-cap', repo)]), out: (line) => out.push(line) });
+        await runDaemonStatus({
+          registryPath: await registry([record('repo-main-growth-cap', repo)]),
+          out: (line) => out.push(line),
+        });
 
         expect(out.find((line) => line.startsWith(`  PLAN GROWTH [${slug}]`))).toContain('remaining 2/8');
 
-        await writeFile(join(featureRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
-          version: 1,
-          effectiveGrowthCap: 9,
-          gates: {},
-          growth: { authored: 20, added: 6, byGate: { prd_audit: 6 } },
-        }), 'utf8');
+        await writeFile(
+          join(featureRoot, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({
+            version: 1,
+            effectiveGrowthCap: 9,
+            gates: {},
+            growth: { authored: 20, added: 6, byGate: { prd_audit: 6 } },
+          }),
+          'utf8',
+        );
         const raisedOut: string[] = [];
-        await runDaemonStatus({ registryPath: await registry([record('repo-main-growth-cap', repo)]), out: (line) => raisedOut.push(line) });
+        await runDaemonStatus({
+          registryPath: await registry([record('repo-main-growth-cap', repo)]),
+          out: (line) => raisedOut.push(line),
+        });
 
         expect(raisedOut.find((line) => line.startsWith(`  PLAN GROWTH [${slug}]`))).toContain('remaining 3/9');
       });
@@ -1211,10 +1342,17 @@ describe('engine/daemon-observe-cli', () => {
         const featureRoot = await writeDaemonPlan(repo, slug, tasks('', 17), {
           otherPlan: { name: 'other.md', content: tasks('', 5) },
         });
-        await writeFile(join(featureRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({ version: 1, gates: {} }), 'utf8');
+        await writeFile(
+          join(featureRoot, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({ version: 1, gates: {} }),
+          'utf8',
+        );
         const out: string[] = [];
 
-        await runDaemonStatus({ registryPath: await registry([record('repo-daemon-plan', repo)]), out: (line) => out.push(line) });
+        await runDaemonStatus({
+          registryPath: await registry([record('repo-daemon-plan', repo)]),
+          out: (line) => out.push(line),
+        });
 
         expect(out).toContain('  PLAN GROWTH [daemon-feature]: authored 17; added 0; remaining 4/4');
       });
@@ -1227,10 +1365,17 @@ describe('engine/daemon-observe-cli', () => {
           activePlan: 'recorded.md',
           otherPlan: { name: 'recorded.md', content: tasks('', 5) },
         });
-        await writeFile(join(featureRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({ version: 1, gates: {} }), 'utf8');
+        await writeFile(
+          join(featureRoot, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({ version: 1, gates: {} }),
+          'utf8',
+        );
         const out: string[] = [];
 
-        await runDaemonStatus({ registryPath: await registry([record('repo-recorded-plan', repo)]), out: (line) => out.push(line) });
+        await runDaemonStatus({
+          registryPath: await registry([record('repo-recorded-plan', repo)]),
+          out: (line) => out.push(line),
+        });
 
         expect(out.join('\n')).toContain('PLAN GROWTH [recorded-feature]: authored 5;');
       });
@@ -1243,10 +1388,17 @@ describe('engine/daemon-observe-cli', () => {
           planName: 'first-other.md',
           otherPlan: { name: 'also-other.md', content: tasks('', 5) },
         });
-        await writeFile(join(featureRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({ version: 1, gates: {} }), 'utf8');
+        await writeFile(
+          join(featureRoot, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({ version: 1, gates: {} }),
+          'utf8',
+        );
         const out: string[] = [];
 
-        await runDaemonStatus({ registryPath: await registry([record('repo-unresolved-plan', repo)]), out: (line) => out.push(line) });
+        await runDaemonStatus({
+          registryPath: await registry([record('repo-unresolved-plan', repo)]),
+          out: (line) => out.push(line),
+        });
 
         expect(out).toContain('  PLAN GROWTH [unresolved-feature]: plan unresolved; added 0');
         expect(out.some((line) => line.includes('remaining 0/0'))).toBe(false);
@@ -1260,19 +1412,29 @@ describe('engine/daemon-observe-cli', () => {
           planName: 'first-other.md',
           otherPlan: { name: 'also-other.md', content: tasks('', 5) },
         });
-        await writeFile(join(featureRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
-          version: 1,
-          gates: {},
-          pendingRepair: {
-            receiptId: 'unresolved-pending', taskIds: ['rem-1'],
-            charges: { prd_audit: { laps: 1, growth: 4 } },
-          },
-        }), 'utf8');
+        await writeFile(
+          join(featureRoot, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({
+            version: 1,
+            gates: {},
+            pendingRepair: {
+              receiptId: 'unresolved-pending',
+              taskIds: ['rem-1'],
+              charges: { prd_audit: { laps: 1, growth: 4 } },
+            },
+          }),
+          'utf8',
+        );
         const out: string[] = [];
 
-        await runDaemonStatus({ registryPath: await registry([record('repo-unresolved-pending-plan', repo)]), out: (line) => out.push(line) });
+        await runDaemonStatus({
+          registryPath: await registry([record('repo-unresolved-pending-plan', repo)]),
+          out: (line) => out.push(line),
+        });
 
-        expect(out).toContain('  PLAN GROWTH [unresolved-pending-feature]: plan unresolved; added 0; pending 4 (prd_audit 4)');
+        expect(out).toContain(
+          '  PLAN GROWTH [unresolved-pending-feature]: plan unresolved; added 0; pending 4 (prd_audit 4)',
+        );
       });
 
       // Covers: task:7
@@ -1281,23 +1443,34 @@ describe('engine/daemon-observe-cli', () => {
         const slug = 'pending-growth-feature';
         const featureRoot = await writeDaemonPlan(repo, slug, [tasks('', 40), tasks('rem-', 11)].join('\n'));
         await mkdir(join(repo, '.ai-conductor'), { recursive: true });
-        await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_appended_tasks: 10\n  max_appended_ratio: 1\n', 'utf8');
-        await writeFile(join(featureRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
-          version: 1,
-          gates: {},
-          growth: { authored: 40, added: 0, byGate: {} },
-          pendingRepair: {
-            receiptId: 'pending-growth',
-            taskIds: Array.from({ length: 11 }, (_, index) => `rem-${index + 1}`),
-            charges: {
-              prd_audit: { laps: 1, growth: 3 },
-              architecture_review_as_built: { laps: 1, growth: 8 },
+        await writeFile(
+          join(repo, '.ai-conductor', 'config.yml'),
+          'prd_audit:\n  max_appended_tasks: 10\n  max_appended_ratio: 1\n',
+          'utf8',
+        );
+        await writeFile(
+          join(featureRoot, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({
+            version: 1,
+            gates: {},
+            growth: { authored: 40, added: 0, byGate: {} },
+            pendingRepair: {
+              receiptId: 'pending-growth',
+              taskIds: Array.from({ length: 11 }, (_, index) => `rem-${index + 1}`),
+              charges: {
+                prd_audit: { laps: 1, growth: 3 },
+                architecture_review_as_built: { laps: 1, growth: 8 },
+              },
             },
-          },
-        }), 'utf8');
+          }),
+          'utf8',
+        );
         const out: string[] = [];
 
-        await runDaemonStatus({ registryPath: await registry([record('repo-pending-growth', repo)]), out: (line) => out.push(line) });
+        await runDaemonStatus({
+          registryPath: await registry([record('repo-pending-growth', repo)]),
+          out: (line) => out.push(line),
+        });
 
         expect(out).toContain(
           '  PLAN GROWTH [pending-growth-feature]: authored 40; added 0; remaining 0/10; pending 11 (prd_audit 3, architecture_review_as_built 8), minimum raise 1',
@@ -1307,31 +1480,51 @@ describe('engine/daemon-observe-cli', () => {
       // Covers: task:7
       it('shows pending growth only when it is chargeable, and leaves ordinary status lines unchanged', async () => {
         const repo = join(root, 'repo-status-growth-variants');
-        const pendingRoot = await writeDaemonPlan(repo, 'partial-pending', [tasks('', 40), tasks('rem-', 3)].join('\n'));
+        const pendingRoot = await writeDaemonPlan(
+          repo,
+          'partial-pending',
+          [tasks('', 40), tasks('rem-', 3)].join('\n'),
+        );
         const baseLedger = { version: 1, gates: {}, growth: { authored: 40, added: 2, byGate: { prd_audit: 2 } } };
-        await writeFile(join(pendingRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
-          ...baseLedger,
-          pendingRepair: {
-            receiptId: 'partial', taskIds: ['rem-1', 'rem-2', 'rem-3'],
-            charges: { prd_audit: { laps: 1, growth: 3 } },
-          },
-        }), 'utf8');
+        await writeFile(
+          join(pendingRoot, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({
+            ...baseLedger,
+            pendingRepair: {
+              receiptId: 'partial',
+              taskIds: ['rem-1', 'rem-2', 'rem-3'],
+              charges: { prd_audit: { laps: 1, growth: 3 } },
+            },
+          }),
+          'utf8',
+        );
         const lapsRoot = await writeDaemonPlan(repo, 'laps-only', [tasks('', 40), tasks('rem-', 1)].join('\n'));
-        await writeFile(join(lapsRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
-          ...baseLedger,
-          growth: { authored: 39, added: 2, byGate: { prd_audit: 2 } },
-          pendingRepair: {
-            receiptId: 'laps-only', taskIds: ['rem-1'], charges: { prd_audit: { laps: 1, growth: 0 } },
-          },
-        }), 'utf8');
+        await writeFile(
+          join(lapsRoot, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({
+            ...baseLedger,
+            growth: { authored: 39, added: 2, byGate: { prd_audit: 2 } },
+            pendingRepair: {
+              receiptId: 'laps-only',
+              taskIds: ['rem-1'],
+              charges: { prd_audit: { laps: 1, growth: 0 } },
+            },
+          }),
+          'utf8',
+        );
         // A settled flat ledger's active plan includes its two charged tasks.
         const ordinaryRoot = await writeDaemonPlan(repo, 'ordinary', tasks('', 42));
         await writeFile(join(ordinaryRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify(baseLedger), 'utf8');
         const out: string[] = [];
 
-        await runDaemonStatus({ registryPath: await registry([record('repo-status-growth-variants', repo)]), out: (line) => out.push(line) });
+        await runDaemonStatus({
+          registryPath: await registry([record('repo-status-growth-variants', repo)]),
+          out: (line) => out.push(line),
+        });
 
-        expect(out).toContain('  PLAN GROWTH [partial-pending]: authored 40; added 2 (prd_audit: 2); remaining 0/5; pending 3 (prd_audit 3)');
+        expect(out).toContain(
+          '  PLAN GROWTH [partial-pending]: authored 40; added 2 (prd_audit: 2); remaining 0/5; pending 3 (prd_audit 3)',
+        );
         expect(out.find((line) => line.startsWith('  PLAN GROWTH [partial-pending]:'))).not.toContain('minimum raise');
         expect(out).toContain('  PLAN GROWTH [laps-only]: authored 39; added 2 (prd_audit: 2); remaining 3/5');
         expect(out).toContain('  PLAN GROWTH [ordinary]: authored 40; added 2 (prd_audit: 2); remaining 3/5');
@@ -1345,21 +1538,35 @@ describe('engine/daemon-observe-cli', () => {
           otherPlan: { name: 'other.md', content: tasks('', 5) },
         });
         await mkdir(join(repo, '.ai-conductor'), { recursive: true });
-        await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'prd_audit:\n  max_appended_tasks: 30\n  max_appended_ratio: 0.5\n', 'utf8');
+        await writeFile(
+          join(repo, '.ai-conductor', 'config.yml'),
+          'prd_audit:\n  max_appended_tasks: 30\n  max_appended_ratio: 0.5\n',
+          'utf8',
+        );
         const ledgerPath = join(featureRoot, '.pipeline', 'kickback-ledger.json');
         const growth = { authored: 0, added: 9, byGate: { prd_audit: 5, architecture_review_as_built: 4 } };
         await writeFile(ledgerPath, JSON.stringify({ version: 1, gates: {}, growth }), 'utf8');
         const out: string[] = [];
 
-        await runDaemonStatus({ registryPath: await registry([record('repo-shared-budget', repo)]), out: (line) => out.push(line) });
+        await runDaemonStatus({
+          registryPath: await registry([record('repo-shared-budget', repo)]),
+          out: (line) => out.push(line),
+        });
 
-        expect(out).toContain('  PLAN GROWTH [shared-budget-feature]: authored 24; added 9 (prd_audit: 5, architecture_review_as_built: 4); remaining 3/12');
+        expect(out).toContain(
+          '  PLAN GROWTH [shared-budget-feature]: authored 24; added 9 (prd_audit: 5, architecture_review_as_built: 4); remaining 3/12',
+        );
 
         await writeFile(ledgerPath, JSON.stringify({ version: 1, effectiveGrowthCap: 20, gates: {}, growth }), 'utf8');
         const raisedOut: string[] = [];
-        await runDaemonStatus({ registryPath: await registry([record('repo-shared-budget', repo)]), out: (line) => raisedOut.push(line) });
+        await runDaemonStatus({
+          registryPath: await registry([record('repo-shared-budget', repo)]),
+          out: (line) => raisedOut.push(line),
+        });
 
-        expect(raisedOut.find((line) => line.startsWith('  PLAN GROWTH [shared-budget-feature]'))).toMatch(/remaining 11\/20$/);
+        expect(raisedOut.find((line) => line.startsWith('  PLAN GROWTH [shared-budget-feature]'))).toMatch(
+          /remaining 11\/20$/,
+        );
       });
 
       it('uses the effective growth cap and reports growth cap evidence without an adjustment', async () => {
@@ -1399,9 +1606,7 @@ describe('engine/daemon-observe-cli', () => {
 
         await runDaemonStatus({ registryPath, out: (line) => out.push(line) });
 
-        expect(out).toContain(
-          '  PLAN GROWTH [growth-feature]: authored 19; added 3 (prd_audit: 3); remaining 9/12',
-        );
+        expect(out).toContain('  PLAN GROWTH [growth-feature]: authored 19; added 3 (prd_audit: 3); remaining 9/12');
         expect(out.join('\n')).toContain('KICKBACK BUDGET [growth-feature]:');
         expect(out.join('\n')).toContain('Allowance: growth');
       });
@@ -1419,9 +1624,7 @@ describe('engine/daemon-observe-cli', () => {
 
         await runDaemonStatus({ registryPath, out: (line) => out.push(line) });
 
-        expect(out).toContain(
-          '  PLAN GROWTH [legacy-feature]: authored 19; added 0; remaining 4/4',
-        );
+        expect(out).toContain('  PLAN GROWTH [legacy-feature]: authored 19; added 0; remaining 4/4');
       });
 
       // Covers: task:4, task:9
@@ -1430,18 +1633,34 @@ describe('engine/daemon-observe-cli', () => {
         const featureRoot = await writeActivePlan(repo, 'laps-feature', 19);
         await writeFile(
           join(featureRoot, '.pipeline', 'kickback-ledger.json'),
-          JSON.stringify({ version: 1, gates: {
-            architecture_review_as_built: {
-              count: 0, cumulative: 0, laps: 1, treeHash: null, lastReason: '', priorVerdict: false, resolvedBefore: 0,
+          JSON.stringify({
+            version: 1,
+            gates: {
+              architecture_review_as_built: {
+                count: 0,
+                cumulative: 0,
+                laps: 1,
+                treeHash: null,
+                lastReason: '',
+                priorVerdict: false,
+                resolvedBefore: 0,
+              },
             },
-          } }),
+          }),
           'utf8',
         );
         const out: string[] = [];
 
-        await runDaemonStatus({ registryPath: await registry([record('repo-remediation-lap', repo)]), out: (line) => out.push(line) });
+        await runDaemonStatus({
+          registryPath: await registry([record('repo-remediation-lap', repo)]),
+          out: (line) => out.push(line),
+        });
 
-        expect(out.find((line) => line.includes('KICKBACK BUDGET [laps-feature]:') && line.includes('architecture_review_as_built'))).toContain(
+        expect(
+          out.find(
+            (line) => line.includes('KICKBACK BUDGET [laps-feature]:') && line.includes('architecture_review_as_built'),
+          ),
+        ).toContain(
           'Kickback budget (architecture_review_as_built): 1/3 consumed; 2 remaining — tier unrecorded, treated as M; allowance 3 (default)',
         );
       });
@@ -1450,47 +1669,170 @@ describe('engine/daemon-observe-cli', () => {
       it('renders each remediation gate exactly once for an empty ledger', async () => {
         const repo = join(root, 'repo-fresh-remediation');
         const featureRoot = await writeActivePlan(repo, 'fresh-feature', 19);
-        await writeFile(join(featureRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify({ version: 1, gates: {} }), 'utf8');
+        await writeFile(
+          join(featureRoot, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({ version: 1, gates: {} }),
+          'utf8',
+        );
         const out: string[] = [];
 
-        await runDaemonStatus({ registryPath: await registry([record('repo-fresh-remediation', repo)]), out: (line) => out.push(line) });
+        await runDaemonStatus({
+          registryPath: await registry([record('repo-fresh-remediation', repo)]),
+          out: (line) => out.push(line),
+        });
 
         const budgets = out.filter((line) => line.includes('KICKBACK BUDGET [fresh-feature]:'));
-        expect(budgets.filter((line) => line.includes('Kickback budget (prd_audit): 0/3 consumed; 3 remaining — tier unrecorded, treated as M; allowance 3 (default)'))).toHaveLength(1);
-        expect(budgets.filter((line) => line.includes('Kickback budget (architecture_review_as_built): 0/3 consumed; 3 remaining — tier unrecorded, treated as M; allowance 3 (default)'))).toHaveLength(1);
+        expect(
+          budgets.filter((line) =>
+            line.includes(
+              'Kickback budget (prd_audit): 0/3 consumed; 3 remaining — tier unrecorded, treated as M; allowance 3 (default)',
+            ),
+          ),
+        ).toHaveLength(1);
+        expect(
+          budgets.filter((line) =>
+            line.includes(
+              'Kickback budget (architecture_review_as_built): 0/3 consumed; 3 remaining — tier unrecorded, treated as M; allowance 3 (default)',
+            ),
+          ),
+        ).toHaveLength(1);
       });
 
       // Covers: task:9
       it('uses the default tier-S prd-audit allowance consistently in status and inspect', async () => {
         const repo = join(root, 'repo-tier-s-remediation');
         const featureRoot = await writeActivePlan(repo, 'tier-s-feature', 19);
-        await writeFile(join(featureRoot, '.pipeline', 'conduct-state.json'), JSON.stringify({
-          build: 'in_progress', complexity_tier: 'S',
-        }), 'utf8');
+        await writeFile(
+          join(featureRoot, '.pipeline', 'conduct-state.json'),
+          JSON.stringify({
+            build: 'in_progress',
+            complexity_tier: 'S',
+          }),
+          'utf8',
+        );
         await writeFile(
           join(featureRoot, '.pipeline', 'kickback-ledger.json'),
-          JSON.stringify({ version: 1, gates: {
-            prd_audit: {
-              count: 0, cumulative: 0, laps: 1, treeHash: null, lastReason: '', priorVerdict: false, resolvedBefore: 0,
+          JSON.stringify({
+            version: 1,
+            gates: {
+              prd_audit: {
+                count: 0,
+                cumulative: 0,
+                laps: 1,
+                treeHash: null,
+                lastReason: '',
+                priorVerdict: false,
+                resolvedBefore: 0,
+              },
             },
-          } }),
+          }),
           'utf8',
         );
         const status: string[] = [];
 
-        await runDaemonStatus({ registryPath: await registry([record('repo-tier-s-remediation', repo)]), out: (line) => status.push(line) });
+        await runDaemonStatus({
+          registryPath: await registry([record('repo-tier-s-remediation', repo)]),
+          out: (line) => status.push(line),
+        });
         const inspect: string[] = [];
-        expect(await dispatchKickbackBudgetCommand(
-          { kind: 'kickback-budget', action: 'inspect', feature: 'tier-s-feature', format: 'human' },
-          { cwd: repo, resolveMainRoot: async () => repo, print: (line) => inspect.push(line) },
-        )).toBe(0);
+        expect(
+          await dispatchKickbackBudgetCommand(
+            { kind: 'kickback-budget', action: 'inspect', feature: 'tier-s-feature', format: 'human' },
+            { cwd: repo, resolveMainRoot: async () => repo, print: (line) => inspect.push(line) },
+          ),
+        ).toBe(0);
 
-        expect(status.find((line) => line.includes('KICKBACK BUDGET [tier-s-feature]:') && line.includes('prd_audit'))).toContain(
-          'Kickback budget (prd_audit): 1/2 consumed; 1 remaining — tier S allowance 2 (default)',
+        expect(
+          status.find((line) => line.includes('KICKBACK BUDGET [tier-s-feature]:') && line.includes('prd_audit')),
+        ).toContain('Kickback budget (prd_audit): 1/2 consumed; 1 remaining — tier S allowance 2 (default)');
+        expect(
+          inspect
+            .join('\n')
+            .split('\n')
+            .find((line) => line.startsWith('Kickback budget (prd_audit):')),
+        ).toContain('Kickback budget (prd_audit): 1/2 consumed; 1 remaining — tier S allowance 2 (default)');
+      });
+
+      // #3502: a feature branch cut before a main config change carries stale lap keys.
+      it('reports the engine-enforced lap allowance from the main checkout, not the feature worktree config', async () => {
+        const repo = join(root, 'repo-drifted-lap-config');
+        const featureRoot = await writeActivePlan(repo, 'drifted-feature', 19);
+        await writeFile(
+          join(featureRoot, '.pipeline', 'conduct-state.json'),
+          JSON.stringify({
+            build: 'in_progress',
+            complexity_tier: 'L',
+          }),
+          'utf8',
         );
-        expect(inspect.join('\n').split('\n').find((line) => line.startsWith('Kickback budget (prd_audit):'))).toContain(
-          'Kickback budget (prd_audit): 1/2 consumed; 1 remaining — tier S allowance 2 (default)',
+        await writeFile(
+          join(featureRoot, '.pipeline', 'kickback-ledger.json'),
+          JSON.stringify({
+            version: 1,
+            gates: {
+              prd_audit: {
+                count: 0,
+                cumulative: 0,
+                laps: 1,
+                treeHash: null,
+                lastReason: '',
+                priorVerdict: false,
+                resolvedBefore: 0,
+              },
+            },
+          }),
+          'utf8',
         );
+        // The stale feature branch still carries the keys main has since removed.
+        await mkdir(join(featureRoot, '.ai-conductor'), { recursive: true });
+        await writeFile(
+          join(featureRoot, '.ai-conductor', 'config.yml'),
+          'prd_audit:\n  max_remediation_laps: 2\narchitecture_review_as_built:\n  max_remediation_laps: 3\n',
+          'utf8',
+        );
+        // The engine loads the user config merged beneath the main checkout's project config.
+        await mkdir(join(repo, '.ai-conductor'), { recursive: true });
+        await writeFile(
+          join(repo, '.ai-conductor', 'config.yml'),
+          'architecture_review_as_built:\n  max_remediation_laps:\n    L: 5\n',
+          'utf8',
+        );
+        const userConfigDir = join(root, 'user-config');
+        await mkdir(userConfigDir, { recursive: true });
+        await writeFile(join(userConfigDir, 'config.yml'), 'prd_audit:\n  max_remediation_laps:\n    L: 6\n', 'utf8');
+        const previousUserConfigDir = process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
+        process.env.AI_CONDUCTOR_USER_CONFIG_DIR = userConfigDir;
+        try {
+          const status: string[] = [];
+          await runDaemonStatus({
+            registryPath: await registry([record('repo-drifted-lap-config', repo)]),
+            out: (line) => status.push(line),
+          });
+          const inspect: string[] = [];
+          expect(
+            await dispatchKickbackBudgetCommand(
+              { kind: 'kickback-budget', action: 'inspect', feature: 'drifted-feature', format: 'human' },
+              { cwd: repo, resolveMainRoot: async () => repo, print: (line) => inspect.push(line) },
+            ),
+          ).toBe(0);
+          const inspectLines = inspect.join('\n').split('\n');
+
+          const prdAudit = 'Kickback budget (prd_audit): 1/6 consumed; 5 remaining — tier L allowance 6 (configured)';
+          const asBuilt =
+            'Kickback budget (architecture_review_as_built): 0/5 consumed; 5 remaining — tier L allowance 5 (configured)';
+          const statusFor = (gate: string) =>
+            status.find((line) => line.includes('KICKBACK BUDGET [drifted-feature]:') && line.includes(`(${gate})`));
+          expect(statusFor('prd_audit')).toContain(prdAudit);
+          expect(statusFor('architecture_review_as_built')).toContain(asBuilt);
+          expect(inspectLines.find((line) => line.startsWith('Kickback budget (prd_audit):'))).toBe(prdAudit);
+          expect(inspectLines.find((line) => line.startsWith('Kickback budget (architecture_review_as_built):'))).toBe(
+            asBuilt,
+          );
+          expect([...status, ...inspectLines].join('\n')).not.toMatch(/allowance [23] \(configured\)/);
+        } finally {
+          if (previousUserConfigDir === undefined) delete process.env.AI_CONDUCTOR_USER_CONFIG_DIR;
+          else process.env.AI_CONDUCTOR_USER_CONFIG_DIR = previousUserConfigDir;
+        }
       });
 
       // Covers: task:9
@@ -1499,18 +1841,26 @@ describe('engine/daemon-observe-cli', () => {
         const featureRoot = await writeActivePlan(repo, 'broken-feature', 19);
         await writeFile(
           join(featureRoot, '.pipeline', 'kickback-ledger.json'),
-          JSON.stringify({ version: 1, gates: {
-            prd_audit: { laps: 'not-a-number' },
-          } }),
+          JSON.stringify({
+            version: 1,
+            gates: {
+              prd_audit: { laps: 'not-a-number' },
+            },
+          }),
           'utf8',
         );
         const out: string[] = [];
 
-        const { code } = await runDaemonStatus({ registryPath: await registry([record('repo-broken-remediation', repo)]), out: (line) => out.push(line) });
+        const { code } = await runDaemonStatus({
+          registryPath: await registry([record('repo-broken-remediation', repo)]),
+          out: (line) => out.push(line),
+        });
 
         expect(code).toBe(0);
         const budgets = out.filter((line) => line.includes('KICKBACK BUDGET [broken-feature]:'));
-        expect(budgets).toContain('  KICKBACK BUDGET [broken-feature]: prd_audit: budget unavailable (durable entry failed validation)');
+        expect(budgets).toContain(
+          '  KICKBACK BUDGET [broken-feature]: prd_audit: budget unavailable (durable entry failed validation)',
+        );
         const prdBudget = budgets.find((line) => line.includes('prd_audit: budget unavailable'));
         expect(prdBudget).not.toContain('tier');
         expect(prdBudget).not.toContain('allowance');
@@ -1522,15 +1872,28 @@ describe('engine/daemon-observe-cli', () => {
         const featureRoot = await writeActivePlan(repo, 'build-review-feature', 19);
         await writeFile(
           join(featureRoot, '.pipeline', 'kickback-ledger.json'),
-          JSON.stringify({ version: 1, gates: {
-            build_review: {
-              count: 4, cumulative: 4, treeHash: null, lastReason: 'review cap', priorVerdict: false,
-              resolvedBefore: 0, effectiveLimit: 6, adjustmentsKnown: true,
-              capEvidence: {
-                gate: 'build_review', consumed: 4, limit: 6, latestReason: 'review cap', haltGeneration: 'halt-1',
+          JSON.stringify({
+            version: 1,
+            gates: {
+              build_review: {
+                count: 4,
+                cumulative: 4,
+                treeHash: null,
+                lastReason: 'review cap',
+                priorVerdict: false,
+                resolvedBefore: 0,
+                effectiveLimit: 6,
+                adjustmentsKnown: true,
+                capEvidence: {
+                  gate: 'build_review',
+                  consumed: 4,
+                  limit: 6,
+                  latestReason: 'review cap',
+                  haltGeneration: 'halt-1',
+                },
               },
             },
-          } }),
+          }),
           'utf8',
         );
         const status: string[] = [];
@@ -1540,25 +1903,35 @@ describe('engine/daemon-observe-cli', () => {
         });
 
         const inspect: string[] = [];
-        expect(await dispatchKickbackBudgetCommand(
-          { kind: 'kickback-budget', action: 'inspect', feature: 'build-review-feature', format: 'human' },
-          { cwd: repo, resolveMainRoot: async () => repo, print: (line) => inspect.push(line) },
-        )).toBe(0);
+        expect(
+          await dispatchKickbackBudgetCommand(
+            { kind: 'kickback-budget', action: 'inspect', feature: 'build-review-feature', format: 'human' },
+            { cwd: repo, resolveMainRoot: async () => repo, print: (line) => inspect.push(line) },
+          ),
+        ).toBe(0);
         const inspectJson: string[] = [];
-        expect(await dispatchKickbackBudgetCommand(
-          { kind: 'kickback-budget', action: 'inspect', feature: 'build-review-feature', format: 'json' },
-          { cwd: repo, resolveMainRoot: async () => repo, print: (line) => inspectJson.push(line) },
-        )).toBe(0);
+        expect(
+          await dispatchKickbackBudgetCommand(
+            { kind: 'kickback-budget', action: 'inspect', feature: 'build-review-feature', format: 'json' },
+            { cwd: repo, resolveMainRoot: async () => repo, print: (line) => inspectJson.push(line) },
+          ),
+        ).toBe(0);
 
         const expected = 'Kickback budget (build_review): 4/6 consumed; 2 remaining';
-        const statusLine = status.find((line) => line.includes('KICKBACK BUDGET [build-review-feature]:') && line.includes('build_review'));
-        const inspectLine = inspect.join('\n').split('\n\n').find((block) => block.startsWith('Kickback budget (build_review):'));
+        const statusLine = status.find(
+          (line) => line.includes('KICKBACK BUDGET [build-review-feature]:') && line.includes('build_review'),
+        );
+        const inspectLine = inspect
+          .join('\n')
+          .split('\n\n')
+          .find((block) => block.startsWith('Kickback budget (build_review):'));
         expect(statusLine).toContain(expected);
         expect(inspectLine).toContain(expected);
         expect(statusLine).not.toMatch(/— tier|allowance \d/);
         expect(inspectLine).not.toMatch(/— tier|allowance \d/);
-        const buildReview = (JSON.parse(inspectJson[0]) as { gates: Array<Record<string, unknown>> }).gates
-          .find((gate) => gate.gate === 'build_review');
+        const buildReview = (JSON.parse(inspectJson[0]) as { gates: Array<Record<string, unknown>> }).gates.find(
+          (gate) => gate.gate === 'build_review',
+        );
         expect(buildReview).toMatchObject({ gate: 'build_review', consumed: 4, limit: 6, remaining: 2 });
         expect(buildReview).not.toHaveProperty('tier');
         expect(buildReview).not.toHaveProperty('allowanceSource');
@@ -1570,14 +1943,27 @@ describe('engine/daemon-observe-cli', () => {
         const featureRoot = await writeActivePlan(repo, 'review-feature', 19);
         await writeFile(
           join(featureRoot, '.pipeline', 'kickback-ledger.json'),
-          JSON.stringify({ version: 1, gates: {
-            build_review: { count: 1, cumulative: 1, treeHash: null, lastReason: '', priorVerdict: false, resolvedBefore: 0 },
-          } }),
+          JSON.stringify({
+            version: 1,
+            gates: {
+              build_review: {
+                count: 1,
+                cumulative: 1,
+                treeHash: null,
+                lastReason: '',
+                priorVerdict: false,
+                resolvedBefore: 0,
+              },
+            },
+          }),
           'utf8',
         );
         const out: string[] = [];
 
-        await runDaemonStatus({ registryPath: await registry([record('repo-review-without-budget', repo)]), out: (line) => out.push(line) });
+        await runDaemonStatus({
+          registryPath: await registry([record('repo-review-without-budget', repo)]),
+          out: (line) => out.push(line),
+        });
 
         expect(out.filter((line) => line.includes('KICKBACK BUDGET [review-feature]:'))).not.toContainEqual(
           expect.stringContaining('Kickback budget (build_review):'),
@@ -1592,7 +1978,11 @@ describe('engine/daemon-observe-cli', () => {
         const pipeline = join(repo, '.worktrees', slug, '.pipeline');
         await mkdir(pipeline, { recursive: true });
         await writeFile(join(pipeline, 'conduct-state.json'), JSON.stringify({ test_suite: 'in_progress' }), 'utf8');
-        await writeFile(join(pipeline, 'events.jsonl'), events.map((event) => JSON.stringify(event)).join('\n') + '\n', 'utf8');
+        await writeFile(
+          join(pipeline, 'events.jsonl'),
+          events.map((event) => JSON.stringify(event)).join('\n') + '\n',
+          'utf8',
+        );
       };
       const startedAt = '2026-10-10T12:00:00.000Z';
       await Promise.all([
@@ -1663,10 +2053,7 @@ describe('engine/daemon-observe-cli', () => {
       await sink.close();
 
       const out: string[] = [];
-      const code = await runDaemonLogs(
-        { repo, follow: false, all: false },
-        { out: (l) => out.push(l) },
-      );
+      const code = await runDaemonLogs({ repo, follow: false, all: false }, { out: (l) => out.push(l) });
       expect(code).toBe(0);
       expect(out).toContain('[daemon] alpha');
       expect(out).toContain('[daemon] beta');
@@ -1676,10 +2063,7 @@ describe('engine/daemon-observe-cli', () => {
       const repo = join(root, 'repo');
       await mkdir(repo, { recursive: true });
       const out: string[] = [];
-      const code = await runDaemonLogs(
-        { repo, follow: false, all: false },
-        { out: (l) => out.push(l) },
-      );
+      const code = await runDaemonLogs({ repo, follow: false, all: false }, { out: (l) => out.push(l) });
       expect(code).toBe(0);
       expect(out.join('\n')).toMatch(/no daemon log yet/);
     });
@@ -1696,17 +2080,10 @@ describe('engine/daemon-observe-cli', () => {
       sb.write('[daemon] from-b');
       await sb.close();
       const registryPath = join(root, 'registry.json');
-      await writeFile(
-        registryPath,
-        JSON.stringify([record('a', a), record('b', b)]),
-        'utf8',
-      );
+      await writeFile(registryPath, JSON.stringify([record('a', a), record('b', b)]), 'utf8');
 
       const out: string[] = [];
-      const code = await runDaemonLogs(
-        { follow: false, all: true },
-        { registryPath, out: (l) => out.push(l) },
-      );
+      const code = await runDaemonLogs({ follow: false, all: true }, { registryPath, out: (l) => out.push(l) });
       expect(code).toBe(0);
       const joined = out.join('\n');
       expect(joined).toContain('from-a');
@@ -1728,16 +2105,12 @@ describe('engine/daemon-observe-cli', () => {
       const untilStop = new Promise<void>((r) => {
         release = r;
       });
-      const running = runDaemonLogs(
-        { repo, follow: true, all: false },
-        { out: (l) => out.push(l), untilStop },
-      );
+      const running = runDaemonLogs({ repo, follow: true, all: false }, { out: (l) => out.push(l), untilStop });
 
       // Give runDaemonLogs a turn to print the tail and arm the follower.
       await vi.waitFor(() => expect(out).toContain('[daemon] existing'));
       // The follower must be a ref'd timer while following, or the CLI exits.
-      expect(process.getActiveResourcesInfo().filter((r) => r === 'Timeout').length)
-        .toBeGreaterThan(0);
+      expect(process.getActiveResourcesInfo().filter((r) => r === 'Timeout').length).toBeGreaterThan(0);
 
       const sink2 = await openDaemonLog(repo);
       sink2.write('[daemon] appended');
@@ -1758,10 +2131,7 @@ describe('engine/daemon-observe-cli', () => {
       await sink.close();
 
       const out: string[] = [];
-      const code = await runDaemonLogs(
-        { repo, follow: false, all: false, lines: 2 },
-        { out: (l) => out.push(l) },
-      );
+      const code = await runDaemonLogs({ repo, follow: false, all: false, lines: 2 }, { out: (l) => out.push(l) });
       expect(code).toBe(0);
       expect(out).toEqual(['[daemon] two', '[daemon] three']);
     });
@@ -1805,8 +2175,12 @@ describe('engine/daemon-observe-cli', () => {
       expect(command).toEqual({ kind: 'stories-refs', repo });
       const stdout: string[] = [];
       const stderr: string[] = [];
-      const out = vi.spyOn(console, 'log').mockImplementation((line: string) => { stdout.push(line); });
-      const err = vi.spyOn(console, 'error').mockImplementation((line: string) => { stderr.push(line); });
+      const out = vi.spyOn(console, 'log').mockImplementation((line: string) => {
+        stdout.push(line);
+      });
+      const err = vi.spyOn(console, 'error').mockImplementation((line: string) => {
+        stderr.push(line);
+      });
       try {
         return { code: await dispatchDaemonObserve(command!), stdout, stderr };
       } finally {
@@ -1820,9 +2194,12 @@ describe('engine/daemon-observe-cli', () => {
     });
 
     it('detects `daemon logs` with flags', () => {
-      expect(
-        detectDaemonObserveCommand(argv('daemon', 'logs', '--repo', '/x', '--follow', '--all')),
-      ).toEqual({ kind: 'logs', repo: '/x', follow: true, all: true });
+      expect(detectDaemonObserveCommand(argv('daemon', 'logs', '--repo', '/x', '--follow', '--all'))).toEqual({
+        kind: 'logs',
+        repo: '/x',
+        follow: true,
+        all: true,
+      });
     });
 
     it('parses --lines (and -n) so the flag is not silently ignored', () => {
@@ -1851,10 +2228,14 @@ describe('engine/daemon-observe-cli', () => {
     });
 
     it('detects stories-refs with --repo <path> and --repo=<path>', () => {
-      expect(detectDaemonObserveCommand(argv('daemon', 'stories-refs', '--repo', '/x')))
-        .toEqual({ kind: 'stories-refs', repo: '/x' });
-      expect(detectDaemonObserveCommand(argv('daemon', 'stories-refs', '--repo=/y')))
-        .toEqual({ kind: 'stories-refs', repo: '/y' });
+      expect(detectDaemonObserveCommand(argv('daemon', 'stories-refs', '--repo', '/x'))).toEqual({
+        kind: 'stories-refs',
+        repo: '/x',
+      });
+      expect(detectDaemonObserveCommand(argv('daemon', 'stories-refs', '--repo=/y'))).toEqual({
+        kind: 'stories-refs',
+        repo: '/y',
+      });
     });
 
     it('dispatches a clean stories-refs report with its scanned ref, abbreviated commit, and spec count', async () => {
@@ -1867,8 +2248,8 @@ describe('engine/daemon-observe-cli', () => {
 
       expect(code).toBe(0);
       expect(output).toBe(
-        `stories-refs: scanned 1 specs at main (${sha.slice(0, 9)})\n`
-        + 'stories-refs: clean — no spec has an unresolvable Stories reference\n',
+        `stories-refs: scanned 1 specs at main (${sha.slice(0, 9)})\n` +
+          'stories-refs: clean — no spec has an unresolvable Stories reference\n',
       );
     });
 
@@ -1918,8 +2299,8 @@ describe('engine/daemon-observe-cli', () => {
 
       expect(code).toBe(0);
       expect(output).toBe(
-        `stories-refs: scanned 0 specs at main (${sha.slice(0, 9)})\n`
-        + 'stories-refs: clean — no spec has an unresolvable Stories reference\n',
+        `stories-refs: scanned 0 specs at main (${sha.slice(0, 9)})\n` +
+          'stories-refs: clean — no spec has an unresolvable Stories reference\n',
       );
     });
 
@@ -1954,7 +2335,9 @@ describe('engine/daemon-observe-cli', () => {
         {
           out: (line) => out.push(line),
           err: (line) => err.push(line),
-          scan: async () => { throw new Error('fixture scan exploded'); },
+          scan: async () => {
+            throw new Error('fixture scan exploded');
+          },
         },
       );
 

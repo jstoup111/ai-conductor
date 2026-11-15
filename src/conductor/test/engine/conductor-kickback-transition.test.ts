@@ -18,10 +18,7 @@ import { writeKickbackLedger } from '../kickback-ledger-test-support.js';
 import * as projectPrelude from '../../src/engine/project-prelude.js';
 import * as protectedArtifactSeal from '../../src/engine/protected-artifact-seal.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
-import {
-  persistFixtureProjectedRemediationPlan,
-  persistFixtureRemediationPlan,
-} from './remediation-plan-fixtures.js';
+import { persistFixtureProjectedRemediationPlan, persistFixtureRemediationPlan } from './remediation-plan-fixtures.js';
 
 describe('BUILD pending-repair settlement transition (Task 6)', () => {
   let dir: string;
@@ -39,8 +36,13 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
   });
 
   const entry = (laps = 0) => ({
-    count: 0, cumulative: 0, laps, treeHash: null,
-    lastReason: 'blocking finding', priorVerdict: true, resolvedBefore: 0,
+    count: 0,
+    cumulative: 0,
+    laps,
+    treeHash: null,
+    lastReason: 'blocking finding',
+    priorVerdict: true,
+    resolvedBefore: 0,
   });
 
   const asBuiltFindings = [
@@ -91,22 +93,25 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
       feature_desc: 'transition',
       ...(options.complexityTier === undefined ? {} : { complexity_tier: options.complexityTier }),
     });
-    await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
-      tasks: [{ id: 'rem-1', status: 'pending' }],
-    }));
+    await writeFile(
+      join(dir, '.pipeline', 'task-status.json'),
+      JSON.stringify({
+        tasks: [{ id: 'rem-1', status: 'pending' }],
+      }),
+    );
     if (options.authoredTasks !== undefined) {
       await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
-      await writeFile(join(dir, '.docs', 'plans', 'transition.md'), Array.from(
-        { length: options.authoredTasks },
-        (_, index) => `### Task ${index + 1}: Authored work`,
-      ).join('\n'));
+      await writeFile(
+        join(dir, '.docs', 'plans', 'transition.md'),
+        Array.from({ length: options.authoredTasks }, (_, index) => `### Task ${index + 1}: Authored work`).join('\n'),
+      );
     }
     await writeKickbackLedger(dir, { ...ledger, pendingRepair } as KickbackLedger);
     if (options.buildOutcome !== undefined) {
       await writeFile(join(dir, '.pipeline', 'build-outcome.json'), JSON.stringify(options.buildOutcome));
     }
-    const build = vi.fn(async () => options.buildResult ?? ({ success: true }));
-    const runner: StepRunner = { run: async (step) => step === 'build' ? build() : { success: true } };
+    const build = vi.fn(async () => options.buildResult ?? { success: true });
+    const runner: StepRunner = { run: async (step) => (step === 'build' ? build() : { success: true }) };
     if (options.refuseAtProtectedArtifact) {
       vi.spyOn(projectPrelude, 'currentCommitSha').mockResolvedValue('approved-commit');
       vi.spyOn(protectedArtifactSeal, 'verifyProtectedArtifactSeal').mockResolvedValue({
@@ -122,7 +127,12 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
       projectRoot: dir,
       stepRunner: runner,
       events: new ConductorEventEmitter(),
-      mode: 'auto', daemon: true, resume: true, fromStep: 'build', verifyArtifacts: false, maxRetries: 1,
+      mode: 'auto',
+      daemon: true,
+      resume: true,
+      fromStep: 'build',
+      verifyArtifacts: false,
+      maxRetries: 1,
       config: {
         defaults: { model: 'test-model', effort: options.effort ?? 'medium', max_retries: 1, escalate: false },
         prd_audit: {
@@ -146,21 +156,27 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
       },
     } as never);
     if (options.activeRegionChild !== undefined) {
-      (conductor as unknown as { activeRegionChild: ReturnType<typeof parseChildId> }).activeRegionChild = parseChildId(options.activeRegionChild);
+      (conductor as unknown as { activeRegionChild: ReturnType<typeof parseChildId> }).activeRegionChild = parseChildId(
+        options.activeRegionChild,
+      );
     }
     await conductor.run();
     return { build };
   }
 
   it('settles an in-allowance mixed repair before dispatching BUILD', async () => {
-    const { build } = await runBuild({
-      receiptId: 'mixed', taskIds: ['rem-1'],
-      charges: { prd_audit: { laps: 1, growth: 1 }, architecture_review_as_built: { laps: 1, growth: 1 } },
-    }, {
-      version: 1,
-      gates: { prd_audit: entry(), architecture_review_as_built: entry() },
-      growth: { authored: 4, added: 0, byGate: {} },
-    });
+    const { build } = await runBuild(
+      {
+        receiptId: 'mixed',
+        taskIds: ['rem-1'],
+        charges: { prd_audit: { laps: 1, growth: 1 }, architecture_review_as_built: { laps: 1, growth: 1 } },
+      },
+      {
+        version: 1,
+        gates: { prd_audit: entry(), architecture_review_as_built: entry() },
+        growth: { authored: 4, added: 0, byGate: {} },
+      },
+    );
 
     expect(build).toHaveBeenCalledOnce();
     await expect(readKickbackLedger(dir)).resolves.toMatchObject({
@@ -172,25 +188,34 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
   // Covers: task:7
   it('charges an unconfigured tier-L as-built fourth lap and halts the fifth at BUILD dispatch', async () => {
     const pendingRepair: PendingRepair = {
-      receiptId: 'tier-l-as-built', taskIds: ['rem-1'],
+      receiptId: 'tier-l-as-built',
+      taskIds: ['rem-1'],
       charges: { architecture_review_as_built: { laps: 1, growth: 0 } },
     };
-    const { build: fourth } = await runBuild(pendingRepair, {
-      version: 1,
-      gates: { architecture_review_as_built: entry(3) },
-      growth: { authored: 4, added: 0, byGate: {} },
-    }, { complexityTier: 'L', remediationCaps: {} });
+    const { build: fourth } = await runBuild(
+      pendingRepair,
+      {
+        version: 1,
+        gates: { architecture_review_as_built: entry(3) },
+        growth: { authored: 4, added: 0, byGate: {} },
+      },
+      { complexityTier: 'L', remediationCaps: {} },
+    );
 
     expect(fourth).toHaveBeenCalledOnce();
     await expect(readKickbackLedger(dir)).resolves.toMatchObject({
       gates: { architecture_review_as_built: { laps: 4 } },
     });
 
-    const { build: fifth } = await runBuild(pendingRepair, {
-      version: 1,
-      gates: { architecture_review_as_built: entry(4) },
-      growth: { authored: 4, added: 0, byGate: {} },
-    }, { complexityTier: 'L', remediationCaps: {} });
+    const { build: fifth } = await runBuild(
+      pendingRepair,
+      {
+        version: 1,
+        gates: { architecture_review_as_built: entry(4) },
+        growth: { authored: 4, added: 0, byGate: {} },
+      },
+      { complexityTier: 'L', remediationCaps: {} },
+    );
 
     expect(fifth).not.toHaveBeenCalled();
     await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
@@ -202,14 +227,19 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
   });
 
   it('halts an unconfigured tier-S prd-audit third lap without charging it at BUILD dispatch', async () => {
-    const { build } = await runBuild({
-      receiptId: 'tier-s-prd', taskIds: ['rem-1'],
-      charges: { prd_audit: { laps: 1, growth: 0 } },
-    }, {
-      version: 1,
-      gates: { prd_audit: entry(2) },
-      growth: { authored: 4, added: 0, byGate: {} },
-    }, { complexityTier: 'S', remediationCaps: {} });
+    const { build } = await runBuild(
+      {
+        receiptId: 'tier-s-prd',
+        taskIds: ['rem-1'],
+        charges: { prd_audit: { laps: 1, growth: 0 } },
+      },
+      {
+        version: 1,
+        gates: { prd_audit: entry(2) },
+        growth: { authored: 4, added: 0, byGate: {} },
+      },
+      { complexityTier: 'S', remediationCaps: {} },
+    );
 
     expect(build).not.toHaveBeenCalled();
     await expect(readKickbackLedger(dir)).resolves.toMatchObject({ gates: { prd_audit: { laps: 2 } } });
@@ -220,45 +250,59 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
   });
 
   it('halts an unconfigured feature with no recorded tier at the default M prd-audit allowance', async () => {
-    const { build } = await runBuild({
-      receiptId: 'unrecorded-tier-prd', taskIds: ['rem-1'],
-      charges: { prd_audit: { laps: 1, growth: 0 } },
-    }, {
-      version: 1,
-      gates: { prd_audit: entry(3) },
-      growth: { authored: 4, added: 0, byGate: {} },
-    }, { remediationCaps: {} });
+    const { build } = await runBuild(
+      {
+        receiptId: 'unrecorded-tier-prd',
+        taskIds: ['rem-1'],
+        charges: { prd_audit: { laps: 1, growth: 0 } },
+      },
+      {
+        version: 1,
+        gates: { prd_audit: entry(3) },
+        growth: { authored: 4, added: 0, byGate: {} },
+      },
+      { remediationCaps: {} },
+    );
 
     expect(build).not.toHaveBeenCalled();
     const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
+    expect(halt).toContain('BUILD dispatch halted: prd_audit laps allowance exhausted');
     expect(halt).toContain(
-      'BUILD dispatch halted: prd_audit laps allowance exhausted',
+      'Kickback budget (prd_audit): 3/3 consumed; 0 remaining — tier unrecorded, treated as M; allowance 3 (default)',
     );
-    expect(halt).toContain('Kickback budget (prd_audit): 3/3 consumed; 0 remaining — tier unrecorded, treated as M; allowance 3 (default)');
     expect(halt).not.toContain('tier L');
     expect(halt).not.toContain('allowance 4');
   });
 
   it('honors raised effective lap caps over tier defaults and configured caps at BUILD dispatch', async () => {
     const pendingRepair: PendingRepair = {
-      receiptId: 'raised-tier-cap', taskIds: ['rem-1'],
+      receiptId: 'raised-tier-cap',
+      taskIds: ['rem-1'],
       charges: { architecture_review_as_built: { laps: 1, growth: 0 } },
     };
-    const { build: raisedDefault } = await runBuild(pendingRepair, {
-      version: 1,
-      gates: { architecture_review_as_built: { ...entry(3), effectiveLapCap: 5 } },
-      growth: { authored: 4, added: 0, byGate: {} },
-    }, { complexityTier: 'M', remediationCaps: {} });
+    const { build: raisedDefault } = await runBuild(
+      pendingRepair,
+      {
+        version: 1,
+        gates: { architecture_review_as_built: { ...entry(3), effectiveLapCap: 5 } },
+        growth: { authored: 4, added: 0, byGate: {} },
+      },
+      { complexityTier: 'M', remediationCaps: {} },
+    );
     expect(raisedDefault).toHaveBeenCalledOnce();
 
-    const { build: raisedConfigured } = await runBuild(pendingRepair, {
-      version: 1,
-      gates: { architecture_review_as_built: { ...entry(4), effectiveLapCap: 5 } },
-      growth: { authored: 4, added: 0, byGate: {} },
-    }, {
-      complexityTier: 'L',
-      remediationCaps: { asBuilt: { L: 2 } },
-    });
+    const { build: raisedConfigured } = await runBuild(
+      pendingRepair,
+      {
+        version: 1,
+        gates: { architecture_review_as_built: { ...entry(4), effectiveLapCap: 5 } },
+        growth: { authored: 4, added: 0, byGate: {} },
+      },
+      {
+        complexityTier: 'L',
+        remediationCaps: { asBuilt: { L: 2 } },
+      },
+    );
     expect(raisedConfigured).toHaveBeenCalledOnce();
     await expect(readKickbackLedger(dir)).resolves.toMatchObject({
       gates: { architecture_review_as_built: { laps: 5, effectiveLapCap: 5 } },
@@ -273,28 +317,40 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
       run_started_at: Date.now() - 1_000,
       feature_desc: 'retry-transition',
     });
-    await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
-      tasks: [{ id: 'rem-1', status: 'pending' }],
-    }));
+    await writeFile(
+      join(dir, '.pipeline', 'task-status.json'),
+      JSON.stringify({
+        tasks: [{ id: 'rem-1', status: 'pending' }],
+      }),
+    );
     await writeKickbackLedger(dir, {
       version: 1,
       gates: { prd_audit: entry() },
       growth: { authored: 4, added: 0, byGate: {} },
       pendingRepair: {
-        receiptId: 'retry-repair', taskIds: ['rem-1'],
+        receiptId: 'retry-repair',
+        taskIds: ['rem-1'],
         charges: { prd_audit: { laps: 1, growth: 1 } },
       },
     });
 
     let attempts = 0;
-    const retryingRunner: StepRunner = { run: async (step) => {
-      if (step !== 'build' || ++attempts > 1) return { success: true };
-      return { success: false, error: 'retry once' };
-    } };
+    const retryingRunner: StepRunner = {
+      run: async (step) => {
+        if (step !== 'build' || ++attempts > 1) return { success: true };
+        return { success: false, error: 'retry once' };
+      },
+    };
     await new Conductor({
-      stateFilePath: statePath, projectRoot: dir, stepRunner: retryingRunner,
-      events: new ConductorEventEmitter(), mode: 'auto', daemon: true,
-      resume: true, fromStep: 'build', verifyArtifacts: false,
+      stateFilePath: statePath,
+      projectRoot: dir,
+      stepRunner: retryingRunner,
+      events: new ConductorEventEmitter(),
+      mode: 'auto',
+      daemon: true,
+      resume: true,
+      fromStep: 'build',
+      verifyArtifacts: false,
       config: { prd_audit: { max_remediation_laps: 1, max_appended_tasks: 5, max_appended_ratio: 1 } },
     } as never).run();
 
@@ -306,10 +362,15 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
       feature_desc: 'retry-transition',
     });
     await new Conductor({
-      stateFilePath: statePath, projectRoot: dir,
+      stateFilePath: statePath,
+      projectRoot: dir,
       stepRunner: { run: async () => ({ success: true }) },
-      events: new ConductorEventEmitter(), mode: 'auto', daemon: true,
-      resume: true, fromStep: 'build', verifyArtifacts: false,
+      events: new ConductorEventEmitter(),
+      mode: 'auto',
+      daemon: true,
+      resume: true,
+      fromStep: 'build',
+      verifyArtifacts: false,
       config: { prd_audit: { max_remediation_laps: 1, max_appended_tasks: 5, max_appended_ratio: 1 } },
     } as never).run();
 
@@ -325,14 +386,18 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
   });
 
   it('settles an obligation-keyed lap-only existing-task charge without growth', async () => {
-    const { build } = await runBuild({
-      receiptId: 'repair-existing-task-obligation', taskIds: ['1'],
-      charges: { prd_audit: { laps: 1, growth: 0 } },
-    }, {
-      version: 1,
-      gates: { prd_audit: entry() },
-      growth: { authored: 4, added: 0, byGate: {} },
-    });
+    const { build } = await runBuild(
+      {
+        receiptId: 'repair-existing-task-obligation',
+        taskIds: ['1'],
+        charges: { prd_audit: { laps: 1, growth: 0 } },
+      },
+      {
+        version: 1,
+        gates: { prd_audit: entry() },
+        growth: { authored: 4, added: 0, byGate: {} },
+      },
+    );
 
     expect(build).toHaveBeenCalledOnce();
     await expect(readKickbackLedger(dir)).resolves.toMatchObject({
@@ -343,24 +408,37 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
 
   it('refuses an exact no-op kickback cycle before settling its pending repair', async () => {
     const pendingRepair: PendingRepair = {
-      receiptId: 'no-op-repair', taskIds: ['rem-1'],
+      receiptId: 'no-op-repair',
+      taskIds: ['rem-1'],
       charges: { prd_audit: { laps: 1, growth: 1 } },
     };
-    const { build } = await runBuild(pendingRepair, {
-      version: 1,
-      gates: { prd_audit: { ...entry(), priorVerdict: false } },
-      growth: { authored: 4, added: 0, byGate: {} },
-    }, {
-      treeHash: 'tree-1',
-      buildOutcome: {
+    const { build } = await runBuild(
+      pendingRepair,
+      {
         version: 1,
-        records: [{
-          outcome: 'no-movement', terminalOutcome: 'done', gate: 'prd_audit', verdict: false,
-          rung: { model: 'test-model', effort: 'medium' },
-          treeBefore: 'tree-1', treeAfter: 'tree-1', headBefore: 'head-1', headAfter: 'head-1',
-        }],
+        gates: { prd_audit: { ...entry(), priorVerdict: false } },
+        growth: { authored: 4, added: 0, byGate: {} },
       },
-    });
+      {
+        treeHash: 'tree-1',
+        buildOutcome: {
+          version: 1,
+          records: [
+            {
+              outcome: 'no-movement',
+              terminalOutcome: 'done',
+              gate: 'prd_audit',
+              verdict: false,
+              rung: { model: 'test-model', effort: 'medium' },
+              treeBefore: 'tree-1',
+              treeAfter: 'tree-1',
+              headBefore: 'head-1',
+              headAfter: 'head-1',
+            },
+          ],
+        },
+      },
+    );
 
     expect(build).not.toHaveBeenCalled();
     await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
@@ -379,61 +457,99 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     ['null tree', null, 'medium'],
     ['higher rung', 'tree-1', 'high'],
   ] as const)('dispatches BUILD when a no-op cycle has a %s', async (_case, treeHash, effort) => {
-    const { build } = await runBuild({
-      receiptId: `different-${_case}`, taskIds: ['rem-1'],
-      charges: { prd_audit: { laps: 1, growth: 1 } },
-    }, {
-      version: 1,
-      gates: { prd_audit: { ...entry(), priorVerdict: false } },
-      growth: { authored: 4, added: 0, byGate: {} },
-    }, {
-      treeHash,
-      effort,
-      buildOutcome: {
-        version: 1,
-        records: [{
-          outcome: 'no-movement', terminalOutcome: 'done', gate: 'prd_audit', verdict: false,
-          rung: { model: 'test-model', effort: 'medium' },
-          treeBefore: 'tree-1', treeAfter: 'tree-1', headBefore: 'head-1', headAfter: 'head-1',
-        }],
+    const { build } = await runBuild(
+      {
+        receiptId: `different-${_case}`,
+        taskIds: ['rem-1'],
+        charges: { prd_audit: { laps: 1, growth: 1 } },
       },
-    });
+      {
+        version: 1,
+        gates: { prd_audit: { ...entry(), priorVerdict: false } },
+        growth: { authored: 4, added: 0, byGate: {} },
+      },
+      {
+        treeHash,
+        effort,
+        buildOutcome: {
+          version: 1,
+          records: [
+            {
+              outcome: 'no-movement',
+              terminalOutcome: 'done',
+              gate: 'prd_audit',
+              verdict: false,
+              rung: { model: 'test-model', effort: 'medium' },
+              treeBefore: 'tree-1',
+              treeAfter: 'tree-1',
+              headBefore: 'head-1',
+              headAfter: 'head-1',
+            },
+          ],
+        },
+      },
+    );
 
     expect(build).toHaveBeenCalledOnce();
   });
 
   it('stamps an escalated no-movement attempt at its actual rung, so a base-rung re-dispatch proceeds', async () => {
-    await runBuild(undefined, {
-      version: 1,
-      gates: { prd_audit: { ...entry(), priorVerdict: false } },
-      growth: { authored: 4, added: 0, byGate: {} },
-    }, {
-      treeHash: 'tree-1',
-      buildResult: { success: true, model: 'test-model', effort: 'high' },
-    });
-    const outcomes = JSON.parse(await readFile(join(dir, '.pipeline', 'build-outcome.json'), 'utf8')) as BuildOutcomeStore;
+    await runBuild(
+      undefined,
+      {
+        version: 1,
+        gates: { prd_audit: { ...entry(), priorVerdict: false } },
+        growth: { authored: 4, added: 0, byGate: {} },
+      },
+      {
+        treeHash: 'tree-1',
+        buildResult: { success: true, model: 'test-model', effort: 'high' },
+      },
+    );
+    const outcomes = JSON.parse(
+      await readFile(join(dir, '.pipeline', 'build-outcome.json'), 'utf8'),
+    ) as BuildOutcomeStore;
     const stamped = outcomes.records.at(-1)?.rung;
     expect(stamped).toEqual({ model: 'test-model', effort: 'high' });
-    expect(sameNoOpCycle({
-      outcome: 'no-movement', terminalOutcome: 'done', gate: 'prd_audit', verdict: false,
-      rung: stamped!, treeBefore: 'tree-1', treeAfter: 'tree-1', headBefore: 'head-1', headAfter: 'head-1',
-    }, {
-      gate: 'prd_audit', treeHash: 'tree-1', verdict: false,
-      rung: buildOutcomeRung(undefined, { model: 'test-model', effort: 'medium' }),
-    })).toBe(false);
+    expect(
+      sameNoOpCycle(
+        {
+          outcome: 'no-movement',
+          terminalOutcome: 'done',
+          gate: 'prd_audit',
+          verdict: false,
+          rung: stamped!,
+          treeBefore: 'tree-1',
+          treeAfter: 'tree-1',
+          headBefore: 'head-1',
+          headAfter: 'head-1',
+        },
+        {
+          gate: 'prd_audit',
+          treeHash: 'tree-1',
+          verdict: false,
+          rung: buildOutcomeRung(undefined, { model: 'test-model', effort: 'medium' }),
+        },
+      ),
+    ).toBe(false);
   });
 
   it('leaves a pending repair uncharged when protected-artifact admission refuses BUILD', async () => {
     const pendingRepair: PendingRepair = {
-      receiptId: 'refused-repair', taskIds: ['rem-1'],
+      receiptId: 'refused-repair',
+      taskIds: ['rem-1'],
       charges: { prd_audit: { laps: 1, growth: 1 } },
       prdAuditCriteria: ['S2.1'],
     };
-    const { build } = await runBuild(pendingRepair, {
-      version: 1,
-      gates: { prd_audit: entry() },
-      growth: { authored: 4, added: 0, byGate: {} },
-    }, { refuseAtProtectedArtifact: true });
+    const { build } = await runBuild(
+      pendingRepair,
+      {
+        version: 1,
+        gates: { prd_audit: entry() },
+        growth: { authored: 4, added: 0, byGate: {} },
+      },
+      { refuseAtProtectedArtifact: true },
+    );
 
     expect(build).not.toHaveBeenCalled();
     await expect(readKickbackLedger(dir)).resolves.toMatchObject({
@@ -447,52 +563,74 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
     await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
     await writeFile(join(dir, '.docs', 'plans', 'existing-task.md'), '### Task 1: Existing repair\n');
-    await writeFile(join(dir, '.docs', 'stories', 'existing-task.md'), '## Story 1: Repair\n\n### Happy Path\n- Given repair work, when it is completed, then it passes.\n');
-    await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
-      tasks: [{ id: '1', status: 'completed' }],
-    }));
-    await persistPrdAuditVerdict(dir, {
-      complete: true,
-      judgment: {
-        version: 'v1',
-        criterionJudgments: [{
-          criterion: { storyId: '1', ordinal: 1 },
-          criterionId: 'S1.1',
-          grade: 'FIXABLE',
-          evidence: 'Fixture identifies the existing repair.',
-          rationale: 'Fixture repair requires the active owning task.',
-          requirementAssociations: [],
-          evidenceTaskIds: ['1'],
-          ownerTaskId: '1',
-        }],
-        noOwnerObservations: [],
+    await writeFile(
+      join(dir, '.docs', 'stories', 'existing-task.md'),
+      '## Story 1: Repair\n\n### Happy Path\n- Given repair work, when it is completed, then it passes.\n',
+    );
+    await writeFile(
+      join(dir, '.pipeline', 'task-status.json'),
+      JSON.stringify({
+        tasks: [{ id: '1', status: 'completed' }],
+      }),
+    );
+    await persistPrdAuditVerdict(
+      dir,
+      {
+        complete: true,
+        judgment: {
+          version: 'v1',
+          criterionJudgments: [
+            {
+              criterion: { storyId: '1', ordinal: 1 },
+              criterionId: 'S1.1',
+              grade: 'FIXABLE',
+              evidence: 'Fixture identifies the existing repair.',
+              rationale: 'Fixture repair requires the active owning task.',
+              requirementAssociations: [],
+              evidenceTaskIds: ['1'],
+              ownerTaskId: '1',
+            },
+          ],
+          noOwnerObservations: [],
+        },
+        diagnostics: [],
+        recordedDispositions: [],
       },
-      diagnostics: [],
-      recordedDispositions: [],
-    }, { attemptId: 'fixture-prd-audit', codeStamp: null });
+      { attemptId: 'fixture-prd-audit', codeStamp: null },
+    );
     await writeKickbackLedger(dir, { version: 1, gates: {}, growth: { authored: 1, added: 0, byGate: {} } });
     const conductor = new Conductor({
       stateFilePath: statePath,
       projectRoot: dir,
       events: new ConductorEventEmitter(),
       config: { prd_audit: { max_remediation_laps: 1 } } as never,
-      stepRunner: { run: async (step, _state, options) => {
-        if (step === 'remediate') {
-          await persistFixtureProjectedRemediationPlan(dir, options, [{
-            id: 'S1.1', disposition: 'existing-task', category: null, rationale: 'Already owned.',
-            tasks: [], boundTaskIds: ['1'],
-          }]);
-        }
-        return { success: true };
-      } },
+      stepRunner: {
+        run: async (step, _state, options) => {
+          if (step === 'remediate') {
+            await persistFixtureProjectedRemediationPlan(dir, options, [
+              {
+                id: 'S1.1',
+                disposition: 'existing-task',
+                category: null,
+                rationale: 'Already owned.',
+                tasks: [],
+                boundTaskIds: ['1'],
+              },
+            ]);
+          }
+          return { success: true };
+        },
+      },
     });
 
-    await expect((conductor as any).planRemediation(
-      { feature_desc: 'existing-task', session_started_at: Date.now() - 1_000 },
-      ALL_STEPS,
-      'restage existing work',
-      { source: 'prd_audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
-    )).resolves.toMatchObject({ kind: 'route', target: 'build' });
+    await expect(
+      (conductor as any).planRemediation(
+        { feature_desc: 'existing-task', session_started_at: Date.now() - 1_000 },
+        ALL_STEPS,
+        'restage existing work',
+        { source: 'prd_audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] },
+      ),
+    ).resolves.toMatchObject({ kind: 'route', target: 'build' });
 
     const ledger = await readKickbackLedger(dir);
     expect(ledger.gates.prd_audit?.laps ?? 0).toBe(0);
@@ -506,15 +644,19 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
   });
 
   it('names every existing-task PRD finding when its lap is exhausted at BUILD admission', async () => {
-    const { build } = await runBuild({
-      receiptId: 'existing-task-exhausted', taskIds: ['1'],
-      charges: { prd_audit: { laps: 1, growth: 0 } },
-      prdAuditCriteria: ['S1.1', 'S1.2'],
-    }, {
-      version: 1,
-      gates: { prd_audit: entry(1) },
-      growth: { authored: 4, added: 0, byGate: {} },
-    });
+    const { build } = await runBuild(
+      {
+        receiptId: 'existing-task-exhausted',
+        taskIds: ['1'],
+        charges: { prd_audit: { laps: 1, growth: 0 } },
+        prdAuditCriteria: ['S1.1', 'S1.2'],
+      },
+      {
+        version: 1,
+        gates: { prd_audit: entry(1) },
+        growth: { authored: 4, added: 0, byGate: {} },
+      },
+    );
 
     expect(build).not.toHaveBeenCalled();
     await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
@@ -524,8 +666,18 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
 
   it.each([
     ['prd_audit lap', { prd_audit: entry(1) }, { prd_audit: { laps: 1, growth: 0 } }, 'laps'],
-    ['as-built lap', { architecture_review_as_built: entry(1) }, { architecture_review_as_built: { laps: 1, growth: 0 } }, 'laps'],
-    ['mixed as-built lap', { prd_audit: entry(), architecture_review_as_built: entry(1) }, { prd_audit: { laps: 1, growth: 1 }, architecture_review_as_built: { laps: 1, growth: 1 } }, 'laps'],
+    [
+      'as-built lap',
+      { architecture_review_as_built: entry(1) },
+      { architecture_review_as_built: { laps: 1, growth: 0 } },
+      'laps',
+    ],
+    [
+      'mixed as-built lap',
+      { prd_audit: entry(), architecture_review_as_built: entry(1) },
+      { prd_audit: { laps: 1, growth: 1 }, architecture_review_as_built: { laps: 1, growth: 1 } },
+      'laps',
+    ],
     ['growth', { prd_audit: entry() }, { prd_audit: { laps: 1, growth: 1 } }, 'growth'],
   ])('halts before BUILD without charging a %s exhaustion', async (_name, gates, charges, allowance) => {
     const initialGrowth: NonNullable<KickbackLedger['growth']> = {
@@ -533,14 +685,19 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
       added: allowance === 'growth' ? 4 : 0,
       byGate: allowance === 'growth' ? { prd_audit: 4 } : {},
     };
-    const { build } = await runBuild({
-      receiptId: `exhausted-${allowance}`,
-      taskIds: ['rem-1'],
-      charges,
-      ...(Object.hasOwn(charges, 'prd_audit') ? { prdAuditCriteria: ['S2.1'] } : {}),
-    }, {
-      version: 1, gates, growth: initialGrowth,
-    });
+    const { build } = await runBuild(
+      {
+        receiptId: `exhausted-${allowance}`,
+        taskIds: ['rem-1'],
+        charges,
+        ...(Object.hasOwn(charges, 'prd_audit') ? { prdAuditCriteria: ['S2.1'] } : {}),
+      },
+      {
+        version: 1,
+        gates,
+        growth: initialGrowth,
+      },
+    );
 
     expect(build).not.toHaveBeenCalled();
     await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toMatch(new RegExp(allowance, 'i'));
@@ -557,25 +714,31 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
       pendingRepair: { taskIds: ['rem-1'] },
     });
     expect(haltedLedger.growth).toEqual(initialGrowth);
-    const exhaustedGate = allowance === 'growth' ? 'prd_audit' :
-      _name.includes('as-built') ? 'architecture_review_as_built' : 'prd_audit';
+    const exhaustedGate =
+      allowance === 'growth' ? 'prd_audit' : _name.includes('as-built') ? 'architecture_review_as_built' : 'prd_audit';
     expect(haltedLedger.gates[exhaustedGate]?.capEvidence).toMatchObject({ allowance });
     expect(haltedLedger.gates[exhaustedGate]?.capEvidence?.haltGeneration).toEqual(expect.any(String));
   });
 
   it('records a raised lap cap as the cap evidence limit so the next raise matches', async () => {
-    await runBuild({
-      receiptId: 'raised-lap-exhausted', taskIds: ['rem-1'],
-      charges: { architecture_review_as_built: { laps: 1, growth: 0 } },
-    }, {
-      version: 1,
-      gates: { architecture_review_as_built: { ...entry(3), effectiveLapCap: 3 } },
-      growth: { authored: 4, added: 0, byGate: {} },
-    });
+    await runBuild(
+      {
+        receiptId: 'raised-lap-exhausted',
+        taskIds: ['rem-1'],
+        charges: { architecture_review_as_built: { laps: 1, growth: 0 } },
+      },
+      {
+        version: 1,
+        gates: { architecture_review_as_built: { ...entry(3), effectiveLapCap: 3 } },
+        growth: { authored: 4, added: 0, byGate: {} },
+      },
+    );
 
     const ledger = await readKickbackLedger(dir);
     expect(ledger.gates.architecture_review_as_built?.capEvidence).toMatchObject({
-      allowance: 'laps', consumed: 3, limit: 3,
+      allowance: 'laps',
+      consumed: 3,
+      limit: 3,
     });
   });
 
@@ -586,32 +749,51 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
     statePath = join(dir, '.pipeline', 'conduct-state.json');
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     try {
-      await runBuild({
-        receiptId: 'child-as-built-exhausted', taskIds: ['rem-1'],
-        charges: { architecture_review_as_built: { laps: 1, growth: 0 } },
-      }, {
-        version: 1,
-        gates: { architecture_review_as_built: { ...entry(3), effectiveLapCap: 3 } },
-        growth: { authored: 4, added: 0, byGate: {} },
-      }, { activeRegionChild: 2 });
+      await runBuild(
+        {
+          receiptId: 'child-as-built-exhausted',
+          taskIds: ['rem-1'],
+          charges: { architecture_review_as_built: { laps: 1, growth: 0 } },
+        },
+        {
+          version: 1,
+          gates: { architecture_review_as_built: { ...entry(3), effectiveLapCap: 3 } },
+          growth: { authored: 4, added: 0, byGate: {} },
+        },
+        { activeRegionChild: 2 },
+      );
 
       const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
       expect(halt).toContain('for child 2');
       const childPipeline = join(dir, '.pipeline', 'children', '2');
       await mkdir(childPipeline, { recursive: true });
-      await mkdir(join(dir, '.ai-conductor'), { recursive: true });
-      await writeFile(join(dir, '.ai-conductor', 'config.yml'), 'architecture_review_as_built:\n  max_remediation_laps: 1\n');
-      await writeFile(join(childPipeline, 'kickback-ledger.json'), JSON.stringify({
-        version: 1,
-        gates: { architecture_review_as_built: entry(0) },
-      }));
+      // Inspect reads the main checkout's config, as the dispatching executor does (#3502).
+      await mkdir(join(root, '.ai-conductor'), { recursive: true });
+      await writeFile(
+        join(root, '.ai-conductor', 'config.yml'),
+        'architecture_review_as_built:\n  max_remediation_laps: 1\n',
+      );
+      await writeFile(
+        join(childPipeline, 'kickback-ledger.json'),
+        JSON.stringify({
+          version: 1,
+          gates: { architecture_review_as_built: entry(0) },
+        }),
+      );
       const output: string[] = [];
-      expect(await dispatchKickbackBudgetCommand(
-        { kind: 'kickback-budget', action: 'inspect', feature: 'transition', format: 'human', child: '2' },
-        { cwd: root, resolveMainRoot: async () => root, print: (line) => output.push(line) },
-      )).toBe(1);
-      const haltLine = halt.split('\n').find((line) => line.startsWith('Kickback budget (architecture_review_as_built):'));
-      const inspectLine = output.join('\n').split('\n').find((line) => line.startsWith('Kickback budget (architecture_review_as_built):'));
+      expect(
+        await dispatchKickbackBudgetCommand(
+          { kind: 'kickback-budget', action: 'inspect', feature: 'transition', format: 'human', child: '2' },
+          { cwd: root, resolveMainRoot: async () => root, print: (line) => output.push(line) },
+        ),
+      ).toBe(1);
+      const haltLine = halt
+        .split('\n')
+        .find((line) => line.startsWith('Kickback budget (architecture_review_as_built):'));
+      const inspectLine = output
+        .join('\n')
+        .split('\n')
+        .find((line) => line.startsWith('Kickback budget (architecture_review_as_built):'));
       expect(inspectLine).toBe(haltLine);
     } finally {
       dir = originalDir;
@@ -621,9 +803,14 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
   });
 
   it('fails closed before BUILD for a malformed pending repair', async () => {
-    const { build } = await runBuild({ receiptId: '', taskIds: [], charges: {} }, {
-      version: 1, gates: { prd_audit: entry(), architecture_review_as_built: entry() }, growth: { authored: 4, added: 0, byGate: {} },
-    });
+    const { build } = await runBuild(
+      { receiptId: '', taskIds: [], charges: {} },
+      {
+        version: 1,
+        gates: { prd_audit: entry(), architecture_review_as_built: entry() },
+        growth: { authored: 4, added: 0, byGate: {} },
+      },
+    );
 
     expect(build).not.toHaveBeenCalled();
     const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
@@ -633,16 +820,20 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
   });
 
   it('leads an as-built exhaustion with its findings and retains PRD findings as also pending', async () => {
-    const { build } = await runBuild({
-      receiptId: 'as-built-findings-first', taskIds: ['rem-1'],
-      charges: { prd_audit: { laps: 1, growth: 0 }, architecture_review_as_built: { laps: 1, growth: 0 } },
-      prdAuditCriteria: ['S5.1', 'S5.2', 'S5.3'],
-    }, {
-      version: 1,
-      gates: { prd_audit: entry(), architecture_review_as_built: entry(1) },
-      growth: { authored: 4, added: 0, byGate: {} },
-      pendingAsBuiltRemediationFindings: asBuiltFindings,
-    });
+    const { build } = await runBuild(
+      {
+        receiptId: 'as-built-findings-first',
+        taskIds: ['rem-1'],
+        charges: { prd_audit: { laps: 1, growth: 0 }, architecture_review_as_built: { laps: 1, growth: 0 } },
+        prdAuditCriteria: ['S5.1', 'S5.2', 'S5.3'],
+      },
+      {
+        version: 1,
+        gates: { prd_audit: entry(), architecture_review_as_built: entry(1) },
+        growth: { authored: 4, added: 0, byGate: {} },
+        pendingAsBuiltRemediationFindings: asBuiltFindings,
+      },
+    );
 
     expect(build).not.toHaveBeenCalled();
     const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
@@ -656,16 +847,20 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
   });
 
   it('leads a PRD exhaustion with its criteria and retains as-built findings as also pending', async () => {
-    const { build } = await runBuild({
-      receiptId: 'prd-findings-first', taskIds: ['rem-1'],
-      charges: { prd_audit: { laps: 1, growth: 0 }, architecture_review_as_built: { laps: 1, growth: 0 } },
-      prdAuditCriteria: ['S5.1', 'S5.2', 'S5.3'],
-    }, {
-      version: 1,
-      gates: { prd_audit: entry(1), architecture_review_as_built: entry() },
-      growth: { authored: 4, added: 0, byGate: {} },
-      pendingAsBuiltRemediationFindings: asBuiltFindings,
-    });
+    const { build } = await runBuild(
+      {
+        receiptId: 'prd-findings-first',
+        taskIds: ['rem-1'],
+        charges: { prd_audit: { laps: 1, growth: 0 }, architecture_review_as_built: { laps: 1, growth: 0 } },
+        prdAuditCriteria: ['S5.1', 'S5.2', 'S5.3'],
+      },
+      {
+        version: 1,
+        gates: { prd_audit: entry(1), architecture_review_as_built: entry() },
+        growth: { authored: 4, added: 0, byGate: {} },
+        pendingAsBuiltRemediationFindings: asBuiltFindings,
+      },
+    );
 
     expect(build).not.toHaveBeenCalled();
     await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
@@ -674,12 +869,19 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
   });
 
   it('does not add an also-pending line to a PRD-only exhaustion', async () => {
-    const { build } = await runBuild({
-      receiptId: 'prd-only-findings', taskIds: ['rem-1'],
-      charges: { prd_audit: { laps: 1, growth: 0 } }, prdAuditCriteria: ['S1.1'],
-    }, {
-      version: 1, gates: { prd_audit: entry(1) }, growth: { authored: 4, added: 0, byGate: {} },
-    });
+    const { build } = await runBuild(
+      {
+        receiptId: 'prd-only-findings',
+        taskIds: ['rem-1'],
+        charges: { prd_audit: { laps: 1, growth: 0 } },
+        prdAuditCriteria: ['S1.1'],
+      },
+      {
+        version: 1,
+        gates: { prd_audit: entry(1) },
+        growth: { authored: 4, added: 0, byGate: {} },
+      },
+    );
 
     expect(build).not.toHaveBeenCalled();
     const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
@@ -688,12 +890,19 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
   });
 
   it('uses pending task ids when an as-built exhaustion has no as-built findings', async () => {
-    const { build } = await runBuild({
-      receiptId: 'as-built-task-fallback', taskIds: ['rem-1', 'rem-2'],
-      charges: { architecture_review_as_built: { laps: 1, growth: 0 } }, prdAuditCriteria: ['S5.1'],
-    }, {
-      version: 1, gates: { architecture_review_as_built: entry(1) }, growth: { authored: 4, added: 0, byGate: {} },
-    });
+    const { build } = await runBuild(
+      {
+        receiptId: 'as-built-task-fallback',
+        taskIds: ['rem-1', 'rem-2'],
+        charges: { architecture_review_as_built: { laps: 1, growth: 0 } },
+        prdAuditCriteria: ['S5.1'],
+      },
+      {
+        version: 1,
+        gates: { architecture_review_as_built: entry(1) },
+        growth: { authored: 4, added: 0, byGate: {} },
+      },
+    );
 
     expect(build).not.toHaveBeenCalled();
     const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
@@ -702,23 +911,28 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
   });
 
   it('renders projected pending growth and its minimum raise when BUILD growth is exhausted', async () => {
-    const { build } = await runBuild({
-      receiptId: 'growth-projection', taskIds: ['rem-1'],
-      charges: {
-        prd_audit: { laps: 1, growth: 3 },
-        architecture_review_as_built: { laps: 1, growth: 8 },
+    const { build } = await runBuild(
+      {
+        receiptId: 'growth-projection',
+        taskIds: ['rem-1'],
+        charges: {
+          prd_audit: { laps: 1, growth: 3 },
+          architecture_review_as_built: { laps: 1, growth: 8 },
+        },
       },
-    }, {
-      version: 1,
-      gates: { prd_audit: entry(), architecture_review_as_built: entry() },
-      growth: { authored: 40, added: 0, byGate: {} },
-    }, { growthCap: 10, authoredTasks: 40 });
+      {
+        version: 1,
+        gates: { prd_audit: entry(), architecture_review_as_built: entry() },
+        growth: { authored: 40, added: 0, byGate: {} },
+      },
+      { growthCap: 10, authoredTasks: 40 },
+    );
 
     expect(build).not.toHaveBeenCalled();
     const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
     expect(halt).toContain(
       'Plan growth: 0/10 added; 0 remaining (config-derived cap)\n' +
-      'Pending growth: 11 (prd_audit 3, architecture_review_as_built 8); would reach 11/10 when build dispatches; minimum raise 1',
+        'Pending growth: 11 (prd_audit 3, architecture_review_as_built 8); would reach 11/10 when build dispatches; minimum raise 1',
     );
     expect(halt).toContain(
       'Plan-growth allowance exhausted. Recover with: ai-conductor kickback-budget raise --feature transition --gate architecture_review_as_built --by 1 --rationale "«why»"',
@@ -732,27 +946,38 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
   });
 
   it('renders the projected minimum raise for raised and at-cap growth exhaustion', async () => {
-    const raised = await runBuild({
-      receiptId: 'raised-growth-projection', taskIds: ['rem-1'],
-      charges: { prd_audit: { laps: 1, growth: 3 }, architecture_review_as_built: { laps: 1, growth: 2 } },
-    }, {
-      version: 1, effectiveGrowthCap: 13,
-      gates: { prd_audit: entry(), architecture_review_as_built: entry() },
-      growth: { authored: 40, added: 9, byGate: { prd_audit: 9 } },
-    }, { authoredTasks: 40 });
+    const raised = await runBuild(
+      {
+        receiptId: 'raised-growth-projection',
+        taskIds: ['rem-1'],
+        charges: { prd_audit: { laps: 1, growth: 3 }, architecture_review_as_built: { laps: 1, growth: 2 } },
+      },
+      {
+        version: 1,
+        effectiveGrowthCap: 13,
+        gates: { prd_audit: entry(), architecture_review_as_built: entry() },
+        growth: { authored: 40, added: 9, byGate: { prd_audit: 9 } },
+      },
+      { authoredTasks: 40 },
+    );
     expect(raised.build).not.toHaveBeenCalled();
     await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
       'Plan growth: 9/13 added; 0 remaining (raised cap)\nPending growth: 5 (prd_audit 3, architecture_review_as_built 2); would reach 14/13 when build dispatches; minimum raise 1',
     );
 
-    const atCap = await runBuild({
-      receiptId: 'at-cap-growth-projection', taskIds: ['rem-1'],
-      charges: { prd_audit: { laps: 1, growth: 2 } },
-    }, {
-      version: 1,
-      gates: { prd_audit: entry() },
-      growth: { authored: 40, added: 10, byGate: { prd_audit: 10 } },
-    }, { growthCap: 10, authoredTasks: 40 });
+    const atCap = await runBuild(
+      {
+        receiptId: 'at-cap-growth-projection',
+        taskIds: ['rem-1'],
+        charges: { prd_audit: { laps: 1, growth: 2 } },
+      },
+      {
+        version: 1,
+        gates: { prd_audit: entry() },
+        growth: { authored: 40, added: 10, byGate: { prd_audit: 10 } },
+      },
+      { growthCap: 10, authoredTasks: 40 },
+    );
     expect(atCap.build).not.toHaveBeenCalled();
     await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
       'Plan growth: 10/10 added; 0 remaining (config-derived cap)\nPending growth: 2 (prd_audit 2); would reach 12/10 when build dispatches; minimum raise 2',
@@ -763,14 +988,20 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
   });
 
   it('settles the projected repair after a raise and leaves no HALT', async () => {
-    const { build } = await runBuild({
-      receiptId: 'raised-settlement', taskIds: ['rem-1'],
-      charges: { prd_audit: { laps: 1, growth: 3 }, architecture_review_as_built: { laps: 1, growth: 8 } },
-    }, {
-      version: 1, effectiveGrowthCap: 11,
-      gates: { prd_audit: entry(), architecture_review_as_built: entry() },
-      growth: { authored: 40, added: 0, byGate: {} },
-    }, { authoredTasks: 40 });
+    const { build } = await runBuild(
+      {
+        receiptId: 'raised-settlement',
+        taskIds: ['rem-1'],
+        charges: { prd_audit: { laps: 1, growth: 3 }, architecture_review_as_built: { laps: 1, growth: 8 } },
+      },
+      {
+        version: 1,
+        effectiveGrowthCap: 11,
+        gates: { prd_audit: entry(), architecture_review_as_built: entry() },
+        growth: { authored: 40, added: 0, byGate: {} },
+      },
+      { authoredTasks: 40 },
+    );
 
     expect(build).toHaveBeenCalledOnce();
     const settled = await readKickbackLedger(dir);
@@ -781,7 +1012,8 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
 
   it('keeps a projected growth repair byte-identical when no raise is applied twice', async () => {
     const pendingRepair: PendingRepair = {
-      receiptId: 'unraised-growth-projection', taskIds: ['rem-1'],
+      receiptId: 'unraised-growth-projection',
+      taskIds: ['rem-1'],
       charges: { prd_audit: { laps: 1, growth: 3 }, architecture_review_as_built: { laps: 1, growth: 8 } },
     };
     const ledger: KickbackLedger = {
@@ -791,21 +1023,35 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
       pendingRepair,
     };
     await writeState(statePath, {
-      ...Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])), build: 'pending',
-      session_started_at: Date.now() - 1_000, run_started_at: Date.now() - 1_000, feature_desc: 'transition',
+      ...Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])),
+      build: 'pending',
+      session_started_at: Date.now() - 1_000,
+      run_started_at: Date.now() - 1_000,
+      feature_desc: 'transition',
     });
-    await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{ id: 'rem-1', status: 'pending' }] }));
+    await writeFile(
+      join(dir, '.pipeline', 'task-status.json'),
+      JSON.stringify({ tasks: [{ id: 'rem-1', status: 'pending' }] }),
+    );
     await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
-    await writeFile(join(dir, '.docs', 'plans', 'transition.md'), Array.from(
-      { length: 40 }, (_, index) => `### Task ${index + 1}: Authored work`,
-    ).join('\n'));
+    await writeFile(
+      join(dir, '.docs', 'plans', 'transition.md'),
+      Array.from({ length: 40 }, (_, index) => `### Task ${index + 1}: Authored work`).join('\n'),
+    );
     await writeKickbackLedger(dir, ledger);
     const before = (await readKickbackLedger(dir)).pendingRepair;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const build = vi.fn(async () => ({ success: true }));
       await new Conductor({
-        stateFilePath: statePath, projectRoot: dir, stepRunner: { run: async (step: string) => step === 'build' ? build() : { success: true } },
-        events: new ConductorEventEmitter(), mode: 'auto', daemon: true, resume: true, fromStep: 'build', verifyArtifacts: false,
+        stateFilePath: statePath,
+        projectRoot: dir,
+        stepRunner: { run: async (step: string) => (step === 'build' ? build() : { success: true }) },
+        events: new ConductorEventEmitter(),
+        mode: 'auto',
+        daemon: true,
+        resume: true,
+        fromStep: 'build',
+        verifyArtifacts: false,
         config: {
           defaults: { model: 'test-model', effort: 'medium', max_retries: 1, escalate: false },
           prd_audit: { max_remediation_laps: 1, max_appended_tasks: 10, max_appended_ratio: 1 },
@@ -822,29 +1068,50 @@ describe('BUILD pending-repair settlement transition (Task 6)', () => {
   });
 
   it('does not offer a growth raise for lap exhaustion or malformed pending repairs', async () => {
-    await runBuild({
-      receiptId: 'lap-with-growth', taskIds: ['rem-1'], charges: { prd_audit: { laps: 1, growth: 3 } },
-    }, {
-      version: 1, gates: { prd_audit: entry(1) }, growth: { authored: 40, added: 2, byGate: {} },
-    }, { growthCap: 10, authoredTasks: 40 });
+    await runBuild(
+      {
+        receiptId: 'lap-with-growth',
+        taskIds: ['rem-1'],
+        charges: { prd_audit: { laps: 1, growth: 3 } },
+      },
+      {
+        version: 1,
+        gates: { prd_audit: entry(1) },
+        growth: { authored: 40, added: 2, byGate: {} },
+      },
+      { growthCap: 10, authoredTasks: 40 },
+    );
     const lapHalt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
     expect(lapHalt).toContain('laps allowance exhausted');
     expect(lapHalt).toContain('Pending growth: 3 (prd_audit 3); would reach 3/10 when build dispatches');
     expect(lapHalt).not.toContain('minimum raise');
     expect(lapHalt).toContain('--by «N»');
 
-    await runBuild({
-      receiptId: 'lap-without-growth', taskIds: ['rem-1'], charges: { prd_audit: { laps: 1, growth: 0 } },
-    }, {
-      version: 1, gates: { prd_audit: entry(1) }, growth: { authored: 40, added: 0, byGate: {} },
-    }, { growthCap: 10, authoredTasks: 40 });
+    await runBuild(
+      {
+        receiptId: 'lap-without-growth',
+        taskIds: ['rem-1'],
+        charges: { prd_audit: { laps: 1, growth: 0 } },
+      },
+      {
+        version: 1,
+        gates: { prd_audit: entry(1) },
+        growth: { authored: 40, added: 0, byGate: {} },
+      },
+      { growthCap: 10, authoredTasks: 40 },
+    );
     const lapsOnlyHalt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
     expect(lapsOnlyHalt).toContain('Plan growth: 0/10 added; 10 remaining (config-derived cap)');
     expect(lapsOnlyHalt).not.toContain('Pending growth:');
 
-    await runBuild({ receiptId: '', taskIds: [], charges: {} }, {
-      version: 1, gates: { prd_audit: entry() }, growth: { authored: 40, added: 0, byGate: {} },
-    });
+    await runBuild(
+      { receiptId: '', taskIds: [], charges: {} },
+      {
+        version: 1,
+        gates: { prd_audit: entry() },
+        growth: { authored: 40, added: 0, byGate: {} },
+      },
+    );
     const malformedHalt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf8');
     expect(malformedHalt).toContain('Kickback budget (prd_audit): growth allowance unavailable (');
     expect(malformedHalt).not.toContain('Pending growth:');
@@ -896,7 +1163,9 @@ describe('remediation halts without a planned repair (Task 11)', () => {
       stateFilePath: join(dir, '.pipeline', 'conduct-state.json'),
       projectRoot: dir,
       events: new ConductorEventEmitter(),
-      mode: 'auto', daemon: true, verifyArtifacts: false,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
       stepRunner: {
         run: async (step, _state, options) => {
           dispatched.push(step);
@@ -906,14 +1175,16 @@ describe('remediation halts without a planned repair (Task 11)', () => {
       },
     });
 
-    const outcome = await (conductor as unknown as {
-      planRemediation: (
-        state: { session_started_at: number; feature_desc: string },
-        steps: typeof ALL_STEPS,
-        dispatchContext: string,
-        hintSource: { source: string; evidence: [] },
-      ) => Promise<{ kind: string; haltClass?: string; detail?: string }>;
-    }).planRemediation(
+    const outcome = await (
+      conductor as unknown as {
+        planRemediation: (
+          state: { session_started_at: number; feature_desc: string },
+          steps: typeof ALL_STEPS,
+          dispatchContext: string,
+          hintSource: { source: string; evidence: [] },
+        ) => Promise<{ kind: string; haltClass?: string; detail?: string }>;
+      }
+    ).planRemediation(
       { session_started_at: Date.now() - 1_000, feature_desc: 'no-repair' },
       ALL_STEPS,
       'no recognized remediation disposition',
@@ -921,11 +1192,13 @@ describe('remediation halts without a planned repair (Task 11)', () => {
     );
 
     expect(dispatched).toEqual(['remediate']);
-    expect(outcome).toEqual(expect.objectContaining({
-      kind: 'halt',
-      haltClass: 'needs-human',
-      detail: expect.stringContaining('remediation planner returned no recognized disposition'),
-    }));
+    expect(outcome).toEqual(
+      expect.objectContaining({
+        kind: 'halt',
+        haltClass: 'needs-human',
+        detail: expect.stringContaining('remediation planner returned no recognized disposition'),
+      }),
+    );
     expect((await readKickbackLedger(dir)).pendingRepair).toBeUndefined();
   });
 });
@@ -964,8 +1237,12 @@ describe('whole-feature kickbacks from an active child (rem-prd-audit-11-r3)', (
       version: 1,
       gates: {
         plan: {
-          count: 2, cumulative: 2, treeHash: null, lastReason: 'prior plan finding',
-          priorVerdict: true, resolvedBefore: 0,
+          count: 2,
+          cumulative: 2,
+          treeHash: null,
+          lastReason: 'prior plan finding',
+          priorVerdict: true,
+          resolvedBefore: 0,
         },
       },
       growth: { authored: 0, added: 0, byGate: {} },
@@ -973,25 +1250,40 @@ describe('whole-feature kickbacks from an active child (rem-prd-audit-11-r3)', (
     const before = await childFiles();
     const events = new ConductorEventEmitter();
     const kickbacks: unknown[] = [];
-    events.on('kickback', (event) => { kickbacks.push(event); });
+    events.on('kickback', (event) => {
+      kickbacks.push(event);
+    });
     const conductor = new Conductor({
       projectRoot: dir,
       stateFilePath: join(dir, '.pipeline', 'conduct-state.json'),
       events,
       daemon: false,
     } as never);
-    (conductor as unknown as { activeRegionChild: ReturnType<typeof parseChildId> }).activeRegionChild = parseChildId(2);
+    (conductor as unknown as { activeRegionChild: ReturnType<typeof parseChildId> }).activeRegionChild =
+      parseChildId(2);
 
-    const result = await (conductor as unknown as {
-      scanKickbackVerdicts: (
-        step: 'manual_test', state: Record<string, never>,
-        verdicts: { plan: { satisfied: false; checkedAt: number; kickback: { from: 'manual_test'; evidence: string } } },
-        steps: typeof ALL_STEPS, options: { navigate: false },
-      ) => Promise<'halt' | 'kicked' | null>;
-    }).scanKickbackVerdicts(
+    const result = await (
+      conductor as unknown as {
+        scanKickbackVerdicts: (
+          step: 'manual_test',
+          state: Record<string, never>,
+          verdicts: {
+            plan: { satisfied: false; checkedAt: number; kickback: { from: 'manual_test'; evidence: string } };
+          },
+          steps: typeof ALL_STEPS,
+          options: { navigate: false },
+        ) => Promise<'halt' | 'kicked' | null>;
+      }
+    ).scanKickbackVerdicts(
       'manual_test',
       {},
-      { plan: { satisfied: false, checkedAt: Date.now(), kickback: { from: 'manual_test', evidence: 'plan needs repair' } } },
+      {
+        plan: {
+          satisfied: false,
+          checkedAt: Date.now(),
+          kickback: { from: 'manual_test', evidence: 'plan needs repair' },
+        },
+      },
       ALL_STEPS,
       { navigate: false },
     );
@@ -1004,7 +1296,6 @@ describe('whole-feature kickbacks from an active child (rem-prd-audit-11-r3)', (
     await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).resolves.not.toContain('for child 2');
   });
 });
-
 
 describe('kickback-cap resume into BUILD (Task 9)', () => {
   let dir: string;
@@ -1028,15 +1319,23 @@ describe('kickback-cap resume into BUILD (Task 9)', () => {
       run_started_at: Date.now() - 1_000,
       feature_desc: 'raised-transition',
     });
-    await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
-      tasks: [{ id: 'rem-1', status: 'pending' }],
-    }));
+    await writeFile(
+      join(dir, '.pipeline', 'task-status.json'),
+      JSON.stringify({
+        tasks: [{ id: 'rem-1', status: 'pending' }],
+      }),
+    );
     await writeKickbackLedger(dir, {
       version: 1,
       gates: {
         prd_audit: {
-          count: 0, cumulative: 0, laps: 1, treeHash: null,
-          lastReason: 'cap', priorVerdict: true, resolvedBefore: 0,
+          count: 0,
+          cumulative: 0,
+          laps: 1,
+          treeHash: null,
+          lastReason: 'cap',
+          priorVerdict: true,
+          resolvedBefore: 0,
           effectiveLapCap: 2,
           capEvidence: { gate: 'prd_audit', consumed: 1, limit: 1, latestReason: 'cap', haltGeneration: 'g1' },
           resumeAuthorization: { adjustmentId: 'raise-1', haltGeneration: 'g1', consumed: true },
@@ -1044,7 +1343,8 @@ describe('kickback-cap resume into BUILD (Task 9)', () => {
       },
       growth: { authored: 4, added: 0, byGate: {} },
       pendingRepair: {
-        receiptId: 'raised-repair', taskIds: ['rem-1'],
+        receiptId: 'raised-repair',
+        taskIds: ['rem-1'],
         charges: { prd_audit: { laps: 1, growth: 0 } },
       },
     });
@@ -1057,22 +1357,31 @@ describe('kickback-cap resume into BUILD (Task 9)', () => {
     const dispatched: string[] = [];
     let releaseBuild: (() => void) | undefined;
     let signalBuildStarted: (() => void) | undefined;
-    const buildStarted = new Promise<void>((resolve) => { signalBuildStarted = resolve; });
-    const waitForBuildRelease = new Promise<void>((resolve) => { releaseBuild = resolve; });
+    const buildStarted = new Promise<void>((resolve) => {
+      signalBuildStarted = resolve;
+    });
+    const waitForBuildRelease = new Promise<void>((resolve) => {
+      releaseBuild = resolve;
+    });
     const run = new Conductor({
       stateFilePath: statePath,
       projectRoot: dir,
       events: new ConductorEventEmitter(),
-      mode: 'auto', daemon: true, resume: true, verifyArtifacts: false,
+      mode: 'auto',
+      daemon: true,
+      resume: true,
+      verifyArtifacts: false,
       config: { prd_audit: { max_remediation_laps: 1 } } as never,
-      stepRunner: { run: async (step) => {
-        dispatched.push(step);
-        if (step === 'build') {
-          signalBuildStarted?.();
-          await waitForBuildRelease;
-        }
-        return { success: true };
-      } },
+      stepRunner: {
+        run: async (step) => {
+          dispatched.push(step);
+          if (step === 'build') {
+            signalBuildStarted?.();
+            await waitForBuildRelease;
+          }
+          return { success: true };
+        },
+      },
     }).run();
 
     await buildStarted;

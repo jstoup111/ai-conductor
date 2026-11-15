@@ -26,32 +26,24 @@ import { readGatedSnapshot, type GatedSpecItem, type GatedRepoItem, type Clock }
 import { summarizeAccuracyLedger } from './attribution-audit.js';
 import { scanInheritedState } from './daemon-dashboard.js';
 import { formatHeartbeatAge } from './step-heartbeat.js';
-import { kickbackBudgetFallbackLimit, readPlanGrowthBudget, resolveRemediationLapAllowance } from './remediation-caps.js';
-import { readState } from './state.js';
-import { loadConfig } from './config.js';
 import {
-  isUnreadableKickbackGate,
-  isUnreadableKickbackLedger,
-  readKickbackLedger,
-} from './kickback-ledger.js';
+  kickbackBudgetFallbackLimit,
+  readPlanGrowthBudget,
+  resolveRemediationLapAllowance,
+} from './remediation-caps.js';
+import { readState } from './state.js';
+import { loadConfig, loadMergedConfig } from './config.js';
+import { isUnreadableKickbackGate, isUnreadableKickbackLedger, readKickbackLedger } from './kickback-ledger.js';
 import { renderKickbackBudgetView, withPendingGrowth } from './kickback-budget-view.js';
 import { readWatch } from './mergeable-sweep.js';
 import { resolveActiveChild } from './child-cursor.js';
 import { resolveExecutionChild } from './routing/execution-child.js';
 import { type ChildId } from './child-context.js';
-import {
-  renderStoriesRefsReport,
-  scanStoriesRefs,
-  type StoriesRefsScan,
-} from './stories-refs-diagnostic.js';
+import { renderStoriesRefsReport, scanStoriesRefs, type StoriesRefsScan } from './stories-refs-diagnostic.js';
 import { hasDurableChildState, loadSliceTopology, type SliceTopologyUnavailableCause } from './slice-topology.js';
 import { readCascadeCounts } from './restack/cascade-cap.js';
 import { renderCascadeSummary, resolveCascadeAllowanceForWorktree } from './restack/cascade-allowance.js';
-import {
-  readDaemonTimeline,
-  type DaemonExitRecord,
-  type DaemonMemorySample,
-} from './daemon-ledger-readers.js';
+import { readDaemonTimeline, type DaemonExitRecord, type DaemonMemorySample } from './daemon-ledger-readers.js';
 import type { HarnessConfig } from '../types/config.js';
 
 /** Fallback label when a pidfile record has no `engineDir`, or its basename
@@ -347,7 +339,7 @@ function formatStatusRow(row: DaemonStatusRow): string {
       ? `⏳ restart-pending (waiting on ${drainSlugs.join(', ')})`
       : row.state === 'restart-pending' && row.restartPending?.blockingSlug
         ? `⏳ restart-pending (waiting on ${row.restartPending.blockingSlug})`
-      : STATE_BADGE[row.state];
+        : STATE_BADGE[row.state];
   const parts = [`${badge}  ${row.name}`, `  ${row.path}`];
   if (row.pid !== undefined) parts.push(`  pid ${row.pid}`);
   if (row.startedAt) parts.push(`  since ${row.startedAt}`);
@@ -405,8 +397,7 @@ interface BlockedSnapshot {
 }
 
 type BlockedSnapshotRead =
-  | { kind: 'ok'; snapshot: BlockedSnapshot }
-  | { kind: 'unknown'; why: 'missing' | 'unreadable' | 'schema-mismatch' };
+  { kind: 'ok'; snapshot: BlockedSnapshot } | { kind: 'unknown'; why: 'missing' | 'unreadable' | 'schema-mismatch' };
 
 /**
  * Read the local blocked-spec snapshot only. This is deliberately a filesystem
@@ -488,7 +479,8 @@ function readOnlyReviewCapability(event: unknown): ReadOnlyReviewCapability | un
     typeof record.provider !== 'string' ||
     typeof record.platform !== 'string' ||
     (record.status !== 'available' && record.status !== 'unavailable')
-  ) return undefined;
+  )
+    return undefined;
   if (record.status === 'unavailable' && typeof record.reason !== 'string') return undefined;
   return {
     provider: record.provider,
@@ -586,7 +578,9 @@ async function renderReadOnlyReviewCapabilitySection(repoPath: string, out: (lin
   }
   for (const capability of capabilities) {
     const reason = capability.reason === undefined ? '' : `: ${capability.reason}`;
-    out(`  READ-ONLY REVIEW CAPABILITY: ${capability.provider} on ${capability.platform} — ${capability.status}${reason}`);
+    out(
+      `  READ-ONLY REVIEW CAPABILITY: ${capability.provider} on ${capability.platform} — ${capability.status}${reason}`,
+    );
   }
 }
 
@@ -597,7 +591,13 @@ type ShippedPrReadiness = {
 };
 
 const SHIPPED_READINESS_VERDICTS = new Set<ShippedPrReadiness['verdict']>([
-  'ready', 'conflicting', 'ci-failing', 'ci-pending', 'no-checks', 'draft', 'indeterminate',
+  'ready',
+  'conflicting',
+  'ci-failing',
+  'ci-pending',
+  'no-checks',
+  'draft',
+  'indeterminate',
 ]);
 
 function shippedPrReadiness(event: unknown): ShippedPrReadiness | undefined {
@@ -609,7 +609,8 @@ function shippedPrReadiness(event: unknown): ShippedPrReadiness | undefined {
     typeof record.slug !== 'string' ||
     typeof record.verdict !== 'string' ||
     !SHIPPED_READINESS_VERDICTS.has(record.verdict as ShippedPrReadiness['verdict'])
-  ) return undefined;
+  )
+    return undefined;
   return {
     prUrl: record.prUrl,
     slug: record.slug,
@@ -714,7 +715,7 @@ async function activeChildStatusLabel(
 ): Promise<ActiveChildStatusLabel | StackTopologyStatus | undefined> {
   const topology = await loadSliceTopology(featureRoot, slug);
   if (topology.kind === 'unavailable') {
-    return await hasDurableChildState(featureRoot, slug) === true ? { cause: topology.cause } : undefined;
+    return (await hasDurableChildState(featureRoot, slug)) === true ? { cause: topology.cause } : undefined;
   }
   if (topology.kind !== 'sliced' || topology.positions.length < 2) return undefined;
   const cursor = await resolveActiveChild(featureRoot, slug);
@@ -745,8 +746,9 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
 
   // A fresh authorization normally belongs to a halted feature; excluding it
   // would hide the only recovery budget the operator needs to inspect.
-  const visibleFeatures = [...state.inProgress, ...state.halted]
-    .filter((feature, index, features) => features.findIndex((item) => item.slug === feature.slug) === index);
+  const visibleFeatures = [...state.inProgress, ...state.halted].filter(
+    (feature, index, features) => features.findIndex((item) => item.slug === feature.slug) === index,
+  );
   for (const feature of visibleFeatures) {
     const featureRoot = join(repoPath, '.worktrees', feature.slug);
     const stackStatus = await activeChildStatusLabel(featureRoot, feature.slug);
@@ -754,8 +756,11 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
     const child = activeChild?.child;
     const childStatus = activeChild
       ? ` child ${activeChild.child}/${activeChild.total}${activeChild.taskIds.length ? `; tasks ${activeChild.taskIds.join(', ')}` : ''}`
-      : stackStatus && 'cause' in stackStatus ? ` stack unavailable: ${stackStatus.cause}` : '';
-    const config = await loadConfig(featureRoot);
+      : stackStatus && 'cause' in stackStatus
+        ? ` stack unavailable: ${stackStatus.cause}`
+        : '';
+    // Lap allowances use the config the dispatching executor enforces (#3502).
+    const config = await loadMergedConfig(repoPath);
     const growthConfig = await loadConfig(repoPath);
     const ledger = await readKickbackLedger(featureRoot, child);
     try {
@@ -777,18 +782,21 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
         ledger.pendingRepair,
       );
       const pending = view.pendingGrowth;
-      const pendingSummary = pending === undefined
-        ? ''
-        : `; pending ${pending.total} (${Object.entries(pending.byGate).map(([gate, amount]) => `${gate} ${amount}`).join(', ')})` +
-          (pending.minimumRaise === undefined ? '' : `, minimum raise ${pending.minimumRaise}`);
-      const summary = authoredSource === 'unresolved'
-        ? `plan unresolved; ${added}${pendingSummary || (capSource === 'raised' ? `; remaining ${growth.remaining}/${cap}` : '')}`
-        : `authored ${growth.authored}; ${added}; remaining ${view.remaining}/${cap}${pendingSummary}`;
+      const pendingSummary =
+        pending === undefined
+          ? ''
+          : `; pending ${pending.total} (${Object.entries(pending.byGate)
+              .map(([gate, amount]) => `${gate} ${amount}`)
+              .join(', ')})` + (pending.minimumRaise === undefined ? '' : `, minimum raise ${pending.minimumRaise}`);
+      const summary =
+        authoredSource === 'unresolved'
+          ? `plan unresolved; ${added}${pendingSummary || (capSource === 'raised' ? `; remaining ${growth.remaining}/${cap}` : '')}`
+          : `authored ${growth.authored}; ${added}; remaining ${view.remaining}/${cap}${pendingSummary}`;
       out(`  PLAN GROWTH [${feature.slug}${childStatus}]: ${summary}`);
     } catch (error) {
       out(
         `  PLAN GROWTH [${feature.slug}${childStatus}]: unavailable (` +
-        `${error instanceof Error ? error.message : String(error)})`,
+          `${error instanceof Error ? error.message : String(error)})`,
       );
     }
     if (activeChild) {
@@ -798,21 +806,23 @@ async function renderPlanGrowthSection(repoPath: string, out: (line: string) => 
           out(`  RESTACK CASCADES [${feature.slug}]: unavailable (${cascades.detail})`);
         } else {
           const allowance = await resolveCascadeAllowanceForWorktree(featureRoot);
-          out(`  RESTACK CASCADES [${feature.slug}]: ${renderCascadeSummary(cascades.counts, allowance).statusFragment}`);
+          out(
+            `  RESTACK CASCADES [${feature.slug}]: ${renderCascadeSummary(cascades.counts, allowance).statusFragment}`,
+          );
         }
       } catch (error) {
         out(
           `  RESTACK CASCADES [${feature.slug}]: unavailable (` +
-          `${error instanceof Error ? error.message : String(error)})`,
+            `${error instanceof Error ? error.message : String(error)})`,
         );
       }
     }
-    const budgetConfig = config.ok ? config.config : {} as HarnessConfig;
+    const budgetConfig = config.ok ? config.config : ({} as HarnessConfig);
     const state = await readState(join(featureRoot, '.pipeline', 'conduct-state.json'));
     const tier = state.ok ? state.value.complexity_tier : undefined;
     const renderBudget = (gate: 'build_review' | 'prd_audit' | 'architecture_review_as_built') => {
       const entry = ledger.gates[gate];
-      const pendingLaps = gate === 'build_review' ? 0 : ledger.pendingRepair?.charges[gate]?.laps ?? 0;
+      const pendingLaps = gate === 'build_review' ? 0 : (ledger.pendingRepair?.charges[gate]?.laps ?? 0);
       const view = renderKickbackBudgetView(
         entry,
         gate,
@@ -869,7 +879,9 @@ export async function renderInFlightSection(
   const now = clock().getTime();
   for (const feature of state.inProgress) {
     for (const step of feature.inFlight ?? []) {
-      out(`  IN FLIGHT [${feature.slug}]: ${step.step} running ${formatHeartbeatAge(Math.max(0, now - step.startedAtMs))}`);
+      out(
+        `  IN FLIGHT [${feature.slug}]: ${step.step} running ${formatHeartbeatAge(Math.max(0, now - step.startedAtMs))}`,
+      );
     }
   }
 }
@@ -882,20 +894,30 @@ export async function renderExecutorVersionsSection(repoPath: string, out: (line
   const supervisor = await readPidRecord(repoPath).catch(() => null);
   const entries = await listExecutorRecords(repoPath).catch(() => []);
   const dispatches = await readFile(join(repoPath, '.daemon', 'events.jsonl'), 'utf8')
-    .then((content) => content.split('\n').flatMap((line) => {
-      try {
-        const event = JSON.parse(line) as { type?: unknown; slug?: unknown; engineVersionId?: unknown };
-        return event.type === 'feature_dispatch_started' && typeof event.slug === 'string'
-          ? [{ slug: event.slug, version: typeof event.engineVersionId === 'string' ? event.engineVersionId : 'unknown' }]
-          : [];
-      } catch { return []; }
-    }))
+    .then((content) =>
+      content.split('\n').flatMap((line) => {
+        try {
+          const event = JSON.parse(line) as { type?: unknown; slug?: unknown; engineVersionId?: unknown };
+          return event.type === 'feature_dispatch_started' && typeof event.slug === 'string'
+            ? [
+                {
+                  slug: event.slug,
+                  version: typeof event.engineVersionId === 'string' ? event.engineVersionId : 'unknown',
+                },
+              ]
+            : [];
+        } catch {
+          return [];
+        }
+      }),
+    )
     .catch(() => [] as Array<{ slug: string; version: string }>);
   if (entries.length === 0 && !supervisor && dispatches.length === 0) return;
   out(`  EXECUTOR ENGINE CURRENT: ${current ?? 'unknown'}`);
   if (supervisor) {
     const version = versionIdFromEngineDir(supervisor.engineDir);
-    const older = current !== undefined && version !== VERSION_UNKNOWN && version !== current ? ' (older than current)' : '';
+    const older =
+      current !== undefined && version !== VERSION_UNKNOWN && version !== current ? ' (older than current)' : '';
     out(`  SUPERVISOR ENGINE: ${version}${older}`);
   }
   for (const entry of entries) {
@@ -915,9 +937,7 @@ export async function renderExecutorVersionsSection(repoPath: string, out: (line
  * `conduct daemon status` — read-only sweep of the registry. Always exits 0
  * (stale/missing entries are reported, not errors). Returns the rows for testing.
  */
-export async function runDaemonStatus(
-  deps: DaemonStatusDeps = {},
-): Promise<{ code: number; rows: DaemonStatusRow[] }> {
+export async function runDaemonStatus(deps: DaemonStatusDeps = {}): Promise<{ code: number; rows: DaemonStatusRow[] }> {
   const out = deps.out ?? ((l: string) => console.log(l));
   const registryPath = deps.registryPath ?? resolveRegistryPath();
   const clock = deps.clock ?? (() => new Date());
@@ -942,7 +962,9 @@ export async function runDaemonStatus(
     if ('event' in timeline) {
       const newest = [...(timeline.event ?? [])].reverse();
       if ((row.state === 'dead-pane' || row.liveness === 'stale') && row.pid !== undefined) {
-        const exit = newest.find((entry): entry is DaemonExitRecord => entry.type === 'daemon_exited' && entry.pid === row.pid);
+        const exit = newest.find(
+          (entry): entry is DaemonExitRecord => entry.type === 'daemon_exited' && entry.pid === row.pid,
+        );
         if (exit) row.lastExit = exit;
       }
       const sample = newest.find((entry): entry is DaemonMemorySample => entry.type === 'daemon_memory_sample');
@@ -1018,10 +1040,7 @@ async function printRepoTail(
  * for one repo (default cwd) or every registered repo (`--all`). `--follow`
  * streams appended lines (single repo only) until interrupted.
  */
-export async function runDaemonLogs(
-  args: DaemonLogsArgs,
-  deps: DaemonLogsDeps = {},
-): Promise<number> {
+export async function runDaemonLogs(args: DaemonLogsArgs, deps: DaemonLogsDeps = {}): Promise<number> {
   const out = deps.out ?? ((l: string) => console.log(l));
   const cwd = deps.cwd ?? process.cwd();
   const lines = args.lines ?? 0; // 0 → all current-file lines
