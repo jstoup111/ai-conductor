@@ -9183,6 +9183,27 @@ export class Conductor {
       breadcrumb.lastEventType = ev.type;
       return this.emitExecutionEvent(ev);
     };
+    const quarantineValidationResidue = async (
+      source: StepName | 'validation',
+      baseline: readonly string[],
+    ): Promise<void> => {
+      const residue = await quarantineValidatorResidue({
+        projectRoot: this.projectRoot,
+        git: makeGitRunner(this.projectRoot),
+        baseline,
+        source,
+      });
+      if (residue.kind === 'moved') {
+        await emitTracked({
+          type: 'validator_residue_quarantined',
+          source,
+          paths: residue.paths,
+          directory: residue.directory,
+        });
+      } else if (residue.kind === 'refused') {
+        this.log?.(`WARNING: validator residue quarantine refused — ${residue.reason}`);
+      }
+    };
     // Acceptance RED telemetry records gate lifecycle but must not alter the
     // gate's authority: a failing sink leaves every later lifecycle event
     // eligible to emit and the completion verdict unchanged.
@@ -10371,22 +10392,7 @@ export class Conductor {
                   }),
                   cap,
                 );
-                const residue = await quarantineValidatorResidue({
-                  projectRoot: this.projectRoot,
-                  git: makeGitRunner(this.projectRoot),
-                  baseline: validatorResidueBaseline,
-                  source: 'validation',
-                });
-                if (residue.kind === 'moved') {
-                  await emitTracked({
-                    type: 'validator_residue_quarantined',
-                    source: 'validation',
-                    paths: residue.paths,
-                    directory: residue.directory,
-                  });
-                } else if (residue.kind === 'refused') {
-                  this.log?.(`WARNING: validator residue quarantine refused — ${residue.reason}`);
-                }
+                await quarantineValidationResidue('validation', validatorResidueBaseline);
                 return outcomes;
               };
 
@@ -13035,22 +13041,7 @@ export class Conductor {
               }
 
             if (validatorResidueBaseline !== undefined) {
-              const residue = await quarantineValidatorResidue({
-                projectRoot: this.projectRoot,
-                git: makeGitRunner(this.projectRoot),
-                baseline: validatorResidueBaseline,
-                source: step.name,
-              });
-              if (residue.kind === 'moved') {
-                await emitTracked({
-                  type: 'validator_residue_quarantined',
-                  source: step.name,
-                  paths: residue.paths,
-                  directory: residue.directory,
-                });
-              } else if (residue.kind === 'refused') {
-                this.log?.(`WARNING: validator residue quarantine refused — ${residue.reason}`);
-              }
+              await quarantineValidationResidue(step.name, validatorResidueBaseline);
             }
 
             // A self-host dispatch can be cancelled while waiting for admission.
