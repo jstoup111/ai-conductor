@@ -536,6 +536,17 @@ async function awaitDaemonOtelStop(operation: Promise<void>, timeoutMs: number):
   }
 }
 
+export async function stopDispatchVisualizer(
+  visualizer: { stop: () => Promise<void> },
+  active: Set<{ stop: () => Promise<void> }>,
+): Promise<void> {
+  try {
+    await visualizer.stop();
+  } finally {
+    active.delete(visualizer);
+  }
+}
+
 /**
  * Flush daemon-owned OTel state before handing SIGHUP back to its default
  * disposition. The listener removes itself first, so the re-raised signal
@@ -1800,8 +1811,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
     if (visualizer) activeDispatchVisualizers.add(visualizer);
     return async () => {
       if (!visualizer) return;
-      activeDispatchVisualizers.delete(visualizer);
-      await visualizer.stop();
+      await stopDispatchVisualizer(visualizer, activeDispatchVisualizers);
     };
   };
   // The same registry backs dispatcher claims and every maintenance liveness
