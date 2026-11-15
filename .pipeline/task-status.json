@@ -1,0 +1,153 @@
+{
+  "plan_ref": ".docs/plans/child-executed-features-lose-closing-otel-telemetr.md",
+  "tasks": [
+    {
+      "id": "1",
+      "name": "abortAll refuses coordination without detaching the child's bus",
+      "status": "completed",
+      "files": [
+        "src/conductor/src/engine/executor-broker.ts",
+        "src/conductor/test/engine/executor-broker.test.ts"
+      ],
+      "startHead": "1cc7745a6918a2defd7a1fb898a8622663ed8157",
+      "doneWhen": [
+        {
+          "check": "[test] After `broker.abortAll()`, the pending child rate-limit clear rejects with `executor broker aborted` and a later child feature event is still delivered on that attachment's `events` bus.",
+          "evidence": "test:src/conductor/test/engine/executor-broker.test.ts::keeps an aborted child attachment forwarding events until its own close",
+          "source": "verified"
+        },
+        {
+          "check": "[test] The attachment's `attachFeatureOtelVisualizer` hook is not stopped by `abortAll` and is stopped exactly once by that attachment's own `close()`.",
+          "evidence": "test:src/conductor/test/engine/executor-broker.test.ts::keeps an aborted child attachment forwarding events until its own close",
+          "source": "verified"
+        }
+      ]
+    },
+    {
+      "id": "2",
+      "name": "A collected child's events are dropped and an unresponsive child is still killed",
+      "status": "completed",
+      "files": [
+        "src/conductor/test/engine/executor-broker.test.ts"
+      ],
+      "startHead": "fae6187bd418224337df9646f321fbe87abf7ed8",
+      "doneWhen": [
+        {
+          "check": "[test] After attachment `'a'`'s own `close()`, a feature event sent by child `'a'` is not delivered on `'a'`'s `events` bus and is recorded by neither the `'a'` nor the `'b'` recording visualizer on the same broker.",
+          "evidence": "test:src/conductor/test/engine/executor-broker.test.ts::drops a collected child event before either attached visualizer can record it",
+          "source": "verified"
+        },
+        {
+          "check": "[test] The existing `child-feature-executor.test.ts` `stopAll` case still shows a child that ignores `stop` receives SIGKILL after its teardown allowance.",
+          "evidence": "existing stopAll SIGKILL regression case passed unchanged; pre-feature test has no current-task Covers marker",
+          "source": "unverified",
+          "reason": "existing stopAll SIGKILL regression case passed unchanged; pre-feature test has no current-task Covers marker"
+        },
+        {
+          "check": "[test] The existing `daemon-cli.test.ts` two-executor force-release case still shows the daemon releases its lock and exits.",
+          "evidence": "existing two-executor SIGTERM drain/lock-release regression case passed unchanged; pre-feature test has no current-task Covers marker",
+          "source": "unverified",
+          "reason": "existing two-executor SIGTERM drain/lock-release regression case passed unchanged; pre-feature test has no current-task Covers marker"
+        }
+      ]
+    },
+    {
+      "id": "3",
+      "name": "A daemon SIGTERM delivers each child's closing events to its visualizer",
+      "status": "completed",
+      "files": [
+        "src/conductor/test/engine/daemon-child-dispatch.integration.test.ts",
+        "src/conductor/test/fixtures/in-memory-executor-fork.ts"
+      ],
+      "startHead": "fae6187bd418224337df9646f321fbe87abf7ed8",
+      "doneWhen": [
+        {
+          "check": "[test] On daemon SIGTERM with two in-flight child dispatches, every event of each child's post-stop closing sequence (`step_interrupted`, `loop_halt`, `feature_complete`) is delivered, in order and with none missing, on that dispatch's supervisor feature bus and recorded by that dispatch's recording OTel visualizer, for both slugs.",
+          "evidence": "test:src/conductor/test/engine/daemon-child-dispatch.integration.test.ts::forwards each stopping child closing sequence to its supervisor feature bus and OTel visualizer",
+          "source": "verified"
+        },
+        {
+          "check": "[test] The same SIGTERM case still records a `stop` for each child and exactly one `abortAll`, so the daemon SIGTERM reaches the broker abort Task 1 tests.",
+          "evidence": "test:src/conductor/test/engine/daemon-child-dispatch.integration.test.ts::forwards each stopping child closing sequence to its supervisor feature bus and OTel visualizer",
+          "source": "verified"
+        }
+      ]
+    },
+    {
+      "id": "4",
+      "name": "An ending dispatch's visualizer stays visible to SIGHUP until its export settles",
+      "status": "completed",
+      "files": [
+        "src/conductor/src/daemon-cli.ts",
+        "src/conductor/test/daemon-sighup-otel.test.ts"
+      ],
+      "startHead": "1cc7745a6918a2defd7a1fb898a8622663ed8157",
+      "doneWhen": [
+        {
+          "check": "[test] While a dispatch visualizer's stop started by `stopDispatchVisualizer` is pending, `installDaemonOtelSighupHandler`'s handler calls that visualizer's `stop()` and does not call `kill` until the stop resolves.",
+          "evidence": "test:src/conductor/test/daemon-sighup-otel.test.ts::keeps an ending dispatch visualizer active until its pending stop lets SIGHUP re-raise",
+          "source": "verified"
+        },
+        {
+          "check": "[test] After `stopDispatchVisualizer` settles, the visualizer is absent from the active set and a later SIGHUP neither calls its `stop()` again nor waits on it before calling `kill(481, 'SIGHUP')`.",
+          "evidence": "test:src/conductor/test/daemon-sighup-otel.test.ts::does not stop or await an already-settled dispatch visualizer when SIGHUP arrives later",
+          "source": "verified"
+        },
+        {
+          "check": "`attachChildFeatureOtelVisualizer`'s returned hook removes its visualizer from `activeDispatchVisualizers` only after `visualizer.stop()` settles, through `stopDispatchVisualizer`.",
+          "evidence": "implementation:src/conductor/src/daemon-cli.ts::stopDispatchVisualizer",
+          "source": "reported"
+        }
+      ]
+    },
+    {
+      "id": "5",
+      "name": "Daemon metrics flush after each child dispatch ends",
+      "status": "completed",
+      "files": [
+        "src/conductor/src/daemon-cli.ts",
+        "src/conductor/test/engine/daemon-cli-executor-wiring.test.ts"
+      ],
+      "startHead": "fae6187bd418224337df9646f321fbe87abf7ed8",
+      "doneWhen": [
+        {
+          "check": "[test] Through `runDaemonMode`, the daemon OTel `flush()` is called after the child executor records `feature_dispatch_ended` for the dispatch.",
+          "evidence": "test:src/conductor/test/engine/daemon-cli-executor-wiring.test.ts::flushes enabled daemon metrics after the child dispatch ends and before the scheduler collects it",
+          "source": "verified"
+        },
+        {
+          "check": "[test] Through `runDaemonMode`, the scheduler does not record the dispatch's completion until that `flush()` resolves, and records it after.",
+          "evidence": "test:src/conductor/test/engine/daemon-cli-executor-wiring.test.ts::flushes enabled daemon metrics after the child dispatch ends and before the scheduler collects it",
+          "source": "verified"
+        }
+      ]
+    },
+    {
+      "id": "6",
+      "name": "With OTel disabled a child dispatch ends without a flush",
+      "status": "completed",
+      "files": [
+        "src/conductor/test/engine/daemon-cli-executor-wiring.test.ts"
+      ],
+      "startHead": "f5a242596b6c2edb2e49e6673adadb972c27f9f4",
+      "doneWhen": [
+        {
+          "check": "[test] With `wireDaemonOtel` returning `null`, `runDaemonMode` records the child executor's `done` outcome for the slug unchanged.",
+          "evidence": "test:src/conductor/test/engine/daemon-cli-executor-wiring.test.ts::returns the child outcome unchanged without flushing when daemon OTel is disabled",
+          "source": "verified"
+        },
+        {
+          "check": "[test] With `wireDaemonOtel` returning `null`, no daemon metric flush is invoked for the dispatch.",
+          "evidence": "test:src/conductor/test/engine/daemon-cli-executor-wiring.test.ts::returns the child outcome unchanged without flushing when daemon OTel is disabled",
+          "source": "verified"
+        }
+      ]
+    },
+    {
+      "id": "rem-prd-audit-refusal-764b7098-3851-4084-a679-9bab61beeb47",
+      "name": "Restore .memory/index.md, .memory/gotchas/daemon-exclusive-execution-deps.md, .memory/gotchas/done-when-evidence-task-marker.md, and .memory/gotchas/lifecycle-order-integration-test.md byte-for-byte from base 1cc7745a69. Do not re-add .memory/patterns/child-broker-coordination-then-detach.md. The net `git diff 1cc7745a69 HEAD -- .memory` must be empty. Change no other files.",
+      "status": "completed",
+      "commit": "0dd8c618a7b1ce3eeaa432135916b8a079a31b0a"
+    }
+  ]
+}
