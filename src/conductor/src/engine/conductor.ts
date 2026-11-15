@@ -12719,6 +12719,12 @@ export class Conductor {
                       })
                     ) {
                       const reason = composeBuildOutcomeHaltReason(prior, gate);
+                      await writeBuildOutcomeBestEffort(this.projectRoot, {
+                        ...outcomes,
+                        records: outcomes.records.map((record, index) =>
+                          index === outcomes.records.length - 1 ? { ...record, refusalSpent: true } : record,
+                        ),
+                      });
                       await this.writeHaltMarker(reason + '\n', 'needs-human');
                       await this.persistPendingStateChanges(state, 'persist conductor transition');
                       const prUrl = await this.surfaceRemediationPr(reason);

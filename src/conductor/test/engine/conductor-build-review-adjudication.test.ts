@@ -13,6 +13,11 @@ import { dirname, join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, rename: vi.fn(actual.rename) };
+});
+
 import type { CompletionContext } from '../../src/engine/artifacts.js';
 import type { StepRunner, StepRunResult, StepRunOptions } from '../../src/engine/conductor.js';
 import type { chargeBuildReviewEffectInLedger } from '../../src/engine/kickback-ledger.js';
@@ -932,10 +937,14 @@ async function fixture(options: FixtureOptions = {}) {
       .catch(() => {});
   }
 
-  try {
+  const run = async () => {
     await conductor.run().catch((error: unknown) => {
       if (!(error instanceof Error) || !error.message.startsWith('stop after')) throw error;
     });
+  };
+
+  try {
+    await run();
   } finally {
     cleanPassSettlement?.mockRestore();
     persister?.stop();
@@ -967,6 +976,7 @@ async function fixture(options: FixtureOptions = {}) {
         .filter(Boolean)
         .map((line) => JSON.parse(line) as ConductorEvent),
     haltMarker: async (): Promise<string> => readFile(join(projectRoot, '.pipeline/HALT'), 'utf8').catch(() => ''),
+    rerun: run,
   };
 }
 
@@ -2746,7 +2756,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(restartedOrder.attemptedCaseIds).toEqual(order.attemptedCaseIds);
   });
 
-  // Covers: task:2
+  // Covers: task:2, task:4
   it('dispatches BUILD for a build_review case the prior no-op build was not delivered', async () => {
     const first = await fixture();
     const order = (await first.readJson('.pipeline/build-review-work-order.json')) as Record<string, unknown>;
@@ -2807,8 +2817,8 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     }
   });
 
-  // Covers: task:2
-  it('refuses a build_review kickback when the prior no-op build received the same case', async () => {
+  // Covers: task:2, task:4
+  it('spends a refusal so clearing its HALT retries BUILD once before a fresh refusal', async () => {
     const first = await fixture();
     const order = (await first.readJson('.pipeline/build-review-work-order.json')) as Record<string, unknown>;
     const cases = (await first.readJson('.pipeline/remediation-cases.json')) as Record<string, unknown>;
@@ -2819,6 +2829,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     try {
       const restarted = await fixture({
         startFrom: 'build',
+        buildResult: { success: true },
         seedPipeline: async (root) => {
           await writeFile(
             join(root, '.pipeline/build-review-work-order.json'),
@@ -2866,8 +2877,104 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
       expect(restarted.dispatched).not.toContain('build');
       await expect(readFile(join(restarted.projectRoot, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
       expect(await restarted.haltMarker()).toContain('build_review kickback-to-build refused');
+      expect(await restarted.haltMarker()).toContain('Clearing this HALT retries BUILD once.');
+      await expect(restarted.readJson('.pipeline/build-outcome.json')).resolves.toMatchObject({
+        records: [expect.objectContaining({ refusalSpent: true })],
+      });
+
+      await rm(join(restarted.projectRoot, '.pipeline/HALT'), { force: true });
+      await rm(join(restarted.projectRoot, '.pipeline/HALT.class'), { force: true });
+      await restarted.rerun();
+
+      expect(restarted.dispatched.filter((step) => step === 'build')).toEqual(['build']);
+      expect(await restarted.haltMarker()).toBe('');
+      const retriedOutcome = (await restarted.readJson('.pipeline/build-outcome.json')) as {
+        records: Array<{ refusalSpent?: true }>;
+      };
+      expect(retriedOutcome.records.at(-1)).not.toHaveProperty('refusalSpent');
+
+      const retryState = await restarted.state();
+      await writeState(join(restarted.projectRoot, '.pipeline/state.json'), { ...retryState, build: 'pending' });
+      await restarted.rerun();
+
+      expect(restarted.dispatched.filter((step) => step === 'build')).toEqual(['build']);
+      await expect(readFile(join(restarted.projectRoot, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
     } finally {
       treeSpy.mockRestore();
+    }
+  });
+
+  // Covers: task:4
+  it('writes the refusal HALT when persisting its spent marker fails', async () => {
+    const originalRename = vi.mocked(rename).getMockImplementation()!;
+    vi.mocked(rename).mockImplementation(async (from, to) => {
+      if (from.includes('.build-outcome.')) throw new Error('sidecar rename rejected');
+      return originalRename(from, to);
+    });
+
+    try {
+      const first = await fixture();
+      const order = (await first.readJson('.pipeline/build-review-work-order.json')) as Record<string, unknown>;
+      const cases = (await first.readJson('.pipeline/remediation-cases.json')) as Record<string, unknown>;
+      const ledger = await first.readJson('.pipeline/kickback-ledger.json');
+      const treeHash = 'tree-refusal-sidecar-write-failure';
+      const treeSpy = vi.spyOn(projectPrelude, 'currentTreeHash').mockResolvedValue(treeHash);
+
+      try {
+        const restarted = await fixture({
+          startFrom: 'build',
+          seedPipeline: async (root) => {
+            await writeFile(
+              join(root, '.pipeline/build-review-work-order.json'),
+              JSON.stringify({
+                ...order,
+                feature: { ...(order.feature as object), repository: root },
+                cases: (order.cases as Array<Record<string, unknown>>).map((row) => ({ ...row, caseId: 'c2' })),
+              }),
+              'utf8',
+            );
+            await writeFile(
+              join(root, '.pipeline/remediation-cases.json'),
+              JSON.stringify({
+                ...cases,
+                feature: { ...(cases.feature as object), repository: root },
+                cases: (cases.cases as Array<Record<string, unknown>>).map((row) => ({ ...row, id: 'c2' })),
+              }),
+              'utf8',
+            );
+            await writeFile(join(root, '.pipeline/kickback-ledger.json'), JSON.stringify(ledger), 'utf8');
+            await writeFile(
+              join(root, '.pipeline/build-outcome.json'),
+              JSON.stringify({
+                version: 1,
+                records: [
+                  {
+                    outcome: 'no-movement',
+                    terminalOutcome: 'done',
+                    gate: 'build_review',
+                    verdict: false,
+                    rung: { model: 'test-model', effort: 'medium' },
+                    treeBefore: treeHash,
+                    treeAfter: treeHash,
+                    headBefore: 'head-before',
+                    headAfter: 'head-after',
+                    deliveredCaseIds: ['c2'],
+                  },
+                ],
+              }),
+              'utf8',
+            );
+          },
+        });
+
+        expect(restarted.dispatched).not.toContain('build');
+        await expect(readFile(join(restarted.projectRoot, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+        expect(await restarted.haltMarker()).toContain('build_review kickback-to-build refused');
+      } finally {
+        treeSpy.mockRestore();
+      }
+    } finally {
+      vi.mocked(rename).mockImplementation(originalRename);
     }
   });
 
