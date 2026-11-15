@@ -7,6 +7,7 @@ import { Conductor, type StepRunResult, type StepRunner } from '../../src/engine
 import type { ProviderExecutionContext } from '../../src/engine/provider-execution.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import type { SelfHostGuardrails } from '../../src/engine/self-host/wiring.js';
+import { LiveBoundaryCoordinator } from '../../src/engine/self-host/live-boundary-coordinator.js';
 import { ProviderSetupUnavailableError } from '../../src/execution/provider-setup-failure.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductState } from '../../src/types/index.js';
@@ -14,7 +15,14 @@ import * as liveBoundary from '../../src/engine/self-host/live-boundary.js';
 
 vi.mock('../../src/engine/self-host/live-boundary.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../src/engine/self-host/live-boundary.js')>(),
-  fingerprintLiveBoundary: vi.fn(async () => ({ measurements: [] })),
+  fingerprintLiveCheckoutSurface: vi.fn(async (root: string) => ({
+    surface: { root, label: 'live checkout', exclude: [], manifest: [] },
+    measurement: { label: 'live checkout', elapsedMs: 0, fileCount: 0 },
+  })),
+  fingerprintProviderStateSurface: vi.fn(async ({ unrelatedProviderState }: { unrelatedProviderState: string }) => ({
+    surface: { root: unrelatedProviderState, label: 'provider state', exclude: [], manifest: [] },
+    measurement: { label: 'provider state', elapsedMs: 0, fileCount: 0 },
+  })),
   verifyLiveBoundary: vi.fn(async () => ({ ok: true })),
 }));
 
@@ -42,7 +50,7 @@ function conductor(
   providerExecution: ProviderExecutionContext,
   runner: StepRunner,
   selfHostGuardrails: SelfHostGuardrails,
-  options: { projectRoot?: string; config?: object } = {},
+  options: { projectRoot?: string; config?: object; liveBoundaryCoordinator?: LiveBoundaryCoordinator } = {},
 ) {
   return new Conductor({
     stateFilePath: `${options.projectRoot ?? '/worktree'}/conduct-state.json`, projectRoot: options.projectRoot ?? '/worktree', featureSlug: 'catalog-shape',
@@ -51,6 +59,7 @@ function conductor(
       llm_provider: 'pi', harness_self_host: { live_containment: false, build_auth: { mode: 'api-key' } },
       ...options.config,
     } as never,
+    liveBoundaryCoordinator: options.liveBoundaryCoordinator,
   });
 }
 
@@ -62,6 +71,10 @@ async function dispatch(conductor: Conductor): Promise<StepRunResult> {
 
 describe('conductor self-host catalog shape', () => {
   it('prepares catalog-shaped homes and fingerprints each selected auth path', async () => {
+    const liveFingerprint = vi.mocked(liveBoundary.fingerprintLiveCheckoutSurface);
+    const providerFingerprint = vi.mocked(liveBoundary.fingerprintProviderStateSurface);
+    liveFingerprint.mockClear();
+    providerFingerprint.mockClear();
     const isolatedAuth = new Map<string, Record<string, { type: string; key: string }>>();
     const preparedEnvs: NodeJS.ProcessEnv[] = [];
     const provisionProviderHome = vi.fn(async (options: { provider: { id: string; prepareSelfHostAuth(context: { homeDir: string }): Promise<unknown> } }) => {
@@ -92,7 +105,9 @@ describe('conductor self-host catalog shape', () => {
       return { success: true, output: 'done' };
     } };
 
-    await expect(dispatch(conductor(providerExecution, runner, guardrails(provisionProviderHome)))).resolves.toMatchObject({ success: true });
+    await expect(dispatch(conductor(providerExecution, runner, guardrails(provisionProviderHome), {
+      liveBoundaryCoordinator: new LiveBoundaryCoordinator(),
+    }))).resolves.toMatchObject({ success: true });
 
     expect(provisionProviderHome).toHaveBeenCalledTimes(3);
     expect(piAuth.mock.calls.map(([context]) => context)).toEqual([
@@ -105,8 +120,9 @@ describe('conductor self-host catalog shape', () => {
       { PI_CODING_AGENT_DIR: '/worktree/.daemon/scratch/pi-1' },
       { PI_CODING_AGENT_DIR: '/worktree/.daemon/scratch/pi-2' },
     ]);
-    expect(vi.mocked(liveBoundary.fingerprintLiveBoundary).mock.calls.map(([options]) => options.selectedAuthPaths)).toEqual([
-      ['auth.json'], ['auth.json'], ['auth.json'], ['.credentials.json'],
+    expect(liveFingerprint).toHaveBeenCalledOnce();
+    expect(providerFingerprint.mock.calls.map(([options]) => options.selectedAuthPaths)).toEqual([
+      ['auth.json'], ['auth.json'], ['.credentials.json'],
     ]);
   });
 
@@ -115,10 +131,12 @@ describe('conductor self-host catalog shape', () => {
     const runtimes = new ProviderRuntimeSet([{ key: 'pi', provider: { invoke: vi.fn() }, policy: {} }] as never);
     const providerExecution = { runtimes, sessions: {} as never, configuredProviders: ['pi'] } as ProviderExecutionContext;
     const runner: StepRunner = { run: async () => providerExecution.prepareCandidateSelfHost!(candidate('pi', 'openrouter/m'), runtimes.get('pi') as never, { step: 'build', runId: 'catalog-shape', attempt: 1 }).then(() => ({ success: true })) };
-    const fingerprint = vi.mocked(liveBoundary.fingerprintLiveBoundary);
+    const fingerprint = vi.mocked(liveBoundary.fingerprintProviderStateSurface);
     fingerprint.mockClear();
 
-    await expect(dispatch(conductor(providerExecution, runner, guardrails(provisionProviderHome)))).rejects.toMatchObject({
+    await expect(dispatch(conductor(providerExecution, runner, guardrails(provisionProviderHome), {
+      liveBoundaryCoordinator: new LiveBoundaryCoordinator(),
+    }))).rejects.toMatchObject({
       name: ProviderSetupUnavailableError.name,
       setupUnavailable: expect.objectContaining({ provider: 'pi', capability: 'self-host-isolation' }),
     });
