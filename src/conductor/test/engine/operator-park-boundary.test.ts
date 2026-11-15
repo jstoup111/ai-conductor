@@ -233,7 +233,7 @@ describe('operator park boundary contract', () => {
     // classifier, where it gives an operator park precedence over a yield.
     const groupBranchInjections = [
       ...conductorSource.matchAll(
-        /return(?: await)? runGroupBranch\(\s*member,\s*state,\s*\{[\s\S]*?operatorParkBoundary:\s*this\.daemon && this\.featureSlug !== undefined\s*\?\s*(this\.(?:rawOperatorParkBoundary|operatorParkBoundary))\s*:\s*undefined,/g,
+        /return(?: await)?\s+runGroupBranch\(\s*member,\s*state,\s*\{[\s\S]*?operatorParkBoundary:\s*this\.daemon && this\.featureSlug !== undefined\s*\?\s*(this\.(?:rawOperatorParkBoundary|operatorParkBoundary))\s*:\s*undefined,/g,
       ),
     ].map((match) => match[1]);
     expect(groupBranchInjections).toEqual(['this.operatorParkBoundary', 'this.operatorParkBoundary']);
@@ -855,10 +855,10 @@ describe('operator park boundary contract', () => {
     for (const [name, branch, reentry] of reentryCases) {
       const branchOffset = serialLoop.indexOf(branch);
       expect(branchOffset, `${name} branch is inside the serial retry loop`).toBeGreaterThan(-1);
-      const reentrySource = serialLoop.slice(branchOffset);
-      const match = reentrySource.match(reentry);
-      expect(match, `${name} re-enters the serial retry loop`).not.toBeNull();
-      expect(branchOffset + match!.index!).toBeGreaterThan(branchOffset);
+      expect(
+        serialLoop.slice(branchOffset).search(reentry) + branchOffset,
+        `${name} re-enters the serial retry loop`,
+      ).toBeGreaterThan(branchOffset);
     }
 
     const attemptGate =
@@ -2557,14 +2557,17 @@ describe('operator park boundary contract', () => {
     });
 
     const result = await conductor.run();
-    const daemonCliSource = await readFile(new URL('../../src/daemon-cli.ts', import.meta.url), 'utf8');
+    const daemonCliSource = await readFile(
+      new URL('../../src/engine/daemon-feature-lifecycle.ts', import.meta.url),
+      'utf8',
+    );
 
     expect({
       result,
       runnerCalls: run.mock.calls,
       logLines,
       daemonWiresMarkerReadErrors:
-        /operatorParkBoundary:\s*\(\)\s*=>\s*isOperatorParked\(\s*projectRoot,\s*item\.slug,\s*\(error\)\s*=>\s*featureLog\(`operator park marker read failed: \$\{error\.message\}`\),?\s*\)/.test(
+        /operatorParkBoundary:\s*async \(\)\s*=>\s*\{[\s\S]*?isOperatorParked\(projectRoot, item\.slug,[\s\S]*?featureLog\(`operator park marker read failed: \$\{error\.message\}`\)/.test(
           daemonCliSource,
         ),
     }).toEqual({

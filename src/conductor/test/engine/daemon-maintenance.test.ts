@@ -1,9 +1,6 @@
 // Covers: task:3, task:11, task:12, task:14
 import { describe, expect, it, vi } from 'vitest';
-import {
-  DaemonMaintenance,
-  type DaemonMaintenanceOperation,
-} from '../../src/engine/daemon-maintenance.js';
+import { DaemonMaintenance, type DaemonMaintenanceOperation } from '../../src/engine/daemon-maintenance.js';
 import type { FeatureExecutor } from '../../src/engine/feature-executor.js';
 import { rekickSweep } from '../../src/engine/daemon-rekick.js';
 import type { WorkClaims } from '../../src/engine/work-claims.js';
@@ -30,12 +27,24 @@ function trackedClaims(attempts: string[]): WorkClaims {
     list() {
       return [...active];
     },
-    complete(slug) { completed.add(slug); },
-    isCompleted(slug) { return completed.has(slug); },
-    park(slug) { parked.add(slug); },
-    unpark(slug) { parked.delete(slug); },
-    isParked(slug) { return parked.has(slug); },
-    listParked() { return [...parked]; },
+    complete(slug) {
+      completed.add(slug);
+    },
+    isCompleted(slug) {
+      return completed.has(slug);
+    },
+    park(slug) {
+      parked.add(slug);
+    },
+    unpark(slug) {
+      parked.delete(slug);
+    },
+    isParked(slug) {
+      return parked.has(slug);
+    },
+    listParked() {
+      return [...parked];
+    },
   };
 }
 
@@ -45,10 +54,7 @@ vi.mock('../../src/engine/daemon-maintenance.js', async (importOriginal) => {
   return {
     ...actual,
     DaemonMaintenance: class extends actual.DaemonMaintenance {
-      override async run<T>(
-        operation: DaemonMaintenanceOperation,
-        work: () => Promise<T>,
-      ): Promise<T | undefined> {
+      override async run<T>(operation: DaemonMaintenanceOperation, work: () => Promise<T>): Promise<T | undefined> {
         maintenanceTrace.operations.push(operation);
         return super.run(operation, work);
       }
@@ -107,14 +113,11 @@ describe('engine/daemon-maintenance', () => {
       autoRestartOnStaleEngine: true,
     });
 
-    expect(maintenanceTrace.operations).toEqual([
-      'restart-pending', 'stale-engine', 'sweep', 'episode-end-sweep',
-    ]);
-    expect(trace).toEqual([
-      'refresh', 'rekick', 'restart-pending', 'stale-engine', 'episode-end-sweep', 'sweep',
-    ]);
+    expect(maintenanceTrace.operations).toEqual(['restart-pending', 'stale-engine', 'sweep', 'episode-end-sweep']);
+    expect(trace).toEqual(['refresh', 'rekick', 'restart-pending', 'stale-engine', 'episode-end-sweep', 'sweep']);
   });
 
+  // Covers: task:27
   it('refreshes into a free slot while another executor keeps its pinned order', async () => {
     let rootBase = 'base-s1';
     let localDiscoveries = 0;
@@ -139,8 +142,7 @@ describe('engine/daemon-maintenance', () => {
           return { slug: order.slug, status: 'done' };
         }
 
-        secondObservedFirstPinned =
-          firstRunning && firstWorktreeHead === 'base-s1' && rootBase === 'base-s2';
+        secondObservedFirstPinned = firstRunning && firstWorktreeHead === 'base-s1' && rootBase === 'base-s2';
         // The refresh result is folded on a later pass; first stays in flight
         // until second has observed it.
         releaseFirst?.();
@@ -167,9 +169,6 @@ describe('engine/daemon-maintenance', () => {
           }
           localDiscoveries++;
           return [];
-        },
-        runFeature: async () => {
-          throw new Error('featureExecution owns this test');
         },
         featureExecution: { createWorkOrder, executor },
         readPersistedBaseSha: async () => 'base-s1',
@@ -317,11 +316,7 @@ describe('engine/daemon-maintenance', () => {
 
     const result = await runDaemon(
       {
-        discoverBacklog: async () => [
-          { slug: 'first' },
-          { slug: 'second' },
-          { slug: 'later' },
-        ],
+        discoverBacklog: async () => [{ slug: 'first' }, { slug: 'second' }, { slug: 'later' }],
         runFeature: async (item) => {
           started.push(item.slug);
           if (item.slug === 'later') return { slug: item.slug, status: 'done' as const };
@@ -380,11 +375,7 @@ describe('engine/daemon-maintenance', () => {
 
     const result = await runDaemon(
       {
-        discoverBacklog: async () => [
-          { slug: 'first' },
-          { slug: 'second' },
-          { slug: 'later' },
-        ],
+        discoverBacklog: async () => [{ slug: 'first' }, { slug: 'second' }, { slug: 'later' }],
         runFeature: async (item) => {
           started.push(item.slug);
           if (item.slug === 'later') return { slug: item.slug, status: 'done' as const };

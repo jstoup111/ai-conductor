@@ -20,9 +20,18 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-function runtime(key: 'codex' | 'claude', invoke: () => Promise<{ success: boolean; output: string; exitCode: number }>): ProviderRuntime {
+function runtime(
+  key: 'codex' | 'claude',
+  invoke: () => Promise<{ success: boolean; output: string; exitCode: number }>,
+): ProviderRuntime {
   const policy = key === 'codex' ? CODEX_MODEL_POLICY : CLAUDE_MODEL_POLICY;
-  return { key, provider: { invoke }, policy, builtIn: true, availability: new ModelAvailability(policy.modelFallbackLadder) };
+  return {
+    key,
+    provider: { invoke },
+    policy,
+    builtIn: true,
+    availability: new ModelAvailability(policy.modelFallbackLadder),
+  };
 }
 
 describe('provider admission at the daemon dispatch entry point', () => {
@@ -38,21 +47,31 @@ describe('provider admission at the daemon dispatch entry point', () => {
       runtimes: new ProviderRuntimeSet([runtime('codex', codexInvoke), runtime('claude', claudeInvoke)]),
       sessions: new ProviderSessionStore(),
       config: { provider_substitution: 'disallow' as const },
-      onAttempt: (_step: string, attempt: { provider: string }) => { attempts.push(attempt.provider); },
+      onAttempt: (_step: string, attempt: { provider: string }) => {
+        attempts.push(attempt.provider);
+      },
     };
     const events = new ConductorEventEmitter();
     const run = makeRunFeature({
+      dispatchAdmission: 'acquire',
       createWorktree: async () => ({ path: root, branch: 'feature' }),
       runConductor: async (_worktree, _item, execution) => {
         await executeProviderCandidates({
-          step: 'build', configuredProviders: execution!.configuredProviders,
-          preferredProvider: 'codex', runtimes: execution!.runtimes, sessions: execution!.sessions,
-          config: execution!.config, onAttempt: execution!.onAttempt,
+          step: 'build',
+          configuredProviders: execution!.configuredProviders,
+          preferredProvider: 'codex',
+          runtimes: execution!.runtimes,
+          sessions: execution!.sessions,
+          config: execution!.config,
+          onAttempt: execution!.onAttempt,
           options: { prompt: 'build', cwd: root },
         });
       },
       readOutcome: async () => ({ done: false, halted: true }),
-      teardownWorktree: async () => {}, markProcessed: async () => {}, daemon: false, project: 'test',
+      teardownWorktree: async () => {},
+      markProcessed: async () => {},
+      daemon: false,
+      project: 'test',
       beginFeatureRun: () => ({ events, providerExecution, stop: () => {} }),
     });
 
@@ -87,24 +106,34 @@ describe('provider admission at the daemon dispatch entry point', () => {
       },
     };
     const run = makeRunFeature({
+      dispatchAdmission: 'acquire',
       createWorktree: async () => ({ path: root, branch: 'feature' }),
       runConductor: async (_worktree, _item, execution) => {
         await executeProviderCandidates({
-          step: 'build', configuredProviders: execution!.configuredProviders,
-          preferredProvider: 'codex', config: execution!.config,
-          runtimes: execution!.runtimes, sessions: execution!.sessions,
-          providerAvailability: execution!.providerAvailability, onAttempt: execution!.onAttempt,
+          step: 'build',
+          configuredProviders: execution!.configuredProviders,
+          preferredProvider: 'codex',
+          config: execution!.config,
+          runtimes: execution!.runtimes,
+          sessions: execution!.sessions,
+          providerAvailability: execution!.providerAvailability,
+          onAttempt: execution!.onAttempt,
           options: { prompt: 'build', cwd: root },
         });
       },
       readOutcome: async () => ({ done: false, halted: true }),
-      teardownWorktree: async () => {}, markProcessed: async () => {}, daemon: false, project: 'test',
+      teardownWorktree: async () => {},
+      markProcessed: async () => {},
+      daemon: false,
+      project: 'test',
       beginFeatureRun: () => ({ events, providerExecution, stop: () => {} }),
     });
 
     await run({ slug: 'later-step' });
 
-    expect(emittedAttempts).toEqual([expect.objectContaining({ provider: 'codex', invoked: false, skipReason: 'suppression-refused' })]);
+    expect(emittedAttempts).toEqual([
+      expect.objectContaining({ provider: 'codex', invoked: false, skipReason: 'suppression-refused' }),
+    ]);
     expect(codexInvoke).not.toHaveBeenCalled();
     expect(claudeInvoke).not.toHaveBeenCalled();
   });

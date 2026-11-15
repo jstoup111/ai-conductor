@@ -1,4 +1,4 @@
-// Covers: task:4, task:9
+// Covers: task:4, task:9, task:31
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -25,40 +25,77 @@ const fixture = vi.hoisted(() => ({
 }));
 const buildExporters = vi.hoisted(() => vi.fn());
 vi.mock('../../src/engine/otel/transport.js', () => ({ buildExporters, isExportRefused: () => false }));
-vi.mock('../../src/engine/self-host/daemon-build-token.js', () => ({ readDaemonBuildToken: vi.fn(async () => ({ state: 'ok' as const, token: 'test-daemon-token' })) }));
+vi.mock('../../src/engine/self-host/daemon-build-token.js', () => ({
+  readDaemonBuildToken: vi.fn(async () => ({ state: 'ok' as const, token: 'test-daemon-token' })),
+}));
 vi.mock('../../src/engine/daemon-deps.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/daemon-deps.js')>();
   return { ...actual, resolveDaemonBaseSha: vi.fn(async () => 'a'.repeat(40)) };
 });
+vi.mock('../../src/engine/config.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/engine/config.js')>()),
+  loadMergedConfig: vi.fn(async () => ({
+    ok: true as const,
+    config: { llm_provider: 'codex', otel: { exporter: 'otlp', endpoint: 'http://fake-collector:4318' } },
+    warnings: [],
+  })),
+}));
+vi.mock('../../src/engine/provider-discovery.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/engine/provider-discovery.js')>()),
+  discoverInstalledProviders: vi.fn(async () => ({ installed: ['codex'], missing: [] })),
+}));
+vi.mock('../../src/engine/provider-model-probe.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/engine/provider-model-probe.js')>()),
+  validateConfiguredProviderModels: vi.fn(async () => {}),
+  resolveProviderModelTiers: vi.fn(async () => {}),
+}));
 vi.mock('../../src/engine/work-order.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/work-order.js')>();
-  return { ...actual, buildWorkOrder: vi.fn((input) => input) };
+  return {
+    ...actual,
+    buildWorkOrder: vi.fn((input) => ({
+      ...input,
+      engineVersionId: input.enginePin.engineVersionId,
+      schemaVersion: 1,
+      manifest: [],
+    })),
+  };
 });
-vi.mock('../../src/engine/daemon-runner.js', () => ({
-  makeRunFeature: (deps: { beginFeatureRun: (worktree: { path: string; branch: string }, item: { slug: string }) => Promise<Record<string, unknown>> }) => async (item: { slug: string }) => {
-    const scope = await deps.beginFeatureRun({ path: fixture.worktreePath, branch: `feat/${item.slug}` }, item);
-    const events = scope.events as { emit: (event: ConductorEvent) => Promise<void> };
-    for (const event of fixture.events) if (event.type !== fixture.filteredType) await events.emit(event);
-    for (let attempt = 0; attempt < fixture.metricExportAttempts; attempt += 1) {
-      await events.emit({
-        type: 'provider_attempt',
-        step: 'build',
-        provider: 'claude',
-        outcome: 'success',
-        invoked: true,
-        tokenUsage: { input: 10, output: 2, costUsd: 0.25 },
-      });
-      if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(60_000);
-    }
-    for (const event of fixture.postMetricEvents) await events.emit(event);
-    // The periodic exports need fake time, while daemon shutdown awaits the
-    // SDK's real completion path. Return to real timers before cleanup.
-    if (fixture.metricExportAttempts > 0) vi.useRealTimers();
-    await (scope.stop as () => Promise<void>)();
-    const outcome = { slug: item.slug, status: 'halted', reason: 'test dispatch complete' };
-    fixture.outcomes.push(outcome);
-    return outcome;
-  },
+vi.mock('../../src/engine/daemon-runner.js', async (importOriginal) => ({
+  // The supervisor's child executor classifies each dispatch with the real
+  // daemon-runner helpers; only the one-feature runner is bounded here.
+  ...(await importOriginal<typeof import('../../src/engine/daemon-runner.js')>()),
+  makeRunFeature:
+    (deps: {
+      beginFeatureRun: (
+        worktree: { path: string; branch: string },
+        item: { slug: string },
+      ) => Promise<Record<string, unknown>>;
+    }) =>
+    async (item: { slug: string }) => {
+      const scope = await deps.beginFeatureRun({ path: fixture.worktreePath, branch: `feat/${item.slug}` }, item);
+      const events = scope.events as { emit: (event: ConductorEvent) => Promise<void> };
+      for (const event of fixture.events) if (event.type !== fixture.filteredType) await events.emit(event);
+      for (let attempt = 0; attempt < fixture.metricExportAttempts; attempt += 1) {
+        await events.emit({
+          type: 'provider_attempt',
+          step: 'build',
+          provider: 'claude',
+          outcome: 'success',
+          invoked: true,
+          tokenUsage: { input: 10, output: 2, costUsd: 0.25 },
+        });
+        if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(60_000);
+      }
+      for (const event of fixture.postMetricEvents) await events.emit(event);
+      // The periodic exports need fake time, while daemon shutdown awaits the
+      // SDK's real completion path. Return to real timers before cleanup.
+      if (fixture.metricExportAttempts > 0) vi.useRealTimers();
+      await (scope.stop as () => Promise<void>)();
+      const outcome = { slug: item.slug, status: 'halted', reason: 'test dispatch complete' };
+      fixture.outcomes.push(outcome);
+      return outcome;
+    },
 }));
 
 import { buildInteractiveVisualizers } from '../../src/index.js';
@@ -70,54 +107,127 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { VisualizerFactoryContext } from '../../src/types/plugin.js';
 import type { OtelVisualizerStartContext } from '../../src/engine/otel/wire.js';
+import { createInMemoryExecutorFork, useTempEngineStore } from '../fixtures/in-memory-executor-fork.js';
 
 let dirs: string[] = [];
 afterEach(async () => {
-  buildExporters.mockReset(); fixture.events = []; fixture.postMetricEvents = []; fixture.filteredType = undefined;
-  fixture.metricExportAttempts = 0; fixture.metricExportCalls = 0; fixture.outcomes = [];
+  buildExporters.mockReset();
+  fixture.events = [];
+  fixture.postMetricEvents = [];
+  fixture.filteredType = undefined;
+  fixture.metricExportAttempts = 0;
+  fixture.metricExportCalls = 0;
+  fixture.outcomes = [];
   vi.useRealTimers();
-  await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true }))); dirs = [];
+  await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true })));
+  dirs = [];
 });
 
 const config = { otel: { exporter: 'otlp', endpoint: 'http://fake-collector:4318' } } as HarnessConfig;
 const eventSequences: Partial<Record<ConductorEvent['type'], ConductorEvent[]>> = {
-  daemon_backlog_snapshot: [{
-    type: 'daemon_backlog_snapshot',
-    counts: { eligible: 1, waiting: 0, blocked: 0, gated: 0, parked: 0 },
-    oldestAgeSeconds: { eligible: 1 },
-    slots: { busy: 0, free: 1 },
-    inFlight: [],
-    blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false },
-    pollDurationMs: 1,
-  }],
-  feature_dispatch_started: [{ type: 'feature_dispatch_started', slug: 'feature-a', kind: 'initial' }],
-  feature_dispatch_ended: [{ type: 'feature_dispatch_ended', slug: 'feature-a', outcome: 'complete' }],
+  daemon_backlog_snapshot: [
+    {
+      type: 'daemon_backlog_snapshot',
+      counts: { eligible: 1, waiting: 0, blocked: 0, gated: 0, parked: 0 },
+      oldestAgeSeconds: { eligible: 1 },
+      slots: { busy: 0, free: 1 },
+      inFlight: [],
+      blocked: { paused: false, build_auth_missing: false, gh_version: false, episode_active: false },
+      pollDurationMs: 1,
+    },
+  ],
+  // The supervisor owns this event too (ADR D4): the broker drops a child's
+  // copy and the supervisor classifies the claim itself. The fixture worktree
+  // already exists when the claim is dispatched, so its kind is `resume`.
+  feature_dispatch_started: [{ type: 'feature_dispatch_started', slug: 'feature-a', kind: 'resume' }],
+  // The supervisor owns this terminal event; the child fixture returns its
+  // normal halted outcome, which the supervisor records as `halted`.
+  feature_dispatch_ended: [{ type: 'feature_dispatch_ended', slug: 'feature-a', outcome: 'halted' }],
   feature_shipped: [{ type: 'feature_shipped', slug: 'feature-a', active: { state: 'unavailable' } }],
   memory_setup: [{ type: 'memory_setup', before: 'absent', canonical: true }],
   step_started: [{ type: 'step_started', step: 'build', index: 0 }],
-  step_completed: [{ type: 'step_started', step: 'build', index: 0 }, { type: 'step_completed', step: 'build', status: 'done' }],
-  step_failed: [{ type: 'step_started', step: 'build', index: 0 }, { type: 'step_failed', step: 'build', error: 'boom', retryCount: 1 }],
-  step_interrupted: [{ type: 'step_started', step: 'build', index: 0 }, { type: 'step_interrupted', step: 'build', reason: 'controlled shutdown' }],
-  step_refused: [{ type: 'step_started', step: 'build', index: 0 }, { type: 'step_refused', step: 'build', kind: 'needs-human', reason: 'operator required' }],
+  step_completed: [
+    { type: 'step_started', step: 'build', index: 0 },
+    { type: 'step_completed', step: 'build', status: 'done' },
+  ],
+  step_failed: [
+    { type: 'step_started', step: 'build', index: 0 },
+    { type: 'step_failed', step: 'build', error: 'boom', retryCount: 1 },
+  ],
+  step_interrupted: [
+    { type: 'step_started', step: 'build', index: 0 },
+    { type: 'step_interrupted', step: 'build', reason: 'controlled shutdown' },
+  ],
+  step_refused: [
+    { type: 'step_started', step: 'build', index: 0 },
+    { type: 'step_refused', step: 'build', kind: 'needs-human', reason: 'operator required' },
+  ],
   step_inapplicable: [{ type: 'step_inapplicable', step: 'manual_test', reason: 'no UI', decider: 'unknown' }],
   step_inapplicable_ignored: [{ type: 'step_inapplicable_ignored', cause: 'branch-only', step: 'manual_test' }],
-  step_inapplicable_refused: [{ type: 'step_inapplicable_refused', step: 'manual_test', reason: 'late declaration', priorStatus: 'done' }],
-  group_member_step: [{ type: 'group_member_step', member: 'build', skill: 'build', phase: 'result', outcome: 'completed' }],
-  provider_attempt: [{ type: 'provider_attempt', step: 'build', provider: 'claude', outcome: 'success', invoked: true, tokenUsage: { input: 10, output: 2, costUsd: 0.25 } }],
-  feature_usage_total: [{ type: 'feature_usage_total', dispatches: 1, meteredDispatches: 1, unmeteredDispatches: 0, costUnmeteredDispatches: 0, costUsd: 0.25, inputTokens: 10, outputTokens: 2 }],
-  feature_cost_snapshot: [{ type: 'feature_cost_snapshot', costUsd: 0.25, costComplete: true, byDimension: [{ step: 'build', model: 'test-model', source: 'provider', costUsd: 0.25 }], tokensByDimension: [{ step: 'build', model: 'test-model', tokens: { input: 10, output: 2 } }] }],
-  step_retry: [{ type: 'step_started', step: 'build', index: 0 }, { type: 'step_retry', step: 'build', attempt: 1, maxAttempts: 3, reason: 'retry' }],
+  step_inapplicable_refused: [
+    { type: 'step_inapplicable_refused', step: 'manual_test', reason: 'late declaration', priorStatus: 'done' },
+  ],
+  group_member_step: [
+    { type: 'group_member_step', member: 'build', skill: 'build', phase: 'result', outcome: 'completed' },
+  ],
+  provider_attempt: [
+    {
+      type: 'provider_attempt',
+      step: 'build',
+      provider: 'claude',
+      outcome: 'success',
+      invoked: true,
+      tokenUsage: { input: 10, output: 2, costUsd: 0.25 },
+    },
+  ],
+  feature_usage_total: [
+    {
+      type: 'feature_usage_total',
+      dispatches: 1,
+      meteredDispatches: 1,
+      unmeteredDispatches: 0,
+      costUnmeteredDispatches: 0,
+      costUsd: 0.25,
+      inputTokens: 10,
+      outputTokens: 2,
+    },
+  ],
+  feature_cost_snapshot: [
+    {
+      type: 'feature_cost_snapshot',
+      costUsd: 0.25,
+      costComplete: true,
+      byDimension: [{ step: 'build', model: 'test-model', source: 'provider', costUsd: 0.25 }],
+      tokensByDimension: [{ step: 'build', model: 'test-model', tokens: { input: 10, output: 2 } }],
+    },
+  ],
+  step_retry: [
+    { type: 'step_started', step: 'build', index: 0 },
+    { type: 'step_retry', step: 'build', attempt: 1, maxAttempts: 3, reason: 'retry' },
+  ],
   gate_verdict: [{ type: 'gate_verdict', step: 'build', satisfied: true }],
   kickback: [{ type: 'kickback', from: 'build', to: 'plan', count: 1 }],
-  feature_complete: [{ type: 'step_started', step: 'build', index: 0 }, { type: 'feature_complete', featureDesc: 'parity guard' }],
-  loop_halt: [{ type: 'step_started', step: 'build', index: 0 }, { type: 'loop_halt', reason: 'parity guard' }],
+  feature_complete: [
+    { type: 'step_started', step: 'build', index: 0 },
+    { type: 'feature_complete', featureDesc: 'parity guard' },
+  ],
+  loop_halt: [
+    { type: 'step_started', step: 'build', index: 0 },
+    { type: 'loop_halt', reason: 'parity guard' },
+  ],
   rebase_noop: [{ type: 'rebase_noop', baseSha: 'base-sha' }],
   rebase_changed: [{ type: 'rebase_changed', baseSha: 'base-sha', changedPaths: ['src/feature.ts'] }],
   rebase_mergeable_skip: [{ type: 'rebase_mergeable_skip', baseSha: 'base-sha' }],
   build_progress: [{ type: 'build_progress', step: 'build', resolved: 1, total: 2, activity: 'quiet' }],
-  build_no_progress: [{ type: 'build_no_progress', step: 'build', quietMinutes: 1, resolved: 1, total: 2, activity: 'quiet' }],
-  build_active_stall: [{ type: 'build_active_stall', step: 'build', minutes: 45, resolved: 1, total: 2, action: 'warn' }],
-  build_stall: [{ type: 'build_stall', step: 'build', reason: 'no_task_progress', resolvedBefore: 1, resolvedAfter: 1 }],
+  build_no_progress: [
+    { type: 'build_no_progress', step: 'build', quietMinutes: 1, resolved: 1, total: 2, activity: 'quiet' },
+  ],
+  build_active_stall: [
+    { type: 'build_active_stall', step: 'build', minutes: 45, resolved: 1, total: 2, action: 'warn' },
+  ],
+  build_stall: [
+    { type: 'build_stall', step: 'build', reason: 'no_task_progress', resolvedBefore: 1, resolvedAfter: 1 },
+  ],
 };
 function eventSequence(type: ConductorEvent['type']): ConductorEvent[] {
   const events = eventSequences[type];
@@ -168,20 +278,28 @@ function comparableMetricValue(name: string, value: unknown): unknown {
 
 function signals(spanExporter: InMemorySpanExporter, metricExporter: InMemoryMetricExporter): OtelSignals {
   return {
-    spans: spanExporter.getFinishedSpans().map((span: ReadableSpan) => ({ name: span.name, status: span.status, attributes: withoutResourceIdentity(span.attributes), events: span.events.map((event) => ({ name: event.name, attributes: event.attributes })) })),
-    metrics: metricExporter.getMetrics().flatMap((resourceMetrics) => resourceMetrics.scopeMetrics.flatMap((scopeMetrics) =>
-      scopeMetrics.metrics.map((metric) => ({
-        name: metric.descriptor.name,
-        dataPoints: metric.dataPoints.map((point) => ({
-          value: comparableMetricValue(metric.descriptor.name, point.value),
-          attributes: withoutResourceIdentity(point.attributes),
+    spans: spanExporter.getFinishedSpans().map((span: ReadableSpan) => ({
+      name: span.name,
+      status: span.status,
+      attributes: withoutResourceIdentity(span.attributes),
+      events: span.events.map((event) => ({ name: event.name, attributes: event.attributes })),
+    })),
+    metrics: metricExporter.getMetrics().flatMap((resourceMetrics) =>
+      resourceMetrics.scopeMetrics.flatMap((scopeMetrics) =>
+        scopeMetrics.metrics.map((metric) => ({
+          name: metric.descriptor.name,
+          dataPoints: metric.dataPoints.map((point) => ({
+            value: comparableMetricValue(metric.descriptor.name, point.value),
+            attributes: withoutResourceIdentity(point.attributes),
+          })),
         })),
-      })),
-    )),
+      ),
+    ),
   };
 }
 async function throughInteractive(events: ConductorEvent[]): Promise<OtelSignals> {
-  const pipelineDir = await mkdtemp(join(tmpdir(), 'interactive-otel-parity-')); dirs.push(pipelineDir);
+  const pipelineDir = await mkdtemp(join(tmpdir(), 'interactive-otel-parity-'));
+  dirs.push(pipelineDir);
   const exporter = new InMemorySpanExporter();
   const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
   // The daemon owns its lifetime meter and the feature scope owns spans, so
@@ -191,23 +309,67 @@ async function throughInteractive(events: ConductorEvent[]): Promise<OtelSignals
     .mockReturnValueOnce({ spanExporter: exporter, metricExporter })
     .mockReturnValueOnce({ spanExporter: exporter, metricExporter });
   const emitter = new ConductorEventEmitter();
-  const context: VisualizerFactoryContext & { startContext: OtelVisualizerStartContext } = { config, pipelineDir, emitter, startContext: { feature: 'interactive', project: 'test', pipelineDir, branch: undefined, engineVersion: undefined, harnessVersion: undefined } };
+  const context: VisualizerFactoryContext & { startContext: OtelVisualizerStartContext } = {
+    config,
+    pipelineDir,
+    emitter,
+    startContext: {
+      feature: 'interactive',
+      project: 'test',
+      pipelineDir,
+      branch: undefined,
+      engineVersion: undefined,
+      harnessVersion: undefined,
+    },
+  };
   const visualizers = buildInteractiveVisualizers(new PluginRegistry(), config, context);
   for (const event of events) await emitter.emit(event);
   await Promise.all(visualizers.map((visualizer) => visualizer.stop()));
   return signals(exporter, metricExporter);
 }
-async function throughDaemonDispatch(events: ConductorEvent[], filteredType?: ConductorEvent['type']): Promise<OtelSignals> {
-  const repo = await mkdtemp(join(tmpdir(), 'daemon-otel-parity-')); dirs.push(repo);
-  fixture.worktreePath = join(repo, '.worktrees', 'feature-a'); fixture.events = events; fixture.filteredType = filteredType;
-  await mkdir(join(fixture.worktreePath, '.pipeline'), { recursive: true }); await mkdir(join(repo, '.ai-conductor'), { recursive: true });
-  await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'executor_isolation: in-process\notel:\n  exporter: otlp\n  endpoint: http://fake-collector:4318\n');
+async function throughDaemonDispatch(
+  events: ConductorEvent[],
+  filteredType?: ConductorEvent['type'],
+): Promise<OtelSignals> {
+  const repo = await mkdtemp(join(tmpdir(), 'daemon-otel-parity-'));
+  dirs.push(repo);
+  fixture.worktreePath = join(repo, '.worktrees', 'feature-a');
+  fixture.events = events;
+  fixture.filteredType = filteredType;
+  await mkdir(join(fixture.worktreePath, '.pipeline'), { recursive: true });
+  await mkdir(join(repo, '.ai-conductor'), { recursive: true });
+  await writeFile(
+    join(repo, '.ai-conductor', 'config.yml'),
+    'otel:\n  exporter: otlp\n  endpoint: http://fake-collector:4318\n',
+  );
   const exporter = new InMemorySpanExporter();
   const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
   buildExporters
     .mockReturnValueOnce({ spanExporter: exporter, metricExporter })
     .mockReturnValueOnce({ spanExporter: exporter, metricExporter });
-  await runDaemonMode({ projectRoot: repo, concurrency: 1, maxItems: 1, baseBranch: 'main', ensureFresh: async () => {}, watch: false, workSource: { discover: async () => [{ slug: 'feature-a' }] }, probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }), providerDiscoveryRunner: allInstalledProviderDiscoveryRunner() });
+  const store = await useTempEngineStore();
+  try {
+    // No `run` override is supplied: createInMemoryExecutorFork composes the
+    // production createExecutorChildRuntime and its production child runner.
+    await runDaemonMode({
+      projectRoot: repo,
+      engineRoot: store.engineRoot,
+      concurrency: 1,
+      maxItems: 1,
+      baseBranch: 'main',
+      ensureFresh: async () => {},
+      watch: false,
+      workSource: { discover: async () => [{ slug: 'feature-a' }] },
+      probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+      providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
+      executorFork: createInMemoryExecutorFork({
+        projectRoot: repo,
+        createWorktree: async () => ({ path: fixture.worktreePath }),
+      }),
+    });
+  } finally {
+    await store.teardown();
+  }
   return signals(exporter, metricExporter);
 }
 
@@ -228,17 +390,40 @@ async function runDaemonExportScenario(metricExporter: PushMetricExporter): Prom
   outcome: { slug: string; status: string; reason: string };
   metricExportCalls: number;
 }> {
-  const repo = await mkdtemp(join(tmpdir(), 'daemon-otel-export-failure-')); dirs.push(repo);
+  const repo = await mkdtemp(join(tmpdir(), 'daemon-otel-export-failure-'));
+  dirs.push(repo);
   fixture.worktreePath = join(repo, '.worktrees', 'feature-a');
-  fixture.events = [
-    { type: 'step_started', step: 'build', index: 0 },
-  ];
+  fixture.events = [{ type: 'step_started', step: 'build', index: 0 }];
   fixture.postMetricEvents = [{ type: 'step_completed', step: 'build', status: 'done' }];
   fixture.metricExportAttempts = 3;
-  await mkdir(join(fixture.worktreePath, '.pipeline'), { recursive: true }); await mkdir(join(repo, '.ai-conductor'), { recursive: true });
-  await writeFile(join(repo, '.ai-conductor', 'config.yml'), 'executor_isolation: in-process\notel:\n  exporter: otlp\n  endpoint: http://fake-collector:4318\n');
+  await mkdir(join(fixture.worktreePath, '.pipeline'), { recursive: true });
+  await mkdir(join(repo, '.ai-conductor'), { recursive: true });
+  await writeFile(
+    join(repo, '.ai-conductor', 'config.yml'),
+    'otel:\n  exporter: otlp\n  endpoint: http://fake-collector:4318\n',
+  );
   buildExporters.mockReturnValue({ spanExporter: new InMemorySpanExporter(), metricExporter });
-  await runDaemonMode({ projectRoot: repo, concurrency: 1, maxItems: 1, baseBranch: 'main', ensureFresh: async () => {}, watch: false, workSource: { discover: async () => [{ slug: 'feature-a' }] }, probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }), providerDiscoveryRunner: allInstalledProviderDiscoveryRunner() });
+  const store = await useTempEngineStore();
+  try {
+    await runDaemonMode({
+      projectRoot: repo,
+      engineRoot: store.engineRoot,
+      concurrency: 1,
+      maxItems: 1,
+      baseBranch: 'main',
+      ensureFresh: async () => {},
+      watch: false,
+      workSource: { discover: async () => [{ slug: 'feature-a' }] },
+      probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+      providerDiscoveryRunner: allInstalledProviderDiscoveryRunner(),
+      executorFork: createInMemoryExecutorFork({
+        projectRoot: repo,
+        createWorktree: async () => ({ path: fixture.worktreePath }),
+      }),
+    });
+  } finally {
+    await store.teardown();
+  }
   const [rawFeatureEvents, rawDaemonEvents] = await Promise.all([
     readFile(join(fixture.worktreePath, '.pipeline/events.jsonl'), 'utf8'),
     readFile(join(repo, '.daemon/events.jsonl'), 'utf8'),
@@ -257,24 +442,32 @@ function terminalVerdicts(events: ConductorEvent[]): Array<Record<string, unknow
   const verdicts: Array<Record<string, unknown>> = [];
   for (const event of events) {
     switch (event.type) {
-      case 'step_completed': verdicts.push({ type: event.type, step: event.step, status: event.status }); break;
-      case 'step_failed': verdicts.push({ type: event.type, step: event.step, error: event.error, retryCount: event.retryCount }); break;
-      case 'feature_complete': verdicts.push({ type: event.type }); break;
-      case 'loop_halt': verdicts.push({ type: event.type, reason: event.reason }); break;
-      default: break;
+      case 'step_completed':
+        verdicts.push({ type: event.type, step: event.step, status: event.status });
+        break;
+      case 'step_failed':
+        verdicts.push({ type: event.type, step: event.step, error: event.error, retryCount: event.retryCount });
+        break;
+      case 'feature_complete':
+        verdicts.push({ type: event.type });
+        break;
+      case 'loop_halt':
+        verdicts.push({ type: event.type, reason: event.reason });
+        break;
+      default:
+        break;
     }
   }
   return verdicts;
 }
-function missingParityTypes(results: Map<ConductorEvent['type'], { interactive: OtelSignals; daemon: OtelSignals }>): ConductorEvent['type'][] {
+function missingParityTypes(
+  results: Map<ConductorEvent['type'], { interactive: OtelSignals; daemon: OtelSignals }>,
+): ConductorEvent['type'][] {
   return [...results].flatMap(([type, { interactive, daemon }]) => {
     const daemonSpans = new Set(daemon.spans.map((span) => JSON.stringify(span)));
     const missingSpan = interactive.spans.some((span) => !daemonSpans.has(JSON.stringify(span)));
     const daemonMetrics = new Map<string, Set<string>>(
-      daemon.metrics.map((metric) => [
-        metric.name,
-        new Set(metric.dataPoints.map((point) => JSON.stringify(point))),
-      ]),
+      daemon.metrics.map((metric) => [metric.name, new Set(metric.dataPoints.map((point) => JSON.stringify(point)))]),
     );
     const missingPoint = interactive.metrics.some((metric) => {
       const points = daemonMetrics.get(metric.name);
@@ -288,15 +481,27 @@ function missingParityTypes(results: Map<ConductorEvent['type'], { interactive: 
 }
 
 describe('daemon OTel parity acceptance', () => {
-  it('exports every OTel event through daemon dispatch exactly as the interactive helper does', async () => {
+  it('exports every OTel event through the production child-runtime daemon dispatch exactly as the interactive helper does', async () => {
     const results = new Map<ConductorEvent['type'], { interactive: OtelSignals; daemon: OtelSignals }>();
-    for (const type of otelEventTypes()) results.set(type, { interactive: await throughInteractive(eventSequence(type)), daemon: await throughDaemonDispatch(eventSequence(type)) });
+    for (const type of otelEventTypes())
+      results.set(type, {
+        interactive: await throughInteractive(eventSequence(type)),
+        daemon: await throughDaemonDispatch(eventSequence(type)),
+      });
     const missing = missingParityTypes(results);
     expect(missing, `daemon OTel exporter missed: ${missing.join(', ')}`).toEqual([]);
   });
   it('proves the parity assertion detects a filtered metric-only snapshot', async () => {
     const type = 'feature_cost_snapshot' as const;
-    const results = new Map<ConductorEvent['type'], { interactive: OtelSignals; daemon: OtelSignals }>([[type, { interactive: await throughInteractive(eventSequence(type)), daemon: await throughDaemonDispatch(eventSequence(type), type) }]]);
+    const results = new Map<ConductorEvent['type'], { interactive: OtelSignals; daemon: OtelSignals }>([
+      [
+        type,
+        {
+          interactive: await throughInteractive(eventSequence(type)),
+          daemon: await throughDaemonDispatch(eventSequence(type), type),
+        },
+      ],
+    ]);
     expect(missingParityTypes(results)).toEqual(['feature_cost_snapshot']);
   });
 
@@ -310,7 +515,10 @@ describe('daemon OTel parity acceptance', () => {
     expect(rendererErrors).toHaveLength(1);
     expect(failed.metricExportCalls).toBeGreaterThanOrEqual(3);
     expect(errorLines).toHaveLength(1);
-    expect(rendererErrors[0]).toMatchObject({ rendererName: 'otel', error: expect.stringContaining('collector refused metrics') });
+    expect(rendererErrors[0]).toMatchObject({
+      rendererName: 'otel',
+      error: expect.stringContaining('collector refused metrics'),
+    });
     expect(errorLines[0]).toContain(rendererErrors[0].error);
     expect(terminalVerdicts(failed.events)).toEqual(terminalVerdicts(succeeded.events));
     expect(failed.outcome).toEqual(succeeded.outcome);

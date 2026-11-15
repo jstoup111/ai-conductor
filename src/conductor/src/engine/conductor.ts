@@ -275,6 +275,7 @@ import {
   recordRoundStall,
   reconcileRounds,
   routedRoundOpen,
+  routedWorkOutstanding,
 } from './routing/round-admission.js';
 import { enterHostRegion, verifyGreenAcceptance } from './routing/host-region-entry.js';
 import { settleDerivedNoOpHost } from './routing/routed-exit.js';
@@ -2584,6 +2585,25 @@ export class Conductor {
   }
 
   /**
+   * An adjudicated FAIL is a durable PASS before any routed exit is allowed to
+   * run.  Exit/refusal paths may stop the process, so leaving this write to
+   * advanceTail made a settled host look unsatisfied after resume.
+   */
+  private async persistAdjudicatedBuildReviewSettlement(state: ConductState): Promise<void> {
+    await writeVerdict(
+      this.projectRoot,
+      'build_review',
+      {
+        satisfied: true,
+        reason: 'build_review FAIL settled by post-join adjudication',
+        checkedAt: Date.now(),
+      },
+      this.activeRegionChild,
+      { routedRound: await this.routedRoundForActiveChild(state) },
+    );
+  }
+
+  /**
    * Make a declared project-owned region available before its author runs.
    * The template bytes are the floor, while a later capture is authoritative.
    */
@@ -4652,6 +4672,60 @@ export class Conductor {
     return reason;
   }
 
+  /** Persist the bounded escalation shared by every routed admission fence. */
+  private async recordRoutingFenceHalt(
+    slug: string,
+    detail: string,
+  ): Promise<{
+    detail: string;
+    haltClass: 'mechanical' | 'needs-human';
+  }> {
+    const affected = await diagnoseAffectedRounds(this.projectRoot, slug);
+    const stall = await recordRoundStall(
+      this.projectRoot,
+      slug,
+      {
+        kind: 'stalled',
+        detail,
+        rounds: affected.kind === 'affected' ? affected.rounds : [],
+      },
+      this.events,
+    );
+    return { detail: stall.detail, haltClass: stall.haltClass ?? 'needs-human' };
+  }
+
+  /**
+   * The sole routed-admission fence result.  Keeping the fence marker and
+   * bounded-stall receipt together prevents a new consumer from restoring a
+   * fixed mechanical class (and therefore an unbounded retry loop).
+   */
+  private async boundedRoutingFenceHalt(
+    slug: string,
+    detail: string,
+  ): Promise<{
+    kind: 'halt';
+    detail: string;
+    haltClass: 'mechanical' | 'needs-human';
+    routingFence: true;
+  }> {
+    const stall = await this.recordRoutingFenceHalt(slug, detail);
+    return { kind: 'halt', detail: stall.detail, haltClass: stall.haltClass, routingFence: true };
+  }
+
+  /** A refused admission fence defers routing; it does not reopen scope. */
+  private async writeRoutingFenceRefusalHalt(
+    detail: string,
+    haltClass: string | undefined,
+    refused: readonly OverScopeRenderableFinding[],
+  ): Promise<string> {
+    const reason = `${detail}\nFindings: ${[...new Set(refused.map((finding) => finding.criterion))].join(', ')}`;
+    await this.writeHaltMarker(
+      `${reason}\n`,
+      haltClass === 'mechanical' || haltClass === 'needs-human' ? haltClass : 'needs-human',
+    );
+    return reason;
+  }
+
   /**
    * A refusal whose prd_audit allowance is spent halts as a recoverable
    * kickback cap: the refused block stays visible, but the class, cap evidence
@@ -4715,6 +4789,7 @@ export class Conductor {
       /** Raw rows remain durable routing evidence for a consolidated join. */
       readonly consolidatedManualTestFailRows?: readonly string[];
     },
+    attemptRunId = this.currentRunId,
   ): Promise<
     | { kind: 'route'; target: StepName; hint: string; evidence: string }
     | {
@@ -4724,6 +4799,8 @@ export class Conductor {
         kickbackOutcome?: string;
         /** The planner did not bind every refusal; `detail` is the refused block itself. */
         refusalAdmissionRejected?: true;
+        /** A route-admission fence is routing deferral, never an over-scope decision request. */
+        routingFence?: true;
       }
     | { kind: 'none'; reason: string }
   > {
@@ -4761,7 +4838,7 @@ export class Conductor {
       // typed-verdict migration; normal lifecycle handling will request a
       // current audit instead.
       const current = await readCurrentPrdAuditVerdict(this.projectRoot, {
-        attemptRunId: this.currentRunId,
+        attemptRunId,
         config: this.config,
         git: this.prdAuditGit(),
       });
@@ -4782,7 +4859,7 @@ export class Conductor {
         return { kind: 'halt', haltClass: 'mechanical', detail };
       }
       prdAuditVerdict = current.value;
-      const overScopeRoute = await this.routeCurrentPrdAuditOverScope(state.feature_desc, state, this.currentRunId);
+      const overScopeRoute = await this.routeCurrentPrdAuditOverScope(state.feature_desc, state, attemptRunId);
       prdAuditOverScopeRoute = overScopeRoute;
       // Accepted-only scope closes the round. The scope router inspects only
       // OVER_SCOPE rows, so a recorded acceptance may coexist with FIXABLE or
@@ -4791,7 +4868,7 @@ export class Conductor {
       if (
         overScopeRoute.kind === 'record' &&
         remediationEvidenceSources.every((provenance) => provenance.gate === 'prd_audit') &&
-        !(await this.prdAuditHasNonScopeBlockingFindings(this.currentRunId))
+        !(await this.prdAuditHasNonScopeBlockingFindings(attemptRunId))
       ) {
         return { kind: 'none', reason: 'the recorded prd-audit scope acceptance closes the only blocking finding' };
       }
@@ -4829,7 +4906,7 @@ export class Conductor {
         source: remediationProjectionSource(hintSource.source),
         activePlanPath: (await this.getActivePlanPath()) ?? undefined,
         featureDesc: state.feature_desc,
-        attemptRunId: this.currentRunId,
+        attemptRunId,
         config: this.config,
         git: this.prdAuditGit(),
         includedGates: remediationEvidenceSources.map((evidence) => evidence.gate),
@@ -5714,9 +5791,16 @@ export class Conductor {
           kind: 'halt';
           detail: string;
           haltClass?: KickbackCapHaltClass | 'mechanical' | 'needs-human';
+          /** The caller must render this as a routing stop, not a scope refusal. */
+          routingFence?: true;
         }
       | undefined
     > {
+      // A fence says an already-open routed round must make progress before a
+      // new one can be admitted.  Record that stop at its shared producer so
+      // every consumer receives the same bounded mechanical escalation instead
+      // of each rendering a permanently-mechanical halt of its own.
+      const routingFenceHalt = (detail: string) => this.boundedRoutingFenceHalt(this.featureSlug!, detail);
       // A mixed or unresolvable work order belongs to the ordinary remediation
       // path, which owns its existing halt detail. Do not admit a routed round
       // for only the resolvable subset.
@@ -5859,7 +5943,12 @@ export class Conductor {
                   ? { consolidatedManualTestFail: hintSource.consolidatedManualTestFailRows }
                   : {}),
               });
-              if (routed.kind === 'halt') return { kind: 'halt', haltClass: 'needs-human', detail: routed.detail };
+              if (routed.kind === 'halt') {
+                const routingFence = 'fence' in routed && routed.fence === true;
+                return routingFence
+                  ? routingFenceHalt(routed.detail)
+                  : { kind: 'halt', haltClass: 'needs-human', detail: routed.detail };
+              }
               const lapSources = new Set(routedFixes.map((gap) => (gap as CriterionBoundRemediationGap).gateSource));
               const receipt = {
                 laps: {
@@ -5883,8 +5972,11 @@ export class Conductor {
                 roundId,
                 kind: 'audit',
               });
-              if (fence !== undefined)
-                return { kind: 'halt', haltClass: fence.fence ? 'mechanical' : 'needs-human', detail: fence.detail };
+              if (fence !== undefined) {
+                return fence.fence
+                  ? routingFenceHalt(fence.detail)
+                  : { kind: 'halt', haltClass: 'needs-human', detail: fence.detail };
+              }
               const created = await createRouteRecord(this.projectRoot, this.featureSlug, {
                 roundId,
                 kind: 'audit',
@@ -5909,12 +6001,11 @@ export class Conductor {
                   return 'persisted';
                 },
               });
-              if (admission.kind !== 'admitted')
-                return {
-                  kind: 'halt',
-                  haltClass: admission.fence ? 'mechanical' : 'needs-human',
-                  detail: admission.detail,
-                };
+              if (admission.kind !== 'admitted') {
+                return admission.fence
+                  ? routingFenceHalt(admission.detail)
+                  : { kind: 'halt', haltClass: 'needs-human', detail: admission.detail };
+              }
               return {
                 kind: 'route',
                 target: 'build',
@@ -6518,6 +6609,32 @@ export class Conductor {
     return { kind: 'settled' };
   }
 
+  /**
+   * Make a clean or effective-PASS build review terminal only after its
+   * durable remediation state has settled. Every success path shares this
+   * authority so a routed exit cannot run ahead of an invalid settlement.
+   */
+  private async settleCleanBuildReviewSuccess(
+    state: ConductState,
+    settlementLatch: { settled: boolean },
+  ): Promise<'settled' | 'halted'> {
+    if (settlementLatch.settled) return 'settled';
+    const settlement = await this.settleRemediationCasesOnCleanBuildReview();
+    if (settlement.kind === 'invalid') {
+      await this.haltSerialExecution({
+        reason: `build_review clean-PASS durable settlement halted: ${settlement.reason}`,
+        haltClass: 'needs-human',
+        persistState: async () => {
+          await this.persistPendingStateChanges(state, 'persist conductor transition');
+        },
+      });
+      return 'halted';
+    }
+    await this.persistAdjudicatedBuildReviewSettlement(state);
+    settlementLatch.settled = true;
+    return 'settled';
+  }
+
   /** Best-effort compact remediation context from existing build-review evidence. */
   private async buildReviewPointerLines(verdictRaw: unknown): Promise<readonly string[]> {
     const aggregate = parseBuildReviewAggregate(verdictRaw);
@@ -6753,10 +6870,11 @@ export class Conductor {
     state: ConductState,
     indexOf: (name: StepName) => number,
     requireSatisfiedRegion = false,
+    cursor?: ActiveChildResolution,
   ): Promise<{ readonly index: number; readonly activeChild?: ActiveChildLifecycleTarget } | 'halt' | undefined> {
     const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
     if (!slug || this.activeRegionChild === undefined) return undefined;
-    const execution = resolveExecutionChild(await this.resolveActiveChild(this.projectRoot, slug), slug);
+    const execution = resolveExecutionChild(cursor ?? (await this.resolveActiveChild(this.projectRoot, slug)), slug);
     if (
       execution.source !== 'routed-host' ||
       execution.roundId === undefined ||
@@ -6822,6 +6940,108 @@ export class Conductor {
   }
 
   /**
+   * Whole-feature validators must never overtake durable routed work.  This
+   * runs before their completed-state short circuit so resume cannot walk past
+   * a host which was green when the process stopped but whose exit was not yet
+   * committed.
+   */
+  private async guardOutstandingRoutedWork(
+    state: ConductState,
+    indexOf: (name: StepName) => number,
+  ): Promise<{ readonly index: number; readonly activeChild?: ActiveChildLifecycleTarget } | 'halt' | undefined> {
+    const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
+    if (!slug || this.config.stacked_prs?.route_whole_feature_fixes !== true) return undefined;
+
+    const leaf = await resolveSealedLeaf(this.projectRoot);
+    const outstanding = await routedWorkOutstanding(this.projectRoot, slug, {
+      routingEnabled: true,
+      sealedLeaf: leaf,
+    });
+    if (outstanding.kind === 'none') return undefined;
+
+    // `advanceTail` may already have written its optimistic convergence marker
+    // before a resumed loop reaches this guard.  Outstanding routing makes
+    // that marker provisional, not success; use the completion-refusal path
+    // so it is removed before the bounded routing halt is recorded.
+    if (await this.markerExists(DONE_MARKER)) {
+      await this.stopParkedForRouting(
+        {
+          kind: 'completion-refused',
+          reason: 'a routed round remains open',
+        },
+        state,
+      );
+      return 'halt';
+    }
+
+    // First give a fully satisfied marker host its normal exit. This is the
+    // only path which is allowed to close a host; reconciliation below merely
+    // chooses work that still needs its BUILD region.
+    if (outstanding.kind === 'child' || outstanding.kind === 'leaf-host') {
+      const cursor = await this.resolveActiveChild(this.projectRoot, slug);
+      const execution = resolveExecutionChild(cursor, slug);
+      if (execution.source === 'routed-host') {
+        await this.activateChildRegionState(state, execution.target.child, execution.target.isLeaf);
+        const exited = await this.continueRoutedHostExit(state, indexOf, true);
+        if (exited !== undefined) return exited;
+      }
+    }
+
+    // Reconciliation is the existing authority for both a pending host and a
+    // queued revalidation.  It may advance durable routing state, whereas the
+    // classifier above intentionally only reads it.
+    const reconciled = await reconcileRounds(this.projectRoot, slug);
+    const admission = await admitQueuedRevalidation({
+      worktree: this.projectRoot,
+      slug,
+      reconciled,
+    });
+    if (
+      admission.kind === 'none' &&
+      reconciled.kind === 'leaf-returned' &&
+      !(await routedRoundOpen(this.projectRoot, slug))
+    ) {
+      // Reconciliation can close the final markerless round before this
+      // guard selects a host. Restore the same root state that a live routed
+      // exit uses, then let whole-feature validation resume normally.
+      await this.restoreWholeFeatureState(state);
+      return { index: indexOf('manual_test') };
+    }
+    if (admission.kind === 'admitted' || admission.kind === 'continue' || admission.kind === 'busy') {
+      const cursor = await this.resolveActiveChild(this.projectRoot, slug);
+      const execution = resolveExecutionChild(cursor, slug);
+      if (execution.source === 'routed-host' || execution.source === 'revalidating') {
+        await this.activateChildRegionState(state, execution.target.child, execution.target.isLeaf);
+        // A repaired host can have a later region gate invalidated while its
+        // earlier evidence remains current.  Re-enter at the first actual
+        // unsatisfied gate, not the hard-coded start of the region.
+        const verdicts = await this.readGateVerdictOverlay();
+        const firstUnsatisfied = CHILD_REGION_STEPS.find((step) => !gateSatisfied(step, state, verdicts));
+        return {
+          index: indexOf(firstUnsatisfied ?? 'acceptance_specs'),
+          activeChild: execution.target,
+        };
+      }
+    }
+
+    const subject = outstanding.kind === 'unreadable' ? `unreadable ${outstanding.subject}` : outstanding.kind;
+    const admissionDetail =
+      admission.kind === 'stalled' || admission.kind === 'unavailable' || admission.kind === 'busy'
+        ? admission.detail
+        : undefined;
+    const reconciliationDetail =
+      reconciled.kind === 'stalled' || reconciled.kind === 'unavailable' ? reconciled.detail : undefined;
+    await this.stopParkedForRouting(
+      {
+        kind: 'parked',
+        reason: `routed work cannot advance (${subject}): ${admissionDetail ?? reconciliationDetail ?? 'no routing transition was available'}`,
+      },
+      state,
+    );
+    return 'halt';
+  }
+
+  /**
    * A selector parking decision is durable unfinished routing work, not a
    * successful terminal state.  Give it the same bounded, event-spine-backed
    * diagnostic as an in-loop round stall before returning control to daemon.
@@ -6858,10 +7078,10 @@ export class Conductor {
       cause.kind === 'completion-refused'
         ? `completion refused: ${cause.reason}`
         : `parked ${parked!.kind} ${parked!.subject}: ${cause.reason}`;
-    // `advanceTail` optimistically leaves DONE at selector convergence. A
-    // later completion fence can still reject an open routed round; do not
-    // let the daemon observe that provisional marker as terminal success.
-    if (cause.kind === 'completion-refused') {
+    // `advanceTail` can optimistically leave DONE at selector convergence.
+    // Any routed stop proves that convergence was provisional, whether the
+    // stop came from the terminal completion fence or selector parking.
+    if (cause.kind === 'completion-refused' || cause.kind === 'parked') {
       await unlinkFile(join(this.projectRoot, DONE_MARKER)).catch(() => {});
     }
     const stall = await recordRoundStall(
@@ -8979,6 +9199,20 @@ export class Conductor {
         breadcrumb.lastAdvancedStep = step.name;
         breadcrumb.exitIndex = i;
 
+        // A routed round is durable unfinished BUILD work. Check it before a
+        // whole-feature step can be skipped, dispatched, or joined into its
+        // validation group; otherwise a resumed run can validate the feature
+        // while a previous host is still waiting to exit.
+        if (i > indexOf('build_review')) {
+          const routed = await this.guardOutstandingRoutedWork(state, indexOf);
+          if (routed === 'halt') return;
+          if (routed !== undefined) {
+            activeChild = routed.activeChild;
+            i = routed.index - 1;
+            continue stepLoop;
+          }
+        }
+
         // BUILD is a per-child region. Resolve and enter it before checking
         // status, so a persisted child branch is always checked out before a
         // region step can be skipped or dispatched.
@@ -10515,6 +10749,19 @@ export class Conductor {
               // is named as a recoverable cap rather than a decision to revisit.
               const haltGroupedRefusalRework = async (outcome?: RefusalRoundOutcome): Promise<boolean> => {
                 if (prdAuditRoute?.kind !== 'over-scope-refusal-rework') return false;
+                if (outcome?.kind === 'halt' && outcome.routingFence) {
+                  const reason = await this.writeRoutingFenceRefusalHalt(
+                    outcome.detail,
+                    outcome.haltClass,
+                    prdAuditRoute.route.refused,
+                  );
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  await closeClassifiedPassingMembers();
+                  await this.emitLoopHalt(reason);
+                  process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
+                  return true;
+                }
                 if (outcome?.kind === 'halt' && outcome.haltClass === KICKBACK_CAP_HALT_CLASS) return false;
                 const blocker = outcome === undefined ? await refusalReworkAllowanceBlocker() : undefined;
                 const reason =
@@ -13560,18 +13807,16 @@ export class Conductor {
             }
 
             // Step runner returned success. Now verify real completion.
-            if (!(
-              this.verifyArtifacts &&
-              stepHasCompletionCheck(step.name, this.config) &&
-              step.name !== 'complexity'
-            )) {
+            const mustCheckCompletion =
+              this.verifyArtifacts && stepHasCompletionCheck(step.name, this.config) && step.name !== 'complexity';
+            if (!mustCheckCompletion) {
               // No completion check will run this iteration — nothing will
               // consume the in-flight attempt timestamp, so clear it now
               // rather than leaking it into a later completionCtx() call.
               this.currentAttemptStartedAt = undefined;
               this.currentRunId = undefined;
             }
-            if (this.verifyArtifacts && stepHasCompletionCheck(step.name, this.config) && step.name !== 'complexity') {
+            if (mustCheckCompletion) {
               if (step.name === 'acceptance_specs') {
                 // The dispatch has returned; publish that RED evidence is now
                 // awaiting its authoritative completion-gate verdict.
@@ -13938,6 +14183,7 @@ export class Conductor {
                           haltClass?: string;
                           kickbackOutcome?: string;
                           refusalAdmissionRejected?: true;
+                          routingFence?: true;
                         }
                       | { kind: 'none'; reason: string }
                       | undefined;
@@ -13957,6 +14203,7 @@ export class Conductor {
                           source: 'prd-audit',
                           evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }],
                         },
+                        dispatchRunId,
                       );
                     } catch {
                       // Append-side mechanical faults (e.g. a decision id that
@@ -13999,6 +14246,19 @@ export class Conductor {
                       await this.persistPendingStateChanges(state, 'persist conductor transition');
                       const prUrl = await this.surfaceRemediationPr(outcome.detail);
                       await this.emitLoopHalt(outcome.detail, prUrl);
+                      process.off('SIGINT', sigintHandler);
+                      process.off('SIGTERM', sigterm);
+                      return;
+                    }
+                    if (outcome?.kind === 'halt' && outcome.routingFence) {
+                      const reason = await this.writeRoutingFenceRefusalHalt(
+                        outcome.detail,
+                        outcome.haltClass,
+                        refusalRoute.refused,
+                      );
+                      await this.persistPendingStateChanges(state, 'persist conductor transition');
+                      const prUrl = await this.surfaceRemediationPr(reason);
+                      await this.emitLoopHalt(reason, prUrl);
                       process.off('SIGINT', sigintHandler);
                       process.off('SIGTERM', sigterm);
                       return;
@@ -14076,6 +14336,11 @@ export class Conductor {
               }
 
               if (!completion.done) {
+                // A build-review runner can succeed while its authoritative
+                // aggregate remains non-green.  Route that terminal condition
+                // through the adjudication/failure boundary instead of treating
+                // the provider success as a completed gate after retries end.
+                if (step.name === 'build_review') succeeded = false;
                 lastError = `Step '${step.name}' completed but completion check failed: ${completion.reason ?? 'unknown'}`;
                 if (step.name === 'build_review' && completion.reason?.startsWith(`${BUILD_REVIEW_VERDICT} `)) {
                   buildReviewSchemaFailureReason = completion.reason;
@@ -14786,7 +15051,12 @@ export class Conductor {
               }
             }
 
-            if (this.verifyArtifacts && stepHasCompletionCheck(step.name, this.config) && !succeeded) break;
+            if (
+              !succeeded &&
+              ((step.name === 'build_review' && lastError !== '') ||
+                (this.verifyArtifacts && stepHasCompletionCheck(step.name, this.config)))
+            )
+              break;
 
             succeeded = true;
             successOutput = result.output;
@@ -14811,838 +15081,146 @@ export class Conductor {
           }
         }
 
-        if (!succeeded) {
-          if (failedStepResult?.refusal) {
-            const { kind, reason } = failedStepResult.refusal;
-            await this.writeHaltMarker(reason + '\n', kind === 'seal' ? PROTECTED_ARTIFACT_HALT_CLASS : 'needs-human');
-            await this.recordStepRefusal(state, step.name, kind, reason, serialExecutionContext);
-            await this.emitLoopHalt(reason);
-            process.off('SIGINT', sigintHandler);
-            process.off('SIGTERM', sigterm);
-            return;
-          }
-          // Exhausted retries — route through the recovery menu.
-          await this.saveConductorStepStatus(state, step.name, 'failed');
-          if (step.name === 'build') {
-            const [headAfter, treeAfter, resolvedAfter] = await Promise.all([
-              currentCommitSha(this.projectRoot),
-              currentTreeHash(this.projectRoot),
-              countResolvedTasks(this.projectRoot, this.activeRegionChild),
-            ]);
-            const outcomeStore = await readBuildOutcome(this.projectRoot);
-            const note = lastError ? lastError.split('\n').slice(-200) : undefined;
-            const gate = await pendingBuildKickbackGate();
-            await this.recordBuildOutcome({
-              terminalOutcome: 'failed',
-              note,
-              gate,
-              rung: buildOutcomeRung(failedStepResult, lastBuildEscalation),
-              treeBefore: treeHashBeforeBuild,
-              treeAfter,
-              resolvedBefore: resolvedTasksBefore,
-              resolvedAfter,
-              headBefore: headShaBeforeBuild,
-              headAfter,
-              outcomeStore,
-            });
-          }
-          await emitTracked({
-            type: 'step_failed',
-            step: step.name,
-            error: lastError,
-            retryCount: attempt,
-            ...(failedStepResult?.exitFacts !== undefined && { providerExit: failedStepResult.exitFacts }),
-            ...(failedStepResult?.effort !== undefined && { effort: failedStepResult.effort }),
-            ...(state.complexity_tier !== undefined && { tier: state.complexity_tier }),
-            ...(failedStepResult?.observedIntervals ? { observedIntervals: failedStepResult.observedIntervals } : {}),
-            executionContext: serialExecutionContext,
-          });
-
-          // Auto mode is unattended — NEVER prompt or open a REPL. An advisory
-          // step's failure auto-skips so it can't block the run; a gating or
-          // structural failure (e.g. plan, build) stops the run for a human to
-          // inspect. This must come before the interactive recovery menu below.
-          if (this.mode === 'auto' || (step.name === 'build_review' && this.hasEnabledCustomBuildReviewPolicy())) {
-            if (step.enforcement === 'advisory') {
-              // Advisory means "does not block the pipeline" — it must NOT mean
-              // "reports success having produced nothing". Record the skip AND,
-              // for a verdict-bearing advisory step, the failure that
-              // caused it, so the durable gate record names the missing
-              // artifact instead of leaving a hole a reader can only read as
-              // "it passed".
-              await this.recordStepSkip(
-                state,
-                step,
-                `advisory step failed after ${attempt} attempt(s): ${lastError ?? 'no reason recorded'}`,
+        // An adjudication-settled build_review is a clean PASS for the rest of
+        // the loop.  Keep that fact through the shared success tail so it
+        // emits the same completion event and closes any active child region.
+        const buildReviewAdjudicationSettlement = { settled: false };
+        settledBuildReviewFailure: {
+          if (!succeeded) {
+            if (failedStepResult?.refusal) {
+              const { kind, reason } = failedStepResult.refusal;
+              await this.writeHaltMarker(
+                reason + '\n',
+                kind === 'seal' ? PROTECTED_ARTIFACT_HALT_CLASS : 'needs-human',
               );
-              continue;
+              await this.recordStepRefusal(state, step.name, kind, reason, serialExecutionContext);
+              await this.emitLoopHalt(reason);
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
+            }
+            const pendingBuildReviewAggregate =
+              step.name === 'build_review' &&
+              (await readFile(pipelinePathFor(this.projectRoot, 'build-review.json', this.activeRegionChild), 'utf8')
+                .then((content) => {
+                  try {
+                    const verdict = validateBuildReviewVerdict(JSON.parse(content));
+                    return verdict?.ok === true && verdict.verdict === 'FAIL';
+                  } catch {
+                    return false;
+                  }
+                })
+                .catch(() => false));
+            // Only a current raw FAIL is pending adjudication. Dispatch failures
+            // and stale/missing/non-failing verdicts remain terminal failures.
+            if (!pendingBuildReviewAggregate) {
+              await this.saveConductorStepStatus(state, step.name, 'failed');
+            }
+            if (step.name === 'build') {
+              const [headAfter, treeAfter, resolvedAfter] = await Promise.all([
+                currentCommitSha(this.projectRoot),
+                currentTreeHash(this.projectRoot),
+                countResolvedTasks(this.projectRoot, this.activeRegionChild),
+              ]);
+              const outcomeStore = await readBuildOutcome(this.projectRoot);
+              const note = lastError ? lastError.split('\n').slice(-200) : undefined;
+              const gate = await pendingBuildKickbackGate();
+              await this.recordBuildOutcome({
+                terminalOutcome: 'failed',
+                note,
+                gate,
+                rung: buildOutcomeRung(failedStepResult, lastBuildEscalation),
+                treeBefore: treeHashBeforeBuild,
+                treeAfter,
+                resolvedBefore: resolvedTasksBefore,
+                resolvedAfter,
+                headBefore: headShaBeforeBuild,
+                headAfter,
+                outcomeStore,
+              });
+            }
+            if (!pendingBuildReviewAggregate) {
+              await emitTracked({
+                type: 'step_failed',
+                step: step.name,
+                error: lastError,
+                retryCount: attempt,
+                ...(failedStepResult?.exitFacts !== undefined && { providerExit: failedStepResult.exitFacts }),
+                ...(failedStepResult?.effort !== undefined && { effort: failedStepResult.effort }),
+                ...(state.complexity_tier !== undefined && { tier: state.complexity_tier }),
+                ...(failedStepResult?.observedIntervals
+                  ? { observedIntervals: failedStepResult.observedIntervals }
+                  : {}),
+                executionContext: serialExecutionContext,
+              });
             }
 
-            // A runner's typed unretryable-input failure cannot be repaired by
-            // any step-specific recovery route. Preserve advisory skips above,
-            // then let the common terminal below record the needs-human halt.
-            let finishRemediationPlannerFault: string | undefined;
-            if (unretryableInputFailure === undefined) {
-              // prd-audit gap-aware routing (daemon only). A blocking audit halts
-              // today regardless of cause. Instead, distinguish WHO can close the
-              // gap: a pure implementation gap (impl-gap) is the daemon's to fix —
-              // route back to BUILD and re-audit (bounded by prdAuditSelfHeals so
-              // an impl-gap it can't actually close still halts). A product/plan
-              // gap (intended-drift, or an unclassifiable blocking row) needs a
-              // human DECIDE amendment the daemon can't run — halt for inspection.
-              // Manual-test FAIL routing (daemon only, #367): a manual_test that
-              // exhausted its retries with FAIL rows recorded is an implementation
-              // gap by definition — the routing question prd_audit needs an agent
-              // for (impl vs product-scope) has exactly one answer here, so route
-              // deterministically back to BUILD with the FAIL rows as the retry
-              // hint (no /remediate dispatch). A non-FAIL gate miss (missing/stale
-              // results — the skill never ran or recorded properly) carries no bug
-              // evidence to hand BUILD and falls through to the generic gating
-              // HALT below, as does an exhausted self-heal budget.
-              if (this.daemon && step.name === 'manual_test') {
-                const failRows = await readManualTestFailRows(this.projectRoot);
-                if (failRows.length > 0) {
-                  const outcome = await handleManualTestFailKickback(failRows);
-                  if (outcome.action === 'return') return;
-                  i = outcome.nextIndex;
-                  continue;
-                }
+            // Auto mode is unattended — NEVER prompt or open a REPL. An advisory
+            // step's failure auto-skips so it can't block the run; a gating or
+            // structural failure (e.g. plan, build) stops the run for a human to
+            // inspect. This must come before the interactive recovery menu below.
+            if (this.mode === 'auto' || (step.name === 'build_review' && this.hasEnabledCustomBuildReviewPolicy())) {
+              if (step.enforcement === 'advisory') {
+                // Advisory means "does not block the pipeline" — it must NOT mean
+                // "reports success having produced nothing". Record the skip AND,
+                // for a verdict-bearing advisory step, the failure that
+                // caused it, so the durable gate record names the missing
+                // artifact instead of leaving a hole a reader can only read as
+                // "it passed".
+                await this.recordStepSkip(
+                  state,
+                  step,
+                  `advisory step failed after ${attempt} attempt(s): ${lastError ?? 'no reason recorded'}`,
+                );
+                continue;
               }
 
-              // Native full-suite failure routing (Task 17): the verifier owns
-              // execution and redaction, so carry its typed reason + sanitized
-              // diagnostic into the existing bounded BUILD kickback loop. This
-              // is mechanical and therefore applies to every auto-mode run, not
-              // only daemon-hosted runs.
-              const fullSuiteFailure = failedStepResult?.fullSuiteVerification;
-              if (step.name === 'test_suite' && fullSuiteFailure?.status === 'FAILED') {
-                // The verifier's only semantic suite result is a completed command
-                // with a non-zero exit. Every other typed result says it could not
-                // establish that verdict, so preserve that infrastructure class
-                // rather than charging the code-repair kickback budget.
-                if (fullSuiteFailure.reason !== 'nonzero_exit') {
-                  const reason =
-                    `test_suite infrastructure failure (${fullSuiteFailure.reason}): ` +
-                    `${fullSuiteFailure.message}\nEvidence: .pipeline/test-suite-evidence.json`;
-                  await this.writeHaltMarker(reason + '\n', 'needs-human');
-                  await this.persistPendingStateChanges(state, 'persist conductor transition');
-                  const prUrl = await this.surfaceRemediationPr(reason);
-                  await this.emitLoopHalt(reason, prUrl);
-                  process.off('SIGINT', sigintHandler);
-                  process.off('SIGTERM', sigterm);
-                  return;
-                }
-                const evidence =
-                  `full-suite verification failed (${fullSuiteFailure.reason}): ` +
-                  `${fullSuiteFailure.message}\nEvidence: .pipeline/test-suite-evidence.json`;
-                const remediationRecord = await this.recordDeterministicGateRepair('test_suite', fullSuiteFailure);
-                const kickback = await consumeKickbackBudget('test_suite', evidence);
-                const count = kickback.entry.count;
-                if (!kickback.exhausted) {
-                  await emitTracked({
-                    type: 'kickback',
-                    from: 'test_suite',
-                    to: 'build',
-                    evidence,
-                    count,
-                  });
-                  pendingRetryHints.set(
-                    'build',
-                    `test_suite failed:\n${evidence}\n` +
-                      (remediationRecord ? `Recorded rebase-repair context: ${remediationRecord.id}\n` : '') +
-                      'Fix and commit the failure before the suite is re-run.',
-                  );
-                  if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) return;
-                  const navigationIndex = await this.navigateStateBack(state, 'build', steps);
-                  // The failed native gate is not covered by the done-only stale
-                  // cascade; restage it explicitly for the next BUILD lap.
-                  await this.commitStateChanges(state, 'restage test_suite after BUILD kickback', {
-                    test_suite: 'stale',
-                  });
-                  i = navigationIndex - 1; // for-loop i++ lands on build
-                  continue;
-                }
-                const reason =
-                  `test_suite failure unresolved after ${count} build kickback(s) ` +
-                  `(cap ${MAX_KICKBACKS_PER_GATE}): ${evidence}`;
-                await this.writeHaltMarker(reason + '\n', 'needs-human');
-                await this.persistPendingStateChanges(state, 'persist conductor transition');
-                const prUrl = await this.surfaceRemediationPr(reason);
-                await this.emitLoopHalt(reason, prUrl);
-                process.off('SIGINT', sigintHandler);
-                process.off('SIGTERM', sigterm);
-                return;
-              }
-
-              if (
-                step.name === 'build_review' &&
-                buildReviewMalformedCovers !== undefined &&
-                (this.daemon || this.mode === 'auto' || this.hasEnabledCustomBuildReviewPolicy())
-              ) {
-                const evidence = failedStepResult?.output ?? '';
-                const kickback = await consumeKickbackBudget('build_review', evidence);
-                const routedRepairCreditApplied =
-                  cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted
-                    ? await consumeCurrentRoutedRepairCredit()
-                    : false;
-                if (cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted && !routedRepairCreditApplied) {
-                  const reason = this.withActiveChild(
-                    `build_review cumulative kickback cap exceeded:\n` +
-                      renderKickbackBudgetView(kickback.entry, 'build_review', MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW),
-                  );
-                  const capEntry = await recordKickbackCapEvidence(
-                    this.projectRoot,
-                    'build_review',
-                    {
-                      consumed: kickback.entry.cumulative,
-                      limit: kickback.entry.effectiveLimit ?? MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
-                      latestReason: kickback.entry.lastReason,
-                    },
-                    this.activeRegionChild,
-                  );
-                  const markerResult = await this.writeHaltMarker(
-                    `${reason}\nKickback halt generation: ${capEntry.capEvidence!.haltGeneration}\n`,
-                    'needs-human',
-                  );
-                  if (markerResult.status === 'failed') {
-                    this.log?.(`halt marker write failed: ${markerResult.path} — ${markerResult.reason}`);
-                  }
-                  await this.persistPendingStateChanges(state, 'persist conductor transition');
-                  const prUrl = await this.surfaceRemediationPr(reason);
-                  await this.emitLoopHalt(reason, prUrl);
-                  process.off('SIGINT', sigintHandler);
-                  process.off('SIGTERM', sigterm);
-                  return;
-                }
-                if (!kickback.exhausted || routedRepairCreditApplied) {
-                  await emitTracked({
-                    type: 'kickback',
-                    from: 'build_review',
-                    to: 'build',
-                    evidence,
-                    count: kickback.entry.count,
-                    cumulativeCount: kickback.entry.cumulative,
-                  });
-                  pendingRetryHints.set(
-                    'build',
-                    `build_review found malformed Covers markers:\n${evidence}\n` +
-                      'Fix each token to an accepted form and commit before build_review re-runs.',
-                  );
-                  if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) return;
-                  await captureKickbackToBuildContext('build_review');
-                  const navigationIndex = await this.navigateStateBack(state, 'build', steps);
-                  await this.commitStateChanges(
-                    state,
-                    'restage BUILD review after malformed Covers kickback',
-                    filterRestageChanges(state, { build_review: 'stale', manual_test: 'stale' }),
-                  );
-                  i = navigationIndex - 1;
-                  continue;
-                }
-                const reason =
-                  `build_review malformed Covers markers unresolved after ${kickback.entry.count} ` +
-                  `build kickback(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${evidence}`;
-                await this.writeHaltMarker(reason + '\n', 'needs-human');
-                await this.persistPendingStateChanges(state, 'persist conductor transition');
-                const prUrl = await this.surfaceRemediationPr(reason);
-                await this.emitLoopHalt(reason, prUrl);
-                process.off('SIGINT', sigintHandler);
-                process.off('SIGTERM', sigterm);
-                return;
-              }
-
-              // build_review kickback (daemon only, Task 13): a FAIL verdict from
-              // the objective grader between `build` and `manual_test` is an
-              // implementation gap by definition — route back to BUILD with the
-              // grader's reasons as the retry hint. Uses the durable kickback ledger
-              // keyed by 'build_review' (the same anti-ping-pong mechanism the
-              // gate-driven tail uses for other gates), bounded by
-              // MAX_KICKBACKS_PER_GATE like the other self-heal loops.
-              if (
-                step.name === 'build_review' &&
-                (this.daemon || this.mode === 'auto' || this.hasEnabledCustomBuildReviewPolicy())
-              ) {
-                let verdictRaw: unknown = null;
-                try {
-                  verdictRaw = JSON.parse(
-                    await readFile(
-                      pipelinePathFor(this.projectRoot, 'build-review.json', this.activeRegionChild),
-                      'utf-8',
-                    ),
-                  );
-                } catch {
-                  /* missing/unreadable — falls through to generic HALT below */
-                }
-                const parsed = verdictRaw !== null ? validateBuildReviewVerdict(verdictRaw) : null;
-                if (parsed?.ok && parsed.verdict === 'FAIL') {
-                  // #1740 follow-up: this raw read bypasses the completion
-                  // predicate's lap-freshness guard, so without this check a
-                  // FAIL aggregate from a PRIOR lap re-raises its (already
-                  // fixed) findings as kickbacks forever — the stored lapId
-                  // never changes while HEAD moves every lap. Treat a stale-lap
-                  // aggregate as no verdict at all: discard it and re-land on
-                  // build_review so the grader writes a brand-new verdict.
-                  const staleLap = await discardStaleLapBuildReviewFail(
-                    this.projectRoot,
-                    verdictRaw,
-                    undefined,
-                    this.activeRegionChild,
-                  );
-                  if (staleLap) {
-                    staleLapDiscards += 1;
-                    if (staleLapDiscards > 1) {
-                      const reason =
-                        `build_review stale-lap FAIL persists after discard: the grader rewrote an ` +
-                        `aggregate for prior lap ${staleLap.storedLapId} while HEAD is at ` +
-                        `${staleLap.currentLapId} — re-landing again would loop; halting for inspection`;
-                      await this.writeHaltMarker(reason + '\n', 'needs-human');
-                      await this.persistPendingStateChanges(state, 'persist conductor transition');
-                      const prUrl = await this.surfaceRemediationPr(reason);
-                      await this.emitLoopHalt(reason, prUrl);
-                      process.off('SIGINT', sigintHandler);
-                      process.off('SIGTERM', sigterm);
-                      return;
-                    }
-                    this.log?.(
-                      `build_review FAIL aggregate belongs to prior lap ${staleLap.storedLapId} ` +
-                        `(current ${staleLap.currentLapId}) — discarded; a prior lap's FAIL is never kicked back`,
-                    );
-                    await emitTracked({
-                      type: 'build_review_stale_aggregate',
-                      ...staleLap,
-                    });
-                    await this.saveConductorStepStatus(state, step.name, 'failed');
-                    await this.persistPendingStateChanges(state, 'persist conductor transition');
-                    i = i - 1; // for-loop i++ re-lands on build_review
+              // A runner's typed unretryable-input failure cannot be repaired by
+              // any step-specific recovery route. Preserve advisory skips above,
+              // then let the common terminal below record the needs-human halt.
+              let finishRemediationPlannerFault: string | undefined;
+              if (unretryableInputFailure === undefined) {
+                // prd-audit gap-aware routing (daemon only). A blocking audit halts
+                // today regardless of cause. Instead, distinguish WHO can close the
+                // gap: a pure implementation gap (impl-gap) is the daemon's to fix —
+                // route back to BUILD and re-audit (bounded by prdAuditSelfHeals so
+                // an impl-gap it can't actually close still halts). A product/plan
+                // gap (intended-drift, or an unclassifiable blocking row) needs a
+                // human DECIDE amendment the daemon can't run — halt for inspection.
+                // Manual-test FAIL routing (daemon only, #367): a manual_test that
+                // exhausted its retries with FAIL rows recorded is an implementation
+                // gap by definition — the routing question prd_audit needs an agent
+                // for (impl vs product-scope) has exactly one answer here, so route
+                // deterministically back to BUILD with the FAIL rows as the retry
+                // hint (no /remediate dispatch). A non-FAIL gate miss (missing/stale
+                // results — the skill never ran or recorded properly) carries no bug
+                // evidence to hand BUILD and falls through to the generic gating
+                // HALT below, as does an exhausted self-heal budget.
+                if (this.daemon && step.name === 'manual_test') {
+                  const failRows = await readManualTestFailRows(this.projectRoot);
+                  if (failRows.length > 0) {
+                    const outcome = await handleManualTestFailKickback(failRows);
+                    if (outcome.action === 'return') return;
+                    i = outcome.nextIndex;
                     continue;
                   }
-                  const aggregate = parseBuildReviewAggregate(verdictRaw);
-                  // The compatibility selector lives at the conductor boundary:
-                  // scalar/legacy verdicts retain the historical raw route, while
-                  // a current raw aggregate defaults to the post-join path.
-                  if (aggregate && this.buildReviewAdjudicationEnabled()) {
-                    const effective = await (this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict)(
-                      this.projectRoot,
-                      verdictRaw,
-                      {
-                        emit: async (event) => {
-                          await this.events.emit(event);
-                        },
-                        minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
-                        minSeverity: buildReviewSeverityThresholds(resolveBuildReviewConfig(this.config)),
-                        child: this.activeRegionChild,
-                        adjudicationEnabled: this.buildReviewAdjudicationEnabled(),
-                      },
-                    );
-                    // Old raw aggregate fixtures (and pre-adjudication callers)
-                    // have no worktree identity from which a feature-local case
-                    // store can be selected.  They retain the exact historical
-                    // raw lane.  Every other disposition/state failure is still
-                    // authoritative and therefore fail-closed.
-                    const legacyAdjudicationInput = !effective.ok
-                      ? effective.reason === 'build-review feature identity is unavailable'
-                      : !('feature' in effective) || effective.feature === undefined;
-                    if (legacyAdjudicationInput && this.hasEnabledCustomBuildReviewPolicy()) {
-                      const reason =
-                        'build_review custom-capability error: compatibility adjudication requires feature identity';
-                      await this.writeHaltMarker(reason + '\n', 'needs-human');
-                      await this.persistPendingStateChanges(state, 'persist conductor transition');
-                      await this.emitLoopHalt(reason);
-                      return;
-                    }
-                    if (!effective.ok && !legacyAdjudicationInput) {
-                      const reason = `build_review adjudication halted: ${effective.reason}`;
-                      await this.writeHaltMarker(reason + '\n', 'needs-human');
-                      await this.persistPendingStateChanges(state, 'persist conductor transition');
-                      await this.emitLoopHalt(reason);
-                      return;
-                    }
-                    if (effective.ok && !legacyAdjudicationInput) {
-                      // Only uncovered coverage faults pin the mechanical lane.
-                      // Mapping an undifferentiated list to `retry` treated a
-                      // branch the operator had already covered with an exact
-                      // reduced-coverage decision as a live fault, so a
-                      // content-complete PASS was unreachable.
-                      const uncoveredInfrastructure = effective.effective.uncoveredInfrastructureFailureRubrics;
-                      const uncoveredScopeIncomplete = effective.effective.uncoveredScopeIncompleteRubrics ?? [];
-                      const mechanicalLedger = await readKickbackLedger(this.projectRoot, this.activeRegionChild);
-                      if (isUnreadableKickbackGate(mechanicalLedger, 'build_review')) {
-                        const reason = `build_review adjudication halted: kickback ledger gate 'build_review' is unreadable`;
-                        await this.writeHaltMarker(reason + '\n', 'needs-human');
-                        await this.persistPendingStateChanges(state, 'persist conductor transition');
-                        await this.emitLoopHalt(reason);
-                        return;
-                      }
-                      const mechanicalFaults = mechanicalLedger.gates.build_review?.mechanicalFaults ?? 0;
-                      const mechanical =
-                        uncoveredInfrastructure.length === 0 && uncoveredScopeIncomplete.length === 0
-                          ? 'healthy'
-                          : mechanicalFaults >= MAX_MECHANICAL_FAULTS_BUILD_REVIEW
-                            ? 'halt'
-                            : 'retry';
-                      // Covered faults can release retry routing, but they never
-                      // prove that a case source was absent. Keep that evidence
-                      // boundary distinct from the retry/halt mechanical lane.
-                      const absenceRetirementMechanicallyHealthy =
-                        isBuildReviewLapHealthyForAbsenceRetirement(aggregate);
-                      const resolveOperatorResolvedFindingIds = async (): Promise<ReadonlySet<string>> => {
-                        const latest = await (this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict)(
-                          this.projectRoot,
-                          verdictRaw,
-                          {
-                            emit: async (event) => {
-                              await this.events.emit(event);
-                            },
-                            minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
-                            minSeverity: buildReviewSeverityThresholds(resolveBuildReviewConfig(this.config)),
-                            child: this.activeRegionChild,
-                            adjudicationEnabled: this.buildReviewAdjudicationEnabled(),
-                          },
-                        );
-                        if (!latest.ok) throw new Error(latest.reason);
-                        return new Set(latest.effective.acceptedFindingIds);
-                      };
-                      // Carry authority is the feature's current disposition
-                      // ledger, not merely the current lap's accepted ids.  The
-                      // origin necessarily belongs to an earlier finding id.
-                      const resolveEffectiveAcceptedSourceIds = async (): Promise<ReadonlySet<string>> => {
-                        const listed = await new BuildReviewDispositionStore(this.projectRoot).list(effective.feature);
-                        if (!listed.ok) throw new Error(listed.message);
-                        return new Set(
-                          listed.records
-                            .filter(
-                              (record) =>
-                                !('contractVersion' in record.finding.canonicalPayload) ||
-                                record.finding.canonicalPayload.contractVersion ===
-                                  CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
-                            )
-                            .map((record) => `${record.finding.canonicalPayload.rubric}:${record.finding.id}`),
-                        );
-                      };
-                      const trackerRepo = await this.resolveTrackerRepoSlug();
-                      // A deferred issue is creation, not an existing-resource
-                      // mutation. Obtain fresh feature provenance now and mint the
-                      // opaque, one-shot capability before exposing a filing path
-                      // to the coordinator. Missing state/evidence deliberately
-                      // leaves `fileIssue` absent, so the coordinator can read for
-                      // an existing marker but cannot create a new remote issue.
-                      const featureCreationAuthority =
-                        trackerRepo === undefined
-                          ? undefined
-                          : await (async () => {
-                              const slug = this.featureSlug ?? state.feature_desc;
-                              const branch = state.worktree_branch ?? this.worktreeBranch;
-                              if (!slug || !branch) return undefined;
-                              const mutation = await this.resolveFeatureCreationMutation({
-                                cwd: this.projectRoot,
-                                slug,
-                                branch,
-                                git: (args) => this.git(args, { cwd: this.projectRoot }),
-                                gh: this.gh,
-                              });
-                              return mutation
-                                ? authorizeGithubFeatureIssueCreation({ repository: trackerRepo, mutation })
-                                : undefined;
-                            })();
-                      const resolvedReviewConfig = resolveBuildReviewConfig(this.config);
-                      const floors = buildReviewConfidenceFloors(resolvedReviewConfig);
-                      const suppressedFindingIds = effective.effective.suppressedFindingIds ?? [];
-                      const advisoryFindingIds = effective.effective.advisoryFindingIds ?? [];
-                      const outOfDeltaFindingIds = effective.effective.outOfDeltaFindingIds ?? [];
-                      // One shared projection with the effective-verdict seam that
-                      // already persisted these rows for this lap; the coordinator
-                      // re-runs that same idempotent upsert rather than owning a
-                      // second, divergent write.
-                      const suppressions = projectBuildReviewSuppressionEntries({
-                        aggregate,
-                        suppressedFindingIds,
-                        floors,
-                      });
-                      const advisories = projectBuildReviewAdvisoryEntries({
-                        aggregate,
-                        advisoryFindingIds,
-                        thresholds: buildReviewSeverityThresholds(resolvedReviewConfig),
-                      });
-                      // Provenance regions are resolved against the immutable
-                      // diff named by each current artifact, never against an
-                      // anchor hash that may be a test title or custom region.
-                      const changedFilesBySource = new Map<
-                        string,
-                        Promise<ReturnType<typeof deriveChangedFileReferences> | undefined>
-                      >();
-                      const artifactFacts = await readBuildReviewAdjudicationArtifactFacts(
-                        this.projectRoot,
-                        aggregate,
-                        {
-                          changedFilesForArtifact: async (artifact) => {
-                            const scope = artifact.reviewScope;
-                            if (scope === undefined || 'kind' in scope) return undefined;
-                            const key = `${scope.mergeBase}..${scope.headSha}`;
-                            let changedFiles = changedFilesBySource.get(key);
-                            if (changedFiles === undefined) {
-                              changedFiles = this.git(['diff', '--no-ext-diff', key], { cwd: this.projectRoot })
-                                .then((result) => deriveChangedFileReferences(result.stdout))
-                                .catch(() => undefined);
-                              changedFilesBySource.set(key, changedFiles);
-                            }
-                            return changedFiles;
-                          },
-                        },
-                        this.activeRegionChild,
-                      );
-                      // Settlement gate: `verdictRaw` is the aggregate the join
-                      // recorded after every branch settled; the shared operation
-                      // refuses anything that does not parse as that complete lap.
-                      const outcome = await applyBuildReviewOutcome({
-                        recordedAggregate: verdictRaw,
-                        adjudication: {
-                          projectRoot: this.projectRoot,
-                          feature: effective.feature,
-                          ...(this.activeRegionChild === undefined ? {} : { child: this.activeRegionChild }),
-                          operatorResolvedFindingIds: new Set(effective.effective.acceptedFindingIds),
-                          suppressedFindingIds: new Set(suppressedFindingIds),
-                          advisoryFindingIds: new Set(advisoryFindingIds),
-                          outOfDeltaFindingIds: new Set(outOfDeltaFindingIds),
-                          declaredSeverityThresholds: buildReviewSeverityThresholds(resolvedReviewConfig),
-                          suppressions: [...suppressions, ...advisories],
-                          resolveOperatorResolvedFindingIds,
-                          resolveEffectiveAcceptedSourceIds,
-                          mechanical,
-                          absenceRetirementMechanicallyHealthy,
-                          priorFindingDigests: artifactFacts.priorFindingDigests,
-                          ...(artifactFacts.provenance === undefined ? {} : { provenance: artifactFacts.provenance }),
-                          chargeInput: {
-                            treeHash: await currentTreeHash(this.projectRoot),
-                            resolvedCount: await countResolvedTasks(this.projectRoot, this.activeRegionChild),
-                            reason: buildReviewFailureDetails(parsed).join('\n') || 'build_review adjudicated action',
-                          },
-                          ...(this.buildReviewChargeEffect === undefined
-                            ? {}
-                            : { chargeEffect: this.buildReviewChargeEffect }),
-                          judge: async (context) => {
-                            const requestedMode =
-                              typeof context === 'object' &&
-                              context !== null &&
-                              'mode' in context &&
-                              ((context as { mode?: unknown }).mode === 'case-v1' ||
-                                (context as { mode?: unknown }).mode === 'case-v2')
-                                ? (context as { mode: 'case-v1' | 'case-v2' }).mode
-                                : 'case-v1';
-                            const dispatched = await this.stepRunner.run('remediate', state, {
-                              retryReason: `Adjudicate this complete build-review context only; write ${requestedMode} remediation output.\n${JSON.stringify(context)}`,
-                            });
-                            if (!dispatched.success) {
-                              throw new RemediateDispatchError(dispatched.provider ?? 'unknown', dispatched.exitFacts);
-                            }
-                            const judgement = await readRemediationCaseJudgement(
-                              this.projectRoot,
-                              state.session_started_at,
-                            );
-                            if (!judgement.ok) throw new Error(judgement.reason);
-                            return judgement.judgement;
-                          },
-                          // Task 18 Done-when 4: the deferral path is only reachable
-                          // when the production call carries all three dependencies.
-                          // Omitting them left marker lookup, issue filing, and
-                          // deferral completion dead in production while an injected
-                          // coordinator fixture kept passing.
-                          ...(trackerRepo === undefined
-                            ? {}
-                            : {
-                                repo: trackerRepo,
-                                tracker: createGithubTrackerClient(this.gh, { events: this.events }),
-                                ...(featureCreationAuthority === undefined
-                                  ? {}
-                                  : {
-                                      fileIssue: async (issue: {
-                                        title: string;
-                                        body: string;
-                                        priority: 'critical' | 'high' | 'medium' | 'low';
-                                      }) => {
-                                        const filed = await fileIntakeIssue(
-                                          {
-                                            title: issue.title,
-                                            body: issue.body,
-                                            priority: issue.priority,
-                                            repo: trackerRepo,
-                                          },
-                                          {
-                                            creation: {
-                                              authority: featureCreationAuthority,
-                                              operations: createIntakeFilingOperations(
-                                                this.gh,
-                                                this.projectRoot,
-                                                featureCreationAuthority,
-                                                this.events,
-                                              ),
-                                            },
-                                          },
-                                        );
-                                        return { issueUrl: filed.issueUrl };
-                                      },
-                                    }),
-                              }),
-                          emit: async (event) => {
-                            await this.events.emit(event);
-                          },
-                          emitOrThrow: async (event) => this.events.emitOrThrow(event),
-                        },
-                      });
-                      if (
-                        outcome.kind === 'decision-stop' ||
-                        (outcome.kind === 'infrastructure' && outcome.status === 'halt')
-                      ) {
-                        const detail =
-                          outcome.kind === 'decision-stop'
-                            ? [
-                                outcome.detail,
-                                describeBuildReviewDecisionStops(outcome.stops),
-                                ...(outcome.remainingInfrastructure
-                                  ? [BUILD_REVIEW_REMAINING_INFRASTRUCTURE_NOTE]
-                                  : []),
-                              ]
-                                .filter((line) => line !== '')
-                                .join('\n')
-                            : [
-                                outcome.reason,
-                                describeBuildReviewScopeIncompleteFaults(
-                                  aggregate.scopeIncomplete.filter((fault) =>
-                                    uncoveredScopeIncomplete.includes(fault.rubric),
-                                  ),
-                                ),
-                              ]
-                                .filter((line) => line !== '')
-                                .join('\n');
-                        const trace = outcome.trace;
-                        const reason = `build_review adjudication halted: ${detail}` + (trace ? `\n${trace}` : '');
-                        await this.writeHaltMarker(reason + '\n', 'needs-human');
-                        await this.persistPendingStateChanges(state, 'persist conductor transition');
-                        await this.emitLoopHalt(reason);
-                        return;
-                      }
-                      if (outcome.kind === 'settled') {
-                        const settlement = await this.settleRemediationCasesOnCleanBuildReview();
-                        if (settlement.kind === 'invalid') {
-                          await this.haltSerialExecution({
-                            reason: `build_review clean-PASS durable settlement halted: ${settlement.reason}`,
-                            haltClass: 'needs-human',
-                            persistState: async () => {
-                              await this.persistPendingStateChanges(state, 'persist conductor transition');
-                            },
-                          });
-                          return;
-                        }
-                        await this.saveConductorStepStatus(state, step.name, 'done');
-                        this.log?.(outcome.trace);
-                        continue;
-                      }
-                      if (outcome.kind === 'repair') {
-                        const ledger = await readKickbackLedger(this.projectRoot, this.activeRegionChild);
-                        const count = ledger.gates.build_review?.count ?? 1;
-                        const evidence =
-                          `build-review admitted repair ${outcome.caseIds.join(', ')}\n${outcome.trace}` +
-                          (outcome.remainingInfrastructure ? `\n${BUILD_REVIEW_REMAINING_INFRASTRUCTURE_NOTE}` : '');
-                        await emitTracked({ type: 'kickback', from: 'build_review', to: 'build', evidence, count });
-                        pendingRetryHints.set('build', `build_review adjudication: ${evidence}`);
-                        if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) return;
-                        await captureKickbackToBuildContext('build_review');
-                        const navigationIndex = await this.navigateStateBack(state, 'build', steps);
-                        await this.commitStateChanges(
-                          state,
-                          'restage BUILD review after adjudicated kickback',
-                          filterRestageChanges(state, { build_review: 'stale', manual_test: 'stale' }),
-                        );
-                        i = navigationIndex - 1;
-                        continue;
-                      }
-                      // adr-2026-08-29 D3.2: no actionable content route remains
-                      // and coverage is uncovered. That is the MECHANICAL
-                      // lane — re-land build_review under its own bounded
-                      // allowance. Falling through to the legacy raw route spent a
-                      // semantic kickback and re-sent content the judgement had
-                      // already finalized back to BUILD as raw reasons.
-                      const uncoveredRubric = uncoveredInfrastructure[0] ?? uncoveredScopeIncomplete[0];
-                      const uncoveredResult = uncoveredRubric ? aggregate.results[uncoveredRubric] : undefined;
-                      const scopeFault =
-                        uncoveredRubric && uncoveredScopeIncomplete.includes(uncoveredRubric)
-                          ? aggregate.scopeIncomplete.find((fault) => fault.rubric === uncoveredRubric)
-                          : undefined;
-                      const bumpedMechanicalFaults = await bumpMechanicalFaultsInLedgerResult(
-                        this.projectRoot,
-                        'build_review',
-                        uncoveredRubric && uncoveredResult?.kind === 'infrastructure-failure'
-                          ? {
-                              rubric: uncoveredRubric,
-                              reason: uncoveredResult.reason,
-                              detail: uncoveredResult.detail ?? 'uncovered infrastructure failure on a settled lap',
-                              lapId: aggregate.lapId,
-                            }
-                          : scopeFault === undefined
-                            ? undefined
-                            : {
-                                rubric: scopeFault.rubric,
-                                reason: scopeFault.reason,
-                                detail: scopeFault.detail,
-                                lapId: aggregate.lapId,
-                              },
-                        this.activeRegionChild,
-                      );
-                      if (bumpedMechanicalFaults.kind === 'unreadable') {
-                        const reason = `build_review adjudication halted: ${bumpedMechanicalFaults.reason}`;
-                        await this.writeHaltMarker(reason + '\n', 'needs-human');
-                        await this.persistPendingStateChanges(state, 'persist conductor transition');
-                        await this.emitLoopHalt(reason);
-                        return;
-                      }
-                      await this.saveConductorStepStatus(state, step.name, 'failed');
-                      await this.persistPendingStateChanges(state, 'persist conductor transition');
-                      i = i - 1; // for-loop i++ re-lands on build_review
-                      continue;
-                    }
-                  }
-                  // A scalar/legacy verdict never entered the shared authority above.
-                  // With an enabled custom member it is refused, never raw-routed (D10).
-                  if (!aggregate && this.hasEnabledCustomBuildReviewPolicy()) {
+                }
+
+                // Native full-suite failure routing (Task 17): the verifier owns
+                // execution and redaction, so carry its typed reason + sanitized
+                // diagnostic into the existing bounded BUILD kickback loop. This
+                // is mechanical and therefore applies to every auto-mode run, not
+                // only daemon-hosted runs.
+                const fullSuiteFailure = failedStepResult?.fullSuiteVerification;
+                if (step.name === 'test_suite' && fullSuiteFailure?.status === 'FAILED') {
+                  // The verifier's only semantic suite result is a completed command
+                  // with a non-zero exit. Every other typed result says it could not
+                  // establish that verdict, so preserve that infrastructure class
+                  // rather than charging the code-repair kickback budget.
+                  if (fullSuiteFailure.reason !== 'nonzero_exit') {
                     const reason =
-                      'build_review custom-capability error: the FAIL verdict carries no settled aggregate for the shared adjudication authority';
-                    await this.writeHaltMarker(reason + '\n', 'needs-human');
-                    await this.persistPendingStateChanges(state, 'persist conductor transition');
-                    await this.emitLoopHalt(reason);
-                    return;
-                  }
-                  const failureDetails = buildReviewFailureDetails(parsed);
-                  let buildReviewBeforeConsumption: KickbackGateEntry | undefined;
-                  let buildReviewKickbackCharged = false;
-                  // The raw aggregate can outlive a concurrent operator acceptance.
-                  // Every exit from this raw-FAIL block re-reads the effective
-                  // verdict immediately before it exits, so no early snapshot can
-                  // turn accepted risk into a rework route or a HALT.
-                  const reenterBuildReviewIfEffectivePass = async (): Promise<boolean> => {
-                    try {
-                      const resolution = await (
-                        this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
-                      )(this.projectRoot, verdictRaw, {
-                        emit: async (event) => {
-                          await this.events.emit(event);
-                        },
-                        minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
-                        minSeverity: buildReviewSeverityThresholds(resolveBuildReviewConfig(this.config)),
-                        child: this.activeRegionChild,
-                        adjudicationEnabled: this.buildReviewAdjudicationEnabled(),
-                      });
-                      if (!rawBuildReviewFailIsEffectivelyAccepted(resolution)) return false;
-                    } catch {
-                      // Resolver failures retain the legacy raw-aggregate exit.
-                      return false;
-                    }
-
-                    this.log?.(
-                      'build_review raw FAIL dropped: every graded finding was accepted ' +
-                        'by operator disposition at exit time; re-running build_review.',
-                    );
-                    if (buildReviewKickbackCharged) {
-                      await refundBuildReviewKickback(
-                        this.projectRoot,
-                        buildReviewBeforeConsumption,
-                        this.activeRegionChild,
-                      );
-                    }
-                    await this.saveConductorStepStatus(state, step.name, 'failed');
-                    await this.persistPendingStateChanges(state, 'persist conductor transition');
-                    i = i - 1; // for-loop i++ re-lands on build_review
-                    return true;
-                  };
-                  // Task 8 (build-review-grades-plan-vs-diff-against-a-stale-o):
-                  // scope-FAIL disposition, BEFORE any rework routing decision
-                  // below (and before the #569 no_task_progress remediation
-                  // routing this same conductor uses elsewhere for build
-                  // stalls — that routing never applies to build_review, but
-                  // ordering here still matters relative to this block's own
-                  // kickback-cap HALT further down). `runScopeFailDisposition`
-                  // re-probes a fresh base (read-only — never mutates git
-                  // history, Story 6) and returns one of:
-                  //   - `kicked-to-build`: routes to build rework unchanged
-                  //     (today's behavior) — falls through below.
-                  //   - `invalidated`: the FAIL graded a stale view; discard
-                  //     the verdict and re-run build_review against fresh
-                  //     inputs instead of dispatching rework (bounded to once
-                  //     per feature-session by the persisted regrade counter).
-                  //   - `halt`: a SECOND stale-mirage detection this session —
-                  //     never re-enters grading; HALT with the graded/fresh
-                  //     base shas, flagged paths, and regrade count consumed.
-                  // Fully guarded: a classification failure (e.g. offline)
-                  // must never block or alter today's kickback behavior.
-                  let scopeFailDisposition: Disposition | undefined;
-                  if (lastBuildReviewMergeBase) {
-                    try {
-                      scopeFailDisposition = await runScopeFailDisposition({
-                        git: makeGitRunner(this.projectRoot),
-                        root: this.projectRoot,
-                        gradedBaseSha: lastBuildReviewMergeBase,
-                        flaggedPaths: extractFlaggedPaths(failureDetails),
-                        ...(this.activeRegionChild === undefined
-                          ? {}
-                          : {
-                              childBase: {
-                                slug: state.feature_desc ?? this.featureSlug ?? this.featureDesc ?? '',
-                                child: this.activeRegionChild,
-                              },
-                            }),
-                        regrade: async () => 'pass',
-                      });
-                    } catch {
-                      // Never block/alter kickback routing over disposition
-                      // classification failures — falls through to genuine
-                      // routing below either way.
-                    }
-                  }
-
-                  if (scopeFailDisposition?.kind === 'halt') {
-                    if (await reenterBuildReviewIfEffectivePass()) continue;
-                    const haltBody =
-                      `build_review scope-FAIL disposition HALT: a second stale-mirage ` +
-                      `detection this feature-session — never re-enters grading.\n` +
-                      `gradedBaseSha: ${scopeFailDisposition.gradedBaseSha}\n` +
-                      `freshBaseSha: ${scopeFailDisposition.freshBaseSha}\n` +
-                      `flaggedPaths: ${scopeFailDisposition.flaggedPaths.join(', ')}\n` +
-                      `regradeCount: ${scopeFailDisposition.regradeCount}\n`;
-                    await this.writeHaltMarker(haltBody, 'needs-human');
-                    await this.persistPendingStateChanges(state, 'persist conductor transition');
-                    const reason =
-                      'build_review scope-FAIL disposition HALT: second stale-mirage ' +
-                      'detection this feature-session';
-                    const prUrl = await this.surfaceRemediationPr(reason);
-                    await this.emitLoopHalt(reason, prUrl);
-                    process.off('SIGINT', sigintHandler);
-                    process.off('SIGTERM', sigterm);
-                    return;
-                  }
-
-                  if (scopeFailDisposition?.kind === 'invalidated') {
-                    if (await reenterBuildReviewIfEffectivePass()) continue;
-                    await removeBuildReviewVerdict(this.projectRoot, this.activeRegionChild).catch(() => {
-                      /* best-effort removal */
-                    });
-                    const regradeCount = await readRegradeCount(this.projectRoot).catch(() => 0);
-                    await emitTracked({
-                      type: 'build_review_stale_mirage_regrade',
-                      mergeBase: lastBuildReviewMergeBase ?? '',
-                      regradeCount,
-                    });
-                    await this.saveConductorStepStatus(state, step.name, 'failed');
-                    await this.persistPendingStateChanges(state, 'persist conductor transition');
-                    i = i - 1; // for-loop i++ re-lands on build_review
-                    continue;
-                  }
-
-                  // D2: a build_review FAIL that re-enters right after a prior
-                  // kickback-to-build cycle made zero net progress on an
-                  // unchanged verdict escalates to HALT on this cycle instead
-                  // of spending another kickback toward the cap.
-                  const escalation = await checkKickbackToBuildEscalation('build_review');
-                  if (escalation.halt) {
-                    if (await reenterBuildReviewIfEffectivePass()) continue;
-                    const reason = `build_review kickback-to-build no-op: ${escalation.reason}`;
+                      `test_suite infrastructure failure (${fullSuiteFailure.reason}): ` +
+                      `${fullSuiteFailure.message}\nEvidence: .pipeline/test-suite-evidence.json`;
                     await this.writeHaltMarker(reason + '\n', 'needs-human');
                     await this.persistPendingStateChanges(state, 'persist conductor transition');
                     const prUrl = await this.surfaceRemediationPr(reason);
@@ -15652,17 +15230,59 @@ export class Conductor {
                     return;
                   }
                   const evidence =
-                    failureDetails.length > 0 ? failureDetails.join('\n') : 'grader returned FAIL without reasons';
-                  const kickback = await consumeKickbackBudget('build_review', evidence);
-                  buildReviewBeforeConsumption = kickback.before;
-                  buildReviewKickbackCharged = true;
+                    `full-suite verification failed (${fullSuiteFailure.reason}): ` +
+                    `${fullSuiteFailure.message}\nEvidence: .pipeline/test-suite-evidence.json`;
+                  const remediationRecord = await this.recordDeterministicGateRepair('test_suite', fullSuiteFailure);
+                  const kickback = await consumeKickbackBudget('test_suite', evidence);
                   const count = kickback.entry.count;
+                  if (!kickback.exhausted) {
+                    await emitTracked({
+                      type: 'kickback',
+                      from: 'test_suite',
+                      to: 'build',
+                      evidence,
+                      count,
+                    });
+                    pendingRetryHints.set(
+                      'build',
+                      `test_suite failed:\n${evidence}\n` +
+                        (remediationRecord ? `Recorded rebase-repair context: ${remediationRecord.id}\n` : '') +
+                        'Fix and commit the failure before the suite is re-run.',
+                    );
+                    if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) return;
+                    const navigationIndex = await this.navigateStateBack(state, 'build', steps);
+                    // The failed native gate is not covered by the done-only stale
+                    // cascade; restage it explicitly for the next BUILD lap.
+                    await this.commitStateChanges(state, 'restage test_suite after BUILD kickback', {
+                      test_suite: 'stale',
+                    });
+                    i = navigationIndex - 1; // for-loop i++ lands on build
+                    continue;
+                  }
+                  const reason =
+                    `test_suite failure unresolved after ${count} build kickback(s) ` +
+                    `(cap ${MAX_KICKBACKS_PER_GATE}): ${evidence}`;
+                  await this.writeHaltMarker(reason + '\n', 'needs-human');
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
+                  const prUrl = await this.surfaceRemediationPr(reason);
+                  await this.emitLoopHalt(reason, prUrl);
+                  process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
+                  return;
+                }
+
+                if (
+                  step.name === 'build_review' &&
+                  buildReviewMalformedCovers !== undefined &&
+                  (this.daemon || this.mode === 'auto' || this.hasEnabledCustomBuildReviewPolicy())
+                ) {
+                  const evidence = failedStepResult?.output ?? '';
+                  const kickback = await consumeKickbackBudget('build_review', evidence);
                   const routedRepairCreditApplied =
                     cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted
                       ? await consumeCurrentRoutedRepairCredit()
                       : false;
                   if (cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted && !routedRepairCreditApplied) {
-                    if (await reenterBuildReviewIfEffectivePass()) continue;
                     const reason = this.withActiveChild(
                       `build_review cumulative kickback cap exceeded:\n` +
                         renderKickbackBudgetView(kickback.entry, 'build_review', MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW),
@@ -15692,133 +15312,875 @@ export class Conductor {
                     return;
                   }
                   if (!kickback.exhausted || routedRepairCreditApplied) {
-                    const pointerLines = await this.buildReviewPointerLines(verdictRaw);
-                    const pointerContext = pointerLines.length > 0 ? `\n${pointerLines.join('\n')}` : '';
-
-                    // Test-quality FAILs are local diff defects and re-enter BUILD.
-                    // Kickback counting semantics are deliberately unchanged.
-                    const reworkTarget: StepName = 'build';
-                    const reworkHint =
-                      `build_review FAILED with these reasons:\n${evidence}\nFix the ` +
-                      `flagged issue(s) in build, then COMMIT — build_review re-runs after ` +
-                      `this build.` +
-                      pointerContext;
-                    const reworkEvidence = evidence;
-
-                    if (await reenterBuildReviewIfEffectivePass()) continue;
-
                     await emitTracked({
                       type: 'kickback',
                       from: 'build_review',
-                      to: reworkTarget,
-                      evidence: reworkEvidence,
-                      count,
+                      to: 'build',
+                      evidence,
+                      count: kickback.entry.count,
                       cumulativeCount: kickback.entry.cumulative,
                     });
-                    pendingRetryHints.set(reworkTarget, reworkHint);
-
-                    // Task 7: Merged-PR guard on build_review kickback (TS-1).
-                    // Before committing the rewind, check if the recorded PR has been
-                    // merged out-of-band. If so, stop the run as a synthetic verified
-                    // ship and return successfully.
-                    if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
-                      return;
-                    }
+                    pendingRetryHints.set(
+                      'build',
+                      `build_review found malformed Covers markers:\n${evidence}\n` +
+                        'Fix each token to an accepted form and commit before build_review re-runs.',
+                    );
+                    if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) return;
                     await captureKickbackToBuildContext('build_review');
-                    const navigationIndex = await this.navigateStateBack(state, reworkTarget, steps);
-                    // markDownstreamStale only restages `done` steps; build_review
-                    // is `failed` here, so restage it (and manual_test) explicitly
-                    // for the tail.
+                    const navigationIndex = await this.navigateStateBack(state, 'build', steps);
                     await this.commitStateChanges(
                       state,
-                      'restage BUILD review after kickback',
+                      'restage BUILD review after malformed Covers kickback',
                       filterRestageChanges(state, { build_review: 'stale', manual_test: 'stale' }),
                     );
-                    i = navigationIndex - 1; // for-loop i++ lands on the rework target
+                    i = navigationIndex - 1;
                     continue;
                   }
                   const reason =
-                    `build_review FAIL unresolved after ${count} build kickback(s) ` +
-                    `(cap ${MAX_KICKBACKS_PER_GATE}): ${kickback.entry.lastReason || 'no reasons recorded'}`;
-                  if (await reenterBuildReviewIfEffectivePass()) continue;
+                    `build_review malformed Covers markers unresolved after ${kickback.entry.count} ` +
+                    `build kickback(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${evidence}`;
                   await this.writeHaltMarker(reason + '\n', 'needs-human');
                   await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await this.emitLoopHalt(reason, prUrl);
                   process.off('SIGINT', sigintHandler);
-                  return;
-                }
-              }
-
-              // Task 8: Stall remediation with error handling for degraded exits.
-              // When a build stall is detected (stallQuestion is set), attempt to dispatch
-              // /remediate to get the answer. Wrap in try/catch to handle dispatch throws,
-              // and check outcome.kind for malformed JSON / stale file / dropped dispositions.
-              // Budget is checked before dispatch to implement fail-safe immediate HALT for
-              // exhausted budget (Task 8 E). Any error or degraded outcome writes HALT with
-              // the question (TR-5), never a generic retries-exhausted message.
-              if (this.daemon && step.name === 'build' && stallQuestion !== null) {
-                // Budget check: if we've already exhausted the remediation budget on prior
-                // stalls in this run, skip dispatch and go straight to fail-safe HALT.
-                if (remediationRounds >= MAX_KICKBACKS_PER_GATE) {
-                  const detail = `Remediation budget exhausted (${remediationRounds} stalls attempted, cap ${MAX_KICKBACKS_PER_GATE})`;
-                  await writeStallHalt(this.projectRoot, stallQuestion, detail, this.events);
-                  await this.persistPendingStateChanges(state, 'persist conductor transition');
-                  const prUrl = await this.surfaceRemediationPr(stallQuestion + '\n\n' + detail);
-                  await this.emitLoopHalt(stallQuestion + '\n\n' + detail, prUrl);
-                  process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
                   return;
                 }
 
-                // Attempt remediation dispatch with error handling
-                try {
-                  const outcome = await this.planRemediation(
-                    state,
-                    steps,
-                    'Build stall detected. Agent needs input to proceed. A question is at ' +
-                      '.pipeline/halt-user-input-required. Plan remediation per the /remediate ' +
-                      'skill; the engine validates and persists its typed result.',
-                    {
-                      source: 'build-stall',
-                      evidence: [{ gate: 'build', evidenceFile: '.pipeline/halt-user-input-required' }],
-                    },
-                  );
+                // build_review kickback (daemon only, Task 13): a FAIL verdict from
+                // the objective grader between `build` and `manual_test` is an
+                // implementation gap by definition — route back to BUILD with the
+                // grader's reasons as the retry hint. Uses the durable kickback ledger
+                // keyed by 'build_review' (the same anti-ping-pong mechanism the
+                // gate-driven tail uses for other gates), bounded by
+                // MAX_KICKBACKS_PER_GATE like the other self-heal loops.
+                if (
+                  step.name === 'build_review' &&
+                  (this.daemon || this.mode === 'auto' || this.hasEnabledCustomBuildReviewPolicy())
+                ) {
+                  let verdictRaw: unknown = null;
+                  try {
+                    verdictRaw = JSON.parse(
+                      await readFile(
+                        pipelinePathFor(this.projectRoot, 'build-review.json', this.activeRegionChild),
+                        'utf-8',
+                      ),
+                    );
+                  } catch {
+                    /* missing/unreadable — falls through to generic HALT below */
+                  }
+                  const parsed = verdictRaw !== null ? validateBuildReviewVerdict(verdictRaw) : null;
+                  if (parsed?.ok && parsed.verdict === 'FAIL') {
+                    // #1740 follow-up: this raw read bypasses the completion
+                    // predicate's lap-freshness guard, so without this check a
+                    // FAIL aggregate from a PRIOR lap re-raises its (already
+                    // fixed) findings as kickbacks forever — the stored lapId
+                    // never changes while HEAD moves every lap. Treat a stale-lap
+                    // aggregate as no verdict at all: discard it and re-land on
+                    // build_review so the grader writes a brand-new verdict.
+                    const staleLap = await discardStaleLapBuildReviewFail(
+                      this.projectRoot,
+                      verdictRaw,
+                      undefined,
+                      this.activeRegionChild,
+                    );
+                    if (staleLap) {
+                      staleLapDiscards += 1;
+                      if (staleLapDiscards > 1) {
+                        const reason =
+                          `build_review stale-lap FAIL persists after discard: the grader rewrote an ` +
+                          `aggregate for prior lap ${staleLap.storedLapId} while HEAD is at ` +
+                          `${staleLap.currentLapId} — re-landing again would loop; halting for inspection`;
+                        await this.writeHaltMarker(reason + '\n', 'needs-human');
+                        await this.persistPendingStateChanges(state, 'persist conductor transition');
+                        const prUrl = await this.surfaceRemediationPr(reason);
+                        await this.emitLoopHalt(reason, prUrl);
+                        process.off('SIGINT', sigintHandler);
+                        process.off('SIGTERM', sigterm);
+                        return;
+                      }
+                      this.log?.(
+                        `build_review FAIL aggregate belongs to prior lap ${staleLap.storedLapId} ` +
+                          `(current ${staleLap.currentLapId}) — discarded; a prior lap's FAIL is never kicked back`,
+                      );
+                      await emitTracked({
+                        type: 'build_review_stale_aggregate',
+                        ...staleLap,
+                      });
+                      await this.saveConductorStepStatus(state, step.name, 'failed');
+                      await this.persistPendingStateChanges(state, 'persist conductor transition');
+                      i = i - 1; // for-loop i++ re-lands on build_review
+                      continue;
+                    }
+                    const aggregate = parseBuildReviewAggregate(verdictRaw);
+                    // The compatibility selector lives at the conductor boundary:
+                    // scalar/legacy verdicts retain the historical raw route, while
+                    // a current raw aggregate defaults to the post-join path.
+                    if (aggregate && this.buildReviewAdjudicationEnabled()) {
+                      const effective = await (this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict)(
+                        this.projectRoot,
+                        verdictRaw,
+                        {
+                          emit: async (event) => {
+                            await this.events.emit(event);
+                          },
+                          minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
+                          minSeverity: buildReviewSeverityThresholds(resolveBuildReviewConfig(this.config)),
+                          child: this.activeRegionChild,
+                          adjudicationEnabled: this.buildReviewAdjudicationEnabled(),
+                        },
+                      );
+                      // Old raw aggregate fixtures (and pre-adjudication callers)
+                      // have no worktree identity from which a feature-local case
+                      // store can be selected.  They retain the exact historical
+                      // raw lane.  Every other disposition/state failure is still
+                      // authoritative and therefore fail-closed.
+                      const legacyAdjudicationInput = !effective.ok
+                        ? effective.reason === 'build-review feature identity is unavailable'
+                        : !('feature' in effective) || effective.feature === undefined;
+                      if (legacyAdjudicationInput && this.hasEnabledCustomBuildReviewPolicy()) {
+                        const reason =
+                          'build_review custom-capability error: compatibility adjudication requires feature identity';
+                        await this.writeHaltMarker(reason + '\n', 'needs-human');
+                        await this.persistPendingStateChanges(state, 'persist conductor transition');
+                        await this.emitLoopHalt(reason);
+                        return;
+                      }
+                      if (!effective.ok && !legacyAdjudicationInput) {
+                        const reason = `build_review adjudication halted: ${effective.reason}`;
+                        await this.writeHaltMarker(reason + '\n', 'needs-human');
+                        await this.persistPendingStateChanges(state, 'persist conductor transition');
+                        await this.emitLoopHalt(reason);
+                        return;
+                      }
+                      if (effective.ok && !legacyAdjudicationInput) {
+                        // A raw FAIL can already be an effective PASS through
+                        // acceptance, suppression, or advisory policy.  It has no
+                        // actionable graph to adjudicate; settle durable case state
+                        // and enter the ordinary PASS tail directly.
+                        if (
+                          effective.effective.verdict === 'PASS' ||
+                          (effective.effective.unresolvedFindingIds.length === 0 &&
+                            effective.effective.uncoveredInfrastructureFailureRubrics.length === 0 &&
+                            (effective.effective.uncoveredScopeIncompleteRubrics?.length ?? 0) === 0)
+                        ) {
+                          if (
+                            (await this.settleCleanBuildReviewSuccess(state, buildReviewAdjudicationSettlement)) ===
+                            'halted'
+                          )
+                            return;
+                          succeeded = true;
+                          break settledBuildReviewFailure;
+                        }
+                        // Only uncovered coverage faults pin the mechanical lane.
+                        // Mapping an undifferentiated list to `retry` treated a
+                        // branch the operator had already covered with an exact
+                        // reduced-coverage decision as a live fault, so a
+                        // content-complete PASS was unreachable.
+                        const uncoveredInfrastructure = effective.effective.uncoveredInfrastructureFailureRubrics;
+                        const uncoveredScopeIncomplete = effective.effective.uncoveredScopeIncompleteRubrics ?? [];
+                        const mechanicalLedger = await readKickbackLedger(this.projectRoot, this.activeRegionChild);
+                        if (isUnreadableKickbackGate(mechanicalLedger, 'build_review')) {
+                          const reason = `build_review adjudication halted: kickback ledger gate 'build_review' is unreadable`;
+                          await this.writeHaltMarker(reason + '\n', 'needs-human');
+                          await this.persistPendingStateChanges(state, 'persist conductor transition');
+                          await this.emitLoopHalt(reason);
+                          return;
+                        }
+                        const mechanicalFaults = mechanicalLedger.gates.build_review?.mechanicalFaults ?? 0;
+                        const mechanical =
+                          uncoveredInfrastructure.length === 0 && uncoveredScopeIncomplete.length === 0
+                            ? 'healthy'
+                            : mechanicalFaults >= MAX_MECHANICAL_FAULTS_BUILD_REVIEW
+                              ? 'halt'
+                              : 'retry';
+                        // Covered faults can release retry routing, but they never
+                        // prove that a case source was absent. Keep that evidence
+                        // boundary distinct from the retry/halt mechanical lane.
+                        const absenceRetirementMechanicallyHealthy =
+                          isBuildReviewLapHealthyForAbsenceRetirement(aggregate);
+                        const resolveOperatorResolvedFindingIds = async (): Promise<ReadonlySet<string>> => {
+                          const latest = await (
+                            this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
+                          )(this.projectRoot, verdictRaw, {
+                            emit: async (event) => {
+                              await this.events.emit(event);
+                            },
+                            minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
+                            minSeverity: buildReviewSeverityThresholds(resolveBuildReviewConfig(this.config)),
+                            child: this.activeRegionChild,
+                            adjudicationEnabled: this.buildReviewAdjudicationEnabled(),
+                          });
+                          if (!latest.ok) throw new Error(latest.reason);
+                          return new Set(latest.effective.acceptedFindingIds);
+                        };
+                        // Carry authority is the feature's current disposition
+                        // ledger, not merely the current lap's accepted ids.  The
+                        // origin necessarily belongs to an earlier finding id.
+                        const resolveEffectiveAcceptedSourceIds = async (): Promise<ReadonlySet<string>> => {
+                          const listed = await new BuildReviewDispositionStore(this.projectRoot).list(
+                            effective.feature,
+                          );
+                          if (!listed.ok) throw new Error(listed.message);
+                          return new Set(
+                            listed.records
+                              .filter(
+                                (record) =>
+                                  !('contractVersion' in record.finding.canonicalPayload) ||
+                                  record.finding.canonicalPayload.contractVersion ===
+                                    CURRENT_BUILD_REVIEW_RUBRIC_CONTRACT_VERSION,
+                              )
+                              .map((record) => `${record.finding.canonicalPayload.rubric}:${record.finding.id}`),
+                          );
+                        };
+                        const trackerRepo = await this.resolveTrackerRepoSlug();
+                        // A deferred issue is creation, not an existing-resource
+                        // mutation. Obtain fresh feature provenance now and mint the
+                        // opaque, one-shot capability before exposing a filing path
+                        // to the coordinator. Missing state/evidence deliberately
+                        // leaves `fileIssue` absent, so the coordinator can read for
+                        // an existing marker but cannot create a new remote issue.
+                        const featureCreationAuthority =
+                          trackerRepo === undefined
+                            ? undefined
+                            : await (async () => {
+                                const slug = this.featureSlug ?? state.feature_desc;
+                                const branch = state.worktree_branch ?? this.worktreeBranch;
+                                if (!slug || !branch) return undefined;
+                                const mutation = await this.resolveFeatureCreationMutation({
+                                  cwd: this.projectRoot,
+                                  slug,
+                                  branch,
+                                  git: (args) => this.git(args, { cwd: this.projectRoot }),
+                                  gh: this.gh,
+                                });
+                                return mutation
+                                  ? authorizeGithubFeatureIssueCreation({ repository: trackerRepo, mutation })
+                                  : undefined;
+                              })();
+                        const resolvedReviewConfig = resolveBuildReviewConfig(this.config);
+                        const floors = buildReviewConfidenceFloors(resolvedReviewConfig);
+                        const suppressedFindingIds = effective.effective.suppressedFindingIds ?? [];
+                        const advisoryFindingIds = effective.effective.advisoryFindingIds ?? [];
+                        const outOfDeltaFindingIds = effective.effective.outOfDeltaFindingIds ?? [];
+                        // One shared projection with the effective-verdict seam that
+                        // already persisted these rows for this lap; the coordinator
+                        // re-runs that same idempotent upsert rather than owning a
+                        // second, divergent write.
+                        const suppressions = projectBuildReviewSuppressionEntries({
+                          aggregate,
+                          suppressedFindingIds,
+                          floors,
+                        });
+                        const advisories = projectBuildReviewAdvisoryEntries({
+                          aggregate,
+                          advisoryFindingIds,
+                          thresholds: buildReviewSeverityThresholds(resolvedReviewConfig),
+                        });
+                        // Provenance regions are resolved against the immutable
+                        // diff named by each current artifact, never against an
+                        // anchor hash that may be a test title or custom region.
+                        const changedFilesBySource = new Map<
+                          string,
+                          Promise<ReturnType<typeof deriveChangedFileReferences> | undefined>
+                        >();
+                        const artifactFacts = await readBuildReviewAdjudicationArtifactFacts(
+                          this.projectRoot,
+                          aggregate,
+                          {
+                            changedFilesForArtifact: async (artifact) => {
+                              const scope = artifact.reviewScope;
+                              if (scope === undefined || 'kind' in scope) return undefined;
+                              const key = `${scope.mergeBase}..${scope.headSha}`;
+                              let changedFiles = changedFilesBySource.get(key);
+                              if (changedFiles === undefined) {
+                                changedFiles = this.git(['diff', '--no-ext-diff', key], { cwd: this.projectRoot })
+                                  .then((result) => deriveChangedFileReferences(result.stdout))
+                                  .catch(() => undefined);
+                                changedFilesBySource.set(key, changedFiles);
+                              }
+                              return changedFiles;
+                            },
+                          },
+                          this.activeRegionChild,
+                        );
+                        // Settlement gate: `verdictRaw` is the aggregate the join
+                        // recorded after every branch settled; the shared operation
+                        // refuses anything that does not parse as that complete lap.
+                        const outcome = await applyBuildReviewOutcome({
+                          recordedAggregate: verdictRaw,
+                          adjudication: {
+                            projectRoot: this.projectRoot,
+                            feature: effective.feature,
+                            ...(this.activeRegionChild === undefined ? {} : { child: this.activeRegionChild }),
+                            operatorResolvedFindingIds: new Set(effective.effective.acceptedFindingIds),
+                            suppressedFindingIds: new Set(suppressedFindingIds),
+                            advisoryFindingIds: new Set(advisoryFindingIds),
+                            outOfDeltaFindingIds: new Set(outOfDeltaFindingIds),
+                            declaredSeverityThresholds: buildReviewSeverityThresholds(resolvedReviewConfig),
+                            suppressions: [...suppressions, ...advisories],
+                            resolveOperatorResolvedFindingIds,
+                            resolveEffectiveAcceptedSourceIds,
+                            mechanical,
+                            absenceRetirementMechanicallyHealthy,
+                            priorFindingDigests: artifactFacts.priorFindingDigests,
+                            ...(artifactFacts.provenance === undefined ? {} : { provenance: artifactFacts.provenance }),
+                            chargeInput: {
+                              treeHash: await currentTreeHash(this.projectRoot),
+                              resolvedCount: await countResolvedTasks(this.projectRoot, this.activeRegionChild),
+                              reason: buildReviewFailureDetails(parsed).join('\n') || 'build_review adjudicated action',
+                            },
+                            ...(this.buildReviewChargeEffect === undefined
+                              ? {}
+                              : { chargeEffect: this.buildReviewChargeEffect }),
+                            judge: async (context) => {
+                              const requestedMode =
+                                typeof context === 'object' &&
+                                context !== null &&
+                                'mode' in context &&
+                                ((context as { mode?: unknown }).mode === 'case-v1' ||
+                                  (context as { mode?: unknown }).mode === 'case-v2')
+                                  ? (context as { mode: 'case-v1' | 'case-v2' }).mode
+                                  : 'case-v1';
+                              const dispatched = await this.stepRunner.run('remediate', state, {
+                                retryReason: `Adjudicate this complete build-review context only; write ${requestedMode} remediation output.\n${JSON.stringify(context)}`,
+                              });
+                              if (!dispatched.success) {
+                                throw new RemediateDispatchError(
+                                  dispatched.provider ?? 'unknown',
+                                  dispatched.exitFacts,
+                                );
+                              }
+                              const judgement = await readRemediationCaseJudgement(
+                                this.projectRoot,
+                                state.session_started_at,
+                              );
+                              if (!judgement.ok) throw new Error(judgement.reason);
+                              return judgement.judgement;
+                            },
+                            // Task 18 Done-when 4: the deferral path is only reachable
+                            // when the production call carries all three dependencies.
+                            // Omitting them left marker lookup, issue filing, and
+                            // deferral completion dead in production while an injected
+                            // coordinator fixture kept passing.
+                            ...(trackerRepo === undefined
+                              ? {}
+                              : {
+                                  repo: trackerRepo,
+                                  tracker: createGithubTrackerClient(this.gh, { events: this.events }),
+                                  ...(featureCreationAuthority === undefined
+                                    ? {}
+                                    : {
+                                        fileIssue: async (issue: {
+                                          title: string;
+                                          body: string;
+                                          priority: 'critical' | 'high' | 'medium' | 'low';
+                                        }) => {
+                                          const filed = await fileIntakeIssue(
+                                            {
+                                              title: issue.title,
+                                              body: issue.body,
+                                              priority: issue.priority,
+                                              repo: trackerRepo,
+                                            },
+                                            {
+                                              creation: {
+                                                authority: featureCreationAuthority,
+                                                operations: createIntakeFilingOperations(
+                                                  this.gh,
+                                                  this.projectRoot,
+                                                  featureCreationAuthority,
+                                                  this.events,
+                                                ),
+                                              },
+                                            },
+                                          );
+                                          return { issueUrl: filed.issueUrl };
+                                        },
+                                      }),
+                                }),
+                            emit: async (event) => {
+                              await this.events.emit(event);
+                            },
+                            emitOrThrow: async (event) => this.events.emitOrThrow(event),
+                          },
+                        });
+                        if (
+                          outcome.kind === 'decision-stop' ||
+                          (outcome.kind === 'infrastructure' && outcome.status === 'halt')
+                        ) {
+                          const detail =
+                            outcome.kind === 'decision-stop'
+                              ? [
+                                  outcome.detail,
+                                  describeBuildReviewDecisionStops(outcome.stops),
+                                  ...(outcome.remainingInfrastructure
+                                    ? [BUILD_REVIEW_REMAINING_INFRASTRUCTURE_NOTE]
+                                    : []),
+                                ]
+                                  .filter((line) => line !== '')
+                                  .join('\n')
+                              : [
+                                  outcome.reason,
+                                  describeBuildReviewScopeIncompleteFaults(
+                                    aggregate.scopeIncomplete.filter((fault) =>
+                                      uncoveredScopeIncomplete.includes(fault.rubric),
+                                    ),
+                                  ),
+                                ]
+                                  .filter((line) => line !== '')
+                                  .join('\n');
+                          const trace = outcome.trace;
+                          const reason = `build_review adjudication halted: ${detail}` + (trace ? `\n${trace}` : '');
+                          await this.writeHaltMarker(reason + '\n', 'needs-human');
+                          await this.persistPendingStateChanges(state, 'persist conductor transition');
+                          await this.emitLoopHalt(reason);
+                          return;
+                        }
+                        if (outcome.kind === 'settled') {
+                          if (
+                            (await this.settleCleanBuildReviewSuccess(state, buildReviewAdjudicationSettlement)) ===
+                            'halted'
+                          )
+                            return;
+                          // A settled raw failure continues through the normal
+                          // success tail, rather than selecting this lap again.
+                          succeeded = true;
+                          this.log?.(outcome.trace);
+                          break settledBuildReviewFailure;
+                        }
+                        if (outcome.kind === 'repair') {
+                          const ledger = await readKickbackLedger(this.projectRoot, this.activeRegionChild);
+                          const count = ledger.gates.build_review?.count ?? 1;
+                          const evidence =
+                            `build-review admitted repair ${outcome.caseIds.join(', ')}\n${outcome.trace}` +
+                            (outcome.remainingInfrastructure ? `\n${BUILD_REVIEW_REMAINING_INFRASTRUCTURE_NOTE}` : '');
+                          await emitTracked({ type: 'kickback', from: 'build_review', to: 'build', evidence, count });
+                          pendingRetryHints.set('build', `build_review adjudication: ${evidence}`);
+                          if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) return;
+                          await captureKickbackToBuildContext('build_review');
+                          const navigationIndex = await this.navigateStateBack(state, 'build', steps);
+                          await this.commitStateChanges(
+                            state,
+                            'restage BUILD review after adjudicated kickback',
+                            filterRestageChanges(state, { build_review: 'stale', manual_test: 'stale' }),
+                          );
+                          i = navigationIndex - 1;
+                          continue;
+                        }
+                        // adr-2026-08-29 D3.2: no actionable content route remains
+                        // and coverage is uncovered. That is the MECHANICAL
+                        // lane — re-land build_review under its own bounded
+                        // allowance. Falling through to the legacy raw route spent a
+                        // semantic kickback and re-sent content the judgement had
+                        // already finalized back to BUILD as raw reasons.
+                        const uncoveredRubric = uncoveredInfrastructure[0] ?? uncoveredScopeIncomplete[0];
+                        const uncoveredResult = uncoveredRubric ? aggregate.results[uncoveredRubric] : undefined;
+                        const scopeFault =
+                          uncoveredRubric && uncoveredScopeIncomplete.includes(uncoveredRubric)
+                            ? aggregate.scopeIncomplete.find((fault) => fault.rubric === uncoveredRubric)
+                            : undefined;
+                        const bumpedMechanicalFaults = await bumpMechanicalFaultsInLedgerResult(
+                          this.projectRoot,
+                          'build_review',
+                          uncoveredRubric && uncoveredResult?.kind === 'infrastructure-failure'
+                            ? {
+                                rubric: uncoveredRubric,
+                                reason: uncoveredResult.reason,
+                                detail: uncoveredResult.detail ?? 'uncovered infrastructure failure on a settled lap',
+                                lapId: aggregate.lapId,
+                              }
+                            : scopeFault === undefined
+                              ? undefined
+                              : {
+                                  rubric: scopeFault.rubric,
+                                  reason: scopeFault.reason,
+                                  detail: scopeFault.detail,
+                                  lapId: aggregate.lapId,
+                                },
+                          this.activeRegionChild,
+                        );
+                        if (bumpedMechanicalFaults.kind === 'unreadable') {
+                          const reason = `build_review adjudication halted: ${bumpedMechanicalFaults.reason}`;
+                          await this.writeHaltMarker(reason + '\n', 'needs-human');
+                          await this.persistPendingStateChanges(state, 'persist conductor transition');
+                          await this.emitLoopHalt(reason);
+                          return;
+                        }
+                        await this.saveConductorStepStatus(state, step.name, 'failed');
+                        await this.persistPendingStateChanges(state, 'persist conductor transition');
+                        i = i - 1; // for-loop i++ re-lands on build_review
+                        continue;
+                      }
+                    }
+                    // A scalar/legacy verdict never entered the shared authority above.
+                    // With an enabled custom member it is refused, never raw-routed (D10).
+                    if (!aggregate && this.hasEnabledCustomBuildReviewPolicy()) {
+                      const reason =
+                        'build_review custom-capability error: the FAIL verdict carries no settled aggregate for the shared adjudication authority';
+                      await this.writeHaltMarker(reason + '\n', 'needs-human');
+                      await this.persistPendingStateChanges(state, 'persist conductor transition');
+                      await this.emitLoopHalt(reason);
+                      return;
+                    }
+                    const failureDetails = buildReviewFailureDetails(parsed);
+                    let buildReviewBeforeConsumption: KickbackGateEntry | undefined;
+                    let buildReviewKickbackCharged = false;
+                    // The raw aggregate can outlive a concurrent operator acceptance.
+                    // Every exit from this raw-FAIL block re-reads the effective
+                    // verdict immediately before it exits, so no early snapshot can
+                    // turn accepted risk into a rework route or a HALT.
+                    const reenterBuildReviewIfEffectivePass = async (): Promise<boolean> => {
+                      try {
+                        const resolution = await (
+                          this.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
+                        )(this.projectRoot, verdictRaw, {
+                          emit: async (event) => {
+                            await this.events.emit(event);
+                          },
+                          minConfidence: buildReviewConfidenceFloors(resolveBuildReviewConfig(this.config)),
+                          minSeverity: buildReviewSeverityThresholds(resolveBuildReviewConfig(this.config)),
+                          child: this.activeRegionChild,
+                          adjudicationEnabled: this.buildReviewAdjudicationEnabled(),
+                        });
+                        if (!rawBuildReviewFailIsEffectivelyAccepted(resolution)) return false;
+                      } catch {
+                        // Resolver failures retain the legacy raw-aggregate exit.
+                        return false;
+                      }
 
-                  if (outcome.kind === 'route') {
-                    remediationRounds++;
-                    await emitTracked({
-                      type: 'kickback',
-                      from: 'build',
-                      to: outcome.target,
-                      evidence: outcome.evidence,
-                      count: remediationRounds,
-                    });
-                    pendingRetryHints.set(outcome.target, outcome.hint);
+                      this.log?.(
+                        'build_review raw FAIL dropped: its effective verdict is PASS at exit time; ' +
+                          'completing the clean-PASS tail.',
+                      );
+                      if (buildReviewKickbackCharged) {
+                        await refundBuildReviewKickback(
+                          this.projectRoot,
+                          buildReviewBeforeConsumption,
+                          this.activeRegionChild,
+                        );
+                      }
+                      // This is a legacy/raw aggregate race, rather than a
+                      // post-join settlement. Re-land the review so its next
+                      // aggregate records the effective PASS; marking the
+                      // adjudication latch here would skip that required fresh
+                      // review attempt.
+                      succeeded = true;
+                      return true;
+                    };
+                    // Task 8 (build-review-grades-plan-vs-diff-against-a-stale-o):
+                    // scope-FAIL disposition, BEFORE any rework routing decision
+                    // below (and before the #569 no_task_progress remediation
+                    // routing this same conductor uses elsewhere for build
+                    // stalls — that routing never applies to build_review, but
+                    // ordering here still matters relative to this block's own
+                    // kickback-cap HALT further down). `runScopeFailDisposition`
+                    // re-probes a fresh base (read-only — never mutates git
+                    // history, Story 6) and returns one of:
+                    //   - `kicked-to-build`: routes to build rework unchanged
+                    //     (today's behavior) — falls through below.
+                    //   - `invalidated`: the FAIL graded a stale view; discard
+                    //     the verdict and re-run build_review against fresh
+                    //     inputs instead of dispatching rework (bounded to once
+                    //     per feature-session by the persisted regrade counter).
+                    //   - `halt`: a SECOND stale-mirage detection this session —
+                    //     never re-enters grading; HALT with the graded/fresh
+                    //     base shas, flagged paths, and regrade count consumed.
+                    // Fully guarded: a classification failure (e.g. offline)
+                    // must never block or alter today's kickback behavior.
+                    let scopeFailDisposition: Disposition | undefined;
+                    if (lastBuildReviewMergeBase) {
+                      try {
+                        scopeFailDisposition = await runScopeFailDisposition({
+                          git: makeGitRunner(this.projectRoot),
+                          root: this.projectRoot,
+                          gradedBaseSha: lastBuildReviewMergeBase,
+                          flaggedPaths: extractFlaggedPaths(failureDetails),
+                          ...(this.activeRegionChild === undefined
+                            ? {}
+                            : {
+                                childBase: {
+                                  slug: state.feature_desc ?? this.featureSlug ?? this.featureDesc ?? '',
+                                  child: this.activeRegionChild,
+                                },
+                              }),
+                          regrade: async () => 'pass',
+                        });
+                      } catch {
+                        // Never block/alter kickback routing over disposition
+                        // classification failures — falls through to genuine
+                        // routing below either way.
+                      }
+                    }
 
-                    // Task 7: Merged-PR guard on stall remediation kickback (TS-1).
-                    if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+                    if (scopeFailDisposition?.kind === 'halt') {
+                      if (await reenterBuildReviewIfEffectivePass()) break settledBuildReviewFailure;
+                      const haltBody =
+                        `build_review scope-FAIL disposition HALT: a second stale-mirage ` +
+                        `detection this feature-session — never re-enters grading.\n` +
+                        `gradedBaseSha: ${scopeFailDisposition.gradedBaseSha}\n` +
+                        `freshBaseSha: ${scopeFailDisposition.freshBaseSha}\n` +
+                        `flaggedPaths: ${scopeFailDisposition.flaggedPaths.join(', ')}\n` +
+                        `regradeCount: ${scopeFailDisposition.regradeCount}\n`;
+                      await this.writeHaltMarker(haltBody, 'needs-human');
+                      await this.persistPendingStateChanges(state, 'persist conductor transition');
+                      const reason =
+                        'build_review scope-FAIL disposition HALT: second stale-mirage ' +
+                        'detection this feature-session';
+                      const prUrl = await this.surfaceRemediationPr(reason);
+                      await this.emitLoopHalt(reason, prUrl);
+                      process.off('SIGINT', sigintHandler);
+                      process.off('SIGTERM', sigterm);
                       return;
                     }
 
-                    const nav = navigateBack(state, outcome.target, steps);
-                    state = nav.state;
-                    this.haltState = state;
-                    (state as Record<string, unknown>).build = 'stale';
+                    if (scopeFailDisposition?.kind === 'invalidated') {
+                      if (await reenterBuildReviewIfEffectivePass()) break settledBuildReviewFailure;
+                      await removeBuildReviewVerdict(this.projectRoot, this.activeRegionChild).catch(() => {
+                        /* best-effort removal */
+                      });
+                      const regradeCount = await readRegradeCount(this.projectRoot).catch(() => 0);
+                      await emitTracked({
+                        type: 'build_review_stale_mirage_regrade',
+                        mergeBase: lastBuildReviewMergeBase ?? '',
+                        regradeCount,
+                      });
+                      await this.saveConductorStepStatus(state, step.name, 'failed');
+                      await this.persistPendingStateChanges(state, 'persist conductor transition');
+                      i = i - 1; // for-loop i++ re-lands on build_review
+                      continue;
+                    }
+
+                    // D2: a build_review FAIL that re-enters right after a prior
+                    // kickback-to-build cycle made zero net progress on an
+                    // unchanged verdict escalates to HALT on this cycle instead
+                    // of spending another kickback toward the cap.
+                    const escalation = await checkKickbackToBuildEscalation('build_review');
+                    if (escalation.halt) {
+                      if (await reenterBuildReviewIfEffectivePass()) break settledBuildReviewFailure;
+                      const reason = `build_review kickback-to-build no-op: ${escalation.reason}`;
+                      await this.writeHaltMarker(reason + '\n', 'needs-human');
+                      await this.persistPendingStateChanges(state, 'persist conductor transition');
+                      const prUrl = await this.surfaceRemediationPr(reason);
+                      await this.emitLoopHalt(reason, prUrl);
+                      process.off('SIGINT', sigintHandler);
+                      process.off('SIGTERM', sigterm);
+                      return;
+                    }
+                    const evidence =
+                      failureDetails.length > 0 ? failureDetails.join('\n') : 'grader returned FAIL without reasons';
+                    const kickback = await consumeKickbackBudget('build_review', evidence);
+                    buildReviewBeforeConsumption = kickback.before;
+                    buildReviewKickbackCharged = true;
+                    const count = kickback.entry.count;
+                    const routedRepairCreditApplied =
+                      cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted
+                        ? await consumeCurrentRoutedRepairCredit()
+                        : false;
+                    if (cumulativeKickbackBoundEnabled && kickback.cumulativeExhausted && !routedRepairCreditApplied) {
+                      if (await reenterBuildReviewIfEffectivePass()) break settledBuildReviewFailure;
+                      const reason = this.withActiveChild(
+                        `build_review cumulative kickback cap exceeded:\n` +
+                          renderKickbackBudgetView(
+                            kickback.entry,
+                            'build_review',
+                            MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+                          ),
+                      );
+                      const capEntry = await recordKickbackCapEvidence(
+                        this.projectRoot,
+                        'build_review',
+                        {
+                          consumed: kickback.entry.cumulative,
+                          limit: kickback.entry.effectiveLimit ?? MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+                          latestReason: kickback.entry.lastReason,
+                        },
+                        this.activeRegionChild,
+                      );
+                      const markerResult = await this.writeHaltMarker(
+                        `${reason}\nKickback halt generation: ${capEntry.capEvidence!.haltGeneration}\n`,
+                        'needs-human',
+                      );
+                      if (markerResult.status === 'failed') {
+                        this.log?.(`halt marker write failed: ${markerResult.path} — ${markerResult.reason}`);
+                      }
+                      await this.persistPendingStateChanges(state, 'persist conductor transition');
+                      const prUrl = await this.surfaceRemediationPr(reason);
+                      await this.emitLoopHalt(reason, prUrl);
+                      process.off('SIGINT', sigintHandler);
+                      process.off('SIGTERM', sigterm);
+                      return;
+                    }
+                    if (!kickback.exhausted || routedRepairCreditApplied) {
+                      const pointerLines = await this.buildReviewPointerLines(verdictRaw);
+                      const pointerContext = pointerLines.length > 0 ? `\n${pointerLines.join('\n')}` : '';
+
+                      // Test-quality FAILs are local diff defects and re-enter BUILD.
+                      // Kickback counting semantics are deliberately unchanged.
+                      const reworkTarget: StepName = 'build';
+                      const reworkHint =
+                        `build_review FAILED with these reasons:\n${evidence}\nFix the ` +
+                        `flagged issue(s) in build, then COMMIT — build_review re-runs after ` +
+                        `this build.` +
+                        pointerContext;
+                      const reworkEvidence = evidence;
+
+                      if (await reenterBuildReviewIfEffectivePass()) break settledBuildReviewFailure;
+
+                      await emitTracked({
+                        type: 'kickback',
+                        from: 'build_review',
+                        to: reworkTarget,
+                        evidence: reworkEvidence,
+                        count,
+                        cumulativeCount: kickback.entry.cumulative,
+                      });
+                      pendingRetryHints.set(reworkTarget, reworkHint);
+
+                      // Task 7: Merged-PR guard on build_review kickback (TS-1).
+                      // Before committing the rewind, check if the recorded PR has been
+                      // merged out-of-band. If so, stop the run as a synthetic verified
+                      // ship and return successfully.
+                      if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+                        return;
+                      }
+                      await captureKickbackToBuildContext('build_review');
+                      const navigationIndex = await this.navigateStateBack(state, reworkTarget, steps);
+                      // markDownstreamStale only restages `done` steps; build_review
+                      // is `failed` here, so restage it (and manual_test) explicitly
+                      // for the tail.
+                      await this.commitStateChanges(
+                        state,
+                        'restage BUILD review after kickback',
+                        filterRestageChanges(state, { build_review: 'stale', manual_test: 'stale' }),
+                      );
+                      i = navigationIndex - 1; // for-loop i++ lands on the rework target
+                      continue;
+                    }
+                    const reason =
+                      `build_review FAIL unresolved after ${count} build kickback(s) ` +
+                      `(cap ${MAX_KICKBACKS_PER_GATE}): ${kickback.entry.lastReason || 'no reasons recorded'}`;
+                    if (await reenterBuildReviewIfEffectivePass()) break settledBuildReviewFailure;
+                    await this.writeHaltMarker(reason + '\n', 'needs-human');
                     await this.persistPendingStateChanges(state, 'persist conductor transition');
-                    i = nav.index - 1; // for-loop i++ lands on the target step
-                    continue;
+                    const prUrl = await this.surfaceRemediationPr(reason);
+                    await this.emitLoopHalt(reason, prUrl);
+                    process.off('SIGINT', sigintHandler);
+                    return;
+                  }
+                }
+
+                // Task 8: Stall remediation with error handling for degraded exits.
+                // When a build stall is detected (stallQuestion is set), attempt to dispatch
+                // /remediate to get the answer. Wrap in try/catch to handle dispatch throws,
+                // and check outcome.kind for malformed JSON / stale file / dropped dispositions.
+                // Budget is checked before dispatch to implement fail-safe immediate HALT for
+                // exhausted budget (Task 8 E). Any error or degraded outcome writes HALT with
+                // the question (TR-5), never a generic retries-exhausted message.
+                if (this.daemon && step.name === 'build' && stallQuestion !== null) {
+                  // Budget check: if we've already exhausted the remediation budget on prior
+                  // stalls in this run, skip dispatch and go straight to fail-safe HALT.
+                  if (remediationRounds >= MAX_KICKBACKS_PER_GATE) {
+                    const detail = `Remediation budget exhausted (${remediationRounds} stalls attempted, cap ${MAX_KICKBACKS_PER_GATE})`;
+                    await writeStallHalt(this.projectRoot, stallQuestion, detail, this.events);
+                    await this.persistPendingStateChanges(state, 'persist conductor transition');
+                    const prUrl = await this.surfaceRemediationPr(stallQuestion + '\n\n' + detail);
+                    await this.emitLoopHalt(stallQuestion + '\n\n' + detail, prUrl);
+                    process.off('SIGINT', sigintHandler);
+                    process.off('SIGTERM', sigterm);
+                    return;
                   }
 
-                  if (outcome.kind === 'halt') {
-                    const reason = stallQuestion + '\n\n' + outcome.detail;
-                    await writeStallHalt(
-                      this.projectRoot,
-                      stallQuestion,
-                      outcome.detail,
-                      this.events,
-                      outcome.haltClass,
+                  // Attempt remediation dispatch with error handling
+                  try {
+                    const outcome = await this.planRemediation(
+                      state,
+                      steps,
+                      'Build stall detected. Agent needs input to proceed. A question is at ' +
+                        '.pipeline/halt-user-input-required. Plan remediation per the /remediate ' +
+                        'skill; the engine validates and persists its typed result.',
+                      {
+                        source: 'build-stall',
+                        evidence: [{ gate: 'build', evidenceFile: '.pipeline/halt-user-input-required' }],
+                      },
                     );
+
+                    if (outcome.kind === 'route') {
+                      remediationRounds++;
+                      await emitTracked({
+                        type: 'kickback',
+                        from: 'build',
+                        to: outcome.target,
+                        evidence: outcome.evidence,
+                        count: remediationRounds,
+                      });
+                      pendingRetryHints.set(outcome.target, outcome.hint);
+
+                      // Task 7: Merged-PR guard on stall remediation kickback (TS-1).
+                      if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+                        return;
+                      }
+
+                      const nav = navigateBack(state, outcome.target, steps);
+                      state = nav.state;
+                      this.haltState = state;
+                      (state as Record<string, unknown>).build = 'stale';
+                      await this.persistPendingStateChanges(state, 'persist conductor transition');
+                      i = nav.index - 1; // for-loop i++ lands on the target step
+                      continue;
+                    }
+
+                    if (outcome.kind === 'halt') {
+                      const reason = stallQuestion + '\n\n' + outcome.detail;
+                      await writeStallHalt(
+                        this.projectRoot,
+                        stallQuestion,
+                        outcome.detail,
+                        this.events,
+                        outcome.haltClass,
+                      );
+                      await this.persistPendingStateChanges(state, 'persist conductor transition');
+                      const prUrl = await this.surfaceRemediationPr(reason);
+                      await this.emitLoopHalt(reason, prUrl);
+                      process.off('SIGINT', sigintHandler);
+                      process.off('SIGTERM', sigterm);
+                      return;
+                    }
+
+                    // A bounded typed-planner round is exhausted. The original
+                    // stall question remains the first line; retain the planner's
+                    // final mechanical fault in the HALT detail.
+                    const detail = `Remediation planner fault: ${outcome.reason}`;
+                    await writeStallHalt(this.projectRoot, stallQuestion, detail, this.events);
+                    await this.persistPendingStateChanges(state, 'persist conductor transition');
+                    const prUrl = await this.surfaceRemediationPr(stallQuestion + '\n\n' + detail);
+                    await this.emitLoopHalt(stallQuestion + '\n\n' + detail, prUrl);
+                    process.off('SIGINT', sigintHandler);
+                    process.off('SIGTERM', sigterm);
+                    return;
+                  } catch (err) {
+                    // Remediation dispatch threw an error — fail-safe HALT with the question
+                    const detail = `Remediation dispatch failed: ${err instanceof Error ? err.message : String(err)}`;
+                    await writeStallHalt(this.projectRoot, stallQuestion, detail, this.events);
+                    await this.persistPendingStateChanges(state, 'persist conductor transition');
+                    const prUrl = await this.surfaceRemediationPr(stallQuestion + '\n\n' + detail);
+                    await this.emitLoopHalt(stallQuestion + '\n\n' + detail, prUrl);
+                    process.off('SIGINT', sigintHandler);
+                    process.off('SIGTERM', sigterm);
+                    return;
+                  }
+                }
+
+                if (this.daemon && step.name === 'prd_audit') {
+                  // D2: prd_audit re-failing right after a prior kickback-to-build
+                  // cycle that made zero net progress on an unchanged verdict
+                  // escalates to HALT here instead of spending another remediation
+                  // round or self-heal toward the caps below.
+                  const prdAuditEscalation = await checkKickbackToBuildEscalation('prd_audit');
+                  if (prdAuditEscalation.halt) {
+                    const reason = `prd_audit kickback-to-build no-op: ${prdAuditEscalation.reason}`;
+                    await this.writeHaltMarker(reason + '\n', 'needs-human');
                     await this.persistPendingStateChanges(state, 'persist conductor transition');
                     const prUrl = await this.surfaceRemediationPr(reason);
                     await this.emitLoopHalt(reason, prUrl);
@@ -15826,430 +16188,254 @@ export class Conductor {
                     process.off('SIGTERM', sigterm);
                     return;
                   }
+                  // Agentic remediation (preferred): dispatch /remediate to plan how
+                  // to close the blocking gaps, then route deterministically from its
+                  // structured plan. HALT is reserved for architectural-clarity /
+                  // product-scope gaps; everything else routes to the right step.
+                  // Mixed gaps fix the autonomous ones first — the human gaps
+                  // re-surface on the next audit and HALT then. Falls back to the
+                  // deterministic classifyPrdAuditGaps routing when no usable plan is
+                  // produced or the remediation budget is exhausted.
+                  let remediationPlannerFault: string | undefined;
+                  if (remediationRounds < prdAuditRemediationLapCap()) {
+                    const outcome = await this.planRemediation(
+                      state,
+                      steps,
+                      'A blocking prd-audit is at .pipeline/prd-audit.md (an as-built ' +
+                        `review may be at ${AS_BUILT_VERDICT_PATH}). Plan ` +
+                        'remediation per the /remediate skill; the engine validates and persists its typed result.',
+                      {
+                        source: 'prd-audit',
+                        evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }],
+                      },
+                    );
+                    if (outcome.kind === 'route') {
+                      remediationRounds++;
+                      await emitTracked({
+                        type: 'kickback',
+                        from: 'prd_audit',
+                        to: outcome.target,
+                        evidence: outcome.evidence,
+                        count: remediationRounds,
+                      });
+                      pendingRetryHints.set(outcome.target, outcome.hint);
 
-                  // A bounded typed-planner round is exhausted. The original
-                  // stall question remains the first line; retain the planner's
-                  // final mechanical fault in the HALT detail.
-                  const detail = `Remediation planner fault: ${outcome.reason}`;
-                  await writeStallHalt(this.projectRoot, stallQuestion, detail, this.events);
-                  await this.persistPendingStateChanges(state, 'persist conductor transition');
-                  const prUrl = await this.surfaceRemediationPr(stallQuestion + '\n\n' + detail);
-                  await this.emitLoopHalt(stallQuestion + '\n\n' + detail, prUrl);
-                  process.off('SIGINT', sigintHandler);
-                  process.off('SIGTERM', sigterm);
-                  return;
-                } catch (err) {
-                  // Remediation dispatch threw an error — fail-safe HALT with the question
-                  const detail = `Remediation dispatch failed: ${err instanceof Error ? err.message : String(err)}`;
-                  await writeStallHalt(this.projectRoot, stallQuestion, detail, this.events);
-                  await this.persistPendingStateChanges(state, 'persist conductor transition');
-                  const prUrl = await this.surfaceRemediationPr(stallQuestion + '\n\n' + detail);
-                  await this.emitLoopHalt(stallQuestion + '\n\n' + detail, prUrl);
-                  process.off('SIGINT', sigintHandler);
-                  process.off('SIGTERM', sigterm);
-                  return;
-                }
-              }
+                      // Task 7: Merged-PR guard on generic remediation kickback (TS-1).
+                      // Before committing the rewind, check if the recorded PR has been
+                      // merged out-of-band. If so, stop the run as a synthetic verified
+                      // ship and return successfully.
+                      if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+                        return;
+                      }
+                      if (outcome.target === 'build') {
+                        await captureKickbackToBuildContext('prd_audit');
+                      }
+                      const nav = navigateBack(state, outcome.target, steps);
+                      state = nav.state;
+                      this.haltState = state;
+                      (state as Record<string, unknown>).prd_audit = 'stale';
+                      await this.persistPendingStateChanges(state, 'persist conductor transition');
+                      i = nav.index - 1; // for-loop i++ lands on the target step
+                      continue;
+                    }
+                    if (outcome.kind === 'halt') {
+                      const reason = 'prd-audit halted: needs human DECIDE — ' + outcome.detail;
+                      await this.writeHaltMarker(reason + '\n', outcome.haltClass ?? 'needs-human');
+                      await this.persistPendingStateChanges(state, 'persist conductor transition');
+                      const prUrl = await this.surfaceRemediationPr(reason);
+                      await this.emitLoopHalt(reason, prUrl);
+                      process.off('SIGINT', sigintHandler);
+                      process.off('SIGTERM', sigterm);
+                      return;
+                    }
+                    // No usable remediation plan → fall through to the fallback below.
+                    remediationPlannerFault = outcome.reason;
+                  }
 
-              if (this.daemon && step.name === 'prd_audit') {
-                // D2: prd_audit re-failing right after a prior kickback-to-build
-                // cycle that made zero net progress on an unchanged verdict
-                // escalates to HALT here instead of spending another remediation
-                // round or self-heal toward the caps below.
-                const prdAuditEscalation = await checkKickbackToBuildEscalation('prd_audit');
-                if (prdAuditEscalation.halt) {
-                  const reason = `prd_audit kickback-to-build no-op: ${prdAuditEscalation.reason}`;
-                  await this.writeHaltMarker(reason + '\n', 'needs-human');
-                  await this.persistPendingStateChanges(state, 'persist conductor transition');
-                  const prUrl = await this.surfaceRemediationPr(reason);
-                  await this.emitLoopHalt(reason, prUrl);
-                  process.off('SIGINT', sigintHandler);
-                  process.off('SIGTERM', sigterm);
-                  return;
-                }
-                // Agentic remediation (preferred): dispatch /remediate to plan how
-                // to close the blocking gaps, then route deterministically from its
-                // structured plan. HALT is reserved for architectural-clarity /
-                // product-scope gaps; everything else routes to the right step.
-                // Mixed gaps fix the autonomous ones first — the human gaps
-                // re-surface on the next audit and HALT then. Falls back to the
-                // deterministic classifyPrdAuditGaps routing when no usable plan is
-                // produced or the remediation budget is exhausted.
-                let remediationPlannerFault: string | undefined;
-                if (remediationRounds < prdAuditRemediationLapCap()) {
-                  const outcome = await this.planRemediation(
-                    state,
-                    steps,
-                    'A blocking prd-audit is at .pipeline/prd-audit.md (an as-built ' +
-                      `review may be at ${AS_BUILT_VERDICT_PATH}). Plan ` +
-                      'remediation per the /remediate skill; the engine validates and persists its typed result.',
-                    {
-                      source: 'prd-audit',
-                      evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }],
-                    },
+                  // Fallback (no /remediate plan, or remediation budget exhausted):
+                  // the deterministic classifyPrdAuditGaps routing.
+                  const cls = await classifyPrdAuditGaps(
+                    this.projectRoot,
+                    state.session_started_at,
+                    lastPrdAuditRunId,
+                    this.config,
+                    state.feature_desc,
+                    makeGitRunner(this.projectRoot),
                   );
-                  if (outcome.kind === 'route') {
-                    remediationRounds++;
+                  if (cls.kind === 'impl-only' && prdAuditSelfHeals < prdAuditRemediationLapCap()) {
+                    prdAuditSelfHeals++;
                     await emitTracked({
                       type: 'kickback',
                       from: 'prd_audit',
-                      to: outcome.target,
-                      evidence: outcome.evidence,
-                      count: remediationRounds,
+                      to: 'build',
+                      evidence: cls.summary,
+                      count: prdAuditSelfHeals,
                     });
-                    pendingRetryHints.set(outcome.target, outcome.hint);
+                    // Hand the BUILD agent the gap it must close. Without this the
+                    // re-dispatched BUILD got no context, saw a complete task list,
+                    // and changed nothing — so the re-audit failed the same FRs and
+                    // the loop burned the self-heal budget to no effect.
+                    pendingRetryHints.set(
+                      'build',
+                      `prd-audit BLOCKED on un-ALIGNED FRs: ${cls.summary}. The plan's ` +
+                        `task list is already complete, but these functional requirements ` +
+                        `are NOT satisfied in the shipped code. Read .pipeline/prd-audit.md ` +
+                        `for the per-FR gap-class and file:line evidence, then make the code ` +
+                        `changes needed to close each gap and commit them — do NOT rely on ` +
+                        `the task list being done. The as-built code is re-audited after ` +
+                        `this build; an unaddressed gap will re-block.` +
+                        (remediationPlannerFault === undefined
+                          ? ''
+                          : `\n\nRemediation planner fault: ${remediationPlannerFault}`),
+                    );
 
-                    // Task 7: Merged-PR guard on generic remediation kickback (TS-1).
+                    // Task 7: Merged-PR guard on prd_audit fallback kickback (TS-1).
                     // Before committing the rewind, check if the recorded PR has been
                     // merged out-of-band. If so, stop the run as a synthetic verified
                     // ship and return successfully.
                     if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
                       return;
                     }
-                    if (outcome.target === 'build') {
-                      await captureKickbackToBuildContext('prd_audit');
-                    }
-                    const nav = navigateBack(state, outcome.target, steps);
+                    await captureKickbackToBuildContext('prd_audit');
+                    const nav = navigateBack(state, 'build', steps);
                     state = nav.state;
                     this.haltState = state;
+                    // markDownstreamStale only restages `done` steps; prd_audit is
+                    // `failed` here, so restage it explicitly to re-run on the tail.
                     (state as Record<string, unknown>).prd_audit = 'stale';
                     await this.persistPendingStateChanges(state, 'persist conductor transition');
-                    i = nav.index - 1; // for-loop i++ lands on the target step
+                    i = nav.index - 1; // for-loop i++ lands on build
                     continue;
                   }
-                  if (outcome.kind === 'halt') {
-                    const reason = 'prd-audit halted: needs human DECIDE — ' + outcome.detail;
-                    await this.writeHaltMarker(reason + '\n', outcome.haltClass ?? 'needs-human');
-                    await this.persistPendingStateChanges(state, 'persist conductor transition');
-                    const prUrl = await this.surfaceRemediationPr(reason);
-                    await this.emitLoopHalt(reason, prUrl);
-                    process.off('SIGINT', sigintHandler);
-                    process.off('SIGTERM', sigterm);
-                    return;
-                  }
-                  // No usable remediation plan → fall through to the fallback below.
-                  remediationPlannerFault = outcome.reason;
-                }
-
-                // Fallback (no /remediate plan, or remediation budget exhausted):
-                // the deterministic classifyPrdAuditGaps routing.
-                const cls = await classifyPrdAuditGaps(
-                  this.projectRoot,
-                  state.session_started_at,
-                  lastPrdAuditRunId,
-                  this.config,
-                  state.feature_desc,
-                  makeGitRunner(this.projectRoot),
-                );
-                if (cls.kind === 'impl-only' && prdAuditSelfHeals < prdAuditRemediationLapCap()) {
-                  prdAuditSelfHeals++;
-                  await emitTracked({
-                    type: 'kickback',
-                    from: 'prd_audit',
-                    to: 'build',
-                    evidence: cls.summary,
-                    count: prdAuditSelfHeals,
-                  });
-                  // Hand the BUILD agent the gap it must close. Without this the
-                  // re-dispatched BUILD got no context, saw a complete task list,
-                  // and changed nothing — so the re-audit failed the same FRs and
-                  // the loop burned the self-heal budget to no effect.
-                  pendingRetryHints.set(
-                    'build',
-                    `prd-audit BLOCKED on un-ALIGNED FRs: ${cls.summary}. The plan's ` +
-                      `task list is already complete, but these functional requirements ` +
-                      `are NOT satisfied in the shipped code. Read .pipeline/prd-audit.md ` +
-                      `for the per-FR gap-class and file:line evidence, then make the code ` +
-                      `changes needed to close each gap and commit them — do NOT rely on ` +
-                      `the task list being done. The as-built code is re-audited after ` +
-                      `this build; an unaddressed gap will re-block.` +
-                      (remediationPlannerFault === undefined
-                        ? ''
-                        : `\n\nRemediation planner fault: ${remediationPlannerFault}`),
-                  );
-
-                  // Task 7: Merged-PR guard on prd_audit fallback kickback (TS-1).
-                  // Before committing the rewind, check if the recorded PR has been
-                  // merged out-of-band. If so, stop the run as a synthetic verified
-                  // ship and return successfully.
-                  if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
-                    return;
-                  }
-                  await captureKickbackToBuildContext('prd_audit');
-                  const nav = navigateBack(state, 'build', steps);
-                  state = nav.state;
-                  this.haltState = state;
-                  // markDownstreamStale only restages `done` steps; prd_audit is
-                  // `failed` here, so restage it explicitly to re-run on the tail.
-                  (state as Record<string, unknown>).prd_audit = 'stale';
-                  await this.persistPendingStateChanges(state, 'persist conductor transition');
-                  i = nav.index - 1; // for-loop i++ lands on build
-                  continue;
-                }
-                const reason =
-                  cls.kind === 'invalid-evidence'
-                    ? `prd-audit halted: current typed output is unavailable — ${lastError ?? cls.summary}`
-                    : cls.kind === 'impl-only'
-                      ? `prd-audit impl-gap unresolved after ${prdAuditSelfHeals} build attempt(s) (cap ${prdAuditRemediationLapCap()}): ${cls.summary}`
-                      : `prd-audit halted: product/plan gap needs human DECIDE — ${cls.summary}`;
-                // Both terminal branches now require an operator: product/plan
-                // gaps need DECIDE input, while an implementation gap reaches
-                // this writer only after autonomous self-healing is exhausted.
-                const terminalReason =
-                  remediationPlannerFault === undefined
-                    ? reason
-                    : `${reason}\n\nRemediation planner fault: ${remediationPlannerFault}`;
-                await this.writeHaltMarker(terminalReason + '\n', 'needs-human');
-                const prUrl = await this.surfaceRemediationPr(terminalReason);
-                await this.emitLoopHalt(terminalReason, prUrl);
-                process.off('SIGINT', sigintHandler);
-                process.off('SIGTERM', sigterm);
-                return;
-              }
-
-              // Publication-defect fast path. A finish-gate refusal classified
-              // `missing: 'presentation'` is not a gap anyone needs to reason
-              // about: every evidence condition already passed and the gate has
-              // named the exact wrong thing about the recorded PR. Re-dispatch
-              // the publication work directly.
-              //
-              // This MUST come before the /remediate hook below. The planner's
-              // disposition vocabulary routes to build | acceptance_specs |
-              // architecture_review | plan | publication | halt, and before
-              // `publication` existed a placeholder PR body had to launder
-              // through `build` — turning a 30-second `gh pr edit` into an
-              // 18-task rebuild whose appended task then tripped the
-              // protected-artifact self-amendment guard on the plan file.
-              //
-              // This LAYERS UNDER the FINISH publication coordinator's own
-              // routing (`routeFinishPublicationDisposition`, above): that seam
-              // owns dispositions the coordinator itself reports and never
-              // reaches remediation. This one owns the other axis — the
-              // completion gate re-reading the recorded PR AFTER a step reported
-              // success and finding presentation the coordinator's
-              // verify-after-write did not correct. Without a coordinator wired
-              // in, it is the only guard on that axis.
-              //
-              // Bounded by PUBLICATION_REDISPATCH_BUDGET, which is exactly the
-              // budget the gate's own durable one-shot record needs: the second
-              // pass applies the deterministic body floor and converges. Once the
-              // budget is spent, the defect deliberately falls through to the
-              // generic HALT rather than the planner — a PR body is never
-              // something BUILD can fix.
-              if (step.name === 'finish' && finishPresentationDefect) {
-                if (publicationRedispatches < PUBLICATION_REDISPATCH_BUDGET) {
-                  publicationRedispatches++;
-                  await emitTracked({
-                    type: 'kickback',
-                    from: 'finish',
-                    to: 'finish',
-                    evidence: finishPresentationDefect,
-                    count: publicationRedispatches,
-                  });
-                  pendingRetryHints.set(
-                    'finish',
-                    buildRetryHint(
-                      'finish',
-                      finishPresentationDefect,
-                      'presentation',
-                      join(this.projectRoot, '.pipeline'),
-                    ),
-                  );
-                  // Re-enter finish itself. No navigateBack: nothing downstream
-                  // of finish exists to invalidate, and the implementation work
-                  // this defect sits on top of must stay untouched.
-                  (state as Record<string, unknown>).finish = 'stale';
-                  await this.persistPendingStateChanges(state, 'persist conductor transition');
-                  i--; // for-loop i++ lands back on finish
-                  continue;
-                }
-                const reason =
-                  `finish halted on a PR publication defect after ` +
-                  `${publicationRedispatches} body-rewrite re-dispatch(es): ${finishPresentationDefect}`;
-                await this.writeHaltMarker(reason + '\n', 'needs-human');
-                await this.persistPendingStateChanges(state, 'persist conductor transition');
-                const prUrl = await this.surfaceRemediationPr(reason);
-                await this.emitLoopHalt(reason, prUrl);
-                process.off('SIGINT', sigintHandler);
-                process.off('SIGTERM', sigterm);
-                return;
-              }
-
-              if (step.name === 'architecture_review_as_built') {
-                const asBuiltOutcome = await readAsBuiltRoutingOutcome(this.projectRoot);
-                const asBuiltRemediationEnabled =
-                  (
-                    this.config as HarnessConfig & {
-                      architecture_review_as_built?: { remediation?: { enabled?: boolean } };
-                    }
-                  ).architecture_review_as_built?.remediation?.enabled ?? true;
-                let remediableNoPlanReason: string | undefined;
-                if (this.daemon && asBuiltRemediationEnabled && asBuiltOutcome.kind === 'blocked-remediable') {
-                  const escalation = await checkKickbackToBuildEscalation(step.name);
-                  if (escalation.halt) {
-                    // AB-R7 / APPROVED decision 4 — see the validation-group
-                    // exit above; both terminals carry the same class and the
-                    // same per-finding listing.
-                    const reason =
-                      `as-built architecture review kickback-to-build no-op: ${escalation.reason}` +
-                      renderAsBuiltBlockedFindingDetail(asBuiltOutcome.findings);
-                    // AB-R5 class / adr-2026-08-12 D1: this serial exit returns
-                    // between step_started and step_completed, so the open
-                    // execution needs its one terminal before the loop ends. The
-                    // group twin above returns after parallel_completed and does
-                    // not.
-                    await this.closeOpenExecutions();
-                    await this.writeHaltMarker(reason + '\n', KICKBACK_CAP_HALT_CLASS);
-                    await this.persistPendingStateChanges(state, 'persist conductor transition');
-                    const prUrl = await this.surfaceRemediationPr(reason);
-                    await this.emitLoopHalt(reason, prUrl);
-                    process.off('SIGINT', sigintHandler);
-                    process.off('SIGTERM', sigterm);
-                    return;
-                  }
-                  const remediation = await this.planRemediation(
-                    state,
-                    steps,
-                    'A blocking as-built architecture review is at ' +
-                      `${AS_BUILT_VERDICT_PATH}. Plan remediation per the ` +
-                      '/remediate skill; the engine validates and persists its typed result.',
-                    {
-                      source: 'architecture-review-as-built',
-                      evidence: [
-                        {
-                          gate: 'architecture_review_as_built',
-                          evidenceFile: AS_BUILT_VERDICT_PATH,
-                        },
-                      ],
-                    },
-                  );
-                  if (remediation.kind === 'route') {
-                    remediationRounds++;
-                    await emitTracked({
-                      type: 'kickback',
-                      from: step.name,
-                      to: remediation.target,
-                      evidence: remediation.evidence,
-                      count: remediationRounds,
-                      ...(escalation.kickbackOutcome ? { kickback_outcome: escalation.kickbackOutcome } : {}),
-                    });
-                    pendingRetryHints.set(remediation.target, remediation.hint);
-                    if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
-                      return;
-                    }
-                    if (remediation.target === 'build') {
-                      await captureKickbackToBuildContext(step.name);
-                    }
-                    const nav = navigateBack(state, remediation.target, steps);
-                    state = nav.state;
-                    this.haltState = state;
-                    (state as Record<string, unknown>)[step.name] = 'stale';
-                    await this.persistPendingStateChanges(state, 'persist conductor transition');
-                    i = nav.index - 1; // for-loop i++ lands on the remediation target
-                    continue;
-                  }
-                  if (remediation.kind === 'halt') {
-                    const reason = `as-built architecture review halted: needs human DECIDE — ${remediation.detail}`;
-                    await this.closeOpenExecutions();
-                    await this.writeHaltMarker(reason + '\n', remediation.haltClass ?? 'needs-human');
-                    await this.persistPendingStateChanges(state, 'persist conductor transition');
-                    const prUrl = await this.surfaceRemediationPr(reason);
-                    await this.emitLoopHalt(reason, prUrl);
-                    process.off('SIGINT', sigintHandler);
-                    process.off('SIGTERM', sigterm);
-                    return;
-                  }
-                  if (remediation.kind === 'none') {
-                    remediableNoPlanReason = remediation.reason;
-                  }
-                }
-                // The listing is part of the reason so the marker, the surfaced
-                // PR, and the loop_halt event all carry the same text — the
-                // group site composes its reason the same way.
-                const reason =
-                  `as-built architecture review halted: ${lastError}` +
-                  (asBuiltOutcome.kind === 'blocked-remediable' && remediableNoPlanReason
-                    ? ` — remediation did not route: ${remediableNoPlanReason}`
-                    : '') +
-                  renderAsBuiltBlockedFindingDetail(asBuiltOutcome.findings);
-                const recordingFault =
-                  asBuiltOutcome.kind === 'blocked-design'
-                    ? await this.recordAsBuiltNeedsHumanFindings(
-                        (asBuiltOutcome.findings ?? []).map((finding) => ({
-                          findingId: finding.id,
-                          attemptId: this.currentRunId ?? 'unknown-attempt',
-                          class: finding.class,
-                          reference: finding.reference,
-                          summary: finding.summary,
-                        })),
-                        reason,
-                      )
-                    : undefined;
-                if (recordingFault !== undefined) {
-                  await this.writeHaltMarker(recordingFault + '\n', 'needs-human');
-                  await this.persistPendingStateChanges(state, 'persist conductor transition');
-                  const prUrl = await this.surfaceRemediationPr(recordingFault);
-                  await this.emitLoopHalt(recordingFault, prUrl);
+                  const reason =
+                    cls.kind === 'invalid-evidence'
+                      ? `prd-audit halted: current typed output is unavailable — ${lastError ?? cls.summary}`
+                      : cls.kind === 'impl-only'
+                        ? `prd-audit impl-gap unresolved after ${prdAuditSelfHeals} build attempt(s) (cap ${prdAuditRemediationLapCap()}): ${cls.summary}`
+                        : `prd-audit halted: product/plan gap needs human DECIDE — ${cls.summary}`;
+                  // Both terminal branches now require an operator: product/plan
+                  // gaps need DECIDE input, while an implementation gap reaches
+                  // this writer only after autonomous self-healing is exhausted.
+                  const terminalReason =
+                    remediationPlannerFault === undefined
+                      ? reason
+                      : `${reason}\n\nRemediation planner fault: ${remediationPlannerFault}`;
+                  await this.writeHaltMarker(terminalReason + '\n', 'needs-human');
+                  const prUrl = await this.surfaceRemediationPr(terminalReason);
+                  await this.emitLoopHalt(terminalReason, prUrl);
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
                   return;
                 }
-                await this.writeHaltMarker(
-                  reason + '\n',
-                  asBuiltOutcome.kind === 'plan-gap-undelivered' ? 'plan-gap' : 'needs-human',
-                );
-                await this.persistPendingStateChanges(state, 'persist conductor transition');
-                const prUrl = await this.surfaceRemediationPr(reason);
-                await this.emitLoopHalt(reason, prUrl);
-                process.off('SIGINT', sigintHandler);
-                process.off('SIGTERM', sigterm);
-                return;
-              }
 
-              // Finish remediation (daemon only): give the same /remediate
-              // planner that routes a blocking prd_audit a shot at a failed finish
-              // verification before the generic HALT.
-              // Retain an exhausted planner's final mechanical fault until that
-              // same generic terminal writes the FINISH lifecycle outcome.  A
-              // no-plan finish round deliberately keeps the established terminal
-              // (rather than inventing a remediation-specific halt), but it must
-              // not erase the diagnostic that explains why no route occurred.
-              if (this.daemon && step.name === 'finish' && remediationRounds < MAX_KICKBACKS_PER_GATE) {
-                const finishGate = true;
-                // D2: this gate re-failing right after a prior kickback-to-build
-                // cycle that made zero net progress on an unchanged verdict
-                // escalates to HALT here instead of spending another
-                // remediation round toward MAX_KICKBACKS_PER_GATE.
-                const gateEscalation = await checkKickbackToBuildEscalation(step.name);
-                if (gateEscalation.halt) {
+                // Publication-defect fast path. A finish-gate refusal classified
+                // `missing: 'presentation'` is not a gap anyone needs to reason
+                // about: every evidence condition already passed and the gate has
+                // named the exact wrong thing about the recorded PR. Re-dispatch
+                // the publication work directly.
+                //
+                // This MUST come before the /remediate hook below. The planner's
+                // disposition vocabulary routes to build | acceptance_specs |
+                // architecture_review | plan | publication | halt, and before
+                // `publication` existed a placeholder PR body had to launder
+                // through `build` — turning a 30-second `gh pr edit` into an
+                // 18-task rebuild whose appended task then tripped the
+                // protected-artifact self-amendment guard on the plan file.
+                //
+                // This LAYERS UNDER the FINISH publication coordinator's own
+                // routing (`routeFinishPublicationDisposition`, above): that seam
+                // owns dispositions the coordinator itself reports and never
+                // reaches remediation. This one owns the other axis — the
+                // completion gate re-reading the recorded PR AFTER a step reported
+                // success and finding presentation the coordinator's
+                // verify-after-write did not correct. Without a coordinator wired
+                // in, it is the only guard on that axis.
+                //
+                // Bounded by PUBLICATION_REDISPATCH_BUDGET, which is exactly the
+                // budget the gate's own durable one-shot record needs: the second
+                // pass applies the deterministic body floor and converges. Once the
+                // budget is spent, the defect deliberately falls through to the
+                // generic HALT rather than the planner — a PR body is never
+                // something BUILD can fix.
+                if (step.name === 'finish' && finishPresentationDefect) {
+                  if (publicationRedispatches < PUBLICATION_REDISPATCH_BUDGET) {
+                    publicationRedispatches++;
+                    await emitTracked({
+                      type: 'kickback',
+                      from: 'finish',
+                      to: 'finish',
+                      evidence: finishPresentationDefect,
+                      count: publicationRedispatches,
+                    });
+                    pendingRetryHints.set(
+                      'finish',
+                      buildRetryHint(
+                        'finish',
+                        finishPresentationDefect,
+                        'presentation',
+                        join(this.projectRoot, '.pipeline'),
+                      ),
+                    );
+                    // Re-enter finish itself. No navigateBack: nothing downstream
+                    // of finish exists to invalidate, and the implementation work
+                    // this defect sits on top of must stay untouched.
+                    (state as Record<string, unknown>).finish = 'stale';
+                    await this.persistPendingStateChanges(state, 'persist conductor transition');
+                    i--; // for-loop i++ lands back on finish
+                    continue;
+                  }
                   const reason =
-                    `${finishGate ? 'finish' : 'as-built architecture review'} ` +
-                    `kickback-to-build no-op: ${gateEscalation.reason}`;
+                    `finish halted on a PR publication defect after ` +
+                    `${publicationRedispatches} body-rewrite re-dispatch(es): ${finishPresentationDefect}`;
                   await this.writeHaltMarker(reason + '\n', 'needs-human');
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await this.emitLoopHalt(reason, prUrl);
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
                   return;
                 }
-                const outcome = await this.planRemediation(
-                  state,
-                  steps,
-                  finishGate
-                    ? `The finish step's fresh verification failed: ${lastError}. ` +
-                        'Failing-test evidence, when the finish skill recorded it, is at ' +
-                        '.pipeline/test-failures.md. Plan remediation per the /remediate ' +
-                        'skill; the engine validates and persists its typed result.'
-                    : 'A blocking as-built architecture review is at ' +
-                        `${AS_BUILT_VERDICT_PATH}. Plan remediation per ` +
-                        'the /remediate skill; the engine validates and persists its typed result.',
-                  finishGate
-                    ? {
-                        source: 'finish-verification',
-                        evidence: [{ gate: 'finish', evidenceFile: '.pipeline/test-failures.md' }],
+
+                if (step.name === 'architecture_review_as_built') {
+                  const asBuiltOutcome = await readAsBuiltRoutingOutcome(this.projectRoot);
+                  const asBuiltRemediationEnabled =
+                    (
+                      this.config as HarnessConfig & {
+                        architecture_review_as_built?: { remediation?: { enabled?: boolean } };
                       }
-                    : {
-                        source: 'as-built architecture review',
+                    ).architecture_review_as_built?.remediation?.enabled ?? true;
+                  let remediableNoPlanReason: string | undefined;
+                  if (this.daemon && asBuiltRemediationEnabled && asBuiltOutcome.kind === 'blocked-remediable') {
+                    const escalation = await checkKickbackToBuildEscalation(step.name);
+                    if (escalation.halt) {
+                      // AB-R7 / APPROVED decision 4 — see the validation-group
+                      // exit above; both terminals carry the same class and the
+                      // same per-finding listing.
+                      const reason =
+                        `as-built architecture review kickback-to-build no-op: ${escalation.reason}` +
+                        renderAsBuiltBlockedFindingDetail(asBuiltOutcome.findings);
+                      // AB-R5 class / adr-2026-08-12 D1: this serial exit returns
+                      // between step_started and step_completed, so the open
+                      // execution needs its one terminal before the loop ends. The
+                      // group twin above returns after parallel_completed and does
+                      // not.
+                      await this.closeOpenExecutions();
+                      await this.writeHaltMarker(reason + '\n', KICKBACK_CAP_HALT_CLASS);
+                      await this.persistPendingStateChanges(state, 'persist conductor transition');
+                      const prUrl = await this.surfaceRemediationPr(reason);
+                      await this.emitLoopHalt(reason, prUrl);
+                      process.off('SIGINT', sigintHandler);
+                      process.off('SIGTERM', sigterm);
+                      return;
+                    }
+                    const remediation = await this.planRemediation(
+                      state,
+                      steps,
+                      'A blocking as-built architecture review is at ' +
+                        `${AS_BUILT_VERDICT_PATH}. Plan remediation per the ` +
+                        '/remediate skill; the engine validates and persists its typed result.',
+                      {
+                        source: 'architecture-review-as-built',
                         evidence: [
                           {
                             gate: 'architecture_review_as_built',
@@ -16257,189 +16443,325 @@ export class Conductor {
                           },
                         ],
                       },
-                );
-                if (outcome.kind === 'route') {
-                  remediationRounds++;
-                  await emitTracked({
-                    type: 'kickback',
-                    from: step.name,
-                    to: outcome.target,
-                    evidence: outcome.evidence,
-                    count: remediationRounds,
-                    // #647 D3: when checkKickbackToBuildEscalation classified the
-                    // prior build cycle as productive (it did not halt for THAT
-                    // reason), tag this re-kickback with the same discriminator.
-                    ...(gateEscalation.kickbackOutcome ? { kickback_outcome: gateEscalation.kickbackOutcome } : {}),
-                  });
-                  pendingRetryHints.set(outcome.target, outcome.hint);
-
-                  // Task 4: Merged-PR guard on finish-remediation kickback (TS-1).
-                  // Before committing the rewind, check if the recorded PR has been
-                  // merged out-of-band. If so, stop the run as a synthetic verified
-                  // ship and return successfully.
-                  if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+                    );
+                    if (remediation.kind === 'route') {
+                      remediationRounds++;
+                      await emitTracked({
+                        type: 'kickback',
+                        from: step.name,
+                        to: remediation.target,
+                        evidence: remediation.evidence,
+                        count: remediationRounds,
+                        ...(escalation.kickbackOutcome ? { kickback_outcome: escalation.kickbackOutcome } : {}),
+                      });
+                      pendingRetryHints.set(remediation.target, remediation.hint);
+                      if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+                        return;
+                      }
+                      if (remediation.target === 'build') {
+                        await captureKickbackToBuildContext(step.name);
+                      }
+                      const nav = navigateBack(state, remediation.target, steps);
+                      state = nav.state;
+                      this.haltState = state;
+                      (state as Record<string, unknown>)[step.name] = 'stale';
+                      await this.persistPendingStateChanges(state, 'persist conductor transition');
+                      i = nav.index - 1; // for-loop i++ lands on the remediation target
+                      continue;
+                    }
+                    if (remediation.kind === 'halt') {
+                      const reason = `as-built architecture review halted: needs human DECIDE — ${remediation.detail}`;
+                      await this.closeOpenExecutions();
+                      await this.writeHaltMarker(reason + '\n', remediation.haltClass ?? 'needs-human');
+                      await this.persistPendingStateChanges(state, 'persist conductor transition');
+                      const prUrl = await this.surfaceRemediationPr(reason);
+                      await this.emitLoopHalt(reason, prUrl);
+                      process.off('SIGINT', sigintHandler);
+                      process.off('SIGTERM', sigterm);
+                      return;
+                    }
+                    if (remediation.kind === 'none') {
+                      remediableNoPlanReason = remediation.reason;
+                    }
+                  }
+                  // The listing is part of the reason so the marker, the surfaced
+                  // PR, and the loop_halt event all carry the same text — the
+                  // group site composes its reason the same way.
+                  const reason =
+                    `as-built architecture review halted: ${lastError}` +
+                    (asBuiltOutcome.kind === 'blocked-remediable' && remediableNoPlanReason
+                      ? ` — remediation did not route: ${remediableNoPlanReason}`
+                      : '') +
+                    renderAsBuiltBlockedFindingDetail(asBuiltOutcome.findings);
+                  const recordingFault =
+                    asBuiltOutcome.kind === 'blocked-design'
+                      ? await this.recordAsBuiltNeedsHumanFindings(
+                          (asBuiltOutcome.findings ?? []).map((finding) => ({
+                            findingId: finding.id,
+                            attemptId: this.currentRunId ?? 'unknown-attempt',
+                            class: finding.class,
+                            reference: finding.reference,
+                            summary: finding.summary,
+                          })),
+                          reason,
+                        )
+                      : undefined;
+                  if (recordingFault !== undefined) {
+                    await this.writeHaltMarker(recordingFault + '\n', 'needs-human');
+                    await this.persistPendingStateChanges(state, 'persist conductor transition');
+                    const prUrl = await this.surfaceRemediationPr(recordingFault);
+                    await this.emitLoopHalt(recordingFault, prUrl);
+                    process.off('SIGINT', sigintHandler);
+                    process.off('SIGTERM', sigterm);
                     return;
                   }
-
-                  if (outcome.target === 'build') {
-                    await captureKickbackToBuildContext(step.name);
-                  }
-                  const navigationIndex = await this.navigateStateBack(state, outcome.target, steps);
-                  // markDownstreamStale only restages `done` steps; this gate is
-                  // `failed` here, so restage it explicitly to re-run on the tail.
-                  await this.commitStateChanges(state, `restage ${step.name} after remediation`, {
-                    [step.name]: 'stale',
-                  });
-                  i = navigationIndex - 1; // for-loop i++ lands on the target step
-                  continue;
-                }
-                if (outcome.kind === 'halt') {
-                  const reason =
-                    `${finishGate ? 'finish' : 'as-built architecture review'} halted: ` +
-                    `needs human DECIDE — ${outcome.detail}`;
-                  // #647 D3: the D1 no-op guard (planRemediation stamps
-                  // kickbackOutcome='derived-already-complete' when the target
-                  // was already evidence-complete) — emit a 'kickback' audit
-                  // event carrying that discriminator so the audit trail
-                  // distinguishes this from a productive kickback, even though
-                  // no route/re-entry into build actually happens.
-                  if (outcome.kickbackOutcome) {
-                    await emitTracked({
-                      type: 'kickback',
-                      from: step.name,
-                      to: 'build',
-                      evidence: outcome.detail,
-                      count: remediationRounds,
-                      kickback_outcome: outcome.kickbackOutcome,
-                    });
-                  }
-                  await this.writeHaltMarker(reason + '\n', 'needs-human');
+                  await this.writeHaltMarker(
+                    reason + '\n',
+                    asBuiltOutcome.kind === 'plan-gap-undelivered' ? 'plan-gap' : 'needs-human',
+                  );
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await this.emitLoopHalt(reason, prUrl);
                   process.off('SIGINT', sigintHandler);
                   process.off('SIGTERM', sigterm);
                   return;
                 }
-                // No usable remediation plan → preserve its final named fault
-                // on the existing generic FINISH terminal below.
-                finishRemediationPlannerFault = outcome.reason;
+
+                // Finish remediation (daemon only): give the same /remediate
+                // planner that routes a blocking prd_audit a shot at a failed finish
+                // verification before the generic HALT.
+                // Retain an exhausted planner's final mechanical fault until that
+                // same generic terminal writes the FINISH lifecycle outcome.  A
+                // no-plan finish round deliberately keeps the established terminal
+                // (rather than inventing a remediation-specific halt), but it must
+                // not erase the diagnostic that explains why no route occurred.
+                if (this.daemon && step.name === 'finish' && remediationRounds < MAX_KICKBACKS_PER_GATE) {
+                  const finishGate = true;
+                  // D2: this gate re-failing right after a prior kickback-to-build
+                  // cycle that made zero net progress on an unchanged verdict
+                  // escalates to HALT here instead of spending another
+                  // remediation round toward MAX_KICKBACKS_PER_GATE.
+                  const gateEscalation = await checkKickbackToBuildEscalation(step.name);
+                  if (gateEscalation.halt) {
+                    const reason =
+                      `${finishGate ? 'finish' : 'as-built architecture review'} ` +
+                      `kickback-to-build no-op: ${gateEscalation.reason}`;
+                    await this.writeHaltMarker(reason + '\n', 'needs-human');
+                    const prUrl = await this.surfaceRemediationPr(reason);
+                    await this.emitLoopHalt(reason, prUrl);
+                    process.off('SIGINT', sigintHandler);
+                    process.off('SIGTERM', sigterm);
+                    return;
+                  }
+                  const outcome = await this.planRemediation(
+                    state,
+                    steps,
+                    finishGate
+                      ? `The finish step's fresh verification failed: ${lastError}. ` +
+                          'Failing-test evidence, when the finish skill recorded it, is at ' +
+                          '.pipeline/test-failures.md. Plan remediation per the /remediate ' +
+                          'skill; the engine validates and persists its typed result.'
+                      : 'A blocking as-built architecture review is at ' +
+                          `${AS_BUILT_VERDICT_PATH}. Plan remediation per ` +
+                          'the /remediate skill; the engine validates and persists its typed result.',
+                    finishGate
+                      ? {
+                          source: 'finish-verification',
+                          evidence: [{ gate: 'finish', evidenceFile: '.pipeline/test-failures.md' }],
+                        }
+                      : {
+                          source: 'as-built architecture review',
+                          evidence: [
+                            {
+                              gate: 'architecture_review_as_built',
+                              evidenceFile: AS_BUILT_VERDICT_PATH,
+                            },
+                          ],
+                        },
+                  );
+                  if (outcome.kind === 'route') {
+                    remediationRounds++;
+                    await emitTracked({
+                      type: 'kickback',
+                      from: step.name,
+                      to: outcome.target,
+                      evidence: outcome.evidence,
+                      count: remediationRounds,
+                      // #647 D3: when checkKickbackToBuildEscalation classified the
+                      // prior build cycle as productive (it did not halt for THAT
+                      // reason), tag this re-kickback with the same discriminator.
+                      ...(gateEscalation.kickbackOutcome ? { kickback_outcome: gateEscalation.kickbackOutcome } : {}),
+                    });
+                    pendingRetryHints.set(outcome.target, outcome.hint);
+
+                    // Task 4: Merged-PR guard on finish-remediation kickback (TS-1).
+                    // Before committing the rewind, check if the recorded PR has been
+                    // merged out-of-band. If so, stop the run as a synthetic verified
+                    // ship and return successfully.
+                    if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
+                      return;
+                    }
+
+                    if (outcome.target === 'build') {
+                      await captureKickbackToBuildContext(step.name);
+                    }
+                    const navigationIndex = await this.navigateStateBack(state, outcome.target, steps);
+                    // markDownstreamStale only restages `done` steps; this gate is
+                    // `failed` here, so restage it explicitly to re-run on the tail.
+                    await this.commitStateChanges(state, `restage ${step.name} after remediation`, {
+                      [step.name]: 'stale',
+                    });
+                    i = navigationIndex - 1; // for-loop i++ lands on the target step
+                    continue;
+                  }
+                  if (outcome.kind === 'halt') {
+                    const reason =
+                      `${finishGate ? 'finish' : 'as-built architecture review'} halted: ` +
+                      `needs human DECIDE — ${outcome.detail}`;
+                    // #647 D3: the D1 no-op guard (planRemediation stamps
+                    // kickbackOutcome='derived-already-complete' when the target
+                    // was already evidence-complete) — emit a 'kickback' audit
+                    // event carrying that discriminator so the audit trail
+                    // distinguishes this from a productive kickback, even though
+                    // no route/re-entry into build actually happens.
+                    if (outcome.kickbackOutcome) {
+                      await emitTracked({
+                        type: 'kickback',
+                        from: step.name,
+                        to: 'build',
+                        evidence: outcome.detail,
+                        count: remediationRounds,
+                        kickback_outcome: outcome.kickbackOutcome,
+                      });
+                    }
+                    await this.writeHaltMarker(reason + '\n', outcome.haltClass ?? 'needs-human');
+                    const prUrl = await this.surfaceRemediationPr(reason);
+                    await this.emitLoopHalt(reason, prUrl);
+                    process.off('SIGINT', sigintHandler);
+                    process.off('SIGTERM', sigterm);
+                    return;
+                  }
+                  // No usable remediation plan → preserve its final named fault
+                  // on the existing generic FINISH terminal below.
+                  finishRemediationPlannerFault = outcome.reason;
+                }
+              }
+
+              // Unattended hard failure on a gating/structural step. Write a HALT
+              // marker (not just return) so a supervising daemon classifies this as
+              // `halted` — worktree kept, NOT marked processed, retryable after a
+              // human looks — instead of "loop ended without DONE or HALT marker".
+              // If a step already wrote a specific HALT reason (e.g. the pre-flight
+              // credentials check), preserve it — never overwrite with the generic
+              // "retries exhausted" message (adr-2026-07-04-auth-failure-park-and-poll).
+              const existingHalt = await readFile(join(this.projectRoot, LOOP_HALT_MARKER), 'utf-8').catch(() => null);
+              const uncommittedPaths = await uncommittedPathsOrNull(await this.completionCtx(state));
+              const uncommittedPathsReason = uncommittedPaths
+                ? `${uncommittedPaths.length} uncommitted paths: ${uncommittedPaths.slice(0, 3).join(', ')}${
+                    uncommittedPaths.length > 3 ? ` (+${uncommittedPaths.length - 3} more)` : ''
+                  }`
+                : undefined;
+              // #569 Task 5: a no_task_progress build stall is a more specific
+              // and actionable diagnosis than a generic unchanged-input note,
+              // so it takes precedence over `unchangedInputNote` (but never
+              // over an existing, more-specific HALT marker written by
+              // auto-park/budget-exhaustion/remediation above).
+              const reason =
+                existingHalt && existingHalt.trim().length > 0
+                  ? existingHalt.trim()
+                  : lastVerdictHandshakeFailure
+                    ? `step '${step.name}' exhausted retries without a fresh verdict: ` + lastVerdictHandshakeFailure
+                    : unretryableInputFailure
+                      ? `step '${unretryableInputFailure.failingStep}' cannot make progress: its inputs cannot change on a re-dispatch. ` +
+                        `Re-run '${unretryableInputFailure.retryAfterStep}' before retrying '${unretryableInputFailure.failingStep}'.`
+                      : uncommittedPathsReason
+                        ? uncommittedPathsReason
+                        : acceptanceRedHealFailureReason
+                          ? acceptanceRedHealFailureReason
+                          : lastBuildStallReason
+                            ? lastBuildStallReason
+                            : graderDispatchFailureReason
+                              ? `${graderDispatchFailureReason} (retries exhausted with backoff — this is an infrastructure failure, not a code-quality rejection; the build's completed work is intact)`
+                              : unchangedInputNote
+                                ? `step '${step.name}' failed in auto mode: ${unchangedInputNote}`
+                                : buildReviewSchemaFailureReason
+                                  ? buildReviewSchemaFailureReason
+                                  : `step '${step.name}' failed in auto mode (retries exhausted)`;
+              const terminalReason =
+                finishRemediationPlannerFault === undefined
+                  ? reason
+                  : `${reason}\n\nRemediation planner fault: ${finishRemediationPlannerFault}`;
+              if (!existingHalt || existingHalt.trim().length === 0) {
+                await this.writeHaltMarker(terminalReason + '\n', 'needs-human');
+              }
+              // The HALT marker is written before escalation. All state transitions
+              // have already crossed the state-store boundary.
+              // so the daemon can classify the outcome even if escalation throws (C1).
+              // Escalate for all gating/structural steps (not just build): open a
+              // needs-remediation draft PR so a human can see the failure without
+              // hunting through daemon logs. surfaceRemediationPr is best-effort and
+              // wraps escalation in try/catch — a throwing escalation must never
+              // prevent the HALT path from returning cleanly (C1).
+              const prUrl = await this.surfaceRemediationPr(`${terminalReason}\n${lastError}`);
+              await this.emitLoopHalt(terminalReason, prUrl);
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
+            }
+
+            if (this.onRecovery) {
+              const gating = step.enforcement === 'gating';
+              let action: RecoveryOption;
+              // Keep polling the UI until it returns something other than `retry`
+              // once retries are exhausted. Terminal-side prompt hosts should drop
+              // `retry` from the menu when `retriesExhausted` is set; if a caller
+              // ignores the context, this loop prevents an infinite retry storm.
+              const retryKey = this.childScopedStepKey(step.name, this.activeRegionChild);
+              let count = 0;
+              while (true) {
+                count = recoveryRetries.get(retryKey) ?? 0;
+                const retriesExhausted = count >= MAX_RECOVERY_RETRIES;
+                action = await this.onRecovery(step.name, gating, {
+                  recoveryCount: count,
+                  retriesExhausted,
+                });
+                if (action === 'retry' && retriesExhausted) continue;
+                break;
+              }
+              if (action === 'retry') {
+                recoveryRetries.set(retryKey, count + 1);
+                i--;
+                continue;
+              }
+              if (action === 'skip' && !gating) {
+                await this.saveConductorStepStatus(state, step.name, 'skipped');
+                continue;
+              }
+              if (action === 'back') {
+                const navigable = getNavigableSteps(state, steps);
+                const target = await this.onNavigate(navigable);
+                if (target) {
+                  const navigationIndex = await this.navigateStateBack(state, target, steps);
+                  await emitTracked({ type: 'navigation_back', from: step.name, to: target });
+                  i = navigationIndex - 1;
+                  continue;
+                }
+              }
+              if (action === 'interactive') {
+                if (this.stepRunner.runInteractive) {
+                  await this.stepRunner.runInteractive(step.name, {
+                    reason: retryHint?.trim() || lastError,
+                  });
+                }
+                i--;
+                continue;
               }
             }
 
-            // Unattended hard failure on a gating/structural step. Write a HALT
-            // marker (not just return) so a supervising daemon classifies this as
-            // `halted` — worktree kept, NOT marked processed, retryable after a
-            // human looks — instead of "loop ended without DONE or HALT marker".
-            // If a step already wrote a specific HALT reason (e.g. the pre-flight
-            // credentials check), preserve it — never overwrite with the generic
-            // "retries exhausted" message (adr-2026-07-04-auth-failure-park-and-poll).
-            const existingHalt = await readFile(join(this.projectRoot, LOOP_HALT_MARKER), 'utf-8').catch(() => null);
-            const uncommittedPaths = await uncommittedPathsOrNull(await this.completionCtx(state));
-            const uncommittedPathsReason = uncommittedPaths
-              ? `${uncommittedPaths.length} uncommitted paths: ${uncommittedPaths.slice(0, 3).join(', ')}${
-                  uncommittedPaths.length > 3 ? ` (+${uncommittedPaths.length - 3} more)` : ''
-                }`
-              : undefined;
-            // #569 Task 5: a no_task_progress build stall is a more specific
-            // and actionable diagnosis than a generic unchanged-input note,
-            // so it takes precedence over `unchangedInputNote` (but never
-            // over an existing, more-specific HALT marker written by
-            // auto-park/budget-exhaustion/remediation above).
-            const reason =
-              existingHalt && existingHalt.trim().length > 0
-                ? existingHalt.trim()
-                : lastVerdictHandshakeFailure
-                  ? `step '${step.name}' exhausted retries without a fresh verdict: ` + lastVerdictHandshakeFailure
-                  : unretryableInputFailure
-                    ? `step '${unretryableInputFailure.failingStep}' cannot make progress: its inputs cannot change on a re-dispatch. ` +
-                      `Re-run '${unretryableInputFailure.retryAfterStep}' before retrying '${unretryableInputFailure.failingStep}'.`
-                    : uncommittedPathsReason
-                      ? uncommittedPathsReason
-                      : acceptanceRedHealFailureReason
-                        ? acceptanceRedHealFailureReason
-                        : lastBuildStallReason
-                          ? lastBuildStallReason
-                          : graderDispatchFailureReason
-                            ? `${graderDispatchFailureReason} (retries exhausted with backoff — this is an infrastructure failure, not a code-quality rejection; the build's completed work is intact)`
-                            : unchangedInputNote
-                              ? `step '${step.name}' failed in auto mode: ${unchangedInputNote}`
-                              : buildReviewSchemaFailureReason
-                                ? buildReviewSchemaFailureReason
-                                : `step '${step.name}' failed in auto mode (retries exhausted)`;
-            const terminalReason =
-              finishRemediationPlannerFault === undefined
-                ? reason
-                : `${reason}\n\nRemediation planner fault: ${finishRemediationPlannerFault}`;
-            if (!existingHalt || existingHalt.trim().length === 0) {
-              await this.writeHaltMarker(terminalReason + '\n', 'needs-human');
-            }
-            // The HALT marker is written before escalation. All state transitions
-            // have already crossed the state-store boundary.
-            // so the daemon can classify the outcome even if escalation throws (C1).
-            // Escalate for all gating/structural steps (not just build): open a
-            // needs-remediation draft PR so a human can see the failure without
-            // hunting through daemon logs. surfaceRemediationPr is best-effort and
-            // wraps escalation in try/catch — a throwing escalation must never
-            // prevent the HALT path from returning cleanly (C1).
-            const prUrl = await this.surfaceRemediationPr(`${terminalReason}\n${lastError}`);
-            await this.emitLoopHalt(terminalReason, prUrl);
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
             return;
           }
-
-          if (this.onRecovery) {
-            const gating = step.enforcement === 'gating';
-            let action: RecoveryOption;
-            // Keep polling the UI until it returns something other than `retry`
-            // once retries are exhausted. Terminal-side prompt hosts should drop
-            // `retry` from the menu when `retriesExhausted` is set; if a caller
-            // ignores the context, this loop prevents an infinite retry storm.
-            const retryKey = this.childScopedStepKey(step.name, this.activeRegionChild);
-            let count = 0;
-            while (true) {
-              count = recoveryRetries.get(retryKey) ?? 0;
-              const retriesExhausted = count >= MAX_RECOVERY_RETRIES;
-              action = await this.onRecovery(step.name, gating, {
-                recoveryCount: count,
-                retriesExhausted,
-              });
-              if (action === 'retry' && retriesExhausted) continue;
-              break;
-            }
-            if (action === 'retry') {
-              recoveryRetries.set(retryKey, count + 1);
-              i--;
-              continue;
-            }
-            if (action === 'skip' && !gating) {
-              await this.saveConductorStepStatus(state, step.name, 'skipped');
-              continue;
-            }
-            if (action === 'back') {
-              const navigable = getNavigableSteps(state, steps);
-              const target = await this.onNavigate(navigable);
-              if (target) {
-                const navigationIndex = await this.navigateStateBack(state, target, steps);
-                await emitTracked({ type: 'navigation_back', from: step.name, to: target });
-                i = navigationIndex - 1;
-                continue;
-              }
-            }
-            if (action === 'interactive') {
-              if (this.stepRunner.runInteractive) {
-                await this.stepRunner.runInteractive(step.name, {
-                  reason: retryHint?.trim() || lastError,
-                });
-              }
-              i--;
-              continue;
-            }
-          }
-
-          process.off('SIGINT', sigintHandler);
-          process.off('SIGTERM', sigterm);
-          return;
         }
 
         // Success path ------------------------------------------------------
@@ -16594,24 +16916,11 @@ export class Conductor {
           // A clean build_review lap settles its durable remediation cases
           // before the PASS becomes terminal, so no repaired work order stays
           // BUILD-eligible for a later lap to replay.
-          if (step.name === 'build_review') {
-            const settlement = await this.settleRemediationCasesOnCleanBuildReview();
-            if (settlement.kind === 'invalid') {
-              // adr-2026-08-11 decision 1: a halt reaches the operator through
-              // the persisted spine, never a bare marker write. Writing the
-              // marker alone left the active execution open and emitted no
-              // `loop_halt` — and the daemon's fallback emitter is suppressed
-              // precisely because a marker now exists, so the halt was
-              // invisible to every spine consumer.
-              await this.haltSerialExecution({
-                reason: `build_review clean-PASS durable settlement halted: ${settlement.reason}`,
-                haltClass: 'needs-human',
-                persistState: async () => {
-                  await this.persistPendingStateChanges(state, 'persist conductor transition');
-                },
-              });
-              return;
-            }
+          if (
+            step.name === 'build_review' &&
+            (await this.settleCleanBuildReviewSuccess(state, buildReviewAdjudicationSettlement)) === 'halted'
+          ) {
+            return;
           }
 
           // For complexity + worktree, 'done' (and tier / worktree fields) are
@@ -16791,11 +17100,12 @@ export class Conductor {
           if (
             step.name === 'build_review' &&
             activeChild !== undefined &&
-            activeChildRequiresClosure &&
-            CHILD_REGION_STEPS.every((regionStep) => {
-              const status = getStepStatus(state, regionStep);
-              return status === 'done' || status === 'skipped';
-            })
+            (activeChildRequiresClosure || (buildReviewAdjudicationSettlement.settled && !activeChild.isLeaf)) &&
+            (buildReviewAdjudicationSettlement.settled ||
+              CHILD_REGION_STEPS.every((regionStep) => {
+                const status = getStepStatus(state, regionStep);
+                return status === 'done' || status === 'skipped';
+              }))
           ) {
             const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
             if (!slug) throw new Error('cannot advance child BUILD region without a feature slug');
@@ -16812,6 +17122,20 @@ export class Conductor {
               return;
             }
             const next = await this.resolveActiveChild(this.projectRoot, slug);
+            // An ordinary child closure can reveal the routed overlay only
+            // after its closure CAS. Consume that already-read cursor; a
+            // second cursor read may advance a test or daemon observer past
+            // the host whose durable exit still needs committing.
+            const nextExecution = resolveExecutionChild(next, slug);
+            if (nextExecution.source === 'routed-host' && nextExecution.target.child === activeChild.child) {
+              const routedExitAfterClosure = await this.continueRoutedHostExit(state, indexOf, false, next);
+              if (routedExitAfterClosure === 'halt') return;
+              if (routedExitAfterClosure !== undefined) {
+                activeChild = routedExitAfterClosure.activeChild;
+                i = routedExitAfterClosure.index - 1;
+                continue;
+              }
+            }
             if (next.kind !== 'active') {
               const reason =
                 next.kind === 'no-child'
@@ -16828,7 +17152,15 @@ export class Conductor {
 
           let advance: number | null | 'halt' | 'parked';
           try {
-            advance = await this.advanceTail(step, state, stuckGate, steps, indexOf, buildRoutedForward);
+            advance = await this.advanceTail(
+              step,
+              state,
+              stuckGate,
+              steps,
+              indexOf,
+              buildRoutedForward,
+              buildReviewAdjudicationSettlement.settled,
+            );
           } catch (transitionErr) {
             // Tag the escaped rejection with which step-transition it happened
             // during, preserving the original stack (never rethrow a bare
@@ -17183,7 +17515,7 @@ export class Conductor {
   ): Promise<
     | { readonly kind: 'admitted' }
     | { readonly kind: 'exhausted'; readonly reason: string }
-    | { readonly kind: 'halted'; readonly reason: string }
+    | { readonly kind: 'halted'; readonly reason: string; readonly haltClass?: 'mechanical' | 'needs-human' }
   > {
     const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
     // The flat path remains authoritative when routing does not apply.  Its
@@ -17371,9 +17703,11 @@ export class Conductor {
         reason: `routing round ${roundId} admission failed: ${error instanceof Error ? error.message : String(error)}`,
       };
     }
-    return admitted.kind === 'admitted'
-      ? { kind: 'admitted' }
-      : { kind: 'halted', reason: `routing round ${roundId} admission failed: ${admitted.detail}` };
+    if (admitted.kind === 'admitted') return { kind: 'admitted' };
+    const admissionReason = `routing round ${roundId} admission failed: ${admitted.detail}`;
+    if (!admitted.fence) return { kind: 'halted', reason: admissionReason };
+    const stall = await this.recordRoutingFenceHalt(slug, admissionReason);
+    return { kind: 'halted', reason: stall.detail, haltClass: stall.haltClass };
   }
 
   /** Records the taskless routed receipt for a manual-test kickback. */
@@ -17531,7 +17865,10 @@ export class Conductor {
             case 'exhausted':
             case 'halted': {
               const reason = routedAdmission.reason;
-              await this.writeHaltMarker(reason + '\n', 'needs-human');
+              await this.writeHaltMarker(
+                reason + '\n',
+                (routedAdmission.kind === 'halted' ? routedAdmission.haltClass : undefined) ?? 'needs-human',
+              );
               const prUrl = await this.surfaceRemediationPr(reason);
               await this.emitLoopHalt(reason, prUrl);
               return 'halt';
@@ -17597,6 +17934,7 @@ export class Conductor {
     steps: StepDefinition[],
     indexOf: (name: StepName) => number,
     buildRoutedForward = false,
+    buildReviewAdjudicationSettled = false,
   ): Promise<number | null | 'halt' | 'parked'> {
     // The gate-driven tail engages only when completion is verified against
     // artifacts (verifyArtifacts=true) — the single satisfaction authority
@@ -17696,18 +18034,33 @@ export class Conductor {
               reason: state.build_routed_reason ?? 'build routed after commit movement',
               checkedAt: Date.now(),
             }
-          : step.name === 'finish'
-            ? { satisfied: true, checkedAt: Date.now() }
-            : await computeAndWriteVerdict(this.projectRoot, step.name, await this.completionCtx(state), {
-                retainReplayPreservation: false,
-              });
-      if (step.name === 'finish' || (step.name === 'build' && buildRoutedForward)) {
+          : step.name === 'build_review' && buildReviewAdjudicationSettled
+            ? {
+                satisfied: true,
+                reason: 'build_review FAIL settled by post-join adjudication',
+                checkedAt: Date.now(),
+              }
+            : step.name === 'finish'
+              ? { satisfied: true, checkedAt: Date.now() }
+              : await computeAndWriteVerdict(this.projectRoot, step.name, await this.completionCtx(state), {
+                  retainReplayPreservation: false,
+                });
+      if (
+        step.name === 'finish' ||
+        (step.name === 'build' && buildRoutedForward) ||
+        (step.name === 'build_review' && buildReviewAdjudicationSettled)
+      ) {
         await writeVerdict(
           this.projectRoot,
           step.name,
           verdict,
-          step.name === 'build' ? this.activeRegionChild : undefined,
-          { routedRound: step.name === 'build' ? await this.routedRoundForActiveChild(state) : undefined },
+          step.name === 'build' || step.name === 'build_review' ? this.activeRegionChild : undefined,
+          {
+            routedRound:
+              step.name === 'build' || step.name === 'build_review'
+                ? await this.routedRoundForActiveChild(state)
+                : undefined,
+          },
         );
       }
       await this.events.emit(
@@ -17893,19 +18246,29 @@ export class Conductor {
     // Do not probe routing refs for flat/N=1 features.  The sealed leaf is a
     // local durable fact and is enough to reject that whole class before any
     // marker or queue read.
-    if (parkingSlug && this.config.stacked_prs?.route_whole_feature_fixes === true) {
-      const leaf = await resolveSealedLeaf(this.projectRoot);
-      if (leaf !== undefined && leaf > 1) {
-        const marker = await readRepairMarker(this.projectRoot, parkingSlug);
-        if (marker.kind === 'marker') {
-          routedParking =
-            marker.marker.host === leaf ? { kind: 'leaf-host' } : { kind: 'child', child: marker.marker.host };
-        } else {
-          const queue = await readRevalidationQueue(this.projectRoot, parkingSlug);
-          if (queue.kind === 'unreadable' || (queue.kind === 'queue' && queue.queue.entries.length > 0)) {
-            routedParking = { kind: 'queue' };
-          }
-        }
+    if (parkingSlug) {
+      const outstanding = await routedWorkOutstanding(this.projectRoot, parkingSlug, {
+        routingEnabled: this.config.stacked_prs?.route_whole_feature_fixes === true,
+        sealedLeaf: await resolveSealedLeaf(this.projectRoot),
+      });
+      switch (outstanding.kind) {
+        case 'none':
+          break;
+        case 'child':
+          routedParking = { kind: 'child', child: outstanding.child };
+          break;
+        case 'leaf-host':
+          routedParking = { kind: 'leaf-host' };
+          break;
+        // A queue, unreadable routing data, or an open record with no marker
+        // all need preflight reconciliation before a whole-feature gate runs.
+        case 'queue':
+        case 'open-round':
+        case 'unreadable':
+          routedParking = { kind: 'queue' };
+          break;
+        default:
+          assertNever(outstanding);
       }
     }
     const decision = selectNextGate({

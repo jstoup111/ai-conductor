@@ -25,7 +25,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DAEMON_CLI_SRC = join(__dirname, '../../src/daemon-cli.ts');
+const DAEMON_CLI_SRC = join(__dirname, '../../src/engine/daemon-feature-lifecycle.ts');
 
 describe('Task 8 — daemon-cli guards resumeRebaseFirst (REKICK sentinel) on operator-park', () => {
   it('checks isOperatorParked and returns BEFORE the one-shot resumeRebaseFirst call, so a parked sentinel is never consumed', async () => {
@@ -33,19 +33,12 @@ describe('Task 8 — daemon-cli guards resumeRebaseFirst (REKICK sentinel) on op
 
     // The real production primitive is already imported (Task 7 wiring).
     // Allow for other imports in the same statement (e.g., reconcileStrandedParkMarkers).
-    expect(source).toMatch(
-      /import\s*\{[^}]*isOperatorParked[^}]*\}\s*from\s*['"]\.\/engine\/park-marker\.js['"]/,
-    );
+    expect(source).toMatch(/import\s*\{[^}]*isOperatorParked[^}]*\}\s*from\s*['"]\.\/park-marker\.js['"]/);
 
     // Isolate the region from the ranManualTest computation through the
     // resumeRebaseFirst call, so we can assert relative ordering.
-    const region = source.match(
-      /const ranManualTest[\s\S]*?await resumeRebaseFirst\(\{[\s\S]*?\}\);/,
-    );
-    expect(
-      region,
-      'expected a block spanning ranManualTest through the resumeRebaseFirst(...) call',
-    ).toBeTruthy();
+    const region = source.match(/const ranManualTest[\s\S]*?await resumeRebaseFirst\(\{[\s\S]*?\}\);/);
+    expect(region, 'expected a block spanning ranManualTest through the resumeRebaseFirst(...) call').toBeTruthy();
     const block = region![0];
 
     const parkedCheckIdx = block.search(/isOperatorParked\(/);
@@ -64,9 +57,7 @@ describe('Task 8 — daemon-cli guards resumeRebaseFirst (REKICK sentinel) on op
   it('the parked branch is reached before the sentinel would be consumed (behavioral proxy via the real primitives)', async () => {
     const { mkdtemp, rm, mkdir, writeFile: write, access } = await import('node:fs/promises');
     const { tmpdir } = await import('node:os');
-    const { isOperatorParked, writeOperatorPark } = (await import(
-      '../../src/engine/park-marker.js'
-    )) as {
+    const { isOperatorParked, writeOperatorPark } = (await import('../../src/engine/park-marker.js')) as {
       isOperatorParked: (root: string, slug: string) => Promise<boolean>;
       writeOperatorPark: (root: string, slug: string) => Promise<void>;
     };

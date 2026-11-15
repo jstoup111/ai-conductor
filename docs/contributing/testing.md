@@ -578,7 +578,7 @@ Three structural tests keep `engine/conductor.ts` a thin facade (layout in
 
 | Test | Fails when |
 | --- | --- |
-| `conductor-shape.test.ts` | `conductor.ts` gains a top-level declaration other than `Conductor` or an allowlisted tuning constant; a module other than `src/index.ts` or `src/daemon-cli.ts` imports the facade; an entry point imports anything but the `Conductor` value from it; a direct consumer imports a moved declaration through a re-export instead of its defining module. |
+| `conductor-shape.test.ts` | `conductor.ts` gains a top-level declaration other than `Conductor` or an allowlisted tuning constant; a module other than `src/index.ts`, `src/daemon-cli.ts`, or `src/engine/daemon-feature-lifecycle.ts` imports the facade; an allowed importer imports anything but the `Conductor` value from it; a direct consumer imports a moved declaration through a re-export instead of its defining module. |
 | `conductor-export-surface.test.ts` | The checker-resolved export set of `conductor.js` differs from `conductor-exports.json`, exposes a declaration that was private before the split, or a re-exported value loses its object identity. |
 | `destination-isolated-import.test.ts` | A destination module, imported alone, leaves any runtime export `undefined` (an initialization cycle). |
 

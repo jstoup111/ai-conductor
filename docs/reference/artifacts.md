@@ -675,7 +675,7 @@ Daemon-scoped state at the main checkout root. Gitignored. Seventeen paths.
 | `daemon.log` | The active daemon log | Rotated at open time when it exceeds 1 MB |
 | `daemon.log.1` | The rotated log | Overwritten by each rotation |
 | `daemon.pid` | pid, uuid, engine dir | `O_EXCL` pidfile. Fleet-wide GC cross-checks every pidfile; any read error other than "not found" aborts GC with zero deletions |
-| `executors/<slug>.json` | `{ pid, engineDir, engineVersionId, startedAt }` | Written atomically when a [child executor](configuration.md#executor_isolation) is forked and removed when it exits. Engine-store GC keeps every referenced version and aborts on an unreadable record. At boot a successor removes dead or non-executor records, terminates a live predecessor executor (SIGTERM, then SIGKILL), and fails boot if it survives |
+| `executors/<slug>.json` | `{ pid, engineDir, engineVersionId, startedAt }` | Written atomically when a [child executor](configuration.md#daemon-feature-executors) is forked and removed when it exits. Engine-store GC keeps every referenced version and aborts on an unreadable record. At boot a successor removes dead or non-executor records, terminates a live predecessor executor (SIGTERM, then SIGKILL), and fails boot if it survives |
 | `gated.json` | Owner-gate snapshot | — |
 | `last-base-sha` | Fast-forward tracking | — |
 | `mergeable-watch.jsonl` | Append-only mergeable sweep ledger | — |
@@ -1141,7 +1141,7 @@ phase.
 
 #### Executor engine events
 
-Emitted by the supervisor for [child executors](configuration.md#executor_isolation). Persisted to
+Emitted by the supervisor for [child executors](configuration.md#daemon-feature-executors). Persisted to
 `.daemon/events.jsonl` and rendered to the daemon log; not audited or exported to OpenTelemetry.
 
 | Event | Fields |

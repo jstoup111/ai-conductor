@@ -867,10 +867,9 @@ rely on it. See
 
 ## Restart after an engine change
 
-With the default [`executor_isolation: child`](../reference/configuration.md#executor_isolation),
-each claimed feature already runs the engine build `dist` names at claim time, so a published engine
-change reaches new dispatches without a restart. Restart to update the supervisor itself, or when
-running with `executor_isolation: in-process`.
+Each claimed feature runs in a [child executor](../reference/configuration.md#daemon-feature-executors)
+on the engine build `dist` names at claim time, so a published engine change reaches new dispatches
+without a restart. Restart only to update the supervisor itself.
 
 ```bash
 ai-conductor daemon restart
@@ -953,9 +952,8 @@ a running feature. If it does, the daemon asks one running feature to yield its 
 
 Preemption ranks priority bands as follows: `critical` > `high` > `medium` = `unlabeled` =
 no-issue > `low`. It applies only while priority resolution is banded. During a priority-read outage
-the backlog falls back to input order and nothing is preempted. Preemption also requires the
-default [`executor_isolation: child`](../reference/configuration.md#executor_isolation); the
-`in-process` executor never yields.
+the backlog falls back to input order and nothing is preempted. The yield request goes to the
+feature's [child executor](../reference/configuration.md#daemon-feature-executors).
 
 A running feature is a candidate only when its rank is strictly lower than the arrival's and it sits
 later in the current backlog. The lowest-ranked candidate yields first. Among equal ranks, the most

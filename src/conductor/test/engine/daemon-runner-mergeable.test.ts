@@ -10,11 +10,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import {
-  makeRunFeature,
-  type FeatureRunnerDeps,
-  type WorktreeOutcome,
-} from '../../src/engine/daemon-runner.js';
+import { makeRunFeature, type FeatureRunnerDeps, type WorktreeOutcome } from '../../src/engine/daemon-runner.js';
 import { runDaemon, type DaemonDeps, type BacklogItem } from '../../src/engine/daemon.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 import type { GithubOperationRunner } from '../../src/engine/github-operations.js';
@@ -28,6 +24,7 @@ const ITEM: BacklogItem = { slug: 'feat-x' };
 
 function baseDeps(overrides: Partial<FeatureRunnerDeps> = {}): FeatureRunnerDeps {
   return {
+    dispatchAdmission: 'acquire',
     createWorktree: async (slug) => ({ path: `/wt/${slug}`, branch: `feat/${slug}` }),
     runConductor: async () => {},
     readOutcome: async (): Promise<WorktreeOutcome> => ({ done: false, halted: false }),
@@ -88,10 +85,10 @@ function cleanupOperations(runGh: GhRunner): GithubOperationRunner {
     run: async (request) => {
       const target = request.target as { repository: string; number: number };
       if (request.operation === 'pull-request.label.remove') {
-        await runGh([
-          'api', '--method', 'DELETE',
-          `repos/${target.repository}/issues/${target.number}/labels/needs-remediation`,
-        ], { cwd: '/project' });
+        await runGh(
+          ['api', '--method', 'DELETE', `repos/${target.repository}/issues/${target.number}/labels/needs-remediation`],
+          { cwd: '/project' },
+        );
       }
       if (request.operation === 'pull-request.ready') {
         await runGh(['pr', 'ready', String(target.number), '-R', target.repository], { cwd: '/project' });
@@ -249,10 +246,7 @@ describe('FR-16: clear-on-success', () => {
     // removeLabel('needs-remediation'): REST DELETE .../labels/needs-remediation
     expect(
       calls.some(
-        (a) =>
-          a[0] === 'api' &&
-          a.includes('DELETE') &&
-          a.some((s) => /\/labels\/needs-remediation$/.test(s)),
+        (a) => a[0] === 'api' && a.includes('DELETE') && a.some((s) => /\/labels\/needs-remediation$/.test(s)),
       ),
     ).toBe(true);
     // setReady: pr ready
@@ -275,9 +269,9 @@ describe('FR-16: clear-on-success', () => {
       }),
     );
     await run(ITEM);
-    expect(
-      calls.some((a) => a[0] === 'api' && a.includes('DELETE') && a.some((s) => /\/labels\//.test(s))),
-    ).toBe(false);
+    expect(calls.some((a) => a[0] === 'api' && a.includes('DELETE') && a.some((s) => /\/labels\//.test(s)))).toBe(
+      false,
+    );
     expect(calls.some((a) => a[0] === 'pr' && a[1] === 'ready')).toBe(false);
   });
 
@@ -351,7 +345,7 @@ describe('FR-16: clear-on-success', () => {
         runGh: async (args, opts) => {
           if (args[0] === 'pr' && args[1] === 'view') {
             order.push('prMergeState');
-            return (await makeGhFake({ labels: ['needs-remediation'] }).runGh(args, opts));
+            return await makeGhFake({ labels: ['needs-remediation'] }).runGh(args, opts);
           }
           if (args[0] === 'api' && args.includes('DELETE')) order.push('removeLabel');
           if (args[0] === 'pr' && args[1] === 'ready') order.push('setReady');

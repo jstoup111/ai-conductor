@@ -2,13 +2,27 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
-import { admitRound, reconcileRounds } from '../../../src/engine/routing/round-admission.js';
-import { createRouteRecord, readRepairMarker, readRouteRecord, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
-import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
+import {
+  admitRound,
+  checkRoundAdmissionFence,
+  reconcileRounds,
+  routedWorkOutstanding,
+} from '../../../src/engine/routing/round-admission.js';
+import {
+  createRouteRecord,
+  readRepairMarker,
+  readRouteRecord,
+  writeRoutingTransaction,
+} from '../../../src/engine/routing/route-record-store.js';
+import {
+  repairMarkerRefFor,
+  revalidationQueueRefFor,
+  routeRecordRefFor,
+} from '../../../src/engine/routing/routing-refs.js';
 import { parseCommitSha } from '../../../src/engine/restack/restack-types.js';
 import { parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
 import { EventPersister } from '../../../src/engine/event-persister.js';
@@ -55,11 +69,24 @@ async function writeRecord(subject: Awaited<ReturnType<typeof fixture>>, record:
 
 async function writeQueue(subject: Awaited<ReturnType<typeof fixture>>): Promise<void> {
   const sha = parseCommitSha((await subject.git(['rev-parse', 'HEAD'])).stdout.trim())!;
-  const blob = (await subject.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify({
-    generation: 1,
-    entries: [{ child: c1, position: c1, closureSha: sha, gates: ['test_suite'], replay: { oldParent: sha, newParent: sha }, state: 'queued' }],
-    outbox: [],
-  }) })).stdout.trim();
+  const blob = (
+    await subject.git(['hash-object', '-w', '--stdin'], {
+      input: JSON.stringify({
+        generation: 1,
+        entries: [
+          {
+            child: c1,
+            position: c1,
+            closureSha: sha,
+            gates: ['test_suite'],
+            replay: { oldParent: sha, newParent: sha },
+            state: 'queued',
+          },
+        ],
+        outbox: [],
+      }),
+    })
+  ).stdout.trim();
   await subject.git(['update-ref', revalidationQueueRefFor('demo'), blob]);
 }
 
@@ -70,6 +97,98 @@ async function routingRefSnapshot(subject: Awaited<ReturnType<typeof fixture>>):
 function openAudit(record: RouteRecord, hosts: RouteRecord['hosts'], currentHostIndex = 0): RouteRecord {
   return { ...record, phase: 'open', hosts, currentHostIndex, outbox: [] };
 }
+
+describe('routed work outstanding (real local Git)', () => {
+  const enabled = { routingEnabled: true, sealedLeaf: c3 } as const;
+
+  it.each([
+    ['leaf-host marker', c3, { kind: 'leaf-host' }],
+    ['child marker', c1, { kind: 'child', child: c1 }],
+  ] as const)('reports %s before inspecting queue or routes', async (_name, host, expected) => {
+    const subject = await fixture();
+    try {
+      const blob = (
+        await subject.git(['hash-object', '-w', '--stdin'], {
+          input: JSON.stringify({ host, roundId }),
+        })
+      ).stdout.trim();
+      await subject.git(['update-ref', repairMarkerRefFor('demo'), blob]);
+
+      await expect(routedWorkOutstanding(subject.repo, 'demo', enabled)).resolves.toEqual(expected);
+    } finally {
+      await rm(subject.repo, { recursive: true, force: true });
+    }
+  });
+
+  it('reports a non-empty revalidation queue when no marker exists', async () => {
+    const subject = await fixture();
+    try {
+      await writeQueue(subject);
+
+      await expect(routedWorkOutstanding(subject.repo, 'demo', enabled)).resolves.toEqual({ kind: 'queue' });
+    } finally {
+      await rm(subject.repo, { recursive: true, force: true });
+    }
+  });
+
+  it('reports an open round by id when no marker or queue work exists', async () => {
+    const subject = await fixture();
+    try {
+      const created = await createRouteRecord(subject.repo, 'demo', input);
+      if (created.kind !== 'created') throw new Error(created.kind);
+      await writeRecord(subject, openAudit(created.record, { [c1]: 'restacked', [c2]: 'pending' }));
+
+      await expect(routedWorkOutstanding(subject.repo, 'demo', enabled)).resolves.toEqual({
+        kind: 'open-round',
+        roundId,
+      });
+    } finally {
+      await rm(subject.repo, { recursive: true, force: true });
+    }
+  });
+
+  it('reports none when only closed routes remain and marker and queue are absent', async () => {
+    const subject = await fixture();
+    try {
+      const created = await createRouteRecord(subject.repo, 'demo', input);
+      if (created.kind !== 'created') throw new Error(created.kind);
+      await writeRecord(subject, { ...created.record, phase: 'closed', hosts: { [c1]: 'done' } });
+
+      await expect(routedWorkOutstanding(subject.repo, 'demo', enabled)).resolves.toEqual({ kind: 'none' });
+    } finally {
+      await rm(subject.repo, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['marker', repairMarkerRefFor('demo'), 'marker'],
+    ['queue', revalidationQueueRefFor('demo'), 'queue'],
+    ['route record', routeRecordRefFor('demo', roundId), roundId],
+  ] as const)('names the unreadable %s', async (_name, ref, subjectName) => {
+    const subject = await fixture();
+    try {
+      const blob = (await subject.git(['hash-object', '-w', '--stdin'], { input: '{not-json' })).stdout.trim();
+      await subject.git(['update-ref', ref, blob]);
+
+      await expect(routedWorkOutstanding(subject.repo, 'demo', enabled)).resolves.toEqual({
+        kind: 'unreadable',
+        subject: subjectName,
+      });
+    } finally {
+      await rm(subject.repo, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['routing is disabled', { routingEnabled: false, sealedLeaf: c3 }],
+    ['the sealed leaf is one', { routingEnabled: true, sealedLeaf: c1 }],
+  ] as const)('does not inspect refs when %s', async (_name, options) => {
+    const git = vi.fn<GitRunner>();
+
+    await expect(routedWorkOutstanding('/not-used', 'demo', { ...options, git })).resolves.toEqual({ kind: 'none' });
+    expect(git).not.toHaveBeenCalled();
+  });
+});
 
 describe('routed-round admission (real local Git)', () => {
   // Covers: task:rem-prd-audit-rem-prd-audit-rem-vg6-s6-1
@@ -83,11 +202,15 @@ describe('routed-round admission (real local Git)', () => {
         phase: 'closed',
         hosts: { [c1]: 'done' },
       };
-      const blob = (await subject.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(closed) })).stdout.trim();
+      const blob = (
+        await subject.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(closed) })
+      ).stdout.trim();
       await subject.git(['update-ref', routeRecordRefFor('demo', roundId), blob]);
 
       await expect(reconcileRounds(subject.repo, 'demo')).resolves.toEqual({ kind: 'quiescent' });
-    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+    } finally {
+      await rm(subject.repo, { recursive: true, force: true });
+    }
   });
 
   it('writes a prepared record then atomically opens its first marker and phase events', async () => {
@@ -108,10 +231,18 @@ describe('routed-round admission (real local Git)', () => {
         persist: (event) => persister.persistDurably(event),
       });
       expect(admitted).toMatchObject({ kind: 'admitted', record: { phase: 'open', hosts: { 1: 'admitted' } } });
-      expect(await readRepairMarker(subject.repo, 'demo')).toMatchObject({ kind: 'marker', marker: { roundId, host: c1 } });
+      expect(await readRepairMarker(subject.repo, 'demo')).toMatchObject({
+        kind: 'marker',
+        marker: { roundId, host: c1 },
+      });
       // `admitRound` does not return the route that its caller passes to
       // navigateBack until both admission occurrences are in the spine.
-      expect((await readFile(eventsPath, 'utf8')).trim().split('\n').map((line) => JSON.parse(line))).toEqual([
+      expect(
+        (await readFile(eventsPath, 'utf8'))
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line)),
+      ).toEqual([
         expect.objectContaining({ type: 'routed_repair_phase', roundId, host: c1, phase: 'admitted', credit: false }),
         expect.objectContaining({ type: 'remediation_routed', roundId }),
       ]);
@@ -123,7 +254,9 @@ describe('routed-round admission (real local Git)', () => {
       expect(writes).toHaveLength(4);
       expect(writes[1]?.input).toContain(`update ${repairMarkerRefFor('demo')}`);
       expect(writes[1]?.input).toContain('verify refs/conductor/demo/restack/journal ');
-    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+    } finally {
+      await rm(subject.repo, { recursive: true, force: true });
+    }
   });
 
   // Covers: task:rem-prd-audit-W8, S5.10
@@ -132,30 +265,54 @@ describe('routed-round admission (real local Git)', () => {
     try {
       const created = await createRouteRecord(subject.repo, 'demo', input);
       if (created.kind !== 'created') throw new Error(created.kind);
-      const markerBlob = (await subject.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify({ host: 1, roundId: 'r9' }) })).stdout.trim();
+      const markerBlob = (
+        await subject.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify({ host: 1, roundId: 'r9' }) })
+      ).stdout.trim();
       await subject.git(['update-ref', repairMarkerRefFor('demo'), markerBlob]);
       expect(await admitRound(subject.repo, 'demo', created.record, c1)).toEqual({
         kind: 'refused',
         detail: 'routing round r9 is already open; cannot admit r1',
       });
-      expect(await readRouteRecord(subject.repo, 'demo', roundId)).toMatchObject({ kind: 'record', record: { phase: 'prepared', hosts: { 1: 'pending' } } });
-    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+      expect(await readRouteRecord(subject.repo, 'demo', roundId)).toMatchObject({
+        kind: 'record',
+        record: { phase: 'prepared', hosts: { 1: 'pending' } },
+      });
+    } finally {
+      await rm(subject.repo, { recursive: true, force: true });
+    }
   });
 
   // Covers: task:1
   it('admits a revalidate round when the open audit round can only yield the queue', async () => {
     const subject = await fixture();
     try {
-      const audit = await createRouteRecord(subject.repo, 'demo', { ...input, allocation: { [c1]: { remTaskIds: [], blockBodies: [] }, [c3]: { remTaskIds: [], blockBodies: [] } } });
-      const revalidate = await createRouteRecord(subject.repo, 'demo', { ...revalidateInput, roundId: parseRoundId('r2')!, allocation: { [c1]: { remTaskIds: [], blockBodies: [] } } });
+      const audit = await createRouteRecord(subject.repo, 'demo', {
+        ...input,
+        allocation: { [c1]: { remTaskIds: [], blockBodies: [] }, [c3]: { remTaskIds: [], blockBodies: [] } },
+      });
+      const revalidate = await createRouteRecord(subject.repo, 'demo', {
+        ...revalidateInput,
+        roundId: parseRoundId('r2')!,
+        allocation: { [c1]: { remTaskIds: [], blockBodies: [] } },
+      });
       if (audit.kind !== 'created' || revalidate.kind !== 'created') throw new Error('route creation failed');
       await writeRecord(subject, openAudit(audit.record, { [c1]: 'restacked', [c3]: 'pending' }));
       await writeQueue(subject);
 
-      await expect(admitRound(subject.repo, 'demo', revalidate.record, c1)).resolves.toMatchObject({ kind: 'admitted' });
-      await expect(readRepairMarker(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'marker', marker: { roundId: 'r2', host: c1 } });
-      await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({ kind: 'record', record: { phase: 'open' } });
-    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+      await expect(admitRound(subject.repo, 'demo', revalidate.record, c1)).resolves.toMatchObject({
+        kind: 'admitted',
+      });
+      await expect(readRepairMarker(subject.repo, 'demo')).resolves.toMatchObject({
+        kind: 'marker',
+        marker: { roundId: 'r2', host: c1 },
+      });
+      await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
+        kind: 'record',
+        record: { phase: 'open' },
+      });
+    } finally {
+      await rm(subject.repo, { recursive: true, force: true });
+    }
   });
 
   it('continues past a deferred queue round to a later open round with a pending host', async () => {
@@ -183,56 +340,99 @@ describe('routed-round admission (real local Git)', () => {
       await writeQueue(subject);
 
       await expect(reconcileRounds(subject.repo, 'demo')).resolves.toEqual({
-        kind: 'navigate-host', roundId: secondId, host: c2,
+        kind: 'navigate-host',
+        roundId: secondId,
+        host: c2,
       });
       await expect(readRepairMarker(subject.repo, 'demo')).resolves.toMatchObject({
-        kind: 'marker', marker: { roundId: secondId, host: c2 },
+        kind: 'marker',
+        marker: { roundId: secondId, host: c2 },
       });
-    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+    } finally {
+      await rm(subject.repo, { recursive: true, force: true });
+    }
   });
 
-  // Covers: task:1
-  it('refuses a second audit round while another open round has pending work', async () => {
+  // Covers: task:7
+  it('names the blocking round, phase, marker host, and recovery command at the audit fence', async () => {
     const subject = await fixture();
     try {
       const first = await createRouteRecord(subject.repo, 'demo', input);
       const second = await createRouteRecord(subject.repo, 'demo', { ...input, roundId: parseRoundId('r2')! });
       if (first.kind !== 'created' || second.kind !== 'created') throw new Error('route creation failed');
-      await writeRecord(subject, openAudit(first.record, { [c1]: 'pending' }));
+      await writeRecord(subject, openAudit(first.record, { [c1]: 'repairing', [c2]: 'pending' }));
+      const markerBlob = (
+        await subject.git(['hash-object', '-w', '--stdin'], {
+          input: JSON.stringify({ host: c1, roundId }),
+        })
+      ).stdout.trim();
+      await subject.git(['update-ref', repairMarkerRefFor('demo'), markerBlob]);
 
-      await expect(admitRound(subject.repo, 'demo', second.record, c1)).resolves.toMatchObject({ kind: 'refused', fence: true, detail: expect.stringContaining('r1') });
-      await expect(readRepairMarker(subject.repo, 'demo')).resolves.toEqual({ kind: 'absent' });
-      await expect(readRouteRecord(subject.repo, 'demo', parseRoundId('r2')!)).resolves.toMatchObject({ kind: 'record', record: { phase: 'prepared' } });
-    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+      await expect(
+        checkRoundAdmissionFence(subject.repo, 'demo', { roundId: second.record.roundId, kind: 'audit' }),
+      ).resolves.toMatchObject({
+        kind: 'refused',
+        fence: true,
+        detail: expect.stringMatching(/r1.*open.*host 1.*repairing.*ai-conductor stack rounds --slug demo/),
+      });
+    } finally {
+      await rm(subject.repo, { recursive: true, force: true });
+    }
   });
 
   // Covers: task:1
-  it.each(['admitted', 'repairing', 'built'] as const)('refuses revalidation while an open audit host is %s', async (state) => {
-    const subject = await fixture();
-    try {
-      const audit = await createRouteRecord(subject.repo, 'demo', input);
-      const revalidate = await createRouteRecord(subject.repo, 'demo', { ...revalidateInput, roundId: parseRoundId('r2')! });
-      if (audit.kind !== 'created' || revalidate.kind !== 'created') throw new Error('route creation failed');
-      await writeRecord(subject, openAudit(audit.record, { [c1]: state }));
-      await expect(admitRound(subject.repo, 'demo', revalidate.record, c1)).resolves.toMatchObject({ kind: 'refused', fence: true });
-      await expect(readRepairMarker(subject.repo, 'demo')).resolves.toEqual({ kind: 'absent' });
-    } finally { await rm(subject.repo, { recursive: true, force: true }); }
-  });
+  it.each(['admitted', 'repairing', 'built'] as const)(
+    'refuses revalidation while an open audit host is %s',
+    async (state) => {
+      const subject = await fixture();
+      try {
+        const audit = await createRouteRecord(subject.repo, 'demo', input);
+        const revalidate = await createRouteRecord(subject.repo, 'demo', {
+          ...revalidateInput,
+          roundId: parseRoundId('r2')!,
+        });
+        if (audit.kind !== 'created' || revalidate.kind !== 'created') throw new Error('route creation failed');
+        await writeRecord(subject, openAudit(audit.record, { [c1]: state }));
+        await expect(admitRound(subject.repo, 'demo', revalidate.record, c1)).resolves.toMatchObject({
+          kind: 'refused',
+          fence: true,
+        });
+        await expect(readRepairMarker(subject.repo, 'demo')).resolves.toEqual({ kind: 'absent' });
+      } finally {
+        await rm(subject.repo, { recursive: true, force: true });
+      }
+    },
+  );
 
   // Covers: task:1
   it('refuses revalidation when an open round would select a pending child host', async () => {
     const subject = await fixture();
     try {
-      const audit = await createRouteRecord(subject.repo, 'demo', { ...input, allocation: { [c1]: { remTaskIds: [], blockBodies: [] }, [c2]: { remTaskIds: [], blockBodies: [] }, [c3]: { remTaskIds: [], blockBodies: [] } } });
-      const revalidate = await createRouteRecord(subject.repo, 'demo', { ...revalidateInput, roundId: parseRoundId('r2')! });
+      const audit = await createRouteRecord(subject.repo, 'demo', {
+        ...input,
+        allocation: {
+          [c1]: { remTaskIds: [], blockBodies: [] },
+          [c2]: { remTaskIds: [], blockBodies: [] },
+          [c3]: { remTaskIds: [], blockBodies: [] },
+        },
+      });
+      const revalidate = await createRouteRecord(subject.repo, 'demo', {
+        ...revalidateInput,
+        roundId: parseRoundId('r2')!,
+      });
       if (audit.kind !== 'created' || revalidate.kind !== 'created') throw new Error('route creation failed');
       await writeRecord(subject, openAudit(audit.record, { [c1]: 'restacked', [c2]: 'pending', [c3]: 'pending' }));
-      await expect(admitRound(subject.repo, 'demo', revalidate.record, c1)).resolves.toMatchObject({ kind: 'refused', fence: true });
+      await expect(admitRound(subject.repo, 'demo', revalidate.record, c1)).resolves.toMatchObject({
+        kind: 'refused',
+        fence: true,
+      });
       await expect(readRepairMarker(subject.repo, 'demo')).resolves.toEqual({ kind: 'absent' });
-    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+    } finally {
+      await rm(subject.repo, { recursive: true, force: true });
+    }
   });
 
-  // Covers: task:1
+  // Covers: task:7
   it('refuses an unreadable open record at the fence', async () => {
     const subject = await fixture();
     try {
@@ -240,14 +440,22 @@ describe('routed-round admission (real local Git)', () => {
       if (candidate.kind !== 'created') throw new Error(candidate.kind);
       const badBlob = (await subject.git(['hash-object', '-w', '--stdin'], { input: '{bad json' })).stdout.trim();
       await subject.git(['update-ref', routeRecordRefFor('demo', parseRoundId('r9')!), badBlob]);
-      await expect(admitRound(subject.repo, 'demo', candidate.record, c1)).resolves.toMatchObject({ kind: 'refused', fence: true, detail: expect.stringContaining('r9') });
-    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+      const refused = await admitRound(subject.repo, 'demo', candidate.record, c1);
+      expect(refused).toMatchObject({ kind: 'refused', fence: true, detail: expect.stringContaining('r9') });
+      if (refused.kind !== 'refused') throw new Error('expected unreadable route record to refuse admission');
+      expect(refused.detail).not.toMatch(/host|pending|admitted|repairing|built|restacked/);
+    } finally {
+      await rm(subject.repo, { recursive: true, force: true });
+    }
   });
 
   // Covers: task:rem-as-built-W11
   it('refuses an illegal host or round phase lifecycle update without writing a route ref', async () => {
     for (const preState of [
-      { name: 'host state', apply: (record: RouteRecord): RouteRecord => ({ ...record, hosts: { ...record.hosts, [c1]: 'built' } }) },
+      {
+        name: 'host state',
+        apply: (record: RouteRecord): RouteRecord => ({ ...record, hosts: { ...record.hosts, [c1]: 'built' } }),
+      },
       { name: 'round phase', apply: (record: RouteRecord): RouteRecord => ({ ...record, phase: 'closed' }) },
     ]) {
       const subject = await fixture();
@@ -262,12 +470,20 @@ describe('routed-round admission (real local Git)', () => {
           return subject.git(args, options);
         };
         const illegal = preState.apply(stored.record);
-        expect(await writeRoutingTransaction(subject.repo, 'demo', [{ kind: 'update-record', previous: stored, record: illegal }], { git }))
-          .toEqual({ kind: 'unavailable' });
+        expect(
+          await writeRoutingTransaction(
+            subject.repo,
+            'demo',
+            [{ kind: 'update-record', previous: stored, record: illegal }],
+            { git },
+          ),
+        ).toEqual({ kind: 'unavailable' });
         expect(calls.filter((call) => call.args[0] === 'update-ref')).toHaveLength(0);
         expect(await readRepairMarker(subject.repo, 'demo')).toEqual({ kind: 'absent' });
         expect(await readRouteRecord(subject.repo, 'demo', roundId)).toEqual(stored);
-      } finally { await rm(subject.repo, { recursive: true, force: true }); }
+      } finally {
+        await rm(subject.repo, { recursive: true, force: true });
+      }
     }
   });
 
@@ -282,8 +498,14 @@ describe('routed-round admission (real local Git)', () => {
       const opened = await createRouteRecord(subject.repo, 'demo', input);
       if (opened.kind !== 'created') throw new Error(opened.kind);
       await admitRound(subject.repo, 'demo', opened.record, c1);
-      expect(await reconcileRounds(subject.repo, 'demo')).toEqual({ kind: 'navigate-leaf-to-build', roundId: 'r1', host: c1 });
-    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+      expect(await reconcileRounds(subject.repo, 'demo')).toEqual({
+        kind: 'navigate-leaf-to-build',
+        roundId: 'r1',
+        host: c1,
+      });
+    } finally {
+      await rm(subject.repo, { recursive: true, force: true });
+    }
   });
 
   // Covers: task:3
@@ -303,29 +525,57 @@ describe('routed-round admission (real local Git)', () => {
       if (r3.kind !== 'created' || r4.kind !== 'created') throw new Error('route creation failed');
       await writeRecord(subject, openAudit(r3.record, { [c1]: 'restacked', [c2]: 'pending' }));
       await writeRecord(subject, openAudit(r4.record, { [c1]: 'built' }));
-      const markerBlob = (await subject.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify({ host: c1, roundId: 'r4' }) })).stdout.trim();
+      const markerBlob = (
+        await subject.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify({ host: c1, roundId: 'r4' }) })
+      ).stdout.trim();
       await subject.git(['update-ref', repairMarkerRefFor('demo'), markerBlob]);
       const beforeR3 = await readRouteRecord(subject.repo, 'demo', parseRoundId('r3')!);
 
-      await expect(reconcileRounds(subject.repo, 'demo')).resolves.toEqual({ kind: 'resume-exit', roundId: 'r4', host: c1 });
+      await expect(reconcileRounds(subject.repo, 'demo')).resolves.toEqual({
+        kind: 'resume-exit',
+        roundId: 'r4',
+        host: c1,
+      });
       await expect(readRouteRecord(subject.repo, 'demo', parseRoundId('r3')!)).resolves.toEqual(beforeR3);
-    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+    } finally {
+      await rm(subject.repo, { recursive: true, force: true });
+    }
   });
 
   // Covers: task:3
   it('continues after closing a round and admits the next open round host', async () => {
     const subject = await fixture();
     try {
-      const r3 = await createRouteRecord(subject.repo, 'demo', { ...input, roundId: parseRoundId('r3')!, allocation: { [c1]: { remTaskIds: [], blockBodies: [] } } });
-      const r4 = await createRouteRecord(subject.repo, 'demo', { ...input, roundId: parseRoundId('r4')!, allocation: { [c1]: { remTaskIds: [], blockBodies: [] }, [c2]: { remTaskIds: [], blockBodies: [] } } });
+      const r3 = await createRouteRecord(subject.repo, 'demo', {
+        ...input,
+        roundId: parseRoundId('r3')!,
+        allocation: { [c1]: { remTaskIds: [], blockBodies: [] } },
+      });
+      const r4 = await createRouteRecord(subject.repo, 'demo', {
+        ...input,
+        roundId: parseRoundId('r4')!,
+        allocation: { [c1]: { remTaskIds: [], blockBodies: [] }, [c2]: { remTaskIds: [], blockBodies: [] } },
+      });
       if (r3.kind !== 'created' || r4.kind !== 'created') throw new Error('route creation failed');
       await writeRecord(subject, openAudit(r3.record, { [c1]: 'restacked' }));
       await writeRecord(subject, openAudit(r4.record, { [c1]: 'restacked', [c2]: 'pending' }));
 
-      await expect(reconcileRounds(subject.repo, 'demo')).resolves.toEqual({ kind: 'navigate-host', roundId: 'r4', host: c2 });
-      await expect(readRouteRecord(subject.repo, 'demo', parseRoundId('r3')!)).resolves.toMatchObject({ kind: 'record', record: { phase: 'closed' } });
-      await expect(readRepairMarker(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'marker', marker: { roundId: 'r4', host: c2 } });
-    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+      await expect(reconcileRounds(subject.repo, 'demo')).resolves.toEqual({
+        kind: 'navigate-host',
+        roundId: 'r4',
+        host: c2,
+      });
+      await expect(readRouteRecord(subject.repo, 'demo', parseRoundId('r3')!)).resolves.toMatchObject({
+        kind: 'record',
+        record: { phase: 'closed' },
+      });
+      await expect(readRepairMarker(subject.repo, 'demo')).resolves.toMatchObject({
+        kind: 'marker',
+        marker: { roundId: 'r4', host: c2 },
+      });
+    } finally {
+      await rm(subject.repo, { recursive: true, force: true });
+    }
   });
 
   // Covers: task:3
@@ -346,9 +596,18 @@ describe('routed-round admission (real local Git)', () => {
       await writeRecord(subject, openAudit(revalidate.record, { [c1]: 'restacked' }));
       await writeRecord(subject, openAudit(audit.record, { [c1]: 'restacked', [c3]: 'pending' }));
 
-      await expect(reconcileRounds(subject.repo, 'demo')).resolves.toEqual({ kind: 'navigate-host', roundId: 'r4', host: c3 });
-      await expect(readRepairMarker(subject.repo, 'demo')).resolves.toMatchObject({ kind: 'marker', marker: { roundId: 'r4', host: c3 } });
-    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+      await expect(reconcileRounds(subject.repo, 'demo')).resolves.toEqual({
+        kind: 'navigate-host',
+        roundId: 'r4',
+        host: c3,
+      });
+      await expect(readRepairMarker(subject.repo, 'demo')).resolves.toMatchObject({
+        kind: 'marker',
+        marker: { roundId: 'r4', host: c3 },
+      });
+    } finally {
+      await rm(subject.repo, { recursive: true, force: true });
+    }
   });
 
   // Covers: task:3
@@ -360,19 +619,21 @@ describe('routed-round admission (real local Git)', () => {
       await writeRecord(subject, openAudit(r3.record, { [c1]: 'pending' }));
       const unreadable = (await subject.git(['hash-object', '-w', '--stdin'], { input: '{not-json' })).stdout.trim();
       await subject.git(['update-ref', routeRecordRefFor('demo', parseRoundId('r4')!), unreadable]);
-      const markerBlob = (await subject.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify({ host: c1, roundId: 'r4' }) })).stdout.trim();
+      const markerBlob = (
+        await subject.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify({ host: c1, roundId: 'r4' }) })
+      ).stdout.trim();
       await subject.git(['update-ref', repairMarkerRefFor('demo'), markerBlob]);
       const before = await routingRefSnapshot(subject);
 
       await expect(reconcileRounds(subject.repo, 'demo')).resolves.toMatchObject({
         kind: 'stalled',
         detail: expect.stringContaining('r4'),
-        rounds: expect.arrayContaining([
-          expect.objectContaining({ roundId: 'r4', readable: false }),
-        ]),
+        rounds: expect.arrayContaining([expect.objectContaining({ roundId: 'r4', readable: false })]),
       });
       expect(await routingRefSnapshot(subject)).toBe(before);
-    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+    } finally {
+      await rm(subject.repo, { recursive: true, force: true });
+    }
   });
 
   // Covers: task:3
@@ -386,14 +647,19 @@ describe('routed-round admission (real local Git)', () => {
       });
       if (r3.kind !== 'created') throw new Error('route creation failed');
       await writeRecord(subject, openAudit(r3.record, { [c1]: 'restacked', [c2]: 'pending' }));
-      const contested: GitRunner = async (args, options) => args[0] === 'update-ref' && args[1] === '--stdin'
-        ? { exitCode: 1, stdout: '', stderr: 'injected CAS refusal' }
-        : subject.git(args, options);
+      const contested: GitRunner = async (args, options) =>
+        args[0] === 'update-ref' && args[1] === '--stdin'
+          ? { exitCode: 1, stdout: '', stderr: 'injected CAS refusal' }
+          : subject.git(args, options);
 
       await expect(reconcileRounds(subject.repo, 'demo', { git: contested })).resolves.toMatchObject({
-        kind: 'stalled', detail: expect.stringContaining('r3'), rounds: [expect.objectContaining({ roundId: 'r3', readable: true, unsettledHosts: { 2: 'pending' } })],
+        kind: 'stalled',
+        detail: expect.stringContaining('r3'),
+        rounds: [expect.objectContaining({ roundId: 'r3', readable: true, unsettledHosts: { 2: 'pending' } })],
       });
-    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+    } finally {
+      await rm(subject.repo, { recursive: true, force: true });
+    }
   });
 
   // Covers: task:20
@@ -405,17 +671,29 @@ describe('routed-round admission (real local Git)', () => {
         ...input,
         kind: 'operator',
         operator: {
-          origin: 'rewind', reason: 'recheck the suite', operator: 'operator@example.test', entryStep: 'test_suite',
-          carried: [], otherTips: { 'feat/daemon-demo': tip as never },
-          priorRegion: { statuses: { acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' }, verdicts: {} },
+          origin: 'rewind',
+          reason: 'recheck the suite',
+          operator: 'operator@example.test',
+          entryStep: 'test_suite',
+          carried: [],
+          otherTips: { 'feat/daemon-demo': tip as never },
+          priorRegion: {
+            statuses: { acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' },
+            verdicts: {},
+          },
         },
       });
       if (created.kind !== 'created') throw new Error(created.kind);
       await expect(admitRound(subject.repo, 'demo', created.record, c1)).resolves.toMatchObject({ kind: 'admitted' });
       await expect(reconcileRounds(subject.repo, 'demo')).resolves.toEqual({
-        kind: 'navigate-leaf-to-build', roundId: 'r1', host: c1, entryStep: 'test_suite',
+        kind: 'navigate-leaf-to-build',
+        roundId: 'r1',
+        host: c1,
+        entryStep: 'test_suite',
       });
-    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+    } finally {
+      await rm(subject.repo, { recursive: true, force: true });
+    }
   });
 
   it('refuses a fenced transaction when a restack journal appears before commit', async () => {
@@ -427,15 +705,25 @@ describe('routed-round admission (real local Git)', () => {
       if (stored.kind !== 'record') throw new Error('record unavailable');
       const raced: GitRunner = async (args, options) => {
         if (args[0] === 'update-ref' && args[1] === '--stdin') {
-          const journal = parseCommitSha((await subject.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify({}) })).stdout.trim())!;
+          const journal = parseCommitSha(
+            (await subject.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify({}) })).stdout.trim(),
+          )!;
           await subject.git(['update-ref', 'refs/conductor/demo/restack/journal', journal]);
         }
         return subject.git(args, options);
       };
       const next: RouteRecord = { ...stored.record, phase: 'open', hosts: { [c1]: 'admitted' } };
-      expect(await writeRoutingTransaction(subject.repo, 'demo', [{ kind: 'update-record', previous: stored, record: next }], { git: raced }))
-        .toEqual({ kind: 'cas-failed' });
+      expect(
+        await writeRoutingTransaction(
+          subject.repo,
+          'demo',
+          [{ kind: 'update-record', previous: stored, record: next }],
+          { git: raced },
+        ),
+      ).toEqual({ kind: 'cas-failed' });
       expect(await readRouteRecord(subject.repo, 'demo', roundId)).toEqual(stored);
-    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+    } finally {
+      await rm(subject.repo, { recursive: true, force: true });
+    }
   });
 });

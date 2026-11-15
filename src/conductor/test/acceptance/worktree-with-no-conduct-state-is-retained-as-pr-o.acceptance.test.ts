@@ -28,19 +28,9 @@ import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import {
-  renderDashboard,
-  scanInheritedState,
-} from '../../src/engine/daemon-dashboard.js';
-import {
-  pickEligible,
-  type BacklogItem,
-  type PickEligibleCtx,
-} from '../../src/engine/daemon.js';
-import {
-  makeRunFeature,
-  type FeatureRunnerDeps,
-} from '../../src/engine/daemon-runner.js';
+import { renderDashboard, scanInheritedState } from '../../src/engine/daemon-dashboard.js';
+import { pickEligible, type BacklogItem, type PickEligibleCtx } from '../../src/engine/daemon.js';
+import { makeRunFeature, type FeatureRunnerDeps } from '../../src/engine/daemon-runner.js';
 import { InMemoryWorkClaims } from '../../src/engine/work-claims.js';
 
 const SLUG = 'never-started-feature';
@@ -74,6 +64,7 @@ function failingRunnerDeps(
   createWorktree: FeatureRunnerDeps['createWorktree'],
 ): FeatureRunnerDeps {
   return {
+    dispatchAdmission: 'acquire',
     projectRoot,
     project: 'acceptance',
     daemon: false,
@@ -91,9 +82,7 @@ function failingRunnerDeps(
 }
 
 afterEach(async () => {
-  await Promise.all(
-    roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
-  );
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 describe('acceptance: never-started worktree classification and dispatch parity (#1329)', () => {
@@ -191,8 +180,6 @@ describe('acceptance: every failed dispatch leaves an operator-clearable lever (
 
     expect.soft(outcome.status).toBe('error');
     expect.soft(await exists(join(worktreePath, '.pipeline', 'HALT'))).toBe(false);
-    expect(logs.join('\n')).toMatch(
-      new RegExp(`unrecoverable-state[\\s\\S]*${SLUG}`, 'i'),
-    );
+    expect(logs.join('\n')).toMatch(new RegExp(`unrecoverable-state[\\s\\S]*${SLUG}`, 'i'));
   });
 });

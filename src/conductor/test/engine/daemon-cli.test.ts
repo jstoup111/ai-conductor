@@ -1,4 +1,4 @@
-// Covers: task:3, task:9, task:14
+// Covers: task:3, task:9, task:14, task:30
 // ─────────────────────────────────────────────────────────────────────────────
 // Task 12 (adr-2026-07-03-gated-snapshot-status-read-model): the daemon must
 // write `.daemon/gated.json` on EVERY discovery pass — populated, explicitly
@@ -32,11 +32,8 @@ import { computeStatusRow } from '../../src/engine/daemon-observe-cli.js';
 import { getPidfilePath } from '../../src/engine/daemon-lock.js';
 import type { ConductState } from '../../src/types/index.js';
 import { deriveDaemonBaseState, persistDaemonBaseState } from '../../src/engine/daemon-state.js';
-import {
-  createForcedSetupPrepare,
-  renderDaemonEvent,
-  runDaemonMode,
-} from '../../src/daemon-cli.js';
+import { renderDaemonEvent, runDaemonMode } from '../../src/daemon-cli.js';
+import { createForcedSetupPrepare } from '../../src/engine/daemon-feature-lifecycle.js';
 import { terminateFeature } from '../../src/engine/daemon-runner.js';
 import type { prepareWorktree } from '../../src/engine/worktree-prepare.js';
 import type {
@@ -47,6 +44,8 @@ import type {
   StateMutationResult,
 } from '../../src/engine/conduct-state-store.js';
 import { allInstalledProviderDiscoveryRunner } from './boot-test-helpers.js';
+import { createInMemoryExecutorFork, useTempEngineStore } from '../fixtures/in-memory-executor-fork.js';
+import { commitAll, initTestRepo } from '../fixtures/git-repo.js';
 
 const supportedGhVersion = async () => ({
   kind: 'ok' as const,
@@ -176,8 +175,9 @@ describe('daemon termination guidance', () => {
       const halt = await readFile(join(worktreePath, '.pipeline', 'HALT'), 'utf8');
       expect(marker).toMatch(/^auto-parked: runtime dispatch failure\ntimestamp: .+\n$/);
       expect(halt).toMatch(/^feature parked — will not re-dispatch on the next scan/);
-      await expect(readFile(join(worktreePath, '.daemon', 'parked', slug), 'utf8'))
-        .rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(worktreePath, '.daemon', 'parked', slug), 'utf8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
     } finally {
       runDaemonSpy.mockRestore();
     }
@@ -226,8 +226,7 @@ describe('daemon termination guidance', () => {
         watch: false,
       });
 
-      const lines = (await readFile(join(engineerDir, 'signals.jsonl'), 'utf8'))
-        .split('\n').filter(Boolean);
+      const lines = (await readFile(join(engineerDir, 'signals.jsonl'), 'utf8')).split('\n').filter(Boolean);
       expect(lines).toHaveLength(1);
       const record = JSON.parse(lines[0]);
       expect(record).toMatchObject({
@@ -359,12 +358,12 @@ describe('daemon setup-triage prepare wiring', () => {
     const prepare = vi.fn(async () => {});
     const log = vi.fn();
     const events = new ConductorEventEmitter();
-    const runPrepare = createForcedSetupPrepare(
-      prepare as typeof prepareWorktree,
-      log,
-      true,
-      { projectRoot, baseBranch: 'main', events, dispatchStartTimeoutSeconds: 300 },
-    );
+    const runPrepare = createForcedSetupPrepare(prepare as typeof prepareWorktree, log, true, {
+      projectRoot,
+      baseBranch: 'main',
+      events,
+      dispatchStartTimeoutSeconds: 300,
+    });
 
     await runPrepare('/worktrees/after-quarantine');
     await runPrepare('/worktrees/after-fix');
@@ -384,24 +383,38 @@ describe('daemon setup-triage prepare wiring', () => {
       1,
       '/worktrees/after-quarantine',
       log,
-      { verbose: true, force: true, baseSha, events, dispatchStart: true, dispatchStartTimeoutSeconds: 300 },
+      expect.objectContaining({
+        verbose: true,
+        force: true,
+        baseSha,
+        events,
+        dispatchStart: true,
+        dispatchStartTimeoutSeconds: 300,
+        skillNameRoot: expect.any(String),
+      }),
     );
     expect(prepare).toHaveBeenNthCalledWith(
       2,
       '/worktrees/after-fix',
       log,
-      { verbose: true, force: true, baseSha, events, dispatchStart: true, dispatchStartTimeoutSeconds: 300 },
+      expect.objectContaining({
+        verbose: true,
+        force: true,
+        baseSha,
+        events,
+        dispatchStart: true,
+        dispatchStartTimeoutSeconds: 300,
+        skillNameRoot: expect.any(String),
+      }),
     );
   });
 
   it('re-resolves the base on every verification run', async () => {
     const prepare = vi.fn(async () => {});
-    const runPrepare = createForcedSetupPrepare(
-      prepare as typeof prepareWorktree,
-      undefined,
-      false,
-      { projectRoot, baseBranch: 'main' },
-    );
+    const runPrepare = createForcedSetupPrepare(prepare as typeof prepareWorktree, undefined, false, {
+      projectRoot,
+      baseBranch: 'main',
+    });
 
     await runPrepare('/worktrees/before-advance');
     const firstBase = await git('rev-parse', 'main');
@@ -410,26 +423,27 @@ describe('daemon setup-triage prepare wiring', () => {
     const secondBase = await git('rev-parse', 'main');
 
     expect(secondBase).not.toBe(firstBase);
-    expect(prepare.mock.calls.map((call) => (call as unknown as [string, unknown, { baseSha?: string }])[2].baseSha))
-      .toEqual([firstBase, secondBase]);
+    expect(
+      prepare.mock.calls.map((call) => (call as unknown as [string, unknown, { baseSha?: string }])[2].baseSha),
+    ).toEqual([firstBase, secondBase]);
   });
 
   it('keeps forced setup pinned to the dispatched order when the root advances', async () => {
     const prepare = vi.fn(async () => {});
     const pinnedBase = await git('rev-parse', 'main');
-    const runPrepare = createForcedSetupPrepare(
-      prepare as typeof prepareWorktree,
-      undefined,
-      false,
-      { projectRoot, baseBranch: 'main', baseSha: pinnedBase },
-    );
+    const runPrepare = createForcedSetupPrepare(prepare as typeof prepareWorktree, undefined, false, {
+      projectRoot,
+      baseBranch: 'main',
+      baseSha: pinnedBase,
+    });
 
     await runPrepare('/worktrees/before-advance');
     await git('commit', '--allow-empty', '-m', 'root advances after dispatch');
     await runPrepare('/worktrees/after-advance');
 
-    expect(prepare.mock.calls.map((call) => (call as unknown as [string, unknown, { baseSha?: string }])[2].baseSha))
-      .toEqual([pinnedBase, pinnedBase]);
+    expect(
+      prepare.mock.calls.map((call) => (call as unknown as [string, unknown, { baseSha?: string }])[2].baseSha),
+    ).toEqual([pinnedBase, pinnedBase]);
   });
 });
 
@@ -453,11 +467,15 @@ describe('daemon state-store command boundary (Task 17)', () => {
 
   it('leaves an unresolved tier for the engine to resolve conservatively', async () => {
     const observed: ConductState = { build: 'done', feature_desc: 'legacy-feature' };
-    const baseState = deriveDaemonBaseState(observed, {
-      slug: 'demo',
-      tier: undefined,
-      track: 'technical',
-    }, () => ({ worktree: 'done', prd: 'skipped' }));
+    const baseState = deriveDaemonBaseState(
+      observed,
+      {
+        slug: 'demo',
+        tier: undefined,
+        track: 'technical',
+      },
+      () => ({ worktree: 'done', prd: 'skipped' }),
+    );
     const store = new RecordingConductStateStore();
 
     await persistDaemonBaseState('/tmp/conduct-state.json', observed, baseState, store);
@@ -473,29 +491,33 @@ describe('daemon state-store command boundary (Task 17)', () => {
   });
 
   it('surfaces an actionable typed store failure', async () => {
-    await expect(persistDaemonBaseState(
-      '/tmp/conduct-state.json',
-      {},
-      { complexity_tier: 'M' },
-      new RecordingConductStateStore({ kind: 'lease', message: 'lease held by another daemon' }),
-    )).rejects.toThrow('Daemon base-state update failed (lease): lease held by another daemon');
+    await expect(
+      persistDaemonBaseState(
+        '/tmp/conduct-state.json',
+        {},
+        { complexity_tier: 'M' },
+        new RecordingConductStateStore({ kind: 'lease', message: 'lease held by another daemon' }),
+      ),
+    ).rejects.toThrow('Daemon base-state update failed (lease): lease held by another daemon');
   });
 });
-
 
 describe('protected artifact rotation rendering', () => {
   // Covers: task:9
   it('keeps the legacy rebaseline line unchanged when deleting commits are absent', () => {
     const lines: string[] = [];
 
-    renderDaemonEvent({
-      type: 'protected_artifact_rebaseline',
-      trigger: 'defensive-history-rewrite',
-      fromCommit: '1234567890abcdef',
-      toCommit: 'fedcba0987654321',
-      paths: ['.docs/plans/feature.md'],
-      excludedBaseAheadPaths: ['.docs/specs/upstream.md'],
-    }, (line) => lines.push(line));
+    renderDaemonEvent(
+      {
+        type: 'protected_artifact_rebaseline',
+        trigger: 'defensive-history-rewrite',
+        fromCommit: '1234567890abcdef',
+        toCommit: 'fedcba0987654321',
+        paths: ['.docs/plans/feature.md'],
+        excludedBaseAheadPaths: ['.docs/specs/upstream.md'],
+      },
+      (line) => lines.push(line),
+    );
 
     expect(lines).toEqual([
       '· seal rebaselined 1234567890ab..fedcba098765 (defensive-history-rewrite) — 1 path(s); excluded base-ahead paths: .docs/specs/upstream.md',
@@ -509,14 +531,17 @@ describe('protected artifact rotation rendering', () => {
     const firstCommit = '1234567890abcdef1234567890abcdef12345678';
     const secondCommit = 'fedcba0987654321fedcba0987654321fedcba09';
 
-    renderDaemonEvent({
-      type: 'protected_artifact_rebaseline',
-      trigger: 'inherited-base-deletion',
-      fromCommit: firstCommit,
-      toCommit: firstCommit,
-      paths: [firstPath, secondPath],
-      deletedBy: { [firstPath]: firstCommit, [secondPath]: secondCommit },
-    }, (line) => lines.push(line));
+    renderDaemonEvent(
+      {
+        type: 'protected_artifact_rebaseline',
+        trigger: 'inherited-base-deletion',
+        fromCommit: firstCommit,
+        toCommit: firstCommit,
+        paths: [firstPath, secondPath],
+        deletedBy: { [firstPath]: firstCommit, [secondPath]: secondCommit },
+      },
+      (line) => lines.push(line),
+    );
 
     expect(lines).toEqual([
       `· seal rebaselined 1234567890ab..1234567890ab (inherited-base-deletion) — 2 path(s); pruned base-deleted paths: ${firstPath}@1234567890ab, ${secondPath}@fedcba098765`,
@@ -526,22 +551,28 @@ describe('protected artifact rotation rendering', () => {
   it('renders each rotation variant with its provenance evidence', () => {
     const lines: string[] = [];
 
-    renderDaemonEvent({
-      type: 'protected_artifact_rebaseline',
-      trigger: 'defensive-history-rewrite',
-      fromCommit: '1234567890abcdef',
-      toCommit: 'fedcba0987654321',
-      paths: ['.docs/plans/feature.md'],
-      excludedBaseAheadPaths: ['.docs/specs/upstream.md'],
-    }, (line) => lines.push(line));
-    renderDaemonEvent({
-      type: 'protected_artifact_rebaseline_refused',
-      condition: 'feature-authored:head-differs-from-base',
-      verdictCondition: 'head-differs-from-base',
-      path: '.docs/plans/feature.md',
-      mergeBase: 'abcdef1234567890',
-      headTouchedPath: true,
-    }, (line) => lines.push(line));
+    renderDaemonEvent(
+      {
+        type: 'protected_artifact_rebaseline',
+        trigger: 'defensive-history-rewrite',
+        fromCommit: '1234567890abcdef',
+        toCommit: 'fedcba0987654321',
+        paths: ['.docs/plans/feature.md'],
+        excludedBaseAheadPaths: ['.docs/specs/upstream.md'],
+      },
+      (line) => lines.push(line),
+    );
+    renderDaemonEvent(
+      {
+        type: 'protected_artifact_rebaseline_refused',
+        condition: 'feature-authored:head-differs-from-base',
+        verdictCondition: 'head-differs-from-base',
+        path: '.docs/plans/feature.md',
+        mergeBase: 'abcdef1234567890',
+        headTouchedPath: true,
+      },
+      (line) => lines.push(line),
+    );
 
     expect(lines).toEqual([
       '· seal rebaselined 1234567890ab..fedcba098765 (defensive-history-rewrite) — 1 path(s); excluded base-ahead paths: .docs/specs/upstream.md',
@@ -552,9 +583,11 @@ describe('protected artifact rotation rendering', () => {
 
 let daemonDir: string;
 let root: string;
+const gatedSnapshotRoots = new Set<string>();
 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'daemon-cli-gated-snapshot-'));
+  gatedSnapshotRoots.add(root);
   daemonDir = join(root, '.daemon');
 });
 
@@ -565,9 +598,15 @@ describe('daemon event rendering', () => {
 
     renderDaemonEvent({ type: 'step_started', step: 'build', index: 0 }, log);
     renderDaemonEvent({ type: 'gate_verdict', step: 'build', satisfied: true }, log);
-    renderDaemonEvent({
-      type: 'build_review_outer_verdict', lapId: 'lap-1', rawVerdict: 'PASS', effectiveVerdict: 'PASS',
-    }, log);
+    renderDaemonEvent(
+      {
+        type: 'build_review_outer_verdict',
+        lapId: 'lap-1',
+        rawVerdict: 'PASS',
+        effectiveVerdict: 'PASS',
+      },
+      log,
+    );
     renderDaemonEvent({ type: 'step_completed', step: 'build', status: 'done' }, log);
     renderDaemonEvent({ type: 'feature_complete' }, log);
 
@@ -576,8 +615,31 @@ describe('daemon event rendering', () => {
 });
 
 afterEach(async () => {
-  await rm(root, { recursive: true, force: true });
+  // This fixture shares its setup state across the daemon CLI cases. Retain
+  // every allocation until cleanup so each created root is removed even if
+  // setup advances before an earlier teardown runs.
+  await Promise.all(
+    [...gatedSnapshotRoots].map(async (path) => {
+      await rm(path, { recursive: true, force: true });
+      gatedSnapshotRoots.delete(path);
+    }),
+  );
 });
+
+async function prepareChildDispatchProject(slugs: readonly string[]): Promise<void> {
+  await initTestRepo(root);
+  await Promise.all([
+    mkdir(join(root, '.docs', 'stories'), { recursive: true }),
+    mkdir(join(root, '.docs', 'plans'), { recursive: true }),
+  ]);
+  await Promise.all(
+    slugs.flatMap((slug) => [
+      writeFile(join(root, '.docs', 'stories', `${slug}.md`), `# ${slug}\n`),
+      writeFile(join(root, '.docs', 'plans', `${slug}.md`), `# ${slug}\n`),
+    ]),
+  );
+  await commitAll(root, 'base');
+}
 
 function baseDeps(overrides: Partial<LocalWorkSourceDeps> = {}): LocalWorkSourceDeps {
   return {
@@ -615,9 +677,7 @@ describe('daemon-cli discover-path gated snapshot wiring (Task 12)', () => {
     const raw = await readFile(join(daemonDir, 'gated.json'), 'utf-8');
     const parsed = JSON.parse(raw);
     expect(parsed.gated).toHaveLength(2);
-    expect(parsed.repoWarnings).toEqual(
-      expect.arrayContaining([expect.objectContaining({ warning: 'no-cutover' })]),
-    );
+    expect(parsed.repoWarnings).toEqual(expect.arrayContaining([expect.objectContaining({ warning: 'no-cutover' })]));
   });
 
   it('the NEXT pass with zero gated overwrites the stale file with an explicit empty snapshot and a fresh writtenAt', async () => {
@@ -679,9 +739,7 @@ describe('daemon-cli discover-path gated snapshot wiring (Task 12)', () => {
       discoverBacklog: vi.fn().mockResolvedValue({
         items: [{ slug: 'buildable' } satisfies BacklogItem],
         waiting: [],
-        gated: [
-          { kind: 'spec', slug: 'foo', reason: 'other-owner', otherOwner: 'alice', remedy: 'declare owner' },
-        ],
+        gated: [{ kind: 'spec', slug: 'foo', reason: 'other-owner', otherOwner: 'alice', remedy: 'declare owner' }],
       }),
     });
 
@@ -747,10 +805,7 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
   it('daemon-cli.ts source code has process-level SIGTERM handler wiring', () => {
     // Static check: daemon-cli.ts must wire ONE process-level handler that
     // aborts all in-flight waits, awaits state saves, then exits.
-    const src = readFileSync(
-      join(__dirname, '../../src/daemon-cli.ts'),
-      'utf-8'
-    );
+    const src = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8');
 
     // Verify daemon-cli has the allWaitSignals tracking set
     expect(src).toContain('allWaitSignals');
@@ -764,14 +819,11 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
     // Task 11 added per-conductor SIGTERM in conductor.ts.
     // Task 22 requirement: scope it to interactive mode only, so daemon path
     // uses the process-level handler (one per daemon) instead of N per-conductor handlers.
-    const src = readFileSync(
-      join(__dirname, '../../src/engine/conductor.ts'),
-      'utf-8'
-    );
+    const src = readFileSync(join(__dirname, '../../src/engine/conductor.ts'), 'utf-8');
 
     // Verify scoping: per-conductor handler should only be installed when NOT daemon mode
     // Look for the mode check guarding the per-conductor SIGTERM handler
-    expect(src).toContain("!this.daemon");
+    expect(src).toContain('!this.daemon');
     expect(src).toContain("process.on('SIGTERM'");
   });
 
@@ -779,10 +831,7 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
     // The daemon-cli process-level handler must be able to abort all in-flight
     // rate-limit waits across N concurrent conductors. This requires tracking
     // AbortControllers at the daemon process level (not per-conductor).
-    const src = readFileSync(
-      join(__dirname, '../../src/daemon-cli.ts'),
-      'utf-8'
-    );
+    const src = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8');
 
     // Daemon must have a mechanism to collect AbortSignals/Controllers from conductors
     // so the process-level handler can abort them all on SIGTERM
@@ -800,10 +849,7 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
 
       // Verify the guard condition exists in source
-      const src = readFileSync(
-        join(__dirname, '../../src/engine/conductor.ts'),
-        'utf-8'
-      );
+      const src = readFileSync(join(__dirname, '../../src/engine/conductor.ts'), 'utf-8');
 
       // The handler should be guarded by: if (!this.daemon)
       expect(src).toContain('if (!this.daemon)');
@@ -858,7 +904,10 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
   // future refactor that silently drops the episode construction or wiring.
   // ───────────────────────────────────────────────────────────────────────────
   it('daemon-cli.ts wires RateLimitEpisode: imports create, constructs one episode, passes to Conductor and runDaemon', () => {
-    const src = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8');
+    const src = [
+      readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8'),
+      readFileSync(join(__dirname, '../../src/engine/daemon-feature-lifecycle.ts'), 'utf-8'),
+    ].join('\n');
     // Verify import
     expect(src).toContain("import { create as createRateLimitEpisode } from './engine/rate-limit-episode.js';");
     // Verify construction
@@ -875,9 +924,33 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
     const worktreeBase = join(root, '.worktrees');
     const feature = join(worktreeBase, 'provider-scratch');
     await mkdir(feature, { recursive: true });
-    const deadHome = await acquireScratchHome({ worktreeRoot: feature, repository: 'owner/repo', featureSlug: 'provider-scratch', runId: 'R', attempt: 1, provider: 'codex', ownerPid: 99999999 });
-    const liveHome = await acquireScratchHome({ worktreeRoot: feature, repository: 'owner/repo', featureSlug: 'provider-scratch', runId: 'R', attempt: 2, provider: 'claude', ownerPid: process.pid });
-    const failedHome = await acquireScratchHome({ worktreeRoot: feature, repository: 'owner/repo', featureSlug: 'provider-scratch', runId: 'F', attempt: 3, provider: 'codex', ownerPid: 99999998 });
+    const deadHome = await acquireScratchHome({
+      worktreeRoot: feature,
+      repository: 'owner/repo',
+      featureSlug: 'provider-scratch',
+      runId: 'R',
+      attempt: 1,
+      provider: 'codex',
+      ownerPid: 99999999,
+    });
+    const liveHome = await acquireScratchHome({
+      worktreeRoot: feature,
+      repository: 'owner/repo',
+      featureSlug: 'provider-scratch',
+      runId: 'R',
+      attempt: 2,
+      provider: 'claude',
+      ownerPid: process.pid,
+    });
+    const failedHome = await acquireScratchHome({
+      worktreeRoot: feature,
+      repository: 'owner/repo',
+      featureSlug: 'provider-scratch',
+      runId: 'F',
+      attempt: 3,
+      provider: 'codex',
+      ownerPid: 99999998,
+    });
     const failedRun = join(feature, '.daemon', 'scratch', 'F');
     await chmod(failedRun, 0o555);
     const daemonModule = await import('../../src/engine/daemon.js');
@@ -916,11 +989,37 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
         reason: event.reason,
       }));
       expect(cleanupEvents).toHaveLength(3);
-      expect(cleanupEvents).toEqual(expect.arrayContaining([
-        { type: 'scratch_cleanup_reclaimed', repository: 'owner/repo', featureSlug: 'provider-scratch', runId: 'R', attempt: 1, path: deadHome, reason: 'dead-owner' },
-        { type: 'scratch_cleanup_retained', repository: 'owner/repo', featureSlug: 'provider-scratch', runId: 'R', attempt: 2, path: liveHome, reason: 'live-owner' },
-        { type: 'scratch_cleanup_failed', repository: 'owner/repo', featureSlug: 'provider-scratch', runId: 'F', attempt: 3, path: failedHome, reason: expect.any(String) },
-      ]));
+      expect(cleanupEvents).toEqual(
+        expect.arrayContaining([
+          {
+            type: 'scratch_cleanup_reclaimed',
+            repository: 'owner/repo',
+            featureSlug: 'provider-scratch',
+            runId: 'R',
+            attempt: 1,
+            path: deadHome,
+            reason: 'dead-owner',
+          },
+          {
+            type: 'scratch_cleanup_retained',
+            repository: 'owner/repo',
+            featureSlug: 'provider-scratch',
+            runId: 'R',
+            attempt: 2,
+            path: liveHome,
+            reason: 'live-owner',
+          },
+          {
+            type: 'scratch_cleanup_failed',
+            repository: 'owner/repo',
+            featureSlug: 'provider-scratch',
+            runId: 'F',
+            attempt: 3,
+            path: failedHome,
+            reason: expect.any(String),
+          },
+        ]),
+      );
     } finally {
       await chmod(failedRun, 0o755);
       vi.restoreAllMocks();
@@ -930,6 +1029,8 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
   it('releases the lock then exits after the daemon consumes a queued restart marker', async () => {
     const events: string[] = [];
     const started: string[] = [];
+    await prepareChildDispatchProject(['first', 'second', 'later']);
+    const store = await useTempEngineStore();
     await mkdir(join(root, '.ai-conductor'), { recursive: true });
     await writeFile(
       join(root, '.ai-conductor', 'config.yml'),
@@ -948,23 +1049,27 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
     // them blocked turns a useful assertion failure into Vitest's 20-second
     // timeout and leaks work into later files.
     const daemon = runDaemonMode({
+      projectRoot: root,
+      engineRoot: store.engineRoot,
+      concurrency: 2,
+      idlePollSeconds: 0,
+      baseBranch: 'main',
+      ensureFresh: async () => {},
+      providerDiscoveryRunner,
+      probeGhVersion: supportedGhVersion,
+      runHaltClassMigration: async () => join(root, '.worktrees'),
+      workSource: {
+        discover: async () => [{ slug: 'first' }, { slug: 'second' }, { slug: 'later' }],
+      },
+      watch: false,
+      executorFork: createInMemoryExecutorFork({
         projectRoot: root,
-        concurrency: 2,
-        baseBranch: 'main',
-        ensureFresh: async () => {},
-        providerDiscoveryRunner,
-        probeGhVersion: supportedGhVersion,
-        runHaltClassMigration: async () => join(root, '.worktrees'),
-        workSource: {
-          discover: async () => [
-            { slug: 'first' },
-            { slug: 'second' },
-            { slug: 'later' },
-          ],
-        },
-        watch: false,
-        runFeature: async (item) => {
-          started.push(item.slug);
+        // This fixture only observes supervisor drain behavior. Capturing
+        // child console output locally keeps the in-memory process double
+        // from intercepting supervisor console lines while both run.
+        consoleSinks: new Map(),
+        run: async ({ order }) => {
+          started.push(order.slug);
           if (started.length === 2) {
             await writeRestartPending(root, { blockingSlug: 'first' });
             await vi.waitFor(async () => {
@@ -988,16 +1093,18 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
             releaseWorkers?.();
           }
           await workersReleased;
-          return { slug: item.slug, status: 'done' };
+          return { slug: order.slug, status: 'done' };
         },
-        exitProcess: () => {
-          events.push(existsSync(join(root, RESTART_MARKER)) ? 'marker-present' : 'marker-consumed');
-          events.push(existsSync(getPidfilePath(root)) ? 'lock-held' : 'lock-released');
-          events.push('exited');
-        },
+      }),
+      exitProcess: () => {
+        events.push(existsSync(join(root, RESTART_MARKER)) ? 'marker-present' : 'marker-consumed');
+        events.push(existsSync(getPidfilePath(root)) ? 'lock-held' : 'lock-released');
+        events.push('exited');
+      },
     });
 
     try {
+      await vi.waitFor(() => expect(started).toHaveLength(2), { timeout: 1_000 });
       await drainStatusObserved;
       await daemon;
       const durableDrainLines = (await readFile(join(root, '.daemon', 'daemon.log'), 'utf8'))
@@ -1013,6 +1120,7 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
     } finally {
       releaseWorkers?.();
       await daemon;
+      await store.teardown();
     }
   });
 });
@@ -1027,9 +1135,7 @@ describe('Task 3: SIGTERM drains then releases lock; bounded force-release', () 
   it('daemonSigtermHandler body does not call process.exit directly and calls teardown.requestStop', () => {
     const src = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8');
 
-    const handlerMatch = src.match(
-      /const daemonSigtermHandler = async \(\) => \{([\s\S]*?)\n  \};/,
-    );
+    const handlerMatch = src.match(/const daemonSigtermHandler = async \(\) => \{([\s\S]*?)\n  \};/);
     expect(handlerMatch).not.toBeNull();
     const handlerBody = handlerMatch![1];
 
@@ -1042,9 +1148,7 @@ describe('Task 3: SIGTERM drains then releases lock; bounded force-release', () 
 
   it('fans SIGTERM out to child executors before beginning the daemon lock drain', () => {
     const src = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8');
-    const handlerMatch = src.match(
-      /const daemonSigtermHandler = async \(\) => \{([\s\S]*?)\n  \};/,
-    );
+    const handlerMatch = src.match(/const daemonSigtermHandler = async \(\) => \{([\s\S]*?)\n  \};/);
     expect(handlerMatch).not.toBeNull();
     const handlerBody = handlerMatch![1];
 
@@ -1063,81 +1167,94 @@ describe('Task 3: SIGTERM drains then releases lock; bounded force-release', () 
     expect(src).toMatch(/await dispatchDaemon\(\s*\{[\s\S]*?shouldStop:\s*\(\)\s*=>\s*teardown\.shouldStop\(\),/);
   });
 
-  it('force-releases a wedged two-executor daemon after its scaled bound and drops the lock before exit', async () => {
-    // exitProcess records the exit instead of terminating this worker. Pair it
-    // with a recording sink so post-exit fixture cleanup cannot write to a
-    // stream that the real process-exit backstop has already closed.
-    const logLines: string[] = [];
-    const logModule = await import('../../src/engine/daemon-log.js');
-    const logSpy = vi.spyOn(logModule, 'openDaemonLog').mockResolvedValue({
-      write: (line) => { logLines.push(line); },
-      close: async () => {},
-      closeSync: () => {},
-    });
+  it('force-release logs its marker and releases the lock before non-zero exit', () => {
+    const src = readFileSync(join(__dirname, '../../src/daemon-cli.ts'), 'utf-8');
+    const releaseBackstopStart = src.indexOf('const releaseBackstop = (): void => {');
+    const releaseBackstopEnd = src.indexOf('\n  };', releaseBackstopStart);
+    const daemonTeardownStart = src.indexOf('const teardown = createScaledDaemonTeardown({');
+    const forceReleaseStart = src.indexOf('onForceRelease: () => {', daemonTeardownStart);
+    const forceReleaseEnd = src.indexOf('\n    },', forceReleaseStart);
+
+    expect(releaseBackstopStart).toBeGreaterThanOrEqual(0);
+    expect(releaseBackstopEnd).toBeGreaterThan(releaseBackstopStart);
+    expect(daemonTeardownStart).toBeGreaterThanOrEqual(0);
+    expect(forceReleaseStart).toBeGreaterThanOrEqual(0);
+    expect(forceReleaseEnd).toBeGreaterThan(forceReleaseStart);
+
+    const releaseBackstopBody = src.slice(releaseBackstopStart, releaseBackstopEnd);
+    const forceReleaseBody = src.slice(forceReleaseStart, forceReleaseEnd);
+    expect(releaseBackstopBody).toContain('lock.releaseSync()');
+    expect(forceReleaseBody).toContain('[daemon] teardown force-release:');
+    expect(forceReleaseBody.indexOf('releaseBackstop()')).toBeLessThan(forceReleaseBody.indexOf('exitProcess(1)'));
+  });
+
+  it('drains two child executors after SIGTERM before releasing the lock and exiting once', async () => {
     const started: string[] = [];
+    const settledOnAbort: string[] = [];
     const exits: Array<{ code: number; lockPresent: boolean }> = [];
-    let releaseWorkers: (() => void) | undefined;
-    const workersReleased = new Promise<void>((resolve) => {
-      releaseWorkers = resolve;
-    });
-    let workersStarted!: () => void;
-    const startedWorkers = new Promise<void>((resolve) => {
-      workersStarted = resolve;
-    });
+    await prepareChildDispatchProject(['first', 'second']);
+    const store = await useTempEngineStore();
     await mkdir(join(root, '.ai-conductor'), { recursive: true });
     await writeFile(
       join(root, '.ai-conductor', 'config.yml'),
-      'daemon_concurrency: 2\nharness_self_host:\n  build_auth:\n    mode: api-key\n',
+      'daemon_concurrency: 2\nteardown_timeout_seconds: 0.001\nharness_self_host:\n  build_auth:\n    mode: api-key\n',
     );
+    let discoveryPass = 0;
 
     const daemon = runDaemonMode({
       projectRoot: root,
+      engineRoot: store.engineRoot,
       concurrency: 2,
+      continuous: true,
+      idlePollSeconds: 0.01,
       baseBranch: 'main',
       ensureFresh: async () => {},
       providerDiscoveryRunner,
       probeGhVersion: supportedGhVersion,
       runHaltClassMigration: async () => join(root, '.worktrees'),
+      // Keep the daemon at an idle boundary until SIGTERM's child-first
+      // shutdown finishes; a one-shot fixture can otherwise refill during
+      // stopAll's grace wait, before the handler arms the drain flag.
       workSource: {
-        discover: async () => [{ slug: 'first' }, { slug: 'second' }],
+        discover: async () => (discoveryPass++ < 2 ? [{ slug: 'first' }, { slug: 'second' }] : []),
       },
       watch: false,
-      runFeature: async (item) => {
-        started.push(item.slug);
-        if (started.length === 2) workersStarted();
-        await workersReleased;
-        return { slug: item.slug, status: 'done' };
-      },
+      executorFork: createInMemoryExecutorFork({
+        projectRoot: root,
+        run: async ({ order, signal }) => {
+          started.push(order.slug);
+          await new Promise<void>((resolve) => {
+            signal.addEventListener(
+              'abort',
+              () => {
+                settledOnAbort.push(order.slug);
+                resolve();
+              },
+              { once: true },
+            );
+          });
+          return { slug: order.slug, status: 'parked', reason: 'supervisor shutdown' };
+        },
+      }),
       exitProcess: (code) => {
         exits.push({ code, lockPresent: existsSync(getPidfilePath(root)) });
       },
     });
 
     try {
-      await startedWorkers;
-      vi.useFakeTimers();
+      await vi.waitFor(() => expect(started).toHaveLength(2), { timeout: 1_000 });
       process.emit('SIGTERM');
-      // SIGTERM handlers are async because they first close any active
-      // conductor executions.  Let that continuation arm the teardown timer
-      // before advancing fake time; otherwise a busy worker can advance the
-      // clock before this daemon has observed its own signal.
-      await vi.advanceTimersByTimeAsync(0);
-      // The two running executors each receive the full 30-second allowance.
-      // Stopping just short of 60 seconds makes the scaled boundary observable:
-      // the former single-executor 30-second timeout would have force-released
-      // the lock already.
-      await vi.advanceTimersByTimeAsync(59_999);
-      expect(exits).toEqual([]);
-
-      await vi.advanceTimersByTimeAsync(1);
-
-      expect(exits).toEqual([{ code: 1, lockPresent: false }]);
-      expect(logLines.join('\n')).toContain('teardown force-release');
-    } finally {
-      releaseWorkers?.();
       await daemon;
-      vi.useRealTimers();
-      logSpy.mockRestore();
+
+      expect(settledOnAbort).toHaveLength(2);
+      expect(new Set(settledOnAbort)).toEqual(new Set(['first', 'second']));
+      expect(exits).toEqual([{ code: 0, lockPresent: false }]);
+      await expect(readFile(join(root, '.daemon', 'daemon.log'), 'utf8')).resolves.not.toContain(
+        'teardown force-release',
+      );
+    } finally {
+      await daemon;
+      await store.teardown();
     }
   });
 

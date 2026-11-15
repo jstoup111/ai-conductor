@@ -63,6 +63,7 @@ engine/canonical-launcher.ts -> filesystem
 engine/child-context.ts -> filesystem
 engine/child-cursor.ts -> filesystem
 engine/child-feature-executor.ts -> clock
+engine/child-feature-executor.ts -> filesystem
 engine/child-feature-executor.ts -> process
 engine/child-lifecycle.ts -> filesystem
 engine/ci-fix.ts -> git
@@ -89,6 +90,8 @@ engine/daemon-deps.ts -> process
 engine/daemon-dispatch-preparation.ts -> filesystem
 engine/daemon-exit-witness.ts -> clock
 engine/daemon-exit-witness.ts -> filesystem
+engine/daemon-feature-lifecycle.ts -> filesystem
+engine/daemon-feature-lifecycle.ts -> process
 engine/daemon-ledger-readers.ts -> filesystem
 engine/daemon-lock.ts -> clock
 engine/daemon-lock.ts -> filesystem
@@ -161,7 +164,6 @@ engine/event-persister.ts -> clock
 engine/event-persister.ts -> filesystem
 engine/executor-broker.ts -> clock
 engine/executor-child-runtime.ts -> filesystem
-engine/executor-child-runtime.ts -> git
 engine/executor-child-runtime.ts -> process
 engine/executor-child.ts -> filesystem
 engine/executor-proxies.ts -> clock
