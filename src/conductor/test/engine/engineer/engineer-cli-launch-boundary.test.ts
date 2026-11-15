@@ -118,7 +118,7 @@ describe('Composer launcher boundary', () => {
         return 0;
       });
       let attached = true;
-      const code = await dispatchEngineer({ kind: 'launch', provider: 'claude' }, {
+      const code = await dispatchEngineer({ kind: 'launch', provider: 'claude', idea: 'switch providers' }, {
         registryPath, env: { AI_CONDUCTOR_COMPOSE_LAUNCH_ID: 'launch-16' },
         spawnHost, checkpoint, git, gh: async () => ({ stdout: '', stderr: '', exitCode: 0 }), print: () => {}, printErr: () => {},
         isAttachedTerminal: () => attached,
