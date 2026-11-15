@@ -1,0 +1,9 @@
+# Track: Routed build claim with null fields is rejected as malformed and discarded
+
+Track: technical
+
+Scope boundary: the routed BUILD claim boundary only. In scope: a malformed routed prerequisite claim names the offending field and the rule it broke in its failed-attempt detail and retry reason; a present `.pipeline/halt-user-input-required` marker takes precedence over the routed claim, so the attempt reaches the existing halt-marker stall handling instead of being counted as a failed claim; genuinely invalid claims stay refused. Out of scope: Codex null normalisation (already delivered by `fromCodexStrictResult`, #3581 and #3589, and pinned by `test/execution/codex-strict-schema.test.ts`), a new builder outcome in `PREREQUISITE_CLAIM_SCHEMA`, honouring the marker on non-routed failed BUILD attempts, and downward claims (#3674).
+
+Engine-internal routing behaviour with no user-facing product requirements; acceptance criteria live in stories. Source: jstoup111/ai-conductor#3643.
+
+Chosen approach: engine precedence plus parser detail. The marker is the existing operator-input channel (`skills/pipeline/SKILL.md`; ADR adr-2026-07-10-daemon-stall-remediation); the incident's builder wrote it, then emitted `{"outcome":"blocked-by-prerequisite","child":null,...}`. Codex normalisation had already reduced that to a claim without `child`, so the claim was genuinely invalid, and the failed-attempt path never consults the marker. The retry builder then deleted the marker itself. Rejected alternatives: (A, filer hypothesis) normalise nulls and add a `needs-operator-input` claim outcome, since normalisation already exists and a new outcome changes the provider schema contract for every provider and duplicates the marker channel; (C) honour the marker on every failed BUILD attempt, which is broader than this issue and changes the generic retry path.
