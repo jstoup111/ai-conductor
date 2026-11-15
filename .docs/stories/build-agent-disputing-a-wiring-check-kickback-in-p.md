@@ -212,7 +212,9 @@ recorded.
 
 ### Done When
 - [ ] `build-outcome.ts` exports a pure `sameNoOpCycle(prior, current)` returning `true` only when
-      all four components are present, comparable, and equal.
+      all four components are present, comparable, and equal, the prior record's delivered build-review
+      case ids (none for a record written before they were recorded) include every case the current
+      BUILD would be delivered, and the prior record's refusal is not yet spent.
 - [ ] A test table covers each mismatch axis (tree, gate, verdict, rung) and both null axes, and
       asserts `false` for every one.
 - [ ] An acceptance test drives the conductor through a refused re-entry and asserts zero provider

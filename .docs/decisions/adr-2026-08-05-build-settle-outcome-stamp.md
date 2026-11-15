@@ -98,6 +98,19 @@ so a fresh dispatch re-enters at rung 1 and the tuple matches on the cross-dispa
 targets. It is included as cheap insurance: the guard must never be able to refuse a strictly
 more-capable retry, and that property should not depend on a scoping detail elsewhere in the file.
 
+> **Amended 2026-11-15 by #3661:** the tuple alone cannot see the *work* a kickback carries. After a
+> zero-work revalidation BUILD, `build_review` admitted two new remediation cases at the same tree,
+> verdict and rung, and the refusal declined a build no agent had ever been asked to do. Every record
+> therefore also stores the build-review work-order case ids its BUILD was delivered (an empty list when
+> no work order reached the prompt), and a definite match additionally requires that every case the
+> current BUILD would be delivered appears in the prior record's list. A record written before the list
+> existed counts as having been delivered no cases, so the original gates keep their refusal and any
+> delivered case dispatches. Case identity is the adjudicator's existing judgement, so the refusal keys on it rather than
+> re-deriving equivalence. A refusal also spends its record: the refusing pass marks the record before
+> writing the `needs-human` HALT, and a spent record never matches again, so clearing that HALT (by
+> `halt clear` or by removing the HALT files) retries BUILD exactly once. The retried BUILD writes a fresh
+> record, so a second identical empty cycle is refused again.
+
 **D4 — The stamp is written on every terminal outcome of the build step, not only on success.**
 Success, `step_failed`, and a no-verdict outcome (including `authFailure`) each write a stamp
 recording which one occurred. A success-only stamp would leave the refusal comparing against a
