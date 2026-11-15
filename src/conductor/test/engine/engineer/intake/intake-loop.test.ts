@@ -646,8 +646,12 @@ describe('runIntakeLoop', () => {
         ],
         quarantineFiles: [],
       });
-      expect(corruptionLogs.join('\n')).not.toContain(firstCorruptBytes);
-      expect(corruptionLogs.join('\n')).not.toContain(secondCorruptBytes);
+      // The full diagnostic deliberately names the absolute ledger path, which
+      // can itself contain either byte sequence (for example, in a worktree
+      // name). Only the quarantine detail is required not to expose bytes.
+      const quarantineDiagnostics = corruptionLogs.map((message) => message.slice(message.indexOf('quarantine=')));
+      expect(quarantineDiagnostics.join('\n')).not.toContain(firstCorruptBytes);
+      expect(quarantineDiagnostics.join('\n')).not.toContain(secondCorruptBytes);
     } finally {
       quarantineFailure.active = false;
       await rm(directory, { recursive: true, force: true });
