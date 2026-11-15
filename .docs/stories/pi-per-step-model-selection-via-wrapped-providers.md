@@ -129,9 +129,9 @@ As an operator, I want cheap steps on a small model and heavy steps on a large o
 **Requirement:** TI-5. `llm_providers.<id>.model_fallback_ladder` and `.model_escalation_order`
 drive the availability ladder and retry escalation per dispatched provider. Pi never inherits the
 top-level `model_fallback_ladder`, and every rung is logged (ladder items 7–8, issue outcome 3).
-The ladder fires on the adapter's model-unavailable signal. Anchoring upstream model-not-found
-output under an explicit `--provider` belongs to #2718, so until then the boot probe is the primary
-guard against unknown ids.
+The ladder fires on the adapter's model-unavailable signal. Under an explicit `--provider`, only
+the captured OpenRouter unknown-model rejection carries that signal (#3505); for every other
+upstream the boot probe is the primary guard against unknown ids.
 
 As an operator, I want an unavailable Pi model to fall to my next configured Pi model, and retries to escalate along my Pi order, so that Pi steps recover the same way claude steps do.
 
@@ -196,7 +196,7 @@ As an operator, I want a Pi run that ended in an error to fail its step, so that
 - Given Pi exits 0 and its terminal assistant message has a normal stop reason with text content, when the adapter parses the stream, then the invocation succeeds with that text as output, as before.
 
 #### Negative Paths
-- Given Pi exits 0 with `stopReason: "error"` and an `errorMessage` matching none of the signatures #2718 anchors, when the result is classified, then it sets none of `authFailure`, `rateLimited`, or `modelUnavailable`, and the step fails as an ordinary step failure carrying the error message.
+- Given Pi exits 0 with `stopReason: "error"` and an `errorMessage` matching none of the anchored Pi failure or unknown-model signatures, when the result is classified, then it sets none of `authFailure`, `rateLimited`, or `modelUnavailable`, and the step fails as an ordinary step failure carrying the error message.
 - Given Pi exits 0 with `stopReason: "error"` and no `errorMessage`, when the adapter parses the stream, then the invocation fails with a message stating that Pi reported an error stop with no message.
 - Given a Pi stream whose last line is malformed JSON after an error-stop message, when the adapter parses it, then the error-stop message still determines a failed result.
 
