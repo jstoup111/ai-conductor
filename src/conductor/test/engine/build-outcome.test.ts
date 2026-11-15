@@ -42,9 +42,7 @@ describe('classifyBuildSettle', () => {
     ['no-movement when tree hashes match', 'same-tree', 'same-tree', 2, 2, 'no-movement'],
     ['moved when resolved work increases despite matching trees', 'same-tree', 'same-tree', 2, 3, 'moved'],
   ] as const)('%s', (_description, treeBefore, treeAfter, resolvedBefore, resolvedAfter, expected) => {
-    expect(
-      classifyBuildSettle({ treeBefore, treeAfter, resolvedBefore, resolvedAfter }),
-    ).toBe(expected);
+    expect(classifyBuildSettle({ treeBefore, treeAfter, resolvedBefore, resolvedAfter })).toBe(expected);
   });
 
   it.each([
@@ -52,9 +50,7 @@ describe('classifyBuildSettle', () => {
     ['treeAfter is null', 'before-tree', null],
     ['both tree hashes are null', null, null],
   ] as const)('returns no-movement when %s', (_description, treeBefore, treeAfter) => {
-    expect(
-      classifyBuildSettle({ treeBefore, treeAfter, resolvedBefore: 2, resolvedAfter: 3 }),
-    ).toBe('no-movement');
+    expect(classifyBuildSettle({ treeBefore, treeAfter, resolvedBefore: 2, resolvedAfter: 3 })).toBe('no-movement');
   });
 
   it.each([
@@ -97,10 +93,35 @@ describe('classifyBuildSettle', () => {
     ).toBe(false);
   });
 
-  it('does not import the retired build-progress classifier', () => {
+  // Covers: task:1
+  it.each([
+    [
+      'rejects a current case absent from the prior delivery',
+      priorOutcome({ deliveredCaseIds: ['c1'] }),
+      ['c2'],
+      false,
+    ],
+    ['treats a legacy prior record as delivering no cases', priorOutcome(), ['c1'], false],
+    ['accepts equal delivered cases', priorOutcome({ deliveredCaseIds: ['c1', 'c2'] }), ['c1', 'c2'], true],
+    ['accepts a subset of delivered cases', priorOutcome({ deliveredCaseIds: ['c1', 'c2'] }), ['c1'], true],
+    ['accepts two empty delivered-case sets', priorOutcome(), undefined, true],
+    ['rejects a spent refusal', priorOutcome({ refusalSpent: true }), undefined, false],
+  ] as const)('%s', (_description, prior, deliveredCaseIds, expected) => {
     expect(
-      readFileSync(new URL('../../src/engine/build-outcome.ts', import.meta.url), 'utf8'),
-    ).not.toMatch(/import\s+(?:type\s+)?[\s\S]*?\bclassifyBuildProgress\b/);
+      sameNoOpCycle(prior, {
+        gate: 'build_review',
+        treeHash: 'tree-1',
+        verdict: false,
+        rung: { model: 'gpt-5.6-terra', effort: 'medium' },
+        deliveredCaseIds,
+      }),
+    ).toBe(expected);
+  });
+
+  it('does not import the retired build-progress classifier', () => {
+    expect(readFileSync(new URL('../../src/engine/build-outcome.ts', import.meta.url), 'utf8')).not.toMatch(
+      /import\s+(?:type\s+)?[\s\S]*?\bclassifyBuildProgress\b/,
+    );
   });
 });
 
@@ -122,10 +143,46 @@ describe('readBuildOutcome', () => {
   it('fails open when a record has an unknown effort level', async () => {
     const sidecarPath = join(dir, '.pipeline', 'build-outcome.json');
     await mkdir(join(dir, '.pipeline'), { recursive: true });
-    await writeFile(sidecarPath, JSON.stringify({
+    await writeFile(
+      sidecarPath,
+      JSON.stringify({
+        version: 1,
+        records: [{ ...priorOutcome(), rung: { model: 'gpt-5.6-terra', effort: 'invalid' } }],
+      }),
+    );
+
+    await expect(readBuildOutcome(dir)).resolves.toEqual({ version: 1, records: [] });
+  });
+
+  // Covers: task:1
+  it('round-trips delivered cases and a spent refusal', async () => {
+    const sidecarPath = join(dir, '.pipeline', 'build-outcome.json');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      sidecarPath,
+      JSON.stringify({
+        version: 1,
+        records: [priorOutcome({ deliveredCaseIds: ['c1', 'c2'], refusalSpent: true })],
+      }),
+    );
+
+    await expect(readBuildOutcome(dir)).resolves.toEqual({
       version: 1,
-      records: [{ ...priorOutcome(), rung: { model: 'gpt-5.6-terra', effort: 'invalid' } }],
-    }));
+      records: [priorOutcome({ deliveredCaseIds: ['c1', 'c2'], refusalSpent: true })],
+    });
+  });
+
+  // Covers: task:1
+  it('fails open when delivered case ids are not strings', async () => {
+    const sidecarPath = join(dir, '.pipeline', 'build-outcome.json');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      sidecarPath,
+      JSON.stringify({
+        version: 1,
+        records: [{ ...priorOutcome(), deliveredCaseIds: [1] }],
+      }),
+    );
 
     await expect(readBuildOutcome(dir)).resolves.toEqual({ version: 1, records: [] });
   });
@@ -167,8 +224,12 @@ describe('readBuildOutcome', () => {
 describe('build outcome category', () => {
   let dir: string;
 
-  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'build-outcome-category-')); });
-  afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'build-outcome-category-'));
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
 
   it('prefers a valid declared dispute category and falls back safely', async () => {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -183,10 +244,14 @@ describe('build outcome category', () => {
   it.each(['disputes-gate', 'belongs-to-decide', 'silent-no-movement'] as const)(
     'is advisory: %s leaves exact-cycle refusal unchanged',
     (category) => {
-      expect(sameNoOpCycle(priorOutcome({ category }), {
-        gate: 'build_review', treeHash: 'tree-1', verdict: false,
-        rung: { model: 'gpt-5.6-terra', effort: 'medium' },
-      })).toBe(true);
+      expect(
+        sameNoOpCycle(priorOutcome({ category }), {
+          gate: 'build_review',
+          treeHash: 'tree-1',
+          verdict: false,
+          rung: { model: 'gpt-5.6-terra', effort: 'medium' },
+        }),
+      ).toBe(true);
     },
   );
 
@@ -206,21 +271,30 @@ describe('build outcome category', () => {
         haltDisposition: composeBuildOutcomeHaltReason(record, 'build_review'),
       });
 
-      expect(outcomes).toBe(JSON.stringify({
-        refusal: true,
-        escalation: { halt: true },
-        haltDisposition: 'build_review kickback-to-build refused: the build made no tree change ' +
-          '(tree tree-1 unchanged). Investigate the unchanged build before retrying.\n' +
-          'Build note: the gate is stale',
-      }));
+      expect(outcomes).toBe(
+        JSON.stringify({
+          refusal: true,
+          escalation: { halt: true },
+          haltDisposition:
+            'build_review kickback-to-build refused: the build made no tree change ' +
+            '(tree tree-1 unchanged). Investigate the unchanged build before retrying. ' +
+            'Clearing this HALT retries BUILD once.\n' +
+            'Build note: the gate is stale',
+        }),
+      );
     },
   );
 
   it('names the operator decision and keeps a multi-line note below the reason line', () => {
-    const reason = composeBuildOutcomeHaltReason(priorOutcome({
-      category: 'belongs-to-decide', note: ['the finding is stale', 'return to DECIDE'],
-    }), 'build_review');
+    const reason = composeBuildOutcomeHaltReason(
+      priorOutcome({
+        category: 'belongs-to-decide',
+        note: ['the finding is stale', 'return to DECIDE'],
+      }),
+      'build_review',
+    );
     expect(reason.split('\n')[0]).toContain('Investigate the unchanged build before retrying.');
+    expect(reason).toContain('Clearing this HALT retries BUILD once.');
     expect(reason).toContain('return to DECIDE');
   });
 });
@@ -243,10 +317,7 @@ describe('writeBuildOutcome', () => {
     const sidecarPath = join(dir, '.pipeline', 'build-outcome.json');
     const renameMock = vi.mocked(rename);
     expect(renameMock).toHaveBeenCalledTimes(1);
-    expect(renameMock).toHaveBeenCalledWith(
-      expect.stringMatching(/\.build-outcome\.[^.]+\.[^.]+\.tmp$/),
-      sidecarPath,
-    );
+    expect(renameMock).toHaveBeenCalledWith(expect.stringMatching(/\.build-outcome\.[^.]+\.[^.]+\.tmp$/), sidecarPath);
     await expect(readBuildOutcome(dir)).resolves.toEqual({ version: 1, records: [priorOutcome()] });
   });
 

@@ -29,6 +29,8 @@ export interface BuildOutcomeRecord {
   note?: string[];
   category?: BuildOutcomeCategory;
   reason?: string;
+  deliveredCaseIds?: string[];
+  refusalSpent?: true;
 }
 
 /** Durable build-settle observations stored outside the feature branch. */
@@ -56,6 +58,7 @@ export interface NoOpCycleInput {
   treeHash: string | null;
   verdict: boolean;
   rung: BuildOutcomeRung;
+  deliveredCaseIds?: readonly string[];
 }
 
 /** Classifies the tree/resolved-work movement observed during a build settle. */
@@ -79,10 +82,7 @@ function inferBuildOutcomeCategory(note?: string[]): BuildOutcomeCategory {
 }
 
 /** Reads optional agent enrichment; invalid artifacts deliberately fall back to inference. */
-export async function resolveBuildOutcomeCategory(
-  projectRoot: string,
-  note?: string[],
-): Promise<BuildOutcomeCategory> {
+export async function resolveBuildOutcomeCategory(projectRoot: string, note?: string[]): Promise<BuildOutcomeCategory> {
   try {
     const parsed: unknown = JSON.parse(await readFile(join(projectRoot, BUILD_DISPUTE_PATH), 'utf-8'));
     const category = (parsed as { category?: unknown })?.category;
@@ -96,28 +96,31 @@ export async function resolveBuildOutcomeCategory(
 }
 
 /** Returns whether a prior build settled without movement for this exact cycle. */
-export function sameNoOpCycle(
-  prior: BuildOutcomeRecord | null,
-  current: NoOpCycleInput,
-): boolean {
-  return prior !== null
-    && prior.outcome === 'no-movement'
-    && prior.gate === current.gate
-    && prior.treeAfter !== null
-    && current.treeHash !== null
-    && prior.treeAfter === current.treeHash
-    && prior.verdict === current.verdict
-    && prior.rung.model === current.rung.model
-    && prior.rung.effort === current.rung.effort;
+export function sameNoOpCycle(prior: BuildOutcomeRecord | null, current: NoOpCycleInput): boolean {
+  return (
+    prior !== null &&
+    prior.outcome === 'no-movement' &&
+    prior.gate === current.gate &&
+    prior.treeAfter !== null &&
+    current.treeHash !== null &&
+    prior.treeAfter === current.treeHash &&
+    prior.verdict === current.verdict &&
+    prior.rung.model === current.rung.model &&
+    prior.rung.effort === current.rung.effort &&
+    prior.refusalSpent !== true &&
+    (current.deliveredCaseIds ?? []).every((caseId) => (prior.deliveredCaseIds ?? []).includes(caseId))
+  );
 }
 
 /** Explains the operator decision behind a refused, known-empty build cycle. */
 export function composeBuildOutcomeHaltReason(record: BuildOutcomeRecord, gate: string): string {
   const note = record.note?.filter(Boolean).join('\n');
   const tree = record.treeAfter ? `tree ${record.treeAfter.slice(0, 7)} unchanged` : 'tree unchanged';
-  return `${gate} kickback-to-build refused: the build made no tree change (${tree}). ` +
-    'Investigate the unchanged build before retrying.' +
-    (note ? `\nBuild note: ${note}` : '');
+  return (
+    `${gate} kickback-to-build refused: the build made no tree change (${tree}). ` +
+    'Investigate the unchanged build before retrying. Clearing this HALT retries BUILD once.' +
+    (note ? `\nBuild note: ${note}` : '')
+  );
 }
 
 /** Returns the most recent observation, if this sidecar has one. */
@@ -140,22 +143,32 @@ function isBuildOutcomeRecord(value: unknown): value is BuildOutcomeRecord {
   const isNullableString = (candidate: unknown): candidate is string | null =>
     typeof candidate === 'string' || candidate === null;
   return (
-    (record.outcome === 'moved' || record.outcome === 'no-movement')
-    && (record.terminalOutcome === 'done' || record.terminalOutcome === 'failed' || record.terminalOutcome === 'no-verdict')
-    && isNullableString(record.gate)
-    && (typeof record.verdict === 'boolean' || record.verdict === null)
-    && typeof record.rung === 'object'
-    && record.rung !== null
-    && !Array.isArray(record.rung)
-    && typeof (record.rung as Record<string, unknown>).model === 'string'
-    && isEffortLevel((record.rung as Record<string, unknown>).effort)
-    && isNullableString(record.treeBefore)
-    && isNullableString(record.treeAfter)
-    && isNullableString(record.headBefore)
-    && isNullableString(record.headAfter)
-    && (record.note === undefined || (Array.isArray(record.note) && record.note.every((line) => typeof line === 'string')))
-    && (record.category === undefined || record.category === 'disputes-gate' || record.category === 'belongs-to-decide' || record.category === 'silent-no-movement')
-    && (record.reason === undefined || typeof record.reason === 'string')
+    (record.outcome === 'moved' || record.outcome === 'no-movement') &&
+    (record.terminalOutcome === 'done' ||
+      record.terminalOutcome === 'failed' ||
+      record.terminalOutcome === 'no-verdict') &&
+    isNullableString(record.gate) &&
+    (typeof record.verdict === 'boolean' || record.verdict === null) &&
+    typeof record.rung === 'object' &&
+    record.rung !== null &&
+    !Array.isArray(record.rung) &&
+    typeof (record.rung as Record<string, unknown>).model === 'string' &&
+    isEffortLevel((record.rung as Record<string, unknown>).effort) &&
+    isNullableString(record.treeBefore) &&
+    isNullableString(record.treeAfter) &&
+    isNullableString(record.headBefore) &&
+    isNullableString(record.headAfter) &&
+    (record.note === undefined ||
+      (Array.isArray(record.note) && record.note.every((line) => typeof line === 'string'))) &&
+    (record.category === undefined ||
+      record.category === 'disputes-gate' ||
+      record.category === 'belongs-to-decide' ||
+      record.category === 'silent-no-movement') &&
+    (record.reason === undefined || typeof record.reason === 'string') &&
+    (record.deliveredCaseIds === undefined ||
+      (Array.isArray(record.deliveredCaseIds) &&
+        record.deliveredCaseIds.every((caseId) => typeof caseId === 'string'))) &&
+    (record.refusalSpent === undefined || record.refusalSpent === true)
   );
 }
 
@@ -195,16 +208,10 @@ export async function readBuildOutcome(projectRoot: string): Promise<BuildOutcom
 }
 
 /** Write build-settle observations atomically, so readers never see partial JSON. */
-export async function writeBuildOutcome(
-  projectRoot: string,
-  outcome: BuildOutcomeStore,
-): Promise<void> {
+export async function writeBuildOutcome(projectRoot: string, outcome: BuildOutcomeStore): Promise<void> {
   const outcomePath = join(projectRoot, BUILD_OUTCOME_PATH);
   const outcomeDir = dirname(outcomePath);
-  const tempPath = join(
-    outcomeDir,
-    `.build-outcome.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`,
-  );
+  const tempPath = join(outcomeDir, `.build-outcome.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`);
 
   await mkdir(outcomeDir, { recursive: true });
   try {
