@@ -229,7 +229,8 @@ complete definition of done: when every check passes, the task is finished — f
 Each check must be **falsifiable**: a zero-context reviewer evaluates it to a definite yes or no
 without appealing to an ideal. Name the test and what it asserts, the command and its expected
 output, or the concrete diff property. "The guard is robust" is not a check; "the guard rejects the
-three drift fixtures listed in Steps and exits non-zero" is.
+three drift fixtures listed in Steps and exits non-zero" is. BUILD must be able to satisfy every
+check itself: never make one depend on a later gate's verdict.
 
 Each check must be verifiable against a **named mechanism** — the function, file, gate, or state
 transition whose existence or behavior it asserts. State what that mechanism does to produce the
@@ -319,9 +320,9 @@ caller that will drift under refactoring.
 
 The Wiring Surface is a floor, not the full list. At SHIP, the as-built `/architecture-review`
 requires every primitive the diff adds or changes (an exported function, config key, emitted event,
-or hook) to be reachable from a production entry point at every tier. When a task changes a
-primitive whose behavior must reach production, some task's `Done when:` must state that behavior
-as observed through an entry point, even when no Wiring Surface entry names it. Wording the
+or hook) to be reachable from a production entry point at every tier. When a task adds or changes
+a primitive, some task's `Done when:` must state its behavior as observed through an entry point,
+even when no Wiring Surface entry names it, unless a cited ADR decision keeps it dormant. Wording the
 obligation as observed behavior, rather than as "call X from Y", lets `/simplify` move the call site
 without making the task undeliverable or its evidence stale.
 
