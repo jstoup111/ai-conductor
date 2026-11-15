@@ -8,9 +8,7 @@ vi.mock('execa', () => ({ execa: vi.fn() }));
 import { makeFeatureRunnerDeps } from '../../src/engine/daemon-deps.js';
 import { isOperatorParked } from '../../src/engine/park-marker.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
-import type {
-  FeatureWorktree,
-} from '../../src/engine/daemon-runner.js';
+import type { FeatureWorktree } from '../../src/engine/daemon-runner.js';
 import type { OperatorParkedTermination } from '../../src/engine/conductor.js';
 
 describe('daemon operator-park boundary wiring', () => {
@@ -56,48 +54,27 @@ describe('daemon operator-park boundary wiring', () => {
 
     expect(result).toBe(termination);
     expect(await isOperatorParked(mainRoot, 'feature-a')).toBe(false);
-    expect(runConductorInWorktree).toHaveBeenCalledWith(
-      worktree,
-      item,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-    );
+    expect(runConductorInWorktree).toHaveBeenCalledWith(worktree, item, undefined, undefined, undefined, undefined);
   });
 
   it('returns a typed pre-first-unit stop from the pre-rebase park decision', async () => {
-    const source = await readFile(
-      new URL('../../src/daemon-cli.ts', import.meta.url),
-      'utf8',
-    );
-    const preRebasePark = source.match(
-      /const parked = await isOperatorParked\(projectRoot, item\.slug\);[\s\S]*?const resume = await resumeRebaseFirst/,
-    )?.[0];
+    const source = await readFile(new URL('../../src/engine/daemon-feature-lifecycle.ts', import.meta.url), 'utf8');
+    const preRebasePark = source.match(/let parked = false;[\s\S]*?const resume = isRekick/)?.[0];
 
     expect(preRebasePark).toBeDefined();
-    expect(preRebasePark).toMatch(
-      /const termination: OperatorParkedTermination = \{\s*kind: 'operator-parked',\s*boundary: \{ kind: 'pre-first-unit' \},\s*\};\s*return termination;/,
-    );
+    expect(preRebasePark).toMatch(/return \{ kind: 'operator-parked', boundary: \{ kind: 'pre-first-unit' \} \};/);
   });
 
   it('binds the daemon predicate to main projectRoot and item.slug, never the worktree root', async () => {
-    const source = await readFile(
-      new URL('../../src/daemon-cli.ts', import.meta.url),
-      'utf8',
-    );
-    const constructor = source.match(
-      /const conductor = new Conductor\(\{[\s\S]*?\n    \}\);/,
-    )?.[0];
+    const source = await readFile(new URL('../../src/engine/daemon-feature-lifecycle.ts', import.meta.url), 'utf8');
+    const constructor = source.match(/const conductor = new Conductor\(\{[\s\S]*?\n    \}\);/)?.[0];
 
     expect(constructor).toBeDefined();
     expect(constructor).toContain('featureSlug: item.slug');
     expect(constructor).toMatch(
-      /operatorParkBoundary:\s*\(\)\s*=>\s*isOperatorParked\(\s*projectRoot,\s*item\.slug,\s*\(error\)\s*=>\s*featureLog\(`operator park marker read failed: \$\{error\.message\}`\),?\s*\)/,
+      /operatorParkBoundary:\s*async \(\)\s*=>\s*\{[\s\S]*?isOperatorParked\(projectRoot, item\.slug/,
     );
-    expect(constructor).not.toMatch(
-      /operatorParkBoundary:[\s\S]*?isOperatorParked\(wt\.path/,
-    );
+    expect(constructor).not.toMatch(/operatorParkBoundary:[\s\S]*?isOperatorParked\(wt\.path/);
   });
 
   it('reads main-root authority even when the worktree has no marker', async () => {

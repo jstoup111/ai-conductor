@@ -26,7 +26,9 @@ describe('daemon-cli parked reconciliation wiring (Task 11)', () => {
   it('snapshots cleanup config once and binds a per-run cache into the daemon sweep', () => {
     expect(source).toMatch(/const reconcileParkedAutoCleanup = config\?\.reconcile_parked_auto_cleanup \?\? true;/);
     expect(source).toMatch(/const parkedSweepCache = new Map<string, ParkClassification>\(\);/);
-    expect(source).toMatch(/reconcileParkedFeatures: async \(\{ disposeHaltWatcher, isFeatureInFlight \}\) => \{[\s\S]*cache: parkedSweepCache,[\s\S]*autoCleanup: reconcileParkedAutoCleanup,/);
+    expect(source).toMatch(
+      /reconcileParkedFeatures: async \(\{ disposeHaltWatcher, isFeatureInFlight \}\) => \{[\s\S]*cache: parkedSweepCache,[\s\S]*autoCleanup: reconcileParkedAutoCleanup,/,
+    );
     expect(source).toMatch(/const reclaimMergedWorktrees = config\?\.reclaim_merged_worktrees \?\? true;/);
     expect(source).toContain('log: (message) => log(message, true),');
   });
@@ -38,7 +40,9 @@ describe('daemon-cli parked reconciliation wiring (Task 11)', () => {
     expect(sweepBinding?.[1]).toBeDefined();
     // The ST-916 repair adapter is constructed from the real production factory,
     // not left `undefined` (which silently defers every record-missing park forever).
-    expect(sweepBinding?.[1]).toContain('requestRecordRepair: makeRecordRepairRequester({ cwd: projectRoot, log, events })');
+    expect(sweepBinding?.[1]).toContain(
+      'requestRecordRepair: makeRecordRepairRequester({ cwd: projectRoot, log, events })',
+    );
     // The disposer is the daemon-owned one handed in by runDaemon, never a local stub.
     expect(sweepBinding?.[1]).toContain('disposeHaltWatcher,');
     expect(source).toContain("import { makeRecordRepairRequester } from './engine/shipment-evidence-cli.js';");
@@ -48,10 +52,10 @@ describe('daemon-cli parked reconciliation wiring (Task 11)', () => {
     const sweepBinding = source.match(
       /reconcileParkedFeatures: async \(\{ disposeHaltWatcher, isFeatureInFlight \}\) => \{([\s\S]*?)\n {6}\},/,
     );
-      expect(sweepBinding?.[1]).toContain('getIssueState: tracker.getIssueState.bind(tracker),');
+    expect(sweepBinding?.[1]).toContain('getIssueState: tracker.getIssueState.bind(tracker),');
     expect(sweepBinding?.[1]).toContain('reclaimMergedWorktrees,');
     expect(sweepBinding?.[1]).toContain('isFeatureInFlight,');
-    expect(sweepBinding?.[1]).toContain('onEvent: (event) => { void events.emit(event); },');
+    expect(sweepBinding?.[1]).toMatch(/onEvent:\s*\(event\)\s*=>\s*\{\s*void events\.emit\(event\);\s*\},/);
   });
 
   it('classifies a CLOSED non-ancestor park as orphan through the bound real tracker seam', async () => {
@@ -88,7 +92,9 @@ describe('daemon-cli parked reconciliation wiring (Task 11)', () => {
   });
 
   it('forces dashboard classification to autoCleanup: false, so a configured false toggle cannot delete during render', () => {
-    const dashboardCall = source.match(/const reconciliation = await options\.reconcileParkedFeatures\(\{([\s\S]*?)\}\);/);
+    const dashboardCall = source.match(
+      /const reconciliation = await options\.reconcileParkedFeatures\(\{([\s\S]*?)\}\);/,
+    );
     expect(dashboardCall?.[1]).toBeDefined();
     expect(dashboardCall?.[1]).toContain('autoCleanup: false');
     expect(source).toContain("classification === 'merged' ? 'merged-ready'");
@@ -98,7 +104,8 @@ describe('daemon-cli parked reconciliation wiring (Task 11)', () => {
     const interfaceIndex = reconciliationSource.indexOf('export interface ReconcileParkedFeaturesOptions {');
     const optionBlock = interfaceIndex < 0 ? undefined : objectAt(reconciliationSource, interfaceIndex);
     expect(optionBlock).toBeDefined();
-    const optionNamedBy = (comment: RegExp) => optionBlock?.match(new RegExp(`${comment.source}[\\s\\S]*?\\*\\/\\s*(\\w+)\\??:`, comment.flags))?.[1];
+    const optionNamedBy = (comment: RegExp) =>
+      optionBlock?.match(new RegExp(`${comment.source}[\\s\\S]*?\\*\\/\\s*(\\w+)\\??:`, comment.flags))?.[1];
     const autoCleanup = optionBlock?.match(/\n\s*(\w+)\??: boolean;\n\s*cache\??:/)?.[1];
     const reclaimMergedWorktrees = optionNamedBy(/Resolved reclamation policy/);
     const onEvent = optionNamedBy(/event-spine sink/);
@@ -106,12 +113,16 @@ describe('daemon-cli parked reconciliation wiring (Task 11)', () => {
 
     // The informational dashboard adapter forwards its explicit disabled
     // policy, while the mutating sweep is connected to the event spine.
-    expect(source).toMatch(new RegExp(
-      `reconcileParkedFeatures\\(\\{[\\s\\S]*?\\b${autoCleanup},[\\s\\S]*?\\b${reclaimMergedWorktrees}:\\s*reclaim,`,
-    ));
-    expect(source).toMatch(new RegExp(
-      `reconcileParkedFeatures: async \\(\\{ disposeHaltWatcher, isFeatureInFlight \\}\\) => \\{[\\s\\S]*?\\b${onEvent}:`,
-    ));
+    expect(source).toMatch(
+      new RegExp(
+        `reconcileParkedFeatures\\(\\{[\\s\\S]*?\\b${autoCleanup},[\\s\\S]*?\\b${reclaimMergedWorktrees}:\\s*reclaim,`,
+      ),
+    );
+    expect(source).toMatch(
+      new RegExp(
+        `reconcileParkedFeatures: async \\(\\{ disposeHaltWatcher, isFeatureInFlight \\}\\) => \\{[\\s\\S]*?\\b${onEvent}:`,
+      ),
+    );
   });
 });
 
@@ -149,15 +160,18 @@ describe('runDaemon — per-slug HALT-watcher disposal reaches parked reconcilia
 
   it('disposing a slug with no live watcher is a silent no-op', async () => {
     const disposed: string[] = [];
-    await runDaemon({
-      discoverBacklog: async () => [],
-      runFeature: async (item) => ({ slug: item.slug, status: 'done' }),
-      sleep: async () => {},
-      watchHaltCleared: (slug) => () => disposed.push(slug),
-      reconcileParkedFeatures: async ({ disposeHaltWatcher }) => {
-        disposeHaltWatcher('never-dispatched');
+    await runDaemon(
+      {
+        discoverBacklog: async () => [],
+        runFeature: async (item) => ({ slug: item.slug, status: 'done' }),
+        sleep: async () => {},
+        watchHaltCleared: (slug) => () => disposed.push(slug),
+        reconcileParkedFeatures: async ({ disposeHaltWatcher }) => {
+          disposeHaltWatcher('never-dispatched');
+        },
       },
-    }, { concurrency: 1, once: false, maxIdlePolls: 1 });
+      { concurrency: 1, once: false, maxIdlePolls: 1 },
+    );
 
     expect(disposed).toEqual([]);
   });

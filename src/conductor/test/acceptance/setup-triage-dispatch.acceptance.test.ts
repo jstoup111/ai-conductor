@@ -53,16 +53,17 @@ import ts from 'typescript';
 
 const execFileAsync = promisify(execFile);
 
+function canonicalExpression(text: string): string {
+  return text.replace(/\s+/g, ' ').replace(/,\s*}/g, ' }').trim();
+}
+
 /** The plan's forward-declared (not-yet-added) triage wiring surface. */
 type FutureDeps = FeatureRunnerDeps & {
   dispatchFixSession?: (...args: unknown[]) => Promise<unknown>;
 };
 
 it('daemon setup-fix dispatch carries the selected provider model policy', async () => {
-  const source = await readFile(
-    new URL('../../src/daemon-cli.ts', import.meta.url),
-    'utf8',
-  );
+  const source = await readFile(new URL('../../src/engine/daemon-feature-lifecycle.ts', import.meta.url), 'utf8');
   const marker = source.indexOf('featureDesc: `setup-fix-${item.slug}`');
   const constructorStart = source.lastIndexOf('new DefaultStepRunner(', marker);
   const constructorEnd = source.indexOf('});', marker);
@@ -71,17 +72,13 @@ it('daemon setup-fix dispatch carries the selected provider model policy', async
 });
 
 it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned provider execution', async () => {
-  const source = await readFile(
-    new URL('../../src/daemon-cli.ts', import.meta.url),
-    'utf8',
-  );
-  const sourceFile = ts.createSourceFile(
-    'daemon-cli.ts',
-    source,
-    ts.ScriptTarget.Latest,
-    true,
-    ts.ScriptKind.TS,
-  );
+  const source = (
+    await Promise.all([
+      readFile(new URL('../../src/daemon-cli.ts', import.meta.url), 'utf8'),
+      readFile(new URL('../../src/engine/daemon-feature-lifecycle.ts', import.meta.url), 'utf8'),
+    ])
+  ).join('\n');
+  const sourceFile = ts.createSourceFile('daemon-cli.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const runners: Record<string, unknown> = {};
   let depsFactory: string | undefined;
   let factoryState: Record<string, string> | undefined;
@@ -94,17 +91,13 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
     ) {
       const options = node.arguments[3];
       const properties = new Map(
-        options.properties
-          .flatMap((property) =>
-            ts.isPropertyAssignment(property)
-              ? [[
-                  property.name.getText(sourceFile),
-                  property.initializer.getText(sourceFile),
-                ] as const]
-              : ts.isShorthandPropertyAssignment(property)
-                ? [[property.name.text, property.name.text] as const]
-                : [],
-          ),
+        options.properties.flatMap((property) =>
+          ts.isPropertyAssignment(property)
+            ? [[property.name.getText(sourceFile), property.initializer.getText(sourceFile)] as const]
+            : ts.isShorthandPropertyAssignment(property)
+              ? [[property.name.text, property.name.text] as const]
+              : [],
+        ),
       );
       const featureDesc = properties.get('featureDesc');
       const label =
@@ -130,8 +123,7 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
     ) {
       const providerExecution = node.arguments[0].properties.find(
         (property): property is ts.PropertyAssignment =>
-          ts.isPropertyAssignment(property) &&
-          property.name.getText(sourceFile) === 'providerExecution',
+          ts.isPropertyAssignment(property) && property.name.getText(sourceFile) === 'providerExecution',
       );
       depsFactory = providerExecution?.initializer.getText(sourceFile);
     }
@@ -146,20 +138,26 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
         : node.initializer.body;
       if (ts.isObjectLiteralExpression(body)) {
         factoryState = Object.fromEntries(
-          body.properties
-            .flatMap((property) =>
-              ts.isPropertyAssignment(property)
-                ? [[
+          body.properties.flatMap((property) =>
+            ts.isPropertyAssignment(property)
+              ? [
+                  [
                     property.name.getText(sourceFile),
-                    property.initializer.getText(sourceFile),
-                  ] as const]
-                : ts.isSpreadAssignment(property) &&
-                    property.expression.getText(sourceFile) === 'providerExecutionEventCallbacks(eventTarget)'
-                  ? [['...providerExecutionEventCallbacks', property.expression.getText(sourceFile)] as const]
+                    canonicalExpression(property.initializer.getText(sourceFile)),
+                  ] as const,
+                ]
+              : ts.isSpreadAssignment(property) &&
+                  property.expression.getText(sourceFile) === 'providerExecutionEventCallbacks(eventTarget)'
+                ? [
+                    [
+                      '...providerExecutionEventCallbacks',
+                      canonicalExpression(property.expression.getText(sourceFile)),
+                    ] as const,
+                  ]
                 : ts.isShorthandPropertyAssignment(property)
                   ? [[property.name.text, property.name.text] as const]
                   : [],
-            ),
+          ),
         );
       }
     }
@@ -167,10 +165,7 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
   };
   visit(sourceFile);
 
-  const runnerSource = await readFile(
-    new URL('../../src/engine/daemon-runner.ts', import.meta.url),
-    'utf8',
-  );
+  const runnerSource = await readFile(new URL('../../src/engine/daemon-runner.ts', import.meta.url), 'utf8');
   const runnerFile = ts.createSourceFile(
     'daemon-runner.ts',
     runnerSource,
@@ -181,10 +176,7 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
   const contextFlow: string[] = [];
   let contextOwner: string | undefined;
   const visitRunner = (node: ts.Node) => {
-    if (
-      ts.isVariableDeclaration(node) &&
-      node.name.getText(runnerFile) === 'providerExecution'
-    ) {
+    if (ts.isVariableDeclaration(node) && node.name.getText(runnerFile) === 'providerExecution') {
       contextOwner = node.initializer?.getText(runnerFile);
     }
     if (
@@ -196,11 +188,7 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
     }
     if (ts.isCallExpression(node)) {
       const callee = node.expression.getText(runnerFile);
-      if (
-        ['deps.runSetupTriage', 'deps.runConductor', 'captureEngineerSignal'].includes(
-          callee,
-        )
-      ) {
+      if (['deps.runSetupTriage', 'deps.runConductor', 'captureEngineerSignal'].includes(callee)) {
         // Per-callee argument slot for the context this spec tracks:
         // `runConductor` takes the provider execution context at index 2, and
         // `runSetupTriage` takes the feature log at index 4 (its trailing
@@ -212,9 +200,7 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
             : callee === 'deps.runSetupTriage'
               ? node.arguments[4]
               : node.arguments.at(-1);
-        contextFlow.push(
-          `${callee}:${contextArgument?.getText(runnerFile)}`,
-        );
+        contextFlow.push(`${callee}:${contextArgument?.getText(runnerFile)}`);
       }
     }
     ts.forEachChild(node, visitRunner);
@@ -249,13 +235,11 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
       sessions: 'new ProviderSessionStore()',
       config: 'config',
       providerAvailability: 'providerAvailability',
-      onProviderSuppressed:
-        "(provider, deadline) => events.emit({\n      type: 'provider_suppressed', provider, deadline,\n    })",
+      onProviderSuppressed: "(provider, deadline) => events.emit({ type: 'provider_suppressed', provider, deadline })",
       '...providerExecutionEventCallbacks': 'providerExecutionEventCallbacks(eventTarget)',
       withCandidateSafety: 'createCandidateSafetyBoundary()',
     },
-    contextOwner:
-      'featureRun?.providerExecution ?? deps.providerExecution?.()',
+    contextOwner: 'featureRun?.providerExecution ?? deps.providerExecution?.()',
     contextFlow: [
       'deps.runSetupTriage:featureLog',
       'deps.runConductor:providerExecution',
@@ -358,11 +342,7 @@ fi
 
   function baseDeps(overrides: Partial<FutureDeps> = {}): FeatureRunnerDeps {
     const dispatchFixSession = overrides.dispatchFixSession ?? (async () => ({ attempted: true }));
-    const runSetupTriage = async (
-      error: SetupFailureError,
-      worktree: { path: string },
-      item: BacklogItem,
-    ) => {
+    const runSetupTriage = async (error: SetupFailureError, worktree: { path: string }, item: BacklogItem) => {
       const git = makeGitRunner(worktree.path);
       const runPrepare = (worktreePath: string) => prepareWorktree(worktreePath);
       const logFn = overrides.log ?? (() => {});
@@ -419,6 +399,7 @@ fi
       },
       project: 'test-project',
       ...overrides,
+      dispatchAdmission: overrides.dispatchAdmission ?? 'acquire',
     };
     return base as FeatureRunnerDeps;
   }
@@ -473,9 +454,7 @@ fi
 
     // Its tip must contain the pre-reset dirty content byte-for-byte (modulo
     // the `git()` test helper's own trailing-newline trim()).
-    expect(await gitOrNull('show', 'wip/setup-quarantine-feat-quarantine-happy:README.md')).toBe(
-      preReadme.trimEnd(),
-    );
+    expect(await gitOrNull('show', 'wip/setup-quarantine-feat-quarantine-happy:README.md')).toBe(preReadme.trimEnd());
     expect(await gitOrNull('show', 'wip/setup-quarantine-feat-quarantine-happy:scratch.txt')).toBe(
       preScratch.trimEnd(),
     );
@@ -544,9 +523,9 @@ fi
     const newTip = await gitOrNull('rev-parse', 'wip/setup-quarantine-feat-quarantine-refresh');
     expect(newTip).not.toBe(oldTip); // moved to the new quarantine commit
     expect(await gitOrNull('cat-file', '-e', oldTip)).not.toBeNull(); // old tip still reachable
-    expect(
-      log.some((l) => /refresh/i.test(l) && l.includes('wip/setup-quarantine-feat-quarantine-refresh')),
-    ).toBe(true);
+    expect(log.some((l) => /refresh/i.test(l) && l.includes('wip/setup-quarantine-feat-quarantine-refresh'))).toBe(
+      true,
+    );
   });
 
   it('TS-2 negative: the post-quarantine retry ALSO fails (committed breakage) ⇒ exactly one fix-session dispatch follows, never a second mechanical retry', async () => {
@@ -695,9 +674,9 @@ fi
       'refs/heads/wip/setup-quarantine-feat-dirty-after-fix',
     );
     expect(quarantineTip).not.toBeNull();
-    expect(
-      await gitOrNull('show', 'wip/setup-quarantine-feat-dirty-after-fix:README.md'),
-    ).toBe('# base\nresidual uncommitted edit');
+    expect(await gitOrNull('show', 'wip/setup-quarantine-feat-dirty-after-fix:README.md')).toBe(
+      '# base\nresidual uncommitted edit',
+    );
 
     // The working tree is clean after triage settles.
     expect(await git('status', '--porcelain')).toBe('');

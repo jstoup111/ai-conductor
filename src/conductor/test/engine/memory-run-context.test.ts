@@ -21,6 +21,7 @@ import type { FeatureRunnerDeps } from '../../src/engine/daemon-runner.js';
 // Minimal stubs — we only need to verify memoryProvider passes through.
 function stubDeps(memoryProvider: unknown): FeatureRunnerDeps {
   return {
+    dispatchAdmission: 'acquire',
     createWorktree: async (slug) => ({ path: `/wt/${slug}`, branch: `feat/${slug}` }),
     runConductor: async () => {},
     readOutcome: async () => ({ done: false, halted: false }),

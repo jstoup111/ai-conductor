@@ -9,12 +9,7 @@ import { leafBranchFor } from './feature-branch-identity.js';
 import type { BacklogItem } from './daemon.js';
 import type { LLMProvider } from '../execution/llm-provider.js';
 import type { ProviderExecutionContext } from './provider-execution.js';
-import type {
-  FeatureRunScope,
-  FeatureRunnerDeps,
-  FeatureWorktree,
-  WorktreeOutcome,
-} from './daemon-runner.js';
+import type { FeatureRunScope, FeatureRunnerDeps, FeatureWorktree, WorktreeOutcome } from './daemon-runner.js';
 import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { prepareWorktree, runProjectTeardown } from './worktree-prepare.js';
 import { resolveHarnessRoot } from './install-freshness.js';
@@ -83,10 +78,7 @@ export interface RealDepsConfig {
   /** Legacy narrative provider when provider-aware feature execution is absent. */
   provider?: LLMProvider;
   providerExecution?: () => ProviderExecutionContext;
-  beginFeatureRun?: (
-    worktree: FeatureWorktree,
-    item: BacklogItem,
-  ) => FeatureRunScope | Promise<FeatureRunScope>;
+  beginFeatureRun?: (worktree: FeatureWorktree, item: BacklogItem) => FeatureRunScope | Promise<FeatureRunScope>;
   /**
    * The resolved active memory provider for this run (adr-2026-06-29-per-project-memory-provider-selection). Computed at
    * run start by `resolveMemoryProvider` and carried on context so every
@@ -153,6 +145,7 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): DaemonFeatureRunnerD
 
   return {
     log: cfg.log,
+    dispatchAdmission: 'acquire',
     // The real daemon path always emits to the engineer store on completion
     // (Phase 9.1). Manual `/conduct` runs don't go through makeFeatureRunnerDeps.
     daemon: true,
@@ -169,45 +162,51 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): DaemonFeatureRunnerD
     projectRoot: cfg.projectRoot,
     // FR-16: production gh runner for clear-on-success label ops.
     runGh: gh,
-    haltPrOperations: ({ prUrl, branch }) => haltPrOperations({
-      number: Number.parseInt(prUrl.split('/').at(-1) ?? '', 10),
-      url: prUrl,
-      headRefName: branch,
-    }),
+    haltPrOperations: ({ prUrl, branch }) =>
+      haltPrOperations({
+        number: Number.parseInt(prUrl.split('/').at(-1) ?? '', 10),
+        url: prUrl,
+        headRefName: branch,
+      }),
 
-    createWorktree: async (slug, order?: WorkOrder) => worktreeLifecycle.run(async () => {
-      const branch = leafBranchFor(slug);
-      const path = join(cfg.worktreeBase, slug);
-      const root = cfg.projectRoot;
-      if (order && cfg.workOrderGit) await verifyWorkOrder(order, cfg.workOrderGit);
-      // Idempotent create/reconcile via the shared worktree mechanism (parity with
-      // the engineer). The base ref is resolved lazily — only when a fresh branch is
-      // cut — so the reuse/attach paths issue no extra git call.
-      const { path: p, branch: b, reconcile } = await ensureWorktree({
-        root,
-        path,
-        branch,
-        resolveBase: async () => {
-          const baseSha = order?.baseSha ?? await resolveWorktreeBase(root, cfg.baseBranch);
-          // Amended Task 6: the pin stays recorded on the order at every width, but the
-          // log line is N>1-only so effective concurrency 1 keeps byte-for-byte log
-          // equivalence with the pre-change daemon (Story 2 / adr-2026-08-27 D7).
-          if ((cfg.effectiveConcurrency ?? 1) > 1) {
-            cfg.log?.(`[daemon] work claim ${slug} pinned base ${baseSha}`);
-          }
-          return baseSha;
-        },
-        log: cfg.log,
-      });
-      return { path: p, branch: b, wasExisting: reconcile !== 'created' };
-    }),
+    createWorktree: async (slug, order?: WorkOrder) =>
+      worktreeLifecycle.run(async () => {
+        const branch = leafBranchFor(slug);
+        const path = join(cfg.worktreeBase, slug);
+        const root = cfg.projectRoot;
+        if (order && cfg.workOrderGit) await verifyWorkOrder(order, cfg.workOrderGit);
+        // Idempotent create/reconcile via the shared worktree mechanism (parity with
+        // the engineer). The base ref is resolved lazily — only when a fresh branch is
+        // cut — so the reuse/attach paths issue no extra git call.
+        const {
+          path: p,
+          branch: b,
+          reconcile,
+        } = await ensureWorktree({
+          root,
+          path,
+          branch,
+          resolveBase: async () => {
+            const baseSha = order?.baseSha ?? (await resolveWorktreeBase(root, cfg.baseBranch));
+            // Amended Task 6: the pin stays recorded on the order at every width, but the
+            // log line is N>1-only so effective concurrency 1 keeps byte-for-byte log
+            // equivalence with the pre-change daemon (Story 2 / adr-2026-08-27 D7).
+            if ((cfg.effectiveConcurrency ?? 1) > 1) {
+              cfg.log?.(`[daemon] work claim ${slug} pinned base ${baseSha}`);
+            }
+            return baseSha;
+          },
+          log: cfg.log,
+        });
+        return { path: p, branch: b, wasExisting: reconcile !== 'created' };
+      }),
 
     // Write WORKTREE_NAMESPACE into the worktree .env and run the project's
     // bin/setup (no-op if absent). Keeps the daemon stack-agnostic while letting
     // each project translate the namespace into its own shared/namespaced infra.
     prepareWorktree: async (wt, log, events, order) => {
       await observeMemorySetup(wt.path, events);
-      const baseSha = order?.baseSha ?? await resolveDaemonBaseSha(cfg.projectRoot, cfg.baseBranch);
+      const baseSha = order?.baseSha ?? (await resolveDaemonBaseSha(cfg.projectRoot, cfg.baseBranch));
       const skillNameRoot = skillNameRootFor({
         isSelfHost: await defaultSelfHostDetector().isSelfHost(cfg.projectRoot),
         worktreePath: wt.path,
@@ -309,9 +308,11 @@ export async function resolveDaemonBase(
 ): Promise<{ ref: string; sha: string } | undefined> {
   for (const ref of [`origin/${baseBranch}`, baseBranch]) {
     try {
-      const sha = (await execa('git', ['rev-parse', '--verify', '--quiet', ref], {
-        cwd: projectRoot,
-      })).stdout.trim();
+      const sha = (
+        await execa('git', ['rev-parse', '--verify', '--quiet', ref], {
+          cwd: projectRoot,
+        })
+      ).stdout.trim();
       return { ref, sha };
     } catch {
       // Try the local branch after the remote-tracking ref is unavailable.
@@ -339,10 +340,7 @@ async function resolveWorktreeBase(projectRoot: string, baseBranch: string): Pro
  * `undefined` when the base cannot be resolved; `prepareWorktree` then writes no
  * marker at all, leaving the gate fail-closed.
  */
-export async function resolveDaemonBaseSha(
-  projectRoot: string,
-  baseBranch: string,
-): Promise<string | undefined> {
+export async function resolveDaemonBaseSha(projectRoot: string, baseBranch: string): Promise<string | undefined> {
   return (await resolveDaemonBase(projectRoot, baseBranch))?.sha;
 }
 
@@ -372,11 +370,7 @@ export async function repairProcessed(
   const processedDir = join(projectRoot, PROCESSED_SUBDIR);
   await mkdir(processedDir, { recursive: true });
   const prUrl = 'malformed' in record ? null : (record.pr ?? null);
-  await writeFile(
-    join(processedDir, slug),
-    `${JSON.stringify({ status: 'shipped', prUrl })}\n`,
-    'utf-8',
-  );
+  await writeFile(join(processedDir, slug), `${JSON.stringify({ status: 'shipped', prUrl })}\n`, 'utf-8');
 }
 
 /**
@@ -419,14 +413,16 @@ export async function readRekicked(projectRoot: string): Promise<Map<string, str
   }
 
   const markers = new Map<string, string>();
-  await Promise.all(slugs.map(async (slug) => {
-    try {
-      const sha = (await readFile(join(rekickedDir, slug), 'utf-8')).trim();
-      if (/^[0-9a-f]+$/i.test(sha)) markers.set(slug, sha);
-    } catch {
-      // A damaged marker remains eligible for a future re-kick.
-    }
-  }));
+  await Promise.all(
+    slugs.map(async (slug) => {
+      try {
+        const sha = (await readFile(join(rekickedDir, slug), 'utf-8')).trim();
+        if (/^[0-9a-f]+$/i.test(sha)) markers.set(slug, sha);
+      } catch {
+        // A damaged marker remains eligible for a future re-kick.
+      }
+    }),
+  );
   return markers;
 }
 
@@ -454,9 +450,9 @@ export async function readWorktreeOutcome(worktreePath: string): Promise<Worktre
 
   let prUrl: string | undefined;
   try {
-    const state = JSON.parse(
-      await readFile(join(worktreePath, '.pipeline/conduct-state.json'), 'utf-8'),
-    ) as { pr_url?: string };
+    const state = JSON.parse(await readFile(join(worktreePath, '.pipeline/conduct-state.json'), 'utf-8')) as {
+      pr_url?: string;
+    };
     prUrl = state.pr_url;
   } catch {
     /* no state / no pr_url */
@@ -470,9 +466,7 @@ export async function readWorktreeOutcome(worktreePath: string): Promise<Worktre
   // pre-Task-12 default for `pr`/`merge-local`).
   let finishChoice: WorktreeOutcome['finishChoice'];
   try {
-    const raw = (
-      await readFile(join(worktreePath, FINISH_CHOICE_MARKER), 'utf-8')
-    ).trim();
+    const raw = (await readFile(join(worktreePath, FINISH_CHOICE_MARKER), 'utf-8')).trim();
     if ((FINISH_CHOICE_VALUES as readonly string[]).includes(raw)) {
       finishChoice = raw as WorktreeOutcome['finishChoice'];
     }
@@ -628,8 +622,7 @@ export function watchHaltCleared(
     watcher.on('error', (error) => {
       const message = error instanceof Error ? error.message : String(error);
       process.stderr.write(
-        `[daemon] WATCH-ERROR: HALT watcher error (slug=${slug}); ` +
-          `falling back to polling: ${message}\n`,
+        `[daemon] WATCH-ERROR: HALT watcher error (slug=${slug}); ` + `falling back to polling: ${message}\n`,
       );
     });
   } catch {

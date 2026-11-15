@@ -6,9 +6,12 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { restackResolverForStepRunner } from '../../../src/daemon-cli.js';
+import { restackResolverForStepRunner } from '../../../src/engine/daemon-feature-lifecycle.js';
 import { parseChildId } from '../../../src/engine/child-context.js';
-import type { ExecuteProviderCandidatesInput, ProviderExecutionResult } from '../../../src/engine/provider-execution.js';
+import type {
+  ExecuteProviderCandidatesInput,
+  ProviderExecutionResult,
+} from '../../../src/engine/provider-execution.js';
 import { ProviderRuntimeSet } from '../../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../../src/engine/provider-session.js';
 import { resolveRestackConflict } from '../../../src/engine/restack/restack-resolver.js';
@@ -79,7 +82,10 @@ afterEach(async () => {
 describe('restack resolver production wiring', () => {
   it('passes the supplied operator decision through the daemon-wired step runner', async () => {
     const operatorDecision = { answer: 'keep upstream', commit: 'a'.repeat(40), paths: ['shared.txt'] };
-    const resolveRebaseConflict = vi.fn(async () => ({ resolved: false as const, reason: 'stop after observing context' }));
+    const resolveRebaseConflict = vi.fn(async () => ({
+      resolved: false as const,
+      reason: 'stop after observing context',
+    }));
 
     await invokeThroughDaemonResolver({ resolveRebaseConflict }, operatorDecision);
 
@@ -87,11 +93,16 @@ describe('restack resolver production wiring', () => {
   });
 
   it('does not add an operator decision when none was supplied', async () => {
-    const resolveRebaseConflict = vi.fn(async () => ({ resolved: false as const, reason: 'stop after observing context' }));
+    const resolveRebaseConflict = vi.fn(async () => ({
+      resolved: false as const,
+      reason: 'stop after observing context',
+    }));
 
     await invokeThroughDaemonResolver({ resolveRebaseConflict });
 
-    expect(resolveRebaseConflict).toHaveBeenCalledWith(expect.not.objectContaining({ operatorDecision: expect.anything() }));
+    expect(resolveRebaseConflict).toHaveBeenCalledWith(
+      expect.not.objectContaining({ operatorDecision: expect.anything() }),
+    );
   });
 
   it('passes the restack environment through the provider-aware resolver dispatch', async () => {
@@ -120,12 +131,14 @@ describe('restack resolver production wiring', () => {
 
     await invokeThroughDaemonResolver(runner);
 
-    expect(invoke).toHaveBeenCalledWith(expect.objectContaining({
-      environmentOverlay: expect.objectContaining({
-        GIT_CONFIG_KEY_0: 'core.hooksPath',
-        GIT_COMMITTER_NAME: stamp.name,
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        environmentOverlay: expect.objectContaining({
+          GIT_CONFIG_KEY_0: 'core.hooksPath',
+          GIT_COMMITTER_NAME: stamp.name,
+        }),
       }),
-    }));
+    );
   });
 
   it('omits the environment overlay when the resolution context has no environment', async () => {

@@ -1,41 +1,51 @@
 import { mkdir } from 'node:fs/promises';
-import { basename, join } from 'node:path';
-import { execa } from 'execa';
-import { v4 as uuidv4 } from 'uuid';
-import { Conductor } from './conductor.js';
-import { loadConfig } from './config.js';
-import { createProductionAcceptanceRedExec } from './acceptance-red-runner.js';
-import {
-  createProductionFinishPublicationCoordinator,
-  createProductionReleaseReadinessObserver,
-} from './finish-publication-production.js';
-import { createProvenanceGuardedFinishPresentationRepair } from './finish-presentation-repair.js';
-import { makeProductionGit } from './pr-labels.js';
-import { isOperatorParked } from './park-marker.js';
-import { DefaultStepRunner } from './step-runners.js';
+import { execFile as execFileCb } from 'node:child_process';
+import { join } from 'node:path';
+import { promisify } from 'node:util';
+import type { ConductorOptions } from './conductor-options.js';
+import { loadMergedConfig } from './config.js';
 import { makeRunFeature, type FeatureRunnerDeps, type FeatureWorktree } from './daemon-runner.js';
-import { readWorktreeOutcome } from './daemon-deps.js';
+import { makeFeatureRunnerDeps } from './daemon-deps.js';
+import {
+  createWorkOrderGitRunner,
+  prepareDaemonFeatureManagedSessionContext,
+  runDaemonFeatureConductor,
+  runDaemonSetupTriage,
+  type DaemonFeatureLifecycleContext,
+} from './daemon-feature-lifecycle.js';
 import { installDaemonProcessServices, type DaemonProcessServicesOptions } from './daemon-process-bootstrap.js';
-import { prepareWorktree, runProjectTeardown } from './worktree-prepare.js';
-import { runSetupFailureTriage } from './setup-triage.js';
 import { PluginRegistry } from './plugin-registry.js';
 import { discoverPlugins, registerBuiltins } from './plugin-loader.js';
 import { discoverInstalledProviders } from './provider-discovery.js';
 import { createProviderRuntimeSet } from './provider-runtime.js';
 import { ProviderSessionStore } from './provider-session.js';
-import { normalizeProviderSelection, validateProviderInstallation, validateRegisteredProviderSelections } from './provider-selection.js';
+import {
+  normalizeProviderSelection,
+  validateProviderInstallation,
+  validateRegisteredProviderSelections,
+} from './provider-selection.js';
 import {
   resolveProviderModelTiers,
   validateConfiguredProviderModels,
   type ProviderModelProbeRunner,
 } from './provider-model-probe.js';
-import { createCandidateSafetyBoundary, providerExecutionEventCallbacks, type ProviderExecutionContext } from './provider-execution.js';
-import { resolveHarnessRoot } from './install-freshness.js';
+import {
+  createCandidateSafetyBoundary,
+  providerExecutionEventCallbacks,
+  type ProviderExecutionContext,
+} from './provider-execution.js';
+import { createManagedSessionObservationPreparer } from '../execution/managed-session-preparation.js';
+import { createSessionEventIdentity } from '../execution/session-event-identity.js';
+import { resolveHarnessVersion } from './version-report.js';
+import { probeManagedObservationDestination } from './build-review-read-only-capability.js';
+import { resolveDispatchStartTimeoutSeconds, resolveTeardownTimeoutSeconds } from './resolved-config.js';
 import { originDefaultBranch, makeGitRunner } from './rebase.js';
+import { isOperatorParked } from './park-marker.js';
 import { leafBranchFor } from './feature-branch-identity.js';
+
+const execFile = promisify(execFileCb);
 import { hasDurableChildState } from './child-cursor.js';
 import { acquireFeatureDispatchLease } from './feature-dispatch-lease.js';
-import { createStepStatusWriteRefusalDiagnostics, resolveConductorStateStore } from './conductor-deps.js';
 import { seedDaemonDispatchState } from './daemon-state.js';
 import type { ConductStateStore } from './conduct-state-store.js';
 import type { ConductState } from '../types/index.js';
@@ -44,6 +54,7 @@ import type { ExecutorChildDispatchAdmission, ExecutorChildRunInput } from './ex
 import type { WorkOrder } from './work-order.js';
 import { ConductorEventEmitter } from './conductor-event-emitter.js';
 import { startSessionEventTail } from './event-persister.js';
+import { makeProductionGh } from './tracker-client.js';
 
 export interface ExecutorChildFeatureRunnerInput {
   order: ExecutorChildRunInput['order'];
@@ -58,6 +69,8 @@ export interface ExecutorChildFeatureRunnerInput {
 
 export interface MakeExecutorChildRunOptions {
   readonly projectRoot: string;
+  /** Defaults to install for direct callers retained during the migration. */
+  readonly processServices?: 'install' | 'inherited';
   readonly runFeature?: typeof runExecutorChildFeature;
   readonly githubBoundary?: Pick<DaemonProcessServicesOptions, 'runner' | 'readCredential' | 'readToken'>;
 }
@@ -71,11 +84,28 @@ export function buildExecutorChildConductorBoundaryOptions({
   projectRoot: string;
   slug: string;
   preemptionRequested: () => boolean;
-}): Pick<ConstructorParameters<typeof Conductor>[0], 'operatorParkBoundary' | 'preemptionRequested'> {
+}): Pick<ConductorOptions, 'operatorParkBoundary' | 'preemptionRequested'> {
   return {
     operatorParkBoundary: () => isOperatorParked(projectRoot, slug),
     preemptionRequested,
   };
+}
+
+export interface CreateExecutorChildRuntimeOptions {
+  readonly projectRoot: string;
+  /** The entrypoint owns process-global services; in-memory children inherit them. */
+  readonly processServices: 'install' | 'inherited';
+}
+
+/**
+ * A newer supervisor carries its configured base branch in the WorkOrder.
+ * Orders from older supervisors omit it, preserving the prior origin lookup.
+ */
+export async function resolveExecutorChildBaseBranch(
+  order: Pick<WorkOrder, 'baseBranch'>,
+  git: ReturnType<typeof makeGitRunner>,
+): Promise<string> {
+  return order.baseBranch ?? (await originDefaultBranch(git)) ?? 'main';
 }
 
 /**
@@ -87,7 +117,7 @@ export async function makeExecutorChildDispatchAdmission(
   { projectRoot }: Pick<MakeExecutorChildRunOptions, 'projectRoot'>,
   order: WorkOrder,
 ): Promise<ExecutorChildDispatchAdmission> {
-  if (await hasDurableChildState(projectRoot, order.slug) !== true) return { kind: 'admitted' };
+  if ((await hasDurableChildState(projectRoot, order.slug)) !== true) return { kind: 'admitted' };
 
   const leaseResult = await acquireFeatureDispatchLease(projectRoot, order.slug, 'daemon dispatch');
   if (leaseResult.kind !== 'acquired') {
@@ -114,16 +144,45 @@ export async function makeExecutorChildDispatchAdmission(
 }
 
 /**
+ * Compose every child-executor dependency at its process boundary. Keeping
+ * process-service ownership explicit lets an in-memory test fork share the
+ * one resolver installed for its host process.
+ */
+export function createExecutorChildRuntime({ projectRoot, processServices }: CreateExecutorChildRuntimeOptions) {
+  return {
+    admitDispatch: (order: WorkOrder) => makeExecutorChildDispatchAdmission({ projectRoot }, order),
+    // Reuse the daemon seam, which verifies the WorkOrder before its first
+    // worktree side effect and performs the pinned-base create under the
+    // brokered lifecycle lock.
+    createWorktree: async (order: WorkOrder, worktreeLifecycle: ExecutorChildRunInput['worktreeLifecycle']) => {
+      const runnerDeps = makeFeatureRunnerDeps({
+        projectRoot,
+        worktreeBase: join(projectRoot, '.worktrees'),
+        baseBranch: 'main',
+        runConductorInWorktree: async () => {},
+        workOrderGit: createWorkOrderGitRunner(projectRoot),
+        worktreeLifecycle: worktreeLifecycle as never,
+      });
+      return runnerDeps.createWorktree(order.slug, order);
+    },
+    run: makeExecutorChildRun({ projectRoot, processServices }),
+  };
+}
+
+/**
  * Compose the child-only daemon services before running its sole feature.
  * Each child handles one order, so the order's feature bus is the process bus.
  */
 export function makeExecutorChildRun({
   projectRoot,
+  processServices = 'install',
   runFeature = runExecutorChildFeature,
   githubBoundary,
 }: MakeExecutorChildRunOptions): (input: ExecutorChildRunInput) => Promise<FeatureExecutionOutcome> {
   return async (input) => {
-    installDaemonProcessServices({ projectRoot, events: input.events, ...githubBoundary });
+    if (processServices === 'install') {
+      installDaemonProcessServices({ projectRoot, events: input.events, ...githubBoundary });
+    }
     return runFeature({
       ...input,
       worktree: {
@@ -167,7 +226,17 @@ export function makeExecutorChildFeatureRunner(
 ): () => Promise<FeatureExecutionOutcome> {
   const run = makeRunFeature({
     ...lifecycle,
+    // The root-side admission has already acquired (and checked the park
+    // marker for) a stacked dispatch lease. Acquiring it again here observes
+    // the child's own holder as live and parks every durable child.
+    dispatchAdmission: 'admitted',
     createWorktree: async () => input.worktree,
+    // WorkOrder is dispatcher authority. Thread it to the shared preparation
+    // seam so it uses the claim-time base rather than resolving a later base.
+    prepareWorktree:
+      lifecycle.prepareWorktree === undefined
+        ? undefined
+        : (worktree, log, events) => lifecycle.prepareWorktree!(worktree, log, events, input.order),
     // The child entrypoint already owns this feature's event persistence and
     // forwarding; bind that bus as the runner scope so setup, triage,
     // shipment and termination events reach the child spine (ADR D4).
@@ -187,17 +256,22 @@ export function makeExecutorChildFeatureRunner(
     },
     deferTerminalEffects: true,
   });
-  return () => run({
-    slug: input.order.slug,
-    ...(input.order.tier ? { tier: input.order.tier } : {}),
-    ...(input.order.sourceRef ? { sourceRef: input.order.sourceRef } : {}),
-    ...(input.order.track ? { track: input.order.track } : {}),
-    ...(input.order.band ? { band: input.order.band } : {}),
-    ...(input.order.resolutionMode ? { resolutionMode: input.order.resolutionMode } : {}),
-    ...(input.order.applicabilityDeclarations ? { applicabilityDeclarations: input.order.applicabilityDeclarations } : {}),
-    ...(input.order.applicabilityBaseContentSha256 ? { applicabilityBaseContentSha256: input.order.applicabilityBaseContentSha256 } : {}),
-    ...(input.order.applicabilityIgnored ? { applicabilityIgnored: input.order.applicabilityIgnored } : {}),
-  });
+  return () =>
+    run({
+      slug: input.order.slug,
+      ...(input.order.tier ? { tier: input.order.tier } : {}),
+      ...(input.order.sourceRef ? { sourceRef: input.order.sourceRef } : {}),
+      ...(input.order.track ? { track: input.order.track } : {}),
+      ...(input.order.band ? { band: input.order.band } : {}),
+      ...(input.order.resolutionMode ? { resolutionMode: input.order.resolutionMode } : {}),
+      ...(input.order.applicabilityDeclarations
+        ? { applicabilityDeclarations: input.order.applicabilityDeclarations }
+        : {}),
+      ...(input.order.applicabilityBaseContentSha256
+        ? { applicabilityBaseContentSha256: input.order.applicabilityBaseContentSha256 }
+        : {}),
+      ...(input.order.applicabilityIgnored ? { applicabilityIgnored: input.order.applicabilityIgnored } : {}),
+    });
 }
 
 /**
@@ -205,17 +279,21 @@ export function makeExecutorChildFeatureRunner(
  * root mutation and all shared coordination.  This is intentionally a
  * one-order runner: it never parses daemon argv or starts a daemon loop.
  */
-export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
-  worktree: { path: string; branch: string };
-  projectRoot: string;
-  supervisorEngineVersionId: string;
-  /** Injectable only for the child boot's provider-tier catalog probe. */
-  providerModelProbeRunner?: ProviderModelProbeRunner;
-}): Promise<FeatureExecutionOutcome> {
+export async function runExecutorChildFeature(
+  input: ExecutorChildRunInput & {
+    worktree: { path: string; branch: string };
+    projectRoot: string;
+    supervisorEngineVersionId: string;
+    /** Injectable only for the child boot's provider-tier catalog probe. */
+    providerModelProbeRunner?: ProviderModelProbeRunner;
+  },
+): Promise<FeatureExecutionOutcome> {
   const { order, events, signal, worktree, projectRoot } = input;
   if (signal.aborted) return { slug: order.slug, status: 'parked', reason: String(signal.reason ?? 'stopped') };
 
-  const loaded = await loadConfig(projectRoot);
+  // A child is a real daemon feature dispatch, not a reduced config reader:
+  // user defaults are merged beneath project config exactly as in-process runs.
+  const loaded = await loadMergedConfig(projectRoot, await resolveHarnessVersion(import.meta.dirname));
   if (!loaded.ok && loaded.error.type !== 'missing') throw new Error(`Config error: ${loaded.error.message}`);
   const config = loaded.ok ? loaded.config : undefined;
   const registry = new PluginRegistry();
@@ -248,155 +326,103 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
     config,
     providerAvailability: input.providerAvailability,
     withCandidateSafety: createCandidateSafetyBoundary(),
+    onProviderSuppressed: (provider, deadline) => events.emit({ type: 'provider_suppressed', provider, deadline }),
     ...providerExecutionEventCallbacks(events),
+    ...(input.log ? { diagnosticLog: input.log } : {}),
   };
   const runtime = providerExecution.runtimes.get(configuredProviders[0]);
   if (!runtime) throw new Error('executor child requires a configured provider runtime');
 
   const pipelineDir = join(worktree.path, '.pipeline');
   await mkdir(pipelineDir, { recursive: true });
-  const sessionTail = startSessionEventTail(worktree.path, events, order.slug);
-  const sessionId = uuidv4();
-  const stepRunner = new DefaultStepRunner(runtime.provider, sessionId, worktree.path, {
-    featureDesc: order.slug,
+  const dispatchId = createSessionEventIdentity();
+  const managedSessionContext = await prepareDaemonFeatureManagedSessionContext({
     projectRoot,
-    pipelineDir,
-    config,
-    modelPolicy: runtime.policy,
-    mode: 'auto',
-    providerExecution,
-    events,
-    worktreeLifecycle: input.worktreeLifecycle as never,
-    skillNameRoot: await resolveHarnessRoot(),
-  });
-  const stateFilePath = join(pipelineDir, 'conduct-state.json');
-  const stateStore = resolveConductorStateStore(
-    stateFilePath,
-    undefined,
-    createStepStatusWriteRefusalDiagnostics(events),
-  );
-  const baseBranch = (await originDefaultBranch(makeGitRunner(worktree.path))) ?? 'main';
-  const git = makeProductionGit();
-  const waitControllers = new Set<AbortController>();
-  const conductor = new Conductor({
-    stateFilePath,
-    stateStore,
-    stepRunner,
-    events,
-    mode: 'auto',
-    config,
-    modelPolicy: runtime.policy,
-    providerExecution,
-    // The supervisor's pool width is an IPC concern: keep the existing
-    // legacy no-providerExecution refusal effective in a child executor.
-    effectiveDaemonConcurrency: input.effectiveConcurrency ?? order.effectiveConcurrency,
-    projectRoot: worktree.path,
-    acceptanceRedExec: createProductionAcceptanceRedExec(),
-    finishPublication: createProductionFinishPublicationCoordinator({
-      projectRoot: worktree.path,
-      stateFilePath,
-      engineVersionId: input.engineVersionId,
-      baseBranch,
-      prTemplateBytes: config?.pr_template_bytes,
-      git,
-      gh: (await import('./pr-labels.js')).makeProductionGh(),
-      events,
-      flushSessionEvents: sessionTail.flush,
-      repairPresentation: createProvenanceGuardedFinishPresentationRepair({ projectRoot: worktree.path, git, gh: (await import('./pr-labels.js')).makeProductionGh(), baseBranch, events }),
-      observeReleaseReadiness: createProductionReleaseReadinessObserver({ projectRoot: worktree.path, config }),
-    }),
-    worktreeBranch: worktree.branch,
-    log: input.log,
-    // This must be the supervisor's decision, not a child-side path guess:
-    // self-host dispatches use the brokered live-boundary coordinator.
-    selfHost: order.selfHost === true,
-    baseBranch,
-    resume: true,
-    daemon: true,
+    worktreeRoot: worktree.path,
     featureSlug: order.slug,
-    // Child isolation changes process ownership, not operator-park semantics:
-    // consult the same root marker at each existing conductor admission
-    // boundary and leave the feature state intact for a later unpark/retry.
-    ...buildExecutorChildConductorBoundaryOptions({
-      projectRoot,
-      slug: order.slug,
-      preemptionRequested: input.preemptionRequested,
+    dispatchId,
+    provider: configuredProviders[0]!,
+  });
+  providerExecution.managedSessionContext = managedSessionContext;
+  providerExecution.prepareManagedSessionObservation = createManagedSessionObservationPreparer((observation) =>
+    probeManagedObservationDestination({
+      ...observation,
+      runProcess: async (executable, args) => {
+        const result = await execFile(executable, [...args]);
+        return { exitCode: 0, stdout: result.stdout, stderr: result.stderr };
+      },
     }),
+  );
+  const sessionTail = startSessionEventTail(worktree.path, events, order.slug);
+  const baseBranch = await resolveExecutorChildBaseBranch(order, makeGitRunner(worktree.path));
+  const waitControllers = new Set<AbortController>();
+  let activeConductor: { closeOpenExecutionsForShutdown(): Promise<void> } | undefined;
+  const lifecycleContext: DaemonFeatureLifecycleContext = {
+    projectRoot,
+    config,
+    baseBranch,
+    isSelfHost: order.selfHost === true,
+    effectiveDaemonConcurrency: input.effectiveConcurrency ?? order.effectiveConcurrency ?? 1,
+    worktreeLifecycle: input.worktreeLifecycle as never,
+    rateLimitEpisode: input.rateLimitEpisode as never,
+    // Daemon startup owns this one capability observation. Retain the
+    // WorkOrder snapshot so a child dispatch does not probe again.
+    readOnlyReviewCapabilities: order.readOnlyReviewCapabilities ?? {},
+    liveBoundaryCoordinator: input.liveBoundaryCoordinator as never,
+    // Only the child executor relays the supervisor's memory-only yield
+    // request; the in-process daemon path leaves this unset.
+    preemptionRequested: input.preemptionRequested,
+    ownerGh: makeProductionGh(),
+    createProviderExecution: () => providerExecution,
+    events,
+    log: input.log ?? (() => {}),
+    registerConductor: (conductor) => {
+      activeConductor = conductor;
+      return () => {
+        activeConductor = undefined;
+      };
+    },
     registerAbortController: (controller) => {
       waitControllers.add(controller);
       controller.signal.addEventListener('abort', () => waitControllers.delete(controller), { once: true });
     },
-    rateLimitEpisode: input.rateLimitEpisode,
-    liveBoundaryCoordinator: input.liveBoundaryCoordinator as never,
-    verifyArtifacts: true,
-  });
+    isShutdownRequested: () => signal.aborted,
+    flushFeatureEvents: sessionTail.flush,
+    engineVersionId: input.engineVersionId,
+  };
   // The child owns the conductor, so its stop path mirrors the daemon's
   // in-process SIGTERM path. Register every rate-limit wait locally and abort
   // it before closing open executions; the conductor then reaches its normal
   // shutdown boundary instead of continuing orphaned after the IPC child exits.
   const closeForShutdown = async () => {
     for (const wait of waitControllers) wait.abort(signal.reason);
-    await conductor.closeOpenExecutionsForShutdown();
+    await activeConductor?.closeOpenExecutionsForShutdown();
   };
   let shutdown: Promise<void> | undefined;
-  const beginShutdown = () => shutdown ??= closeForShutdown();
-  signal.addEventListener('abort', () => { void beginShutdown(); }, { once: true });
-  const runner = makeExecutorChildFeatureRunner({ order, worktree, events, providerExecution, log: input.log, stateStore }, {
-    createWorktree: async () => worktree,
-    prepareWorktree: async (featureWorktree, featureLog, featureEvents) => prepareWorktree(
-      featureWorktree.path,
-      featureLog,
-      {
-        baseSha: order.baseSha,
-        events: featureEvents,
-        dispatchStart: true,
-        skillNameRoot: await resolveHarnessRoot(),
-      },
-    ),
-    runSetupTriage: async (
-      error,
-      featureWorktree,
-      item,
-      execution = providerExecution,
-      featureLog = input.log,
-      featureEvents,
-    ) => {
-      const runPrepare = async () => prepareWorktree(featureWorktree.path, featureLog, {
-        force: true,
-        baseSha: order.baseSha,
-        events: featureEvents,
-        dispatchStart: true,
-        skillNameRoot: await resolveHarnessRoot(),
-      });
-      const triageRuntime = execution.runtimes.get(execution.configuredProviders[0]);
-      if (!triageRuntime) throw new Error('executor child requires a configured provider runtime');
-      return runSetupFailureTriage(
-        makeGitRunner(featureWorktree.path),
-        featureWorktree.path,
-        item.slug,
-        error,
-        runPrepare,
-        async () => new DefaultStepRunner(triageRuntime.provider, uuidv4(), featureWorktree.path, {
-          featureDesc: `setup-fix-${item.slug}`,
-          config,
-          modelPolicy: triageRuntime.policy,
-          mode: 'auto',
-          providerExecution: execution,
-          log: featureLog,
-          skillNameRoot: await resolveHarnessRoot(),
-        }).resolveSetupFailure({
-          worktreePath: featureWorktree.path,
-          outputTail: error.outputTail,
-          slug: item.slug,
-        }),
-        featureLog ? { log: featureLog } : undefined,
-        featureEvents,
-      );
+  const beginShutdown = () => (shutdown ??= closeForShutdown());
+  signal.addEventListener(
+    'abort',
+    () => {
+      void beginShutdown();
     },
-    runConductor: async () => {
+    { once: true },
+  );
+  const runnerDeps = makeFeatureRunnerDeps({
+    projectRoot,
+    worktreeBase: join(projectRoot, '.worktrees'),
+    baseBranch,
+    runConductorInWorktree: async (featureWorktree, item, execution, featureEvents, featureLog, sessionId) => {
       if (signal.aborted) return { kind: 'operator-parked', boundary: { kind: 'pre-first-unit' } };
       try {
-        return await conductor.run();
+        return await runDaemonFeatureConductor(
+          lifecycleContext,
+          featureWorktree,
+          item,
+          execution,
+          featureEvents,
+          featureLog,
+          sessionId,
+        );
       } catch (error) {
         // An aborted rate-limit clear may reject its in-flight attempt while
         // the conductor is draining. Shutdown is authoritative in that case.
@@ -405,22 +431,31 @@ export async function runExecutorChildFeature(input: ExecutorChildRunInput & {
         return { kind: 'operator-parked', boundary: { kind: 'pre-first-unit' } };
       }
     },
-    readOutcome: (featureWorktree) => readWorktreeOutcome(featureWorktree.path),
-    teardownWorktree: async (featureWorktree, keep) => {
-      if (keep) return;
-      await runProjectTeardown(featureWorktree.path, input.log);
-      await input.worktreeLifecycle.run(() => execa(
-        'git', ['worktree', 'remove', '--force', featureWorktree.path], { cwd: projectRoot },
-      ).catch(() => {}));
-    },
-    // Deferred terminal effects make this unreachable in the child. It keeps
-    // the canonical runner contract complete without permitting a root write.
-    markProcessed: async () => {},
-    daemon: true,
     providerExecution: () => providerExecution,
-    project: basename(projectRoot),
+    events,
     log: input.log,
+    runSetupTriage: (error, featureWorktree, item, execution, featureLog, featureEvents) =>
+      runDaemonSetupTriage(
+        lifecycleContext,
+        error,
+        featureWorktree,
+        item,
+        execution,
+        featureLog,
+        featureEvents,
+        order.baseSha,
+      ),
+    workOrderGit: createWorkOrderGitRunner(projectRoot),
+    worktreeLifecycle: input.worktreeLifecycle as never,
+    effectiveConcurrency: input.effectiveConcurrency ?? order.effectiveConcurrency,
+    verbose: config?.daemon_verbose ?? false,
+    dispatchStartTimeoutSeconds: resolveDispatchStartTimeoutSeconds(config),
+    teardownTimeoutSeconds: resolveTeardownTimeoutSeconds(config),
   });
+  const runner = makeExecutorChildFeatureRunner(
+    { order, worktree, events, providerExecution, log: input.log },
+    runnerDeps,
+  );
   try {
     const result = await runner();
     if (signal.aborted && result.status !== 'parked') {

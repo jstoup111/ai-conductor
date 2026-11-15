@@ -20,11 +20,18 @@ class Port implements ExecutorIpcPort {
   peer?: Port;
   private readonly handlers = new Map<'message' | 'disconnect', Set<(value?: unknown) => void>>();
   private readonly inbox: unknown[] = [];
-  send(message: unknown): boolean { this.peer?.inbox.push(message); return true; }
-  on(event: 'message' | 'disconnect', listener: (value?: unknown) => void): void {
-    const set = this.handlers.get(event) ?? new Set(); set.add(listener); this.handlers.set(event, set);
+  send(message: unknown): boolean {
+    this.peer?.inbox.push(message);
+    return true;
   }
-  emit(event: 'message' | 'disconnect', value?: unknown): void { for (const handler of this.handlers.get(event) ?? []) handler(value); }
+  on(event: 'message' | 'disconnect', listener: (value?: unknown) => void): void {
+    const set = this.handlers.get(event) ?? new Set();
+    set.add(listener);
+    this.handlers.set(event, set);
+  }
+  emit(event: 'message' | 'disconnect', value?: unknown): void {
+    for (const handler of this.handlers.get(event) ?? []) handler(value);
+  }
   deliver(): boolean {
     const messages = this.inbox.splice(0);
     for (const message of messages) this.emit('message', message);
@@ -65,39 +72,46 @@ function brokerFixture() {
   const episode = createRateLimitEpisode({
     now: () => now,
     rng: () => 0,
-    setTimer: (callback) => { timers.push(callback); },
+    setTimer: (callback) => {
+      timers.push(callback);
+    },
   });
   const broker = createExecutorBroker({
     rateLimitEpisode: episode,
     providerAvailability: createProviderAvailability({ now: () => now }),
-    worktreeLifecycle: new WorktreeLifecycleQueue(), rootEvents: new ConductorEventEmitter(), featureLogFor: () => () => {}, now: () => now,
+    worktreeLifecycle: new WorktreeLifecycleQueue(),
+    rootEvents: new ConductorEventEmitter(),
+    featureLogFor: () => () => {},
+    now: () => now,
   });
   return {
     broker,
     episode,
-    now: (value: number) => { now = value; },
+    now: (value: number) => {
+      now = value;
+    },
     fireNextTimer: () => timers.shift()?.(),
   };
 }
 
 describe('executor broker', () => {
-  it.each([
-    'token-unavailable',
-    'identity-read-failed',
-    'worktree-write-failed',
-    'resolver-absent',
-  ] as const)('relays a child %s co-author skip once on its feature bus', (reason) => {
-    const fixture = brokerFixture();
-    const channel = pair();
-    const attachment = fixture.broker.attach('feature', channel.supervisor);
-    const received: unknown[] = [];
-    attachment.events.on('bot_co_author_skipped', (event) => { received.push(event); });
+  it.each(['token-unavailable', 'identity-read-failed', 'worktree-write-failed', 'resolver-absent'] as const)(
+    'relays a child %s co-author skip once on its feature bus',
+    (reason) => {
+      const fixture = brokerFixture();
+      const channel = pair();
+      const attachment = fixture.broker.attach('feature', channel.supervisor);
+      const received: unknown[] = [];
+      attachment.events.on('bot_co_author_skipped', (event) => {
+        received.push(event);
+      });
 
-    channel.child.send({ kind: 'event', scope: 'feature', payload: { type: 'bot_co_author_skipped', reason } });
-    channel.flush();
+      channel.child.send({ kind: 'event', scope: 'feature', payload: { type: 'bot_co_author_skipped', reason } });
+      channel.flush();
 
-    expect(received).toEqual([{ type: 'bot_co_author_skipped', reason }]);
-  });
+      expect(received).toEqual([{ type: 'bot_co_author_skipped', reason }]);
+    },
+  );
 
   it.each([
     ['token-unavailable', 'bot co-author skipped: token unavailable'],
@@ -111,7 +125,8 @@ describe('executor broker', () => {
       worktreeLifecycle: new WorktreeLifecycleQueue(),
       rootEvents: new ConductorEventEmitter(),
       featureLogFor: () => (line) => featureLog.push(line),
-      attachFeatureEventRenderer: (_slug, events) => attachFeatureEventRenderer(events, (line) => featureLog.push(line)),
+      attachFeatureEventRenderer: (_slug, events) =>
+        attachFeatureEventRenderer(events, (line) => featureLog.push(line)),
     });
     broker.attach('feature', channel.supervisor);
 
@@ -133,6 +148,35 @@ describe('executor broker', () => {
     channel.child.send({ kind: 'hello', protocolVersion: 1, engineVersionId: '20261019T120000Z-aaaaaaaaaaaa' });
     channel.flush();
     expect(proxy.active()).toBe(true);
+  });
+
+  it('queues a supervisor visualizer failure until the child can persist it on its feature spine', () => {
+    const channel = pair();
+    const received: unknown[] = [];
+    channel.child.on('message', (message) => {
+      received.push(message);
+    });
+    const broker = createExecutorBroker({
+      rateLimitEpisode: createRateLimitEpisode({ now: () => 1_000 }),
+      providerAvailability: createProviderAvailability({ now: () => 1_000 }),
+      worktreeLifecycle: new WorktreeLifecycleQueue(),
+      rootEvents: new ConductorEventEmitter(),
+      featureLogFor: () => () => {},
+      attachFeatureOtelVisualizer: (_trace, events) => {
+        void events.emit({ type: 'renderer_error', rendererName: 'otel', error: 'constructor failed' });
+        return () => {};
+      },
+    });
+
+    broker.attach('feature', channel.supervisor, { engineVersionId: '20261019T120000Z-aaaaaaaaaaaa' as never });
+    channel.child.send({ kind: 'hello', protocolVersion: 1, engineVersionId: '20261019T120000Z-aaaaaaaaaaaa' });
+    channel.flush();
+
+    expect(received).toContainEqual({
+      kind: 'event',
+      scope: 'feature',
+      payload: { type: 'renderer_error', rendererName: 'otel', error: 'constructor failed' },
+    });
   });
 
   it('replicates the one supervisor rate-limit episode to child synchronous views', async () => {
@@ -172,7 +216,9 @@ describe('executor broker', () => {
     expect(fixture.episode.snapshot?.()).toEqual({ deadline: 2_000, escalationCounter: 1 });
 
     let cleared = false;
-    const wait = proxyB.clear().then(() => { cleared = true; });
+    const wait = proxyB.clear().then(() => {
+      cleared = true;
+    });
     b.flush();
     expect(cleared).toBe(false);
     fixture.now(2_000);
@@ -234,11 +280,16 @@ describe('executor broker', () => {
     const availability = createProviderAvailability({ now: () => now });
     const rootEvents = new ConductorEventEmitter();
     const brokerEvents: unknown[] = [];
-    rootEvents.on('provider_suppressed', (event) => { brokerEvents.push(event); });
+    rootEvents.on('provider_suppressed', (event) => {
+      brokerEvents.push(event);
+    });
     const broker = createExecutorBroker({
       rateLimitEpisode: createRateLimitEpisode({ now: () => now }),
       providerAvailability: availability,
-      worktreeLifecycle: new WorktreeLifecycleQueue(), rootEvents, featureLogFor: () => () => {}, now: () => now,
+      worktreeLifecycle: new WorktreeLifecycleQueue(),
+      rootEvents,
+      featureLogFor: () => () => {},
+      now: () => now,
     });
     const a = pair();
     const b = pair();
@@ -278,7 +329,10 @@ describe('executor broker', () => {
     const broker = createExecutorBroker({
       rateLimitEpisode: createRateLimitEpisode({ now: () => now }),
       providerAvailability: availability,
-      worktreeLifecycle: new WorktreeLifecycleQueue(), rootEvents: new ConductorEventEmitter(), featureLogFor: () => () => {}, now: () => now,
+      worktreeLifecycle: new WorktreeLifecycleQueue(),
+      rootEvents: new ConductorEventEmitter(),
+      featureLogFor: () => () => {},
+      now: () => now,
     });
     const channel = pair();
     const proxy = createProviderAvailabilityProxy(createExecutorRequestClient(channel.child), () => now);
@@ -299,7 +353,9 @@ describe('executor broker', () => {
       rateLimitEpisode: fixture.episode,
       providerAvailability: createProviderAvailability({ now: () => 1_000 }),
       liveBoundaryCoordinator: coordinator,
-      worktreeLifecycle: new WorktreeLifecycleQueue(), rootEvents: new ConductorEventEmitter(), featureLogFor: () => () => {},
+      worktreeLifecycle: new WorktreeLifecycleQueue(),
+      rootEvents: new ConductorEventEmitter(),
+      featureLogFor: () => () => {},
     });
     fixture.broker.attach('feature', channel.supervisor);
 
@@ -308,7 +364,9 @@ describe('executor broker', () => {
     const held = await window;
 
     let mutationStarted = false;
-    const mutation = coordinator.runMutation(async () => { mutationStarted = true; });
+    const mutation = coordinator.runMutation(async () => {
+      mutationStarted = true;
+    });
     await Promise.resolve();
     expect(mutationStarted).toBe(false);
 
@@ -325,18 +383,27 @@ describe('executor broker', () => {
       rateLimitEpisode: createRateLimitEpisode({ now: () => 1_000 }),
       providerAvailability: createProviderAvailability({ now: () => 1_000 }),
       liveBoundaryCoordinator: coordinator,
-      worktreeLifecycle: new WorktreeLifecycleQueue(), rootEvents: new ConductorEventEmitter(), featureLogFor: () => () => {},
+      worktreeLifecycle: new WorktreeLifecycleQueue(),
+      rootEvents: new ConductorEventEmitter(),
+      featureLogFor: () => () => {},
     });
     const proxy = createLiveBoundaryProxy(createExecutorRequestClient(channel.child));
     broker.attach('feature', channel.supervisor);
 
     let finishMutation!: () => void;
-    const mutation = coordinator.runMutation(() => new Promise<void>((resolve) => { finishMutation = resolve; }));
+    const mutation = coordinator.runMutation(
+      () =>
+        new Promise<void>((resolve) => {
+          finishMutation = resolve;
+        }),
+    );
     await Promise.resolve();
     const opening = proxy!.openWindow({ contained: false, reason: 'test' });
     channel.flush();
     let opened = false;
-    void opening.then(() => { opened = true; });
+    void opening.then(() => {
+      opened = true;
+    });
     await Promise.resolve();
     expect(opened).toBe(false);
 
@@ -353,7 +420,9 @@ describe('executor broker', () => {
       rateLimitEpisode: createRateLimitEpisode({ now: () => 1_000 }),
       providerAvailability: createProviderAvailability({ now: () => 1_000 }),
       liveBoundaryCoordinator: coordinator,
-      worktreeLifecycle: new WorktreeLifecycleQueue(), rootEvents: new ConductorEventEmitter(), featureLogFor: () => () => {},
+      worktreeLifecycle: new WorktreeLifecycleQueue(),
+      rootEvents: new ConductorEventEmitter(),
+      featureLogFor: () => () => {},
     });
     const proxy = createLiveBoundaryProxy(createExecutorRequestClient(channel.child));
     broker.attach('feature', channel.supervisor);
@@ -364,7 +433,9 @@ describe('executor broker', () => {
     await Promise.all([first, second]);
 
     let mutationStarted = false;
-    const mutation = coordinator.runMutation(async () => { mutationStarted = true; });
+    const mutation = coordinator.runMutation(async () => {
+      mutationStarted = true;
+    });
     await Promise.resolve();
     expect(mutationStarted).toBe(false);
 
@@ -380,7 +451,9 @@ describe('executor broker', () => {
       rateLimitEpisode: createRateLimitEpisode({ now: () => 1_000 }),
       providerAvailability: createProviderAvailability({ now: () => 1_000 }),
       liveBoundaryCoordinator: coordinator,
-      worktreeLifecycle: new WorktreeLifecycleQueue(), rootEvents: new ConductorEventEmitter(), featureLogFor: () => () => {},
+      worktreeLifecycle: new WorktreeLifecycleQueue(),
+      rootEvents: new ConductorEventEmitter(),
+      featureLogFor: () => () => {},
     });
     const proxy = createLiveBoundaryProxy(createExecutorRequestClient(channel.child));
     broker.attach('feature', channel.supervisor);
@@ -409,7 +482,9 @@ describe('executor broker', () => {
     const broker = createExecutorBroker({
       rateLimitEpisode: createRateLimitEpisode({ now: () => 1_000 }),
       providerAvailability: createProviderAvailability({ now: () => 1_000 }),
-      worktreeLifecycle: lifecycle, rootEvents: new ConductorEventEmitter(), featureLogFor: () => () => {},
+      worktreeLifecycle: lifecycle,
+      rootEvents: new ConductorEventEmitter(),
+      featureLogFor: () => () => {},
     });
     const a = pair();
     const b = pair();
@@ -419,18 +494,27 @@ describe('executor broker', () => {
     broker.attach('b', b.supervisor);
 
     let releaseSweep!: () => void;
-    const sweep = lifecycle.run(() => new Promise<void>((resolve) => { releaseSweep = resolve; }));
+    const sweep = lifecycle.run(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseSweep = resolve;
+        }),
+    );
     await Promise.resolve();
     const entered: string[] = [];
     let releaseA!: () => void;
     let releaseB!: () => void;
     const runA = proxyA.run(async () => {
       entered.push('a');
-      await new Promise<void>((resolve) => { releaseA = resolve; });
+      await new Promise<void>((resolve) => {
+        releaseA = resolve;
+      });
     });
     const runB = proxyB.run(async () => {
       entered.push('b');
-      await new Promise<void>((resolve) => { releaseB = resolve; });
+      await new Promise<void>((resolve) => {
+        releaseB = resolve;
+      });
     });
 
     await flushAsync(a);
@@ -459,7 +543,9 @@ describe('executor broker', () => {
     const broker = createExecutorBroker({
       rateLimitEpisode: createRateLimitEpisode({ now: () => 1_000 }),
       providerAvailability: createProviderAvailability({ now: () => 1_000 }),
-      worktreeLifecycle: lifecycle, rootEvents: new ConductorEventEmitter(), featureLogFor: () => () => {},
+      worktreeLifecycle: lifecycle,
+      rootEvents: new ConductorEventEmitter(),
+      featureLogFor: () => () => {},
     });
     const a = pair();
     const b = pair();
@@ -473,12 +559,16 @@ describe('executor broker', () => {
     let releaseB!: () => void;
     const runA = proxyA.run(async () => {
       entered.push('a');
-      await new Promise<void>((resolve) => { releaseA = resolve; });
+      await new Promise<void>((resolve) => {
+        releaseA = resolve;
+      });
     });
     await flushAsync(a);
     const runB = proxyB.run(async () => {
       entered.push('b');
-      await new Promise<void>((resolve) => { releaseB = resolve; });
+      await new Promise<void>((resolve) => {
+        releaseB = resolve;
+      });
     });
     await flushAsync(b);
     expect(entered).toEqual(['a']);
@@ -500,14 +590,21 @@ describe('executor broker', () => {
     const broker = createExecutorBroker({
       rateLimitEpisode: createRateLimitEpisode({ now: () => 1_000 }),
       providerAvailability: createProviderAvailability({ now: () => 1_000 }),
-      worktreeLifecycle: lifecycle, rootEvents: new ConductorEventEmitter(), featureLogFor: () => () => {},
+      worktreeLifecycle: lifecycle,
+      rootEvents: new ConductorEventEmitter(),
+      featureLogFor: () => () => {},
     });
     const channel = pair();
     const proxy = createWorktreeLifecycleProxy(createExecutorRequestClient(channel.child));
     broker.attach('feature', channel.supervisor);
 
     let releaseSweep!: () => void;
-    const sweep = lifecycle.run(() => new Promise<void>((resolve) => { releaseSweep = resolve; }));
+    const sweep = lifecycle.run(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseSweep = resolve;
+        }),
+    );
     await Promise.resolve();
     const pending = proxy.run(async () => undefined);
     await flushAsync(channel);
