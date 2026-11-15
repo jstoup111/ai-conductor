@@ -6,7 +6,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import { describeRoutingRounds, renderRoutingRounds } from '../../src/engine/stack-rounds-cli.js';
-import { createRouteRecord, readRouteRecord, writeRoutingTransaction } from '../../src/engine/routing/route-record-store.js';
+import {
+  createRouteRecord,
+  readRouteRecord,
+  writeRoutingTransaction,
+} from '../../src/engine/routing/route-record-store.js';
 import { repairMarkerRefFor, routeRecordRefFor } from '../../src/engine/routing/routing-refs.js';
 import { emptyUnsettledReceipt, parseRoundId, type RouteRecord } from '../../src/engine/routing/route-types.js';
 import { createSweepRepository, removeAll } from './restack/restack-sweepG2-fixture.js';
@@ -19,17 +23,23 @@ const r3 = parseRoundId('r3')!;
 const r4 = parseRoundId('r4')!;
 const r5 = parseRoundId('r5')!;
 
-afterEach(async () => { await removeAll(cleanup); });
+afterEach(async () => {
+  await removeAll(cleanup);
+});
 
 async function fixture() {
   const subject = await createSweepRepository('stack-rounds-inspect-', cleanup);
   await subject.git(['commit', '-qm', 'initial']);
   const create = async (roundId: typeof r4 | typeof r5) => {
     const created = await createRouteRecord(subject.repo, slug, {
-      roundId, kind: 'audit', sealedAuthored: 0, items: [],
-      allocation: roundId === r4
-        ? { [c1]: { remTaskIds: [], blockBodies: [] }, [c2]: { remTaskIds: [], blockBodies: [] } }
-        : { [c1]: { remTaskIds: [], blockBodies: [] } },
+      roundId,
+      kind: 'audit',
+      sealedAuthored: 0,
+      items: [],
+      allocation:
+        roundId === r4
+          ? { [c1]: { remTaskIds: [], blockBodies: [] }, [c2]: { remTaskIds: [], blockBodies: [] } }
+          : { [c1]: { remTaskIds: [], blockBodies: [] } },
     });
     if (created.kind !== 'created') throw new Error(`could not create ${roundId}: ${created.kind}`);
     const stored = await readRouteRecord(subject.repo, slug, roundId);
@@ -52,8 +62,15 @@ async function fixture() {
     receipt: settled,
   };
   const open5: RouteRecord = { ...stored5.record, phase: 'open', hosts: { [c1]: 'repairing' } };
-  expect(await writeRoutingTransaction(subject.repo, slug, [{ kind: 'update-record', previous: stored4, record: open4 }])).toEqual({ kind: 'updated' });
-  expect(await writeRoutingTransaction(subject.repo, slug, [{ kind: 'update-record', previous: stored5, record: open5 }, { kind: 'create-marker', marker: { host: c1, roundId: r5 } }])).toEqual({ kind: 'updated' });
+  expect(
+    await writeRoutingTransaction(subject.repo, slug, [{ kind: 'update-record', previous: stored4, record: open4 }]),
+  ).toEqual({ kind: 'updated' });
+  expect(
+    await writeRoutingTransaction(subject.repo, slug, [
+      { kind: 'update-record', previous: stored5, record: open5 },
+      { kind: 'create-marker', marker: { host: c1, roundId: r5 } },
+    ]),
+  ).toEqual({ kind: 'updated' });
   return subject;
 }
 
@@ -62,7 +79,11 @@ async function routeRefs(subject: Awaited<ReturnType<typeof fixture>>): Promise<
 }
 
 async function pipelinePaths(subject: Awaited<ReturnType<typeof fixture>>): Promise<readonly string[]> {
-  try { return (await readdir(join(subject.repo, '.pipeline'), { recursive: true })).sort(); } catch { return []; }
+  try {
+    return (await readdir(join(subject.repo, '.pipeline'), { recursive: true })).sort();
+  } catch {
+    return [];
+  }
 }
 
 async function writeBlob(subject: Awaited<ReturnType<typeof fixture>>, value: string): Promise<string> {
@@ -79,10 +100,16 @@ describe('stack rounds inspection (real local Git)', () => {
     expect(described.readable).toBe(true);
     expect(described.rounds.map((round) => round.roundId)).toEqual([r4, r5]);
     expect(described.marker).toMatchObject({ kind: 'marker', marker: { host: c1, roundId: r5 } });
-    expect(renderRoutingRounds(slug, described)).toContain('r4 audit open hosts 1:restacked execution=leaf placement=deferred, 2:pending execution=leaf placement=placed current host 1 settled outbox 0');
-    expect(renderRoutingRounds(slug, described)).toContain('r5 audit open hosts 1:repairing execution=owner placement=none current host 1 unsettled outbox 0');
+    expect(renderRoutingRounds(slug, described)).toContain(
+      'r4 audit open hosts 1:restacked execution=leaf placement=deferred, 2:pending execution=leaf placement=placed current host 1 settled outbox 0',
+    );
+    expect(renderRoutingRounds(slug, described)).toContain(
+      'r5 audit open hosts 1:repairing execution=owner placement=none current host 1 unsettled outbox 0',
+    );
     expect(renderRoutingRounds(slug, described)).toContain('repair marker: host 1 round r5');
-    expect(renderRoutingRounds(slug, described)).toContain(`wedge: r4 host 2 pending unadmitted behind marker r5; ai-conductor stack rounds --slug ${slug} --close r4 --reason <text>`);
+    expect(renderRoutingRounds(slug, described)).toContain(
+      `wedge: r4 host 2 pending unadmitted behind marker r5; ai-conductor stack rounds --slug ${slug} --close r4 --reason <text>`,
+    );
     expect(await routeRefs(subject)).toBe(beforeRefs);
     expect(await pipelinePaths(subject)).toEqual(beforePipeline);
   });

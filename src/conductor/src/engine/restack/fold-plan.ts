@@ -7,13 +7,36 @@ import { type ChildId } from '../child-context.js';
 import { childBranchFor, leafBranchFor } from '../feature-branch-identity.js';
 import { type GitRunner } from '../rebase.js';
 import { parseCommitSha, type CommitSha } from './restack-types.js';
-import type { FoldCommitPlan, FoldFrozenBlock, FoldHunk, FoldPart, FoldPartReason, FoldPlan, FoldRange, FoldSourceCommit } from './fold-types.js';
+import type {
+  FoldCommitPlan,
+  FoldFrozenBlock,
+  FoldHunk,
+  FoldPart,
+  FoldPartReason,
+  FoldPlan,
+  FoldRange,
+  FoldSourceCommit,
+} from './fold-types.js';
 
-export type { FoldCommitPlan, FoldFrozenBlock, FoldHunk, FoldPart, FoldPartReason, FoldPlan, FoldRange, FoldSourceCommit } from './fold-types.js';
+export type {
+  FoldCommitPlan,
+  FoldFrozenBlock,
+  FoldHunk,
+  FoldPart,
+  FoldPartReason,
+  FoldPlan,
+  FoldRange,
+  FoldSourceCommit,
+} from './fold-types.js';
 
 export type CollectFoldSetResult =
   | { readonly kind: 'collected'; readonly commits: readonly FoldSourceCommit[] }
-  | { readonly kind: 'refused'; readonly reason: 'fold-owner-invalid'; readonly commit: CommitSha; readonly host: ChildId }
+  | {
+      readonly kind: 'refused';
+      readonly reason: 'fold-owner-invalid';
+      readonly commit: CommitSha;
+      readonly host: ChildId;
+    }
   | { readonly kind: 'unavailable' };
 
 export interface CollectFoldSetInput {
@@ -38,7 +61,11 @@ function refused(commit: CommitSha, host: ChildId): Extract<CollectFoldSetResult
 }
 
 function trailerValues(message: string, key: 'Round' | 'Owner'): string[] {
-  const finalParagraph = message.trimEnd().split(/\n\s*\n/).at(-1) ?? '';
+  const finalParagraph =
+    message
+      .trimEnd()
+      .split(/\n\s*\n/)
+      .at(-1) ?? '';
   return finalParagraph.split('\n').flatMap((line) => {
     const match = line.match(new RegExp(`^${key}:\\s*(.*)\\s*$`));
     return match === null ? [] : [match[1]!];
@@ -51,10 +78,17 @@ async function rangeCommits(input: CollectFoldSetInput, range: FoldRange): Promi
   try {
     const ancestor = await input.git(['merge-base', '--is-ancestor', range.leafEntryTip, range.exitTip]);
     if (ancestor.exitCode !== 0) return refused(boundary, range.host);
-    const listed = await input.git(['rev-list', '--first-parent', '--reverse', `${range.leafEntryTip}..${range.exitTip}`]);
+    const listed = await input.git([
+      'rev-list',
+      '--first-parent',
+      '--reverse',
+      `${range.leafEntryTip}..${range.exitTip}`,
+    ]);
     if (listed.exitCode !== 0) return refused(boundary, range.host);
     const commits = listed.stdout.split('\n').filter(Boolean).map(parseCommitSha);
-    return commits.every((commit): commit is CommitSha => commit !== undefined) ? commits : refused(boundary, range.host);
+    return commits.every((commit): commit is CommitSha => commit !== undefined)
+      ? commits
+      : refused(boundary, range.host);
   } catch {
     return refused(boundary, range.host);
   }
@@ -84,16 +118,26 @@ export async function collectFoldSet(input: CollectFoldSetInput): Promise<Collec
     const listed = await rangeCommits(input, range);
     if (!Array.isArray(listed)) return listed;
     for (const commit of listed) {
-      if (!await validOwnedCommit(input, commit, range)) return refused(commit, range.host);
+      if (!(await validOwnedCommit(input, commit, range))) return refused(commit, range.host);
       commits.push({ sha: commit, roundId: range.roundId, owner: range.host });
     }
   }
 
   if (commits.length < 2) return { kind: 'collected', commits };
   try {
-    const leaf = await input.git(['rev-list', '--first-parent', '--reverse', `refs/heads/${leafBranchFor(input.slug)}`]);
+    const leaf = await input.git([
+      'rev-list',
+      '--first-parent',
+      '--reverse',
+      `refs/heads/${leafBranchFor(input.slug)}`,
+    ]);
     if (leaf.exitCode !== 0) return { kind: 'unavailable' };
-    const order = new Map(leaf.stdout.split('\n').filter(Boolean).map((sha, index) => [sha, index]));
+    const order = new Map(
+      leaf.stdout
+        .split('\n')
+        .filter(Boolean)
+        .map((sha, index) => [sha, index]),
+    );
     if (commits.some(({ sha }) => !order.has(sha))) return { kind: 'unavailable' };
     commits.sort((left, right) => order.get(left.sha)! - order.get(right.sha)!);
   } catch {
@@ -120,11 +164,22 @@ function hunkPatches(path: string, diff: string): FoldHunk[] {
   return hunks;
 }
 
-function containsFrozenBlock(hunk: FoldHunk, blocks: readonly { readonly id: string; readonly body: string }[]): boolean {
-  const added = new Set(hunk.patch.split('\n')
-    .filter((line) => line.startsWith('+') && !line.startsWith('+++'))
-    .map((line) => line.slice(1)));
-  return blocks.some(({ body }) => body.replace(/\n$/, '').split('\n').every((line) => added.has(line)));
+function containsFrozenBlock(
+  hunk: FoldHunk,
+  blocks: readonly { readonly id: string; readonly body: string }[],
+): boolean {
+  const added = new Set(
+    hunk.patch
+      .split('\n')
+      .filter((line) => line.startsWith('+') && !line.startsWith('+++'))
+      .map((line) => line.slice(1)),
+  );
+  return blocks.some(({ body }) =>
+    body
+      .replace(/\n$/, '')
+      .split('\n')
+      .every((line) => added.has(line)),
+  );
 }
 
 /**
@@ -133,14 +188,20 @@ function containsFrozenBlock(hunk: FoldHunk, blocks: readonly { readonly id: str
  * null when nothing remains, and undefined when a block contained in the hunk
  * is not one contiguous added run, so the residual cannot be expressed.
  */
-function residualHunk(hunk: FoldHunk, blocks: readonly { readonly id: string; readonly body: string }[]): FoldHunk | null | undefined {
+function residualHunk(
+  hunk: FoldHunk,
+  blocks: readonly { readonly id: string; readonly body: string }[],
+): FoldHunk | null | undefined {
   const lines = hunk.patch.replace(/\n$/, '').split('\n');
   const start = lines.findIndex((line) => line.startsWith('@@ '));
   const header = start === -1 ? undefined : lines[start]!.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/);
   if (header === undefined || header === null) return undefined;
   let body = lines.slice(start + 1);
   for (const block of blocks) {
-    const blockLines = block.body.replace(/\n$/, '').split('\n').map((line) => `+${line}`);
+    const blockLines = block.body
+      .replace(/\n$/, '')
+      .split('\n')
+      .map((line) => `+${line}`);
     if (!blockLines.every((line) => body.includes(line))) continue;
     const at = body.findIndex((_, index) => blockLines.every((line, offset) => body[index + offset] === line));
     if (at === -1) return undefined;
@@ -161,7 +222,10 @@ async function residualApplies(git: GitRunner, parent: CommitSha, patch: string,
   const env = { GIT_INDEX_FILE: index };
   const seeded = await git(['read-tree', parent], { env });
   if (seeded.exitCode !== 0) throw new Error(`cannot seed fold residual index: ${seeded.stderr}`);
-  const checked = await git(['apply', '--cached', '--check', '--binary', '--unidiff-zero', '--whitespace=nowarn'], { env, input: patch });
+  const checked = await git(['apply', '--cached', '--check', '--binary', '--unidiff-zero', '--whitespace=nowarn'], {
+    env,
+    input: patch,
+  });
   return checked.exitCode === 0;
 }
 
@@ -187,13 +251,26 @@ async function frozenBlocks(
   if (configured === undefined || configured.length === 0) return configured;
   const patch = await input.git(['show', '--format=', '--no-ext-diff', source.sha]);
   if (patch.exitCode !== 0) throw new Error(`cannot read frozen block commit ${source.sha}`);
-  const added = new Set(patch.stdout.split('\n')
-    .filter((line) => line.startsWith('+') && !line.startsWith('+++'))
-    .map((line) => line.slice(1)));
-  return configured.every(({ body }) => body.replace(/\n$/, '').split('\n').every((line) => added.has(line))) ? configured : undefined;
+  const added = new Set(
+    patch.stdout
+      .split('\n')
+      .filter((line) => line.startsWith('+') && !line.startsWith('+++'))
+      .map((line) => line.slice(1)),
+  );
+  return configured.every(({ body }) =>
+    body
+      .replace(/\n$/, '')
+      .split('\n')
+      .every((line) => added.has(line)),
+  )
+    ? configured
+    : undefined;
 }
 
-async function childTips(input: PlaceFoldCommitsInput, owner: ChildId): Promise<readonly { readonly child: ChildId; readonly tip: CommitSha }[]> {
+async function childTips(
+  input: PlaceFoldCommitsInput,
+  owner: ChildId,
+): Promise<readonly { readonly child: ChildId; readonly tip: CommitSha }[]> {
   const entries: { child: ChildId; tip: CommitSha }[] = [];
   for (let raw = Number(owner); raw <= 9; raw += 1) {
     const child = raw as ChildId;
@@ -222,12 +299,16 @@ async function materializeHunk(
   if (seeded.exitCode !== 0) throw new Error(`cannot seed fold hunk index: ${seeded.stderr}`);
   if (wholeFile) {
     const exists = await git(['cat-file', '-e', `${source}:${path}`], { env });
-    const materialized = exists.exitCode === 0
-      ? await git(['restore', '--source', source, '--staged', '--', path], { env })
-      : await git(['rm', '--cached', '--ignore-unmatch', '--', path], { env });
+    const materialized =
+      exists.exitCode === 0
+        ? await git(['restore', '--source', source, '--staged', '--', path], { env })
+        : await git(['rm', '--cached', '--ignore-unmatch', '--', path], { env });
     if (materialized.exitCode !== 0) throw new Error(`cannot materialize fold whole-file path: ${materialized.stderr}`);
   } else {
-    const applied = await git(['apply', '--cached', '--binary', '--unidiff-zero', '--whitespace=nowarn'], { env, input: patch });
+    const applied = await git(['apply', '--cached', '--binary', '--unidiff-zero', '--whitespace=nowarn'], {
+      env,
+      input: patch,
+    });
     if (applied.exitCode !== 0) throw new Error(`cannot materialize fold hunk: ${applied.stderr}`);
   }
   const tree = await git(['write-tree'], { env });
@@ -250,7 +331,8 @@ async function lowestAcceptingChild(
   for (const candidate of candidates) {
     const merged = await input.git(['merge-tree', '--write-tree', '--merge-base', parent, candidate.tip, probe]);
     if (merged.exitCode === 0) return candidate.child;
-    if (merged.exitCode !== 1) throw new Error(`cannot probe fold placement on child ${candidate.child}: ${merged.stderr}`);
+    if (merged.exitCode !== 1)
+      throw new Error(`cannot probe fold placement on child ${candidate.child}: ${merged.stderr}`);
   }
   const leaf = await input.git(['rev-parse', '--verify', `refs/heads/${leafBranchFor(input.slug)}`]);
   const leafTip = leaf.exitCode === 0 ? parseCommitSha(leaf.stdout.trim()) : undefined;
@@ -282,7 +364,10 @@ async function placeFoldHunk(input: PlaceFoldCommitsInput, hunkInput: HunkPlacem
   if (hunkInput.blocks !== undefined && containsFrozenBlock(hunk, hunkInput.blocks)) {
     const residual = residualHunk(hunk, hunkInput.blocks);
     if (residual === null) return { kind: 'frozen', path: hunk.path };
-    if (residual === undefined || !await residualApplies(input.git, hunkInput.parent, residual.patch, hunkInput.index)) {
+    if (
+      residual === undefined ||
+      !(await residualApplies(input.git, hunkInput.parent, residual.patch, hunkInput.index))
+    ) {
       return { kind: 'unexpressible', path: hunk.path };
     }
     hunk = residual;
@@ -316,14 +401,23 @@ async function planFoldCommit(
 
   const parent = await sourceParent(input.git, source.sha);
   const candidates = await childTips(input, source.owner);
-  const parts: FoldPart[] = blocks === undefined
-    ? []
-    : [{ kind: 'blocks', child: source.owner, paths: [], reason: 'owner', blocks }];
+  const parts: FoldPart[] =
+    blocks === undefined ? [] : [{ kind: 'blocks', child: source.owner, paths: [], reason: 'owner', blocks }];
   const frozenPaths = new Set<string>();
   const unexpressiblePaths: string[] = [];
 
   for (const path of paths) {
-    const diff = await input.git(['diff', '--binary', '--no-ext-diff', '--no-renames', '--unified=0', parent, source.sha, '--', path]);
+    const diff = await input.git([
+      'diff',
+      '--binary',
+      '--no-ext-diff',
+      '--no-renames',
+      '--unified=0',
+      parent,
+      source.sha,
+      '--',
+      path,
+    ]);
     if (diff.exitCode !== 0) throw new Error(`cannot read fold hunks for ${source.sha}:${path}`);
     for (const [ordinal, sourceHunk] of hunkPatches(path, diff.stdout).entries()) {
       const index = join(indexDirectory, `${source.sha}-${path.replace(/[^A-Za-z0-9_.-]/g, '-')}-${ordinal}.index`);
@@ -341,9 +435,16 @@ async function planFoldCommit(
   }
 
   if (unexpressiblePaths.length > 0) {
-    return { kind: 'refused', reason: 'fold-residual-unexpressible', commit: source.sha, paths: [...new Set(unexpressiblePaths)] };
+    return {
+      kind: 'refused',
+      reason: 'fold-residual-unexpressible',
+      commit: source.sha,
+      paths: [...new Set(unexpressiblePaths)],
+    };
   }
-  const placedPaths = new Set(parts.flatMap((part) => part.kind === 'hunks' ? [part.path] : []).concat([...frozenPaths]));
+  const placedPaths = new Set(
+    parts.flatMap((part) => (part.kind === 'hunks' ? [part.path] : [])).concat([...frozenPaths]),
+  );
   const unplacedPaths = paths.filter((path) => !placedPaths.has(path));
   if (unplacedPaths.length > 0) {
     return { kind: 'refused', reason: 'fold-unplaced-path', commit: source.sha, paths: unplacedPaths };
@@ -370,25 +471,35 @@ export async function placeFoldCommits(input: PlaceFoldCommitsInput): Promise<Fo
     for (const range of input.ranges ?? []) {
       const hostPlans = planned.filter((commit) => commit.owner === range.host && commit.roundId === range.roundId);
       if (hostPlans.length === 0) continue;
-      const acceptingChildren = [...new Set(hostPlans.flatMap((commit) => commit.parts
-        .flatMap((part) => part.child === 'leaf' ? [] : [part.child])))]
-        .sort((left, right) => Number(left) - Number(right));
+      const acceptingChildren = [
+        ...new Set(
+          hostPlans.flatMap((commit) => commit.parts.flatMap((part) => (part.child === 'leaf' ? [] : [part.child]))),
+        ),
+      ].sort((left, right) => Number(left) - Number(right));
       // A metadata-only empty evidence commit is replayable, but it does not
       // prove that the recorded host received any of the repair.  Require a
       // material hunk or frozen block on the placement child before accepting
       // the plan; otherwise the fold would silently carry that host's work
       // above its assigned floor.
-      const hasNonEmptyOwnerPart = hostPlans.some((commit) => commit.parts.some((part) =>
-        part.child === range.host && (
-          part.kind === 'hunks'
-            ? part.hunk.patch.trim().length > 0
-            : part.kind === 'blocks'
-              ? part.blocks.some((block) => block.body.trim().length > 0)
-              : false
-        )));
+      const hasNonEmptyOwnerPart = hostPlans.some((commit) =>
+        commit.parts.some(
+          (part) =>
+            part.child === range.host &&
+            (part.kind === 'hunks'
+              ? part.hunk.patch.trim().length > 0
+              : part.kind === 'blocks'
+                ? part.blocks.some((block) => block.body.trim().length > 0)
+                : false),
+        ),
+      );
       if (!hasNonEmptyOwnerPart) {
-        return { kind: 'refused', reason: 'fold-misrouted', host: range.host,
-          findingIds: range.findingIds ?? [], acceptingChildren };
+        return {
+          kind: 'refused',
+          reason: 'fold-misrouted',
+          host: range.host,
+          findingIds: range.findingIds ?? [],
+          acceptingChildren,
+        };
       }
     }
     return { kind: 'planned', commits: planned };

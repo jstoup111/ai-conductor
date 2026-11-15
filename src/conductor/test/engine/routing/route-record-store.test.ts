@@ -15,9 +15,17 @@ import {
   writeRouteRecord,
 } from '../../../src/engine/routing/route-record-store.js';
 import type { CreateRouteRecordInput } from '../../../src/engine/routing/route-record-store.js';
-import { repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
+import {
+  repairMarkerRefFor,
+  revalidationQueueRefFor,
+  routeRecordRefFor,
+} from '../../../src/engine/routing/routing-refs.js';
 import { emptyUnsettledReceipt, parseRoundId, type RouteRecord } from '../../../src/engine/routing/route-types.js';
-import { journalRefFor, writeRestackJournalBlob, type RestackJournal } from '../../../src/engine/restack/restack-journal.js';
+import {
+  journalRefFor,
+  writeRestackJournalBlob,
+  type RestackJournal,
+} from '../../../src/engine/restack/restack-journal.js';
 import { parseCommitSha, type CommitSha, type RestackOpId } from '../../../src/engine/restack/restack-types.js';
 
 const roundId = parseRoundId('r1');
@@ -40,7 +48,6 @@ const routeRecord: RouteRecord = {
 
 /** A round closes only once its last host finished in place (ADR decision 6). */
 const closedRouteRecord: RouteRecord = { ...routeRecord, phase: 'closed', hosts: { [c1]: 'done' } };
-
 
 function sha(raw: string): CommitSha {
   const parsed = parseCommitSha(raw);
@@ -65,13 +72,22 @@ async function createRepo() {
   }
 }
 
-async function writeRef(fixture: Awaited<ReturnType<typeof createRepo>>, ref: string, value: unknown): Promise<CommitSha> {
-  const blob = sha((await fixture.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(value) })).stdout.trim());
+async function writeRef(
+  fixture: Awaited<ReturnType<typeof createRepo>>,
+  ref: string,
+  value: unknown,
+): Promise<CommitSha> {
+  const blob = sha(
+    (await fixture.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(value) })).stdout.trim(),
+  );
   await fixture.git(['update-ref', ref, blob]);
   return blob;
 }
 
-async function routeFixture(fixture: Awaited<ReturnType<typeof createRepo>>, record: RouteRecord = routeRecord): Promise<CommitSha> {
+async function routeFixture(
+  fixture: Awaited<ReturnType<typeof createRepo>>,
+  record: RouteRecord = routeRecord,
+): Promise<CommitSha> {
   return writeRef(fixture, routeRecordRefFor('demo', record.roundId), record);
 }
 
@@ -113,13 +129,15 @@ describe('ref-backed route record store', () => {
       owner: { host: 'test-host', pid: 1, processStartTime: '1' },
       routed: { roundId, host: c1, routeOld, routeNew, markerOld },
     };
-    const routedAppliedLines = (routeRecordStore as typeof routeRecordStore & {
-      readonly routedAppliedLines?: (
-        slug: string,
-        journal: RestackJournal,
-        ownerOpId: RestackOpId,
-      ) => readonly string[] | 'refused';
-    }).routedAppliedLines;
+    const routedAppliedLines = (
+      routeRecordStore as typeof routeRecordStore & {
+        readonly routedAppliedLines?: (
+          slug: string,
+          journal: RestackJournal,
+          ownerOpId: RestackOpId,
+        ) => readonly string[] | 'refused';
+      }
+    ).routedAppliedLines;
 
     expect([
       routedAppliedLines?.('demo', journal, 'op-1' as RestackOpId),
@@ -139,22 +157,24 @@ describe('ref-backed route record store', () => {
       await routeFixture(fixture, { ...routeRecord, hosts: { [c1]: 'built' } });
       const stored = await readRouteRecord(fixture.repo, 'demo', roundId);
       if (stored.kind !== 'record') throw new Error('expected stored route record');
-      const routedRecordAfterExit = (routeRecordStore as typeof routeRecordStore & {
-        readonly routedRecordAfterExit?: (
-          record: typeof stored,
-          host: typeof c1,
-          outcome: 'restacked',
-        ) => unknown;
-      }).routedRecordAfterExit;
+      const routedRecordAfterExit = (
+        routeRecordStore as typeof routeRecordStore & {
+          readonly routedRecordAfterExit?: (record: typeof stored, host: typeof c1, outcome: 'restacked') => unknown;
+        }
+      ).routedRecordAfterExit;
 
-      const result = routedRecordAfterExit?.(stored, c1, 'restacked') as {
-        readonly kind?: string;
-        readonly record?: RouteRecord;
-      } | undefined;
+      const result = routedRecordAfterExit?.(stored, c1, 'restacked') as
+        | {
+            readonly kind?: string;
+            readonly record?: RouteRecord;
+          }
+        | undefined;
       expect(result).toMatchObject({ kind: 'updated', record: { hosts: { [c1]: 'restacked' } } });
       expect(result?.record?.outbox).toHaveLength(1);
       expect(result?.record?.outbox[0]?.event).toMatchObject({
-        type: 'routed_repair_phase', host: c1, phase: 'restacked',
+        type: 'routed_repair_phase',
+        host: c1,
+        phase: 'restacked',
       });
     } finally {
       await rm(fixture.repo, { recursive: true, force: true });
@@ -178,12 +198,17 @@ describe('ref-backed route record store', () => {
         record: {
           hosts: { [c1]: 'repairing' },
           hostReasons: { [c1]: 'derived-already-complete' },
-          outbox: [{
-            event: {
-              type: 'routed_repair_phase', host: c1, phase: 'repairing', credit: false,
-              reason: 'derived-already-complete',
+          outbox: [
+            {
+              event: {
+                type: 'routed_repair_phase',
+                host: c1,
+                phase: 'repairing',
+                credit: false,
+                reason: 'derived-already-complete',
+              },
             },
-          }],
+          ],
         },
       });
     } finally {
@@ -197,10 +222,19 @@ describe('ref-backed route record store', () => {
       const marker = { host: c1, roundId };
       const markerBlob = await writeRef(fixture, repairMarkerRefFor('demo'), marker);
       const stale = sha('d'.repeat(40));
-      const deleteMarker = [{ kind: 'delete-marker', old: stale }] as unknown as Parameters<typeof routeRecordStore.writeRoutingTransaction>[2];
+      const deleteMarker = [{ kind: 'delete-marker', old: stale }] as unknown as Parameters<
+        typeof routeRecordStore.writeRoutingTransaction
+      >[2];
 
-      expect(await routeRecordStore.writeRoutingTransaction(fixture.repo, 'demo', deleteMarker)).toEqual({ kind: 'cas-failed' });
-      expect(await readRepairMarker(fixture.repo, 'demo')).toEqual({ kind: 'marker', slug: 'demo', blob: markerBlob, marker });
+      expect(await routeRecordStore.writeRoutingTransaction(fixture.repo, 'demo', deleteMarker)).toEqual({
+        kind: 'cas-failed',
+      });
+      expect(await readRepairMarker(fixture.repo, 'demo')).toEqual({
+        kind: 'marker',
+        slug: 'demo',
+        blob: markerBlob,
+        marker,
+      });
     } finally {
       await rm(fixture.repo, { recursive: true, force: true });
     }
@@ -213,14 +247,16 @@ describe('ref-backed route record store', () => {
       const markerBlob = await writeRef(fixture, repairMarkerRefFor('demo'), { host: 1, roundId: 'r1' });
       const queueBlob = await writeRef(fixture, revalidationQueueRefFor('demo'), {
         generation: 2,
-        entries: [{
-          child: 1,
-          position: 1,
-          closureSha: 'a'.repeat(40),
-          gates: ['test_suite'],
-          replay: { oldParent: 'b'.repeat(40), newParent: 'c'.repeat(40) },
-          state: 'queued',
-        }],
+        entries: [
+          {
+            child: 1,
+            position: 1,
+            closureSha: 'a'.repeat(40),
+            gates: ['test_suite'],
+            replay: { oldParent: 'b'.repeat(40), newParent: 'c'.repeat(40) },
+            state: 'queued',
+          },
+        ],
         outbox: [],
       });
 
@@ -233,28 +269,40 @@ describe('ref-backed route record store', () => {
           receipt: { laps: {}, growth: 0, taskless: {}, echo: {}, acks: {} },
         },
       });
-      expect(await readRepairMarker(fixture.repo, 'demo')).toEqual({ kind: 'marker', slug: 'demo', blob: markerBlob, marker: { host: 1, roundId } });
+      expect(await readRepairMarker(fixture.repo, 'demo')).toEqual({
+        kind: 'marker',
+        slug: 'demo',
+        blob: markerBlob,
+        marker: { host: 1, roundId },
+      });
       expect(await readRevalidationQueue(fixture.repo, 'demo')).toEqual({
         kind: 'queue',
         slug: 'demo',
         queue: {
           generation: 2,
-          entries: [{
-            child: 1,
-            position: 1,
-            closureSha: 'a'.repeat(40),
-            gates: ['test_suite'],
-            replay: { oldParent: 'b'.repeat(40), newParent: 'c'.repeat(40) },
-            state: 'queued',
-          }],
+          entries: [
+            {
+              child: 1,
+              position: 1,
+              closureSha: 'a'.repeat(40),
+              gates: ['test_suite'],
+              replay: { oldParent: 'b'.repeat(40), newParent: 'c'.repeat(40) },
+              state: 'queued',
+            },
+          ],
           outbox: [],
         },
         blob: queueBlob,
       });
 
       expect(await readRouteRecord(fixture.repo, 'demo', parseRoundId('r2')!)).toEqual({ kind: 'absent' });
-      const invalidBlob = await writeRef(fixture, routeRecordRefFor('demo', parseRoundId('r3')!), { route: 'not a record' });
-      expect(await readRouteRecord(fixture.repo, 'demo', parseRoundId('r3')!)).toEqual({ kind: 'unreadable', blob: invalidBlob });
+      const invalidBlob = await writeRef(fixture, routeRecordRefFor('demo', parseRoundId('r3')!), {
+        route: 'not a record',
+      });
+      expect(await readRouteRecord(fixture.repo, 'demo', parseRoundId('r3')!)).toEqual({
+        kind: 'unreadable',
+        blob: invalidBlob,
+      });
     } finally {
       await rm(fixture.repo, { recursive: true, force: true });
     }
@@ -269,11 +317,9 @@ describe('ref-backed route record store', () => {
         execution: 'leaf' as const,
         placements: { [c1]: { state: 'deferred' as const, leafEntryTip } },
       };
-      const created = await routeRecordStore.writeRoutingTransaction(
-        fixture.repo,
-        'demo',
-        [{ kind: 'create-record', record: leafRecord }],
-      );
+      const created = await routeRecordStore.writeRoutingTransaction(fixture.repo, 'demo', [
+        { kind: 'create-record', record: leafRecord },
+      ]);
 
       expect(created).toEqual({ kind: 'updated' });
       expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toMatchObject({
@@ -294,8 +340,12 @@ describe('ref-backed route record store', () => {
         kind: 'operator',
         execution: 'leaf',
         operator: {
-          origin: 'land', reason: 'operator route', operator: 'operator', entryStep: 'acceptance_specs',
-          carried: [], otherTips: { 'feat/daemon-demo': leafEntryTip },
+          origin: 'land',
+          reason: 'operator route',
+          operator: 'operator',
+          entryStep: 'acceptance_specs',
+          carried: [],
+          otherTips: { 'feat/daemon-demo': leafEntryTip },
           priorRegion: {
             statuses: { acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' },
             verdicts: {},
@@ -310,11 +360,17 @@ describe('ref-backed route record store', () => {
       };
 
       await writeRef(fixture, routeRecordRefFor('demo', roundId), operator);
-      expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toEqual(expect.objectContaining({ kind: 'unreadable' }));
+      expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toEqual(
+        expect.objectContaining({ kind: 'unreadable' }),
+      );
       await writeRef(fixture, routeRecordRefFor('demo', roundId), revalidate);
-      expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toEqual(expect.objectContaining({ kind: 'unreadable' }));
+      expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toEqual(
+        expect.objectContaining({ kind: 'unreadable' }),
+      );
       await writeRef(fixture, routeRecordRefFor('demo', roundId), unknownPlacement);
-      expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toEqual(expect.objectContaining({ kind: 'unreadable' }));
+      expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toEqual(
+        expect.objectContaining({ kind: 'unreadable' }),
+      );
     } finally {
       await rm(fixture.repo, { recursive: true, force: true });
     }
@@ -325,7 +381,8 @@ describe('ref-backed route record store', () => {
     try {
       await writeRef(fixture, repairMarkerRefFor('demo'), { host: c1, roundId, execution: 'leaf' });
       expect(await readRepairMarker(fixture.repo, 'demo')).toMatchObject({
-        kind: 'marker', marker: { host: c1, roundId, execution: 'leaf' },
+        kind: 'marker',
+        marker: { host: c1, roundId, execution: 'leaf' },
       });
 
       await writeRef(fixture, repairMarkerRefFor('demo'), { host: c1, roundId });
@@ -358,7 +415,9 @@ describe('ref-backed route record store', () => {
         args: ['update-ref', '--stdin'],
         input: expect.stringContaining(`start\nupdate ${routeRecordRefFor('demo', roundId)} `),
       });
-      expect(update?.input).toContain(` ${stored.blob}\nverify ${journalRefFor('demo')} ${'0'.repeat(40)}\nprepare\ncommit\n`);
+      expect(update?.input).toContain(
+        ` ${stored.blob}\nverify ${journalRefFor('demo')} ${'0'.repeat(40)}\nprepare\ncommit\n`,
+      );
     } finally {
       await rm(fixture.repo, { recursive: true, force: true });
     }
@@ -381,12 +440,22 @@ describe('ref-backed route record store', () => {
         return realGit(args, options);
       };
 
-      expect(await writeRouteRecord(fixture.repo, stored, {
-        ...routeRecord,
-        phase: 'prepared',
-        hosts: { [c1]: 'pending' },
-      }, { git })).toEqual({ kind: 'cas-failed' });
-      expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toMatchObject({ kind: 'record', record: concurrent });
+      expect(
+        await writeRouteRecord(
+          fixture.repo,
+          stored,
+          {
+            ...routeRecord,
+            phase: 'prepared',
+            hosts: { [c1]: 'pending' },
+          },
+          { git },
+        ),
+      ).toEqual({ kind: 'cas-failed' });
+      expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toMatchObject({
+        kind: 'record',
+        record: concurrent,
+      });
     } finally {
       await rm(fixture.repo, { recursive: true, force: true });
     }
@@ -405,7 +474,9 @@ describe('ref-backed route record store', () => {
         hosts: { [c1]: 'pending' as const },
       };
 
-      expect(await createRouteRecord(fixture.repo, 'demo', malformedExistingTask as unknown as CreateRouteRecordInput)).toEqual({ kind: 'unavailable' });
+      expect(
+        await createRouteRecord(fixture.repo, 'demo', malformedExistingTask as unknown as CreateRouteRecordInput),
+      ).toEqual({ kind: 'unavailable' });
       expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toEqual({ kind: 'absent' });
 
       await routeFixture(fixture);
@@ -436,5 +507,4 @@ describe('ref-backed route record store', () => {
       await rm(fixture.repo, { recursive: true, force: true });
     }
   });
-
 });

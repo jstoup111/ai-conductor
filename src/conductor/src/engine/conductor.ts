@@ -18756,7 +18756,7 @@ export class Conductor {
     // the daemon path below.  Keep the ordinary base rebase daemon-only.
     const git = makeGitRunner(this.projectRoot);
 
-    if (stackSlug && await hasDurableChildState(this.projectRoot, stackSlug)) {
+    if (stackSlug && (await hasDurableChildState(this.projectRoot, stackSlug))) {
       if (await publishedStackRefusal(this.projectRoot, stackSlug, { git })) {
         await this.events.emit(emitRestackRefused({ reason: 'published-stack' }));
         return { success: true };
@@ -18778,8 +18778,10 @@ export class Conductor {
       // Deferred audit work is intentionally left on the leaf until FINISH.
       // The recorded execution mode, not the current config toggle, is the
       // authority for the recovery.
-      if (!await routedRoundOpen(this.projectRoot, stackSlug, { git })
-        && await deferredPlacementsExist(this.projectRoot, stackSlug, { git })) {
+      if (
+        !(await routedRoundOpen(this.projectRoot, stackSlug, { git })) &&
+        (await deferredPlacementsExist(this.projectRoot, stackSlug, { git }))
+      ) {
         const folded = await runRestack({
           worktree: this.projectRoot,
           slug: stackSlug,
@@ -18792,7 +18794,8 @@ export class Conductor {
           resolverCap: resolveRebaseResolutionAttempts(this.config),
         });
         if (folded.kind !== 'applied') {
-          const detail = folded.kind === 'unavailable' ? folded.detail : folded.kind === 'halted' ? folded.detail : folded.kind;
+          const detail =
+            folded.kind === 'unavailable' ? folded.detail : folded.kind === 'halted' ? folded.detail : folded.kind;
           return { success: false, output: `stack fold ${folded.kind}: ${detail}` };
         }
         // A fold owns a fresh revalidation generation.  Admit its first child
@@ -18891,7 +18894,10 @@ export class Conductor {
           await recordRebaseStepCompletion(this.stateFilePath, outcome);
           return { success: true };
         }
-        if (await routedRoundOpen(this.projectRoot, stackSlug, { git }) || await deferredPlacementsExist(this.projectRoot, stackSlug, { git })) {
+        if (
+          (await routedRoundOpen(this.projectRoot, stackSlug, { git })) ||
+          (await deferredPlacementsExist(this.projectRoot, stackSlug, { git }))
+        ) {
           await this.events.emit(emitRestackRefused({ reason: 'deferred-base-refresh' }));
           return { success: false, output: 'stack base refresh deferred: routed round open' };
         }

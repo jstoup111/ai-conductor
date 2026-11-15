@@ -13,9 +13,22 @@ import type {
 import type { ObservedInterval } from './provider.js';
 import type { ProviderId } from './provider.js';
 import type { SchedulingUnitRef } from './scheduling-unit.js';
-import type { GithubOperationName, GithubOperationRefusalReason, GithubOperationTarget, GithubBotAuthRefusalReason } from './github.js';
+import type {
+  GithubOperationName,
+  GithubOperationRefusalReason,
+  GithubOperationTarget,
+  GithubBotAuthRefusalReason,
+} from './github.js';
 import type { BuildReviewInfrastructureFailureReason, BuildReviewJudgedResultRejection } from './build-review.js';
-import type { ChildId, CommitSha, JournalState, RefName, RestackCause, RestackOpId, RestackRefusalReason } from './restack.js';
+import type {
+  ChildId,
+  CommitSha,
+  JournalState,
+  RefName,
+  RestackCause,
+  RestackOpId,
+  RestackRefusalReason,
+} from './restack.js';
 type LandGateRejectionIdentifier = import('./land.js').LandGateRejectionIdentifier;
 type RefusalReason = import('./park.js').RefusalReason;
 type HaltDisposition = import('./halt.js').HaltDisposition;
@@ -168,10 +181,7 @@ export type DaemonMaintenancePhaseEvent =
 
 /** Closed outcomes for the daemon's bounded setup repair session. */
 export type SetupRepairDisposition =
-  | 'engine-committed'
-  | 'accepted-existing-commit'
-  | 'verified-no-tree-change'
-  | 'rejected';
+  'engine-committed' | 'accepted-existing-commit' | 'verified-no-tree-change' | 'rejected';
 
 /** Fail-closed reasons for a rejected setup repair attempt. */
 export type SetupRepairRejectionReason =
@@ -255,9 +265,7 @@ export type StackPublicationEvent =
   | { type: 'stack_tip_diverged'; prs: readonly number[] };
 
 /** Closed, non-diagnostic context for credential-park progress telemetry. */
-export type CredentialParkProgressDegradation =
-  | 'credential-failure'
-  | 'unrelated-diagnostic-degradation';
+export type CredentialParkProgressDegradation = 'credential-failure' | 'unrelated-diagnostic-degradation';
 
 type CredentialParkProgressEventBase = {
   type: 'credentials_park_progress';
@@ -286,10 +294,7 @@ type CredentialParkProgressEvent = CredentialParkProgressEventBase &
       }
   );
 
-export type VerdictFreshnessOutcome =
-  | 'rewritten'
-  | 'preserved_surface_miss'
-  | 'stale_invalidated';
+export type VerdictFreshnessOutcome = 'rewritten' | 'preserved_surface_miss' | 'stale_invalidated';
 
 export type VerdictFreshnessClassification =
   | {
@@ -358,20 +363,35 @@ export interface ExecutionContext {
 
 /** A telemetry subject is either a registered lifecycle step or a configured branch. */
 export type ExecutionSubject =
-  | { kind: 'lifecycle-step'; step: StepName }
-  | { kind: 'configured-member'; parentGroup: string; member: string };
+  { kind: 'lifecycle-step'; step: StepName } | { kind: 'configured-member'; parentGroup: string; member: string };
 
 /** Closed, non-textual facts permitted on the CI repair diagnostic bus event. */
-export type CiRepairDiagnosticStage = 'context' | 'log-enrichment' | 'branch' | 'readiness' | 'execution' | 'guard' | 'verification' | 'publication';
-export type CiRepairDiagnosticReason = 'auth' | 'permission' | 'timeout' | 'api' | 'capability' | 'malformed-context' | 'missing-context' | 'missing-branch' | 'log-unavailable' | 'context-truncated' | 'provider-unavailable' | 'readiness-degraded' | 'flag-invalid' | 'spawn-env' | 'unknown' | 'guard-refused' | 'verification-failed' | 'publication-refused' | 'verified-publication';
+export type CiRepairDiagnosticStage =
+  'context' | 'log-enrichment' | 'branch' | 'readiness' | 'execution' | 'guard' | 'verification' | 'publication';
+export type CiRepairDiagnosticReason =
+  | 'auth'
+  | 'permission'
+  | 'timeout'
+  | 'api'
+  | 'capability'
+  | 'malformed-context'
+  | 'missing-context'
+  | 'missing-branch'
+  | 'log-unavailable'
+  | 'context-truncated'
+  | 'provider-unavailable'
+  | 'readiness-degraded'
+  | 'flag-invalid'
+  | 'spawn-env'
+  | 'unknown'
+  | 'guard-refused'
+  | 'verification-failed'
+  | 'publication-refused'
+  | 'verified-publication';
 export type CiRepairDiagnosticDisposition = 'deferred' | 'degraded' | 'failed' | 'published';
 
 /** Closed reasons reported by the boot-time built-in provider probe. */
-export type ProviderDiscoveryFailureReason =
-  | 'not-found'
-  | 'not-executable'
-  | 'version-failed'
-  | 'timeout';
+export type ProviderDiscoveryFailureReason = 'not-found' | 'not-executable' | 'version-failed' | 'timeout';
 
 /** The installed and unavailable built-in providers observed during one boot. */
 export interface ProviderDiscoveryEvent {
@@ -414,9 +434,7 @@ export interface ProviderAttemptEvent {
 }
 
 /** Explicit identity for a provider candidate at the moment it starts. */
-export type ProviderStartIdentity =
-  | { kind: 'known'; id: string }
-  | { kind: 'unknown' };
+export type ProviderStartIdentity = { kind: 'known'; id: string } | { kind: 'unknown' };
 
 /** A provider candidate has started invocation for a step. */
 export interface ProviderAttemptStartedEvent {
@@ -442,9 +460,7 @@ export type ProviderStreamProgressEvent = ProviderStreamObservation & {
 export type BuildActivity = 'quiet' | 'active-committing' | 'active-not-committing';
 
 /** Engine-established attribution carried by an external managed-session producer. */
-export type SessionObservationScope =
-  | { kind: 'feature'; featureSlug: string }
-  | { kind: 'project' };
+export type SessionObservationScope = { kind: 'feature'; featureSlug: string } | { kind: 'project' };
 
 /** Closed outcomes from a locally observed `gh` process; never remote-state proof. */
 export type GithubBypassCliOutcome = 'cli-succeeded' | 'cli-failed' | 'unknown';
@@ -692,7 +708,12 @@ type ConductorEventBody =
       quarantineRef?: string;
       preservedPaths: string[];
     }
-  | { type: 'project_setup'; ran: boolean; reason: 'marker-valid' | 'no-marker' | 'no-script' | 'script-changed' | 'base-moved' | 'marker-invalid' | 'forced' }
+  | {
+      type: 'project_setup';
+      ran: boolean;
+      reason:
+        'marker-valid' | 'no-marker' | 'no-script' | 'script-changed' | 'base-moved' | 'marker-invalid' | 'forced';
+    }
   | {
       /** The memory-path state observed before daemon setup ran. */
       type: 'memory_setup';
@@ -863,12 +884,20 @@ type ConductorEventBody =
       rubric: string;
       lapId: string;
       mode: 'full' | 'delta';
-      reason: 'first-lap' | 'merge-base-changed' | 'version-changed' | 'record-unreadable' | 'open-source-unmapped' | 'delta';
+      reason:
+        'first-lap' | 'merge-base-changed' | 'version-changed' | 'record-unreadable' | 'open-source-unmapped' | 'delta';
       deltaHunkCount: number;
       settledHunkCount: number;
     }
   /** adr-2026-08-21 D5: a cached judgement discarded because the judging engine or rubric skill text changed. */
-  | { type: 'build_review_cache_discarded'; rubric: string; lapId: string; reason: 'engine-version-mismatch' | 'skill-digest-mismatch'; cachedEngineStamp?: string; currentEngineStamp: string }
+  | {
+      type: 'build_review_cache_discarded';
+      rubric: string;
+      lapId: string;
+      reason: 'engine-version-mismatch' | 'skill-digest-mismatch';
+      cachedEngineStamp?: string;
+      currentEngineStamp: string;
+    }
   | {
       type: 'build_review_rubric_infrastructure_failure';
       rubric: string;
@@ -924,7 +953,13 @@ type ConductorEventBody =
       operator: string;
     }
   | { type: 'build_review_disposition_refused'; feature: string; reason: string }
-  | { type: 'build_review_disposition_version_invalidated'; feature: string; findingId: string; rubric: string; contractVersion: string }
+  | {
+      type: 'build_review_disposition_version_invalidated';
+      feature: string;
+      findingId: string;
+      rubric: string;
+      contractVersion: string;
+    }
   | {
       type: 'build_review_outer_verdict';
       lapId: string;
@@ -937,7 +972,12 @@ type ConductorEventBody =
       /** Findings below the configured per-rubric confidence floor. */
       suppressedFindings?: readonly { findingId: string; rubric: string; confidence: number; floor: number }[];
       /** Below-threshold findings are durable advisory history, never a route. */
-      advisoryFindings?: readonly { findingId: string; rubric: string; severity: 'critical' | 'major' | 'minor' | 'nit'; threshold: 'critical' | 'major' | 'minor' | 'nit' }[];
+      advisoryFindings?: readonly {
+        findingId: string;
+        rubric: string;
+        severity: 'critical' | 'major' | 'minor' | 'nit';
+        threshold: 'critical' | 'major' | 'minor' | 'nit';
+      }[];
       /** Scope bookkeeping: visible, never accepted risk or remediation work. */
       outOfDeltaCount?: number;
     }
@@ -959,7 +999,12 @@ type ConductorEventBody =
       caseIds: readonly string[];
       effectIds: readonly string[];
       /** Durable stop evidence, including blocked consistency verdicts. */
-      decisionStops?: readonly { readonly caseId: string; readonly owner?: 'product' | 'plan' | 'architecture'; readonly sourceIds: readonly string[]; readonly rationale: string }[];
+      decisionStops?: readonly {
+        readonly caseId: string;
+        readonly owner?: 'product' | 'plan' | 'architecture';
+        readonly sourceIds: readonly string[];
+        readonly rationale: string;
+      }[];
     }
   | {
       /** A remediation judgement could not be completed and remains fail-closed. */
@@ -969,7 +1014,8 @@ type ConductorEventBody =
       reason: string;
       /** Present when a proposed case-store transition was refused without corrupting persisted history. */
       rejectedTransition?: {
-        readonly invariant: 'source-linked-by-multiple-cases' | 'duplicate-case-id' | 'duplicate-effect-id' | 'invalid-next-state';
+        readonly invariant:
+          'source-linked-by-multiple-cases' | 'duplicate-case-id' | 'duplicate-effect-id' | 'invalid-next-state';
         readonly caseIds: readonly string[];
         readonly sourceIds: readonly string[];
       };
@@ -1086,11 +1132,7 @@ type ConductorEventBody =
       /** A hook-owned containment check could not reach a verdict. */
       type: 'containment_check_unresolved';
       /** Closed classification of the failed containment-check boundary. */
-      failure:
-        | 'commit-message-unreadable'
-        | 'task-status-unreadable'
-        | 'task-status-malformed'
-        | 'evaluation-failed';
+      failure: 'commit-message-unreadable' | 'task-status-unreadable' | 'task-status-malformed' | 'evaluation-failed';
       /** Present once the commit message yielded a resolvable Task trailer. */
       taskId?: string;
       /** Raw commit message, retained when the hook read it before failing. */
@@ -1180,7 +1222,20 @@ type ConductorEventBody =
       runId: ScratchCleanupIdentityValue;
       attempt: ScratchCleanupAttempt;
       path: string;
-      reason: 'no-lease' | 'malformed-lease' | 'incomplete-lease' | 'live-owner' | 'unknown-owner' | 'concurrent-acquisition' | 'legacy-nonmatching' | 'legacy-not-directory' | 'legacy-mtime-unavailable' | 'legacy-newer-than-process-start' | 'legacy-unreadable-lease' | 'legacy-live-owner' | 'legacy-unknown-owner';
+      reason:
+        | 'no-lease'
+        | 'malformed-lease'
+        | 'incomplete-lease'
+        | 'live-owner'
+        | 'unknown-owner'
+        | 'concurrent-acquisition'
+        | 'legacy-nonmatching'
+        | 'legacy-not-directory'
+        | 'legacy-mtime-unavailable'
+        | 'legacy-newer-than-process-start'
+        | 'legacy-unreadable-lease'
+        | 'legacy-live-owner'
+        | 'legacy-unknown-owner';
     }
   | {
       /** A provider scratch home could not be removed during a daemon sweep or legacy collection. */
@@ -1205,12 +1260,13 @@ type ConductorEventBody =
       interrupted: boolean;
       skipped: number;
       omittedLines: number;
-    } & (
+    } &
       /** Current captures retain their owner and project its display step. */
-      | { readonly owner: TranscriptOwner; readonly step: string }
-      /** Rows persisted before owner identities were introduced. */
-      | { readonly owner?: never; readonly step: TranscriptOwnerStep }
-    ))
+      (
+        | { readonly owner: TranscriptOwner; readonly step: string }
+        /** Rows persisted before owner identities were introduced. */
+        | { readonly owner?: never; readonly step: TranscriptOwnerStep }
+      ))
   | ({
       /** Provider transcript capture failed, but scratch-home retirement continued. */
       type: 'provider_transcripts_harvest_failed';
@@ -1220,12 +1276,13 @@ type ConductorEventBody =
       provider: string;
       path: string;
       error: string;
-    } & (
+    } &
       /** Current captures retain their owner and project its display step. */
-      | { readonly owner: TranscriptOwner; readonly step: string }
-      /** Rows persisted before owner identities were introduced. */
-      | { readonly owner?: never; readonly step: TranscriptOwnerStep }
-    ))
+      (
+        | { readonly owner: TranscriptOwner; readonly step: string }
+        /** Rows persisted before owner identities were introduced. */
+        | { readonly owner?: never; readonly step: TranscriptOwnerStep }
+      ))
   | {
       /** A captured provider transcript was retained after its step verdict settled. */
       type: 'provider_transcripts_retained';
@@ -1796,10 +1853,7 @@ type ConductorEventBody =
       type: 'build_member_evidence_recomputed';
       member: 'test_suite';
       decision: 'recompute';
-      basis:
-        | 'recorded-head-versus-current-head'
-        | 'fingerprint-mismatch'
-        | 'fresh-evidence-required';
+      basis: 'recorded-head-versus-current-head' | 'fingerprint-mismatch' | 'fresh-evidence-required';
     }
   | {
       /** A feature-declared applicability marker made this step inapplicable for the feature. */
@@ -2385,7 +2439,11 @@ type ConductorEventBody =
       type: 'routing_rounds_stalled';
       rounds: readonly (
         | { readonly roundId: RoundId; readonly readable: false }
-        | { readonly roundId: RoundId; readonly readable: true; readonly unsettledHosts: Readonly<Record<ChildId, HostState>> }
+        | {
+            readonly roundId: RoundId;
+            readonly readable: true;
+            readonly unsettledHosts: Readonly<Record<ChildId, HostState>>;
+          }
       )[];
       detail: string;
       attempt: number;

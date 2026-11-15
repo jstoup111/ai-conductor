@@ -347,7 +347,7 @@ async function foldedSourceForChild(git: GitRunner, slug: string, child: ChildId
   if (!branch.ok) return undefined;
   const log = await git(['log', '--format=%B', `refs/heads/${branch.branch}`]);
   if (log.exitCode !== 0) return undefined;
-  return /^Folded-from:\s*([0-9a-f]{7,64})\s*$/mi.exec(log.stdout)?.[1];
+  return /^Folded-from:\s*([0-9a-f]{7,64})\s*$/im.exec(log.stdout)?.[1];
 }
 
 /**

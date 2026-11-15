@@ -50,8 +50,12 @@ function branchHostsMarker(
   execution?: 'leaf',
 ): boolean {
   if (identity.kind === 'child') return identity.child === host;
-  return identity.kind === 'leaf' && (cursor.kind === 'active' || cursor.kind === 'repair-pending') &&
-    cursor.isLeaf && (execution === 'leaf' || cursor.child === host);
+  return (
+    identity.kind === 'leaf' &&
+    (cursor.kind === 'active' || cursor.kind === 'repair-pending') &&
+    cursor.isLeaf &&
+    (execution === 'leaf' || cursor.child === host)
+  );
 }
 
 /**
@@ -80,7 +84,8 @@ export async function runRoundStamp(deps: RoundStampDependencies): Promise<numbe
   // No marker means an unrelated commit, which remains permitted. An
   // unreadable marker cannot prove the mandatory leaf attribution.
   if (marker.kind === 'unreadable') return deps.verify ? 1 : 0;
-  if (marker.kind !== 'marker' || !branchHostsMarker(identity, cursor, marker.marker.host, marker.marker.execution)) return 0;
+  if (marker.kind !== 'marker' || !branchHostsMarker(identity, cursor, marker.marker.host, marker.marker.execution))
+    return 0;
 
   let message: string;
   try {
@@ -89,9 +94,13 @@ export async function runRoundStamp(deps: RoundStampDependencies): Promise<numbe
     return deps.verify ? 1 : 0;
   }
   const leafExecution = marker.marker.execution === 'leaf' && identity.kind === 'leaf';
-  const owner = identity.kind === 'leaf' && (cursor.kind === 'active' || cursor.kind === 'repair-pending') && cursor.isLeaf && cursor.child === marker.marker.host
-    ? 'leaf'
-    : `c${marker.marker.host}`;
+  const owner =
+    identity.kind === 'leaf' &&
+    (cursor.kind === 'active' || cursor.kind === 'repair-pending') &&
+    cursor.isLeaf &&
+    cursor.child === marker.marker.host
+      ? 'leaf'
+      : `c${marker.marker.host}`;
   if (deps.verify && !leafExecution) return 0;
   try {
     const parsed = await execa('git', ['interpret-trailers', '--parse'], {
@@ -104,22 +113,45 @@ export async function runRoundStamp(deps: RoundStampDependencies): Promise<numbe
     if (deps.verify) {
       const rounds = trailers.filter((trailer) => /^Round:\s*/.test(trailer));
       const owners = trailers.filter((trailer) => /^Owner:\s*/.test(trailer));
-      return rounds.length === 1 && owners.length === 1 &&
-        rounds[0] === `Round: ${marker.marker.roundId}` && owners[0] === `Owner: ${owner}` ? 0 : 1;
+      return rounds.length === 1 &&
+        owners.length === 1 &&
+        rounds[0] === `Round: ${marker.marker.roundId}` &&
+        owners[0] === `Owner: ${owner}`
+        ? 0
+        : 1;
     }
     if (leafExecution) {
-      const stamped = await execa('git', [
-        'interpret-trailers', '--in-place', '--if-exists', 'replace',
-        '--trailer', `Round: ${marker.marker.roundId}`,
-        '--trailer', `Owner: ${owner}`, deps.commitMessagePath,
-      ], { cwd: deps.projectRoot, reject: false });
+      const stamped = await execa(
+        'git',
+        [
+          'interpret-trailers',
+          '--in-place',
+          '--if-exists',
+          'replace',
+          '--trailer',
+          `Round: ${marker.marker.roundId}`,
+          '--trailer',
+          `Owner: ${owner}`,
+          deps.commitMessagePath,
+        ],
+        { cwd: deps.projectRoot, reject: false },
+      );
       return stamped.exitCode === 0 ? 0 : 1;
     }
     if (/^Round:/m.test(parsed.stdout)) return 0;
-    const stamped = await execa('git', [
-      'interpret-trailers', '--in-place', '--if-exists', 'addIfDifferent',
-      '--trailer', `Round: ${marker.marker.roundId}`, deps.commitMessagePath,
-    ], { cwd: deps.projectRoot, reject: false });
+    const stamped = await execa(
+      'git',
+      [
+        'interpret-trailers',
+        '--in-place',
+        '--if-exists',
+        'addIfDifferent',
+        '--trailer',
+        `Round: ${marker.marker.roundId}`,
+        deps.commitMessagePath,
+      ],
+      { cwd: deps.projectRoot, reject: false },
+    );
     if (stamped.exitCode !== 0) return deps.verify ? 1 : 0;
   } catch {
     // Ordinary attribution remains advisory, but verification must fail closed.

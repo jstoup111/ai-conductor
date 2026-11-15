@@ -80,16 +80,11 @@ export function parseStoriesReference(planContent: string): string | undefined {
   return reference.length > 0 ? reference : undefined;
 }
 
-export function specHash(
-  planBytes: Buffer,
-  storiesBytes: Buffer | null | undefined
-): SpecHashResult {
+export function specHash(planBytes: Buffer, storiesBytes: Buffer | null | undefined): SpecHashResult {
   const storiesIncluded = storiesBytes != null;
 
   const canonicalPlan = trimTrailingNewlines(planBytes);
-  const canonicalStories = storiesIncluded
-    ? trimTrailingNewlines(storiesBytes as Buffer)
-    : Buffer.alloc(0);
+  const canonicalStories = storiesIncluded ? trimTrailingNewlines(storiesBytes as Buffer) : Buffer.alloc(0);
 
   const hash = createHash('sha256');
   hash.update(canonicalPlan);
@@ -176,9 +171,7 @@ export function renderShippedRecord(fields: ShippedRecordFields): string {
   // version stays byte-identical to the pre-stamping format, so backfill
   // proposals and repair writes are unaffected and legacy records still
   // round-trip.
-  const engineVersion = fields.engineVersion
-    ? `engine_version: ${fields.engineVersion}\n`
-    : '';
+  const engineVersion = fields.engineVersion ? `engine_version: ${fields.engineVersion}\n` : '';
 
   return (
     `---\n` +
@@ -217,15 +210,12 @@ export function resolveEngineVersion(engineDir: string): string {
  * fence, so appending this block is safe and never affects dedup/discovery
  * parsing of the frontmatter fields.
  */
-export function renderShippedRecordWithCost(
-  fields: ShippedRecordFields,
-  rollup: CostRollup
-): string {
+export function renderShippedRecordWithCost(fields: ShippedRecordFields, rollup: CostRollup): string {
   const frontmatter = renderShippedRecord(fields);
   const costUsd = Math.round(rollup.costUsd * 10000) / 10000;
   const providerLines = Object.entries(rollup.providers ?? {}).map(
     ([provider, providerRollup]) =>
-      `  ${provider}: input: ${providerRollup.tokens.input}, output: ${providerRollup.tokens.output}, cache_read: ${providerRollup.tokens.cacheRead}, cache_creation: ${providerRollup.tokens.cacheCreation}, cost_usd: ${Math.round(providerRollup.costUsd * 10000) / 10000}, dispatches: ${providerRollup.dispatches}, cost_unmetered: ${providerRollup.costUnmetered?.count ?? 0}\n`
+      `  ${provider}: input: ${providerRollup.tokens.input}, output: ${providerRollup.tokens.output}, cache_read: ${providerRollup.tokens.cacheRead}, cache_creation: ${providerRollup.tokens.cacheCreation}, cost_usd: ${Math.round(providerRollup.costUsd * 10000) / 10000}, dispatches: ${providerRollup.dispatches}, cost_unmetered: ${providerRollup.costUnmetered?.count ?? 0}\n`,
   );
 
   return (
@@ -251,15 +241,10 @@ export function renderShippedRecordWithCost(
  * content. Frontmatter and Cost bytes are left untouched so timing remains an
  * additive, independently computed shipment concern.
  */
-export function appendTimingSection(
-  existingContent: string,
-  timing: TimingRollup,
-): string {
+export function appendTimingSection(existingContent: string, timing: TimingRollup): string {
   const separator = existingContent.endsWith('\n') ? '\n' : '\n\n';
   const activeLine =
-    'activeMs' in timing && timing.activeMs !== undefined
-      ? `active_ms: ${Math.round(timing.activeMs)}\n`
-      : '';
+    'activeMs' in timing && timing.activeMs !== undefined ? `active_ms: ${Math.round(timing.activeMs)}\n` : '';
   const reasonLine =
     timing.state === 'partial' && timing.reason !== undefined
       ? `reason: ${timing.reason.replaceAll('\0', '\\u0000')}\n`
@@ -271,13 +256,7 @@ export function appendTimingSection(
       : '';
 
   return (
-    existingContent +
-    separator +
-    `## Time\n` +
-    `state: ${timing.state}\n` +
-    activeLine +
-    reasonLine +
-    measuredLines
+    existingContent + separator + `## Time\n` + `state: ${timing.state}\n` + activeLine + reasonLine + measuredLines
   );
 }
 
@@ -306,13 +285,14 @@ export function appendRestackSection(
     const costUsd = event.tokenUsage?.costUsd;
     if (typeof costUsd !== 'number' || !Number.isFinite(costUsd)) continue;
     const restack = event.restack;
-    const label = restack === undefined
-      ? 'unattributed'
-      : restack.cause === 'fold'
-        ? 'fold'
-        : restack.cause === 'base-refresh'
-          ? 'base-refresh'
-          : restack.roundId ?? 'feature-repair';
+    const label =
+      restack === undefined
+        ? 'unattributed'
+        : restack.cause === 'fold'
+          ? 'fold'
+          : restack.cause === 'base-refresh'
+            ? 'base-refresh'
+            : (restack.roundId ?? 'feature-repair');
     add(label, costUsd);
   }
   const rendered = [...rows.entries()]
@@ -326,7 +306,9 @@ export function appendRestackSection(
   // block, in which case Time is the nearest equivalent summary.
   const after = /(^## (?:Children|Time)\s*$[\s\S]*?)(?=^##\s|(?![\s\S]))/gm;
   const matches = [...withoutPrevious.matchAll(after)];
-  const target = matches.find((match) => match[0].startsWith('## Children')) ?? matches.find((match) => match[0].startsWith('## Time'));
+  const target =
+    matches.find((match) => match[0].startsWith('## Children')) ??
+    matches.find((match) => match[0].startsWith('## Time'));
   if (target?.index !== undefined) {
     const at = target.index + target[0].length;
     return `${withoutPrevious.slice(0, at)}\n${section}${withoutPrevious.slice(at)}`;
@@ -346,20 +328,14 @@ export function appendBuildReviewAcceptedRisk(
 }
 
 /** Appends the engine-stamped shared reduced-coverage section to a shipped record. */
-export function appendBuildReviewReducedCoverageEvidence(
-  existingContent: string,
-  section: string | undefined,
-): string {
+export function appendBuildReviewReducedCoverageEvidence(existingContent: string, section: string | undefined): string {
   if (section === undefined) return existingContent;
   const separator = existingContent.endsWith('\n') ? '\n' : '\n\n';
   return `${existingContent}${separator}${section}\n`;
 }
 
 /** Appends an idempotent, parser-compatible build-review KPI block. */
-export function appendBuildReviewMetrics(
-  existingContent: string,
-  metrics: BuildReviewMetrics,
-): string {
+export function appendBuildReviewMetrics(existingContent: string, metrics: BuildReviewMetrics): string {
   const section = [
     '## Build Review',
     `laps_to_pass: ${metrics.lapsToPass ?? 'not reached'}`,
@@ -367,10 +343,12 @@ export function appendBuildReviewMetrics(
     `cache_hits: ${metrics.cacheHits}`,
     `infrastructure_failures: ${metrics.infrastructureFailures}`,
     'rubrics:',
-    ...Object.entries(metrics.rubricFailureRates).sort(([left], [right]) => left.localeCompare(right))
+    ...Object.entries(metrics.rubricFailureRates)
+      .sort(([left], [right]) => left.localeCompare(right))
       .map(([rubric, rate]) => `  ${rubric}: failures: ${rate.failures}, judged: ${rate.judged}`),
     'skip_reasons:',
-    ...Object.entries(metrics.skipReasons).sort(([left], [right]) => left.localeCompare(right))
+    ...Object.entries(metrics.skipReasons)
+      .sort(([left], [right]) => left.localeCompare(right))
       .map(([reason, count]) => `  ${reason}: ${count}`),
     '',
   ].join('\n');
@@ -388,9 +366,7 @@ const FRONTMATTER_LINE = /^([a-zA-Z_]+):\s*(.*)$/;
  * (discovery dedup) can still fall back to stem-based matching rather than
  * crashing on a hand-edited or corrupted record (Story 3).
  */
-export function parseShippedRecord(
-  content: string
-): ParsedShippedRecord | MalformedShippedRecord {
+export function parseShippedRecord(content: string): ParsedShippedRecord | MalformedShippedRecord {
   const lines = content.split('\n');
   if (lines[0]?.trim() !== '---') {
     return { malformed: true };
@@ -462,11 +438,10 @@ export async function writeShippedRecord(filePath: string, content: string): Pro
  * committed on the base branch (Story 3).
  */
 export async function listShippedRecords(
-  treeSource: BacklogTreeSource
+  treeSource: BacklogTreeSource,
 ): Promise<Array<{ stem: string; record: ParsedShippedRecord | MalformedShippedRecord }>> {
   const files = await treeSource.listShippedFiles();
-  const results: Array<{ stem: string; record: ParsedShippedRecord | MalformedShippedRecord }> =
-    [];
+  const results: Array<{ stem: string; record: ParsedShippedRecord | MalformedShippedRecord }> = [];
 
   for (const file of files) {
     const content = await treeSource.readFile(`.docs/shipped/${file}`);
@@ -504,15 +479,12 @@ export async function listShippedRecords(
  */
 export function makeIsProcessed(
   processedDir: string,
-  treeSource: BacklogTreeSource
+  treeSource: BacklogTreeSource,
 ): (slug: string) => Promise<boolean> {
-  let cachedRecords: Promise<
-    Array<{ stem: string; record: ParsedShippedRecord | MalformedShippedRecord }>
-  > | null = null;
+  let cachedRecords: Promise<Array<{ stem: string; record: ParsedShippedRecord | MalformedShippedRecord }>> | null =
+    null;
 
-  const getRecords = (): Promise<
-    Array<{ stem: string; record: ParsedShippedRecord | MalformedShippedRecord }>
-  > => {
+  const getRecords = (): Promise<Array<{ stem: string; record: ParsedShippedRecord | MalformedShippedRecord }>> => {
     if (!cachedRecords) {
       cachedRecords = listShippedRecords(treeSource);
     }
