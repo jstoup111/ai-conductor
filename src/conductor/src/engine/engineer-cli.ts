@@ -1510,7 +1510,12 @@ async function runLocalCheckpoint(
       resolveOwner: input.opts.resolveCheckpointOwner,
     });
     return checkpointComposerRun(
-      { worktree: input.worktree, step: input.step, state: input.state, ...(input.notesFile ? { notesFile: input.notesFile } : {}) },
+      {
+        worktree: input.worktree,
+        step: input.step,
+        state: input.state,
+        ...(input.notesFile ? { notesFile: input.notesFile } : {}),
+      },
       deps,
     );
   } finally {
@@ -1531,9 +1536,9 @@ async function chooseComposerBoundaryAction(input: {
   hasRemote: boolean;
   printErr: (message: string) => void;
 }): Promise<ReturnType<typeof resolveBoundaryProvider> | undefined> {
-  const providers = BUILT_IN_PROVIDERS.filter((provider) => supportsProviderCapability(provider, 'interactiveLaunch')).map(
-    (provider) => provider.id,
-  );
+  const providers = BUILT_IN_PROVIDERS.filter((provider) =>
+    supportsProviderCapability(provider, 'interactiveLaunch'),
+  ).map((provider) => provider.id);
   const boundary = input.opts.chooseComposerBoundary
     ? await input.opts.chooseComposerBoundary({
         slug: input.slug,
