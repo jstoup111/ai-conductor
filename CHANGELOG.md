@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.7.0] - 2026-11-10
+## [1.7.0] - 2026-11-15
 
 ### Added
 
@@ -106,6 +106,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - implementationQuality no longer flags persisted shapes guarded by a single validating parser, and simplify flags duplication at the same threshold implementationQuality reviews it. ([implementation PR #3613](https://github.com/jstoup111/ai-conductor/pull/3613)).
 - BUILD treats a build-review remediation work order as the retry's job and records disagreement as a stall question, so a kickback can no longer end in a silent no-change halt. ([implementation PR #3609](https://github.com/jstoup111/ai-conductor/pull/3609)).
 - The pipeline, tdd, remediate, prd-audit and as-built skills are 3,346 words shorter (pipeline −32%), with engine-internal narration and contradictory trailer and task-reset instructions removed. ([implementation PR #3614](https://github.com/jstoup111/ai-conductor/pull/3614)).
+- Daemon features now always run in isolated child executors pinned to the engine build available when claimed. ([implementation PR #3665](https://github.com/jstoup111/ai-conductor/pull/3665)).
 
 ### Removed
 
@@ -287,6 +288,13 @@ bin/migrate
 
 ```bash migration
 printf '%s\n' 'ai-conductor closeout-event is retired; no consumer action is required.'
+```
+
+```bash migration
+if [ -f .ai-conductor/config.yml ]; then
+  sed -i.bak '/^[[:space:]]*executor_isolation:[[:space:]]*/d' .ai-conductor/config.yml
+  rm -f .ai-conductor/config.yml.bak
+fi
 ```
 
 ## [1.6.0] - 2026-10-06
