@@ -1239,6 +1239,48 @@ describe('PiProvider captured failure classification', () => {
     expect(e10WithCustomModelWarning).toEqual(e10);
   });
 
+  // Covers: task:3
+  it('does not classify an unknown-model signature in a successful text stop', async () => {
+    spawn.mockResolvedValue({
+      stdout: textStream('400: {"message":"x is not a valid model ID","code":400}'),
+      stderr: '',
+      exitCode: 0,
+    } as ExecaResult);
+
+    const result = await invoke();
+
+    expect(result).toMatchObject({ success: true });
+    expect(result).not.toHaveProperty('modelUnavailable');
+  });
+
+  // Covers: task:3
+  it('does not classify the custom-model warning on a successful text stop', async () => {
+    spawn.mockResolvedValue({
+      stdout: textStream('hi'),
+      stderr: 'Warning: Model "x" not found for provider "openrouter". Using custom model id.',
+      exitCode: 0,
+    } as ExecaResult);
+
+    const result = await invoke();
+
+    expect(result).toMatchObject({ success: true });
+    expect(result).not.toHaveProperty('modelUnavailable');
+  });
+
+  // Covers: task:3
+  it('leaves a 404 error stop as an ordinary failure', async () => {
+    spawn.mockResolvedValue({
+      stdout: errorStream('404: {"message":"Not Found"}'),
+      stderr: '',
+      exitCode: 0,
+    } as ExecaResult);
+
+    const result = await invoke();
+
+    expect(result).toMatchObject({ success: false });
+    for (const property of ['modelUnavailable', 'authFailure', 'rateLimited', 'usageExhausted', 'providerUnavailable']) expect(result).not.toHaveProperty(property);
+  });
+
   it('classifies each captured rejected credential without leaking its diagnostic', async () => {
     const authFixtures = ['pi-1.0.0-e2-invalid-key-deepseek.jsonl', 'pi-1.0.0-e3-invalid-key-openrouter.jsonl', 'pi-1.0.0-e4-invalid-key-anthropic.jsonl', 'pi-1.0.0-e5-oauth-refresh-failed.jsonl'];
     for (const name of authFixtures) spawn.mockResolvedValueOnce({ stdout: await readFixture(name), stderr: '', exitCode: 0 } as ExecaResult);
