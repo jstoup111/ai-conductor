@@ -124,13 +124,8 @@ describe('operator park boundary contract', () => {
   it('mechanically inventories every supported scheduling-unit dispatch boundary', async () => {
     const conductorSource = await readFile(new URL('../../src/engine/conductor.ts', import.meta.url), 'utf8');
     const dispatchPrimitives = ['this.stepRunner.run(', 'runGroupBranch(', 'this.runParallelGroupViaCore('] as const;
-    const prdWideningReconciliationDispatch = `const judgement = await this.stepRunner.run('remediate', state, {
-          remediationRequest: {
-            mode: 'prd-widening-reconciliation',
-            projection: JSON.stringify(context.value),
-            nativeSchema: PRD_WIDENING_RECONCILIATION_SCHEMA,
-          },
-        });`;
+    const prdWideningReconciliationDispatch =
+      /const judgement = await this\.stepRunner\.run\('remediate', state, \{\s*remediationRequest: \{\s*mode: 'prd-widening-reconciliation',\s*projection: JSON\.stringify\(context\.value\),\s*nativeSchema: PRD_WIDENING_RECONCILIATION_SCHEMA,\s*\},\s*\}\);/g;
     const buildReviewAdjudicationDispatch =
       /const dispatched = await this\.stepRunner\.run\('remediate', state, \{\s*retryReason: `Adjudicate this complete build-review context only; write \$\{requestedMode\} remediation output\.\\n\$\{JSON\.stringify\(context\)\}`,\s*\}\);/g;
     // A string entry matches the exact statement text; a RegExp entry matches
@@ -146,7 +141,6 @@ describe('operator park boundary contract', () => {
       /return(?: await)? this\.stepRunner\.run\(name, state, \{\s*attempt: 1,\s*captureAttempt,\s*escalate: false,\s*retryReason: retryHint,\s*\.\.\.identityOption,\s*\.\.\.executionContextOption,\s*\.{3}\(abortSignal === undefined \? \{\} : \{ abortSignal \}\),\s*\.\.\.this\.buildReviewCapabilityOption\(name\),\s*\}\);/g,
       // Configured-group branches run only through runParallelGroupViaCore,
       // whose caller is one of the guarded scheduling-unit entries above.
-      /return runGroupBranch\(member, state, \{\s*stepRunner: this\.stepRunner,\s*providerAvailability: this\.providerExecution\?\.providerAvailability,\s*onProviderSuppressed: this\.providerExecution\?\.onProviderSuppressed,\s*executionContext,/g,
       /return runGroupBranch\(\s*member,\s*state,\s*\{\s*stepRunner: this\.stepRunner,\s*providerAvailability: this\.providerExecution\?\.providerAvailability,\s*onProviderSuppressed: this\.providerExecution\?\.onProviderSuppressed,\s*executionContext,/g,
       "return this.stepRunner.run('finish', state, options);",
       // The two bounded FINISH prose passes. Their cleanup wrapper may evolve,
@@ -155,7 +149,7 @@ describe('operator park boundary contract', () => {
       /this\.stepRunner\.run\('finish', state, \{\s*\.\.\.options, finishProsePass: 'judge'\s*\}\)/g,
       /this\.stepRunner\.run\('finish', state, \{\s*\.\.\.options,\s*finishProsePass: 'author',\s*\.\.\.\(request\.revisionGuidance === undefined\s*\? \{\}\s*:\s*\{ revisionGuidance: request\.revisionGuidance \}\),\s*\}\)/g,
     ];
-    expect(conductorSource).toContain(prdWideningReconciliationDispatch);
+    expect(conductorSource).toMatch(prdWideningReconciliationDispatch);
     expect(conductorSource).toMatch(buildReviewAdjudicationDispatch);
     const guardedSegmentsIn = (source: string) => {
       const guardedSegments = [

@@ -30,10 +30,9 @@ Before starting manual testing, check the stories in `.docs/stories/` for this f
 - Display the skip reason to the user, then **record it via the CLI** — this is the sole
   way the step is marked done; there is no hand-written marker path:
   ```
-  ai-conductor manual-test-record --skip --reason "<reason>" --pipeline-dir /abs/path/to/.pipeline
+  ai-conductor manual-test-record --skip --reason "<reason>"
   ```
-  Use the absolute worktree `.pipeline` path supplied in the step's system prompt (never a
-  relative path).
+  Run this from the feature worktree. `--pipeline-dir <absolute path>` is an optional override.
 
 ### 1. Detect Project Type
 
@@ -126,11 +125,10 @@ do not hand-write or append to that file yourself. The conductor's completion ga
 this file to verify manual-test ran for the current feature — without it, the step has no
 objective on-disk evidence and cannot pass.
 
-Record the run by piping (or pointing at) the results content and the absolute worktree
-`.pipeline` path supplied in the step's system prompt:
+From the feature worktree, record the run by piping (or pointing at) the results content:
 
 ```
-ai-conductor manual-test-record --results - --pipeline-dir /abs/path/to/.pipeline <<'EOF'
+ai-conductor manual-test-record --results - <<'EOF'
 <results table + bugs section, in the format below>
 EOF
 ```
@@ -138,11 +136,14 @@ EOF
 or, if the results were written to a file first:
 
 ```
-ai-conductor manual-test-record --results /path/to/results.md --pipeline-dir /abs/path/to/.pipeline
+ai-conductor manual-test-record --results /path/to/results.md
 ```
 
 Supply only the current attempt's table and bug list; the CLI adds the `## Attempt N` header and
 timestamp, appends, and never truncates earlier attempts.
+
+`--pipeline-dir <absolute path>` remains an optional override when recording outside the feature
+worktree; never pass a relative pipeline path.
 
 Use this format for the content you pass to `--results` (both in chat and to the CLI):
 
@@ -162,10 +163,8 @@ Use this format for the content you pass to `--results` (both in chat and to the
 2. **BUG-002:** ...
 ```
 
-Always pass the **absolute worktree `.pipeline` path** from the step's system prompt — never a
-relative `.pipeline/...` path, which can land in the wrong checkout. If you cannot run the CLI (no
-pipeline directory supplied, or the command fails), do NOT consider manual_test complete and never
-hand-write the results file — HALT and report the blocker.
+If the record command exits non-zero, do NOT consider manual_test complete and never hand-write the
+results file; report the command's error output as the blocker.
 
 **Whitewash guard (#367):** after a recorded `FAIL`, a later attempt with no `FAIL` rows (PASS
 and/or WARN) is accepted only if new commits exist since the failure, so the Step C fix MUST land as
@@ -216,8 +215,8 @@ docker compose down
 - [ ] Browser automation availability was checked without installing dependencies; unavailable or
       unlaunchable browser criteria were recorded as WARN with the error and recovery command
 - [ ] Every exit path (Step 0 SKIP or Step 5 real-run PASS/FAIL/WARN) ended by actually invoking
-      `ai-conductor manual-test-record` (`--skip --reason ...` or `--results ...`) against the
-      absolute worktree `.pipeline` path — not a hand-written or fabricated marker
+      `ai-conductor manual-test-record` (`--skip --reason ...` or `--results ...`) from the
+      feature worktree — not a hand-written or fabricated marker
 - [ ] All bugs fixed via TDD loop
 - [ ] Re-verification passed after bug fixes
 - [ ] Application shut down cleanly
