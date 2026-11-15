@@ -746,7 +746,6 @@ const reclaimRetentionWithUnlistedReason = {
 } satisfies ConductorEvent;
 void reclaimRetentionWithUnlistedReason;
 
-// @ts-expect-error -- probe-failure progress requires its closed kind and next disposition.
 const probeFailureMissingClosedMetadata = {
   type: 'credentials_park_progress',
   provider: toProviderId('codex'),
@@ -754,6 +753,7 @@ const probeFailureMissingClosedMetadata = {
   readiness: 'probe-failed',
   elapsedSeconds: 3,
   degradation: 'probe-failure',
+  // @ts-expect-error -- probe-failure progress requires its closed kind and next disposition.
 } satisfies ConductorEvent;
 const probeFailureWithPollingDelay = {
   type: 'credentials_park_progress',
@@ -798,8 +798,6 @@ const probeFailureWithConclusiveReadiness = {
   elapsedSeconds: 3,
   // @ts-expect-error -- probe-failure degradation is valid only with probe-failed readiness.
   degradation: 'probe-failure',
-  probeFailureKind: 'timeout',
-  nextDisposition: 'trial-required',
 } satisfies ConductorEvent;
 const probeFailureWithMissingReadiness = {
   type: 'credentials_park_progress',
@@ -809,8 +807,6 @@ const probeFailureWithMissingReadiness = {
   elapsedSeconds: 3,
   // @ts-expect-error -- missing is conclusive readiness, not probe failure.
   degradation: 'probe-failure',
-  probeFailureKind: 'timeout',
-  nextDisposition: 'trial-required',
 } satisfies ConductorEvent;
 const probeFailureWithUnusableReadiness = {
   type: 'credentials_park_progress',
@@ -820,8 +816,6 @@ const probeFailureWithUnusableReadiness = {
   elapsedSeconds: 3,
   // @ts-expect-error -- unusable is conclusive readiness, not probe failure.
   degradation: 'probe-failure',
-  probeFailureKind: 'timeout',
-  nextDisposition: 'trial-required',
 } satisfies ConductorEvent;
 const credentialFailureWithProbeFailedReadiness = {
   type: 'credentials_park_progress',
@@ -942,9 +936,9 @@ const phaseWithoutEventId = (({ eventId: _eventId, ...event }) => event)(routing
 const phaseWithInvalidHostState = { ...routingEvents[2], phase: 'unrecognized' } satisfies ConductorEvent;
 // @ts-expect-error -- revalidation occurrences always retain their execution child.
 const revalidatedWithoutChild = (({ child: _child, ...event }) => event)(routingEvents[3]) satisfies ConductorEvent;
-// @ts-expect-error -- revalidation occurrences are at-least-once deliveries and require stable ids.
 const revalidatedWithoutEventId = (({ eventId: _eventId, ...event }) => event)(
   routingEvents[3],
+  // @ts-expect-error -- revalidation occurrences are at-least-once deliveries and require stable ids.
 ) satisfies ConductorEvent;
 void [
   routedWithoutChild,
