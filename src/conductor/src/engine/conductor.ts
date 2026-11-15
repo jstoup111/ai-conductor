@@ -5128,7 +5128,6 @@ export class Conductor {
     ];
     const asBuiltFindings = new Map<string, AsBuiltGoverningClauseResolution>();
     const asBuiltRecordedFindings = new Map<string, RecordedAsBuiltRemediationFinding>();
-    const asBuiltUnresolvableClauses: Array<{ id: string; clause: string }> = [];
     let prdAuditValidated = false;
     let asBuiltValidated = false;
     let asBuiltAttemptId: string | undefined;
@@ -5196,18 +5195,6 @@ export class Conductor {
         await this.events.emit({ type: 'gate_blocked', step: 'architecture_review_as_built', reason: detail });
         return { kind: 'halt', haltClass: 'mechanical', detail };
       }
-    }
-
-    if (asBuiltUnresolvableClauses.length > 0) {
-      return {
-        kind: 'halt',
-        haltClass: 'needs-human',
-        detail:
-          'As-built review remediation cannot resolve governing clause(s): ' +
-          asBuiltUnresolvableClauses.map(({ id, clause }) => `${id}: ${clause}`).join('; ') +
-          '. A REMEDIABLE row cites exactly one clause: an APPROVED ADR filename stem plus its ' +
-          "decision number, or one task id from this feature's plan.",
-      };
     }
 
     const appendGaps: CriterionBoundRemediationGap[] = [];
