@@ -1,12 +1,4 @@
-import {
-  chmodSync,
-  lstatSync,
-  readdirSync,
-  readFileSync,
-  statSync,
-  utimesSync,
-  writeFileSync,
-} from 'fs';
+import { chmodSync, lstatSync, readdirSync, readFileSync, statSync, utimesSync, writeFileSync } from 'fs';
 import type { Dirent } from 'fs';
 import { mkdtemp, readdir, rm } from 'fs/promises';
 import { basename, isAbsolute, join, relative, resolve, sep } from 'path';
@@ -74,9 +66,12 @@ export interface RunRootOwnerMarker {
 export function isRunRootOwnerMarker(value: unknown): value is RunRootOwnerMarker {
   if (!value || typeof value !== 'object') return false;
   const record = value as Record<string, unknown>;
-  return typeof record.pid === 'number' && Number.isFinite(record.pid)
-    && typeof record.hostname === 'string'
-    && typeof record.startedAt === 'string';
+  return (
+    typeof record.pid === 'number' &&
+    Number.isFinite(record.pid) &&
+    typeof record.hostname === 'string' &&
+    typeof record.startedAt === 'string'
+  );
 }
 
 /** A candidate run-root and its already-read owner marker state. */
@@ -84,10 +79,7 @@ export interface RunRootEntry {
   name: string;
   isDirectory: boolean;
   dirMtimeMs: number;
-  marker:
-    | { kind: 'present'; mtimeMs: number }
-    | { kind: 'absent' }
-    | { kind: 'unreadable'; error: unknown };
+  marker: { kind: 'present'; mtimeMs: number } | { kind: 'absent' } | { kind: 'unreadable'; error: unknown };
 }
 
 /** Pure stale-run-root sweep result, retaining any ambiguous candidate. */
@@ -166,9 +158,7 @@ type GuardLogger = (message: string) => void;
 
 function logOwnerMarkerError(logger: GuardLogger, action: string, error: unknown): void {
   logger(
-    `tmpdir-leak-guard: owner marker ${action} failed — ${
-      error instanceof Error ? error.message : String(error)
-    }`
+    `tmpdir-leak-guard: owner marker ${action} failed — ${error instanceof Error ? error.message : String(error)}`,
   );
 }
 
@@ -181,7 +171,7 @@ function logOwnerMarkerError(logger: GuardLogger, action: string, error: unknown
 export function writeRunRootOwnerMarker(
   runRoot: string,
   owner: RunRootOwnerMarker,
-  logger: GuardLogger = console.error
+  logger: GuardLogger = console.error,
 ): void {
   try {
     writeFileSync(join(runRoot, RUN_TMP_ROOT_OWNER_MARKER), JSON.stringify(owner), 'utf8');
@@ -196,7 +186,7 @@ export function startRunRootHeartbeat(
   {
     intervalMs = RUN_TMP_ROOT_HEARTBEAT_MS,
     logger = console.error,
-  }: { intervalMs?: number; logger?: GuardLogger } = {}
+  }: { intervalMs?: number; logger?: GuardLogger } = {},
 ): { stop: () => void } {
   const markerPath = join(runRoot, RUN_TMP_ROOT_OWNER_MARKER);
   const heartbeat = setInterval(() => {
@@ -251,6 +241,7 @@ export const IGNORED_TMPDIR_PREFIXES: readonly string[] = [
   'self-host-', // live provider homes owned by the running daemon
   'ai-conductor-claude-system-prompt-', // live daemon's in-flight Claude prompt files
   'claude-', // active Claude Code session scratchpads
+  'gem-miner-', // concurrent Gem Miner development test databases
   'moshi-codex-rl.json', // active Codex rate-limit state
   'cc-daemon-', // daemon tmux session scratch
   'systemd-', // systemd-private-*, systemd-*.service-*
@@ -272,22 +263,15 @@ export const IGNORED_TMPDIR_PREFIXES: readonly string[] = [
  * derive the direct child rather than requiring the supplied path itself to be
  * the direct child.
  */
-export function vitestOwnTmpdirEntries(
-  projectTmpDirs: readonly (string | undefined)[],
-  realTmpdir: string
-): string[] {
+export function vitestOwnTmpdirEntries(projectTmpDirs: readonly (string | undefined)[], realTmpdir: string): string[] {
   const resolvedRealTmpdir = resolve(realTmpdir);
 
-  return projectTmpDirs.flatMap(projectTmpDir => {
+  return projectTmpDirs.flatMap((projectTmpDir) => {
     if (!projectTmpDir) return [];
     const resolvedProjectTmpDir = resolve(projectTmpDir);
     const relativePath = relative(resolvedRealTmpdir, resolvedProjectTmpDir);
-    if (
-      relativePath === ''
-      || relativePath === '..'
-      || relativePath.startsWith(`..${sep}`)
-      || isAbsolute(relativePath)
-    ) return [];
+    if (relativePath === '' || relativePath === '..' || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath))
+      return [];
     return [relativePath.split(sep)[0]!];
   });
 }
@@ -322,10 +306,7 @@ export function runIdFromRunRoot(runRoot: string): string {
  * Must be called inside a test worker, where the run root is published in
  * `AI_CONDUCTOR_TEST_TMP_ROOT`.
  */
-export function externalFixturePrefix(
-  label: string,
-  env: NodeJS.ProcessEnv = process.env
-): string {
+export function externalFixturePrefix(label: string, env: NodeJS.ProcessEnv = process.env): string {
   const realTmpdir = env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR;
   const runRoot = env[RUN_TMP_ROOT_ENV];
   if (!realTmpdir || !runRoot) {
@@ -382,10 +363,7 @@ export async function createRunTmpRoot(realTmpdir: string): Promise<string> {
  * @param env Environment object to mutate (defaults to the real process env)
  * @returns The run root path, newly created or already installed
  */
-export function ensureRunTmpRootSync(
-  realTmpdir?: string,
-  env: NodeJS.ProcessEnv = process.env
-): string {
+export function ensureRunTmpRootSync(realTmpdir?: string, env: NodeJS.ProcessEnv = process.env): string {
   const temporaryBase = realTmpdir !== undefined && env[VITEST_TMP_BASE_ENV] === undefined;
   if (temporaryBase) env[VITEST_TMP_BASE_ENV] = realTmpdir;
   try {
@@ -422,11 +400,7 @@ export const RUN_TMP_ROOT_SWEEP_FAILURE_PREFIX = 'tmpdir-leak-guard: stale run r
 
 function logSweepFailure(logger: GuardLogger, name: string, error: unknown): void {
   try {
-    logger(
-      `${RUN_TMP_ROOT_SWEEP_FAILURE_PREFIX}${name} — ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
+    logger(`${RUN_TMP_ROOT_SWEEP_FAILURE_PREFIX}${name} — ${error instanceof Error ? error.message : String(error)}`);
   } catch {
     // A best-effort diagnostic must not turn a fail-open sweep into a setup failure.
   }
@@ -437,7 +411,7 @@ function logUnreadableOwnerMarker(logger: GuardLogger, name: string, error: unkn
     logger(
       `tmpdir-leak-guard: owner marker unreadable for ${name}; retaining run root — ${
         error instanceof Error ? error.message : String(error)
-      }`
+      }`,
     );
   } catch {
     // A best-effort diagnostic must not turn a fail-open sweep into a setup failure.
@@ -466,7 +440,7 @@ export async function sweepStaleRunTmpRoots(
     legacyStaleAfterMs: number;
     remove?: (runRoot: string) => Promise<void>;
     logger?: GuardLogger;
-  }
+  },
 ): Promise<StaleRunTmpRootsResult> {
   const failures: StaleRunTmpRootsResult['failures'] = [];
   let dirents: Dirent[];
@@ -613,7 +587,7 @@ export function diffTmpdirEntries(
   after: TmpdirSnapshot,
   ignoredPrefixes: readonly string[] = IGNORED_TMPDIR_PREFIXES,
   exemptEntries: readonly string[] = [],
-  ownRunId?: string
+  ownRunId?: string,
 ): TmpdirDiff {
   // A failed BEFORE snapshot has no baseline, so every entry would read as
   // new. Fail open (report nothing) rather than fail the run on a phantom
@@ -643,7 +617,7 @@ export function diffTmpdirEntries(
       ignored.push(entry);
       continue;
     }
-    if (ignoredPrefixes.some(prefix => entry.startsWith(prefix))) {
+    if (ignoredPrefixes.some((prefix) => entry.startsWith(prefix))) {
       ignored.push(entry);
     } else {
       stray.push(entry);

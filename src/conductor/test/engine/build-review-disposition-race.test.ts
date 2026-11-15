@@ -79,38 +79,42 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
       join(projectRoot, '.pipeline', 'task-status.json'),
       JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }),
     );
-    const kickbackLedger = opts?.kickbackLedger ?? (opts?.seedNoOpEscalation
-      ? {
-          version: 1,
-          gates: {
-            build_review: {
-              count: 2, cumulative: 2, treeHash, lastReason: 'same',
-              priorVerdict: false, resolvedBefore: 1,
-            },
-          },
-        }
-      : opts?.seedPerGateLimit
+    const kickbackLedger =
+      opts?.kickbackLedger ??
+      (opts?.seedNoOpEscalation
         ? {
             version: 1,
             gates: {
               build_review: {
-                count: 2, cumulative: 2, treeHash, lastReason: 'prior',
-                priorVerdict: true, resolvedBefore: 1,
+                count: 2,
+                cumulative: 2,
+                treeHash,
+                lastReason: 'same',
+                priorVerdict: false,
+                resolvedBefore: 1,
               },
             },
           }
-        : undefined);
+        : opts?.seedPerGateLimit
+          ? {
+              version: 1,
+              gates: {
+                build_review: {
+                  count: 2,
+                  cumulative: 2,
+                  treeHash,
+                  lastReason: 'prior',
+                  priorVerdict: true,
+                  resolvedBefore: 1,
+                },
+              },
+            }
+          : undefined);
     if (kickbackLedger) {
-      await writeFile(
-        join(projectRoot, '.pipeline', 'kickback-ledger.json'),
-        JSON.stringify(kickbackLedger),
-      );
+      await writeFile(join(projectRoot, '.pipeline', 'kickback-ledger.json'), JSON.stringify(kickbackLedger));
     }
     if (opts?.staleMirage === 'halt') {
-      await writeFile(
-        join(projectRoot, '.pipeline', 'build-review-regrade.json'),
-        JSON.stringify({ count: 1 }),
-      );
+      await writeFile(join(projectRoot, '.pipeline', 'build-review-regrade.json'), JSON.stringify({ count: 1 }));
     }
 
     const dispatched: StepName[] = [];
@@ -127,26 +131,30 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
           }
           await writeFile(
             join(projectRoot, '.pipeline', 'build-review.json'),
-            JSON.stringify(buildReviewRuns === 1
-              ? {
-                  verdict: 'FAIL',
-                  reasons: [opts?.staleMirage
-                    ? `diff touches ${gitFixture!.mergedOnlyPath} which is out of scope`
-                    : 'same'],
-                  rubric: { testQuality: true },
-                }
-              : { verdict: 'PASS', rubric: { testQuality: false } }),
+            JSON.stringify(
+              buildReviewRuns === 1
+                ? {
+                    verdict: 'FAIL',
+                    reasons: [
+                      opts?.staleMirage ? `diff touches ${gitFixture!.mergedOnlyPath} which is out of scope` : 'same',
+                    ],
+                    rubric: { testQuality: true },
+                  }
+                : { verdict: 'PASS', rubric: { testQuality: false } },
+            ),
           );
           return {
             success: true,
-            ...(opts?.staleMirage ? {
-              baseFreshness: {
-                mergeBase: gitFixture!.staleTrackingSha,
-                trackingRefSha: gitFixture!.staleTrackingSha,
-                remoteHeadSha: gitFixture!.freshRemoteSha,
-                fresh: false,
-              },
-            } : {}),
+            ...(opts?.staleMirage
+              ? {
+                  baseFreshness: {
+                    mergeBase: gitFixture!.staleTrackingSha,
+                    trackingRefSha: gitFixture!.staleTrackingSha,
+                    remoteHeadSha: gitFixture!.freshRemoteSha,
+                    fresh: false,
+                  },
+                }
+              : {}),
           };
         }
         return { success: true };
@@ -184,14 +192,21 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
       if (!(error instanceof Error) || !error.message.startsWith('stop after')) throw error;
     });
     return {
-      dispatched, kickbacks, invalidatedDispositions, staleMirageRegrades,
+      dispatched,
+      kickbacks,
+      invalidatedDispositions,
+      staleMirageRegrades,
       buildReviewRuns: () => buildReviewRuns,
-      projectRoot, treeHash, buildReviewMergeBase,
+      projectRoot,
+      treeHash,
+      buildReviewMergeBase,
     };
   }
 
-  it('drops the kickback and re-lands build_review when every finding is accepted at routing time', async () => {
-    const resolver = vi.fn(async () => effective({ accepted: ['sha256:accepted-test-quality-finding'], unresolved: [] }));
+  it('drops the kickback and settles build_review when every finding is accepted at routing time', async () => {
+    const resolver = vi.fn(async () =>
+      effective({ accepted: ['sha256:accepted-test-quality-finding'], unresolved: [] }),
+    );
 
     const { dispatched, kickbacks, buildReviewRuns, projectRoot } = await fixture(resolver);
 
@@ -199,27 +214,38 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
     // The raw FAIL never routed rework: no build dispatch, no kickback event.
     expect(dispatched).not.toContain('build');
     expect(kickbacks).toEqual([]);
-    // build_review re-ran and settled from the disposition-aware join.
-    expect(buildReviewRuns()).toBe(2);
+    // The disposition-aware join settles this same review as a clean PASS.
+    expect(buildReviewRuns()).toBe(1);
     // The kickback budget was not consumed by the dropped raw FAIL.
-    expect(JSON.parse(await readFile(join(projectRoot, '.pipeline/kickback-ledger.json'), 'utf8'))).toEqual({ version: 1, gates: {} });
+    expect(JSON.parse(await readFile(join(projectRoot, '.pipeline/kickback-ledger.json'), 'utf8'))).toEqual({
+      version: 1,
+      gates: {},
+    });
   });
 
   it('lets the raw-FAIL resolver report a non-binding disposition on the event spine', async () => {
     const resolver = vi.fn(async (_projectRoot, _aggregate, deps) => {
       await deps.emit({
         type: 'build_review_disposition_version_invalidated',
-        feature: 'feature', findingId: 'sha256:superseded', rubric: 'testQuality', contractVersion: 'v1',
+        feature: 'feature',
+        findingId: 'sha256:superseded',
+        rubric: 'testQuality',
+        contractVersion: 'v1',
       });
       return effective({ accepted: ['sha256:accepted-test-quality-finding'], unresolved: [] });
     });
 
     const { invalidatedDispositions } = await fixture(resolver);
 
-    expect(invalidatedDispositions).toEqual([{
-      type: 'build_review_disposition_version_invalidated',
-      feature: 'feature', findingId: 'sha256:superseded', rubric: 'testQuality', contractVersion: 'v1',
-    }]);
+    expect(invalidatedDispositions).toEqual([
+      {
+        type: 'build_review_disposition_version_invalidated',
+        feature: 'feature',
+        findingId: 'sha256:superseded',
+        rubric: 'testQuality',
+        contractVersion: 'v1',
+      },
+    ]);
   });
 
   it('keeps the kickback when unresolved findings remain despite a partial acceptance', async () => {
@@ -232,7 +258,10 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
   });
 
   it('keeps the kickback when the disposition store is unavailable (fail-open to raw routing)', async () => {
-    const resolver = vi.fn(async () => ({ ok: false as const, reason: 'build-review disposition state is unavailable' }));
+    const resolver = vi.fn(async () => ({
+      ok: false as const,
+      reason: 'build-review disposition state is unavailable',
+    }));
 
     const { dispatched, kickbacks } = await fixture(resolver, { stopOnBuild: true });
 
@@ -278,17 +307,19 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
   it('invalidates a stale-mirage FAIL before routing: no rework, verdict removed, regrade event emitted, build_review re-runs', async () => {
     const resolver = vi.fn(async () => effective({ accepted: [], unresolved: ['sha256:still-open'] }));
 
-    const { dispatched, kickbacks, buildReviewRuns, staleMirageRegrades, projectRoot, buildReviewMergeBase } = await fixture(
-      resolver,
-      { staleMirage: 'invalidated', stopOnBuild: true },
-    );
+    const { dispatched, kickbacks, buildReviewRuns, staleMirageRegrades, projectRoot, buildReviewMergeBase } =
+      await fixture(resolver, { staleMirage: 'invalidated', stopOnBuild: true });
 
     expect(buildReviewMergeBase).toBeTruthy();
     expect(dispatched).not.toContain('build');
     expect(kickbacks).toEqual([]);
     expect(buildReviewRuns()).toBe(2);
     expect(staleMirageRegrades).toEqual([
-      expect.objectContaining({ type: 'build_review_stale_mirage_regrade', mergeBase: buildReviewMergeBase, regradeCount: 1 }),
+      expect.objectContaining({
+        type: 'build_review_stale_mirage_regrade',
+        mergeBase: buildReviewMergeBase,
+        regradeCount: 1,
+      }),
     ]);
     // The regrade PASSed, so the run finished without a HALT and the
     // invalidated verdict never reached the kickback ledger.
@@ -300,10 +331,10 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
   it('halts needs-human on a second stale-mirage detection, naming the graded/fresh base shas, flagged paths, and regrade count', async () => {
     const resolver = vi.fn(async () => effective({ accepted: [], unresolved: ['sha256:still-open'] }));
 
-    const { dispatched, kickbacks, buildReviewRuns, projectRoot, buildReviewMergeBase } = await fixture(
-      resolver,
-      { staleMirage: 'halt', stopOnBuild: true },
-    );
+    const { dispatched, kickbacks, buildReviewRuns, projectRoot, buildReviewMergeBase } = await fixture(resolver, {
+      staleMirage: 'halt',
+      stopOnBuild: true,
+    });
 
     expect(dispatched).toEqual(['build_review']);
     expect(kickbacks).toEqual([]);
@@ -333,23 +364,26 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
 
   // ── Effective PASS overrides every raw-FAIL exit ──────────────────────────
 
-  async function expectEffectivePassToReenter(options?: Parameters<typeof fixture>[1]) {
+  async function expectEffectivePassToSettle(options?: Parameters<typeof fixture>[1]) {
     const resolver = vi.fn(async () => effective({ accepted: ['sha256:accepted'], unresolved: [] }));
-    const { dispatched, kickbacks, buildReviewRuns, projectRoot, treeHash, buildReviewMergeBase } = await fixture(resolver, options);
+    const { dispatched, kickbacks, buildReviewRuns, projectRoot, treeHash, buildReviewMergeBase } = await fixture(
+      resolver,
+      options,
+    );
     expect(resolver).toHaveBeenCalled();
     expect(dispatched).not.toContain('build');
     expect(kickbacks).toEqual([]);
-    expect(buildReviewRuns()).toBe(2);
+    expect(buildReviewRuns()).toBe(1);
     await expect(readFile(join(projectRoot, '.pipeline/HALT'), 'utf8')).rejects.toThrow();
     return { projectRoot, treeHash, buildReviewMergeBase };
   }
 
-  it('re-enters build_review instead of the stale-mirage disposition HALT when an effective PASS overrides a second stale mirage', async () => {
-    const { buildReviewMergeBase } = await expectEffectivePassToReenter({ staleMirage: 'halt' });
+  it('settles build_review instead of the stale-mirage disposition HALT when an effective PASS overrides a second stale mirage', async () => {
+    const { buildReviewMergeBase } = await expectEffectivePassToSettle({ staleMirage: 'halt' });
     expect(buildReviewMergeBase).toBeTruthy();
   });
 
-  it('re-enters build_review instead of invalidating a stale-mirage verdict when the effective verdict is PASS', async () => {
+  it('settles build_review instead of invalidating a stale-mirage verdict when the effective verdict is PASS', async () => {
     const resolver = vi.fn(async () => effective({ accepted: ['sha256:accepted'], unresolved: [] }));
     const { dispatched, kickbacks, buildReviewRuns, staleMirageRegrades, buildReviewMergeBase } = await fixture(
       resolver,
@@ -358,19 +392,19 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
 
     expect(dispatched).not.toContain('build');
     expect(kickbacks).toEqual([]);
-    expect(buildReviewRuns()).toBe(2);
+    expect(buildReviewRuns()).toBe(1);
     // The effective-PASS guard must stop the observable regrade transition.
     expect(staleMirageRegrades).toEqual([]);
     expect(buildReviewMergeBase).toBeTruthy();
   });
 
-  it('re-enters build_review instead of the kickback-to-build no-op HALT when the effective verdict is PASS', async () => {
+  it('settles build_review instead of the kickback-to-build no-op HALT when the effective verdict is PASS', async () => {
     // The D2 baseline must exactly match the tree and resolved task movement
     // observed at re-entry; otherwise it is classified as productive work.
     const resolver = vi.fn(async () => effective({ accepted: ['sha256:accepted'], unresolved: [] }));
     const { buildReviewRuns, projectRoot } = await fixture(resolver, { seedNoOpEscalation: true });
 
-    expect(buildReviewRuns()).toBe(2);
+    expect(buildReviewRuns()).toBe(1);
     expect(JSON.parse(await readFile(join(projectRoot, '.pipeline/kickback-ledger.json'), 'utf8'))).toMatchObject({
       gates: {
         build_review: {
@@ -383,11 +417,16 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
     await expect(readFile(join(projectRoot, '.pipeline/HALT'), 'utf8')).rejects.toThrow();
   });
 
-  it('re-enters build_review instead of the cumulative-cap HALT when the effective verdict is PASS, restoring the ledger', async () => {
+  it('settles build_review instead of the cumulative-cap HALT when the effective verdict is PASS, restoring the ledger', async () => {
     const seeded = {
-      count: 1, cumulative: 5, treeHash: 'prior', lastReason: 'prior', priorVerdict: true, resolvedBefore: 0,
+      count: 1,
+      cumulative: 5,
+      treeHash: 'prior',
+      lastReason: 'prior',
+      priorVerdict: true,
+      resolvedBefore: 0,
     };
-    const { projectRoot } = await expectEffectivePassToReenter({
+    const { projectRoot } = await expectEffectivePassToSettle({
       kickbackLedger: { version: 1, gates: { build_review: seeded } },
     });
     // The budget consumed for the dropped raw FAIL was written back.
@@ -396,12 +435,12 @@ describe('engine/conductor — build_review kickback disposition-race guard', ()
     });
   });
 
-  it('re-enters build_review instead of the per-gate unresolved HALT when the effective verdict is PASS', async () => {
+  it('settles build_review instead of the per-gate unresolved HALT when the effective verdict is PASS', async () => {
     const resolver = vi.fn(async () => effective({ accepted: ['sha256:accepted'], unresolved: [] }));
     const { buildReviewRuns, projectRoot } = await fixture(resolver, { seedPerGateLimit: true });
 
     expect(resolver).toHaveBeenCalledTimes(1);
-    expect(buildReviewRuns()).toBe(2);
+    expect(buildReviewRuns()).toBe(1);
     await expect(readFile(join(projectRoot, '.pipeline/HALT'), 'utf8')).rejects.toThrow();
   });
 });

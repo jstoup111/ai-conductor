@@ -4,19 +4,7 @@
 // No vitest wiring involved: each seam is exercised directly, the same split
 // used by signals-leak-guard.test.ts and global-setup-engineer-signals.test.ts.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import {
-  chmod,
-  mkdtemp,
-  mkdir,
-  readFile,
-  realpath,
-  readdir,
-  rm,
-  stat,
-  symlink,
-  utimes,
-  writeFile,
-} from 'fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, realpath, readdir, rm, stat, symlink, utimes, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { basename, join } from 'path';
 import { tmpdir } from 'os';
@@ -129,30 +117,28 @@ describe('tmpdir-leak-guard: run root lifecycle', () => {
 
     expect(second).toBe(canonicalRoot);
     expect(env.GIT_CEILING_DIRECTORIES).toBe(`/already/a/ceiling:${canonicalRoot}`);
-    expect(env.GIT_CEILING_DIRECTORIES?.split(':')).toEqual([
-      '/already/a/ceiling',
-      canonicalRoot,
-    ]);
-    expect((await readdir(fakeRealTmpdir)).filter(entry => entry.startsWith(RUN_TMP_ROOT_PREFIX)))
-      .toHaveLength(1);
+    expect(env.GIT_CEILING_DIRECTORIES?.split(':')).toEqual(['/already/a/ceiling', canonicalRoot]);
+    expect((await readdir(fakeRealTmpdir)).filter((entry) => entry.startsWith(RUN_TMP_ROOT_PREFIX))).toHaveLength(1);
   });
 
   it('keeps the installed root and Git ceiling stable across ordinary and smoke config reloads', async () => {
-    const saved = Object.fromEntries([
-      VITEST_TMP_BASE_ENV,
-      RUN_TMP_ROOT_ENV,
-      'AI_CONDUCTOR_TEST_TMP_SCOPE',
-      'AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR',
-      'TMPDIR',
-      'GIT_CEILING_DIRECTORIES',
-    ].map(key => [key, process.env[key]]));
+    const saved = Object.fromEntries(
+      [
+        VITEST_TMP_BASE_ENV,
+        RUN_TMP_ROOT_ENV,
+        'AI_CONDUCTOR_TEST_TMP_SCOPE',
+        'AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR',
+        'TMPDIR',
+        'GIT_CEILING_DIRECTORIES',
+      ].map((key) => [key, process.env[key]]),
+    );
     process.env[VITEST_TMP_BASE_ENV] = fakeRealTmpdir;
     delete process.env[RUN_TMP_ROOT_ENV];
     delete process.env.AI_CONDUCTOR_TEST_TMP_SCOPE;
     delete process.env.AI_CONDUCTOR_TEST_ORIGINAL_TMPDIR;
     delete process.env.GIT_CEILING_DIRECTORIES;
     vi.resetModules();
-    vi.doMock('vitest/config', () => ({ defineConfig: <T>(config: T) => config }));
+    vi.doMock('vitest/config', () => ({ defineConfig: <T,>(config: T) => config }));
 
     try {
       await import('../vitest.config.ts');
@@ -164,7 +150,7 @@ describe('tmpdir-leak-guard: run root lifecycle', () => {
       expect({
         root: process.env[RUN_TMP_ROOT_ENV],
         ceiling: process.env.GIT_CEILING_DIRECTORIES,
-        roots: (await readdir(fakeRealTmpdir)).filter(entry => entry.startsWith(RUN_TMP_ROOT_PREFIX)),
+        roots: (await readdir(fakeRealTmpdir)).filter((entry) => entry.startsWith(RUN_TMP_ROOT_PREFIX)),
       }).toEqual({ root: first, ceiling: first, roots: [basename(first as string)] });
     } finally {
       vi.doUnmock('vitest/config');
@@ -322,7 +308,7 @@ describe('tmpdir-leak-guard: diffTmpdirEntries', () => {
     expect(diff).toEqual({ stray: [], ignored: ['kfFnI0ETRGz-YSBaRNMRF'] });
   });
 
-  it('attributes external fixtures by run id: own are strays, a concurrent run\'s are ignored', () => {
+  it("attributes external fixtures by run id: own are strays, a concurrent run's are ignored", () => {
     const diff = diffTmpdirEntries(
       snap([]),
       snap(['acx-mine12-intake-overlap-AbCdEf', 'acx-other9-intake-overlap-AbCdEf']),
@@ -366,6 +352,7 @@ describe('tmpdir-leak-guard: diffTmpdirEntries', () => {
       'self-host-daemon-home',
       'ai-conductor-claude-system-prompt-AbCdEf',
       'claude-1000',
+      'gem-miner-shared-cells-AbCdEf',
       'moshi-codex-rl.json.tmp',
       '.X11-unix',
     ]);
@@ -378,6 +365,7 @@ describe('tmpdir-leak-guard: diffTmpdirEntries', () => {
       'self-host-daemon-home',
       'ai-conductor-claude-system-prompt-AbCdEf',
       'claude-1000',
+      'gem-miner-shared-cells-AbCdEf',
       'moshi-codex-rl.json.tmp',
       '.X11-unix',
     ]);
@@ -414,12 +402,9 @@ describe('tmpdir-leak-guard: diffTmpdirEntries', () => {
   });
 
   it('exempts only an exact Vitest tmpdir entry', () => {
-    const diff = diffTmpdirEntries(
-      snap([]),
-      snap(['vitest-abc', 'vitest-abc-lookalike', 'genuine-leak']),
-      undefined,
-      ['vitest-abc']
-    );
+    const diff = diffTmpdirEntries(snap([]), snap(['vitest-abc', 'vitest-abc-lookalike', 'genuine-leak']), undefined, [
+      'vitest-abc',
+    ]);
 
     expect(diff).toEqual({
       stray: ['vitest-abc-lookalike', 'genuine-leak'],
@@ -437,14 +422,19 @@ describe('tmpdir-leak-guard: diffTmpdirEntries', () => {
 
 describe('tmpdir-leak-guard: vitestOwnTmpdirEntries', () => {
   it('returns direct-child ancestors of supplied Vitest workspaces only', () => {
-    expect(vitestOwnTmpdirEntries([
-      '/fixture/real-tmpdir/vitest-direct',
-      '/fixture/real-tmpdir/vitest-core/node',
-      '/fixture/real-tmpdir/nested/vitest-nested',
-      '/fixture/other-tmpdir/vitest-foreign',
-      '',
-      undefined,
-    ], '/fixture/real-tmpdir')).toEqual(['vitest-direct', 'vitest-core', 'nested']);
+    expect(
+      vitestOwnTmpdirEntries(
+        [
+          '/fixture/real-tmpdir/vitest-direct',
+          '/fixture/real-tmpdir/vitest-core/node',
+          '/fixture/real-tmpdir/nested/vitest-nested',
+          '/fixture/other-tmpdir/vitest-foreign',
+          '',
+          undefined,
+        ],
+        '/fixture/real-tmpdir',
+      ),
+    ).toEqual(['vitest-direct', 'vitest-core', 'nested']);
   });
 });
 
@@ -475,7 +465,7 @@ describe('tmpdir-leak-guard: stale run root decision', () => {
         now,
         staleAfterMs,
         legacyStaleAfterMs,
-      })
+      }),
     ).toEqual({ reap: [root('stale-marker')], retain: [] });
   });
 
@@ -525,7 +515,7 @@ describe('tmpdir-leak-guard: stale run root decision', () => {
         now,
         staleAfterMs,
         legacyStaleAfterMs,
-      })
+      }),
     ).toEqual({ reap: [], retain: [{ name: root('own'), reason: 'own-root', windowMs: staleAfterMs }] });
   });
 
@@ -578,7 +568,7 @@ describe('tmpdir-leak-guard: stale run root decision', () => {
         now,
         staleAfterMs,
         legacyStaleAfterMs,
-      })
+      }),
     ).toEqual({
       reap: [],
       retain: [
@@ -596,9 +586,7 @@ describe('tmpdir-leak-guard: stale run root decision', () => {
       marker: { kind: 'present' as const, mtimeMs: now - 101 },
     };
     const customInput = {
-      entries: [
-        entry,
-      ],
+      entries: [entry],
       ownRoot: '/tmp/another-run-root',
       now,
       staleAfterMs: 100,
@@ -613,9 +601,7 @@ describe('tmpdir-leak-guard: stale run root decision', () => {
       retain: [],
     });
     expect(second).toEqual(first);
-    expect(
-      decideStaleRunRoots({ ...customInput, staleAfterMs })
-    ).toEqual({
+    expect(decideStaleRunRoots({ ...customInput, staleAfterMs })).toEqual({
       reap: [],
       retain: [{ name: root('custom-window'), reason: 'live', windowMs: staleAfterMs }],
     });
@@ -661,7 +647,7 @@ describe('tmpdir-leak-guard: stale run root sweep', () => {
     await mkdir(runRoot);
     await writeFile(
       join(runRoot, RUN_TMP_ROOT_OWNER_MARKER),
-      JSON.stringify({ pid: 42, hostname: 'test-host', startedAt: '2026-09-05T12:00:00.000Z' })
+      JSON.stringify({ pid: 42, hostname: 'test-host', startedAt: '2026-09-05T12:00:00.000Z' }),
     );
     await utimes(join(runRoot, RUN_TMP_ROOT_OWNER_MARKER), markerMtimeMs / 1_000, markerMtimeMs / 1_000);
     return runRoot;
@@ -706,7 +692,7 @@ describe('tmpdir-leak-guard: stale run root sweep', () => {
         staleAfterMs,
         legacyStaleAfterMs,
         logger,
-      })
+      }),
     ).resolves.toEqual({ reaped: [], retained: [], failures: [] });
 
     expect(logger).not.toHaveBeenCalled();
@@ -729,7 +715,7 @@ describe('tmpdir-leak-guard: stale run root sweep', () => {
         legacyStaleAfterMs,
         remove,
         logger,
-      })
+      }),
     ).resolves.toEqual({
       reaped: [],
       retained: [{ name: root('shapeless'), reason: 'marker-unreadable', windowMs: staleAfterMs }],
@@ -738,7 +724,7 @@ describe('tmpdir-leak-guard: stale run root sweep', () => {
 
     expect(remove).not.toHaveBeenCalled();
     expect(logger).toHaveBeenCalledWith(
-      expect.stringContaining(`owner marker unreadable for ${shapeless}; retaining run root`)
+      expect.stringContaining(`owner marker unreadable for ${shapeless}; retaining run root`),
     );
   });
 
@@ -757,7 +743,7 @@ describe('tmpdir-leak-guard: stale run root sweep', () => {
         legacyStaleAfterMs,
         remove,
         logger,
-      })
+      }),
     ).resolves.toEqual({
       reaped: [],
       retained: [{ name: root('malformed'), reason: 'marker-unreadable', windowMs: staleAfterMs }],
@@ -766,7 +752,7 @@ describe('tmpdir-leak-guard: stale run root sweep', () => {
 
     expect(remove).not.toHaveBeenCalled();
     expect(logger).toHaveBeenCalledWith(
-      expect.stringContaining(`owner marker unreadable for ${malformed}; retaining run root`)
+      expect.stringContaining(`owner marker unreadable for ${malformed}; retaining run root`),
     );
   });
 
@@ -786,7 +772,7 @@ describe('tmpdir-leak-guard: stale run root sweep', () => {
           legacyStaleAfterMs,
           remove,
           logger,
-        })
+        }),
       ).resolves.toEqual({
         reaped: [],
         retained: [{ name: root('symlink'), reason: 'not-a-directory', windowMs: staleAfterMs }],
@@ -851,11 +837,9 @@ describe('tmpdir-leak-guard: applyTmpdirTeardownDecision', () => {
     const logged: string[] = [];
 
     expect(() =>
-      applyTmpdirTeardownDecision(
-        { stray: ['governor-test-1', 'authored-ledger-test-2'], ignored: [] },
-        '/tmp',
-        m => logged.push(m)
-      )
+      applyTmpdirTeardownDecision({ stray: ['governor-test-1', 'authored-ledger-test-2'], ignored: [] }, '/tmp', (m) =>
+        logged.push(m),
+      ),
     ).toThrow(/governor-test-1, authored-ledger-test-2/);
 
     expect(logged).toEqual([]);
@@ -864,9 +848,7 @@ describe('tmpdir-leak-guard: applyTmpdirTeardownDecision', () => {
   it('passes silently on a clean run', () => {
     const logged: string[] = [];
 
-    expect(() =>
-      applyTmpdirTeardownDecision({ stray: [], ignored: [] }, '/tmp', m => logged.push(m))
-    ).not.toThrow();
+    expect(() => applyTmpdirTeardownDecision({ stray: [], ignored: [] }, '/tmp', (m) => logged.push(m))).not.toThrow();
 
     expect(logged).toEqual([]);
   });
@@ -875,11 +857,7 @@ describe('tmpdir-leak-guard: applyTmpdirTeardownDecision', () => {
     const logged: string[] = [];
 
     expect(() =>
-      applyTmpdirTeardownDecision(
-        { stray: [], ignored: ['self-host-abc'] },
-        '/tmp',
-        m => logged.push(m)
-      )
+      applyTmpdirTeardownDecision({ stray: [], ignored: ['self-host-abc'] }, '/tmp', (m) => logged.push(m)),
     ).not.toThrow();
 
     expect(logged).toHaveLength(1);
@@ -890,11 +868,9 @@ describe('tmpdir-leak-guard: applyTmpdirTeardownDecision', () => {
     const logged: string[] = [];
 
     expect(() =>
-      applyTmpdirTeardownDecision(
-        { stray: ['governor-test-1'], ignored: ['self-host-abc'] },
-        '/tmp',
-        m => logged.push(m)
-      )
+      applyTmpdirTeardownDecision({ stray: ['governor-test-1'], ignored: ['self-host-abc'] }, '/tmp', (m) =>
+        logged.push(m),
+      ),
     ).toThrow(/governor-test-1/);
 
     expect(logged).toHaveLength(1);
