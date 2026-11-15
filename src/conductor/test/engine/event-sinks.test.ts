@@ -378,6 +378,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'rebase_citation_residue',
   'rebase_supersession_verdict',
   'rebase_untracked_quarantined',
+  'validator_residue_quarantined',
   'repair_boundary_translated',
   'operator_rewind',
   'preemption_boundary',
@@ -1047,6 +1048,38 @@ describe('event sink subscriptions', () => {
       expect(ledger).not.toContain(token);
       expect(ledger).not.toContain(tokenFile);
       expect(ledger).not.toMatch(/(?:gh|git)\s+(?:api|push|auth)/i);
+    } finally {
+      persister.stop();
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:2
+  it('persists validator residue quarantine occurrences through the shared ledger', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'validator-residue-quarantined-event-sinks-'));
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
+    const event = {
+      type: 'validator_residue_quarantined' as const,
+      source: 'manual_test' as const,
+      paths: ['docs/reports/manual-test-step17/report.html'],
+      directory: '.pipeline/validator-residue/manual_test-20261115T120000Z',
+    } satisfies ConductorEvent;
+
+    try {
+      persister.start();
+      await events.emit(event);
+      persister.stop();
+
+      expect({
+        sink: EVENT_SINKS.validator_residue_quarantined,
+        persisted: persistedEventTypes().includes(event.type),
+        ledger: JSON.parse(await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf-8')),
+      }).toEqual({
+        sink: { render: false, persist: true, audit: false, otel: false },
+        persisted: true,
+        ledger: { ...event, ts: expect.any(String) },
+      });
     } finally {
       persister.stop();
       await rm(projectRoot, { recursive: true, force: true });
