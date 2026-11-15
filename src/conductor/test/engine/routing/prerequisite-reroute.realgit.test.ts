@@ -1,4 +1,4 @@
-// Covers: task:7, task:8, task:57, task:58, task:59, task:206
+// Covers: task:2, task:7, task:8, task:57, task:58, task:59, task:206
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -348,7 +348,7 @@ describe('verified prerequisite reroute (real local Git)', () => {
         structuredResult, worktree: subject.repo, slug: 'demo', roundId, host, git: subject.git,
       });
       expect(await settle({ outcome: 'completed' })).toEqual({ kind: 'none' });
-      expect(await settle({ outcome: 'surprise' })).toEqual({ kind: 'failed', detail: 'routed prerequisite claim is malformed' });
+      expect(await settle({ outcome: 'surprise' })).toEqual({ kind: 'failed', detail: 'routed prerequisite claim is malformed: outcome is not completed or blocked-by-prerequisite' });
       expect(await settle({ outcome: 'blocked-by-prerequisite', child: 2, symbols: ['missing'] })).toMatchObject({
         kind: 'failed', detail: expect.stringMatching(/^routed prerequisite claim unverified: /),
       });

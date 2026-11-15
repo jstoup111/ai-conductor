@@ -1,4 +1,4 @@
-// Covers: task:57
+// Covers: task:2
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,9 +7,10 @@ import { describe, expect, it } from 'vitest';
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { leafBranchFor } from '../../../src/engine/feature-branch-identity.js';
-import { parseBuilderClaim, settleRoutedBuildClaim, verifyPrerequisiteClaim } from '../../../src/engine/routing/prerequisite-claim.js';
+import { PREREQUISITE_CLAIM_SCHEMA, parseBuilderClaim, settleRoutedBuildClaim, verifyPrerequisiteClaim } from '../../../src/engine/routing/prerequisite-claim.js';
 import { closureRefFor, repairMarkerRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { parseRoundId } from '../../../src/engine/routing/route-types.js';
+import { fromCodexStrictResult } from '../../../src/execution/codex-strict-schema.js';
 
 const c1 = parseChildId(1)!;
 const c2 = parseChildId(2)!;
@@ -131,10 +132,10 @@ describe('builder prerequisite claim verification (real local Git)', () => {
     const subject = await fixture();
     try {
       const before = await routingRefs(subject.git);
-      expect(parseBuilderClaim({ outcome: 'blocked-by-prerequisite', child: '2' })).toEqual({ kind: 'malformed' });
+      expect(parseBuilderClaim({ outcome: 'blocked-by-prerequisite', child: '2' })).toEqual({ kind: 'malformed', detail: 'child is not an integer from 1 to 9' });
       await expect(settleRoutedBuildClaim({
         structuredResult: { outcome: 'blocked-by-prerequisite', child: '2' }, worktree: subject.repo, slug: 'demo', roundId, host: c1, git: subject.git,
-      })).resolves.toEqual({ kind: 'failed', detail: 'routed prerequisite claim is malformed' });
+      })).resolves.toEqual({ kind: 'failed', detail: 'routed prerequisite claim is malformed: child is not an integer from 1 to 9' });
       await expect(settleRoutedBuildClaim({
         structuredResult: undefined, worktree: subject.repo, slug: 'demo', roundId, host: c1, git: subject.git,
       })).resolves.toEqual({ kind: 'none' });
@@ -159,10 +160,28 @@ describe('builder prerequisite claim verification (real local Git)', () => {
       })).resolves.toEqual({ kind: 'unverified', detail: 'claim has no prerequisite paths or symbols' });
       await expect(settleRoutedBuildClaim({
         structuredResult: { outcome: 'blocked-by-prerequisite', child: 2 }, worktree: subject.repo, slug: 'demo', roundId, host: c1, git,
-      })).resolves.toEqual({ kind: 'failed', detail: 'routed prerequisite claim is malformed' });
+      })).resolves.toEqual({ kind: 'failed', detail: 'routed prerequisite claim is malformed: blocked-by-prerequisite names neither paths nor symbols' });
 
       expect(calls).not.toContain('update-ref');
       expect(await routingRefs(subject.git)).toBe(before);
+    } finally { await rm(subject.repo, { recursive: true, force: true }); }
+  });
+
+  it('settles Codex-normalised null-filled claims according to their selected branch', async () => {
+    const subject = await fixture();
+    try {
+      const settle = (structuredResult: unknown) => settleRoutedBuildClaim({
+        structuredResult, worktree: subject.repo, slug: 'demo', roundId, host: c1, git: subject.git,
+      });
+      await expect(settle(fromCodexStrictResult(PREREQUISITE_CLAIM_SCHEMA, {
+        outcome: 'blocked-by-prerequisite', child: null, paths: ['src/a.ts'], symbols: null,
+      }))).resolves.toEqual({
+        kind: 'failed',
+        detail: 'routed prerequisite claim is malformed: child is missing; blocked-by-prerequisite requires an integer child from 1 to 9',
+      });
+      await expect(settle(fromCodexStrictResult(PREREQUISITE_CLAIM_SCHEMA, {
+        outcome: 'completed', child: null, paths: ['a.ts'], symbols: null,
+      }))).resolves.toEqual({ kind: 'none' });
     } finally { await rm(subject.repo, { recursive: true, force: true }); }
   });
 });

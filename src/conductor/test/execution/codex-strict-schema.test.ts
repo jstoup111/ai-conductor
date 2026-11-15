@@ -1,3 +1,4 @@
+// Covers: task:2
 import { describe, expect, it } from 'vitest';
 import { BUILD_REVIEW_CUSTOM_V1_SCHEMA, BUILD_REVIEW_JUDGED_V3_SCHEMAS, parseBuildReviewCustomReviewerPayload } from '../../src/engine/build-review-domain.js';
 import { AS_BUILT_VERDICT_SCHEMA, validateAsBuiltVerdict } from '../../src/engine/as-built-contract.js';
@@ -77,16 +78,13 @@ describe('toCodexStrictSchema', () => {
       }))).toEqual({ kind: 'none' });
       expect(parseBuilderClaim(fromCodexStrictResult(PREREQUISITE_CLAIM_SCHEMA, {
         outcome: 'blocked-by-prerequisite', child: 2, paths: null, symbols: ['parseB'],
-      }))).toEqual({
-        kind: 'claim',
-        claim: { outcome: 'blocked-by-prerequisite', child: 2, symbols: ['parseB'] },
-      });
+      }))).toEqual(parseBuilderClaim({ outcome: 'blocked-by-prerequisite', child: 2, symbols: ['parseB'] }));
     });
 
     it('still rejects a claim that only the branch rules forbid', () => {
       expect(parseBuilderClaim(fromCodexStrictResult(PREREQUISITE_CLAIM_SCHEMA, {
         outcome: 'blocked-by-prerequisite', child: 2, paths: null, symbols: null,
-      }))).toEqual({ kind: 'malformed' });
+      }))).toEqual({ kind: 'malformed', detail: 'blocked-by-prerequisite names neither paths nor symbols' });
     });
 
     it('reads a completed result as no claim when it also fills fields only the blocked branch declares', () => {
@@ -104,13 +102,13 @@ describe('toCodexStrictSchema', () => {
     it('keeps a property no branch declares, so the closed parser still rejects it', () => {
       expect(parseBuilderClaim(fromCodexStrictResult(PREREQUISITE_CLAIM_SCHEMA, {
         outcome: 'completed', child: null, paths: null, symbols: null, extra: true,
-      }))).toEqual({ kind: 'malformed' });
+      }))).toEqual({ kind: 'malformed', detail: 'completed result carries field extra; completed allows only outcome' });
     });
 
     it('leaves a result whose discriminator matches no branch for the parser to reject', () => {
       expect(parseBuilderClaim(fromCodexStrictResult(PREREQUISITE_CLAIM_SCHEMA, {
         outcome: 'unknown', child: 2, paths: ['a.ts'], symbols: null,
-      }))).toEqual({ kind: 'malformed' });
+      }))).toEqual({ kind: 'malformed', detail: 'outcome is not completed or blocked-by-prerequisite' });
     });
   });
 

@@ -425,7 +425,7 @@ export interface SettleRoutedBuildClaimInput {
 export async function settleRoutedBuildClaim(input: SettleRoutedBuildClaimInput): Promise<SettleRoutedBuildClaimResult> {
   const parsed = parseBuilderClaim(input.structuredResult);
   if (parsed.kind === 'none') return { kind: 'none' };
-  if (parsed.kind === 'malformed') return { kind: 'failed', detail: 'routed prerequisite claim is malformed' };
+  if (parsed.kind === 'malformed') return { kind: 'failed', detail: `routed prerequisite claim is malformed: ${parsed.detail}` };
   const git = input.git ?? makeGitRunner(input.worktree);
   const leaf = input.leaf ?? await resolveSealedLeaf(input.worktree);
   const stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
