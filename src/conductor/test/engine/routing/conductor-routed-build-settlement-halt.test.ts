@@ -416,6 +416,31 @@ describe('routed BUILD settlement cap halt', () => {
     }));
   });
 
+  it('retries a Codex-normalised malformed claim with its field-level detail when no halt marker exists', async () => {
+    const claim = { outcome: 'blocked-by-prerequisite', paths: ['src/a.ts'] };
+    const fixture = await subject({ cap: 15, activeChild: child, buildResult: claim, maxRetries: 2 });
+    const retries: unknown[] = [];
+    const stalls: unknown[] = [];
+    fixture.events.on('step_retry', (event) => { retries.push(event); });
+    fixture.events.on('build_stall', (event) => { stalls.push(event); });
+
+    await fixture.conductor.run();
+
+    expect(claimSeam.calls).toContainEqual(claim);
+    await expect(readBuildOutcome(fixture.root)).resolves.toMatchObject({
+      records: [expect.objectContaining({
+        terminalOutcome: 'failed',
+        reason: 'routed-prerequisite-claim',
+        note: ['routed prerequisite claim is malformed: child is missing; blocked-by-prerequisite requires an integer child from 1 to 9'],
+      })],
+    });
+    expect(retries).toContainEqual(expect.objectContaining({
+      type: 'step_retry', step: 'build', attempt: 2,
+      reason: 'routed prerequisite claim is malformed: child is missing; blocked-by-prerequisite requires an integer child from 1 to 9',
+    }));
+    expect(stalls).not.toContainEqual(expect.objectContaining({ type: 'build_stall', reason: 'halt_marker' }));
+  });
+
   it.each([
     [{ outcome: 'blocked-by-prerequisite', child: 2, paths: ['src/engine/a.ts'] }, 'claimed prerequisite is already present at host 1'],
     [{ outcome: 'blocked-by-prerequisite', child: 2, paths: ['src/engine/'] }, 'claim names no prerequisite file'],
