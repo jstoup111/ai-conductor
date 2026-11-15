@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "slug": "no-op-guard-refuses-a-kickback-with-new-review-cas",
+  "artifacts": [
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/no-op-guard-refuses-a-kickback-with-new-review-cas.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-08-05-build-settle-outcome-stamp.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/no-op-guard-refuses-a-kickback-with-new-review-cas.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/no-op-guard-refuses-a-kickback-with-new-review-cas.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/no-op-guard-refuses-a-kickback-with-new-review-cas.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/no-op-guard-refuses-a-kickback-with-new-review-cas.md"
+    }
+  ]
+}
