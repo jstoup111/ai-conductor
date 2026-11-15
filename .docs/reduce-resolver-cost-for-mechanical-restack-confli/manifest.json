@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "slug": "reduce-resolver-cost-for-mechanical-restack-confli",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/reduce-resolver-cost-for-mechanical-restack-confli.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/reduce-resolver-cost-for-mechanical-restack-confli.md"
+    },
+    {
+      "kind": "coherence-waiver",
+      "path": ".docs/coherence-waivers/reduce-resolver-cost-for-mechanical-restack-confli.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/reduce-resolver-cost-for-mechanical-restack-confli.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/reduce-resolver-cost-for-mechanical-restack-confli.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-11-15-accepted-restack-resolution-reuse.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/reduce-resolver-cost-for-mechanical-restack-confli.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/reduce-resolver-cost-for-mechanical-restack-confli.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/reduce-resolver-cost-for-mechanical-restack-confli.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/reduce-resolver-cost-for-mechanical-restack-confli.md"
+    }
+  ]
+}
