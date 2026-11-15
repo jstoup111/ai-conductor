@@ -244,6 +244,7 @@ describe('planned fold recovery (real local Git)', () => {
     ).resolves.not.toMatchObject({ kind: 'live-owner' });
   });
 
+  // Covers: task:rem-prd-audit-rem2-S3.1
   it('keeps child 1 on its existing parent when origin/HEAD advances before the fold', async () => {
     const subject = await fixture({ stampedOwner: true });
     await subject.git(['checkout', '-q', 'main']);
