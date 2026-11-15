@@ -115,6 +115,7 @@ describe('self-host live-boundary events', () => {
     expect(recorded.filter(event => event.type === 'self_host_containment_verdict')).toEqual([expect.objectContaining({ contained: true, evidence: expect.any(String) })]);
   });
 
+  // Covers: task:4
   it('emits and persists one completed fingerprint before the provider is invoked', async () => {
     const emitted: Extract<ConductorEvent, { type: 'self_host_boundary_fingerprint' }>[] = [];
     const { conductor, eventEmitter, persister } = harness(async () => {
@@ -156,12 +157,13 @@ describe('self-host live-boundary events', () => {
     expect((await events()).filter(event => event.type === 'self_host_boundary_fingerprint')).toEqual([]);
   });
 
-  it('emits no fingerprint and does not invoke the provider when fingerprinting fails', async () => {
+  // Covers: task:4
+  it('emits no fingerprint and does not invoke the provider when live-checkout fingerprinting fails', async () => {
     const failure = new Error('fingerprint unavailable');
     const provider = vi.fn(async (): Promise<StepRunResult> => ({ success: true, output: 'done' }));
     const emitted: ConductorEvent[] = [];
     const failedSteps: ConductorEvent[] = [];
-    vi.spyOn(liveBoundary, 'fingerprintLiveBoundary').mockRejectedValue(failure);
+    vi.spyOn(liveBoundary, 'fingerprintLiveCheckoutSurface').mockRejectedValue(failure);
     const { conductor, eventEmitter, persister } = harness(provider, { maxRetries: 0 });
     eventEmitter.on('self_host_boundary_fingerprint', (event) => { emitted.push(event); });
     eventEmitter.on('step_failed', (event) => { failedSteps.push(event); });
@@ -175,6 +177,7 @@ describe('self-host live-boundary events', () => {
     expect((await events()).filter(event => event.type === 'self_host_boundary_fingerprint')).toEqual([]);
   });
 
+  // Covers: task:4
   it('isolates a throwing fingerprint subscriber so the provider and containment verdict continue', async () => {
     const containment: ConductorEvent[] = [];
     const provider = vi.fn(async (): Promise<StepRunResult> => ({ success: true, output: 'done' }));
@@ -189,7 +192,8 @@ describe('self-host live-boundary events', () => {
     expect(containment).toHaveLength(1);
   });
 
-  it('emits one fingerprint for each completed candidate preparation across a retry', async () => {
+  // Covers: task:4
+  it('emits one fingerprint for two candidate preparations in one dispatch', async () => {
     const emitted: ConductorEvent[] = [];
     let attempts = 0;
     const { conductor, eventEmitter, persister } = harness(async () => {
@@ -202,8 +206,32 @@ describe('self-host live-boundary events', () => {
     persister.stop();
 
     expect(attempts).toBe(2);
-    expect(emitted).toHaveLength(2);
-    expect((await events()).filter(event => event.type === 'self_host_boundary_fingerprint')).toHaveLength(2);
+    expect(emitted).toHaveLength(1);
+    expect((await events()).filter(event => event.type === 'self_host_boundary_fingerprint')).toHaveLength(1);
+  });
+
+  // Covers: task:4
+  it('fingerprints and verifies once across four candidate preparations', async () => {
+    const fingerprint = vi.spyOn(liveBoundary, 'fingerprintLiveCheckoutSurface');
+    const verify = vi.spyOn(liveBoundary, 'verifyLiveBoundary');
+    let attempts = 0;
+    const { conductor, persister } = harness(async () => {
+      attempts += 1;
+      return attempts === 4 ? { success: true, output: 'done' } : { success: false, output: 'retry' };
+    }, { candidateAttempts: 4 });
+
+    await conductor.run();
+    persister.stop();
+
+    expect(attempts).toBe(4);
+    expect(fingerprint).toHaveBeenCalledOnce();
+    expect(verify).toHaveBeenCalledOnce();
+    expect((await events()).filter(event => event.type === 'self_host_boundary_fingerprint')).toEqual([
+      expect.objectContaining({ surfaces: expect.arrayContaining([
+        expect.objectContaining({ label: 'live checkout' }),
+        expect.objectContaining({ label: 'provider state' }),
+      ]) }),
+    ]);
   });
 
   it('maps the original provider catalog home onto the prepared candidate explicitly', async () => {
