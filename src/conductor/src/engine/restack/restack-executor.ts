@@ -947,11 +947,25 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
   const allowance = await resolveCascadeAllowanceForWorktree(options.worktree);
   const cap = await checkCascadeCap(options.worktree, options.slug, foldTargets, allowance.limit, { git });
   if (cap.kind === 'exhausted') {
+    const entry = await recordKickbackCapEvidence(
+      options.worktree,
+      'restack',
+      {
+        consumed: cap.count,
+        limit: cap.limit,
+        latestReason: `fold cascade cap for target child ${cap.child}`,
+        allowance: 'restacks',
+      },
+      cap.child,
+    );
+    const rendered = renderKickbackBudgetView(entry, 'restack', cap.limit, undefined, undefined, cap.child);
+    const capDetail =
+      cap.detail ??
+      `fold target child ${cap.child} reached ${cap.count}/${cap.limit} cascades — ${formatCascadeAllowance(allowance)}` +
+        `${cap.raised ? `; raised to ${cap.limit}` : ''}`;
     await haltRestack(options.worktree, 'cascade-cap', options.events, {
       child: cap.child,
-      detail:
-        cap.detail ??
-        `fold target child ${cap.child} reached ${cap.count}/${cap.limit} cascades — ${formatCascadeAllowance(allowance)}`,
+      detail: `${capDetail}\n${rendered}\nKickback halt generation: ${entry.capEvidence!.haltGeneration}`,
     });
     return haltedResult(options.worktree);
   }
@@ -959,7 +973,17 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
   const active = await activeFor(options.worktree, options.slug, git);
   if ('divergent' in active)
     return { kind: 'unavailable', detail: `cannot fold divergent child ${active.divergent.child}` };
-  const base = await defaultTip(git);
+  // A fold is a feature-repair operation, not a base refresh.  Its stack must
+  // remain rooted at child 1's recorded parent even when origin/HEAD advanced
+  // after the audit round started.
+  const childOne = childBranchFor(options.slug, 1);
+  if (!childOne.ok) return { kind: 'unavailable', detail: childOne.reason };
+  const childOneParent = await requiredSha(
+    git,
+    `refs/heads/${childOne.branch}^1`,
+    'child 1 existing parent for fold',
+  );
+  const base = childOneParent;
   const planned = await planRestackRanges(
     options.worktree,
     { slug: options.slug, oldDefaultTip: base, cause: 'base-refresh', active },
