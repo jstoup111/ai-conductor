@@ -1,7 +1,11 @@
 // Covers: task:2
 import { describe, expect, it, vi } from 'vitest';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { DispatchLiveBoundary } from '../../../src/engine/self-host/dispatch-live-boundary.js';
 import { LiveBoundaryCoordinator } from '../../../src/engine/self-host/live-boundary-coordinator.js';
+import { verifyLiveBoundary } from '../../../src/engine/self-host/live-boundary.js';
 
 const live = { surface: { root: '/live', label: 'live checkout', exclude: [], manifest: [] }, measurement: { label: 'live checkout', elapsedMs: 1, fileCount: 0 } };
 const provider = (root: string) => ({ surface: { root, label: 'provider state', exclude: [], manifest: [] }, measurement: { label: 'provider state', elapsedMs: 1, fileCount: 0 } });
@@ -40,7 +44,7 @@ describe('DispatchLiveBoundary', () => {
     expect(h.fingerprintProviderState).toHaveBeenCalledOnce();
     expect(h.probe).toHaveBeenCalledOnce();
     expect(h.verify).toHaveBeenCalledOnce();
-    expect(h.events).toEqual([{ type: 'self_host_boundary_fingerprint', surfaces: [live.measurement, provider('/claude').measurement] }]);
+    expect(h.events.filter((event: any) => event.type === 'self_host_boundary_fingerprint')).toEqual([{ type: 'self_host_boundary_fingerprint', surfaces: [live.measurement, provider('/claude').measurement] }]);
   });
 
   // Covers: task:2
@@ -59,7 +63,7 @@ describe('DispatchLiveBoundary', () => {
     expect(h.fingerprintProviderState).toHaveBeenCalledTimes(2);
     expect(h.verify).toHaveBeenCalledOnce();
     expect(h.verify.mock.calls[0]?.[0].surfaces).toHaveLength(3);
-    expect(h.events).toEqual([
+    expect(h.events.filter((event: any) => event.type === 'self_host_boundary_fingerprint')).toEqual([
       { type: 'self_host_boundary_fingerprint', surfaces: [live.measurement, provider('/claude').measurement] },
       { type: 'self_host_boundary_fingerprint', surfaces: [provider('/codex').measurement] },
     ]);
@@ -104,7 +108,7 @@ describe('DispatchLiveBoundary', () => {
     await queuedMutation;
     expect(mutation).toHaveBeenCalledOnce();
     expect(fingerprintLiveCheckout).toHaveBeenCalledTimes(2);
-    expect(h.events).toEqual([{ type: 'self_host_boundary_fingerprint', surfaces: [live.measurement, provider('/claude').measurement] }]);
+    expect(h.events.filter((event: any) => event.type === 'self_host_boundary_fingerprint')).toEqual([{ type: 'self_host_boundary_fingerprint', surfaces: [live.measurement, provider('/claude').measurement] }]);
   });
 
   // Covers: task:2
@@ -125,5 +129,126 @@ describe('DispatchLiveBoundary', () => {
     expect(h.verify).not.toHaveBeenCalled();
     expect(h.events).toEqual([]);
     expect(mutation).toHaveBeenCalledOnce();
+  });
+
+  // Covers: task:3
+  it('defers verification until an ended dispatch releases its final lease and reports real drift', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dispatch-live-boundary-held-'));
+    const liveRoot = join(root, 'live'); const providerHome = join(root, 'provider');
+    await Promise.all([mkdir(liveRoot), mkdir(providerHome)]);
+    const coordinator = new LiveBoundaryCoordinator();
+    const verify = vi.fn(verifyLiveBoundary);
+    const violations: string[] = [];
+    let boundary!: DispatchLiveBoundary; let lease!: Awaited<ReturnType<DispatchLiveBoundary['acquire']>>;
+    try {
+      await coordinator.runDispatch(async (openWindow) => {
+        boundary = new DispatchLiveBoundary({ openWindow, emit: async () => undefined, verify, onViolation: reason => violations.push(reason) });
+        lease = await boundary.acquire({ liveCheckout: liveRoot, providerHome, provider: 'claude', probe: async () => ({ contained: false, reason: 'unproven' }) });
+      });
+      await boundary.end();
+      expect(verify).not.toHaveBeenCalled();
+      await writeFile(join(liveRoot, 'escaped.txt'), 'drift');
+      await lease.release();
+      expect(violations).toHaveLength(1);
+      expect(violations[0]).toContain('added escaped.txt');
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  // Covers: task:3
+  it('holds the coordinator window until pending verification resolves', async () => {
+    const coordinator = new LiveBoundaryCoordinator();
+    let resolveVerify!: () => void;
+    const pendingVerify = new Promise<{ ok: true }>((resolve) => { resolveVerify = () => resolve({ ok: true }); });
+    let boundary!: DispatchLiveBoundary; let lease!: Awaited<ReturnType<DispatchLiveBoundary['acquire']>>;
+    await coordinator.runDispatch(async (openWindow) => {
+      boundary = new DispatchLiveBoundary({ openWindow, emit: async () => undefined, verify: vi.fn(() => pendingVerify) });
+      lease = await boundary.acquire({ liveCheckout: '/live', providerHome: '/provider', provider: 'claude', probe: async () => ({ contained: true, evidence: 'contained' }) });
+    });
+    const mutated = vi.fn(async () => undefined);
+    const queuedMutation = coordinator.runMutation(mutated);
+    await boundary.end();
+    const released = lease.release();
+    await Promise.resolve();
+    expect(mutated).not.toHaveBeenCalled();
+    resolveVerify();
+    await released;
+    await queuedMutation;
+    expect(mutated).toHaveBeenCalledOnce();
+  });
+
+  // Covers: task:3
+  it('verifies once and releases the window when a candidate lease is released without invocation', async () => {
+    const coordinator = new LiveBoundaryCoordinator();
+    const verify = vi.fn(async () => ({ ok: true }));
+    let boundary!: DispatchLiveBoundary; let lease!: Awaited<ReturnType<DispatchLiveBoundary['acquire']>>;
+    await coordinator.runDispatch(async (openWindow) => {
+      boundary = new DispatchLiveBoundary({ openWindow, emit: async () => undefined, verify });
+      lease = await boundary.acquire({ liveCheckout: '/live', providerHome: '/provider', provider: 'claude', probe: async () => ({ contained: false, reason: 'unproven' }) });
+    });
+    const mutated = vi.fn(async () => undefined);
+    const queuedMutation = coordinator.runMutation(mutated);
+    await boundary.end();
+    await lease.release();
+    await queuedMutation;
+    expect(verify).toHaveBeenCalledOnce();
+    expect(mutated).toHaveBeenCalledOnce();
+  });
+
+  // Covers: task:3
+  it('does not report a live-checkout change restored before verification', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dispatch-live-boundary-restored-'));
+    const liveRoot = join(root, 'live'); const providerHome = join(root, 'provider');
+    await Promise.all([mkdir(liveRoot), mkdir(providerHome), writeFile(join(liveRoot, 'source.txt'), 'original')]);
+    const violations: string[] = [];
+    const coordinator = new LiveBoundaryCoordinator();
+    let boundary!: DispatchLiveBoundary; let lease!: Awaited<ReturnType<DispatchLiveBoundary['acquire']>>;
+    try {
+      await coordinator.runDispatch(async (openWindow) => {
+        boundary = new DispatchLiveBoundary({ openWindow, emit: async () => undefined, onViolation: reason => violations.push(reason) });
+        lease = await boundary.acquire({ liveCheckout: liveRoot, providerHome, provider: 'claude', probe: async () => ({ contained: false, reason: 'unproven' }) });
+      });
+      await writeFile(join(liveRoot, 'source.txt'), 'changed');
+      await writeFile(join(liveRoot, 'source.txt'), 'original');
+      await boundary.end();
+      await lease.release();
+      expect(violations).toEqual([]);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  // Covers: task:3
+  it('reports contained live-checkout drift without a violation', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dispatch-live-boundary-contained-'));
+    const liveRoot = join(root, 'live'); const providerHome = join(root, 'provider');
+    await Promise.all([mkdir(liveRoot), mkdir(providerHome)]);
+    const events: unknown[] = []; const violations: string[] = [];
+    const coordinator = new LiveBoundaryCoordinator();
+    let boundary!: DispatchLiveBoundary; let lease!: Awaited<ReturnType<DispatchLiveBoundary['acquire']>>;
+    try {
+      await coordinator.runDispatch(async (openWindow) => {
+        boundary = new DispatchLiveBoundary({ openWindow, emit: async event => { events.push(event); }, onViolation: reason => violations.push(reason) });
+        lease = await boundary.acquire({ liveCheckout: liveRoot, providerHome, provider: 'claude', probe: async () => ({ contained: true, evidence: 'bwrap' }) });
+      });
+      await writeFile(join(liveRoot, 'operator.txt'), 'drift');
+      await boundary.end();
+      await lease.release();
+      expect(events.filter((event: any) => event.type === 'self_host_containment_verdict')).toEqual([{ type: 'self_host_containment_verdict', contained: true, evidence: 'bwrap' }]);
+      expect(events.filter((event: any) => event.type === 'contained_live_checkout_drift')).toHaveLength(1);
+      expect(violations).toEqual([]);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  // Covers: task:3
+  it('reports verification failure and closes the coordinator window', async () => {
+    const coordinator = new LiveBoundaryCoordinator();
+    const violations: string[] = [];
+    let boundary!: DispatchLiveBoundary; let lease!: Awaited<ReturnType<DispatchLiveBoundary['acquire']>>;
+    await coordinator.runDispatch(async (openWindow) => {
+      boundary = new DispatchLiveBoundary({ openWindow, emit: async () => undefined, verify: async () => { throw new Error('verify failed'); }, onViolation: reason => violations.push(reason) });
+      lease = await boundary.acquire({ liveCheckout: '/live', providerHome: '/provider', provider: 'claude', probe: async () => ({ contained: false, reason: 'unproven' }) });
+    });
+    await boundary.end();
+    await lease.release();
+    expect(violations).toEqual(['Live boundary could not be verified.']);
+    await expect(coordinator.runMutation(async () => 'released')).resolves.toBe('released');
   });
 });
