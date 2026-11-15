@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "slug": "architecture-review-never-checks-seam-conformance-",
+  "artifacts": [
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/architecture-review-never-checks-seam-conformance-.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/architecture-review-never-checks-seam-conformance-.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/architecture-review-never-checks-seam-conformance-.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/architecture-review-never-checks-seam-conformance-.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/architecture-review-never-checks-seam-conformance-.md"
+    }
+  ]
+}
