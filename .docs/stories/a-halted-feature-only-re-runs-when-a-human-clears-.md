@@ -53,11 +53,13 @@ As the operator, I want a `test_suite` run that could not establish a verdict (t
 - Given a daemon-mode `test_suite` step whose verifier returns an infrastructure failure on every run up to the fixed allowance, when the allowance is spent, then the feature halts with class `needs-human` and a reason naming the verifier reason and the number of automatic retries spent, and the evidence path `.pipeline/test-suite-evidence.json`.
 - Given the infrastructure-lane counter file is unreadable or malformed, when the step evaluates an infrastructure failure, then the lane treats the allowance as spent and halts `needs-human` naming the counter as unreadable (fail-closed, adr-2026-08-31 §1 posture), never as a fresh allowance.
 - Given a feature whose infrastructure allowance was partly spent in a previous dispatch, when a later dispatch hits another infrastructure failure, then the counter continues from the persisted value rather than restarting, so the bound is per feature across dispatches.
+- Given a stacked build whose active child's `test_suite` verifier returns an infrastructure failure on every run, when the allowance is spent, then the child halts `needs-human` after the same number of retries as a non-stacked build, because the cap check reads the same child-scoped kickback ledger the retry counter is written to; no `step_retry` attempt exceeds the stated maximum, and the halt names the verifier reason and the retries spent (#3571).
 
 ### Done When
 - [ ] A named constant bounds the suite-infrastructure allowance, its counter persists in the feature's kickback ledger gate entry beside the existing mechanical-fault fields, and a unit test asserts the counter survives a simulated re-dispatch.
 - [ ] A unit test asserts the retry path emits `step_retry` with an infrastructure reason and leaves `count` and `cumulative` unchanged, and a second test asserts exhaustion writes a `needs-human` HALT whose body contains the verifier reason and the retries spent.
 - [ ] A unit test asserts a malformed counter halts `needs-human` rather than retrying.
+- [ ] A unit test with an active stacked child asserts the exhaustion halt fires at the same allowance, `step_retry` attempts never exceed it, and the counter lands in the child's kickback ledger (#3571).
 
 ## Story 3: Budget exhaustion is a human halt, and judgement halts are never retried automatically
 

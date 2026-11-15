@@ -13537,7 +13537,7 @@ export class Conductor {
                 fullSuiteFailure?.status === 'FAILED' &&
                 fullSuiteFailure.reason !== 'nonzero_exit'
               ) {
-                const retries = await readSuiteInfrastructureRetries(this.projectRoot);
+                const retries = await readSuiteInfrastructureRetries(this.projectRoot, this.activeRegionChild);
                 const infrastructureFailure =
                   `test_suite infrastructure failure (${fullSuiteFailure.reason}): ` + fullSuiteFailure.message;
                 let haltReason: string | undefined;

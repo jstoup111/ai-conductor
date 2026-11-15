@@ -2171,6 +2171,60 @@ describe('engine/conductor', () => {
       expect(verifier.ensure).toHaveBeenCalledTimes(MAX_SUITE_INFRASTRUCTURE_RETRIES + 1);
     });
 
+    it('halts a stacked child at the same test_suite infrastructure retry allowance (#3571)', async () => {
+      // Covers: #3571
+      await writeTestSuiteOnlyState();
+      const child = parseChildId(1)!;
+      const suiteFailure = {
+        status: 'FAILED' as const,
+        reason: 'missing_config' as const,
+        message: 'Project config must declare test_suite',
+      };
+      // Bound the fixture: an uncapped loop gets a passing suite after a few
+      // extra tries, so the regression fails on its assertions instead of hanging.
+      const failuresBeforePass = MAX_SUITE_INFRASTRUCTURE_RETRIES + 4;
+      let inspections = 0;
+      let ensures = 0;
+      const verifier = {
+        inspect: vi.fn(async () => (++inspections > failuresBeforePass
+          ? { status: 'CURRENT' as const, evidence: preservedEvidence }
+          : suiteFailure)),
+        ensure: vi.fn(async () => (++ensures > failuresBeforePass
+          ? { status: 'REUSED' as const, evidence: preservedEvidence }
+          : suiteFailure)),
+      };
+      const retryEvents: ConductorEvent[] = [];
+      events.on('step_retry', (event) => {
+        if (event.type === 'step_retry' && event.step === 'test_suite') retryEvents.push(event);
+      });
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
+        mode: 'auto',
+        daemon: true,
+        fromStep: 'test_suite',
+        fullSuiteVerifier: verifier,
+        childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'no-child' }) },
+      });
+      (conductor as unknown as { activeRegionChild: typeof child }).activeRegionChild = child;
+
+      await conductor.run();
+
+      await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
+      expect(halt).toContain(`test_suite infrastructure failure (missing_config): ${suiteFailure.message}`);
+      expect(halt).toContain(`retries spent: ${MAX_SUITE_INFRASTRUCTURE_RETRIES}`);
+      expect(retryEvents.map((event) => (event as { attempt: number }).attempt)).toEqual(
+        Array.from({ length: MAX_SUITE_INFRASTRUCTURE_RETRIES }, (_, index) => index + 1),
+      );
+      expect((await readKickbackLedger(dir, child)).gates.test_suite.suiteInfrastructureRetries)
+        .toBe(MAX_SUITE_INFRASTRUCTURE_RETRIES);
+      expect(verifier.inspect).toHaveBeenCalledTimes(MAX_SUITE_INFRASTRUCTURE_RETRIES + 1);
+      expect(verifier.ensure).toHaveBeenCalledTimes(MAX_SUITE_INFRASTRUCTURE_RETRIES + 1);
+    });
+
     it('halts needs-human without a test_suite re-run when its durable retry counter is unreadable', async () => {
       // Covers: task:4
       await writeTestSuiteOnlyState();

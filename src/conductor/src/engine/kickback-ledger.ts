@@ -886,11 +886,14 @@ export async function readKickbackLedger(projectRoot: string, child?: ChildId): 
  * Read the test-suite infrastructure retry counter. Unlike ordinary ledger
  * reads, this counter fails closed for corrupt durable state. A fresh ledger
  * (or one without a test_suite entry) has spent no retry allowance yet.
+ * Pass the same `child` the bump writes to, or a stacked child never sees
+ * its own count (#3571).
  */
 export async function readSuiteInfrastructureRetries(
   projectRoot: string,
+  child?: ChildId,
 ): Promise<number | 'unreadable'> {
-  const ledger = await readKickbackLedger(projectRoot);
+  const ledger = await readKickbackLedger(projectRoot, child);
   if (isUnreadableKickbackGate(ledger, 'test_suite')) return 'unreadable';
   return ledger.gates.test_suite?.suiteInfrastructureRetries ?? 0;
 }
