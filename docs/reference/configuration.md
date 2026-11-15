@@ -1614,7 +1614,13 @@ a routed round instead of appended to the leaf plan:
   higher child's tree (a closed child's closure, or the leaf); a verified claim preserves the rejected host tip at `rejected/r<n>/<m>`, restores the host's
   closure, moves the round to that child in one fenced transaction, and emits
   `remediation_rerouted`. A malformed or unverified claim counts as an ordinary failed build
-  attempt; a failed move or worktree sync halts `needs-human`.
+  attempt; a failed move or worktree sync halts `needs-human`. A malformed claim's failure detail,
+  which is also the `step_retry` reason, names the first faulty field:
+  `routed prerequisite claim is malformed: <reason>` (for example, `child is missing;
+  blocked-by-prerequisite requires an integer child from 1 to 9`). A `null` result counts as
+  malformed, and a `completed` result may carry only `outcome`. When the builder leaves
+  `.pipeline/halt-user-input-required`, the engine does not settle the claim. The attempt goes to
+  the [`halt_marker`](../runbooks/stalled-or-stuck-feature.md#halt_marker) stall handling.
 - **Exit.** When a host child's `build_review` passes, the host leaves the round. A host tip equal
   to its closure exits with one compare-and-swap that marks the host `done` and deletes the marker.
   Otherwise the engine marks the host `built` and runs a journaled `feature-repair`
