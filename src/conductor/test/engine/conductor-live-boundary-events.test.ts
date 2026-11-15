@@ -10,7 +10,7 @@ import type { SelfHostGuardrails } from '../../src/engine/self-host/wiring.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
-import { writeState } from '../../src/engine/state.js';
+import { readState, writeState } from '../../src/engine/state.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
@@ -232,6 +232,71 @@ describe('self-host live-boundary events', () => {
         expect.objectContaining({ label: 'provider state' }),
       ]) }),
     ]);
+  });
+
+  // Covers: task:5
+  it('halts at the next boundary when the second candidate adds to the live checkout', async () => {
+    let attempts = 0;
+    const { conductor, persister } = harness(async () => {
+      attempts += 1;
+      if (attempts === 2) await writeFile(join(liveCheckout, 'second-candidate.txt'), 'drift');
+      return attempts === 1 ? { success: false, output: 'retry' } : { success: true, output: 'done' };
+    }, { candidateAttempts: 2 });
+
+    await conductor.run();
+    persister.stop();
+
+    const state = await readState(join(projectRoot, 'conduct-state.json'));
+    const recorded = await events();
+    expect(state.ok && state.value.build).toBe('done');
+    expect(recorded.filter(event => event.type === 'loop_halt')).toHaveLength(1);
+    expect(await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8')).toContain('added second-candidate.txt');
+  });
+
+  // Covers: task:5
+  it('records one contained drift and verdict for two candidate preparations without a HALT', async () => {
+    await chmod(liveCheckout, 0o555);
+    let attempts = 0;
+    const { conductor, persister } = harness(async () => {
+      attempts += 1;
+      if (attempts === 2) {
+        await chmod(liveCheckout, 0o755);
+        await writeFile(join(liveCheckout, '.claude', 'settings.local.json'), '{"operator":true}\n');
+      }
+      return attempts === 1 ? { success: false, output: 'retry' } : { success: true, output: 'done' };
+    }, { candidateAttempts: 2 });
+
+    await conductor.run();
+    persister.stop();
+
+    const recorded = await events();
+    expect(recorded.filter(event => event.type === 'contained_live_checkout_drift')).toHaveLength(1);
+    expect(recorded.filter(event => event.type === 'self_host_containment_verdict')).toHaveLength(1);
+    await expect(readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  // Covers: task:5
+  it('takes a fresh provider-state snapshot for a second dispatch after provider state changes', async () => {
+    const actualFingerprint = liveBoundary.fingerprintProviderStateSurface;
+    let fingerprints = 0;
+    vi.spyOn(liveBoundary, 'fingerprintProviderStateSurface').mockImplementation(async (args) => {
+      fingerprints += 1;
+      if (fingerprints === 2) await writeFile(join(providerHome, 'settings.json'), '{"changed":true}\n');
+      return actualFingerprint(args);
+    });
+    let dispatches = 0;
+    const { conductor, persister } = harness(async () => {
+      dispatches += 1;
+      return dispatches === 1 ? { success: false, output: 'retry' } : { success: true, output: 'done' };
+    }, { maxRetries: 2 });
+
+    await conductor.run();
+    persister.stop();
+
+    const recorded = await events();
+    expect(recorded.filter(event => event.type === 'self_host_boundary_fingerprint')).toHaveLength(2);
+    expect(recorded.filter(event => event.type === 'loop_halt')).toEqual([]);
+    await expect(readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('maps the original provider catalog home onto the prepared candidate explicitly', async () => {
