@@ -30,6 +30,7 @@ import { switchToChild, noOpChildLifecycleEvents } from '../../src/engine/child-
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 import type { ConductState, ConductorEvent } from '../../src/types/index.js';
 
 const fixtures: string[] = [];
@@ -123,7 +124,9 @@ describe('serial validation residue wiring', () => {
     const emitter = new ConductorEventEmitter();
     const persister = new EventPersister(join(dir, '.pipeline/events.jsonl'), emitter);
     persister.start();
-    emitter.on('validator_residue_quarantined', (event) => events.push(event));
+    emitter.on('validator_residue_quarantined', (event) => {
+      events.push(event);
+    });
     const runner = manualRunner(dir);
     const instance = conductor(dir, statePath, runner, emitter, undefined, 'manual_test', true);
 
@@ -158,9 +161,15 @@ describe('serial validation residue wiring', () => {
         persisted.findIndex((item) => item.type === 'step_failed' && item.step === 'manual_test'),
       );
       await expect(
-        switchToChild(dir, { child: 1, position: 1, branch: 'validator-child' }, noOpChildLifecycleEvents, undefined, {
-          git: makeGitRunner(dir),
-        }),
+        switchToChild(
+          dir,
+          { child: parseChildId(1)!, position: parseChildId(1)!, branch: 'validator-child' },
+          noOpChildLifecycleEvents,
+          undefined,
+          {
+            git: makeGitRunner(dir),
+          },
+        ),
       ).resolves.toEqual({ kind: 'completed' });
     } finally {
       persister.stop();
@@ -173,8 +182,12 @@ describe('serial validation residue wiring', () => {
     residueMock.implementation = async () => ({ kind: 'refused', reason });
     const events: ConductorEvent[] = [];
     const emitter = new ConductorEventEmitter();
-    emitter.on('validator_residue_quarantined', (event) => events.push(event));
-    const instance = conductor(dir, statePath, manualRunner(dir), emitter, (line) => logs.push(line));
+    emitter.on('validator_residue_quarantined', (event) => {
+      events.push(event);
+    });
+    const instance = conductor(dir, statePath, manualRunner(dir), emitter, (line) => {
+      logs.push(line);
+    });
 
     await instance.run();
 
@@ -227,7 +240,9 @@ describe('serial validation residue wiring', () => {
 
     const events: ConductorEvent[] = [];
     const emitter = new ConductorEventEmitter();
-    emitter.on('validator_residue_quarantined', (event) => events.push(event));
+    emitter.on('validator_residue_quarantined', (event) => {
+      events.push(event);
+    });
     await conductor(dir, statePath, runner, emitter, undefined, 'build').run();
 
     await expect(readFile(join(dir, 'src/new.ts'), 'utf8')).resolves.toContain('value');
@@ -282,8 +297,12 @@ describe('grouped validation residue wiring', () => {
     await writeFile(join(dir, 'scratch.txt'), 'preexisting\n');
     const events: ConductorEvent[] = [];
     const emitter = new ConductorEventEmitter();
-    emitter.on('validator_residue_quarantined', (event) => events.push(event));
-    emitter.on('gate_verdict', (event) => events.push(event));
+    emitter.on('validator_residue_quarantined', (event) => {
+      events.push(event);
+    });
+    emitter.on('gate_verdict', (event) => {
+      events.push(event);
+    });
     const runner: StepRunner = {
       run: vi.fn(async (step) => {
         if (step === 'architecture_review_as_built') {
@@ -329,7 +348,9 @@ describe('grouped validation residue wiring', () => {
     let manualAttempts = 0;
     const events: ConductorEvent[] = [];
     const emitter = new ConductorEventEmitter();
-    emitter.on('validator_residue_quarantined', (event) => events.push(event));
+    emitter.on('validator_residue_quarantined', (event) => {
+      events.push(event);
+    });
     const runner: StepRunner = {
       run: vi.fn(async (step) => {
         if (step === 'manual_test') {
