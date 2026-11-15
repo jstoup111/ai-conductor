@@ -39,8 +39,8 @@ trap cleanup EXIT
 
 SKILLS_DIR="${WORKDIR}/skills"
 ARCHITECTURE_FILE="${WORKDIR}/ARCHITECTURE.md"
-mkdir -p "${SKILLS_DIR}/exact-row" "${SKILLS_DIR}/engine-row" "${SKILLS_DIR}/tdd" "${SKILLS_DIR}/engineer" "${SKILLS_DIR}/coverage-binding"
-for skill in exact-row engine-row tdd engineer coverage-binding; do
+mkdir -p "${SKILLS_DIR}/exact-row" "${SKILLS_DIR}/engine-row" "${SKILLS_DIR}/tdd" "${SKILLS_DIR}/coverage-binding"
+for skill in exact-row engine-row tdd coverage-binding; do
   printf '%s\n' '---' "name: ${skill}" '---' > "${SKILLS_DIR}/${skill}/SKILL.md"
 done
 
@@ -75,7 +75,7 @@ CODE=$?
 assert "exact rows, engine-gate rows, aliases, and an allowlisted skill pass" \
   "$([ "$CODE" -eq 0 ] && echo 0 || echo 1)"
 assert "allowlisted row-less skill is identified as allowlisted" \
-  "$(case "$OUT" in *'engineer — allowlisted:'*) echo 0;; *) echo 1;; esac)"
+  "$(case "$OUT" in *'coverage-binding — allowlisted:'*) echo 0;; *) echo 1;; esac)"
 [ "$CODE" -eq 0 ] || echo "$OUT" | sed 's/^/    /'
 
 mkdir -p "${SKILLS_DIR}/row-less"
@@ -87,10 +87,10 @@ assert "row-less unlisted skill fails and names the skill" \
 rm -f "${SKILLS_DIR}/row-less/SKILL.md"
 rmdir "${SKILLS_DIR}/row-less"
 
-OUT=$(run_fixture_checker_with $'engineer|' '')
+OUT=$(run_fixture_checker_with $'coverage-binding|' '')
 CODE=$?
 assert "allowlist entry with an empty reason fails and names the entry" \
-  "$( [ "$CODE" -ne 0 ] && printf '%s\n' "$OUT" | grep -Fq 'engineer' && echo 0 || echo 1)"
+  "$( [ "$CODE" -ne 0 ] && printf '%s\n' "$OUT" | grep -Fq 'coverage-binding' && echo 0 || echo 1)"
 
 OUT=$(run_fixture_checker_with $'ghost|retired skill' '')
 CODE=$?
