@@ -206,6 +206,7 @@ describe('self-host live boundary: violations are enforced at the next dispatch'
     return readFile(join(projectRoot, '.pipeline/HALT'), 'utf-8').catch(() => null);
   }
 
+  // Covers: task:5
   it('lets a step that completed mid-change keep its own success verdict', async () => {
     const { conductor, dispatches, emitted } = harness(async () => {
       await changeProviderStateMidStep();
@@ -220,6 +221,7 @@ describe('self-host live boundary: violations are enforced at the next dispatch'
     expect(emitted.filter((e) => e.type === 'step_failed')).toEqual([]);
   });
 
+  // Covers: task:5
   it('still halts the run, with the boundary reason and a mechanical class', async () => {
     const { conductor, emitted } = harness(async () => {
       await changeProviderStateMidStep();
