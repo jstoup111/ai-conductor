@@ -122,7 +122,10 @@ describe('daemon executor-isolation composition', () => {
     });
 
     await vi.waitFor(() => expect(order).toEqual(['feature_dispatch_ended', 'flush']));
-    expect(seams.wireDaemonOtel).toHaveBeenCalledWith(expect.objectContaining({ otel: { exporter: 'file' } }), expect.anything());
+    expect(seams.wireDaemonOtel).toHaveBeenCalledWith(
+      expect.objectContaining({ otel: { exporter: 'file' } }),
+      expect.anything(),
+    );
     expect(schedulerCompletion).not.toHaveBeenCalled();
 
     releaseFlush();
