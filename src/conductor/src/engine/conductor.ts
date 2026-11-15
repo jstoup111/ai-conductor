@@ -7658,7 +7658,9 @@ export class Conductor {
     const dispatchLiveBoundary = new DispatchLiveBoundary({
       openWindow,
       emit: async (event) => this.events.emit(event),
-      onViolation: (reason) => { this.pendingLiveBoundaryHalt = reason; },
+      onViolation: (reason) => {
+        this.pendingLiveBoundaryHalt = reason;
+      },
     });
     if (this.providerExecution) {
       this.providerExecution.withCandidateSafety = async (candidate, invoke) => {
@@ -7708,12 +7710,13 @@ export class Conductor {
             providerHome,
             provider: providerId,
             selectedAuthPaths: [provider.selfHostShape.selectedAuthPath],
-            probe: async () => sh.liveContainment
-              ? probeContainment(bindSet, liveCheckout, this.projectRoot, async (executable, args) => {
-                  const result = await execa(executable, args, { reject: false });
-                  return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode ?? 1 };
-                })
-              : { contained: false as const, reason: 'containment disabled by configuration' },
+            probe: async () =>
+              sh.liveContainment
+                ? probeContainment(bindSet, liveCheckout, this.projectRoot, async (executable, args) => {
+                    const result = await execa(executable, args, { reject: false });
+                    return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode ?? 1 };
+                  })
+                : { contained: false as const, reason: 'containment disabled by configuration' },
           });
           // The daemon owns root mutations. Register the complete fingerprint →
           // verify lifetime before provisioning the provider so a concurrent
