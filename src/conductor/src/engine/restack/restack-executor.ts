@@ -38,6 +38,7 @@ import { planRestackRanges } from './restack-plan.js';
 import { collectFoldSet, placeFoldCommits } from './fold-plan.js';
 import type { FoldCommitPlan, FoldFrozenBlock, FoldPart, FoldRange, FoldSourceCommit } from './fold-types.js';
 import { withDaemonCoAuthorTrailer } from '../bot-co-author.js';
+import { unionRemBlocks } from '../routing/rem-block-merge.js';
 import {
   adaptedPathsFor,
   checkPathOwnership,
@@ -728,6 +729,49 @@ function foldCommitEnvironment(author: Awaited<ReturnType<typeof authorOf>>, sta
   };
 }
 
+async function textAtRevision(git: GitRunner, revision: string, path: string, env?: NodeJS.ProcessEnv): Promise<string | undefined> {
+  const result = await git(['show', revision === ':' ? `:${path}` : `${revision}:${path}`], env === undefined ? undefined : { env });
+  return result.exitCode === 0 ? result.stdout : undefined;
+}
+
+function blockOnlyPlan(base: string, blocks: readonly FoldFrozenBlock[]): string {
+  const additions = blocks.map((block) => block.body).join('');
+  return `${base}${base.endsWith('\n') ? '\n' : '\n\n'}${additions}`;
+}
+
+async function materializeFrozenBlocks(
+  git: GitRunner,
+  source: CommitSha,
+  blocks: readonly FoldFrozenBlock[],
+  index: string,
+): Promise<void> {
+  const env = { GIT_INDEX_FILE: index };
+  const changed = await git(['diff-tree', '--no-commit-id', '--name-only', '-r', source]);
+  if (changed.exitCode !== 0) throw new Error(`cannot list frozen fold paths for ${source}: ${changed.stderr}`);
+  const paths = changed.stdout
+    .split('\n')
+    .filter((path) => path.startsWith('.docs/plans/') && path.endsWith('.md'));
+  let materialized = false;
+  for (const path of paths) {
+    const [base, ours] = await Promise.all([
+      textAtRevision(git, `${source}^`, path),
+      textAtRevision(git, ':', path, env),
+    ]);
+    if (base === undefined || ours === undefined) continue;
+    const merged = unionRemBlocks(base, ours, blockOnlyPlan(base, blocks));
+    if (merged.kind === 'declined') continue;
+    if (merged.kind === 'body-mismatch')
+      throw new Error(`cannot re-materialize frozen fold block ${merged.remId} for ${source}`);
+    const blob = await git(['hash-object', '-w', '--stdin'], { input: merged.text });
+    const blobSha = blob.exitCode === 0 ? parseCommitSha(blob.stdout.trim()) : undefined;
+    if (!blobSha) throw new Error(`cannot write frozen fold block for ${source}: ${blob.stderr}`);
+    const updated = await git(['update-index', '--add', '--cacheinfo', `100644,${blobSha},${path}`], { env });
+    if (updated.exitCode !== 0) throw new Error(`cannot stage frozen fold block for ${source}: ${updated.stderr}`);
+    materialized = true;
+  }
+  if (!materialized) throw new Error(`cannot re-materialize frozen fold blocks for ${source}`);
+}
+
 async function writeFoldCommit(
   git: GitRunner,
   parent: CommitSha,
@@ -739,19 +783,10 @@ async function writeFoldCommit(
   const env = { GIT_INDEX_FILE: index };
   const seeded = await git(['read-tree', parent], { env });
   if (seeded.exitCode !== 0) throw new Error(`cannot seed fold index: ${seeded.stderr}`);
-  let copiedWholePatch = false;
   for (const part of parts) {
     if (part.kind === 'whole') continue;
     if (part.kind === 'blocks') {
-      // Frozen rem blocks are normally the entire source commit. Applying the
-      // source patch keeps their deterministic append semantics and also
-      // preserves an intentionally empty evidence commit below.
-      if (copiedWholePatch) continue;
-      const patch = await git(['show', '--format=', '--binary', '--no-ext-diff', source.sha]);
-      if (patch.exitCode !== 0) throw new Error(`cannot read frozen fold source ${source.sha}`);
-      const applied = await git(['apply', '--cached', '--binary', '--whitespace=nowarn'], { env, input: patch.stdout });
-      if (applied.exitCode !== 0) throw new Error(`cannot apply frozen fold source ${source.sha}: ${applied.stderr}`);
-      copiedWholePatch = true;
+      await materializeFrozenBlocks(git, source.sha, part.blocks, index);
       continue;
     }
     const applied = await git(['apply', '--cached', '--binary', '--unidiff-zero', '--whitespace=nowarn'], {
@@ -1032,7 +1067,7 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
             }
           } catch (error) {
             const detail = error instanceof Error ? error.message : String(error);
-            if (detail.startsWith('cannot apply fold hunk') || detail.startsWith('cannot apply frozen fold source')) {
+            if (detail.startsWith('cannot apply fold hunk') || detail.includes('frozen fold')) {
               await abortJournal(options.worktree, journal, git, []);
               await haltRestackConflict(
                 options.worktree,

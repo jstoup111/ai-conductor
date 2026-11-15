@@ -1,7 +1,7 @@
 // Covers: task:16
 // A planned fold has a source-to-placement plan, not generic replay ranges.
 import { execFile as execFileCallback } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -108,6 +108,79 @@ async function snapshot(git: (args: string[]) => Promise<{ stdout: string }>) {
 }
 
 describe('planned fold recovery (real local Git)', () => {
+  it('re-materializes only frozen blocks while replaying a mixed source commit on its planned children', async () => {
+    const subject = await fixture();
+    const block = '### Task rem-prd-audit-T1: Repair\n**Done when:**\n- fixed\n**Child:** 1\n**Round:** r2\n';
+    const planPath = join(subject.repo, '.docs', 'plans', 'demo.md');
+    const [basePlan, stories, complexity] = await Promise.all([
+      readFile(planPath, 'utf8'),
+      readFile(join(subject.repo, '.docs', 'stories', 'demo.md'), 'utf8'),
+      readFile(join(subject.repo, '.docs', 'complexity', 'demo.md'), 'utf8'),
+    ]);
+
+    await subject.git(['update-ref', '-d', 'refs/conductor/demo/routes/r1']);
+    await subject.git(['checkout', '-q', 'feat/c1/demo']);
+    await mkdir(join(subject.repo, '.docs', 'plans'), { recursive: true });
+    await mkdir(join(subject.repo, '.docs', 'stories'), { recursive: true });
+    await mkdir(join(subject.repo, '.docs', 'complexity'), { recursive: true });
+    await writeFile(planPath, basePlan);
+    await writeFile(join(subject.repo, '.docs', 'stories', 'demo.md'), stories);
+    await writeFile(join(subject.repo, '.docs', 'complexity', 'demo.md'), complexity);
+    await subject.git(['add', '.docs/plans/demo.md', '.docs/stories/demo.md', '.docs/complexity/demo.md']);
+    await subject.git(['commit', '-qm', 'child one plan']);
+    const c1 = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim() as CommitSha;
+    await subject.git(['update-ref', 'refs/conductor/demo/closed/c1', c1]);
+
+    await subject.git(['checkout', '-qB', 'feat/c2/demo', c1]);
+    await writeFile(join(subject.repo, 'residual.txt'), 'before\n');
+    await subject.git(['add', 'residual.txt']);
+    await subject.git(['commit', '-qm', 'child two residual']);
+    const c2 = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim() as CommitSha;
+    await subject.git(['update-ref', 'refs/conductor/demo/closed/c2', c2]);
+
+    await subject.git(['checkout', '-qB', 'feat/daemon-demo', c2]);
+    await writeFile(join(subject.repo, 'leaf.txt'), 'leaf\n');
+    await subject.git(['add', 'leaf.txt']);
+    await subject.git(['commit', '-qm', 'leaf build']);
+    const entry = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim() as CommitSha;
+    const foldedPlan = `${basePlan}${basePlan.endsWith('\n') ? '\n' : '\n\n'}${block}`;
+    await writeFile(planPath, foldedPlan);
+    await writeFile(join(subject.repo, 'residual.txt'), 'after\n');
+    await subject.git(['add', '.docs/plans/demo.md', 'residual.txt']);
+    await subject.git(['commit', '-qm', 'mixed routed repair\n\nRound: r2\nOwner: c1']);
+    const source = (await subject.git(['rev-parse', 'HEAD'])).stdout.trim() as CommitSha;
+    const preFoldTree = (await subject.git(['rev-parse', `${source}^{tree}`])).stdout.trim();
+
+    const route = await createRouteRecord(
+      subject.repo,
+      'demo',
+      {
+        roundId: parseRoundId('r2')!,
+        kind: 'audit',
+        sealedAuthored: 1,
+        execution: 'leaf',
+        items: [
+          { findingId: 'mixed', kind: 'audit', owner: child(1), host: child(1), reason: 'repair', fallback: [] },
+        ],
+        allocation: { [child(1)]: { remTaskIds: ['rem-prd-audit-T1'], blockBodies: [block] } },
+        placements: { [child(1)]: { state: 'deferred', leafEntryTip: entry, exitTip: source } },
+      },
+      { git: makeGitRunner(subject.repo) },
+    );
+    if (route.kind !== 'created') throw new Error(`could not create mixed fold route: ${route.kind}`);
+
+    const folded = await runRestack({ worktree: subject.repo, slug: 'demo', cause: 'fold', git: makeGitRunner(subject.repo) });
+    expect(folded).toMatchObject({ kind: 'applied' });
+
+    expect((await subject.git(['show', 'feat/c1/demo:.docs/plans/demo.md'])).stdout).toBe(foldedPlan);
+    await expect(subject.git(['show', 'feat/c1/demo:residual.txt'])).rejects.toMatchObject({ code: 128 });
+    expect((await subject.git(['show', 'feat/c2/demo:residual.txt'])).stdout).toBe('after\n');
+    expect((await subject.git(['log', '-Safter', '--format=%H', 'feat/c2/demo', '--', 'residual.txt'])).stdout.trim().split('\n'))
+      .toHaveLength(1);
+    expect((await subject.git(['log', '--format=%H', 'feat/c2/demo'])).stdout.trim().split('\n')).not.toContain(source);
+    expect((await subject.git(['rev-parse', 'feat/daemon-demo^{tree}'])).stdout.trim()).toBe(preFoldTree);
+  });
+
   it('rolls every ref back rather than generically replaying an interrupted FoldPlan', async () => {
     const subject = await fixture();
     const before = await snapshot(subject.git);
