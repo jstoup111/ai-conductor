@@ -1,4 +1,4 @@
-// Covers: task:7, task:8, task:9, task:10, task:11
+// Covers: task:2, task:7, task:8, task:9, task:10, task:11
 import { describe, expect, it } from 'vitest';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { create as createRateLimitEpisode } from '../../src/engine/rate-limit-episode.js';
@@ -298,6 +298,39 @@ describe('executor broker', () => {
 
     await attachment.close();
     expect(stopped).toEqual(['b']);
+  });
+
+  // Covers: task:2
+  it('drops a collected child event before either attached visualizer can record it', async () => {
+    const recorded: Record<string, unknown[]> = { a: [], b: [] };
+    const broker = createExecutorBroker({
+      rateLimitEpisode: createRateLimitEpisode({ now: () => 1_000 }),
+      providerAvailability: createProviderAvailability({ now: () => 1_000 }),
+      worktreeLifecycle: new WorktreeLifecycleQueue(),
+      rootEvents: new ConductorEventEmitter(),
+      featureLogFor: () => () => {},
+      attachFeatureOtelVisualizer: ({ slug }, events) => {
+        events.on('bot_co_author_skipped', (event) => recorded[slug]!.push(event));
+        return () => {};
+      },
+    });
+    const a = pair();
+    const b = pair();
+    const attachmentA = broker.attach('a', a.supervisor, 'v1');
+    broker.attach('b', b.supervisor, 'v1');
+    const receivedByA: unknown[] = [];
+    attachmentA.events.on('bot_co_author_skipped', (event) => receivedByA.push(event));
+
+    await attachmentA.close();
+    a.child.send({
+      kind: 'event',
+      scope: 'feature',
+      payload: { type: 'bot_co_author_skipped', reason: 'token-unavailable' },
+    });
+    a.flush();
+
+    expect(receivedByA).toEqual([]);
+    expect(recorded).toEqual({ a: [], b: [] });
   });
 
   it('rejects a child rate-limit clear when its supervisor channel disconnects', async () => {
