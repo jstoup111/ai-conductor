@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "slug": "routed-build-claim-with-null-fields-is-rejected-as",
+  "artifacts": [
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/routed-build-claim-with-null-fields-is-rejected-as.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/routed-build-claim-with-null-fields-is-rejected-as.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/routed-build-claim-with-null-fields-is-rejected-as.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/routed-build-claim-with-null-fields-is-rejected-as.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/routed-build-claim-with-null-fields-is-rejected-as.md"
+    }
+  ]
+}
