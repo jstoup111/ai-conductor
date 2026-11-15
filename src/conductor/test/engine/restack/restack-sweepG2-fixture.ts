@@ -24,7 +24,10 @@ const envelopeFilesystem: SliceTopologyFixtureFilesystem = {
 
 export interface SweepRepository {
   readonly repo: string;
-  readonly git: (args: string[], env?: NodeJS.ProcessEnv) => Promise<{ readonly stdout: string; readonly stderr: string }>;
+  readonly git: (
+    args: string[],
+    env?: NodeJS.ProcessEnv,
+  ) => Promise<{ readonly stdout: string; readonly stderr: string }>;
   /** Write one file (creating parents), stage it, commit, and return HEAD. */
   readonly commit: (message: string, path: string, content: string) => Promise<CommitSha>;
   readonly write: (path: string, content: string) => Promise<void>;
@@ -42,7 +45,8 @@ export async function createSweepRepository(prefix: string, cleanup: string[]): 
   // The launcher-owned marker remains stable for the whole Vitest run.
   const repo = await mkdtemp(join(process.env[RUN_TMP_ROOT_ENV] ?? tmpdir(), prefix));
   cleanup.push(repo);
-  const git = (args: string[], env?: NodeJS.ProcessEnv) => execFile('git', args, { cwd: repo, ...(env === undefined ? {} : { env: { ...process.env, ...env } }) });
+  const git = (args: string[], env?: NodeJS.ProcessEnv) =>
+    execFile('git', args, { cwd: repo, ...(env === undefined ? {} : { env: { ...process.env, ...env } }) });
   const write = async (path: string, content: string) => {
     await mkdir(dirname(join(repo, path)), { recursive: true });
     await writeFile(join(repo, path), content);
@@ -72,15 +76,19 @@ export async function sealStack(repo: string, positions: readonly number[] = [1,
     entries: [],
     sliceMembership: {
       taskSlices: Object.fromEntries(positions.map((position) => [String(position), position])),
-      titles: positions.map((position) => position === positions.at(-1) ? 'Leaf' : `Child ${position}`),
+      titles: positions.map((position) => (position === positions.at(-1) ? 'Leaf' : `Child ${position}`)),
     },
     storyOwnership: Object.fromEntries(positions.map((position) => [`S${position}`, position])),
   };
   const original = (await execFile('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: repo })).stdout.trim();
-  const branches = (await execFile('git', ['for-each-ref', '--format=%(refname:short)', 'refs/heads/feat'], { cwd: repo })).stdout
+  const branches = (
+    await execFile('git', ['for-each-ref', '--format=%(refname:short)', 'refs/heads/feat'], { cwd: repo })
+  ).stdout
     .split('\n')
     .filter((branch) => branch === 'feat/daemon-demo' || /^feat\/c\d+\/demo$/.test(branch));
-  const closedRefs = (await execFile('git', ['for-each-ref', '--format=%(refname)', 'refs/conductor/demo/closed/'], { cwd: repo })).stdout
+  const closedRefs = (
+    await execFile('git', ['for-each-ref', '--format=%(refname)', 'refs/conductor/demo/closed/'], { cwd: repo })
+  ).stdout
     .split('\n')
     .filter(Boolean);
   // Every commit in the fixture's graph must carry the same replacement-tree
@@ -105,12 +113,21 @@ export async function removeAll(cleanup: string[]): Promise<void> {
 }
 
 export async function stackRefs(subject: SweepRepository): Promise<string> {
-  return (await subject.git([
-    'for-each-ref', '--format=%(refname) %(objectname)', 'refs/heads/', 'refs/conductor/demo/closed/',
-  ])).stdout;
+  return (
+    await subject.git([
+      'for-each-ref',
+      '--format=%(refname) %(objectname)',
+      'refs/heads/',
+      'refs/conductor/demo/closed/',
+    ])
+  ).stdout;
 }
 
 export async function persistedEvents(repo: string): Promise<Array<Record<string, unknown> & { type: string }>> {
   const raw = await readFile(join(repo, '.pipeline', 'events.jsonl'), 'utf8');
-  return raw.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown> & { type: string });
+  return raw
+    .trim()
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as Record<string, unknown> & { type: string });
 }
