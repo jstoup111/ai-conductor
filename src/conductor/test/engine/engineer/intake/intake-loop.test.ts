@@ -60,9 +60,7 @@ describe('intake-loop types', () => {
   });
 
   it('constructs values conforming to each shape (compile-time check)', async () => {
-    const mod = (await import(
-      '../../../../src/engine/engineer/intake/intake-loop.js'
-    )) as Record<string, unknown>;
+    const mod = (await import('../../../../src/engine/engineer/intake/intake-loop.js')) as Record<string, unknown>;
     type Deps = import('../../../../src/engine/engineer/intake/intake-loop.js').IntakeLoopDeps;
     type Opts = import('../../../../src/engine/engineer/intake/intake-loop.js').IntakeLoopOptions;
 
@@ -95,9 +93,7 @@ describe('intake-loop types', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 describe('intakeTick', () => {
   it('a tick with 2 envelopes from poll() enqueues both and returns {captured: 2}', async () => {
-    const mod = (await import(
-      '../../../../src/engine/engineer/intake/intake-loop.js'
-    )) as Record<string, any>;
+    const mod = (await import('../../../../src/engine/engineer/intake/intake-loop.js')) as Record<string, any>;
     const intakeTick = mod.intakeTick as (deps: any) => Promise<{ captured: number }>;
     expect(typeof intakeTick).toBe('function');
 
@@ -148,9 +144,7 @@ describe('intakeTick', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 describe('intakeTick — ledger dedup (exactly-once)', () => {
   it('a second tick whose poll() returns [] enqueues nothing and notifies nothing', async () => {
-    const mod = (await import(
-      '../../../../src/engine/engineer/intake/intake-loop.js'
-    )) as Record<string, any>;
+    const mod = (await import('../../../../src/engine/engineer/intake/intake-loop.js')) as Record<string, any>;
     const intakeTick = mod.intakeTick as (deps: any) => Promise<{ captured: number }>;
 
     const envelopeA = {
@@ -204,9 +198,7 @@ describe('intakeTick — ledger dedup (exactly-once)', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 describe('intakeTick — repo isolation on failure', () => {
   it('poll() yields A/B/C but enqueue() throws for B: tick captures A+C, logs B, does not throw', async () => {
-    const mod = (await import(
-      '../../../../src/engine/engineer/intake/intake-loop.js'
-    )) as Record<string, any>;
+    const mod = (await import('../../../../src/engine/engineer/intake/intake-loop.js')) as Record<string, any>;
     const intakeTick = mod.intakeTick as (deps: any) => Promise<{ captured: number }>;
 
     const envelopeA = {
@@ -269,9 +261,7 @@ describe('intakeTick — repo isolation on failure', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 describe('intakeTick — origin routing (target + sourceRef)', () => {
   it('an envelope from owner/X#7 carries target=owner/X and sourceRef=owner/X#7 when enqueued', async () => {
-    const mod = (await import(
-      '../../../../src/engine/engineer/intake/intake-loop.js'
-    )) as Record<string, any>;
+    const mod = (await import('../../../../src/engine/engineer/intake/intake-loop.js')) as Record<string, any>;
     const intakeTick = mod.intakeTick as (deps: any) => Promise<{ captured: number }>;
 
     const envelope = {
@@ -311,9 +301,7 @@ describe('intakeTick — origin routing (target + sourceRef)', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 describe('intakeTick — origin-unresolved (preserve, do not drop)', () => {
   it('an envelope without hintRepo is still enqueued with its raw sourceRef, and a warning is logged', async () => {
-    const mod = (await import(
-      '../../../../src/engine/engineer/intake/intake-loop.js'
-    )) as Record<string, any>;
+    const mod = (await import('../../../../src/engine/engineer/intake/intake-loop.js')) as Record<string, any>;
     const intakeTick = mod.intakeTick as (deps: any) => Promise<{ captured: number }>;
 
     const envelope = {
@@ -363,9 +351,7 @@ describe('intakeTick — origin-unresolved (preserve, do not drop)', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 describe('runIntakeLoop', () => {
   it('with once=true runs exactly one tick and returns (no sleep)', async () => {
-    const mod = (await import(
-      '../../../../src/engine/engineer/intake/intake-loop.js'
-    )) as Record<string, any>;
+    const mod = (await import('../../../../src/engine/engineer/intake/intake-loop.js')) as Record<string, any>;
     const runIntakeLoop = mod.runIntakeLoop as (deps: any, opts: any) => Promise<void>;
     expect(typeof runIntakeLoop).toBe('function');
 
@@ -387,9 +373,7 @@ describe('runIntakeLoop', () => {
   });
 
   it('with once=false (continuous) runs 3 ticks over 3 intervals, sleeping between ticks', async () => {
-    const mod = (await import(
-      '../../../../src/engine/engineer/intake/intake-loop.js'
-    )) as Record<string, any>;
+    const mod = (await import('../../../../src/engine/engineer/intake/intake-loop.js')) as Record<string, any>;
     const runIntakeLoop = mod.runIntakeLoop as (deps: any, opts: any) => Promise<void>;
 
     let tickCount = 0;
@@ -413,12 +397,11 @@ describe('runIntakeLoop', () => {
       }
     });
 
-    await runIntakeLoop(
-      { poll, enqueue, notify, sleep, now, log },
-      { intervalMs: 60000, once: false },
-    ).catch((e: unknown) => {
-      if (e !== STOP) throw e;
-    });
+    await runIntakeLoop({ poll, enqueue, notify, sleep, now, log }, { intervalMs: 60000, once: false }).catch(
+      (e: unknown) => {
+        if (e !== STOP) throw e;
+      },
+    );
 
     // Each iteration ticks then sleeps; the 3rd sleep call throws, stopping
     // the loop before a 4th tick begins — so exactly 3 ticks and 3 sleeps.
@@ -439,9 +422,7 @@ describe('runIntakeLoop', () => {
   // `runIntakeLoop` catches it, logs it, and proceeds to a second tick.
   // ───────────────────────────────────────────────────────────────────────
   it('a tick that throws (e.g. notify() rejects) is caught, logged, and the loop continues to the next tick', async () => {
-    const mod = (await import(
-      '../../../../src/engine/engineer/intake/intake-loop.js'
-    )) as Record<string, any>;
+    const mod = (await import('../../../../src/engine/engineer/intake/intake-loop.js')) as Record<string, any>;
     const runIntakeLoop = mod.runIntakeLoop as (deps: any, opts: any) => Promise<void>;
 
     const envelope = {
@@ -479,12 +460,11 @@ describe('runIntakeLoop', () => {
     });
 
     await expect(
-      runIntakeLoop(
-        { poll, enqueue, notify, sleep, now, log },
-        { intervalMs: 1000, once: false },
-      ).catch((e: unknown) => {
-        if (e !== STOP) throw e;
-      }),
+      runIntakeLoop({ poll, enqueue, notify, sleep, now, log }, { intervalMs: 1000, once: false }).catch(
+        (e: unknown) => {
+          if (e !== STOP) throw e;
+        },
+      ),
     ).resolves.toBeUndefined();
 
     // The first tick's notify() threw, but the loop caught it, logged it, and
@@ -492,15 +472,11 @@ describe('runIntakeLoop', () => {
     // runIntakeLoop other than the deliberate STOP sentinel from sleep().
     expect(pollCalls).toBe(2);
     expect(sleep).toHaveBeenCalledTimes(2);
-    expect(log.mock.calls.some((call: unknown[]) => String(call[0]).includes('notify: total tick failure'))).toBe(
-      true,
-    );
+    expect(log.mock.calls.some((call: unknown[]) => String(call[0]).includes('notify: total tick failure'))).toBe(true);
   });
 
   it('retains a corrupt-ledger episode across a resolved poll without ledger evidence, then resets only after an explicit successful ledger probe', async () => {
-    const mod = (await import(
-      '../../../../src/engine/engineer/intake/intake-loop.js'
-    )) as Record<string, any>;
+    const mod = (await import('../../../../src/engine/engineer/intake/intake-loop.js')) as Record<string, any>;
     const { createLedger } = await import('../../../../src/engine/engineer/intake/ledger.js');
     const runIntakeLoop = mod.runIntakeLoop as (deps: any, opts: any) => Promise<void>;
     const directory = await mkdtemp(join(tmpdir(), 'intake-loop-corruption-'));
@@ -546,10 +522,7 @@ describe('runIntakeLoop', () => {
         },
       };
 
-      await runIntakeLoop(
-        deps,
-        { intervalMs: 1 },
-      ).catch((error: unknown) => {
+      await runIntakeLoop(deps, { intervalMs: 1 }).catch((error: unknown) => {
         if (error !== STOP) throw error;
       });
 
@@ -586,9 +559,7 @@ describe('runIntakeLoop', () => {
   });
 
   it('reports distinct corrupt byte states when quarantine creation fails, while suppressing repeats', async () => {
-    const mod = (await import(
-      '../../../../src/engine/engineer/intake/intake-loop.js'
-    )) as Record<string, any>;
+    const mod = (await import('../../../../src/engine/engineer/intake/intake-loop.js')) as Record<string, any>;
     const { createLedger } = await import('../../../../src/engine/engineer/intake/ledger.js');
     const runIntakeLoop = mod.runIntakeLoop as (deps: any, opts: any) => Promise<void>;
     const directory = await mkdtemp(join(tmpdir(), 'intake-loop-quarantine-failure-'));
@@ -672,9 +643,7 @@ describe('runIntakeLoop', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 describe('intakeTick — injected reconcile effect', () => {
   it('calls the injected reconcile() exactly once per tick, after poll/enqueue', async () => {
-    const mod = (await import(
-      '../../../../src/engine/engineer/intake/intake-loop.js'
-    )) as Record<string, any>;
+    const mod = (await import('../../../../src/engine/engineer/intake/intake-loop.js')) as Record<string, any>;
     const intakeTick = mod.intakeTick as (deps: any) => Promise<{ captured: number }>;
 
     const callOrder: string[] = [];
@@ -700,9 +669,7 @@ describe('intakeTick — injected reconcile effect', () => {
   });
 
   it('a throwing reconcile() does not crash the tick', async () => {
-    const mod = (await import(
-      '../../../../src/engine/engineer/intake/intake-loop.js'
-    )) as Record<string, any>;
+    const mod = (await import('../../../../src/engine/engineer/intake/intake-loop.js')) as Record<string, any>;
     const intakeTick = mod.intakeTick as (deps: any) => Promise<{ captured: number }>;
 
     const poll = vi.fn(async () => []);
