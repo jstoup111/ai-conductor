@@ -9,9 +9,7 @@ import { promisify } from 'util';
 const execFile = promisify(execFileCb);
 
 vi.mock('execa', () => ({
-  execa: vi.fn(() =>
-    Promise.resolve({ stdout: '', stderr: '', exitCode: 0 })
-  ),
+  execa: vi.fn(() => Promise.resolve({ stdout: '', stderr: '', exitCode: 0 })),
 }));
 vi.mock('../../src/engine/self-host/operator-credentials.js', () => ({
   readOperatorCredentialsState: vi.fn().mockResolvedValue('fresh'),
@@ -42,16 +40,11 @@ import { execa } from 'execa';
 import type { ConductState, ConductorEvent, Track } from '../../src/types/index.js';
 import type { ConductStateStore } from '../../src/engine/conduct-state-store.js';
 import type { HarnessConfig } from '../../src/types/config.js';
-import type { StepName, StepStatus,} from '../../src/types/index.js';
+import type { StepName, StepStatus } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
-import {
-  ALL_STEPS,
-} from '../../src/engine/steps.js';
-import {
-  resolveExistingTaskBindingsForAdmission,
-  recordActivePlanPath,
-} from '../../src/engine/conductor.js';
+import { ALL_STEPS } from '../../src/engine/steps.js';
+import { resolveExistingTaskBindingsForAdmission, recordActivePlanPath } from '../../src/engine/conductor.js';
 import { Conductor } from '../test-conductor.js';
 import type { StepRunner, StepRunResult, StepRunOptions } from '../../src/engine/conductor.js';
 import type { GroupBranchLifecycleObserver, GroupMember } from '../../src/engine/group-core.js';
@@ -69,7 +62,7 @@ import {
   creditKickbackGateLaps,
   MAX_SUITE_INFRASTRUCTURE_RETRIES,
   readKickbackLedger,
-  } from '../../src/engine/kickback-ledger.js';
+} from '../../src/engine/kickback-ledger.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
 import { CloseoutEventTail } from '../../src/engine/closeout-tail.js';
 import { dispatchTaskCommand } from '../../src/engine/task-cli.js';
@@ -78,9 +71,7 @@ import { MetricsRecorder } from '../../src/engine/otel/metrics.js';
 import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
 import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
 import { parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
-import {
-  CODEX_MODEL_POLICY,
-} from '../../src/engine/provider-model-policy.js';
+import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
@@ -111,16 +102,20 @@ describe('protected artifact rebaseline logging', () => {
       stateFilePath: '/tmp/protected-artifact-rebaseline-log/conduct-state.json',
       stepRunner: createMockStepRunner(),
       events: new ConductorEventEmitter(),
-      log: (line) => { logs.push(line); },
+      log: (line) => {
+        logs.push(line);
+      },
     });
     const firstPath = '.docs/plans/retired-a.md';
     const secondPath = '.docs/plans/retired-b.md';
     const firstCommit = '1234567890abcdef1234567890abcdef12345678';
     const secondCommit = 'fedcba0987654321fedcba0987654321fedcba09';
 
-    await (conductor as unknown as {
-      surfaceProtectedArtifactRebaseline(event: ConductorEvent): Promise<void>;
-    }).surfaceProtectedArtifactRebaseline({
+    await (
+      conductor as unknown as {
+        surfaceProtectedArtifactRebaseline(event: ConductorEvent): Promise<void>;
+      }
+    ).surfaceProtectedArtifactRebaseline({
       type: 'protected_artifact_rebaseline',
       trigger: 'inherited-base-deletion',
       fromCommit: firstCommit,
@@ -156,19 +151,27 @@ function failingBuildReviewAggregate(summary: string) {
     snapshotDigest: 'sha256:fixture',
     results: {
       testQuality: {
-        kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest: 'sha256:fixture',
-        contractVersion: 'v3', verdict: 'FAIL',
-        findings: [{
-          concernKind: 'test-insensitive', summary, evidenceLocations: ['test/fixture.test.ts:1'],
-          anchor: {
-            rubric: 'testQuality',
-            locus: {
-              path: 'test/fixture.test.ts',
-              contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-              display: 'fixture test',
+        kind: 'judged',
+        rubric: 'testQuality',
+        lapId,
+        snapshotDigest: 'sha256:fixture',
+        contractVersion: 'v3',
+        verdict: 'FAIL',
+        findings: [
+          {
+            concernKind: 'test-insensitive',
+            summary,
+            evidenceLocations: ['test/fixture.test.ts:1'],
+            anchor: {
+              rubric: 'testQuality',
+              locus: {
+                path: 'test/fixture.test.ts',
+                contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                display: 'fixture test',
+              },
             },
           },
-        }],
+        ],
       },
     },
   });
@@ -207,29 +210,33 @@ async function writePrdAuditFixableFixture(
   runId: string | undefined,
   findings: readonly { criterionId: string; ownerTaskId: string }[] = [{ criterionId: 'S1.1', ownerTaskId: '1' }],
 ): Promise<void> {
-  await persistPrdAuditVerdict(projectRoot, {
-    complete: true,
-    judgment: {
-      version: 'v1',
-      criterionJudgments: findings.map(({ criterionId, ownerTaskId }) => {
-        const match = /^S(.+)\.(\d+)$/.exec(criterionId);
-        if (!match) throw new Error(`Invalid fixture criterion: ${criterionId}`);
-        return {
-          criterion: { storyId: match[1], ordinal: Number(match[2]) },
-          criterionId,
-          grade: 'FIXABLE' as const,
-          evidence: `Fixture reports ${criterionId} as repairable.`,
-          rationale: 'Fixture remediation requires the active owning task.',
-          requirementAssociations: [],
-          evidenceTaskIds: [ownerTaskId],
-          ownerTaskId,
-        };
-      }),
-      noOwnerObservations: [],
+  await persistPrdAuditVerdict(
+    projectRoot,
+    {
+      complete: true,
+      judgment: {
+        version: 'v1',
+        criterionJudgments: findings.map(({ criterionId, ownerTaskId }) => {
+          const match = /^S(.+)\.(\d+)$/.exec(criterionId);
+          if (!match) throw new Error(`Invalid fixture criterion: ${criterionId}`);
+          return {
+            criterion: { storyId: match[1], ordinal: Number(match[2]) },
+            criterionId,
+            grade: 'FIXABLE' as const,
+            evidence: `Fixture reports ${criterionId} as repairable.`,
+            rationale: 'Fixture remediation requires the active owning task.',
+            requirementAssociations: [],
+            evidenceTaskIds: [ownerTaskId],
+            ownerTaskId,
+          };
+        }),
+        noOwnerObservations: [],
+      },
+      diagnostics: [],
+      recordedDispositions: [],
     },
-    diagnostics: [],
-    recordedDispositions: [],
-  }, { attemptId: runId ?? 'fixture-prd-audit', codeStamp: 'fixture-head' });
+    { attemptId: runId ?? 'fixture-prd-audit', codeStamp: 'fixture-head' },
+  );
 }
 
 type LegacyRemediationDisposition = {
@@ -253,12 +260,12 @@ async function persistLegacyRemediationPlan(
   const normalized = dispositions.map((disposition) => ({
     ...disposition,
     tasks: disposition.disposition === 'existing-task' ? [] : disposition.tasks,
-    ...(disposition.disposition === 'existing-task'
-      ? { boundTaskIds: disposition.tasks.map((task) => task.id) }
-      : {}),
+    ...(disposition.disposition === 'existing-task' ? { boundTaskIds: disposition.tasks.map((task) => task.id) } : {}),
   }));
-  if (options?.remediationRequest?.mode === 'gap-plan' &&
-      options.remediationRequest.projection.requiredReferences.length > 0) {
+  if (
+    options?.remediationRequest?.mode === 'gap-plan' &&
+    options.remediationRequest.projection.requiredReferences.length > 0
+  ) {
     await persistFixtureProjectedRemediationPlan(projectRoot, options, normalized);
     return;
   }
@@ -278,12 +285,14 @@ function asBuiltBlockedFixture(findings: readonly AsBuiltFinding[]) {
 }
 
 function asBuiltRemediableFixture(id: string, taskId: string, summary: string) {
-  return asBuiltBlockedFixture([{
-    id,
-    class: 'REMEDIABLE' as const,
-    reference: { kind: 'plan-task' as const, taskId },
-    summary,
-  }]);
+  return asBuiltBlockedFixture([
+    {
+      id,
+      class: 'REMEDIABLE' as const,
+      reference: { kind: 'plan-task' as const, taskId },
+      summary,
+    },
+  ]);
 }
 
 function createMockStepRunner(result: StepRunResult = { success: true }): StepRunner {
@@ -315,7 +324,8 @@ function useRealGitExeca(): () => void {
     } catch (error) {
       const result = error as { stdout?: string; stderr?: string; code?: number };
       return {
-        stdout: result.stdout ?? '', stderr: result.stderr ?? '',
+        stdout: result.stdout ?? '',
+        stderr: result.stderr ?? '',
         exitCode: typeof result.code === 'number' ? result.code : 1,
       } as never;
     }
@@ -330,9 +340,10 @@ async function seedGenericTail(statePath: string): Promise<void> {
 function buildBoundaryState(featureDesc = 'feature'): ConductState {
   return {
     ...Object.fromEntries(
-      ALL_STEPS
-        .slice(0, ALL_STEPS.findIndex((step) => step.name === 'build'))
-        .map((step) => [step.name, 'done']),
+      ALL_STEPS.slice(
+        0,
+        ALL_STEPS.findIndex((step) => step.name === 'build'),
+      ).map((step) => [step.name, 'done']),
     ),
     feature_desc: featureDesc,
     build: 'pending',
@@ -393,7 +404,9 @@ describe('engine/conductor', () => {
         verdicts.push({ satisfied: event.satisfied, reason: event.reason });
       }
     });
-    events.on('loop_halt', () => { halted = true; });
+    events.on('loop_halt', () => {
+      halted = true;
+    });
 
     try {
       await new Conductor({
@@ -410,10 +423,12 @@ describe('engine/conductor', () => {
       restoreExeca();
     }
 
-    expect(verdicts).toContainEqual(expect.objectContaining({
-      satisfied: false,
-      reason: expect.stringContaining(`${adrPath}: missing-section`),
-    }));
+    expect(verdicts).toContainEqual(
+      expect.objectContaining({
+        satisfied: false,
+        reason: expect.stringContaining(`${adrPath}: missing-section`),
+      }),
+    );
     expect(halted).toBe(true);
     const finalState = await readState(featureState);
     expect(finalState.ok && finalState.value.architecture_review).not.toBe('skipped');
@@ -427,16 +442,19 @@ describe('engine/conductor', () => {
     await writeFile(join(repository, 'README.md'), 'base\n');
     await commitAll(repository, 'seed main');
     const adrPath = '.docs/decisions/adr-2026-10-10-unapproved.md';
-    await writeFile(join(repository, adrPath), [
-      '# ADR: Unapproved assumption',
-      '',
-      '## Assumptions',
-      '',
-      '| # | Assumption | Basis | Confidence | Load-bearing | Impact if wrong | Approval |',
-      '|---|---|---|---|---|---|---|',
-      '| A3 | The input is stable | unverified | 50% | yes | The gate may reject valid work | — |',
-      '',
-    ].join('\n'));
+    await writeFile(
+      join(repository, adrPath),
+      [
+        '# ADR: Unapproved assumption',
+        '',
+        '## Assumptions',
+        '',
+        '| # | Assumption | Basis | Confidence | Load-bearing | Impact if wrong | Approval |',
+        '|---|---|---|---|---|---|---|',
+        '| A3 | The input is stable | unverified | 50% | yes | The gate may reject valid work | — |',
+        '',
+      ].join('\n'),
+    );
     await writeState(join(repository, 'conduct-state.json'), decisionGateState('M'));
 
     const restoreExeca = useRealGitExeca();
@@ -462,10 +480,12 @@ describe('engine/conductor', () => {
       restoreExeca();
     }
 
-    expect(verdicts).toContainEqual(expect.objectContaining({
-      satisfied: false,
-      reason: expect.stringContaining(`${adrPath}: missing-approval (A3)`),
-    }));
+    expect(verdicts).toContainEqual(
+      expect.objectContaining({
+        satisfied: false,
+        reason: expect.stringContaining(`${adrPath}: missing-approval (A3)`),
+      }),
+    );
     const finalState = await readState(join(repository, 'conduct-state.json'));
     expect(finalState.ok && finalState.value.architecture_review).not.toBe('done');
   });
@@ -494,14 +514,12 @@ describe('engine/conductor', () => {
   it('restores every plan-amendment reopen into the first BUILD prompt after a restart without losing a coexisting gate repair', async () => {
     const planPath = '.docs/plans/feature.md';
     await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
-    await writeFile(join(dir, planPath), [
-      '# Plan',
-      '',
-      '### Task 1: Restore request authorization',
-      '',
-      '### Task 2: Preserve audit provenance',
-      '',
-    ].join('\n'));
+    await writeFile(
+      join(dir, planPath),
+      ['# Plan', '', '### Task 1: Restore request authorization', '', '### Task 2: Preserve audit provenance', ''].join(
+        '\n',
+      ),
+    );
     await writeState(statePath, buildBoundaryState());
 
     const repairs = createRepairObligationStore(dir, join(dir, '.pipeline', 'engine-state.json'));
@@ -510,23 +528,28 @@ describe('engine/conductor', () => {
         id: 'plan-amendment-1',
         taskIds: ['1'],
         source: {
-          findingId: 'digest-1', authority: 'plan_amendment' as const,
-          instruction: 'Task 1 (Restore request authorization) plan text changed since it was implemented; reopen it in BUILD.',
+          findingId: 'digest-1',
+          authority: 'plan_amendment' as const,
+          instruction:
+            'Task 1 (Restore request authorization) plan text changed since it was implemented; reopen it in BUILD.',
         },
       },
       {
         id: 'plan-amendment-2',
         taskIds: ['2'],
         source: {
-          findingId: 'digest-2', authority: 'plan_amendment' as const,
-          instruction: 'Task 2 (Preserve audit provenance) plan text changed since it was implemented; reopen it in BUILD.',
+          findingId: 'digest-2',
+          authority: 'plan_amendment' as const,
+          instruction:
+            'Task 2 (Preserve audit provenance) plan text changed since it was implemented; reopen it in BUILD.',
         },
       },
       {
         id: 'gate-repair-1',
         taskIds: ['1'],
         source: {
-          findingId: 'ARCH-1', authority: 'architecture_review_as_built' as const,
+          findingId: 'ARCH-1',
+          authority: 'architecture_review_as_built' as const,
           instruction: 'ARCH-1 requires Task 1 to restore the approved authorization guard.',
         },
       },
@@ -555,8 +578,12 @@ describe('engine/conductor', () => {
     }).run();
 
     expect(hints).toHaveLength(1);
-    expect(hints[0]).toContain('Task 1 (Restore request authorization) plan text changed since it was implemented; reopen it in BUILD.');
-    expect(hints[0]).toContain('Task 2 (Preserve audit provenance) plan text changed since it was implemented; reopen it in BUILD.');
+    expect(hints[0]).toContain(
+      'Task 1 (Restore request authorization) plan text changed since it was implemented; reopen it in BUILD.',
+    );
+    expect(hints[0]).toContain(
+      'Task 2 (Preserve audit provenance) plan text changed since it was implemented; reopen it in BUILD.',
+    );
     expect(hints[0]).toContain('ARCH-1 requires Task 1 to restore the approved authorization guard.');
   });
 
@@ -584,9 +611,10 @@ describe('engine/conductor', () => {
     }).run();
 
     expect(hints).toHaveLength(1);
-    expect(hints[0]).toContain('Task 1 (Validate signed callback signatures) plan text changed since it was implemented; reopen it in BUILD.');
+    expect(hints[0]).toContain(
+      'Task 1 (Validate signed callback signatures) plan text changed since it was implemented; reopen it in BUILD.',
+    );
   });
-
 
   // Covers: task:9
   it('preserves conductor terminal tiers through the metrics listener before daemon dispatch-end', async () => {
@@ -600,21 +628,34 @@ describe('engine/conductor', () => {
       'feature',
     );
     listener.start(events);
-    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: createMockStepRunner(), events });
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+    });
 
     try {
-      await (conductor as unknown as {
-        completeRun(state: ConductState, doneMarkerBody: string): Promise<void>;
-      }).completeRun({ complexity_tier: 'M' }, 'complete\n');
+      await (
+        conductor as unknown as {
+          completeRun(state: ConductState, doneMarkerBody: string): Promise<void>;
+        }
+      ).completeRun({ complexity_tier: 'M' }, 'complete\n');
       await events.emit({ type: 'feature_dispatch_ended', slug: 'feature', outcome: 'complete', tier: 'L' });
       (conductor as unknown as { haltState: ConductState }).haltState = { complexity_tier: 'S' };
       await (conductor as unknown as { emitLoopHalt(reason: string): Promise<void> }).emitLoopHalt('halted');
       await events.emit({
-        type: 'feature_dispatch_ended', slug: 'feature', outcome: 'halted', haltClass: 'mechanical', step: 'build', tier: 'L',
+        type: 'feature_dispatch_ended',
+        slug: 'feature',
+        outcome: 'halted',
+        haltClass: 'mechanical',
+        step: 'build',
+        tier: 'L',
       });
       await provider.forceFlush();
 
-      const outcomes = exporter.getMetrics()
+      const outcomes = exporter
+        .getMetrics()
         .flatMap((batch) => batch.scopeMetrics)
         .flatMap((scope) => scope.metrics)
         .filter((metric) => metric.descriptor.name === 'conductor.run.outcomes')
@@ -633,17 +674,23 @@ describe('engine/conductor', () => {
   // Covers: task:9, rem-as-built-rem-ab2-2
   it('keeps a plan-gap halt tiered when the centralized halt follows a tail poll', async () => {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
-    await writeFile(join(dir, 'plan.md'), [
-      '### Task 7: Deliver the bounded behavior',
-      '**Done when:**',
-      '- The approved behavior can be verified without widening the plan.',
-      '',
-    ].join('\n'));
+    await writeFile(
+      join(dir, 'plan.md'),
+      [
+        '### Task 7: Deliver the bounded behavior',
+        '**Done when:**',
+        '- The approved behavior can be verified without widening the plan.',
+        '',
+      ].join('\n'),
+    );
     await recordActivePlanPath(dir, 'plan.md');
     await writeState(statePath, { complexity_tier: 'M' });
-    await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
-      tasks: [{ id: '7', name: 'Task 7', status: 'in_progress' }],
-    }));
+    await writeFile(
+      join(dir, '.pipeline', 'task-status.json'),
+      JSON.stringify({
+        tasks: [{ id: '7', name: 'Task 7', status: 'in_progress' }],
+      }),
+    );
     await writeFile(join(dir, '.pipeline', 'current-task'), '7');
 
     const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
@@ -660,9 +707,16 @@ describe('engine/conductor', () => {
     const buildProvider: StepRunner = {
       run: async (step) => {
         expect(step).toBe('build');
-        await expect(dispatchTaskCommand({
-          kind: 'done', id: '7', planGap: { index: 1, reason: 'No approved path.' },
-        }, dir)).resolves.toBe(1);
+        await expect(
+          dispatchTaskCommand(
+            {
+              kind: 'done',
+              id: '7',
+              planGap: { index: 1, reason: 'No approved path.' },
+            },
+            dir,
+          ),
+        ).resolves.toBe(1);
         await tail.poll();
         return { success: false, output: 'plan gap' };
       },
@@ -676,11 +730,17 @@ describe('engine/conductor', () => {
       (conductor as unknown as { haltState: ConductState }).haltState = persistedState.value;
       await (conductor as unknown as { emitLoopHalt(reason: string): Promise<void> }).emitLoopHalt('centralized halt');
       await events.emit({
-        type: 'feature_dispatch_ended', slug: 'feature', outcome: 'halted', haltClass: 'plan-gap', step: 'build', tier: 'M',
+        type: 'feature_dispatch_ended',
+        slug: 'feature',
+        outcome: 'halted',
+        haltClass: 'plan-gap',
+        step: 'build',
+        tier: 'M',
       });
       await provider.forceFlush();
 
-      const outcomes = exporter.getMetrics()
+      const outcomes = exporter
+        .getMetrics()
         .flatMap((batch) => batch.scopeMetrics)
         .flatMap((scope) => scope.metrics)
         .filter((metric) => metric.descriptor.name === 'conductor.run.outcomes')
@@ -699,32 +759,53 @@ describe('engine/conductor', () => {
   // Covers: task:9
   it('omits tier from unresolved completion and an early halt', async () => {
     const terminalEvents: Array<Extract<ConductorEvent, { type: 'feature_complete' | 'loop_halt' }>> = [];
-    events.on('feature_complete', (event) => { terminalEvents.push(event as (typeof terminalEvents)[number]); });
+    events.on('feature_complete', (event) => {
+      terminalEvents.push(event as (typeof terminalEvents)[number]);
+    });
     const haltEvents = new ConductorEventEmitter();
-    haltEvents.on('loop_halt', (event) => { terminalEvents.push(event as (typeof terminalEvents)[number]); });
+    haltEvents.on('loop_halt', (event) => {
+      terminalEvents.push(event as (typeof terminalEvents)[number]);
+    });
     const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
     const provider = new MeterProvider({
       readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 })],
     });
     const completionListener = new MetricsListener(
-      new MetricsRecorder(provider.getMeter('conductor-terminal-tier'), { project: 'project', worker: 'worker' }), undefined, 'unresolved-complete',
+      new MetricsRecorder(provider.getMeter('conductor-terminal-tier'), { project: 'project', worker: 'worker' }),
+      undefined,
+      'unresolved-complete',
     );
     const haltListener = new MetricsListener(
-      new MetricsRecorder(provider.getMeter('conductor-terminal-tier'), { project: 'project', worker: 'worker' }), undefined, 'early-halt',
+      new MetricsRecorder(provider.getMeter('conductor-terminal-tier'), { project: 'project', worker: 'worker' }),
+      undefined,
+      'early-halt',
     );
     completionListener.start(events);
     haltListener.start(haltEvents);
-    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: createMockStepRunner(), events });
-    const haltConductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: createMockStepRunner(), events: haltEvents });
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+    });
+    const haltConductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events: haltEvents,
+    });
 
     try {
-      await (conductor as unknown as {
-        completeRun(state: ConductState, doneMarkerBody: string): Promise<void>;
-      }).completeRun({}, 'complete\n');
+      await (
+        conductor as unknown as {
+          completeRun(state: ConductState, doneMarkerBody: string): Promise<void>;
+        }
+      ).completeRun({}, 'complete\n');
       await (haltConductor as unknown as { emitLoopHalt(reason: string): Promise<void> }).emitLoopHalt('early halt');
       await provider.forceFlush();
 
-      const outcomes = exporter.getMetrics()
+      const outcomes = exporter
+        .getMetrics()
         .flatMap((batch) => batch.scopeMetrics)
         .flatMap((scope) => scope.metrics)
         .filter((metric) => metric.descriptor.name === 'conductor.run.outcomes')
@@ -812,7 +893,10 @@ describe('engine/conductor', () => {
 
     try {
       const conductor = new Conductor({
-        projectRoot: dir, stateFilePath: statePath, stepRunner: createMockStepRunner(), events,
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
       });
       const executionEvents = conductor as unknown as {
         emitExecutionEvent(event: ConductorEvent): Promise<void>;
@@ -839,7 +923,10 @@ describe('engine/conductor', () => {
 
     try {
       const conductor = new Conductor({
-        projectRoot: dir, stateFilePath: statePath, stepRunner: createMockStepRunner(), events,
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
       });
       const executionEvents = conductor as unknown as {
         emitExecutionEvent(event: ConductorEvent): Promise<void>;
@@ -865,7 +952,10 @@ describe('engine/conductor', () => {
       if (emitted.type === 'step_completed') terminals.push(emitted);
     });
     const conductor = new Conductor({
-      projectRoot: dir, stateFilePath: statePath, stepRunner: createMockStepRunner(), events,
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
     });
     const executionEvents = conductor as unknown as {
       emitExecutionEvent(event: ConductorEvent): Promise<void>;
@@ -873,7 +963,10 @@ describe('engine/conductor', () => {
 
     await executionEvents.emitExecutionEvent({ type: 'step_started', step: 'build', index: 0 });
     await executionEvents.emitExecutionEvent({
-      type: 'step_completed', step: 'build', status: 'done', tier: 'L',
+      type: 'step_completed',
+      step: 'build',
+      status: 'done',
+      tier: 'L',
     });
 
     expect({ snapshots, terminals }).toEqual({
@@ -884,19 +977,13 @@ describe('engine/conductor', () => {
 
   describe('existing-task remediation admission', () => {
     it('resolves bound ids from the active plan through the shared resolver', () => {
-      const result = resolveExistingTaskBindingsForAdmission(
-        [{ id: '2' }],
-        new Set(['1', '2']),
-      );
+      const result = resolveExistingTaskBindingsForAdmission([{ id: '2' }], new Set(['1', '2']));
 
       expect(result).toEqual({ kind: 'resolved', ids: ['2'] });
     });
 
     it('rejects a bound id absent from the active plan and names it', () => {
-      const result = resolveExistingTaskBindingsForAdmission(
-        [{ id: 'missing-task' }],
-        new Set(['1', '2']),
-      );
+      const result = resolveExistingTaskBindingsForAdmission([{ id: 'missing-task' }], new Set(['1', '2']));
 
       expect(result).toEqual({ kind: 'unresolvable', id: 'missing-task' });
     });
@@ -910,13 +997,15 @@ describe('engine/conductor', () => {
         stepRunner: {
           run: async (step, _state, options) => {
             if (step === 'remediate') {
-              await persistLegacyRemediationPlan(dir, options, [{
+              await persistLegacyRemediationPlan(dir, options, [
+                {
                   id: 'missing-binding',
                   disposition: 'existing-task',
                   category: null,
                   rationale: 'The existing task owns this repair.',
                   tasks: [{ id: 'missing-task', title: 'Existing task binding' }],
-              }]);
+                },
+              ]);
             }
             return { success: true };
           },
@@ -939,68 +1028,87 @@ describe('engine/conductor', () => {
     it.each([
       ['missing', undefined, false],
       ['unreadable', undefined, true],
-    ])('halts needs-human without routing when task-status is %s during re-stage', async (_case, taskStatus, makeUnreadable) => {
-      await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
-      await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeFile(join(dir, '.docs', 'plans', 'existing-task-bindings.md'), '### Task 1: Existing work\n');
-      await writeAsBuiltFixture(dir, undefined, asBuiltRemediableFixture('existing-binding', '1', 'Existing work'));
-      if (taskStatus !== undefined) {
-        await writeFile(join(dir, '.pipeline', 'task-status.json'), taskStatus);
-      }
-      if (makeUnreadable) {
-        await mkdir(join(dir, '.pipeline', 'task-status.json'));
-      }
-      const conductor = new Conductor({
-        stateFilePath: statePath,
-        stepRunner: {
-          run: async (step, _state, options) => {
-            if (step === 'remediate') {
-              await persistLegacyRemediationPlan(dir, options, [{
-                  id: fixtureAsBuiltFindingId(),
-                  disposition: 'existing-task',
-                  category: null,
-                  rationale: 'The existing task owns this repair.',
-                  tasks: [{ id: '1', title: 'Existing task binding' }],
-              }]);
-            }
-            return { success: true };
+    ])(
+      'halts needs-human without routing when task-status is %s during re-stage',
+      async (_case, taskStatus, makeUnreadable) => {
+        await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+        await mkdir(join(dir, '.pipeline'), { recursive: true });
+        await writeFile(join(dir, '.docs', 'plans', 'existing-task-bindings.md'), '### Task 1: Existing work\n');
+        await writeAsBuiltFixture(dir, undefined, asBuiltRemediableFixture('existing-binding', '1', 'Existing work'));
+        if (taskStatus !== undefined) {
+          await writeFile(join(dir, '.pipeline', 'task-status.json'), taskStatus);
+        }
+        if (makeUnreadable) {
+          await mkdir(join(dir, '.pipeline', 'task-status.json'));
+        }
+        const conductor = new Conductor({
+          stateFilePath: statePath,
+          stepRunner: {
+            run: async (step, _state, options) => {
+              if (step === 'remediate') {
+                await persistLegacyRemediationPlan(dir, options, [
+                  {
+                    id: fixtureAsBuiltFindingId(),
+                    disposition: 'existing-task',
+                    category: null,
+                    rationale: 'The existing task owns this repair.',
+                    tasks: [{ id: '1', title: 'Existing task binding' }],
+                  },
+                ]);
+              }
+              return { success: true };
+            },
           },
-        },
-        events,
-        projectRoot: dir,
-      });
+          events,
+          projectRoot: dir,
+        });
 
-      const outcome = await (conductor as any).planRemediation(
-        { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000, build: 'done' },
-        ALL_STEPS,
-        'test re-stage failure',
-        { source: 'architecture-review-as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.json' }] },
-      );
+        const outcome = await (conductor as any).planRemediation(
+          { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000, build: 'done' },
+          ALL_STEPS,
+          'test re-stage failure',
+          {
+            source: 'architecture-review-as-built',
+            evidence: [
+              { gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.json' },
+            ],
+          },
+        );
 
-      expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'needs-human' });
-      expect(outcome.detail).toMatch(/re-stage.*task-status/i);
-    });
+        expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'needs-human' });
+        expect(outcome.detail).toMatch(/re-stage.*task-status/i);
+      },
+    );
 
     it('halts needs-human without routing when a bound id is absent from task-status during re-stage', async () => {
       await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(join(dir, '.docs', 'plans', 'existing-task-bindings.md'), '### Task 1: Existing work\n');
-      await writeAsBuiltFixture(dir, undefined, asBuiltRemediableFixture('missing-status-binding', '1', 'Existing work'));
-      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
-        tasks: [{ id: '2', status: 'completed' }],
-      }));
+      await writeAsBuiltFixture(
+        dir,
+        undefined,
+        asBuiltRemediableFixture('missing-status-binding', '1', 'Existing work'),
+      );
+      await writeFile(
+        join(dir, '.pipeline', 'task-status.json'),
+        JSON.stringify({
+          tasks: [{ id: '2', status: 'completed' }],
+        }),
+      );
       const conductor = new Conductor({
         stateFilePath: statePath,
         stepRunner: {
           run: async (step, _state, options) => {
             if (step === 'remediate') {
-              await persistLegacyRemediationPlan(dir, options, [{
+              await persistLegacyRemediationPlan(dir, options, [
+                {
                   id: fixtureAsBuiltFindingId(),
                   disposition: 'existing-task',
                   category: null,
                   rationale: 'The existing task owns this repair.',
                   tasks: [{ id: '1', title: 'Existing task binding' }],
-              }]);
+                },
+              ]);
             }
             return { success: true };
           },
@@ -1013,20 +1121,23 @@ describe('engine/conductor', () => {
         { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000, build: 'done' },
         ALL_STEPS,
         'test missing re-stage id',
-        { source: 'architecture-review-as-built', evidence: [{ gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.json' }] },
+        {
+          source: 'architecture-review-as-built',
+          evidence: [
+            { gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.json' },
+          ],
+        },
       );
 
       expect(outcome).toMatchObject({ kind: 'halt', haltClass: 'needs-human' });
       expect(outcome.detail).toMatch(/re-stage.*'1'/i);
-      expect(JSON.parse(await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8')))
-        .toEqual({ tasks: [{ id: '2', status: 'completed' }] });
+      expect(JSON.parse(await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8'))).toEqual({
+        tasks: [{ id: '2', status: 'completed' }],
+      });
     });
 
     it('strips a trailing parenthesized binding annotation through the shared resolver', () => {
-      const result = resolveExistingTaskBindingsForAdmission(
-        [{ id: '2 (already scoped)' }],
-        new Set(['1', '2']),
-      );
+      const result = resolveExistingTaskBindingsForAdmission([{ id: '2 (already scoped)' }], new Set(['1', '2']));
 
       expect(result).toEqual({ kind: 'resolved', ids: ['2'] });
     });
@@ -1050,32 +1161,52 @@ describe('engine/conductor', () => {
       await writeFile(planPath, uncommittedPlan);
       await writeFile(
         join(dir, '.pipeline', 'task-status.json'),
-        JSON.stringify({ tasks: Array.from({ length: 8 }, (_, index) => ({
-          id: String(index + 1),
-          status: index < 3 ? 'completed' : 'pending',
-        })) }),
+        JSON.stringify({
+          tasks: Array.from({ length: 8 }, (_, index) => ({
+            id: String(index + 1),
+            status: index < 3 ? 'completed' : 'pending',
+          })),
+        }),
       );
       await writeKickbackLedger(dir, {
         version: 1,
         gates: {},
         growth: { authored: 8, added: 0, byGate: {} },
       });
-      await writeAsBuiltFixture(dir, undefined, asBuiltBlockedFixture([
-        { id: 'ARCH-1', class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '1' }, summary: 'Repair task one' },
-        { id: 'ARCH-2', class: 'REMEDIABLE', reference: { kind: 'plan-task', taskId: '2' }, summary: 'Repair task two' },
-      ]));
+      await writeAsBuiltFixture(
+        dir,
+        undefined,
+        asBuiltBlockedFixture([
+          {
+            id: 'ARCH-1',
+            class: 'REMEDIABLE',
+            reference: { kind: 'plan-task', taskId: '1' },
+            summary: 'Repair task one',
+          },
+          {
+            id: 'ARCH-2',
+            class: 'REMEDIABLE',
+            reference: { kind: 'plan-task', taskId: '2' },
+            summary: 'Repair task two',
+          },
+        ]),
+      );
       const conductor = new Conductor({
         stateFilePath: statePath,
         stepRunner: {
           run: async (step, _state, options) => {
             if (step === 'remediate') {
-              await persistLegacyRemediationPlan(dir, options, [1, 2].map((id) => ({
+              await persistLegacyRemediationPlan(
+                dir,
+                options,
+                [1, 2].map((id) => ({
                   id: fixtureAsBuiltFindingId(id),
                   disposition: 'existing-task',
                   category: null,
                   rationale: `Task ${id} already owns this repair.`,
                   tasks: [{ id: String(id), title: `Existing work ${id}` }],
-              })));
+                })),
+              );
             }
             return { success: true };
           },
@@ -1091,33 +1222,35 @@ describe('engine/conductor', () => {
         'test #2119',
         {
           source: 'architecture-review-as-built',
-          evidence: [{
-            gate: 'architecture_review_as_built',
-            evidenceFile: '.pipeline/architecture-review-as-built.json',
-          }],
+          evidence: [
+            {
+              gate: 'architecture_review_as_built',
+              evidenceFile: '.pipeline/architecture-review-as-built.json',
+            },
+          ],
         },
       );
 
       expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
       expect(await readFile(planPath, 'utf8')).toBe(uncommittedPlan);
-      await expect(git(['diff', '--cached', '--quiet', '--', '.docs/plans/existing-task-bindings.md']))
-        .resolves.toBeDefined();
+      await expect(
+        git(['diff', '--cached', '--quiet', '--', '.docs/plans/existing-task-bindings.md']),
+      ).resolves.toBeDefined();
       const commits = await git(['log', '--format=%s']);
       expect(commits.stdout).not.toContain('chore(plan): record appended remediation tasks');
       // Re-stage every bound task before the caller rewinds to build. Task 3
       // is deliberately completed but unbound: it must stay completed, proving
       // this route does not broadly reset task tracking.
-      expect(JSON.parse(await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8')).tasks)
-        .toEqual([
-          { id: '1', name: 'Existing work 1', status: 'pending' },
-          { id: '2', name: 'Existing work 2', status: 'pending' },
-          { id: '3', status: 'completed' },
-          { id: '4', name: 'Existing work 4', status: 'pending' },
-          { id: '5', name: 'Existing work 5', status: 'pending' },
-          { id: '6', name: 'Existing work 6', status: 'pending' },
-          { id: '7', name: 'Existing work 7', status: 'pending' },
-          { id: '8', name: 'Existing work 8', status: 'pending' },
-        ]);
+      expect(JSON.parse(await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8')).tasks).toEqual([
+        { id: '1', name: 'Existing work 1', status: 'pending' },
+        { id: '2', name: 'Existing work 2', status: 'pending' },
+        { id: '3', status: 'completed' },
+        { id: '4', name: 'Existing work 4', status: 'pending' },
+        { id: '5', name: 'Existing work 5', status: 'pending' },
+        { id: '6', name: 'Existing work 6', status: 'pending' },
+        { id: '7', name: 'Existing work 7', status: 'pending' },
+        { id: '8', name: 'Existing work 8', status: 'pending' },
+      ]);
       const ledger = await readKickbackLedger(dir);
       // Existing-task repairs now reserve their lap for the BUILD boundary,
       // rather than charging while the task row is re-staged.
@@ -1130,37 +1263,47 @@ describe('engine/conductor', () => {
       // A non-appending binding is still a successful as-built remediation
       // authorization. It must leave the same durable finding record that
       // the next successful as-built projection consumes.
-      expect(ledger.pendingAsBuiltRemediationFindings).toEqual([{
-        gate: 'architecture_review_as_built',
-        finding: fixtureAsBuiltFindingId(),
-        class: 'REMEDIABLE',
-        governingClause: 'Task 1',
-        reference: { kind: 'plan-task', taskId: '1' },
-        summary: 'Repair task one',
-        outcome: 'remediated',
-      }, {
-        gate: 'architecture_review_as_built',
-        finding: fixtureAsBuiltFindingId(2),
-        class: 'REMEDIABLE',
-        governingClause: 'Task 2',
-        reference: { kind: 'plan-task', taskId: '2' },
-        summary: 'Repair task two',
-        outcome: 'remediated',
-      }]);
+      expect(ledger.pendingAsBuiltRemediationFindings).toEqual([
+        {
+          gate: 'architecture_review_as_built',
+          finding: fixtureAsBuiltFindingId(),
+          class: 'REMEDIABLE',
+          governingClause: 'Task 1',
+          reference: { kind: 'plan-task', taskId: '1' },
+          summary: 'Repair task one',
+          outcome: 'remediated',
+        },
+        {
+          gate: 'architecture_review_as_built',
+          finding: fixtureAsBuiltFindingId(2),
+          class: 'REMEDIABLE',
+          governingClause: 'Task 2',
+          reference: { kind: 'plan-task', taskId: '2' },
+          summary: 'Repair task two',
+          outcome: 'remediated',
+        },
+      ]);
 
-      expect(await (conductor as unknown as {
-        projectPendingAsBuiltRemediationFindings: () => Promise<string | undefined>;
-      }).projectPendingAsBuiltRemediationFindings()).toBeUndefined();
+      expect(
+        await (
+          conductor as unknown as {
+            projectPendingAsBuiltRemediationFindings: () => Promise<string | undefined>;
+          }
+        ).projectPendingAsBuiltRemediationFindings(),
+      ).toBeUndefined();
       expect((await readKickbackLedger(dir)).pendingAsBuiltRemediationFindings).toBeUndefined();
     });
 
     it('refuses pending as-built projection when its ledger is unreadable', async () => {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeFile(join(dir, '.pipeline', 'kickback-ledger.json'), JSON.stringify({
-        version: 1,
-        gates: {},
-        pendingAsBuiltRemediationFindings: [{ finding: 'malformed' }],
-      }));
+      await writeFile(
+        join(dir, '.pipeline', 'kickback-ledger.json'),
+        JSON.stringify({
+          version: 1,
+          gates: {},
+          pendingAsBuiltRemediationFindings: [{ finding: 'malformed' }],
+        }),
+      );
       const conductor = new Conductor({
         stateFilePath: join(dir, '.pipeline', 'conduct-state.json'),
         stepRunner: createMockStepRunner(),
@@ -1168,9 +1311,13 @@ describe('engine/conductor', () => {
         projectRoot: dir,
       });
 
-      await expect((conductor as unknown as {
-        projectPendingAsBuiltRemediationFindings: () => Promise<string | undefined>;
-      }).projectPendingAsBuiltRemediationFindings()).resolves.toContain('kickback ledger is unreadable');
+      await expect(
+        (
+          conductor as unknown as {
+            projectPendingAsBuiltRemediationFindings: () => Promise<string | undefined>;
+          }
+        ).projectPendingAsBuiltRemediationFindings(),
+      ).resolves.toContain('kickback ledger is unreadable');
     });
 
     it('records an existing-task lap at the as-built cap for build-boundary settlement', async () => {
@@ -1180,16 +1327,24 @@ describe('engine/conductor', () => {
         join(dir, '.docs', 'plans', 'existing-task-bindings.md'),
         Array.from({ length: 8 }, (_, i) => `### Task ${i + 1}: Existing work ${i + 1}`).join('\n'),
       );
-      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
-        tasks: [{ id: '1', status: 'completed' }],
-      }));
+      await writeFile(
+        join(dir, '.pipeline', 'task-status.json'),
+        JSON.stringify({
+          tasks: [{ id: '1', status: 'completed' }],
+        }),
+      );
       await writeAsBuiltFixture(dir, undefined, asBuiltRemediableFixture('ARCH-1', '1', 'Repair task one'));
       await writeKickbackLedger(dir, {
         version: 1,
         gates: {
           architecture_review_as_built: {
-            count: 0, cumulative: 0, treeHash: null, lastReason: '', priorVerdict: true,
-            resolvedBefore: 0, laps: 1,
+            count: 0,
+            cumulative: 0,
+            treeHash: null,
+            lastReason: '',
+            priorVerdict: true,
+            resolvedBefore: 0,
+            laps: 1,
           },
         },
         // Two growth slots remain, but this existing-task binding draws none.
@@ -1200,11 +1355,15 @@ describe('engine/conductor', () => {
         stepRunner: {
           run: async (step, _state, options) => {
             if (step === 'remediate') {
-              await persistLegacyRemediationPlan(dir, options, [{
-                  id: fixtureAsBuiltFindingId(), disposition: 'existing-task', category: null,
+              await persistLegacyRemediationPlan(dir, options, [
+                {
+                  id: fixtureAsBuiltFindingId(),
+                  disposition: 'existing-task',
+                  category: null,
                   rationale: 'Task 1 already owns this repair.',
                   tasks: [{ id: '1', title: 'Existing work' }],
-              }]);
+                },
+              ]);
             }
             return { success: true };
           },
@@ -1222,10 +1381,12 @@ describe('engine/conductor', () => {
         'test existing-task lap cap',
         {
           source: 'architecture-review-as-built',
-          evidence: [{
-            gate: 'architecture_review_as_built',
-            evidenceFile: '.pipeline/architecture-review-as-built.json',
-          }],
+          evidence: [
+            {
+              gate: 'architecture_review_as_built',
+              evidenceFile: '.pipeline/architecture-review-as-built.json',
+            },
+          ],
         },
       );
 
@@ -1243,19 +1404,29 @@ describe('engine/conductor', () => {
       const planPath = join(dir, '.docs', 'plans', 'existing-task-bindings.md');
       const authoredPlan = '### Task 1: Existing work\n';
       await writeFile(planPath, authoredPlan);
-      await writeFile(join(dir, '.docs', 'stories', 'existing-task-bindings.md'), '## Story 1: Existing work\n\n### Happy Path\n- Given work, when repaired, then it passes.\n');
-      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }));
+      await writeFile(
+        join(dir, '.docs', 'stories', 'existing-task-bindings.md'),
+        '## Story 1: Existing work\n\n### Happy Path\n- Given work, when repaired, then it passes.\n',
+      );
+      await writeFile(
+        join(dir, '.pipeline', 'task-status.json'),
+        JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }),
+      );
       await writePrdAuditFixableFixture(dir, undefined);
       const conductor = new Conductor({
         stateFilePath: statePath,
         stepRunner: {
           run: async (step, _state, options) => {
             if (step === 'remediate') {
-              await persistLegacyRemediationPlan(dir, options, [{
-                  id: 'S1.1', disposition: 'existing-task', category: null,
+              await persistLegacyRemediationPlan(dir, options, [
+                {
+                  id: 'S1.1',
+                  disposition: 'existing-task',
+                  category: null,
                   rationale: 'Task 1 already owns this repair.',
                   tasks: [{ id: '1', title: 'Existing work' }],
-              }]);
+                },
+              ]);
             }
             return { success: true };
           },
@@ -1274,8 +1445,9 @@ describe('engine/conductor', () => {
 
       expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
       expect(await readFile(planPath, 'utf8')).toBe(authoredPlan);
-      expect(JSON.parse(await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8')).tasks)
-        .toEqual([{ id: '1', name: 'Existing work', status: 'pending' }]);
+      expect(JSON.parse(await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8')).tasks).toEqual([
+        { id: '1', name: 'Existing work', status: 'pending' },
+      ]);
       expect((await readKickbackLedger(dir)).pendingRepair).toMatchObject({
         charges: { prd_audit: { laps: 1, growth: 0 } },
         taskIds: ['1'],
@@ -1288,11 +1460,20 @@ describe('engine/conductor', () => {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       const planPath = join(dir, '.docs', 'plans', 'existing-task-bindings.md');
       await writeFile(planPath, '### Task 1: PRD work\n\n### Task 2: As-built work\n');
-      await writeFile(join(dir, '.docs', 'stories', 'existing-task-bindings.md'), '## Story 1: Existing work\n\n### Happy Path\n- Given work, when repaired, then it passes.\n');
+      await writeFile(
+        join(dir, '.docs', 'stories', 'existing-task-bindings.md'),
+        '## Story 1: Existing work\n\n### Happy Path\n- Given work, when repaired, then it passes.\n',
+      );
       await writePrdAuditFixableFixture(dir, undefined);
-      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
-        tasks: [{ id: '1', status: 'completed' }, { id: '2', status: 'completed' }],
-      }));
+      await writeFile(
+        join(dir, '.pipeline', 'task-status.json'),
+        JSON.stringify({
+          tasks: [
+            { id: '1', status: 'completed' },
+            { id: '2', status: 'completed' },
+          ],
+        }),
+      );
       await writeKickbackLedger(dir, {
         version: 1,
         gates: {},
@@ -1304,7 +1485,13 @@ describe('engine/conductor', () => {
           run: async (step, _state, options) => {
             if (step === 'remediate') {
               await persistLegacyRemediationPlan(dir, options, [
-                  { id: 'S1.1', disposition: 'existing-task', category: null, rationale: 'Task 1 owns this repair.', tasks: [{ id: '1', title: 'PRD work' }] },
+                {
+                  id: 'S1.1',
+                  disposition: 'existing-task',
+                  category: null,
+                  rationale: 'Task 1 owns this repair.',
+                  tasks: [{ id: '1', title: 'PRD work' }],
+                },
               ]);
             }
             return { success: true };
@@ -1349,7 +1536,10 @@ describe('engine/conductor', () => {
       const planPath = join(dir, '.docs', 'plans', 'existing-task-bindings.md');
       await writeFile(planPath, '### Task 1: Existing work 1\n\n### Task 2: Existing work 2\n');
       const taskStatus = JSON.stringify({
-        tasks: [{ id: '1', status: 'completed' }, { id: '2', status: 'completed' }],
+        tasks: [
+          { id: '1', status: 'completed' },
+          { id: '2', status: 'completed' },
+        ],
       });
       await writeFile(join(dir, '.pipeline', 'task-status.json'), taskStatus);
       await writeKickbackLedger(dir, {
@@ -1364,13 +1554,15 @@ describe('engine/conductor', () => {
         stepRunner: {
           run: async (step, _state, options) => {
             if (step === 'remediate') {
-              await persistLegacyRemediationPlan(dir, options, [{
+              await persistLegacyRemediationPlan(dir, options, [
+                {
                   id: fixtureAsBuiltFindingId(),
                   disposition: 'existing-task',
                   category: null,
                   rationale: 'Task 1 already owns this repair.',
                   tasks: [{ id: '1', title: 'Existing work 1' }],
-              }]);
+                },
+              ]);
             }
             return { success: true };
           },
@@ -1387,10 +1579,12 @@ describe('engine/conductor', () => {
         'test consolidated existing-task round',
         {
           source: 'validation-group',
-          evidence: [{
-            gate: 'architecture_review_as_built',
-            evidenceFile: '.pipeline/architecture-review-as-built.json',
-          }],
+          evidence: [
+            {
+              gate: 'architecture_review_as_built',
+              evidenceFile: '.pipeline/architecture-review-as-built.json',
+            },
+          ],
           consolidatedManualTestFail: true,
         },
       );
@@ -1414,7 +1608,10 @@ describe('engine/conductor', () => {
       const planPath = join(dir, '.docs', 'plans', 'existing-task-bindings.md');
       const authoredPlan = Array.from({ length: 4 }, (_, i) => `### Task ${i + 1}: Authored ${i + 1}`).join('\n');
       await writeFile(planPath, authoredPlan);
-      await writeFile(join(dir, '.docs', 'stories', 'existing-task-bindings.md'), '## Story 1: Repair\n\n### Happy Path\n- Given repair work, when it is completed, then it passes.\n');
+      await writeFile(
+        join(dir, '.docs', 'stories', 'existing-task-bindings.md'),
+        '## Story 1: Repair\n\n### Happy Path\n- Given repair work, when it is completed, then it passes.\n',
+      );
       await writePrdAuditFixableFixture(dir, undefined);
       await writeKickbackLedger(dir, { version: 1, gates: {}, growth: { authored: 4, added: 0, byGate: {} } });
       const conductor = new Conductor({
@@ -1423,19 +1620,32 @@ describe('engine/conductor', () => {
         events,
         git: PRESERVABLE_PRD_AUDIT_GIT,
         config: { prd_audit: { max_remediation_laps: 2 } } as never,
-        stepRunner: { run: async (step, _state, options) => {
-          if (step === 'remediate') await persistLegacyRemediationPlan(dir, options, [{
-            id: 'S1.1', disposition: 'build', category: null, rationale: 'Append the repair.',
-            tasks: [{ id: 'rem-fr-1', title: 'Appended repair' }],
-          }]);
-          return { success: true };
-        } },
+        stepRunner: {
+          run: async (step, _state, options) => {
+            if (step === 'remediate')
+              await persistLegacyRemediationPlan(dir, options, [
+                {
+                  id: 'S1.1',
+                  disposition: 'build',
+                  category: null,
+                  rationale: 'Append the repair.',
+                  tasks: [{ id: 'rem-fr-1', title: 'Appended repair' }],
+                },
+              ]);
+            return { success: true };
+          },
+        },
       });
       const input = { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000 };
-      const source = { source: 'prd_audit' as const, evidence: [{ gate: 'prd_audit' as const, evidenceFile: '.pipeline/prd-audit.md' }] };
+      const source = {
+        source: 'prd_audit' as const,
+        evidence: [{ gate: 'prd_audit' as const, evidenceFile: '.pipeline/prd-audit.md' }],
+      };
 
-      await expect((conductor as any).planRemediation(input, ALL_STEPS, 'append once', source))
-        .resolves.toMatchObject({ kind: 'route', target: 'build' });
+      await expect((conductor as any).planRemediation(input, ALL_STEPS, 'append once', source)).resolves.toMatchObject({
+        kind: 'route',
+        target: 'build',
+      });
       expect(await readFile(planPath, 'utf8')).toContain('### Task rem-prd-audit-rem-fr-1: Appended repair');
       expect((await readKickbackLedger(dir)).growth).toEqual({ authored: 4, added: 0, byGate: {} });
       expect((await readKickbackLedger(dir)).pendingRepair).toMatchObject({
@@ -1451,15 +1661,26 @@ describe('engine/conductor', () => {
         join(dir, '.docs', 'plans', 'existing-task-bindings.md'),
         Array.from({ length: 4 }, (_, i) => `### Task ${i + 1}: Authored ${i + 1}`).join('\n'),
       );
-      await writeFile(join(dir, '.docs', 'stories', 'existing-task-bindings.md'), [
-        '## Story 1: Repair', '', '### Happy Path',
-        '- Given the first repair, when it is completed, then it passes.',
-        '- Given the second repair, when it is completed, then it passes.',
-        '- Given the third repair, when it is completed, then it passes.',
-      ].join('\n'));
-      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({
-        tasks: [{ id: '2', status: 'completed' }, { id: '3', status: 'completed' }],
-      }));
+      await writeFile(
+        join(dir, '.docs', 'stories', 'existing-task-bindings.md'),
+        [
+          '## Story 1: Repair',
+          '',
+          '### Happy Path',
+          '- Given the first repair, when it is completed, then it passes.',
+          '- Given the second repair, when it is completed, then it passes.',
+          '- Given the third repair, when it is completed, then it passes.',
+        ].join('\n'),
+      );
+      await writeFile(
+        join(dir, '.pipeline', 'task-status.json'),
+        JSON.stringify({
+          tasks: [
+            { id: '2', status: 'completed' },
+            { id: '3', status: 'completed' },
+          ],
+        }),
+      );
       await writePrdAuditFixableFixture(dir, undefined, [
         { criterionId: 'S1.1', ownerTaskId: '1' },
         { criterionId: 'S1.2', ownerTaskId: '2' },
@@ -1479,26 +1700,49 @@ describe('engine/conductor', () => {
         events,
         git: PRESERVABLE_PRD_AUDIT_GIT,
         config: { prd_audit: { max_remediation_laps: 2 } } as never,
-        stepRunner: { run: async (step, _state, options) => {
-          if (step === 'remediate') await persistLegacyRemediationPlan(dir, options, [
-              { id: 'S1.1', disposition: 'build', category: null, rationale: 'Append.', tasks: [{ id: 'rem-s1-1', title: 'Appended repair' }] },
-              { id: 'S1.2', disposition: 'existing-task', category: null, rationale: 'Already owned.', tasks: [{ id: '2', title: 'Authored 2' }] },
-              { id: 'S1.3', disposition: 'existing-task', category: null, rationale: 'Already owned.', tasks: [{ id: '3', title: 'Authored 3' }] },
-          ]);
-          return { success: true };
-        } },
+        stepRunner: {
+          run: async (step, _state, options) => {
+            if (step === 'remediate')
+              await persistLegacyRemediationPlan(dir, options, [
+                {
+                  id: 'S1.1',
+                  disposition: 'build',
+                  category: null,
+                  rationale: 'Append.',
+                  tasks: [{ id: 'rem-s1-1', title: 'Appended repair' }],
+                },
+                {
+                  id: 'S1.2',
+                  disposition: 'existing-task',
+                  category: null,
+                  rationale: 'Already owned.',
+                  tasks: [{ id: '2', title: 'Authored 2' }],
+                },
+                {
+                  id: 'S1.3',
+                  disposition: 'existing-task',
+                  category: null,
+                  rationale: 'Already owned.',
+                  tasks: [{ id: '3', title: 'Authored 3' }],
+                },
+              ]);
+            return { success: true };
+          },
+        },
       });
 
       const input = { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000 };
       const source = { source: 'prd_audit', evidence: [{ gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' }] };
 
-      await expect((conductor as any).planRemediation(input, ALL_STEPS, 'restage existing work', source))
-        .resolves.toMatchObject({ kind: 'route', target: 'build' });
-      expect(JSON.parse(await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8')).tasks)
-        .toEqual(expect.arrayContaining([
+      await expect(
+        (conductor as any).planRemediation(input, ALL_STEPS, 'restage existing work', source),
+      ).resolves.toMatchObject({ kind: 'route', target: 'build' });
+      expect(JSON.parse(await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf8')).tasks).toEqual(
+        expect.arrayContaining([
           expect.objectContaining({ id: '2', status: 'pending' }),
           expect.objectContaining({ id: '3', status: 'pending' }),
-        ]));
+        ]),
+      );
 
       // The first route proves existing-task admission. Clear its unspent
       // boundary receipt while modeling an earlier settled append that spent
@@ -1523,29 +1767,57 @@ describe('engine/conductor', () => {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       const planPath = join(dir, '.docs', 'plans', 'existing-task-bindings.md');
       await writeFile(planPath, Array.from({ length: 8 }, (_, i) => `### Task ${i + 1}: Authored ${i + 1}`).join('\n'));
-      await writeFile(join(dir, '.docs', 'stories', 'existing-task-bindings.md'), '## Story 1: Repair\n\n### Happy Path\n- Given repair work, when it is completed, then it passes.\n');
-      await writeFile(join(dir, '.pipeline', 'task-status.json'), JSON.stringify({ tasks: [{ id: '2', status: 'completed' }] }));
+      await writeFile(
+        join(dir, '.docs', 'stories', 'existing-task-bindings.md'),
+        '## Story 1: Repair\n\n### Happy Path\n- Given repair work, when it is completed, then it passes.\n',
+      );
+      await writeFile(
+        join(dir, '.pipeline', 'task-status.json'),
+        JSON.stringify({ tasks: [{ id: '2', status: 'completed' }] }),
+      );
       await writePrdAuditFixableFixture(dir, undefined);
       await writeAsBuiltFixture(dir, undefined, asBuiltRemediableFixture('ARCH-1', '2', 'Existing repair'));
       await writeKickbackLedger(dir, { version: 1, gates: {}, growth: { authored: 8, added: 0, byGate: {} } });
       const conductor = new Conductor({
-        stateFilePath: statePath, projectRoot: dir, events,
+        stateFilePath: statePath,
+        projectRoot: dir,
+        events,
         git: PRESERVABLE_PRD_AUDIT_GIT,
         config: { architecture_review_as_built: { remediation: { enabled: true } } } as never,
-        stepRunner: { run: async (step, _state, options) => {
-          if (step === 'remediate') await persistLegacyRemediationPlan(dir, options, [
-            { id: 'S1.1', disposition: 'build', category: null, rationale: 'Append.', tasks: [{ id: 'rem-s1-1', title: 'Appended repair' }] },
-            { id: fixtureAsBuiltFindingId(), disposition: 'existing-task', category: null, rationale: 'Already owned.', tasks: [{ id: '2', title: 'Authored 2' }] },
-          ]);
-          return { success: true };
-        } },
+        stepRunner: {
+          run: async (step, _state, options) => {
+            if (step === 'remediate')
+              await persistLegacyRemediationPlan(dir, options, [
+                {
+                  id: 'S1.1',
+                  disposition: 'build',
+                  category: null,
+                  rationale: 'Append.',
+                  tasks: [{ id: 'rem-s1-1', title: 'Appended repair' }],
+                },
+                {
+                  id: fixtureAsBuiltFindingId(),
+                  disposition: 'existing-task',
+                  category: null,
+                  rationale: 'Already owned.',
+                  tasks: [{ id: '2', title: 'Authored 2' }],
+                },
+              ]);
+            return { success: true };
+          },
+        },
       });
       const outcome = await (conductor as any).planRemediation(
-        { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000 }, ALL_STEPS, 'mixed attribution',
-        { source: 'validation-group', evidence: [
-          { gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' },
-          { gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.json' },
-        ] },
+        { feature_desc: 'existing-task-bindings', session_started_at: Date.now() - 1_000 },
+        ALL_STEPS,
+        'mixed attribution',
+        {
+          source: 'validation-group',
+          evidence: [
+            { gate: 'prd_audit', evidenceFile: '.pipeline/prd-audit.md' },
+            { gate: 'architecture_review_as_built', evidenceFile: '.pipeline/architecture-review-as-built.json' },
+          ],
+        },
       );
 
       expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
@@ -1558,7 +1830,6 @@ describe('engine/conductor', () => {
         },
       });
     });
-
   });
 
   it('credits lap counts once immediately before reopening an invalidated build_review after rebase', async () => {
@@ -1598,15 +1869,17 @@ describe('engine/conductor', () => {
     (conductor as unknown as { lastRebaseOutcome: { kind: 'changed' } }).lastRebaseOutcome = {
       kind: 'changed',
     };
-    const advanceTail = (conductor as unknown as {
-      advanceTail: (
-        step: (typeof ALL_STEPS)[number],
-        state: ConductState,
-        stuckGate: Map<StepName, number>,
-        steps: typeof ALL_STEPS,
-        indexOf: (name: StepName) => number,
-      ) => Promise<number | null | 'halt'>;
-    }).advanceTail.bind(conductor);
+    const advanceTail = (
+      conductor as unknown as {
+        advanceTail: (
+          step: (typeof ALL_STEPS)[number],
+          state: ConductState,
+          stuckGate: Map<StepName, number>,
+          steps: typeof ALL_STEPS,
+          indexOf: (name: StepName) => number,
+        ) => Promise<number | null | 'halt'>;
+      }
+    ).advanceTail.bind(conductor);
 
     await advanceTail(
       ALL_STEPS.find((step) => step.name === 'rebase')!,
@@ -1617,14 +1890,18 @@ describe('engine/conductor', () => {
     );
 
     expect(creditKickbackGateLaps).toHaveBeenCalledTimes(1);
-    expect(creditKickbackGateLaps).toHaveBeenCalledWith(expect.objectContaining({
-      cumulative: 4,
-      mechanicalFaults: 3,
-    }));
-    expect((await readKickbackLedger(dir)).gates.build_review).toEqual(expect.objectContaining({
-      cumulative: 0,
-      mechanicalFaults: 0,
-    }));
+    expect(creditKickbackGateLaps).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cumulative: 4,
+        mechanicalFaults: 3,
+      }),
+    );
+    expect((await readKickbackLedger(dir)).gates.build_review).toEqual(
+      expect.objectContaining({
+        cumulative: 0,
+        mechanicalFaults: 0,
+      }),
+    );
     expect(state.build_review).toBe('pending');
   });
 
@@ -1661,15 +1938,17 @@ describe('engine/conductor', () => {
     (conductor as unknown as { lastRebaseOutcome: { kind: 'changed' } }).lastRebaseOutcome = {
       kind: 'changed',
     };
-    const advanceTail = (conductor as unknown as {
-      advanceTail: (
-        step: (typeof ALL_STEPS)[number],
-        state: ConductState,
-        stuckGate: Map<StepName, number>,
-        steps: typeof ALL_STEPS,
-        indexOf: (name: StepName) => number,
-      ) => Promise<number | null | 'halt'>;
-    }).advanceTail.bind(conductor);
+    const advanceTail = (
+      conductor as unknown as {
+        advanceTail: (
+          step: (typeof ALL_STEPS)[number],
+          state: ConductState,
+          stuckGate: Map<StepName, number>,
+          steps: typeof ALL_STEPS,
+          indexOf: (name: StepName) => number,
+        ) => Promise<number | null | 'halt'>;
+      }
+    ).advanceTail.bind(conductor);
 
     await advanceTail(
       ALL_STEPS.find((step) => step.name === 'rebase')!,
@@ -1728,8 +2007,8 @@ describe('engine/conductor', () => {
 
       expect(dispatched).toContain('build');
     } finally {
-      vi.mocked(execa).mockImplementation(() =>
-        Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }) as unknown as ReturnType<typeof execa>,
+      vi.mocked(execa).mockImplementation(
+        () => Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }) as unknown as ReturnType<typeof execa>,
       );
     }
   });
@@ -1967,20 +2246,25 @@ describe('engine/conductor', () => {
       await writeState(statePath, state);
     }
 
-    const ledgerBytes = JSON.stringify({
-      version: 1,
-      gates: {
-        test_suite: {
-          count: 1,
-          cumulative: 1,
-          mechanicalFaults: 0,
-          treeHash: '0123456789abcdef0123456789abcdef01234567',
-          lastReason: 'previous suite failure',
-          priorVerdict: true,
-          resolvedBefore: 4,
+    const ledgerBytes =
+      JSON.stringify(
+        {
+          version: 1,
+          gates: {
+            test_suite: {
+              count: 1,
+              cumulative: 1,
+              mechanicalFaults: 0,
+              treeHash: '0123456789abcdef0123456789abcdef01234567',
+              lastReason: 'previous suite failure',
+              priorVerdict: true,
+              resolvedBefore: 4,
+            },
+          },
         },
-      },
-    }, null, 2) + '\n';
+        null,
+        2,
+      ) + '\n';
 
     it('preserves the test_suite ledger bytes and emits no kickback for a within-budget reuse', async () => {
       // Covers: task:12
@@ -1991,7 +2275,9 @@ describe('engine/conductor', () => {
       const before = await readFile(ledgerPath, 'utf8');
       const beforeHash = createHash('sha256').update(before).digest('hex');
       const kickbacks: ConductorEvent[] = [];
-      events.on('kickback', (event) => { kickbacks.push(event); });
+      events.on('kickback', (event) => {
+        kickbacks.push(event);
+      });
       const verifier = {
         inspect: vi.fn().mockResolvedValue({
           status: 'PRESERVED_WITHIN_BUDGET' as const,
@@ -2031,7 +2317,9 @@ describe('engine/conductor', () => {
       // Covers: task:3
       await writeTestSuiteOnlyState();
       const kickbacks: ConductorEvent[] = [];
-      events.on('kickback', (event) => { kickbacks.push(event); });
+      events.on('kickback', (event) => {
+        kickbacks.push(event);
+      });
       const suiteFailure = {
         status: 'FAILED' as const,
         reason: 'nonzero_exit' as const,
@@ -2057,19 +2345,21 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      expect((await readKickbackLedger(dir)).gates.test_suite).toEqual(expect.objectContaining({
-        count: 1,
-        cumulative: 1,
-      }));
-      expect((await readKickbackLedger(dir)).gates.test_suite).not.toHaveProperty(
-        'suiteInfrastructureRetries',
+      expect((await readKickbackLedger(dir)).gates.test_suite).toEqual(
+        expect.objectContaining({
+          count: 1,
+          cumulative: 1,
+        }),
       );
-      expect(kickbacks).toEqual([expect.objectContaining({
-        type: 'kickback',
-        from: 'test_suite',
-        to: 'build',
-        count: 1,
-      })]);
+      expect((await readKickbackLedger(dir)).gates.test_suite).not.toHaveProperty('suiteInfrastructureRetries');
+      expect(kickbacks).toEqual([
+        expect.objectContaining({
+          type: 'kickback',
+          from: 'test_suite',
+          to: 'build',
+          count: 1,
+        }),
+      ]);
       expect(verifier.inspect).toHaveBeenCalledTimes(1);
       expect(verifier.ensure).toHaveBeenCalledTimes(1);
       expect(runner.run).toHaveBeenCalledWith('build', expect.anything(), expect.anything());
@@ -2090,10 +2380,12 @@ describe('engine/conductor', () => {
         if (event.type === 'step_retry' && event.step === 'test_suite') retryEvents.push(event);
       });
       const verifier = {
-        inspect: vi.fn()
+        inspect: vi
+          .fn()
           .mockResolvedValueOnce(timeoutFailure)
           .mockResolvedValueOnce({ status: 'CURRENT' as const, evidence: preservedEvidence }),
-        ensure: vi.fn()
+        ensure: vi
+          .fn()
           .mockResolvedValueOnce(timeoutFailure)
           .mockResolvedValueOnce({ status: 'REUSED' as const, evidence: preservedEvidence }),
       };
@@ -2115,18 +2407,22 @@ describe('engine/conductor', () => {
       expect(finalState.ok).toBe(true);
       if (!finalState.ok) throw new Error(finalState.error.message);
       expect(finalState.value.test_suite).toBe('done');
-      expect(retryEvents).toEqual([expect.objectContaining({
-        type: 'step_retry',
-        step: 'test_suite',
-        attempt: 1,
-        reason: expect.stringContaining('infrastructure'),
-      })]);
+      expect(retryEvents).toEqual([
+        expect.objectContaining({
+          type: 'step_retry',
+          step: 'test_suite',
+          attempt: 1,
+          reason: expect.stringContaining('infrastructure'),
+        }),
+      ]);
       expect(retryEvents[0]).not.toHaveProperty('progressAttempt');
       expect(retryEvents[0]).not.toHaveProperty('progressAttemptCeiling');
-      expect((await readKickbackLedger(dir)).gates.test_suite).toEqual(expect.objectContaining({
-        count: 1,
-        cumulative: 1,
-      }));
+      expect((await readKickbackLedger(dir)).gates.test_suite).toEqual(
+        expect.objectContaining({
+          count: 1,
+          cumulative: 1,
+        }),
+      );
       expect(verifier.inspect).toHaveBeenCalledTimes(2);
       expect(verifier.ensure).toHaveBeenCalledTimes(2);
       expect(runner.run).not.toHaveBeenCalled();
@@ -2171,14 +2467,74 @@ describe('engine/conductor', () => {
       expect(verifier.ensure).toHaveBeenCalledTimes(MAX_SUITE_INFRASTRUCTURE_RETRIES + 1);
     });
 
+    it('halts a stacked child at the same test_suite infrastructure retry allowance (#3571)', async () => {
+      // Covers: #3571
+      await writeTestSuiteOnlyState();
+      const child = parseChildId(1)!;
+      const suiteFailure = {
+        status: 'FAILED' as const,
+        reason: 'missing_config' as const,
+        message: 'Project config must declare test_suite',
+      };
+      // Bound the fixture: an uncapped loop gets a passing suite after a few
+      // extra tries, so the regression fails on its assertions instead of hanging.
+      const failuresBeforePass = MAX_SUITE_INFRASTRUCTURE_RETRIES + 4;
+      let inspections = 0;
+      let ensures = 0;
+      const verifier = {
+        inspect: vi.fn(async () =>
+          ++inspections > failuresBeforePass
+            ? { status: 'CURRENT' as const, evidence: preservedEvidence }
+            : suiteFailure,
+        ),
+        ensure: vi.fn(async () =>
+          ++ensures > failuresBeforePass ? { status: 'REUSED' as const, evidence: preservedEvidence } : suiteFailure,
+        ),
+      };
+      const retryEvents: ConductorEvent[] = [];
+      events.on('step_retry', (event) => {
+        if (event.type === 'step_retry' && event.step === 'test_suite') retryEvents.push(event);
+      });
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
+        mode: 'auto',
+        daemon: true,
+        fromStep: 'test_suite',
+        fullSuiteVerifier: verifier,
+        childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'no-child' }) },
+      });
+      (conductor as unknown as { activeRegionChild: typeof child }).activeRegionChild = child;
+
+      await conductor.run();
+
+      await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).resolves.toBe('needs-human');
+      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
+      expect(halt).toContain(`test_suite infrastructure failure (missing_config): ${suiteFailure.message}`);
+      expect(halt).toContain(`retries spent: ${MAX_SUITE_INFRASTRUCTURE_RETRIES}`);
+      expect(retryEvents.map((event) => (event as { attempt: number }).attempt)).toEqual(
+        Array.from({ length: MAX_SUITE_INFRASTRUCTURE_RETRIES }, (_, index) => index + 1),
+      );
+      expect((await readKickbackLedger(dir, child)).gates.test_suite.suiteInfrastructureRetries).toBe(
+        MAX_SUITE_INFRASTRUCTURE_RETRIES,
+      );
+      expect(verifier.inspect).toHaveBeenCalledTimes(MAX_SUITE_INFRASTRUCTURE_RETRIES + 1);
+      expect(verifier.ensure).toHaveBeenCalledTimes(MAX_SUITE_INFRASTRUCTURE_RETRIES + 1);
+    });
+
     it('halts needs-human without a test_suite re-run when its durable retry counter is unreadable', async () => {
       // Covers: task:4
       await writeTestSuiteOnlyState();
       await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeFile(join(dir, '.pipeline/kickback-ledger.json'), JSON.stringify({
-        version: 1,
-        gates: { test_suite: { suiteInfrastructureRetries: 1.5 } },
-      }));
+      await writeFile(
+        join(dir, '.pipeline/kickback-ledger.json'),
+        JSON.stringify({
+          version: 1,
+          gates: { test_suite: { suiteInfrastructureRetries: 1.5 } },
+        }),
+      );
       const suiteFailure = {
         status: 'FAILED' as const,
         reason: 'spawn_failed' as const,
@@ -2214,10 +2570,10 @@ describe('engine/conductor', () => {
       // Covers: task:4
       await writeTestSuiteOnlyState();
       await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeFile(join(dir, '.pipeline/kickback-ledger.json'), ledgerBytes.replace(
-        '"resolvedBefore": 4',
-        '"resolvedBefore": 4,\n          "suiteInfrastructureRetries": 1',
-      ));
+      await writeFile(
+        join(dir, '.pipeline/kickback-ledger.json'),
+        ledgerBytes.replace('"resolvedBefore": 4', '"resolvedBefore": 4,\n          "suiteInfrastructureRetries": 1'),
+      );
       const suiteFailure = {
         status: 'FAILED' as const,
         reason: 'spawn_failed' as const,
@@ -2240,8 +2596,9 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      expect((await readKickbackLedger(dir)).gates.test_suite.suiteInfrastructureRetries)
-        .toBe(MAX_SUITE_INFRASTRUCTURE_RETRIES);
+      expect((await readKickbackLedger(dir)).gates.test_suite.suiteInfrastructureRetries).toBe(
+        MAX_SUITE_INFRASTRUCTURE_RETRIES,
+      );
       expect(verifier.inspect).toHaveBeenCalledTimes(2);
       expect(verifier.ensure).toHaveBeenCalledTimes(2);
       await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
@@ -2258,7 +2615,9 @@ describe('engine/conductor', () => {
         const ledgerPath = join(dir, '.pipeline/kickback-ledger.json');
         await writeFile(ledgerPath, ledgerBytes);
         const kickbacks: ConductorEvent[] = [];
-        events.on('kickback', (event) => { kickbacks.push(event); });
+        events.on('kickback', (event) => {
+          kickbacks.push(event);
+        });
         const suiteFailure = {
           status: 'FAILED' as const,
           reason,
@@ -2282,10 +2641,12 @@ describe('engine/conductor', () => {
 
         await conductor.run();
 
-        expect((await readKickbackLedger(dir)).gates.test_suite).toEqual(expect.objectContaining({
-          count: 1,
-          cumulative: 1,
-        }));
+        expect((await readKickbackLedger(dir)).gates.test_suite).toEqual(
+          expect.objectContaining({
+            count: 1,
+            cumulative: 1,
+          }),
+        );
         expect(kickbacks).toEqual([]);
         expect(verifier.inspect).toHaveBeenCalledTimes(3);
         expect(verifier.ensure).toHaveBeenCalledTimes(3);
@@ -2300,9 +2661,7 @@ describe('engine/conductor', () => {
 
   it('keeps the interactive CLI constructor free of daemon operator-park options', async () => {
     const source = await readFile(new URL('../../src/index.ts', import.meta.url), 'utf8');
-    const constructor = source.match(
-      /const conductor = new Conductor\(\{[\s\S]*?\n  \}\);/,
-    )?.[0];
+    const constructor = source.match(/const conductor = new Conductor\(\{[\s\S]*?\n  \}\);/)?.[0];
 
     expect(constructor).toBeDefined();
     expect(constructor).not.toMatch(/operatorParkBoundary|featureSlug/);
@@ -2377,12 +2736,17 @@ describe('engine/conductor', () => {
         .map((line) => JSON.parse(line));
       const starts = records.filter((record) => record.type === 'step_started');
       const terminals = records.filter(
-        (record) => record.type === 'step_completed' || record.type === 'step_failed' || record.type === 'step_interrupted',
+        (record) =>
+          record.type === 'step_completed' || record.type === 'step_failed' || record.type === 'step_interrupted',
       );
       const terminalIndex = records.findIndex((record) => record.type === 'step_interrupted');
       const haltIndex = records.findIndex((record) => record.type === 'loop_halt');
 
-      expect({ starts: starts.length, terminals: terminals.length, terminalBeforeHalt: terminalIndex < haltIndex }).toEqual({
+      expect({
+        starts: starts.length,
+        terminals: terminals.length,
+        terminalBeforeHalt: terminalIndex < haltIndex,
+      }).toEqual({
         starts: 1,
         terminals: 1,
         terminalBeforeHalt: true,
@@ -2426,9 +2790,7 @@ describe('engine/conductor', () => {
         .split('\n')
         .map((line) => JSON.parse(line));
       const starts = records.filter((record) => record.type === 'step_started');
-      const terminals = records.filter(
-        (record) => record.type === 'step_completed' || record.type === 'step_failed',
-      );
+      const terminals = records.filter((record) => record.type === 'step_completed' || record.type === 'step_failed');
 
       expect({
         starts: starts.length,
@@ -2464,9 +2826,11 @@ describe('engine/conductor', () => {
       daemon: true,
     });
 
-    const emitLoopHalt = (conductor as unknown as {
-      emitLoopHalt(reason: string): Promise<void>;
-    }).emitLoopHalt.bind(conductor);
+    const emitLoopHalt = (
+      conductor as unknown as {
+        emitLoopHalt(reason: string): Promise<void>;
+      }
+    ).emitLoopHalt.bind(conductor);
 
     // `state.last_step` wins when a central halt occurs outside the loop.
     (conductor as unknown as { haltState: ConductState }).haltState = { last_step: 'build' };
@@ -2482,9 +2846,7 @@ describe('engine/conductor', () => {
     // The diagnostic fallback remains in the reason, but is not a StepName and
     // therefore must not cross the typed event boundary as `step`.
     (conductor as unknown as { _breadcrumb: Record<string, never> })._breadcrumb = {};
-    await emitLoopHalt(
-      'loop exited without a terminal verdict (last step: no step recorded)',
-    );
+    await emitLoopHalt('loop exited without a terminal verdict (last step: no step recorded)');
 
     expect(halts).toEqual([
       expect.objectContaining({ reason: 'halt with persisted state', step: 'build' }),
@@ -2511,9 +2873,11 @@ describe('engine/conductor', () => {
     (conductor as unknown as { haltState: ConductState }).haltState = { manual_test: 'done' };
     const reason = 'deferred boundary halt after manual_test settled';
 
-    await (conductor as unknown as {
-      emitLoopHalt(reason: string): Promise<void>;
-    }).emitLoopHalt(reason);
+    await (
+      conductor as unknown as {
+        emitLoopHalt(reason: string): Promise<void>;
+      }
+    ).emitLoopHalt(reason);
 
     expect(halts).toEqual([expect.objectContaining({ reason, step: 'manual_test' })]);
   });
@@ -2536,15 +2900,19 @@ describe('engine/conductor', () => {
     };
     const reason = 'central halt after state persisted build';
 
-    await (conductor as unknown as {
-      emitLoopHalt(reason: string): Promise<void>;
-    }).emitLoopHalt(reason);
+    await (
+      conductor as unknown as {
+        emitLoopHalt(reason: string): Promise<void>;
+      }
+    ).emitLoopHalt(reason);
 
     (conductor as unknown as { _breadcrumb: Record<string, never> })._breadcrumb = {};
     const deferredReason = 'central halt outside an active step';
-    await (conductor as unknown as {
-      emitLoopHalt(reason: string): Promise<void>;
-    }).emitLoopHalt(deferredReason);
+    await (
+      conductor as unknown as {
+        emitLoopHalt(reason: string): Promise<void>;
+      }
+    ).emitLoopHalt(deferredReason);
 
     expect(halts).toEqual([
       expect.objectContaining({ reason, step: 'manual_test' }),
@@ -2585,13 +2953,11 @@ describe('engine/conductor', () => {
     });
 
     const step = ALL_STEPS[0];
-    await (conductor as unknown as {
-      recordStepSkip(
-        state: ConductState,
-        step: (typeof ALL_STEPS)[number],
-        cause: string,
-      ): Promise<void>;
-    }).recordStepSkip({}, step, 'composition test');
+    await (
+      conductor as unknown as {
+        recordStepSkip(state: ConductState, step: (typeof ALL_STEPS)[number], cause: string): Promise<void>;
+      }
+    ).recordStepSkip({}, step, 'composition test');
 
     expect(stateStore.applyBatch).toHaveBeenCalledWith({
       name: 'save step status',
@@ -2617,9 +2983,13 @@ describe('engine/conductor', () => {
     });
     const state: ConductState = {};
 
-    await expect((conductor as unknown as {
-      saveConductorStepStatus(state: ConductState, step: StepName, status: StepStatus): Promise<void>;
-    }).saveConductorStepStatus(state, 'build', 'in_progress')).rejects.toThrow('lease held elsewhere');
+    await expect(
+      (
+        conductor as unknown as {
+          saveConductorStepStatus(state: ConductState, step: StepName, status: StepStatus): Promise<void>;
+        }
+      ).saveConductorStepStatus(state, 'build', 'in_progress'),
+    ).rejects.toThrow('lease held elsewhere');
 
     expect(state).toEqual({});
   });
@@ -2644,16 +3014,22 @@ describe('engine/conductor', () => {
     });
     const state: ConductState = { feature_desc: 'terminal-state-store' };
 
-    await (conductor as unknown as {
-      completeRun(state: ConductState, doneMarkerBody: string): Promise<void>;
-    }).completeRun(state, 'complete\n');
+    await (
+      conductor as unknown as {
+        completeRun(state: ConductState, doneMarkerBody: string): Promise<void>;
+      }
+    ).completeRun(state, 'complete\n');
 
     expect(state.feature_status).toBe('complete');
     expect(stateStore.applyBatch).toHaveBeenCalledWith({
       name: 'complete verified feature run',
-      mutations: [expect.objectContaining({
-        field: 'feature_status', expected: undefined, next: 'complete',
-      })],
+      mutations: [
+        expect.objectContaining({
+          field: 'feature_status',
+          expected: undefined,
+          next: 'complete',
+        }),
+      ],
     });
     expect(completed).toHaveLength(1);
   });
@@ -2677,9 +3053,13 @@ describe('engine/conductor', () => {
       daemon: true,
     });
 
-    await expect((conductor as unknown as {
-      completeRun(state: ConductState, doneMarkerBody: string): Promise<void>;
-    }).completeRun({}, 'complete\n')).rejects.toThrow('completion changed elsewhere');
+    await expect(
+      (
+        conductor as unknown as {
+          completeRun(state: ConductState, doneMarkerBody: string): Promise<void>;
+        }
+      ).completeRun({}, 'complete\n'),
+    ).rejects.toThrow('completion changed elsewhere');
 
     expect(completed).toHaveLength(0);
   });
@@ -2699,20 +3079,26 @@ describe('engine/conductor', () => {
     });
     const state: ConductState = { manual_test: 'in_progress' };
 
-    await (conductor as unknown as {
-      commitSignalCompletions(
-        state: ConductState,
-        signal: NodeJS.Signals,
-        completions: Record<string, StepStatus>,
-      ): Promise<void>;
-    }).commitSignalCompletions(state, 'SIGINT', { manual_test: 'done' });
+    await (
+      conductor as unknown as {
+        commitSignalCompletions(
+          state: ConductState,
+          signal: NodeJS.Signals,
+          completions: Record<string, StepStatus>,
+        ): Promise<void>;
+      }
+    ).commitSignalCompletions(state, 'SIGINT', { manual_test: 'done' });
 
     expect(state.manual_test).toBe('done');
     expect(stateStore.applyBatch).toHaveBeenCalledWith({
       name: 'record SIGINT partial group completion',
-      mutations: [expect.objectContaining({
-        field: 'manual_test', expected: 'in_progress', next: 'done',
-      })],
+      mutations: [
+        expect.objectContaining({
+          field: 'manual_test',
+          expected: 'in_progress',
+          next: 'done',
+        }),
+      ],
     });
   });
 
@@ -2732,17 +3118,17 @@ describe('engine/conductor', () => {
       log,
     });
 
-    await expect((conductor as unknown as {
-      persistSignalCompletionsBestEffort(
-        state: ConductState,
-        signal: NodeJS.Signals,
-        completions: Record<string, StepStatus>,
-      ): Promise<void>;
-    }).persistSignalCompletionsBestEffort(
-      { manual_test: 'in_progress' },
-      'SIGTERM',
-      { manual_test: 'done' },
-    )).resolves.toBeUndefined();
+    await expect(
+      (
+        conductor as unknown as {
+          persistSignalCompletionsBestEffort(
+            state: ConductState,
+            signal: NodeJS.Signals,
+            completions: Record<string, StepStatus>,
+          ): Promise<void>;
+        }
+      ).persistSignalCompletionsBestEffort({ manual_test: 'in_progress' }, 'SIGTERM', { manual_test: 'done' }),
+    ).resolves.toBeUndefined();
 
     expect(log).toHaveBeenCalledWith(expect.stringContaining('SIGTERM could not persist'));
   });
@@ -2768,23 +3154,23 @@ describe('engine/conductor', () => {
       stories: 'done',
     };
 
-    await (conductor as unknown as {
-      navigateStateBack(
-        state: ConductState,
-        target: StepName,
-        steps: typeof ALL_STEPS,
-      ): Promise<number>;
-    }).navigateStateBack(state, 'explore', ALL_STEPS);
+    await (
+      conductor as unknown as {
+        navigateStateBack(state: ConductState, target: StepName, steps: typeof ALL_STEPS): Promise<number>;
+      }
+    ).navigateStateBack(state, 'explore', ALL_STEPS);
 
     expect(state.explore).toBe('pending');
     expect(state.complexity).toBe('stale');
-    expect(stateStore.applyBatch).toHaveBeenCalledWith(expect.objectContaining({
-      name: 'navigate back to explore',
-      mutations: expect.arrayContaining([
-        expect.objectContaining({ field: 'explore', expected: 'done', next: 'pending' }),
-        expect.objectContaining({ field: 'complexity', expected: 'done', next: 'stale' }),
-      ]),
-    }));
+    expect(stateStore.applyBatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'navigate back to explore',
+        mutations: expect.arrayContaining([
+          expect.objectContaining({ field: 'explore', expected: 'done', next: 'pending' }),
+          expect.objectContaining({ field: 'complexity', expected: 'done', next: 'stale' }),
+        ]),
+      }),
+    );
   });
 
   it('records session/run timestamps and supplied worktree metadata as one initialization batch', async () => {
@@ -2805,9 +3191,11 @@ describe('engine/conductor', () => {
     const state: ConductState = {};
 
     try {
-      const fresh = await (conductor as unknown as {
-        initializeRunState(state: ConductState): Promise<boolean>;
-      }).initializeRunState(state);
+      const fresh = await (
+        conductor as unknown as {
+          initializeRunState(state: ConductState): Promise<boolean>;
+        }
+      ).initializeRunState(state);
 
       expect(fresh).toBe(true);
       expect(state).toMatchObject({
@@ -2845,32 +3233,42 @@ describe('engine/conductor', () => {
     const complexityState: ConductState = {};
     const worktreeState: ConductState = {};
 
-    await (conductor as unknown as {
-      runComplexityStep(state: ConductState): Promise<StepRunResult>;
-    }).runComplexityStep(complexityState);
-    await (conductor as unknown as {
-      runWorktreeStep(state: ConductState): Promise<StepRunResult>;
-    }).runWorktreeStep(worktreeState);
+    await (
+      conductor as unknown as {
+        runComplexityStep(state: ConductState): Promise<StepRunResult>;
+      }
+    ).runComplexityStep(complexityState);
+    await (
+      conductor as unknown as {
+        runWorktreeStep(state: ConductState): Promise<StepRunResult>;
+      }
+    ).runWorktreeStep(worktreeState);
 
     expect(complexityState).toMatchObject({
-      complexity_tier: 'L', complexity: 'done', last_step: 'complexity',
+      complexity_tier: 'L',
+      complexity: 'done',
+      last_step: 'complexity',
     });
     expect(worktreeState).toMatchObject({ worktree: 'done', last_step: 'worktree' });
-    expect(stateStore.applyBatch).toHaveBeenCalledWith(expect.objectContaining({
-      name: 'record complexity decision',
-      mutations: expect.arrayContaining([
-        expect.objectContaining({ field: 'complexity_tier', next: 'L' }),
-        expect.objectContaining({ field: 'complexity', next: 'done' }),
-        expect.objectContaining({ field: 'last_step', next: 'complexity' }),
-      ]),
-    }));
-    expect(stateStore.applyBatch).toHaveBeenCalledWith(expect.objectContaining({
-      name: 'record worktree step completion',
-      mutations: expect.arrayContaining([
-        expect.objectContaining({ field: 'worktree', next: 'done' }),
-        expect.objectContaining({ field: 'last_step', next: 'worktree' }),
-      ]),
-    }));
+    expect(stateStore.applyBatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'record complexity decision',
+        mutations: expect.arrayContaining([
+          expect.objectContaining({ field: 'complexity_tier', next: 'L' }),
+          expect.objectContaining({ field: 'complexity', next: 'done' }),
+          expect.objectContaining({ field: 'last_step', next: 'complexity' }),
+        ]),
+      }),
+    );
+    expect(stateStore.applyBatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'record worktree step completion',
+        mutations: expect.arrayContaining([
+          expect.objectContaining({ field: 'worktree', next: 'done' }),
+          expect.objectContaining({ field: 'last_step', next: 'worktree' }),
+        ]),
+      }),
+    );
   });
 
   it('caches a committed DECIDE track marker through the recording store', async () => {
@@ -2890,25 +3288,35 @@ describe('engine/conductor', () => {
     });
     const state: ConductState = { feature_desc: 'feature' };
 
-    await expect((conductor as unknown as {
-      resolveTrack(state: ConductState): Promise<Track>;
-    }).resolveTrack(state)).resolves.toBe('technical');
+    await expect(
+      (
+        conductor as unknown as {
+          resolveTrack(state: ConductState): Promise<Track>;
+        }
+      ).resolveTrack(state),
+    ).resolves.toBe('technical');
 
     expect(state).toMatchObject({ track: 'technical' });
-    expect(stateStore.apply).toHaveBeenCalledWith(expect.objectContaining({
-      field: 'track', expected: undefined, next: 'technical',
-    }));
+    expect(stateStore.apply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        field: 'track',
+        expected: undefined,
+        next: 'technical',
+      }),
+    );
   });
 
   describe('track marker ownership (#3334)', () => {
     // A worktree inherits every feature's committed `.docs/track` marker from
     // its base branch; only the marker this branch wrote may decide the track.
-    const branchGit = (changedOnBranch: string[]) => vi.fn(async (args: string[]) => {
-      if (args[0] === 'symbolic-ref') return { stdout: 'refs/remotes/origin/main\n', exitCode: 0 };
-      if (args[0] === 'merge-base') return { stdout: 'base-sha\n', exitCode: 0 };
-      if (args[0] === 'diff' && args[2] === 'base-sha..HEAD') return { stdout: changedOnBranch.join('\n'), exitCode: 0 };
-      return { stdout: '', exitCode: 0 };
-    });
+    const branchGit = (changedOnBranch: string[]) =>
+      vi.fn(async (args: string[]) => {
+        if (args[0] === 'symbolic-ref') return { stdout: 'refs/remotes/origin/main\n', exitCode: 0 };
+        if (args[0] === 'merge-base') return { stdout: 'base-sha\n', exitCode: 0 };
+        if (args[0] === 'diff' && args[2] === 'base-sha..HEAD')
+          return { stdout: changedOnBranch.join('\n'), exitCode: 0 };
+        return { stdout: '', exitCode: 0 };
+      });
     const resolveTrackFor = (conductor: Conductor, state: ConductState) =>
       (conductor as unknown as { resolveTrack(state: ConductState): Promise<Track> }).resolveTrack(state);
 
@@ -2918,11 +3326,16 @@ describe('engine/conductor', () => {
       await writeFile(join(dir, '.docs', 'track', 'zzz-other-feature.md'), 'Track: product\n');
       const git = branchGit(['.docs/track/explore-named-this.md']);
       const conductor = new Conductor({
-        projectRoot: dir, stateFilePath: statePath, stepRunner: createMockStepRunner(), events, git,
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
+        git,
       });
 
-      await expect(resolveTrackFor(conductor, { feature_desc: 'Make interactive runs faster' }))
-        .resolves.toBe('technical');
+      await expect(resolveTrackFor(conductor, { feature_desc: 'Make interactive runs faster' })).resolves.toBe(
+        'technical',
+      );
       expect(git).toHaveBeenCalledWith(['merge-base', 'origin/main', 'HEAD'], expect.anything());
     });
 
@@ -2930,7 +3343,11 @@ describe('engine/conductor', () => {
       await mkdir(join(dir, '.docs', 'track'), { recursive: true });
       await writeFile(join(dir, '.docs', 'track', 'zzz-other-feature.md'), 'Track: technical\n');
       const conductor = new Conductor({
-        projectRoot: dir, stateFilePath: statePath, stepRunner: createMockStepRunner(), events, git: branchGit([]),
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
+        git: branchGit([]),
       });
       const state: ConductState = { feature_desc: 'my-feature' };
 
@@ -2954,12 +3371,20 @@ describe('engine/conductor', () => {
       mode: 'auto',
     });
 
-    await expect((conductor as unknown as {
-      initializeRunState(state: ConductState): Promise<boolean>;
-    }).initializeRunState({})).rejects.toThrow('state write failed');
-    await expect((conductor as unknown as {
-      runComplexityStep(state: ConductState): Promise<StepRunResult>;
-    }).runComplexityStep({})).rejects.toThrow('state write failed');
+    await expect(
+      (
+        conductor as unknown as {
+          initializeRunState(state: ConductState): Promise<boolean>;
+        }
+      ).initializeRunState({}),
+    ).rejects.toThrow('state write failed');
+    await expect(
+      (
+        conductor as unknown as {
+          runComplexityStep(state: ConductState): Promise<StepRunResult>;
+        }
+      ).runComplexityStep({}),
+    ).rejects.toThrow('state write failed');
   });
 
   it('records a BUILD group join as one expected-value batch', async () => {
@@ -2977,13 +3402,11 @@ describe('engine/conductor', () => {
     });
     const state: ConductState = { build: 'in_progress' };
 
-    await (conductor as unknown as {
-      commitStateChanges(
-        state: ConductState,
-        name: string,
-        changes: Record<string, unknown>,
-      ): Promise<void>;
-    }).commitStateChanges(state, 'join BUILD verification group', {
+    await (
+      conductor as unknown as {
+        commitStateChanges(state: ConductState, name: string, changes: Record<string, unknown>): Promise<void>;
+      }
+    ).commitStateChanges(state, 'join BUILD verification group', {
       build: 'done',
       build__test_suite: 'done',
     });
@@ -3013,32 +3436,40 @@ describe('engine/conductor', () => {
     });
     const state: ConductState = { build: 'done', build_review: 'done', manual_test: 'done' };
 
-    await expect((conductor as unknown as {
-      navigateStateBack(state: ConductState, target: StepName, steps: typeof ALL_STEPS): Promise<number>;
-    }).navigateStateBack(state, 'build', ALL_STEPS)).rejects.toThrow('state changed elsewhere');
+    await expect(
+      (
+        conductor as unknown as {
+          navigateStateBack(state: ConductState, target: StepName, steps: typeof ALL_STEPS): Promise<number>;
+        }
+      ).navigateStateBack(state, 'build', ALL_STEPS),
+    ).rejects.toThrow('state changed elsewhere');
 
-    expect(stateStore.applyBatch).toHaveBeenCalledWith(expect.objectContaining({
-      name: 'navigate back to build',
-      mutations: expect.arrayContaining([
-        expect.objectContaining({ field: 'build', expected: 'done', next: 'pending' }),
-        expect.objectContaining({ field: 'build_review', expected: 'done', next: 'stale' }),
-        expect.objectContaining({ field: 'manual_test', expected: 'done', next: 'stale' }),
-      ]),
-    }));
+    expect(stateStore.applyBatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: 'navigate back to build',
+        mutations: expect.arrayContaining([
+          expect.objectContaining({ field: 'build', expected: 'done', next: 'pending' }),
+          expect.objectContaining({ field: 'build_review', expected: 'done', next: 'stale' }),
+          expect.objectContaining({ field: 'manual_test', expected: 'done', next: 'stale' }),
+        ]),
+      }),
+    );
     expect(state).toMatchObject({ build: 'done', build_review: 'done', manual_test: 'done' });
   });
 
   it('preserves Codex authentication failure metadata for the spot-audit dispatcher', async () => {
-    const module = await import('../../src/engine/conductor.js') as {
+    const module = (await import('../../src/engine/conductor.js')) as {
       toSpotAuditVerifierResult?: (result: unknown) => unknown;
     };
 
-    expect(module.toSpotAuditVerifierResult?.({
-      success: false,
-      output: 'selected authentication source rejected',
-      authFailure: true,
-      authentication: { provider: 'codex', source: 'cached-login', state: 'unusable' },
-    })).toEqual({
+    expect(
+      module.toSpotAuditVerifierResult?.({
+        success: false,
+        output: 'selected authentication source rejected',
+        authFailure: true,
+        authentication: { provider: 'codex', source: 'cached-login', state: 'unusable' },
+      }),
+    ).toEqual({
       success: false,
       output: 'selected authentication source rejected',
       authFailure: true,
@@ -3048,7 +3479,7 @@ describe('engine/conductor', () => {
 
   it('preserves observed intervals through the spot-audit verifier adapter', async () => {
     const observedIntervals = [{ startedAtMs: 600, durationMs: 50 }];
-    const module = await import('../../src/engine/conductor.js') as {
+    const module = (await import('../../src/engine/conductor.js')) as {
       toSpotAuditVerifierResult?: (result: unknown) => {
         observedIntervals?: readonly unknown[];
       };
@@ -3086,33 +3517,46 @@ describe('engine/conductor', () => {
     };
     const attribution = { member: 'manual_test', skill: 'manual-test', executionContext };
 
-    const outcome = await runGroupBranch(member, {}, {
-      stepRunner,
-      lifecycleObserver,
-      executionContext,
-    }, 1);
+    const outcome = await runGroupBranch(
+      member,
+      {},
+      {
+        stepRunner,
+        lifecycleObserver,
+        executionContext,
+      },
+      1,
+    );
 
-    expect((outcome as { observedIntervals?: readonly unknown[] }).observedIntervals?.[0])
-      .toBe(observedIntervals[0]);
+    expect((outcome as { observedIntervals?: readonly unknown[] }).observedIntervals?.[0]).toBe(observedIntervals[0]);
     expect(lifecycleObserver.onAdmitted.mock.calls).toEqual([[attribution]]);
-    expect(lifecycleObserver.onAttempt.mock.calls).toEqual([[{
-      ...attribution,
-      attempt: 1,
-      result: { success: true, observedIntervals },
-    }]]);
+    expect(lifecycleObserver.onAttempt.mock.calls).toEqual([
+      [
+        {
+          ...attribution,
+          attempt: 1,
+          result: { success: true, observedIntervals },
+        },
+      ],
+    ]);
     expect(lifecycleObserver.onRetry).not.toHaveBeenCalled();
-    expect(lifecycleObserver.onSettled.mock.calls).toEqual([[{
-      ...attribution,
-      outcome,
-      attempts: [{ ...attribution, attempt: 1, result: { success: true, observedIntervals } }],
-      observedIntervals,
-    }]]);
+    expect(lifecycleObserver.onSettled.mock.calls).toEqual([
+      [
+        {
+          ...attribution,
+          outcome,
+          attempts: [{ ...attribution, attempt: 1, result: { success: true, observedIntervals } }],
+          observedIntervals,
+        },
+      ],
+    ]);
   });
 
   it('preserves all ordered intervals across a grouped retry', async () => {
     const firstIntervals = [{ startedAtMs: 800, durationMs: 15 }];
     const terminalIntervals = [{ startedAtMs: 900, durationMs: 60 }];
-    const run = vi.fn()
+    const run = vi
+      .fn()
       .mockResolvedValueOnce({
         success: false,
         output: 'first failure',
@@ -3129,16 +3573,20 @@ describe('engine/conductor', () => {
       outcome: { kind: 'skipped' },
     };
 
-    const outcome = await runGroupBranch(member, {}, {
-      stepRunner: { run },
-      lifecycleObserver: NOOP_GROUP_BRANCH_LIFECYCLE_OBSERVER,
-    }, 2);
+    const outcome = await runGroupBranch(
+      member,
+      {},
+      {
+        stepRunner: { run },
+        lifecycleObserver: NOOP_GROUP_BRANCH_LIFECYCLE_OBSERVER,
+      },
+      2,
+    );
 
     expect({
       kind: outcome.kind,
       calls: run.mock.calls.length,
-      intervals: (outcome as { observedIntervals?: readonly unknown[] })
-        .observedIntervals,
+      intervals: (outcome as { observedIntervals?: readonly unknown[] }).observedIntervals,
     }).toEqual({
       kind: 'no-verdict',
       calls: 2,
@@ -3173,7 +3621,7 @@ describe('engine/conductor', () => {
 
   it('rechecks aggregate suite evidence and writes the FINISH fence verdict under the leaf child', async () => {
     const child = parseChildId(2)!;
-    const inspect = vi.fn(async () => ({ status: 'CURRENT', evidence: {} } as FullSuiteInspectionResult));
+    const inspect = vi.fn(async () => ({ status: 'CURRENT', evidence: {} }) as FullSuiteInspectionResult);
     const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: createMockStepRunner(),
@@ -3183,20 +3631,26 @@ describe('engine/conductor', () => {
       config: { test_suite: { verification: { mode: 'changed', drift_budget: {} as never } } },
       fullSuiteVerifier: {
         inspect,
-        ensure: async () => { throw new Error('FINISH fence must only inspect existing evidence'); },
+        ensure: async () => {
+          throw new Error('FINISH fence must only inspect existing evidence');
+        },
       },
     });
     (conductor as unknown as { activeRegionChild: number; activeRegionIsLeaf: boolean }).activeRegionChild = child;
     (conductor as unknown as { activeRegionChild: number; activeRegionIsLeaf: boolean }).activeRegionIsLeaf = true;
 
-    await (conductor as unknown as {
-      nonGreenFinishValidators: (value: ConductState) => Promise<unknown[]>;
-    }).nonGreenFinishValidators({ test_suite: 'done' } as ConductState);
+    await (
+      conductor as unknown as {
+        nonGreenFinishValidators: (value: ConductState) => Promise<unknown[]>;
+      }
+    ).nonGreenFinishValidators({ test_suite: 'done' } as ConductState);
 
-    expect(inspect).toHaveBeenCalledWith(expect.objectContaining({
-      requireAggregate: true,
-      activeChild: { child, isLeaf: true },
-    }));
+    expect(inspect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requireAggregate: true,
+        activeChild: { child, isLeaf: true },
+      }),
+    );
     expect(await readVerdict(dir, 'test_suite', child)).toMatchObject({ satisfied: true });
     await expect(readFile(join(dir, '.pipeline/test-suite-evidence.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
@@ -3204,26 +3658,35 @@ describe('engine/conductor', () => {
   it('parks a cached-login audit verifier failure and redispatches only that verifier when ready', async () => {
     const authentication = { provider: 'codex' as const, source: 'cached-login' as const, state: 'unusable' as const };
     const readiness = vi.fn().mockResolvedValue({ ...authentication, state: 'ready' as const });
-    const dispatchVerifier = vi.fn()
+    const dispatchVerifier = vi
+      .fn()
       .mockResolvedValueOnce({ success: false, output: 'login expired', authFailure: true, authentication })
       .mockResolvedValueOnce({ success: true, output: 'verdict' });
     const runner: StepRunner = { run: vi.fn(), dispatchVerifier };
-    const runtimes = new ProviderRuntimeSet([{
-      key: 'codex',
-      provider: { invoke: vi.fn(), readiness },
-      policy: CODEX_MODEL_POLICY,
-      builtIn: true,
-      availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
-    }]);
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'codex',
+        provider: { invoke: vi.fn(), readiness },
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+      },
+    ]);
     const conductor = new Conductor({
-      stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
       config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as HarnessConfig,
       providerExecution: { runtimes, sessions: new ProviderSessionStore(), configuredProviders: ['codex'] },
       sleepFn: vi.fn(async () => {}),
     });
 
-    const result = await (conductor as unknown as { dispatchSpotAuditVerifier: (opts: { residueIds: string[]; planPath: string }) => Promise<unknown> })
-      .dispatchSpotAuditVerifier({ residueIds: ['8'], planPath: '/tmp/plan.md' });
+    const result = await (
+      conductor as unknown as {
+        dispatchSpotAuditVerifier: (opts: { residueIds: string[]; planPath: string }) => Promise<unknown>;
+      }
+    ).dispatchSpotAuditVerifier({ residueIds: ['8'], planPath: '/tmp/plan.md' });
 
     expect({
       result,
@@ -3240,18 +3703,30 @@ describe('engine/conductor', () => {
 
   it('returns a timed-out API-key verifier auth failure to the observational audit without redispatching', async () => {
     const authentication = { provider: 'codex' as const, source: 'api-key' as const, state: 'unusable' as const };
-    const dispatchVerifier = vi.fn().mockResolvedValue({ success: false, output: 'key rejected', authFailure: true, authentication });
+    const dispatchVerifier = vi
+      .fn()
+      .mockResolvedValue({ success: false, output: 'key rejected', authFailure: true, authentication });
     const runner: StepRunner = { run: vi.fn(), dispatchVerifier };
     const conductor = new Conductor({
-      stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
       config: { harness_self_host: { auth_park_timeout_minutes: 0 } } as HarnessConfig,
       sleepFn: vi.fn(async () => {}),
     });
 
-    const result = await (conductor as unknown as { dispatchSpotAuditVerifier: (opts: { residueIds: string[]; planPath: string }) => Promise<unknown> })
-      .dispatchSpotAuditVerifier({ residueIds: ['8'], planPath: '/tmp/plan.md' });
+    const result = await (
+      conductor as unknown as {
+        dispatchSpotAuditVerifier: (opts: { residueIds: string[]; planPath: string }) => Promise<unknown>;
+      }
+    ).dispatchSpotAuditVerifier({ residueIds: ['8'], planPath: '/tmp/plan.md' });
 
-    expect({ result, verifierCalls: dispatchVerifier.mock.calls.length, mainRunnerCalls: vi.mocked(runner.run).mock.calls.length }).toEqual({
+    expect({
+      result,
+      verifierCalls: dispatchVerifier.mock.calls.length,
+      mainRunnerCalls: vi.mocked(runner.run).mock.calls.length,
+    }).toEqual({
       result: { success: false, output: 'key rejected', authFailure: true, authentication },
       verifierCalls: 1,
       mainRunnerCalls: 0,
@@ -3261,26 +3736,42 @@ describe('engine/conductor', () => {
   it('loses a repeatedly rejected cached-login audit sample after one in-place recovery cycle', async () => {
     const authentication = { provider: 'codex' as const, source: 'cached-login' as const, state: 'unusable' as const };
     const readiness = vi.fn().mockResolvedValue({ ...authentication, state: 'ready' as const });
-    const dispatchVerifier = vi.fn()
+    const dispatchVerifier = vi
+      .fn()
       .mockResolvedValueOnce({ success: false, output: 'first rejection', authFailure: true, authentication })
       .mockResolvedValueOnce({ success: false, output: 'second rejection', authFailure: true, authentication });
     const runner: StepRunner = { run: vi.fn(), dispatchVerifier };
-    const runtimes = new ProviderRuntimeSet([{
-      key: 'codex', provider: { invoke: vi.fn(), readiness },
-      policy: CODEX_MODEL_POLICY, builtIn: true,
-      availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
-    }]);
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'codex',
+        provider: { invoke: vi.fn(), readiness },
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+      },
+    ]);
     const conductor = new Conductor({
-      stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
       config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as HarnessConfig,
       providerExecution: { runtimes, sessions: new ProviderSessionStore(), configuredProviders: ['codex'] },
       sleepFn: vi.fn(async () => {}),
     });
 
-    const result = await (conductor as unknown as { dispatchSpotAuditVerifier: (opts: { residueIds: string[]; planPath: string }) => Promise<unknown> })
-      .dispatchSpotAuditVerifier({ residueIds: ['8'], planPath: '/tmp/plan.md' });
+    const result = await (
+      conductor as unknown as {
+        dispatchSpotAuditVerifier: (opts: { residueIds: string[]; planPath: string }) => Promise<unknown>;
+      }
+    ).dispatchSpotAuditVerifier({ residueIds: ['8'], planPath: '/tmp/plan.md' });
 
-    expect({ result, readinessCalls: readiness.mock.calls.length, verifierCalls: dispatchVerifier.mock.calls.length, mainRunnerCalls: vi.mocked(runner.run).mock.calls.length }).toEqual({
+    expect({
+      result,
+      readinessCalls: readiness.mock.calls.length,
+      verifierCalls: dispatchVerifier.mock.calls.length,
+      mainRunnerCalls: vi.mocked(runner.run).mock.calls.length,
+    }).toEqual({
       result: { success: false, output: 'second rejection', authFailure: true, authentication },
       readinessCalls: 1,
       verifierCalls: 2,
@@ -3293,10 +3784,17 @@ describe('engine/conductor', () => {
     const runner: StepRunner = { run: vi.fn(), dispatchVerifier };
     const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir });
 
-    const result = await (conductor as unknown as { dispatchSpotAuditVerifier: (opts: { residueIds: string[]; planPath: string }) => Promise<unknown> })
-      .dispatchSpotAuditVerifier({ residueIds: ['8'], planPath: '/tmp/plan.md' });
+    const result = await (
+      conductor as unknown as {
+        dispatchSpotAuditVerifier: (opts: { residueIds: string[]; planPath: string }) => Promise<unknown>;
+      }
+    ).dispatchSpotAuditVerifier({ residueIds: ['8'], planPath: '/tmp/plan.md' });
 
-    expect({ result, verifierCalls: dispatchVerifier.mock.calls.length, mainRunnerCalls: vi.mocked(runner.run).mock.calls.length }).toEqual({
+    expect({
+      result,
+      verifierCalls: dispatchVerifier.mock.calls.length,
+      mainRunnerCalls: vi.mocked(runner.run).mock.calls.length,
+    }).toEqual({
       result: { success: false, output: 'verdict unavailable' },
       verifierCalls: 1,
       mainRunnerCalls: 0,
@@ -3309,10 +3807,7 @@ describe('engine/conductor', () => {
       pr_url: 'https://github.com/owner/repo/pull/916',
     };
 
-    async function stopIfPrMerged(
-      conductor: Conductor,
-      state: ConductState = terminalState,
-    ): Promise<boolean> {
+    async function stopIfPrMerged(conductor: Conductor, state: ConductState = terminalState): Promise<boolean> {
       return (
         conductor as unknown as {
           stopIfPrMerged: (
@@ -3321,7 +3816,11 @@ describe('engine/conductor', () => {
             onSigterm: () => Promise<void>,
           ) => Promise<boolean>;
         }
-      ).stopIfPrMerged(state, async () => {}, async () => {});
+      ).stopIfPrMerged(
+        state,
+        async () => {},
+        async () => {},
+      );
     }
 
     it('halts a merged evidence refusal without writing synthetic finish or DONE markers', async () => {
@@ -3344,11 +3843,11 @@ describe('engine/conductor', () => {
       await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf-8')).resolves.toContain(
         'durable shipment evidence: shipped-record-missing',
       );
-      await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf-8')).resolves.toBe(
-        'mechanical',
-      );
+      await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf-8')).resolves.toBe('mechanical');
       await expect(readFile(join(dir, '.pipeline', 'DONE'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
-      await expect(readFile(join(dir, '.pipeline', 'finish-choice'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(dir, '.pipeline', 'finish-choice'), 'utf-8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
     });
 
     it('lets verified merged evidence continue through the normal state machine without synthetic markers', async () => {
@@ -3366,7 +3865,9 @@ describe('engine/conductor', () => {
       expect(verifier).toHaveBeenCalledWith(terminalState.pr_url, terminalState.feature_desc);
       await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
       await expect(readFile(join(dir, '.pipeline', 'DONE'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
-      await expect(readFile(join(dir, '.pipeline', 'finish-choice'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(dir, '.pipeline', 'finish-choice'), 'utf-8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
     });
   });
 
@@ -3376,14 +3877,27 @@ describe('engine/conductor', () => {
       await mkdir(join(dir, '.docs', 'track'), { recursive: true });
       await writeFile(join(dir, '.docs', 'track', 'feat.md'), '# Track\n\nTrack: technical\n');
       await writeState(statePath, {
-        worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
-        complexity_tier: 'M', feature_desc: 'feat',
+        worktree: 'done',
+        memory: 'done',
+        explore: 'done',
+        complexity: 'done',
+        complexity_tier: 'M',
+        feature_desc: 'feat',
       } as ConductState);
 
       const stepsRun: StepName[] = [];
-      const runner: StepRunner = { run: async (s) => { stepsRun.push(s); return { success: true }; } };
+      const runner: StepRunner = {
+        run: async (s) => {
+          stepsRun.push(s);
+          return { success: true };
+        },
+      };
       const conductor = new Conductor({
-        stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir, fromStep: 'prd',
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        fromStep: 'prd',
       });
       await conductor.run();
 
@@ -3399,14 +3913,27 @@ describe('engine/conductor', () => {
       await mkdir(join(dir, '.docs', 'track'), { recursive: true });
       await writeFile(join(dir, '.docs', 'track', 'feat.md'), '# Track\n\nTrack: product\n');
       await writeState(statePath, {
-        worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
-        complexity_tier: 'M', feature_desc: 'feat',
+        worktree: 'done',
+        memory: 'done',
+        explore: 'done',
+        complexity: 'done',
+        complexity_tier: 'M',
+        feature_desc: 'feat',
       } as ConductState);
 
       const stepsRun: StepName[] = [];
-      const runner: StepRunner = { run: async (s) => { stepsRun.push(s); return { success: true }; } };
+      const runner: StepRunner = {
+        run: async (s) => {
+          stepsRun.push(s);
+          return { success: true };
+        },
+      };
       const conductor = new Conductor({
-        stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir, fromStep: 'prd',
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        fromStep: 'prd',
       });
       await conductor.run();
 
@@ -3424,10 +3951,7 @@ describe('engine/conductor', () => {
 
     async function writeDocumentationDelivery(value: unknown): Promise<void> {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeFile(
-        join(dir, '.pipeline', 'documentation-delivery.json'),
-        JSON.stringify(value),
-      );
+      await writeFile(join(dir, '.pipeline', 'documentation-delivery.json'), JSON.stringify(value));
     }
 
     const verifiedPr = JSON.stringify({
@@ -3541,11 +4065,7 @@ describe('engine/conductor', () => {
 
     it('fails closed instead of reusing a delivery marker from an earlier run', async () => {
       await writeDocumentationDelivery(delivery);
-      await utimes(
-        join(dir, '.pipeline', 'documentation-delivery.json'),
-        new Date(0),
-        new Date(0),
-      );
+      await utimes(join(dir, '.pipeline', 'documentation-delivery.json'), new Date(0), new Date(0));
       const stepsRun: StepName[] = [];
       const runner: StepRunner = {
         run: async (step) => {
@@ -3595,7 +4115,13 @@ describe('engine/conductor', () => {
   it('starts at step index 0 for new feature', async () => {
     await seedGenericTail(statePath);
     const runner = createMockStepRunner();
-    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, verifyArtifacts: false });
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      verifyArtifacts: false,
+    });
 
     await conductor.run();
 
@@ -3654,7 +4180,13 @@ describe('engine/conductor', () => {
   it('marks step done after success', async () => {
     await seedGenericTail(statePath);
     const runner = createMockStepRunner();
-    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, verifyArtifacts: false });
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      verifyArtifacts: false,
+    });
 
     await conductor.run();
 
@@ -3677,7 +4209,13 @@ describe('engine/conductor', () => {
         return { success: true };
       },
     };
-    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, verifyArtifacts: false });
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      verifyArtifacts: false,
+    });
 
     await conductor.run();
 
@@ -3697,7 +4235,13 @@ describe('engine/conductor', () => {
   it('sets feature_status=complete when all steps done', async () => {
     await seedGenericTail(statePath);
     const runner = createMockStepRunner();
-    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, verifyArtifacts: false });
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      verifyArtifacts: false,
+    });
 
     await conductor.run();
 
@@ -3711,7 +4255,13 @@ describe('engine/conductor', () => {
   it('emits step_started and step_completed events', async () => {
     await seedGenericTail(statePath);
     const runner = createMockStepRunner();
-    const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, verifyArtifacts: false });
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      verifyArtifacts: false,
+    });
 
     const emitted: Array<{ type: string; step: string }> = [];
     events.on('step_started', (e) => {
@@ -3830,16 +4380,20 @@ describe('engine/conductor', () => {
       };
       await executionEvents.emitExecutionEvent({ type: 'parallel_started', step: 'build', branches: [] });
       emit.mockClear();
-      const terminal: ConductorEvent = type === 'step_completed'
-        ? { type, step: 'build', status: 'done' }
-        : { type, step: 'build', error: 'late step failure', retryCount: 0 };
+      const terminal: ConductorEvent =
+        type === 'step_completed'
+          ? { type, step: 'build', status: 'done' }
+          : { type, step: 'build', error: 'late step failure', retryCount: 0 };
       await executionEvents.emitExecutionEvent(terminal);
       expect(emit).not.toHaveBeenCalled();
 
       await conductor.closeOpenExecutionsForShutdown();
-      expect(emit).toHaveBeenCalledWith(expect.objectContaining({
-        type: 'parallel_failure', step: 'build',
-      }));
+      expect(emit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'parallel_failure',
+          step: 'build',
+        }),
+      );
     },
   );
 
@@ -3867,15 +4421,19 @@ describe('engine/conductor', () => {
       // must not land as a second terminal for the same execution.
       await executionEvents.emitExecutionEvent({ type: 'step_completed', step: 'prd_audit', status: 'done' });
       await executionEvents.emitExecutionEvent({
-        type: 'step_failed', step: 'prd_audit', error: 'late validation failure', retryCount: 0,
+        type: 'step_failed',
+        step: 'prd_audit',
+        error: 'late validation failure',
+        retryCount: 0,
       });
 
       const records = (await readFile(join(dir, '.pipeline/events.jsonl'), 'utf-8'))
         .trim()
         .split('\n')
         .map((line) => JSON.parse(line));
-      const terminals = records.filter((record) =>
-        record.type === 'step_completed' || record.type === 'step_failed' || record.type === 'step_interrupted',
+      const terminals = records.filter(
+        (record) =>
+          record.type === 'step_completed' || record.type === 'step_failed' || record.type === 'step_interrupted',
       );
       expect(terminals).toEqual([
         expect.objectContaining({
@@ -3917,8 +4475,9 @@ describe('engine/conductor', () => {
         .trim()
         .split('\n')
         .map((line) => JSON.parse(line));
-      const terminals = records.filter((record) =>
-        record.type === 'step_completed' || record.type === 'step_failed' || record.type === 'step_interrupted',
+      const terminals = records.filter(
+        (record) =>
+          record.type === 'step_completed' || record.type === 'step_failed' || record.type === 'step_interrupted',
       );
       expect(terminals).toEqual([
         expect.objectContaining({
@@ -3970,11 +4529,13 @@ describe('engine/conductor', () => {
         .trim()
         .split('\n')
         .map((line) => JSON.parse(line));
-      expect(records).toContainEqual(expect.objectContaining({
-        type: 'step_interrupted',
-        step: 'build',
-        activeInterval: { startedAtMs: 1_000, durationMs: 25 },
-      }));
+      expect(records).toContainEqual(
+        expect.objectContaining({
+          type: 'step_interrupted',
+          step: 'build',
+          activeInterval: { startedAtMs: 1_000, durationMs: 25 },
+        }),
+      );
       await expect(readFile(join(dir, '.pipeline/HALT'), 'utf-8')).resolves.toBe(
         'live checkout changed during self-host execution\n',
       );
@@ -4090,11 +4651,22 @@ describe('engine/conductor', () => {
     // each retry re-dispatches, a backoff sleeps between attempts, and the
     // reason is never empty.
     await writeState(statePath, {
-      worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
-      complexity_tier: 'M', prd: 'done', architecture_diagram: 'done',
-      architecture_review: 'done', stories: 'done', conflict_check: 'done',
-      writing_system_tests: 'done', acceptance_specs: 'done', plan: 'done', coherence_check: 'done', build: 'done',
-       test_suite: 'done',
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      complexity_tier: 'M',
+      prd: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      writing_system_tests: 'done',
+      acceptance_specs: 'done',
+      plan: 'done',
+      coherence_check: 'done',
+      build: 'done',
+      test_suite: 'done',
     } as ConductState);
 
     let buildReviewCalls = 0;
@@ -4144,7 +4716,9 @@ describe('engine/conductor', () => {
       mode: 'auto',
       fromStep: 'build_review',
       maxRetries: 3,
-      sleepFn: async (ms: number) => { sleeps.push(ms); },
+      sleepFn: async (ms: number) => {
+        sleeps.push(ms);
+      },
     });
 
     await conductor.run().catch(() => {});
@@ -4170,20 +4744,31 @@ describe('engine/conductor', () => {
 
   it('routes a typed unretryable build_review runner failure on its first attempt', async () => {
     await writeState(statePath, {
-      worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
-      complexity_tier: 'M', prd: 'done', architecture_diagram: 'done',
-      architecture_review: 'done', stories: 'done', conflict_check: 'done',
-      writing_system_tests: 'done', acceptance_specs: 'done', plan: 'done', coherence_check: 'done', build: 'done',
-       test_suite: 'done',
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      complexity_tier: 'M',
+      prd: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      writing_system_tests: 'done',
+      acceptance_specs: 'done',
+      plan: 'done',
+      coherence_check: 'done',
+      build: 'done',
+      test_suite: 'done',
     } as ConductState);
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName) =>
         step === 'build_review'
           ? {
-            success: false,
-            output: 'current suite proof is stale',
-            unretryableInputs: { retryAfterStep: 'test_suite' as const },
-          }
+              success: false,
+              output: 'current suite proof is stale',
+              unretryableInputs: { retryAfterStep: 'test_suite' as const },
+            }
           : { success: true },
       ),
     };
@@ -4208,26 +4793,39 @@ describe('engine/conductor', () => {
       retryDecisions,
     }).toEqual({
       calls: ['build_review'],
-      retryDecisions: [{ type: 'retry_decision', step: 'build_review', attempt: 1, decision: 'route', signal: 'unretryable-inputs' }],
+      retryDecisions: [
+        { type: 'retry_decision', step: 'build_review', attempt: 1, decision: 'route', signal: 'unretryable-inputs' },
+      ],
     });
   });
 
   it('keeps typed runner failures on the ordinary retry ladder when retry routing is disabled', async () => {
     await writeState(statePath, {
-      worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
-      complexity_tier: 'M', prd: 'done', architecture_diagram: 'done',
-      architecture_review: 'done', stories: 'done', conflict_check: 'done',
-      writing_system_tests: 'done', acceptance_specs: 'done', plan: 'done', coherence_check: 'done', build: 'done',
-       test_suite: 'done',
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      complexity_tier: 'M',
+      prd: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      writing_system_tests: 'done',
+      acceptance_specs: 'done',
+      plan: 'done',
+      coherence_check: 'done',
+      build: 'done',
+      test_suite: 'done',
     } as ConductState);
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName) =>
         step === 'build_review'
           ? {
-            success: false,
-            output: 'current suite proof is stale',
-            unretryableInputs: { retryAfterStep: 'test_suite' as const },
-          }
+              success: false,
+              output: 'current suite proof is stale',
+              unretryableInputs: { retryAfterStep: 'test_suite' as const },
+            }
           : { success: true },
       ),
     };
@@ -4259,11 +4857,22 @@ describe('engine/conductor', () => {
 
   it('keeps an untyped build_review runner failure on the ordinary retry ladder', async () => {
     await writeState(statePath, {
-      worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
-      complexity_tier: 'M', prd: 'done', architecture_diagram: 'done',
-      architecture_review: 'done', stories: 'done', conflict_check: 'done',
-      writing_system_tests: 'done', acceptance_specs: 'done', plan: 'done', coherence_check: 'done', build: 'done',
-       test_suite: 'done',
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      complexity_tier: 'M',
+      prd: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      writing_system_tests: 'done',
+      acceptance_specs: 'done',
+      plan: 'done',
+      coherence_check: 'done',
+      build: 'done',
+      test_suite: 'done',
     } as ConductState);
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName) =>
@@ -4301,9 +4910,7 @@ describe('engine/conductor', () => {
     // grader-dispatch backoff — that is scoped to graderDispatchFailed so
     // ordinary failures keep their existing timing.
     const runner: StepRunner = {
-      run: vi.fn(async (step: StepName) =>
-        step === 'explore' ? { success: false, output: '' } : { success: true },
-      ),
+      run: vi.fn(async (step: StepName) => (step === 'explore' ? { success: false, output: '' } : { success: true })),
     };
     const sleeps: number[] = [];
     const retryReasons: string[] = [];
@@ -4317,7 +4924,9 @@ describe('engine/conductor', () => {
       events,
       mode: 'auto',
       maxRetries: 3,
-      sleepFn: async (ms: number) => { sleeps.push(ms); },
+      sleepFn: async (ms: number) => {
+        sleeps.push(ms);
+      },
     });
 
     await conductor.run().catch(() => {});
@@ -4337,8 +4946,7 @@ describe('engine/conductor', () => {
     // NOT open the recovery menu / a REPL — it stops for a human to inspect.
     const onRecovery = vi.fn().mockResolvedValue('quit' as const);
     const runner: StepRunner = {
-      run: async (step: StepName) =>
-        step === 'stories' ? { success: false, output: 'boom' } : { success: true },
+      run: async (step: StepName) => (step === 'stories' ? { success: false, output: 'boom' } : { success: true }),
     };
     const conductor = new Conductor({
       projectRoot: dir,
@@ -4364,8 +4972,7 @@ describe('engine/conductor', () => {
     // daemon reported the opaque "loop ended without DONE or HALT marker" error
     // and couldn't tell halt (retryable) from a crash. Now it writes HALT.
     const runner: StepRunner = {
-      run: async (step: StepName) =>
-        step === 'stories' ? { success: false, output: 'boom' } : { success: true },
+      run: async (step: StepName) => (step === 'stories' ? { success: false, output: 'boom' } : { success: true }),
     };
     let halted = false;
     events.on('loop_halt', () => {
@@ -4390,5 +4997,4 @@ describe('engine/conductor', () => {
     const result = await readState(statePath);
     expect(result.ok && result.value.feature_status).toBeUndefined();
   });
-
 });
