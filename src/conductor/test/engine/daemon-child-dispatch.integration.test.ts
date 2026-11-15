@@ -46,7 +46,12 @@ vi.mock('../../src/engine/otel/wire.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/otel/wire.js')>();
   return {
     ...actual,
-    wireOtelVisualizer: vi.fn((_config, context, events) => {
+    wireOtelVisualizer: vi.fn(
+      (
+        _config: Parameters<typeof actual.wireOtelVisualizer>[0],
+        context: Parameters<typeof actual.wireOtelVisualizer>[1],
+        events: Parameters<typeof actual.wireOtelVisualizer>[2],
+      ) => {
       const slug = context.feature;
       if (slug === undefined) return null;
       const eventTypes = ['step_interrupted', 'loop_halt', 'feature_complete'] as const;
@@ -71,7 +76,8 @@ vi.mock('../../src/engine/otel/wire.js', async (importOriginal) => {
             seams.visualizerStops.set(slug, (seams.visualizerStops.get(slug) ?? 0) + 1);
           })),
       };
-    }),
+      },
+    ),
   };
 });
 
