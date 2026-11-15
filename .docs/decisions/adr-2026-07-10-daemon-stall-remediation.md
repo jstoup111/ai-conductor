@@ -36,10 +36,16 @@ In **daemon mode only**, route a `halt_marker` build stall through the existing
 1. **Capture before clear.** In the stall branch, read the marker **content** before
    `clearHaltMarker` runs, and persist it as evidence to
    `.pipeline/build-stall-question.md` (gitignored run evidence, overwritten per stall).
+
+   > **Amended 2026-11-15 by #3658:** In a stacked feature the evidence is written under the active child's `.pipeline/children/<k>/` region, and it is deleted once the stall it records has been routed or halted. A feature with no children keeps this path. A file left at a path every child shares let one child's BUILD act on another child's settled remediation (`adr-2026-11-15-remediation-build-inputs-are-region-state-retired-on-settlement` decisions 1 and 3).
+
 2. **New `build_stall` trigger into `planRemediation()`.** Dispatch with a context
    naming the stall question and `hintSource = { source: 'build_stall', evidenceFile:
    '.pipeline/build-stall-question.md' }`. The remediation-planner reasons over the
    question plus committed artifacts (plan, stories, ADRs, task-status).
+
+   > **Amended 2026-11-15 by #3658:** A stall whose question cites a case that is resolved, or open only in another child's case store, is decided by the engine before this dispatch and sends no remediation. BUILD is re-dispatched under a bound counted on the event spine, and the HALT at exhaustion still carries the question verbatim. Every other `halt_marker` stall is dispatched as stated here (`adr-2026-11-15-remediation-build-inputs-are-region-state-retired-on-settlement` decisions 5 and 6).
+
 3. **Answerable → in-loop resume, no retry burned.** A `route` outcome with target
    `build` is consumed **in the retry loop** (not via `navigateBack` — the stall happens
    *during* build): set the loop-local `retryHint` to the remediation hint carrying the

@@ -20,7 +20,8 @@ stall marker is deleted, so that no downstream path can lose it.
 #### Happy Path
 - Given a daemon-mode build gate miss with `.pipeline/halt-user-input-required` containing
   `Need user decision: which auth provider?`, when the stall breaker runs, then
-  `.pipeline/build-stall-question.md` exists containing exactly that text BEFORE
+  the stall-question evidence file (`.pipeline/build-stall-question.md`, or the active child's
+  region copy in a stacked feature) exists containing exactly that text BEFORE
   `clearHaltMarker` deletes the marker, and the `build_stall` event still fires with reason
   `halt_marker`.
 - Given a marker with multi-line content, when the stall breaker runs, then the evidence
@@ -58,10 +59,11 @@ that answerable questions never require me.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given daemon mode, a `halt_marker` stall, and `remediationRounds` under
+- Given daemon mode, a `halt_marker` stall whose question is not a stale citation of a resolved
+  or other-child case, and `remediationRounds` under
   `MAX_KICKBACKS_PER_GATE`, when the stall branch runs, then `planRemediation()` is invoked
   for the build-stall source, the engine projection carries the stall question from
-  `.pipeline/build-stall-question.md` under its `stall:<slug>` reference, and a `kickback`-class
+  the stall-question evidence file under its `stall:<slug>` reference, and a `kickback`-class
   event records the round.
 
 #### Negative Paths
@@ -167,7 +169,7 @@ breaks, so the dead end is at worst as informative as the agent's last words.
 
 #### Happy Path
 - Given any stall that ultimately halts, when the run loop returns, then `.pipeline/HALT`
-  contains the captured question (from `.pipeline/build-stall-question.md`) as its first
+  contains the captured question (from the stall-question evidence file) as its first
   non-empty line.
 
 #### Negative Paths
