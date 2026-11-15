@@ -63,7 +63,7 @@ export interface PrerequisiteClaim {
 export type ParsedBuilderClaim =
   | { readonly kind: 'none' }
   | { readonly kind: 'claim'; readonly claim: PrerequisiteClaim }
-  | { readonly kind: 'malformed' };
+  | { readonly kind: 'malformed'; readonly detail: string };
 
 function stringList(value: unknown): readonly string[] | undefined {
   if (!Array.isArray(value) || value.length < CLAIM_LIST_FIELD.minItems) return undefined;
@@ -73,21 +73,46 @@ function stringList(value: unknown): readonly string[] | undefined {
 
 /** Parse the provider's terminal payload without accepting partially valid claims. */
 export function parseBuilderClaim(result: unknown): ParsedBuilderClaim {
-  if (result === undefined || result === null) return { kind: 'none' };
-  if (typeof result !== 'object' || Array.isArray(result)) return { kind: 'malformed' };
+  if (result === undefined) return { kind: 'none' };
+  if (result === null || typeof result !== 'object' || Array.isArray(result)) {
+    return { kind: 'malformed', detail: 'result is not a JSON object' };
+  }
   const value = result as Record<string, unknown>;
-  if (value.outcome === PREREQUISITE_CLAIM_CONTRACT.completed && Object.keys(value).length === 1) return { kind: 'none' };
-  if (value.outcome !== PREREQUISITE_CLAIM_CONTRACT.blocked) return { kind: 'malformed' };
-  if (!Object.keys(value).every((key) => key === 'outcome' || key === 'child' || PREREQUISITE_CLAIM_CONTRACT.optionalFields.includes(key as 'paths' | 'symbols'))) return { kind: 'malformed' };
+  const keys = Object.keys(value);
+  if (value.outcome === PREREQUISITE_CLAIM_CONTRACT.completed) {
+    const extra = keys.find((key) => key !== 'outcome');
+    return extra === undefined
+      ? { kind: 'none' }
+      : { kind: 'malformed', detail: `completed result carries field ${renderFieldName(extra)}; completed allows only outcome` };
+  }
+  if (value.outcome !== PREREQUISITE_CLAIM_CONTRACT.blocked) {
+    return { kind: 'malformed', detail: 'outcome is not completed or blocked-by-prerequisite' };
+  }
+  const unknownKey = keys.find((key) => key !== 'outcome' && key !== 'child' && !PREREQUISITE_CLAIM_CONTRACT.optionalFields.includes(key as 'paths' | 'symbols'));
+  if (unknownKey !== undefined) return { kind: 'malformed', detail: `unknown field ${renderFieldName(unknownKey)}` };
+  if (value.child === undefined) {
+    return { kind: 'malformed', detail: `child is missing; blocked-by-prerequisite requires an integer child from 1 to ${MAX_CHILD_ID}` };
+  }
   // `parseChildId` enforces the same integer range as CLAIM_CHILD_FIELD.
   const child = typeof value.child === 'number' ? parseChildId(value.child) : undefined;
-  if (!child) return { kind: 'malformed' };
+  if (!child) return { kind: 'malformed', detail: `child is not an integer from 1 to ${MAX_CHILD_ID}` };
   const paths = value.paths === undefined ? undefined : stringList(value.paths);
   const symbols = value.symbols === undefined ? undefined : stringList(value.symbols);
-  if ((value.paths !== undefined && paths === undefined) || (value.symbols !== undefined && symbols === undefined)) return { kind: 'malformed' };
+  if (value.paths !== undefined && paths === undefined) {
+    return { kind: 'malformed', detail: 'paths must be a non-empty list of non-empty strings' };
+  }
+  if (value.symbols !== undefined && symbols === undefined) {
+    return { kind: 'malformed', detail: 'symbols must be a non-empty list of non-empty strings' };
+  }
   // Schema `anyOf`: at least one of paths or symbols is present.
-  if (paths === undefined && symbols === undefined) return { kind: 'malformed' };
+  if (paths === undefined && symbols === undefined) {
+    return { kind: 'malformed', detail: 'blocked-by-prerequisite names neither paths nor symbols' };
+  }
   return { kind: 'claim', claim: { outcome: 'blocked-by-prerequisite', child, ...(paths === undefined ? {} : { paths }), ...(symbols === undefined ? {} : { symbols }) } };
+}
+
+function renderFieldName(key: string): string {
+  return /^[A-Za-z0-9_.-]{1,64}$/.test(key) ? key : '<unprintable>';
 }
 
 export type VerifyPrerequisiteClaimResult =
