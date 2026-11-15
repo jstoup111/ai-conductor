@@ -7582,7 +7582,7 @@ export class Conductor {
           const liveCheckout = installed.status === 'ok' ? installed.root : this.projectRoot;
           const providerHome = process.env[provider.homeVariable] ?? join(homedir(), provider.defaultHome);
           const bindSet = deriveBindSet(liveCheckout, this.projectRoot);
-          boundaryLease = await dispatchLiveBoundary.acquire({
+          const acquiredBoundaryLease = await dispatchLiveBoundary.acquire({
             liveCheckout,
             providerHome,
             provider: providerId,
@@ -7595,12 +7595,13 @@ export class Conductor {
                   })
                 : { contained: false as const, reason: 'containment disabled by configuration' },
           });
+          boundaryLease = acquiredBoundaryLease;
           // The daemon owns root mutations. Register the complete fingerprint →
           // verify lifetime before provisioning the provider so a concurrent
           // mutation either finishes first or waits for this exact snapshot to
           // verify. Outside daemon concurrency this seam is intentionally inert.
           const prepareInvocation = (invocation: SelfHostInvocation): SelfHostInvocation => {
-            if (!boundaryLease.containment.contained) return invocation;
+            if (!acquiredBoundaryLease.containment.contained) return invocation;
             return { ...invocation, ...wrapForContainment(invocation, bindSet) };
           };
           // Until a context is returned its setup owns this window.  If any
