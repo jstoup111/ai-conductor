@@ -64,6 +64,7 @@ import type { ConductState, StepName } from '../../src/types/index.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 import { Conductor } from '../test-conductor.js';
 import { createSweepRepository, sealStack } from './restack/restack-sweepG2-fixture.js';
+import { RUN_TMP_ROOT_ENV } from '../tmpdir-leak-guard.js';
 
 const LAP_ID = parseBuildReviewLapId('lap-adjudication')!;
 const SNAPSHOT = 'sha256:snapshot';
@@ -567,6 +568,20 @@ function customIndexOnlyActionJudgement(sourceId: string): RemediationCaseV2Judg
 const roots: string[] = [];
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
+
+it('keeps restack sweep repositories inside the run root when TMPDIR is reset', async () => {
+  const runRoot = process.env[RUN_TMP_ROOT_ENV];
+  expect(runRoot).toBeTruthy();
+  const previousTmpdir = process.env.TMPDIR;
+  process.env.TMPDIR = '/tmp';
+  try {
+    const subject = await createSweepRepository('adjudication-run-root-', roots);
+    expect(subject.repo.startsWith(`${runRoot}/`)).toBe(true);
+  } finally {
+    if (previousTmpdir === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = previousTmpdir;
+  }
 });
 
 interface FixtureOptions {
