@@ -1,5 +1,5 @@
 // Covers: task:5, task:21, task:28
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -38,11 +38,17 @@ const originalConsoleLog = console.log;
 const originalConsoleWarn = console.warn;
 const originalConsoleError = console.error;
 
-function executor(): FeatureExecutor & { stopAll(): Promise<void>; requestYield(slug: string): boolean } {
+type ChildExecutor = FeatureExecutor & {
+  execute: Mock<FeatureExecutor['execute']>;
+  stopAll: Mock<() => Promise<void>>;
+  requestYield: Mock<(slug: string) => boolean>;
+};
+
+function executor(): ChildExecutor {
   return {
-    execute: vi.fn(async (order: WorkOrder) => ({ slug: order.slug, status: 'done' as const })),
-    stopAll: vi.fn(async () => {}),
-    requestYield: vi.fn(() => true),
+    execute: vi.fn<FeatureExecutor['execute']>(async (order: WorkOrder) => ({ slug: order.slug, status: 'done' })),
+    stopAll: vi.fn<() => Promise<void>>(async () => {}),
+    requestYield: vi.fn<(slug: string) => boolean>(() => true),
   };
 }
 
@@ -113,7 +119,7 @@ describe('daemon executor-isolation composition', () => {
       workSource: { discover: async () => [{ slug: 'child-feature' }] },
       watch: false,
       runDaemon: async (deps) => {
-        const [item] = await deps.discoverBacklog();
+        const [item] = await deps.discoverBacklog({ refresh: false });
         const outcome = await deps.featureExecution!.executor.execute(workOrder(item!.slug));
         schedulerCompletion();
         order.push('scheduler_completion');
@@ -155,7 +161,7 @@ describe('daemon executor-isolation composition', () => {
       workSource: { discover: async () => [{ slug: outcome.slug }] },
       watch: false,
       runDaemon: async (deps) => {
-        const [item] = await deps.discoverBacklog();
+        const [item] = await deps.discoverBacklog({ refresh: false });
         schedulerOutcomes.push(await deps.featureExecution!.executor.execute(workOrder(item!.slug)));
         return { processed: schedulerOutcomes, stoppedReason: 'backlog_drained' };
       },

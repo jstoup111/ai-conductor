@@ -276,7 +276,9 @@ describe('executor broker', () => {
     const proxy = createRateLimitEpisodeProxy(createExecutorRequestClient(channel.child), () => 1_000);
     const attachment = broker.attach('b', channel.supervisor, 'v1');
     const received: unknown[] = [];
-    attachment.events.on('bot_co_author_skipped', (event) => received.push(event));
+    attachment.events.on('bot_co_author_skipped', (event) => {
+      received.push(event);
+    });
     channel.flush();
     proxy.enter(2_000);
     channel.flush();
@@ -310,7 +312,9 @@ describe('executor broker', () => {
       rootEvents: new ConductorEventEmitter(),
       featureLogFor: () => () => {},
       attachFeatureOtelVisualizer: ({ slug }, events) => {
-        events.on('bot_co_author_skipped', (event) => recorded[slug]!.push(event));
+        events.on('bot_co_author_skipped', (event) => {
+          recorded[slug]!.push(event);
+        });
         return () => {};
       },
     });
@@ -319,7 +323,9 @@ describe('executor broker', () => {
     const attachmentA = broker.attach('a', a.supervisor, 'v1');
     broker.attach('b', b.supervisor, 'v1');
     const receivedByA: unknown[] = [];
-    attachmentA.events.on('bot_co_author_skipped', (event) => receivedByA.push(event));
+    attachmentA.events.on('bot_co_author_skipped', (event) => {
+      receivedByA.push(event);
+    });
 
     await attachmentA.close();
     a.child.send({
