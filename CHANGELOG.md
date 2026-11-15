@@ -270,6 +270,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Routed builds resume unfinished work before whole-feature gates and report bounded admission stops. ([implementation PR #3657](https://github.com/jstoup111/ai-conductor/pull/3657)).
 - Manual-test commands now record results without requiring a pipeline-directory argument. ([implementation PR #3679](https://github.com/jstoup111/ai-conductor/pull/3679)).
 - `kickback-budget inspect` and `daemon status` now report the remediation lap allowance the engine enforces, even when a feature branch's config has drifted from the main checkout's. ([implementation PR #3700](https://github.com/jstoup111/ai-conductor/pull/3700)).
+- A stacked child's test_suite infrastructure failure now halts needs-human after the same bounded retries as a non-stacked build, instead of retrying without limit. ([implementation PR #3698](https://github.com/jstoup111/ai-conductor/pull/3698)).
 
 ## Migration
 
