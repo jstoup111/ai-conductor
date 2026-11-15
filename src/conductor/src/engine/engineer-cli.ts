@@ -1450,6 +1450,318 @@ async function handleComposerHostExit(input: {
   return { record, ...(summary ? { summary } : {}), ...(saved ? { saved } : {}), saveFailed };
 }
 
+/** Run the deterministic checkpoint primitive without leaving its dispatch policy inline. */
+async function runCheckpointCommand(input: {
+  dispatch: Extract<EngineerDispatchDescriptor, { kind: 'checkpoint' }>;
+  opts: DispatchEngineerOpts;
+  registryPath?: string;
+  engineerDir?: string;
+  gh: GhRunner;
+  git: GitRunner;
+  print: (message: string) => void;
+  printErr: (message: string) => void;
+}): Promise<number> {
+  const { worktree, step, state, notesFile } = input.dispatch;
+  try {
+    const result = input.opts.checkpoint
+      ? await input.opts.checkpoint({ worktree, step, state, ...(notesFile ? { notesFile } : {}) })
+      : await runLocalCheckpoint({ ...input, worktree, step, state, notesFile });
+    input.print(JSON.stringify({ kind: 'checkpoint', ...result }));
+    return 0;
+  } catch (error: unknown) {
+    input.printErr(`engineer checkpoint: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+}
+
+/** Save a checkpoint through the production registry, event, and publication boundaries. */
+async function runLocalCheckpoint(
+  input: Omit<Parameters<typeof runCheckpointCommand>[0], 'dispatch'> & {
+    worktree: string;
+    step: string;
+    state: 'accepted' | 'draft';
+    notesFile?: string;
+  },
+): Promise<Awaited<ReturnType<typeof checkpointComposerRun>>> {
+  const reader = createRegistryReader(input.registryPath ? { registryPath: input.registryPath } : {});
+  const projects = await reader.listProjects();
+  const project = projects.find(
+    (candidate) => input.worktree === candidate.path || input.worktree.startsWith(`${candidate.path}/.worktrees/`),
+  );
+  if (!project)
+    throw new Error(
+      `compose checkpoint: worktree "${input.worktree}" is not beneath a registered project; register the repository first with conduct register.`,
+    );
+  const target = await resolveTargetRepo(project.path, reader);
+  const events = new ConductorEventEmitter();
+  const persister = new EventPersister(join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'), events);
+  persister.start();
+  try {
+    const branchResult = await input.git(['branch', '--show-current'], { cwd: input.worktree });
+    const deps = await prepareCheckpointDeps({
+      target,
+      branch: branchResult.stdout.trim(),
+      worktree: input.worktree,
+      gh: input.gh,
+      git: input.git,
+      events,
+      provider: (input.opts.env ?? process.env).AI_CONDUCTOR_AUTHORING_PROVIDER,
+      engineerDir: input.engineerDir,
+      resolveOwner: input.opts.resolveCheckpointOwner,
+    });
+    return checkpointComposerRun(
+      { worktree: input.worktree, step: input.step, state: input.state, ...(input.notesFile ? { notesFile: input.notesFile } : {}) },
+      deps,
+    );
+  } finally {
+    persister.stop();
+  }
+}
+
+function isComposerBoundaryInteractive(opts: DispatchEngineerOpts): boolean {
+  return (opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY)))();
+}
+
+/** Prompt and validate one launcher boundary choice; undefined re-offers only on a TTY. */
+async function chooseComposerBoundaryAction(input: {
+  opts: DispatchEngineerOpts;
+  slug: string;
+  step: string;
+  activeProvider: BuiltInProviderId;
+  hasRemote: boolean;
+  printErr: (message: string) => void;
+}): Promise<ReturnType<typeof resolveBoundaryProvider> | undefined> {
+  const providers = BUILT_IN_PROVIDERS.filter((provider) => supportsProviderCapability(provider, 'interactiveLaunch')).map(
+    (provider) => provider.id,
+  );
+  const boundary = input.opts.chooseComposerBoundary
+    ? await input.opts.chooseComposerBoundary({
+        slug: input.slug,
+        step: input.step,
+        provider: input.activeProvider,
+        choices: ['continue', 'switch', 'handoff'],
+        providers,
+      })
+    : await promptComposerBoundary({ providers });
+  try {
+    return resolveBoundaryProvider({
+      choice: boundary.choice,
+      activeProvider: input.activeProvider,
+      switchTo: boundary.switchTo,
+      hasRemote: input.hasRemote,
+    });
+  } catch (error) {
+    input.printErr(`compose boundary: ${error instanceof Error ? error.message : String(error)}`);
+    return undefined;
+  }
+}
+
+/** Emit the terminal hand-off only after a published checkpoint is available. */
+async function handoffComposerBoundary(input: {
+  target: Parameters<typeof checkpointPublication>[0];
+  branch: string;
+  slug: string;
+  worktree: string;
+  saved?: Awaited<ReturnType<typeof checkpointComposerRun>>;
+  gh: GhRunner;
+  events: ConductorEventEmitter;
+  print: (message: string) => void;
+}): Promise<void> {
+  const owner = await resolveDaemonOwner(await readMachineOwnerConfig(), input.gh, input.worktree);
+  const repository = input.target.remote ? parseGhRepo(input.target.remote) : undefined;
+  const existing = repository
+    ? await findExistingSpecPullRequest(
+        async (args, options) => {
+          const result = await input.gh(args, { ...options, cwd: options?.cwd ?? input.worktree });
+          return { ...result, stderr: '' };
+        },
+        repository,
+        input.branch,
+        input.worktree,
+      )
+    : undefined;
+  const prUrl = input.saved?.prUrl ?? existing?.url;
+  await input.events.emitOrThrow({
+    type: 'composer_run_handed_off',
+    slug: input.slug,
+    actor: owner.resolved ? owner.id : 'unresolved',
+    ...(prUrl ? { prUrl } : {}),
+  });
+  input.print(`Composer run handed off${prUrl ? `: ${prUrl}` : ''}. Resume with compose resume ${input.branch}.`);
+}
+
+/** Resolve a resume selector to exactly one registered Composer project. */
+async function resolveComposerResumeTarget(input: {
+  dispatch: Extract<EngineerDispatchDescriptor, { kind: 'resume' }>;
+  registryPath?: string;
+}): Promise<{
+  target: Awaited<ReturnType<typeof resolveTargetRepo>>;
+  repository: string;
+  selector: ResumeTarget;
+}> {
+  const reader = createRegistryReader(input.registryPath ? { registryPath: input.registryPath } : {});
+  const projects = await reader.listProjects();
+  const selector = parseResumeTarget(input.dispatch.target);
+  const selectorRepository = selector.kind === 'intake' || selector.kind === 'pr' ? selector.repository : undefined;
+  const project = input.dispatch.project
+    ? projects.find((item) => item.name === input.dispatch.project)
+    : selectorRepository
+      ? projects.find((item) => dependencyRepository(item).toLowerCase() === selectorRepository.toLowerCase())
+      : projects.length === 1
+        ? projects[0]
+        : undefined;
+  if (!project)
+    throw new Error(
+      input.dispatch.project
+        ? `project "${input.dispatch.project}" is not registered; register it with conduct register <path> before resuming.`
+        : selectorRepository
+          ? `compose resume: repository ${selectorRepository} is not registered; register it with conduct register <path>.`
+          : projects.length === 0
+            ? 'compose resume: no registered projects; register it with conduct register <path>.'
+            : 'compose resume: target has no repository qualifier; searched registered projects and require --project.',
+    );
+  const repository = dependencyRepository(project);
+  if (selectorRepository && repository.toLowerCase() !== selectorRepository.toLowerCase())
+    throw new Error(
+      `compose resume: repository ${selectorRepository} is not registered for this target; register it with conduct register <path>.`,
+    );
+  return { target: await resolveTargetRepo(project.path, reader), repository, selector };
+}
+
+/** Reconcile an abandoned local resume worktree before it is attached again. */
+function reconcileComposerResumeLocalState(input: {
+  target: Awaited<ReturnType<typeof resolveTargetRepo>>;
+  opts: DispatchEngineerOpts;
+  git: GitRunner;
+}) {
+  return async (branch: string) => {
+    const slug = branch.slice('spec/'.length);
+    const path = join(input.target.canonicalPath, '.worktrees', `engineer-${slug}`);
+    const hasWorktree = await access(path).then(
+      () => true,
+      () => false,
+    );
+    const localRef = hasWorktree ? 'HEAD' : branch;
+    const status = hasWorktree
+      ? await input.git(['status', '--porcelain', '--untracked-files=all'], { cwd: path })
+      : { stdout: '' };
+    const dirtyDocs = status.stdout
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => line.slice(3));
+    const ahead = input.target.remote
+      ? await input.git(['log', '--format=%h', `origin/${branch}..${localRef}`], {
+          cwd: hasWorktree ? path : input.target.canonicalPath,
+        })
+      : { stdout: '' };
+    const unpushedCommits = ahead.stdout.split('\n').filter(Boolean);
+    const fastForwardable = !input.target.remote
+      ? true
+      : await isComposerResumeFastForwardable({
+          target: input.target,
+          git: input.git,
+          branch,
+          localRef,
+          cwd: hasWorktree ? path : input.target.canonicalPath,
+        });
+    if (!hasWorktree && input.target.remote && unpushedCommits.length === 0 && !fastForwardable) {
+      await input.git(['branch', '-f', branch, `origin/${branch}`], { cwd: input.target.canonicalPath });
+    }
+    const remote = input.target.remote
+      ? await readComposerResumeRemoteState({ target: input.target, git: input.git, branch, slug })
+      : undefined;
+    const interactive = isComposerBoundaryInteractive(input.opts);
+    const choice =
+      dirtyDocs.length || unpushedCommits.length
+        ? input.opts.chooseComposerLocalState
+          ? await input.opts.chooseComposerLocalState({ dirtyDocs, unpushedCommits })
+          : await promptComposerLocalState({ dirtyDocs, unpushedCommits, remote })
+        : undefined;
+    return {
+      leftovers: { dirtyDocs, unpushedCommits },
+      interactive,
+      choice,
+      fastForwardable,
+      discard: async () => {
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        if (dirtyDocs.length > 0 && hasWorktree) {
+          await input.git(['add', '-A'], { cwd: path });
+          await input.git(['commit', '-m', withDaemonCoAuthorTrailer(`composer WIP backup: ${slug}`)], { cwd: path });
+        }
+        const cwd = hasWorktree ? path : input.target.canonicalPath;
+        await input.git(['branch', `composer-backup/${slug}-${stamp}`, localRef], { cwd });
+        if (!input.target.remote) return;
+        if (hasWorktree) {
+          await input.git(['reset', '--hard', `origin/${branch}`], { cwd });
+          return;
+        }
+        await input.git(['branch', '-f', branch, `origin/${branch}`], { cwd });
+      },
+    };
+  };
+}
+
+async function isComposerResumeFastForwardable(input: {
+  target: Awaited<ReturnType<typeof resolveTargetRepo>>;
+  git: GitRunner;
+  branch: string;
+  localRef: string;
+  cwd: string;
+}): Promise<boolean> {
+  const [base, remoteHead] = await Promise.all([
+    input.git(['merge-base', `origin/${input.branch}`, input.localRef], { cwd: input.cwd }),
+    input.git(['rev-parse', `origin/${input.branch}`], { cwd: input.cwd }),
+  ]);
+  return base.stdout.trim() === remoteHead.stdout.trim();
+}
+
+async function readComposerResumeRemoteState(input: {
+  target: Awaited<ReturnType<typeof resolveTargetRepo>>;
+  git: GitRunner;
+  branch: string;
+  slug: string;
+}) {
+  const [tip, serialized] = await Promise.all([
+    input.git(['rev-parse', `origin/${input.branch}`], { cwd: input.target.canonicalPath }),
+    input.git(['show', `origin/${input.branch}:.docs/composer-runs/${input.slug}.json`], {
+      cwd: input.target.canonicalPath,
+    }),
+  ]);
+  try {
+    const summary = summarizeRun(parseRunRecord(serialized.stdout));
+    return { step: summary.nextStep, lastActor: summary.lastActor, lastAt: summary.lastAt, tip: tip.stdout.trim() };
+  } catch {
+    return { step: 'unknown', tip: tip.stdout.trim() };
+  }
+}
+
+/** Attach the saved branch only after local reconciliation selected a safe state. */
+function attachComposerResumeWorktree(input: {
+  target: Awaited<ReturnType<typeof resolveTargetRepo>>;
+  git: GitRunner;
+  requestedTarget: string;
+}) {
+  return async (branch: string) => {
+    const slug = branch.slice('spec/'.length);
+    if (!input.target.remote) {
+      const existing = await input.git(['show-ref', '--verify', `refs/heads/${branch}`], {
+        cwd: input.target.canonicalPath,
+      });
+      if ((existing.exitCode ?? 0) !== 0)
+        throw new Error(
+          `compose resume: no saved Composer run found for ${input.requestedTarget} (searched existing local ${branch})`,
+        );
+    }
+    const result = await ensureWorktree({
+      root: input.target.canonicalPath,
+      path: join(input.target.canonicalPath, '.worktrees', `engineer-${slug}`),
+      branch,
+      resolveBase: async () => 'HEAD',
+    });
+    return { worktree: result.path };
+  };
+}
+
 /**
  * Per-subcommand `--help`/`-h` text (#524). Each entry states: what the subcommand
  * does, its flags (required vs optional), what durable state it mutates (or that
@@ -1919,33 +2231,19 @@ export async function dispatchEngineer(dispatch: EngineerDispatch, opts: Dispatc
                   print(
                     `Composer run ${touched.slug}: current step ${summary.nextStep}; active provider ${activeProvider}. Choices: continue, switch, hand off.`,
                   );
-                  const providers = BUILT_IN_PROVIDERS.filter((provider) =>
-                    supportsProviderCapability(provider, 'interactiveLaunch'),
-                  ).map((provider) => provider.id);
                   // Refused/failed switch attempts return to this exact durable
                   // boundary instead of silently falling through to another idea.
                   for (;;) {
-                    const boundary = opts.chooseComposerBoundary
-                      ? await opts.chooseComposerBoundary({
-                          slug: touched.slug,
-                          step: summary.nextStep,
-                          provider: activeProvider,
-                          choices: ['continue', 'switch', 'handoff'],
-                          providers,
-                        })
-                      : await promptComposerBoundary({ providers });
-                    let action;
-                    try {
-                      action = resolveBoundaryProvider({
-                        choice: boundary.choice,
-                        activeProvider,
-                        switchTo: boundary.switchTo,
-                        hasRemote: Boolean(target.remote),
-                      });
-                    } catch (error) {
-                      printErr(`compose boundary: ${error instanceof Error ? error.message : String(error)}`);
-                      if (!(opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY)))())
-                        break;
+                    const action = await chooseComposerBoundaryAction({
+                      opts,
+                      slug: touched.slug,
+                      step: summary.nextStep,
+                      activeProvider,
+                      hasRemote: Boolean(target.remote),
+                      printErr,
+                    });
+                    if (!action) {
+                      if (!isComposerBoundaryInteractive(opts)) break;
                       continue;
                     }
                     if (action.action === 'handoff') {
@@ -1953,35 +2251,19 @@ export async function dispatchEngineer(dispatch: EngineerDispatch, opts: Dispatc
                         printErr(
                           'compose boundary: handoff is unavailable until the local checkpoint is published; choose continue to retry.',
                         );
-                        if (
-                          !(opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY)))()
-                        )
-                          break;
+                        if (!isComposerBoundaryInteractive(opts)) break;
                         continue;
                       }
-                      const owner = await resolveDaemonOwner(await readMachineOwnerConfig(), gh, touched.worktreePath);
-                      const repository = target.remote ? parseGhRepo(target.remote) : undefined;
-                      const existing = repository
-                        ? await findExistingSpecPullRequest(
-                            async (args, options) => {
-                              const result = await gh(args, { ...options, cwd: options?.cwd ?? touched.worktreePath });
-                              return { ...result, stderr: '' };
-                            },
-                            repository,
-                            branch,
-                            touched.worktreePath,
-                          )
-                        : undefined;
-                      const prUrl = saved?.prUrl ?? existing?.url;
-                      await events.emitOrThrow({
-                        type: 'composer_run_handed_off',
+                      await handoffComposerBoundary({
+                        target,
+                        branch,
                         slug: touched.slug,
-                        actor: owner.resolved ? owner.id : 'unresolved',
-                        ...(prUrl ? { prUrl } : {}),
+                        worktree: touched.worktreePath,
+                        saved,
+                        gh,
+                        events,
+                        print,
                       });
-                      print(
-                        `Composer run handed off${prUrl ? `: ${prUrl}` : ''}. Resume with compose resume ${branch}.`,
-                      );
                       break;
                     }
                     try {
@@ -2618,57 +2900,8 @@ export async function dispatchEngineer(dispatch: EngineerDispatch, opts: Dispatc
       }
 
       // ── checkpoint ────────────────────────────────────────────────────────────
-      case 'checkpoint': {
-        const { worktree, step, state, notesFile } = dispatch;
-        try {
-          const result = opts.checkpoint
-            ? await opts.checkpoint({ worktree, step, state, ...(notesFile ? { notesFile } : {}) })
-            : await (async () => {
-                const reader = createRegistryReader(registryPath ? { registryPath } : {});
-                const projects = await reader.listProjects();
-                const project = projects.find(
-                  (candidate) => worktree === candidate.path || worktree.startsWith(`${candidate.path}/.worktrees/`),
-                );
-                if (!project)
-                  throw new Error(
-                    `compose checkpoint: worktree "${worktree}" is not beneath a registered project; register the repository first with conduct register.`,
-                  );
-                const target = await resolveTargetRepo(project.path, reader);
-                const events = new ConductorEventEmitter();
-                const persister = new EventPersister(
-                  join(target.canonicalPath, '.pipeline', 'composer-events.jsonl'),
-                  events,
-                );
-                persister.start();
-                try {
-                  const branchResult = await git(['branch', '--show-current'], { cwd: worktree });
-                  const branch = branchResult.stdout.trim();
-                  const deps = await prepareCheckpointDeps({
-                    target,
-                    branch,
-                    worktree,
-                    gh,
-                    git,
-                    events,
-                    provider: (opts.env ?? process.env).AI_CONDUCTOR_AUTHORING_PROVIDER,
-                    engineerDir,
-                    resolveOwner: opts.resolveCheckpointOwner,
-                  });
-                  return await checkpointComposerRun(
-                    { worktree, step, state, ...(notesFile ? { notesFile } : {}) },
-                    deps,
-                  );
-                } finally {
-                  persister.stop();
-                }
-              })();
-          print(JSON.stringify({ kind: 'checkpoint', ...result }));
-          return 0;
-        } catch (error: unknown) {
-          printErr(`engineer checkpoint: ${error instanceof Error ? error.message : String(error)}`);
-          return 1;
-        }
-      }
+      case 'checkpoint':
+        return runCheckpointCommand({ dispatch, opts, registryPath, engineerDir, gh, git, print, printErr });
 
       // ── resume ────────────────────────────────────────────────────────────────
       case 'resume': {
@@ -2696,42 +2929,7 @@ export async function dispatchEngineer(dispatch: EngineerDispatch, opts: Dispatc
           const result = opts.resume
             ? await opts.resume(dispatch)
             : await (async () => {
-                const reader = createRegistryReader(registryPath ? { registryPath } : {});
-                const projects = await reader.listProjects();
-                const selector = parseResumeTarget(dispatch.target);
-                const selectorRepository =
-                  selector.kind === 'intake'
-                    ? selector.repository
-                    : selector.kind === 'pr'
-                      ? selector.repository
-                      : undefined;
-                const project = dispatch.project
-                  ? projects.find((item) => item.name === dispatch.project)
-                  : selectorRepository
-                    ? projects.find(
-                        (item) => dependencyRepository(item).toLowerCase() === selectorRepository.toLowerCase(),
-                      )
-                    : projects.length === 1
-                      ? projects[0]
-                      : undefined;
-                if (!project)
-                  throw new Error(
-                    dispatch.project
-                      ? `project "${dispatch.project}" is not registered; register it with conduct register <path> before resuming.`
-                      : selectorRepository
-                        ? `compose resume: repository ${selectorRepository} is not registered; register it with conduct register <path>.`
-                        : projects.length === 0
-                          ? 'compose resume: no registered projects; register the repository with conduct register <path>.'
-                          : 'compose resume: target has no repository qualifier; searched registered projects and require --project.',
-                  );
-                const selectedRepository = dependencyRepository(project).toLowerCase();
-                if (selectorRepository && selectedRepository !== selectorRepository.toLowerCase()) {
-                  throw new Error(
-                    `compose resume: repository ${selectorRepository} is not registered for this target; register it with conduct register <path>.`,
-                  );
-                }
-                const target = await resolveTargetRepo(project.path, reader);
-                const repository = dependencyRepository(project);
+                const { target, repository } = await resolveComposerResumeTarget({ dispatch, registryPath });
                 const resolveBranch = async (selector: ResumeTarget) => {
                   if (selector.kind === 'branch') {
                     if (!target.remote) return { branch: selector.branch };
@@ -2820,122 +3018,8 @@ export async function dispatchEngineer(dispatch: EngineerDispatch, opts: Dispatc
                             throw new Error(`could not fetch origin ${branch}: ${fetched.stdout}`);
                         }
                       : undefined,
-                    localState: async (branch) => {
-                      const slug = branch.slice('spec/'.length);
-                      const path = join(target.canonicalPath, '.worktrees', `engineer-${slug}`);
-                      const hasWorktree = await access(path).then(
-                        () => true,
-                        () => false,
-                      );
-                      const localRef = hasWorktree ? 'HEAD' : branch;
-                      const status = hasWorktree
-                        ? await git(['status', '--porcelain', '--untracked-files=all'], { cwd: path })
-                        : { stdout: '' };
-                      const dirtyDocs = status.stdout
-                        .split('\n')
-                        .filter(Boolean)
-                        .map((line) => line.slice(3));
-                      const ahead = target.remote
-                        ? await git(['log', '--format=%h', `origin/${branch}..${localRef}`], {
-                            cwd: hasWorktree ? path : target.canonicalPath,
-                          })
-                        : { stdout: '' };
-                      const unpushedCommits = ahead.stdout.split('\n').filter(Boolean);
-                      const fastForwardable = !target.remote
-                        ? true
-                        : await (async () => {
-                            const [base, remoteHead] = await Promise.all([
-                              git(['merge-base', `origin/${branch}`, localRef], {
-                                cwd: hasWorktree ? path : target.canonicalPath,
-                              }),
-                              git(['rev-parse', `origin/${branch}`], {
-                                cwd: hasWorktree ? path : target.canonicalPath,
-                              }),
-                            ]);
-                            return base.stdout.trim() === remoteHead.stdout.trim();
-                          })();
-                      // An abandoned worktree must not leave a clean local branch
-                      // behind its fetched remote. Advance it before ensureWorktree
-                      // attaches that branch; a branch with local commits remains a
-                      // visible leftover and is never rewritten implicitly.
-                      if (!hasWorktree && target.remote && unpushedCommits.length === 0 && !fastForwardable) {
-                        await git(['branch', '-f', branch, `origin/${branch}`], { cwd: target.canonicalPath });
-                      }
-                      const remote = target.remote
-                        ? await (async () => {
-                            const [tip, serialized] = await Promise.all([
-                              git(['rev-parse', `origin/${branch}`], { cwd: target.canonicalPath }),
-                              git(['show', `origin/${branch}:.docs/composer-runs/${slug}.json`], {
-                                cwd: target.canonicalPath,
-                              }),
-                            ]);
-                            try {
-                              const summary = summarizeRun(parseRunRecord(serialized.stdout));
-                              return {
-                                step: summary.nextStep,
-                                lastActor: summary.lastActor,
-                                lastAt: summary.lastAt,
-                                tip: tip.stdout.trim(),
-                              };
-                            } catch {
-                              return { step: 'unknown', tip: tip.stdout.trim() };
-                            }
-                          })()
-                        : undefined;
-                      const interactive = (
-                        opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY))
-                      )();
-                      const choice =
-                        dirtyDocs.length || unpushedCommits.length
-                          ? opts.chooseComposerLocalState
-                            ? await opts.chooseComposerLocalState({ dirtyDocs, unpushedCommits })
-                            : await promptComposerLocalState({ dirtyDocs, unpushedCommits, remote })
-                          : undefined;
-                      return {
-                        leftovers: { dirtyDocs, unpushedCommits },
-                        interactive,
-                        choice,
-                        // A local-only branch has no remote to diverge from. For a
-                        // remote branch, any local-only commits must be discarded
-                        // unless the operator explicitly selected keep after a
-                        // fast-forwardable comparison supplied by the git graph.
-                        fastForwardable,
-                        discard: async () => {
-                          const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-                          if (dirtyDocs.length > 0 && hasWorktree) {
-                            await git(['add', '-A'], { cwd: path });
-                            await git(['commit', '-m', withDaemonCoAuthorTrailer(`composer WIP backup: ${slug}`)], {
-                              cwd: path,
-                            });
-                          }
-                          const cwd = hasWorktree ? path : target.canonicalPath;
-                          await git(['branch', `composer-backup/${slug}-${stamp}`, localRef], { cwd });
-                          if (target.remote) {
-                            if (hasWorktree) await git(['reset', '--hard', `origin/${branch}`], { cwd });
-                            else await git(['branch', '-f', branch, `origin/${branch}`], { cwd });
-                          }
-                        },
-                      };
-                    },
-                    attach: async (branch) => {
-                      const slug = branch.slice('spec/'.length);
-                      if (!target.remote) {
-                        const existing = await git(['show-ref', '--verify', `refs/heads/${branch}`], {
-                          cwd: target.canonicalPath,
-                        });
-                        if ((existing.exitCode ?? 0) !== 0)
-                          throw new Error(
-                            `compose resume: no saved Composer run found for ${dispatch.target} (searched existing local ${branch})`,
-                          );
-                      }
-                      const result = await ensureWorktree({
-                        root: target.canonicalPath,
-                        path: join(target.canonicalPath, '.worktrees', `engineer-${slug}`),
-                        branch,
-                        resolveBase: async () => 'HEAD',
-                      });
-                      return { worktree: result.path };
-                    },
+                    localState: reconcileComposerResumeLocalState({ target, opts, git }),
+                    attach: attachComposerResumeWorktree({ target, git, requestedTarget: dispatch.target }),
                     ownership: async ({ worktree, slug, branch }) => {
                       const committedOwner = await composerCommittedMarkerOwner(git, worktree, branch, slug);
                       const daemonSession = Boolean((opts.env ?? process.env).CONDUCT_DAEMON_SESSION);
