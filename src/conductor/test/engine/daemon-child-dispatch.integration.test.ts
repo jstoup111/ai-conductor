@@ -1,11 +1,17 @@
-// Covers: task:28, task:29, task:33, task:36
+// Covers: task:3, task:28, task:29, task:33, task:36
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
 
-const seams = vi.hoisted(() => ({ abortAll: vi.fn(), nodeFork: vi.fn() }));
+const seams = vi.hoisted(() => ({
+  abortAll: vi.fn(),
+  nodeFork: vi.fn(),
+  featureBusEvents: new Map<string, string[]>(),
+  visualizerEvents: new Map<string, string[]>(),
+  visualizerStops: new Map<string, number>(),
+}));
 
 // The daemon loop checks its build credential before dispatch. These tests own
 // dispatch wiring, so they supply a deterministic credential boundary rather
@@ -36,6 +42,38 @@ vi.mock('../../src/engine/executor-broker.js', async (importOriginal) => {
   };
 });
 
+vi.mock('../../src/engine/otel/wire.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/otel/wire.js')>();
+  return {
+    ...actual,
+    wireOtelVisualizer: vi.fn((_config, context, events) => {
+      const slug = context.feature;
+      if (slug === undefined) return null;
+      const eventTypes = ['step_interrupted', 'loop_halt', 'feature_complete'] as const;
+      for (const type of eventTypes) {
+        events.on(type, (event) => {
+          const seen = seams.featureBusEvents.get(slug) ?? [];
+          seen.push(event.type);
+          seams.featureBusEvents.set(slug, seen);
+        });
+        events.on(type, (event) => {
+          const seen = seams.visualizerEvents.get(slug) ?? [];
+          seen.push(event.type);
+          seams.visualizerEvents.set(slug, seen);
+        });
+      }
+      let stopped: Promise<void> | undefined;
+      return {
+        name: `recording-otel-${slug}`,
+        start: () => {},
+        stop: () => (stopped ??= Promise.resolve().then(() => {
+          seams.visualizerStops.set(slug, (seams.visualizerStops.get(slug) ?? 0) + 1);
+        })),
+      };
+    }),
+  };
+});
+
 import { runDaemonMode } from '../../src/daemon-cli.js';
 import { allInstalledProviderDiscoveryRunner } from './boot-test-helpers.js';
 import { createInMemoryExecutorFork, useTempEngineStore } from '../fixtures/in-memory-executor-fork.js';
@@ -47,6 +85,9 @@ afterEach(async () => {
   vi.restoreAllMocks();
   seams.abortAll.mockReset();
   seams.nodeFork.mockReset();
+  seams.featureBusEvents.clear();
+  seams.visualizerEvents.clear();
+  seams.visualizerStops.clear();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -260,19 +301,32 @@ describe('daemon child dispatch composition', () => {
     }
   });
 
-  it('stops every child and aborts broker coordination before SIGTERM resolves', async () => {
+  it('forwards each stopping child closing sequence to its supervisor feature bus and OTel visualizer', async () => {
     const { root, baseSha } = await project();
     const store = await useTempEngineStore();
     await mkdir(join(root, '.ai-conductor'), { recursive: true });
-    await writeFile(join(root, '.ai-conductor', 'config.yml'), 'daemon_concurrency: 2\nteardown_timeout_seconds: 1\n');
+    await writeFile(
+      join(root, '.ai-conductor', 'config.yml'),
+      'daemon_concurrency: 2\nteardown_timeout_seconds: 1\notel:\n  exporter: file\n',
+    );
     const stops: string[] = [];
+    const entered = new Set<string>();
+    const stopped = new Set<string>();
     const executorFork = vi.fn(
       createInMemoryExecutorFork({
         projectRoot: root,
-        handshake: 'silent',
         onSupervisorMessage: (message) => {
           const candidate = message as { kind?: string };
           if (candidate.kind === 'stop') stops.push(candidate.kind);
+        },
+        run: async ({ order, events, signal }) => {
+          entered.add(order.slug);
+          await new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+          stopped.add(order.slug);
+          await events.emit({ type: 'step_interrupted', step: 'build', reason: `shutdown ${order.slug}` });
+          await events.emit({ type: 'loop_halt', reason: `shutdown ${order.slug}` });
+          await events.emit({ type: 'feature_complete', featureDesc: order.slug });
+          return { slug: order.slug, status: 'done' };
         },
       }),
     );
@@ -293,11 +347,19 @@ describe('daemon child dispatch composition', () => {
         ),
       );
       await vi.waitFor(() => expect(executorFork).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(entered).toEqual(new Set(['first', 'second'])));
       process.emit('SIGTERM');
       await daemon;
 
-      expect(stops).toEqual(['stop', 'stop']);
+      expect(stops.length).toBeGreaterThanOrEqual(2);
+      expect(stopped).toEqual(new Set(['first', 'second']));
       expect(seams.abortAll).toHaveBeenCalledOnce();
+      const closingSequence = ['step_interrupted', 'loop_halt', 'feature_complete'];
+      for (const slug of ['first', 'second']) {
+        expect(seams.featureBusEvents.get(slug)).toEqual(closingSequence);
+        expect(seams.visualizerEvents.get(slug)).toEqual(closingSequence);
+        expect(seams.visualizerStops.get(slug)).toBe(1);
+      }
     } finally {
       await store.teardown();
     }
