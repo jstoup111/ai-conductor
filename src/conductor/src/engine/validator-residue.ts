@@ -1,8 +1,4 @@
-import {
-  confirmUntrackedRebasePaths,
-  moveRebaseUntrackedPathsToQuarantine,
-  type GitRunner,
-} from './rebase.js';
+import { confirmUntrackedRebasePaths, moveRebaseUntrackedPathsToQuarantine, type GitRunner } from './rebase.js';
 
 export const VALIDATOR_RESIDUE_DIRECTORY = '.pipeline/validator-residue';
 
