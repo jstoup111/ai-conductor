@@ -585,6 +585,97 @@ describe('configured ladder in normal provider-aware dispatch', () => {
   });
 });
 
+describe('Pi upstream unknown-model fallback through the real adapter', () => {
+  const retired = 'openrouter/retired-model';
+  const live = 'openrouter/live-model';
+  const environment = {
+    stat: async () => ({ isFile: () => true, isDirectory: () => false }), access: async () => {},
+    env: {}, homeDir: () => '/home/agent', cwd: () => '/workspace',
+  };
+  const configuredLadder: HarnessConfig = {
+    llm_providers: {
+      pi: {
+        model: retired,
+        model_fallback_ladder: [retired, live],
+      },
+    },
+    steps: { plan: { llm_provider: 'pi' } },
+  };
+
+  async function piStreams(unavailableForEveryModel = false) {
+    const unknownModel = await readFile(new URL('../fixtures/pi/pi-1.0.0-e10-unknown-model-openrouter.jsonl', import.meta.url), 'utf8');
+    const success = await readFile(new URL('../fixtures/pi/terminal-assistant.jsonl', import.meta.url), 'utf8');
+    const spawn = vi.fn(async (_file: string, args: readonly string[]) => ({
+      stdout: unavailableForEveryModel || args.includes('retired-model') ? unknownModel : success,
+      stderr: '',
+      exitCode: 0,
+    }));
+    return { pi: new PiProvider(dispatchGitGuard, 'pi', spawn as never, environment), spawn };
+  }
+
+  function dispatch(config: HarnessConfig, pi: PiProvider, runtimes = runtimeSet(config, { pi })) {
+    return executeProviderCandidates({
+      step: 'plan', configuredProviders: ['pi'], preferredProvider: 'pi', runtimes,
+      sessions: new ProviderSessionScope(vi.fn()), config,
+      options: { prompt: 'Plan.', cwd: '/workspace' },
+    });
+  }
+
+  // Covers: task:5
+  it('walks retired then live OpenRouter models after Pi reports the retired model unknown', async () => {
+    const { pi, spawn } = await piStreams();
+
+    const result = await dispatch(configuredLadder, pi);
+
+    expect(result).toMatchObject({ success: true, resolvedModel: live });
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(spawn.mock.calls.map(([, args]) => args)).toEqual([
+      expect.arrayContaining(['--provider', 'openrouter', '--model', 'retired-model']),
+      expect.arrayContaining(['--provider', 'openrouter', '--model', 'live-model']),
+    ]);
+  });
+
+  // Covers: task:5
+  it('skips the retired Pi rung on a second dispatch in the same runtime set', async () => {
+    const { pi, spawn } = await piStreams();
+    const runtimes = runtimeSet(configuredLadder, { pi });
+
+    await dispatch(configuredLadder, pi, runtimes);
+    const second = await dispatch(configuredLadder, pi, runtimes);
+
+    expect(second).toMatchObject({ success: true, resolvedModel: live });
+    expect(spawn.mock.calls.map(([, args]) => args.includes('retired-model'))).toEqual([true, false, false]);
+  });
+
+  // Covers: task:5
+  it('reports all configured Pi rungs unavailable once each when every model is unknown upstream', async () => {
+    const { pi, spawn } = await piStreams(true);
+
+    const result = await dispatch(configuredLadder, pi);
+
+    expect(result).toMatchObject({ success: false });
+    expect(result.output).toContain('All configured providers are unavailable for step');
+    expect(result.output).toContain('pi (');
+    expect(result.output).toContain('Pi upstream provider reports the requested model as unknown.');
+    expect(spawn).toHaveBeenCalledTimes(2);
+    expect(spawn.mock.calls.map(([, args]) => args[args.indexOf('--model') + 1])).toEqual(['retired-model', 'live-model']);
+  });
+
+  // Covers: task:5
+  it('reports a single Pi attempt unavailable when no Pi ladder is configured', async () => {
+    const { pi, spawn } = await piStreams(true);
+    const config: HarnessConfig = { steps: { plan: { llm_provider: 'pi' } } };
+
+    const result = await dispatch(config, pi);
+
+    expect(result).toMatchObject({ success: false });
+    expect(result.output).toContain('All configured providers are unavailable for step');
+    expect(result.output).toContain('pi (');
+    expect(result.output).toContain('Pi upstream provider reports the requested model as unknown.');
+    expect(spawn).toHaveBeenCalledOnce();
+  });
+});
+
 describe('preferred Pi escalation and fallback isolation', () => {
   it('escalates a preferred Pi candidate at attempt three, while an unordered model escalates effort only', async () => {
     const small = 'openai/gpt-5.6-luna';
