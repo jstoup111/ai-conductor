@@ -1650,9 +1650,20 @@ a routed round instead of appended to the leaf plan:
 - **Fallback.** A lap with any `halt` disposition, an unresolved target, or a target other than
   `build` takes the ordinary remediation path unchanged.
 - **Halts.** A routing refusal halts `needs-human` with its detail, for example
-  `routing round limit r999 reached`, `routing round r<n> is already open; cannot admit r<m>`,
+  `routing round limit r999 reached`,
   `routing cannot read the sealed task-slice ownership envelope`, or
   `leaf branch <branch> is missing prerequisite paths: <paths>`.
+- **Admission fence.** A new round is refused while another round is open, has an active host, or
+  is unreadable. The refusal is a routing stall, not a decision request: it halts under the stall
+  counting below with a cause such as `routing round r<n> is <phase>; host <k> is <state>; cannot admit
+  r<m>; inspect with ai-conductor stack rounds --slug <slug>`. When the refused round was over-scope
+  refusal rework, the halt also lists the refused criteria (`Findings: <keys>`) and carries no
+  `over-scope-decisions` block.
+- **Whole-feature gates wait.** On a routed feature, no gate after `build_review` starts while a
+  repair marker, a revalidation queue entry, or a non-closed round exists. The engine first takes a
+  satisfied host's routed exit or re-enters the BUILD region; otherwise it stops through the
+  parked-routing stall below. A `build_review` that settles through adjudication closes its child
+  region the same way a clean PASS does.
 - **Parked routing work.** When the step selector stops with routed work awaiting admission, or
   completion is refused because a round is still open, the run does not finish as converged. The
   engine records a stall whose cause is
