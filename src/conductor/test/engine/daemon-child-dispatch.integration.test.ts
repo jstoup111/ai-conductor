@@ -52,30 +52,30 @@ vi.mock('../../src/engine/otel/wire.js', async (importOriginal) => {
         context: Parameters<typeof actual.wireOtelVisualizer>[1],
         events: Parameters<typeof actual.wireOtelVisualizer>[2],
       ) => {
-      const slug = context.feature;
-      if (slug === undefined) return null;
-      const eventTypes = ['step_interrupted', 'loop_halt', 'feature_complete'] as const;
-      for (const type of eventTypes) {
-        events.on(type, (event) => {
-          const seen = seams.featureBusEvents.get(slug) ?? [];
-          seen.push(event.type);
-          seams.featureBusEvents.set(slug, seen);
-        });
-        events.on(type, (event) => {
-          const seen = seams.visualizerEvents.get(slug) ?? [];
-          seen.push(event.type);
-          seams.visualizerEvents.set(slug, seen);
-        });
-      }
-      let stopped: Promise<void> | undefined;
-      return {
-        name: `recording-otel-${slug}`,
-        start: () => {},
-        stop: () =>
-          (stopped ??= Promise.resolve().then(() => {
-            seams.visualizerStops.set(slug, (seams.visualizerStops.get(slug) ?? 0) + 1);
-          })),
-      };
+        const slug = context.feature;
+        if (slug === undefined) return null;
+        const eventTypes = ['step_interrupted', 'loop_halt', 'feature_complete'] as const;
+        for (const type of eventTypes) {
+          events.on(type, (event) => {
+            const seen = seams.featureBusEvents.get(slug) ?? [];
+            seen.push(event.type);
+            seams.featureBusEvents.set(slug, seen);
+          });
+          events.on(type, (event) => {
+            const seen = seams.visualizerEvents.get(slug) ?? [];
+            seen.push(event.type);
+            seams.visualizerEvents.set(slug, seen);
+          });
+        }
+        let stopped: Promise<void> | undefined;
+        return {
+          name: `recording-otel-${slug}`,
+          start: () => {},
+          stop: () =>
+            (stopped ??= Promise.resolve().then(() => {
+              seams.visualizerStops.set(slug, (seams.visualizerStops.get(slug) ?? 0) + 1);
+            })),
+        };
       },
     ),
   };
