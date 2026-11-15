@@ -129,57 +129,60 @@ const maintenancePhaseFixtures = [
   },
 ] satisfies ConductorEvent[];
 void maintenancePhaseFixtures;
-// @ts-expect-error repairs always identify their PR.
 const repairWithoutPrUrl: ConductorEvent = {
   type: 'daemon_maintenance_phase',
   phase: 'repair',
   durationMs: 1,
   outcome: 'completed',
+  // @ts-expect-error repairs always identify their PR.
+  prUrl: undefined,
 };
-// @ts-expect-error non-repair phases cannot carry repair identity.
 const refreshWithPrUrl: ConductorEvent = {
   type: 'daemon_maintenance_phase',
   phase: 'startup-refresh',
   durationMs: 1,
   outcome: 'completed',
+  // @ts-expect-error non-repair phases cannot carry repair identity.
   prUrl: 'https://example.test/pr/1',
 };
-// @ts-expect-error only repairs are deferred.
 const deferredRefresh: ConductorEvent = {
   type: 'daemon_maintenance_phase',
   phase: 'startup-refresh',
   durationMs: 1,
+  // @ts-expect-error only repairs are deferred.
   outcome: 'deferred',
 };
-// @ts-expect-error only parked reconciliation skips unchanged inputs.
 const skippedRepair: ConductorEvent = {
   type: 'daemon_maintenance_phase',
   phase: 'repair',
   durationMs: 1,
+  // @ts-expect-error only parked reconciliation skips unchanged inputs.
   outcome: 'skipped-unchanged',
   prUrl: 'https://example.test/pr/1',
 };
-// @ts-expect-error parked reconciliation is never deferred.
 const deferredParkedReconcile: ConductorEvent = {
   type: 'daemon_maintenance_phase',
   phase: 'parked-reconcile',
   durationMs: 1,
+  // @ts-expect-error parked reconciliation is never deferred.
   outcome: 'deferred',
 };
-// @ts-expect-error parked reconciliation summaries have a closed vocabulary.
 const parkedSummaryWithUnknownKey: ConductorEvent = {
   type: 'daemon_maintenance_phase',
   phase: 'parked-reconcile',
   durationMs: 1,
   outcome: 'completed',
-  summary: { retained: 1 },
+  summary: {
+    // @ts-expect-error parked reconciliation summaries have a closed vocabulary.
+    retained: 1,
+  },
 };
-// @ts-expect-error summaries are only meaningful for the reconciliation phase.
 const refreshWithSummary: ConductorEvent = {
   type: 'daemon_maintenance_phase',
   phase: 'startup-refresh',
   durationMs: 1,
   outcome: 'completed',
+  // @ts-expect-error summaries are only meaningful for the reconciliation phase.
   summary: { reconciled: 1 },
 };
 void repairWithoutPrUrl;
@@ -231,9 +234,9 @@ type RestackRefusalReasonIsClosed = Assert<
 const restackRefusalReasonContract: RestackRefusalReasonIsClosed = true;
 void restackRefusalReasonContract;
 
-// @ts-expect-error -- restack refusals use the closed ADR reason vocabulary.
 const restackRefusalWithUnknownReason = {
   type: 'restack_refused',
+  // @ts-expect-error -- restack refusals use the closed ADR reason vocabulary.
   reason: 'unexpected-reason',
 } satisfies ConductorEvent;
 void restackRefusalWithUnknownReason;
@@ -657,111 +660,114 @@ const readOnlyReviewFault = {
 } satisfies ConductorEvent;
 void [nativeSchemaUnsupportedFault, invalidStructuredResultFault, readOnlyReviewFault];
 
-// @ts-expect-error -- retained reclamation reasons are a closed union.
 const reclaimRetentionWithUnlistedReason = {
   type: 'worktree_reclaim_retained',
   slug: 'feature',
+  // @ts-expect-error -- retained reclamation reasons are a closed union.
   reason: 'operator-maybe',
 } satisfies ConductorEvent;
 void reclaimRetentionWithUnlistedReason;
 
-// @ts-expect-error -- probe-failure progress requires its closed kind and next disposition.
 const probeFailureMissingClosedMetadata = {
   type: 'credentials_park_progress',
-  provider: 'codex',
+  provider: toProviderId('codex'),
   source: 'cached-login',
   readiness: 'probe-failed',
   elapsedSeconds: 3,
   degradation: 'probe-failure',
+  // @ts-expect-error -- probe-failure progress requires its closed kind.
+  probeFailureKind: undefined,
+  // @ts-expect-error -- probe-failure progress requires its next disposition.
+  nextDisposition: undefined,
 } satisfies ConductorEvent;
-// @ts-expect-error -- a terminal probe-failure disposition has no next polling delay.
 const probeFailureWithPollingDelay = {
   type: 'credentials_park_progress',
-  provider: 'codex',
+  provider: toProviderId('codex'),
   source: 'cached-login',
   readiness: 'probe-failed',
   elapsedSeconds: 3,
   degradation: 'probe-failure',
   probeFailureKind: 'timeout',
   nextDisposition: 'trial-required',
+  // @ts-expect-error -- a terminal probe-failure disposition has no next polling delay.
   nextProbeDelaySeconds: 4,
 } satisfies ConductorEvent;
-// @ts-expect-error -- recovery progress retains only the closed parser-rejection union, never raw doctor diagnostics.
 const probeFailureWithRawParserRejection = {
   type: 'credentials_park_progress',
-  provider: 'codex',
+  provider: toProviderId('codex'),
   source: 'cached-login',
   readiness: 'probe-failed',
   elapsedSeconds: 3,
   degradation: 'probe-failure',
   probeFailureKind: 'unparseable-output',
+  // @ts-expect-error -- recovery progress retains only the closed parser-rejection union, never raw doctor diagnostics.
   parserRejection: 'sk-live-super-secret-token /private/codex/credentials.json',
   nextDisposition: 'trial-required',
 } satisfies ConductorEvent;
-// @ts-expect-error -- conclusive credential progress cannot carry probe-only metadata.
 const credentialFailureWithProbeMetadata = {
   type: 'credentials_park_progress',
-  provider: 'codex',
+  provider: toProviderId('codex'),
   source: 'cached-login',
   readiness: 'unusable',
   elapsedSeconds: 3,
   nextProbeDelaySeconds: 4,
   degradation: 'credential-failure',
+  // @ts-expect-error -- conclusive credential progress cannot carry probe-only metadata.
   probeFailureKind: 'timeout',
+  // @ts-expect-error -- conclusive credential progress cannot carry probe-only metadata.
   nextDisposition: 'trial-required',
 } satisfies ConductorEvent;
-// @ts-expect-error -- probe-failure degradation is valid only with probe-failed readiness.
 const probeFailureWithConclusiveReadiness = {
   type: 'credentials_park_progress',
-  provider: 'codex',
+  provider: toProviderId('codex'),
   source: 'cached-login',
   readiness: 'ready',
   elapsedSeconds: 3,
+  nextProbeDelaySeconds: 4,
+  // @ts-expect-error -- probe-failure degradation is valid only with probe-failed readiness.
   degradation: 'probe-failure',
-  probeFailureKind: 'timeout',
-  nextDisposition: 'trial-required',
 } satisfies ConductorEvent;
-// @ts-expect-error -- missing is conclusive readiness, not probe failure.
 const probeFailureWithMissingReadiness = {
   type: 'credentials_park_progress',
-  provider: 'codex',
+  provider: toProviderId('codex'),
   source: 'cached-login',
   readiness: 'missing',
   elapsedSeconds: 3,
+  nextProbeDelaySeconds: 4,
+  // @ts-expect-error -- missing is conclusive readiness, not probe failure.
   degradation: 'probe-failure',
-  probeFailureKind: 'timeout',
-  nextDisposition: 'trial-required',
 } satisfies ConductorEvent;
-// @ts-expect-error -- unusable is conclusive readiness, not probe failure.
 const probeFailureWithUnusableReadiness = {
   type: 'credentials_park_progress',
-  provider: 'codex',
+  provider: toProviderId('codex'),
   source: 'cached-login',
   readiness: 'unusable',
   elapsedSeconds: 3,
+  nextProbeDelaySeconds: 4,
+  // @ts-expect-error -- unusable is conclusive readiness, not probe failure.
   degradation: 'probe-failure',
+} satisfies ConductorEvent;
+const credentialFailureWithProbeFailedReadiness = {
+  type: 'credentials_park_progress',
+  provider: toProviderId('codex'),
+  source: 'cached-login',
+  readiness: 'probe-failed',
+  elapsedSeconds: 3,
+  // @ts-expect-error -- probe-failed readiness cannot be represented as credential failure.
+  degradation: 'credential-failure',
   probeFailureKind: 'timeout',
   nextDisposition: 'trial-required',
 } satisfies ConductorEvent;
-// @ts-expect-error -- probe-failed readiness cannot be represented as credential failure.
-const credentialFailureWithProbeFailedReadiness = {
-  type: 'credentials_park_progress',
-  provider: 'codex',
-  source: 'cached-login',
-  readiness: 'probe-failed',
-  elapsedSeconds: 3,
-  nextProbeDelaySeconds: 4,
-  degradation: 'credential-failure',
-} satisfies ConductorEvent;
-// @ts-expect-error -- probe-failed readiness cannot be represented as unrelated degradation.
 const unrelatedDegradationWithProbeFailedReadiness = {
   type: 'credentials_park_progress',
-  provider: 'codex',
+  provider: toProviderId('codex'),
   source: 'cached-login',
   readiness: 'probe-failed',
   elapsedSeconds: 3,
-  nextProbeDelaySeconds: 4,
+  // @ts-expect-error -- probe-failed readiness cannot be represented as unrelated degradation.
   degradation: 'unrelated-diagnostic-degradation',
+  probeFailureKind: 'timeout',
+  nextDisposition: 'trial-required',
 } satisfies ConductorEvent;
 void [
   probeFailureMissingClosedMetadata,
@@ -864,10 +870,9 @@ const phaseWithoutEventId = (({ eventId: _eventId, ...event }) => event)(routing
 const phaseWithInvalidHostState = { ...routingEvents[2], phase: 'unrecognized' } satisfies ConductorEvent;
 // @ts-expect-error -- revalidation occurrences always retain their execution child.
 const revalidatedWithoutChild = (({ child: _child, ...event }) => event)(routingEvents[3]) satisfies ConductorEvent;
+const revalidatedWithoutEventIdShape = (({ eventId: _eventId, ...event }) => event)(routingEvents[3]);
 // @ts-expect-error -- revalidation occurrences are at-least-once deliveries and require stable ids.
-const revalidatedWithoutEventId = (({ eventId: _eventId, ...event }) => event)(
-  routingEvents[3],
-) satisfies ConductorEvent;
+const revalidatedWithoutEventId: ConductorEvent = revalidatedWithoutEventIdShape;
 void [
   routedWithoutChild,
   routedWithoutEventId,
