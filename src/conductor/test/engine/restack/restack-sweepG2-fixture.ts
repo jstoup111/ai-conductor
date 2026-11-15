@@ -11,6 +11,7 @@ import { promisify } from 'node:util';
 
 import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from '../slice-topology-fixture.js';
 import { parseCommitSha, type CommitSha } from '../../../src/engine/restack/restack-types.js';
+import { RUN_TMP_ROOT_ENV } from '../../tmpdir-leak-guard.js';
 
 const execFile = promisify(execFileCallback);
 
@@ -37,7 +38,9 @@ export function sha(raw: string): CommitSha {
 }
 
 export async function createSweepRepository(prefix: string, cleanup: string[]): Promise<SweepRepository> {
-  const repo = await mkdtemp(join(tmpdir(), prefix));
+  // TMPDIR is process-global and individual tests may temporarily reset it.
+  // The launcher-owned marker remains stable for the whole Vitest run.
+  const repo = await mkdtemp(join(process.env[RUN_TMP_ROOT_ENV] ?? tmpdir(), prefix));
   cleanup.push(repo);
   const git = (args: string[], env?: NodeJS.ProcessEnv) => execFile('git', args, { cwd: repo, ...(env === undefined ? {} : { env: { ...process.env, ...env } }) });
   const write = async (path: string, content: string) => {
