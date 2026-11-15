@@ -448,10 +448,7 @@ describe('routed BUILD settlement cap halt', () => {
     expect(stalls).not.toContainEqual(expect.objectContaining({ type: 'build_stall', reason: 'halt_marker' }));
   });
 
-  it.each([
-    ['a malformed claim', { outcome: 'blocked-by-prerequisite', paths: ['src/a.ts'] }],
-    ['a well-formed claim', { outcome: 'blocked-by-prerequisite', child: 2, symbols: ['parseB'] }],
-  ])('routes a builder input marker through stall handling before settling %s', async (_name, claim) => {
+  const expectBuilderInputMarkerStall = async (claim: unknown) => {
     const markerContent = 'Need user decision: sync the worktree';
     const fixture = await subject({
       cap: 15,
@@ -480,6 +477,14 @@ describe('routed BUILD settlement cap halt', () => {
     expect(retries).not.toContainEqual(expect.objectContaining({ type: 'step_retry', reason: expect.stringMatching(/^routed prerequisite claim/) }));
     expect((await fixture.git(['rev-parse', 'HEAD'])).stdout.trim()).toBe(beforeHead);
     await expect(readRepairMarker(fixture.root, 'demo', { git: fixture.git })).resolves.toEqual(beforeMarker);
+  };
+
+  it('routes a builder input marker through stall handling before settling a malformed claim', async () => {
+    await expectBuilderInputMarkerStall({ outcome: 'blocked-by-prerequisite', paths: ['src/a.ts'] });
+  });
+
+  it('routes a builder input marker through stall handling before settling a well-formed claim', async () => {
+    await expectBuilderInputMarkerStall({ outcome: 'blocked-by-prerequisite', child: 2, symbols: ['parseB'] });
   });
 
   it.each([
