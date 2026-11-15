@@ -1,7 +1,7 @@
 // Covers: task:16
 // Covers: task:17
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
@@ -67,6 +67,139 @@ describe('Composer launcher boundary', () => {
         launchId: 'launch-16', provider: 'codex',
         worktreePath: join(project, '.worktrees', 'engineer-record-launcher-event'),
       }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('Covers: Tasks 16, 17, and 3 reloads the switched child record before checkpointing its first unaccepted step', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'composer-launch-exit-'));
+    const project = join(root, 'project');
+    const registryPath = join(root, 'registry.json');
+    const slug = 'switched-child';
+    const recordPath = join(project, '.docs', 'composer-runs', `${slug}.json`);
+    const initialRecord = {
+      schemaVersion: 1, slug, track: 'technical', steps: { explore: { state: 'draft' } },
+      needsReconfirm: [], ownerHistory: [], notes: {},
+    };
+    const childRecord = {
+      ...initialRecord,
+      steps: {
+        explore: { state: 'accepted', actor: 'operator-a', provider: 'codex', at: '2026-11-15T00:00:00.000Z', artifacts: [] },
+        complexity: { state: 'draft' },
+      },
+      lastCheckpoint: { actor: 'operator-a', provider: 'codex', at: '2026-11-15T00:00:00.000Z' },
+    };
+    try {
+      await execa('git', ['init', '-b', 'main', project]);
+      await execa('git', ['config', 'user.email', 'test@example.test'], { cwd: project });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: project });
+      await writeFile(join(project, 'README.md'), '# fixture\n');
+      await execa('git', ['add', 'README.md'], { cwd: project });
+      await execa('git', ['commit', '-m', 'fixture'], { cwd: project });
+      await mkdir(join(project, '.docs', 'composer-runs'), { recursive: true });
+      await mkdir(join(project, '.pipeline'), { recursive: true });
+      await mkdir(join(project, '.worktrees'), { recursive: true });
+      await writeFile(recordPath, `${JSON.stringify(initialRecord)}\n`);
+      await writeFile(join(project, '.pipeline', 'composer-events.jsonl'), `${JSON.stringify({
+        type: 'composer_run_started', slug, worktreePath: project, launchId: 'launch-16', provider: 'claude',
+      })}\n`);
+      await writeFile(registryPath, JSON.stringify([{ schemaVersion: 1, name: 'project', path: project, status: 'registered', registeredAt: '2026-11-10T00:00:00.000Z' }]));
+
+      const checkpoint = vi.fn(async (request: { worktree: string; step: string; state: 'accepted' | 'draft'; provider?: string }) => ({
+        slug, state: request.state, committed: true, published: true,
+      }));
+      const git = async (args: string[], options?: { cwd?: string }) => {
+        const result = await execa('git', args, { cwd: options?.cwd, reject: false });
+        return { stdout: result.stdout, exitCode: result.exitCode ?? 0 };
+      };
+      const spawnHost = vi.fn(async (executable: string) => {
+        if (executable === 'codex') await writeFile(recordPath, `${JSON.stringify(childRecord)}\n`);
+        return 0;
+      });
+      let attached = true;
+      const code = await dispatchEngineer({ kind: 'launch', provider: 'claude' }, {
+        registryPath, env: { AI_CONDUCTOR_COMPOSE_LAUNCH_ID: 'launch-16' },
+        spawnHost, checkpoint, git, gh: async () => ({ stdout: '', stderr: '', exitCode: 0 }), print: () => {}, printErr: () => {},
+        isAttachedTerminal: () => attached,
+        loadLaunchConfig: async () => ({ ok: true, config: {}, warnings: [] }),
+        prePoll: async () => 0, confirmAnother: async () => false,
+        providerInstalled: async () => true,
+        chooseComposerBoundary: vi.fn()
+          .mockResolvedValueOnce({ choice: 'switch', switchTo: 'codex' })
+          .mockImplementationOnce(async () => { attached = false; return { choice: 'handoff' }; }),
+        probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+      });
+
+      expect(code).toBe(0);
+      expect(spawnHost.mock.calls.map(([executable]) => executable)).toEqual(['claude', 'codex']);
+      expect(checkpoint.mock.calls.map(([request]) => ({ step: request.step, state: request.state, provider: request.provider }))).toEqual([
+        { step: 'explore', state: 'draft', provider: 'claude' },
+        { step: 'complexity', state: 'draft', provider: 'codex' },
+      ]);
+      expect(JSON.parse(await readFile(recordPath, 'utf8')).steps).toMatchObject({
+        explore: { state: 'accepted', provider: 'codex' }, complexity: { state: 'draft' },
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('Covers: Task 16 checkpoints the reloaded first unaccepted step after a direct resume host exits', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'composer-resume-exit-'));
+    const project = join(root, 'project');
+    const registryPath = join(root, 'registry.json');
+    const slug = 'direct-resume';
+    const initialRecord = {
+      schemaVersion: 1, slug, track: 'technical', steps: { explore: { state: 'draft' } },
+      needsReconfirm: [], ownerHistory: [], notes: {},
+    };
+    const childRecord = {
+      ...initialRecord,
+      steps: {
+        explore: { state: 'accepted', actor: 'operator-a', provider: 'codex', at: '2026-11-15T00:00:00.000Z', artifacts: [] },
+        complexity: { state: 'draft' },
+      },
+      lastCheckpoint: { actor: 'operator-a', provider: 'codex', at: '2026-11-15T00:00:00.000Z' },
+    };
+    try {
+      await execa('git', ['init', '-b', 'main', project]);
+      await execa('git', ['config', 'user.email', 'test@example.test'], { cwd: project });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: project });
+      await mkdir(join(project, '.docs', 'composer-runs'), { recursive: true });
+      await mkdir(join(project, '.pipeline'), { recursive: true });
+      await mkdir(join(project, '.worktrees'), { recursive: true });
+      await writeFile(join(project, 'README.md'), '# fixture\n');
+      await writeFile(join(project, '.docs', 'composer-runs', `${slug}.json`), `${JSON.stringify(initialRecord)}\n`);
+      await execa('git', ['add', 'README.md', '.docs'], { cwd: project });
+      await execa('git', ['commit', '-m', 'fixture'], { cwd: project });
+      await execa('git', ['branch', `spec/${slug}`], { cwd: project });
+      await writeFile(registryPath, JSON.stringify([{ schemaVersion: 1, name: 'project', path: project, status: 'registered', registeredAt: '2026-11-10T00:00:00.000Z' }]));
+
+      const checkpoint = vi.fn(async (request: { worktree: string; step: string; state: 'accepted' | 'draft'; provider?: string }) => ({
+        slug, state: request.state, committed: true, published: true,
+      }));
+      const git = async (args: string[], options?: { cwd?: string }) => {
+        const result = await execa('git', args, { cwd: options?.cwd, reject: false });
+        return { stdout: result.stdout, exitCode: result.exitCode ?? 0 };
+      };
+      const spawnHost = vi.fn(async (_executable: string, _argv: string[], worktree: string) => {
+        await writeFile(join(worktree, '.docs', 'composer-runs', `${slug}.json`), `${JSON.stringify(childRecord)}\n`);
+        return 0;
+      });
+      const print = vi.fn();
+      const code = await dispatchEngineer({ kind: 'resume', target: `spec/${slug}`, project: 'project', provider: 'codex' }, {
+        registryPath, env: {}, spawnHost, checkpoint, git, print, printErr: () => {},
+        isAttachedTerminal: () => true, providerInstalled: async () => true,
+        resolveResumeOwner: async () => ({ resolved: true, id: 'operator-a' }),
+        probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+      });
+
+      expect(code).toBe(0);
+      expect(checkpoint.mock.calls.map(([request]) => ({ step: request.step, state: request.state, provider: request.provider }))).toEqual([
+        { step: 'complexity', state: 'draft', provider: 'codex' },
+      ]);
+      expect(print.mock.calls.flat().join('\n')).toContain('current step complexity; active provider codex');
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -674,7 +674,7 @@ export interface DispatchEngineerOpts {
   /** Injected git runner (for tests). */
   git?: GitRunner;
   /** Task 3 local-checkpoint seam; production uses checkpointComposerRun. */
-  checkpoint?: (request: { worktree: string; step: string; state: 'accepted' | 'draft'; notesFile?: string }) => Promise<{ slug: string; state: 'accepted' | 'draft'; committed: boolean; published: boolean; prUrl?: string }>;
+  checkpoint?: (request: { worktree: string; step: string; state: 'accepted' | 'draft'; notesFile?: string; provider?: string }) => Promise<{ slug: string; state: 'accepted' | 'draft'; committed: boolean; published: boolean; prUrl?: string }>;
   /** Machine-owner seam for deterministic checkpoint tests; production resolves the local machine identity. */
   resolveCheckpointOwner?: () => Promise<OwnerResolution>;
   /** Resume boundary seam. */
@@ -934,7 +934,7 @@ function promptComposerLocalState(input: { dirtyDocs: readonly string[]; unpushe
 async function findComposerLaunchRun(
   projects: readonly { name: string; path: string }[],
   launchId: string,
-): Promise<{ project: { name: string; path: string }; slug: string; worktreePath: string; provider: BuiltInProviderId } | undefined> {
+): Promise<{ project: { name: string; path: string }; slug: string; worktreePath: string } | undefined> {
   for (const project of projects) {
     let text: string;
     try { text = await readFile(join(project.path, '.pipeline', 'composer-events.jsonl'), 'utf8'); } catch { continue; }
@@ -949,7 +949,6 @@ async function findComposerLaunchRun(
     );
     if (started) return {
       project, slug: started.slug as string, worktreePath: started.worktreePath as string,
-      provider: (typeof started.provider === 'string' ? started.provider : DEFAULT_PROVIDER) as BuiltInProviderId,
     };
   }
   return undefined;
@@ -1205,6 +1204,69 @@ async function prepareCheckpointDeps(input: {
         recordDecidingIntakeLedger(input.engineerDir, { sourceRef, branch, draftPrUrl: prUrl }))
       : undefined,
   };
+}
+
+/**
+ * A host process is an authoring boundary: reload its durable record after it
+ * exits, then checkpoint the current first-unaccepted step with the provider
+ * that actually ran that host. Callers present the refreshed summary at their
+ * own boundary (interactive relaunch or direct-resume return).
+ */
+async function handleComposerHostExit(input: {
+  target: Parameters<typeof checkpointPublication>[0];
+  branch: string;
+  worktree: string;
+  slug: string;
+  gh: NonNullable<DispatchEngineerOpts['gh']>;
+  git: GitRunner;
+  events: ConductorEventEmitter;
+  provider: BuiltInProviderId;
+  engineerDir?: string;
+  resolveOwner?: () => Promise<OwnerResolution>;
+  checkpoint?: DispatchEngineerOpts['checkpoint'];
+  printErr: (message: string) => void;
+}): Promise<{
+  record?: ReturnType<typeof parseRunRecord>;
+  summary?: ReturnType<typeof summarizeRun>;
+  saved?: Awaited<ReturnType<typeof checkpointComposerRun>>;
+  saveFailed: boolean;
+}> {
+  const recordPath = join(input.worktree, '.docs', 'composer-runs', `${input.slug}.json`);
+  let record: ReturnType<typeof parseRunRecord> | undefined;
+  try { record = parseRunRecord(await readFile(recordPath, 'utf8')); } catch { record = undefined; }
+  const status = await input.git(['status', '--porcelain', '--untracked-files=all', '--', '.docs'], { cwd: input.worktree });
+  const dirtyDocs = (status.exitCode ?? 0) === 0 && status.stdout.trim().length > 0;
+  let saved: Awaited<ReturnType<typeof checkpointComposerRun>> | undefined;
+  let saveFailed = false;
+  const preExitSummary = record ? summarizeRun(record) : undefined;
+
+  // A session can exit during its first DECIDE step, before a run record exists.
+  // Dirty artifacts still need the initial durable draft checkpoint.
+  if ((record || dirtyDocs) && (!preExitSummary || preExitSummary.nextStep !== 'delivery') && dirtyDocs) {
+    const step = preExitSummary?.nextStep ?? 'explore';
+    try {
+      saved = input.checkpoint
+        ? await input.checkpoint({ worktree: input.worktree, step, state: 'draft', provider: input.provider })
+        : await (async () => {
+          const deps = await prepareCheckpointDeps({
+            target: input.target, branch: input.branch, worktree: input.worktree,
+            gh: input.gh, git: input.git, events: input.events, provider: input.provider,
+            engineerDir: input.engineerDir, resolveOwner: input.resolveOwner,
+          });
+          return checkpointComposerRun({ worktree: input.worktree, step, state: 'draft' }, deps);
+        })();
+      saveFailed = saved.published === false && Boolean(input.target.remote);
+    } catch (error) {
+      // The local commit is deliberately durable before publication. Continue
+      // to the boundary so the operator can retry or hand off.
+      input.printErr(`compose: draft is saved locally only. ${error instanceof Error ? error.message : String(error)}`);
+      saveFailed = true;
+    }
+  }
+
+  try { record = parseRunRecord(await readFile(recordPath, 'utf8')); } catch { record = undefined; }
+  const summary = record && summarizeRun(record).nextStep !== 'delivery' ? summarizeRun(record) : undefined;
+  return { record, ...(summary ? { summary } : {}), ...(saved ? { saved } : {}), saveFailed };
 }
 
 /**
@@ -1644,36 +1706,13 @@ export async function dispatchEngineer(
             persister.start();
             try {
               const branch = `spec/${touched.slug}`;
-              let record;
-              try { record = parseRunRecord(await readFile(join(touched.worktreePath, '.docs', 'composer-runs', `${touched.slug}.json`), 'utf8')); } catch { record = undefined; }
-              const status = await git(['status', '--porcelain', '--untracked-files=all', '--', '.docs'], { cwd: touched.worktreePath });
-              const dirtyDocs = (status.exitCode ?? 0) === 0 && status.stdout.trim().length > 0;
-              // A session can exit during its very first DECIDE step, before a
-              // run record exists. Its dirty artifacts still need the first
-              // durable draft checkpoint instead of being silently skipped.
-              if ((record || dirtyDocs) && (!record || summarizeRun(record).nextStep !== 'delivery')) {
-              let summary = record ? summarizeRun(record) : { nextStep: 'explore' as const, drafts: [], acceptedSteps: [], decisions: [], openQuestions: [] };
-              let saved: Awaited<ReturnType<typeof checkpointComposerRun>> | undefined;
-              let saveFailed = false;
-              const checkpointDraft = async (step: typeof summary.nextStep) => {
-                const deps = await prepareCheckpointDeps({
-                  target, branch, worktree: touched.worktreePath, gh, git, events,
-                  provider: touched.provider, engineerDir,
-                });
-                return checkpointComposerRun({ worktree: touched.worktreePath, step, state: 'draft' }, deps);
-              };
-              if (dirtyDocs) try {
-                saved = await checkpointDraft(summary.nextStep);
-              } catch (error) {
-                // The local commit is deliberately durable before publication.
-                // Continue to the boundary so the operator can retry or hand off.
-                printErr(`compose: draft is saved locally only. ${error instanceof Error ? error.message : String(error)}`);
-                saveFailed = true;
-              }
-              try { record = parseRunRecord(await readFile(join(touched.worktreePath, '.docs', 'composer-runs', `${touched.slug}.json`), 'utf8')); } catch { record = undefined; }
-              if (record && summarizeRun(record).nextStep !== 'delivery') {
-                summary = summarizeRun(record);
-                let activeProvider = (record.lastCheckpoint?.provider ?? touched.provider) as BuiltInProviderId;
+              let exited = await handleComposerHostExit({
+                target, branch, worktree: touched.worktreePath, slug: touched.slug, gh, git, events,
+                provider: host!.id, engineerDir, checkpoint: opts.checkpoint, printErr,
+              });
+              if (exited.summary) {
+                let { summary, saved, saveFailed } = exited;
+                let activeProvider = (exited.record?.lastCheckpoint?.provider ?? host!.id) as BuiltInProviderId;
                 print(`Composer run ${touched.slug}: current step ${summary.nextStep}; active provider ${activeProvider}. Choices: continue, switch, hand off.`);
                 const providers = BUILT_IN_PROVIDERS.filter((provider) => supportsProviderCapability(provider, 'interactiveLaunch')).map((provider) => provider.id);
                 // Refused/failed switch attempts return to this exact durable
@@ -1720,23 +1759,15 @@ export async function dispatchEngineer(
                     const name = await resolveSkillName(skillNameRoot, 'composer');
                     const prompt = `${nextHost.invocationPrefix}${name} --resume ${touched.worktreePath} --step ${summary.nextStep}\nResume context: ${JSON.stringify({ drafts: summary.drafts, acceptedArtifacts: summary.acceptedSteps.flatMap((step) => step.artifacts.map((artifact) => artifact.path)), decisions: summary.decisions, openQuestions: summary.openQuestions })}`;
                     lastCode = await (opts.spawnHost ?? spawnInteractiveHost)(nextExecutable, nextHost.interactiveLaunch.argv({ prompt, permissionMode: 'default' }), touched.worktreePath, { ...launchEnv, AI_CONDUCTOR_AUTHORING_PROVIDER: action.provider, AI_CONDUCTOR_COMPOSE_LAUNCH_ID: launchId });
-                    // Every child exit is another durable boundary. A clean
-                    // retry is intentionally passed to checkpoint so a prior
-                    // publication failure cannot be cleared by exit status.
-                    try {
-                      saved = await checkpointDraft(summary.nextStep);
-                      saveFailed = saved.published === false && Boolean(target.remote);
-                    } catch (error) {
-                      printErr(`compose: draft is saved locally only. ${error instanceof Error ? error.message : String(error)}`);
-                      saveFailed = true;
-                    }
-                    try { record = parseRunRecord(await readFile(join(touched.worktreePath, '.docs', 'composer-runs', `${touched.slug}.json`), 'utf8')); } catch { record = undefined; }
-                    if (!record || summarizeRun(record).nextStep === 'delivery') break;
-                    summary = summarizeRun(record);
-                    activeProvider = (record.lastCheckpoint?.provider ?? action.provider) as BuiltInProviderId;
+                    exited = await handleComposerHostExit({
+                      target, branch, worktree: touched.worktreePath, slug: touched.slug, gh, git, events,
+                      provider: action.provider, engineerDir, checkpoint: opts.checkpoint, printErr,
+                    });
+                    if (!exited.summary) break;
+                    ({ summary, saved, saveFailed } = exited);
+                    activeProvider = (exited.record?.lastCheckpoint?.provider ?? action.provider) as BuiltInProviderId;
                   } catch (error) { printErr(`compose boundary: ${error instanceof Error ? error.message : String(error)}`); }
                 }
-              }
               }
             } finally { persister.stop(); }
           }
@@ -2503,26 +2534,14 @@ export async function dispatchEngineer(
               // printing it after the host exits cannot resume its context.
               const prompt = `${host.invocationPrefix}${composerName} --resume ${resumed.worktree} --step ${resumed.context.nextStep}\nResume context: ${JSON.stringify(resumed.context)}`;
               await (opts.spawnHost ?? spawnInteractiveHost)(executable, host.interactiveLaunch.argv({ prompt, permissionMode: 'default' }), resumed.worktree, { ...(opts.env ?? process.env), AI_CONDUCTOR_AUTHORING_PROVIDER: provider, AI_CONDUCTOR_COMPOSE_LAUNCH_ID: launchId });
-              // A direct resume is a host-exit boundary too. Save any draft
-              // before returning control, including the first checkpoint of a
-              // run that had no record when its child was launched.
               const branch = resumed.context.branch;
               const slug = resumed.context.slug;
-              let current: ReturnType<typeof parseRunRecord> | undefined;
-              try { current = parseRunRecord(await readFile(join(resumed.worktree, '.docs', 'composer-runs', `${slug}.json`), 'utf8')); } catch { current = undefined; }
-              const dirty = await git(['status', '--porcelain', '--untracked-files=all', '--', '.docs'], { cwd: resumed.worktree });
-              if (dirty.stdout.trim() && (!current || summarizeRun(current).nextStep !== 'delivery')) {
-                const nextStep = current ? summarizeRun(current).nextStep : 'explore';
-                const deps = await prepareCheckpointDeps({
-                  target, branch, worktree: resumed.worktree, gh, git, events, provider, engineerDir,
-                  resolveOwner: async () => owner,
-                });
-                await checkpointComposerRun({ worktree: resumed.worktree, step: nextStep, state: 'draft' }, deps);
-                current = parseRunRecord(await readFile(join(resumed.worktree, '.docs', 'composer-runs', `${slug}.json`), 'utf8'));
-              }
-              if (current && summarizeRun(current).nextStep !== 'delivery') {
-                const summary = summarizeRun(current);
-                print(`Composer run ${slug}: current step ${summary.nextStep}; active provider ${(current.lastCheckpoint?.provider ?? provider)}. Choices: continue, switch, hand off.`);
+              const exited = await handleComposerHostExit({
+                target, branch, worktree: resumed.worktree, slug, gh, git, events, provider,
+                engineerDir, resolveOwner: async () => owner, checkpoint: opts.checkpoint, printErr,
+              });
+              if (exited.summary) {
+                print(`Composer run ${slug}: current step ${exited.summary.nextStep}; active provider ${(exited.record?.lastCheckpoint?.provider ?? provider)}. Choices: continue, switch, hand off.`);
               }
               return resumed;
             } finally { persister.stop(); }
