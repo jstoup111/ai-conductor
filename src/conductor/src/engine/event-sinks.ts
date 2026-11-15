@@ -247,6 +247,7 @@ export const EVENT_SINKS = {
   rebase_merge_audit: { render: false, persist: true, audit: false, otel: false },
   rebase_conflict_halt: { render: true, persist: true, audit: false, otel: false },
   rebase_untracked_quarantined: { render: false, persist: true, audit: false, otel: false },
+  validator_residue_quarantined: { render: false, persist: true, audit: false, otel: false },
   repair_boundary_translated: { render: false, persist: true, audit: false, otel: false },
   rebase_citation_residue: { render: false, persist: true, audit: false, otel: false },
   rebase_supersession_verdict: { render: false, persist: true, audit: false, otel: false },
