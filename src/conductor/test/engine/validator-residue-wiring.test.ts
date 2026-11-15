@@ -105,7 +105,10 @@ function manualRunner(dir: string, beforeReport?: () => Promise<void>): StepRunn
         await mkdir(join(dir, 'docs/reports/manual-test-step17'), { recursive: true });
         await writeFile(join(dir, 'docs/reports/manual-test-step17/report.html'), '<html>report</html>\n');
         await mkdir(join(dir, '.pipeline'), { recursive: true });
-        await writeFile(join(dir, '.pipeline/manual-test-results.md'), '| Story | Result |\n| --- | --- |\n| 1 | FAIL |\n');
+        await writeFile(
+          join(dir, '.pipeline/manual-test-results.md'),
+          '| Story | Result |\n| --- | --- |\n| 1 | FAIL |\n',
+        );
       }
       return { success: true };
     }),
@@ -130,30 +133,35 @@ describe('serial validation residue wiring', () => {
       expect(runner.run).toHaveBeenCalledWith('manual_test', expect.anything(), expect.anything());
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({
-        type: 'validator_residue_quarantined', source: 'manual_test',
+        type: 'validator_residue_quarantined',
+        source: 'manual_test',
         paths: ['docs/reports/manual-test-step17/report.html'],
       });
       const event = events[0] as Extract<ConductorEvent, { type: 'validator_residue_quarantined' }>;
-      await expect(readFile(join(dir, event.directory, event.paths[0]!), 'utf8')).resolves.toBe('<html>report</html>\n');
+      await expect(readFile(join(dir, event.directory, event.paths[0]!), 'utf8')).resolves.toBe(
+        '<html>report</html>\n',
+      );
       await expect(execa('git', ['status', '--porcelain'], { cwd: dir })).resolves.toMatchObject({ stdout: '' });
       const persisted = (await readFile(join(dir, '.pipeline/events.jsonl'), 'utf8'))
         .trim()
         .split('\n')
         .map((line) => JSON.parse(line) as ConductorEvent);
       const quarantines = persisted.filter((item) => item.type === 'validator_residue_quarantined');
-      expect(quarantines).toEqual([expect.objectContaining({
-        source: 'manual_test', paths: ['docs/reports/manual-test-step17/report.html'], directory: event.directory,
-      })]);
+      expect(quarantines).toEqual([
+        expect.objectContaining({
+          source: 'manual_test',
+          paths: ['docs/reports/manual-test-step17/report.html'],
+          directory: event.directory,
+        }),
+      ]);
       expect(persisted.findIndex((item) => item.type === 'validator_residue_quarantined')).toBeLessThan(
         persisted.findIndex((item) => item.type === 'step_failed' && item.step === 'manual_test'),
       );
-      await expect(switchToChild(
-        dir,
-        { child: 1, position: 1, branch: 'validator-child' },
-        noOpChildLifecycleEvents,
-        undefined,
-        { git: makeGitRunner(dir) },
-      )).resolves.toEqual({ kind: 'completed' });
+      await expect(
+        switchToChild(dir, { child: 1, position: 1, branch: 'validator-child' }, noOpChildLifecycleEvents, undefined, {
+          git: makeGitRunner(dir),
+        }),
+      ).resolves.toEqual({ kind: 'completed' });
     } finally {
       persister.stop();
     }
@@ -172,7 +180,9 @@ describe('serial validation residue wiring', () => {
 
     expect(logs).toContain(`WARNING: validator residue quarantine refused — ${reason}`);
     expect(events).toEqual([]);
-    await expect(readFile(join(dir, 'docs/reports/manual-test-step17/report.html'), 'utf8')).resolves.toBe('<html>report</html>\n');
+    await expect(readFile(join(dir, 'docs/reports/manual-test-step17/report.html'), 'utf8')).resolves.toBe(
+      '<html>report</html>\n',
+    );
   }
 
   // Covers: task:3
@@ -194,7 +204,9 @@ describe('serial validation residue wiring', () => {
     await conductor(dir, statePath, manualRunner(dir), new ConductorEventEmitter(), (line) => logs.push(line)).run();
 
     expect(logs).toContainEqual(expect.stringMatching(/^WARNING: validator residue quarantine refused — /));
-    await expect(readFile(join(dir, 'docs/reports/manual-test-step17/report.html'), 'utf8')).resolves.toBe('<html>report</html>\n');
+    await expect(readFile(join(dir, 'docs/reports/manual-test-step17/report.html'), 'utf8')).resolves.toBe(
+      '<html>report</html>\n',
+    );
   });
 
   // Covers: task:3
@@ -203,13 +215,15 @@ describe('serial validation residue wiring', () => {
     const state = await readFile(statePath, 'utf8').then((raw) => JSON.parse(raw) as ConductState);
     state.build = 'pending';
     await writeState(statePath, state);
-    const runner: StepRunner = { run: vi.fn(async (step) => {
-      if (step === 'build') {
-        await mkdir(join(dir, 'src'), { recursive: true });
-        await writeFile(join(dir, 'src/new.ts'), 'export const value = 1;\n');
-      }
-      return { success: true };
-    }) };
+    const runner: StepRunner = {
+      run: vi.fn(async (step) => {
+        if (step === 'build') {
+          await mkdir(join(dir, 'src'), { recursive: true });
+          await writeFile(join(dir, 'src/new.ts'), 'export const value = 1;\n');
+        }
+        return { success: true };
+      }),
+    };
 
     const events: ConductorEvent[] = [];
     const emitter = new ConductorEventEmitter();
@@ -220,10 +234,15 @@ describe('serial validation residue wiring', () => {
     expect(events).toEqual([]);
     await expect(access(join(dir, '.pipeline/validator-residue'))).rejects.toMatchObject({ code: 'ENOENT' });
     await mkdir(join(dir, '.pipeline'), { recursive: true });
-    await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks: [{ id: '3', status: 'completed' }] }));
-    await expect(checkStepCompletion(dir, 'build', {
-      worktreeStatus: async () => (await execa('git', ['status', '--porcelain'], { cwd: dir })).stdout,
-    })).resolves.toMatchObject({
+    await writeFile(
+      join(dir, '.pipeline/task-status.json'),
+      JSON.stringify({ tasks: [{ id: '3', status: 'completed' }] }),
+    );
+    await expect(
+      checkStepCompletion(dir, 'build', {
+        worktreeStatus: async () => (await execa('git', ['status', '--porcelain'], { cwd: dir })).stdout,
+      }),
+    ).resolves.toMatchObject({
       done: false,
       missing: 'uncommitted',
       reason: expect.stringContaining('src/new.ts'),
@@ -232,11 +251,13 @@ describe('serial validation residue wiring', () => {
 
   it('does nothing when manual test writes only ignored pipeline evidence', async () => {
     const { dir, statePath } = await fixture();
-    const runner: StepRunner = { run: vi.fn(async () => {
-      await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeFile(join(dir, '.pipeline/manual-test-results.md'), 'attempt evidence\n');
-      return { success: true };
-    }) };
+    const runner: StepRunner = {
+      run: vi.fn(async () => {
+        await mkdir(join(dir, '.pipeline'), { recursive: true });
+        await writeFile(join(dir, '.pipeline/manual-test-results.md'), 'attempt evidence\n');
+        return { success: true };
+      }),
+    };
 
     await conductor(dir, statePath, runner).run();
 
@@ -263,25 +284,35 @@ describe('grouped validation residue wiring', () => {
     const emitter = new ConductorEventEmitter();
     emitter.on('validator_residue_quarantined', (event) => events.push(event));
     emitter.on('gate_verdict', (event) => events.push(event));
-    const runner: StepRunner = { run: vi.fn(async (step) => {
-      if (step === 'architecture_review_as_built') {
-        await mkdir(join(dir, 'docs/reports/as-built'), { recursive: true });
-        await writeFile(join(dir, 'docs/reports/as-built/report.html'), '<html>as built</html>\n');
-        await writeFile(join(dir, 'src/app.ts'), 'export const app = 2;\n');
-      }
-      if (step === 'manual_test') {
-        await mkdir(join(dir, '.pipeline'), { recursive: true });
-        await writeFile(join(dir, '.pipeline/manual-test-results.md'), '| Story | Result |\n| --- | --- |\n| 1 | PASS |\n');
-      }
-      return { success: true };
-    }) };
+    const runner: StepRunner = {
+      run: vi.fn(async (step) => {
+        if (step === 'architecture_review_as_built') {
+          await mkdir(join(dir, 'docs/reports/as-built'), { recursive: true });
+          await writeFile(join(dir, 'docs/reports/as-built/report.html'), '<html>as built</html>\n');
+          await writeFile(join(dir, 'src/app.ts'), 'export const app = 2;\n');
+        }
+        if (step === 'manual_test') {
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          await writeFile(
+            join(dir, '.pipeline/manual-test-results.md'),
+            '| Story | Result |\n| --- | --- |\n| 1 | PASS |\n',
+          );
+        }
+        return { success: true };
+      }),
+    };
 
     await conductor(dir, statePath, runner, emitter).run();
 
     expect(events.filter((event) => event.type === 'validator_residue_quarantined')).toHaveLength(1);
-    const residue = events.find((event) => event.type === 'validator_residue_quarantined') as Extract<ConductorEvent, { type: 'validator_residue_quarantined' }>;
+    const residue = events.find((event) => event.type === 'validator_residue_quarantined') as Extract<
+      ConductorEvent,
+      { type: 'validator_residue_quarantined' }
+    >;
     expect(residue).toMatchObject({ source: 'validation', paths: ['docs/reports/as-built/report.html'] });
-    await expect(readFile(join(dir, residue.directory, 'docs/reports/as-built/report.html'), 'utf8')).resolves.toBe('<html>as built</html>\n');
+    await expect(readFile(join(dir, residue.directory, 'docs/reports/as-built/report.html'), 'utf8')).resolves.toBe(
+      '<html>as built</html>\n',
+    );
     expect(events.findIndex((event) => event.type === 'validator_residue_quarantined')).toBeLessThan(
       events.findIndex((event) => event.type === 'gate_verdict'),
     );
@@ -299,23 +330,33 @@ describe('grouped validation residue wiring', () => {
     const events: ConductorEvent[] = [];
     const emitter = new ConductorEventEmitter();
     emitter.on('validator_residue_quarantined', (event) => events.push(event));
-    const runner: StepRunner = { run: vi.fn(async (step) => {
-      if (step === 'manual_test') {
-        manualAttempts += 1;
-        if (manualAttempts === 1) throw new Error('fixture retry');
-        await mkdir(join(dir, 'docs/reports/retry'), { recursive: true });
-        await writeFile(join(dir, 'docs/reports/retry/report.html'), '<html>retry</html>\n');
-        await mkdir(join(dir, '.pipeline'), { recursive: true });
-        await writeFile(join(dir, '.pipeline/manual-test-results.md'), '| Story | Result |\n| --- | --- |\n| 1 | PASS |\n');
-      }
-      return { success: true };
-    }) };
+    const runner: StepRunner = {
+      run: vi.fn(async (step) => {
+        if (step === 'manual_test') {
+          manualAttempts += 1;
+          if (manualAttempts === 1) throw new Error('fixture retry');
+          await mkdir(join(dir, 'docs/reports/retry'), { recursive: true });
+          await writeFile(join(dir, 'docs/reports/retry/report.html'), '<html>retry</html>\n');
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          await writeFile(
+            join(dir, '.pipeline/manual-test-results.md'),
+            '| Story | Result |\n| --- | --- |\n| 1 | PASS |\n',
+          );
+        }
+        return { success: true };
+      }),
+    };
 
     await conductor(dir, statePath, runner, emitter, undefined, 'manual_test', false, 2).run();
 
     expect(manualAttempts).toBe(2);
-    const residue = events.find((event) => event.type === 'validator_residue_quarantined') as Extract<ConductorEvent, { type: 'validator_residue_quarantined' }>;
+    const residue = events.find((event) => event.type === 'validator_residue_quarantined') as Extract<
+      ConductorEvent,
+      { type: 'validator_residue_quarantined' }
+    >;
     expect(residue).toMatchObject({ source: 'validation', paths: ['docs/reports/retry/report.html'] });
-    await expect(readFile(join(dir, residue.directory, 'docs/reports/retry/report.html'), 'utf8')).resolves.toBe('<html>retry</html>\n');
+    await expect(readFile(join(dir, residue.directory, 'docs/reports/retry/report.html'), 'utf8')).resolves.toBe(
+      '<html>retry</html>\n',
+    );
   });
 });
