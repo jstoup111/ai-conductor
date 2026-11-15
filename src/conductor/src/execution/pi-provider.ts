@@ -134,6 +134,9 @@ export async function resolvePiSkill(
 export const PI_MODEL_UNAVAILABLE_RE =
   /^Error: Model "[^"\r\n]+" not found\. Use --list-models to see available models\.$/;
 
+export const PI_UPSTREAM_MODEL_UNAVAILABLE_RE =
+  /^400: \{"message":"[^"\r\n]+ is not a valid model ID"/m;
+
 export const PI_FAILURE_SIGNATURES = Object.freeze([
   { kind: 'auth', state: 'missing', pattern: /^No API key found for /m },
   { kind: 'auth', state: 'missing', pattern: /^No API key for provider: /m },
@@ -767,6 +770,18 @@ export class PiProvider implements LLMProvider {
         output: `${piDisplayName()} authentication failed: the upstream provider credential is missing or was rejected.`,
         authFailure: true,
         authentication: { provider: 'pi', source: 'cached-login', state: classification.auth },
+      };
+    }
+    if (exitCode === 0
+      && parsed.terminalAssistantStopReason === 'error'
+      && PI_UPSTREAM_MODEL_UNAVAILABLE_RE.test(parsed.terminalAssistantErrorMessage ?? '')) {
+      return {
+        success: false,
+        output: 'Pi upstream provider reports the requested model as unknown.',
+        exitCode,
+        ...failedUsage,
+        gitGuardInstalled: guardDir !== null,
+        modelUnavailable: true,
       };
     }
     if (exitCode === 0 && options.nativeSchema !== undefined && parsed.finalStructuredResult === undefined) {

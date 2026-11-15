@@ -1183,6 +1183,62 @@ describe('PiProvider captured failure classification', () => {
     }
   });
 
+  // Covers: task:2
+  it('classifies captured OpenRouter unknown-model error stops without exposing their upstream diagnostic', async () => {
+    spawn.mockResolvedValueOnce({ stdout: await readFixture('pi-1.0.0-e10-unknown-model-openrouter.jsonl'), stderr: '', exitCode: 0 } as ExecaResult)
+      .mockResolvedValueOnce({ stdout: errorStream('400: {"message":"anthropic/claude-x is not a valid model ID","code":400}'), stderr: '', exitCode: 0 } as ExecaResult)
+      .mockResolvedValueOnce({ stdout: await readFixture('pi-1.0.0-e10-unknown-model-openrouter.jsonl'), stderr: '', exitCode: 0 } as ExecaResult)
+      .mockResolvedValueOnce({ stdout: await readFixture('pi-1.0.0-e10-unknown-model-openrouter.jsonl'), stderr: 'Warning: Model "nonexistent-model-xyz" not found for provider "openrouter". Using custom model id.', exitCode: 0 } as ExecaResult);
+
+    // Covers: task:2
+    const e10 = await invoke();
+    // Covers: task:2
+    const slashModel = await invoke();
+
+    // Covers: task:2
+    const nativeSchemaWorktree = await mkdtemp(join(tmpdir(), 'pi-e10-native-schema-'));
+    const nativeSchemaScratchHome = join(nativeSchemaWorktree, '.daemon', 'scratch', 'run-1', 'pi');
+    await mkdir(nativeSchemaScratchHome, { recursive: true });
+    // Covers: task:2
+    let nativeSchemaResult: Awaited<ReturnType<PiProvider['invoke']>>;
+    try {
+      // Covers: task:2
+      const nativeSchemaProvider = new PiProvider(
+        dispatchGitGuard,
+        '/resolved/pi',
+        spawn,
+        harnessedPiEnvironment(),
+        vi.fn(async () => '/engine-home/.ai-conductor/pi/harness-extension.ts'),
+      );
+      // Covers: task:2
+      nativeSchemaResult = await nativeSchemaProvider.invoke({
+        ...invokeOptions,
+        nativeSchema: { type: 'object' },
+        nativeSchemaScratchHome,
+        nativeSchemaScratchRoot: nativeSchemaWorktree,
+      });
+    } finally {
+      await rm(nativeSchemaWorktree, { recursive: true, force: true });
+    }
+
+    // Covers: task:2
+    const e10WithCustomModelWarning = await invoke();
+    expect(e10).toMatchObject({
+      success: false,
+      modelUnavailable: true,
+      output: 'Pi upstream provider reports the requested model as unknown.',
+    });
+    // Covers: task:2
+    for (const property of ['authFailure', 'rateLimited', 'usageExhausted', 'providerUnavailable']) expect(e10).not.toHaveProperty(property);
+    expect(e10.output).toBe('Pi upstream provider reports the requested model as unknown.');
+    // Covers: task:2
+    for (const forbidden of ['400:', '"code"', 'is not a valid model ID']) expect(e10.output).not.toContain(forbidden);
+    expect(slashModel).toMatchObject({ success: false, modelUnavailable: true });
+    expect(nativeSchemaResult).toMatchObject({ success: false, modelUnavailable: true });
+    expect(nativeSchemaResult.output).not.toContain('missing structured result');
+    expect(e10WithCustomModelWarning).toEqual(e10);
+  });
+
   it('classifies each captured rejected credential without leaking its diagnostic', async () => {
     const authFixtures = ['pi-1.0.0-e2-invalid-key-deepseek.jsonl', 'pi-1.0.0-e3-invalid-key-openrouter.jsonl', 'pi-1.0.0-e4-invalid-key-anthropic.jsonl', 'pi-1.0.0-e5-oauth-refresh-failed.jsonl'];
     for (const name of authFixtures) spawn.mockResolvedValueOnce({ stdout: await readFixture(name), stderr: '', exitCode: 0 } as ExecaResult);
