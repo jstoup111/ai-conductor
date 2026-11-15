@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "slug": "self-host-boundary-fingerprint-re-walks-the-live-c",
+  "artifacts": [
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/self-host-boundary-fingerprint-re-walks-the-live-c.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/self-host-boundary-fingerprint-re-walks-the-live-c.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/self-host-boundary-fingerprint-re-walks-the-live-c.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/self-host-boundary-fingerprint-re-walks-the-live-c.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/self-host-boundary-fingerprint-re-walks-the-live-c.md"
+    }
+  ]
+}
