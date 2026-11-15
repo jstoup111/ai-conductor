@@ -32,6 +32,7 @@ import { parseBuildReviewLapId, type BuildReviewFinding } from '../../src/engine
 import { canonicalizeBuildReviewFindingIdentity } from '../../src/engine/build-review-finding-identity.js';
 import { stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
+import * as projectPrelude from '../../src/engine/project-prelude.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import * as remediationCaseReconciler from '../../src/engine/remediation-case-reconciler.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
@@ -590,6 +591,8 @@ interface FixtureOptions {
   readonly buildPending?: boolean;
   /** Observes the durable handoff at the BUILD dispatch boundary. */
   readonly onBuildDispatch?: (projectRoot: string) => Promise<void>;
+  /** Lets a no-op guard fixture settle BUILD instead of stopping at dispatch. */
+  readonly buildResult?: StepRunResult;
   readonly chargeEffect?: typeof chargeBuildReviewEffectInLedger;
   /** A clean lap. The adjudication coordinator never runs for one. */
   readonly rawVerdict?: 'PASS' | 'FAIL';
@@ -697,6 +700,7 @@ async function fixture(options: FixtureOptions = {}) {
       if (opts?.retryReason !== undefined) retryReasons.set(step, opts.retryReason);
       if (step === 'build') {
         await options.onBuildDispatch?.(projectRoot);
+        if (options.buildResult !== undefined) return options.buildResult;
         throw new Error('stop after BUILD dispatch');
       }
       if (step === 'remediate') {
@@ -856,6 +860,7 @@ async function fixture(options: FixtureOptions = {}) {
     mode: options.attended ? 'default' : 'auto',
     daemon: !options.attended,
     config: {
+      defaults: { model: 'test-model', effort: 'medium', max_retries: 1, escalate: false },
       ...(options.stacked ? { stacked_prs: { enabled: true, route_whole_feature_fixes: true } } : {}),
       kickback_escalation: { enabled: false },
       build_review: {
@@ -2736,6 +2741,67 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     };
     expect(restartedOrder.effectId).toBe(order.effectId);
     expect(restartedOrder.attemptedCaseIds).toEqual(order.attemptedCaseIds);
+  });
+
+  // Covers: task:2
+  it('dispatches BUILD for a build_review case the prior no-op build was not delivered', async () => {
+    const first = await fixture();
+    const order = (await first.readJson('.pipeline/build-review-work-order.json')) as Record<string, unknown>;
+    const cases = (await first.readJson('.pipeline/remediation-cases.json')) as Record<string, unknown>;
+    const ledger = await first.readJson('.pipeline/kickback-ledger.json');
+    const treeHash = 'tree-review-cases';
+    const treeSpy = vi.spyOn(projectPrelude, 'currentTreeHash').mockResolvedValue(treeHash);
+
+    try {
+      const restarted = await fixture({
+        startFrom: 'build',
+        buildResult: { success: true },
+        seedPipeline: async (root) => {
+          const seededOrder = {
+            ...order,
+            feature: { ...(order.feature as object), repository: root },
+            cases: (order.cases as Array<Record<string, unknown>>).map((row) => ({ ...row, caseId: 'c2' })),
+          };
+          const seededCases = {
+            ...cases,
+            feature: { ...(cases.feature as object), repository: root },
+            cases: (cases.cases as Array<Record<string, unknown>>).map((row) => ({ ...row, id: 'c2' })),
+          };
+          await writeFile(join(root, '.pipeline/build-review-work-order.json'), JSON.stringify(seededOrder), 'utf8');
+          await writeFile(join(root, '.pipeline/remediation-cases.json'), JSON.stringify(seededCases), 'utf8');
+          await writeFile(join(root, '.pipeline/kickback-ledger.json'), JSON.stringify(ledger), 'utf8');
+          await writeFile(
+            join(root, '.pipeline/build-outcome.json'),
+            JSON.stringify({
+              version: 1,
+              records: [
+                {
+                  outcome: 'no-movement',
+                  terminalOutcome: 'done',
+                  gate: 'build_review',
+                  verdict: false,
+                  rung: { model: 'test-model', effort: 'medium' },
+                  treeBefore: treeHash,
+                  treeAfter: treeHash,
+                  headBefore: 'head-before',
+                  headAfter: 'head-after',
+                  deliveredCaseIds: ['c1'],
+                },
+              ],
+            }),
+            'utf8',
+          );
+        },
+      });
+
+      expect(restarted.dispatched.filter((step) => step === 'build')).toEqual(['build']);
+      expect(await restarted.haltMarker()).toBe('');
+      await expect(restarted.readJson('.pipeline/build-outcome.json')).resolves.toMatchObject({
+        records: [expect.objectContaining({ deliveredCaseIds: ['c2'] })],
+      });
+    } finally {
+      treeSpy.mockRestore();
+    }
   });
 
   it('treats an all-resolved durable action order as absent on a fresh BUILD entry', async () => {

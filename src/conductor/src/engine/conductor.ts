@@ -1399,6 +1399,7 @@ export class Conductor {
   /** Persist one terminal BUILD attempt without changing its caller-owned meaning. */
   private async recordBuildOutcome(input: {
     terminalOutcome: BuildTerminalOutcome;
+    deliveredCaseIds: readonly string[];
     reason?: string;
     note?: string[];
     gate: string | null;
@@ -1423,6 +1424,7 @@ export class Conductor {
             resolvedAfter: input.resolvedAfter,
           }),
           terminalOutcome: input.terminalOutcome,
+          deliveredCaseIds: [...input.deliveredCaseIds],
           gate: input.gate,
           verdict: input.gate === null ? null : false,
           rung: input.rung,
@@ -6337,7 +6339,7 @@ export class Conductor {
   private async durableBuildReviewRetryContext(
     retryHint: string | undefined,
   ): Promise<
-    | { readonly kind: 'ready'; readonly context: string }
+    | { readonly kind: 'ready'; readonly context: string; readonly caseIds: readonly string[] }
     | { readonly kind: 'absent' }
     | { readonly kind: 'invalid'; readonly reason: string }
   > {
@@ -6380,6 +6382,7 @@ export class Conductor {
     if (!attempt.ok) return { kind: 'invalid', reason: `work order attempt ${attempt.reason}` };
     return {
       kind: 'ready',
+      caseIds: order.workOrder.cases.map((row) => row.caseId).sort(),
       context: appendBuildReviewWorkOrderContext(
         retryHint ?? 'build_review adjudication: resume the durable remediation work order.',
         order.workOrder,
@@ -12068,6 +12071,7 @@ export class Conductor {
         // Seed from any kickback hint queued for this step (e.g. the prd_audit
         // impl-gap → BUILD handoff), then clear it so it only affects attempt 1.
         let retryHint: string | undefined = pendingRetryHints.get(step.name);
+        let deliveredBuildReviewCaseIds: readonly string[] = [];
         pendingRetryHints.delete(step.name);
         if (step.name === 'build') {
           const slug = state.feature_desc ?? this.featureSlug ?? this.featureDesc;
@@ -12093,7 +12097,10 @@ export class Conductor {
             await this.emitLoopHalt(reason);
             return;
           }
-          if (durableRetry.kind === 'ready') retryHint = durableRetry.context;
+          if (durableRetry.kind === 'ready') {
+            retryHint = durableRetry.context;
+            deliveredBuildReviewCaseIds = durableRetry.caseIds;
+          }
         }
         let successOutput: string | undefined;
         let stepResult: StepRunResult | undefined;
@@ -12708,6 +12715,7 @@ export class Conductor {
                         treeHash,
                         verdict: false,
                         rung: buildOutcomeRung(undefined, esc),
+                        deliveredCaseIds: deliveredBuildReviewCaseIds,
                       })
                     ) {
                       const reason = composeBuildOutcomeHaltReason(prior, gate);
@@ -12908,6 +12916,7 @@ export class Conductor {
                 const note = [settled.detail];
                 await this.recordBuildOutcome({
                   terminalOutcome: 'failed',
+                  deliveredCaseIds: deliveredBuildReviewCaseIds,
                   reason: 'routed-prerequisite-claim',
                   note,
                   gate: null,
@@ -13156,6 +13165,7 @@ export class Conductor {
                 const gate = await pendingBuildKickbackGate();
                 await this.recordBuildOutcome({
                   terminalOutcome: 'no-verdict',
+                  deliveredCaseIds: deliveredBuildReviewCaseIds,
                   reason: 'authFailure',
                   note,
                   gate,
@@ -15114,6 +15124,7 @@ export class Conductor {
               const gate = await pendingBuildKickbackGate();
               await this.recordBuildOutcome({
                 terminalOutcome: 'failed',
+                deliveredCaseIds: deliveredBuildReviewCaseIds,
                 note,
                 gate,
                 rung: buildOutcomeRung(failedStepResult, lastBuildEscalation),
@@ -16951,6 +16962,7 @@ export class Conductor {
             const gate = await pendingBuildKickbackGate();
             await this.recordBuildOutcome({
               terminalOutcome: 'done',
+              deliveredCaseIds: deliveredBuildReviewCaseIds,
               note: tail,
               gate,
               rung: buildOutcomeRung(stepResult, lastBuildEscalation),
