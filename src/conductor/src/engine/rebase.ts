@@ -616,8 +616,9 @@ export async function confirmUntrackedRebasePaths(
 export async function moveRebaseUntrackedPathsToQuarantine(
   projectRoot: string,
   paths: string[],
+  directory = REBASE_UNTRACKED_QUARANTINE_DIR,
 ): Promise<string> {
-  const quarantine = join(projectRoot, REBASE_UNTRACKED_QUARANTINE_DIR);
+  const quarantine = join(projectRoot, directory);
   const moves = paths.map((path) => {
     const source = confinedWorktreePath(projectRoot, path);
     if (!source) throw new Error(`refusing to quarantine unsafe rebase path: ${path}`);
