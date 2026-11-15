@@ -267,6 +267,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - build_review no longer fails a lap as review-input-mutated when reviewer transcripts are captured mid-lap. ([implementation PR #3672](https://github.com/jstoup111/ai-conductor/pull/3672)).
 - Restack safely refuses a child resolution when its recorded target tip has changed. ([implementation PR #3667](https://github.com/jstoup111/ai-conductor/pull/3667)).
 - As-built remediation no longer halts needs-human on features with many open as-built cases; pending findings are no longer sent twice. ([implementation PR #3678](https://github.com/jstoup111/ai-conductor/pull/3678)).
+- Routed builds resume unfinished work before whole-feature gates and report bounded admission stops. ([implementation PR #3657](https://github.com/jstoup111/ai-conductor/pull/3657)).
 
 ## Migration
 
