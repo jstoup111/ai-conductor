@@ -189,6 +189,11 @@ Check the proposed design against documented architecture:
 - Does the implementation approach match existing patterns (service objects, concerns, etc.)?
 - If it establishes a new structural pattern, is there an ADR justifying the departure?
 
+**Seam conformance (external boundaries):**
+- An *external system* is anything outside the project's own code that its production code reaches — a hosted API, another service, a database or queue, a model provider, or a command-line tool run as a subprocess.
+- A *seam* is a boundary interface that an APPROVED ADR in the project's `.docs/decisions/` designates as the way production code reaches a named external system.
+- Derive the seam inventory only from the project's APPROVED ADRs in `.docs/decisions/`. DRAFT and SUPERSEDED ADRs, existing code, and diagrams define no seam; diagrams may help locate a seam an ADR defines. Existing code that already bypasses a seam is tech debt, not precedent.
+
 **State management:**
 - Can invalid states be represented in the proposed data model?
 - Are state transitions explicit (enum/state machine) or implicit (boolean flags)?
