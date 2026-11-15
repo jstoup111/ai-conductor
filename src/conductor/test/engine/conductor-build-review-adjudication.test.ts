@@ -2837,6 +2837,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
               ...order,
               feature: { ...(order.feature as object), repository: root },
               cases: (order.cases as Array<Record<string, unknown>>).map((row) => ({ ...row, caseId: 'c2' })),
+              attemptedCaseIds: (order.attemptedCaseIds as string[] | undefined)?.map(() => 'c2'),
             }),
             'utf8',
           );
@@ -2850,6 +2851,16 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
             'utf8',
           );
           await writeFile(join(root, '.pipeline/kickback-ledger.json'), JSON.stringify(ledger), 'utf8');
+          await writeFile(
+            join(root, '.pipeline/task-status.json'),
+            JSON.stringify({
+              tasks: [
+                { id: '1', status: 'completed' },
+                { id: '32', status: 'completed' },
+              ],
+            }),
+            'utf8',
+          );
           await writeFile(
             join(root, '.pipeline/build-outcome.json'),
             JSON.stringify({
@@ -2930,6 +2941,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
                 ...order,
                 feature: { ...(order.feature as object), repository: root },
                 cases: (order.cases as Array<Record<string, unknown>>).map((row) => ({ ...row, caseId: 'c2' })),
+                attemptedCaseIds: (order.attemptedCaseIds as string[] | undefined)?.map(() => 'c2'),
               }),
               'utf8',
             );
