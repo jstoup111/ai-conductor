@@ -10145,6 +10145,7 @@ export class Conductor {
               // post-join reader to receive that exact attempt identity.
               let settledGroupRunIds = new Map<string, string>();
               const dispatchGroupRound = async (members: typeof membership.dispatchable) => {
+                const validatorResidueBaseline = await listUntrackedPaths(makeGitRunner(this.projectRoot));
                 // The validation join normally dispatches each member directly
                 // through group-core, bypassing the serial `prd_audit` branch
                 // below.  Capture must therefore happen before that fan-out,
@@ -10171,7 +10172,7 @@ export class Conductor {
                   roundChanges[syntheticKey] = 'stale';
                 }
                 await this.commitStateChanges(state, `start ${builtinGroup.name} verification group`, roundChanges);
-                return runWithConcurrency(
+                const outcomes = await runWithConcurrency(
                   members.map((member) => async () => {
                     // This thunk is launched only after runWithConcurrency admits
                     // a member under the group cap. A fresh scope therefore cannot
@@ -10370,6 +10371,23 @@ export class Conductor {
                   }),
                   cap,
                 );
+                const residue = await quarantineValidatorResidue({
+                  projectRoot: this.projectRoot,
+                  git: makeGitRunner(this.projectRoot),
+                  baseline: validatorResidueBaseline,
+                  source: 'validation',
+                });
+                if (residue.kind === 'moved') {
+                  await emitTracked({
+                    type: 'validator_residue_quarantined',
+                    source: 'validation',
+                    paths: residue.paths,
+                    directory: residue.directory,
+                  });
+                } else if (residue.kind === 'refused') {
+                  this.log?.(`WARNING: validator residue quarantine refused — ${residue.reason}`);
+                }
+                return outcomes;
               };
 
               // Task 27: reset the pending-completions side-channel for THIS
