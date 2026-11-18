@@ -20,6 +20,12 @@
 | Performance risk | Prior as-built cases add bounded bytes to an existing projection. Overflow faults rather than truncating. No extra dispatch. |
 | Worktree isolation | The store is per-worktree under `.pipeline/` (excluded from the live boundary) and lock-guarded. Nothing is shared across worktrees. |
 
+> **Amended 2026-11-15 by #3677:** Prior as-built cases no longer add bytes to the prompt and
+> can no longer overflow. They are handed to the agent in full as per-attempt files, with
+> resolved cases in an on-demand archive
+> (adr-2026-09-07-durable-prd-widening-decision-reconciliation D7.4). This also retires the
+> "Prior cases overflow projection bytes on long features" risk row below.
+
 Technical-intent items:
 - **Reconcile each finding as same, recurrence, materially changed, or new, with a reason.**
   Feasible inside `gap-plan` (ADR decisions 3 and 4).

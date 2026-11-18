@@ -98,6 +98,15 @@ Adopt **Option A**.
    - **Bound:** the cases are bounded under the projection's existing named byte limits. Overflow is
      a preparation fault that halts `needs-human`, naming the dimension. Cases are never truncated,
      following the build_review precedent in `adr-2026-08-29-build-review-remediate-case-adjudication` D3.
+
+   > **Amended 2026-11-15 by #3677:** The cases are no longer bounded by a byte limit and cannot
+   > overflow. The engine hands every case to the planner in full through per-attempt history
+   > files: open and needs-human cases, and any resolved case with a currently pending source
+   > finding, in an active snapshot the planner always reads; the remaining resolved cases in a
+   > resolved archive the planner reads when a current finding may be a recurrence. The prompt
+   > lists the cases by id only. Cases are still never truncated. `needs-human` remains for a
+   > repair task the plan no longer declares and for an unreadable case store
+   > (adr-2026-09-07-durable-prd-widening-decision-reconciliation D7.4).
 3. **Each as-built disposition carries a reconciliation result.**
    - **Shape:** every `as-built-finding` disposition in the `gap-plan` result carries
      `reconciliation: { relation, priorCaseId?, reason }`.
