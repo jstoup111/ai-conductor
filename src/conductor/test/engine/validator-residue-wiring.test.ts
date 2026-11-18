@@ -176,6 +176,30 @@ describe('serial validation residue wiring', () => {
     }
   });
 
+  it('quarantines serial manual-test residue when its dispatch throws', async () => {
+    const { dir, statePath } = await fixture();
+    const events: ConductorEvent[] = [];
+    const emitter = new ConductorEventEmitter();
+    emitter.on('validator_residue_quarantined', (event) => events.push(event));
+    const runner: StepRunner = {
+      run: vi.fn(async (step) => {
+        if (step === 'manual_test') {
+          await mkdir(join(dir, 'docs/reports'), { recursive: true });
+          await writeFile(join(dir, 'docs/reports/thrown.html'), 'thrown report\n');
+          throw new Error('manual test dispatch failed');
+        }
+        return { success: true };
+      }),
+    };
+
+    await conductor(dir, statePath, runner, emitter).run();
+
+    expect(events).toHaveLength(1);
+    const event = events[0] as Extract<ConductorEvent, { type: 'validator_residue_quarantined' }>;
+    expect(event).toMatchObject({ source: 'manual_test', paths: ['docs/reports/thrown.html'] });
+    await expect(readFile(join(dir, event.directory, 'docs/reports/thrown.html'), 'utf8')).resolves.toBe('thrown report\n');
+  });
+
   async function assertMockedRefusal(reason: string): Promise<void> {
     const { dir, statePath } = await fixture();
     const logs: string[] = [];
@@ -379,5 +403,29 @@ describe('grouped validation residue wiring', () => {
     await expect(readFile(join(dir, residue.directory, 'docs/reports/retry/report.html'), 'utf8')).resolves.toBe(
       '<html>retry</html>\n',
     );
+  });
+
+  it('quarantines grouped residue when a member dispatch throws after writing it', async () => {
+    const { dir, statePath } = await groupFixture();
+    const events: ConductorEvent[] = [];
+    const emitter = new ConductorEventEmitter();
+    emitter.on('validator_residue_quarantined', (event) => events.push(event));
+    const runner: StepRunner = {
+      run: vi.fn(async (step) => {
+        if (step === 'architecture_review_as_built') {
+          await mkdir(join(dir, 'docs/reports'), { recursive: true });
+          await writeFile(join(dir, 'docs/reports/thrown-group.html'), 'group report\n');
+          throw new Error('group member dispatch failed');
+        }
+        return { success: true };
+      }),
+    };
+
+    await conductor(dir, statePath, runner, emitter).run();
+
+    expect(events).toHaveLength(1);
+    const event = events[0] as Extract<ConductorEvent, { type: 'validator_residue_quarantined' }>;
+    expect(event).toMatchObject({ source: 'validation', paths: ['docs/reports/thrown-group.html'] });
+    await expect(readFile(join(dir, event.directory, 'docs/reports/thrown-group.html'), 'utf8')).resolves.toBe('group report\n');
   });
 });

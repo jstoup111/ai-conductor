@@ -9183,6 +9183,14 @@ export class Conductor {
       breadcrumb.lastEventType = ev.type;
       return this.emitExecutionEvent(ev);
     };
+    const captureValidationResidueBaseline = async (): Promise<readonly string[] | undefined> => {
+      const baseline = await captureValidatorResidueBaseline(makeGitRunner(this.projectRoot));
+      if (baseline.kind === 'refused') {
+        this.log?.(`WARNING: validator residue baseline unavailable — ${baseline.reason}`);
+        return undefined;
+      }
+      return baseline.paths;
+    };
     const quarantineValidationResidue = async (
       source: StepName | 'validation',
       baseline: readonly string[],
@@ -10166,11 +10174,7 @@ export class Conductor {
               // post-join reader to receive that exact attempt identity.
               let settledGroupRunIds = new Map<string, string>();
               const dispatchGroupRound = async (members: typeof membership.dispatchable) => {
-                const baselineResult = await captureValidatorResidueBaseline(makeGitRunner(this.projectRoot));
-                if (baselineResult.kind === 'refused') {
-                  this.log?.(`WARNING: validator residue baseline unavailable — ${baselineResult.reason}`);
-                }
-                const validatorResidueBaseline = baselineResult.kind === 'captured' ? baselineResult.paths : undefined;
+                const validatorResidueBaseline = await captureValidationResidueBaseline();
                 // The validation join normally dispatches each member directly
                 // through group-core, bypassing the serial `prd_audit` branch
                 // below.  Capture must therefore happen before that fan-out,
@@ -10197,7 +10201,8 @@ export class Conductor {
                   roundChanges[syntheticKey] = 'stale';
                 }
                 await this.commitStateChanges(state, `start ${builtinGroup.name} verification group`, roundChanges);
-                const outcomes = await runWithConcurrency(
+                try {
+                  return await runWithConcurrency(
                   members.map((member) => async () => {
                     // This thunk is launched only after runWithConcurrency admits
                     // a member under the group cap. A fresh scope therefore cannot
@@ -10394,12 +10399,13 @@ export class Conductor {
                       stepInFlightTicker.current?.stop();
                     }
                   }),
-                  cap,
-                );
-                if (validatorResidueBaseline !== undefined) {
-                  await quarantineValidationResidue('validation', validatorResidueBaseline);
+                    cap,
+                  );
+                } finally {
+                  if (validatorResidueBaseline !== undefined) {
+                    await quarantineValidationResidue('validation', validatorResidueBaseline);
+                  }
                 }
-                return outcomes;
               };
 
               // Task 27: reset the pending-completions side-channel for THIS
@@ -12579,15 +12585,10 @@ export class Conductor {
             // this attempt produced from one it inherited is to record the marker's
             // identity here, before the attempt is dispatched.
             const haltBeforeAttempt = await snapshotHaltMarker(this.projectRoot);
-            const validatorResidueBaselineResult =
-              getGroupForStep(step.name)?.name === VALIDATION_GROUP.name
-                ? await captureValidatorResidueBaseline(makeGitRunner(this.projectRoot))
-                : undefined;
-            if (validatorResidueBaselineResult?.kind === 'refused') {
-              this.log?.(`WARNING: validator residue baseline unavailable — ${validatorResidueBaselineResult.reason}`);
-            }
             const validatorResidueBaseline =
-              validatorResidueBaselineResult?.kind === 'captured' ? validatorResidueBaselineResult.paths : undefined;
+              getGroupForStep(step.name)?.name === VALIDATION_GROUP.name
+                ? await captureValidationResidueBaseline()
+                : undefined;
 
             // An operator park declines the whole next provider attempt. Keep this
             // admission check ahead of escalation, telemetry, and every dispatch
@@ -13045,15 +13046,14 @@ export class Conductor {
                 // BUILD/SHIP step, not gated on step.name === 'build'.
                 removePhaseMarker(this.projectRoot);
                 cleanupEmptyPipelineDirIfNotPreexisting();
+                if (validatorResidueBaseline !== undefined) {
+                  await quarantineValidationResidue(step.name, validatorResidueBaseline);
+                }
                 // currentAttemptStartedAt stays set through the completion check
                 // just below (it needs a live attemptStartedAt to gate verdict
                 // freshness) — cleared unconditionally right after that check
                 // completes, further down.
               }
-
-            if (validatorResidueBaseline !== undefined) {
-              await quarantineValidationResidue(step.name, validatorResidueBaseline);
-            }
 
             // A self-host dispatch can be cancelled while waiting for admission.
             // That is a declined attempt, not an ordinary runner failure: stop

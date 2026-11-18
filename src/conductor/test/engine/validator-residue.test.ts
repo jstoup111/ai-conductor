@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execa } from 'execa';
@@ -80,6 +80,53 @@ describe('validator residue quarantine', () => {
         ),
       },
     );
+  });
+
+  it('ignores the old-path field of a staged rename while listing new residue', async () => {
+    await writeFile(join(repository, 'old.txt'), 'old\n');
+    await runGit(['add', 'old.txt']);
+    await runGit(['commit', '-qm', 'add old']);
+    await runGit(['mv', 'old.txt', 'renamed.txt']);
+    const baseline = await listUntrackedPaths(git);
+    await mkdir(join(repository, 'docs/reports'), { recursive: true });
+    await writeFile(join(repository, 'docs/reports/report.html'), 'report\n');
+
+    await expect(
+      quarantineValidatorResidue({ projectRoot: repository, git, baseline, source: 'manual_test' }),
+    ).resolves.toMatchObject({ kind: 'moved', paths: ['docs/reports/report.html'] });
+    await expect(git(['status', '--porcelain'])).resolves.toMatchObject({ stdout: 'R  old.txt -> renamed.txt' });
+  });
+
+  it('confirms glob-shaped untracked names literally', async () => {
+    const baseline = await listUntrackedPaths(git);
+    await mkdir(join(repository, 'docs/reports'), { recursive: true });
+    await writeFile(join(repository, 'docs/reports/report[1].html'), 'bracket\n');
+    await writeFile(join(repository, 'docs/reports/report1.html'), 'plain\n');
+
+    const result = await quarantineValidatorResidue({ projectRoot: repository, git, baseline, source: 'manual_test' });
+
+    expect(result).toMatchObject({
+      kind: 'moved',
+      paths: ['docs/reports/report1.html', 'docs/reports/report[1].html'],
+    });
+  });
+
+  it('rolls back earlier moves when a later source directory cannot be renamed', async () => {
+    const baseline = await listUntrackedPaths(git);
+    await writeFile(join(repository, 'a-first.txt'), 'first\n');
+    await mkdir(join(repository, 'z-locked'), { recursive: true });
+    await writeFile(join(repository, 'z-locked', 'second.txt'), 'second\n');
+    await chmod(join(repository, 'z-locked'), 0o500);
+
+    try {
+      await expect(
+        quarantineValidatorResidue({ projectRoot: repository, git, baseline, source: 'manual_test' }),
+      ).resolves.toMatchObject({ kind: 'refused', reason: expect.any(String) });
+      await expect(readFile(join(repository, 'a-first.txt'), 'utf8')).resolves.toBe('first\n');
+      await expect(readFile(join(repository, 'z-locked', 'second.txt'), 'utf8')).resolves.toBe('second\n');
+    } finally {
+      await chmod(join(repository, 'z-locked'), 0o700);
+    }
   });
 
   it('refuses every move when a destination already exists', async () => {

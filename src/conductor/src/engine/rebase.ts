@@ -609,7 +609,9 @@ export async function confirmUntrackedRebasePaths(
     } catch {
       throw new Error(`refusing to quarantine missing rebase path: ${path}`);
     }
-    const status = await git(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', path]);
+    const status = await git(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', path], {
+      env: { GIT_LITERAL_PATHSPECS: '1' },
+    });
     if (status.exitCode !== 0 || status.stdout !== `?? ${path}\0`) {
       throw new Error(`refusing to quarantine path Git does not report untracked: ${path}`);
     }
@@ -650,8 +652,28 @@ export async function moveRebaseUntrackedPathsToQuarantine(
   for (const move of moves) {
     await mkdir(dirname(move.destination), { recursive: true });
   }
-  for (const move of moves) {
-    await rename(move.source, move.destination);
+  const moved: typeof moves = [];
+  try {
+    for (const move of moves) {
+      await rename(move.source, move.destination);
+      moved.push(move);
+    }
+  } catch (error) {
+    let rollbackError: unknown;
+    for (const move of moved.reverse()) {
+      try {
+        await mkdir(dirname(move.source), { recursive: true });
+        await rename(move.destination, move.source);
+      } catch (rollback) {
+        rollbackError ??= rollback;
+      }
+    }
+    if (rollbackError !== undefined) {
+      const original = error instanceof Error ? error.message : String(error);
+      const rollback = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
+      throw new Error(`quarantine move failed (${original}); rollback failed (${rollback})`);
+    }
+    throw error;
   }
   return quarantine;
 }
