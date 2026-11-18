@@ -835,7 +835,7 @@ export class PiProvider implements LLMProvider {
       ) {
         return {
           success: false,
-          output: 'Pi upstream provider reports the requested model as unknown.',
+          output: `${piDisplayName()} upstream provider reports the requested model as unknown.`,
           exitCode,
           ...failedUsage,
           gitGuardInstalled: guardDir !== null,
