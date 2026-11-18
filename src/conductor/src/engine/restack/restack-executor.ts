@@ -90,11 +90,7 @@ import {
 import { mergeQueueGeneration } from '../routing/revalidation-queue.js';
 import { deferredPlacementInventory } from '../routing/round-admission.js';
 import { childRevalidatedEvent } from '../routing/routing-events.js';
-import {
-  parseRevalidationQueueRecord,
-  routingEligible,
-  type RevalidationQueueRecord,
-} from '../routing/route-types.js';
+import { parseRevalidationQueueRecord, routingEligible, type RevalidationQueueRecord } from '../routing/route-types.js';
 import { recordKickbackCapEvidence } from '../kickback-ledger.js';
 import { renderKickbackBudgetView } from '../kickback-budget-view.js';
 import {
@@ -729,8 +725,16 @@ function foldCommitEnvironment(author: Awaited<ReturnType<typeof authorOf>>, sta
   };
 }
 
-async function textAtRevision(git: GitRunner, revision: string, path: string, env?: NodeJS.ProcessEnv): Promise<string | undefined> {
-  const result = await git(['show', revision === ':' ? `:${path}` : `${revision}:${path}`], env === undefined ? undefined : { env });
+async function textAtRevision(
+  git: GitRunner,
+  revision: string,
+  path: string,
+  env?: NodeJS.ProcessEnv,
+): Promise<string | undefined> {
+  const result = await git(
+    ['show', revision === ':' ? `:${path}` : `${revision}:${path}`],
+    env === undefined ? undefined : { env },
+  );
   return result.exitCode === 0 ? result.stdout : undefined;
 }
 
@@ -748,9 +752,7 @@ async function materializeFrozenBlocks(
   const env = { GIT_INDEX_FILE: index };
   const changed = await git(['diff-tree', '--no-commit-id', '--name-only', '-r', source]);
   if (changed.exitCode !== 0) throw new Error(`cannot list frozen fold paths for ${source}: ${changed.stderr}`);
-  const paths = changed.stdout
-    .split('\n')
-    .filter((path) => path.startsWith('.docs/plans/') && path.endsWith('.md'));
+  const paths = changed.stdout.split('\n').filter((path) => path.startsWith('.docs/plans/') && path.endsWith('.md'));
   let materialized = false;
   for (const path of paths) {
     const [base, ours] = await Promise.all([
@@ -983,11 +985,7 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
   // after the audit round started.
   const childOne = childBranchFor(options.slug, 1);
   if (!childOne.ok) return { kind: 'unavailable', detail: childOne.reason };
-  const childOneParent = await requiredSha(
-    git,
-    `refs/heads/${childOne.branch}^1`,
-    'child 1 existing parent for fold',
-  );
+  const childOneParent = await requiredSha(git, `refs/heads/${childOne.branch}^1`, 'child 1 existing parent for fold');
   const base = childOneParent;
   const planned = await planRestackRanges(
     options.worktree,
