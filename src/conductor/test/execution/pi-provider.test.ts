@@ -1358,54 +1358,93 @@ describe('PiProvider captured failure classification', () => {
   // Covers: task:4
   it('reserves model unavailability for the explicit legacy exit-one diagnostic', async () => {
     const cases = [
-      ['E2 invalid DeepSeek key', 'pi-1.0.0-e2-invalid-key-deepseek.jsonl', { authFailure: true }],
-      ['E3 invalid OpenRouter key', 'pi-1.0.0-e3-invalid-key-openrouter.jsonl', { authFailure: true }],
-      ['E4 invalid Anthropic key', 'pi-1.0.0-e4-invalid-key-anthropic.jsonl', { authFailure: true }],
-      ['E5 OAuth refresh failure', 'pi-1.0.0-e5-oauth-refresh-failed.jsonl', { authFailure: true }],
-      ['E6 rate limit', 'pi-1.0.0-e6-rate-limit.jsonl', { rateLimited: true }, ['usageExhausted']],
-      ['E7 usage exhaustion', 'pi-1.0.0-e7-usage-exhausted.jsonl', { rateLimited: true, usageExhausted: true }],
-      ['E8 Anthropic rate limit', 'pi-1.0.0-e8-rate-limit-anthropic.jsonl', { rateLimited: true }, ['usageExhausted']],
-      ['E9 server error', 'pi-1.0.0-e9-server-error.jsonl', {}, ['authFailure', 'rateLimited', 'usageExhausted']],
-      ['E11 insufficient balance', 'pi-1.0.0-e11-insufficient-balance-deepseek.jsonl', {}, ['authFailure', 'rateLimited', 'usageExhausted']],
+      [
+        'E2 invalid DeepSeek key',
+        'pi-1.0.0-e2-invalid-key-deepseek.jsonl',
+        { authFailure: true },
+        ['rateLimited', 'usageExhausted', 'modelUnavailable', 'providerUnavailable'],
+      ],
+      [
+        'E3 invalid OpenRouter key',
+        'pi-1.0.0-e3-invalid-key-openrouter.jsonl',
+        { authFailure: true },
+        ['rateLimited', 'usageExhausted', 'modelUnavailable', 'providerUnavailable'],
+      ],
+      [
+        'E4 invalid Anthropic key',
+        'pi-1.0.0-e4-invalid-key-anthropic.jsonl',
+        { authFailure: true },
+        ['rateLimited', 'usageExhausted', 'modelUnavailable', 'providerUnavailable'],
+      ],
+      [
+        'E5 OAuth refresh failure',
+        'pi-1.0.0-e5-oauth-refresh-failed.jsonl',
+        { authFailure: true },
+        ['rateLimited', 'usageExhausted', 'modelUnavailable', 'providerUnavailable'],
+      ],
+      [
+        'E6 rate limit',
+        'pi-1.0.0-e6-rate-limit.jsonl',
+        { rateLimited: true },
+        ['authFailure', 'usageExhausted', 'modelUnavailable', 'providerUnavailable'],
+      ],
+      [
+        'E7 usage exhaustion',
+        'pi-1.0.0-e7-usage-exhausted.jsonl',
+        { rateLimited: true, usageExhausted: true },
+        ['authFailure', 'modelUnavailable', 'providerUnavailable'],
+      ],
+      [
+        'E8 Anthropic rate limit',
+        'pi-1.0.0-e8-rate-limit-anthropic.jsonl',
+        { rateLimited: true },
+        ['authFailure', 'usageExhausted', 'modelUnavailable', 'providerUnavailable'],
+      ],
+      [
+        'E9 server error',
+        'pi-1.0.0-e9-server-error.jsonl',
+        {},
+        ['authFailure', 'rateLimited', 'usageExhausted', 'modelUnavailable', 'providerUnavailable'],
+      ],
+      [
+        'E11 insufficient balance',
+        'pi-1.0.0-e11-insufficient-balance-deepseek.jsonl',
+        {},
+        ['authFailure', 'rateLimited', 'usageExhausted', 'modelUnavailable', 'providerUnavailable'],
+      ],
       [
         'legacy exit-one Model not found',
         { stdout: '', stderr: 'Error: Model "x" not found. Use --list-models to see available models.', exitCode: 1 },
         { modelUnavailable: true },
+        ['authFailure', 'rateLimited', 'usageExhausted', 'providerUnavailable'],
       ],
       [
         '401 look-alike error stop',
         { stdout: errorStream('401: {"message":"x is not a valid model ID","code":401}'), stderr: '', exitCode: 0 },
         { authFailure: true },
+        ['rateLimited', 'usageExhausted', 'modelUnavailable', 'providerUnavailable'],
       ],
       [
         '429 look-alike error stop',
         { stdout: errorStream('429: {"message":"x is not a valid model ID","code":429}'), stderr: '', exitCode: 0 },
         { rateLimited: true },
+        ['authFailure', 'usageExhausted', 'modelUnavailable', 'providerUnavailable'],
       ],
       [
         'exit-one 400 stderr',
         { stdout: '', stderr: '400: {"message":"x is not a valid model ID","code":400}', exitCode: 1 },
         {},
-        ['authFailure', 'rateLimited', 'usageExhausted'],
+        ['authFailure', 'rateLimited', 'usageExhausted', 'modelUnavailable', 'providerUnavailable'],
       ],
     ] as const;
 
-    for (const [_name, captured, expected, absent = []] of cases) {
+    for (const [_name, captured, expected, forbidden] of cases) {
       const response =
-        typeof captured === 'string'
-          ? { stdout: await readFixture(captured), stderr: '', exitCode: 0 }
-          : captured;
+        typeof captured === 'string' ? { stdout: await readFixture(captured), stderr: '', exitCode: 0 } : captured;
       spawn.mockResolvedValueOnce(response as ExecaResult);
       const result = await invoke();
       expect(result).toMatchObject({ success: false, ...expected });
-      if (!('modelUnavailable' in expected)) expect(result).not.toHaveProperty('modelUnavailable');
-      for (const property of absent) expect(result).not.toHaveProperty(property);
-      if ('modelUnavailable' in expected) continue;
-      if (absent.length === 0 && Object.keys(expected).length === 0) {
-        for (const property of ['authFailure', 'rateLimited', 'usageExhausted'])
-          expect(result).not.toHaveProperty(property);
-      }
-      if ('modelUnavailable' in expected) expect(result).not.toHaveProperty('authFailure');
+      for (const property of forbidden) expect(result).not.toHaveProperty(property);
     }
   });
 
@@ -1418,19 +1457,9 @@ describe('PiProvider captured failure classification', () => {
     for (const property of ['authFailure', 'rateLimited', 'usageExhausted', 'providerUnavailable'])
       expect(result).not.toHaveProperty(property);
     expect(result.output).toBe('Pi upstream provider reports the requested model as unknown.');
-    for (const forbidden of ['400:', '"code"', 'is not a valid model ID']) expect(result.output).not.toContain(forbidden);
+    for (const forbidden of ['400:', '"code"', 'is not a valid model ID'])
+      expect(result.output).not.toContain(forbidden);
   };
-
-  // Covers: task:2
-  it('classifies the captured OpenRouter unknown-model error stop without exposing its diagnostic', async () => {
-    spawn.mockResolvedValueOnce({
-      stdout: await readFixture('pi-1.0.0-e10-unknown-model-openrouter.jsonl'),
-      stderr: '',
-      exitCode: 0,
-    } as ExecaResult);
-    const e10 = await invoke();
-    assertUnknownModel(e10);
-  });
 
   // Covers: task:2
   it('classifies a slash-model 400 error stop as an unavailable upstream model', async () => {
@@ -1487,7 +1516,15 @@ describe('PiProvider captured failure classification', () => {
       exitCode: 0,
     } as ExecaResult);
     const e10 = await invoke();
-    assertUnknownModel(e10);
+    expect(e10).toMatchObject({
+      success: false,
+      modelUnavailable: true,
+      output: 'Pi upstream provider reports the requested model as unknown.',
+    });
+    for (const property of ['authFailure', 'rateLimited', 'usageExhausted', 'providerUnavailable'])
+      expect(e10).not.toHaveProperty(property);
+    expect(e10.output).toBe('Pi upstream provider reports the requested model as unknown.');
+    for (const forbidden of ['400:', '"code"', 'is not a valid model ID']) expect(e10.output).not.toContain(forbidden);
 
     spawn.mockResolvedValueOnce({
       stdout: await readFixture('pi-1.0.0-e10-unknown-model-openrouter.jsonl'),
