@@ -23,11 +23,7 @@ import { STEP_SKILL_INVOCATIONS, renderSkillInvocation } from '../../src/engine/
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import { createProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 
-type PiSubprocessFactory = (
-  file: string,
-  args: readonly string[],
-  options: ExecaOptions,
-) => Promise<ExecaResult>;
+type PiSubprocessFactory = (file: string, args: readonly string[], options: ExecaOptions) => Promise<ExecaResult>;
 
 const invokeOptions: InvokeOptions = {
   prompt: 'Implement the requested change.',
@@ -42,26 +38,22 @@ const readFixture = (name: string) => readFile(new URL(`../fixtures/pi/${name}`,
 
 describe('parsePiModelListing', () => {
   it('parses the captured Pi 0.84.3 listing into canonical provider/model ids', async () => {
-    const listing = parsePiModelListing(await readFile(
-      new URL('../fixtures/pi-list-models-0.84.3.txt', import.meta.url),
-      'utf8',
-    ));
+    const listing = parsePiModelListing(
+      await readFile(new URL('../fixtures/pi-list-models-0.84.3.txt', import.meta.url), 'utf8'),
+    );
 
     expect(listing).toEqual({
       kind: 'parsed',
-      modelIds: [
-        'anthropic/claude-opus-4-5',
-        'cline/google/gemma-4-31b-it:free',
-        'openai/gpt-5',
-      ],
+      modelIds: ['anthropic/claude-opus-4-5', 'cline/google/gemma-4-31b-it:free', 'openai/gpt-5'],
     });
   });
 
   it('locates provider and model columns by their header names rather than their positions', () => {
-    expect(parsePiModelListing([
-      'model                    context  provider',
-      'google/gemma-4-31b-it:free  128K     cline',
-    ].join('\n'))).toEqual({
+    expect(
+      parsePiModelListing(
+        ['model                    context  provider', 'google/gemma-4-31b-it:free  128K     cline'].join('\n'),
+      ),
+    ).toEqual({
       kind: 'parsed',
       modelIds: ['cline/google/gemma-4-31b-it:free'],
     });
@@ -75,15 +67,17 @@ describe('parsePiModelListing', () => {
   });
 });
 
-function fakePiEnvironment(options: {
-  files?: readonly string[];
-  directories?: readonly string[];
-  env?: NodeJS.ProcessEnv;
-  homeDir?: string;
-  cwd?: string;
-  stat?: PiEnvironment['stat'];
-  access?: PiEnvironment['access'];
-} = {}): { environment: PiEnvironment; stat: ReturnType<typeof vi.fn> } {
+function fakePiEnvironment(
+  options: {
+    files?: readonly string[];
+    directories?: readonly string[];
+    env?: NodeJS.ProcessEnv;
+    homeDir?: string;
+    cwd?: string;
+    stat?: PiEnvironment['stat'];
+    access?: PiEnvironment['access'];
+  } = {},
+): { environment: PiEnvironment; stat: ReturnType<typeof vi.fn> } {
   const files = new Set(options.files ?? []);
   const directories = new Set(options.directories ?? []);
   const stat = vi.fn(async (path: string) => {
@@ -120,10 +114,30 @@ describe('resolvePiSkill', () => {
   const projectSkillsRoot = '/workspace/project/.agents/skills';
 
   it.each([
-    ['the agent catalog', `${homeSkillsRoot}/${skillName}/SKILL.md`, {}, [homeSkillsRoot, defaultPiRoot, projectSkillsRoot]],
-    ['the configured Pi agent catalog', `${configuredPiRoot}/${skillName}/SKILL.md`, { PI_CODING_AGENT_DIR: '/configured/pi-agent' }, [homeSkillsRoot, configuredPiRoot, projectSkillsRoot]],
-    ['the default Pi agent catalog', `${defaultPiRoot}/${skillName}/SKILL.md`, {}, [homeSkillsRoot, defaultPiRoot, projectSkillsRoot]],
-    ['the project catalog', `${projectSkillsRoot}/${skillName}/SKILL.md`, {}, [homeSkillsRoot, defaultPiRoot, projectSkillsRoot]],
+    [
+      'the agent catalog',
+      `${homeSkillsRoot}/${skillName}/SKILL.md`,
+      {},
+      [homeSkillsRoot, defaultPiRoot, projectSkillsRoot],
+    ],
+    [
+      'the configured Pi agent catalog',
+      `${configuredPiRoot}/${skillName}/SKILL.md`,
+      { PI_CODING_AGENT_DIR: '/configured/pi-agent' },
+      [homeSkillsRoot, configuredPiRoot, projectSkillsRoot],
+    ],
+    [
+      'the default Pi agent catalog',
+      `${defaultPiRoot}/${skillName}/SKILL.md`,
+      {},
+      [homeSkillsRoot, defaultPiRoot, projectSkillsRoot],
+    ],
+    [
+      'the project catalog',
+      `${projectSkillsRoot}/${skillName}/SKILL.md`,
+      {},
+      [homeSkillsRoot, defaultPiRoot, projectSkillsRoot],
+    ],
   ])('finds SKILL.md in %s', async (_source, skillPath, env, searchedRoots) => {
     const { environment, stat } = fakePiEnvironment({ files: [skillPath], env });
 
@@ -196,14 +210,14 @@ describe('Pi frontmatter-named catalog entries', () => {
     });
     const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
 
-    await expect(provider.invoke({ ...invokeOptions, prompt: '/skill:ac-explore\nExplore it.' }))
-      .resolves.toMatchObject({ success: true });
-    await expect(provider.invoke({ ...invokeOptions, prompt: '/skill:explore\nExplore it.' }))
-      .resolves.toMatchObject({
-        success: false,
-        commandUnresolved: true,
-        commandUnresolvedName: 'explore',
-      });
+    await expect(
+      provider.invoke({ ...invokeOptions, prompt: '/skill:ac-explore\nExplore it.' }),
+    ).resolves.toMatchObject({ success: true });
+    await expect(provider.invoke({ ...invokeOptions, prompt: '/skill:explore\nExplore it.' })).resolves.toMatchObject({
+      success: false,
+      commandUnresolved: true,
+      commandUnresolvedName: 'explore',
+    });
 
     expect(spawn).toHaveBeenCalledOnce();
   });
@@ -216,8 +230,9 @@ describe('Pi frontmatter-named catalog entries', () => {
     const prompt = renderSkillInvocation(STEP_SKILL_INVOCATIONS.build!, 'pi');
 
     expect(prompt).toBe('/skill:pipeline');
-    await expect(provider.invoke({ ...invokeOptions, prompt: `${prompt}\nBuild it.` }))
-      .resolves.toMatchObject({ success: true });
+    await expect(provider.invoke({ ...invokeOptions, prompt: `${prompt}\nBuild it.` })).resolves.toMatchObject({
+      success: true,
+    });
     expect(spawn).toHaveBeenCalledOnce();
   });
 });
@@ -249,10 +264,19 @@ describe('PiProvider', () => {
     expect(spawn).toHaveBeenCalledWith(
       '/resolved/pi',
       [
-        '-p', '-na', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath,
-        '--provider', 'anthropic',
-        '--model', 'claude-opus-4-5',
-        '--thinking', 'xhigh',
+        '-p',
+        '-na',
+        '--no-session',
+        '--mode',
+        'json',
+        '--append-system-prompt',
+        harnessPath,
+        '--provider',
+        'anthropic',
+        '--model',
+        'claude-opus-4-5',
+        '--thinking',
+        'xhigh',
       ],
       expect.objectContaining({
         input: invokeOptions.prompt,
@@ -275,10 +299,12 @@ describe('PiProvider', () => {
     const previousTempRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
     process.env.AI_CONDUCTOR_TEST_TMP_ROOT = tempRoot;
     try {
-      await expect(provider.invoke({ ...invokeOptions, ...systemPromptOptions })).resolves.toMatchObject({ success: true });
+      await expect(provider.invoke({ ...invokeOptions, ...systemPromptOptions })).resolves.toMatchObject({
+        success: true,
+      });
 
       const args = spawn.mock.calls[0]![1];
-      const appendIndices = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+      const appendIndices = args.flatMap((value, index) => (value === '--append-system-prompt' ? [index] : []));
       expect({
         appendPrompts: appendIndices.map((index) => args[index + 1]),
         tempEntries: (await readdir(tempRoot)).filter((entry) => entry.startsWith('ai-conductor-pi-system-prompt-')),
@@ -294,32 +320,35 @@ describe('PiProvider', () => {
   it.each([
     ['no system prompt', {}],
     ['an empty system prompt', { systemPrompt: '' }],
-  ])('spawns without trying to create a system-prompt file for %s when the temp root is invalid', async (_caseName, systemPromptOptions) => {
-    const fixtureRoot = await mkdtemp(join(tmpdir(), 'ai-conductor-pi-invalid-temp-root-'));
-    const blockingFile = join(fixtureRoot, 'not-a-directory');
-    const previousTempRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
-    await writeFile(blockingFile, 'file blocks mkdtemp parent');
-    process.env.AI_CONDUCTOR_TEST_TMP_ROOT = join(blockingFile, 'child');
-    try {
-      const result = await provider.invoke({ ...invokeOptions, ...systemPromptOptions });
+  ])(
+    'spawns without trying to create a system-prompt file for %s when the temp root is invalid',
+    async (_caseName, systemPromptOptions) => {
+      const fixtureRoot = await mkdtemp(join(tmpdir(), 'ai-conductor-pi-invalid-temp-root-'));
+      const blockingFile = join(fixtureRoot, 'not-a-directory');
+      const previousTempRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+      await writeFile(blockingFile, 'file blocks mkdtemp parent');
+      process.env.AI_CONDUCTOR_TEST_TMP_ROOT = join(blockingFile, 'child');
+      try {
+        const result = await provider.invoke({ ...invokeOptions, ...systemPromptOptions });
 
-      expect({
-        spawned: spawn.mock.calls.length,
-        systemPromptPreparationFailed: result.output.includes('could not prepare the system prompt for delivery'),
-      }).toEqual({ spawned: 1, systemPromptPreparationFailed: false });
-    } finally {
-      if (previousTempRoot === undefined) delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
-      else process.env.AI_CONDUCTOR_TEST_TMP_ROOT = previousTempRoot;
-      await rm(fixtureRoot, { recursive: true, force: true });
-    }
-  });
+        expect({
+          spawned: spawn.mock.calls.length,
+          systemPromptPreparationFailed: result.output.includes('could not prepare the system prompt for delivery'),
+        }).toEqual({ spawned: 1, systemPromptPreparationFailed: false });
+      } finally {
+        if (previousTempRoot === undefined) delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+        else process.env.AI_CONDUCTOR_TEST_TMP_ROOT = previousTempRoot;
+        await rm(fixtureRoot, { recursive: true, force: true });
+      }
+    },
+  );
 
   // Covers: task:8
   it('appends the engine system prompt after HARNESS.md and delivers it through its file', async () => {
     const systemPrompt = 'RETRY: fix the lint error\n[Conduct step 7/20]';
     let delivered: string | undefined;
     spawn.mockImplementationOnce(async (_file, args) => {
-      const flags = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+      const flags = args.flatMap((value, index) => (value === '--append-system-prompt' ? [index] : []));
       const path = args[flags[1]! + 1]!;
       delivered = await readFile(path, 'utf8');
       await rm(dirname(path), { recursive: true, force: true });
@@ -329,7 +358,7 @@ describe('PiProvider', () => {
     await provider.invoke({ ...invokeOptions, systemPrompt });
 
     const args = spawn.mock.calls[0]![1];
-    const flags = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+    const flags = args.flatMap((value, index) => (value === '--append-system-prompt' ? [index] : []));
     expect({
       harnessFirst: flags[0]! < flags[1]!,
       harness: args[flags[0]! + 1],
@@ -342,7 +371,7 @@ describe('PiProvider', () => {
     const systemPrompt = 'RETRY: Adjudicate findings\n{"currentFindings":["A"]}';
     let delivered: string | undefined;
     spawn.mockImplementationOnce(async (_file, args) => {
-      const flags = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+      const flags = args.flatMap((value, index) => (value === '--append-system-prompt' ? [index] : []));
       const path = args[flags[1]! + 1]!;
       delivered = await readFile(path, 'utf8');
       await rm(dirname(path), { recursive: true, force: true });
@@ -351,7 +380,10 @@ describe('PiProvider', () => {
 
     await provider.invoke({ ...invokeOptions, prompt: '/remediate', systemPrompt });
 
-    expect({ input: spawn.mock.calls[0]![2].input, delivered }).toEqual({ input: '/remediate', delivered: systemPrompt });
+    expect({ input: spawn.mock.calls[0]![2].input, delivered }).toEqual({
+      input: '/remediate',
+      delivered: systemPrompt,
+    });
   });
 
   // Covers: task:8
@@ -359,7 +391,7 @@ describe('PiProvider', () => {
     const systemPrompt = '/skill:remediate\nDo not turn this into the dispatch prompt.';
     let delivered: string | undefined;
     spawn.mockImplementationOnce(async (_file, args) => {
-      const flags = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+      const flags = args.flatMap((value, index) => (value === '--append-system-prompt' ? [index] : []));
       const path = args[flags[1]! + 1]!;
       delivered = await readFile(path, 'utf8');
       await rm(dirname(path), { recursive: true, force: true });
@@ -465,7 +497,7 @@ describe('PiProvider', () => {
   ])('delivers %s through the appended file only', async (_caseName, systemPrompt) => {
     let delivered: Buffer | undefined;
     spawn.mockImplementationOnce(async (_file, args) => {
-      const indices = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+      const indices = args.flatMap((value, index) => (value === '--append-system-prompt' ? [index] : []));
       delivered = await readFile(args[indices[1]! + 1]!);
       return { stdout: assistantEnd, stderr: '', exitCode: 0 } as ExecaResult;
     });
@@ -501,7 +533,7 @@ describe('PiProvider', () => {
         { stdout: '', stderr: '', exitCode: undefined, code: 'ENOENT' },
       ]) {
         spawn.mockImplementationOnce(async (_file, args) => {
-          const indices = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+          const indices = args.flatMap((value, index) => (value === '--append-system-prompt' ? [index] : []));
           const path = args[indices[1]! + 1]!;
           paths.push(path);
           expect((await fileStat(path)).mode & 0o777).toBe(0o600);
@@ -512,11 +544,16 @@ describe('PiProvider', () => {
 
       const controller = new AbortController();
       let resolveProcess: (result: ExecaResult) => void;
-      const process = Object.assign(new Promise<ExecaResult>((resolve) => { resolveProcess = resolve; }), {
-        kill: vi.fn(() => resolveProcess({ stdout: '', stderr: '', exitCode: 1 } as ExecaResult)),
-      });
+      const process = Object.assign(
+        new Promise<ExecaResult>((resolve) => {
+          resolveProcess = resolve;
+        }),
+        {
+          kill: vi.fn(() => resolveProcess({ stdout: '', stderr: '', exitCode: 1 } as ExecaResult)),
+        },
+      );
       spawn.mockImplementationOnce((_file, args) => {
-        const indices = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+        const indices = args.flatMap((value, index) => (value === '--append-system-prompt' ? [index] : []));
         paths.push(args[indices[1]! + 1]!);
         return process as ReturnType<PiSubprocessFactory>;
       });
@@ -525,10 +562,20 @@ describe('PiProvider', () => {
       controller.abort();
       await expect(aborted).resolves.toMatchObject({ output: 'Pi invocation aborted.' });
 
-      expect(await Promise.all(paths.flatMap((path) => [
-        fileStat(path).then(() => true, () => false),
-        fileStat(dirname(path)).then(() => true, () => false),
-      ]))).toEqual(Array(paths.length * 2).fill(false));
+      expect(
+        await Promise.all(
+          paths.flatMap((path) => [
+            fileStat(path).then(
+              () => true,
+              () => false,
+            ),
+            fileStat(dirname(path)).then(
+              () => true,
+              () => false,
+            ),
+          ]),
+        ),
+      ).toEqual(Array(paths.length * 2).fill(false));
 
       const preSpawnController = new AbortController();
       let preSpawnPath: string | undefined;
@@ -545,24 +592,31 @@ describe('PiProvider', () => {
       }));
       provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
       const callsBeforePreSpawnAbort = spawn.mock.calls.length;
-      await expect(provider.invoke({ ...invokeOptions, systemPrompt: 'pre-spawn abort', abortSignal: preSpawnController.signal }))
-        .resolves.toMatchObject({ output: 'Pi invocation aborted.' });
+      await expect(
+        provider.invoke({ ...invokeOptions, systemPrompt: 'pre-spawn abort', abortSignal: preSpawnController.signal }),
+      ).resolves.toMatchObject({ output: 'Pi invocation aborted.' });
       expect({
         spawned: spawn.mock.calls.length - callsBeforePreSpawnAbort,
-        fileExists: await fileStat(preSpawnPath!).then(() => true, () => false),
+        fileExists: await fileStat(preSpawnPath!).then(
+          () => true,
+          () => false,
+        ),
         tempEntries: (await readdir(tempRoot)).filter((entry) => entry.startsWith('ai-conductor-pi-system-prompt-')),
       }).toEqual({ spawned: 0, fileExists: false, tempEntries: [] });
 
       const concurrentPaths: string[] = [];
       const concurrentContents: string[] = [];
       spawn.mockImplementation(async (_file, args) => {
-        const indices = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+        const indices = args.flatMap((value, index) => (value === '--append-system-prompt' ? [index] : []));
         const path = args[indices[1]! + 1]!;
         concurrentPaths.push(path);
         concurrentContents.push(await readFile(path, 'utf8'));
         return { stdout: assistantEnd, stderr: '', exitCode: 0 } as ExecaResult;
       });
-      await Promise.all([provider.invoke({ ...invokeOptions, systemPrompt: 'A' }), provider.invoke({ ...invokeOptions, systemPrompt: 'B' })]);
+      await Promise.all([
+        provider.invoke({ ...invokeOptions, systemPrompt: 'A' }),
+        provider.invoke({ ...invokeOptions, systemPrompt: 'B' }),
+      ]);
       expect({ paths: concurrentPaths, contents: concurrentContents }).toEqual({
         paths: expect.arrayContaining([expect.any(String), expect.any(String)]),
         contents: expect.arrayContaining(['A', 'B']),
@@ -579,7 +633,7 @@ describe('PiProvider', () => {
   it('delivers a system prompt through the guarded Pi runtime', async () => {
     let delivered: string | undefined;
     spawn.mockImplementationOnce(async (_file, args) => {
-      const flags = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+      const flags = args.flatMap((value, index) => (value === '--append-system-prompt' ? [index] : []));
       const path = args[flags[1]! + 1]!;
       delivered = await readFile(path, 'utf8');
       await rm(dirname(path), { recursive: true, force: true });
@@ -589,25 +643,33 @@ describe('PiProvider', () => {
     registry.register('llm_provider', 'pi', provider);
     registry.markInitialized();
 
-    await createProviderRuntimeSet(registry).get('pi').provider.invoke({
-      ...invokeOptions,
-      prompt: '/x',
-      systemPrompt: 'S',
-    });
+    await createProviderRuntimeSet(registry)
+      .get('pi')
+      .provider.invoke({
+        ...invokeOptions,
+        prompt: '/x',
+        systemPrompt: 'S',
+      });
 
     expect({ spawned: spawn.mock.calls.length, delivered }).toEqual({ spawned: 1, delivered: 'S' });
   });
 
   it.each([
     ['the installed agent catalog', '/home/agent/.agents/skills/pipeline/SKILL.md', {}],
-    ['the configured Pi catalog', '/configured/pi-agent/skills/pipeline/SKILL.md', { PI_CODING_AGENT_DIR: '/configured/pi-agent' }],
+    [
+      'the configured Pi catalog',
+      '/configured/pi-agent/skills/pipeline/SKILL.md',
+      { PI_CODING_AGENT_DIR: '/configured/pi-agent' },
+    ],
     ['the default Pi catalog', '/home/agent/.pi/agent/skills/pipeline/SKILL.md', {}],
     ['the project catalog', '/workspace/project/.agents/skills/pipeline/SKILL.md', {}],
   ])('invokes a /skill: command found in %s', async (_source, skillPath, env) => {
     ({ environment } = fakePiEnvironment({ files: [harnessPath, skillPath], env }));
     provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
 
-    await expect(provider.invoke({ ...invokeOptions, prompt: '/skill:pipeline\nBuild it.' })).resolves.toMatchObject({ success: true });
+    await expect(provider.invoke({ ...invokeOptions, prompt: '/skill:pipeline\nBuild it.' })).resolves.toMatchObject({
+      success: true,
+    });
 
     expect(spawn).toHaveBeenCalledOnce();
     expect(spawn.mock.calls[0]?.[1]).toContain('-na');
@@ -637,29 +699,32 @@ describe('PiProvider', () => {
     ['only the retired PI_HOME catalog', ['/legacy/pi-home/skills/pipeline/SKILL.md'], []],
     ['only the retired project .pi catalog', ['/workspace/project/.pi/skills/pipeline/SKILL.md'], []],
     ['a directory without SKILL.md', [], ['/home/agent/.agents/skills/pipeline']],
-  ])('refuses an unresolvable Pi command found in %s without spawning the provider', async (_source, extraFiles, directories) => {
-    ({ environment } = fakePiEnvironment({
-      files: [harnessPath, ...extraFiles],
-      directories,
-      env: { PI_HOME: '/legacy/pi-home' },
-    }));
-    provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
+  ])(
+    'refuses an unresolvable Pi command found in %s without spawning the provider',
+    async (_source, extraFiles, directories) => {
+      ({ environment } = fakePiEnvironment({
+        files: [harnessPath, ...extraFiles],
+        directories,
+        env: { PI_HOME: '/legacy/pi-home' },
+      }));
+      provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
 
-    await expect(provider.invoke({ ...invokeOptions, prompt: '/skill:pipeline\nBuild it.' })).resolves.toMatchObject({
-      success: false,
-      commandUnresolved: true,
-      commandUnresolvedName: 'pipeline',
-      executionDisposition: 'not-started',
-      output: expect.stringContaining('pipeline'),
-    });
+      await expect(provider.invoke({ ...invokeOptions, prompt: '/skill:pipeline\nBuild it.' })).resolves.toMatchObject({
+        success: false,
+        commandUnresolved: true,
+        commandUnresolvedName: 'pipeline',
+        executionDisposition: 'not-started',
+        output: expect.stringContaining('pipeline'),
+      });
 
-    const result = await provider.invoke({ ...invokeOptions, prompt: '/skill:pipeline' });
-    expect(result.output).toContain('/home/agent/.agents/skills');
-    expect(result.output).toContain('/home/agent/.pi/agent/skills');
-    expect(result.output).toContain('/workspace/project/.agents/skills');
-    expect(result).not.toHaveProperty('providerUnavailable');
-    expect(spawn).not.toHaveBeenCalled();
-  });
+      const result = await provider.invoke({ ...invokeOptions, prompt: '/skill:pipeline' });
+      expect(result.output).toContain('/home/agent/.agents/skills');
+      expect(result.output).toContain('/home/agent/.pi/agent/skills');
+      expect(result.output).toContain('/workspace/project/.agents/skills');
+      expect(result).not.toHaveProperty('providerUnavailable');
+      expect(spawn).not.toHaveBeenCalled();
+    },
+  );
 
   it('does not reject an explicit-only skill whose SKILL.md exists', async () => {
     ({ environment } = fakePiEnvironment({
@@ -667,7 +732,9 @@ describe('PiProvider', () => {
     }));
     provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
 
-    await expect(provider.invoke({ ...invokeOptions, prompt: '/skill:fixture\nBuild it.' })).resolves.toMatchObject({ success: true });
+    await expect(provider.invoke({ ...invokeOptions, prompt: '/skill:fixture\nBuild it.' })).resolves.toMatchObject({
+      success: true,
+    });
 
     expect(spawn).toHaveBeenCalledOnce();
   });
@@ -690,7 +757,12 @@ describe('PiProvider', () => {
 
     expect(spawn).not.toHaveBeenCalled();
 
-    const packageUnavailable = await new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, harnessedPiEnvironment()).invoke({
+    const packageUnavailable = await new PiProvider(
+      dispatchGitGuard,
+      '/resolved/pi',
+      spawn,
+      harnessedPiEnvironment(),
+    ).invoke({
       ...invokeOptions,
       subagents: true,
     });
@@ -706,24 +778,44 @@ describe('PiProvider', () => {
   });
 
   it.each([
-    ['a project skills directory', ['/workspace/project/.agents/skills'], ['-p', '-na', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath, '--skill', '/workspace/project/.agents/skills']],
-    ['no project skills path', [], ['-p', '-na', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath]],
-    ['a project skills file', [], ['-p', '-na', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath]],
+    [
+      'a project skills directory',
+      ['/workspace/project/.agents/skills'],
+      [
+        '-p',
+        '-na',
+        '--no-session',
+        '--mode',
+        'json',
+        '--append-system-prompt',
+        harnessPath,
+        '--skill',
+        '/workspace/project/.agents/skills',
+      ],
+    ],
+    [
+      'no project skills path',
+      [],
+      ['-p', '-na', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath],
+    ],
+    [
+      'a project skills file',
+      [],
+      ['-p', '-na', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath],
+    ],
   ])('loads %s only when it is a directory and never trusts it', async (_source, directories, expectedArgs) => {
-    const files = _source === 'a project skills file'
-      ? [harnessPath, '/workspace/project/.agents/skills']
-      : [harnessPath];
+    const files =
+      _source === 'a project skills file' ? [harnessPath, '/workspace/project/.agents/skills'] : [harnessPath];
     ({ environment } = fakePiEnvironment({ files, directories }));
     provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment);
 
     await expect(provider.invoke(invokeOptions)).resolves.toMatchObject({ success: true });
 
-    expect(spawn).toHaveBeenCalledWith('/resolved/pi', [
-      ...expectedArgs,
-      '--provider', 'anthropic',
-      '--model', 'claude-opus-4-5',
-      '--thinking', 'xhigh',
-    ], expect.anything());
+    expect(spawn).toHaveBeenCalledWith(
+      '/resolved/pi',
+      [...expectedArgs, '--provider', 'anthropic', '--model', 'claude-opus-4-5', '--thinking', 'xhigh'],
+      expect.anything(),
+    );
     expect(spawn.mock.calls[0]?.[1]).toContain('-na');
     expect(spawn.mock.calls[0]?.[1]).not.toContain('--approve');
     expect(spawn.mock.calls[0]?.[1]).not.toContain('-a');
@@ -777,21 +869,44 @@ describe('PiProvider', () => {
 
     expect(spawn.mock.calls.map(([, args]) => args)).toEqual([
       [
-        '-p', '-na', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath,
-        '--provider', 'anthropic',
-        '--model', 'claude-opus-4-5',
-        '--thinking', 'xhigh',
+        '-p',
+        '-na',
+        '--no-session',
+        '--mode',
+        'json',
+        '--append-system-prompt',
+        harnessPath,
+        '--provider',
+        'anthropic',
+        '--model',
+        'claude-opus-4-5',
+        '--thinking',
+        'xhigh',
       ],
       [
-        '-p', '-na', '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath,
-        '--provider', 'anthropic',
-        '--model', 'claude-opus-4-5',
-        '--thinking', 'xhigh',
+        '-p',
+        '-na',
+        '--no-session',
+        '--mode',
+        'json',
+        '--append-system-prompt',
+        harnessPath,
+        '--provider',
+        'anthropic',
+        '--model',
+        'claude-opus-4-5',
+        '--thinking',
+        'xhigh',
       ],
     ]);
     expect(provider.supportsSessionResume).toBe(false);
     expect(provider.lifecycleCapability).toEqual({ synchronousSpawnPermit: true });
-    expect(Object.getOwnPropertyNames(PiProvider.prototype)).toEqual(['constructor', 'resolveSelfHostExecutable', 'prepareSelfHostAuth', 'invoke']);
+    expect(Object.getOwnPropertyNames(PiProvider.prototype)).toEqual([
+      'constructor',
+      'resolveSelfHostExecutable',
+      'prepareSelfHostAuth',
+      'invoke',
+    ]);
   });
 
   // Covers: task:5
@@ -803,7 +918,15 @@ describe('PiProvider', () => {
   it('resolves the candidate provider key into its isolated self-host auth file', async () => {
     const homeDir = await mkdtemp(join(tmpdir(), 'pi-provider-self-host-'));
     const runner = vi.fn(async () => ({ stdout: 'K' }));
-    const selfHostProvider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, environment, undefined, undefined, runner);
+    const selfHostProvider = new PiProvider(
+      dispatchGitGuard,
+      '/resolved/pi',
+      spawn,
+      environment,
+      undefined,
+      undefined,
+      runner,
+    );
 
     try {
       await selfHostProvider.prepareSelfHostAuth({ provider: 'pi', homeDir, model: 'deepseek/x' });
@@ -832,11 +955,9 @@ describe('PiProvider', () => {
     });
 
     const args = spawn.mock.calls[0]?.[1] ?? [];
-    expect(args).toEqual(expect.arrayContaining([
-      '--provider', 'cline',
-      '--model', 'google/gemma-4-31b-it:free',
-      '--thinking', 'high',
-    ]));
+    expect(args).toEqual(
+      expect.arrayContaining(['--provider', 'cline', '--model', 'google/gemma-4-31b-it:free', '--thinking', 'high']),
+    );
     expect(args.filter((arg) => arg === '--thinking')).toHaveLength(1);
     expect(args).not.toContain('google/gemma-4-31b-it:free:high');
   });
@@ -864,9 +985,7 @@ describe('PiProvider', () => {
     });
     expect(pi.modelPolicy.requiresConfiguredModels).toBe(true);
     expect(pi.modelPolicy.modelFallbackLadder).toEqual([]);
-    expect(Object.values(pi.modelPolicy.stepModels)).toEqual(
-      expect.arrayContaining(['']),
-    );
+    expect(Object.values(pi.modelPolicy.stepModels)).toEqual(expect.arrayContaining(['']));
 
     await expect(provider.invoke(invokeOptions)).resolves.toMatchObject({ success: true });
   });
@@ -994,7 +1113,9 @@ describe('PiProvider', () => {
     const controller = new AbortController();
     let resolveProcess: (result: ExecaResult) => void;
     const process = Object.assign(
-      new Promise<ExecaResult>((resolve) => { resolveProcess = resolve; }),
+      new Promise<ExecaResult>((resolve) => {
+        resolveProcess = resolve;
+      }),
       {
         kill: vi.fn(() => resolveProcess({ stdout: '', stderr: '', exitCode: 1 } as ExecaResult)),
       },
@@ -1031,11 +1152,11 @@ describe('PiProvider', () => {
       exitCode: 1,
       exitFacts: { signal: 'SIGTERM', stdoutBytes: 0, stderrBytes: 0 },
     });
-    expect(diagnosticLog.mock.calls.filter(([message]) =>
-      String(message).startsWith('pi subprocess exited without a classifiable result:'),
-    )).toEqual([[
-      'pi subprocess exited without a classifiable result: signal=SIGTERM stdoutBytes=0 stderrBytes=0',
-    ]]);
+    expect(
+      diagnosticLog.mock.calls.filter(([message]) =>
+        String(message).startsWith('pi subprocess exited without a classifiable result:'),
+      ),
+    ).toEqual([['pi subprocess exited without a classifiable result: signal=SIGTERM stdoutBytes=0 stderrBytes=0']]);
   });
 
   // Covers: task:8
@@ -1075,16 +1196,8 @@ describe('PiProvider', () => {
       { stdout: '', stderr: 'Pi encountered an unexpected transport failure.', exitCode: 1 },
       {},
     ],
-    [
-      'authentication-style output',
-      { stdout: '', stderr: 'Authentication required. Please log in.', exitCode: 1 },
-      {},
-    ],
-    [
-      'rate-limit-style output',
-      { stdout: '', stderr: 'Error 429: rate limit exceeded.', exitCode: 1 },
-      {},
-    ],
+    ['authentication-style output', { stdout: '', stderr: 'Authentication required. Please log in.', exitCode: 1 }, {}],
+    ['rate-limit-style output', { stdout: '', stderr: 'Error 429: rate limit exceeded.', exitCode: 1 }, {}],
   ])('classifies %s without inferring unsupported Pi recovery signals', async (_name, response, expected) => {
     spawn.mockResolvedValue(response as ExecaResult);
 
@@ -1107,8 +1220,13 @@ describe('PiProvider captured failure classification', () => {
   const spawn = vi.fn<PiSubprocessFactory>();
   const provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, harnessedPiEnvironment());
   const invoke = () => provider.invoke(invokeOptions);
-  const errorStream = (message: string) => JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: '', stopReason: 'error', errorMessage: message } });
-  const textStream = (text: string) => JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: text, stopReason: 'stop' } });
+  const errorStream = (message: string) =>
+    JSON.stringify({
+      type: 'message_end',
+      message: { role: 'assistant', content: '', stopReason: 'error', errorMessage: message },
+    });
+  const textStream = (text: string) =>
+    JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: text, stopReason: 'stop' } });
 
   beforeEach(() => vi.clearAllMocks());
 
@@ -1121,7 +1239,8 @@ describe('PiProvider captured failure classification', () => {
     const result = await invoke();
     expect(result).toMatchObject({ success: false, ...expected });
     if (name !== 'pi-1.0.0-e7-usage-exhausted.jsonl') {
-      for (const property of ['usageExhausted', 'authFailure', 'modelUnavailable', 'waitSeconds']) expect(result).not.toHaveProperty(property);
+      for (const property of ['usageExhausted', 'authFailure', 'modelUnavailable', 'waitSeconds'])
+        expect(result).not.toHaveProperty(property);
     }
   });
 
@@ -1134,19 +1253,48 @@ describe('PiProvider captured failure classification', () => {
     };
     const terminal = lines.length - 1 - [...lines].reverse().findIndex(isAssistantEnd);
     const earlier = lines.slice(0, terminal);
-    expect(earlier.filter((line) => line.includes('"stopReason":"error"') && line.includes('429: {\\"message\\":\\"Rate limit reached for requests'))).toHaveLength(3);
-    return [...earlier, textStream(text), JSON.stringify({ type: 'agent_end', willRetry: false }), JSON.stringify({ type: 'auto_retry_end', success: true, attempt: 3 })].join('\n');
+    expect(
+      earlier.filter(
+        (line) =>
+          line.includes('"stopReason":"error"') &&
+          line.includes('429: {\\"message\\":\\"Rate limit reached for requests'),
+      ),
+    ).toHaveLength(3);
+    return [
+      ...earlier,
+      textStream(text),
+      JSON.stringify({ type: 'agent_end', willRetry: false }),
+      JSON.stringify({ type: 'auto_retry_end', success: true, attempt: 3 }),
+    ].join('\n');
   };
 
   it('uses a sanitized rate-limit result and classifies only terminal error stops', async () => {
-    spawn.mockResolvedValueOnce({ stdout: await readFixture('pi-1.0.0-e6-rate-limit.jsonl'), stderr: '', exitCode: 0 } as ExecaResult)
-      .mockResolvedValueOnce({ stdout: await readFixture('pi-1.0.0-e9-server-error.jsonl'), stderr: '', exitCode: 0 } as ExecaResult)
+    spawn
+      .mockResolvedValueOnce({
+        stdout: await readFixture('pi-1.0.0-e6-rate-limit.jsonl'),
+        stderr: '',
+        exitCode: 0,
+      } as ExecaResult)
+      .mockResolvedValueOnce({
+        stdout: await readFixture('pi-1.0.0-e9-server-error.jsonl'),
+        stderr: '',
+        exitCode: 0,
+      } as ExecaResult)
       .mockResolvedValueOnce({ stdout: errorStream('upstream said 429: busy'), stderr: '', exitCode: 0 } as ExecaResult)
-      .mockResolvedValueOnce({ stdout: textStream('HTTP 429: rate limit reached'), stderr: '', exitCode: 0 } as ExecaResult)
-      .mockResolvedValueOnce({ stdout: await e6EarlierErrorStopsThenStop('completed after earlier errors'), stderr: '', exitCode: 0 } as ExecaResult);
+      .mockResolvedValueOnce({
+        stdout: textStream('HTTP 429: rate limit reached'),
+        stderr: '',
+        exitCode: 0,
+      } as ExecaResult)
+      .mockResolvedValueOnce({
+        stdout: await e6EarlierErrorStopsThenStop('completed after earlier errors'),
+        stderr: '',
+        exitCode: 0,
+      } as ExecaResult);
     const rateLimited = await invoke();
     expect(rateLimited.output).toBe('Pi request was rate-limited by its upstream provider.');
-    for (const forbidden of ['Rate limit reached for requests', 'rate_limit_exceeded', '{"message"']) expect(rateLimited.output).not.toContain(forbidden);
+    for (const forbidden of ['Rate limit reached for requests', 'rate_limit_exceeded', '{"message"'])
+      expect(rateLimited.output).not.toContain(forbidden);
     for (const result of [await invoke(), await invoke()]) {
       expect(result).not.toHaveProperty('rateLimited');
       expect(result).not.toHaveProperty('usageExhausted');
@@ -1159,12 +1307,27 @@ describe('PiProvider captured failure classification', () => {
   });
 
   it('requires an anchored 429 and quota vocabulary for usage exhaustion', async () => {
-    spawn.mockResolvedValueOnce({ stdout: errorStream('429: Monthly usage limit reached'), stderr: '', exitCode: 0 } as ExecaResult)
+    spawn
+      .mockResolvedValueOnce({
+        stdout: errorStream('429: Monthly usage limit reached'),
+        stderr: '',
+        exitCode: 0,
+      } as ExecaResult)
       .mockResolvedValueOnce({ stdout: errorStream('500: insufficient_quota'), stderr: '', exitCode: 0 } as ExecaResult)
-      .mockResolvedValueOnce({ stdout: errorStream('402: Insufficient Balance'), stderr: '', exitCode: 0 } as ExecaResult);
+      .mockResolvedValueOnce({
+        stdout: errorStream('402: Insufficient Balance'),
+        stderr: '',
+        exitCode: 0,
+      } as ExecaResult);
     const exhausted = await invoke();
-    expect(exhausted).toMatchObject({ usageExhausted: true, rateLimited: true, waitSeconds: 3600, output: 'Pi upstream provider usage is exhausted.' });
-    for (const forbidden of ['insufficient_quota', 'billing details']) expect(exhausted.output).not.toContain(forbidden);
+    expect(exhausted).toMatchObject({
+      usageExhausted: true,
+      rateLimited: true,
+      waitSeconds: 3600,
+      output: 'Pi upstream provider usage is exhausted.',
+    });
+    for (const forbidden of ['insufficient_quota', 'billing details'])
+      expect(exhausted.output).not.toContain(forbidden);
     for (const result of [await invoke(), await invoke()]) {
       expect(result).not.toHaveProperty('usageExhausted');
       expect(result).not.toHaveProperty('rateLimited');
@@ -1173,9 +1336,18 @@ describe('PiProvider captured failure classification', () => {
 
   it('classifies Pi authentication from stderr and an error stop', async () => {
     const stderr = await readFixture('pi-1.0.0-e1-no-api-key.stderr.txt');
-    spawn.mockResolvedValueOnce({ stdout: '', stderr, exitCode: 1 } as ExecaResult)
-      .mockResolvedValueOnce({ stdout: '', stderr: `Warning: Model "x" not found for provider "deepseek". Using custom model id.\n${stderr}`, exitCode: 1 } as ExecaResult)
-      .mockResolvedValueOnce({ stdout: errorStream('No API key for provider: cline'), stderr: '', exitCode: 0 } as ExecaResult);
+    spawn
+      .mockResolvedValueOnce({ stdout: '', stderr, exitCode: 1 } as ExecaResult)
+      .mockResolvedValueOnce({
+        stdout: '',
+        stderr: `Warning: Model "x" not found for provider "deepseek". Using custom model id.\n${stderr}`,
+        exitCode: 1,
+      } as ExecaResult)
+      .mockResolvedValueOnce({
+        stdout: errorStream('No API key for provider: cline'),
+        stderr: '',
+        exitCode: 0,
+      } as ExecaResult);
     const expected = { provider: 'pi', source: 'cached-login', state: 'missing' };
     for (const result of [await invoke(), await invoke(), await invoke()]) {
       expect(result.authFailure).toBe(true);
@@ -1199,23 +1371,27 @@ describe('PiProvider captured failure classification', () => {
     for (const [name] of preserved) {
       spawn.mockResolvedValueOnce({ stdout: await readFixture(name), stderr: '', exitCode: 0 } as ExecaResult);
     }
-    spawn.mockResolvedValueOnce({
-      stdout: '',
-      stderr: 'Error: Model "x" not found. Use --list-models to see available models.',
-      exitCode: 1,
-    } as ExecaResult).mockResolvedValueOnce({
-      stdout: errorStream('401: {"message":"x is not a valid model ID","code":401}'),
-      stderr: '',
-      exitCode: 0,
-    } as ExecaResult).mockResolvedValueOnce({
-      stdout: errorStream('429: {"message":"x is not a valid model ID","code":429}'),
-      stderr: '',
-      exitCode: 0,
-    } as ExecaResult).mockResolvedValueOnce({
-      stdout: '',
-      stderr: '400: {"message":"x is not a valid model ID","code":400}',
-      exitCode: 1,
-    } as ExecaResult);
+    spawn
+      .mockResolvedValueOnce({
+        stdout: '',
+        stderr: 'Error: Model "x" not found. Use --list-models to see available models.',
+        exitCode: 1,
+      } as ExecaResult)
+      .mockResolvedValueOnce({
+        stdout: errorStream('401: {"message":"x is not a valid model ID","code":401}'),
+        stderr: '',
+        exitCode: 0,
+      } as ExecaResult)
+      .mockResolvedValueOnce({
+        stdout: errorStream('429: {"message":"x is not a valid model ID","code":429}'),
+        stderr: '',
+        exitCode: 0,
+      } as ExecaResult)
+      .mockResolvedValueOnce({
+        stdout: '',
+        stderr: '400: {"message":"x is not a valid model ID","code":400}',
+        exitCode: 1,
+      } as ExecaResult);
 
     const results = [];
     for (const [_name, expected] of preserved) {
@@ -1249,10 +1425,27 @@ describe('PiProvider captured failure classification', () => {
 
   // Covers: task:2
   it('classifies captured OpenRouter unknown-model error stops without exposing their upstream diagnostic', async () => {
-    spawn.mockResolvedValueOnce({ stdout: await readFixture('pi-1.0.0-e10-unknown-model-openrouter.jsonl'), stderr: '', exitCode: 0 } as ExecaResult)
-      .mockResolvedValueOnce({ stdout: errorStream('400: {"message":"anthropic/claude-x is not a valid model ID","code":400}'), stderr: '', exitCode: 0 } as ExecaResult)
-      .mockResolvedValueOnce({ stdout: await readFixture('pi-1.0.0-e10-unknown-model-openrouter.jsonl'), stderr: '', exitCode: 0 } as ExecaResult)
-      .mockResolvedValueOnce({ stdout: await readFixture('pi-1.0.0-e10-unknown-model-openrouter.jsonl'), stderr: 'Warning: Model "nonexistent-model-xyz" not found for provider "openrouter". Using custom model id.', exitCode: 0 } as ExecaResult);
+    spawn
+      .mockResolvedValueOnce({
+        stdout: await readFixture('pi-1.0.0-e10-unknown-model-openrouter.jsonl'),
+        stderr: '',
+        exitCode: 0,
+      } as ExecaResult)
+      .mockResolvedValueOnce({
+        stdout: errorStream('400: {"message":"anthropic/claude-x is not a valid model ID","code":400}'),
+        stderr: '',
+        exitCode: 0,
+      } as ExecaResult)
+      .mockResolvedValueOnce({
+        stdout: await readFixture('pi-1.0.0-e10-unknown-model-openrouter.jsonl'),
+        stderr: '',
+        exitCode: 0,
+      } as ExecaResult)
+      .mockResolvedValueOnce({
+        stdout: await readFixture('pi-1.0.0-e10-unknown-model-openrouter.jsonl'),
+        stderr: 'Warning: Model "nonexistent-model-xyz" not found for provider "openrouter". Using custom model id.',
+        exitCode: 0,
+      } as ExecaResult);
 
     // Covers: task:2
     const e10 = await invoke();
@@ -1293,7 +1486,8 @@ describe('PiProvider captured failure classification', () => {
       output: 'Pi upstream provider reports the requested model as unknown.',
     });
     // Covers: task:2
-    for (const property of ['authFailure', 'rateLimited', 'usageExhausted', 'providerUnavailable']) expect(e10).not.toHaveProperty(property);
+    for (const property of ['authFailure', 'rateLimited', 'usageExhausted', 'providerUnavailable'])
+      expect(e10).not.toHaveProperty(property);
     expect(e10.output).toBe('Pi upstream provider reports the requested model as unknown.');
     // Covers: task:2
     for (const forbidden of ['400:', '"code"', 'is not a valid model ID']) expect(e10.output).not.toContain(forbidden);
@@ -1342,20 +1536,51 @@ describe('PiProvider captured failure classification', () => {
     const result = await invoke();
 
     expect(result).toMatchObject({ success: false });
-    for (const property of ['modelUnavailable', 'authFailure', 'rateLimited', 'usageExhausted', 'providerUnavailable']) expect(result).not.toHaveProperty(property);
+    for (const property of ['modelUnavailable', 'authFailure', 'rateLimited', 'usageExhausted', 'providerUnavailable'])
+      expect(result).not.toHaveProperty(property);
   });
 
   it('classifies each captured rejected credential without leaking its diagnostic', async () => {
-    const authFixtures = ['pi-1.0.0-e2-invalid-key-deepseek.jsonl', 'pi-1.0.0-e3-invalid-key-openrouter.jsonl', 'pi-1.0.0-e4-invalid-key-anthropic.jsonl', 'pi-1.0.0-e5-oauth-refresh-failed.jsonl'];
-    for (const name of authFixtures) spawn.mockResolvedValueOnce({ stdout: await readFixture(name), stderr: '', exitCode: 0 } as ExecaResult);
-    spawn.mockResolvedValueOnce({ stdout: '', stderr: 'Authentication failed for "anthropic". Credentials may have expired', exitCode: 1 } as ExecaResult)
+    const authFixtures = [
+      'pi-1.0.0-e2-invalid-key-deepseek.jsonl',
+      'pi-1.0.0-e3-invalid-key-openrouter.jsonl',
+      'pi-1.0.0-e4-invalid-key-anthropic.jsonl',
+      'pi-1.0.0-e5-oauth-refresh-failed.jsonl',
+    ];
+    for (const name of authFixtures)
+      spawn.mockResolvedValueOnce({ stdout: await readFixture(name), stderr: '', exitCode: 0 } as ExecaResult);
+    spawn
+      .mockResolvedValueOnce({
+        stdout: '',
+        stderr: 'Authentication failed for "anthropic". Credentials may have expired',
+        exitCode: 1,
+      } as ExecaResult)
       .mockResolvedValueOnce({ stdout: textStream('401: Unauthorized'), stderr: '', exitCode: 0 } as ExecaResult)
       .mockResolvedValueOnce({ stdout: errorStream('403: Forbidden'), stderr: '', exitCode: 0 } as ExecaResult)
-      .mockResolvedValueOnce({ stdout: '', stderr: 'Error: Model "nonexistent-model-xyz" not found. Use --list-models to see available models.', exitCode: 1 } as ExecaResult);
+      .mockResolvedValueOnce({
+        stdout: '',
+        stderr: 'Error: Model "nonexistent-model-xyz" not found. Use --list-models to see available models.',
+        exitCode: 1,
+      } as ExecaResult);
     const results = await Promise.all(authFixtures.map(() => invoke()));
-    for (const result of results) expect(result).toMatchObject({ authFailure: true, authentication: { provider: 'pi', source: 'cached-login', state: 'unusable' } });
-    expect(results[0]?.output).toBe('Pi authentication failed: the upstream provider credential is missing or was rejected.');
-    for (const forbidden of ['****0000', 'request_id', 'Authentication Fails', '{"message"', 'invalid_grant', 'platform.claude.com', 'stack=']) expect(results.flatMap((result) => [result.output]).join('\n')).not.toContain(forbidden);
+    for (const result of results)
+      expect(result).toMatchObject({
+        authFailure: true,
+        authentication: { provider: 'pi', source: 'cached-login', state: 'unusable' },
+      });
+    expect(results[0]?.output).toBe(
+      'Pi authentication failed: the upstream provider credential is missing or was rejected.',
+    );
+    for (const forbidden of [
+      '****0000',
+      'request_id',
+      'Authentication Fails',
+      '{"message"',
+      'invalid_grant',
+      'platform.claude.com',
+      'stack=',
+    ])
+      expect(results.flatMap((result) => [result.output]).join('\n')).not.toContain(forbidden);
     expect(await invoke()).toMatchObject({ authFailure: true, authentication: { state: 'unusable' } });
     for (const result of [await invoke(), await invoke()]) {
       expect(result).toMatchObject({ success: result.output === '401: Unauthorized' });
@@ -1374,16 +1599,26 @@ describe('PiProvider captured failure classification', () => {
   });
 
   it('keeps unmatched stderr and warning-prefixed error stops as ordinary failures', async () => {
-    spawn.mockResolvedValueOnce({ stdout: '', stderr: 'boom: tool crashed', exitCode: 1 } as ExecaResult)
-      .mockResolvedValueOnce({ stdout: await readFixture('error-stop-live-capture.jsonl'), stderr: '', exitCode: 0 } as ExecaResult)
-      .mockResolvedValueOnce({ stdout: errorStream('Warning: 429 retries scheduled'), stderr: '', exitCode: 0 } as ExecaResult);
+    spawn
+      .mockResolvedValueOnce({ stdout: '', stderr: 'boom: tool crashed', exitCode: 1 } as ExecaResult)
+      .mockResolvedValueOnce({
+        stdout: await readFixture('error-stop-live-capture.jsonl'),
+        stderr: '',
+        exitCode: 0,
+      } as ExecaResult)
+      .mockResolvedValueOnce({
+        stdout: errorStream('Warning: 429 retries scheduled'),
+        stderr: '',
+        exitCode: 0,
+      } as ExecaResult);
     const crashed = await invoke();
     expect(crashed.exitFacts).toBeDefined();
-    for (const property of ['authFailure', 'rateLimited', 'usageExhausted', 'modelUnavailable', 'providerUnavailable']) expect(crashed).not.toHaveProperty(property);
+    for (const property of ['authFailure', 'rateLimited', 'usageExhausted', 'modelUnavailable', 'providerUnavailable'])
+      expect(crashed).not.toHaveProperty(property);
     const captured = await invoke();
     expect(captured).toMatchObject({ success: false, output: 'Free tier request failed.' });
     expect(captured).not.toHaveProperty('authFailure');
-    expect((await invoke())).not.toHaveProperty('rateLimited');
+    expect(await invoke()).not.toHaveProperty('rateLimited');
   });
 });
 
@@ -1415,13 +1650,14 @@ const assistantEnd = piLine({
   type: 'message_end',
   message: { role: 'assistant', content: [{ type: 'text', text: 'Submitted.' }], stopReason: 'stop' },
 });
-const submitEnd = (details: unknown, isError = false) => piLine({
-  type: 'tool_execution_end',
-  toolCallId: `call-${Math.random().toString(36).slice(2)}`,
-  toolName: 'submit_result',
-  result: { content: [{ type: 'text', text: isError ? 'validation failed' : 'Result submitted.' }], details },
-  isError,
-});
+const submitEnd = (details: unknown, isError = false) =>
+  piLine({
+    type: 'tool_execution_end',
+    toolCallId: `call-${Math.random().toString(36).slice(2)}`,
+    toolName: 'submit_result',
+    result: { content: [{ type: 'text', text: isError ? 'validation failed' : 'Result submitted.' }], details },
+    isError,
+  });
 
 describe('PiProvider native output schema', () => {
   const spawn = vi.fn<PiSubprocessFactory>();
@@ -1431,15 +1667,17 @@ describe('PiProvider native output schema', () => {
   let scratchHome: string;
   let provider: PiProvider;
 
-  const respond = (lines: string[]) => spawn.mockResolvedValue({ stdout: lines.join('\n'), stderr: '', exitCode: 0 } as ExecaResult);
-  const schemaInvoke = (overrides: Partial<InvokeOptions> = {}) => provider.invoke({
-    ...invokeOptions,
-    cwd: worktree,
-    nativeSchema: schema,
-    nativeSchemaScratchHome: scratchHome,
-    nativeSchemaScratchRoot: worktree,
-    ...overrides,
-  });
+  const respond = (lines: string[]) =>
+    spawn.mockResolvedValue({ stdout: lines.join('\n'), stderr: '', exitCode: 0 } as ExecaResult);
+  const schemaInvoke = (overrides: Partial<InvokeOptions> = {}) =>
+    provider.invoke({
+      ...invokeOptions,
+      cwd: worktree,
+      nativeSchema: schema,
+      nativeSchemaScratchHome: scratchHome,
+      nativeSchemaScratchRoot: worktree,
+      ...overrides,
+    });
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -1449,7 +1687,9 @@ describe('PiProvider native output schema', () => {
     provider = new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, harnessedPiEnvironment(), materializeExtension);
     respond([submitEnd({ verdict: 'pass' }), assistantEnd]);
   });
-  afterEach(async () => { await rm(worktree, { recursive: true, force: true }); });
+  afterEach(async () => {
+    await rm(worktree, { recursive: true, force: true });
+  });
 
   it('writes a self-host schema when the invocation cwd is a review checkout other than the home owner', async () => {
     const reviewCheckout = await mkdtemp(join(tmpdir(), 'pi-self-host-schema-review-checkout-'));
@@ -1458,7 +1698,13 @@ describe('PiProvider native output schema', () => {
         cwd: reviewCheckout,
         nativeSchemaScratchHome: undefined,
         nativeSchemaScratchRoot: undefined,
-        selfHost: { executable: '/resolved/pi', args: [], teardown: async () => {}, env: { PI_HOME: scratchHome }, scratchRoot: worktree },
+        selfHost: {
+          executable: '/resolved/pi',
+          args: [],
+          teardown: async () => {},
+          env: { PI_HOME: scratchHome },
+          scratchRoot: worktree,
+        },
       });
 
       expect(JSON.parse(await readFile(join(scratchHome, 'output-schema.json'), 'utf8'))).toEqual(schema);
@@ -1492,7 +1738,11 @@ describe('PiProvider native output schema', () => {
   });
 
   it('reports a terminal E6 rate limit before checking for a structured result', async () => {
-    spawn.mockResolvedValue({ stdout: await readFixture('pi-1.0.0-e6-rate-limit.jsonl'), stderr: '', exitCode: 0 } as ExecaResult);
+    spawn.mockResolvedValue({
+      stdout: await readFixture('pi-1.0.0-e6-rate-limit.jsonl'),
+      stderr: '',
+      exitCode: 0,
+    } as ExecaResult);
 
     const result = await schemaInvoke();
 
@@ -1569,18 +1819,27 @@ describe('PiProvider trust_project_files', () => {
   it.each([
     ['absent', undefined],
     ['false', false],
-  ] as const)('passes -na and never -a/--approve/--no-extensions when trust is %s', async (_label, trustProjectFiles) => {
-    await new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, harnessedPiEnvironment()).invoke({ ...invokeOptions, trustProjectFiles });
+  ] as const)(
+    'passes -na and never -a/--approve/--no-extensions when trust is %s',
+    async (_label, trustProjectFiles) => {
+      await new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, harnessedPiEnvironment()).invoke({
+        ...invokeOptions,
+        trustProjectFiles,
+      });
 
-    const args = spawn.mock.calls[0]![1];
-    expect(args).toContain('-na');
-    expect(args).not.toContain('-a');
-    expect(args).not.toContain('--approve');
-    expect(args).not.toContain('--no-extensions');
-  });
+      const args = spawn.mock.calls[0]![1];
+      expect(args).toContain('-na');
+      expect(args).not.toContain('-a');
+      expect(args).not.toContain('--approve');
+      expect(args).not.toContain('--no-extensions');
+    },
+  );
 
   it('omits -na and --no-extensions when trust_project_files opts in', async () => {
-    await new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, harnessedPiEnvironment()).invoke({ ...invokeOptions, trustProjectFiles: true });
+    await new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, harnessedPiEnvironment()).invoke({
+      ...invokeOptions,
+      trustProjectFiles: true,
+    });
 
     const args = spawn.mock.calls[0]![1];
     expect(args).not.toContain('-na');
@@ -1592,7 +1851,8 @@ describe('PiProvider subagents', () => {
   const spawn = vi.fn<PiSubprocessFactory>();
   const packageDir = '/home/agent/.pi/agent/npm/node_modules/pi-subagents';
   let isolatedHome: string;
-  const installed = () => fakePiEnvironment({ files: ['/home/agent/.agents/skills/HARNESS.md', `${packageDir}/package.json`] }).environment;
+  const installed = () =>
+    fakePiEnvironment({ files: ['/home/agent/.agents/skills/HARNESS.md', `${packageDir}/package.json`] }).environment;
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -1616,15 +1876,24 @@ describe('PiProvider subagents', () => {
     await new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, installed()).invoke({
       ...invokeOptions,
       subagents: true,
-      selfHost: { executable: '/resolved/pi', args: [], teardown: async () => {}, env: { PI_CODING_AGENT_DIR: isolatedHome } },
+      selfHost: {
+        executable: '/resolved/pi',
+        args: [],
+        teardown: async () => {},
+        env: { PI_CODING_AGENT_DIR: isolatedHome },
+      },
     });
 
     const [, args, options] = spawn.mock.calls[0]!;
     expect(args.join(' ')).toContain(`-e ${packageDir} --exclude-tools subagents_enable`);
-    expect(JSON.parse(await readFile(join(isolatedHome, 'extensions', 'subagent', 'config.json'), 'utf8')))
-      .toEqual({ asyncByDefault: false, toolActivation: 'eager', maxSubagentDepth: 1 });
-    expect(JSON.parse(await readFile(join(isolatedHome, 'settings.json'), 'utf8')))
-      .toEqual({ subagents: { agentOverrides: { delegate: { model: 'inherit' } }, defaultThinking: 'xhigh' } });
+    expect(JSON.parse(await readFile(join(isolatedHome, 'extensions', 'subagent', 'config.json'), 'utf8'))).toEqual({
+      asyncByDefault: false,
+      toolActivation: 'eager',
+      maxSubagentDepth: 1,
+    });
+    expect(JSON.parse(await readFile(join(isolatedHome, 'settings.json'), 'utf8'))).toEqual({
+      subagents: { agentOverrides: { delegate: { model: 'inherit' } }, defaultThinking: 'xhigh' },
+    });
     expect((options.env as NodeJS.ProcessEnv).PI_SUBAGENTS_TEMP_ROOT).toBe(join(isolatedHome, 'subagents-tmp'));
   });
 
@@ -1633,11 +1902,22 @@ describe('PiProvider subagents', () => {
     ['a read-only review', { subagents: true, readOnlyReview: true }],
     ['a schema-constrained dispatch', { subagents: true, nativeSchema: { name: 'x', schema: { type: 'object' } } }],
   ])('does not load the extension when %s', async (_label, extra) => {
-    await new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, installed(), vi.fn(async () => '/asset.ts')).invoke({
+    await new PiProvider(
+      dispatchGitGuard,
+      '/resolved/pi',
+      spawn,
+      installed(),
+      vi.fn(async () => '/asset.ts'),
+    ).invoke({
       ...invokeOptions,
       ...extra,
       nativeSchemaScratchHome: isolatedHome,
-      selfHost: { executable: '/resolved/pi', args: [], teardown: async () => {}, env: { PI_CODING_AGENT_DIR: isolatedHome } },
+      selfHost: {
+        executable: '/resolved/pi',
+        args: [],
+        teardown: async () => {},
+        env: { PI_CODING_AGENT_DIR: isolatedHome },
+      },
     });
 
     const args = spawn.mock.calls[0]?.[1] ?? [];
@@ -1647,7 +1927,10 @@ describe('PiProvider subagents', () => {
 
   // Covers: task:8
   it('marks a missing subagents package as not started before spawning', async () => {
-    const result = await new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, harnessedPiEnvironment()).invoke({ ...invokeOptions, subagents: true });
+    const result = await new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, harnessedPiEnvironment()).invoke({
+      ...invokeOptions,
+      subagents: true,
+    });
 
     expect(result).toMatchObject({
       success: false,
@@ -1660,7 +1943,10 @@ describe('PiProvider subagents', () => {
   });
 
   it('never writes into the operator agent dir when no isolated home is in force', async () => {
-    await new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, installed()).invoke({ ...invokeOptions, subagents: true });
+    await new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, installed()).invoke({
+      ...invokeOptions,
+      subagents: true,
+    });
 
     const [, args, options] = spawn.mock.calls[0]!;
     expect(args).toContain(packageDir);
@@ -1677,16 +1963,27 @@ describe('PiProvider read-only review argv', () => {
 
   const toolsValue = (args: readonly string[]) => args[args.indexOf('--tools') + 1];
   const invokeReadOnly = (overrides: Partial<InvokeOptions> = {}) =>
-    new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, harnessedPiEnvironment(), materializeExtension).invoke({ ...invokeOptions, cwd: worktree, readOnlyReview: true, ...overrides });
+    new PiProvider(dispatchGitGuard, '/resolved/pi', spawn, harnessedPiEnvironment(), materializeExtension).invoke({
+      ...invokeOptions,
+      cwd: worktree,
+      readOnlyReview: true,
+      ...overrides,
+    });
 
   beforeEach(async () => {
     vi.clearAllMocks();
     worktree = await mkdtemp(join(tmpdir(), 'pi-read-only-'));
     scratchHome = join(worktree, '.daemon', 'scratch', 'run-1', 'pi');
     await mkdir(scratchHome, { recursive: true });
-    spawn.mockResolvedValue({ stdout: [submitEnd({ verdict: 'pass' }), assistantEnd].join('\n'), stderr: '', exitCode: 0 } as ExecaResult);
+    spawn.mockResolvedValue({
+      stdout: [submitEnd({ verdict: 'pass' }), assistantEnd].join('\n'),
+      stderr: '',
+      exitCode: 0,
+    } as ExecaResult);
   });
-  afterEach(async () => { await rm(worktree, { recursive: true, force: true }); });
+  afterEach(async () => {
+    await rm(worktree, { recursive: true, force: true });
+  });
 
   it('restricts tools to read,grep,find,ls,git_read and loads only the harness asset', async () => {
     await invokeReadOnly();
@@ -1706,17 +2003,21 @@ describe('PiProvider read-only review argv', () => {
     const baselineArgs = spawn.mock.calls[0]![1];
     let delivered: string | undefined;
     spawn.mockImplementationOnce(async (_file, args) => {
-      const appendIndices = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+      const appendIndices = args.flatMap((value, index) => (value === '--append-system-prompt' ? [index] : []));
       const systemPromptPath = args[appendIndices[1]! + 1]!;
       delivered = await readFile(systemPromptPath, 'utf8');
       await rm(dirname(systemPromptPath), { recursive: true, force: true });
-      return { stdout: [submitEnd({ verdict: 'pass' }), assistantEnd].join('\n'), stderr: '', exitCode: 0 } as ExecaResult;
+      return {
+        stdout: [submitEnd({ verdict: 'pass' }), assistantEnd].join('\n'),
+        stderr: '',
+        exitCode: 0,
+      } as ExecaResult;
     });
 
     await invokeReadOnly({ systemPrompt: 'S' });
 
     const args = spawn.mock.calls[1]![1];
-    const appendIndices = args.flatMap((value, index) => value === '--append-system-prompt' ? [index] : []);
+    const appendIndices = args.flatMap((value, index) => (value === '--append-system-prompt' ? [index] : []));
     expect({
       harnessFirst: appendIndices[0]! < appendIndices[1]!,
       harness: args[appendIndices[0]! + 1],
@@ -1735,14 +2036,22 @@ describe('PiProvider read-only review argv', () => {
   });
 
   it('adds submit_result to the tools when a native schema is requested', async () => {
-    await invokeReadOnly({ nativeSchema: { type: 'object' }, nativeSchemaScratchHome: scratchHome, nativeSchemaScratchRoot: worktree });
+    await invokeReadOnly({
+      nativeSchema: { type: 'object' },
+      nativeSchemaScratchHome: scratchHome,
+      nativeSchemaScratchRoot: worktree,
+    });
 
     expect(toolsValue(spawn.mock.calls[0]![1])).toBe('read,grep,find,ls,git_read,submit_result');
   });
 
   it('never names a write or shell tool', async () => {
     await invokeReadOnly();
-    await invokeReadOnly({ nativeSchema: { type: 'object' }, nativeSchemaScratchHome: scratchHome, nativeSchemaScratchRoot: worktree });
+    await invokeReadOnly({
+      nativeSchema: { type: 'object' },
+      nativeSchemaScratchHome: scratchHome,
+      nativeSchemaScratchRoot: worktree,
+    });
 
     for (const [, args] of spawn.mock.calls) {
       const tools = toolsValue(args)!.split(',');

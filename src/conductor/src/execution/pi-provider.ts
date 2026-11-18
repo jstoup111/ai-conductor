@@ -49,14 +49,16 @@ export interface PiEnvironment {
   readonly cwd: () => string;
 }
 
-export type PiSkillResolution = {
-  readonly found: true;
-  readonly skillPath: string;
-  readonly searchedRoots: readonly string[];
-} | {
-  readonly found: false;
-  readonly searchedRoots: readonly string[];
-};
+export type PiSkillResolution =
+  | {
+      readonly found: true;
+      readonly skillPath: string;
+      readonly searchedRoots: readonly string[];
+    }
+  | {
+      readonly found: false;
+      readonly searchedRoots: readonly string[];
+    };
 
 const defaultPiEnvironment: PiEnvironment = {
   stat,
@@ -75,7 +77,7 @@ async function isFile(path: string, environment: PiEnvironment): Promise<boolean
 }
 
 async function isReadableRegularFile(path: string, environment: PiEnvironment): Promise<boolean> {
-  if (!await isFile(path, environment)) return false;
+  if (!(await isFile(path, environment))) return false;
   try {
     await environment.access(path, constants.R_OK);
     return true;
@@ -93,7 +95,9 @@ async function isDirectory(path: string, environment: PiEnvironment): Promise<bo
 }
 
 /** Write one invocation's system prompt to a private temp file Pi appends at startup. */
-async function writePiSystemPromptFile(systemPrompt: string): Promise<{ readonly path: string; dispose(): Promise<void> }> {
+async function writePiSystemPromptFile(
+  systemPrompt: string,
+): Promise<{ readonly path: string; dispose(): Promise<void> }> {
   const tempRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT ?? tmpdir();
   const dir = await mkdtemp(join(tempRoot, 'ai-conductor-pi-system-prompt-'));
   const path = join(dir, 'system-prompt.md');
@@ -110,8 +114,7 @@ export async function resolvePiSkill(
   name: string,
   environment: PiEnvironment = defaultPiEnvironment,
 ): Promise<PiSkillResolution> {
-  const piAgentDirectory = environment.env.PI_CODING_AGENT_DIR
-    ?? join(environment.homeDir(), '.pi', 'agent');
+  const piAgentDirectory = environment.env.PI_CODING_AGENT_DIR ?? join(environment.homeDir(), '.pi', 'agent');
   const searchedRoots = [
     join(environment.homeDir(), '.agents', 'skills'),
     join(piAgentDirectory, 'skills'),
@@ -134,8 +137,7 @@ export async function resolvePiSkill(
 export const PI_MODEL_UNAVAILABLE_RE =
   /^Error: Model "[^"\r\n]+" not found\. Use --list-models to see available models\.$/;
 
-export const PI_UPSTREAM_MODEL_UNAVAILABLE_RE =
-  /^400: \{"message":"[^"\r\n]+ is not a valid model ID"/m;
+export const PI_UPSTREAM_MODEL_UNAVAILABLE_RE = /^400: \{"message":"[^"\r\n]+ is not a valid model ID"/m;
 
 export const PI_FAILURE_SIGNATURES = Object.freeze([
   { kind: 'auth', state: 'missing', pattern: /^No API key found for /m },
@@ -146,24 +148,22 @@ export const PI_FAILURE_SIGNATURES = Object.freeze([
   { kind: 'limit', pattern: /^429(?:: | )/m },
 ] as const);
 
-export const PI_QUOTA_VOCABULARY_RE = /GoUsageLimitError|FreeUsageLimitError|Monthly usage limit reached|available balance|insufficient_quota|out of budget|quota exceeded|billing|subscription_sharing_usage_limit_exceeded/i;
+export const PI_QUOTA_VOCABULARY_RE =
+  /GoUsageLimitError|FreeUsageLimitError|Monthly usage limit reached|available balance|insufficient_quota|out of budget|quota exceeded|billing|subscription_sharing_usage_limit_exceeded/i;
 
-function classifyPiFailure(text: string): 'usage-exhausted' | 'rate-limited' | { auth: 'missing' | 'unusable' } | undefined {
+function classifyPiFailure(
+  text: string,
+): 'usage-exhausted' | 'rate-limited' | { auth: 'missing' | 'unusable' } | undefined {
   const limit = PI_FAILURE_SIGNATURES.find((signature) => signature.kind === 'limit');
   if (limit?.pattern.test(text)) return PI_QUOTA_VOCABULARY_RE.test(text) ? 'usage-exhausted' : 'rate-limited';
   const auth = PI_FAILURE_SIGNATURES.find((signature) => signature.kind === 'auth' && signature.pattern.test(text));
   return auth?.kind === 'auth' ? { auth: auth.state } : undefined;
 }
 
-export type PiModelIdParseFailureReason =
-  | 'missing-separator'
-  | 'empty-provider'
-  | 'empty-model'
-  | 'whitespace';
+export type PiModelIdParseFailureReason = 'missing-separator' | 'empty-provider' | 'empty-model' | 'whitespace';
 
 export type PiModelIdParseResult =
-  | { readonly provider: string; readonly model: string }
-  | { readonly reason: PiModelIdParseFailureReason };
+  { readonly provider: string; readonly model: string } | { readonly reason: PiModelIdParseFailureReason };
 
 /** Parse Pi's canonical provider/model identifier without rewriting its model suffix. */
 export function parsePiModelId(modelId: string): PiModelIdParseResult {
@@ -196,7 +196,8 @@ export function parsePiModelListing(stdout: string): ProviderModelCatalogParseRe
   const header = columns(lines[headerIndex]!);
   const providerIndex = header.indexOf('provider');
   const modelIndex = header.indexOf('model');
-  const modelIds = lines.slice(headerIndex + 1)
+  const modelIds = lines
+    .slice(headerIndex + 1)
     .filter((line) => line.trim())
     .flatMap((line) => {
       const row = columns(line);
@@ -250,7 +251,12 @@ async function writePiNativeSchema(options: InvokeOptions): Promise<string> {
   const homeDir = options.nativeSchemaScratchHome ?? options.selfHost?.env.PI_HOME;
   if (!homeDir) throw new Error(`requested native schema requires an owned ${piDisplayName()} scratch home`);
   return writeScratchSchema({
-    worktreeRoot: (options.nativeSchemaScratchHome === undefined ? options.selfHost?.scratchRoot : options.nativeSchemaScratchRoot) ?? options.cwd ?? process.cwd(),
+    worktreeRoot:
+      (options.nativeSchemaScratchHome === undefined
+        ? options.selfHost?.scratchRoot
+        : options.nativeSchemaScratchRoot) ??
+      options.cwd ??
+      process.cwd(),
     homeDir,
     schema: options.nativeSchema!,
   });
@@ -260,12 +266,14 @@ function terminalAssistantText(content: unknown): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
   return content
-    .map((part) => (
-      typeof part === 'object' && part !== null && (part as { type?: unknown }).type === 'text'
-        && typeof (part as { text?: unknown }).text === 'string'
+    .map((part) =>
+      typeof part === 'object' &&
+      part !== null &&
+      (part as { type?: unknown }).type === 'text' &&
+      typeof (part as { text?: unknown }).text === 'string'
         ? (part as { text: string }).text
-        : ''
-    ))
+        : '',
+    )
     .join('');
 }
 
@@ -315,15 +323,16 @@ function launchedAsyncRunId(message: PiMessage): string | undefined {
 /** Background runs whose terminal usage a wait result delivered (`details.completions[].runId`). */
 function completedAsyncRunIds(message: PiMessage): string[] {
   if (!isRecord(message.details) || !Array.isArray(message.details.completions)) return [];
-  return message.details.completions.flatMap((completion) => (
-    isRecord(completion) && typeof completion.runId === 'string' && completion.runId !== ''
-      ? [completion.runId]
-      : []
-  ));
+  return message.details.completions.flatMap((completion) =>
+    isRecord(completion) && typeof completion.runId === 'string' && completion.runId !== '' ? [completion.runId] : [],
+  );
 }
 
 /** Extract Pi's authoritative terminal assistant message and sum its final per-message usage. */
-export function parsePiJsonl(stdout: string, rateCard?: RateCard): {
+export function parsePiJsonl(
+  stdout: string,
+  rateCard?: RateCard,
+): {
   output: string;
   tokenUsage?: TokenUsage;
   hasTerminalAssistantMessage: boolean;
@@ -369,35 +378,40 @@ export function parsePiJsonl(stdout: string, rateCard?: RateCard): {
         hasTerminalAssistantMessage = true;
         assistantTurns += 1;
         output = terminalAssistantText(event.message.content);
-        terminalAssistantStopReason = typeof event.message.stopReason === 'string'
-          ? event.message.stopReason
-          : undefined;
-        terminalAssistantErrorMessage = typeof event.message.errorMessage === 'string'
-          ? event.message.errorMessage
-          : undefined;
+        terminalAssistantStopReason =
+          typeof event.message.stopReason === 'string' ? event.message.stopReason : undefined;
+        terminalAssistantErrorMessage =
+          typeof event.message.errorMessage === 'string' ? event.message.errorMessage : undefined;
       }
-      if (event.type === 'message_end' && event.message?.usage
-        && (event.message.role === 'assistant' || event.message.role === 'toolResult')) {
+      if (
+        event.type === 'message_end' &&
+        event.message?.usage &&
+        (event.message.role === 'assistant' || event.message.role === 'toolResult')
+      ) {
         const { input, output: outputTokens, cacheRead, cacheWrite, reasoning } = event.message.usage;
-        if (typeof input === 'number' && Number.isFinite(input)
-          && typeof outputTokens === 'number' && Number.isFinite(outputTokens)) {
-          const model = typeof event.message.responseModel === 'string'
-            ? event.message.responseModel
-            : typeof event.message.model === 'string'
-              ? event.message.model
-              : undefined;
-          const provider = typeof event.message.provider === 'string'
-            ? event.message.provider
-            : undefined;
+        if (
+          typeof input === 'number' &&
+          Number.isFinite(input) &&
+          typeof outputTokens === 'number' &&
+          Number.isFinite(outputTokens)
+        ) {
+          const model =
+            typeof event.message.responseModel === 'string'
+              ? event.message.responseModel
+              : typeof event.message.model === 'string'
+                ? event.message.model
+                : undefined;
+          const provider = typeof event.message.provider === 'string' ? event.message.provider : undefined;
           const validMessageModel = provider !== undefined && model !== undefined;
           if (event.message.role === 'assistant' && validMessageModel) {
             attributedModel = `${provider}/${model}`;
           }
-          const hasNonZeroTokens = input !== 0
-            || outputTokens !== 0
-            || (typeof cacheRead === 'number' && Number.isFinite(cacheRead) && cacheRead !== 0)
-            || (typeof cacheWrite === 'number' && Number.isFinite(cacheWrite) && cacheWrite !== 0)
-            || (typeof reasoning === 'number' && Number.isFinite(reasoning) && reasoning !== 0);
+          const hasNonZeroTokens =
+            input !== 0 ||
+            outputTokens !== 0 ||
+            (typeof cacheRead === 'number' && Number.isFinite(cacheRead) && cacheRead !== 0) ||
+            (typeof cacheWrite === 'number' && Number.isFinite(cacheWrite) && cacheWrite !== 0) ||
+            (typeof reasoning === 'number' && Number.isFinite(reasoning) && reasoning !== 0);
           if (hasNonZeroTokens) {
             hasTokenBearingMessage = true;
             const cost = event.message.usage.cost?.total;
@@ -412,9 +426,10 @@ export function parsePiJsonl(stdout: string, rateCard?: RateCard): {
               ...(typeof cacheRead === 'number' && Number.isFinite(cacheRead) ? { cacheRead } : {}),
               ...(typeof cacheWrite === 'number' && Number.isFinite(cacheWrite) ? { cacheCreation: cacheWrite } : {}),
             };
-            const priced = event.message.role === 'assistant' && validMessageModel
-              ? applyRateCard(messageUsage, model, rateCard)
-              : undefined;
+            const priced =
+              event.message.role === 'assistant' && validMessageModel
+                ? applyRateCard(messageUsage, model, rateCard)
+                : undefined;
             if (priced?.costSource === 'rate-card' && priced.costUsd !== undefined) {
               rateCardCostUsd += priced.costUsd;
             } else {
@@ -427,13 +442,19 @@ export function parsePiJsonl(stdout: string, rateCard?: RateCard): {
             output: (previous?.output ?? 0) + outputTokens,
             ...(typeof cacheRead === 'number' && Number.isFinite(cacheRead)
               ? { cacheRead: (previous?.cacheRead ?? 0) + cacheRead }
-              : (previous?.cacheRead === undefined ? {} : { cacheRead: previous.cacheRead })),
+              : previous?.cacheRead === undefined
+                ? {}
+                : { cacheRead: previous.cacheRead }),
             ...(typeof cacheWrite === 'number' && Number.isFinite(cacheWrite)
               ? { cacheCreation: (previous?.cacheCreation ?? 0) + cacheWrite }
-              : (previous?.cacheCreation === undefined ? {} : { cacheCreation: previous.cacheCreation })),
+              : previous?.cacheCreation === undefined
+                ? {}
+                : { cacheCreation: previous.cacheCreation }),
             ...(typeof reasoning === 'number' && Number.isFinite(reasoning)
               ? { reasoningOutput: (previous?.reasoningOutput ?? 0) + reasoning }
-              : (previous?.reasoningOutput === undefined ? {} : { reasoningOutput: previous.reasoningOutput })),
+              : previous?.reasoningOutput === undefined
+                ? {}
+                : { reasoningOutput: previous.reasoningOutput }),
           };
         }
       }
@@ -470,10 +491,13 @@ export function parsePiJsonl(stdout: string, rateCard?: RateCard): {
     allTokenBearingMessagesRateCardPriced = false;
   }
 
-  if (tokenUsage && (tokenUsage.input !== 0
-    || tokenUsage.output !== 0
-    || (tokenUsage.cacheRead ?? 0) !== 0
-    || (tokenUsage.cacheCreation ?? 0) !== 0)) {
+  if (
+    tokenUsage &&
+    (tokenUsage.input !== 0 ||
+      tokenUsage.output !== 0 ||
+      (tokenUsage.cacheRead ?? 0) !== 0 ||
+      (tokenUsage.cacheCreation ?? 0) !== 0)
+  ) {
     tokenUsage = {
       ...tokenUsage,
       numTurns: assistantTurns,
@@ -482,7 +506,7 @@ export function parsePiJsonl(stdout: string, rateCard?: RateCard): {
         ? { costUsd: providerCostUsd, costSource: 'provider' as const }
         : hasTokenBearingMessage && allTokenBearingMessagesRateCardPriced
           ? { costUsd: rateCardCostUsd, costSource: 'rate-card' as const }
-        : {}),
+          : {}),
     };
   } else {
     tokenUsage = undefined;
@@ -540,7 +564,9 @@ export class PiProvider implements LLMProvider {
       throw new Error(`${piDisplayName()} process spawn denied: ${permit.reason}`);
     }
     let guardDir: string | null;
-    try { guardDir = options.reviewDispatch ? null : await this.dispatchGitGuard(options.cwd); } catch (error) {
+    try {
+      guardDir = options.reviewDispatch ? null : await this.dispatchGitGuard(options.cwd);
+    } catch (error) {
       return {
         success: false,
         output: error instanceof Error ? error.message : String(error),
@@ -550,7 +576,7 @@ export class PiProvider implements LLMProvider {
     }
 
     const harnessPath = join(this.environment.homeDir(), '.agents', 'skills', 'HARNESS.md');
-    if (!await isFile(harnessPath, this.environment)) {
+    if (!(await isFile(harnessPath, this.environment))) {
       const reason = `${piDisplayName()} provider requires HARNESS.md at ${harnessPath}. Run bin/install to provision it.`;
       return {
         success: false,
@@ -589,7 +615,15 @@ export class PiProvider implements LLMProvider {
 
     // ADR D18: -na keeps project-local Pi files untrusted unless the operator
     // opts in; a read-only review (D17) always keeps -na.
-    const args = ['-p', ...(options.trustProjectFiles === true && !options.readOnlyReview ? [] : ['-na']), '--no-session', '--mode', 'json', '--append-system-prompt', harnessPath];
+    const args = [
+      '-p',
+      ...(options.trustProjectFiles === true && !options.readOnlyReview ? [] : ['-na']),
+      '--no-session',
+      '--mode',
+      'json',
+      '--append-system-prompt',
+      harnessPath,
+    ];
     let systemPromptFile: Awaited<ReturnType<typeof writePiSystemPromptFile>> | undefined;
     if (typeof options.systemPrompt === 'string' && options.systemPrompt.length > 0) {
       try {
@@ -601,7 +635,7 @@ export class PiProvider implements LLMProvider {
           exitCode: 1,
         };
       }
-      if (!await isReadableRegularFile(systemPromptFile.path, this.environment)) {
+      if (!(await isReadableRegularFile(systemPromptFile.path, this.environment))) {
         await systemPromptFile.dispose();
         return {
           success: false,
@@ -612,214 +646,243 @@ export class PiProvider implements LLMProvider {
       args.push('--append-system-prompt', systemPromptFile.path);
     }
     try {
-    const projectSkillsPath = join(cwd, '.agents', 'skills');
-    if (await isDirectory(projectSkillsPath, this.environment)) {
-      args.push('--skill', projectSkillsPath);
-    }
-    let schemaFile: string | undefined;
-    let extensionPath: string | undefined;
-    try {
-      if (options.nativeSchema !== undefined) schemaFile = await writePiNativeSchema(options);
-      if (options.readOnlyReview || options.nativeSchema !== undefined) {
-        extensionPath = await this.materializeExtension({ homeDir: options.selfHost?.env.PI_HOME });
-        args.push('-e', extensionPath);
+      const projectSkillsPath = join(cwd, '.agents', 'skills');
+      if (await isDirectory(projectSkillsPath, this.environment)) {
+        args.push('--skill', projectSkillsPath);
       }
-    } catch (error) {
-      return {
-        success: false,
-        output: `${piDisplayName()} native schema setup failed: ${error instanceof Error ? error.message : String(error)}`,
-        exitCode: 1,
-        executionDisposition: 'not-started',
-      };
-    }
-    if (options.readOnlyReview) {
-      // Read-only review: no discovered extensions, no project resources (whatever
-      // trust_project_files says), and a closed tool set whose only git access is git_read.
-      args.push('--no-extensions', '--tools', `read,grep,find,ls,git_read${schemaFile ? ',submit_result' : ''}`, '--conduct-git-read');
-    }
-    if (schemaFile) args.push('--conduct-output-schema', schemaFile);
-    // Delegation is for writable work only: a read-only review or a
-    // schema-constrained answer never needs a child session.
-    let subagentsTempRoot: string | undefined;
-    if (options.subagents === true && !options.readOnlyReview && options.nativeSchema === undefined) {
-      const operatorAgentDir = this.environment.env.PI_CODING_AGENT_DIR
-        ?? join(this.environment.homeDir(), '.pi', 'agent');
-      const packageDir = piSubagentsPackageDir(operatorAgentDir);
-      if (!await isFile(join(packageDir, 'package.json'), this.environment)) {
-        const reason = `${piDisplayName()} subagents are enabled (llm_providers.pi.subagents) but ${packageDir} is not installed. Run \`pi install npm:pi-subagents\`.`;
+      let schemaFile: string | undefined;
+      let extensionPath: string | undefined;
+      try {
+        if (options.nativeSchema !== undefined) schemaFile = await writePiNativeSchema(options);
+        if (options.readOnlyReview || options.nativeSchema !== undefined) {
+          extensionPath = await this.materializeExtension({ homeDir: options.selfHost?.env.PI_HOME });
+          args.push('-e', extensionPath);
+        }
+      } catch (error) {
         return {
           success: false,
-          output: reason,
+          output: `${piDisplayName()} native schema setup failed: ${error instanceof Error ? error.message : String(error)}`,
           exitCode: 1,
-          providerUnavailable: true,
-          providerUnavailableScope: 'run',
-          providerUnavailableReason: reason,
           executionDisposition: 'not-started',
         };
       }
-      args.push(...piSubagentsArgs(packageDir));
-      const isolatedAgentDir = options.selfHost?.env.PI_CODING_AGENT_DIR;
-      if (isolatedAgentDir !== undefined) {
-        subagentsTempRoot = (await seedPiSubagentsHome(isolatedAgentDir, options.effort)).tempRoot;
+      if (options.readOnlyReview) {
+        // Read-only review: no discovered extensions, no project resources (whatever
+        // trust_project_files says), and a closed tool set whose only git access is git_read.
+        args.push(
+          '--no-extensions',
+          '--tools',
+          `read,grep,find,ls,git_read${schemaFile ? ',submit_result' : ''}`,
+          '--conduct-git-read',
+        );
       }
-    }
-    if (options.model) {
-      const parsedModel = parsePiModelId(options.model);
-      if ('provider' in parsedModel) {
-        args.push('--provider', parsedModel.provider, '--model', parsedModel.model);
+      if (schemaFile) args.push('--conduct-output-schema', schemaFile);
+      // Delegation is for writable work only: a read-only review or a
+      // schema-constrained answer never needs a child session.
+      let subagentsTempRoot: string | undefined;
+      if (options.subagents === true && !options.readOnlyReview && options.nativeSchema === undefined) {
+        const operatorAgentDir =
+          this.environment.env.PI_CODING_AGENT_DIR ?? join(this.environment.homeDir(), '.pi', 'agent');
+        const packageDir = piSubagentsPackageDir(operatorAgentDir);
+        if (!(await isFile(join(packageDir, 'package.json'), this.environment))) {
+          const reason = `${piDisplayName()} subagents are enabled (llm_providers.pi.subagents) but ${packageDir} is not installed. Run \`pi install npm:pi-subagents\`.`;
+          return {
+            success: false,
+            output: reason,
+            exitCode: 1,
+            providerUnavailable: true,
+            providerUnavailableScope: 'run',
+            providerUnavailableReason: reason,
+            executionDisposition: 'not-started',
+          };
+        }
+        args.push(...piSubagentsArgs(packageDir));
+        const isolatedAgentDir = options.selfHost?.env.PI_CODING_AGENT_DIR;
+        if (isolatedAgentDir !== undefined) {
+          subagentsTempRoot = (await seedPiSubagentsHome(isolatedAgentDir, options.effort)).tempRoot;
+        }
       }
-    }
-    if (options.effort) args.push('--thinking', options.effort);
-    // Filesystem preflight is asynchronous. An abort that arrives during it
-    // must not create an unobservable subprocess after the signal fired.
-    if (abortSignal?.aborted) return { ...abortedInvocationResult(), executionDisposition: 'not-started' };
+      if (options.model) {
+        const parsedModel = parsePiModelId(options.model);
+        if ('provider' in parsedModel) {
+          args.push('--provider', parsedModel.provider, '--model', parsedModel.model);
+        }
+      }
+      if (options.effort) args.push('--thinking', options.effort);
+      // Filesystem preflight is asynchronous. An abort that arrives during it
+      // must not create an unobservable subprocess after the signal fired.
+      if (abortSignal?.aborted) return { ...abortedInvocationResult(), executionDisposition: 'not-started' };
 
-    // Apply the marker after the self-host overlay, then explicitly mask
-    // tmux's implicit target variables so execa cannot inherit the daemon
-    // pane from its parent environment.
-    const environment = scrubTmuxEnvironment(withDaemonSessionMarker({
-      ...(options.selfHost?.env ?? {}),
-      ...options.env,
-      ...options.environmentOverlay,
-      ...(subagentsTempRoot === undefined ? {} : { PI_SUBAGENTS_TEMP_ROOT: subagentsTempRoot }),
-    }));
-    const managedEnvironment = options.managedSessionContext
-      ? composePreparedManagedSessionEnvironment(options.managedSessionContext, composeManagedSessionEnvironment(options.managedSessionContext, environment))
-      : environment;
-    // execa extends an overlay with the parent environment. Materialize PATH
-    // before adding the guard so an otherwise-empty self-host overlay retains
-    // the Pi environment's inherited executable search path.
-    const childEnvironment = guardDir
-      ? withGitGuardPath({ ...managedEnvironment, PATH: managedEnvironment.PATH ?? this.environment.env.PATH }, guardDir)
-      : managedEnvironment;
-    const subprocess = this.subprocessFactory(this.executable, args, {
-      reject: false,
-      input: options.prompt,
-      stdin: 'pipe',
-      stdout: 'pipe',
-      stderr: 'pipe',
-      cwd: options.cwd,
-      env: childEnvironment,
-    });
-    let aborted = false;
-    const abort = () => {
-      aborted = true;
-      (subprocess as typeof subprocess & { kill?: () => void }).kill?.();
-    };
-    abortSignal?.addEventListener('abort', abort, { once: true });
-    let result: Awaited<typeof subprocess>;
-    try {
-      result = await subprocess;
-    } finally {
-      abortSignal?.removeEventListener('abort', abort);
-    }
-    const stdout = typeof result.stdout === 'string' ? result.stdout : '';
-    const parsed = parsePiJsonl(stdout, this.loadRates(options.cwd ?? process.cwd()));
-    // A failed, killed, or aborted run still billed every completed message it
-    // streamed, so its usage is recorded like a successful run's. When the
-    // agent loop never settled, spend after the last completed message is
-    // unseen: the tokens are kept but the price is withheld (cost-unmetered).
-    const failedAttemptUsage = parsed.streamSettled
-      ? parsed.tokenUsage
-      : withholdCost(parsed.tokenUsage);
-    const failedUsage = failedAttemptUsage === undefined ? {} : { tokenUsage: failedAttemptUsage };
-    if (aborted || abortSignal?.aborted) return { ...abortedInvocationResult(), ...failedUsage, gitGuardInstalled: guardDir !== null };
-    const exitFacts = deriveProviderExitFacts(result);
-    const exitCode = result.exitCode ?? 1;
-    const stderr = typeof result.stderr === 'string' ? result.stderr : '';
+      // Apply the marker after the self-host overlay, then explicitly mask
+      // tmux's implicit target variables so execa cannot inherit the daemon
+      // pane from its parent environment.
+      const environment = scrubTmuxEnvironment(
+        withDaemonSessionMarker({
+          ...(options.selfHost?.env ?? {}),
+          ...options.env,
+          ...options.environmentOverlay,
+          ...(subagentsTempRoot === undefined ? {} : { PI_SUBAGENTS_TEMP_ROOT: subagentsTempRoot }),
+        }),
+      );
+      const managedEnvironment = options.managedSessionContext
+        ? composePreparedManagedSessionEnvironment(
+            options.managedSessionContext,
+            composeManagedSessionEnvironment(options.managedSessionContext, environment),
+          )
+        : environment;
+      // execa extends an overlay with the parent environment. Materialize PATH
+      // before adding the guard so an otherwise-empty self-host overlay retains
+      // the Pi environment's inherited executable search path.
+      const childEnvironment = guardDir
+        ? withGitGuardPath(
+            { ...managedEnvironment, PATH: managedEnvironment.PATH ?? this.environment.env.PATH },
+            guardDir,
+          )
+        : managedEnvironment;
+      const subprocess = this.subprocessFactory(this.executable, args, {
+        reject: false,
+        input: options.prompt,
+        stdin: 'pipe',
+        stdout: 'pipe',
+        stderr: 'pipe',
+        cwd: options.cwd,
+        env: childEnvironment,
+      });
+      let aborted = false;
+      const abort = () => {
+        aborted = true;
+        (subprocess as typeof subprocess & { kill?: () => void }).kill?.();
+      };
+      abortSignal?.addEventListener('abort', abort, { once: true });
+      let result: Awaited<typeof subprocess>;
+      try {
+        result = await subprocess;
+      } finally {
+        abortSignal?.removeEventListener('abort', abort);
+      }
+      const stdout = typeof result.stdout === 'string' ? result.stdout : '';
+      const parsed = parsePiJsonl(stdout, this.loadRates(options.cwd ?? process.cwd()));
+      // A failed, killed, or aborted run still billed every completed message it
+      // streamed, so its usage is recorded like a successful run's. When the
+      // agent loop never settled, spend after the last completed message is
+      // unseen: the tokens are kept but the price is withheld (cost-unmetered).
+      const failedAttemptUsage = parsed.streamSettled ? parsed.tokenUsage : withholdCost(parsed.tokenUsage);
+      const failedUsage = failedAttemptUsage === undefined ? {} : { tokenUsage: failedAttemptUsage };
+      if (aborted || abortSignal?.aborted)
+        return { ...abortedInvocationResult(), ...failedUsage, gitGuardInstalled: guardDir !== null };
+      const exitFacts = deriveProviderExitFacts(result);
+      const exitCode = result.exitCode ?? 1;
+      const stderr = typeof result.stderr === 'string' ? result.stderr : '';
 
-    // Missing-binary classification is anchored to structural process signals.
-    // Never infer provider-wide unavailability from arbitrary stderr prose.
-    if (result.code === 'ENOENT' || exitCode === 127) {
-      const reason = `LLM provider '${piDisplayName().toLowerCase()}' not found. Install it or check your PATH.`;
+      // Missing-binary classification is anchored to structural process signals.
+      // Never infer provider-wide unavailability from arbitrary stderr prose.
+      if (result.code === 'ENOENT' || exitCode === 127) {
+        const reason = `LLM provider '${piDisplayName().toLowerCase()}' not found. Install it or check your PATH.`;
+        return {
+          success: false,
+          output: reason,
+          exitCode,
+          providerUnavailable: true,
+          providerUnavailableScope: 'run',
+          providerUnavailableReason: reason,
+          gitGuardInstalled: guardDir !== null,
+        };
+      }
+
+      if (exitCode === 0 && !parsed.hasTerminalAssistantMessage) {
+        return {
+          success: false,
+          output: `${piDisplayName()} provider parse failure: missing terminal assistant message.`,
+          exitCode,
+          ...failedUsage,
+          gitGuardInstalled: guardDir !== null,
+        };
+      }
+      const classifiedText =
+        exitCode === 0 && parsed.terminalAssistantStopReason === 'error'
+          ? (parsed.terminalAssistantErrorMessage ?? '')
+          : exitCode !== 0
+            ? stderr
+            : '';
+      const classification = classifyPiFailure(classifiedText);
+      if (classification !== undefined) {
+        const common = { success: false as const, exitCode, ...failedUsage, gitGuardInstalled: guardDir !== null };
+        if (classification === 'usage-exhausted')
+          return {
+            ...common,
+            output: `${piDisplayName()} upstream provider usage is exhausted.`,
+            rateLimited: true,
+            usageExhausted: true,
+            waitSeconds: 3600,
+          };
+        if (classification === 'rate-limited')
+          return {
+            ...common,
+            output: `${piDisplayName()} request was rate-limited by its upstream provider.`,
+            rateLimited: true,
+          };
+        return {
+          ...common,
+          output: `${piDisplayName()} authentication failed: the upstream provider credential is missing or was rejected.`,
+          authFailure: true,
+          authentication: { provider: 'pi', source: 'cached-login', state: classification.auth },
+        };
+      }
+      if (
+        exitCode === 0 &&
+        parsed.terminalAssistantStopReason === 'error' &&
+        PI_UPSTREAM_MODEL_UNAVAILABLE_RE.test(parsed.terminalAssistantErrorMessage ?? '')
+      ) {
+        return {
+          success: false,
+          output: 'Pi upstream provider reports the requested model as unknown.',
+          exitCode,
+          ...failedUsage,
+          gitGuardInstalled: guardDir !== null,
+          modelUnavailable: true,
+        };
+      }
+      if (exitCode === 0 && options.nativeSchema !== undefined && parsed.finalStructuredResult === undefined) {
+        return {
+          success: false,
+          output: `${piDisplayName()} provider parse failure: missing structured result.`,
+          exitCode: 1,
+          ...failedUsage,
+          gitGuardInstalled: guardDir !== null,
+        };
+      }
+
+      if (exitCode === 0 && parsed.terminalAssistantStopReason === 'error') {
+        return {
+          success: false,
+          output: parsed.terminalAssistantErrorMessage || `${piDisplayName()} reported an error stop with no message`,
+          exitCode,
+          ...failedUsage,
+          gitGuardInstalled: guardDir !== null,
+        };
+      }
+
+      const output = stderr ? `${parsed.output}\n${stderr}`.trim() : parsed.output;
+      const modelUnavailable = exitCode !== 0 && PI_MODEL_UNAVAILABLE_RE.test(stderr);
+      const genericUnclassifiedFailure = exitCode !== 0 && !modelUnavailable;
+      if (genericUnclassifiedFailure) {
+        options.diagnosticLog?.(formatProviderExitFacts('pi', exitFacts));
+      }
+
       return {
-        success: false,
-        output: reason,
+        success: exitCode === 0,
+        output,
         exitCode,
-        providerUnavailable: true,
-        providerUnavailableScope: 'run',
-        providerUnavailableReason: reason,
+        ...(modelUnavailable ? { modelUnavailable: true } : {}),
+        ...(exitCode === 0 ? (parsed.tokenUsage === undefined ? {} : { tokenUsage: parsed.tokenUsage }) : failedUsage),
+        ...(exitCode === 0 && parsed.finalStructuredResult !== undefined
+          ? { finalStructuredResult: parsed.finalStructuredResult }
+          : {}),
+        ...(genericUnclassifiedFailure ? { exitFacts } : {}),
         gitGuardInstalled: guardDir !== null,
       };
-    }
-
-    if (exitCode === 0 && !parsed.hasTerminalAssistantMessage) {
-      return {
-        success: false,
-        output: `${piDisplayName()} provider parse failure: missing terminal assistant message.`,
-        exitCode,
-        ...failedUsage,
-        gitGuardInstalled: guardDir !== null,
-      };
-    }
-    const classifiedText = exitCode === 0 && parsed.terminalAssistantStopReason === 'error'
-      ? parsed.terminalAssistantErrorMessage ?? ''
-      : exitCode !== 0 ? stderr : '';
-    const classification = classifyPiFailure(classifiedText);
-    if (classification !== undefined) {
-      const common = { success: false as const, exitCode, ...failedUsage, gitGuardInstalled: guardDir !== null };
-      if (classification === 'usage-exhausted') return {
-        ...common, output: `${piDisplayName()} upstream provider usage is exhausted.`,
-        rateLimited: true, usageExhausted: true, waitSeconds: 3600,
-      };
-      if (classification === 'rate-limited') return {
-        ...common, output: `${piDisplayName()} request was rate-limited by its upstream provider.`, rateLimited: true,
-      };
-      return {
-        ...common,
-        output: `${piDisplayName()} authentication failed: the upstream provider credential is missing or was rejected.`,
-        authFailure: true,
-        authentication: { provider: 'pi', source: 'cached-login', state: classification.auth },
-      };
-    }
-    if (exitCode === 0
-      && parsed.terminalAssistantStopReason === 'error'
-      && PI_UPSTREAM_MODEL_UNAVAILABLE_RE.test(parsed.terminalAssistantErrorMessage ?? '')) {
-      return {
-        success: false,
-        output: 'Pi upstream provider reports the requested model as unknown.',
-        exitCode,
-        ...failedUsage,
-        gitGuardInstalled: guardDir !== null,
-        modelUnavailable: true,
-      };
-    }
-    if (exitCode === 0 && options.nativeSchema !== undefined && parsed.finalStructuredResult === undefined) {
-      return { success: false, output: `${piDisplayName()} provider parse failure: missing structured result.`, exitCode: 1, ...failedUsage, gitGuardInstalled: guardDir !== null };
-    }
-
-    if (exitCode === 0 && parsed.terminalAssistantStopReason === 'error') {
-      return {
-        success: false,
-        output: parsed.terminalAssistantErrorMessage || `${piDisplayName()} reported an error stop with no message`,
-        exitCode,
-        ...failedUsage,
-        gitGuardInstalled: guardDir !== null,
-      };
-    }
-
-    const output = stderr ? `${parsed.output}\n${stderr}`.trim() : parsed.output;
-    const modelUnavailable = exitCode !== 0 && PI_MODEL_UNAVAILABLE_RE.test(stderr);
-    const genericUnclassifiedFailure = exitCode !== 0 && !modelUnavailable;
-    if (genericUnclassifiedFailure) {
-      options.diagnosticLog?.(formatProviderExitFacts('pi', exitFacts));
-    }
-
-    return {
-      success: exitCode === 0,
-      output,
-      exitCode,
-      ...(modelUnavailable ? { modelUnavailable: true } : {}),
-      ...(exitCode === 0
-        ? (parsed.tokenUsage === undefined ? {} : { tokenUsage: parsed.tokenUsage })
-        : failedUsage),
-      ...(exitCode === 0 && parsed.finalStructuredResult !== undefined ? { finalStructuredResult: parsed.finalStructuredResult } : {}),
-      ...(genericUnclassifiedFailure ? { exitFacts } : {}),
-      gitGuardInstalled: guardDir !== null,
-    };
     } finally {
       await systemPromptFile?.dispose();
     }
   }
-
 }

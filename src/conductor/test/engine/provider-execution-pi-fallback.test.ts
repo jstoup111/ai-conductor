@@ -49,10 +49,7 @@ function fakeProvider(result: InvokeResult): LLMProvider {
   };
 }
 
-function runtimeSet(
-  config: HarnessConfig,
-  providers: Readonly<Record<string, LLMProvider>>,
-): ProviderRuntimeSet {
+function runtimeSet(config: HarnessConfig, providers: Readonly<Record<string, LLMProvider>>): ProviderRuntimeSet {
   const registry = new PluginRegistry();
   for (const [key, provider] of Object.entries(providers)) {
     registry.register('llm_provider', key, provider);
@@ -78,10 +75,7 @@ describe.each(['pi', 'codex'] as const)('provider fallback from %s', (firstProvi
       step: 'build',
       configuredProviders: [firstProvider, 'claude'],
       preferredProvider: firstProvider,
-      runtimes: new ProviderRuntimeSet([
-        runtime(firstProvider, first),
-        runtime('claude', claude),
-      ]),
+      runtimes: new ProviderRuntimeSet([runtime(firstProvider, first), runtime('claude', claude)]),
       sessions: new ProviderSessionScope(vi.fn()),
       options: { prompt: 'Build.', cwd: '/workspace' },
     });
@@ -101,8 +95,11 @@ describe.each(['pi', 'codex'] as const)('provider fallback from %s', (firstProvi
 
 describe('Pi classified failures hold the provider walk', () => {
   const environment = {
-    stat: async () => ({ isFile: () => true, isDirectory: () => false }), access: async () => {},
-    env: {}, homeDir: () => '/home/agent', cwd: () => '/workspace',
+    stat: async () => ({ isFile: () => true, isDirectory: () => false }),
+    access: async () => {},
+    env: {},
+    homeDir: () => '/home/agent',
+    cwd: () => '/workspace',
   };
 
   it.each([
@@ -115,9 +112,12 @@ describe('Pi classified failures hold the provider walk', () => {
     const claude = fakeProvider({ success: true, output: 'must not run', exitCode: 0 });
 
     const result = await executeProviderCandidates({
-      step: 'build', configuredProviders: ['pi', 'claude'], preferredProvider: ['pi', 'claude'],
+      step: 'build',
+      configuredProviders: ['pi', 'claude'],
+      preferredProvider: ['pi', 'claude'],
       runtimes: new ProviderRuntimeSet([runtime('pi', pi), runtime('claude', claude)]),
-      sessions: new ProviderSessionScope(vi.fn()), options: { prompt: 'Build.', cwd: '/workspace' },
+      sessions: new ProviderSessionScope(vi.fn()),
+      options: { prompt: 'Build.', cwd: '/workspace' },
     });
 
     expect(result).toMatchObject({ actualProvider: 'pi', [recovery]: true });
@@ -131,7 +131,9 @@ describe('Pi lifecycle abort', () => {
     const controller = new AbortController();
     let resolveSubprocess!: (result: { stdout: string; stderr: string; exitCode: number }) => void;
     let signalStarted!: () => void;
-    const started = new Promise<void>((resolve) => { signalStarted = resolve; });
+    const started = new Promise<void>((resolve) => {
+      signalStarted = resolve;
+    });
     const subprocess = Object.assign(
       new Promise<{ stdout: string; stderr: string; exitCode: number }>((resolve) => {
         resolveSubprocess = resolve;
@@ -230,9 +232,11 @@ describe('DefaultStepRunner Pi model policy dispatch', () => {
     const pi: LLMProvider = {
       supportsSessionResume: false,
       lifecycleCapability: { synchronousSpawnPermit: true },
-      invoke: vi.fn(async ({ model }) => model === configuredModel
-        ? { success: false, output: `${configuredModel} is unavailable`, exitCode: 1, modelUnavailable: true }
-        : { success: true, output: 'Pi fallback completed', exitCode: 0 }),
+      invoke: vi.fn(async ({ model }) =>
+        model === configuredModel
+          ? { success: false, output: `${configuredModel} is unavailable`, exitCode: 1, modelUnavailable: true }
+          : { success: true, output: 'Pi fallback completed', exitCode: 0 },
+      ),
     };
     const warnings: string[] = [];
     const config: HarnessConfig = {
@@ -285,12 +289,22 @@ describe('effective provider policy dispatch', () => {
     const runtimes = runtimeSet(config, { pi });
 
     await executeProviderCandidates({
-      step: 'explore', configuredProviders: ['claude'], preferredProvider: 'pi', runtimes,
-      sessions: new ProviderSessionScope(vi.fn()), config, options: { prompt: 'Explore.', cwd: '/workspace' },
+      step: 'explore',
+      configuredProviders: ['claude'],
+      preferredProvider: 'pi',
+      runtimes,
+      sessions: new ProviderSessionScope(vi.fn()),
+      config,
+      options: { prompt: 'Explore.', cwd: '/workspace' },
     });
     await executeProviderCandidates({
-      step: 'plan', configuredProviders: ['claude'], preferredProvider: 'pi', runtimes,
-      sessions: new ProviderSessionScope(vi.fn()), config, options: { prompt: 'Plan.', cwd: '/workspace' },
+      step: 'plan',
+      configuredProviders: ['claude'],
+      preferredProvider: 'pi',
+      runtimes,
+      sessions: new ProviderSessionScope(vi.fn()),
+      config,
+      options: { prompt: 'Plan.', cwd: '/workspace' },
     });
 
     expect(pi.invoke).toHaveBeenNthCalledWith(1, expect.objectContaining({ model: 'google/gemini-2.5-flash' }));
@@ -309,32 +323,80 @@ describe('effective provider policy dispatch', () => {
       },
       steps: {
         plan: {
-          llm_provider: 'pi', model: 'anthropic/claude-sonnet-4-5', effort: 'medium',
+          llm_provider: 'pi',
+          model: 'anthropic/claude-sonnet-4-5',
+          effort: 'medium',
           by_tier: { L: { model: 'anthropic/claude-opus-4-5', effort: 'xhigh' } },
         },
       },
     };
     const runtimes = runtimeSet(config, { pi });
 
-    await executeProviderCandidates({ step: 'plan', configuredProviders: ['claude'], preferredProvider: 'pi', runtimes, sessions: new ProviderSessionScope(vi.fn()), config, tier: 'L', options: { prompt: 'Plan L.', cwd: '/workspace' } });
-    await executeProviderCandidates({ step: 'plan', configuredProviders: ['claude'], preferredProvider: 'pi', runtimes, sessions: new ProviderSessionScope(vi.fn()), config, tier: 'M', options: { prompt: 'Plan M.', cwd: '/workspace' } });
+    await executeProviderCandidates({
+      step: 'plan',
+      configuredProviders: ['claude'],
+      preferredProvider: 'pi',
+      runtimes,
+      sessions: new ProviderSessionScope(vi.fn()),
+      config,
+      tier: 'L',
+      options: { prompt: 'Plan L.', cwd: '/workspace' },
+    });
+    await executeProviderCandidates({
+      step: 'plan',
+      configuredProviders: ['claude'],
+      preferredProvider: 'pi',
+      runtimes,
+      sessions: new ProviderSessionScope(vi.fn()),
+      config,
+      tier: 'M',
+      options: { prompt: 'Plan M.', cwd: '/workspace' },
+    });
 
-    expect(pi.invoke).toHaveBeenNthCalledWith(1, expect.objectContaining({ model: 'anthropic/claude-opus-4-5', effort: 'xhigh' }));
-    expect(pi.invoke).toHaveBeenNthCalledWith(2, expect.objectContaining({ model: 'anthropic/claude-sonnet-4-5', effort: 'medium' }));
+    expect(pi.invoke).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ model: 'anthropic/claude-opus-4-5', effort: 'xhigh' }),
+    );
+    expect(pi.invoke).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ model: 'anthropic/claude-sonnet-4-5', effort: 'medium' }),
+    );
   });
 
   it('keeps Claude defaults out of an explicitly Pi-routed step', async () => {
     const pi = fakeProvider({ success: true, output: 'Pi completed', exitCode: 0 });
     const claude = fakeProvider({ success: true, output: 'Claude completed', exitCode: 0 });
     const config: HarnessConfig = {
-      llm_provider: 'claude', defaults: { model: 'opus' },
-      llm_providers: { pi: { model: 'openai/gpt-5.6-sol', model_escalation_order: ['openai/gpt-5.6-sol'], model_fallback_ladder: ['openai/gpt-5.6-sol'] } },
+      llm_provider: 'claude',
+      defaults: { model: 'opus' },
+      llm_providers: {
+        pi: {
+          model: 'openai/gpt-5.6-sol',
+          model_escalation_order: ['openai/gpt-5.6-sol'],
+          model_fallback_ladder: ['openai/gpt-5.6-sol'],
+        },
+      },
       steps: { plan: { llm_provider: 'pi' } },
     };
     const runtimes = runtimeSet(config, { claude, pi });
 
-    await executeProviderCandidates({ step: 'plan', configuredProviders: ['claude'], preferredProvider: 'pi', runtimes, sessions: new ProviderSessionScope(vi.fn()), config, options: { prompt: 'Plan.', cwd: '/workspace' } });
-    await executeProviderCandidates({ step: 'build', configuredProviders: ['claude'], runtimes, sessions: new ProviderSessionScope(vi.fn()), config, options: { prompt: 'Build.', cwd: '/workspace' } });
+    await executeProviderCandidates({
+      step: 'plan',
+      configuredProviders: ['claude'],
+      preferredProvider: 'pi',
+      runtimes,
+      sessions: new ProviderSessionScope(vi.fn()),
+      config,
+      options: { prompt: 'Plan.', cwd: '/workspace' },
+    });
+    await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['claude'],
+      runtimes,
+      sessions: new ProviderSessionScope(vi.fn()),
+      config,
+      options: { prompt: 'Build.', cwd: '/workspace' },
+    });
 
     expect(pi.invoke).toHaveBeenCalledWith(expect.objectContaining({ model: 'openai/gpt-5.6-sol' }));
     expect(pi.invoke).not.toHaveBeenCalledWith(expect.objectContaining({ model: 'opus' }));
@@ -344,8 +406,12 @@ describe('effective provider policy dispatch', () => {
   it('uses the Pi effective policy after a run-scope Claude fallback', async () => {
     const piModel = 'openai/gpt-5.6-sol';
     const claude = fakeProvider({
-      success: false, output: 'Claude unavailable', exitCode: 127,
-      providerUnavailable: true, providerUnavailableScope: 'run', providerUnavailableReason: 'Claude unavailable',
+      success: false,
+      output: 'Claude unavailable',
+      exitCode: 127,
+      providerUnavailable: true,
+      providerUnavailableScope: 'run',
+      providerUnavailableReason: 'Claude unavailable',
     });
     const pi = fakeProvider({ success: true, output: 'Pi completed', exitCode: 0 });
     const config: HarnessConfig = {
@@ -354,8 +420,12 @@ describe('effective provider policy dispatch', () => {
       steps: { plan: { llm_provider: ['claude', 'pi'], model: 'opus', effort: 'max' } },
     };
     const result = await executeProviderCandidates({
-      step: 'plan', configuredProviders: ['claude'], preferredProvider: ['claude', 'pi'],
-      runtimes: runtimeSet(config, { claude, pi }), sessions: new ProviderSessionScope(vi.fn()), config,
+      step: 'plan',
+      configuredProviders: ['claude'],
+      preferredProvider: ['claude', 'pi'],
+      runtimes: runtimeSet(config, { claude, pi }),
+      sessions: new ProviderSessionScope(vi.fn()),
+      config,
       options: { prompt: 'Plan.', cwd: '/workspace' },
     });
 
@@ -383,31 +453,47 @@ describe('Pi provider event metadata', () => {
     const attempts: unknown[] = [];
 
     const result = await executeProviderCandidates({
-      step: 'plan', configuredProviders: ['pi'], preferredProvider: 'pi',
-      runtimes: runtimeSet(config, { pi }), sessions: new ProviderSessionScope(vi.fn()), config,
-      onAttempt: async (_step, attempt) => { attempts.push(attempt); },
+      step: 'plan',
+      configuredProviders: ['pi'],
+      preferredProvider: 'pi',
+      runtimes: runtimeSet(config, { pi }),
+      sessions: new ProviderSessionScope(vi.fn()),
+      config,
+      onAttempt: async (_step, attempt) => {
+        attempts.push(attempt);
+      },
       options: { prompt: 'Plan.', cwd: '/workspace' },
     });
 
-    expect(attempts).toEqual([
-      expect.objectContaining({ provider: 'pi', model, effort: 'xhigh', outcome: 'success' }),
-    ]);
+    expect(attempts).toEqual([expect.objectContaining({ provider: 'pi', model, effort: 'xhigh', outcome: 'success' })]);
     expect(result).toMatchObject({
-      success: true, actualProvider: 'pi', resolvedModel: model, resolvedEffort: 'xhigh',
+      success: true,
+      actualProvider: 'pi',
+      resolvedModel: model,
+      resolvedEffort: 'xhigh',
     });
   });
 
   it('keeps the full Pi model id in failed attempt and retry metadata', async () => {
     const pi = fakeProvider({
-      success: false, output: `${model} unavailable`, exitCode: 1, modelUnavailable: true,
+      success: false,
+      output: `${model} unavailable`,
+      exitCode: 1,
+      modelUnavailable: true,
     });
     const attempts: unknown[] = [];
 
     const result = await executeProviderCandidates({
-      step: 'plan', configuredProviders: ['pi'], preferredProvider: 'pi',
-      runtimes: runtimeSet(config, { pi }), sessions: new ProviderSessionScope(vi.fn()), config,
+      step: 'plan',
+      configuredProviders: ['pi'],
+      preferredProvider: 'pi',
+      runtimes: runtimeSet(config, { pi }),
+      sessions: new ProviderSessionScope(vi.fn()),
+      config,
       attempt: 2,
-      onAttempt: async (_step, attempt) => { attempts.push(attempt); },
+      onAttempt: async (_step, attempt) => {
+        attempts.push(attempt);
+      },
       options: { prompt: 'Plan retry.', cwd: '/workspace' },
     });
 
@@ -415,7 +501,10 @@ describe('Pi provider event metadata', () => {
       expect.objectContaining({ provider: 'pi', model, effort: 'max', outcome: 'unavailable' }),
     ]);
     expect(result).toMatchObject({
-      success: false, actualProvider: 'pi', resolvedModel: model, resolvedEffort: 'max',
+      success: false,
+      actualProvider: 'pi',
+      resolvedModel: model,
+      resolvedEffort: 'max',
     });
     expect(result.attempts[0]?.model).toBe(model);
   });
@@ -437,14 +526,20 @@ describe('configured ladder in normal provider-aware dispatch', () => {
     const pi: LLMProvider = {
       supportsSessionResume: false,
       lifecycleCapability: { synchronousSpawnPermit: true },
-      invoke: vi.fn(async ({ model }) => model === first
-        ? { success: false, output: `${first} unavailable`, exitCode: 1, modelUnavailable: true }
-        : { success: true, output: 'Pi completed', exitCode: 0 }),
+      invoke: vi.fn(async ({ model }) =>
+        model === first
+          ? { success: false, output: `${first} unavailable`, exitCode: 1, modelUnavailable: true }
+          : { success: true, output: 'Pi completed', exitCode: 0 },
+      ),
     };
 
     const result = await executeProviderCandidates({
-      step: 'plan', configuredProviders: ['claude'], preferredProvider: 'pi',
-      runtimes: runtimeSet(piConfig, { pi }), sessions: new ProviderSessionScope(vi.fn()), config: piConfig,
+      step: 'plan',
+      configuredProviders: ['claude'],
+      preferredProvider: 'pi',
+      runtimes: runtimeSet(piConfig, { pi }),
+      sessions: new ProviderSessionScope(vi.fn()),
+      config: piConfig,
       options: { prompt: 'Plan.', cwd: '/workspace' },
     });
 
@@ -456,14 +551,20 @@ describe('configured ladder in normal provider-aware dispatch', () => {
     const pi: LLMProvider = {
       supportsSessionResume: false,
       lifecycleCapability: { synchronousSpawnPermit: true },
-      invoke: vi.fn(async ({ model }) => model === first
-        ? { success: false, output: `${first} unavailable`, exitCode: 1, modelUnavailable: true }
-        : { success: true, output: 'Pi completed', exitCode: 0 }),
+      invoke: vi.fn(async ({ model }) =>
+        model === first
+          ? { success: false, output: `${first} unavailable`, exitCode: 1, modelUnavailable: true }
+          : { success: true, output: 'Pi completed', exitCode: 0 },
+      ),
     };
     const runtimes = runtimeSet(piConfig, { pi });
     const input = {
-      step: 'plan' as const, configuredProviders: ['pi'], preferredProvider: 'pi', runtimes,
-      sessions: new ProviderSessionScope(vi.fn()), config: piConfig,
+      step: 'plan' as const,
+      configuredProviders: ['pi'],
+      preferredProvider: 'pi',
+      runtimes,
+      sessions: new ProviderSessionScope(vi.fn()),
+      config: piConfig,
       options: { prompt: 'Plan.', cwd: '/workspace' },
     };
 
@@ -479,16 +580,25 @@ describe('configured ladder in normal provider-aware dispatch', () => {
       lifecycleCapability: { synchronousSpawnPermit: true },
       systemPromptCapability: { deliversSystemPrompt: true },
       invoke: vi.fn(async ({ model }) => ({
-        success: false, output: `${model} unavailable`, exitCode: 1, modelUnavailable: true,
+        success: false,
+        output: `${model} unavailable`,
+        exitCode: 1,
+        modelUnavailable: true,
       })),
     };
     const attempts: Array<{ model?: string }> = [];
 
     const result = await executeProviderCandidates({
-      step: 'plan', configuredProviders: ['pi'], preferredProvider: 'pi',
-      runtimes: runtimeSet(piConfig, { pi }), sessions: new ProviderSessionScope(vi.fn()), config: piConfig,
+      step: 'plan',
+      configuredProviders: ['pi'],
+      preferredProvider: 'pi',
+      runtimes: runtimeSet(piConfig, { pi }),
+      sessions: new ProviderSessionScope(vi.fn()),
+      config: piConfig,
       attempt: 1,
-      onAttempt: async (_step, attempt) => { attempts.push(attempt); },
+      onAttempt: async (_step, attempt) => {
+        attempts.push(attempt);
+      },
       options: { prompt: 'Plan.', cwd: '/workspace' },
     });
 
@@ -497,7 +607,9 @@ describe('configured ladder in normal provider-aware dispatch', () => {
     expect(result.exitCode).toBe(1);
     expect(result.output).toContain(`${second} unavailable`);
     expect(attempts).toHaveLength(1);
-    expect(vi.mocked(pi.invoke).mock.calls.some(([options]) => options.model === 'opus' || options.model === 'sonnet')).toBe(false);
+    expect(
+      vi.mocked(pi.invoke).mock.calls.some(([options]) => options.model === 'opus' || options.model === 'sonnet'),
+    ).toBe(false);
   });
 
   it('preserves the exhausted Pi rung identity on the returned result and step_retry event', async () => {
@@ -513,12 +625,17 @@ describe('configured ladder in normal provider-aware dispatch', () => {
       lifecycleCapability: { synchronousSpawnPermit: true },
       systemPromptCapability: { deliversSystemPrompt: true },
       invoke: vi.fn(async ({ model }) => ({
-        success: false, output: `${model} unavailable`, exitCode: 1, modelUnavailable: true,
+        success: false,
+        output: `${model} unavailable`,
+        exitCode: 1,
+        modelUnavailable: true,
       })),
     };
     const events = new ConductorEventEmitter();
     const retries: ConductorEvent[] = [];
-    events.on('step_retry', (event) => { retries.push(event); });
+    events.on('step_retry', (event) => {
+      retries.push(event);
+    });
     const providerRunner = new DefaultStepRunner(pi, 'pi-exhausted-retry', projectRoot, {
       config,
       providerExecution: {
@@ -529,7 +646,10 @@ describe('configured ladder in normal provider-aware dispatch', () => {
     });
     let firstResult: Awaited<ReturnType<DefaultStepRunner['run']>> | undefined;
     let calls = 0;
-    await writeFile(join(projectRoot, 'conduct-state.json'), JSON.stringify({ complexity_tier: 'M', conflict_check: 'done', plan: 'pending' }));
+    await writeFile(
+      join(projectRoot, 'conduct-state.json'),
+      JSON.stringify({ complexity_tier: 'M', conflict_check: 'done', plan: 'pending' }),
+    );
     const conductor = new Conductor({
       projectRoot,
       stateFilePath: join(projectRoot, 'conduct-state.json'),
@@ -569,14 +689,20 @@ describe('configured ladder in normal provider-aware dispatch', () => {
     const codex: LLMProvider = {
       supportsSessionResume: false,
       lifecycleCapability: { synchronousSpawnPermit: true },
-      invoke: vi.fn(async ({ model }) => model === 'gpt-a'
-        ? { success: false, output: 'gpt-a unavailable', exitCode: 1, modelUnavailable: true }
-        : { success: true, output: 'Codex completed', exitCode: 0 }),
+      invoke: vi.fn(async ({ model }) =>
+        model === 'gpt-a'
+          ? { success: false, output: 'gpt-a unavailable', exitCode: 1, modelUnavailable: true }
+          : { success: true, output: 'Codex completed', exitCode: 0 },
+      ),
     };
 
     const result = await executeProviderCandidates({
-      step: 'build', configuredProviders: ['claude'], preferredProvider: 'codex',
-      runtimes: runtimeSet(config, { codex }), sessions: new ProviderSessionScope(vi.fn()), config,
+      step: 'build',
+      configuredProviders: ['claude'],
+      preferredProvider: 'codex',
+      runtimes: runtimeSet(config, { codex }),
+      sessions: new ProviderSessionScope(vi.fn()),
+      config,
       options: { prompt: 'Build.', cwd: '/workspace' },
     });
 
@@ -589,8 +715,11 @@ describe('Pi upstream unknown-model fallback through the real adapter', () => {
   const retired = 'openrouter/retired-model';
   const live = 'openrouter/live-model';
   const environment = {
-    stat: async () => ({ isFile: () => true, isDirectory: () => false }), access: async () => {},
-    env: {}, homeDir: () => '/home/agent', cwd: () => '/workspace',
+    stat: async () => ({ isFile: () => true, isDirectory: () => false }),
+    access: async () => {},
+    env: {},
+    homeDir: () => '/home/agent',
+    cwd: () => '/workspace',
   };
   const configuredLadder: HarnessConfig = {
     llm_providers: {
@@ -603,7 +732,10 @@ describe('Pi upstream unknown-model fallback through the real adapter', () => {
   };
 
   async function piStreams(unavailableForEveryModel = false) {
-    const unknownModel = await readFile(new URL('../fixtures/pi/pi-1.0.0-e10-unknown-model-openrouter.jsonl', import.meta.url), 'utf8');
+    const unknownModel = await readFile(
+      new URL('../fixtures/pi/pi-1.0.0-e10-unknown-model-openrouter.jsonl', import.meta.url),
+      'utf8',
+    );
     const success = await readFile(new URL('../fixtures/pi/terminal-assistant.jsonl', import.meta.url), 'utf8');
     const spawn = vi.fn(async (_file: string, args: readonly string[]) => ({
       stdout: unavailableForEveryModel || args.includes('retired-model') ? unknownModel : success,
@@ -615,8 +747,12 @@ describe('Pi upstream unknown-model fallback through the real adapter', () => {
 
   function dispatch(config: HarnessConfig, pi: PiProvider, runtimes = runtimeSet(config, { pi })) {
     return executeProviderCandidates({
-      step: 'plan', configuredProviders: ['pi'], preferredProvider: 'pi', runtimes,
-      sessions: new ProviderSessionScope(vi.fn()), config,
+      step: 'plan',
+      configuredProviders: ['pi'],
+      preferredProvider: 'pi',
+      runtimes,
+      sessions: new ProviderSessionScope(vi.fn()),
+      config,
       options: { prompt: 'Plan.', cwd: '/workspace' },
     });
   }
@@ -658,7 +794,10 @@ describe('Pi upstream unknown-model fallback through the real adapter', () => {
     expect(result.output).toContain('pi (');
     expect(result.output).toContain('Pi upstream provider reports the requested model as unknown.');
     expect(spawn).toHaveBeenCalledTimes(2);
-    expect(spawn.mock.calls.map(([, args]) => args[args.indexOf('--model') + 1])).toEqual(['retired-model', 'live-model']);
+    expect(spawn.mock.calls.map(([, args]) => args[args.indexOf('--model') + 1])).toEqual([
+      'retired-model',
+      'live-model',
+    ]);
   });
 
   // Covers: task:5
@@ -684,7 +823,9 @@ describe('preferred Pi escalation and fallback isolation', () => {
     const pi = fakeProvider({ success: true, output: 'Pi completed', exitCode: 0 });
     const config: HarnessConfig = {
       llm_provider: 'claude',
-      llm_providers: { pi: { model: small, model_escalation_order: [small, mid, large], model_fallback_ladder: [small, mid, large] } },
+      llm_providers: {
+        pi: { model: small, model_escalation_order: [small, mid, large], model_fallback_ladder: [small, mid, large] },
+      },
       steps: {
         plan: { llm_provider: 'pi' },
         build: { llm_provider: 'pi', model: 'google/gemini-3-pro', effort: 'medium' },
@@ -692,36 +833,72 @@ describe('preferred Pi escalation and fallback isolation', () => {
     };
     const runtimes = runtimeSet(config, { pi });
 
-    await executeProviderCandidates({ step: 'plan', configuredProviders: ['claude'], preferredProvider: 'pi', runtimes, sessions: new ProviderSessionScope(vi.fn()), config, attempt: 3, escalate: true, options: { prompt: 'Plan.', cwd: '/workspace' } });
-    await executeProviderCandidates({ step: 'build', configuredProviders: ['claude'], preferredProvider: 'pi', runtimes, sessions: new ProviderSessionScope(vi.fn()), config, attempt: 3, escalate: true, options: { prompt: 'Build.', cwd: '/workspace' } });
+    await executeProviderCandidates({
+      step: 'plan',
+      configuredProviders: ['claude'],
+      preferredProvider: 'pi',
+      runtimes,
+      sessions: new ProviderSessionScope(vi.fn()),
+      config,
+      attempt: 3,
+      escalate: true,
+      options: { prompt: 'Plan.', cwd: '/workspace' },
+    });
+    await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['claude'],
+      preferredProvider: 'pi',
+      runtimes,
+      sessions: new ProviderSessionScope(vi.fn()),
+      config,
+      attempt: 3,
+      escalate: true,
+      options: { prompt: 'Build.', cwd: '/workspace' },
+    });
 
     expect(pi.invoke).toHaveBeenNthCalledWith(1, expect.objectContaining({ model: mid, effort: 'xhigh' }));
-    expect(pi.invoke).toHaveBeenNthCalledWith(2, expect.objectContaining({ model: 'google/gemini-3-pro', effort: 'high' }));
+    expect(pi.invoke).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ model: 'google/gemini-3-pro', effort: 'high' }),
+    );
   });
 
   it('uses the fallback Pi ladder rather than an auxiliary Claude ladder', async () => {
     const firstPi = 'anthropic/claude-opus-4-5';
     const secondPi = 'openai/gpt-5.6-sol';
     const claude = fakeProvider({
-      success: false, output: 'Claude unavailable', exitCode: 127,
-      providerUnavailable: true, providerUnavailableScope: 'run', providerUnavailableReason: 'Claude unavailable',
+      success: false,
+      output: 'Claude unavailable',
+      exitCode: 127,
+      providerUnavailable: true,
+      providerUnavailableScope: 'run',
+      providerUnavailableReason: 'Claude unavailable',
     });
     const pi: LLMProvider = {
       supportsSessionResume: false,
       lifecycleCapability: { synchronousSpawnPermit: true },
-      invoke: vi.fn(async ({ model }) => model === firstPi
-        ? { success: false, output: `${firstPi} unavailable`, exitCode: 1, modelUnavailable: true }
-        : { success: true, output: 'Pi completed', exitCode: 0 }),
+      invoke: vi.fn(async ({ model }) =>
+        model === firstPi
+          ? { success: false, output: `${firstPi} unavailable`, exitCode: 1, modelUnavailable: true }
+          : { success: true, output: 'Pi completed', exitCode: 0 },
+      ),
     };
     const config: HarnessConfig = {
       llm_provider: 'claude',
-      llm_providers: { pi: { model: firstPi, model_escalation_order: [firstPi, secondPi], model_fallback_ladder: [firstPi, secondPi] } },
+      llm_providers: {
+        pi: { model: firstPi, model_escalation_order: [firstPi, secondPi], model_fallback_ladder: [firstPi, secondPi] },
+      },
     };
 
     const result = await executeProviderCandidates({
-      step: 'plan_review', configuredProviders: ['claude'], preferredProvider: ['claude', 'pi'],
-      runtimes: runtimeSet(config, { claude, pi }), sessions: new ProviderSessionScope(vi.fn()), config,
-      modelFallbackLadder: ['opus', 'sonnet'], options: { prompt: 'Judge.', cwd: '/workspace' },
+      step: 'plan_review',
+      configuredProviders: ['claude'],
+      preferredProvider: ['claude', 'pi'],
+      runtimes: runtimeSet(config, { claude, pi }),
+      sessions: new ProviderSessionScope(vi.fn()),
+      config,
+      modelFallbackLadder: ['opus', 'sonnet'],
+      options: { prompt: 'Judge.', cwd: '/workspace' },
     });
 
     expect(result).toMatchObject({ success: true, actualProvider: 'pi' });
@@ -731,11 +908,17 @@ describe('preferred Pi escalation and fallback isolation', () => {
 
 describe('Pi rate limits in the serial loop with a pi then claude ladder', () => {
   const environment = {
-    stat: async () => ({ isFile: () => true, isDirectory: () => false }), access: async () => {},
-    env: {}, homeDir: () => '/home/agent', cwd: () => '/workspace',
+    stat: async () => ({ isFile: () => true, isDirectory: () => false }),
+    access: async () => {},
+    env: {},
+    homeDir: () => '/home/agent',
+    cwd: () => '/workspace',
   };
   const successStream = [
-    JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: 'Plan written.', stopReason: 'stop' } }),
+    JSON.stringify({
+      type: 'message_end',
+      message: { role: 'assistant', content: 'Plan written.', stopReason: 'stop' },
+    }),
     JSON.stringify({ type: 'agent_end' }),
   ].join('\n');
   const piFixture = (name: string) => readFile(new URL(`../fixtures/pi/${name}`, import.meta.url), 'utf8');
@@ -766,26 +949,35 @@ describe('Pi rate limits in the serial loop with a pi then claude ladder', () =>
     });
     const events = new ConductorEventEmitter();
     const rateLimits: ConductorEvent[] = [];
-    events.on('rate_limit', (event) => { rateLimits.push(event); });
+    events.on('rate_limit', (event) => {
+      rateLimits.push(event);
+    });
     const planAttempts: Array<number | undefined> = [];
     const planResults: Array<Awaited<ReturnType<DefaultStepRunner['run']>>> = [];
     const sleeps: number[] = [];
-    await writeFile(join(projectRoot, 'conduct-state.json'), JSON.stringify({ complexity_tier: 'M', conflict_check: 'done', plan: 'pending' }));
+    await writeFile(
+      join(projectRoot, 'conduct-state.json'),
+      JSON.stringify({ complexity_tier: 'M', conflict_check: 'done', plan: 'pending' }),
+    );
     const conductor = new Conductor({
       projectRoot,
       stateFilePath: join(projectRoot, 'conduct-state.json'),
       events,
       fromStep: 'plan',
       maxRetries: 2,
-      sleepFn: vi.fn(async (ms: number) => { sleeps.push(ms); }),
-      ...(input.providerAvailability ? {
-        providerExecution: {
-          configuredProviders: ['pi', 'claude'],
-          runtimes: new ProviderRuntimeSet([runtime('pi', pi), runtime('claude', claude)]),
-          sessions: new ProviderSessionStore(),
-          providerAvailability: input.providerAvailability,
-        },
-      } : {}),
+      sleepFn: vi.fn(async (ms: number) => {
+        sleeps.push(ms);
+      }),
+      ...(input.providerAvailability
+        ? {
+            providerExecution: {
+              configuredProviders: ['pi', 'claude'],
+              runtimes: new ProviderRuntimeSet([runtime('pi', pi), runtime('claude', claude)]),
+              sessions: new ProviderSessionStore(),
+              providerAvailability: input.providerAvailability,
+            },
+          }
+        : {}),
       stepRunner: {
         run: async (step, state, options) => {
           if (step !== 'plan') return { success: false, output: 'tail barrier' };
@@ -798,7 +990,10 @@ describe('Pi rate limits in the serial loop with a pi then claude ladder', () =>
     });
 
     await conductor.run();
-    const finalState = JSON.parse(await readFile(join(projectRoot, 'conduct-state.json'), 'utf8')) as Record<string, unknown>;
+    const finalState = JSON.parse(await readFile(join(projectRoot, 'conduct-state.json'), 'utf8')) as Record<
+      string,
+      unknown
+    >;
     return { spawn, claude, rateLimits, planAttempts, planResults, sleeps, finalState };
   }
 
@@ -838,10 +1033,15 @@ describe('Pi rate limits in the serial loop with a pi then claude ladder', () =>
     const pi = new PiProvider(dispatchGitGuard, 'pi', spawn as never, environment);
     const attempts: Array<Record<string, unknown>> = [];
     const result = await executeProviderCandidates({
-      step: 'build', configuredProviders: ['pi', 'claude'], preferredProvider: ['pi', 'claude'],
+      step: 'build',
+      configuredProviders: ['pi', 'claude'],
+      preferredProvider: ['pi', 'claude'],
       runtimes: new ProviderRuntimeSet([runtime('pi', pi), runtime('claude', claude)]),
-      sessions: new ProviderSessionScope(vi.fn()), providerAvailability,
-      onAttempt: async (_step, attempt) => { attempts.push(attempt as unknown as Record<string, unknown>); },
+      sessions: new ProviderSessionScope(vi.fn()),
+      providerAvailability,
+      onAttempt: async (_step, attempt) => {
+        attempts.push(attempt as unknown as Record<string, unknown>);
+      },
       options: { prompt: 'Build.', cwd: '/workspace' },
     });
 
