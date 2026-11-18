@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "slug": "prd-audit-halts-needs-human-when-as-built-case-his",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/prd-audit-halts-needs-human-when-as-built-case-his.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/prd-audit-halts-needs-human-when-as-built-case-his.md"
+    },
+    {
+      "kind": "coherence-waiver",
+      "path": ".docs/coherence-waivers/prd-audit-halts-needs-human-when-as-built-case-his.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/prd-audit-halts-needs-human-when-as-built-case-his.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/2026-11-15-prd-audit-halts-needs-human-when-as-built-case-his.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-09-07-durable-prd-widening-decision-reconciliation.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-28-as-built-finding-reconciliation.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/prd-audit-halts-needs-human-when-as-built-case-his.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/prd-audit-halts-needs-human-when-as-built-case-his.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/prd-audit-halts-needs-human-when-as-built-case-his.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/prd-audit-halts-needs-human-when-as-built-case-his.md"
+    }
+  ]
+}
