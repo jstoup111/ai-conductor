@@ -480,8 +480,7 @@ export async function requestRoutedExit(input: RequestRoutedExitInput): Promise<
   // the leaf. A missing closure is expected for that terminal host; a failed
   // closure read for any other host must preserve its repair state.
   const leaf = await resolveSealedLeaf(input.worktree);
-  if (leaf === undefined)
-    return halted(`routed exit host ${input.host}: cannot resolve sealed leaf identity`);
+  if (leaf === undefined) return halted(`routed exit host ${input.host}: cannot resolve sealed leaf identity`);
   if (input.host === leaf) {
     const done = transitionHost(stored, input.host, 'done', { credit: false });
     if (done.kind !== 'updated') return halted(`routed exit host ${input.host}: cannot mark leaf host done`);
@@ -505,8 +504,7 @@ export async function requestRoutedExit(input: RequestRoutedExitInput): Promise<
   }
 
   const closure = await resolveGitRef(git, closureRefFor(input.slug, input.host));
-  if (typeof closure !== 'string')
-    return halted(`routed exit host ${input.host}: non-leaf closure is unavailable`);
+  if (typeof closure !== 'string') return halted(`routed exit host ${input.host}: non-leaf closure is unavailable`);
 
   // Fold-mode audit hosts execute on the leaf. Their work is deliberately
   // left there until FINISH folds the recorded boundary range back onto its

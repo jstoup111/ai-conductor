@@ -1306,7 +1306,7 @@ export function parseRevalidationQueueRecord(blob: string): RevalidationQueueRec
     const sources = Object.entries(foldValue.sources).flatMap(([child, shas]) => {
       const parsedChild = parseChild(Number(child));
       const parsedShas = Array.isArray(shas)
-        ? shas.map((sha) => typeof sha === 'string' ? parseCommitSha(sha) : undefined)
+        ? shas.map((sha) => (typeof sha === 'string' ? parseCommitSha(sha) : undefined))
         : [];
       return parsedChild && parsedShas.length > 0 && parsedShas.every((sha) => sha !== undefined)
         ? [[String(parsedChild), parsedShas as CommitSha[]] as const]

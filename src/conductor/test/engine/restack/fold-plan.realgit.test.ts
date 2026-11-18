@@ -476,7 +476,9 @@ describe('placeFoldCommits (real local Git)', () => {
 
     expect(result.kind).toBe('planned');
     if (result.kind !== 'planned') return;
-    const part = result.commits[0]!.parts.find((candidate) => candidate.kind === 'hunks' && candidate.path === 'notes.md');
+    const part = result.commits[0]!.parts.find(
+      (candidate) => candidate.kind === 'hunks' && candidate.path === 'notes.md',
+    );
     expect(part).toMatchObject({ kind: 'hunks', child: hostOne });
     expect(part?.kind === 'hunks' ? part.hunk.patch : '').toContain('+line with a hard break  \n');
   });

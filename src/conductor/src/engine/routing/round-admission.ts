@@ -148,7 +148,8 @@ export async function deferredPlacementInventory(
     for (const [rawHost, placement] of Object.entries(stored.record.placements ?? {})) {
       if (placement.state !== 'deferred') continue;
       const host = parseChildId(Number(rawHost));
-      if (!host) return { kind: 'unavailable', detail: `routing round ${roundId} has an invalid deferred host ${rawHost}` };
+      if (!host)
+        return { kind: 'unavailable', detail: `routing round ${roundId} has an invalid deferred host ${rawHost}` };
       placements.push({
         host,
         roundId,

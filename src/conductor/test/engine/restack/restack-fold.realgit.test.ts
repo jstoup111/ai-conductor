@@ -194,9 +194,7 @@ describe('planned fold recovery (real local Git)', () => {
         kind: 'audit',
         sealedAuthored: 1,
         execution: 'leaf',
-        items: [
-          { findingId: 'mixed', kind: 'audit', owner: child(1), host: child(1), reason: 'repair', fallback: [] },
-        ],
+        items: [{ findingId: 'mixed', kind: 'audit', owner: child(1), host: child(1), reason: 'repair', fallback: [] }],
         allocation: { [child(1)]: { remTaskIds: ['rem-prd-audit-T1'], blockBodies: [block] } },
         placements: { [child(1)]: { state: 'deferred', leafEntryTip: entry, exitTip: source } },
       },
@@ -204,14 +202,22 @@ describe('planned fold recovery (real local Git)', () => {
     );
     if (route.kind !== 'created') throw new Error(`could not create mixed fold route: ${route.kind}`);
 
-    const folded = await runRestack({ worktree: subject.repo, slug: 'demo', cause: 'fold', git: makeGitRunner(subject.repo) });
+    const folded = await runRestack({
+      worktree: subject.repo,
+      slug: 'demo',
+      cause: 'fold',
+      git: makeGitRunner(subject.repo),
+    });
     expect(folded).toMatchObject({ kind: 'applied' });
 
     expect((await subject.git(['show', 'feat/c1/demo:.docs/plans/demo.md'])).stdout).toBe(foldedPlan);
     await expect(subject.git(['show', 'feat/c1/demo:residual.txt'])).rejects.toMatchObject({ code: 128 });
     expect((await subject.git(['show', 'feat/c2/demo:residual.txt'])).stdout).toBe('after\n');
-    expect((await subject.git(['log', '-Safter', '--format=%H', 'feat/c2/demo', '--', 'residual.txt'])).stdout.trim().split('\n'))
-      .toHaveLength(1);
+    expect(
+      (await subject.git(['log', '-Safter', '--format=%H', 'feat/c2/demo', '--', 'residual.txt'])).stdout
+        .trim()
+        .split('\n'),
+    ).toHaveLength(1);
     expect((await subject.git(['log', '--format=%H', 'feat/c2/demo'])).stdout.trim().split('\n')).not.toContain(source);
     expect((await subject.git(['rev-parse', 'feat/daemon-demo^{tree}'])).stdout.trim()).toBe(preFoldTree);
   });
@@ -296,7 +302,9 @@ describe('planned fold recovery (real local Git)', () => {
     ).resolves.toMatchObject({ kind: 'applied' });
 
     expect((await subject.git(['merge-base', subject.base, 'feat/c1/demo'])).stdout.trim()).toBe(subject.base);
-    await expect(subject.git(['merge-base', '--is-ancestor', advanced, 'feat/c1/demo'])).rejects.toMatchObject({ code: 1 });
+    await expect(subject.git(['merge-base', '--is-ancestor', advanced, 'feat/c1/demo'])).rejects.toMatchObject({
+      code: 1,
+    });
     expect((await subject.git(['show', 'feat/c1/demo:src/server/identity.ts'])).stdout).toBe('deferred identity\n');
     expect((await subject.git(['show', 'feat/daemon-demo:src/server/ten-players.ts'])).stdout).toBe('ten players\n');
   });
@@ -334,10 +342,17 @@ describe('planned fold recovery (real local Git)', () => {
         restack: options.restack,
       });
       const merged = await native([
-        'merge-tree', '--write-tree', '--merge-base', options.range.oldParent, options.newParent, options.range.oldTip,
+        'merge-tree',
+        '--write-tree',
+        '--merge-base',
+        options.range.oldParent,
+        options.newParent,
+        options.range.oldTip,
       ]);
       if (merged.exitCode !== 0) throw new Error(`could not build resolved fold child: ${merged.stderr}`);
-      const committed = await native(['commit-tree', merged.stdout.trim(), '-p', options.newParent], { input: 'resolved fold child\n' });
+      const committed = await native(['commit-tree', merged.stdout.trim(), '-p', options.newParent], {
+        input: 'resolved fold child\n',
+      });
       const tip = committed.stdout.trim() as CommitSha;
       return {
         outcome: { kind: 'changed', baseSha: options.newParent, changedCodePaths: [] },
@@ -364,14 +379,18 @@ describe('planned fold recovery (real local Git)', () => {
 
     expect(result!).toMatchObject({ kind: 'applied' });
     const persisted = (await readFile(join(subject.repo, '.pipeline', 'events.jsonl'), 'utf8'))
-      .split('\n').filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>);
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
     const foldPlan = persisted.find((event) => event.type === 'restack_planned' && event.cause === 'fold');
     expect(foldPlan).toBeDefined();
-    expect(persisted).toContainEqual(expect.objectContaining({
-      type: 'provider_attempt',
-      step: 'rebase',
-      restack: { opId: foldPlan!.opId, cause: 'fold', roundId: 'r1' },
-    }));
+    expect(persisted).toContainEqual(
+      expect.objectContaining({
+        type: 'provider_attempt',
+        step: 'rebase',
+        restack: { opId: foldPlan!.opId, cause: 'fold', roundId: 'r1' },
+      }),
+    );
     expect((await subject.git(['show', 'feat/c2/demo:src/server/identity.ts'])).stdout).toBe('deferred identity\n');
   });
 
@@ -407,18 +426,22 @@ describe('planned fold recovery (real local Git)', () => {
       };
     };
 
-    await expect(runRestack({
-      worktree: subject.repo,
-      slug: 'demo',
-      cause: 'fold',
-      resolver,
-      resolverCap: 1,
-      git: conflict,
-    })).resolves.toMatchObject({ kind: 'halted' });
+    await expect(
+      runRestack({
+        worktree: subject.repo,
+        slug: 'demo',
+        cause: 'fold',
+        resolver,
+        resolverCap: 1,
+        git: conflict,
+      }),
+    ).resolves.toMatchObject({ kind: 'halted' });
 
     expect(attempts).toBe(1);
     expect(await snapshot(subject.git)).toEqual(before);
-    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain('cannot resolve fold conflict');
+    await expect(readFile(join(subject.repo, '.pipeline', 'HALT'), 'utf8')).resolves.toContain(
+      'cannot resolve fold conflict',
+    );
   });
 
   it('aborts its journal and leaves every ref untouched when the folded leaf tree differs', async () => {
