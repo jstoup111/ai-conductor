@@ -798,12 +798,11 @@ export class PiProvider implements LLMProvider {
           gitGuardInstalled: guardDir !== null,
         };
       }
-      const classifiedText =
+      const terminalErrorMessage =
         exitCode === 0 && parsed.terminalAssistantStopReason === 'error'
           ? (parsed.terminalAssistantErrorMessage ?? '')
-          : exitCode !== 0
-            ? stderr
-            : '';
+          : undefined;
+      const classifiedText = terminalErrorMessage ?? (exitCode !== 0 ? stderr : '');
       const classification = classifyPiFailure(classifiedText);
       if (classification !== undefined) {
         const common = { success: false as const, exitCode, ...failedUsage, gitGuardInstalled: guardDir !== null };
@@ -828,11 +827,7 @@ export class PiProvider implements LLMProvider {
           authentication: { provider: 'pi', source: 'cached-login', state: classification.auth },
         };
       }
-      if (
-        exitCode === 0 &&
-        parsed.terminalAssistantStopReason === 'error' &&
-        PI_UPSTREAM_MODEL_UNAVAILABLE_RE.test(parsed.terminalAssistantErrorMessage ?? '')
-      ) {
+      if (terminalErrorMessage !== undefined && PI_UPSTREAM_MODEL_UNAVAILABLE_RE.test(terminalErrorMessage)) {
         return {
           success: false,
           output: `${piDisplayName()} upstream provider reports the requested model as unknown.`,
@@ -852,10 +847,10 @@ export class PiProvider implements LLMProvider {
         };
       }
 
-      if (exitCode === 0 && parsed.terminalAssistantStopReason === 'error') {
+      if (terminalErrorMessage !== undefined) {
         return {
           success: false,
-          output: parsed.terminalAssistantErrorMessage || `${piDisplayName()} reported an error stop with no message`,
+          output: terminalErrorMessage || `${piDisplayName()} reported an error stop with no message`,
           exitCode,
           ...failedUsage,
           gitGuardInstalled: guardDir !== null,
