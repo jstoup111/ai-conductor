@@ -123,12 +123,9 @@ type FullSuiteExecutionFailureDetails =
       signal: null;
     };
 
-export type FullSuiteExecutionFailure =
-  FullSuiteExecutionFailureBase & FullSuiteExecutionFailureDetails;
+export type FullSuiteExecutionFailure = FullSuiteExecutionFailureBase & FullSuiteExecutionFailureDetails;
 
-export type FullSuiteExecutionResult =
-  | FullSuiteExecutionSuccess
-  | FullSuiteExecutionFailure;
+export type FullSuiteExecutionResult = FullSuiteExecutionSuccess | FullSuiteExecutionFailure;
 
 export interface ExecuteFullSuiteOptions {
   projectRoot: string;
@@ -157,11 +154,7 @@ async function runFullSuiteCommand(
   let cleanupPromise: Promise<void> | undefined;
   const timeout = setTimeout(() => {
     timedOut = true;
-    cleanupPromise = terminateProcessTree(
-      subprocess.pid,
-      (signal) => subprocess.kill(signal),
-      cleanup,
-    );
+    cleanupPromise = terminateProcessTree(subprocess.pid, (signal) => subprocess.kill(signal), cleanup);
     void cleanupPromise.catch(() => undefined);
   }, options.timeoutMs);
   try {
@@ -186,18 +179,9 @@ async function runFullSuiteCommand(
   }
 }
 
-const UNLAUNCHABLE_CODES = new Set([
-  'EACCES',
-  'ENOENT',
-  'ENOEXEC',
-  'ENOTDIR',
-  'EPERM',
-]);
+const UNLAUNCHABLE_CODES = new Set(['EACCES', 'ENOENT', 'ENOEXEC', 'ENOTDIR', 'EPERM']);
 const SIGNAL_BY_SHELL_EXIT_CODE = new Map<number, NodeJS.Signals>(
-  Object.entries(osConstants.signals).map(([signal, number]) => [
-    128 + number,
-    signal as NodeJS.Signals,
-  ]),
+  Object.entries(osConstants.signals).map(([signal, number]) => [128 + number, signal as NodeJS.Signals]),
 );
 
 function signalPosixProcessTree(
@@ -233,14 +217,10 @@ function isProcessAlive(pid: number): boolean {
 }
 
 function cleanupFailureMessage(error: unknown): string {
-  return error instanceof Error && error.message.length > 0
-    ? error.message
-    : 'unknown taskkill failure';
+  return error instanceof Error && error.message.length > 0 ? error.message : 'unknown taskkill failure';
 }
 
-function killDirectProcessSafely(
-  killDirectProcess: (signal: NodeJS.Signals) => boolean,
-): void {
+function killDirectProcessSafely(killDirectProcess: (signal: NodeJS.Signals) => boolean): void {
   try {
     killDirectProcess('SIGKILL');
   } catch (error) {
@@ -275,9 +255,7 @@ async function terminateWindowsProcessTree(
     await taskkill(['/PID', String(pid), '/T', '/F']);
   } catch (error) {
     killDirectProcessSafely(killDirectProcess);
-    throw new Error(
-      `Windows process-tree cleanup failed: ${cleanupFailureMessage(error)}`,
-    );
+    throw new Error(`Windows process-tree cleanup failed: ${cleanupFailureMessage(error)}`);
   }
 }
 
@@ -295,16 +273,10 @@ async function terminateProcessTree(
 }
 
 function errorRecord(error: unknown): Record<string, unknown> {
-  return typeof error === 'object' && error !== null
-    ? error as Record<string, unknown>
-    : {};
+  return typeof error === 'object' && error !== null ? (error as Record<string, unknown>) : {};
 }
 
-function errorOutput(
-  error: Record<string, unknown>,
-  stream: 'stdout' | 'stderr',
-  includeErrorMessage = false,
-): string {
+function errorOutput(error: Record<string, unknown>, stream: 'stdout' | 'stderr', includeErrorMessage = false): string {
   const output = error[stream];
   if (typeof output === 'string' && output.length > 0) return output;
   if (stream !== 'stderr') return '';
@@ -312,18 +284,14 @@ function errorOutput(
   return includeErrorMessage && typeof error.message === 'string' ? error.message : '';
 }
 
-function classifyFailure(
-  error: Record<string, unknown>,
-): FullSuiteExecutionFailureDetails {
+function classifyFailure(error: Record<string, unknown>): FullSuiteExecutionFailureDetails {
   if (error.timedOut === true) {
     return { reason: 'timeout', exitCode: null, signal: null };
   }
-  const signal = typeof error.signal === 'string'
-    ? error.signal as NodeJS.Signals
-    : null;
+  const signal = typeof error.signal === 'string' ? (error.signal as NodeJS.Signals) : null;
   if (signal !== null) return { reason: 'signal', exitCode: null, signal };
 
-  const exitCode = Number.isInteger(error.exitCode) ? error.exitCode as number : null;
+  const exitCode = Number.isInteger(error.exitCode) ? (error.exitCode as number) : null;
   if (typeof error.code === 'string' && UNLAUNCHABLE_CODES.has(error.code)) {
     return {
       reason: 'unlaunchable',
@@ -334,9 +302,7 @@ function classifyFailure(
   if (exitCode === 126 || exitCode === 127) {
     return { reason: 'unlaunchable', exitCode, signal: null };
   }
-  const shellSignal = exitCode === null
-    ? undefined
-    : SIGNAL_BY_SHELL_EXIT_CODE.get(exitCode);
+  const shellSignal = exitCode === null ? undefined : SIGNAL_BY_SHELL_EXIT_CODE.get(exitCode);
   if (shellSignal !== undefined) {
     return { reason: 'signal', exitCode: null, signal: shellSignal };
   }
@@ -346,9 +312,7 @@ function classifyFailure(
   return { reason: 'internal_error', exitCode: null, signal: null };
 }
 
-export async function executeFullSuite(
-  options: ExecuteFullSuiteOptions,
-): Promise<FullSuiteExecutionResult> {
+export async function executeFullSuite(options: ExecuteFullSuiteOptions): Promise<FullSuiteExecutionResult> {
   const {
     projectRoot,
     testSuite,
@@ -357,23 +321,21 @@ export async function executeFullSuite(
     clock = () => new Date(),
     processTreeCleanup,
   } = options;
-  const runner = configuredRunner ?? (
-    (command, runnerOptions) => runFullSuiteCommand(
-      command,
-      runnerOptions,
-      processTreeCleanup,
-    )
-  );
+  const runner =
+    configuredRunner ?? ((command, runnerOptions) => runFullSuiteCommand(command, runnerOptions, processTreeCleanup));
   if (testSuite.command === undefined && testSuite.commands === undefined) {
     throw new Error('test_suite.command or test_suite.commands is required for aggregate execution');
   }
-  const entries = testSuite.commands === undefined
-    ? [{
-        command: testSuite.command!,
-        working_directory: resolve(projectRoot, testSuite.working_directory ?? '.'),
-        timeout_seconds: testSuite.timeout_seconds ?? DEFAULT_FULL_SUITE_TIMEOUT_MS / 1_000,
-      }]
-    : resolveFullSuiteCommandEntries({ ...testSuite, project_root: projectRoot });
+  const entries =
+    testSuite.commands === undefined
+      ? [
+          {
+            command: testSuite.command!,
+            working_directory: resolve(projectRoot, testSuite.working_directory ?? '.'),
+            timeout_seconds: testSuite.timeout_seconds ?? DEFAULT_FULL_SUITE_TIMEOUT_MS / 1_000,
+          },
+        ]
+      : resolveFullSuiteCommandEntries({ ...testSuite, project_root: projectRoot });
   const listExecution = testSuite.commands !== undefined;
   const attempts: FullSuiteExecutionAttempt[] = [];
   const aggregateStarted = clock();
@@ -393,15 +355,26 @@ export async function executeFullSuite(
       });
       const ended = clock();
       attempts.push({
-        index, result: 'passed', durationMs: ended.getTime() - started.getTime(),
-        command, workingDirectory: cwd, exitCode: 0, signal: null, terminationReason: null,
-        stdout: result.stdout, stderr: result.stderr,
+        index,
+        result: 'passed',
+        durationMs: ended.getTime() - started.getTime(),
+        command,
+        workingDirectory: cwd,
+        exitCode: 0,
+        signal: null,
+        terminationReason: null,
+        stdout: result.stdout,
+        stderr: result.stderr,
       });
       if (index !== entries.length - 1) continue;
       return {
-        ok: true, command, cwd,
-        startedAt: aggregateStarted.toISOString(), endedAt: ended.toISOString(),
-        durationMs: ended.getTime() - aggregateStarted.getTime(), ...result,
+        ok: true,
+        command,
+        cwd,
+        startedAt: aggregateStarted.toISOString(),
+        endedAt: ended.toISOString(),
+        durationMs: ended.getTime() - aggregateStarted.getTime(),
+        ...result,
         ...(listExecution ? { plannedEntryCount: entries.length, entries: attempts } : {}),
       };
     } catch (error) {
@@ -409,15 +382,24 @@ export async function executeFullSuite(
       const classification = classifyFailure(failure);
       const ended = clock();
       attempts.push({
-        index, result: 'failed', durationMs: ended.getTime() - started.getTime(),
-        command, workingDirectory: cwd, exitCode: classification.exitCode,
-        signal: classification.signal, terminationReason: classification.reason,
+        index,
+        result: 'failed',
+        durationMs: ended.getTime() - started.getTime(),
+        command,
+        workingDirectory: cwd,
+        exitCode: classification.exitCode,
+        signal: classification.signal,
+        terminationReason: classification.reason,
         stdout: errorOutput(failure, 'stdout'),
         stderr: errorOutput(failure, 'stderr', classification.reason === 'internal_error'),
       });
       return {
-        ok: false, ...classification, command, cwd,
-        startedAt: aggregateStarted.toISOString(), endedAt: ended.toISOString(),
+        ok: false,
+        ...classification,
+        command,
+        cwd,
+        startedAt: aggregateStarted.toISOString(),
+        endedAt: ended.toISOString(),
         durationMs: ended.getTime() - aggregateStarted.getTime(),
         stdout: errorOutput(failure, 'stdout'),
         stderr: errorOutput(failure, 'stderr', classification.reason === 'internal_error'),
