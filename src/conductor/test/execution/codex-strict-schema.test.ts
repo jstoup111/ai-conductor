@@ -1,5 +1,10 @@
+// Covers: task:2
 import { describe, expect, it } from 'vitest';
-import { BUILD_REVIEW_CUSTOM_V1_SCHEMA, BUILD_REVIEW_JUDGED_V3_SCHEMAS, parseBuildReviewCustomReviewerPayload } from '../../src/engine/build-review-domain.js';
+import {
+  BUILD_REVIEW_CUSTOM_V1_SCHEMA,
+  BUILD_REVIEW_JUDGED_V3_SCHEMAS,
+  parseBuildReviewCustomReviewerPayload,
+} from '../../src/engine/build-review-domain.js';
 import { AS_BUILT_VERDICT_SCHEMA, validateAsBuiltVerdict } from '../../src/engine/as-built-contract.js';
 import { PRD_WIDENING_RECONCILIATION_SCHEMA } from '../../src/engine/prd-widening-contract.js';
 import { PREREQUISITE_CLAIM_SCHEMA, parseBuilderClaim } from '../../src/engine/routing/prerequisite-claim.js';
@@ -9,7 +14,8 @@ type Json = Record<string, unknown>;
 
 /** The rule the OpenAI strict structured-output API enforces on every object. */
 function objectsMissingRequiredKeys(schema: unknown, path = '$'): string[] {
-  if (Array.isArray(schema)) return schema.flatMap((child, index) => objectsMissingRequiredKeys(child, `${path}[${index}]`));
+  if (Array.isArray(schema))
+    return schema.flatMap((child, index) => objectsMissingRequiredKeys(child, `${path}[${index}]`));
   if (typeof schema !== 'object' || schema === null) return [];
   const node = schema as Json;
   const own: string[] = [];
@@ -17,7 +23,10 @@ function objectsMissingRequiredKeys(schema: unknown, path = '$'): string[] {
     const required = new Set(Array.isArray(node.required) ? node.required : []);
     for (const key of Object.keys(node.properties)) if (!required.has(key)) own.push(`${path}.${key}`);
   }
-  return [...own, ...Object.entries(node).flatMap(([key, child]) => objectsMissingRequiredKeys(child, `${path}.${key}`))];
+  return [
+    ...own,
+    ...Object.entries(node).flatMap(([key, child]) => objectsMissingRequiredKeys(child, `${path}.${key}`)),
+  ];
 }
 
 /** Strict mode also rejects typeless subschemas (e.g. a bare `const`) and `oneOf` (#2748 shipped both). */
@@ -38,12 +47,15 @@ describe('toCodexStrictSchema', () => {
     prdWidening: PRD_WIDENING_RECONCILIATION_SCHEMA,
   };
 
-  it.each(Object.entries(nativeContracts))('types every const and replaces oneOf in the %s contract', (_name, schema) => {
-    expect(typelessOrOneOfNodes(schema)).not.toEqual([]);
-    const strict = toCodexStrictSchema(schema);
-    expect(typelessOrOneOfNodes(strict)).toEqual([]);
-    expect(objectsMissingRequiredKeys(strict)).toEqual([]);
-  });
+  it.each(Object.entries(nativeContracts))(
+    'types every const and replaces oneOf in the %s contract',
+    (_name, schema) => {
+      expect(typelessOrOneOfNodes(schema)).not.toEqual([]);
+      const strict = toCodexStrictSchema(schema);
+      expect(typelessOrOneOfNodes(strict)).toEqual([]);
+      expect(objectsMissingRequiredKeys(strict)).toEqual([]);
+    },
+  );
 
   describe('a contract whose root is a union of object branches', () => {
     const strict = toCodexStrictSchema(PREREQUISITE_CLAIM_SCHEMA) as Json;
@@ -72,21 +84,39 @@ describe('toCodexStrictSchema', () => {
     });
 
     it('round-trips both claim shapes through the closed parser', () => {
-      expect(parseBuilderClaim(fromCodexStrictResult(PREREQUISITE_CLAIM_SCHEMA, {
-        outcome: 'completed', child: null, paths: null, symbols: null,
-      }))).toEqual({ kind: 'none' });
-      expect(parseBuilderClaim(fromCodexStrictResult(PREREQUISITE_CLAIM_SCHEMA, {
-        outcome: 'blocked-by-prerequisite', child: 2, paths: null, symbols: ['parseB'],
-      }))).toEqual({
-        kind: 'claim',
-        claim: { outcome: 'blocked-by-prerequisite', child: 2, symbols: ['parseB'] },
-      });
+      expect(
+        parseBuilderClaim(
+          fromCodexStrictResult(PREREQUISITE_CLAIM_SCHEMA, {
+            outcome: 'completed',
+            child: null,
+            paths: null,
+            symbols: null,
+          }),
+        ),
+      ).toEqual({ kind: 'none' });
+      expect(
+        parseBuilderClaim(
+          fromCodexStrictResult(PREREQUISITE_CLAIM_SCHEMA, {
+            outcome: 'blocked-by-prerequisite',
+            child: 2,
+            paths: null,
+            symbols: ['parseB'],
+          }),
+        ),
+      ).toEqual(parseBuilderClaim({ outcome: 'blocked-by-prerequisite', child: 2, symbols: ['parseB'] }));
     });
 
     it('still rejects a claim that only the branch rules forbid', () => {
-      expect(parseBuilderClaim(fromCodexStrictResult(PREREQUISITE_CLAIM_SCHEMA, {
-        outcome: 'blocked-by-prerequisite', child: 2, paths: null, symbols: null,
-      }))).toEqual({ kind: 'malformed' });
+      expect(
+        parseBuilderClaim(
+          fromCodexStrictResult(PREREQUISITE_CLAIM_SCHEMA, {
+            outcome: 'blocked-by-prerequisite',
+            child: 2,
+            paths: null,
+            symbols: null,
+          }),
+        ),
+      ).toEqual({ kind: 'malformed', detail: 'blocked-by-prerequisite names neither paths nor symbols' });
     });
 
     it('reads a completed result as no claim when it also fills fields only the blocked branch declares', () => {
@@ -96,21 +126,37 @@ describe('toCodexStrictSchema', () => {
         { child: null, paths: ['a.ts'], symbols: ['parseB'] },
         { child: 2, paths: ['a.ts'], symbols: null },
       ]) {
-        expect(parseBuilderClaim(fromCodexStrictResult(PREREQUISITE_CLAIM_SCHEMA, { outcome: 'completed', ...fields })))
-          .toEqual({ kind: 'none' });
+        expect(
+          parseBuilderClaim(fromCodexStrictResult(PREREQUISITE_CLAIM_SCHEMA, { outcome: 'completed', ...fields })),
+        ).toEqual({ kind: 'none' });
       }
     });
 
     it('keeps a property no branch declares, so the closed parser still rejects it', () => {
-      expect(parseBuilderClaim(fromCodexStrictResult(PREREQUISITE_CLAIM_SCHEMA, {
-        outcome: 'completed', child: null, paths: null, symbols: null, extra: true,
-      }))).toEqual({ kind: 'malformed' });
+      expect(
+        parseBuilderClaim(
+          fromCodexStrictResult(PREREQUISITE_CLAIM_SCHEMA, {
+            outcome: 'completed',
+            child: null,
+            paths: null,
+            symbols: null,
+            extra: true,
+          }),
+        ),
+      ).toEqual({ kind: 'malformed', detail: 'completed result carries field extra; completed allows only outcome' });
     });
 
     it('leaves a result whose discriminator matches no branch for the parser to reject', () => {
-      expect(parseBuilderClaim(fromCodexStrictResult(PREREQUISITE_CLAIM_SCHEMA, {
-        outcome: 'unknown', child: 2, paths: ['a.ts'], symbols: null,
-      }))).toEqual({ kind: 'malformed' });
+      expect(
+        parseBuilderClaim(
+          fromCodexStrictResult(PREREQUISITE_CLAIM_SCHEMA, {
+            outcome: 'unknown',
+            child: 2,
+            paths: ['a.ts'],
+            symbols: null,
+          }),
+        ),
+      ).toEqual({ kind: 'malformed', detail: 'outcome is not completed or blocked-by-prerequisite' });
     });
   });
 
@@ -124,8 +170,15 @@ describe('toCodexStrictSchema', () => {
 
   it('round-trips a Codex as-built verdict through the closed validator', () => {
     const strictOutput = {
-      version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],
-      outcomeDelivered: null, affectedOutcome: null, findings: null, violations: null, resolution: null,
+      version: 'v2',
+      verdict: 'APPROVED',
+      reachability: [],
+      driftNotes: [],
+      outcomeDelivered: null,
+      affectedOutcome: null,
+      findings: null,
+      violations: null,
+      resolution: null,
     };
     const verdict = validateAsBuiltVerdict(fromCodexStrictResult(AS_BUILT_VERDICT_SCHEMA, strictOutput));
     expect(verdict).toMatchObject({ ok: true, verdict: { verdict: 'APPROVED' } });
@@ -137,10 +190,13 @@ describe('toCodexStrictSchema', () => {
     security: BUILD_REVIEW_JUDGED_V3_SCHEMAS.security,
   };
 
-  it.each(Object.entries(engineSchemas))('requires every property of every object in the %s build-review schema', (_name, schema) => {
-    expect(objectsMissingRequiredKeys(schema)).not.toEqual([]);
-    expect(objectsMissingRequiredKeys(toCodexStrictSchema(schema))).toEqual([]);
-  });
+  it.each(Object.entries(engineSchemas))(
+    'requires every property of every object in the %s build-review schema',
+    (_name, schema) => {
+      expect(objectsMissingRequiredKeys(schema)).not.toEqual([]);
+      expect(objectsMissingRequiredKeys(toCodexStrictSchema(schema))).toEqual([]);
+    },
+  );
 
   it('makes originally optional properties nullable and keeps required ones unchanged', () => {
     const strict = toCodexStrictSchema(BUILD_REVIEW_CUSTOM_V1_SCHEMA) as Json;
@@ -162,26 +218,46 @@ describe('fromCodexStrictResult', () => {
       kind: 'custom-findings',
       version: 'v2',
       requirement: null,
-      findings: [{
-        concernId: 'float-money',
-        summary: 'Average uses float64.',
-        confidence: null,
-        severity: 'major',
-        evidenceLocations: ['internal/httpapi/average.go:12'],
-        sourceRegions: [{ path: 'internal/httpapi/average.go', startLine: 12, endLine: 12, contentHash: 'sha256:abc', display: 'avg' }],
-      }],
+      findings: [
+        {
+          concernId: 'float-money',
+          summary: 'Average uses float64.',
+          confidence: null,
+          severity: 'major',
+          evidenceLocations: ['internal/httpapi/average.go:12'],
+          sourceRegions: [
+            {
+              path: 'internal/httpapi/average.go',
+              startLine: 12,
+              endLine: 12,
+              contentHash: 'sha256:abc',
+              display: 'avg',
+            },
+          ],
+        },
+      ],
     };
 
     expect(fromCodexStrictResult(BUILD_REVIEW_CUSTOM_V1_SCHEMA, strictOutput)).toEqual({
       kind: 'custom-findings',
       version: 'v2',
-      findings: [{
-        concernId: 'float-money',
-        summary: 'Average uses float64.',
-        severity: 'major',
-        evidenceLocations: ['internal/httpapi/average.go:12'],
-        sourceRegions: [{ path: 'internal/httpapi/average.go', startLine: 12, endLine: 12, contentHash: 'sha256:abc', display: 'avg' }],
-      }],
+      findings: [
+        {
+          concernId: 'float-money',
+          summary: 'Average uses float64.',
+          severity: 'major',
+          evidenceLocations: ['internal/httpapi/average.go:12'],
+          sourceRegions: [
+            {
+              path: 'internal/httpapi/average.go',
+              startLine: 12,
+              endLine: 12,
+              contentHash: 'sha256:abc',
+              display: 'avg',
+            },
+          ],
+        },
+      ],
     });
   });
 });
@@ -189,9 +265,16 @@ describe('fromCodexStrictResult', () => {
 describe('custom-v2 strict result parsing', () => {
   it.each([null, undefined, []])('accepts empty findings represented as %j after Codex normalization', (findings) => {
     const result = fromCodexStrictResult(BUILD_REVIEW_CUSTOM_V1_SCHEMA, {
-      kind: 'custom-findings', version: 'v2', findings, requirement: null,
+      kind: 'custom-findings',
+      version: 'v2',
+      findings,
+      requirement: null,
     });
-    expect(parseBuildReviewCustomReviewerPayload(result)).toEqual({ kind: 'custom-findings', version: 'v2', findings: [] });
+    expect(parseBuildReviewCustomReviewerPayload(result)).toEqual({
+      kind: 'custom-findings',
+      version: 'v2',
+      findings: [],
+    });
   });
 
   it('accepts direct null findings while retaining the closed payload grammar', () => {
@@ -202,7 +285,10 @@ describe('custom-v2 strict result parsing', () => {
 
   it.each([null, undefined])('still rejects invalid version %j', (version) => {
     const result = fromCodexStrictResult(BUILD_REVIEW_CUSTOM_V1_SCHEMA, {
-      kind: 'custom-findings', version, findings: null, requirement: null,
+      kind: 'custom-findings',
+      version,
+      findings: null,
+      requirement: null,
     });
     expect(parseBuildReviewCustomReviewerPayload(result)).toBeUndefined();
   });
@@ -214,28 +300,47 @@ describe('custom-v2 strict result parsing', () => {
   it('discards a non-null flat-schema requirement beside custom findings', () => {
     // Codex filled the unsupported-policy sibling on a real eventSpine finding.
     const finding = {
-      concernId: 'stamped-artifact-field', summary: 'A stamped trailer is read back as coordination.',
+      concernId: 'stamped-artifact-field',
+      summary: 'A stamped trailer is read back as coordination.',
       severity: 'major',
       evidenceLocations: ['src/a.ts:1'],
-      sourceRegions: [{ path: 'src/a.ts', startLine: 1, endLine: 1, contentHash: `sha256:${'a'.repeat(64)}`, display: 'a' }],
+      sourceRegions: [
+        { path: 'src/a.ts', startLine: 1, endLine: 1, contentHash: `sha256:${'a'.repeat(64)}`, display: 'a' },
+      ],
     };
     const result = fromCodexStrictResult(BUILD_REVIEW_CUSTOM_V1_SCHEMA, {
-      kind: 'custom-findings', version: 'v2', findings: [{ ...finding, confidence: null }], requirement: 'Event-spine policy contract: v1',
+      kind: 'custom-findings',
+      version: 'v2',
+      findings: [{ ...finding, confidence: null }],
+      requirement: 'Event-spine policy contract: v1',
     });
-    expect(parseBuildReviewCustomReviewerPayload(result)).toEqual({ kind: 'custom-findings', version: 'v2', findings: [finding] });
+    expect(parseBuildReviewCustomReviewerPayload(result)).toEqual({
+      kind: 'custom-findings',
+      version: 'v2',
+      findings: [finding],
+    });
   });
 
   it('preserves unsupported-policy without inventing findings', () => {
     const result = fromCodexStrictResult(BUILD_REVIEW_CUSTOM_V1_SCHEMA, {
-      kind: 'unsupported-policy', version: null, findings: null, requirement: 'Needs network access',
+      kind: 'unsupported-policy',
+      version: null,
+      findings: null,
+      requirement: 'Needs network access',
     });
-    expect(parseBuildReviewCustomReviewerPayload(result)).toEqual({ kind: 'unsupported-policy', requirement: 'Needs network access' });
+    expect(parseBuildReviewCustomReviewerPayload(result)).toEqual({
+      kind: 'unsupported-policy',
+      requirement: 'Needs network access',
+    });
   });
 
-  it.each(Object.entries(BUILD_REVIEW_JUDGED_V3_SCHEMAS))('keeps %s judged findings required and non-nullable', (_rubric, schema) => {
-    const strict = toCodexStrictSchema(schema) as Json;
-    expect((strict.properties as Json).findings).toMatchObject({ type: 'array' });
-    expect((strict.properties as Json).findings).not.toHaveProperty('anyOf');
-    expect(fromCodexStrictResult(schema, { findings: null })).toEqual({ findings: null });
-  });
+  it.each(Object.entries(BUILD_REVIEW_JUDGED_V3_SCHEMAS))(
+    'keeps %s judged findings required and non-nullable',
+    (_rubric, schema) => {
+      const strict = toCodexStrictSchema(schema) as Json;
+      expect((strict.properties as Json).findings).toMatchObject({ type: 'array' });
+      expect((strict.properties as Json).findings).not.toHaveProperty('anyOf');
+      expect(fromCodexStrictResult(schema, { findings: null })).toEqual({ findings: null });
+    },
+  );
 });

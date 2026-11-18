@@ -12871,7 +12871,12 @@ export class Conductor {
             // verification, the fenced reroute and worktree synchronization are
             // all engine operations. A bad claim deliberately becomes this
             // region's ordinary failed attempt, not a whole-feature escalation.
-            if (step.name === 'build' && routedPrerequisiteClaim !== undefined && routedClaimSlug !== undefined) {
+            if (
+              step.name === 'build' &&
+              routedPrerequisiteClaim !== undefined &&
+              routedClaimSlug !== undefined &&
+              !(await haltMarkerExists(this.projectRoot))
+            ) {
               const settled = await settleRoutedBuildClaim({
                 structuredResult: result.finalStructuredResult,
                 worktree: this.projectRoot,
