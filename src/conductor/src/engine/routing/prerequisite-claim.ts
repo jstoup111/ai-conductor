@@ -16,7 +16,7 @@ import {
   type RouteRecordStoreDependencies,
 } from './route-record-store.js';
 import { remediationReroutedEvent, withOutboxEvent } from './routing-events.js';
-import { validatedReroute, type RouteRecord, type RoundId } from './route-types.js';
+import { parseRevalidationQueueRecord, validatedReroute, type RouteRecord, type RoundId } from './route-types.js';
 
 /**
  * Engine-owned terminal result requested from a routed BUILD provider.  It is
@@ -340,14 +340,19 @@ async function hasOnlyRoundOrHaltCommits(
   }
 }
 
-/** A Folded-from trailer is durable proof that this child is revalidating a
- * folded placement rather than an ordinary routed repair. */
-async function foldedSourceForChild(git: GitRunner, slug: string, child: ChildId): Promise<string | undefined> {
-  const branch = childBranchFor(slug, child);
-  if (!branch.ok) return undefined;
-  const log = await git(['log', '--format=%B', `refs/heads/${branch.branch}`]);
-  if (log.exitCode !== 0) return undefined;
-  return /^Folded-from:\s*([0-9a-f]{7,64})\s*$/im.exec(log.stdout)?.[1];
+/** Fold sources belong to the queue generation admitted by this route, never branch history. */
+async function foldedSourceForChild(
+  stored: Awaited<ReturnType<typeof readRouteRecord>>,
+  git: GitRunner,
+  child: ChildId,
+): Promise<string | undefined> {
+  if (stored.kind !== 'record') return undefined;
+  const pin = stored.record.entry?.revalidation;
+  if (!pin) return undefined;
+  const blob = await git(['cat-file', '-p', pin.queueBlob]);
+  if (blob.exitCode !== 0) return undefined;
+  const queue = parseRevalidationQueueRecord(blob.stdout);
+  return queue?.generation === pin.generation ? queue.fold?.sources[String(child)]?.join(', ') : undefined;
 }
 
 /**
@@ -585,7 +590,7 @@ export async function settleRoutedBuildClaim(
   if (verified.kind !== 'verified')
     return { kind: 'failed', detail: `routed prerequisite claim ${verified.kind}: ${verified.detail}` };
   if (stored.record.kind === 'revalidate') {
-    const foldedFrom = await foldedSourceForChild(git, input.slug, input.host);
+    const foldedFrom = await foldedSourceForChild(stored, git, input.host);
     if (foldedFrom !== undefined) {
       return {
         kind: 'needs-human',

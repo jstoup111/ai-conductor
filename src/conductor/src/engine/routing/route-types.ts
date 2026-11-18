@@ -3,7 +3,7 @@ import { isValidGitBranchName } from '../git-branch-name.js';
 import { parseCommitSha } from '../restack/restack-types.js';
 import type { StackedPrsConfig } from '../../types/config.js';
 import type { StepStatus } from '../../types/steps.js';
-import type { ChildId, CommitSha } from '../../types/restack.js';
+import type { ChildId, CommitSha, RestackOpId } from '../../types/restack.js';
 import type { HostState, RoundId, RouteKind } from '../../types/routing.js';
 export type { HostState, RoundId, RouteKind };
 
@@ -503,6 +503,12 @@ export interface RevalidationQueueRecord {
   readonly generation: number;
   readonly entries: readonly RevalidationQueueEntry[];
   readonly outbox: readonly OutboxEntry[];
+  /** Immutable provenance for entries created by one fold transaction. */
+  readonly fold?: {
+    readonly opId: RestackOpId;
+    readonly sources: Readonly<Record<string, readonly CommitSha[]>>;
+    readonly leafTree: CommitSha;
+  };
 }
 
 const hostStates = new Set<HostState>([
@@ -1292,5 +1298,22 @@ export function parseRevalidationQueueRecord(blob: string): RevalidationQueueRec
     children.add(entry.child);
     previousPosition = entry.position;
   }
-  return { generation: value.generation, entries: parsedEntries, outbox };
+  const foldValue = value.fold;
+  let fold: RevalidationQueueRecord['fold'];
+  if (foldValue !== undefined) {
+    if (!isRecord(foldValue) || typeof foldValue.opId !== 'string' || !isRecord(foldValue.sources)) return undefined;
+    const leafTree = typeof foldValue.leafTree === 'string' ? parseCommitSha(foldValue.leafTree) : undefined;
+    const sources = Object.entries(foldValue.sources).flatMap(([child, shas]) => {
+      const parsedChild = parseChild(Number(child));
+      const parsedShas = Array.isArray(shas)
+        ? shas.map((sha) => typeof sha === 'string' ? parseCommitSha(sha) : undefined)
+        : [];
+      return parsedChild && parsedShas.length > 0 && parsedShas.every((sha) => sha !== undefined)
+        ? [[String(parsedChild), parsedShas as CommitSha[]] as const]
+        : [];
+    });
+    if (!leafTree || sources.length !== Object.keys(foldValue.sources).length) return undefined;
+    fold = { opId: foldValue.opId as RestackOpId, sources: Object.fromEntries(sources), leafTree };
+  }
+  return { generation: value.generation, entries: parsedEntries, outbox, ...(fold === undefined ? {} : { fold }) };
 }
