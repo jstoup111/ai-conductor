@@ -84,6 +84,33 @@ describe('executeFullSuite', () => {
     }));
   });
 
+  it('overrides a stale real-tmpdir child environment with the active Vitest root', async () => {
+    let environment: NodeJS.ProcessEnv | undefined;
+    await executeFullSuite({
+      projectRoot: '/repo',
+      testSuite: { command: 'npm test' },
+      environment: {
+        PATH: '/fixture/bin',
+        AI_CONDUCTOR_TEST_TMP_ROOT: '/tmp',
+        TMPDIR: '/tmp',
+        TMP: '/tmp',
+        TEMP: '/tmp',
+      },
+      runner: async (_command, options) => {
+        environment = options.env;
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+      clock: () => new Date('2026-10-17T00:00:00.000Z'),
+    });
+
+    expect(environment).toEqual(expect.objectContaining({
+      AI_CONDUCTOR_TEST_TMP_ROOT: process.env.AI_CONDUCTOR_TEST_TMP_ROOT,
+      TMPDIR: process.env.TMPDIR,
+      TMP: process.env.TMP,
+      TEMP: process.env.TEMP,
+    }));
+  });
+
   it('uses the aggregate default timeout when none is declared', async () => {
     let forwardedTimeout: number | undefined;
     const runner: FullSuiteCommandRunner = async (_command, options) => {

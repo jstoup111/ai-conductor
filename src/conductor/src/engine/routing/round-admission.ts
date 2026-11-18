@@ -1,7 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { parseChildId, type ChildId } from '../child-context.js';
-import type { CommitSha } from '../restack/restack-types.js';
+import { type ChildId } from '../child-context.js';
 import { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import { FEATURE_EVENT_LOG_PATH, persistOnActiveEventSpine } from '../event-persister.js';
 import { makeGitRunner } from '../rebase.js';
@@ -9,6 +8,7 @@ import { operatorRoundEvent, remediationRoutedEvent, withOutboxEvent } from './r
 import {
   drainOutbox,
   drainRoutingOutboxes,
+  deferredPlacementInventory,
   readRepairMarker,
   readRouteRecord,
   transitionHost,
@@ -112,55 +112,8 @@ export type RoundAdmissionFenceResult = Extract<AdmitRoundResult, { readonly kin
   readonly fence: true;
 };
 
-export interface DeferredPlacement {
-  readonly host: ChildId;
-  readonly roundId: RoundId;
-  readonly leafEntryTip: CommitSha;
-  readonly exitTip?: CommitSha;
-  readonly findingIds: readonly string[];
-}
-
-export type DeferredPlacementInventory =
-  | { readonly kind: 'inventory'; readonly placements: readonly DeferredPlacement[] }
-  | { readonly kind: 'unavailable'; readonly detail: string };
-
-/** Enumerates every deferred placement from one checked route namespace read. */
-export async function deferredPlacementInventory(
-  worktree: string,
-  slug: string,
-  dependencies: RouteRecordStoreDependencies = {},
-): Promise<DeferredPlacementInventory> {
-  const git = dependencies.git ?? makeGitRunner(worktree);
-  let listed: Awaited<ReturnType<typeof git>>;
-  try {
-    listed = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
-  } catch {
-    return { kind: 'unavailable', detail: 'cannot enumerate routing rounds' };
-  }
-  if (listed.exitCode !== 0) return { kind: 'unavailable', detail: 'cannot enumerate routing rounds' };
-  const placements: DeferredPlacement[] = [];
-  for (const ref of listed.stdout.split('\n').filter(Boolean)) {
-    const roundId = parseRoundId(ref.split('/').at(-1) ?? '');
-    if (!roundId || ref !== `refs/conductor/${slug}/routes/${roundId}`)
-      return { kind: 'unavailable', detail: `routing ref ${ref} has an invalid round id` };
-    const stored = await readRouteRecord(worktree, slug, roundId, { git });
-    if (stored.kind !== 'record') return { kind: 'unavailable', detail: `routing round ${roundId} is unreadable` };
-    for (const [rawHost, placement] of Object.entries(stored.record.placements ?? {})) {
-      if (placement.state !== 'deferred') continue;
-      const host = parseChildId(Number(rawHost));
-      if (!host)
-        return { kind: 'unavailable', detail: `routing round ${roundId} has an invalid deferred host ${rawHost}` };
-      placements.push({
-        host,
-        roundId,
-        leafEntryTip: placement.leafEntryTip,
-        ...(placement.exitTip === undefined ? {} : { exitTip: placement.exitTip }),
-        findingIds: stored.record.items.filter((item) => item.host === host).map((item) => item.findingId),
-      });
-    }
-  }
-  return { kind: 'inventory', placements };
-}
+export { deferredPlacementInventory } from './route-record-store.js';
+export type { DeferredPlacement, DeferredPlacementInventory } from './route-record-store.js';
 
 /** Closed rounds with unfurled leaf ranges still own the stack until fold. */
 export async function deferredPlacementsExist(
