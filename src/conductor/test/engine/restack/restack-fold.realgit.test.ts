@@ -418,8 +418,9 @@ describe('planned fold recovery (real local Git)', () => {
         environment: {},
         restack: options.restack,
       });
+      if (attempt.resolved) throw new Error('expected the fold resolver to leave the conflict unresolved');
       return {
-        outcome: { kind: 'conflict_halt', conflicts: ['two.txt'], reason: attempt.reason ?? 'resolver cap exhausted' },
+        outcome: { kind: 'conflict_halt', conflicts: ['two.txt'], reason: attempt.reason },
         tip: undefined,
         rewrites: new Map(),
         candidates: [options.range.oldTip],
