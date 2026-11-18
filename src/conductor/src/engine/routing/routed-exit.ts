@@ -25,7 +25,7 @@ import { resolveGitRef } from './git-ref-resolver.js';
 import { closureRefFor } from './routing-refs.js';
 import {
   assertNever,
-  parseRoundId,
+  parseRevalidationQueueRecord,
   type HostState,
   type RevalidationQueueRecord,
   type RouteRecord,
@@ -193,10 +193,10 @@ export async function advanceRound(
         ? { kind: 'closed' }
         : { kind: 'unavailable', detail: `round close ${wrote.kind}` };
     }
-    const foldLeafHead = stored.record.kind === 'revalidate' ? await hasFoldLeafReturn(worktree, slug, git) : undefined;
+    const fold = stored.record.kind === 'revalidate' ? await foldProvenanceForRound(stored, git) : undefined;
     return returnToLeaf(worktree, slug, stored, {
       git,
-      ...(foldLeafHead === undefined ? {} : { mode: 'fold' as const, foldLeafHead }),
+      ...(fold === undefined ? {} : { mode: 'fold' as const, foldLeafTree: fold.leafTree }),
     });
   }
   const admitted = transitionHost(stored, next.host, 'admitted', { credit: false });
@@ -243,17 +243,17 @@ async function hasOtherOpenRound(
   return false;
 }
 
-/** Revalidation rounds are separate from the route that recorded a fold. */
-async function hasFoldLeafReturn(worktree: string, slug: string, git: GitRunner): Promise<CommitSha | undefined> {
-  const refs = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
-  if (refs.exitCode !== 0) return undefined;
-  for (const ref of refs.stdout.split('\n').filter(Boolean)) {
-    const roundId = parseRoundId(ref.split('/').at(-1) ?? '');
-    if (roundId === undefined) continue;
-    const stored = await readRouteRecord(worktree, slug, roundId, { git });
-    if (stored.kind === 'record' && stored.record.leafReturn !== undefined) return stored.record.leafReturn.head;
-  }
-  return undefined;
+/** Reads fold facts from the exact queue generation pinned by this round. */
+async function foldProvenanceForRound(
+  stored: StoredRouteRecord,
+  git: GitRunner,
+): Promise<NonNullable<RevalidationQueueRecord['fold']> | undefined> {
+  const pin = stored.record.entry?.revalidation;
+  if (!pin) return undefined;
+  const blob = await git(['cat-file', '-p', pin.queueBlob]);
+  if (blob.exitCode !== 0) return undefined;
+  const queue = parseRevalidationQueueRecord(blob.stdout);
+  return queue?.generation === pin.generation ? queue.fold : undefined;
 }
 
 async function restageLeafGates(worktree: string): Promise<string | undefined> {
@@ -305,7 +305,7 @@ export async function returnToLeaf(
     readonly events?: ConductorEventEmitter;
     readonly abandon?: boolean;
     /** A fold has already rebuilt the stack and may preserve unchanged leaf gates. */ readonly mode?: 'fold';
-    readonly foldLeafHead?: CommitSha;
+    readonly foldLeafTree?: CommitSha;
   } = {},
 ): Promise<Extract<AdvanceRoundResult, { readonly kind: 'closed' | 'leaf-returned' | 'unavailable' }>> {
   const git = options.git ?? makeGitRunner(worktree);
@@ -354,18 +354,15 @@ export async function returnToLeaf(
   // An operator abandon restores the host's prior region and deliberately
   // discards its landing. Returning from that path is bookkeeping only: the
   // leaf's prior whole-feature validation remains authoritative.
-  // Folding records the leaf head before replay.  When its rebuilt leaf has
+  // Folding records the leaf tree in its queue generation. When its rebuilt leaf has
   // the same tree, whole-feature verdicts still describe the exact surface
   // under review and need not be re-pended merely for history surgery.
   const foldedTreeUnchanged =
     options.mode === 'fold' && currentStored.record.leafReturn !== undefined
       ? await (async () => {
-          const before = await git([
-            'rev-parse',
-            `${options.foldLeafHead ?? currentStored.record.leafReturn!.head}^{tree}`,
-          ]);
+          const before = options.foldLeafTree;
           const after = await git(['rev-parse', `${resolved}^{tree}`]);
-          return before.exitCode === 0 && after.exitCode === 0 && before.stdout.trim() === after.stdout.trim();
+          return before !== undefined && after.exitCode === 0 && before === after.stdout.trim();
         })()
       : false;
   if (!options.abandon && !foldedTreeUnchanged) {
@@ -479,10 +476,13 @@ export async function requestRoutedExit(input: RequestRoutedExitInput): Promise<
     return halted(`routed exit host ${input.host}: repair marker is unavailable or belongs to another round`);
   }
 
-  // The actual leaf already owns the whole-feature branch. It never enters a
-  // deferred fold set, even when this audit executes every host on the leaf.
-  const closure = await resolveGitRef(git, closureRefFor(input.slug, input.host));
-  if (typeof closure !== 'string') {
+  // The sealed stack identity, not the presence of a closure ref, determines
+  // the leaf. A missing closure is expected for that terminal host; a failed
+  // closure read for any other host must preserve its repair state.
+  const leaf = await resolveSealedLeaf(input.worktree);
+  if (leaf === undefined)
+    return halted(`routed exit host ${input.host}: cannot resolve sealed leaf identity`);
+  if (input.host === leaf) {
     const done = transitionHost(stored, input.host, 'done', { credit: false });
     if (done.kind !== 'updated') return halted(`routed exit host ${input.host}: cannot mark leaf host done`);
     const placements = Object.fromEntries(
@@ -503,6 +503,10 @@ export async function requestRoutedExit(input: RequestRoutedExitInput): Promise<
       ? { kind: 'no-commit-done' }
       : halted(`routed exit host ${input.host}: leaf compare-and-swap ${wrote.kind}`);
   }
+
+  const closure = await resolveGitRef(git, closureRefFor(input.slug, input.host));
+  if (typeof closure !== 'string')
+    return halted(`routed exit host ${input.host}: non-leaf closure is unavailable`);
 
   // Fold-mode audit hosts execute on the leaf. Their work is deliberately
   // left there until FINISH folds the recorded boundary range back onto its

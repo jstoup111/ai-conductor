@@ -158,7 +158,12 @@ function hunkPatches(path: string, diff: string): FoldHunk[] {
   for (let start = firstHunk; start < lines.length;) {
     let end = start + 1;
     while (end < lines.length && !lines[end]!.startsWith('@@ ')) end += 1;
-    hunks.push({ path, patch: `${[...header, ...lines.slice(start, end)].join('\n').trimEnd()}\n`, wholeFile: false });
+    // Preserve hunk-body bytes exactly: `trimEnd()` also removes meaningful
+    // trailing spaces, such as Markdown hard breaks.  The split above retains
+    // one synthetic final empty line for Git's terminating newline; remove
+    // only that terminator before restoring the patch terminator.
+    const patch = [...header, ...lines.slice(start, end)].join('\n');
+    hunks.push({ path, patch: `${patch.replace(/\n$/, '')}\n`, wholeFile: false });
     start = end;
   }
   return hunks;

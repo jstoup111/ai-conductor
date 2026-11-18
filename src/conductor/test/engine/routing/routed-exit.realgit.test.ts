@@ -177,22 +177,62 @@ describe('routed exit (real local Git)', () => {
   // Covers: task:10
   it('settles a leaf-executed leaf host without a placement entry', async () => {
     const subject = await fixture(false);
-    await replaceRoute(subject, (record) => ({ ...record, execution: 'leaf' }));
-    await subject.git(['update-ref', '-d', closureRefFor('demo', host)]);
+    const leaf = parseChildId(3)!;
+    await subject.git(['checkout', '-q', 'feat/daemon-demo']);
+    const head = (await subject.gitRunner(['rev-parse', 'HEAD'])).stdout.trim() as never;
+    const tree = (await subject.gitRunner(['rev-parse', 'HEAD^{tree}'])).stdout.trim() as never;
+    await replaceRoute(subject, (record) => ({
+      ...record,
+      execution: 'leaf',
+      items: [{ ...record.items[0]!, owner: leaf, host: leaf }],
+      allocation: { [leaf]: { remTaskIds: ['rem-1'], blockBodies: ['### Task rem-1\n'] } },
+      hosts: { [leaf]: 'repairing' },
+      entry: { host: leaf, pinnedBase: head, tree },
+    }));
+    const marker = (await subject.gitRunner(['rev-parse', repairMarkerRefFor('demo')])).stdout.trim() as never;
+    await subject.gitRunner([
+      'update-ref',
+      repairMarkerRefFor('demo'),
+      await blob(subject.gitRunner, { host: leaf, roundId, execution: 'leaf' }),
+      marker,
+    ]);
 
     await expect(
       requestRoutedExit({
         worktree: subject.repo,
         slug: 'demo',
         roundId,
-        host,
+        host: leaf,
         git: subject.gitRunner,
       }),
     ).resolves.toEqual({ kind: 'no-commit-done' });
     const stored = await readRouteRecord(subject.repo, 'demo', roundId);
-    expect(stored).toMatchObject({ kind: 'record', record: { hosts: { 1: 'done' } } });
+    expect(stored).toMatchObject({ kind: 'record', record: { hosts: { 3: 'done' } } });
     if (stored.kind !== 'record') throw new Error('route record disappeared');
     expect(Object.hasOwn(stored.record, 'placements')).toBe(false);
+  });
+
+  it('keeps a non-leaf deferred placement and repair marker when its closure read errors', async () => {
+    const subject = await fixture(false);
+    const entry = (await subject.gitRunner(['rev-parse', 'HEAD'])).stdout.trim() as never;
+    await replaceRoute(subject, (record) => ({
+      ...record,
+      execution: 'leaf',
+      placements: { [host]: { state: 'deferred', leafEntryTip: entry } },
+    }));
+    const failingClosureRead: GitRunner = async (args, options) =>
+      args[0] === 'rev-parse' && args.at(-1) === closureRefFor('demo', host)
+        ? { exitCode: 128, stdout: '', stderr: 'simulated closure read failure' }
+        : subject.gitRunner(args, options);
+
+    await expect(
+      requestRoutedExit({ worktree: subject.repo, slug: 'demo', roundId, host, git: failingClosureRead }),
+    ).resolves.toMatchObject({ kind: 'halted', detail: expect.stringContaining('non-leaf closure is unavailable') });
+    await expect(readRouteRecord(subject.repo, 'demo', roundId, { git: subject.gitRunner })).resolves.toMatchObject({
+      kind: 'record',
+      record: { hosts: { 1: 'repairing' }, placements: { 1: { state: 'deferred', leafEntryTip: entry } } },
+    });
+    expect(await refExists(subject.gitRunner, repairMarkerRefFor('demo'))).toBe(true);
   });
 
   // Covers: task:3

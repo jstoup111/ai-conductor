@@ -88,10 +88,10 @@ import {
   routeRecordRefFor,
 } from '../routing/routing-refs.js';
 import { mergeQueueGeneration } from '../routing/revalidation-queue.js';
+import { deferredPlacementInventory } from '../routing/round-admission.js';
 import { childRevalidatedEvent } from '../routing/routing-events.js';
 import {
   parseRevalidationQueueRecord,
-  parseRoundId,
   routingEligible,
   type RevalidationQueueRecord,
 } from '../routing/route-types.js';
@@ -847,32 +847,27 @@ async function deferredFoldRanges(
   worktree: string,
   slug: string,
   git: GitRunner,
-): Promise<readonly FoldRange[] | undefined> {
-  const prefix = `refs/conductor/${slug}/routes/`;
-  const listed = await git(['for-each-ref', '--format=%(refname)', prefix]);
-  if (listed.exitCode !== 0) return undefined;
+): Promise<
+  | { readonly kind: 'ranges'; readonly ranges: readonly FoldRange[] }
+  | { readonly kind: 'unavailable' }
+  | { readonly kind: 'missing-closure'; readonly host: ChildId }
+> {
+  const inventory = await deferredPlacementInventory(worktree, slug, { git });
+  if (inventory.kind !== 'inventory') return { kind: 'unavailable' };
   const ranges: FoldRange[] = [];
-  for (const ref of listed.stdout.split('\n').filter(Boolean)) {
-    const roundId = parseRoundId(ref.slice(prefix.length));
-    if (roundId === undefined || ref !== `${prefix}${roundId}`) return undefined;
-    const stored = await readRouteRecord(worktree, slug, roundId, { git });
-    if (stored.kind !== 'record') return undefined;
-    for (const [rawHost, placement] of Object.entries(stored.record.placements ?? {})) {
-      if (placement.state !== 'deferred') continue;
-      const host = Number(rawHost) as ChildId;
-      const closure = await git(['rev-parse', '-q', '--verify', closureRefFor(slug, host)]);
-      if (closure.exitCode !== 0 && closure.exitCode !== 1) return undefined;
-      if (closure.exitCode === 1) continue;
-      ranges.push({
-        host,
-        roundId,
-        findingIds: stored.record.items.filter((item) => item.host === host).map((item) => item.findingId),
-        leafEntryTip: placement.leafEntryTip,
-        ...(placement.exitTip === undefined ? {} : { exitTip: placement.exitTip }),
-      });
-    }
+  for (const placement of inventory.placements) {
+    const closure = await git(['rev-parse', '-q', '--verify', closureRefFor(slug, placement.host)]);
+    if (closure.exitCode !== 0)
+      return closure.exitCode === 1 ? { kind: 'missing-closure', host: placement.host } : { kind: 'unavailable' };
+    ranges.push({
+      host: placement.host,
+      roundId: placement.roundId,
+      findingIds: placement.findingIds,
+      leafEntryTip: placement.leafEntryTip,
+      ...(placement.exitTip === undefined ? {} : { exitTip: placement.exitTip }),
+    });
   }
-  return ranges;
+  return { kind: 'ranges', ranges };
 }
 
 async function foldFrozenBlocks(
@@ -896,8 +891,15 @@ async function foldFrozenBlocks(
  */
 async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promise<RunRestackResult> {
   const ranges = await deferredFoldRanges(options.worktree, options.slug, git);
-  if (ranges === undefined) return { kind: 'unavailable', detail: 'cannot collect deferred fold ranges' };
-  const collected = await collectFoldSet({ ranges, slug: options.slug, git });
+  if (ranges.kind === 'unavailable') return { kind: 'unavailable', detail: 'cannot collect deferred fold ranges' };
+  if (ranges.kind === 'missing-closure') {
+    await haltRestack(options.worktree, 'fold-owner-invalid', options.events, {
+      child: ranges.host,
+      detail: `deferred fold host ${ranges.host} closure is missing`,
+    });
+    return haltedResult(options.worktree);
+  }
+  const collected = await collectFoldSet({ ranges: ranges.ranges, slug: options.slug, git });
   if (collected.kind === 'unavailable') return { kind: 'unavailable', detail: 'cannot collect deferred fold ranges' };
   if (collected.kind === 'refused') {
     await haltRestack(options.worktree, 'fold-owner-invalid', options.events, {
@@ -911,7 +913,7 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
     worktree: options.worktree,
     slug: options.slug,
     commits: collected.commits,
-    ranges,
+    ranges: ranges.ranges,
     git,
     frozenBlocksFor: (source) => foldFrozenBlocks(options.worktree, options.slug, source, git),
   });
@@ -1281,7 +1283,19 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
               },
             ];
           });
-        const nextQueue = mergeQueueGeneration(queueBefore, entries);
+        const leafTree = await requiredSha(git, `${leafHead}^{tree}`, 'fold leaf tree');
+        const nextQueue = mergeQueueGeneration(queueBefore, entries, {
+          fold: {
+            opId: journal.journal.opId,
+            sources: Object.fromEntries(
+              [...new Set(folded.commits.map((source) => source.owner))].map((owner) => [
+                String(owner),
+                folded.commits.filter((source) => source.owner === owner).map((source) => source.sha),
+              ]),
+            ),
+            leafTree,
+          },
+        });
         const queueBlob = await runGit(git, ['hash-object', '-w', '--stdin'], JSON.stringify(nextQueue));
         const queueNew = queueBlob.exitCode === 0 ? parseCommitSha(queueBlob.stdout.trim()) : undefined;
         if (queueNew === undefined) return { kind: 'unavailable', detail: 'cannot write fold revalidation queue' };

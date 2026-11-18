@@ -17,6 +17,7 @@ import type { RevalidationQueueEntry, RevalidationQueueRecord, RoundId } from '.
 
 export interface MergeQueueGenerationOptions {
   readonly acknowledge?: ChildId;
+  readonly fold?: NonNullable<RevalidationQueueRecord['fold']>;
 }
 
 function mergeEntry(previous: RevalidationQueueEntry, next: RevalidationQueueEntry): RevalidationQueueEntry {
@@ -39,10 +40,19 @@ export function mergeQueueGeneration(
   }
   if (options.acknowledge !== undefined) entries.delete(options.acknowledge);
 
+  const foldCandidate = options.fold ?? current.fold;
+  const foldSources = foldCandidate === undefined
+    ? undefined
+    : Object.fromEntries(
+        Object.entries(foldCandidate.sources).filter(([child]) => entries.has(Number(child) as ChildId)),
+      );
   return {
     generation: current.generation + 1,
     entries: [...entries.values()].sort((left, right) => left.position - right.position),
     outbox: current.outbox,
+    ...(foldCandidate === undefined || Object.keys(foldSources!).length === 0
+      ? {}
+      : { fold: { ...foldCandidate, sources: foldSources! } }),
   };
 }
 

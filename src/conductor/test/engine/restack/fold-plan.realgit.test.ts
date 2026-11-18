@@ -460,6 +460,27 @@ describe('placeFoldCommits (real local Git)', () => {
     expect(stableHunk?.hunk.patch).not.toContain("owner = 'folded'");
   });
 
+  it('keeps trailing Markdown hard-break bytes in a placed hunk', async () => {
+    const subject = await placementFixture();
+    await writeFile(join(subject.repo, 'notes.md'), 'line with a hard break  \n');
+    await subject.git(['add', 'notes.md']);
+    await subject.git(['commit', '-qm', `markdown hard break${trailers('r1', 'c1')}`]);
+    const source = await subject.head();
+
+    const result = await placeFoldCommits({
+      worktree: subject.repo,
+      slug,
+      commits: [{ sha: source as never, roundId: parseRoundId('r1')!, owner: hostOne }],
+      git: makeGitRunner(subject.repo),
+    });
+
+    expect(result.kind).toBe('planned');
+    if (result.kind !== 'planned') return;
+    const part = result.commits[0]!.parts.find((candidate) => candidate.kind === 'hunks' && candidate.path === 'notes.md');
+    expect(part).toMatchObject({ kind: 'hunks', child: hostOne });
+    expect(part?.kind === 'hunks' ? part.hunk.patch : '').toContain('+line with a hard break  \n');
+  });
+
   const block = '### Task rem-prd-audit-T1: Repair\n**Done when:**\n- fixed\n**Child:** 1\n**Round:** r1\n';
 
   async function frozenFixture(plan: string) {

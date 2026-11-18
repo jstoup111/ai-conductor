@@ -60,7 +60,7 @@ function child(value: number) {
   return parsed;
 }
 
-async function fixture(options: { readonly stampedOwner?: boolean } = {}) {
+async function fixture(options: { readonly stampedOwner?: boolean; readonly hardBreak?: boolean } = {}) {
   const repo = await mkdtemp(join(tmpdir(), 'restack-fold-recovery-'));
   repositories.push(repo);
   const git = (args: string[]) => execFile('git', args, { cwd: repo });
@@ -85,7 +85,7 @@ async function fixture(options: { readonly stampedOwner?: boolean } = {}) {
   const foldedSource = await commit(
     options.stampedOwner ? 'deferred repair\n\nRound: r1\nOwner: c1' : 'deferred repair',
     'src/server/identity.ts',
-    'deferred identity\n',
+    options.hardBreak ? 'deferred identity  \n' : 'deferred identity\n',
   );
   const leaf = await commit('leaf build', 'src/server/ten-players.ts', 'ten players\n');
   const route = await createRouteRecord(
@@ -116,6 +116,18 @@ async function fixture(options: { readonly stampedOwner?: boolean } = {}) {
   });
   return { repo, git, base, c1, c2, foldedSource, leaf };
 }
+
+it('folds a last added Markdown hard break without changing the leaf tree', async () => {
+  const subject = await fixture({ stampedOwner: true, hardBreak: true });
+  const before = (await subject.git(['rev-parse', 'feat/daemon-demo^{tree}'])).stdout.trim();
+
+  await expect(
+    runRestack({ worktree: subject.repo, slug: 'demo', cause: 'fold', git: makeGitRunner(subject.repo) }),
+  ).resolves.toMatchObject({ kind: 'applied' });
+
+  expect((await subject.git(['show', 'feat/c1/demo:src/server/identity.ts'])).stdout).toBe('deferred identity  \n');
+  expect((await subject.git(['rev-parse', 'feat/daemon-demo^{tree}'])).stdout.trim()).toBe(before);
+});
 
 async function snapshot(git: (args: string[]) => Promise<{ stdout: string }>) {
   const refs = [
