@@ -22,10 +22,11 @@ function preserveVitestTmpEnvironment(environment: NodeJS.ProcessEnv): NodeJS.Pr
     TMP: process.env.TMP,
     TEMP: process.env.TEMP,
   };
-  const missing = Object.fromEntries(
-    Object.entries(inherited).filter(([key]) => environment[key] === undefined),
-  );
-  return Object.keys(missing).length === 0 ? environment : { ...environment, ...missing };
+  // A caller can deliberately construct a sparse child environment, but it
+  // must not retain a stale real-tmpdir value while the parent test process is
+  // scoped to a run root. Ruby/Jekyll honor these variables too, so keeping a
+  // caller's `/tmp` here lets their scratch trees bypass the global leak guard.
+  return { ...environment, ...inherited };
 }
 
 export interface FullSuiteCommandRunnerOptions {

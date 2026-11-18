@@ -79,6 +79,7 @@ import {
   readRouteRecord,
   routedAppliedLines,
   routedRecordAfterExit,
+  deferredPlacementInventory,
   writeRoutingTransaction,
 } from '../routing/route-record-store.js';
 import {
@@ -88,7 +89,6 @@ import {
   routeRecordRefFor,
 } from '../routing/routing-refs.js';
 import { mergeQueueGeneration } from '../routing/revalidation-queue.js';
-import { deferredPlacementInventory } from '../routing/round-admission.js';
 import { childRevalidatedEvent } from '../routing/routing-events.js';
 import { parseRevalidationQueueRecord, routingEligible, type RevalidationQueueRecord } from '../routing/route-types.js';
 import { recordKickbackCapEvidence } from '../kickback-ledger.js';
