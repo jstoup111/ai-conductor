@@ -516,20 +516,6 @@ export async function fingerprintProviderStateSurface(args: {
   };
 }
 
-export async function fingerprintLiveBoundary(args: {
-  liveCheckout: string;
-  unrelatedProviderState: string;
-  provider?: BuiltInProviderId;
-  selectedAuthPaths?: readonly string[];
-}): Promise<LiveBoundarySnapshot> {
-  const liveCheckout = await fingerprintLiveCheckoutSurface(args.liveCheckout);
-  const providerState = await fingerprintProviderStateSurface(args);
-  return {
-    surfaces: [liveCheckout.surface, providerState.surface],
-    measurements: [liveCheckout.measurement, providerState.measurement],
-  };
-}
-
 /**
  * True iff `path` was removed from a Claude plugin-cache version directory that the
  * BASELINE already marked orphaned (`plugins/cache/<marketplace>/<plugin>/<version>/.orphaned_at`).
