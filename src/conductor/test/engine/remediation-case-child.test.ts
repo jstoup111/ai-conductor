@@ -224,15 +224,22 @@ describe('child-scoped build-review remediation cases', () => {
       store.mutate(async () => ({ value: undefined, nextState: appliedState('child-2-case') })),
     ).resolves.toEqual({ ok: true, value: undefined });
     await expect(
-      publishBuildReviewWorkOrder(root, {
-        version: 'v1',
-        domain: 'build_review',
-        feature: FEATURE,
-        effectId: 'effect-child-2-case',
-        cases: [{ caseId: 'child-2-case', priority: 'high', tasks: [{ title: 'Repair child 2' }] }],
-      }, undefined, child),
+      publishBuildReviewWorkOrder(
+        root,
+        {
+          version: 'v1',
+          domain: 'build_review',
+          feature: FEATURE,
+          effectId: 'effect-child-2-case',
+          cases: [{ caseId: 'child-2-case', priority: 'high', tasks: [{ title: 'Repair child 2' }] }],
+        },
+        undefined,
+        child,
+      ),
     ).resolves.toMatchObject({ ok: true });
-    await expect(markBuildReviewWorkOrderAttempted(root, FEATURE, undefined, child)).resolves.toMatchObject({ ok: true });
+    await expect(markBuildReviewWorkOrderAttempted(root, FEATURE, undefined, child)).resolves.toMatchObject({
+      ok: true,
+    });
     await writeFile(remediationCaseJudgementPath(root, child), '{"stale":"judgement"}');
     const settled = appliedState('child-2-case');
     await store.mutate(async () => ({
@@ -240,7 +247,9 @@ describe('child-scoped build-review remediation cases', () => {
       nextState: { ...settled, cases: settled.cases.map((row) => ({ ...row, resolution: 'resolved' as const })) },
     }));
 
-    await expect(retryContext(root, child).durableBuildReviewRetryContext(undefined)).resolves.toEqual({ kind: 'absent' });
+    await expect(retryContext(root, child).durableBuildReviewRetryContext(undefined)).resolves.toEqual({
+      kind: 'absent',
+    });
     await expect(readFile(buildReviewWorkOrderPath(root, child), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readFile(remediationCaseJudgementPath(root, child), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
@@ -256,7 +265,9 @@ describe('child-scoped build-review remediation cases', () => {
     }));
     await publishBuildReviewWorkOrder(root, workOrder('child-4-case', 'Repair adopted child 4'));
 
-    await expect(retryContext(root, child3).durableBuildReviewRetryContext(undefined)).resolves.toEqual({ kind: 'absent' });
+    await expect(retryContext(root, child3).durableBuildReviewRetryContext(undefined)).resolves.toEqual({
+      kind: 'absent',
+    });
     await expect(readFile(buildReviewWorkOrderPath(root), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readFile(buildReviewWorkOrderPath(root, child4), 'utf8')).resolves.toContain('Repair adopted child 4');
     await expect(retryContext(root, child4).durableBuildReviewRetryContext(undefined)).resolves.toMatchObject({
@@ -281,12 +292,16 @@ describe('child-scoped build-review remediation cases', () => {
     await writeFile(remediationTypedPlanPath(root), '{"legacy":true}');
     await writeFile(join(root, '.pipeline', 'build-stall-question.md'), 'legacy question');
 
-    await expect(retryContext(root, child3).durableBuildReviewRetryContext(undefined)).resolves.toEqual({ kind: 'absent' });
+    await expect(retryContext(root, child3).durableBuildReviewRetryContext(undefined)).resolves.toEqual({
+      kind: 'absent',
+    });
     await Promise.all([
       expect(readFile(buildReviewWorkOrderPath(root), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' }),
       expect(readFile(remediationCaseJudgementPath(root), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' }),
       expect(readFile(remediationTypedPlanPath(root), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' }),
-      expect(readFile(join(root, '.pipeline', 'build-stall-question.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' }),
+      expect(readFile(join(root, '.pipeline', 'build-stall-question.md'), 'utf8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      }),
     ]);
   });
 });
