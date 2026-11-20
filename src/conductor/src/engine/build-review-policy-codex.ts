@@ -2,10 +2,7 @@ import type { InstalledReviewSkill } from './build-review-policy.js';
 import { dirname } from 'node:path';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import {
-  ReviewPolicyCatalogError,
-  type ReviewPolicyCatalogFailureCode,
-} from './build-review-policy-resolver.js';
+import { ReviewPolicyCatalogError, type ReviewPolicyCatalogFailureCode } from './build-review-policy-resolver.js';
 import { CODEX_PROVIDER, providerDescriptor, resolveProviderExecutable } from '../execution/provider-catalog.js';
 
 const CODEX_DISPLAY_NAME = providerDescriptor(CODEX_PROVIDER).displayName;
@@ -48,11 +45,12 @@ export interface CodexPluginDescriptor {
   readonly enabled: boolean;
   readonly availability: 'AVAILABLE' | 'DISABLED_BY_ADMIN';
   readonly localVersion: string | null;
-  readonly source: { readonly type: 'local'; readonly path: string } | { readonly type: 'remote' };
+  readonly source: { readonly type: 'local'; readonly path: string } | { readonly type: 'remote' | 'git' | 'npm' };
 }
 
-export interface CodexPluginReadResponse {
-  readonly plugin: { readonly summary: CodexPluginDescriptor };
+/** `plugin/installed`: installed plugins grouped by marketplace, for the requested cwds. */
+export interface CodexPluginInstalledResponse {
+  readonly marketplaces: readonly { readonly plugins: readonly CodexPluginDescriptor[] }[];
 }
 
 export interface CodexAppServerSession {
@@ -71,14 +69,21 @@ export interface CodexAppServerTransport {
  * The catalog adapter remains the owner of validation; this transport only
  * provides request/response framing and closes the child with its candidate.
  */
-export function createCodexAppServerTransport(executable = resolveProviderExecutable(CODEX_PROVIDER), launch: typeof spawn = spawn): CodexAppServerTransport {
+export function createCodexAppServerTransport(
+  executable = resolveProviderExecutable(CODEX_PROVIDER),
+  launch: typeof spawn = spawn,
+): CodexAppServerTransport {
   return {
     async open(environment) {
-      const child = launch(environment.executable ?? executable, [...(environment.executableArgs ?? []), 'app-server'], {
-        cwd: environment.cwd,
-        env: environment.env,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
+      const child = launch(
+        environment.executable ?? executable,
+        [...(environment.executableArgs ?? []), 'app-server'],
+        {
+          cwd: environment.cwd,
+          env: environment.env,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        },
+      );
       if (!child.stdin || !child.stdout) throw new Error(`${CODEX_DISPLAY_NAME} app server did not provide stdio`);
       const pending = new Map<string, { resolve(value: unknown): void; reject(reason: unknown): void }>();
       let buffered = '';
@@ -100,7 +105,10 @@ export function createCodexAppServerTransport(executable = resolveProviderExecut
             const request = pending.get(id);
             if (!request) continue;
             pending.delete(id);
-            if (message.error !== undefined) request.reject(new Error(`${CODEX_DISPLAY_NAME} app server request failed: ${JSON.stringify(message.error)}`));
+            if (message.error !== undefined)
+              request.reject(
+                new Error(`${CODEX_DISPLAY_NAME} app server request failed: ${JSON.stringify(message.error)}`),
+              );
             else request.resolve(message.result);
           } catch {
             // The next well-formed response remains independently usable.
@@ -108,7 +116,9 @@ export function createCodexAppServerTransport(executable = resolveProviderExecut
         }
       });
       child.once('error', rejectAll);
-      child.once('exit', (code) => rejectAll(new Error(`${CODEX_DISPLAY_NAME} app server exited${code === null ? '' : ` ${code}`}`)));
+      child.once('exit', (code) =>
+        rejectAll(new Error(`${CODEX_DISPLAY_NAME} app server exited${code === null ? '' : ` ${code}`}`)),
+      );
       const abort = () => child.kill();
       environment.signal?.addEventListener('abort', abort, { once: true });
       const session: CodexAppServerSession = {
@@ -132,7 +142,9 @@ export function createCodexAppServerTransport(executable = resolveProviderExecut
       // The app server rejects every request with "Not initialized" until the
       // client completes the initialize request and initialized notification.
       try {
-        await session.request('initialize', { clientInfo: { name: 'ai-conductor', title: 'ai-conductor', version: '0' } });
+        await session.request('initialize', {
+          clientInfo: { name: 'ai-conductor', title: 'ai-conductor', version: '0' },
+        });
         child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'initialized' })}\n`);
       } catch (error) {
         await session.close();
@@ -143,10 +155,7 @@ export function createCodexAppServerTransport(executable = resolveProviderExecut
   };
 }
 
-function catalogError(
-  code: ReviewPolicyCatalogFailureCode,
-  message: string,
-): ReviewPolicyCatalogError {
+function catalogError(code: ReviewPolicyCatalogFailureCode, message: string): ReviewPolicyCatalogError {
   return new ReviewPolicyCatalogError(CODEX_PROVIDER, code, message);
 }
 
@@ -166,7 +175,10 @@ function failureCode(error: unknown, signal: AbortSignal | undefined): ReviewPol
 
 function asCatalogError(error: unknown, signal: AbortSignal | undefined): ReviewPolicyCatalogError {
   if (error instanceof ReviewPolicyCatalogError) return error;
-  return catalogError(failureCode(error, signal), `Unable to load ${CODEX_DISPLAY_NAME} policy catalog: ${String(error)}`);
+  return catalogError(
+    failureCode(error, signal),
+    `Unable to load ${CODEX_DISPLAY_NAME} policy catalog: ${String(error)}`,
+  );
 }
 
 function requireCodexCatalogResponse(
@@ -177,7 +189,10 @@ function requireCodexCatalogResponse(
     throw catalogError('malformed', `Malformed ${CODEX_DISPLAY_NAME} skills/list response`);
   }
   if (response.version !== undefined && response.version !== 1) {
-    throw catalogError('unsupported', `Unsupported ${CODEX_DISPLAY_NAME} skills/list response version ${String(response.version)}`);
+    throw catalogError(
+      'unsupported',
+      `Unsupported ${CODEX_DISPLAY_NAME} skills/list response version ${String(response.version)}`,
+    );
   }
   const entry = response.data.find((candidate) => candidate?.cwd === cwd);
   if (!entry) throw catalogError('partial', `${CODEX_DISPLAY_NAME} skills/list response omitted requested cwd ${cwd}`);
@@ -185,35 +200,54 @@ function requireCodexCatalogResponse(
     throw catalogError('malformed', `Malformed ${CODEX_DISPLAY_NAME} skills/list catalog entry`);
   }
   if (entry.complete === false) throw catalogError('partial', `${CODEX_DISPLAY_NAME} skills/list response was partial`);
-  if (entry.errors.length > 0) throw catalogError('error', `${CODEX_DISPLAY_NAME} skills/list response reported catalog errors`);
+  if (entry.errors.length > 0)
+    throw catalogError('error', `${CODEX_DISPLAY_NAME} skills/list response reported catalog errors`);
   return entry;
 }
 
 function requireCodexSkill(skill: CodexSkillMetadata): void {
-  if (!skill || typeof skill.name !== 'string' || typeof skill.path !== 'string'
-    || !['user', 'repo', 'system', 'admin'].includes(skill.scope)
-    || typeof skill.enabled !== 'boolean'
-    || (skill.pluginId !== null && typeof skill.pluginId !== 'string')
-    || (skill.dependencies !== undefined && (!skill.dependencies
-      || !Array.isArray(skill.dependencies.tools)
-      || skill.dependencies.tools.some((tool) => !tool || typeof tool.value !== 'string')))) {
+  if (
+    !skill ||
+    typeof skill.name !== 'string' ||
+    typeof skill.path !== 'string' ||
+    !['user', 'repo', 'system', 'admin'].includes(skill.scope) ||
+    typeof skill.enabled !== 'boolean' ||
+    (skill.pluginId !== null && typeof skill.pluginId !== 'string') ||
+    (skill.dependencies !== undefined &&
+      (!skill.dependencies ||
+        !Array.isArray(skill.dependencies.tools) ||
+        skill.dependencies.tools.some((tool) => !tool || typeof tool.value !== 'string')))
+  ) {
     throw catalogError('malformed', `Malformed ${CODEX_DISPLAY_NAME} skill metadata`);
   }
 }
 
-function requireCodexPlugin(
-  plugin: CodexPluginReadResponse,
-  pluginId: string,
-): CodexPluginDescriptor {
-  const summary = plugin?.plugin?.summary;
-  if (!summary || typeof summary.id !== 'string' || typeof summary.installed !== 'boolean'
-    || typeof summary.enabled !== 'boolean'
-    || !['AVAILABLE', 'DISABLED_BY_ADMIN'].includes(summary.availability)
-    || (summary.localVersion !== null && typeof summary.localVersion !== 'string')
-    || !summary.source || typeof summary.source !== 'object'
-    || !['local', 'remote'].includes(summary.source.type)
-    || (summary.source.type === 'local' && typeof summary.source.path !== 'string')) {
-    throw catalogError('malformed', `Malformed ${CODEX_DISPLAY_NAME} plugin/read response for ${pluginId}`);
+function requireCodexInstalledPlugins(response: CodexPluginInstalledResponse): readonly CodexPluginDescriptor[] {
+  if (
+    !response ||
+    typeof response !== 'object' ||
+    !Array.isArray(response.marketplaces) ||
+    response.marketplaces.some((marketplace) => !marketplace || !Array.isArray(marketplace.plugins))
+  ) {
+    throw catalogError('malformed', `Malformed ${CODEX_DISPLAY_NAME} plugin/installed response`);
+  }
+  return response.marketplaces.flatMap((marketplace) => marketplace.plugins);
+}
+
+function requireCodexPlugin(summary: CodexPluginDescriptor, pluginId: string): CodexPluginDescriptor {
+  if (
+    !summary ||
+    typeof summary.id !== 'string' ||
+    typeof summary.installed !== 'boolean' ||
+    typeof summary.enabled !== 'boolean' ||
+    !['AVAILABLE', 'DISABLED_BY_ADMIN'].includes(summary.availability) ||
+    (summary.localVersion !== null && typeof summary.localVersion !== 'string') ||
+    !summary.source ||
+    typeof summary.source !== 'object' ||
+    !['local', 'remote', 'git', 'npm'].includes(summary.source.type) ||
+    (summary.source.type === 'local' && typeof summary.source.path !== 'string')
+  ) {
+    throw catalogError('malformed', `Malformed ${CODEX_DISPLAY_NAME} plugin metadata for ${pluginId}`);
   }
   return summary;
 }
@@ -240,15 +274,25 @@ export async function listCodexInstalledReviewSkills(
     const entry = requireCodexCatalogResponse(response as CodexSkillsListResponse, environment.cwd);
     entry.skills.forEach(requireCodexSkill);
 
-    const pluginIds = [...new Set(entry.skills
-      .map((skill) => skill.pluginId)
-      .filter((pluginId): pluginId is string => pluginId !== null))]
-      .sort((left, right) => left.localeCompare(right));
+    const pluginIds = [
+      ...new Set(
+        entry.skills.map((skill) => skill.pluginId).filter((pluginId): pluginId is string => pluginId !== null),
+      ),
+    ].sort((left, right) => left.localeCompare(right));
     const plugins = new Map<string, CodexPluginDescriptor>();
-    for (const pluginId of pluginIds) {
-      const plugin = await session.request('plugin/read', { pluginName: pluginId });
+    if (pluginIds.length > 0) {
+      // `plugin/read` needs a marketplace locator that `skills/list` does not
+      // report; `plugin/installed` returns the same summaries for this cwd.
+      const installed = requireCodexInstalledPlugins(
+        (await session.request('plugin/installed', { cwds: [environment.cwd] })) as CodexPluginInstalledResponse,
+      );
       abortIfNeeded(environment.signal);
-      plugins.set(pluginId, requireCodexPlugin(plugin as CodexPluginReadResponse, pluginId));
+      for (const pluginId of pluginIds) {
+        const summary = installed.find((candidate) => candidate?.id === pluginId);
+        if (!summary)
+          throw catalogError('partial', `${CODEX_DISPLAY_NAME} plugin/installed response omitted plugin ${pluginId}`);
+        plugins.set(pluginId, requireCodexPlugin(summary, pluginId));
+      }
     }
 
     return entry.skills.flatMap((skill): InstalledReviewSkill[] => {
@@ -256,19 +300,23 @@ export async function listCodexInstalledReviewSkills(
       const source = plugin === undefined ? sourceForScope(skill.scope) : 'plugin';
       if (source === undefined) return [];
       const availability = availabilityFor(skill, plugin);
-      return [{
-        semanticName: skill.name,
-        source,
-        ...(plugin === undefined
-          ? {}
-          : { plugin: { id: plugin.id, ...(plugin.localVersion === null ? {} : { version: plugin.localVersion }) } }),
-        installationOrigin: skill.path,
-        canonicalSkillPath: skill.path,
-        packageRoot: plugin?.source.type === 'local' ? plugin.source.path : dirname(skill.path),
-        ...(skill.dependencies?.tools === undefined ? {} : { requiredTools: skill.dependencies.tools.map((dependency) => dependency.value) }),
-        declaredDependencies: [],
-        availability,
-      }];
+      return [
+        {
+          semanticName: skill.name,
+          source,
+          ...(plugin === undefined
+            ? {}
+            : { plugin: { id: plugin.id, ...(plugin.localVersion === null ? {} : { version: plugin.localVersion }) } }),
+          installationOrigin: skill.path,
+          canonicalSkillPath: skill.path,
+          packageRoot: plugin?.source.type === 'local' ? plugin.source.path : dirname(skill.path),
+          ...(skill.dependencies?.tools === undefined
+            ? {}
+            : { requiredTools: skill.dependencies.tools.map((dependency) => dependency.value) }),
+          declaredDependencies: [],
+          availability,
+        },
+      ];
     });
   } catch (error) {
     terminalError = asCatalogError(error, environment.signal);
