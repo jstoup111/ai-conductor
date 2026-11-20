@@ -14844,7 +14844,7 @@ export class Conductor {
                           const detail =
                             recorded.kind === 'persist-failed'
                               ? 'Unable to record stale citation; clear this halt after checking the event spine.'
-                              : `Stale citation ${citation.caseId} is ${citation.state === 'resolved' ? 'settled' : `owned by child ${citation.ownerChild}`}; clear this halt with ai-conductor halt clear --feature ${basename(this.projectRoot)} --rationale "stale citation reviewed".`;
+                              : `Stale citation ${citation.caseId} is ${citation.state === 'resolved' ? 'settled' : `owned by child ${citation.ownerChild}`}; clear this halt after reviewing the stale citation.`;
                           await writeStallHalt(this.projectRoot, effectiveQuestion, detail, this.events, haltClass);
                           await this.retireTerminalBuildStallInputs();
                           await this.emitLoopHalt(effectiveQuestion);
