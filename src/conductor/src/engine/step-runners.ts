@@ -2010,7 +2010,7 @@ export class DefaultStepRunner implements StepRunner {
       const result = await this.dispatchProviderWithLifecycleSupervision(
         step,
         invocationOptions,
-        (options) =>
+        (options, onPreparationRevoked) =>
           this.providerExecutor({
             step,
             configuredProviders: this.configuredProviders,
@@ -2037,6 +2037,7 @@ export class DefaultStepRunner implements StepRunner {
             withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
             prepareCandidateSelfHost:
               this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
+            onPreparationRevoked,
             prepareManagedSessionObservation: this.providerExecutionContext?.prepareManagedSessionObservation,
             onAttempt: this.providerAttempt,
             onCandidateStart: this.providerCandidateStart,
@@ -2121,7 +2122,7 @@ export class DefaultStepRunner implements StepRunner {
     const result = await this.dispatchProviderWithLifecycleSupervision(
       request.step,
       invocationOptions,
-      (options) =>
+      (options, onPreparationRevoked) =>
         this.providerExecutor({
           step: request.step,
           configuredProviders: this.configuredProviders,
@@ -2147,6 +2148,7 @@ export class DefaultStepRunner implements StepRunner {
           withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
           prepareCandidateSelfHost:
             this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
+          onPreparationRevoked,
           prepareManagedSessionObservation: this.providerExecutionContext?.prepareManagedSessionObservation,
           onAttempt: this.providerAttempt,
           onCandidateStart: this.providerCandidateStart,
@@ -2178,7 +2180,10 @@ export class DefaultStepRunner implements StepRunner {
   private async dispatchProviderWithLifecycleSupervision(
     step: StepName,
     baseOptions: ExecuteProviderCandidatesInput['options'],
-    run: (options: ExecuteProviderCandidatesInput['options']) => Promise<ProviderExecutionResult>,
+    run: (
+      options: ExecuteProviderCandidatesInput['options'],
+      onPreparationRevoked: NonNullable<ExecuteProviderCandidatesInput['onPreparationRevoked']>,
+    ) => Promise<ProviderExecutionResult>,
     dispatchRunId?: string,
     executionContext?: ExecutionContext,
   ): Promise<ProviderExecutionResult> {
@@ -2257,7 +2262,7 @@ export class DefaultStepRunner implements StepRunner {
             };
           },
           spawnPermit: lease.spawnPermit,
-        }),
+        }, lease.onRevoked),
       );
       if (isProviderLifecycleHalted(result)) {
         return mapProviderLifecycleHalt(result, this.configuredProviders[0] ?? 'unknown');
