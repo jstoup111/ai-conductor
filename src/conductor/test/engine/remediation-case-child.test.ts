@@ -17,7 +17,8 @@ import {
   markBuildReviewWorkOrderAttempted,
   publishBuildReviewWorkOrder,
 } from '../../src/engine/build-review-work-order.js';
-import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
+import { remediationCaseJudgementPath } from '../../src/engine/remediation-case-artifact.js';
+import { remediationTypedPlanPath } from '../../src/engine/remediation-plan-store.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
@@ -55,24 +56,6 @@ function appliedState(id: string): RemediationCaseStoreState {
       effect: { id: `effect-${id}`, kind: 'action' as const, status: 'applied' as const, workOrderId: `order-${id}` },
     })),
   };
-}
-
-function passAggregate(): unknown {
-  return joinBuildReviewRubricOutcomes({
-    lapId: 'child-settlement' as never,
-    snapshotDigest: 'sha256:child-settlement',
-    results: {
-      testQuality: {
-        kind: 'judged',
-        rubric: 'testQuality',
-        lapId: 'child-settlement' as never,
-        snapshotDigest: 'sha256:child-settlement',
-        contractVersion: 'v3',
-        findings: [],
-        verdict: 'PASS',
-      },
-    },
-  });
 }
 
 async function projectRoot(): Promise<string> {
@@ -232,7 +215,8 @@ describe('child-scoped build-review remediation cases', () => {
     });
   });
 
-  it('settles a clean build-review PASS through the active child case store', async () => {
+  // Covers: task:8
+  it('retires only the settled child region work order and judgement before a later BUILD retry', async () => {
     const root = await projectRoot();
     const child = parseChildId(2)!;
     const store = new RemediationCaseStore(root, FEATURE, { child });
@@ -246,29 +230,63 @@ describe('child-scoped build-review remediation cases', () => {
         feature: FEATURE,
         effectId: 'effect-child-2-case',
         cases: [{ caseId: 'child-2-case', priority: 'high', tasks: [{ title: 'Repair child 2' }] }],
-      }),
+      }, undefined, child),
     ).resolves.toMatchObject({ ok: true });
-    await expect(markBuildReviewWorkOrderAttempted(root, FEATURE)).resolves.toMatchObject({ ok: true });
-    const verdictPath = join(root, '.pipeline', 'children', '2', 'build-review.json');
-    await mkdir(join(root, '.pipeline', 'children', '2'), { recursive: true });
-    await writeFile(verdictPath, JSON.stringify(passAggregate()));
+    await expect(markBuildReviewWorkOrderAttempted(root, FEATURE, undefined, child)).resolves.toMatchObject({ ok: true });
+    await writeFile(remediationCaseJudgementPath(root, child), '{"stale":"judgement"}');
+    const settled = appliedState('child-2-case');
+    await store.mutate(async () => ({
+      value: undefined,
+      nextState: { ...settled, cases: settled.cases.map((row) => ({ ...row, resolution: 'resolved' as const })) },
+    }));
 
-    const conductor = new Conductor({
-      projectRoot: root,
-      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
-      stepRunner: {} as never,
-      events: new ConductorEventEmitter(),
-      config: { build_review: { adjudication: { enabled: true } } } as never,
-    }) as unknown as {
-      activeRegionChild: typeof child;
-      settleRemediationCasesOnCleanBuildReview(): Promise<{ kind: string }>;
-    };
-    conductor.activeRegionChild = child;
+    await expect(retryContext(root, child).durableBuildReviewRetryContext(undefined)).resolves.toEqual({ kind: 'absent' });
+    await expect(readFile(buildReviewWorkOrderPath(root, child), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(remediationCaseJudgementPath(root, child), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
 
-    await expect(conductor.settleRemediationCasesOnCleanBuildReview()).resolves.toEqual({ kind: 'settled' });
-    await expect(store.read()).resolves.toMatchObject({
-      ok: true,
-      state: { cases: [expect.objectContaining({ id: 'child-2-case', resolution: 'resolved' })] },
+  // Covers: task:12
+  it('adopts a legacy feature-level order only into its open child owner before BUILD', async () => {
+    const root = await projectRoot();
+    const child3 = parseChildId(3)!;
+    const child4 = parseChildId(4)!;
+    await new RemediationCaseStore(root, FEATURE, { child: child4 }).mutate(async () => ({
+      value: undefined,
+      nextState: appliedState('child-4-case'),
+    }));
+    await publishBuildReviewWorkOrder(root, workOrder('child-4-case', 'Repair adopted child 4'));
+
+    await expect(retryContext(root, child3).durableBuildReviewRetryContext(undefined)).resolves.toEqual({ kind: 'absent' });
+    await expect(readFile(buildReviewWorkOrderPath(root), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readFile(buildReviewWorkOrderPath(root, child4), 'utf8')).resolves.toContain('Repair adopted child 4');
+    await expect(retryContext(root, child4).durableBuildReviewRetryContext(undefined)).resolves.toMatchObject({
+      kind: 'ready',
+      context: expect.stringContaining('Repair adopted child 4'),
     });
+  });
+
+  // Covers: task:13
+  it('removes unowned legacy remediation inputs before a stacked child BUILD retry', async () => {
+    const root = await projectRoot();
+    const child3 = parseChildId(3)!;
+    const child4 = parseChildId(4)!;
+    const resolved = appliedState('resolved-child-4-case');
+    await new RemediationCaseStore(root, FEATURE, { child: child4 }).mutate(async () => ({
+      value: undefined,
+      nextState: { ...resolved, cases: resolved.cases.map((row) => ({ ...row, resolution: 'resolved' as const })) },
+    }));
+    await publishBuildReviewWorkOrder(root, workOrder('resolved-child-4-case', 'Must not be delivered'));
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    await writeFile(remediationCaseJudgementPath(root), '{"legacy":true}');
+    await writeFile(remediationTypedPlanPath(root), '{"legacy":true}');
+    await writeFile(join(root, '.pipeline', 'build-stall-question.md'), 'legacy question');
+
+    await expect(retryContext(root, child3).durableBuildReviewRetryContext(undefined)).resolves.toEqual({ kind: 'absent' });
+    await Promise.all([
+      expect(readFile(buildReviewWorkOrderPath(root), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' }),
+      expect(readFile(remediationCaseJudgementPath(root), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' }),
+      expect(readFile(remediationTypedPlanPath(root), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' }),
+      expect(readFile(join(root, '.pipeline', 'build-stall-question.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' }),
+    ]);
   });
 });
