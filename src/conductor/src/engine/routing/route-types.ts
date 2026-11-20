@@ -987,7 +987,7 @@ function parseHostPlacements(
           : undefined;
     if (!leafEntryTip || (rawPlacement.exitTip !== undefined && !exitTip)) return undefined;
     if (rawPlacement.state === 'placed') {
-      if (!exitTip) return undefined;
+      if (!exitTip || hosts[child] !== 'done') return undefined;
       placements[child] = { state: 'placed', leafEntryTip, exitTip };
       continue;
     }

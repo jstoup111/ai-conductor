@@ -350,6 +350,11 @@ describe('ref-backed route record store', () => {
           execution: 'leaf',
           placements: { [c1]: { state: 'deferred', leafEntryTip } },
         },
+        'placed placement on repairing host': {
+          ...routeRecord,
+          execution: 'leaf',
+          placements: { [c1]: { state: 'placed', leafEntryTip, exitTip } },
+        },
         'foldable deferred placement on repairing host': {
           ...routeRecord,
           execution: 'leaf',
