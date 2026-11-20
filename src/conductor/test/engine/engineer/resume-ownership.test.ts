@@ -208,6 +208,7 @@ describe('resume ownership', () => {
       };
       const options = {
         registryPath,
+        engineerDir: join(root, 'engineer'),
         env: {},
         git,
         gh: async () => ({ stdout: '{}', stderr: '', exitCode: 0 }),
@@ -303,6 +304,7 @@ describe('resume ownership', () => {
         { kind: 'resume', target: branch, project: 'project', provider: 'codex' },
         {
           registryPath,
+          engineerDir: join(root, 'engineer'),
           env: {},
           git,
           gh: async () => ({ stdout: '{}', stderr: '', exitCode: 0 }),
