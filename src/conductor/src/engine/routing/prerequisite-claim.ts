@@ -9,6 +9,7 @@ import { closureRefFor, rejectedPinRefFor } from './routing-refs.js';
 import { resolveCitedPaths } from './cannot-host.js';
 import { resolveGitRef } from './git-ref-resolver.js';
 import {
+  readPinnedQueueFold,
   readRepairMarker,
   readRouteRecord,
   transitionHost,
@@ -16,7 +17,7 @@ import {
   type RouteRecordStoreDependencies,
 } from './route-record-store.js';
 import { remediationReroutedEvent, withOutboxEvent } from './routing-events.js';
-import { parseRevalidationQueueRecord, validatedReroute, type RouteRecord, type RoundId } from './route-types.js';
+import { validatedReroute, type RouteRecord, type RoundId } from './route-types.js';
 
 /**
  * Engine-owned terminal result requested from a routed BUILD provider.  It is
@@ -347,12 +348,7 @@ async function foldedSourceForChild(
   child: ChildId,
 ): Promise<string | undefined> {
   if (stored.kind !== 'record') return undefined;
-  const pin = stored.record.entry?.revalidation;
-  if (!pin) return undefined;
-  const blob = await git(['cat-file', '-p', pin.queueBlob]);
-  if (blob.exitCode !== 0) return undefined;
-  const queue = parseRevalidationQueueRecord(blob.stdout);
-  return queue?.generation === pin.generation ? queue.fold?.sources[String(child)]?.join(', ') : undefined;
+  return (await readPinnedQueueFold(stored, git))?.sources[String(child)]?.join(', ');
 }
 
 /**

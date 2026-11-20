@@ -13,6 +13,7 @@ import { publishedStackRefusal } from '../stack-publication.js';
 import {
   drainOutbox,
   drainQueueOutbox,
+  readPinnedQueueFold,
   readRevalidationQueue,
   readRepairMarker,
   readRouteRecord,
@@ -25,7 +26,6 @@ import { resolveGitRef } from './git-ref-resolver.js';
 import { closureRefFor } from './routing-refs.js';
 import {
   assertNever,
-  parseRevalidationQueueRecord,
   type HostState,
   type RevalidationQueueRecord,
   type RouteRecord,
@@ -193,7 +193,7 @@ export async function advanceRound(
         ? { kind: 'closed' }
         : { kind: 'unavailable', detail: `round close ${wrote.kind}` };
     }
-    const fold = stored.record.kind === 'revalidate' ? await foldProvenanceForRound(stored, git) : undefined;
+    const fold = stored.record.kind === 'revalidate' ? await readPinnedQueueFold(stored, git) : undefined;
     return returnToLeaf(worktree, slug, stored, {
       git,
       ...(fold === undefined ? {} : { mode: 'fold' as const, foldLeafTree: fold.leafTree }),
@@ -241,19 +241,6 @@ async function hasOtherOpenRound(
     if (other.record.phase !== 'closed') return true;
   }
   return false;
-}
-
-/** Reads fold facts from the exact queue generation pinned by this round. */
-async function foldProvenanceForRound(
-  stored: StoredRouteRecord,
-  git: GitRunner,
-): Promise<NonNullable<RevalidationQueueRecord['fold']> | undefined> {
-  const pin = stored.record.entry?.revalidation;
-  if (!pin) return undefined;
-  const blob = await git(['cat-file', '-p', pin.queueBlob]);
-  if (blob.exitCode !== 0) return undefined;
-  const queue = parseRevalidationQueueRecord(blob.stdout);
-  return queue?.generation === pin.generation ? queue.fold : undefined;
 }
 
 async function restageLeafGates(worktree: string): Promise<string | undefined> {
