@@ -231,6 +231,7 @@ export function registerBuiltins(
         feature: ctx.startContext.feature ?? 'unknown',
         project: ctx.startContext.project ?? 'unknown',
         metrics: ctx.startContext.metrics,
+        installProcessSignalHandlers: ctx.startContext.installProcessSignalHandlers,
         spanExporter: ctx.otelSpanExporter,
         env: (ctx.startContext as import('../types/plugin.js').VisualizerStartContext & { env?: NodeJS.ProcessEnv }).env,
         resolvedWarningsHandled: ctx.resolvedWarningsHandled,

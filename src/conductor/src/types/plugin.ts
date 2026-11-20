@@ -55,6 +55,12 @@ export interface VisualizerStartContext {
   pipelineDir?: string;
   /** False when a daemon-lifetime listener owns metrics for this event stream. */
   metrics?: boolean;
+  /**
+   * Whether a visualizer may install process signal handlers for its own
+   * lifecycle. Daemon dispatches leave shutdown to their attachment owner so
+   * child closing events remain observable during the SIGTERM drain.
+   */
+  installProcessSignalHandlers?: boolean;
 }
 export interface ConductorEventBus {
   emit(event: import('./events.js').ConductorEvent): Promise<void>;
