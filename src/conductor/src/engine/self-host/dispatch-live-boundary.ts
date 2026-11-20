@@ -80,7 +80,8 @@ export class DispatchLiveBoundary {
       const [liveSurface, providerSurface] = await Promise.all([live.promise, provider.promise]);
 
       const snapshot = await this.snapshot();
-      const containment = await this.memoize(this.containments, args.liveCheckout, () => args.probe(snapshot), false).promise;
+      const containment = await this.memoize(this.containments, args.liveCheckout, () => args.probe(snapshot), false)
+        .promise;
       const measurements = [
         ...(live.created ? [liveSurface.measurement] : []),
         ...(provider.created ? [providerSurface.measurement] : []),
@@ -155,7 +156,10 @@ export class DispatchLiveBoundary {
   private async snapshot(): Promise<LiveBoundarySnapshot> {
     const liveEntries = [...this.liveSurfaces.entries()];
     const providerEntries = [...this.providerSurfaces.entries()];
-    const surfaces = await Promise.all([...liveEntries.map(([, surface]) => surface), ...providerEntries.map(([, surface]) => surface)]);
+    const surfaces = await Promise.all([
+      ...liveEntries.map(([, surface]) => surface),
+      ...providerEntries.map(([, surface]) => surface),
+    ]);
     const containmentByLiveCheckout = new Map<string, ContainmentVerdict>();
     for (const [root, containment] of this.containments) containmentByLiveCheckout.set(root, await containment);
     return {
@@ -167,7 +171,12 @@ export class DispatchLiveBoundary {
 
   private finalizeIfReady(): Promise<void> | undefined {
     if (this.verification) return this.verification;
-    if (!this.ended || this.leases !== 0 || this.pendingAcquires !== 0 || this.liveSurfaces.size + this.providerSurfaces.size === 0)
+    if (
+      !this.ended ||
+      this.leases !== 0 ||
+      this.pendingAcquires !== 0 ||
+      this.liveSurfaces.size + this.providerSurfaces.size === 0
+    )
       return undefined;
     this.verification = this.finalize();
     return this.verification;
@@ -176,12 +185,23 @@ export class DispatchLiveBoundary {
   private async finalize(): Promise<void> {
     try {
       const containments = await Promise.all(this.containments.values());
-      const result = await this.verify(await this.snapshot(), { contained: false, reason: 'containment not evaluated' });
+      const result = await this.verify(await this.snapshot(), {
+        contained: false,
+        reason: 'containment not evaluated',
+      });
       for (const containment of containments) {
         if (containment.contained) {
-          await this.options.emit({ type: 'self_host_containment_verdict', contained: true, evidence: containment.evidence });
+          await this.options.emit({
+            type: 'self_host_containment_verdict',
+            contained: true,
+            evidence: containment.evidence,
+          });
         } else {
-          await this.options.emit({ type: 'self_host_containment_verdict', contained: false, reason: containment.reason });
+          await this.options.emit({
+            type: 'self_host_containment_verdict',
+            contained: false,
+            reason: containment.reason,
+          });
         }
       }
       if (result.containedDrift) {

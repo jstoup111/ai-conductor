@@ -165,9 +165,24 @@ describe('DispatchLiveBoundary', () => {
       return { ok: false, reason: 'live checkout drift reported' };
     });
     const violations: string[] = [];
-    const h = harness({ fingerprintLiveCheckout, fingerprintProviderState, verify, onViolation: (reason) => violations.push(reason) });
-    const failed = h.boundary.acquire({ liveCheckout: '/live', providerHome: '/failed', provider: 'claude', probe: h.probe });
-    const succeeding = h.boundary.acquire({ liveCheckout: '/live', providerHome: '/good', provider: 'claude', probe: h.probe });
+    const h = harness({
+      fingerprintLiveCheckout,
+      fingerprintProviderState,
+      verify,
+      onViolation: (reason) => violations.push(reason),
+    });
+    const failed = h.boundary.acquire({
+      liveCheckout: '/live',
+      providerHome: '/failed',
+      provider: 'claude',
+      probe: h.probe,
+    });
+    const succeeding = h.boundary.acquire({
+      liveCheckout: '/live',
+      providerHome: '/good',
+      provider: 'claude',
+      probe: h.probe,
+    });
     await Promise.resolve();
     resolveLive();
     await expect(failed).rejects.toThrow('provider walk failed');
@@ -196,10 +211,18 @@ describe('DispatchLiveBoundary', () => {
       onViolation: (reason) => violations.push(reason),
     });
     const baseline = await h.boundary.acquire({
-      liveCheckout: '/live', providerHome: '/baseline', provider: 'claude', probe: h.probe,
+      liveCheckout: '/live',
+      providerHome: '/baseline',
+      provider: 'claude',
+      probe: h.probe,
     });
     await baseline.release();
-    const pending = h.boundary.acquire({ liveCheckout: '/live', providerHome: '/pending', provider: 'claude', probe: h.probe });
+    const pending = h.boundary.acquire({
+      liveCheckout: '/live',
+      providerHome: '/pending',
+      provider: 'claude',
+      probe: h.probe,
+    });
     const ending = h.boundary.end();
     await Promise.resolve();
     expect(violations).toEqual([]);
@@ -222,7 +245,10 @@ describe('DispatchLiveBoundary', () => {
     await coordinator.runDispatch(async (openWindow) => {
       h = harness({ openWindow, fingerprintProviderState: vi.fn(() => pendingProvider) });
       pending = h.boundary.acquire({
-        liveCheckout: '/live', providerHome: '/provider', provider: 'claude', probe: h.probe,
+        liveCheckout: '/live',
+        providerHome: '/provider',
+        provider: 'claude',
+        probe: h.probe,
       });
       await h.boundary.end({ waitForPending: false });
     });
@@ -239,7 +265,7 @@ describe('DispatchLiveBoundary', () => {
   });
 
   // Covers: task:2, task:3
-  it('uses each live checkout root\'s own containment verdict at final verification', async () => {
+  it("uses each live checkout root's own containment verdict at final verification", async () => {
     const root = await mkdtemp(join(tmpdir(), 'dispatch-live-boundary-per-root-'));
     const first = join(root, 'first');
     const second = join(root, 'second');
@@ -247,13 +273,20 @@ describe('DispatchLiveBoundary', () => {
     const violations: string[] = [];
     try {
       await Promise.all([mkdir(first), mkdir(second), mkdir(providerHome)]);
-      const boundary = new DispatchLiveBoundary({ emit: async () => undefined, onViolation: (reason) => violations.push(reason) });
+      const boundary = new DispatchLiveBoundary({
+        emit: async () => undefined,
+        onViolation: (reason) => violations.push(reason),
+      });
       const firstLease = await boundary.acquire({
-        liveCheckout: first, providerHome, provider: 'claude',
+        liveCheckout: first,
+        providerHome,
+        provider: 'claude',
         probe: async () => ({ contained: true, evidence: 'first contained' }),
       });
       const secondLease = await boundary.acquire({
-        liveCheckout: second, providerHome, provider: 'claude',
+        liveCheckout: second,
+        providerHome,
+        provider: 'claude',
         probe: async () => ({ contained: false, reason: 'second unproven' }),
       });
       await writeFile(join(second, 'escaped.txt'), 'drift');
