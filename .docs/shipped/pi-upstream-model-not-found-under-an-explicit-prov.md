@@ -4,6 +4,13 @@ spec_hash: db4177f200b3499cfec48221572cb7670ac7e97bd97a29a2169f162f86ab8125
 pr: https://github.com/jstoup111/ai-conductor/pull/3711
 shipped: 2026-11-20
 engine_version: 20261118T023224Z-cfa8d246f3c8
+findings:
+  - gate: prd_audit
+    grade: OVER_SCOPE
+    criterion: NC-1
+    summary: "This reformatting is outside the planned tasks. It changes no operator-visible output, CLI result, or persisted state; the only cost is a larger review diff and possible merge-conflict surface."
+    accepted: false
+    authority: engine
 ---
 
 ## Cost
