@@ -1,8 +1,16 @@
-// Covers: task:14
-import { describe, expect, it } from 'vitest';
+// Covers: task:14, task:15
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
 
-import { classifyBuildStallStaleCitation } from '../../src/engine/build-stall-stale-citation.js';
+import {
+  classifyBuildStallStaleCitation,
+  recordBuildStallStaleCitation,
+} from '../../src/engine/build-stall-stale-citation.js';
 import { parseChildId } from '../../src/engine/child-context.js';
+import { ConductorEventEmitter } from '../../src/engine/conductor-event-emitter.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
 import type {
   RemediationCaseRecord,
   RemediationCaseStoreReadResult,
@@ -12,6 +20,22 @@ import type {
 const FEATURE = { version: 'v1', repository: 'acme/conductor', feature: 'stale-citation' } as const;
 const child3 = parseChildId(3)!;
 const child4 = parseChildId(4)!;
+const temporaryDirectories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+});
+
+async function eventSpine(): Promise<{ root: string; events: ConductorEventEmitter; persister: EventPersister }> {
+  const root = await mkdtemp(join(tmpdir(), 'build-stall-stale-citation-'));
+  temporaryDirectories.push(root);
+  const events = new ConductorEventEmitter();
+  const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
+  persister.start();
+  return { root, events, persister };
+}
+
+const resolvedCitation = { kind: 'stale', caseId: 'case-resolved', ownerChild: child4, state: 'resolved' } as const;
 
 function record(id: string, resolution: RemediationCaseRecord['resolution']): RemediationCaseRecord {
   return {
@@ -110,5 +134,69 @@ describe('build-stall stale-citation classifier', () => {
         ]),
       ),
     ).toEqual({ kind: 'not-stale' });
+  });
+});
+
+describe('build-stall stale-citation recorder', () => {
+  it('persists the citation fields and its first attempt on the active event spine', async () => {
+    const { root, events, persister } = await eventSpine();
+    try {
+      await expect(recordBuildStallStaleCitation(root, events, resolvedCitation, 2)).resolves.toEqual({ kind: 'recorded', attempt: 1 });
+      const lines = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n');
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0]!)).toMatchObject({
+        type: 'build_stall_stale_citation', caseId: 'case-resolved', ownerChild: 4,
+        state: 'resolved', resolvedTasks: 2, attempt: 1,
+      });
+    } finally {
+      persister.stop();
+    }
+  });
+
+  it('counts consecutive identical citations across fresh recorder instances', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'build-stall-stale-citation-'));
+    temporaryDirectories.push(root);
+    for (const attempt of [1, 2, 3]) {
+      const events = new ConductorEventEmitter();
+      const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
+      persister.start();
+      try {
+        await expect(recordBuildStallStaleCitation(root, events, resolvedCitation, 2))
+          .resolves.toEqual({ kind: 'recorded', attempt });
+      } finally {
+        persister.stop();
+      }
+    }
+  });
+
+  it('restarts at one after task progress or a different case', async () => {
+    const { root, events, persister } = await eventSpine();
+    try {
+      await recordBuildStallStaleCitation(root, events, resolvedCitation, 2);
+      await recordBuildStallStaleCitation(root, events, resolvedCitation, 2);
+      await expect(recordBuildStallStaleCitation(root, events, resolvedCitation, 3))
+        .resolves.toEqual({ kind: 'recorded', attempt: 1 });
+      const otherCitation = { ...resolvedCitation, caseId: 'case-other' } as const;
+      await expect(recordBuildStallStaleCitation(root, events, otherCitation, 3))
+        .resolves.toEqual({ kind: 'recorded', attempt: 1 });
+    } finally {
+      persister.stop();
+    }
+  });
+
+  it('returns persist-failed without an attempt when the active event spine write fails', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'build-stall-stale-citation-'));
+    temporaryDirectories.push(root);
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events, undefined, {
+      appendFile: () => { throw new Error('disk unavailable'); },
+    });
+    persister.start();
+    try {
+      await expect(recordBuildStallStaleCitation(root, events, resolvedCitation, 2))
+        .resolves.toEqual({ kind: 'persist-failed' });
+    } finally {
+      persister.stop();
+    }
   });
 });
