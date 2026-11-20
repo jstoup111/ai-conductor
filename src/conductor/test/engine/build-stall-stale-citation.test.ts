@@ -73,6 +73,7 @@ function classify(question: string | null | undefined, stores: ReadonlyMap<numbe
 }
 
 describe('build-stall stale-citation classifier', () => {
+  // Covers: task:16
   it('classifies a case resolved in another child as stale', () => {
     expect(
       classify(
@@ -85,6 +86,7 @@ describe('build-stall stale-citation classifier', () => {
     ).toEqual({ kind: 'stale', caseId: 'case-resolved', ownerChild: child4, state: 'resolved' });
   });
 
+  // Covers: task:16
   it('classifies a case open only in another child as a foreign stale citation', () => {
     expect(
       classify(
@@ -97,6 +99,7 @@ describe('build-stall stale-citation classifier', () => {
     ).toEqual({ kind: 'stale', caseId: 'case-foreign', ownerChild: child4, state: 'foreign' });
   });
 
+  // Covers: task:17
   it('does not classify active, absent, null, or empty citations as stale', () => {
     const activeStore = new Map([
       [3, readable(record('case-active', 'open'))],
@@ -111,6 +114,7 @@ describe('build-stall stale-citation classifier', () => {
     expect(classify('', activeStore)).toEqual({ kind: 'not-stale' });
   });
 
+  // Covers: task:17
   it('does not classify a citation when any child case store is unreadable', () => {
     expect(
       classify(
@@ -124,6 +128,7 @@ describe('build-stall stale-citation classifier', () => {
     ).toEqual({ kind: 'not-stale' });
   });
 
+  // Covers: task:17
   it('does not classify a mixed citation that names an open active-child case', () => {
     expect(
       classify(
@@ -138,6 +143,7 @@ describe('build-stall stale-citation classifier', () => {
 });
 
 describe('build-stall stale-citation recorder', () => {
+  // Covers: task:16
   it('persists the citation fields and its first attempt on the active event spine', async () => {
     const { root, events, persister } = await eventSpine();
     try {
@@ -160,6 +166,7 @@ describe('build-stall stale-citation recorder', () => {
     }
   });
 
+  // Covers: task:18
   it('counts consecutive identical citations across fresh recorder instances', async () => {
     const root = await mkdtemp(join(tmpdir(), 'build-stall-stale-citation-'));
     temporaryDirectories.push(root);
@@ -178,6 +185,7 @@ describe('build-stall stale-citation recorder', () => {
     }
   });
 
+  // Covers: task:19
   it('restarts at one after task progress or a different case', async () => {
     const { root, events, persister } = await eventSpine();
     try {
@@ -197,6 +205,7 @@ describe('build-stall stale-citation recorder', () => {
     }
   });
 
+  // Covers: task:18
   it('returns persist-failed without an attempt when the active event spine write fails', async () => {
     const root = await mkdtemp(join(tmpdir(), 'build-stall-stale-citation-'));
     temporaryDirectories.push(root);
