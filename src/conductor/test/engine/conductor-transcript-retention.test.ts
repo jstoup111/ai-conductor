@@ -1,5 +1,5 @@
 // Covers: task:12, task:18, task:rem-prd-audit-rem-vg-S2.10, task:rem-prd-audit-rem-vg-S6.2, task:rem-prd-audit-rem-vg-S6.4, task:rem-prd-audit-R2, task:rem-prd-audit-R3, task:rem-as-built-rem-ab-capture-dispatch-seq, task:rem-as-built-rem-ab-settle-by-dispatch, task:rem-prd-audit-rem-settle-aux-captures-per-dispatch
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -23,6 +23,22 @@ import { transcriptOwnerDirectory } from '../../src/engine/self-host/transcript-
 import { transcriptOwnerStep, transcriptSettlementKey } from '../../src/engine/self-host/transcript-retention.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ExecutionContext, TranscriptOwner } from '../../src/types/events.js';
+
+// Transcript retention tests exercise provider dispatch and teardown, but not
+// the live-boundary filesystem walk. Keep the injected provider-home fixture
+// hermetic instead of fingerprinting the operator's real Codex home.
+vi.mock('../../src/engine/self-host/live-boundary.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../src/engine/self-host/live-boundary.js')>()),
+  fingerprintLiveCheckoutSurface: vi.fn(async (root: string) => ({
+    surface: { root, label: 'live checkout', exclude: [], manifest: [] },
+    measurement: { label: 'live checkout', elapsedMs: 0, fileCount: 0 },
+  })),
+  fingerprintProviderStateSurface: vi.fn(async ({ unrelatedProviderState }: { unrelatedProviderState: string }) => ({
+    surface: { root: unrelatedProviderState, label: 'provider state', exclude: [], manifest: [] },
+    measurement: { label: 'provider state', elapsedMs: 0, fileCount: 0 },
+  })),
+  verifyLiveBoundary: vi.fn(async () => ({ ok: true })),
+}));
 
 // @ts-expect-error A rubric is a member identity, never a lifecycle StepName.
 transcriptSettlementKey({ step: 'rubric-security', runId: 'review', attempt: 1 });
