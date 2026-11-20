@@ -20,6 +20,7 @@ describe('validator residue quarantine', () => {
 
   const runGit = async (args: string[]) => execa('git', args, { cwd: repository });
   const child = { child: parseChildId(1)!, position: parseChildId(1)!, branch: 'validator-child' };
+  const refusalReport = 'docs/reports/manual-test-step17/report.html';
 
   beforeEach(async () => {
     repository = await mkdtemp(join(tmpdir(), 'validator-residue-'));
@@ -82,6 +83,22 @@ describe('validator residue quarantine', () => {
     );
   });
 
+  it('leaves baseline files in place when Git later reports their directory as an untracked nested repository', async () => {
+    await mkdir(join(repository, 'existing'), { recursive: true });
+    await writeFile(join(repository, 'existing/notes.txt'), 'already here\n');
+    const baseline = await listUntrackedPaths(git);
+    await runGit(['init', '-q', 'existing']);
+
+    await expect(
+      quarantineValidatorResidue({ projectRoot: repository, git, baseline, source: 'manual_test' }),
+    ).resolves.toEqual({ kind: 'none' });
+    await expect(readFile(join(repository, 'existing/notes.txt'), 'utf8')).resolves.toBe('already here\n');
+    await expect(switchToChild(repository, child, noOpChildLifecycleEvents, undefined, { git })).resolves.toMatchObject({
+      kind: 'refused',
+      reason: expect.stringMatching(/^worktree is dirty:.*existing/),
+    });
+  });
+
   it('ignores the old-path field of a staged rename while listing new residue', async () => {
     await writeFile(join(repository, 'old.txt'), 'old\n');
     await runGit(['add', 'old.txt']);
@@ -129,90 +146,70 @@ describe('validator residue quarantine', () => {
     }
   });
 
-  it('refuses every move when a destination already exists', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-11-15T12:34:56.789Z'));
-    const baseline = await listUntrackedPaths(git);
-    const report = 'docs/reports/manual-test-step17/report.html';
-    const second = 'docs/reports/manual-test-step17/second.html';
-    await mkdir(join(repository, 'docs/reports/manual-test-step17'), { recursive: true });
-    await writeFile(join(repository, report), 'report\n');
-    await writeFile(join(repository, second), 'second\n');
-    await mkdir(
-      join(
-        repository,
-        '.pipeline/validator-residue/manual_test-2026-11-15T12-34-56.789Z/docs/reports/manual-test-step17',
-      ),
-      { recursive: true },
-    );
-    await writeFile(
-      join(repository, '.pipeline/validator-residue/manual_test-2026-11-15T12-34-56.789Z', report),
-      'existing\n',
-    );
-
-    const result = await quarantineValidatorResidue({ projectRoot: repository, git, baseline, source: 'manual_test' });
-
-    expect(result).toMatchObject({ kind: 'refused', reason: expect.any(String) });
-    await expect(readFile(join(repository, report), 'utf8')).resolves.toBe('report\n');
-    await expect(readFile(join(repository, second), 'utf8')).resolves.toBe('second\n');
-    await expect(switchToChild(repository, child, noOpChildLifecycleEvents, undefined, { git })).resolves.toMatchObject(
-      {
-        kind: 'refused',
-        reason: expect.stringContaining(report),
+  it.each([
+    {
+      name: 'a destination already exists',
+      setup: async () => {
+        vi.useFakeTimers();
+        vi.setSystemTime(new Date('2026-11-15T12:34:56.789Z'));
+        await mkdir(
+          join(
+            repository,
+            '.pipeline/validator-residue/manual_test-2026-11-15T12-34-56.789Z/docs/reports/manual-test-step17',
+          ),
+          { recursive: true },
+        );
+        await writeFile(
+          join(repository, '.pipeline/validator-residue/manual_test-2026-11-15T12-34-56.789Z', refusalReport),
+          'existing\n',
+        );
+        return git;
       },
-    );
-  });
-
-  it('refuses every move when the validator residue root is a regular file', async () => {
-    const baseline = await listUntrackedPaths(git);
-    const report = 'docs/reports/manual-test-step17/report.html';
-    const second = 'docs/reports/manual-test-step17/second.html';
-    await mkdir(join(repository, 'docs/reports/manual-test-step17'), { recursive: true });
-    await writeFile(join(repository, report), 'report\n');
-    await writeFile(join(repository, second), 'second\n');
-    await mkdir(join(repository, '.pipeline'), { recursive: true });
-    await writeFile(join(repository, '.pipeline/validator-residue'), 'not a directory\n');
-
-    const result = await quarantineValidatorResidue({ projectRoot: repository, git, baseline, source: 'manual_test' });
-
-    expect(result).toMatchObject({ kind: 'refused', reason: expect.any(String) });
-    await expect(readFile(join(repository, report), 'utf8')).resolves.toBe('report\n');
-    await expect(readFile(join(repository, second), 'utf8')).resolves.toBe('second\n');
-    await expect(switchToChild(repository, child, noOpChildLifecycleEvents, undefined, { git })).resolves.toMatchObject(
-      {
-        kind: 'refused',
-        reason: expect.stringContaining(report),
+    },
+    {
+      name: 'the validator residue root is a regular file',
+      setup: async () => {
+        await mkdir(join(repository, '.pipeline'), { recursive: true });
+        await writeFile(join(repository, '.pipeline/validator-residue'), 'not a directory\n');
+        return git;
       },
-    );
-  });
-
-  it('refuses every move when git reports a newly untracked path that vanished', async () => {
-    const baseline = await listUntrackedPaths(git);
-    const report = 'docs/reports/manual-test-step17/report.html';
+    },
+    {
+      name: 'Git reports a newly untracked path that vanished',
+      setup: async () => {
+        const ghostGit: GitRunner = async (args, options) => {
+          const result = await git(args, options);
+          if (args[0] === 'ls-files') return { ...result, stdout: `${result.stdout}ghost.txt\0` };
+          return result;
+        };
+        return ghostGit;
+      },
+    },
+  ])('refuses every move when $name', async ({ setup }) => {
+    const report = refusalReport;
     const second = 'docs/reports/manual-test-step17/second.html';
+    const baseline = await listUntrackedPaths(git);
     await mkdir(join(repository, 'docs/reports/manual-test-step17'), { recursive: true });
     await writeFile(join(repository, report), 'report\n');
     await writeFile(join(repository, second), 'second\n');
-    const ghostGit: GitRunner = async (args, options) => {
-      const result = await git(args, options);
-      if (args[0] === 'ls-files') return { ...result, stdout: `${result.stdout}ghost.txt\0` };
-      return result;
-    };
+    const runner = await setup();
 
     const result = await quarantineValidatorResidue({
       projectRoot: repository,
-      git: ghostGit,
+      git: runner,
       baseline,
       source: 'manual_test',
     });
 
     expect(result).toMatchObject({ kind: 'refused', reason: expect.any(String) });
+    if (result.kind !== 'refused') throw new Error('expected residue refusal');
+    expect(result.reason).not.toBe('');
     await expect(readFile(join(repository, report), 'utf8')).resolves.toBe('report\n');
     await expect(readFile(join(repository, second), 'utf8')).resolves.toBe('second\n');
     await expect(switchToChild(repository, child, noOpChildLifecycleEvents, undefined, { git })).resolves.toMatchObject(
       {
         kind: 'refused',
-        reason: expect.stringContaining(report),
+        reason: expect.stringMatching(new RegExp(`^worktree is dirty:.*${report}`)),
       },
     );
   });
@@ -228,7 +225,7 @@ describe('validator residue quarantine', () => {
     await expect(access(join(repository, '.pipeline/validator-residue'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('never moves harness-owned pipeline evidence when the worktree forgot to ignore it', async () => {
+  it('refuses to quarantine pipeline evidence when the worktree forgot to ignore it', async () => {
     const baseline = await listUntrackedPaths(git);
     await writeFile(join(repository, '.gitignore'), '');
     await mkdir(join(repository, '.pipeline'), { recursive: true });
@@ -236,8 +233,12 @@ describe('validator residue quarantine', () => {
 
     await expect(
       quarantineValidatorResidue({ projectRoot: repository, git, baseline, source: 'prd_audit' }),
-    ).resolves.toEqual({ kind: 'none' });
+    ).resolves.toMatchObject({ kind: 'refused', reason: expect.any(String) });
     await expect(readFile(join(repository, '.pipeline/prd-audit.json'), 'utf8')).resolves.toBe('{"complete":true}\n');
+    await expect(switchToChild(repository, child, noOpChildLifecycleEvents, undefined, { git })).resolves.toMatchObject({
+      kind: 'refused',
+      reason: expect.stringMatching(/^worktree is dirty:.*\.pipeline\/prd-audit\.json/),
+    });
   });
 
   it('reports an unavailable baseline inspection without throwing into the validation flow', async () => {
