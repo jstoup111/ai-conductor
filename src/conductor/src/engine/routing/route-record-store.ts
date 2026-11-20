@@ -45,6 +45,15 @@ export type ReadRevalidationQueueResult =
       readonly blob: CommitSha;
       readonly queue: RevalidationQueueRecord;
     };
+/**
+ * Fold provenance belongs to the queue generation pinned at route admission.
+ * Do not collapse unavailable evidence into an absent fold: callers use that
+ * distinction to decide whether changing route or leaf-gate state is safe.
+ */
+export type ReadPinnedQueueFoldResult =
+  | { readonly kind: 'fold'; readonly fold: NonNullable<RevalidationQueueRecord['fold']> }
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'unavailable'; readonly detail: string };
 export type WriteRouteRecordResult =
   | { readonly kind: 'updated' }
   | { readonly kind: 'cas-failed' }
@@ -251,13 +260,21 @@ export async function readRevalidationQueue(
 export async function readPinnedQueueFold(
   stored: StoredRouteRecord,
   git: GitRunner,
-): Promise<NonNullable<RevalidationQueueRecord['fold']> | undefined> {
+): Promise<ReadPinnedQueueFoldResult> {
   const pin = stored.record.entry?.revalidation;
-  if (!pin) return undefined;
-  const blob = await git(['cat-file', '-p', pin.queueBlob]);
-  if (blob.exitCode !== 0) return undefined;
+  if (!pin) return { kind: 'absent' };
+  let blob: Awaited<ReturnType<GitRunner>>;
+  try {
+    blob = await git(['cat-file', '-p', pin.queueBlob]);
+  } catch {
+    return { kind: 'unavailable', detail: 'cannot read pinned revalidation queue' };
+  }
+  if (blob.exitCode !== 0) return { kind: 'unavailable', detail: 'cannot read pinned revalidation queue' };
   const queue = parseRevalidationQueueRecord(blob.stdout);
-  return queue?.generation === pin.generation ? queue.fold : undefined;
+  if (!queue) return { kind: 'unavailable', detail: 'pinned revalidation queue is malformed' };
+  if (queue.generation !== pin.generation)
+    return { kind: 'unavailable', detail: 'pinned revalidation queue generation changed' };
+  return queue.fold === undefined ? { kind: 'absent' } : { kind: 'fold', fold: queue.fold };
 }
 
 /** Allocates the next route namespace segment without mutating any ref. */

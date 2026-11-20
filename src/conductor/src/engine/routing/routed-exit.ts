@@ -194,9 +194,10 @@ export async function advanceRound(
         : { kind: 'unavailable', detail: `round close ${wrote.kind}` };
     }
     const fold = stored.record.kind === 'revalidate' ? await readPinnedQueueFold(stored, git) : undefined;
+    if (fold?.kind === 'unavailable') return { kind: 'unavailable', detail: fold.detail };
     return returnToLeaf(worktree, slug, stored, {
       git,
-      ...(fold === undefined ? {} : { mode: 'fold' as const, foldLeafTree: fold.leafTree }),
+      ...(fold?.kind !== 'fold' ? {} : { mode: 'fold' as const, foldLeafTree: fold.fold.leafTree }),
     });
   }
   const admitted = transitionHost(stored, next.host, 'admitted', { credit: false });

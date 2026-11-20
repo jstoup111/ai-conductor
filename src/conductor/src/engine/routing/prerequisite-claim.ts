@@ -346,9 +346,12 @@ async function foldedSourceForChild(
   stored: Awaited<ReturnType<typeof readRouteRecord>>,
   git: GitRunner,
   child: ChildId,
-): Promise<string | undefined> {
-  if (stored.kind !== 'record') return undefined;
-  return (await readPinnedQueueFold(stored, git))?.sources[String(child)]?.join(', ');
+): Promise<{ readonly kind: 'folded'; readonly sources: string } | { readonly kind: 'absent' } | { readonly kind: 'unavailable'; readonly detail: string }> {
+  if (stored.kind !== 'record') return { kind: 'unavailable', detail: 'routed prerequisite claim work order is unavailable' };
+  const fold = await readPinnedQueueFold(stored, git);
+  if (fold.kind === 'unavailable') return fold;
+  const sources = fold.kind === 'fold' ? fold.fold.sources[String(child)]?.join(', ') : undefined;
+  return sources === undefined ? { kind: 'absent' } : { kind: 'folded', sources };
 }
 
 /**
@@ -587,10 +590,11 @@ export async function settleRoutedBuildClaim(
     return { kind: 'failed', detail: `routed prerequisite claim ${verified.kind}: ${verified.detail}` };
   if (stored.record.kind === 'revalidate') {
     const foldedFrom = await foldedSourceForChild(stored, git, input.host);
-    if (foldedFrom !== undefined) {
+    if (foldedFrom.kind === 'unavailable') return { kind: 'needs-human', detail: foldedFrom.detail };
+    if (foldedFrom.kind === 'folded') {
       return {
         kind: 'needs-human',
-        detail: `fold-prerequisite-missing: Folded-from ${foldedFrom}; child ${input.host} requires prerequisite from child ${verified.destination}`,
+        detail: `fold-prerequisite-missing: Folded-from ${foldedFrom.sources}; child ${input.host} requires prerequisite from child ${verified.destination}`,
       };
     }
   }

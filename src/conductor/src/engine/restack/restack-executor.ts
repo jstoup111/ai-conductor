@@ -761,7 +761,21 @@ async function materializeFrozenBlocks(
     ]);
     if (base === undefined || ours === undefined) continue;
     const merged = unionRemBlocks(base, ours, blockOnlyPlan(base, blocks));
-    if (merged.kind === 'declined') continue;
+    if (merged.kind === 'declined') {
+      // The merge-tree replay may already have retained this exact frozen
+      // block while carrying the source hunk. It is materialized in that case;
+      // do not turn the idempotent re-materialization into a false conflict.
+      // A residual patch can also leave a non-canonical plan body; append the
+      // exact frozen block rather than discarding the placement.
+      const text = blocks.every((block) => ours.includes(block.body)) ? ours : blockOnlyPlan(ours, blocks);
+      const blob = await git(['hash-object', '-w', '--stdin'], { input: text });
+      const blobSha = blob.exitCode === 0 ? parseCommitSha(blob.stdout.trim()) : undefined;
+      if (!blobSha) throw new Error(`cannot write frozen fold block for ${source}: ${blob.stderr}`);
+      const updated = await git(['update-index', '--add', '--cacheinfo', `100644,${blobSha},${path}`], { env });
+      if (updated.exitCode !== 0) throw new Error(`cannot stage frozen fold block for ${source}: ${updated.stderr}`);
+      materialized = true;
+      continue;
+    }
     if (merged.kind === 'body-mismatch')
       throw new Error(`cannot re-materialize frozen fold block ${merged.remId} for ${source}`);
     const blob = await git(['hash-object', '-w', '--stdin'], { input: merged.text });
@@ -785,18 +799,30 @@ async function writeFoldCommit(
   const env = { GIT_INDEX_FILE: index };
   const seeded = await git(['read-tree', parent], { env });
   if (seeded.exitCode !== 0) throw new Error(`cannot seed fold index: ${seeded.stderr}`);
+  const sourceParent = await git(['rev-parse', `${source.sha}^`]);
+  const sourceParentSha = sourceParent.exitCode === 0 ? parseCommitSha(sourceParent.stdout.trim()) : undefined;
+  if (!sourceParentSha) throw new Error(`cannot read fold source parent for ${source.sha}`);
+  let placedTip = parent;
+  const frozen = parts.filter((part): part is Extract<FoldPart, { readonly kind: 'blocks' }> => part.kind === 'blocks');
   for (const part of parts) {
     if (part.kind === 'whole') continue;
-    if (part.kind === 'blocks') {
-      await materializeFrozenBlocks(git, source.sha, part.blocks, index);
-      continue;
-    }
-    const applied = await git(['apply', '--cached', '--binary', '--unidiff-zero', '--whitespace=nowarn'], {
-      env,
-      input: part.hunk.patch,
-    });
-    if (applied.exitCode !== 0) throw new Error(`cannot apply fold hunk ${source.sha}:${part.path}: ${applied.stderr}`);
+    if (part.kind === 'blocks') continue;
+    // Replay with the same three-way merge-tree operation that established this
+    // placement. Direct patch application can choose a different location after
+    // an earlier insertion on the child, invalidating the planner's proof.
+    const merged = await git(['merge-tree', '--write-tree', '--merge-base', sourceParentSha, placedTip, part.hunk.probe]);
+    const tree = merged.exitCode === 0 ? parseCommitSha(merged.stdout.trim()) : undefined;
+    if (!tree) throw new Error(`cannot apply fold hunk ${source.sha}:${part.path}: ${merged.stderr}`);
+    const placed = await git(['commit-tree', tree, '-p', placedTip], { input: 'fold replay probe\n' });
+    const next = placed.exitCode === 0 ? parseCommitSha(placed.stdout.trim()) : undefined;
+    if (!next) throw new Error(`cannot write fold replay probe for ${source.sha}:${part.path}: ${placed.stderr}`);
+    placedTip = next;
+    const staged = await git(['read-tree', tree], { env });
+    if (staged.exitCode !== 0) throw new Error(`cannot stage fold hunk ${source.sha}:${part.path}: ${staged.stderr}`);
   }
+  // A residual hunk was probed before the frozen task block was materialized.
+  // Re-materialize blocks only after every hunk has replayed that same proof.
+  for (const part of frozen) await materializeFrozenBlocks(git, source.sha, part.blocks, index);
   const tree = await git(['write-tree'], { env });
   const treeSha = tree.exitCode === 0 ? parseCommitSha(tree.stdout.trim()) : undefined;
   if (!treeSha) throw new Error(`cannot write fold tree for ${source.sha}`);
@@ -1080,6 +1106,7 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
               newParent: parent,
               stamp: draft.committer,
               haltRecordSlug: options.slug,
+              omittedCommits: [...omitted],
               resolver: options.resolver ?? (async () => ({ resolved: false, reason: 'restack resolver unavailable' })),
               cap: options.resolverCap ?? resolveRebaseResolutionAttempts(),
               restack: {
