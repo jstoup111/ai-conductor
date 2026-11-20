@@ -985,8 +985,7 @@ function parseHostPlacements(
         : typeof rawPlacement.exitTip === 'string'
           ? parseCommitSha(rawPlacement.exitTip)
           : undefined;
-    if (!leafEntryTip || (rawPlacement.exitTip !== undefined && !exitTip))
-      return undefined;
+    if (!leafEntryTip || (rawPlacement.exitTip !== undefined && !exitTip)) return undefined;
     if (rawPlacement.state === 'placed') {
       if (!exitTip) return undefined;
       placements[child] = { state: 'placed', leafEntryTip, exitTip };

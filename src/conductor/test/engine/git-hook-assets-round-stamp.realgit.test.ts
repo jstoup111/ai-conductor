@@ -230,7 +230,9 @@ describe('prepare-commit-msg round stamp (real local Git)', () => {
     const message = join(root, '.pipeline', 'normalized-message');
     await writeFile(message, 'feat: leaf repair\n\nRound: r1   \nOwner: c1\n');
 
-    await expect(execFile('node', [engineIndex, 'round-stamp', '--verify', message], { cwd: root })).resolves.toBeDefined();
+    await expect(
+      execFile('node', [engineIndex, 'round-stamp', '--verify', message], { cwd: root }),
+    ).resolves.toBeDefined();
     await expect(commit(root, 'disabled-routing.txt', 'feat: leaf repair')).resolves.toMatch(/^Round: r1$/m);
   });
 

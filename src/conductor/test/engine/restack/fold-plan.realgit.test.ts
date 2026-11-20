@@ -9,7 +9,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { parseChildId } from '../../../src/engine/child-context.js';
 import { makeGitRunner } from '../../../src/engine/rebase.js';
 import { collectFoldSet, placeFoldCommits } from '../../../src/engine/restack/fold-plan.js';
-import { createRouteRecord, readRouteRecord, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
+import {
+  createRouteRecord,
+  readRouteRecord,
+  writeRoutingTransaction,
+} from '../../../src/engine/routing/route-record-store.js';
 import { closureRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { parseRoundId, type HostPlacement } from '../../../src/engine/routing/route-types.js';
 import type { FoldRange } from '../../../src/engine/restack/fold-types.js';
@@ -78,7 +82,12 @@ async function fixture() {
     if (stored.kind !== 'record') throw new Error('could not read created route record');
     const open = placement.state === 'deferred' && placement.exitTip === undefined;
     const record = open
-      ? { ...stored.record, phase: 'open' as const, hosts: { [host]: 'repairing' as const }, placements: { [host]: placement } }
+      ? {
+          ...stored.record,
+          phase: 'open' as const,
+          hosts: { [host]: 'repairing' as const },
+          placements: { [host]: placement },
+        }
       : {
           ...stored.record,
           phase: 'closed' as const,
@@ -170,11 +179,15 @@ describe('collectFoldSet (real local Git)', () => {
       exitTip: stamped as never,
     });
 
-    await expect(collectFoldSet({
-      ranges: [{ host: hostOne, roundId: parseRoundId('r1')!, leafEntryTip: entry as never, exitTip: stamped as never }],
-      slug,
-      git: makeGitRunner(subject.repo),
-    })).resolves.toMatchObject({ kind: 'collected', commits: [{ sha: stamped }] });
+    await expect(
+      collectFoldSet({
+        ranges: [
+          { host: hostOne, roundId: parseRoundId('r1')!, leafEntryTip: entry as never, exitTip: stamped as never },
+        ],
+        slug,
+        git: makeGitRunner(subject.repo),
+      }),
+    ).resolves.toMatchObject({ kind: 'collected', commits: [{ sha: stamped }] });
   });
 
   it('refuses a deferred placement without its exit boundary', async () => {
@@ -565,16 +578,23 @@ describe('placeFoldCommits (real local Git)', () => {
     if (created.kind !== 'created') throw new Error('could not create frozen allocation');
     const stored = await readRouteRecord(subject.repo, slug, parseRoundId('r2')!, { git: makeGitRunner(subject.repo) });
     if (stored.kind !== 'record') throw new Error('could not read frozen allocation');
-    const written = await writeRoutingTransaction(subject.repo, slug, [{
-      kind: 'update-record',
-      previous: stored,
-      record: {
-        ...stored.record,
-        phase: 'closed',
-        hosts: { [hostOne]: 'done' },
-        placements: { [hostOne]: { state: 'deferred', leafEntryTip: frozen as never, exitTip: frozen as never } },
-      },
-    }], { git: makeGitRunner(subject.repo) });
+    const written = await writeRoutingTransaction(
+      subject.repo,
+      slug,
+      [
+        {
+          kind: 'update-record',
+          previous: stored,
+          record: {
+            ...stored.record,
+            phase: 'closed',
+            hosts: { [hostOne]: 'done' },
+            placements: { [hostOne]: { state: 'deferred', leafEntryTip: frozen as never, exitTip: frozen as never } },
+          },
+        },
+      ],
+      { git: makeGitRunner(subject.repo) },
+    );
     if (written.kind !== 'updated') throw new Error('could not finalize frozen allocation');
     const planned = placeFoldCommits({
       worktree: subject.repo,
