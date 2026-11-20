@@ -273,6 +273,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - A stacked child's test_suite infrastructure failure now halts needs-human after the same bounded retries as a non-stacked build, instead of retrying without limit. ([implementation PR #3698](https://github.com/jstoup111/ai-conductor/pull/3698)).
 - Routed builds now reject malformed prerequisite claims with null fields before they affect settlement. ([implementation PR #3717](https://github.com/jstoup111/ai-conductor/pull/3717)).
 - Build review loads Codex plugin-owned review policies again on Codex 0.171+, which requires a marketplace locator for plugin reads. ([implementation PR #3729](https://github.com/jstoup111/ai-conductor/pull/3729)).
+- Self-host builds no longer halt when Codex's background updater writes its hourly log or a Codex session opens a thread. ([implementation PR #3733](https://github.com/jstoup111/ai-conductor/pull/3733)).
+- Pi model fallback now skips rejected upstream model IDs and continues to the next configured candidate. ([implementation PR #3711](https://github.com/jstoup111/ai-conductor/pull/3711)).
 
 ## Migration
 
