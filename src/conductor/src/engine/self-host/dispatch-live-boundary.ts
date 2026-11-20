@@ -172,17 +172,25 @@ export class DispatchLiveBoundary {
   private async emitMeasurementsOnce(
     entries: Array<{ cache: CachedSurface<unknown>; measurement: SurfaceResult['measurement'] }>,
   ): Promise<void> {
-    const inFlight = [...new Set(entries.map(({ cache }) => cache.emission).filter((emission): emission is Promise<void> => emission !== undefined))];
+    const inFlight = [
+      ...new Set(
+        entries
+          .map(({ cache }) => cache.emission)
+          .filter((emission): emission is Promise<void> => emission !== undefined),
+      ),
+    ];
     if (inFlight.length > 0) {
       await Promise.all(inFlight);
       return this.emitMeasurementsOnce(entries);
     }
     const unreported = entries.filter(({ cache }) => !cache.emitted);
     if (unreported.length === 0) return;
-    const emission = Promise.resolve(this.options.emit({
-      type: 'self_host_boundary_fingerprint',
-      surfaces: unreported.map(({ measurement }) => measurement),
-    }));
+    const emission = Promise.resolve(
+      this.options.emit({
+        type: 'self_host_boundary_fingerprint',
+        surfaces: unreported.map(({ measurement }) => measurement),
+      }),
+    );
     for (const { cache } of unreported) cache.emission = emission;
     try {
       await emission;

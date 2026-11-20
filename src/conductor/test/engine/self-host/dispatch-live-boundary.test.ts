@@ -550,7 +550,10 @@ describe('DispatchLiveBoundary', () => {
       await secondLease.release();
       expect(events.filter((event) => event.type === 'contained_live_checkout_drift')).toEqual([
         expect.objectContaining({ evidence: 'first containment', summary: expect.stringContaining('added first.txt') }),
-        expect.objectContaining({ evidence: 'second containment', summary: expect.stringContaining('added second.txt') }),
+        expect.objectContaining({
+          evidence: 'second containment',
+          summary: expect.stringContaining('added second.txt'),
+        }),
       ]);
     } finally {
       await rm(root, { recursive: true, force: true });
