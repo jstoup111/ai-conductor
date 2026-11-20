@@ -653,7 +653,6 @@ const reclaimRetentionWithUnlistedReason = {
 } satisfies ConductorEvent;
 void reclaimRetentionWithUnlistedReason;
 
-// @ts-expect-error -- probe-failure progress requires its closed kind and next disposition.
 const probeFailureMissingClosedMetadata = {
   type: 'credentials_park_progress',
   provider: toProviderId('codex'),
@@ -661,6 +660,7 @@ const probeFailureMissingClosedMetadata = {
   readiness: 'probe-failed',
   elapsedSeconds: 3,
   degradation: 'probe-failure',
+  // @ts-expect-error -- probe-failure progress requires its closed kind and next disposition.
 } satisfies ConductorEvent;
 const probeFailureWithPollingDelay = {
   type: 'credentials_park_progress',
@@ -707,7 +707,9 @@ const probeFailureWithConclusiveReadiness = {
   elapsedSeconds: 3,
   // @ts-expect-error -- probe-failure degradation is valid only with probe-failed readiness.
   degradation: 'probe-failure',
+  // @ts-expect-error -- conclusive progress cannot carry probe-only metadata.
   probeFailureKind: 'timeout',
+  // @ts-expect-error -- conclusive progress cannot carry a probe-failure disposition.
   nextDisposition: 'trial-required',
 } satisfies ConductorEvent;
 const probeFailureWithMissingReadiness = {
@@ -718,7 +720,9 @@ const probeFailureWithMissingReadiness = {
   elapsedSeconds: 3,
   // @ts-expect-error -- missing is conclusive readiness, not probe failure.
   degradation: 'probe-failure',
+  // @ts-expect-error -- conclusive progress cannot carry probe-only metadata.
   probeFailureKind: 'timeout',
+  // @ts-expect-error -- conclusive progress cannot carry a probe-failure disposition.
   nextDisposition: 'trial-required',
 } satisfies ConductorEvent;
 const probeFailureWithUnusableReadiness = {
@@ -729,7 +733,9 @@ const probeFailureWithUnusableReadiness = {
   elapsedSeconds: 3,
   // @ts-expect-error -- unusable is conclusive readiness, not probe failure.
   degradation: 'probe-failure',
+  // @ts-expect-error -- conclusive progress cannot carry probe-only metadata.
   probeFailureKind: 'timeout',
+  // @ts-expect-error -- conclusive progress cannot carry a probe-failure disposition.
   nextDisposition: 'trial-required',
 } satisfies ConductorEvent;
 const credentialFailureWithProbeFailedReadiness = {
@@ -738,6 +744,7 @@ const credentialFailureWithProbeFailedReadiness = {
   source: 'cached-login',
   readiness: 'probe-failed',
   elapsedSeconds: 3,
+  // @ts-expect-error -- probe-failed progress has no polling delay.
   nextProbeDelaySeconds: 4,
   // @ts-expect-error -- probe-failed readiness cannot be represented as credential failure.
   degradation: 'credential-failure',
@@ -748,6 +755,7 @@ const unrelatedDegradationWithProbeFailedReadiness = {
   source: 'cached-login',
   readiness: 'probe-failed',
   elapsedSeconds: 3,
+  // @ts-expect-error -- probe-failed progress has no polling delay.
   nextProbeDelaySeconds: 4,
   // @ts-expect-error -- probe-failed readiness cannot be represented as unrelated degradation.
   degradation: 'unrelated-diagnostic-degradation',
