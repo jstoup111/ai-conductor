@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { checkpointComposerRun } from '../../../src/engine/engineer/checkpoint.js';
 import { resumeOwnershipMode } from '../../../src/engine/engineer/resume.js';
+import { checkpointPublicationOwner } from '../../../src/engine/engineer-cli.js';
 import { decideSpecGate } from '../../../src/engine/owner-gate/gate.js';
 
 describe('resume ownership', () => {
@@ -120,6 +121,13 @@ describe('resume ownership', () => {
         warnings: [expect.stringMatching(/owned by A.*stays local until interactive take-over/i)],
       });
     }
+  });
+
+  it('Covers: Task 14 retains remote ownership after a local take-over commit whose push did not execute', () => {
+    // The local B marker is durable for a retry, but origin's A marker remains
+    // the publication authority until that retry has actually pushed.
+    expect(checkpointPublicationOwner({ localMarkerOwner: 'B', remoteMarkerOwner: 'A' })).toBe('A');
+    expect(checkpointPublicationOwner({ localMarkerOwner: 'B', remoteMarkerOwner: 'B' })).toBe('B');
   });
 
   it('Covers: Task 14 gates the re-stamped owner branch to that daemon owner only', () => {

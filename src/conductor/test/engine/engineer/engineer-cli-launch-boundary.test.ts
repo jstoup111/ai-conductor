@@ -366,4 +366,103 @@ describe('Composer launcher boundary', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('Covers: Tasks 16 and 17 retry an unpublished clean checkpoint and never hand it off', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'composer-resume-unpublished-'));
+    const project = join(root, 'project');
+    const registryPath = join(root, 'registry.json');
+    const slug = 'unpublished-resume';
+    const record = {
+      schemaVersion: 1,
+      slug,
+      track: 'technical',
+      steps: { explore: { state: 'draft' } },
+      needsReconfirm: [],
+      ownerHistory: [],
+      notes: {},
+    };
+    try {
+      await execa('git', ['init', '-b', 'main', project]);
+      await execa('git', ['config', 'user.email', 'test@example.test'], { cwd: project });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: project });
+      await mkdir(join(project, '.docs', 'composer-runs'), { recursive: true });
+      await mkdir(join(project, '.worktrees'), { recursive: true });
+      await writeFile(join(project, 'README.md'), '# fixture\n');
+      await writeFile(join(project, '.docs', 'composer-runs', `${slug}.json`), `${JSON.stringify(record)}\n`);
+      await execa('git', ['add', 'README.md', '.docs'], { cwd: project });
+      await execa('git', ['commit', '-m', 'fixture'], { cwd: project });
+      await execa('git', ['branch', `spec/${slug}`], { cwd: project });
+      await writeFile(
+        registryPath,
+        JSON.stringify([
+          {
+            schemaVersion: 1,
+            name: 'project',
+            path: project,
+            remote: 'https://github.com/acme/project.git',
+            status: 'registered',
+            registeredAt: '2026-11-10T00:00:00.000Z',
+          },
+        ]),
+      );
+      const git = async (args: string[], options?: { cwd?: string }) => {
+        if (args[0] === 'fetch') return { stdout: '', exitCode: 0 };
+        const result = await execa('git', args, { cwd: options?.cwd, reject: false });
+        return { stdout: result.stdout, exitCode: result.exitCode ?? 0 };
+      };
+      const checkpoint = vi.fn(async (request: { worktree: string; step: string; state: 'accepted' | 'draft' }) => {
+        const status = await execa('git', ['status', '--porcelain', '--', '.docs'], { cwd: request.worktree });
+        if (status.stdout.trim()) {
+          await execa('git', ['add', '--', '.docs'], { cwd: request.worktree });
+          await execa('git', ['commit', '-m', 'local checkpoint'], { cwd: request.worktree });
+        }
+        return { slug, state: request.state, committed: status.stdout.trim().length > 0, published: false };
+      });
+      const spawnHost = vi.fn(async (_executable: string, _argv: string[], worktree: string) => {
+        if (spawnHost.mock.calls.length === 1) {
+          await mkdir(join(worktree, '.docs', 'track'), { recursive: true });
+          await writeFile(join(worktree, '.docs', 'track', `${slug}.md`), 'Track: technical\n');
+        }
+        return 0;
+      });
+      const print = vi.fn();
+      const printErr = vi.fn();
+      let attached = true;
+      const chooseComposerBoundary = vi
+        .fn()
+        .mockResolvedValueOnce({ choice: 'handoff' })
+        .mockResolvedValueOnce({ choice: 'continue' })
+        .mockImplementationOnce(async () => {
+          attached = false;
+          return { choice: 'handoff' };
+        });
+
+      const code = await dispatchEngineer(
+        { kind: 'resume', target: `spec/${slug}`, project: 'project', provider: 'codex' },
+        {
+          registryPath,
+          env: {},
+          git,
+          checkpoint,
+          spawnHost,
+          print,
+          printErr,
+          isAttachedTerminal: () => attached,
+          providerInstalled: async () => true,
+          chooseComposerBoundary,
+          resolveResumeOwner: async () => ({ resolved: true, id: 'operator-a' }),
+          gh: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
+          probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+        },
+      );
+
+      expect(code).toBe(0);
+      expect(spawnHost).toHaveBeenCalledTimes(2);
+      expect(checkpoint).toHaveBeenCalledTimes(2);
+      expect(print.mock.calls.flat().join('\n')).not.toMatch(/handed off/i);
+      expect(printErr.mock.calls.flat().join('\n')).toMatch(/handoff is unavailable until the local checkpoint is published/i);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
