@@ -207,9 +207,13 @@ describe('build-review work order', () => {
     await expect(Promise.all([readFile(activePlan, 'utf8'), readFile(taskStatus, 'utf8'), readFile(growth, 'utf8')]))
       .resolves.toEqual(['approved plan\n', '{"tasks":[]}\n', '{"version":1,"gates":{}}\n']);
   });
-  it('records durable BUILD attempt evidence for every case in the published order', async () => {
+  it('uses the feature-level work-order path for publishing, reading, and attempt stamps', async () => {
     const projectRoot = await createProjectRoot();
+    const featurePath = join(projectRoot, '.pipeline/build-review-work-order.json');
+    expect(buildReviewWorkOrderPath(projectRoot)).toBe(featurePath);
+
     await publishBuildReviewWorkOrder(projectRoot, WORK_ORDER);
+    await expect(readFile(featurePath, 'utf8')).resolves.toBe(`${JSON.stringify(WORK_ORDER)}\n`);
 
     await expect(readBuildReviewWorkOrderAttemptedCaseIds(projectRoot, FEATURE)).resolves.toEqual({ ok: true, attemptedCaseIds: [] });
     await expect(markBuildReviewWorkOrderAttempted(projectRoot, FEATURE)).resolves.toMatchObject({ ok: true });
@@ -220,6 +224,7 @@ describe('build-review work order', () => {
     await expect(readBuildReviewWorkOrder(projectRoot, FEATURE, EFFECT_ID)).resolves.toMatchObject({
       ok: true, workOrder: { effectId: EFFECT_ID, attemptedCaseIds: ['case-critical', 'case-high'] },
     });
+    await expect(readFile(featurePath, 'utf8')).resolves.toContain('"attemptedCaseIds":["case-critical","case-high"]');
   });
 
   it('binds a read to the stable effects durable state recorded, not to one guessed id', async () => {
