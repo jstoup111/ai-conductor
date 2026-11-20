@@ -69,6 +69,14 @@ Option C.
      - `--name=value` and `--no-name` are honored.
      - `--` and `--end-of-options` end option parsing.
    - Subcommands that are not guarded pass through unchanged, as today.
+
+   > **Amended 2026-11-15 by #3676:** the spec gains `merge`, `cherry-pick` and `rebase` grammars,
+   > and these become guarded subcommands only for the PATH guard's stack-containment class. That
+   > class applies when the checked-out branch is a `feat/c«k»/«slug»` child branch of a feature
+   > with durable child state. Anywhere else they still pass through unchanged, and decision 3's
+   > refusal of an unresolvable option applies to them only on such a branch. `reset` keeps its
+   > existing guarded grammar. See
+   > adr-2026-11-15-stack-children-never-gain-higher-child-commits decision 2.
 3. **Unresolvable means refused.**
    - A guarded subcommand with an unknown or ambiguous option is refused. The message names the
      token and asks for the full spelling.

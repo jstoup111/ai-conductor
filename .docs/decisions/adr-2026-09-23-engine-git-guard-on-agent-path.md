@@ -125,6 +125,12 @@ Option A.
    > recorded limit. Both guards normalize argv against one git option spec, following git's global
    > and parse-options grammars, and refuse any option on a guarded subcommand they cannot resolve
    > (adr-2026-10-03-fail-closed-git-option-normalization). The matrix above is unchanged.
+
+   > **Amended 2026-11-15 by #3676:** the matrix gains a stack-containment class. On a stacked
+   > child branch below the top position, `merge`, `cherry-pick`, `reset` (including `--keep`,
+   > `--soft` and `--mixed`) and `rebase` are refused when they would bring in a commit unique to a
+   > higher child. Everywhere else they pass as above. See
+   > adr-2026-11-15-stack-children-never-gain-higher-child-commits decision 2.
 6. **Every refusal explains itself.** It exits non-zero without running `git`. Its stderr names the
    refused operation, why it is refused, and the safe alternative: `--force-with-lease`,
    `reset --keep`, `branch -d`, `clean -n`, or committing a WIP first or using a temporary worktree.
@@ -225,6 +231,12 @@ Option A.
 >     Renaming a branch whose tip no other ref holds is refused, because git deletes the old name
 >     before the new one is visible. The refusal names that case and the safe alternative: create
 >     the new branch, then delete the old one with `git branch -d`.
+>
+> > **Amended 2026-11-15 by #3676:** non-deletion lines are no longer all free of git calls. A
+> > `prepared`-stage update of a stacked child branch `refs/heads/feat/c«k»/«slug»` runs the
+> > stack-containment predicate and aborts the transaction when the new value would gain a commit
+> > unique to a higher child. Every other non-deletion line still passes with no git call. See
+> > adr-2026-11-15-stack-children-never-gain-higher-child-commits decision 3.
 > 13. **`pre-push` refuses overwriting remote history the worktree has not seen.** For each
 >     update on stdin it allows a deletion (out of scope above), a new ref, a fast-forward (the
 >     remote's current value is an ancestor of the pushed value), and an update whose remote

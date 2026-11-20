@@ -32,7 +32,7 @@ is spelled, so that an agent cannot run a refused operation by abbreviating or b
 ### Acceptance Criteria
 
 #### Happy Path
-- Given the feature repository, when the PATH guard receives `reset --har` or `reset --ha HEAD~1`, then it is refused as a hard reset with `git reset --keep «target»` as the alternative.
+- Given the feature repository, when the PATH guard receives `reset --har` or `reset --ha HEAD~1`, then it is refused as a hard reset with `git reset --keep «target»` as the alternative (on a stacked child branch, a `reset --keep` toward an entered higher child's own work is itself refused, per adr-2026-11-15-stack-children-never-gain-higher-child-commits).
 - Given the feature repository and an unreachable branch, when the PATH guard receives `branch -df «branch»`, `branch -fd «branch»`, `branch -Dq «branch»` or `branch --del --force «branch»`, then each is refused as a force deletion that would make commits unreachable, with `git branch -d «branch»` as the alternative.
 - Given the feature repository, when the PATH guard receives `clean --fo`, `clean --forc -d` or `clean -dxf`, then each is refused as a forced clean with `git clean -n` as the alternative.
 - Given the feature repository, when the PATH guard receives `-C «repo» --no-pager reset --har` or `--config-env=core.pager=PAGER reset --ha`, then it is refused as a hard reset.
@@ -167,7 +167,7 @@ that hardening the parser changes no decision already made.
 - Given the Claude hook, when the command is each canonical refused form, then it exits 2 with the same message as before this change.
 
 #### Negative Paths
-- Given the feature repository, when the PATH guard receives `push --force-with-lease --force-if-includes`, `reset --keep`, `branch -d «branch»`, `clean -n`, `checkout --ours -- «file»` or `restore --staged «file»`, then the stub real `git` receives the original argv unchanged.
+- Given the feature repository, when the PATH guard receives `push --force-with-lease --force-if-includes`, `reset --keep`, `branch -d «branch»`, `clean -n`, `checkout --ours -- «file»` or `restore --staged «file»`, then the stub real `git` receives the original argv unchanged (on a stacked child branch `feat/c«k»/«slug»`, a `reset` whose incoming commits include an entered higher child's own work is refused instead, per adr-2026-11-15-stack-children-never-gain-higher-child-commits).
 - Given the Claude hook, when the command is `git rebase --continue`, then it exits 0 with no note, and when it is `git rebase main`, then it exits 0 with the existing non-blocking rebase note.
 - Given the feature repository, when the PATH guard receives `reset --hard --soft` (git applies the last mode), then it is still refused as a hard reset.
 
