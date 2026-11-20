@@ -652,29 +652,6 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
   if (typeof resolvedEntryHead !== 'string')
     return { kind: 'refused', detail: `cannot resolve host ${input.host} tip at region entry` };
   const entryHead = resolvedEntryHead;
-  // Persist a non-leaf host's boundary before frozen blocks can move HEAD.
-  // The actual leaf already owns the whole-feature branch and is never folded.
-  if (stored.record.execution === 'leaf' && !pinned.isLeaf && stored.record.placements?.[input.host] === undefined) {
-    const record = {
-      ...stored.record,
-      placements: {
-        ...stored.record.placements,
-        [input.host]: { state: 'deferred' as const, leafEntryTip: entryHead },
-      },
-    };
-    const placed = await writeRoutingTransaction(
-      input.worktree,
-      input.slug,
-      [{ kind: 'update-record', previous: stored, record }],
-      { git },
-    );
-    if (placed.kind !== 'updated')
-      return { kind: 'refused', detail: `cannot persist leaf placement boundary: ${placed.kind}` };
-    const reread = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
-    if (reread.kind !== 'record')
-      return { kind: 'refused', detail: `routing record ${input.roundId} is unavailable after placement boundary` };
-    stored = reread;
-  }
   const allocation = stored.record.allocation[input.host];
   if (!allocation)
     return {
@@ -748,7 +725,20 @@ export async function enterHostRegion(input: EnterHostRegionInput): Promise<Ente
   const repairing = transitionHost(recordWithBindings, input.host, 'repairing', { credit: true });
   if (repairing.kind !== 'updated')
     return { kind: 'refused', detail: `routing round ${input.roundId} host ${input.host} cannot enter repairing` };
-  const record = repairing.record;
+  // `entryHead` was captured before frozen blocks moved the leaf.  Commit its
+  // open boundary only with the repairing transition: the route-record parser
+  // rejects an open placement for an admitted host, and a crash before this
+  // point safely replays the idempotent frozen-block write on the next entry.
+  const record =
+    repairing.record.execution === 'leaf' && !pinned.isLeaf && repairing.record.placements?.[input.host] === undefined
+      ? {
+          ...repairing.record,
+          placements: {
+            ...repairing.record.placements,
+            [input.host]: { state: 'deferred' as const, leafEntryTip: entryHead },
+          },
+        }
+      : repairing.record;
   const transitioned = await writeRoutingTransaction(
     input.worktree,
     input.slug,

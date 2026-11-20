@@ -54,7 +54,7 @@ async function fixture() {
     ...stored4.record,
     phase: 'open',
     execution: 'leaf',
-    hosts: { [c1]: 'restacked', [c2]: 'pending' },
+    hosts: { [c1]: 'done', [c2]: 'pending' },
     placements: {
       [c1]: { state: 'deferred', leafEntryTip: boundary, exitTip: boundary },
       [c2]: { state: 'placed', leafEntryTip: boundary, exitTip: boundary },
@@ -101,7 +101,7 @@ describe('stack rounds inspection (real local Git)', () => {
     expect(described.rounds.map((round) => round.roundId)).toEqual([r4, r5]);
     expect(described.marker).toMatchObject({ kind: 'marker', marker: { host: c1, roundId: r5 } });
     expect(renderRoutingRounds(slug, described)).toContain(
-      'r4 audit open hosts 1:restacked execution=leaf placement=deferred, 2:pending execution=leaf placement=placed current host 1 settled outbox 0',
+      'r4 audit open hosts 1:done execution=leaf placement=deferred, 2:pending execution=leaf placement=placed current host 1 settled outbox 0',
     );
     expect(renderRoutingRounds(slug, described)).toContain(
       'r5 audit open hosts 1:repairing execution=owner placement=none current host 1 unsettled outbox 0',
