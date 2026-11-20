@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "slug": "stacked-rounds-halt-before-final-gates-on-feature-",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/stacked-rounds-halt-before-final-gates-on-feature-.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/stacked-rounds-halt-before-final-gates-on-feature-.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/stacked-rounds-halt-before-final-gates-on-feature-.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/stacked-rounds-halt-before-final-gates-on-feature-.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/stacked-rounds-halt-before-final-gates-on-feature-.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/stacked-rounds-halt-before-final-gates-on-feature-.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/stacked-rounds-halt-before-final-gates-on-feature-.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/stacked-rounds-halt-before-final-gates-on-feature-.md"
+    }
+  ]
+}
