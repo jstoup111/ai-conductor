@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "slug": "zero-work-build-re-raises-a-cleared-halt-from-even",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/zero-work-build-re-raises-a-cleared-halt-from-even.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/zero-work-build-re-raises-a-cleared-halt-from-even.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/zero-work-build-re-raises-a-cleared-halt-from-even.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/zero-work-build-re-raises-a-cleared-halt-from-even.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-07-10-daemon-stall-remediation.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-11-15-build-settles-without-dispatch-when-no-work-is-owed.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/zero-work-build-re-raises-a-cleared-halt-from-even.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/zero-work-build-re-raises-a-cleared-halt-from-even.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/zero-work-build-re-raises-a-cleared-halt-from-even.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/zero-work-build-re-raises-a-cleared-halt-from-even.md"
+    }
+  ]
+}
