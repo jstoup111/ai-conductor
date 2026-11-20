@@ -210,6 +210,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   build_review_repair_context: 'not-audited-by-design',
   mode_skip: 'not-audited-by-design', // skipped steps must have zero records
   build_stall: 'not-audited-by-design',
+  build_stall_stale_citation: 'friction-mapped',
   build_progress: 'not-audited-by-design',
   step_in_flight: 'not-audited-by-design',
   build_no_progress: 'not-audited-by-design',
@@ -795,6 +796,14 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     reason: 'no_task_progress',
     resolvedBefore: 0,
     resolvedAfter: 1,
+  },
+  build_stall_stale_citation: {
+    type: 'build_stall_stale_citation',
+    caseId: 'case-1',
+    ownerChild: parseChildId(4)!,
+    state: 'resolved',
+    resolvedTasks: 1,
+    attempt: 1,
   },
   build_progress: { type: 'build_progress', step: 'build', resolved: 1, total: 3, activity: 'quiet' },
   step_in_flight: { type: 'step_in_flight', step: 'test_suite', elapsedMs: 1 },
