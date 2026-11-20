@@ -2476,15 +2476,17 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
     await seedToBuildStep();
 
     let evidenceAtDispatch: string | undefined;
-    const expectedPath = child === undefined
-      ? '.pipeline/build-stall-question.md'
-      : `.pipeline/children/${child}/build-stall-question.md`;
+    const expectedPath =
+      child === undefined ? '.pipeline/build-stall-question.md' : `.pipeline/children/${child}/build-stall-question.md`;
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName) => {
         if (step === 'build') {
           await beforeBuild?.();
           await writeFile(join(dir, '.pipeline/halt-user-input-required'), question);
-          await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }));
+          await writeFile(
+            join(dir, '.pipeline/task-status.json'),
+            JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+          );
         }
         return { success: true } as StepRunResult;
       }),
@@ -2537,7 +2539,10 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
     const child4 = parseChildId(4)!;
     const result = await captureStallRemediation(child4, 'Which repair unblocks child 4?', async () => {
       await mkdir(join(dir, '.pipeline', 'children', String(child3)), { recursive: true });
-      await writeFile(join(dir, '.pipeline', 'children', String(child3), 'build-stall-question.md'), 'Child 3 remains pending.');
+      await writeFile(
+        join(dir, '.pipeline', 'children', String(child3), 'build-stall-question.md'),
+        'Child 3 remains pending.',
+      );
     });
 
     expect(result.capturedEvidence()).toBe('Which repair unblocks child 4?');
@@ -2549,8 +2554,9 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
         evidence: [{ gate: 'build', evidenceFile: '.pipeline/children/4/build-stall-question.md' }],
       }),
     );
-    await expect(readFile(join(dir, '.pipeline', 'children', String(child3), 'build-stall-question.md'), 'utf8'))
-      .resolves.toBe('Child 3 remains pending.');
+    await expect(
+      readFile(join(dir, '.pipeline', 'children', String(child3), 'build-stall-question.md'), 'utf8'),
+    ).resolves.toBe('Child 3 remains pending.');
   });
 
   // Covers: task:4
