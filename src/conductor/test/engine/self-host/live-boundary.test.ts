@@ -9,10 +9,22 @@ import { promisify } from 'node:util';
 import {
   PROVIDER_STATE_VOLATILE,
   fingerprintLiveCheckoutSurface,
-  fingerprintLiveBoundary,
   fingerprintProviderStateSurface,
   verifyLiveBoundary,
 } from '../../../src/engine/self-host/live-boundary.js';
+
+type FingerprintLiveBoundaryArgs = Parameters<typeof fingerprintProviderStateSurface>[0] & {
+  liveCheckout: string;
+};
+
+const fingerprintLiveBoundary = async (args: FingerprintLiveBoundaryArgs) => {
+  const liveCheckout = await fingerprintLiveCheckoutSurface(args.liveCheckout);
+  const providerState = await fingerprintProviderStateSurface(args);
+  return {
+    surfaces: [liveCheckout.surface, providerState.surface],
+    measurements: [liveCheckout.measurement, providerState.measurement],
+  };
+};
 
 const readdirMock = vi.hoisted(() => vi.fn());
 const readFileMock = vi.hoisted(() => vi.fn());
