@@ -286,13 +286,15 @@ export class SpoolDrainer {
 
   private async delay(ms: number): Promise<void> {
     if (this.stopped) return;
-    const due = this.now() + ms;
     let release!: () => void;
     const interrupted = new Promise<void>((resolve) => { release = resolve; });
     this.pendingDelays.add(release);
     try {
       await Promise.race([
-        this.sleep(Math.max(0, due - this.now())),
+        // The injected sleep boundary owns elapsed-time measurement. Reading
+        // the wall clock twice here can shorten a deterministic retry by one
+        // millisecond before the sleep is even scheduled.
+        this.sleep(ms),
         interrupted,
       ]);
     } finally {
