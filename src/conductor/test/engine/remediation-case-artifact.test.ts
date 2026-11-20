@@ -1,10 +1,14 @@
 // Covers: task:1, task:3, task:4
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { readRemediationCaseJudgement } from '../../src/engine/remediation-case-artifact.js';
+import {
+  readRemediationCaseJudgement,
+  relocateRemediationCaseJudgement,
+} from '../../src/engine/remediation-case-artifact.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 import { validateRemediationCaseGraph } from '../../src/engine/remediation-case-validator.js';
 
 const CASE_V1 = {
@@ -64,11 +68,13 @@ const REFUTE_CASE = {
   effect: { kind: 'none' },
   refutation: {
     claim: 'The changed branch has no behavioral coverage.',
-    assertions: [{
-      assertion: 'The existing test invokes the changed branch.',
-      verdict: 'refuted',
-      evidence: [{ path: 'src/widget.test.ts', excerpt: 'it covers the changed branch' }],
-    }],
+    assertions: [
+      {
+        assertion: 'The existing test invokes the changed branch.',
+        verdict: 'refuted',
+        evidence: [{ path: 'src/widget.test.ts', excerpt: 'it covers the changed branch' }],
+      },
+    ],
   },
 } as const;
 
@@ -86,23 +92,27 @@ const CASE_V2 = {
     { sourceId: 'customA:finding-1', outcome: 'acted', caseRef: 'case-repair' },
     { sourceId: 'customB:finding-2', outcome: 'merged', caseRef: 'case-repair' },
   ],
-  cases: [{
-    caseRef: 'case-repair',
-    existingCaseId: 'remcase-existing-repair',
-    disposition: 'act',
-    priority: 'high',
-    rationale: 'Both policies identify the same missing behavior.',
-    confidence: 'high',
-    effect: {
-      kind: 'action',
-      route: 'build',
-      tasks: [{
-        title: 'src/widget.ts:20 — cover the changed branch.',
-        admittedTaskIds: ['29'],
-        admissionRationale: 'Task 29 owns the case-v2 artifact contract.',
-      }],
+  cases: [
+    {
+      caseRef: 'case-repair',
+      existingCaseId: 'remcase-existing-repair',
+      disposition: 'act',
+      priority: 'high',
+      rationale: 'Both policies identify the same missing behavior.',
+      confidence: 'high',
+      effect: {
+        kind: 'action',
+        route: 'build',
+        tasks: [
+          {
+            title: 'src/widget.ts:20 — cover the changed branch.',
+            admittedTaskIds: ['29'],
+            admissionRationale: 'Task 29 owns the case-v2 artifact contract.',
+          },
+        ],
+      },
     },
-  }],
+  ],
   consistency: {
     verdict: 'consistent',
     sourceIds: ['customA:finding-1', 'customB:finding-2'],
@@ -134,28 +144,88 @@ describe('remediation case artifact', () => {
     expect(result).toEqual({ ok: true, judgement: CASE_V1 });
   });
 
+  // Covers: task:5
+  it('moves a parsed feature judgement into child 4 and removes the feature-level artifact', async () => {
+    await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify(CASE_V1), 'utf8');
+
+    await expect(readRemediationCaseJudgement(projectRoot, Date.now() - 60_000)).resolves.toEqual({
+      ok: true,
+      judgement: CASE_V1,
+    });
+    await relocateRemediationCaseJudgement(projectRoot, parseChildId(4)!);
+
+    await expect(readFile(join(projectRoot, '.pipeline/children/4/remediation.json'), 'utf8')).resolves.toBe(
+      JSON.stringify(CASE_V1),
+    );
+    await expect(readFile(join(projectRoot, '.pipeline/remediation.json'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  // Covers: task:5
+  it('leaves every child region unchanged when the feature judgement cannot parse', async () => {
+    const childRegion = join(projectRoot, '.pipeline/children/3');
+    await mkdir(childRegion, { recursive: true });
+    await writeFile(join(childRegion, 'existing.json'), '{"kept":true}', 'utf8');
+    await writeFile(join(projectRoot, '.pipeline/remediation.json'), '{not-json', 'utf8');
+    const before = await readdir(join(projectRoot, '.pipeline/children'), { recursive: true });
+
+    await expect(readRemediationCaseJudgement(projectRoot, Date.now() - 60_000)).resolves.toEqual({
+      ok: false,
+      reason: 'invalid-json',
+    });
+
+    await expect(readdir(join(projectRoot, '.pipeline/children'), { recursive: true })).resolves.toEqual(before);
+  });
+
+  // Covers: task:5
+  it('keeps a parsed judgement at the feature-level path when no child is active', async () => {
+    await writeFile(join(projectRoot, '.pipeline/remediation.json'), JSON.stringify(CASE_V1), 'utf8');
+
+    await expect(readRemediationCaseJudgement(projectRoot, Date.now() - 60_000)).resolves.toEqual({
+      ok: true,
+      judgement: CASE_V1,
+    });
+    await expect(readFile(join(projectRoot, '.pipeline/remediation.json'), 'utf8')).resolves.toBe(
+      JSON.stringify(CASE_V1),
+    );
+    await expect(readFile(join(projectRoot, '.pipeline/children/4/remediation.json'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
   it('admits an act row declaring a distinct resolved case and preserves it in the graph', async () => {
     const distinctFrom = [{ caseId: 'R', reason: 'asserts daemon-liveness staleness' }] as const;
     const judgement = {
       ...CASE_V1,
-      cases: [{
-        ...CASE_V1.cases[0],
-        distinctFrom,
-      }, ...CASE_V1.cases.slice(1)],
+      cases: [
+        {
+          ...CASE_V1.cases[0],
+          distinctFrom,
+        },
+        ...CASE_V1.cases.slice(1),
+      ],
     };
 
     const parsed = await read(judgement);
-    expect(parsed.ok && validateRemediationCaseGraph(
-      CASE_V1.sourceOutcomes.map((source) => source.sourceId),
-      parsed.judgement,
-    )).toEqual(expect.objectContaining({
-      ok: true,
-      graph: expect.objectContaining({
-        cases: expect.arrayContaining([expect.objectContaining({
-          case: expect.objectContaining({ distinctFrom }),
-        })]),
+    expect(
+      parsed.ok &&
+        validateRemediationCaseGraph(
+          CASE_V1.sourceOutcomes.map((source) => source.sourceId),
+          parsed.judgement,
+        ),
+    ).toEqual(
+      expect.objectContaining({
+        ok: true,
+        graph: expect.objectContaining({
+          cases: expect.arrayContaining([
+            expect.objectContaining({
+              case: expect.objectContaining({ distinctFrom }),
+            }),
+          ]),
+        }),
       }),
-    }));
+    );
   });
 
   it('accepts a bound act row declaring a residual-gap reRaise', async () => {
@@ -206,7 +276,11 @@ describe('remediation case artifact', () => {
   });
 
   it('rejects reRaise with an extra note as a malformed case row', async () => {
-    await expectMalformedReRaise({ kind: 'residual-gap', reason: 'the repair left a narrower gap', note: 'unexpected' });
+    await expectMalformedReRaise({
+      kind: 'residual-gap',
+      reason: 'the repair left a narrower gap',
+      note: 'unexpected',
+    });
   });
 
   it.each([
@@ -232,10 +306,16 @@ describe('remediation case artifact', () => {
   it('refuses a case-v2 action that omits the admitted-plan-task provenance', async () => {
     const judgement = {
       ...CASE_V2,
-      cases: [{
-        ...CASE_V2.cases[0],
-        effect: { kind: 'action', route: 'build', tasks: [{ title: 'src/widget.ts:20 — cover the changed branch.' }] },
-      }],
+      cases: [
+        {
+          ...CASE_V2.cases[0],
+          effect: {
+            kind: 'action',
+            route: 'build',
+            tasks: [{ title: 'src/widget.ts:20 — cover the changed branch.' }],
+          },
+        },
+      ],
     };
 
     await expect(read(judgement)).resolves.toEqual({ ok: false, reason: 'invalid-action-effect' });
@@ -248,15 +328,17 @@ describe('remediation case artifact', () => {
         mode: 'case-v2',
         domain: 'build_review',
         sourceOutcomes: [{ sourceId: `custom:${owner}`, outcome: 'escalate', caseRef: 'case-stop' }],
-        cases: [{
-          caseRef: 'case-stop',
-          disposition: 'escalate',
-          priority: 'high',
-          rationale: `The finding requires a ${owner} decision.`,
-          confidence: 'high',
-          effect: { kind: 'none' },
-          escalation: { owner },
-        }],
+        cases: [
+          {
+            caseRef: 'case-stop',
+            disposition: 'escalate',
+            priority: 'high',
+            rationale: `The finding requires a ${owner} decision.`,
+            confidence: 'high',
+            effect: { kind: 'none' },
+            escalation: { owner },
+          },
+        ],
         consistency: {
           verdict: 'blocked',
           sourceIds: [`custom:${owner}`],
@@ -307,16 +389,20 @@ describe('remediation case artifact', () => {
     async (forbiddenKey) => {
       const result = await read({
         ...REFUTE_CASE_V1,
-        cases: [{
-          ...REFUTE_CASE,
-          refutation: {
-            ...REFUTE_CASE.refutation,
-            assertions: [{
-              ...REFUTE_CASE.refutation.assertions[0],
-              evidence: [{ ...REFUTE_CASE.refutation.assertions[0].evidence[0], [forbiddenKey]: 1 }],
-            }],
+        cases: [
+          {
+            ...REFUTE_CASE,
+            refutation: {
+              ...REFUTE_CASE.refutation,
+              assertions: [
+                {
+                  ...REFUTE_CASE.refutation.assertions[0],
+                  evidence: [{ ...REFUTE_CASE.refutation.assertions[0].evidence[0], [forbiddenKey]: 1 }],
+                },
+              ],
+            },
           },
-        }],
+        ],
       });
 
       expect(result).toEqual({ ok: false, reason: 'malformed-refutation-evidence' });
@@ -327,25 +413,46 @@ describe('remediation case artifact', () => {
     ['missing refutation', (({ refutation: _refutation, ...value }) => value)(REFUTE_CASE)],
     ['zero assertions', { ...REFUTE_CASE, refutation: { ...REFUTE_CASE.refutation, assertions: [] } }],
     ['unknown refutation key', { ...REFUTE_CASE, refutation: { ...REFUTE_CASE.refutation, unknown: true } }],
-    ['missing assertion key', {
-      ...REFUTE_CASE,
-      refutation: { ...REFUTE_CASE.refutation, assertions: [(({
-        verdict: _verdict,
-        ...assertion
-      }) => assertion)(REFUTE_CASE.refutation.assertions[0])] },
-    }],
-    ['unknown assertion key', {
-      ...REFUTE_CASE,
-      refutation: { ...REFUTE_CASE.refutation, assertions: [{ ...REFUTE_CASE.refutation.assertions[0], unknown: true }] },
-    }],
-    ['unknown assertion verdict', {
-      ...REFUTE_CASE,
-      refutation: { ...REFUTE_CASE.refutation, assertions: [{ ...REFUTE_CASE.refutation.assertions[0], verdict: 'uncertain' }] },
-    }],
-    ['too many assertions', {
-      ...REFUTE_CASE,
-      refutation: { ...REFUTE_CASE.refutation, assertions: Array.from({ length: 17 }, () => REFUTE_CASE.refutation.assertions[0]) },
-    }],
+    [
+      'missing assertion key',
+      {
+        ...REFUTE_CASE,
+        refutation: {
+          ...REFUTE_CASE.refutation,
+          assertions: [(({ verdict: _verdict, ...assertion }) => assertion)(REFUTE_CASE.refutation.assertions[0])],
+        },
+      },
+    ],
+    [
+      'unknown assertion key',
+      {
+        ...REFUTE_CASE,
+        refutation: {
+          ...REFUTE_CASE.refutation,
+          assertions: [{ ...REFUTE_CASE.refutation.assertions[0], unknown: true }],
+        },
+      },
+    ],
+    [
+      'unknown assertion verdict',
+      {
+        ...REFUTE_CASE,
+        refutation: {
+          ...REFUTE_CASE.refutation,
+          assertions: [{ ...REFUTE_CASE.refutation.assertions[0], verdict: 'uncertain' }],
+        },
+      },
+    ],
+    [
+      'too many assertions',
+      {
+        ...REFUTE_CASE,
+        refutation: {
+          ...REFUTE_CASE.refutation,
+          assertions: Array.from({ length: 17 }, () => REFUTE_CASE.refutation.assertions[0]),
+        },
+      },
+    ],
   ])('rejects a refute row with %s', async (_name, caseRow) => {
     const result = await read({ ...REFUTE_CASE_V1, cases: [caseRow] });
 
@@ -356,13 +463,17 @@ describe('remediation case artifact', () => {
     const evidence = (({ excerpt: _excerpt, ...entry }) => entry)(REFUTE_CASE.refutation.assertions[0].evidence[0]);
     const result = await read({
       ...REFUTE_CASE_V1,
-      cases: [{
-        ...REFUTE_CASE,
-        refutation: {
-          ...REFUTE_CASE.refutation,
-          assertions: [{ ...REFUTE_CASE.refutation.assertions[0], evidence: Array.isArray(evidence) ? evidence : [evidence] }],
+      cases: [
+        {
+          ...REFUTE_CASE,
+          refutation: {
+            ...REFUTE_CASE.refutation,
+            assertions: [
+              { ...REFUTE_CASE.refutation.assertions[0], evidence: Array.isArray(evidence) ? evidence : [evidence] },
+            ],
+          },
         },
-      }],
+      ],
     });
 
     expect(result).toEqual({ ok: false, reason: 'malformed-refutation-evidence' });
@@ -371,16 +482,20 @@ describe('remediation case artifact', () => {
   it('rejects a refute row with too many evidence entries', async () => {
     const result = await read({
       ...REFUTE_CASE_V1,
-      cases: [{
-        ...REFUTE_CASE,
-        refutation: {
-          ...REFUTE_CASE.refutation,
-          assertions: [{
-            ...REFUTE_CASE.refutation.assertions[0],
-            evidence: Array.from({ length: 9 }, () => REFUTE_CASE.refutation.assertions[0].evidence[0]),
-          }],
+      cases: [
+        {
+          ...REFUTE_CASE,
+          refutation: {
+            ...REFUTE_CASE.refutation,
+            assertions: [
+              {
+                ...REFUTE_CASE.refutation.assertions[0],
+                evidence: Array.from({ length: 9 }, () => REFUTE_CASE.refutation.assertions[0].evidence[0]),
+              },
+            ],
+          },
         },
-      }],
+      ],
     });
 
     expect(result).toEqual({ ok: false, reason: 'invalid-refutation' });
@@ -389,13 +504,15 @@ describe('remediation case artifact', () => {
   it('rejects a refute row with zero evidence entries', async () => {
     const result = await read({
       ...REFUTE_CASE_V1,
-      cases: [{
-        ...REFUTE_CASE,
-        refutation: {
-          ...REFUTE_CASE.refutation,
-          assertions: [{ ...REFUTE_CASE.refutation.assertions[0], evidence: [] }],
+      cases: [
+        {
+          ...REFUTE_CASE,
+          refutation: {
+            ...REFUTE_CASE.refutation,
+            assertions: [{ ...REFUTE_CASE.refutation.assertions[0], evidence: [] }],
+          },
         },
-      }],
+      ],
     });
 
     expect(result).toEqual({ ok: false, reason: 'invalid-refutation' });
@@ -406,59 +523,139 @@ describe('remediation case artifact', () => {
     ['duplicate exact top-level key', { ...CASE_V1, dispositions: [] }, 'invalid-top-level-keys'],
     ['unknown mode', { ...CASE_V1, mode: 'case-v3' }, 'unknown-mode'],
     ['unknown domain', { ...CASE_V1, domain: 'prd_audit' }, 'unknown-domain'],
-    ['unknown source outcome', {
-      ...CASE_V1,
-      sourceOutcomes: [{ ...CASE_V1.sourceOutcomes[0], outcome: 'ignored' }],
-    }, 'invalid-source-outcome'],
-    ['unknown case disposition', {
-      ...CASE_V1,
-      cases: [{ ...CASE_V1.cases[0], disposition: 'route' }],
-    }, 'invalid-case-disposition'],
-    ['unknown confidence', {
-      ...CASE_V1,
-      cases: [{ ...CASE_V1.cases[0], confidence: 'certain' }],
-    }, 'invalid-case-confidence'],
+    [
+      'unknown source outcome',
+      {
+        ...CASE_V1,
+        sourceOutcomes: [{ ...CASE_V1.sourceOutcomes[0], outcome: 'ignored' }],
+      },
+      'invalid-source-outcome',
+    ],
+    [
+      'unknown case disposition',
+      {
+        ...CASE_V1,
+        cases: [{ ...CASE_V1.cases[0], disposition: 'route' }],
+      },
+      'invalid-case-disposition',
+    ],
+    [
+      'unknown confidence',
+      {
+        ...CASE_V1,
+        cases: [{ ...CASE_V1.cases[0], confidence: 'certain' }],
+      },
+      'invalid-case-confidence',
+    ],
     ['mixed legacy fields', { ...CASE_V1, dispositions: [] }, 'invalid-top-level-keys'],
-    ['provider durable case id', {
-      ...CASE_V1,
-      cases: [{ ...CASE_V1.cases[0], caseId: 'provider-case-id' }],
-    }, 'invalid-case-keys'],
-    ['provider durable effect id', {
-      ...CASE_V1,
-      cases: [{ ...CASE_V1.cases[0], effectId: 'provider-effect-id' }],
-    }, 'invalid-case-keys'],
-    ['operator acceptance state', {
-      ...CASE_V1,
-      cases: [{ ...CASE_V1.cases[0], operatorAcceptance: { origins: [{ sourceId: 'testQuality:finding-1', lapId: 'lap-1' }] } }],
-    }, 'operator-owned-acceptance'],
-    ['operator resolution state', {
-      ...CASE_V1,
-      cases: [{ ...CASE_V1.cases[0], operatorResolution: { operator: 'operator', rationale: 'Accepted risk.', resolvedAt: '2026-10-21T00:00:00.000Z' } }],
-    }, 'operator-owned-resolution'],
-    ['carried source outcome', {
-      ...CASE_V1,
-      sourceOutcomes: [{ ...CASE_V1.sourceOutcomes[0], outcome: 'carried' }],
-    }, 'operator-owned-carried-source-outcome'],
-    ['taskless action', {
-      ...CASE_V1,
-      cases: [{ ...CASE_V1.cases[0], effect: { kind: 'action', route: 'build', tasks: [] } }],
-    }, 'invalid-action-effect'],
-    ['unjustified deferral', {
-      ...CASE_V1,
-      cases: [{ ...CASE_V1.cases[1], effect: { ...CASE_V1.cases[1].effect, exclusionRationale: '' } }],
-    }, 'invalid-deferral-effect'],
-    ['refute deferral without an exclusion rationale key', {
-      ...REFUTE_CASE_V1,
-      cases: [{ ...REFUTE_CASE, effect: { kind: 'deferral', title: 'Deferred follow-up', body: 'Track this later.' } }],
-    }, 'invalid-deferral-effect'],
-    ['refute deferral with an empty exclusion rationale', {
-      ...REFUTE_CASE_V1,
-      cases: [{ ...REFUTE_CASE, effect: { kind: 'deferral', title: 'Deferred follow-up', body: 'Track this later.', exclusionRationale: '' } }],
-    }, 'invalid-deferral-effect'],
-    ['refute action effect', {
-      ...REFUTE_CASE_V1,
-      cases: [{ ...REFUTE_CASE, effect: { kind: 'action', route: 'build', tasks: [{ title: 'Not a refute residual.' }] } }],
-    }, 'invalid-refute-effect'],
+    [
+      'provider durable case id',
+      {
+        ...CASE_V1,
+        cases: [{ ...CASE_V1.cases[0], caseId: 'provider-case-id' }],
+      },
+      'invalid-case-keys',
+    ],
+    [
+      'provider durable effect id',
+      {
+        ...CASE_V1,
+        cases: [{ ...CASE_V1.cases[0], effectId: 'provider-effect-id' }],
+      },
+      'invalid-case-keys',
+    ],
+    [
+      'operator acceptance state',
+      {
+        ...CASE_V1,
+        cases: [
+          {
+            ...CASE_V1.cases[0],
+            operatorAcceptance: { origins: [{ sourceId: 'testQuality:finding-1', lapId: 'lap-1' }] },
+          },
+        ],
+      },
+      'operator-owned-acceptance',
+    ],
+    [
+      'operator resolution state',
+      {
+        ...CASE_V1,
+        cases: [
+          {
+            ...CASE_V1.cases[0],
+            operatorResolution: {
+              operator: 'operator',
+              rationale: 'Accepted risk.',
+              resolvedAt: '2026-10-21T00:00:00.000Z',
+            },
+          },
+        ],
+      },
+      'operator-owned-resolution',
+    ],
+    [
+      'carried source outcome',
+      {
+        ...CASE_V1,
+        sourceOutcomes: [{ ...CASE_V1.sourceOutcomes[0], outcome: 'carried' }],
+      },
+      'operator-owned-carried-source-outcome',
+    ],
+    [
+      'taskless action',
+      {
+        ...CASE_V1,
+        cases: [{ ...CASE_V1.cases[0], effect: { kind: 'action', route: 'build', tasks: [] } }],
+      },
+      'invalid-action-effect',
+    ],
+    [
+      'unjustified deferral',
+      {
+        ...CASE_V1,
+        cases: [{ ...CASE_V1.cases[1], effect: { ...CASE_V1.cases[1].effect, exclusionRationale: '' } }],
+      },
+      'invalid-deferral-effect',
+    ],
+    [
+      'refute deferral without an exclusion rationale key',
+      {
+        ...REFUTE_CASE_V1,
+        cases: [
+          { ...REFUTE_CASE, effect: { kind: 'deferral', title: 'Deferred follow-up', body: 'Track this later.' } },
+        ],
+      },
+      'invalid-deferral-effect',
+    ],
+    [
+      'refute deferral with an empty exclusion rationale',
+      {
+        ...REFUTE_CASE_V1,
+        cases: [
+          {
+            ...REFUTE_CASE,
+            effect: {
+              kind: 'deferral',
+              title: 'Deferred follow-up',
+              body: 'Track this later.',
+              exclusionRationale: '',
+            },
+          },
+        ],
+      },
+      'invalid-deferral-effect',
+    ],
+    [
+      'refute action effect',
+      {
+        ...REFUTE_CASE_V1,
+        cases: [
+          { ...REFUTE_CASE, effect: { kind: 'action', route: 'build', tasks: [{ title: 'Not a refute residual.' }] } },
+        ],
+      },
+      'invalid-refute-effect',
+    ],
   ])('rejects %s without exposing partial rows', async (_name, value, reason) => {
     const result = await read(value);
 

@@ -132,6 +132,7 @@ pending_and_refused_citation_contract_holds() {
 }
 
 ship_verdict_artifacts_read_only_contract_holds() {
+  # Covers: task:7
   local pipeline_skill="$1"
   local tdd_skill="$2"
   local artifact pipeline_text tdd_text
