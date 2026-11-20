@@ -177,7 +177,6 @@ describe('Composer resume', () => {
       }),
     ).rejects.toThrow('network unavailable');
     expect(failedAttach).not.toHaveBeenCalled();
-
   });
 
   it('Covers: Task 12 refuses an unregistered project before it fetches or creates a worktree', async () => {
