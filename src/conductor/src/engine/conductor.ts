@@ -6672,6 +6672,16 @@ export class Conductor {
       };
     }
     // /ai-conductor:session-command-context
+    // Once every case in this region is settled, its BUILD-only handoff
+    // artifacts are no longer evidence for a later child.  Retiring them is
+    // best-effort: the resolved case store and its outbox are authoritative,
+    // and durableBuildReviewRetryContext will retry a failed removal.
+    if (!reconciled.state.cases.some((record) => record.resolution === 'open')) {
+      await Promise.all([
+        removeBuildReviewWorkOrder(this.projectRoot, undefined, this.activeRegionChild),
+        removeRemediationCaseJudgement(this.projectRoot, this.activeRegionChild),
+      ]).catch(() => undefined);
+    }
     await drainOutbox();
     return { kind: 'settled' };
   }
