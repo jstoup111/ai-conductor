@@ -180,7 +180,10 @@ function frozenBlockRuns(
   const body = lines.slice(header + 1);
   const runs: Array<{ readonly start: number; readonly end: number }> = [];
   for (const block of blocks) {
-    const expected = block.body.replace(/\n$/, '').split('\n').map((line) => `+${line}`);
+    const expected = block.body
+      .replace(/\n$/, '')
+      .split('\n')
+      .map((line) => `+${line}`);
     const start = body.findIndex((_, index) => expected.every((line, offset) => body[index + offset] === line));
     if (start === -1) {
       if (expected.some((line) => body.includes(line))) return undefined;
@@ -205,15 +208,23 @@ function residualHunk(
   const start = lines.findIndex((line) => line.startsWith('@@ '));
   const header = start === -1 ? undefined : lines[start]!.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/);
   if (header === undefined || header === null) return undefined;
-  const remove = new Set(runs.flatMap((run) => Array.from({ length: run.end - run.start }, (_, offset) => run.start + offset)));
+  const remove = new Set(
+    runs.flatMap((run) => Array.from({ length: run.end - run.start }, (_, offset) => run.start + offset)),
+  );
   const original = lines.slice(start + 1);
-  const body = original.filter((line, index) => !remove.has(index) && !(remove.has(index - 1) && line.startsWith('\\')));
+  const body = original.filter(
+    (line, index) => !remove.has(index) && !(remove.has(index - 1) && line.startsWith('\\')),
+  );
   const added = body.filter((line) => line.startsWith('+')).length;
   const removed = body.filter((line) => line.startsWith('-')).length;
   if (added === 0 && removed === 0) return null;
   const [, oldStart, oldCount, newStart, , section] = header;
   const range = `@@ -${oldStart}${oldCount === undefined ? '' : `,${oldCount}`} +${newStart},${added} @@${section}`;
-  return { path: hunk.path, patch: `${[...lines.slice(0, start), range, ...body].join('\n')}\n`, wholeFile: false } as FoldHunk;
+  return {
+    path: hunk.path,
+    patch: `${[...lines.slice(0, start), range, ...body].join('\n')}\n`,
+    wholeFile: false,
+  } as FoldHunk;
 }
 
 async function residualApplies(git: GitRunner, parent: CommitSha, patch: string, index: string): Promise<boolean> {
