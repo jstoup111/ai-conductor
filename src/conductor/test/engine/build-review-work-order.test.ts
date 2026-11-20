@@ -1,4 +1,4 @@
-// Covers: task:9, task:35
+// Covers: task:1, task:9, task:35
 import { afterEach, describe, expect, it } from 'vitest';
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
