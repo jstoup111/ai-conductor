@@ -46,19 +46,23 @@ const CUSTOM_WORK_ORDER = {
   domain: 'build_review',
   feature: FEATURE,
   effectId: 'effect-custom-1',
-  cases: [{
-    caseId: 'case-custom-merged',
-    priority: 'high',
-    sources: [
-      { sourceId: 'custom:policy-a:finding-1', outcome: 'acted', recordedAt: '2026-09-11T00:00:00.000Z' },
-      { sourceId: 'custom:policy-b:finding-2', outcome: 'merged', recordedAt: '2026-09-11T00:00:00.000Z' },
-    ],
-    tasks: [{
-      title: 'Preserve both policy contracts at the implementation boundary',
-      admittedTaskIds: ['35'],
-      admissionRationale: 'Task 35 owns the admitted consistent repair publication boundary.',
-    }],
-  }],
+  cases: [
+    {
+      caseId: 'case-custom-merged',
+      priority: 'high',
+      sources: [
+        { sourceId: 'custom:policy-a:finding-1', outcome: 'acted', recordedAt: '2026-09-11T00:00:00.000Z' },
+        { sourceId: 'custom:policy-b:finding-2', outcome: 'merged', recordedAt: '2026-09-11T00:00:00.000Z' },
+      ],
+      tasks: [
+        {
+          title: 'Preserve both policy contracts at the implementation boundary',
+          admittedTaskIds: ['35'],
+          admissionRationale: 'Task 35 owns the admitted consistent repair publication boundary.',
+        },
+      ],
+    },
+  ],
 } as const satisfies BuildReviewWorkOrder;
 
 const temporaryDirectories: string[] = [];
@@ -70,10 +74,14 @@ async function createProjectRoot(): Promise<string> {
 }
 
 afterEach(async () => {
-  await Promise.all(temporaryDirectories.splice(0).map((root) => rm(root, {
-    recursive: true,
-    force: true,
-  })));
+  await Promise.all(
+    temporaryDirectories.splice(0).map((root) =>
+      rm(root, {
+        recursive: true,
+        force: true,
+      }),
+    ),
+  );
 });
 
 describe('build-review work order', () => {
@@ -82,14 +90,22 @@ describe('build-review work order', () => {
     const child4 = parseChildId(4)!;
     const child3 = parseChildId(3)!;
 
-    await expect(publishBuildReviewWorkOrder(projectRoot, WORK_ORDER, undefined, child4)).resolves.toMatchObject({ ok: true });
+    await expect(publishBuildReviewWorkOrder(projectRoot, WORK_ORDER, undefined, child4)).resolves.toMatchObject({
+      ok: true,
+    });
     await expect(access(buildReviewWorkOrderPath(projectRoot, child4))).resolves.toBeUndefined();
     await expect(access(buildReviewWorkOrderPath(projectRoot))).rejects.toMatchObject({ code: 'ENOENT' });
-    await expect(readBuildReviewWorkOrder(projectRoot, FEATURE, EFFECT_ID, undefined, child3))
-      .resolves.toEqual({ ok: false, reason: 'missing-work-order' });
-    await expect(markBuildReviewWorkOrderAttempted(projectRoot, FEATURE, undefined, child4)).resolves.toMatchObject({ ok: true });
-    await expect(readBuildReviewWorkOrderAttemptedCaseIds(projectRoot, FEATURE, undefined, child4))
-      .resolves.toEqual({ ok: true, attemptedCaseIds: ['case-critical', 'case-high'] });
+    await expect(readBuildReviewWorkOrder(projectRoot, FEATURE, EFFECT_ID, undefined, child3)).resolves.toEqual({
+      ok: false,
+      reason: 'missing-work-order',
+    });
+    await expect(markBuildReviewWorkOrderAttempted(projectRoot, FEATURE, undefined, child4)).resolves.toMatchObject({
+      ok: true,
+    });
+    await expect(readBuildReviewWorkOrderAttemptedCaseIds(projectRoot, FEATURE, undefined, child4)).resolves.toEqual({
+      ok: true,
+      attemptedCaseIds: ['case-critical', 'case-high'],
+    });
   });
 
   it('persists ordered multi-case work and a later process reads it by the stable effect id', async () => {
@@ -119,28 +135,32 @@ describe('build-review work order', () => {
   });
 
   it('adds ordered file-scoped work to BUILD retry context without replacing existing context', () => {
-    expect(appendBuildReviewWorkOrderContext('Existing retry context.', WORK_ORDER)).toBe([
-      'Existing retry context.',
-      '',
-      `Build-review remediation work order (effect: ${EFFECT_ID}):`,
-      '1. [critical] case-critical',
-      '   1. src/widget.ts:20 — exercise the changed branch',
-      '   2. test/widget.test.ts:41 — prove the rejection path',
-      '2. [high] case-high',
-      '   1. src/worker.ts:8 — cover the retry boundary',
-    ].join('\n'));
+    expect(appendBuildReviewWorkOrderContext('Existing retry context.', WORK_ORDER)).toBe(
+      [
+        'Existing retry context.',
+        '',
+        `Build-review remediation work order (effect: ${EFFECT_ID}):`,
+        '1. [critical] case-critical',
+        '   1. src/widget.ts:20 — exercise the changed branch',
+        '   2. test/widget.test.ts:41 — prove the rejection path',
+        '2. [high] case-high',
+        '   1. src/worker.ts:8 — cover the retry boundary',
+      ].join('\n'),
+    );
   });
 
   it('renders only the admitted custom source links and task rationale into BUILD context', () => {
-    expect(appendBuildReviewWorkOrderContext('Existing retry context.', CUSTOM_WORK_ORDER)).toBe([
-      'Existing retry context.',
-      '',
-      'Build-review remediation work order (effect: effect-custom-1):',
-      '1. [high] case-custom-merged',
-      '   sources: custom:policy-a:finding-1 [acted], custom:policy-b:finding-2 [merged]',
-      '   1. Preserve both policy contracts at the implementation boundary',
-      '      admitted tasks: 35 — Task 35 owns the admitted consistent repair publication boundary.',
-    ].join('\n'));
+    expect(appendBuildReviewWorkOrderContext('Existing retry context.', CUSTOM_WORK_ORDER)).toBe(
+      [
+        'Existing retry context.',
+        '',
+        'Build-review remediation work order (effect: effect-custom-1):',
+        '1. [high] case-custom-merged',
+        '   sources: custom:policy-a:finding-1 [acted], custom:policy-b:finding-2 [merged]',
+        '   1. Preserve both policy contracts at the implementation boundary',
+        '      admitted tasks: 35 — Task 35 owns the admitted consistent repair publication boundary.',
+      ].join('\n'),
+    );
   });
 
   it.each([
@@ -148,7 +168,19 @@ describe('build-review work order', () => {
     ['foreign domain', { ...WORK_ORDER, domain: 'prd_audit' }, 'foreign-domain'],
     ['missing stable effect id', { ...WORK_ORDER, effectId: '' }, 'malformed-order'],
     ['taskless case', { ...WORK_ORDER, cases: [{ ...WORK_ORDER.cases[0], tasks: [] }] }, 'malformed-order'],
-    ['non-action source evidence', { ...CUSTOM_WORK_ORDER, cases: [{ ...CUSTOM_WORK_ORDER.cases[0], sources: [{ ...CUSTOM_WORK_ORDER.cases[0].sources[0], outcome: 'deferred' }] }] }, 'malformed-order'],
+    [
+      'non-action source evidence',
+      {
+        ...CUSTOM_WORK_ORDER,
+        cases: [
+          {
+            ...CUSTOM_WORK_ORDER.cases[0],
+            sources: [{ ...CUSTOM_WORK_ORDER.cases[0].sources[0], outcome: 'deferred' }],
+          },
+        ],
+      },
+      'malformed-order',
+    ],
   ] as const)('refuses to publish %s', async (_description, workOrder, reason) => {
     const projectRoot = await createProjectRoot();
 
@@ -157,9 +189,17 @@ describe('build-review work order', () => {
 
   it.each([
     ['malformed JSON', '{not json', 'malformed-json'],
-    ['foreign feature', JSON.stringify({ ...WORK_ORDER, feature: { ...FEATURE, feature: 'other' } }), 'foreign-feature'],
+    [
+      'foreign feature',
+      JSON.stringify({ ...WORK_ORDER, feature: { ...FEATURE, feature: 'other' } }),
+      'foreign-feature',
+    ],
     ['foreign effect', JSON.stringify({ ...WORK_ORDER, effectId: 'effect-other' }), 'foreign-effect'],
-    ['partial order', JSON.stringify({ ...WORK_ORDER, cases: [{ ...WORK_ORDER.cases[0], tasks: [] }] }), 'malformed-order'],
+    [
+      'partial order',
+      JSON.stringify({ ...WORK_ORDER, cases: [{ ...WORK_ORDER.cases[0], tasks: [] }] }),
+      'malformed-order',
+    ],
   ] as const)('never turns a %s into BUILD prompt text', async (_description, contents, reason) => {
     const projectRoot = await createProjectRoot();
     await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
@@ -176,10 +216,18 @@ describe('build-review work order', () => {
     await writeFile(path, original, 'utf8');
     const filesystem: BuildReviewWorkOrderFilesystem = {
       readFile: (file) => readFile(file, 'utf8'),
-      mkdir: async (directory) => { await mkdir(directory, { recursive: true }); },
-      writeFile: async (file, contents) => { await writeFile(file, contents, 'utf8'); },
-      rename: async () => { throw new Error('rename failed'); },
-      rm: async (file) => { await rm(file, { force: true }); },
+      mkdir: async (directory) => {
+        await mkdir(directory, { recursive: true });
+      },
+      writeFile: async (file, contents) => {
+        await writeFile(file, contents, 'utf8');
+      },
+      rename: async () => {
+        throw new Error('rename failed');
+      },
+      rm: async (file) => {
+        await rm(file, { force: true });
+      },
     };
 
     await expect(publishBuildReviewWorkOrder(projectRoot, WORK_ORDER, filesystem)).resolves.toEqual({
@@ -204,8 +252,9 @@ describe('build-review work order', () => {
 
     await expect(publishBuildReviewWorkOrder(projectRoot, WORK_ORDER)).resolves.toMatchObject({ ok: true });
     await expect(readBuildReviewWorkOrder(projectRoot, FEATURE, EFFECT_ID)).resolves.toMatchObject({ ok: true });
-    await expect(Promise.all([readFile(activePlan, 'utf8'), readFile(taskStatus, 'utf8'), readFile(growth, 'utf8')]))
-      .resolves.toEqual(['approved plan\n', '{"tasks":[]}\n', '{"version":1,"gates":{}}\n']);
+    await expect(
+      Promise.all([readFile(activePlan, 'utf8'), readFile(taskStatus, 'utf8'), readFile(growth, 'utf8')]),
+    ).resolves.toEqual(['approved plan\n', '{"tasks":[]}\n', '{"version":1,"gates":{}}\n']);
   });
   it('uses the feature-level work-order path for publishing, reading, and attempt stamps', async () => {
     const projectRoot = await createProjectRoot();
@@ -215,14 +264,21 @@ describe('build-review work order', () => {
     await publishBuildReviewWorkOrder(projectRoot, WORK_ORDER);
     await expect(readFile(featurePath, 'utf8')).resolves.toBe(`${JSON.stringify(WORK_ORDER)}\n`);
 
-    await expect(readBuildReviewWorkOrderAttemptedCaseIds(projectRoot, FEATURE)).resolves.toEqual({ ok: true, attemptedCaseIds: [] });
+    await expect(readBuildReviewWorkOrderAttemptedCaseIds(projectRoot, FEATURE)).resolves.toEqual({
+      ok: true,
+      attemptedCaseIds: [],
+    });
     await expect(markBuildReviewWorkOrderAttempted(projectRoot, FEATURE)).resolves.toMatchObject({ ok: true });
     // A later process — not the one that stamped it — reads the same evidence.
-    await expect(readBuildReviewWorkOrderAttemptedCaseIds(projectRoot, FEATURE)).resolves.toEqual({ ok: true, attemptedCaseIds: ['case-critical', 'case-high'] });
+    await expect(readBuildReviewWorkOrderAttemptedCaseIds(projectRoot, FEATURE)).resolves.toEqual({
+      ok: true,
+      attemptedCaseIds: ['case-critical', 'case-high'],
+    });
     // Stamping twice is idempotent and preserves the stable effect identity.
     await expect(markBuildReviewWorkOrderAttempted(projectRoot, FEATURE)).resolves.toMatchObject({ ok: true });
     await expect(readBuildReviewWorkOrder(projectRoot, FEATURE, EFFECT_ID)).resolves.toMatchObject({
-      ok: true, workOrder: { effectId: EFFECT_ID, attemptedCaseIds: ['case-critical', 'case-high'] },
+      ok: true,
+      workOrder: { effectId: EFFECT_ID, attemptedCaseIds: ['case-critical', 'case-high'] },
     });
     await expect(readFile(featurePath, 'utf8')).resolves.toContain('"attemptedCaseIds":["case-critical","case-high"]');
   });
@@ -234,15 +290,21 @@ describe('build-review work order', () => {
     // Recovery has no in-memory effect id; it has the set of stable action
     // effects the case store recorded. The published order's primary effect is
     // whichever route was reserved first, so it need not be the first of them.
-    await expect(readBuildReviewWorkOrder(projectRoot, FEATURE, ['effect-earlier-route', EFFECT_ID]))
-      .resolves.toEqual({ ok: true, workOrder: WORK_ORDER });
+    await expect(readBuildReviewWorkOrder(projectRoot, FEATURE, ['effect-earlier-route', EFFECT_ID])).resolves.toEqual({
+      ok: true,
+      workOrder: WORK_ORDER,
+    });
     // An order naming an effect that durable state never recorded is foreign,
     // exactly as a single mismatched id is.
-    await expect(readBuildReviewWorkOrder(projectRoot, FEATURE, ['effect-earlier-route']))
-      .resolves.toEqual({ ok: false, reason: 'foreign-effect' });
+    await expect(readBuildReviewWorkOrder(projectRoot, FEATURE, ['effect-earlier-route'])).resolves.toEqual({
+      ok: false,
+      reason: 'foreign-effect',
+    });
     // No recorded effect can bind anything: fail closed rather than open.
-    await expect(readBuildReviewWorkOrder(projectRoot, FEATURE, []))
-      .resolves.toEqual({ ok: false, reason: 'foreign-effect' });
+    await expect(readBuildReviewWorkOrder(projectRoot, FEATURE, [])).resolves.toEqual({
+      ok: false,
+      reason: 'foreign-effect',
+    });
   });
 
   it('keeps absent attempt evidence distinct from invalid durable orders', async () => {
@@ -250,13 +312,19 @@ describe('build-review work order', () => {
     const missing = await readBuildReviewWorkOrderAttemptedCaseIds(projectRoot, FEATURE);
     expect(missing).toEqual({ ok: false, reason: 'missing-work-order' });
     expect(classifyBuildReviewDurableRead(missing)).toBe('absent');
-    await expect(markBuildReviewWorkOrderAttempted(projectRoot, FEATURE)).resolves.toEqual({ ok: false, reason: 'missing-work-order' });
+    await expect(markBuildReviewWorkOrderAttempted(projectRoot, FEATURE)).resolves.toEqual({
+      ok: false,
+      reason: 'missing-work-order',
+    });
 
     await publishBuildReviewWorkOrder(projectRoot, WORK_ORDER);
     const foreign = { ...FEATURE, feature: 'other-feature' } as const;
     const foreignAttempt = await readBuildReviewWorkOrderAttemptedCaseIds(projectRoot, foreign);
     expect(foreignAttempt).toEqual({ ok: false, reason: 'foreign-feature' });
     expect(classifyBuildReviewDurableRead(foreignAttempt)).toBe('invalid');
-    await expect(markBuildReviewWorkOrderAttempted(projectRoot, foreign)).resolves.toEqual({ ok: false, reason: 'foreign-feature' });
+    await expect(markBuildReviewWorkOrderAttempted(projectRoot, foreign)).resolves.toEqual({
+      ok: false,
+      reason: 'foreign-feature',
+    });
   });
 });

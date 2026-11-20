@@ -29,17 +29,17 @@ import { retireOpenBuildReviewCase, retiresOpenBuildReviewCase } from './remedia
 export type RemediationEffectResult =
   | { readonly ok: true; readonly status: 'applied' | 'already-applied'; readonly effectId: string }
   | {
-    readonly ok: false;
-    readonly reason: string;
-    /**
-     * Case ids whose reserved action effect this executor durably flipped to
-     * `failed` under its own lease. Reported from the same mutation that
-     * persisted the transition, so the caller never has to re-read the store
-     * (and never mistakes a read failure for "nothing failed"). Absent when
-     * the failure left every reservation untouched.
-     */
-    readonly failedCaseIds?: readonly string[];
-  };
+      readonly ok: false;
+      readonly reason: string;
+      /**
+       * Case ids whose reserved action effect this executor durably flipped to
+       * `failed` under its own lease. Reported from the same mutation that
+       * persisted the transition, so the caller never has to re-read the store
+       * (and never mistakes a read failure for "nothing failed"). Absent when
+       * the failure left every reservation untouched.
+       */
+      readonly failedCaseIds?: readonly string[];
+    };
 
 type ActionCase = RemediationCaseRecord & {
   readonly effect: Extract<RemediationCaseRecord['effect'], { readonly kind: 'action' }>;
@@ -50,9 +50,21 @@ type DeferralCase = RemediationCaseRecord & {
 };
 
 export type PersistBuildReviewDecisionStopResult =
-  | { readonly ok: true; readonly status: 'persisted' | 'already-persisted' | 'already-resolved'; readonly caseId: string }
-  | { readonly ok: false; readonly reason: 'invalid-decision-stop' | 'conflicting-case-id' | `case store ${string}`; readonly violation?: never }
-  | { readonly ok: false; readonly reason: 'rejected-transition'; readonly violation: RemediationCaseTransitionViolation };
+  | {
+      readonly ok: true;
+      readonly status: 'persisted' | 'already-persisted' | 'already-resolved';
+      readonly caseId: string;
+    }
+  | {
+      readonly ok: false;
+      readonly reason: 'invalid-decision-stop' | 'conflicting-case-id' | `case store ${string}`;
+      readonly violation?: never;
+    }
+  | {
+      readonly ok: false;
+      readonly reason: 'rejected-transition';
+      readonly violation: RemediationCaseTransitionViolation;
+    };
 
 /** The shared lifecycle vocabulary for reducers and effect execution. */
 export function isOpenRemediationCase(record: RemediationCaseRecord): boolean {
@@ -61,22 +73,32 @@ export function isOpenRemediationCase(record: RemediationCaseRecord): boolean {
 
 /** An open owner or blocked-consistency stop is durable blocking state, never a deferral-shaped effect. */
 export function isBuildReviewDecisionStop(record: RemediationCaseRecord): boolean {
-  return isOpenRemediationCase(record)
-    && record.disposition === 'escalate'
-    && record.effect.kind === 'none'
-    && (record.escalation !== undefined || record.consistencyStop !== undefined);
+  return (
+    isOpenRemediationCase(record) &&
+    record.disposition === 'escalate' &&
+    record.effect.kind === 'none' &&
+    (record.escalation !== undefined || record.consistencyStop !== undefined)
+  );
 }
 
 function sameDecisionStop(left: RemediationCaseRecord, right: RemediationCaseRecord): boolean {
-  return left.id === right.id && left.disposition === 'escalate' && right.disposition === 'escalate' &&
-    left.effect.kind === 'none' && right.effect.kind === 'none' &&
+  return (
+    left.id === right.id &&
+    left.disposition === 'escalate' &&
+    right.disposition === 'escalate' &&
+    left.effect.kind === 'none' &&
+    right.effect.kind === 'none' &&
     left.escalation?.owner === right.escalation?.owner &&
-    sameSourceOutcomes(left, right);
+    sameSourceOutcomes(left, right)
+  );
 }
 
 function sameSourceOutcomes(left: RemediationCaseRecord, right: RemediationCaseRecord): boolean {
-  return left.sources.length === right.sources.length && left.sources.every((source) =>
-    right.sources.some((other) => source.sourceId === other.sourceId && source.outcome === other.outcome),
+  return (
+    left.sources.length === right.sources.length &&
+    left.sources.every((source) =>
+      right.sources.some((other) => source.sourceId === other.sourceId && source.outcome === other.outcome),
+    )
   );
 }
 
@@ -124,9 +146,12 @@ export async function persistBuildReviewDecisionStop(input: {
           : { ok: false as const, reason: 'conflicting-case-id' as const },
       };
     }
-    const converged = state.cases.find((record) =>
-      isBuildReviewDecisionStop(record) && record.disposition === 'escalate' &&
-      sameDecisionStopOwnerOrConsistency(record, input.record) && sameSourceOutcomes(record, input.record),
+    const converged = state.cases.find(
+      (record) =>
+        isBuildReviewDecisionStop(record) &&
+        record.disposition === 'escalate' &&
+        sameDecisionStopOwnerOrConsistency(record, input.record) &&
+        sameSourceOutcomes(record, input.record),
     );
     if (converged) {
       return { value: { ok: true as const, status: 'already-persisted' as const, caseId: converged.id } };
@@ -143,10 +168,12 @@ export async function persistBuildReviewDecisionStop(input: {
 }
 
 function isActionCase(record: RemediationCaseRecord): record is ActionCase {
-  return isOpenRemediationCase(record)
-    && record.disposition === 'act'
-    && record.refutation === undefined
-    && record.effect.kind === 'action';
+  return (
+    isOpenRemediationCase(record) &&
+    record.disposition === 'act' &&
+    record.refutation === undefined &&
+    record.effect.kind === 'action'
+  );
 }
 
 /** The one durable vocabulary for action cases that may enter a BUILD retry. */
@@ -163,14 +190,17 @@ export function isBuildEligibleActionCase(record: RemediationCaseRecord): record
  * them agreeing — editing one side reopened the fail-open PASS.
  */
 export function hasReservedOrFailedRemediationEffect(record: RemediationCaseRecord): boolean {
-  return record.effect.kind !== 'none'
-    && (record.effect.status === 'reserved' || record.effect.status === 'failed');
+  return record.effect.kind !== 'none' && (record.effect.status === 'reserved' || record.effect.status === 'failed');
 }
 
 /** Open cases whose durable effect blocks recovery or terminal PASS settlement. */
 export function isBuildReviewSettlementObligationCase(record: RemediationCaseRecord): boolean {
-  return isOpenRemediationCase(record)
-    && (isBuildReviewDecisionStop(record) || isBuildEligibleActionCase(record) || hasReservedOrFailedRemediationEffect(record));
+  return (
+    isOpenRemediationCase(record) &&
+    (isBuildReviewDecisionStop(record) ||
+      isBuildEligibleActionCase(record) ||
+      hasReservedOrFailedRemediationEffect(record))
+  );
 }
 
 export const STRANDED_ACTION_RESERVATION_DIAGNOSTIC = 'stranded reservation: tasks never published';
@@ -212,42 +242,54 @@ export async function settleStrandedBuildReviewActionReservations(input: {
   readonly readPublishedCaseIds: (actionEffectIds: readonly string[]) => Promise<ReadonlySet<string> | undefined>;
   readonly lapId: string;
 }): Promise<SettleStrandedActionReservationsResult> {
-  const mutation = await input.store.mutate<readonly { readonly caseId: string; readonly effectId: string }[]>(async (state) => {
-    const candidates = state.cases.filter((record): record is ActionCase =>
-      isActionCase(record) && record.effect.status === 'reserved'
-      && retiresOpenBuildReviewCase(record, {
-        liveSourceIds: input.liveSourceIds,
-        effectiveAcceptedSourceIds: input.effectiveAcceptedSourceIds,
-        mechanicallyHealthy: input.mechanicallyHealthy,
-      }));
-    if (candidates.length === 0) return { value: [] };
-    const published = await input.readPublishedCaseIds(
-      state.cases.flatMap((record) => record.effect.kind === 'action' ? [record.effect.id] : []));
-    if (published === undefined) return { value: [] };
-    const settled = candidates
-      .filter((record) => !published.has(record.id))
-      .map((record) => ({ caseId: record.id, effectId: record.effect.id }));
-    if (settled.length === 0) return { value: [] };
-    const stranded = new Set(settled.map(({ caseId }) => caseId));
-    const events = settled.map(({ caseId }) => {
-      const eventId = randomUUID();
-      return { eventId, occurredAt: new Date().toISOString(), event: {
-        type: 'remediation_case_reconciled' as const, eventId, domain: 'build_review' as const,
-        lapId: input.lapId, caseId, resolution: 'resolved' as const,
-      } };
-    });
-    const upgraded = appendRemediationCaseOutbox(state, events[0]!);
-    return {
-      value: settled,
-      nextState: {
-        ...upgraded,
-        cases: upgraded.cases.map((record) => stranded.has(record.id)
-          ? retireOpenBuildReviewCase(record)
-          : record),
-        outbox: [...upgraded.outbox, ...events.slice(1)],
-      },
-    };
-  });
+  const mutation = await input.store.mutate<readonly { readonly caseId: string; readonly effectId: string }[]>(
+    async (state) => {
+      const candidates = state.cases.filter(
+        (record): record is ActionCase =>
+          isActionCase(record) &&
+          record.effect.status === 'reserved' &&
+          retiresOpenBuildReviewCase(record, {
+            liveSourceIds: input.liveSourceIds,
+            effectiveAcceptedSourceIds: input.effectiveAcceptedSourceIds,
+            mechanicallyHealthy: input.mechanicallyHealthy,
+          }),
+      );
+      if (candidates.length === 0) return { value: [] };
+      const published = await input.readPublishedCaseIds(
+        state.cases.flatMap((record) => (record.effect.kind === 'action' ? [record.effect.id] : [])),
+      );
+      if (published === undefined) return { value: [] };
+      const settled = candidates
+        .filter((record) => !published.has(record.id))
+        .map((record) => ({ caseId: record.id, effectId: record.effect.id }));
+      if (settled.length === 0) return { value: [] };
+      const stranded = new Set(settled.map(({ caseId }) => caseId));
+      const events = settled.map(({ caseId }) => {
+        const eventId = randomUUID();
+        return {
+          eventId,
+          occurredAt: new Date().toISOString(),
+          event: {
+            type: 'remediation_case_reconciled' as const,
+            eventId,
+            domain: 'build_review' as const,
+            lapId: input.lapId,
+            caseId,
+            resolution: 'resolved' as const,
+          },
+        };
+      });
+      const upgraded = appendRemediationCaseOutbox(state, events[0]!);
+      return {
+        value: settled,
+        nextState: {
+          ...upgraded,
+          cases: upgraded.cases.map((record) => (stranded.has(record.id) ? retireOpenBuildReviewCase(record) : record)),
+          outbox: [...upgraded.outbox, ...events.slice(1)],
+        },
+      };
+    },
+  );
   if (mutation.ok) return { ok: true, settled: mutation.value };
   return mutation.reason === 'rejected-transition' && mutation.violation !== undefined
     ? { ok: false, reason: mutation.reason, violation: mutation.violation }
@@ -267,35 +309,47 @@ export async function resolveAbsentFailedBuildReviewCases(input: {
   readonly lapId: string;
   readonly mechanicallyHealthy: boolean;
 }): Promise<SettleStrandedActionReservationsResult> {
-  const mutation = await input.store.mutate<readonly { readonly caseId: string; readonly effectId: string }[]>(async (state) => {
-    const settled = state.cases.flatMap((record) =>
-      record.effect.kind === 'action' && retiresOpenBuildReviewCase(record, {
-        liveSourceIds: input.liveSourceIds,
-        effectiveAcceptedSourceIds: new Set(),
-        mechanicallyHealthy: input.mechanicallyHealthy,
-        allowAppliedByAbsence: false,
-      })
-        ? [{ caseId: record.id, effectId: record.effect.id }]
-        : []);
-    if (settled.length === 0) return { value: [] };
-    const retired = new Set(settled.map(({ caseId }) => caseId));
-    const events = settled.map(({ caseId }) => {
-      const eventId = randomUUID();
-      return { eventId, occurredAt: new Date().toISOString(), event: {
-        type: 'remediation_case_reconciled' as const, eventId, domain: 'build_review' as const,
-        lapId: input.lapId, caseId, resolution: 'resolved' as const,
-      } };
-    });
-    const upgraded = appendRemediationCaseOutbox(state, events[0]!);
-    return {
-      value: settled,
-      nextState: {
-        ...upgraded,
-        cases: upgraded.cases.map((record) => retired.has(record.id) ? retireOpenBuildReviewCase(record) : record),
-        outbox: [...upgraded.outbox, ...events.slice(1)],
-      },
-    };
-  });
+  const mutation = await input.store.mutate<readonly { readonly caseId: string; readonly effectId: string }[]>(
+    async (state) => {
+      const settled = state.cases.flatMap((record) =>
+        record.effect.kind === 'action' &&
+        retiresOpenBuildReviewCase(record, {
+          liveSourceIds: input.liveSourceIds,
+          effectiveAcceptedSourceIds: new Set(),
+          mechanicallyHealthy: input.mechanicallyHealthy,
+          allowAppliedByAbsence: false,
+        })
+          ? [{ caseId: record.id, effectId: record.effect.id }]
+          : [],
+      );
+      if (settled.length === 0) return { value: [] };
+      const retired = new Set(settled.map(({ caseId }) => caseId));
+      const events = settled.map(({ caseId }) => {
+        const eventId = randomUUID();
+        return {
+          eventId,
+          occurredAt: new Date().toISOString(),
+          event: {
+            type: 'remediation_case_reconciled' as const,
+            eventId,
+            domain: 'build_review' as const,
+            lapId: input.lapId,
+            caseId,
+            resolution: 'resolved' as const,
+          },
+        };
+      });
+      const upgraded = appendRemediationCaseOutbox(state, events[0]!);
+      return {
+        value: settled,
+        nextState: {
+          ...upgraded,
+          cases: upgraded.cases.map((record) => (retired.has(record.id) ? retireOpenBuildReviewCase(record) : record)),
+          outbox: [...upgraded.outbox, ...events.slice(1)],
+        },
+      };
+    },
+  );
   if (mutation.ok) return { ok: true, settled: mutation.value };
   return mutation.reason === 'rejected-transition' && mutation.violation !== undefined
     ? { ok: false, reason: mutation.reason, violation: mutation.violation }
@@ -314,37 +368,57 @@ export async function settleStrandedBuildReviewDeferralReservations(input: {
   readonly liveSourceIds: ReadonlySet<string>;
   readonly lapId: string;
 }): Promise<SettleStrandedActionReservationsResult> {
-  const mutation = await input.store.mutate<readonly { readonly caseId: string; readonly effectId: string }[]>(async (state) => {
-    const settled = state.cases.flatMap((record) =>
-      isOpenRemediationCase(record) && record.effect.kind === 'deferral' && record.effect.status === 'reserved'
-        && record.sources.every((source) => !input.liveSourceIds.has(source.sourceId))
-        ? [{ caseId: record.id, effectId: record.effect.id }]
-        : []);
-    if (settled.length === 0) return { value: [] };
-    const stranded = new Set(settled.map(({ caseId }) => caseId));
-    const events = settled.map(({ caseId }) => {
-      const eventId = randomUUID();
-      return { eventId, occurredAt: new Date().toISOString(), event: {
-        type: 'remediation_case_reconciled' as const, eventId, domain: 'build_review' as const,
-        lapId: input.lapId, caseId, resolution: 'resolved' as const,
-      } };
-    });
-    const upgraded = appendRemediationCaseOutbox(state, events[0]!);
-    return {
-      value: settled,
-      nextState: {
-        ...upgraded,
-        cases: upgraded.cases.map((record) => stranded.has(record.id) && record.effect.kind === 'deferral'
-        ? {
-          ...record,
-          resolution: 'resolved',
-          effect: { id: record.effect.id, kind: 'deferral', status: 'failed', diagnostic: STRANDED_DEFERRAL_RESERVATION_DIAGNOSTIC },
-        }
-        : record),
-        outbox: [...upgraded.outbox, ...events.slice(1)],
-      },
-    };
-  });
+  const mutation = await input.store.mutate<readonly { readonly caseId: string; readonly effectId: string }[]>(
+    async (state) => {
+      const settled = state.cases.flatMap((record) =>
+        isOpenRemediationCase(record) &&
+        record.effect.kind === 'deferral' &&
+        record.effect.status === 'reserved' &&
+        record.sources.every((source) => !input.liveSourceIds.has(source.sourceId))
+          ? [{ caseId: record.id, effectId: record.effect.id }]
+          : [],
+      );
+      if (settled.length === 0) return { value: [] };
+      const stranded = new Set(settled.map(({ caseId }) => caseId));
+      const events = settled.map(({ caseId }) => {
+        const eventId = randomUUID();
+        return {
+          eventId,
+          occurredAt: new Date().toISOString(),
+          event: {
+            type: 'remediation_case_reconciled' as const,
+            eventId,
+            domain: 'build_review' as const,
+            lapId: input.lapId,
+            caseId,
+            resolution: 'resolved' as const,
+          },
+        };
+      });
+      const upgraded = appendRemediationCaseOutbox(state, events[0]!);
+      return {
+        value: settled,
+        nextState: {
+          ...upgraded,
+          cases: upgraded.cases.map((record) =>
+            stranded.has(record.id) && record.effect.kind === 'deferral'
+              ? {
+                  ...record,
+                  resolution: 'resolved',
+                  effect: {
+                    id: record.effect.id,
+                    kind: 'deferral',
+                    status: 'failed',
+                    diagnostic: STRANDED_DEFERRAL_RESERVATION_DIAGNOSTIC,
+                  },
+                }
+              : record,
+          ),
+          outbox: [...upgraded.outbox, ...events.slice(1)],
+        },
+      };
+    },
+  );
   if (mutation.ok) return { ok: true, settled: mutation.value };
   return mutation.reason === 'rejected-transition' && mutation.violation !== undefined
     ? { ok: false, reason: mutation.reason, violation: mutation.violation }
@@ -386,19 +460,23 @@ export async function applyBuildReviewActionEffects(input: {
     // after reconciliation reserved it but before this lease begins. Only the
     // surviving task-bearing cases may publish or consume an effect; the exit
     // reconciliation resolves the suppressed reservation separately.
-    const actionCases = state.cases
-      .filter(isActionCase)
-      .filter((record) => input.tasksByCaseId.has(record.id));
+    const actionCases = state.cases.filter(isActionCase).filter((record) => input.tasksByCaseId.has(record.id));
     if (actionCases.length === 0) return { value: { ok: false as const, reason: 'no open action effects' } };
-    const pending = actionCases.filter((record) => record.effect.kind === 'action' && record.effect.status === 'reserved');
+    const pending = actionCases.filter(
+      (record) => record.effect.kind === 'action' && record.effect.status === 'reserved',
+    );
     if (pending.length === 0) {
       const failed = actionCases.filter((record) => record.effect.status === 'failed');
       if (failed.length === actionCases.length) {
         return {
           value: {
             ok: false as const,
-            reason: `all open action effects failed: ${failed.map((record) =>
-              `${record.effect.id} (${record.effect.status === 'failed' ? record.effect.diagnostic : 'unknown'})`).join(', ')}`,
+            reason: `all open action effects failed: ${failed
+              .map(
+                (record) =>
+                  `${record.effect.id} (${record.effect.status === 'failed' ? record.effect.diagnostic : 'unknown'})`,
+              )
+              .join(', ')}`,
           },
         };
       }
@@ -407,7 +485,8 @@ export async function applyBuildReviewActionEffects(input: {
     const cases: BuildReviewWorkOrderCase[] = [];
     for (const record of actionCases) {
       const tasks = input.tasksByCaseId.get(record.id);
-      if (!tasks || tasks.length === 0) return { value: { ok: false as const, reason: `action case ${record.id} has no work-order tasks` } };
+      if (!tasks || tasks.length === 0)
+        return { value: { ok: false as const, reason: `action case ${record.id} has no work-order tasks` } };
       cases.push({
         caseId: record.id,
         priority: record.priority,
@@ -441,36 +520,54 @@ export async function applyBuildReviewActionEffects(input: {
       .map((row) => actionCases.find((record) => record.id === row.caseId)!.effect.id)
       .find((effectId) => orderedPendingIds.has(effectId))!;
     const workOrderId = input.workOrderId?.() ?? randomUUID();
-    const failPending = (diagnostic: string): RemediationCaseStoreState => replaceCases(state, (record) =>
-      isSettling(record)
-        ? { ...record, effect: { id: record.effect.id, kind: 'action', status: 'failed', diagnostic } }
-        : record,
-    );
+    const failPending = (diagnostic: string): RemediationCaseStoreState =>
+      replaceCases(state, (record) =>
+        isSettling(record)
+          ? { ...record, effect: { id: record.effect.id, kind: 'action', status: 'failed', diagnostic } }
+          : record,
+      );
     const failedCaseIds = pending.filter(isSettling).map((record) => record.id);
-    const published = await (input.publishWorkOrder ?? publishBuildReviewWorkOrder)(input.projectRoot, {
-      version: 'v1', domain: 'build_review', feature: input.feature, effectId: primaryEffectId,
-      cases: orderBuildReviewActionCases(cases),
-    }, undefined, input.child);
+    const published = await (input.publishWorkOrder ?? publishBuildReviewWorkOrder)(
+      input.projectRoot,
+      {
+        version: 'v1',
+        domain: 'build_review',
+        feature: input.feature,
+        effectId: primaryEffectId,
+        cases: orderBuildReviewActionCases(cases),
+      },
+      undefined,
+      input.child,
+    );
     if (!published.ok) {
       const diagnostic = `work-order ${published.reason}`;
       return { value: { ok: false as const, reason: diagnostic, failedCaseIds }, nextState: failPending(diagnostic) };
     }
     let charged: Awaited<ReturnType<typeof chargeBuildReviewEffectInLedger>>;
     try {
-      charged = await (input.chargeEffect ?? chargeBuildReviewEffectInLedger)(input.projectRoot, primaryEffectId, input.chargeInput, input.child);
+      charged = await (input.chargeEffect ?? chargeBuildReviewEffectInLedger)(
+        input.projectRoot,
+        primaryEffectId,
+        input.chargeInput,
+        input.child,
+      );
     } catch (error) {
       const diagnostic = `build-review effect charge failed: ${error instanceof Error ? error.message : String(error)}`;
       return { value: { ok: false as const, reason: diagnostic, failedCaseIds }, nextState: failPending(diagnostic) };
     }
     if (charged.status === 'unreadable') {
-      return { value: { ok: false as const, reason: charged.reason, failedCaseIds }, nextState: failPending(charged.reason) };
+      return {
+        value: { ok: false as const, reason: charged.reason, failedCaseIds },
+        nextState: failPending(charged.reason),
+      };
     }
     if (charged.status === 'charged' && (charged.exhausted || charged.cumulativeExhausted)) {
       // A bare "budget exhausted" halt told the operator nothing about which
       // work is blocked or how close the counters are. Name both.
       const blocked = pending.map((record) => `${record.id} (effect ${record.effect.id})`).join(', ');
       const scope = charged.cumulativeExhausted ? 'cumulative' : 'per-gate';
-      let diagnostic = `build-review kickback budget exhausted (${scope}): blocked cases ${blocked}; ` +
+      let diagnostic =
+        `build-review kickback budget exhausted (${scope}): blocked cases ${blocked}; ` +
         `count ${charged.entry.count}, cumulative ${charged.entry.cumulative}`;
       // `kickback-budget raise --gate build_review` moves the cumulative limit,
       // and admits a halt only when the ledger's cap evidence names the
@@ -479,19 +576,28 @@ export async function applyBuildReviewActionEffects(input: {
       // the raise recovery, which is the pre-existing behaviour.
       if (charged.cumulativeExhausted) {
         try {
-          const capEntry = await recordKickbackCapEvidence(input.projectRoot, 'build_review', {
-            consumed: charged.entry.cumulative,
-            limit: charged.entry.effectiveLimit ?? MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
-            latestReason: charged.entry.lastReason ?? '',
-          }, input.child);
+          const capEntry = await recordKickbackCapEvidence(
+            input.projectRoot,
+            'build_review',
+            {
+              consumed: charged.entry.cumulative,
+              limit: charged.entry.effectiveLimit ?? MAX_CUMULATIVE_KICKBACKS_BUILD_REVIEW,
+              latestReason: charged.entry.lastReason ?? '',
+            },
+            input.child,
+          );
           diagnostic += `\nKickback halt generation: ${capEntry.capEvidence!.haltGeneration}`;
-        } catch { /* halt without recovery evidence */ }
+        } catch {
+          /* halt without recovery evidence */
+        }
       }
       return { value: { ok: false as const, reason: diagnostic, failedCaseIds }, nextState: failPending(diagnostic) };
     }
-    const next = replaceCases(state, (record) => isSettling(record)
-      ? { ...record, effect: { id: record.effect.id, kind: 'action', status: 'applied', workOrderId } }
-      : record);
+    const next = replaceCases(state, (record) =>
+      isSettling(record)
+        ? { ...record, effect: { id: record.effect.id, kind: 'action', status: 'applied', workOrderId } }
+        : record,
+    );
     return { value: { ok: true as const, status: 'applied' as const, effectId: primaryEffectId }, nextState: next };
   });
   return mutation.ok ? mutation.value : { ok: false, reason: `case store ${mutation.reason}` };
@@ -538,13 +644,19 @@ export async function applyBuildReviewDeferralEffect(input: {
   readonly effect: RemediationCaseDeferralEffect;
   readonly repo: string;
   readonly tracker: EffectMarkerTrackerClient;
-  readonly fileIssue: (input: { title: string; body: string; priority: 'critical' | 'high' | 'medium' | 'low' }) => Promise<Pick<FileIntakeIssueResult, 'issueUrl'>>;
+  readonly fileIssue: (input: {
+    title: string;
+    body: string;
+    priority: 'critical' | 'high' | 'medium' | 'low';
+  }) => Promise<Pick<FileIntakeIssueResult, 'issueUrl'>>;
 }): Promise<RemediationEffectResult> {
   const mutation = await input.store.mutate<RemediationEffectResult>(async (state) => {
     const record = state.cases.find((item) => item.id === input.caseId);
-    if (!record || record.effect.kind !== 'deferral') return { value: { ok: false as const, reason: 'unknown deferral case' } };
+    if (!record || record.effect.kind !== 'deferral')
+      return { value: { ok: false as const, reason: 'unknown deferral case' } };
     const deferral = record as DeferralCase;
-    if (deferral.effect.status === 'applied') return { value: { ok: true as const, status: 'already-applied' as const, effectId: deferral.effect.id } };
+    if (deferral.effect.status === 'applied')
+      return { value: { ok: true as const, status: 'already-applied' as const, effectId: deferral.effect.id } };
     const marker = remediationEffectMarker(deferral.effect.id);
     let issueUrl: string | null;
     try {
@@ -559,14 +671,18 @@ export async function applyBuildReviewDeferralEffect(input: {
       }
     } catch (error) {
       const diagnostic = `deferred intake failed: ${error instanceof Error ? error.message : String(error)}`;
-      const next = replaceCases(state, (item) => item.id === deferral.id
-        ? { ...item, effect: { id: deferral.effect.id, kind: 'deferral', status: 'failed', diagnostic } }
-        : item);
+      const next = replaceCases(state, (item) =>
+        item.id === deferral.id
+          ? { ...item, effect: { id: deferral.effect.id, kind: 'deferral', status: 'failed', diagnostic } }
+          : item,
+      );
       return { value: { ok: false as const, reason: diagnostic }, nextState: next };
     }
-    const next = replaceCases(state, (item) => item.id === deferral.id
-      ? { ...item, effect: { id: deferral.effect.id, kind: 'deferral', status: 'applied', issueUrl: issueUrl! } }
-      : item);
+    const next = replaceCases(state, (item) =>
+      item.id === deferral.id
+        ? { ...item, effect: { id: deferral.effect.id, kind: 'deferral', status: 'applied', issueUrl: issueUrl! } }
+        : item,
+    );
     return { value: { ok: true as const, status: 'applied' as const, effectId: deferral.effect.id }, nextState: next };
   });
   return mutation.ok ? mutation.value : { ok: false, reason: `case store ${mutation.reason}` };

@@ -19,15 +19,15 @@ const MAX_SOURCES_PER_CASE = 512;
 
 export type BuildReviewWorkOrderTask =
   | {
-    readonly title: string;
-  }
+      readonly title: string;
+    }
   | {
-    readonly title: string;
-    /** Engine-validated plan task ownership for a case-v2 action. */
-    readonly admittedTaskIds: readonly string[];
-    /** Adjudicator rationale for admitting this task to the repair. */
-    readonly admissionRationale: string;
-  };
+      readonly title: string;
+      /** Engine-validated plan task ownership for a case-v2 action. */
+      readonly admittedTaskIds: readonly string[];
+      /** Adjudicator rationale for admitting this task to the repair. */
+      readonly admissionRationale: string;
+    };
 
 /** The durable identity of every custom finding that an admitted repair covers. */
 export interface BuildReviewWorkOrderSource {
@@ -101,9 +101,7 @@ export type BuildReviewDurableReadResult =
   | RemediationCaseStoreReadResult
   | RemediationCaseStoreFeatureReadResult;
 
-export function classifyBuildReviewDurableRead(
-  result: BuildReviewDurableReadResult,
-): 'present' | 'absent' | 'invalid' {
+export function classifyBuildReviewDurableRead(result: BuildReviewDurableReadResult): 'present' | 'absent' | 'invalid' {
   if (!result.ok) return result.reason === 'missing-work-order' ? 'absent' : 'invalid';
   return 'feature' in result && result.feature === undefined ? 'absent' : 'present';
 }
@@ -137,18 +135,31 @@ function sameFeature(left: RemediationCaseFeatureIdentity, right: RemediationCas
 }
 
 function parseFeature(value: unknown): RemediationCaseFeatureIdentity | undefined {
-  if (!isRecord(value) || !exactKeys(value, ['version', 'repository', 'feature']) || value.version !== WORK_ORDER_VERSION ||
-    !boundedString(value.repository, MAX_REFERENCE_LENGTH) || !boundedString(value.feature, MAX_REFERENCE_LENGTH)) return undefined;
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, ['version', 'repository', 'feature']) ||
+    value.version !== WORK_ORDER_VERSION ||
+    !boundedString(value.repository, MAX_REFERENCE_LENGTH) ||
+    !boundedString(value.feature, MAX_REFERENCE_LENGTH)
+  )
+    return undefined;
   return { version: WORK_ORDER_VERSION, repository: value.repository, feature: value.feature };
 }
 
 function parseCase(value: unknown): BuildReviewWorkOrderCase | undefined {
-  if (!isRecord(value) || !exactKeys(value, value.sources === undefined
-    ? ['caseId', 'priority', 'tasks']
-    : ['caseId', 'priority', 'sources', 'tasks']) ||
+  if (
+    !isRecord(value) ||
+    !exactKeys(
+      value,
+      value.sources === undefined ? ['caseId', 'priority', 'tasks'] : ['caseId', 'priority', 'sources', 'tasks'],
+    ) ||
     !boundedString(value.caseId, MAX_REFERENCE_LENGTH) ||
     !['critical', 'high', 'medium', 'low'].includes(value.priority as string) ||
-    !Array.isArray(value.tasks) || value.tasks.length === 0 || value.tasks.length > MAX_TASKS_PER_CASE) return undefined;
+    !Array.isArray(value.tasks) ||
+    value.tasks.length === 0 ||
+    value.tasks.length > MAX_TASKS_PER_CASE
+  )
+    return undefined;
   const tasks: BuildReviewWorkOrderTask[] = [];
   for (const task of value.tasks) {
     if (!isRecord(task) || !boundedString(task.title)) return undefined;
@@ -156,9 +167,14 @@ function parseCase(value: unknown): BuildReviewWorkOrderCase | undefined {
       tasks.push({ title: task.title });
       continue;
     }
-    if (!exactKeys(task, ['title', 'admittedTaskIds', 'admissionRationale']) ||
-      !Array.isArray(task.admittedTaskIds) || task.admittedTaskIds.length === 0 ||
-      task.admittedTaskIds.length > MAX_TASKS_PER_CASE || !boundedString(task.admissionRationale)) return undefined;
+    if (
+      !exactKeys(task, ['title', 'admittedTaskIds', 'admissionRationale']) ||
+      !Array.isArray(task.admittedTaskIds) ||
+      task.admittedTaskIds.length === 0 ||
+      task.admittedTaskIds.length > MAX_TASKS_PER_CASE ||
+      !boundedString(task.admissionRationale)
+    )
+      return undefined;
     const admittedTaskIds: string[] = [];
     for (const taskId of task.admittedTaskIds) {
       if (!boundedString(taskId, MAX_REFERENCE_LENGTH) || admittedTaskIds.includes(taskId)) return undefined;
@@ -168,16 +184,26 @@ function parseCase(value: unknown): BuildReviewWorkOrderCase | undefined {
   }
   let sources: BuildReviewWorkOrderSource[] | undefined;
   if (value.sources !== undefined) {
-    if (!Array.isArray(value.sources) || value.sources.length === 0 || value.sources.length > MAX_SOURCES_PER_CASE) return undefined;
+    if (!Array.isArray(value.sources) || value.sources.length === 0 || value.sources.length > MAX_SOURCES_PER_CASE)
+      return undefined;
     const sourceIds = new Set<string>();
     sources = [];
     for (const source of value.sources) {
-      if (!isRecord(source) || !exactKeys(source, ['sourceId', 'outcome', 'recordedAt']) ||
-        !boundedString(source.sourceId, MAX_REFERENCE_LENGTH) || !validTimestamp(source.recordedAt) ||
+      if (
+        !isRecord(source) ||
+        !exactKeys(source, ['sourceId', 'outcome', 'recordedAt']) ||
+        !boundedString(source.sourceId, MAX_REFERENCE_LENGTH) ||
+        !validTimestamp(source.recordedAt) ||
         !['acted', 'merged'].includes(source.outcome as string) ||
-        sourceIds.has(source.sourceId)) return undefined;
+        sourceIds.has(source.sourceId)
+      )
+        return undefined;
       sourceIds.add(source.sourceId);
-      sources.push({ sourceId: source.sourceId, outcome: source.outcome as 'acted' | 'merged', recordedAt: source.recordedAt });
+      sources.push({
+        sourceId: source.sourceId,
+        outcome: source.outcome as 'acted' | 'merged',
+        recordedAt: source.recordedAt,
+      });
     }
   }
   return {
@@ -189,16 +215,28 @@ function parseCase(value: unknown): BuildReviewWorkOrderCase | undefined {
 }
 
 function parseWorkOrder(value: unknown): PublishBuildReviewWorkOrderResult {
-  if (!isRecord(value) || !exactKeys(value, value.attemptedCaseIds === undefined
-    ? ['version', 'domain', 'feature', 'effectId', 'cases']
-    : ['version', 'domain', 'feature', 'effectId', 'cases', 'attemptedCaseIds'])) {
+  if (
+    !isRecord(value) ||
+    !exactKeys(
+      value,
+      value.attemptedCaseIds === undefined
+        ? ['version', 'domain', 'feature', 'effectId', 'cases']
+        : ['version', 'domain', 'feature', 'effectId', 'cases', 'attemptedCaseIds'],
+    )
+  ) {
     return { ok: false, reason: 'malformed-order' };
   }
   if (value.version !== WORK_ORDER_VERSION) return { ok: false, reason: 'unknown-version' };
   if (value.domain !== 'build_review') return { ok: false, reason: 'foreign-domain' };
   const feature = parseFeature(value.feature);
-  if (!feature || !boundedString(value.effectId, MAX_REFERENCE_LENGTH) || !Array.isArray(value.cases) ||
-    value.cases.length === 0 || value.cases.length > MAX_CASES) return { ok: false, reason: 'malformed-order' };
+  if (
+    !feature ||
+    !boundedString(value.effectId, MAX_REFERENCE_LENGTH) ||
+    !Array.isArray(value.cases) ||
+    value.cases.length === 0 ||
+    value.cases.length > MAX_CASES
+  )
+    return { ok: false, reason: 'malformed-order' };
 
   const caseIds = new Set<string>();
   const cases: BuildReviewWorkOrderCase[] = [];
@@ -210,19 +248,28 @@ function parseWorkOrder(value: unknown): PublishBuildReviewWorkOrderResult {
   }
   let attemptedCaseIds: string[] | undefined;
   if (value.attemptedCaseIds !== undefined) {
-    if (!Array.isArray(value.attemptedCaseIds) || value.attemptedCaseIds.length > MAX_CASES) return { ok: false, reason: 'malformed-order' };
+    if (!Array.isArray(value.attemptedCaseIds) || value.attemptedCaseIds.length > MAX_CASES)
+      return { ok: false, reason: 'malformed-order' };
     attemptedCaseIds = [];
     for (const attempted of value.attemptedCaseIds) {
       // Attempt evidence names cases the order itself carries; anything else is
       // a foreign or corrupt trace and never becomes BUILD prompt text.
-      if (!boundedString(attempted, MAX_REFERENCE_LENGTH) || !caseIds.has(attempted)) return { ok: false, reason: 'malformed-order' };
+      if (!boundedString(attempted, MAX_REFERENCE_LENGTH) || !caseIds.has(attempted))
+        return { ok: false, reason: 'malformed-order' };
       attemptedCaseIds.push(attempted);
     }
   }
-  return { ok: true, workOrder: {
-    version: WORK_ORDER_VERSION, domain: 'build_review', feature, effectId: value.effectId, cases,
-    ...(attemptedCaseIds === undefined ? {} : { attemptedCaseIds }),
-  } };
+  return {
+    ok: true,
+    workOrder: {
+      version: WORK_ORDER_VERSION,
+      domain: 'build_review',
+      feature,
+      effectId: value.effectId,
+      cases,
+      ...(attemptedCaseIds === undefined ? {} : { attemptedCaseIds }),
+    },
+  };
 }
 
 function isMissing(error: unknown): boolean {
@@ -288,15 +335,8 @@ export async function readBuildReviewWorkOrder(
 }
 
 /** Adds validated ordered work to an existing BUILD retry context. */
-export function appendBuildReviewWorkOrderContext(
-  context: string,
-  workOrder: BuildReviewWorkOrder,
-): string {
-  const lines = [
-    context,
-    '',
-    `Build-review remediation work order (effect: ${workOrder.effectId}):`,
-  ];
+export function appendBuildReviewWorkOrderContext(context: string, workOrder: BuildReviewWorkOrder): string {
+  const lines = [context, '', `Build-review remediation work order (effect: ${workOrder.effectId}):`];
   for (const [caseIndex, caseRow] of workOrder.cases.entries()) {
     lines.push(`${caseIndex + 1}. [${caseRow.priority}] ${caseRow.caseId}`);
     if (caseRow.sources) {
@@ -352,9 +392,7 @@ export async function readBuildReviewWorkOrderAttemptedCaseIds(
   child?: ChildId,
 ): Promise<ReadBuildReviewWorkOrderAttemptedCaseIdsResult> {
   const order = await readFeatureWorkOrder(projectRoot, feature, filesystem, child);
-  return order.ok
-    ? { ok: true, attemptedCaseIds: order.workOrder.attemptedCaseIds ?? [] }
-    : order;
+  return order.ok ? { ok: true, attemptedCaseIds: order.workOrder.attemptedCaseIds ?? [] } : order;
 }
 
 /**
@@ -374,11 +412,19 @@ export async function markBuildReviewWorkOrderAttempted(
   return publishBuildReviewWorkOrder(projectRoot, { ...order.workOrder, attemptedCaseIds }, filesystem, child);
 }
 
-export async function removeBuildReviewWorkOrder(projectRoot: string, filesystem: BuildReviewWorkOrderFilesystem = defaultFilesystem, child?: ChildId): Promise<void> {
+export async function removeBuildReviewWorkOrder(
+  projectRoot: string,
+  filesystem: BuildReviewWorkOrderFilesystem = defaultFilesystem,
+  child?: ChildId,
+): Promise<void> {
   await filesystem.rm(buildReviewWorkOrderPath(projectRoot, child));
 }
 
-export async function moveBuildReviewWorkOrderToChild(projectRoot: string, child: ChildId, filesystem: BuildReviewWorkOrderFilesystem = defaultFilesystem): Promise<void> {
+export async function moveBuildReviewWorkOrderToChild(
+  projectRoot: string,
+  child: ChildId,
+  filesystem: BuildReviewWorkOrderFilesystem = defaultFilesystem,
+): Promise<void> {
   const target = buildReviewWorkOrderPath(projectRoot, child);
   await filesystem.mkdir(dirname(target));
   await filesystem.rename(buildReviewWorkOrderPath(projectRoot), target);
