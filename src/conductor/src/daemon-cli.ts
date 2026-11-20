@@ -547,17 +547,28 @@ export async function stopDispatchVisualizer(
   }
 }
 
-/**
- * Flush daemon-owned OTel state before handing SIGHUP back to its default
- * disposition. The listener removes itself first, so the re-raised signal
- * cannot recurse through this handler.
- */
-export function installDaemonOtelSighupHandler(options: {
-  daemonOtel: { stop: () => Promise<void> } | null;
-  activeDispatchVisualizers?: ReadonlySet<{ stop: () => Promise<void> }>;
+type DaemonDispatchVisualizers = ReadonlySet<{ stop: () => Promise<void> }> | undefined;
+
+interface DaemonOtelSignalHandlerOptions {
+  activeDispatchVisualizers?: DaemonDispatchVisualizers;
   processAdapter?: DaemonProcessAdapter;
   awaitStop?: AwaitDaemonOtelStop;
-}): () => void {
+}
+
+async function stopActiveDispatchVisualizers(active: DaemonDispatchVisualizers): Promise<void> {
+  await Promise.allSettled([...(active ?? [])].map((visualizer) => visualizer.stop()));
+}
+
+/**
+ * Run a bounded OTel flush, then hand `signal` back to its remaining
+ * listeners or default disposition. The listener removes itself first, so the
+ * re-raised signal cannot recurse through this handler.
+ */
+function installDaemonOtelFlushThenReraise(
+  signal: NodeJS.Signals,
+  options: DaemonOtelSignalHandlerOptions,
+  flush: () => Promise<void>,
+): () => void {
   const processAdapter = options.processAdapter ?? productionDaemonProcessAdapter;
   const awaitStop = options.awaitStop ?? awaitDaemonOtelStop;
   let handling = false;
@@ -565,26 +576,42 @@ export function installDaemonOtelSighupHandler(options: {
     if (handling) return;
     handling = true;
     try {
-      await awaitStop(
-        Promise.resolve().then(async () => {
-          await runSighupPersistence();
-          await Promise.allSettled(
-            [...(options.activeDispatchVisualizers ?? [])].map((visualizer) => visualizer.stop()),
-          );
-          await options.daemonOtel?.stop();
-        }),
-        DAEMON_OTEL_SIGHUP_STOP_TIMEOUT_MS,
-      );
+      await awaitStop(Promise.resolve().then(flush), DAEMON_OTEL_SIGHUP_STOP_TIMEOUT_MS);
     } catch {
-      // SIGHUP must retain its normal respawn/termination behavior even when
-      // the exporter itself fails while releasing the durable spool lease.
+      // The signal must retain its normal behavior even when the exporter
+      // itself fails while releasing the durable spool lease.
     } finally {
-      processAdapter.off('SIGHUP', handler);
-      processAdapter.kill(processAdapter.pid, 'SIGHUP');
+      processAdapter.off(signal, handler);
+      processAdapter.kill(processAdapter.pid, signal);
     }
   };
-  processAdapter.on('SIGHUP', handler);
-  return () => processAdapter.off('SIGHUP', handler);
+  processAdapter.on(signal, handler);
+  return () => processAdapter.off(signal, handler);
+}
+
+/**
+ * Flush daemon-owned OTel state before handing SIGHUP back to its default
+ * disposition.
+ */
+export function installDaemonOtelSighupHandler(
+  options: DaemonOtelSignalHandlerOptions & { daemonOtel: { stop: () => Promise<void> } | null },
+): () => void {
+  return installDaemonOtelFlushThenReraise('SIGHUP', options, async () => {
+    await runSighupPersistence();
+    await stopActiveDispatchVisualizers(options.activeDispatchVisualizers);
+    await options.daemonOtel?.stop();
+  });
+}
+
+/**
+ * Dispatch visualizers do not install their own process signal handlers in
+ * daemon mode, so the daemon owns the best-effort Ctrl-C trace flush: stop
+ * every active dispatch visualizer, then re-raise SIGINT.
+ */
+export function installDaemonOtelSigintHandler(options: DaemonOtelSignalHandlerOptions): () => void {
+  return installDaemonOtelFlushThenReraise('SIGINT', options, () =>
+    stopActiveDispatchVisualizers(options.activeDispatchVisualizers),
+  );
 }
 
 export interface DaemonModeOptions {
@@ -1533,7 +1560,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // One daemon process owns both dispatcher root mutations and every
   // in-process self-host executor's fingerprint window.
   const liveBoundaryCoordinator = isSelfHost ? new LiveBoundaryCoordinator() : undefined;
-  const coordinatedRootMutation = <T,>(mutation: () => Promise<T>, deferLog: (reason: string) => void): Promise<T> =>
+  const coordinatedRootMutation = <T>(mutation: () => Promise<T>, deferLog: (reason: string) => void): Promise<T> =>
     liveBoundaryCoordinator ? liveBoundaryCoordinator.runMutation(mutation, deferLog) : mutation();
   if (isSelfHost) {
     log('self-host mode active — harness self-build guardrails enabled for this daemon.');
@@ -1593,6 +1620,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   // the SIGTERM path.
   const removeDaemonOtelSighupHandler = installDaemonOtelSighupHandler({
     daemonOtel,
+    activeDispatchVisualizers,
+    ...(opts.processAdapter ? { processAdapter: opts.processAdapter } : {}),
+    ...(opts.awaitDaemonOtelStop ? { awaitStop: opts.awaitDaemonOtelStop } : {}),
+  });
+  // Dispatch visualizers skip their own SIGINT/SIGTERM listeners (SIGTERM is
+  // the daemon drain); the daemon keeps the best-effort Ctrl-C flush.
+  const removeDaemonOtelSigintHandler = installDaemonOtelSigintHandler({
     activeDispatchVisualizers,
     ...(opts.processAdapter ? { processAdapter: opts.processAdapter } : {}),
     ...(opts.awaitDaemonOtelStop ? { awaitStop: opts.awaitDaemonOtelStop } : {}),
@@ -2993,6 +3027,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
   await subscriber.stop();
   await daemonOtel?.stop();
   removeDaemonOtelSighupHandler();
+  removeDaemonOtelSigintHandler();
   daemonMemorySampler.stop();
   daemonEventPersistence.stop();
   // A finite daemon invocation (including test/CLI bounded runs) has no
