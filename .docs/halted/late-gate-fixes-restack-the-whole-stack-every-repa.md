@@ -1,20 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-11-20T11:45:47.449Z
+Status: halted
 Slug: late-gate-fixes-restack-the-whole-stack-every-repa
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-late-gate-fixes-restack-the-whole-stack-every-repa
-Head SHA: c0e72fd8adcf4a4b10b764a670926f657667bc61
-Halted at: 2026-11-20T07:52:46.390Z
+Head SHA: b70a079e7791e13e7d18f019cba8394dd3a0b9cd
+Halted at: 2026-11-20T15:32:07.414Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-build_review adjudication halted: semantic remediation case repeat 0d15cb2a-c20f-4e31-9f49-bf69c917afcd; resolve with ai-conductor build-review resolve-case --feature late-gate-fixes-restack-the-whole-stack-every-repa --case 0d15cb2a-c20f-4e31-9f49-bf69c917afcd --rationale "<why>"
+build_review adjudication halted: semantic remediation case repeat 956feb9d-66cb-44c1-b84c-a3a03bdb3296; resolve with ai-conductor build-review resolve-case --feature late-gate-fixes-restack-the-whole-stack-every-repa --case 956feb9d-66cb-44c1-b84c-a3a03bdb3296 --rationale "<why>"
 ```
