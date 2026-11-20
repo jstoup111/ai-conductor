@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-11-20T02:16:28.188Z
 Slug: pi-upstream-model-not-found-under-an-explicit-prov
 Class: needs-human
 Halting step: unknown
