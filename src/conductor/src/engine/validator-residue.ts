@@ -24,6 +24,15 @@ export async function listUntrackedPaths(git: GitRunner): Promise<string[]> {
   return listing.stdout.split('\0').filter((path) => path.length > 0);
 }
 
+function isBaselinePath(path: string, baseline: ReadonlySet<string>): boolean {
+  if (baseline.has(path)) return true;
+  // Git represents an untracked nested repository as `directory/`.  Its
+  // contents can have been present before the dispatch even though the new
+  // listing no longer names them individually, so never quarantine it when a
+  // baseline path is beneath that directory.
+  return path.endsWith('/') && [...baseline].some((baselinePath) => baselinePath.startsWith(path));
+}
+
 /**
  * Capture a pre-dispatch baseline without allowing an unavailable Git probe to
  * abort the validator itself. Callers log a refusal and skip quarantine while
@@ -48,16 +57,14 @@ export async function quarantineValidatorResidue(
   try {
     const current = await listUntrackedPaths(input.git);
     const baseline = new Set(input.baseline);
-    // `.pipeline/` is harness-owned attempt evidence, never product residue.
-    // It is normally ignored by provisioned worktrees, but preserving it here
-    // keeps a missing ignore rule from erasing the validator evidence that the
-    // completion check must read immediately after dispatch.
-    const paths = current.filter(
-      (path) => !baseline.has(path) && path !== '.pipeline' && !path.startsWith('.pipeline/'),
-    );
+    const paths = current.filter((path) => !isBaselinePath(path, baseline));
     if (paths.length === 0) return { kind: 'none' };
 
     const directory = `${VALIDATOR_RESIDUE_DIRECTORY}/${input.source}-${new Date().toISOString().replaceAll(':', '-')}`;
+    const ignored = await input.git(['check-ignore', '--quiet', '--', directory]);
+    if (ignored.exitCode !== 0) {
+      throw new Error(`validator residue destination is not ignored: ${directory}`);
+    }
     const confirmed = await confirmUntrackedRebasePaths(input.git, input.projectRoot, paths);
     await moveRebaseUntrackedPathsToQuarantine(input.projectRoot, confirmed, directory);
     return { kind: 'moved', paths: confirmed, directory };
