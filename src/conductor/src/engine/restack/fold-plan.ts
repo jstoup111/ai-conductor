@@ -6,6 +6,7 @@ import { withDaemonCoAuthorTrailer } from '../bot-co-author.js';
 import { type ChildId } from '../child-context.js';
 import { childBranchFor, leafBranchFor } from '../feature-branch-identity.js';
 import { type GitRunner } from '../rebase.js';
+import { hasExactRoundOwnerTrailers } from '../round-trailers.js';
 import { parseCommitSha, type CommitSha } from './restack-types.js';
 import type {
   FoldCommitPlan,
@@ -60,18 +61,6 @@ function refused(commit: CommitSha, host: ChildId): Extract<CollectFoldSetResult
   return { kind: 'refused', reason: 'fold-owner-invalid', commit, host };
 }
 
-function trailerValues(message: string, key: 'Round' | 'Owner'): string[] {
-  const finalParagraph =
-    message
-      .trimEnd()
-      .split(/\n\s*\n/)
-      .at(-1) ?? '';
-  return finalParagraph.split('\n').flatMap((line) => {
-    const match = line.match(new RegExp(`^${key}:\\s*(.*)\\s*$`));
-    return match === null ? [] : [match[1]!];
-  });
-}
-
 async function rangeCommits(input: CollectFoldSetInput, range: FoldRange): Promise<CommitSha[] | CollectFoldSetResult> {
   const boundary = range.exitTip ?? range.leafEntryTip;
   if (range.exitTip === undefined) return refused(boundary, range.host);
@@ -98,11 +87,11 @@ async function validOwnedCommit(input: CollectFoldSetInput, commit: CommitSha, r
   try {
     const parents = await input.git(['rev-list', '--parents', '-n', '1', commit]);
     if (parents.exitCode !== 0 || parents.stdout.trim().split(/\s+/).length !== 2) return false;
-    const message = await input.git(['show', '-s', '--format=%B', commit]);
-    if (message.exitCode !== 0) return false;
-    const rounds = trailerValues(message.stdout, 'Round');
-    const owners = trailerValues(message.stdout, 'Owner');
-    return rounds.length === 1 && rounds[0] === range.roundId && owners.length === 1 && owners[0] === `c${range.host}`;
+    const trailers = await input.git(['show', '-s', '--format=%(trailers:only,unfold)', commit]);
+    return trailers.exitCode === 0 && hasExactRoundOwnerTrailers(trailers.stdout, {
+      roundId: range.roundId,
+      owner: `c${range.host}`,
+    });
   } catch {
     return false;
   }

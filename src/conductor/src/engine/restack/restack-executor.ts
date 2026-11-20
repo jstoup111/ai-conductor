@@ -754,6 +754,14 @@ async function materializeFrozenBlocks(
   if (changed.exitCode !== 0) throw new Error(`cannot list frozen fold paths for ${source}: ${changed.stderr}`);
   const paths = changed.stdout.split('\n').filter((path) => path.startsWith('.docs/plans/') && path.endsWith('.md'));
   let materialized = false;
+  const stageFrozenText = async (path: string, text: string): Promise<void> => {
+    const blob = await git(['hash-object', '-w', '--stdin'], { input: text });
+    const blobSha = blob.exitCode === 0 ? parseCommitSha(blob.stdout.trim()) : undefined;
+    if (!blobSha) throw new Error(`cannot write frozen fold block for ${source}: ${blob.stderr}`);
+    const updated = await git(['update-index', '--add', '--cacheinfo', `100644,${blobSha},${path}`], { env });
+    if (updated.exitCode !== 0) throw new Error(`cannot stage frozen fold block for ${source}: ${updated.stderr}`);
+    materialized = true;
+  };
   for (const path of paths) {
     const [base, ours] = await Promise.all([
       textAtRevision(git, `${source}^`, path),
@@ -761,29 +769,20 @@ async function materializeFrozenBlocks(
     ]);
     if (base === undefined || ours === undefined) continue;
     const merged = unionRemBlocks(base, ours, blockOnlyPlan(base, blocks));
+    if (merged.kind === 'body-mismatch')
+      throw new Error(`cannot re-materialize frozen fold block ${merged.remId} for ${source}`);
+    const text = merged.kind === 'declined'
+      ? blocks.every((block) => ours.includes(block.body)) ? ours : blockOnlyPlan(ours, blocks)
+      : merged.text;
+    await stageFrozenText(path, text);
     if (merged.kind === 'declined') {
       // The merge-tree replay may already have retained this exact frozen
       // block while carrying the source hunk. It is materialized in that case;
       // do not turn the idempotent re-materialization into a false conflict.
       // A residual patch can also leave a non-canonical plan body; append the
       // exact frozen block rather than discarding the placement.
-      const text = blocks.every((block) => ours.includes(block.body)) ? ours : blockOnlyPlan(ours, blocks);
-      const blob = await git(['hash-object', '-w', '--stdin'], { input: text });
-      const blobSha = blob.exitCode === 0 ? parseCommitSha(blob.stdout.trim()) : undefined;
-      if (!blobSha) throw new Error(`cannot write frozen fold block for ${source}: ${blob.stderr}`);
-      const updated = await git(['update-index', '--add', '--cacheinfo', `100644,${blobSha},${path}`], { env });
-      if (updated.exitCode !== 0) throw new Error(`cannot stage frozen fold block for ${source}: ${updated.stderr}`);
-      materialized = true;
       continue;
     }
-    if (merged.kind === 'body-mismatch')
-      throw new Error(`cannot re-materialize frozen fold block ${merged.remId} for ${source}`);
-    const blob = await git(['hash-object', '-w', '--stdin'], { input: merged.text });
-    const blobSha = blob.exitCode === 0 ? parseCommitSha(blob.stdout.trim()) : undefined;
-    if (!blobSha) throw new Error(`cannot write frozen fold block for ${source}: ${blob.stderr}`);
-    const updated = await git(['update-index', '--add', '--cacheinfo', `100644,${blobSha},${path}`], { env });
-    if (updated.exitCode !== 0) throw new Error(`cannot stage frozen fold block for ${source}: ${updated.stderr}`);
-    materialized = true;
   }
   if (!materialized) throw new Error(`cannot re-materialize frozen fold blocks for ${source}`);
 }
@@ -892,7 +891,7 @@ async function deferredFoldRanges(
   const inventory = await deferredPlacementInventory(worktree, slug, { git });
   if (inventory.kind !== 'inventory') return { kind: 'unavailable' };
   const ranges: FoldRange[] = [];
-  for (const placement of inventory.placements) {
+  for (const placement of inventory.foldable) {
     const closure = await git(['rev-parse', '-q', '--verify', closureRefFor(slug, placement.host)]);
     if (closure.exitCode !== 0)
       return closure.exitCode === 1 ? { kind: 'missing-closure', host: placement.host } : { kind: 'unavailable' };
@@ -901,7 +900,7 @@ async function deferredFoldRanges(
       roundId: placement.roundId,
       findingIds: placement.findingIds,
       leafEntryTip: placement.leafEntryTip,
-      ...(placement.exitTip === undefined ? {} : { exitTip: placement.exitTip }),
+      exitTip: placement.exitTip,
     });
   }
   return { kind: 'ranges', ranges };
@@ -1256,7 +1255,8 @@ async function runFoldRestack(options: RunRestackOptions, git: GitRunner): Promi
         const placements = { ...(stored.record.placements ?? {}) };
         for (const host of hosts) {
           const placement = placements[host];
-          if (placement !== undefined) placements[host] = { ...placement, state: 'placed' };
+          if (placement?.state === 'deferred' && placement.exitTip !== undefined)
+            placements[host] = { state: 'placed', leafEntryTip: placement.leafEntryTip, exitTip: placement.exitTip };
         }
         const written = await git(['hash-object', '-w', '--stdin'], {
           input: JSON.stringify({

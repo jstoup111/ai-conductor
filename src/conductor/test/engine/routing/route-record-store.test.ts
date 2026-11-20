@@ -9,11 +9,14 @@ import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import * as routeRecordStore from '../../../src/engine/routing/route-record-store.js';
 import {
   createRouteRecord,
+  deferredPlacementInventory,
   readRepairMarker,
   readRevalidationQueue,
   readRouteRecord,
   writeRouteRecord,
 } from '../../../src/engine/routing/route-record-store.js';
+import { deferredPlacementsExist } from '../../../src/engine/routing/round-admission.js';
+import { collectFoldSet } from '../../../src/engine/restack/fold-plan.js';
 import type { CreateRouteRecordInput } from '../../../src/engine/routing/route-record-store.js';
 import {
   repairMarkerRefFor,
@@ -325,6 +328,52 @@ describe('ref-backed route record store', () => {
       expect(await readRouteRecord(fixture.repo, 'demo', roundId)).toMatchObject({
         kind: 'record',
         record: leafRecord,
+      });
+    } finally {
+      await rm(fixture.repo, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses impossible leaf-placement lifecycles and keeps open entries out of fold inventory', async () => {
+    const fixture = await createRepo();
+    try {
+      const leafEntryTip = sha('d'.repeat(40));
+      const exitTip = sha('e'.repeat(40));
+      const invalidRecords: Record<string, unknown> = {
+        'placed without exit': {
+          ...routeRecord,
+          execution: 'leaf',
+          placements: { [c1]: { state: 'placed', leafEntryTip } },
+        },
+        'open deferred placement on done host': {
+          ...closedRouteRecord,
+          execution: 'leaf',
+          placements: { [c1]: { state: 'deferred', leafEntryTip } },
+        },
+        'foldable deferred placement on repairing host': {
+          ...routeRecord,
+          execution: 'leaf',
+          placements: { [c1]: { state: 'deferred', leafEntryTip, exitTip } },
+        },
+      };
+      for (const [name, record] of Object.entries(invalidRecords)) {
+        await writeRef(fixture, routeRecordRefFor('demo', roundId), record);
+        await expect(readRouteRecord(fixture.repo, 'demo', roundId), name).resolves.toMatchObject({ kind: 'unreadable' });
+      }
+
+      const openRecord: RouteRecord = {
+        ...routeRecord,
+        execution: 'leaf',
+        placements: { [c1]: { state: 'deferred', leafEntryTip } },
+      };
+      await writeRef(fixture, routeRecordRefFor('demo', roundId), openRecord);
+      const inventory = await deferredPlacementInventory(fixture.repo, 'demo');
+      expect(inventory).toMatchObject({ kind: 'inventory', open: [{ host: c1, roundId }], foldable: [] });
+      await expect(deferredPlacementsExist(fixture.repo, 'demo')).resolves.toBe(true);
+      if (inventory.kind !== 'inventory') throw new Error('inventory should be readable');
+      await expect(collectFoldSet({ ranges: inventory.foldable, slug: 'demo', git: fixture.git })).resolves.toEqual({
+        kind: 'collected',
+        commits: [],
       });
     } finally {
       await rm(fixture.repo, { recursive: true, force: true });

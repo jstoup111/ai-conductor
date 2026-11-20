@@ -7,6 +7,7 @@ import { execa } from 'execa';
 import { resolveActiveChildForCurrentFeature } from './child-cursor.js';
 import { loadConfig } from './config.js';
 import { parseFeatureBranch } from './feature-branch-identity.js';
+import { hasExactRoundOwnerTrailers } from './round-trailers.js';
 import { readRepairMarker } from './routing/route-record-store.js';
 import { repairMarkerRefFor } from './routing/routing-refs.js';
 import { routingEligible } from './routing/route-types.js';
@@ -50,6 +51,9 @@ function branchHostsMarker(
   execution?: 'leaf',
 ): boolean {
   if (identity.kind === 'child') return identity.child === host;
+  // A leaf-execution marker is durable round state. Its leaf branch remains
+  // the execution site even if current config disables route discovery.
+  if (identity.kind === 'leaf' && execution === 'leaf') return true;
   return (
     identity.kind === 'leaf' &&
     (cursor.kind === 'active' || cursor.kind === 'repair-pending') &&
@@ -59,15 +63,18 @@ function branchHostsMarker(
 }
 
 /**
- * Stamps one Round trailer for a routed host only. `routingEligible` is the
- * gate before the marker read: N=1 and routing-off worktrees therefore never
- * probe routing-only refs.
+ * Stamps one Round trailer for a routed host only. A durable leaf-execution
+ * marker remains authoritative after routing config changes.
  */
 export async function runRoundStamp(deps: RoundStampDependencies): Promise<number> {
   const branch = await currentBranch(deps.projectRoot);
   const identity = branch === undefined ? undefined : parseFeatureBranch(branch);
   if (identity === undefined || (identity.kind !== 'child' && identity.kind !== 'leaf')) return 0;
 
+  const marker = await readRepairMarker(deps.projectRoot, identity.slug);
+  // No marker means an unrelated commit, which remains permitted. An
+  // unreadable marker cannot prove the mandatory leaf attribution.
+  if (marker.kind === 'unreadable') return deps.verify ? 1 : 0;
   const [loadedConfig, cursor] = await Promise.all([
     loadConfig(deps.projectRoot),
     resolveActiveChildForCurrentFeature(deps.projectRoot),
@@ -78,12 +85,8 @@ export async function runRoundStamp(deps: RoundStampDependencies): Promise<numbe
   if (cursor.kind === 'git-error' && cursor.unreadableRef === repairMarkerRefFor(identity.slug)) {
     return deps.verify ? 1 : 0;
   }
-  if (!routingEligible(cursor, config)) return 0;
-
-  const marker = await readRepairMarker(deps.projectRoot, identity.slug);
-  // No marker means an unrelated commit, which remains permitted. An
-  // unreadable marker cannot prove the mandatory leaf attribution.
-  if (marker.kind === 'unreadable') return deps.verify ? 1 : 0;
+  const durableLeafExecution = marker.kind === 'marker' && marker.marker.execution === 'leaf';
+  if (!durableLeafExecution && !routingEligible(cursor, config)) return 0;
   if (marker.kind !== 'marker' || !branchHostsMarker(identity, cursor, marker.marker.host, marker.marker.execution))
     return 0;
 
@@ -109,16 +112,8 @@ export async function runRoundStamp(deps: RoundStampDependencies): Promise<numbe
       reject: false,
     });
     if (parsed.exitCode !== 0) return deps.verify ? 1 : 0;
-    const trailers = parsed.stdout.split('\n').filter(Boolean);
     if (deps.verify) {
-      const rounds = trailers.filter((trailer) => /^Round:\s*/.test(trailer));
-      const owners = trailers.filter((trailer) => /^Owner:\s*/.test(trailer));
-      return rounds.length === 1 &&
-        owners.length === 1 &&
-        rounds[0] === `Round: ${marker.marker.roundId}` &&
-        owners[0] === `Owner: ${owner}`
-        ? 0
-        : 1;
+      return hasExactRoundOwnerTrailers(parsed.stdout, { roundId: marker.marker.roundId, owner }) ? 0 : 1;
     }
     if (leafExecution) {
       const stamped = await execa(

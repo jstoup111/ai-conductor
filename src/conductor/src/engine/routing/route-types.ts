@@ -415,12 +415,29 @@ export interface RouteRecord {
   readonly outbox: readonly OutboxEntry[];
 }
 
-/** The durable position of a leaf-executed host's work before and after folding. */
-export interface HostPlacement {
-  readonly state: 'deferred' | 'placed';
+/** A leaf-executed host that is still repairing; it has no fold boundary yet. */
+export interface OpenHostPlacement {
+  readonly state: 'deferred';
   readonly leafEntryTip: CommitSha;
-  readonly exitTip?: CommitSha;
+  readonly exitTip?: never;
 }
+
+/** A completed leaf-executed host whose interval is ready to fold. */
+export interface FoldableHostPlacement {
+  readonly state: 'deferred';
+  readonly leafEntryTip: CommitSha;
+  readonly exitTip: CommitSha;
+}
+
+/** A placement already applied to its owner. */
+export interface PlacedHostPlacement {
+  readonly state: 'placed';
+  readonly leafEntryTip: CommitSha;
+  readonly exitTip: CommitSha;
+}
+
+/** The durable position of a leaf-executed host's work before and after folding. */
+export type HostPlacement = OpenHostPlacement | FoldableHostPlacement | PlacedHostPlacement;
 
 export interface PendingAsBuiltRouteFinding {
   readonly gate: 'architecture_review_as_built';
@@ -968,17 +985,21 @@ function parseHostPlacements(
         : typeof rawPlacement.exitTip === 'string'
           ? parseCommitSha(rawPlacement.exitTip)
           : undefined;
-    if (
-      (rawPlacement.state !== 'deferred' && rawPlacement.state !== 'placed') ||
-      !leafEntryTip ||
-      (rawPlacement.exitTip !== undefined && !exitTip)
-    )
+    if (!leafEntryTip || (rawPlacement.exitTip !== undefined && !exitTip))
       return undefined;
-    placements[child] = {
-      state: rawPlacement.state,
-      leafEntryTip,
-      ...(exitTip === undefined ? {} : { exitTip }),
-    };
+    if (rawPlacement.state === 'placed') {
+      if (!exitTip) return undefined;
+      placements[child] = { state: 'placed', leafEntryTip, exitTip };
+      continue;
+    }
+    if (rawPlacement.state !== 'deferred') return undefined;
+    if (exitTip === undefined) {
+      if (hosts[child] !== 'repairing') return undefined;
+      placements[child] = { state: 'deferred', leafEntryTip };
+      continue;
+    }
+    if (hosts[child] !== 'done') return undefined;
+    placements[child] = { state: 'deferred', leafEntryTip, exitTip };
   }
   return placements;
 }

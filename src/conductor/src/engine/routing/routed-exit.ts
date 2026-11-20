@@ -516,7 +516,7 @@ export async function requestRoutedExit(input: RequestRoutedExitInput): Promise<
             ...done.record,
             placements: {
               ...done.record.placements,
-              [input.host]: { ...placement, state: 'deferred' as const, exitTip: head },
+              [input.host]: { state: 'deferred' as const, leafEntryTip: placement.leafEntryTip, exitTip: head },
             },
           };
     const wrote = await writeRoutingTransaction(
