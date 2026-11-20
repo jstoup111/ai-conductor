@@ -112,4 +112,56 @@ describe('checkpointComposerRun', () => {
     expect(record.steps.explore.provider).toBe('unrecorded');
     expect(f.calls.some(([command]) => command === 'push' || command === 'pr')).toBe(false);
   });
+
+  it('Covers: Task 3 accepts saved-draft artifacts after an intervening commit without reading HEAD', async () => {
+    const f = fixture({ dirty: [] });
+    f.files.set('.docs/plans/saved.md', '# Saved plan\n');
+    f.files.set(
+      '.docs/composer-runs/demo.json',
+      JSON.stringify({
+        schemaVersion: 1,
+        slug: 'demo',
+        track: 'technical',
+        steps: { plan: { state: 'draft' } },
+        lastAcceptedArtifacts: { plan: [{ path: '.docs/plans/saved.md', sha256: 'a'.repeat(64) }] },
+        needsReconfirm: [],
+        ownerHistory: [],
+        notes: {},
+      }),
+    );
+
+    await checkpointComposerRun({ worktree: '/worktree', step: 'plan', state: 'accepted' }, f.deps);
+
+    const saved = JSON.parse(f.files.get('.docs/composer-runs/demo.json')!);
+    expect(saved.steps.plan.artifacts).toEqual([
+      expect.objectContaining({ path: '.docs/plans/saved.md', sha256: expect.any(String) }),
+    ]);
+    expect(f.calls.some(([command]) => command === 'show')).toBe(false);
+  });
+
+  it('Covers: Task 3 accepts the union of saved-draft and dirty step artifacts', async () => {
+    const f = fixture({ dirty: [' M .docs/plans/dirty.md'] });
+    f.files.set('.docs/plans/saved.md', '# Saved plan\n');
+    f.files.set('.docs/plans/dirty.md', '# Dirty addition\n');
+    f.files.set(
+      '.docs/composer-runs/demo.json',
+      JSON.stringify({
+        schemaVersion: 1,
+        slug: 'demo',
+        track: 'technical',
+        steps: { plan: { state: 'draft' } },
+        lastAcceptedArtifacts: { plan: [{ path: '.docs/plans/saved.md', sha256: 'a'.repeat(64) }] },
+        needsReconfirm: [],
+        ownerHistory: [],
+        notes: {},
+      }),
+    );
+
+    await checkpointComposerRun({ worktree: '/worktree', step: 'plan', state: 'accepted' }, f.deps);
+
+    const saved = JSON.parse(f.files.get('.docs/composer-runs/demo.json')!);
+    expect(saved.steps.plan.artifacts.map((artifact: { path: string }) => artifact.path)).toEqual(
+      expect.arrayContaining(['.docs/plans/saved.md', '.docs/plans/dirty.md']),
+    );
+  });
 });

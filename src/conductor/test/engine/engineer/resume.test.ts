@@ -102,12 +102,31 @@ describe('Composer resume', () => {
       readRunRecord: async () => {
         throw new Error('ENOENT .docs/composer-runs/demo.json');
       },
+      findRunRecordRemovalCommit: async () => 'landed-record-removal',
       recordDeciding: deciding,
       emit: emitted,
     });
     expect(result.context).toMatchObject({ slug: 'demo', branch: 'spec/demo', nextStep: 'delivery' });
     expect(deciding).not.toHaveBeenCalled();
     expect(emitted).not.toHaveBeenCalled();
+  });
+
+  it('Covers: Task 12 treats a pre-checkpoint spec branch as a fresh run and emits resumed', async () => {
+    const emitted = vi.fn(async () => {});
+    const result = await resumeComposerRun('spec/demo', {
+      resolveBranch: async () => ({ branch: 'spec/demo' }),
+      attach: async () => ({ worktree: '/tmp/pre-checkpoint-demo' }),
+      readRunRecord: async () => {
+        throw new Error('ENOENT .docs/composer-runs/demo.json');
+      },
+      findRunRecordRemovalCommit: async () => undefined,
+      emit: emitted,
+    });
+
+    expect(result.context).toMatchObject({ slug: 'demo', nextStep: 'explore' });
+    expect(emitted).toHaveBeenCalledWith(
+      expect.objectContaining({ slug: 'demo', worktreePath: '/tmp/pre-checkpoint-demo', ownership: 'unchanged' }),
+    );
   });
 
   it('does not expose a needs-reconfirm plan as accepted in resume context', () => {
@@ -299,7 +318,15 @@ describe('Composer resume', () => {
       // failing while reading absent remote state during reconciliation.
       await execFile('git', ['checkout', 'main'], { cwd: origin });
       await execFile('git', ['checkout', '-b', 'spec/landed'], { cwd: origin });
-      await execFile('git', ['commit', '--allow-empty', '-m', 'landed spec'], { cwd: origin });
+      await mkdir(join(origin, '.docs', 'composer-runs'), { recursive: true });
+      await writeFile(
+        join(origin, '.docs', 'composer-runs', 'landed.json'),
+        JSON.stringify({ ...record, slug: 'landed' }),
+      );
+      await execFile('git', ['add', '.docs/composer-runs/landed.json'], { cwd: origin });
+      await execFile('git', ['commit', '-m', 'checkpointed run'], { cwd: origin });
+      await execFile('git', ['rm', '.docs/composer-runs/landed.json'], { cwd: origin });
+      await execFile('git', ['commit', '-m', 'landed spec'], { cwd: origin });
       await execFile('git', ['push', '-u', 'origin', 'spec/landed'], { cwd: origin });
       spawned.mockClear();
       const deliveryCode = await dispatchEngineer(

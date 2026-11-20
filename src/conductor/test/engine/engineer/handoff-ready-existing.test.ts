@@ -62,6 +62,7 @@ function deps(input: {
   calls: Array<{ operation: string; payload?: unknown }>;
   existing: { url: string; isDraft: boolean } | undefined;
   failReady?: boolean;
+  deliveryRecorded?: boolean;
 }): HandoffDeps {
   const ops = publication(input.calls);
   return {
@@ -88,6 +89,7 @@ function deps(input: {
       return { stdout: JSON.stringify({ body: '' }), stderr: '' };
     },
     findExistingSpecPr: async () => input.existing,
+    deliveryRecorded: async () => input.deliveryRecorded === true,
     worktreePath: root,
     sourceRef: 'acme/widget#7',
   };
@@ -195,6 +197,7 @@ describe('openSpecPr — existing draft handoff (Task 8)', () => {
         deps({
           calls,
           existing: { url: PR_URL, isDraft: false },
+          deliveryRecorded: true,
         }),
       ),
     ).resolves.toMatchObject({ kind: 'pr-opened', url: PR_URL, alreadyDelivered: true });
@@ -202,7 +205,17 @@ describe('openSpecPr — existing draft handoff (Task 8)', () => {
     expect(calls).toEqual([]);
   });
 
-  it('compose handoff reports the readied PR, records done, labels/comments once, and wakes the daemon once', async () => {
+  it('does not mark a ready PR delivered until the intake ledger confirms completion', async () => {
+    const calls: Array<{ operation: string; payload?: unknown }> = [];
+
+    await expect(
+      openSpecPr(target(), BRANCH, deps({ calls, existing: { url: PR_URL, isDraft: false }, deliveryRecorded: false })),
+    ).resolves.toEqual({ kind: 'pr-opened', url: PR_URL });
+
+    expect(calls).toEqual([]);
+  });
+
+  it('compose handoff completes a ready PR whose ledger write was missing: one PR, comment, and daemon wake-up', async () => {
     const registryPath = join(root, 'registry.json');
     const engineerDir = join(root, 'engineer');
     const git = async (args: string[], cwd = root) => execFile('git', args, { cwd });
@@ -239,7 +252,7 @@ describe('openSpecPr — existing draft handoff (Task 8)', () => {
     const gh = async (args: string[]) => {
       ghCalls.push([...args]);
       if (args[0] === 'pr' && args[1] === 'view' && args[2] === BRANCH) {
-        return { stdout: JSON.stringify({ url: PR_URL, isDraft: true }) };
+        return { stdout: JSON.stringify({ url: PR_URL, isDraft: false }) };
       }
       if (args[0] === 'issue' && args[1] === 'view') {
         return { stdout: JSON.stringify({ assignees: [{ login: 'owner' }] }) };
@@ -279,7 +292,7 @@ describe('openSpecPr — existing draft handoff (Task 8)', () => {
       prUrl: PR_URL,
       branch: BRANCH,
     });
-    expect(mutations.map((mutation) => mutation.operation)).toEqual(['pull-request.edit', 'pull-request.ready']);
+    expect(mutations).toEqual([]);
     expect(ghCalls.filter((args) => args[0] === 'issue' && args[1] === 'comment')).toHaveLength(1);
     expect(ghCalls.filter((args) => args[0] === 'api' && args.includes('POST'))).toHaveLength(1);
     expect(launches).toEqual(['wake']);
