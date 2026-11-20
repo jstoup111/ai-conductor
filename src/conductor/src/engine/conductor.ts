@@ -474,7 +474,7 @@ import { parseNameStatus, type ChangedFile } from './self-host/release-gate.js';
 import { writeSelfHostHalt, type GateVerdict } from './self-host/gate-halt.js';
 import { parseReleaseDisposition } from './release-metadata.js';
 import { resolveReleaseMetadataFlow } from './self-host/release-metadata-flow.js';
-import { fingerprintLiveBoundary, verifyLiveBoundary } from './self-host/live-boundary.js';
+import { DispatchLiveBoundary } from './self-host/dispatch-live-boundary.js';
 import { LiveBoundaryCoordinator, type OpenAdmittedWindow } from './self-host/live-boundary-coordinator.js';
 import { deriveBindSet, probeContainment, wrapForContainment } from './self-host/live-containment.js';
 import { auditEnvironmentBlockerClaims } from './self-host/environment-claim-audit.js';
@@ -7532,6 +7532,13 @@ export class Conductor {
 
     const priorPreparation = this.providerExecution?.prepareCandidateSelfHost;
     const priorSafety = this.providerExecution?.withCandidateSafety;
+    const dispatchLiveBoundary = new DispatchLiveBoundary({
+      openWindow,
+      emit: async (event) => this.events.emit(event),
+      onViolation: (reason) => {
+        this.pendingLiveBoundaryHalt = reason;
+      },
+    });
     if (this.providerExecution) {
       this.providerExecution.withCandidateSafety = async (candidate, invoke) => {
         const invokeOwner = async () => {
@@ -7543,7 +7550,7 @@ export class Conductor {
         );
         return result;
       };
-      this.providerExecution.prepareCandidateSelfHost = async (candidate, runtime, identity) => {
+      this.providerExecution.prepareCandidateSelfHost = async (candidate, runtime, identity, onRevoked) => {
         // This is a candidate-local setup capability. Check it before opening
         // a live-boundary window or allocating scratch state so fallback has
         // no resource ownership to unwind.
@@ -7568,72 +7575,35 @@ export class Conductor {
             });
           }
         }
-        // Retain a candidate window before fingerprinting. The dispatch has
-        // already queued outside provider preparation supervision.
-        const boundaryWindow = openWindow?.({ contained: false, reason: 'candidate preparing' });
+        let boundaryLease: Awaited<ReturnType<DispatchLiveBoundary['acquire']>> | undefined;
         let ownershipTransferred = false;
         try {
           const installed = await this.guardrails.resolveInstalledHarnessRoot();
           const liveCheckout = installed.status === 'ok' ? installed.root : this.projectRoot;
           const providerHome = process.env[provider.homeVariable] ?? join(homedir(), provider.defaultHome);
-          const boundary = await fingerprintLiveBoundary({
+          const bindSet = deriveBindSet(liveCheckout, this.projectRoot);
+          const acquiredBoundaryLease = await dispatchLiveBoundary.acquire({
             liveCheckout,
-            unrelatedProviderState: providerHome,
+            providerHome,
             provider: providerId,
             selectedAuthPaths: [provider.selfHostShape.selectedAuthPath],
+            onRevoked,
+            probe: async () =>
+              sh.liveContainment
+                ? probeContainment(bindSet, liveCheckout, this.projectRoot, async (executable, args) => {
+                    const result = await execa(executable, args, { reject: false });
+                    return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode ?? 1 };
+                  })
+                : { contained: false as const, reason: 'containment disabled by configuration' },
           });
-          await this.events.emit({
-            type: 'self_host_boundary_fingerprint',
-            surfaces: boundary.measurements,
-          });
-          const bindSet = deriveBindSet(liveCheckout, this.projectRoot);
-          const containment = sh.liveContainment
-            ? await probeContainment(bindSet, liveCheckout, this.projectRoot, async (executable, args) => {
-                const result = await execa(executable, args, { reject: false });
-                return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode ?? 1 };
-              })
-            : { contained: false as const, reason: 'containment disabled by configuration' };
+          boundaryLease = acquiredBoundaryLease;
           // The daemon owns root mutations. Register the complete fingerprint →
           // verify lifetime before provisioning the provider so a concurrent
           // mutation either finishes first or waits for this exact snapshot to
           // verify. Outside daemon concurrency this seam is intentionally inert.
           const prepareInvocation = (invocation: SelfHostInvocation): SelfHostInvocation => {
-            if (!containment.contained) return invocation;
+            if (!acquiredBoundaryLease.containment.contained) return invocation;
             return { ...invocation, ...wrapForContainment(invocation, bindSet) };
-          };
-          // Runs in the candidate's teardown — i.e. AFTER the dispatch it guards
-          // has already produced its result. Record the verdict instead of
-          // throwing: a throw here propagates out of the `finally` that calls
-          // teardown, discarding a completed step's real outcome and reporting a
-          // successful step as `failed` (see `pendingLiveBoundaryHalt`). The
-          // recorded reason is consumed at the next dispatch boundary, which is
-          // where the HALT marker is written and the run stops.
-          const verify = async () => {
-            try {
-              const result = await verifyLiveBoundary(boundary, containment).catch(() => ({
-                ok: false,
-                reason: 'Live boundary could not be verified.',
-                containedDrift: undefined,
-              }));
-              await this.events.emit(
-                containment.contained
-                  ? { type: 'self_host_containment_verdict', contained: true, evidence: containment.evidence }
-                  : { type: 'self_host_containment_verdict', contained: false, reason: containment.reason },
-              );
-              if (result.containedDrift) {
-                await this.events.emit({
-                  type: 'contained_live_checkout_drift',
-                  evidence: result.containedDrift.evidence,
-                  attribution: 'concurrent-operator',
-                  summary: result.containedDrift.summary,
-                });
-              }
-              if (!result.ok) {
-                this.pendingLiveBoundaryHalt = result.reason ?? 'Live boundary could not be verified.';
-              }
-            } finally {
-              boundaryWindow?.close();
-            }
           };
           // Until a context is returned its setup owns this window.  If any
           // allocation or verification precondition fails, there is no executor
@@ -7681,9 +7651,9 @@ export class Conductor {
               scratchRoot: this.projectRoot,
               teardown: async () => {
                 try {
-                  await verify();
-                } finally {
                   await home.teardown();
+                } finally {
+                  await boundaryLease?.release();
                 }
               },
             });
@@ -7711,14 +7681,14 @@ export class Conductor {
             scratchRoot: this.projectRoot,
             teardown: async () => {
               try {
-                await verify();
-              } finally {
                 await sandbox.teardown();
+              } finally {
+                await boundaryLease?.release();
               }
             },
           });
         } finally {
-          if (!ownershipTransferred) boundaryWindow?.close();
+          if (!ownershipTransferred) await boundaryLease?.release();
         }
       };
     }
@@ -7738,6 +7708,10 @@ export class Conductor {
         this.providerExecution.prepareCandidateSelfHost = priorPreparation;
         this.providerExecution.withCandidateSafety = priorSafety;
       }
+      // Revoked preparations abandon their pending acquire synchronously, so
+      // finalization can wait for the remaining leases and report its single
+      // verdict before the dispatch exposes any resulting halt.
+      await dispatchLiveBoundary.end();
     }
   }
 

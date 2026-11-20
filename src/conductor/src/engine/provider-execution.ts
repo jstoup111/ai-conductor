@@ -264,6 +264,7 @@ export type PrepareCandidateSelfHost = (
   candidate: ProviderCandidate,
   runtime: ProviderRuntime,
   identity?: TranscriptCaptureSource,
+  onRevoked?: (callback: () => void) => () => void,
 ) => Promise<SelfHostInvocation | undefined>;
 
 export interface ExecuteProviderCandidatesInput {
@@ -333,6 +334,8 @@ export interface ExecuteProviderCandidatesInput {
   /** Safety boundary for each resolved candidate, after resolution and before fallback. */
   withCandidateSafety?: WithCandidateSafety;
   prepareCandidateSelfHost?: PrepareCandidateSelfHost;
+  /** Ends candidate-local preparation ownership when its lifecycle lease expires. */
+  onPreparationRevoked?: (callback: () => void) => () => void;
   /** Candidate setup proving narrow telemetry access under a native read-only review policy. */
   prepareManagedSessionObservation?: (input: {
     readonly provider: string;
@@ -907,6 +910,7 @@ export async function executeProviderCandidates({
   onTelemetryError,
   withCandidateSafety,
   prepareCandidateSelfHost,
+  onPreparationRevoked,
   prepareManagedSessionObservation,
   warn,
   options,
@@ -965,7 +969,7 @@ export async function executeProviderCandidates({
       const candidate: ProviderCandidate = { step, providerKey, model: resolved.model, effort: resolved.effort };
       let prepared: SelfHostInvocation | undefined;
       try {
-        prepared = await prepareCandidateSelfHost?.(candidate, runtime, selfHostCaptureIdentity);
+        prepared = await prepareCandidateSelfHost?.(candidate, runtime, selfHostCaptureIdentity, onPreparationRevoked);
         await prepareCandidateBaseline({ candidate, prepared });
       } catch (error) {
         // Normal setup-unavailable candidates will be represented by the real
@@ -1140,7 +1144,7 @@ export async function executeProviderCandidates({
           ? undefined
           : ownedCandidateOptions.providerStreamObserverForCandidate?.(providerKey);
         try {
-          selfHost = await prepareCandidateSelfHost?.(candidate, runtime, selfHostCaptureIdentity);
+          selfHost = await prepareCandidateSelfHost?.(candidate, runtime, selfHostCaptureIdentity, onPreparationRevoked);
           // ADR daemon-session-command-contracts D6 (#3022): a read-only
           // review whose real launch argv can reach no observed command can
           // write no observation record, so it is provisioned no destination

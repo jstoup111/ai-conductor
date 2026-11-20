@@ -40,12 +40,26 @@ import type { ConductState, StepName } from '../../src/types/index.js';
 
 /** Everything except `build` pre-resolved: the run dispatches `build`, then converges. */
 const BUILD_ONLY: ConductState = {
-  worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
-  stories: 'done', conflict_check: 'done', plan: 'done', architecture_diagram: 'done',
-  architecture_review: 'done', acceptance_specs: 'done', test_suite: 'done',
-  build_review: 'done', manual_test: 'done', prd_audit: 'done',
-  architecture_review_as_built: 'done', rebase: 'done', finish: 'done',
-  complexity_tier: 'M', track: 'technical', feature_desc: 'live-boundary-deferral',
+  worktree: 'done',
+  memory: 'done',
+  explore: 'done',
+  complexity: 'done',
+  stories: 'done',
+  conflict_check: 'done',
+  plan: 'done',
+  architecture_diagram: 'done',
+  architecture_review: 'done',
+  acceptance_specs: 'done',
+  test_suite: 'done',
+  build_review: 'done',
+  manual_test: 'done',
+  prd_audit: 'done',
+  architecture_review_as_built: 'done',
+  rebase: 'done',
+  finish: 'done',
+  complexity_tier: 'M',
+  track: 'technical',
+  feature_desc: 'live-boundary-deferral',
 } as ConductState;
 
 // Asserted verbatim: the differing path must survive all the way to the
@@ -102,13 +116,15 @@ describe('self-host live boundary: violations are enforced at the next dispatch'
     opts: { maxRetries?: number } = {},
   ) {
     const dispatches: StepName[] = [];
-    const runtimes = new ProviderRuntimeSet([{
-      key: 'claude',
-      provider: { invoke: vi.fn(), },
-      policy: CLAUDE_MODEL_POLICY,
-      builtIn: true,
-      availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
-    }] as never);
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'claude',
+        provider: { invoke: vi.fn() },
+        policy: CLAUDE_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+      },
+    ] as never);
     const providerExecution: ProviderExecutionContext = {
       runtimes,
       sessions: {} as never,
@@ -195,17 +211,14 @@ describe('self-host live boundary: violations are enforced at the next dispatch'
 
   /** Simulate an unrelated party rewriting operator provider config mid-step. */
   async function changeProviderStateMidStep(): Promise<void> {
-    await writeFile(
-      join(providerHome, 'settings.json'),
-      '{"permissions":{"allow":["Bash(npm test:*)"]}}\n',
-      'utf-8',
-    );
+    await writeFile(join(providerHome, 'settings.json'), '{"permissions":{"allow":["Bash(npm test:*)"]}}\n', 'utf-8');
   }
 
   async function haltReason(): Promise<string | null> {
     return readFile(join(projectRoot, '.pipeline/HALT'), 'utf-8').catch(() => null);
   }
 
+  // Covers: task:5
   it('lets a step that completed mid-change keep its own success verdict', async () => {
     const { conductor, dispatches, emitted } = harness(async () => {
       await changeProviderStateMidStep();
@@ -220,6 +233,7 @@ describe('self-host live boundary: violations are enforced at the next dispatch'
     expect(emitted.filter((e) => e.type === 'step_failed')).toEqual([]);
   });
 
+  // Covers: task:5
   it('still halts the run, with the boundary reason and a mechanical class', async () => {
     const { conductor, emitted } = harness(async () => {
       await changeProviderStateMidStep();
@@ -230,9 +244,7 @@ describe('self-host live boundary: violations are enforced at the next dispatch'
 
     expect(await haltReason()).toContain(BOUNDARY_REASON);
     expect(await readFile(join(projectRoot, '.pipeline/HALT.class'), 'utf-8')).toBe('mechanical');
-    expect(emitted.filter((e) => e.type === 'loop_halt').map((e) => e.reason)).toEqual([
-      BOUNDARY_REASON,
-    ]);
+    expect(emitted.filter((e) => e.type === 'loop_halt').map((e) => e.reason)).toEqual([BOUNDARY_REASON]);
   });
 
   it('detects a change to the live harness checkout the same way', async () => {
@@ -266,16 +278,13 @@ describe('self-host live boundary: violations are enforced at the next dispatch'
     const state = await readState(statePath);
     expect(state.ok && state.value.build).toBe('done');
     expect(state.ok && state.value.finish).toBeUndefined();
-    expect(emitted.filter((e) => e.type === 'loop_halt').map((e) => e.reason)).toEqual([
-      BOUNDARY_REASON,
-    ]);
+    expect(emitted.filter((e) => e.type === 'loop_halt').map((e) => e.reason)).toEqual([BOUNDARY_REASON]);
   });
 
-  it('still marks a step failed when the step\'s own work fails and the boundary is clean', async () => {
-    const { conductor, emitted } = harness(
-      async () => ({ success: false, output: 'compilation failed' }),
-      { maxRetries: 1 },
-    );
+  it("still marks a step failed when the step's own work fails and the boundary is clean", async () => {
+    const { conductor, emitted } = harness(async () => ({ success: false, output: 'compilation failed' }), {
+      maxRetries: 1,
+    });
 
     await conductor.run();
 
