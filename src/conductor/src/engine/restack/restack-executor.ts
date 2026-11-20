@@ -771,9 +771,12 @@ async function materializeFrozenBlocks(
     const merged = unionRemBlocks(base, ours, blockOnlyPlan(base, blocks));
     if (merged.kind === 'body-mismatch')
       throw new Error(`cannot re-materialize frozen fold block ${merged.remId} for ${source}`);
-    const text = merged.kind === 'declined'
-      ? blocks.every((block) => ours.includes(block.body)) ? ours : blockOnlyPlan(ours, blocks)
-      : merged.text;
+    const text =
+      merged.kind === 'declined'
+        ? blocks.every((block) => ours.includes(block.body))
+          ? ours
+          : blockOnlyPlan(ours, blocks)
+        : merged.text;
     await stageFrozenText(path, text);
     if (merged.kind === 'declined') {
       // The merge-tree replay may already have retained this exact frozen

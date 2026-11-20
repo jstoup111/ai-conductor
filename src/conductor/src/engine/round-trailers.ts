@@ -9,12 +9,10 @@ export function hasExactRoundOwnerTrailers(
   expected: { readonly roundId: string; readonly owner: string },
 ): boolean {
   const values = (key: 'Round' | 'Owner') =>
-    normalizedTrailers
-      .split('\n')
-      .flatMap((line) => {
-        const match = line.match(new RegExp(`^${key}:\\s*(.*)$`, 'i'));
-        return match === null ? [] : [match[1]!];
-      });
+    normalizedTrailers.split('\n').flatMap((line) => {
+      const match = line.match(new RegExp(`^${key}:\\s*(.*)$`, 'i'));
+      return match === null ? [] : [match[1]!];
+    });
   const rounds = values('Round');
   const owners = values('Owner');
   return rounds.length === 1 && rounds[0] === expected.roundId && owners.length === 1 && owners[0] === expected.owner;

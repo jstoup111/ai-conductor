@@ -88,10 +88,13 @@ async function validOwnedCommit(input: CollectFoldSetInput, commit: CommitSha, r
     const parents = await input.git(['rev-list', '--parents', '-n', '1', commit]);
     if (parents.exitCode !== 0 || parents.stdout.trim().split(/\s+/).length !== 2) return false;
     const trailers = await input.git(['show', '-s', '--format=%(trailers:only,unfold)', commit]);
-    return trailers.exitCode === 0 && hasExactRoundOwnerTrailers(trailers.stdout, {
-      roundId: range.roundId,
-      owner: `c${range.host}`,
-    });
+    return (
+      trailers.exitCode === 0 &&
+      hasExactRoundOwnerTrailers(trailers.stdout, {
+        roundId: range.roundId,
+        owner: `c${range.host}`,
+      })
+    );
   } catch {
     return false;
   }

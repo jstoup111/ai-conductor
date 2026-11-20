@@ -358,7 +358,9 @@ describe('ref-backed route record store', () => {
       };
       for (const [name, record] of Object.entries(invalidRecords)) {
         await writeRef(fixture, routeRecordRefFor('demo', roundId), record);
-        await expect(readRouteRecord(fixture.repo, 'demo', roundId), name).resolves.toMatchObject({ kind: 'unreadable' });
+        await expect(readRouteRecord(fixture.repo, 'demo', roundId), name).resolves.toMatchObject({
+          kind: 'unreadable',
+        });
       }
 
       const openRecord: RouteRecord = {
