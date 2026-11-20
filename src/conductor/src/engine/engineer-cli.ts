@@ -926,7 +926,7 @@ function formatDependencyDrift(result: DependencyDriftResult): string {
   if (result.kind === 'repository-indeterminate') {
     return `Dependency drift audit: indeterminate (${result.cause})`;
   }
-  const findings = <T,>(name: string, values: readonly T[], render: (value: T) => string): string =>
+  const findings = <T>(name: string, values: readonly T[], render: (value: T) => string): string =>
     values.length === 0
       ? `${name}: 0 findings`
       : `${name}: ${values.length} finding(s)\n${values.map((value) => `  ${render(value)}`).join('\n')}`;
@@ -1339,7 +1339,14 @@ async function prepareCheckpointDeps(input: {
 }): Promise<CheckpointDeps> {
   const slug = input.branch.replace(/^spec\//, '');
   const sourceRef = input.sourceRef ?? (await composerSourceRef(input.worktree, slug));
-  const markerOwner = await composerCommittedMarkerOwner(input.git, input.worktree, input.branch, slug);
+  // The remote branch is the publication authority.  A failed take-over push
+  // leaves B's marker in the local commit, but origin still says A owns the
+  // run; retain local-only mode until that committed remote marker changes.
+  const localMarkerOwner = await composerCommittedMarkerOwner(input.git, input.worktree, input.branch, slug);
+  const remoteMarkerOwner = input.target.remote
+    ? await composerCommittedMarkerOwner(input.git, input.worktree, `origin/${input.branch}`, slug)
+    : undefined;
+  const markerOwner = remoteMarkerOwner ?? localMarkerOwner;
   const owner = await (
     input.resolveOwner ?? (async () => resolveDaemonOwner(await readMachineOwnerConfig(), input.gh, input.worktree))
   )();
@@ -1390,6 +1397,8 @@ async function handleComposerHostExit(input: {
   resolveOwner?: () => Promise<OwnerResolution>;
   checkpoint?: DispatchEngineerOpts['checkpoint'];
   printErr: (message: string) => void;
+  /** A prior unsuccessful publication remains unsafe until a retry succeeds. */
+  priorSaveFailed?: boolean;
 }): Promise<{
   record?: ReturnType<typeof parseRunRecord>;
   summary?: ReturnType<typeof summarizeRun>;
@@ -1408,12 +1417,16 @@ async function handleComposerHostExit(input: {
   });
   const dirtyDocs = (status.exitCode ?? 0) === 0 && status.stdout.trim().length > 0;
   let saved: Awaited<ReturnType<typeof checkpointComposerRun>> | undefined;
-  let saveFailed = false;
+  let saveFailed = input.priorSaveFailed ?? false;
   const preExitSummary = record ? summarizeRun(record) : undefined;
 
   // A session can exit during its first DECIDE step, before a run record exists.
   // Dirty artifacts still need the initial durable draft checkpoint.
-  if ((record || dirtyDocs) && (!preExitSummary || preExitSummary.nextStep !== 'delivery') && dirtyDocs) {
+  if (
+    (record || dirtyDocs) &&
+    (!preExitSummary || preExitSummary.nextStep !== 'delivery') &&
+    (dirtyDocs || saveFailed)
+  ) {
     const step = preExitSummary?.nextStep ?? 'explore';
     try {
       saved = input.checkpoint
@@ -1525,6 +1538,14 @@ async function runLocalCheckpoint(
 
 function isComposerBoundaryInteractive(opts: DispatchEngineerOpts): boolean {
   return (opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY)))();
+}
+
+/** A test may provide its own chooser; the real prompt needs real terminal input to re-offer. */
+function canRepeatComposerBoundary(opts: DispatchEngineerOpts): boolean {
+  return (
+    isComposerBoundaryInteractive(opts) &&
+    (opts.chooseComposerBoundary !== undefined || Boolean(process.stdin.isTTY && process.stdout.isTTY))
+  );
 }
 
 /** Prompt and validate one launcher boundary choice; undefined re-offers only on a TTY. */
@@ -1647,6 +1668,18 @@ function reconcileComposerResumeLocalState(input: {
       () => false,
     );
     const localRef = hasWorktree ? 'HEAD' : branch;
+    // A fresh machine has only origin/spec/<slug>.  Do not ask the production
+    // Git runner to compare a local ref which has not been created yet:
+    // ensureWorktree will attach its tracking branch after this reconciliation.
+    const localRefExists = hasWorktree
+      ? true
+      : (
+          await input
+            .git(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], {
+              cwd: input.target.canonicalPath,
+            })
+            .catch(() => ({ exitCode: 1, stdout: '' }))
+        ).exitCode === 0;
     const status = hasWorktree
       ? await input.git(['status', '--porcelain', '--untracked-files=all'], { cwd: path })
       : { stdout: '' };
@@ -1654,23 +1687,30 @@ function reconcileComposerResumeLocalState(input: {
       .split('\n')
       .filter(Boolean)
       .map((line) => line.slice(3));
-    const ahead = input.target.remote
-      ? await input.git(['log', '--format=%h', `origin/${branch}..${localRef}`], {
-          cwd: hasWorktree ? path : input.target.canonicalPath,
-        })
-      : { stdout: '' };
+    const ahead =
+      input.target.remote && localRefExists
+        ? await input.git(['log', '--format=%h', `origin/${branch}..${localRef}`], {
+            cwd: hasWorktree ? path : input.target.canonicalPath,
+          })
+        : { stdout: '' };
     const unpushedCommits = ahead.stdout.split('\n').filter(Boolean);
-    const fastForwardable = !input.target.remote
-      ? true
-      : await isComposerResumeFastForwardable({
-          target: input.target,
-          git: input.git,
-          branch,
-          localRef,
-          cwd: hasWorktree ? path : input.target.canonicalPath,
-        });
-    if (!hasWorktree && input.target.remote && unpushedCommits.length === 0 && !fastForwardable) {
+    const fastForwardable =
+      !input.target.remote || !localRefExists
+        ? true
+        : await isComposerResumeFastForwardable({
+            target: input.target,
+            git: input.git,
+            branch,
+            localRef,
+            cwd: hasWorktree ? path : input.target.canonicalPath,
+          });
+    if (!hasWorktree && input.target.remote && localRefExists && unpushedCommits.length === 0 && !fastForwardable) {
       await input.git(['branch', '-f', branch, `origin/${branch}`], { cwd: input.target.canonicalPath });
+    }
+    if (hasWorktree && input.target.remote && unpushedCommits.length === 0 && !dirtyDocs.length && !fastForwardable) {
+      const merged = await input.git(['merge', '--ff-only', `origin/${branch}`], { cwd: path });
+      if ((merged.exitCode ?? 0) !== 0)
+        throw new Error(`compose resume: could not fast-forward clean worktree for ${branch}: ${merged.stdout}`);
     }
     const remote = input.target.remote
       ? await readComposerResumeRemoteState({ target: input.target, git: input.git, branch, slug })
@@ -1726,12 +1766,18 @@ async function readComposerResumeRemoteState(input: {
   branch: string;
   slug: string;
 }) {
-  const [tip, serialized] = await Promise.all([
-    input.git(['rev-parse', `origin/${input.branch}`], { cwd: input.target.canonicalPath }),
-    input.git(['show', `origin/${input.branch}:.docs/composer-runs/${input.slug}.json`], {
+  const tip = await input.git(['rev-parse', `origin/${input.branch}`], { cwd: input.target.canonicalPath });
+  let serialized: Awaited<ReturnType<typeof input.git>>;
+  try {
+    serialized = await input.git(['show', `origin/${input.branch}:.docs/composer-runs/${input.slug}.json`], {
       cwd: input.target.canonicalPath,
-    }),
-  ]);
+    });
+  } catch {
+    // land-spec deliberately strips this record.  It is absent remote state,
+    // not a failed resume; resume.ts will surface delivery after attachment.
+    return undefined;
+  }
+  if ((serialized.exitCode ?? 0) !== 0) return undefined;
   try {
     const summary = summarizeRun(parseRunRecord(serialized.stdout));
     return { step: summary.nextStep, lastActor: summary.lastActor, lastAt: summary.lastAt, tip: tip.stdout.trim() };
@@ -2232,13 +2278,16 @@ export async function dispatchEngineer(dispatch: EngineerDispatch, opts: Dispatc
                 });
                 if (exited.summary) {
                   let { summary, saved, saveFailed } = exited;
-                  let activeProvider = (exited.record?.lastCheckpoint?.provider ?? host!.id) as BuiltInProviderId;
-                  print(
-                    `Composer run ${touched.slug}: current step ${summary.nextStep}; active provider ${activeProvider}. Choices: continue, switch, hand off.`,
-                  );
+                  // The provider which just authored this boundary is the
+                  // active provider.  A checkpoint can predate a clean host
+                  // session, so it must not select the next launcher.
+                  let activeProvider = host!.id as BuiltInProviderId;
                   // Refused/failed switch attempts return to this exact durable
                   // boundary instead of silently falling through to another idea.
                   for (;;) {
+                    print(
+                      `Composer run ${touched.slug}: current step ${summary.nextStep}; active provider ${activeProvider}. Choices: continue, switch, hand off.`,
+                    );
                     const action = await chooseComposerBoundaryAction({
                       opts,
                       slug: touched.slug,
@@ -2248,7 +2297,7 @@ export async function dispatchEngineer(dispatch: EngineerDispatch, opts: Dispatc
                       printErr,
                     });
                     if (!action) {
-                      if (!isComposerBoundaryInteractive(opts)) break;
+                      if (!canRepeatComposerBoundary(opts)) break;
                       continue;
                     }
                     if (action.action === 'handoff') {
@@ -2256,7 +2305,7 @@ export async function dispatchEngineer(dispatch: EngineerDispatch, opts: Dispatc
                         printErr(
                           'compose boundary: handoff is unavailable until the local checkpoint is published; choose continue to retry.',
                         );
-                        if (!isComposerBoundaryInteractive(opts)) break;
+                        if (!canRepeatComposerBoundary(opts)) break;
                         continue;
                       }
                       await handoffComposerBoundary({
@@ -2315,11 +2364,11 @@ export async function dispatchEngineer(dispatch: EngineerDispatch, opts: Dispatc
                         engineerDir,
                         checkpoint: opts.checkpoint,
                         printErr,
+                        priorSaveFailed: saveFailed,
                       });
                       if (!exited.summary) break;
                       ({ summary, saved, saveFailed } = exited);
-                      activeProvider = (exited.record?.lastCheckpoint?.provider ??
-                        action.provider) as BuiltInProviderId;
+                      activeProvider = action.provider;
                     } catch (error) {
                       printErr(`compose boundary: ${error instanceof Error ? error.message : String(error)}`);
                     }
@@ -3162,9 +3211,96 @@ export async function dispatchEngineer(dispatch: EngineerDispatch, opts: Dispatc
                     printErr,
                   });
                   if (exited.summary) {
-                    print(
-                      `Composer run ${slug}: current step ${exited.summary.nextStep}; active provider ${exited.record?.lastCheckpoint?.provider ?? provider}. Choices: continue, switch, hand off.`,
-                    );
+                    let { summary, saved, saveFailed } = exited;
+                    // The just-exited host, rather than its last checkpoint,
+                    // owns the next continue choice.  A clean session may not
+                    // have written a checkpoint at all.
+                    let activeProvider = provider;
+                    for (;;) {
+                      print(
+                        `Composer run ${slug}: current step ${summary.nextStep}; active provider ${activeProvider}. Choices: continue, switch, hand off.`,
+                      );
+                      const action = await chooseComposerBoundaryAction({
+                        opts,
+                        slug,
+                        step: summary.nextStep,
+                        activeProvider,
+                        hasRemote: Boolean(target.remote),
+                        printErr,
+                      });
+                      if (!action) {
+                        if (!canRepeatComposerBoundary(opts)) break;
+                        continue;
+                      }
+                      if (action.action === 'handoff') {
+                        if (saveFailed) {
+                          printErr(
+                            'compose boundary: handoff is unavailable until the local checkpoint is published; choose continue to retry.',
+                          );
+                          if (!canRepeatComposerBoundary(opts)) break;
+                          continue;
+                        }
+                        await handoffComposerBoundary({
+                          target,
+                          branch,
+                          slug,
+                          worktree: resumed.worktree,
+                          saved,
+                          gh,
+                          events,
+                          print,
+                        });
+                        break;
+                      }
+                      try {
+                        const nextHost = requireProviderCapability(action.provider, 'interactiveLaunch');
+                        const nextExecutable = resolveProviderExecutable(action.provider);
+                        if (!(await (opts.providerInstalled ?? executableOnPath)(nextExecutable)))
+                          throw new Error(`provider ${action.provider} is not installed.`);
+                        if (action.provider !== activeProvider) {
+                          await events.emitOrThrow({
+                            type: 'composer_provider_switched',
+                            slug,
+                            step: summary.nextStep,
+                            fromProvider: activeProvider,
+                            toProvider: action.provider,
+                            actor: owner.id,
+                          });
+                        }
+                        const name = await resolveSkillName(opts.skillNameRoot ?? null, 'composer');
+                        const nextPrompt = `${nextHost.invocationPrefix}${name} --resume ${resumed.worktree} --step ${summary.nextStep}\nResume context: ${JSON.stringify({ drafts: summary.drafts, acceptedArtifacts: summary.acceptedSteps.flatMap((step) => step.artifacts.map((artifact) => artifact.path)), decisions: summary.decisions, openQuestions: summary.openQuestions })}`;
+                        await (opts.spawnHost ?? spawnInteractiveHost)(
+                          nextExecutable,
+                          nextHost.interactiveLaunch.argv({ prompt: nextPrompt, permissionMode: 'default' }),
+                          resumed.worktree,
+                          {
+                            ...(opts.env ?? process.env),
+                            AI_CONDUCTOR_AUTHORING_PROVIDER: action.provider,
+                            AI_CONDUCTOR_COMPOSE_LAUNCH_ID: launchId,
+                          },
+                        );
+                        const nextExited = await handleComposerHostExit({
+                          target,
+                          branch,
+                          worktree: resumed.worktree,
+                          slug,
+                          gh,
+                          git,
+                          events,
+                          provider: action.provider,
+                          engineerDir,
+                          resolveOwner: async () => owner,
+                          checkpoint: opts.checkpoint,
+                          printErr,
+                          priorSaveFailed: saveFailed,
+                        });
+                        if (!nextExited.summary) break;
+                        ({ summary, saved, saveFailed } = nextExited);
+                        activeProvider = action.provider;
+                      } catch (error) {
+                        printErr(`compose boundary: ${error instanceof Error ? error.message : String(error)}`);
+                      }
+                    }
                   }
                   return resumed;
                 } finally {

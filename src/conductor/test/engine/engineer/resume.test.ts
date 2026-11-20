@@ -1,13 +1,14 @@
 // Covers: task:12
 // Covers: task:15
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { contextForRun, parseResumeTarget, resumeComposerRun } from '../../../src/engine/engineer/resume.js';
 import { dispatchEngineer } from '../../../src/engine/engineer-cli.js';
+import { createLedger } from '../../../src/engine/engineer/intake/ledger.js';
 import type { RunRecord } from '../../../src/engine/engineer/run-record.js';
 
 const execFile = promisify(execFileCb);
@@ -185,6 +186,154 @@ describe('Composer resume', () => {
     expect(transitions).toEqual([{ branch: 'spec/demo', draftPrUrl: 'https://github.com/acme/demo/pull/17' }]);
     expect(emitted).toHaveLength(1);
     expect(emitted[0]).toMatchObject({ slug: 'demo', worktreePath: '/tmp/demo' });
+  });
+
+  it('Covers: Tasks 12 and 13 attach a remote-only branch through production reconciliation, then reconstruct deciding once', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'composer-resume-remote-only-'));
+    const origin = join(root, 'origin');
+    const remote = join(root, 'remote.git');
+    const client = join(root, 'client');
+    const registryPath = join(root, 'registry.json');
+    const engineerDir = join(root, 'engineer');
+    const spawned = vi.fn(async () => 0);
+    try {
+      await execFile('git', ['init', '--bare', remote]);
+      await execFile('git', ['init', '-b', 'main', origin]);
+      await execFile('git', ['config', 'user.email', 'test@example.invalid'], { cwd: origin });
+      await execFile('git', ['config', 'user.name', 'Test'], { cwd: origin });
+      await writeFile(join(origin, 'README.md'), '# demo\n');
+      await execFile('git', ['add', 'README.md'], { cwd: origin });
+      await execFile('git', ['commit', '-m', 'base'], { cwd: origin });
+      await execFile('git', ['remote', 'add', 'origin', remote], { cwd: origin });
+      await execFile('git', ['push', '-u', 'origin', 'main'], { cwd: origin });
+      await execFile('git', ['checkout', '-b', 'spec/demo'], { cwd: origin });
+      await mkdir(join(origin, '.docs', 'composer-runs'), { recursive: true });
+      await mkdir(join(origin, '.docs', 'intake'), { recursive: true });
+      await writeFile(join(origin, '.docs', 'composer-runs', 'demo.json'), JSON.stringify(record));
+      await writeFile(join(origin, '.docs', 'intake', 'demo.md'), '# Intake\n\nSource-Ref: acme/demo#17\nOwner: A\n');
+      await execFile('git', ['add', '.docs'], { cwd: origin });
+      await execFile('git', ['commit', '-m', 'remote composer run'], { cwd: origin });
+      await execFile('git', ['push', '-u', 'origin', 'spec/demo'], { cwd: origin });
+      await execFile('git', ['clone', remote, client]);
+      await writeFile(
+        registryPath,
+        JSON.stringify([
+          {
+            schemaVersion: 1,
+            name: 'demo',
+            path: client,
+            remote: 'https://github.com/acme/demo.git',
+            status: 'registered',
+            registeredAt: '2026-11-19T00:00:00.000Z',
+          },
+        ]),
+      );
+      // Match the rejecting production runner: reconciliation must explicitly
+      // probe the absent local ref instead of relying on a nonzero result.
+      const git = async (args: string[], options?: { cwd?: string }) => {
+        const result = await execFile('git', args, { cwd: options?.cwd ?? client });
+        return { exitCode: 0, stdout: result.stdout };
+      };
+      const code = await dispatchEngineer(
+        { kind: 'resume', target: 'spec/demo', project: 'demo', provider: 'codex' },
+        {
+          registryPath,
+          engineerDir,
+          git,
+          gh: async () => ({ stdout: '{}', stderr: '', exitCode: 0 }),
+          spawnHost: spawned,
+          providerInstalled: async () => true,
+          chooseComposerBoundary: async () => ({ choice: 'switch' }),
+          isAttachedTerminal: () => false,
+          env: {},
+          print: () => {},
+          printErr: () => {},
+          resolveResumeOwner: async () => ({ resolved: true, id: 'A' }),
+          probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+        },
+      );
+
+      expect(code).toBe(0);
+      expect(spawned).toHaveBeenCalledOnce();
+      expect(
+        await execFile('git', ['show-ref', '--verify', '--quiet', 'refs/heads/spec/demo'], { cwd: client }),
+      ).toBeDefined();
+      await expect(
+        createLedger(join(engineerDir, 'ledger.json')).get('github-issues', 'acme/demo#17'),
+      ).resolves.toMatchObject({
+        status: 'deciding',
+        branch: 'spec/demo',
+      });
+      const events = (await readFile(join(client, '.pipeline', 'composer-events.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      expect(events.filter((event) => event.type === 'composer_run_resumed')).toHaveLength(1);
+
+      // Land strips the run record.  A second fresh-machine resume must attach
+      // that remote-only branch and give the host the delivery step instead of
+      // failing while reading absent remote state during reconciliation.
+      await execFile('git', ['checkout', 'main'], { cwd: origin });
+      await execFile('git', ['checkout', '-b', 'spec/landed'], { cwd: origin });
+      await execFile('git', ['commit', '--allow-empty', '-m', 'landed spec'], { cwd: origin });
+      await execFile('git', ['push', '-u', 'origin', 'spec/landed'], { cwd: origin });
+      spawned.mockClear();
+      const deliveryCode = await dispatchEngineer(
+        { kind: 'resume', target: 'spec/landed', project: 'demo', provider: 'codex' },
+        {
+          registryPath,
+          engineerDir,
+          git,
+          gh: async () => ({ stdout: '{}', stderr: '', exitCode: 0 }),
+          spawnHost: spawned,
+          providerInstalled: async () => true,
+          isAttachedTerminal: () => false,
+          env: {},
+          print: () => {},
+          printErr: () => {},
+          resolveResumeOwner: async () => ({ resolved: true, id: 'A' }),
+          probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+        },
+      );
+      expect(deliveryCode).toBe(0);
+      expect(spawned).toHaveBeenCalledOnce();
+      expect(spawned.mock.calls[0][1].join(' ')).toContain('--step delivery');
+
+      // An already-registered, clean worktree may be behind after another
+      // machine checkpoints.  Reconciliation must fast-forward it before
+      // ensureWorktree reuses that path.
+      await execFile('git', ['checkout', 'spec/demo'], { cwd: origin });
+      await writeFile(join(origin, '.docs', 'remote-update.md'), 'new remote checkpoint\n');
+      await execFile('git', ['add', '.docs/remote-update.md'], { cwd: origin });
+      await execFile('git', ['commit', '-m', 'advance remote run'], { cwd: origin });
+      await execFile('git', ['push', 'origin', 'spec/demo'], { cwd: origin });
+      spawned.mockClear();
+      const behindCode = await dispatchEngineer(
+        { kind: 'resume', target: 'spec/demo', project: 'demo', provider: 'codex' },
+        {
+          registryPath,
+          engineerDir,
+          git,
+          gh: async () => ({ stdout: '{}', stderr: '', exitCode: 0 }),
+          spawnHost: spawned,
+          providerInstalled: async () => true,
+          chooseComposerBoundary: async () => ({ choice: 'switch' }),
+          isAttachedTerminal: () => false,
+          env: {},
+          print: () => {},
+          printErr: () => {},
+          resolveResumeOwner: async () => ({ resolved: true, id: 'A' }),
+          probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+        },
+      );
+      expect(behindCode).toBe(0);
+      const worktree = join(client, '.worktrees', 'engineer-demo');
+      expect((await execFile('git', ['rev-parse', 'HEAD'], { cwd: worktree })).stdout.trim()).toBe(
+        (await execFile('git', ['rev-parse', 'origin/spec/demo'], { cwd: client })).stdout.trim(),
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('Covers: Task 15 launches one Codex Composer resume host at the attached worktree and refuses nested hosts before launch', async () => {

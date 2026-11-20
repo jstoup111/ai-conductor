@@ -26,6 +26,7 @@ const emptyRecord = (): RunRecord => ({
 describe('composer run records', () => {
   it.each([
     ['.docs/architecture/composer-run.md', 'architecture_diagram'],
+    ['.docs/applicability/composer-run.md', 'explore'],
     ['.docs/decisions/architecture-review-composer-run.md', 'architecture_review'],
     ['.docs/decisions/adr-composer-run.md', 'architecture_review'],
     ['.docs/conflicts/composer-run.md', 'conflict_check'],
@@ -114,6 +115,24 @@ describe('composer run records', () => {
       { ...track, step: 'explore' },
       { ...complexity, step: 'complexity' },
     ]);
+  });
+
+  it('keeps an accepted Explore applicability artifact accepted rather than reporting it as a draft', () => {
+    const applicability = digestArtifact('.docs/applicability/composer-run.md', Buffer.from('applicable'));
+    const accepted = recordAcceptance(emptyRecord(), {
+      step: 'explore',
+      actor: 'operator-7',
+      provider: 'codex',
+      at: '2026-11-19T00:00:00.000Z',
+      artifacts: [applicability],
+      decisions: [],
+      openQuestions: [],
+    });
+
+    const classification = classifyArtifacts(accepted, [applicability]);
+
+    expect(classification.draft).toEqual([]);
+    expect(classification.accepted).toEqual([expect.objectContaining({ path: applicability.path, step: 'explore' })]);
   });
 
   it('marks an edited accepted stories step as draft and later accepted plan as needing reconfirmation', () => {

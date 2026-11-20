@@ -181,12 +181,14 @@ describe('Composer launcher boundary', () => {
       );
 
       const checkpoint = vi.fn(
-        async (request: { worktree: string; step: string; state: 'accepted' | 'draft'; provider?: string }) => ({
-          slug,
-          state: request.state,
-          committed: true,
-          published: true,
-        }),
+        async (request: { worktree: string; step: string; state: 'accepted' | 'draft'; provider?: string }) => {
+          const status = await execa('git', ['status', '--porcelain', '--', '.docs'], { cwd: request.worktree });
+          if (status.stdout.trim()) {
+            await execa('git', ['add', '--', '.docs'], { cwd: request.worktree });
+            await execa('git', ['commit', '-m', 'checkpoint fixture'], { cwd: request.worktree });
+          }
+          return { slug, state: request.state, committed: status.stdout.trim().length > 0, published: true };
+        },
       );
       const git = async (args: string[], options?: { cwd?: string }) => {
         const result = await execa('git', args, { cwd: options?.cwd, reject: false });
@@ -299,12 +301,19 @@ describe('Composer launcher boundary', () => {
       );
 
       const checkpoint = vi.fn(
-        async (request: { worktree: string; step: string; state: 'accepted' | 'draft'; provider?: string }) => ({
-          slug,
-          state: request.state,
-          committed: true,
-          published: true,
-        }),
+        async (request: { worktree: string; step: string; state: 'accepted' | 'draft'; provider?: string }) => {
+          const status = await execa('git', ['status', '--porcelain', '--', '.docs'], { cwd: request.worktree });
+          if (status.stdout.trim()) {
+            await execa('git', ['add', '--', '.docs'], { cwd: request.worktree });
+            await execa('git', ['commit', '-m', 'checkpoint fixture'], { cwd: request.worktree });
+          }
+          return {
+            slug,
+            state: request.state,
+            committed: status.stdout.trim().length > 0,
+            published: true,
+          };
+        },
       );
       const git = async (args: string[], options?: { cwd?: string }) => {
         const result = await execa('git', args, { cwd: options?.cwd, reject: false });
@@ -315,6 +324,7 @@ describe('Composer launcher boundary', () => {
         return 0;
       });
       const print = vi.fn();
+      let attached = true;
       const code = await dispatchEngineer(
         { kind: 'resume', target: `spec/${slug}`, project: 'project', provider: 'codex' },
         {
@@ -325,14 +335,22 @@ describe('Composer launcher boundary', () => {
           git,
           print,
           printErr: () => {},
-          isAttachedTerminal: () => true,
+          isAttachedTerminal: () => attached,
           providerInstalled: async () => true,
+          chooseComposerBoundary: vi
+            .fn()
+            .mockResolvedValueOnce({ choice: 'continue' })
+            .mockImplementationOnce(async () => {
+              attached = false;
+              return { choice: 'handoff' };
+            }),
           resolveResumeOwner: async () => ({ resolved: true, id: 'operator-a' }),
           probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
         },
       );
 
       expect(code).toBe(0);
+      expect(spawnHost).toHaveBeenCalledTimes(2);
       expect(
         checkpoint.mock.calls.map(([request]) => ({
           step: request.step,
@@ -340,7 +358,10 @@ describe('Composer launcher boundary', () => {
           provider: request.provider,
         })),
       ).toEqual([{ step: 'complexity', state: 'draft', provider: 'codex' }]);
-      expect(print.mock.calls.flat().join('\n')).toContain('current step complexity; active provider codex');
+      expect(print.mock.calls.flat().join('\n')).toMatch(
+        /current step complexity; active provider codex[\s\S]*current step complexity; active provider codex/,
+      );
+      expect(print.mock.calls.flat().join('\n')).not.toMatch(/handed off/i);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
