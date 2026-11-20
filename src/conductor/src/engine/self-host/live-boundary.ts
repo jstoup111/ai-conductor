@@ -38,6 +38,8 @@ interface Manifest {
 export interface LiveBoundarySnapshot {
   readonly surfaces: readonly Surface[];
   readonly measurements: readonly { label: string; elapsedMs: number; fileCount: number }[];
+  /** Containment is specific to the live checkout that was probed. */
+  readonly containmentByLiveCheckout?: ReadonlyMap<string, ContainmentVerdict>;
 }
 
 /**
@@ -639,9 +641,10 @@ export async function verifyLiveBoundary(
         if (diff.added.length + diff.removed.length + diff.changed.length === 0) continue;
       }
       if (surface.label === 'live checkout') {
-        if (containmentVerdict.contained) {
+        const surfaceContainment = snapshot.containmentByLiveCheckout?.get(surface.root) ?? containmentVerdict;
+        if (surfaceContainment.contained) {
           containedDrift = {
-            evidence: containmentVerdict.evidence,
+            evidence: surfaceContainment.evidence,
             summary: describeDiff(diff),
           };
           continue;
@@ -651,7 +654,7 @@ export async function verifyLiveBoundary(
         if (paths.every((path) => classifications.get(path) === 'operator-edit')) continue;
         return {
           ok: false,
-          reason: `${surface.label} changed during self-host execution — ${describeDiff(diff)}. Containment was not in force: ${containmentVerdict.reason}.`,
+          reason: `${surface.label} changed during self-host execution — ${describeDiff(diff)}. Containment was not in force: ${surfaceContainment.reason}.`,
         };
       }
       return { ok: false, reason: `${surface.label} changed during self-host execution — ${describeDiff(diff)}.` };

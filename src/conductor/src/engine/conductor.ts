@@ -7830,7 +7830,10 @@ export class Conductor {
         this.providerExecution.prepareCandidateSelfHost = priorPreparation;
         this.providerExecution.withCandidateSafety = priorSafety;
       }
-      await dispatchLiveBoundary.end();
+      // A preparation timeout can leave a provider fingerprint pending. Do not
+      // hold the supervisor past its timeout; acquire finalization still runs
+      // the one boundary verification when that fingerprint settles.
+      await dispatchLiveBoundary.end({ waitForPending: false });
     }
   }
 

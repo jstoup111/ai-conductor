@@ -145,8 +145,126 @@ describe('DispatchLiveBoundary', () => {
     expect(mutation).toHaveBeenCalledOnce();
     expect(fingerprintLiveCheckout).toHaveBeenCalledTimes(2);
     expect(h.events.filter((event: any) => event.type === 'self_host_boundary_fingerprint')).toEqual([
-      { type: 'self_host_boundary_fingerprint', surfaces: [live.measurement, provider('/claude').measurement] },
+      { type: 'self_host_boundary_fingerprint', surfaces: [live.measurement] },
     ]);
+  });
+
+  // Covers: task:2, task:3
+  it('retains a shared live surface when a sibling provider fingerprint rejects', async () => {
+    let resolveLive!: () => void;
+    const waitingLive = new Promise<typeof live>((resolve) => {
+      resolveLive = () => resolve(live);
+    });
+    const fingerprintLiveCheckout = vi.fn(() => waitingLive);
+    const fingerprintProviderState = vi.fn(async ({ unrelatedProviderState }: { unrelatedProviderState: string }) => {
+      if (unrelatedProviderState === '/failed') throw new Error('provider walk failed');
+      return provider(unrelatedProviderState);
+    });
+    const verify = vi.fn(async (snapshot: Parameters<typeof verifyLiveBoundary>[0]) => {
+      expect(snapshot.surfaces.map((surface) => surface.root)).toContain('/live');
+      return { ok: false, reason: 'live checkout drift reported' };
+    });
+    const violations: string[] = [];
+    const h = harness({ fingerprintLiveCheckout, fingerprintProviderState, verify, onViolation: (reason) => violations.push(reason) });
+    const failed = h.boundary.acquire({ liveCheckout: '/live', providerHome: '/failed', provider: 'claude', probe: h.probe });
+    const succeeding = h.boundary.acquire({ liveCheckout: '/live', providerHome: '/good', provider: 'claude', probe: h.probe });
+    await Promise.resolve();
+    resolveLive();
+    await expect(failed).rejects.toThrow('provider walk failed');
+    const lease = await succeeding;
+    await lease.release();
+    await h.boundary.end();
+    expect(fingerprintLiveCheckout).toHaveBeenCalledOnce();
+    expect(verify).toHaveBeenCalledOnce();
+    expect(violations).toEqual(['live checkout drift reported']);
+  });
+
+  // Covers: task:3
+  it('waits for a pending acquire to settle before end reports its single verification', async () => {
+    let rejectProvider!: (error: Error) => void;
+    const pendingProvider = new Promise<ReturnType<typeof provider>>((_, reject) => {
+      rejectProvider = reject;
+    });
+    const fingerprintProviderState = vi
+      .fn()
+      .mockResolvedValueOnce(provider('/baseline'))
+      .mockReturnValueOnce(pendingProvider);
+    const violations: string[] = [];
+    const h = harness({
+      fingerprintProviderState,
+      verify: async () => ({ ok: false, reason: 'verification completed' }),
+      onViolation: (reason) => violations.push(reason),
+    });
+    const baseline = await h.boundary.acquire({
+      liveCheckout: '/live', providerHome: '/baseline', provider: 'claude', probe: h.probe,
+    });
+    await baseline.release();
+    const pending = h.boundary.acquire({ liveCheckout: '/live', providerHome: '/pending', provider: 'claude', probe: h.probe });
+    const ending = h.boundary.end();
+    await Promise.resolve();
+    expect(violations).toEqual([]);
+    rejectProvider(new Error('pending fingerprint failed'));
+    await expect(pending).rejects.toThrow('pending fingerprint failed');
+    await ending;
+    expect(violations).toEqual(['verification completed']);
+    expect(h.events.filter((event: any) => event.type === 'self_host_containment_verdict')).toHaveLength(1);
+  });
+
+  // Covers: task:3, task:4
+  it('lets a timed-out supervisor end without waiting for a pending fingerprint', async () => {
+    let resolveProvider!: () => void;
+    const pendingProvider = new Promise<ReturnType<typeof provider>>((resolve) => {
+      resolveProvider = () => resolve(provider('/provider'));
+    });
+    const coordinator = new LiveBoundaryCoordinator();
+    let h!: ReturnType<typeof harness>;
+    let pending!: ReturnType<DispatchLiveBoundary['acquire']>;
+    await coordinator.runDispatch(async (openWindow) => {
+      h = harness({ openWindow, fingerprintProviderState: vi.fn(() => pendingProvider) });
+      pending = h.boundary.acquire({
+        liveCheckout: '/live', providerHome: '/provider', provider: 'claude', probe: h.probe,
+      });
+      await h.boundary.end({ waitForPending: false });
+    });
+    expect(h.verify).not.toHaveBeenCalled();
+    const mutation = vi.fn(async () => undefined);
+    const queuedMutation = coordinator.runMutation(mutation);
+    await Promise.resolve();
+    expect(mutation).not.toHaveBeenCalled();
+    resolveProvider();
+    await pending;
+    expect(h.verify).toHaveBeenCalledOnce();
+    await queuedMutation;
+    expect(mutation).toHaveBeenCalledOnce();
+  });
+
+  // Covers: task:2, task:3
+  it('uses each live checkout root\'s own containment verdict at final verification', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dispatch-live-boundary-per-root-'));
+    const first = join(root, 'first');
+    const second = join(root, 'second');
+    const providerHome = join(root, 'provider');
+    const violations: string[] = [];
+    try {
+      await Promise.all([mkdir(first), mkdir(second), mkdir(providerHome)]);
+      const boundary = new DispatchLiveBoundary({ emit: async () => undefined, onViolation: (reason) => violations.push(reason) });
+      const firstLease = await boundary.acquire({
+        liveCheckout: first, providerHome, provider: 'claude',
+        probe: async () => ({ contained: true, evidence: 'first contained' }),
+      });
+      const secondLease = await boundary.acquire({
+        liveCheckout: second, providerHome, provider: 'claude',
+        probe: async () => ({ contained: false, reason: 'second unproven' }),
+      });
+      await writeFile(join(second, 'escaped.txt'), 'drift');
+      await boundary.end();
+      await firstLease.release();
+      await secondLease.release();
+      expect(violations).toHaveLength(1);
+      expect(violations[0]).toContain('second unproven');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   // Covers: task:2

@@ -312,8 +312,19 @@ describe('live self-host boundary', () => {
         fingerprintLiveCheckoutSurface(live),
         fingerprintProviderStateSurface(args),
       ]);
-      expect(liveSurface).toEqual({ surface: snapshot.surfaces[0], measurement: snapshot.measurements[0] });
-      expect(providerSurface).toEqual({ surface: snapshot.surfaces[1], measurement: snapshot.measurements[1] });
+      const withoutElapsed = ({ elapsedMs: _elapsedMs, ...measurement }: { elapsedMs: number; label: string; fileCount: number }) => measurement;
+      expect({ surface: liveSurface.surface, measurement: withoutElapsed(liveSurface.measurement) }).toEqual({
+        surface: snapshot.surfaces[0],
+        measurement: withoutElapsed(snapshot.measurements[0]),
+      });
+      expect({ surface: providerSurface.surface, measurement: withoutElapsed(providerSurface.measurement) }).toEqual({
+        surface: snapshot.surfaces[1],
+        measurement: withoutElapsed(snapshot.measurements[1]),
+      });
+      for (const measurement of [...snapshot.measurements, liveSurface.measurement, providerSurface.measurement]) {
+        expect(Number.isFinite(measurement.elapsedMs)).toBe(true);
+        expect(measurement.elapsedMs).toBeGreaterThanOrEqual(0);
+      }
     } finally {
       await rm(root, { recursive: true, force: true });
     }
