@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   DAEMON_OTEL_SIGHUP_STOP_TIMEOUT_MS,
   installDaemonOtelSighupHandler,
+  installDaemonOtelSigintHandler,
   stopDispatchVisualizer,
   type DaemonProcessAdapter,
 } from '../src/daemon-cli.js';
@@ -277,5 +278,29 @@ describe('Task 18: daemon OTel SIGHUP wiring', () => {
     await vi.waitFor(() => expect(probe.kill).toHaveBeenCalledWith(481, 'SIGHUP'));
     await handling;
     expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it('stops every active dispatch visualizer on SIGINT before re-raising SIGINT through the injected process adapter', async () => {
+    const probe = processProbe();
+    const first = { stop: vi.fn(async () => void probe.calls.push('stop:first')) };
+    const second = { stop: vi.fn(async () => void probe.calls.push('stop:second')) };
+    const awaitStop = vi.fn(async (operation: Promise<void>, timeoutMs: number) => {
+      expect(timeoutMs).toBe(DAEMON_OTEL_SIGHUP_STOP_TIMEOUT_MS);
+      return operation;
+    });
+
+    installDaemonOtelSigintHandler({
+      activeDispatchVisualizers: new Set([first, second]),
+      processAdapter: probe.adapter,
+      awaitStop,
+    });
+
+    // The fake process boundary owns registration and the re-raise; no real
+    // signal reaches the test process.
+    expect(probe.adapter.on).toHaveBeenCalledWith('SIGINT', expect.any(Function));
+    await probe.listeners.get('SIGINT')!();
+
+    expect(awaitStop).toHaveBeenCalledOnce();
+    expect(probe.calls).toEqual(['on:SIGINT', 'stop:first', 'stop:second', 'off:SIGINT', 'kill:481:SIGINT']);
   });
 });
