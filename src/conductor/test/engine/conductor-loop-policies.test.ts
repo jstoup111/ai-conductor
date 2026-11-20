@@ -1,13 +1,11 @@
 // Covers: task:1, task:2, task:3, task:4, task:5, task:9, task:11, task:12, task:21, task:31
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, readdir,} from 'fs/promises';
+import { mkdtemp, rm, readdir } from 'fs/promises';
 import { basename, join } from 'path';
 import { tmpdir } from 'os';
 
 vi.mock('execa', () => ({
-  execa: vi.fn(() =>
-    Promise.resolve({ stdout: '', stderr: '', exitCode: 0 })
-  ),
+  execa: vi.fn(() => Promise.resolve({ stdout: '', stderr: '', exitCode: 0 })),
 }));
 vi.mock('../../src/engine/self-host/operator-credentials.js', () => ({
   readOperatorCredentialsState: vi.fn().mockResolvedValue('fresh'),
@@ -36,22 +34,13 @@ vi.mock('../../src/engine/kickback-ledger.js', async (importOriginal) => {
 });
 import { execa } from 'execa';
 import * as projectPrelude from '../../src/engine/project-prelude.js';
-import type { ConductState,} from '../../src/types/index.js';
+import type { ConductState } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
-import type { StepName,} from '../../src/types/index.js';
+import type { StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
-import {
-  ALL_STEPS,
-  STEP_GROUPS,
-  VALIDATION_GROUP,
-  getGroupForStep,
-  tryGetStepIndex,
-} from '../../src/engine/steps.js';
-import {
-  buildRetryHint,
-  appendRemediationTasks,
-} from '../../src/engine/conductor.js';
+import { ALL_STEPS, STEP_GROUPS, VALIDATION_GROUP, getGroupForStep, tryGetStepIndex } from '../../src/engine/steps.js';
+import { buildRetryHint, appendRemediationTasks } from '../../src/engine/conductor.js';
 import { Conductor } from '../test-conductor.js';
 import type { StepRunner, StepRunResult, StepRunOptions } from '../../src/engine/conductor.js';
 import type { GroupBranchLifecycleObserver } from '../../src/engine/group-core.js';
@@ -61,29 +50,19 @@ import { writeFile, mkdir, readFile } from 'fs/promises';
 import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 import { validatePlanDoneWhen } from '../../src/engine/plan-done-when.js';
 import { AuditTrailWriter } from '../../src/engine/audit-trail.js';
-import {
-  checkStepCompletion,
-} from '../../src/engine/artifacts.js';
+import { checkStepCompletion } from '../../src/engine/artifacts.js';
 import * as artifactModule from '../../src/engine/artifacts.js';
 import * as rebaseModule from '../../src/engine/rebase.js';
-import {
-  CLAUDE_MODEL_POLICY,
-  CODEX_MODEL_POLICY,
-} from '../../src/engine/provider-model-policy.js';
+import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
-import { parseChildId } from '../../src/engine/child-context.js';
+import { parseChildId, type ChildId } from '../../src/engine/child-context.js';
 import { persistFixtureProjectedRemediationPlan } from './remediation-plan-fixtures.js';
-import type {
-  ExecuteProviderCandidatesInput,
-  ProviderExecutionResult,
-} from '../../src/engine/provider-execution.js';
+import type { ExecuteProviderCandidatesInput, ProviderExecutionResult } from '../../src/engine/provider-execution.js';
 
-import type {
-  LLMProvider,
-} from '../../src/execution/llm-provider.js';
+import type { LLMProvider } from '../../src/execution/llm-provider.js';
 
 const NOOP_GROUP_BRANCH_LIFECYCLE_OBSERVER: GroupBranchLifecycleObserver = {
   onAdmitted: () => undefined,
@@ -120,7 +99,6 @@ const RED_EVIDENCE_JSON = JSON.stringify({
   intentRationale: 'The feature acceptance spec executed and failed before implementation.',
 });
 
-
 describe('recovery retry budget', () => {
   let dir: string;
   let statePath: string;
@@ -135,7 +113,10 @@ describe('recovery retry budget', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  function failThenSucceedRunner(failStep: StepName, succeedAfter: number): { runner: StepRunner; calls: () => number } {
+  function failThenSucceedRunner(
+    failStep: StepName,
+    succeedAfter: number,
+  ): { runner: StepRunner; calls: () => number } {
     let count = 0;
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName) => {
@@ -149,9 +130,17 @@ describe('recovery retry budget', () => {
 
   it('passes RecoveryContext with recoveryCount=0 on first recovery entry', async () => {
     await writeState(statePath, {
-      worktree: 'done', memory: 'done', explore: 'done', complexity: 'done', stories: 'done',
-      conflict_check: 'done', plan: 'done', coherence_check: 'done', architecture_diagram: 'done',
-      architecture_review: 'done', writing_system_tests: 'done',
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      coherence_check: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      writing_system_tests: 'done',
     } as ConductState);
     const { runner } = failThenSucceedRunner('build', Infinity);
     const onRecovery = vi.fn().mockResolvedValue('quit' as const);
@@ -176,9 +165,17 @@ describe('recovery retry budget', () => {
 
   it('marks retriesExhausted after MAX_RECOVERY_RETRIES cycles', async () => {
     await writeState(statePath, {
-      worktree: 'done', memory: 'done', explore: 'done', complexity: 'done', stories: 'done',
-      conflict_check: 'done', plan: 'done', coherence_check: 'done', architecture_diagram: 'done',
-      architecture_review: 'done', writing_system_tests: 'done',
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      coherence_check: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      writing_system_tests: 'done',
     } as ConductState);
     const { runner } = failThenSucceedRunner('build', Infinity);
 
@@ -211,9 +208,17 @@ describe('recovery retry budget', () => {
 
   it('starts recovery retries fresh for a newly active child', async () => {
     await writeState(statePath, {
-      worktree: 'done', memory: 'done', explore: 'done', complexity: 'done', stories: 'done',
-      conflict_check: 'done', plan: 'done', coherence_check: 'done', architecture_diagram: 'done',
-      architecture_review: 'done', writing_system_tests: 'done',
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      coherence_check: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      writing_system_tests: 'done',
     } as ConductState);
     const { runner } = failThenSucceedRunner('build', Infinity);
     const child1 = parseChildId(1)!;
@@ -250,9 +255,17 @@ describe('recovery retry budget', () => {
 
   it('does not infinite-loop when a non-conforming onRecovery returns retry after exhaustion', async () => {
     await writeState(statePath, {
-      worktree: 'done', memory: 'done', explore: 'done', complexity: 'done', stories: 'done',
-      conflict_check: 'done', plan: 'done', coherence_check: 'done', architecture_diagram: 'done',
-      architecture_review: 'done', writing_system_tests: 'done',
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      coherence_check: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      writing_system_tests: 'done',
     } as ConductState);
     const { runner } = failThenSucceedRunner('build', Infinity);
 
@@ -330,7 +343,9 @@ describe('buildRetryHint', () => {
     const reason = 'uncommitted paths: src/engine/conductor.ts, src/engine/artifacts.ts';
     const hint = buildRetryHint('build', reason, 'uncommitted');
 
-    expect(hint).toMatch(/^(?=[\s\S]*src\/engine\/conductor\.ts)(?=[\s\S]*src\/engine\/artifacts\.ts)(?=[\s\S]*\bcommit (the )?uncommitted paths\b)(?![\s\S]*Finish the work now)[\s\S]*$/i);
+    expect(hint).toMatch(
+      /^(?=[\s\S]*src\/engine\/conductor\.ts)(?=[\s\S]*src\/engine\/artifacts\.ts)(?=[\s\S]*\bcommit (the )?uncommitted paths\b)(?![\s\S]*Finish the work now)[\s\S]*$/i,
+    );
   });
 
   it('cites manual-test-record for a missing manual_test marker', () => {
@@ -376,7 +391,8 @@ describe('skip-already-resolved steps', () => {
       complexity: 'done',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done', coherence_check: 'done',
+      plan: 'done',
+      coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -413,7 +429,8 @@ describe('skip-already-resolved steps', () => {
       complexity: 'done',
       complexity_tier: 'S',
       stories: 'done',
-      plan: 'done', coherence_check: 'done',
+      plan: 'done',
+      coherence_check: 'done',
       acceptance_specs: 'skipped',
     } as ConductState);
 
@@ -441,7 +458,8 @@ describe('skip-already-resolved steps', () => {
       complexity_tier: 'L',
       stories: 'done',
       conflict_check: 'done',
-      plan: 'done', coherence_check: 'done',
+      plan: 'done',
+      coherence_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
       acceptance_specs: 'done',
@@ -476,7 +494,8 @@ describe('skip-already-resolved steps', () => {
       conflict_check: 'done',
       architecture_diagram: 'done',
       architecture_review: 'done',
-      plan: 'done', coherence_check: 'done',
+      plan: 'done',
+      coherence_check: 'done',
     } as ConductState);
 
     const calledSteps: StepName[] = [];
@@ -553,11 +572,7 @@ describe('build-step stall circuit breaker', () => {
   // every gate evaluation — so these tests' notion of "progress" must be
   // evidence-backed completions, or the stall breaker would (correctly) fire
   // on all of them.
-  async function writeTaskStatus(
-    completed: number,
-    total: number,
-    titles: readonly string[] = [],
-  ): Promise<void> {
+  async function writeTaskStatus(completed: number, total: number, titles: readonly string[] = []): Promise<void> {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await mkdir(join(dir, '.docs/plans'), { recursive: true });
     const planLines: string[] = ['# Plan', ''];
@@ -672,15 +687,17 @@ describe('build-step stall circuit breaker', () => {
     }
 
     const identicalReason = retryReasons[0];
-    expect(artifactModule.classifyRetryDecision({
-      // BUILD itself retains its dedicated progress accounting; this guards
-      // the shared retry classifier's unchanged-reason comparison.
-      step: 'build_review',
-      completion: { done: false, reason: identicalReason },
-      attempt: 2,
-      priorReason: identicalReason,
-      inputsUnchanged: true,
-    })).toEqual({ decision: 'route', signal: 'identical-repeat' });
+    expect(
+      artifactModule.classifyRetryDecision({
+        // BUILD itself retains its dedicated progress accounting; this guards
+        // the shared retry classifier's unchanged-reason comparison.
+        step: 'build_review',
+        completion: { done: false, reason: identicalReason },
+        attempt: 2,
+        priorReason: identicalReason,
+        inputsUnchanged: true,
+      }),
+    ).toEqual({ decision: 'route', signal: 'identical-repeat' });
   });
 
   // Covers: task:12
@@ -705,10 +722,10 @@ describe('build-step stall circuit breaker', () => {
 
     await conductor.run();
 
-    const expected = ['build stalled: no task progress', ...titles.flatMap((title, index) => [
-      String(index + 1),
-      title,
-    ])];
+    const expected = [
+      'build stalled: no task progress',
+      ...titles.flatMap((title, index) => [String(index + 1), title]),
+    ];
     const [question, halt] = await Promise.all([
       readFile(join(dir, '.pipeline/build-stall-question.md'), 'utf8'),
       readFile(join(dir, '.pipeline/HALT'), 'utf8'),
@@ -823,10 +840,7 @@ describe('build-step stall circuit breaker', () => {
     const slug = basename(dir);
     const recordPath = join(dir, '.docs/halted', `${slug}.md`);
     await mkdir(join(dir, '.docs/halted'), { recursive: true });
-    await writeFile(
-      recordPath,
-      `# Halt: ${slug}\n\nStatus: halted\nClass: plan-gap\nStep: build\n`,
-    );
+    await writeFile(recordPath, `# Halt: ${slug}\n\nStatus: halted\nClass: plan-gap\nStep: build\n`);
 
     const runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn> } = {
       run: vi.fn().mockResolvedValue({ success: true }),
@@ -942,7 +956,9 @@ describe('build-step stall circuit breaker', () => {
     };
 
     const stallEvents: unknown[] = [];
-    events.on('build_stall', (e) => { stallEvents.push(e); });
+    events.on('build_stall', (e) => {
+      stallEvents.push(e);
+    });
 
     const onRecovery = vi.fn().mockResolvedValue('quit' as const);
     const conductor = new Conductor({
@@ -989,9 +1005,7 @@ describe('build-step stall circuit breaker', () => {
       // Plan with 3 tasks, matching the writeTaskStatus() heading convention.
       await writeFile(
         join(dir, '.docs/plans/2026-04-18-plan.md'),
-        ['# Plan', '', '### Task 1: Step 1', '', '### Task 2: Step 2', '', '### Task 3: Step 3', ''].join(
-          '\n',
-        ),
+        ['# Plan', '', '### Task 1: Step 1', '', '### Task 2: Step 2', '', '### Task 3: Step 3', ''].join('\n'),
       );
       await execa('git', ['add', '.docs/plans/2026-04-18-plan.md'], { cwd: dir });
       await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
@@ -1024,7 +1038,9 @@ describe('build-step stall circuit breaker', () => {
       };
 
       const stallEvents: unknown[] = [];
-      events.on('build_stall', (e) => { stallEvents.push(e); });
+      events.on('build_stall', (e) => {
+        stallEvents.push(e);
+      });
 
       const onRecovery = vi.fn().mockResolvedValue('quit' as const);
       const conductor = new Conductor({
@@ -1045,8 +1061,8 @@ describe('build-step stall circuit breaker', () => {
       expect(stallEvents).toHaveLength(0);
       expect(runner.runInteractive).not.toHaveBeenCalled();
     } finally {
-      vi.mocked(execa).mockImplementation(() =>
-        Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }) as unknown as ReturnType<typeof execa>,
+      vi.mocked(execa).mockImplementation(
+        () => Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }) as unknown as ReturnType<typeof execa>,
       );
     }
   });
@@ -1062,9 +1078,7 @@ describe('build-step stall circuit breaker', () => {
       return { stdout: result.stdout };
     };
     let headSha = 'base-head';
-    const currentCommitSha = vi.spyOn(projectPrelude, 'currentCommitSha').mockImplementation(
-      async () => headSha,
-    );
+    const currentCommitSha = vi.spyOn(projectPrelude, 'currentCommitSha').mockImplementation(async () => headSha);
     try {
       await seedAllArtifactsExceptTaskStatus();
       await writeTaskStatus(0, 1);
@@ -1135,8 +1149,8 @@ describe('build-step stall circuit breaker', () => {
       expect(onRecovery).toHaveBeenCalledWith('build', false, expect.any(Object));
     } finally {
       currentCommitSha.mockRestore();
-      vi.mocked(execa).mockImplementation(() =>
-        Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }) as unknown as ReturnType<typeof execa>,
+      vi.mocked(execa).mockImplementation(
+        () => Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }) as unknown as ReturnType<typeof execa>,
       );
     }
   });
@@ -1163,9 +1177,7 @@ describe('build-step stall circuit breaker', () => {
       return { stdout: result.stdout };
     };
     let headSha = 'base-head';
-    const currentCommitSha = vi.spyOn(projectPrelude, 'currentCommitSha').mockImplementation(
-      async () => headSha,
-    );
+    const currentCommitSha = vi.spyOn(projectPrelude, 'currentCommitSha').mockImplementation(async () => headSha);
     try {
       await seedAllArtifactsExceptTaskStatus();
       await writeTaskStatus(0, 1);
@@ -1227,13 +1239,15 @@ describe('build-step stall circuit breaker', () => {
         run: vi.fn(async (step, _state, options) => {
           if (step === 'remediate') {
             remediationCalls += 1;
-            await persistFixtureProjectedRemediationPlan(dir, options, [{
-              id: 'stall:dirty-tree',
-              disposition: 'halt',
-              category: 'product-scope',
-              rationale: 'The uncommitted repair needs a human decision.',
-              tasks: [],
-            }]);
+            await persistFixtureProjectedRemediationPlan(dir, options, [
+              {
+                id: 'stall:dirty-tree',
+                disposition: 'halt',
+                category: 'product-scope',
+                rationale: 'The uncommitted repair needs a human decision.',
+                tasks: [],
+              },
+            ]);
           }
           return { success: true };
         }),
@@ -1271,8 +1285,8 @@ describe('build-step stall circuit breaker', () => {
       });
     } finally {
       currentCommitSha.mockRestore();
-      vi.mocked(execa).mockImplementation(() =>
-        Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }) as unknown as ReturnType<typeof execa>,
+      vi.mocked(execa).mockImplementation(
+        () => Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }) as unknown as ReturnType<typeof execa>,
       );
     }
   });
@@ -1411,7 +1425,6 @@ describe('build-step stall circuit breaker', () => {
       expect(buildRetries[0].after! >= buildRetries[0].before!).toBeTruthy();
     }
   });
-
 });
 
 // Task 14: Engine records the active plan path
@@ -1526,8 +1539,8 @@ describe('engine/conductor: engine-recorded plan path controls seed discovery (H
 
     // Error should have been logged
     expect(consoleErrorSpy).toHaveBeenCalled();
-    const errorCalls = consoleErrorSpy.mock.calls.map(c => String(c[0]));
-    const hasAmbiguityMsg = errorCalls.some(msg => msg.match(/ambiguous|multiple.*plan/i));
+    const errorCalls = consoleErrorSpy.mock.calls.map((c) => String(c[0]));
+    const hasAmbiguityMsg = errorCalls.some((msg) => msg.match(/ambiguous|multiple.*plan/i));
     expect(hasAmbiguityMsg).toBe(true);
 
     consoleErrorSpy.mockRestore();
@@ -1574,10 +1587,7 @@ describe('engine/conductor: pipeline-exit false-completion regression', () => {
       join(dir, '.pipeline/task-status.json'),
       JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
     );
-    await writeFile(
-      join(dir, '.pipeline/halt-user-input-required'),
-      'user requested exit; 1 regression in test_X',
-    );
+    await writeFile(join(dir, '.pipeline/halt-user-input-required'), 'user requested exit; 1 regression in test_X');
     // Pre-create earlier-step artifacts so the conductor doesn't fail
     // before reaching build.
     const preFixtures: Array<[string, string]> = [
@@ -1610,10 +1620,7 @@ describe('engine/conductor: pipeline-exit false-completion regression', () => {
     // failing even after the conductor's stall handler clears it.
     const runner: StepRunner = {
       run: vi.fn(async () => {
-        await writeFile(
-          join(dir, '.pipeline/halt-user-input-required'),
-          'user requested exit; 1 regression in test_X',
-        );
+        await writeFile(join(dir, '.pipeline/halt-user-input-required'), 'user requested exit; 1 regression in test_X');
         return { success: true };
       }),
       // The stall handler opens this REPL on the build step. The mock is
@@ -1688,9 +1695,7 @@ describe('engine/conductor: pipeline-exit false-completion regression', () => {
 
     await conductor.run();
 
-    expect(
-      (runner as unknown as { sweepObserved?: boolean }).sweepObserved,
-    ).toBe(true);
+    expect((runner as unknown as { sweepObserved?: boolean }).sweepObserved).toBe(true);
   });
 });
 
@@ -2312,9 +2317,7 @@ Initial task content.
       const updatedStatusContent = await readFile(statusPath, 'utf-8');
       const updatedStatus = JSON.parse(updatedStatusContent);
 
-      const completedTask = updatedStatus.tasks.find(
-        (t: Record<string, unknown>) => t.id === 'rem-fr10-1',
-      );
+      const completedTask = updatedStatus.tasks.find((t: Record<string, unknown>) => t.id === 'rem-fr10-1');
       expect(completedTask).toBeDefined();
       expect(completedTask.status).toBe('completed');
       expect(completedTask.commit).toBe('abc1234');
@@ -2351,14 +2354,20 @@ describe('post-rebase build closure (Task 11)', () => {
     await mkdir(join(dir, '.docs/plans'), { recursive: true });
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeFile(join(dir, '.docs/plans/feature.md'), '# Plan\n\n### Task 1: Commit it\n');
-    await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({
-      tasks: [{ id: 1, status: 'completed' }],
-    }));
-    await writeFile(join(dir, '.pipeline/task-evidence.json'), JSON.stringify({
-      evidenceStamps: { '1': { sha: 'a'.repeat(40), form: 'trailer' } },
-      noEvidenceAttempts: 0,
-      migrationGrandfather: [],
-    }));
+    await writeFile(
+      join(dir, '.pipeline/task-status.json'),
+      JSON.stringify({
+        tasks: [{ id: 1, status: 'completed' }],
+      }),
+    );
+    await writeFile(
+      join(dir, '.pipeline/task-evidence.json'),
+      JSON.stringify({
+        evidenceStamps: { '1': { sha: 'a'.repeat(40), form: 'trailer' } },
+        noEvidenceAttempts: 0,
+        migrationGrandfather: [],
+      }),
+    );
 
     const state = { build: 'done', manual_test: 'skipped' } as ConductState;
     const git: GitRunner = async (args) => ({
@@ -2382,11 +2391,7 @@ describe('post-rebase build closure (Task 11)', () => {
     performRebase.mockResolvedValueOnce(changed);
 
     try {
-      const closure = await checkStepCompletion(
-        dir,
-        'build',
-        await (conductor as any).completionCtx(state),
-      );
+      const closure = await checkStepCompletion(dir, 'build', await (conductor as any).completionCtx(state));
       await (conductor as any).runRebaseStep(state);
       const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
 
@@ -2458,11 +2463,114 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
     await writeState(statePath, state as unknown as ConductState);
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await mkdir(join(dir, '.docs/plans'), { recursive: true });
-    await writeFile(
-      join(dir, '.docs/plans/stall-guard-test.md'),
-      '# Plan\n\n### Task 1: Step 1\n',
-    );
+    await writeFile(join(dir, '.docs/plans/stall-guard-test.md'), '# Plan\n\n### Task 1: Step 1\n');
   }
+
+  async function captureStallRemediation(
+    child: ChildId | undefined,
+    question: string,
+    beforeBuild?: () => Promise<void>,
+  ): Promise<{ planRemediation: ReturnType<typeof vi.fn>; capturedEvidence: () => string | undefined }> {
+    await seedToBuildStep();
+
+    let evidenceAtDispatch: string | undefined;
+    const expectedPath =
+      child === undefined ? '.pipeline/build-stall-question.md' : `.pipeline/children/${child}/build-stall-question.md`;
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        if (step === 'build') {
+          await beforeBuild?.();
+          await writeFile(join(dir, '.pipeline/halt-user-input-required'), question);
+          await writeFile(
+            join(dir, '.pipeline/task-status.json'),
+            JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+          );
+        }
+        return { success: true } as StepRunResult;
+      }),
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+    });
+    const planRemediation = vi.fn(async () => {
+      evidenceAtDispatch = await readFile(join(dir, expectedPath), 'utf8');
+      return { kind: 'halt' as const, detail: 'fixture stops after observing dispatch' };
+    });
+    const privateConductor = conductor as unknown as {
+      activeRegionChild: ChildId | undefined;
+      planRemediation: typeof planRemediation;
+    };
+    privateConductor.activeRegionChild = child;
+    privateConductor.planRemediation = planRemediation;
+
+    await conductor.run();
+    return { planRemediation, capturedEvidence: () => evidenceAtDispatch };
+  }
+
+  // Covers: task:4
+  it('captures child 3 stall evidence in its region and dispatches that path to remediation', async () => {
+    const child3 = parseChildId(3)!;
+    const result = await captureStallRemediation(child3, 'Which repair unblocks child 3?');
+
+    expect(result.capturedEvidence()).toBe('Which repair unblocks child 3?');
+    expect(result.planRemediation).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.stringContaining('Which repair unblocks child 3?'),
+      expect.objectContaining({
+        source: 'build_stall',
+        evidence: [{ gate: 'build', evidenceFile: '.pipeline/children/3/build-stall-question.md' }],
+      }),
+    );
+  });
+
+  // Covers: task:4
+  it('keeps child 3 stall evidence isolated when child 4 dispatches a different question', async () => {
+    const child3 = parseChildId(3)!;
+    const child4 = parseChildId(4)!;
+    const result = await captureStallRemediation(child4, 'Which repair unblocks child 4?', async () => {
+      await mkdir(join(dir, '.pipeline', 'children', String(child3)), { recursive: true });
+      await writeFile(
+        join(dir, '.pipeline', 'children', String(child3), 'build-stall-question.md'),
+        'Child 3 remains pending.',
+      );
+    });
+
+    expect(result.capturedEvidence()).toBe('Which repair unblocks child 4?');
+    expect(result.planRemediation).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.stringContaining('Which repair unblocks child 4?'),
+      expect.objectContaining({
+        evidence: [{ gate: 'build', evidenceFile: '.pipeline/children/4/build-stall-question.md' }],
+      }),
+    );
+    await expect(
+      readFile(join(dir, '.pipeline', 'children', String(child3), 'build-stall-question.md'), 'utf8'),
+    ).resolves.toBe('Child 3 remains pending.');
+  });
+
+  // Covers: task:4
+  it('keeps a no-children stall question at the legacy feature-level path', async () => {
+    const result = await captureStallRemediation(undefined, 'Which repair unblocks this feature?');
+
+    expect(result.capturedEvidence()).toBe('Which repair unblocks this feature?');
+    expect(result.planRemediation).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.stringContaining('Which repair unblocks this feature?'),
+      expect.objectContaining({
+        evidence: [{ gate: 'build', evidenceFile: '.pipeline/build-stall-question.md' }],
+      }),
+    );
+  });
 
   it('interactive mode with halt marker → runInteractive called, remediate NOT dispatched', async () => {
     await seedToBuildStep();
@@ -2473,10 +2581,7 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
         dispatchedSteps.push(step);
         if (step === 'build') {
           // Write halt marker (this would normally trigger remediate in daemon mode)
-          await writeFile(
-            join(dir, '.pipeline/halt-user-input-required'),
-            STALL_QUESTION,
-          );
+          await writeFile(join(dir, '.pipeline/halt-user-input-required'), STALL_QUESTION);
           // Write pending tasks to fail the gate
           await writeFile(
             join(dir, '.pipeline/task-status.json'),
@@ -2493,7 +2598,7 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
       events,
       projectRoot: dir,
       mode: 'interactive', // ← interactive mode
-      daemon: false,        // ← NOT daemon mode
+      daemon: false, // ← NOT daemon mode
       verifyArtifacts: true,
       maxRetries: 1,
     });
@@ -2620,10 +2725,7 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
 
     // A synthesized prompt must be written for /remediate to consume,
     // capturing the signals that produced the no_task_progress verdict.
-    const evidenceContent = await readFile(
-      join(dir, '.pipeline/build-stall-question.md'),
-      'utf-8',
-    );
+    const evidenceContent = await readFile(join(dir, '.pipeline/build-stall-question.md'), 'utf-8');
     expect(evidenceContent).toContain('pending');
     expect(evidenceContent).toContain('0');
     // #773 Task 13: the synthesized prompt no longer enriches with
@@ -2674,13 +2776,15 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
           remediateCallCount.push(buildAttemptCount);
           // Route back to build every time — the stall never actually
           // resolves, forcing the shared budget to exhaust.
-          await persistFixtureProjectedRemediationPlan(dir, options, [{
-            id: `stall:${buildAttemptCount}`,
-            disposition: 'build',
-            category: null,
-            rationale: `Answer ${buildAttemptCount}`,
-            tasks: [],
-          }]);
+          await persistFixtureProjectedRemediationPlan(dir, options, [
+            {
+              id: `stall:${buildAttemptCount}`,
+              disposition: 'build',
+              category: null,
+              rationale: `Answer ${buildAttemptCount}`,
+              tasks: [],
+            },
+          ]);
         }
         return { success: true } as StepRunResult;
       }),
@@ -2968,10 +3072,7 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
 
     // Create a plan file
     await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
-    await writeFile(
-      join(dir, '.docs/plans/auto-park-test.md'),
-      '# Plan\n\n- Task 1\n',
-    );
+    await writeFile(join(dir, '.docs/plans/auto-park-test.md'), '# Plan\n\n- Task 1\n');
 
     // Seed task evidence with no-evidence counter at threshold (3)
     const evidence = await createTaskEvidence(dir);
@@ -3028,10 +3129,7 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
       await writeState(statePath, state as unknown as ConductState);
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await mkdir(join(dir, '.docs/plans'), { recursive: true });
-      await writeFile(
-        join(dir, `.docs/plans/${featureDesc}.md`),
-        '# Plan\n\n### Task 1: Step 1\n',
-      );
+      await writeFile(join(dir, `.docs/plans/${featureDesc}.md`), '# Plan\n\n### Task 1: Step 1\n');
     }
 
     it('build exhausts retries after a no_task_progress stall history → HALT names no-task-progress, not the generic "retries exhausted" message', async () => {
@@ -3198,10 +3296,7 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
       await writeState(statePath, state as unknown as ConductState);
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await mkdir(join(dir, '.docs/plans'), { recursive: true });
-      await writeFile(
-        join(dir, `.docs/plans/${featureDesc}.md`),
-        '# Plan\n\n### Task 1: Step 1\n',
-      );
+      await writeFile(join(dir, `.docs/plans/${featureDesc}.md`), '# Plan\n\n### Task 1: Step 1\n');
     }
 
     it('interactive mode still reaches the REPL stall handoff on a no_task_progress stall — no /remediate dispatch and no auto-park (#569)', async () => {
@@ -3225,7 +3320,9 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
       };
 
       const parkEvents: unknown[] = [];
-      events.on('auto_park', (e) => { parkEvents.push(e); });
+      events.on('auto_park', (e) => {
+        parkEvents.push(e);
+      });
       const onRecovery = vi.fn().mockResolvedValue('quit' as const);
 
       const conductor = new Conductor({
@@ -3286,10 +3383,7 @@ describe('HALT content robust to hostile question text (Task 12)', () => {
     await writeState(statePath, state as unknown as ConductState);
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await mkdir(join(dir, '.docs/plans'), { recursive: true });
-    await writeFile(
-      join(dir, '.docs/plans/halt-robustness-test.md'),
-      '# Plan\n\n### Task 1: Step 1\n',
-    );
+    await writeFile(join(dir, '.docs/plans/halt-robustness-test.md'), '# Plan\n\n### Task 1: Step 1\n');
   }
 
   it('question with backticks/quotes/special chars → readHaltReason returns full first line', async () => {
@@ -3300,10 +3394,7 @@ describe('HALT content robust to hostile question text (Task 12)', () => {
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName) => {
         if (step === 'build') {
-          await writeFile(
-            join(dir, '.pipeline/halt-user-input-required'),
-            testQuestion,
-          );
+          await writeFile(join(dir, '.pipeline/halt-user-input-required'), testQuestion);
           await writeFile(
             join(dir, '.pipeline/task-status.json'),
             JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
@@ -3361,10 +3452,7 @@ describe('HALT content robust to hostile question text (Task 12)', () => {
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName) => {
         if (step === 'build') {
-          await writeFile(
-            join(dir, '.pipeline/halt-user-input-required'),
-            longQuestion,
-          );
+          await writeFile(join(dir, '.pipeline/halt-user-input-required'), longQuestion);
           await writeFile(
             join(dir, '.pipeline/task-status.json'),
             JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
@@ -3416,10 +3504,7 @@ describe('HALT content robust to hostile question text (Task 12)', () => {
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName) => {
         if (step === 'build') {
-          await writeFile(
-            join(dir, '.pipeline/halt-user-input-required'),
-            STALL_QUESTION,
-          );
+          await writeFile(join(dir, '.pipeline/halt-user-input-required'), STALL_QUESTION);
           await writeFile(
             join(dir, '.pipeline/task-status.json'),
             JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
@@ -3467,18 +3552,14 @@ describe('HALT content robust to hostile question text (Task 12)', () => {
   });
 
   it('HALT file not corrupted by special characters in question', async () => {
-    const specialCharsQuestion =
-      'Use emoji? 🚀 Newline control? Colors? Question?';
+    const specialCharsQuestion = 'Use emoji? 🚀 Newline control? Colors? Question?';
 
     await seedToBuildStep();
 
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName) => {
         if (step === 'build') {
-          await writeFile(
-            join(dir, '.pipeline/halt-user-input-required'),
-            specialCharsQuestion,
-          );
+          await writeFile(join(dir, '.pipeline/halt-user-input-required'), specialCharsQuestion);
           await writeFile(
             join(dir, '.pipeline/task-status.json'),
             JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
@@ -3533,11 +3614,7 @@ describe('HALT content robust to hostile question text (Task 12)', () => {
 // or index-based lookups.
 describe('built-in SHIP validation group entry (Decision-1)', () => {
   it('exposes VALIDATION_GROUP with the three members in ADR order', () => {
-    expect(VALIDATION_GROUP.members).toEqual([
-      'manual_test',
-      'prd_audit',
-      'architecture_review_as_built',
-    ]);
+    expect(VALIDATION_GROUP.members).toEqual(['manual_test', 'prd_audit', 'architecture_review_as_built']);
   });
 
   it('positions the group after build review in ALL_STEPS ordering', () => {
@@ -3546,13 +3623,9 @@ describe('built-in SHIP validation group entry (Decision-1)', () => {
     expect(firstMemberIdx).toBe(buildReviewIdx + 1);
 
     // Members remain contiguous and in order in the underlying linear list.
-    const memberIndices = VALIDATION_GROUP.members.map(
-      (name) => ALL_STEPS.findIndex((s) => s.name === name),
-    );
+    const memberIndices = VALIDATION_GROUP.members.map((name) => ALL_STEPS.findIndex((s) => s.name === name));
     expect(memberIndices).toEqual([...memberIndices].sort((a, b) => a - b));
-    expect(memberIndices[memberIndices.length - 1] - memberIndices[0]).toBe(
-      VALIDATION_GROUP.members.length - 1,
-    );
+    expect(memberIndices[memberIndices.length - 1] - memberIndices[0]).toBe(VALIDATION_GROUP.members.length - 1);
   });
 
   it('registers VALIDATION_GROUP in STEP_GROUPS keyed by its name', () => {
@@ -3604,10 +3677,20 @@ describe('built-in SHIP validation group entry (Decision-1)', () => {
     const safetyDir = await mkdtemp(join(tmpdir(), 'conductor-safety-'));
     const safetyStatePath = join(safetyDir, 'conduct-state.json');
     await writeState(safetyStatePath, {
-      worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
-      stories: 'done', conflict_check: 'done', plan: 'done', coherence_check: 'done',
-      architecture_diagram: 'done', architecture_review: 'done', acceptance_specs: 'done',
-      complexity_tier: 'M', track: 'technical', feature_desc: 'safety-boundary',
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      coherence_check: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      acceptance_specs: 'done',
+      complexity_tier: 'M',
+      track: 'technical',
+      feature_desc: 'safety-boundary',
     } as ConductState);
     const runner = createMockStepRunner();
     const conductor = new Conductor({
@@ -3629,9 +3712,11 @@ describe('built-in SHIP validation group entry (Decision-1)', () => {
       } as HarnessConfig,
     });
 
-    await (conductor as unknown as {
-      runSelfBuildDispatch: (step: StepName, state: ConductState, retryHint?: string) => Promise<StepRunResult>;
-    }).runSelfBuildDispatch('build', {} as ConductState);
+    await (
+      conductor as unknown as {
+        runSelfBuildDispatch: (step: StepName, state: ConductState, retryHint?: string) => Promise<StepRunResult>;
+      }
+    ).runSelfBuildDispatch('build', {} as ConductState);
 
     expect(vi.mocked(runner.run)).not.toHaveBeenCalledWith('build', expect.anything(), expect.anything());
     await rm(safetyDir, { recursive: true, force: true });
@@ -3669,12 +3754,14 @@ describe('built-in SHIP validation group entry (Decision-1)', () => {
           withCandidateSafety: async (_candidate, invoke) => invoke(),
         },
       });
-      const executeOneShot = (runner as unknown as {
-        executeProviderAwareOneShot: (
-          step: StepName,
-          options: ExecuteProviderCandidatesInput['options'],
-        ) => Promise<ProviderExecutionResult | undefined>;
-      }).executeProviderAwareOneShot.bind(runner);
+      const executeOneShot = (
+        runner as unknown as {
+          executeProviderAwareOneShot: (
+            step: StepName,
+            options: ExecuteProviderCandidatesInput['options'],
+          ) => Promise<ProviderExecutionResult | undefined>;
+        }
+      ).executeProviderAwareOneShot.bind(runner);
 
       const initial = await runner.run('build', {} as ConductState, { attempt: 1 });
       const retry = await runner.run('build', {} as ConductState, { attempt: 2 });
@@ -3691,11 +3778,26 @@ describe('built-in SHIP validation group entry (Decision-1)', () => {
       const auxiliary = await executeOneShot('build_review', { prompt: 'review', cwd: projectRoot });
 
       expect({ initial, retry, resume, grouped, auxiliary }).toEqual({
-        initial: expect.objectContaining({ success: false, output: expect.stringContaining('Safety wrapper was not entered') }),
-        retry: expect.objectContaining({ success: false, output: expect.stringContaining('Safety wrapper was not entered') }),
-        resume: expect.objectContaining({ success: false, output: expect.stringContaining('Safety wrapper was not entered') }),
-        grouped: expect.objectContaining({ kind: 'permission-denied', reason: expect.stringContaining('Safety wrapper was not entered') }),
-        auxiliary: expect.objectContaining({ success: false, output: expect.stringContaining('Safety wrapper was not entered') }),
+        initial: expect.objectContaining({
+          success: false,
+          output: expect.stringContaining('Safety wrapper was not entered'),
+        }),
+        retry: expect.objectContaining({
+          success: false,
+          output: expect.stringContaining('Safety wrapper was not entered'),
+        }),
+        resume: expect.objectContaining({
+          success: false,
+          output: expect.stringContaining('Safety wrapper was not entered'),
+        }),
+        grouped: expect.objectContaining({
+          kind: 'permission-denied',
+          reason: expect.stringContaining('Safety wrapper was not entered'),
+        }),
+        auxiliary: expect.objectContaining({
+          success: false,
+          output: expect.stringContaining('Safety wrapper was not entered'),
+        }),
       });
     },
   );

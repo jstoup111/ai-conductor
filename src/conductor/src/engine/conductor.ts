@@ -56,6 +56,8 @@ import {
   markBuildReviewWorkOrderAttempted,
   readBuildReviewWorkOrder,
   readBuildReviewWorkOrderAttemptedCaseIds,
+  removeBuildReviewWorkOrder,
+  moveBuildReviewWorkOrderToChild,
 } from './build-review-work-order.js';
 import {
   appendRemediationCaseOutbox,
@@ -100,14 +102,19 @@ import {
 } from './remediation-case-reconciler.js';
 import { formatBuildReviewResolveCaseCommand } from './build-review-adjudication.js';
 import { buildRemediationProjection, type RemediationProjectionLimits } from './remediation-projection.js';
-import { readTypedRemediationPlan } from './remediation-plan-store.js';
+import { readTypedRemediationPlan, removeTypedRemediationPlan } from './remediation-plan-store.js';
 import type { AcceptedRemediationPlanDisposition } from './remediation-plan-contract.js';
 import { createGithubTrackerClient } from './tracker-client.js';
 import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
 import { executeGithubOperation } from './github-operations.js';
 import { createIntakeFilingOperations, fileIntakeIssue } from './engineer/intake/file-issue.js';
 import { authorizeGithubFeatureIssueCreation } from './github-creation-context.js';
-import { readRemediationCaseJudgement } from './remediation-case-artifact.js';
+import {
+  readRemediationCaseJudgement,
+  relocateRemediationCaseJudgement,
+  remediationCaseJudgementPath,
+  removeRemediationCaseJudgement,
+} from './remediation-case-artifact.js';
 import { parseBuildReviewBranchArtifact } from './build-review-artifacts.js';
 import type { BuildReviewFinding } from './build-review-domain.js';
 import { planContractPointers, priorAttemptPointers, readActivePlanPath } from './remediation-context-pointers.js';
@@ -282,6 +289,7 @@ import { settleDerivedNoOpHost } from './routing/routed-exit.js';
 import type { requestRoutedExit } from './routing/routed-exit.js';
 import { admitQueuedRevalidation } from './routing/queue-admission.js';
 import { persistOnActiveEventSpine } from './event-persister.js';
+import { classifyBuildStallStaleCitation, recordBuildStallStaleCitation } from './build-stall-stale-citation.js';
 import { childBranchFor, leafBranchFor } from './feature-branch-identity.js';
 import { emitRestackRefused } from './restack/restack-events.js';
 import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
@@ -509,6 +517,7 @@ import {
   clearHaltMarker,
   readHaltMarkerContent,
   writeStallQuestionEvidence,
+  removeStallQuestionEvidence,
   writeStallHalt,
   normalizeTasks,
   resolveTaskIds,
@@ -4912,6 +4921,9 @@ export class Conductor {
         config: this.config,
         git: this.prdAuditGit(),
         includedGates: remediationEvidenceSources.map((evidence) => evidence.gate),
+        ...(hintSource.source === 'build_stall'
+          ? { evidenceFile: remediationEvidenceSources.find((evidence) => evidence.gate === 'build')?.evidenceFile }
+          : {}),
         ...(prdAuditOverScopeRoute?.kind === 'refusal-rework' ? { refusals: prdAuditOverScopeRoute.refusals } : {}),
       },
       this.remediationProjectionLimitOverrides,
@@ -4944,6 +4956,7 @@ export class Conductor {
         runId: attemptId,
         retryReason: dispatchContext,
         remediationRequest: { mode: 'gap-plan', projection: projectionResult.projection },
+        ...(this.activeRegionChild === undefined ? {} : { child: this.activeRegionChild }),
       });
 
       // The native-schema preflight is a deterministic engine capability
@@ -4987,7 +5000,7 @@ export class Conductor {
         continue;
       }
 
-      typedPlan = await readTypedRemediationPlan(this.projectRoot, { attemptId });
+      typedPlan = await readTypedRemediationPlan(this.projectRoot, { attemptId }, {}, this.activeRegionChild);
       if (typedPlan.kind === 'present') break;
 
       lastFault =
@@ -6343,6 +6356,7 @@ export class Conductor {
     | { readonly kind: 'absent' }
     | { readonly kind: 'invalid'; readonly reason: string }
   > {
+    await this.adoptLegacyRemediationInputs();
     const featureRead = await readRemediationCaseStoreFeature(this.projectRoot, undefined, this.activeRegionChild);
     if (classifyBuildReviewDurableRead(featureRead) === 'absent') return { kind: 'absent' };
     if (!featureRead.ok) return { kind: 'invalid', reason: `case store ${featureRead.reason}` };
@@ -6359,6 +6373,14 @@ export class Conductor {
       ...(this.activeRegionChild === undefined ? {} : { child: this.activeRegionChild }),
     }).read();
     if (!state.ok) return { kind: 'invalid', reason: `case store ${state.reason}` };
+    if (!state.state.cases.some((record) => record.resolution === 'open')) {
+      // Retirement is deliberately non-fatal: a later dispatch repeats this
+      // check, while case settlement and its event outbox remain authoritative.
+      await Promise.all([
+        removeBuildReviewWorkOrder(this.projectRoot, undefined, this.activeRegionChild),
+        removeRemediationCaseJudgement(this.projectRoot, this.activeRegionChild),
+      ]).catch(() => undefined);
+    }
     const openActionCases = new Map(
       state.state.cases.flatMap((record) =>
         isBuildEligibleActionCase(record) ? [[record.id, record.effect.id] as const] : [],
@@ -6368,7 +6390,13 @@ export class Conductor {
     // Effect-bound, not feature-bound: an order carrying a stable effect this
     // feature's case store never recorded is foreign and must never reach BUILD
     // prompt construction, even when it names an open case of this feature.
-    const order = await readBuildReviewWorkOrder(this.projectRoot, feature, [...openActionCases.values()]);
+    const order = await readBuildReviewWorkOrder(
+      this.projectRoot,
+      feature,
+      [...openActionCases.values()],
+      undefined,
+      this.activeRegionChild,
+    );
     if (classifyBuildReviewDurableRead(order) === 'absent') {
       const openCase = state.state.cases.find(isBuildEligibleActionCase)!;
       return {
@@ -6378,16 +6406,65 @@ export class Conductor {
     }
     if (!order.ok) return { kind: 'invalid', reason: `work order ${order.reason}` };
     if (!order.workOrder.cases.some((row) => openActionCases.has(row.caseId))) return { kind: 'absent' };
-    const attempt = await markBuildReviewWorkOrderAttempted(this.projectRoot, feature);
+    const attempt = await markBuildReviewWorkOrderAttempted(
+      this.projectRoot,
+      feature,
+      undefined,
+      this.activeRegionChild,
+    );
     if (!attempt.ok) return { kind: 'invalid', reason: `work order attempt ${attempt.reason}` };
+    const judgementPath = remediationCaseJudgementPath(this.projectRoot, this.activeRegionChild);
+    const judgementContext = state.state.cases.some(isBuildEligibleActionCase)
+      ? `\n\nRemediation input you may read: ${relative(this.projectRoot, judgementPath)}`
+      : '';
     return {
       kind: 'ready',
       caseIds: order.workOrder.cases.map((row) => row.caseId).sort(),
-      context: appendBuildReviewWorkOrderContext(
-        retryHint ?? 'build_review adjudication: resume the durable remediation work order.',
-        order.workOrder,
-      ),
+      context:
+        appendBuildReviewWorkOrderContext(
+          retryHint ?? 'build_review adjudication: resume the durable remediation work order.',
+          order.workOrder,
+        ) + judgementContext,
     };
+  }
+
+  /** Move only a legacy flat order with a provable open child owner. */
+  private async adoptLegacyRemediationInputs(): Promise<void> {
+    if (this.activeRegionChild === undefined) return;
+    const children = await listExistingChildren(this.projectRoot);
+    let adopted = false;
+    for (const child of children) {
+      const feature = await readRemediationCaseStoreFeature(this.projectRoot, undefined, child);
+      if (!feature.ok || !feature.feature) continue;
+      const store = await new RemediationCaseStore(this.projectRoot, feature.feature, { child }).read();
+      if (!store.ok) continue;
+      const effectIds = store.state.cases.flatMap((record) =>
+        record.resolution === 'open' && record.effect.kind === 'action' ? [record.effect.id] : [],
+      );
+      if (effectIds.length === 0) continue;
+      const order = await readBuildReviewWorkOrder(this.projectRoot, feature.feature, effectIds);
+      if (order.ok) {
+        await moveBuildReviewWorkOrderToChild(this.projectRoot, child).catch(() => undefined);
+        adopted = true;
+        break;
+      }
+    }
+    if (!adopted) await removeBuildReviewWorkOrder(this.projectRoot).catch(() => undefined);
+    // These artifacts have no legacy owner encoding; a stacked retry must not
+    // borrow them from the feature root.
+    await Promise.all([
+      removeRemediationCaseJudgement(this.projectRoot),
+      removeTypedRemediationPlan(this.projectRoot),
+      removeStallQuestionEvidence(this.projectRoot),
+    ]).catch(() => undefined);
+  }
+
+  /** Terminal build-stall artifacts have already been copied into the HALT. */
+  private async retireTerminalBuildStallInputs(): Promise<void> {
+    await Promise.all([
+      removeTypedRemediationPlan(this.projectRoot, {}, this.activeRegionChild),
+      removeStallQuestionEvidence(this.projectRoot, this.activeRegionChild),
+    ]).catch(() => undefined);
   }
 
   /** Keep every adjudication gate on the same resolved configuration accessor. */
@@ -6595,6 +6672,16 @@ export class Conductor {
       };
     }
     // /ai-conductor:session-command-context
+    // Once every case in this region is settled, its BUILD-only handoff
+    // artifacts are no longer evidence for a later child.  Retiring them is
+    // best-effort: the resolved case store and its outbox are authoritative,
+    // and durableBuildReviewRetryContext will retry a failed removal.
+    if (!reconciled.state.cases.some((record) => record.resolution === 'open')) {
+      await Promise.all([
+        removeBuildReviewWorkOrder(this.projectRoot, undefined, this.activeRegionChild),
+        removeRemediationCaseJudgement(this.projectRoot, this.activeRegionChild),
+      ]).catch(() => undefined);
+    }
     await drainOutbox();
     return { kind: 'settled' };
   }
@@ -14681,7 +14768,11 @@ export class Conductor {
                     let effectiveQuestion: string | null = null;
                     if (stalled === 'halt_marker') {
                       const question = await readHaltMarkerContent(this.projectRoot);
-                      effectiveQuestion = await writeStallQuestionEvidence(this.projectRoot, question);
+                      effectiveQuestion = await writeStallQuestionEvidence(
+                        this.projectRoot,
+                        question,
+                        this.activeRegionChild,
+                      );
                       // Task 8: save the question for use in degraded remediation error handling
                       stallQuestion = question;
                     } else if (stalled === 'no_task_progress' && this.daemon && this.mode === 'auto') {
@@ -14696,9 +14787,65 @@ export class Conductor {
                         `Build stall: no forward progress (resolved ` +
                         `${resolvedTasksBefore} → ${resolvedTasksAfter} tasks).`;
                       const synthesized = `${lastBuildStallReason ?? progressPart}\n${reasonPart}.`;
-                      effectiveQuestion = await writeStallQuestionEvidence(this.projectRoot, synthesized);
+                      effectiveQuestion = await writeStallQuestionEvidence(
+                        this.projectRoot,
+                        synthesized,
+                        this.activeRegionChild,
+                      );
                     }
                     const isZeroWorkStall = stalled === 'no_task_progress';
+
+                    // A stacked child can cite a case which has already settled
+                    // (or belongs to a sibling).  That is not remediation work;
+                    // persist the bounded observation and give BUILD a precise
+                    // correction without consuming a remediation round.
+                    if (stalled === 'halt_marker' && effectiveQuestion && this.activeRegionChild !== undefined) {
+                      const caseStores = new Map<ChildId, Awaited<ReturnType<RemediationCaseStore['read']>>>();
+                      for (const child of await listExistingChildren(this.projectRoot)) {
+                        const feature = await readRemediationCaseStoreFeature(this.projectRoot, undefined, child);
+                        if (!feature.ok) {
+                          caseStores.set(child, { ok: false, reason: feature.reason });
+                          continue;
+                        }
+                        if (!feature.feature) continue;
+                        caseStores.set(
+                          child,
+                          await new RemediationCaseStore(this.projectRoot, feature.feature, { child }).read(),
+                        );
+                      }
+                      const citation = classifyBuildStallStaleCitation({
+                        question: effectiveQuestion,
+                        activeChild: this.activeRegionChild,
+                        caseStores,
+                      });
+                      if (citation.kind === 'stale') {
+                        const recorded = await recordBuildStallStaleCitation(
+                          this.projectRoot,
+                          this.events,
+                          citation,
+                          resolvedTasksAfter,
+                        );
+                        const mustHalt =
+                          recorded.kind === 'persist-failed' || (recorded.kind === 'recorded' && recorded.attempt >= 3);
+                        if (mustHalt) {
+                          const haltClass =
+                            recorded.kind === 'persist-failed' || recorded.attempt >= 4 ? 'needs-human' : 'mechanical';
+                          const detail =
+                            recorded.kind === 'persist-failed'
+                              ? 'Unable to record stale citation; clear this halt after checking the event spine.'
+                              : `Stale citation ${citation.caseId} is ${citation.state === 'resolved' ? 'settled' : `owned by child ${citation.ownerChild}`}; clear this halt after reviewing the stale citation.`;
+                          await writeStallHalt(this.projectRoot, effectiveQuestion, detail, this.events, haltClass);
+                          await this.retireTerminalBuildStallInputs();
+                          await this.emitLoopHalt(effectiveQuestion);
+                          return;
+                        }
+                        await clearHaltMarker(this.projectRoot);
+                        await removeStallQuestionEvidence(this.projectRoot, this.activeRegionChild);
+                        retryHint = `Case ${citation.caseId} is ${citation.state === 'resolved' ? 'settled' : `owned by child ${citation.ownerChild}`} and is not this session's work.`;
+                        attempt--;
+                        continue;
+                      }
+                    }
 
                     await clearHaltMarker(this.projectRoot);
                     // adr-2026-08-23-committed-halt-record §7 supersedes the
@@ -14743,6 +14890,7 @@ export class Conductor {
                           surfaceRemediation: true,
                           loopHaltReason: effectiveQuestion,
                         });
+                        await this.retireTerminalBuildStallInputs();
                         process.off('SIGINT', sigintHandler);
                         process.off('SIGTERM', sigterm);
                         return;
@@ -14764,7 +14912,15 @@ export class Conductor {
                           `Remediate build stall: ${effectiveQuestion}`,
                           {
                             source: isZeroWorkStall ? 'build_stall_zero_work' : 'build_stall',
-                            evidence: [{ gate: 'build', evidenceFile: '.pipeline/build-stall-question.md' }],
+                            evidence: [
+                              {
+                                gate: 'build',
+                                evidenceFile: relative(
+                                  this.projectRoot,
+                                  pipelinePathFor(this.projectRoot, 'build-stall-question.md', this.activeRegionChild),
+                                ),
+                              },
+                            ],
                           },
                         );
                       } catch (err) {
@@ -14785,6 +14941,7 @@ export class Conductor {
                           await writeStallHalt(this.projectRoot, effectiveQuestion, detail, this.events).catch(() => {
                             /* best-effort marker */
                           });
+                          await this.retireTerminalBuildStallInputs();
                           await this.persistPendingStateChanges(state, 'persist conductor transition');
                           const prUrl = await this.surfaceRemediationPr(haltContent);
                           await this.emitLoopHalt(effectiveQuestion, prUrl);
@@ -14814,6 +14971,7 @@ export class Conductor {
                               count: remediationRounds,
                             });
                             retryHint = outcome.hint;
+                            await removeStallQuestionEvidence(this.projectRoot, this.activeRegionChild);
                             attempt--;
                             continue;
                           }
@@ -14833,6 +14991,7 @@ export class Conductor {
                             await writeStallHalt(this.projectRoot, effectiveQuestion, detail, this.events).catch(() => {
                               /* best-effort marker */
                             });
+                            await this.retireTerminalBuildStallInputs();
                             await this.persistPendingStateChanges(state, 'persist conductor transition');
                             const prUrl = await this.surfaceRemediationPr(haltContent);
                             await this.emitLoopHalt(effectiveQuestion, prUrl);
@@ -14861,6 +15020,7 @@ export class Conductor {
                             ).catch(() => {
                               /* best-effort marker */
                             });
+                            await this.retireTerminalBuildStallInputs();
                             await this.persistPendingStateChanges(state, 'persist conductor transition');
                             const prUrl = await this.surfaceRemediationPr(haltContent);
                             await this.emitLoopHalt(effectiveQuestion, prUrl);
@@ -14884,6 +15044,7 @@ export class Conductor {
                             await writeStallHalt(this.projectRoot, effectiveQuestion, detail, this.events).catch(() => {
                               /* best-effort marker */
                             });
+                            await this.retireTerminalBuildStallInputs();
                             await this.persistPendingStateChanges(state, 'persist conductor transition');
                             const prUrl = await this.surfaceRemediationPr(haltContent);
                             await this.emitLoopHalt(effectiveQuestion, prUrl);
@@ -15666,6 +15827,9 @@ export class Conductor {
                                 state.session_started_at,
                               );
                               if (!judgement.ok) throw new Error(judgement.reason);
+                              if (this.activeRegionChild !== undefined) {
+                                await relocateRemediationCaseJudgement(this.projectRoot, this.activeRegionChild);
+                              }
                               return judgement.judgement;
                             },
                             // Task 18 Done-when 4: the deferral path is only reachable
@@ -16930,6 +17094,12 @@ export class Conductor {
             (await this.settleCleanBuildReviewSuccess(state, buildReviewAdjudicationSettlement)) === 'halted'
           ) {
             return;
+          }
+
+          if (step.name === 'build') {
+            // A gap plan is single-use routing authority. Once its target BUILD
+            // passes, retaining it would make a later retry read stale input.
+            await removeTypedRemediationPlan(this.projectRoot, {}, this.activeRegionChild).catch(() => undefined);
           }
 
           // For complexity + worktree, 'done' (and tier / worktree fields) are

@@ -236,14 +236,11 @@ describe('resolveSpoolDir', () => {
     const secondRequest = new Promise<void>((resolve) => {
       arrive = resolve;
     });
-    const collector = createServer(async (request, response) => {
-      received.push(String(request.headers.authorization));
-      for await (const _chunk of request) {
-        /* consume */
-      }
-      response.writeHead(200).end();
+    const fetch: typeof globalThis.fetch = async (_input, init) => {
+      received.push(String(new Headers(init?.headers).get('authorization')));
       if (received.length === 2) arrive();
-    });
+      return new Response('', { status: 200 });
+    };
     // Config validation reads the ambient environment once, while the runtime
     // gets its own live environment object. Keep the validation-only key
     // fixture-local so concurrently running tests cannot unset OTLP_TOKEN.
@@ -255,7 +252,7 @@ describe('resolveSpoolDir', () => {
         {
           otel: {
             exporter: 'otlp',
-            endpoint: await endpoint(collector),
+            endpoint: 'http://collector.test',
             headers: { authorization: { env: credentialVariable } },
             spool: { enabled: true },
           },
@@ -264,7 +261,7 @@ describe('resolveSpoolDir', () => {
       );
       if (!config.enabled || config.exporter !== 'otlp') throw new Error('expected OTLP configuration');
       const environment: NodeJS.ProcessEnv = { [credentialVariable]: 'first' };
-      const runtime = createSpoolRuntime(directory, config, undefined, { environment });
+      const runtime = createSpoolRuntime(directory, config, undefined, { environment, fetch });
       await runtime.store.write('traces', Buffer.from('first'));
       const draining = runtime.drainer.drainUntilStopped();
       try {

@@ -41,8 +41,8 @@ During BUILD, `.pipeline/prd-audit.json` is the typed PRD verdict authority (ADR
 `.pipeline/prd-audit.md` is its derived human report. `.pipeline/architecture-review-as-built.md`,
 `.pipeline/architecture-review-as-built.json`, `.pipeline/prd-audit-code-stamp.json`, and
 `.pipeline/architecture-review-as-built-code-stamp.json` are read-only SHIP validator evidence.
-Never write, delete, rename, or recreate them. Reading `.pipeline/remediation.json` and the cited
-verdict artifact remains allowed. Use that read-only evidence when the task needs finding detail.
+Never write, delete, rename, or recreate them. When finding detail is needed, read the remediation
+input paths named in the dispatch prompt and the cited verdict artifact.
 
 ## Practices
 

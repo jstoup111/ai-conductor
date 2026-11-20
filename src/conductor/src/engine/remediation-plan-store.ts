@@ -1,12 +1,19 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
+import { pipelinePathFor, type ChildId } from './child-context.js';
 
-import { REMEDIATION_PLAN_CONTRACT_VERSION, type AcceptedRemediationPlanDisposition } from './remediation-plan-contract.js';
+import {
+  REMEDIATION_PLAN_CONTRACT_VERSION,
+  type AcceptedRemediationPlanDisposition,
+} from './remediation-plan-contract.js';
 import type { RemediationProjectionSource, RemediationRequiredReference } from './remediation-projection.js';
 
 /** Engine-owned authority for validated gap-plan dispositions. */
 export const REMEDIATION_TYPED_PLAN_PATH = '.pipeline/remediation-plan.json';
+export function remediationTypedPlanPath(projectRoot: string, child?: ChildId): string {
+  return pipelinePathFor(projectRoot, 'remediation-plan.json', child);
+}
 
 export interface PersistedRemediationPlan {
   readonly version: typeof REMEDIATION_PLAN_CONTRACT_VERSION;
@@ -66,23 +73,42 @@ function nonEmptyText(value: unknown): value is string {
 }
 
 function validSource(value: unknown): value is RemediationProjectionSource {
-  return value === 'validation-group' || value === 'prd-audit' || value === 'as-built' ||
-    value === 'build-stall' || value === 'finish-verification';
+  return (
+    value === 'validation-group' ||
+    value === 'prd-audit' ||
+    value === 'as-built' ||
+    value === 'build-stall' ||
+    value === 'finish-verification'
+  );
 }
 
 function validReference(value: unknown): boolean {
   if (!isRecord(value) || !nonEmptyText(value.kind) || !nonEmptyText(value.id)) return false;
   if (value.kind === 'prd-criterion') {
-    return exactKeys(value, ['kind', 'id', 'sourceGate', 'ownerTaskId', 'summary']) &&
-      value.sourceGate === 'prd_audit' && nonEmptyText(value.ownerTaskId) && nonEmptyText(value.summary);
+    return (
+      exactKeys(value, ['kind', 'id', 'sourceGate', 'ownerTaskId', 'summary']) &&
+      value.sourceGate === 'prd_audit' &&
+      nonEmptyText(value.ownerTaskId) &&
+      nonEmptyText(value.summary)
+    );
   }
   if (value.kind === 'as-built-finding') {
-    return exactKeys(value, ['kind', 'id', 'sourceGate', 'reference', 'summary']) &&
-      value.sourceGate === 'architecture_review_as_built' && isRecord(value.reference) && nonEmptyText(value.summary);
+    return (
+      exactKeys(value, ['kind', 'id', 'sourceGate', 'reference', 'summary']) &&
+      value.sourceGate === 'architecture_review_as_built' &&
+      isRecord(value.reference) &&
+      nonEmptyText(value.summary)
+    );
   }
-  return value.kind === 'refusal' && exactKeys(value, ['kind', 'id', 'sourceGate', 'revision', 'rationale']) &&
-    value.sourceGate === 'refusal-rework' && typeof value.revision === 'number' && Number.isInteger(value.revision) &&
-    value.revision > 0 && nonEmptyText(value.rationale);
+  return (
+    value.kind === 'refusal' &&
+    exactKeys(value, ['kind', 'id', 'sourceGate', 'revision', 'rationale']) &&
+    value.sourceGate === 'refusal-rework' &&
+    typeof value.revision === 'number' &&
+    Number.isInteger(value.revision) &&
+    value.revision > 0 &&
+    nonEmptyText(value.rationale)
+  );
 }
 
 function validLooseReference(value: unknown): boolean {
@@ -92,29 +118,63 @@ function validLooseReference(value: unknown): boolean {
 function validDisposition(value: unknown): value is AcceptedRemediationPlanDisposition {
   if (!isRecord(value)) return false;
   const keys = Object.keys(value);
-  const allowed = ['reference', 'requiredReference', 'disposition', 'targetStep', 'category', 'rationale', 'tasks', 'boundTaskIds', 'reconciliation'];
-  if (!keys.every((key) => allowed.includes(key)) || !keys.includes('reference') || !keys.includes('disposition') ||
-    !keys.includes('targetStep') || !keys.includes('category') || !keys.includes('rationale') ||
-    !keys.includes('tasks') || !keys.includes('boundTaskIds')) return false;
+  const allowed = [
+    'reference',
+    'requiredReference',
+    'disposition',
+    'targetStep',
+    'category',
+    'rationale',
+    'tasks',
+    'boundTaskIds',
+    'reconciliation',
+  ];
+  if (
+    !keys.every((key) => allowed.includes(key)) ||
+    !keys.includes('reference') ||
+    !keys.includes('disposition') ||
+    !keys.includes('targetStep') ||
+    !keys.includes('category') ||
+    !keys.includes('rationale') ||
+    !keys.includes('tasks') ||
+    !keys.includes('boundTaskIds')
+  )
+    return false;
   const reference = validReference(value.reference) || validLooseReference(value.reference);
-  return reference && (value.requiredReference === undefined || validReference(value.requiredReference)) &&
-    nonEmptyText(value.disposition) && nonEmptyText(value.targetStep) &&
-    (value.category === null || nonEmptyText(value.category)) && nonEmptyText(value.rationale) &&
-    Array.isArray(value.tasks) && value.tasks.every((task) => isRecord(task) && exactKeys(task, ['id', 'title']) &&
-      nonEmptyText(task.id) && nonEmptyText(task.title)) &&
-    Array.isArray(value.boundTaskIds) && value.boundTaskIds.every(nonEmptyText) &&
-    (value.reconciliation === undefined || (isRecord(value.reconciliation) &&
-      Object.keys(value.reconciliation).every((key) => ['relation', 'priorCaseId', 'reason'].includes(key)) &&
-      ['same', 'recurrence', 'materially-changed', 'new'].includes(value.reconciliation.relation as string) &&
-      nonEmptyText(value.reconciliation.reason) &&
-      (value.reconciliation.priorCaseId === undefined || nonEmptyText(value.reconciliation.priorCaseId))));
+  return (
+    reference &&
+    (value.requiredReference === undefined || validReference(value.requiredReference)) &&
+    nonEmptyText(value.disposition) &&
+    nonEmptyText(value.targetStep) &&
+    (value.category === null || nonEmptyText(value.category)) &&
+    nonEmptyText(value.rationale) &&
+    Array.isArray(value.tasks) &&
+    value.tasks.every(
+      (task) => isRecord(task) && exactKeys(task, ['id', 'title']) && nonEmptyText(task.id) && nonEmptyText(task.title),
+    ) &&
+    Array.isArray(value.boundTaskIds) &&
+    value.boundTaskIds.every(nonEmptyText) &&
+    (value.reconciliation === undefined ||
+      (isRecord(value.reconciliation) &&
+        Object.keys(value.reconciliation).every((key) => ['relation', 'priorCaseId', 'reason'].includes(key)) &&
+        ['same', 'recurrence', 'materially-changed', 'new'].includes(value.reconciliation.relation as string) &&
+        nonEmptyText(value.reconciliation.reason) &&
+        (value.reconciliation.priorCaseId === undefined || nonEmptyText(value.reconciliation.priorCaseId))))
+  );
 }
 
 function validPersistedPlan(value: unknown): value is PersistedRemediationPlan {
-  return isRecord(value) && exactKeys(value, ['version', 'attemptId', 'source', 'requiredReferenceDigest', 'dispositions']) &&
-    value.version === REMEDIATION_PLAN_CONTRACT_VERSION && nonEmptyText(value.attemptId) && validSource(value.source) &&
-    typeof value.requiredReferenceDigest === 'string' && /^sha256:[a-f0-9]{64}$/.test(value.requiredReferenceDigest) &&
-    Array.isArray(value.dispositions) && value.dispositions.every(validDisposition);
+  return (
+    isRecord(value) &&
+    exactKeys(value, ['version', 'attemptId', 'source', 'requiredReferenceDigest', 'dispositions']) &&
+    value.version === REMEDIATION_PLAN_CONTRACT_VERSION &&
+    nonEmptyText(value.attemptId) &&
+    validSource(value.source) &&
+    typeof value.requiredReferenceDigest === 'string' &&
+    /^sha256:[a-f0-9]{64}$/.test(value.requiredReferenceDigest) &&
+    Array.isArray(value.dispositions) &&
+    value.dispositions.every(validDisposition)
+  );
 }
 
 /** The projected reference order is authoritative, so the digest preserves it. */
@@ -138,6 +198,7 @@ export async function persistRemediationPlan(
   projectRoot: string,
   input: PersistRemediationPlanInput,
   dependencies: RemediationPlanStoreDependencies = {},
+  child?: ChildId,
 ): Promise<PersistRemediationPlanResult> {
   const value: PersistedRemediationPlan = {
     version: REMEDIATION_PLAN_CONTRACT_VERSION,
@@ -147,7 +208,11 @@ export async function persistRemediationPlan(
     dispositions: input.dispositions,
   };
   try {
-    await atomicWrite(join(projectRoot, REMEDIATION_TYPED_PLAN_PATH), `${JSON.stringify(value, null, 2)}\n`, dependencies.filesystem ?? filesystem);
+    await atomicWrite(
+      remediationTypedPlanPath(projectRoot, child),
+      `${JSON.stringify(value, null, 2)}\n`,
+      dependencies.filesystem ?? filesystem,
+    );
     return { kind: 'persisted', value };
   } catch (error) {
     return {
@@ -162,10 +227,13 @@ export async function readTypedRemediationPlan(
   projectRoot: string,
   request: { readonly attemptId: string },
   dependencies: RemediationPlanStoreDependencies = {},
+  child?: ChildId,
 ): Promise<ReadTypedRemediationPlanResult> {
   let raw: unknown;
   try {
-    raw = JSON.parse(await (dependencies.filesystem ?? filesystem).readFile(join(projectRoot, REMEDIATION_TYPED_PLAN_PATH)));
+    raw = JSON.parse(
+      await (dependencies.filesystem ?? filesystem).readFile(remediationTypedPlanPath(projectRoot, child)),
+    );
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'absent' };
     return {
@@ -177,4 +245,12 @@ export async function readTypedRemediationPlan(
     return { kind: 'invalid', reason: 'invalid typed remediation plan: invalid persisted envelope' };
   }
   return raw.attemptId === request.attemptId ? { kind: 'present', value: raw } : { kind: 'absent' };
+}
+
+export async function removeTypedRemediationPlan(
+  projectRoot: string,
+  dependencies: RemediationPlanStoreDependencies = {},
+  child?: ChildId,
+): Promise<void> {
+  await (dependencies.filesystem ?? filesystem).rm(remediationTypedPlanPath(projectRoot, child));
 }

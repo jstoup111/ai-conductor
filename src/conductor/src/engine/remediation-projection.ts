@@ -37,34 +37,30 @@ import { slugify } from './worktree.js';
 export const REMEDIATION_PROJECTION_VERSION = 2;
 
 export type RemediationProjectionSource =
-  | 'validation-group'
-  | 'prd-audit'
-  | 'as-built'
-  | 'build-stall'
-  | 'finish-verification';
+  'validation-group' | 'prd-audit' | 'as-built' | 'build-stall' | 'finish-verification';
 
 export type RemediationRequiredReference =
   | {
-    readonly kind: 'prd-criterion';
-    readonly id: string;
-    readonly sourceGate: 'prd_audit';
-    readonly ownerTaskId: string;
-    readonly summary: string;
-  }
+      readonly kind: 'prd-criterion';
+      readonly id: string;
+      readonly sourceGate: 'prd_audit';
+      readonly ownerTaskId: string;
+      readonly summary: string;
+    }
   | {
-    readonly kind: 'as-built-finding';
-    readonly id: string;
-    readonly sourceGate: 'architecture_review_as_built';
-    readonly reference: AsBuiltGoverningReference;
-    readonly summary: string;
-  }
+      readonly kind: 'as-built-finding';
+      readonly id: string;
+      readonly sourceGate: 'architecture_review_as_built';
+      readonly reference: AsBuiltGoverningReference;
+      readonly summary: string;
+    }
   | {
-    readonly kind: 'refusal';
-    readonly id: string;
-    readonly sourceGate: 'refusal-rework';
-    readonly revision: number;
-    readonly rationale: string;
-  };
+      readonly kind: 'refusal';
+      readonly id: string;
+      readonly sourceGate: 'refusal-rework';
+      readonly revision: number;
+      readonly rationale: string;
+    };
 
 export interface RemediationProjectionTask {
   readonly id: string;
@@ -104,9 +100,10 @@ export interface RemediationProjectionPriorAsBuiltCase {
    * `summary` is omitted when the source finding is still pending: the same text is
    * already in `pendingAsBuiltFindings` under that `findingId`.
    */
-  readonly sources: readonly (
-    Pick<RemediationCaseAsBuiltRecord['sources'][number], 'findingId' | 'reference' | 'relation'> & { readonly summary?: string }
-  )[];
+  readonly sources: readonly (Pick<
+    RemediationCaseAsBuiltRecord['sources'][number],
+    'findingId' | 'reference' | 'relation'
+  > & { readonly summary?: string })[];
   readonly repairTasks: readonly { readonly id: string; readonly resolution: string }[];
 }
 
@@ -147,6 +144,8 @@ export interface RemediationProjectionRequest {
   readonly config?: CompletionContext['config'];
   readonly git?: CompletionContext['git'];
   readonly refusals?: readonly RefusalReworkEvidence[];
+  /** Caller-selected build-stall evidence path; child regions are authoritative. */
+  readonly evidenceFile?: string;
 }
 
 export type RemediationProjectionResult =
@@ -188,49 +187,58 @@ function roundUpPowerOfTwo(bytes: number): number {
 
 const REMEDIATION_PROJECTION_COMPONENT_LIMITS = {
   // `.pipeline/prd-audit.json` + `.pipeline/architecture-review-as-built.json`: 3,911 B union; D7.2 floor → 262,144 B.
-  requiredReferencesBytes: roundUpPowerOfTwo(Math.max(
-    REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
-    REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.requiredReferencesBytes,
-  )),
+  requiredReferencesBytes: roundUpPowerOfTwo(
+    Math.max(
+      REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
+      REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.requiredReferencesBytes,
+    ),
+  ),
   // Largest current plan-task projection in the repository corpus; D7.2 floor → 262,144 B.
-  tasksBytes: roundUpPowerOfTwo(Math.max(
-    REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
-    REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.tasksBytes,
-  )),
+  tasksBytes: roundUpPowerOfTwo(
+    Math.max(REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES, REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.tasksBytes),
+  ),
   // `.pipeline/kickback-ledger.json`: 9,989 B for 15 pending findings; D7.2 floor → 262,144 B.
   // Each finding carries its governing clause, so the set is criterion-bearing and the
   // optional-history floor would fault any as-built lap with roughly eight or more findings.
-  pendingAsBuiltFindingsBytes: roundUpPowerOfTwo(Math.max(
-    REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
-    REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.pendingAsBuiltFindingsBytes,
-  )),
+  pendingAsBuiltFindingsBytes: roundUpPowerOfTwo(
+    Math.max(
+      REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
+      REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.pendingAsBuiltFindingsBytes,
+    ),
+  ),
   // `.pipeline/kickback-ledger.json`: 111 B prior-lap set; optional-history floor → 4,096 B.
-  priorLapsBytes: roundUpPowerOfTwo(Math.max(
-    REMEDIATION_PROJECTION_OPTIONAL_CONTEXT_FLOOR_BYTES,
-    REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.priorLapsBytes,
-  )),
+  priorLapsBytes: roundUpPowerOfTwo(
+    Math.max(
+      REMEDIATION_PROJECTION_OPTIONAL_CONTEXT_FLOOR_BYTES,
+      REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.priorLapsBytes,
+    ),
+  ),
   // No `.docs/shipped` refusal record at BUILD (0 B); optional-history floor → 4,096 B.
-  refusalsBytes: roundUpPowerOfTwo(Math.max(
-    REMEDIATION_PROJECTION_OPTIONAL_CONTEXT_FLOOR_BYTES,
-    REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.refusalsBytes,
-  )),
+  refusalsBytes: roundUpPowerOfTwo(
+    Math.max(
+      REMEDIATION_PROJECTION_OPTIONAL_CONTEXT_FLOOR_BYTES,
+      REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.refusalsBytes,
+    ),
+  ),
   // `.pipeline/remediation-cases.json` asBuiltCases: 8,929 B projected for 11 open
   // cases (#3677). Each case carries its source summaries, so the optional-history
   // floor faulted any as-built lap with roughly five or more open cases; D7.2 floor → 262,144 B.
-  priorAsBuiltCasesBytes: roundUpPowerOfTwo(Math.max(
-    REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
-    REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.priorAsBuiltCasesBytes,
-  )),
+  priorAsBuiltCasesBytes: roundUpPowerOfTwo(
+    Math.max(
+      REMEDIATION_PROJECTION_NAMED_BOUND_FLOOR_BYTES,
+      REMEDIATION_PROJECTION_CORPUS_MAXIMA_BYTES.priorAsBuiltCasesBytes,
+    ),
+  ),
 } as const;
 
 const REMEDIATION_PROJECTION_TOTAL_LIMIT_BYTES = roundUpPowerOfTwo(
   REMEDIATION_PROJECTION_COMPONENT_LIMITS.requiredReferencesBytes +
-  REMEDIATION_PROJECTION_COMPONENT_LIMITS.tasksBytes +
-  REMEDIATION_PROJECTION_COMPONENT_LIMITS.pendingAsBuiltFindingsBytes +
-  REMEDIATION_PROJECTION_COMPONENT_LIMITS.priorLapsBytes +
-  REMEDIATION_PROJECTION_COMPONENT_LIMITS.refusalsBytes +
-  REMEDIATION_PROJECTION_COMPONENT_LIMITS.priorAsBuiltCasesBytes +
-  REMEDIATION_PROJECTION_ENVELOPE_OVERHEAD_BYTES,
+    REMEDIATION_PROJECTION_COMPONENT_LIMITS.tasksBytes +
+    REMEDIATION_PROJECTION_COMPONENT_LIMITS.pendingAsBuiltFindingsBytes +
+    REMEDIATION_PROJECTION_COMPONENT_LIMITS.priorLapsBytes +
+    REMEDIATION_PROJECTION_COMPONENT_LIMITS.refusalsBytes +
+    REMEDIATION_PROJECTION_COMPONENT_LIMITS.priorAsBuiltCasesBytes +
+    REMEDIATION_PROJECTION_ENVELOPE_OVERHEAD_BYTES,
 );
 
 /** Finite engine bounds for required structured input; required values are never truncated. */
@@ -268,19 +276,26 @@ const REMEDIATION_DISPOSITIONS: readonly RemediationDisposition[] = [
 ];
 
 function includesPrdAudit(request: RemediationProjectionRequest): boolean {
-  return request.includedGates?.includes('prd_audit') ??
-    (request.source === 'prd-audit' || request.source === 'validation-group');
+  return (
+    request.includedGates?.includes('prd_audit') ??
+    (request.source === 'prd-audit' || request.source === 'validation-group')
+  );
 }
 
 function includesAsBuilt(request: RemediationProjectionRequest): boolean {
-  return request.includedGates?.includes('architecture_review_as_built') ??
-    (request.source === 'as-built' || request.source === 'validation-group');
+  return (
+    request.includedGates?.includes('architecture_review_as_built') ??
+    (request.source === 'as-built' || request.source === 'validation-group')
+  );
 }
 
 function preparationFault(
   source: string,
   detail: string,
-  fields: Pick<Extract<RemediationProjectionResult, { readonly ok: false }>['fault'], 'dimension' | 'actual' | 'limit'> = {},
+  fields: Pick<
+    Extract<RemediationProjectionResult, { readonly ok: false }>['fault'],
+    'dimension' | 'actual' | 'limit'
+  > = {},
 ): RemediationProjectionResult {
   return { ok: false, kind: 'preparation-fault', fault: { source, detail, ...fields } };
 }
@@ -304,13 +319,27 @@ function projectionLimitFault(
   limits: RemediationProjectionLimits,
 ): RemediationProjectionResult | undefined {
   const dimensions: readonly { readonly dimension: string; readonly actual: number; readonly limit: number }[] = [
-    { dimension: 'required-references', actual: serializedBytes(projection.requiredReferences), limit: limits.requiredReferencesBytes },
+    {
+      dimension: 'required-references',
+      actual: serializedBytes(projection.requiredReferences),
+      limit: limits.requiredReferencesBytes,
+    },
     { dimension: 'tasks', actual: serializedBytes(projection.tasks), limit: limits.tasksBytes },
-    { dimension: 'pending-as-built-findings', actual: serializedBytes(projection.pendingAsBuiltFindings), limit: limits.pendingAsBuiltFindingsBytes },
+    {
+      dimension: 'pending-as-built-findings',
+      actual: serializedBytes(projection.pendingAsBuiltFindings),
+      limit: limits.pendingAsBuiltFindingsBytes,
+    },
     { dimension: 'prior-laps', actual: serializedBytes(projection.priorLaps), limit: limits.priorLapsBytes },
-    ...(projection.priorAsBuiltCases === undefined ? [] : [{
-      dimension: 'prior-as-built-cases', actual: serializedBytes(projection.priorAsBuiltCases), limit: limits.priorAsBuiltCasesBytes,
-    }]),
+    ...(projection.priorAsBuiltCases === undefined
+      ? []
+      : [
+          {
+            dimension: 'prior-as-built-cases',
+            actual: serializedBytes(projection.priorAsBuiltCases),
+            limit: limits.priorAsBuiltCasesBytes,
+          },
+        ]),
     { dimension: 'refusals', actual: serializedBytes(projection.refusals), limit: limits.refusalsBytes },
     // Evidence is bounded and omitted by its independent as-built caps. The
     // total named bound governs structured remediation input only (D7.3).
@@ -327,15 +356,11 @@ function errorDetail(error: unknown): string {
 }
 
 function verdictFault(source: string, detail: string): RemediationProjectionResult {
-  const normalized = detail.toLowerCase().includes('version')
-    ? `unsupported typed verdict version: ${detail}`
-    : detail;
+  const normalized = detail.toLowerCase().includes('version') ? `unsupported typed verdict version: ${detail}` : detail;
   return preparationFault(source, normalized);
 }
 
-async function safelyReadLedger(
-  read: () => Promise<KickbackLedgerReadResult>,
-): Promise<KickbackLedgerReadResult> {
+async function safelyReadLedger(read: () => Promise<KickbackLedgerReadResult>): Promise<KickbackLedgerReadResult> {
   try {
     return await read();
   } catch (error) {
@@ -359,7 +384,7 @@ function untypedEvidenceSource(
 ): { readonly key: string; readonly path: string } | undefined {
   if (request.source === 'build-stall') {
     const slug = slugify(request.featureDesc ?? basename(worktree));
-    return { key: `stall:${slug}`, path: '.pipeline/build-stall-question.md' };
+    return { key: `stall:${slug}`, path: request.evidenceFile ?? '.pipeline/build-stall-question.md' };
   }
   if (request.source === 'finish-verification') {
     return { key: 'test:test-failures', path: '.pipeline/test-failures.md' };
@@ -371,7 +396,10 @@ async function projectUntypedEvidence(
   worktree: string,
   request: RemediationProjectionRequest,
   limits: RemediationEvidenceLimits,
-): Promise<{ readonly ok: true; readonly evidence: RemediationProjectionEvidence } | { readonly ok: false; readonly detail: string }> {
+): Promise<
+  | { readonly ok: true; readonly evidence: RemediationProjectionEvidence }
+  | { readonly ok: false; readonly detail: string }
+> {
   const source = untypedEvidenceSource(worktree, request);
   if (source === undefined) return { ok: true, evidence: { excerpts: [], omittedFiles: [] } };
 
@@ -387,18 +415,25 @@ async function projectUntypedEvidence(
 
   const bytes = utf8Bytes(content);
   if (bytes > limits.perFileHunksBytes || bytes > limits.totalDiffBytes) {
-    return { ok: true, evidence: {
-      excerpts: [],
-      omittedFiles: [{
-        ...source,
-        digest: `sha256:${createHash('sha256').update(content).digest('hex')}`,
-      }],
-    } };
+    return {
+      ok: true,
+      evidence: {
+        excerpts: [],
+        omittedFiles: [
+          {
+            ...source,
+            digest: `sha256:${createHash('sha256').update(content).digest('hex')}`,
+          },
+        ],
+      },
+    };
   }
   return { ok: true, evidence: { excerpts: [{ ...source, content }], omittedFiles: [] } };
 }
 
-function projectPriorLaps(gates: Readonly<Record<string, { readonly laps?: number }>>): readonly RemediationProjectionPriorLap[] {
+function projectPriorLaps(
+  gates: Readonly<Record<string, { readonly laps?: number }>>,
+): readonly RemediationProjectionPriorLap[] {
   return Object.entries(gates)
     .map(([gate, entry]) => ({ gate, laps: entry.laps ?? 0 }))
     .sort((left, right) => left.gate.localeCompare(right.gate));
@@ -430,10 +465,12 @@ async function projectActiveTasks(
   return { ok: true, tasks };
 }
 
-async function projectPriorAsBuiltCases(
-  worktree: string,
-): Promise<
-  | { readonly ok: true; readonly cases: readonly RemediationProjectionPriorAsBuiltCase[]; readonly repairTaskIds: ReadonlySet<string> }
+async function projectPriorAsBuiltCases(worktree: string): Promise<
+  | {
+      readonly ok: true;
+      readonly cases: readonly RemediationProjectionPriorAsBuiltCase[];
+      readonly repairTaskIds: ReadonlySet<string>;
+    }
   | { readonly ok: false; readonly detail: string }
 > {
   const feature = await readRemediationCaseStoreFeature(worktree);
@@ -449,7 +486,11 @@ async function projectPriorAsBuiltCases(
     // The case history remains useful before BUILD has created task status.
   }
   const resolutions = new Map<string, string>();
-  if (typeof taskStatus === 'object' && taskStatus !== null && Array.isArray((taskStatus as { tasks?: unknown }).tasks)) {
+  if (
+    typeof taskStatus === 'object' &&
+    taskStatus !== null &&
+    Array.isArray((taskStatus as { tasks?: unknown }).tasks)
+  ) {
     for (const task of (taskStatus as { tasks: unknown[] }).tasks) {
       if (typeof task !== 'object' || task === null) continue;
       const row = task as { id?: unknown; status?: unknown };
@@ -464,7 +505,12 @@ async function projectPriorAsBuiltCases(
       id: record.id,
       status: record.status,
       recurrenceCount: record.recurrenceCount,
-      sources: record.sources.map(({ findingId, summary, reference, relation }) => ({ findingId, summary, reference, relation })),
+      sources: record.sources.map(({ findingId, summary, reference, relation }) => ({
+        findingId,
+        summary,
+        reference,
+        relation,
+      })),
       repairTasks: record.repairTaskIds.map((id) => ({ id, resolution: resolutions.get(id) ?? 'unknown' })),
     };
   });
@@ -519,11 +565,14 @@ export async function buildRemediationProjection(
       return preparationFault('as-built verdict', `typed verdict is unreadable: ${errorDetail(error)}`);
     }
     if (current.kind !== 'present') {
-      return verdictFault('as-built verdict', current.kind === 'absent'
-        ? 'architecture-review-as-built typed verdict is missing'
-        : current.kind === 'prior-version'
-          ? `architecture-review-as-built typed verdict uses prior contract version ${current.version}`
-          : current.reason);
+      return verdictFault(
+        'as-built verdict',
+        current.kind === 'absent'
+          ? 'architecture-review-as-built typed verdict is missing'
+          : current.kind === 'prior-version'
+            ? `architecture-review-as-built typed verdict uses prior contract version ${current.version}`
+            : current.reason,
+      );
     }
     if (current.value.verdict.verdict === 'BLOCKED') {
       for (const finding of current.value.verdict.findings) {
@@ -554,9 +603,7 @@ export async function buildRemediationProjection(
   const limits: RemediationProjectionLimits = { ...REMEDIATION_PROJECTION_LIMITS, ...limitOverrides };
   const readPending = dependencies.readPendingAsBuiltRemediationFindings ?? readPendingAsBuiltRemediationFindings;
   const readLedger = dependencies.readKickbackLedgerResult ?? readKickbackLedgerResult;
-  const priorCases = includesAsBuilt(request)
-    ? await projectPriorAsBuiltCases(worktree)
-    : undefined;
+  const priorCases = includesAsBuilt(request) ? await projectPriorAsBuiltCases(worktree) : undefined;
   if (priorCases !== undefined && !priorCases.ok) return preparationFault('remediation case store', priorCases.detail);
   if (priorCases !== undefined) priorCases.repairTaskIds.forEach((id) => ownerTaskIds.add(id));
   const [pending, ledger, taskContext, evidence] = await Promise.all([
@@ -571,8 +618,11 @@ export async function buildRemediationProjection(
     // A repair-task id recorded in prior as-built history is operator-owned
     // context.  Its disappearance is not a generic plan parse failure: the
     // next repair cannot safely decide whether that prior case was superseded.
-    const isMissingPriorAsBuiltRepair = priorCases !== undefined && priorCases.ok &&
-      taskContext.missingTaskId !== undefined && priorCases.repairTaskIds.has(taskContext.missingTaskId);
+    const isMissingPriorAsBuiltRepair =
+      priorCases !== undefined &&
+      priorCases.ok &&
+      taskContext.missingTaskId !== undefined &&
+      priorCases.repairTaskIds.has(taskContext.missingTaskId);
     return preparationFault(
       'active plan',
       taskContext.detail,
@@ -588,9 +638,7 @@ export async function buildRemediationProjection(
 
   // Pre-v2 provider ids remain in the ledger for historical shipment
   // records, but are not planning context or remediation obligations.
-  const pendingAsBuiltFindings = pending.findings.filter((finding) =>
-    isEngineStampedAsBuiltFindingId(finding.finding),
-  );
+  const pendingAsBuiltFindings = pending.findings.filter((finding) => isEngineStampedAsBuiltFindingId(finding.finding));
   const pendingFindingIds = new Set(pendingAsBuiltFindings.map((finding) => finding.finding));
 
   const projection: RemediationProjection = {
@@ -600,13 +648,16 @@ export async function buildRemediationProjection(
     evidence: evidence.evidence,
     tasks: taskContext.tasks,
     pendingAsBuiltFindings,
-    ...(priorCases === undefined ? {} : {
-      priorAsBuiltCases: priorCases.cases.map((record) => ({
-        ...record,
-        sources: record.sources.map(({ summary, ...source }) =>
-          pendingFindingIds.has(source.findingId) ? source : { ...source, summary }),
-      })),
-    }),
+    ...(priorCases === undefined
+      ? {}
+      : {
+          priorAsBuiltCases: priorCases.cases.map((record) => ({
+            ...record,
+            sources: record.sources.map(({ summary, ...source }) =>
+              pendingFindingIds.has(source.findingId) ? source : { ...source, summary },
+            ),
+          })),
+        }),
     priorLaps: ledger.kind === 'ok' ? projectPriorLaps(ledger.ledger.gates) : [],
     refusals,
     vocabulary: {
