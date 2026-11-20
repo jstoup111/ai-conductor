@@ -219,7 +219,7 @@ describe('Composer resume', () => {
     const client = join(root, 'client');
     const registryPath = join(root, 'registry.json');
     const engineerDir = join(root, 'engineer');
-    const spawned = vi.fn(async () => 0);
+    const spawned = vi.fn(async (_executable: string, _argv: string[], _cwd: string, _env: NodeJS.ProcessEnv) => 0);
     try {
       await execFile('git', ['init', '--bare', remote]);
       await execFile('git', ['init', '-b', 'main', origin]);
