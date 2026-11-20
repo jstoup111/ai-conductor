@@ -169,6 +169,30 @@ describe('Composer resume', () => {
     expect(local.context.nextStep).toBe('architecture_diagram');
   });
 
+  it('Covers: Task 12 refuses an unregistered project before it fetches or creates a worktree', async () => {
+    const git = vi.fn(async () => ({ stdout: '', exitCode: 0 }));
+    const errors: string[] = [];
+    const registry = await mkdtemp(join(tmpdir(), 'composer-unregistered-'));
+    try {
+      const code = await dispatchEngineer(
+        { kind: 'resume', target: 'acme/demo#12', project: 'missing', provider: 'codex' },
+        {
+          registryPath: join(registry, 'registry.json'),
+          env: {},
+          git,
+          print: () => {},
+          printErr: (line) => errors.push(line),
+          probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+        },
+      );
+      expect(code).toBe(1);
+      expect(errors.join('\n')).toMatch(/project "missing" is not registered.*conduct register/i);
+      expect(git).not.toHaveBeenCalled();
+    } finally {
+      await rm(registry, { recursive: true, force: true });
+    }
+  });
+
   it('Covers: Task 12 records deciding with the draft PR URL and emits exactly one resumed transition without ledger history', async () => {
     const transitions: unknown[] = [];
     const emitted: unknown[] = [];

@@ -1,8 +1,12 @@
 // Covers: task:14
 import { describe, expect, it, vi } from 'vitest';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { execa } from 'execa';
 import { checkpointComposerRun } from '../../../src/engine/engineer/checkpoint.js';
 import { resumeOwnershipMode } from '../../../src/engine/engineer/resume.js';
-import { checkpointPublicationOwner } from '../../../src/engine/engineer-cli.js';
+import { checkpointPublicationOwner, dispatchEngineer } from '../../../src/engine/engineer-cli.js';
 import { decideSpecGate } from '../../../src/engine/owner-gate/gate.js';
 
 describe('resume ownership', () => {
@@ -128,6 +132,99 @@ describe('resume ownership', () => {
     // the publication authority until that retry has actually pushed.
     expect(checkpointPublicationOwner({ localMarkerOwner: 'B', remoteMarkerOwner: 'A' })).toBe('A');
     expect(checkpointPublicationOwner({ localMarkerOwner: 'B', remoteMarkerOwner: 'B' })).toBe('B');
+  });
+
+  it('Covers: Task 14 leaves a foreign run local-only when the exact take-over push approval is refused', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'composer-takeover-refused-'));
+    const registryPath = join(root, 'registry.json');
+    const slug = 'demo';
+    const branch = `spec/${slug}`;
+    const confirmation = { mode: 'interactive' as const, confirm: vi.fn(async () => false) };
+    const pushes: string[][] = [];
+    const errors: string[] = [];
+    try {
+      await execa('git', ['init', '-b', 'main', root]);
+      await execa('git', ['config', 'user.email', 'test@example.test'], { cwd: root });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: root });
+      await mkdir(join(root, '.docs', 'intake'), { recursive: true });
+      await mkdir(join(root, '.docs', 'composer-runs'), { recursive: true });
+      await writeFile(join(root, 'README.md'), '# fixture\n');
+      await writeFile(join(root, '.docs', 'intake', `${slug}.md`), 'Source-Ref: acme/demo#12\nOwner: A\n');
+      await writeFile(
+        join(root, '.docs', 'composer-runs', `${slug}.json`),
+        JSON.stringify({
+          schemaVersion: 1,
+          slug,
+          track: 'technical',
+          steps: { explore: { state: 'draft' } },
+          needsReconfirm: [],
+          ownerHistory: [],
+          notes: {},
+        }),
+      );
+      await execa('git', ['add', '.'], { cwd: root });
+      await execa('git', ['commit', '-m', 'foreign run'], { cwd: root });
+      await execa('git', ['branch', branch], { cwd: root });
+      await writeFile(
+        registryPath,
+        JSON.stringify([
+          {
+            schemaVersion: 1,
+            name: 'project',
+            path: root,
+            remote: 'https://github.com/acme/demo.git',
+            status: 'registered',
+            registeredAt: '2026-11-20T00:00:00.000Z',
+          },
+        ]),
+      );
+      const head = (await execa('git', ['rev-parse', branch], { cwd: root })).stdout;
+      const git = async (args: string[], options?: { cwd?: string }) => {
+        if (args[0] === 'fetch' || args[0] === 'log') return { stdout: '', exitCode: 0 };
+        if (args[0] === 'merge-base' || (args[0] === 'rev-parse' && args[1] === `origin/${branch}`))
+          return { stdout: `${head}\n`, exitCode: 0 };
+        if (args[0] === 'push') {
+          pushes.push(args);
+          return { stdout: '', exitCode: 0 };
+        }
+        const result = await execa('git', args, { cwd: options?.cwd ?? root, reject: false });
+        return { stdout: result.stdout, exitCode: result.exitCode ?? 0 };
+      };
+      const code = await dispatchEngineer(
+        { kind: 'resume', target: branch, project: 'project', provider: 'codex' },
+        {
+          registryPath,
+          env: {},
+          git,
+          gh: async () => ({ stdout: '{}', stderr: '', exitCode: 0 }),
+          resolveResumeOwner: async () => ({ resolved: true, id: 'B' }),
+          confirmComposerTakeover: async () => true,
+          githubOperationConfirmation: confirmation,
+          isAttachedTerminal: () => true,
+          providerInstalled: async () => true,
+          spawnHost: async (_executable, _argv, worktree) => {
+            await rm(join(worktree, '.docs', 'composer-runs', `${slug}.json`));
+            return 0;
+          },
+          print: () => {},
+          printErr: (line) => errors.push(line),
+          probeGhVersion: async () => ({ kind: 'ok', version: { major: 2, minor: 73, patch: 0 } }),
+        },
+      );
+      expect(code).toBe(0);
+      expect(confirmation.confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          operation: 'remote-ref.push',
+          target: { repository: 'acme/demo', kind: 'remote-ref', ref: `refs/heads/${branch}` },
+        }),
+      );
+      expect(pushes).toEqual([]);
+      const worktree = join(root, '.worktrees', `engineer-${slug}`);
+      await expect(readFile(join(worktree, '.docs', 'intake', `${slug}.md`), 'utf8')).resolves.toContain('Owner: A');
+      expect(errors.join('\n')).toMatch(/owner and this run stays local until interactive take-over/i);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('Covers: Task 14 gates the re-stamped owner branch to that daemon owner only', () => {
