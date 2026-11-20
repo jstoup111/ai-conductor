@@ -1,12 +1,7 @@
 import { appendFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 
-import type {
-  StepName,
-  Phase,
-  ConductorEvent,
-  VerdictFreshnessOutcome,
-} from '../types/index.js';
+import type { StepName, Phase, ConductorEvent, VerdictFreshnessOutcome } from '../types/index.js';
 import { auditedEventTypes } from './event-sinks.js';
 import { phaseForStep } from './resolved-config.js';
 import type { ConductorEventEmitter } from './conductor-event-emitter.js';
@@ -118,7 +113,7 @@ export class AuditTrailWriter {
       const message = error instanceof Error ? error.message : String(error);
       process.stderr.write(
         `[audit-trail] WRITE-FAILED: failed to append audit record ` +
-          `(origin=${input.origin}, event=${input.event}): error: ${message}\n`
+          `(origin=${input.origin}, event=${input.event}): error: ${message}\n`,
       );
 
       // Best-effort marker so operators can detect silent audit-trail loss.
@@ -128,7 +123,7 @@ export class AuditTrailWriter {
         appendFileSync(
           join(auditDir, 'WRITE-FAILED'),
           `${new Date().toISOString()} origin=${input.origin} event=${input.event} error=${message}\n`,
-          { flag: 'a' }
+          { flag: 'a' },
         );
       } catch {
         // Marker write also failed; nothing more we can do without throwing.
@@ -136,8 +131,7 @@ export class AuditTrailWriter {
 
       if (this.throwOnWriteFailure) {
         throw new Error(
-          `[audit-trail] failed to append audit record ` +
-            `(origin=${input.origin}, event=${input.event}): ${message}`,
+          `[audit-trail] failed to append audit record ` + `(origin=${input.origin}, event=${input.event}): ${message}`,
         );
       }
     }
@@ -274,29 +268,34 @@ export class AuditTrailWriter {
           origin: 'build_review',
           event: event.type,
           reason: `${event.rubric} policy resolved for ${event.provider} (${event.source})`,
-          cause: event.provenance === undefined
-            ? event.bundleDigest
-            : `${event.bundleDigest}; input ${event.provenance.inputDigest}; candidate ${event.provenance.candidate.provider}/${event.provenance.candidate.model}/${event.provenance.candidate.effort}`,
+          cause:
+            event.provenance === undefined
+              ? event.bundleDigest
+              : `${event.bundleDigest}; input ${event.provenance.inputDigest}; candidate ${event.provenance.candidate.provider}/${event.provenance.candidate.model}/${event.provenance.candidate.effort}`,
         };
       case 'build_review_policy_failed':
         return {
           origin: 'build_review',
           event: event.type,
           reason: `${event.rubric} ${event.stage} failed: ${event.reason}`,
-          cause: event.provenance === undefined
-            ? event.provider
-            : `${event.provenance.inputDigest}; candidate ${event.provenance.candidate.provider}/${event.provenance.candidate.model}/${event.provenance.candidate.effort}`,
+          cause:
+            event.provenance === undefined
+              ? event.provider
+              : `${event.provenance.inputDigest}; candidate ${event.provenance.candidate.provider}/${event.provenance.candidate.model}/${event.provenance.candidate.effort}`,
         };
       case 'build_review_cache_hit':
         return {
           origin: 'build_review',
           event: event.type,
-          reason: event.customReuse === undefined
-            ? `${event.rubric} cache hit`
-            : `${event.rubric} custom policy cache hit from ${event.customReuse.originalLapId}`,
-          ...(event.customReuse === undefined ? {} : {
-            cause: `${event.customReuse.bundleDigest}; input ${event.customReuse.inputDigest}; candidate ${event.customReuse.candidate.provider}/${event.customReuse.candidate.model}/${event.customReuse.candidate.effort}`,
-          }),
+          reason:
+            event.customReuse === undefined
+              ? `${event.rubric} cache hit`
+              : `${event.rubric} custom policy cache hit from ${event.customReuse.originalLapId}`,
+          ...(event.customReuse === undefined
+            ? {}
+            : {
+                cause: `${event.customReuse.bundleDigest}; input ${event.customReuse.inputDigest}; candidate ${event.customReuse.candidate.provider}/${event.customReuse.candidate.model}/${event.customReuse.candidate.effort}`,
+              }),
         };
       case 'verdict_freshness':
         return {
