@@ -56,6 +56,13 @@ async function installHooks(root: string, failRoundStamp = false): Promise<void>
   }
 }
 
+async function setRoutingEnabled(root: string, enabled: boolean): Promise<void> {
+  await writeFile(
+    join(root, '.ai-conductor', 'config.yml'),
+    `stacked_prs:\n  enabled: true\n  max_slices: 3\n  route_whole_feature_fixes: ${enabled}\n  fold_routed_fixes: ${enabled}\n`,
+  );
+}
+
 function withoutGuardValve(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const { CONDUCT_DAEMON_SESSION_UNSAFE_ALLOW: _valve, ...rest } = env;
   return rest;
@@ -184,6 +191,7 @@ describe('prepare-commit-msg round stamp (real local Git)', () => {
 
   it('permits an unrelated commit when no repair marker exists', async () => {
     const root = await routedFixture();
+    await setRoutingEnabled(root, false);
     await expect(commit(root, 'no-marker.txt', 'feat: no marker')).resolves.not.toMatch(/^Round:/m);
   });
 
@@ -214,9 +222,22 @@ describe('prepare-commit-msg round stamp (real local Git)', () => {
     expect(message.match(/^Owner:.*$/gm)).toEqual(['Owner: c1']);
   });
 
+  it('honors a durable leaf marker after routing is disabled and accepts normalized Round whitespace', async () => {
+    const root = await routedFixture({ leafPosition: 3 });
+    await writeRepairMarker(root, 1, 'r1', 'leaf');
+    await setRoutingEnabled(root, false);
+    await git(root, ['checkout', '-q', 'feat/daemon-demo']);
+    const message = join(root, '.pipeline', 'normalized-message');
+    await writeFile(message, 'feat: leaf repair\n\nRound: r1   \nOwner: c1\n');
+
+    await expect(execFile('node', [engineIndex, 'round-stamp', '--verify', message], { cwd: root })).resolves.toBeDefined();
+    await expect(commit(root, 'disabled-routing.txt', 'feat: leaf repair')).resolves.toMatch(/^Round: r1$/m);
+  });
+
   it('rejects a leaf c3 commit when a repository hook strips c1 ownership', async () => {
     const root = await routedFixture({ leafPosition: 3 });
     await writeRepairMarker(root, 1, 'r1', 'leaf');
+    await setRoutingEnabled(root, false);
     await git(root, ['checkout', '-q', 'feat/daemon-demo']);
     const commonDir = await git(root, ['rev-parse', '--git-common-dir']);
     const hookPath = join(root, commonDir, 'hooks', 'commit-msg');

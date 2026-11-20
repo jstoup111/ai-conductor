@@ -122,7 +122,7 @@ export async function deferredPlacementsExist(
   dependencies: RouteRecordStoreDependencies = {},
 ): Promise<boolean> {
   const inventory = await deferredPlacementInventory(worktree, slug, dependencies);
-  return inventory.kind !== 'inventory' || inventory.placements.length > 0;
+  return inventory.kind !== 'inventory' || inventory.open.length + inventory.foldable.length > 0;
 }
 
 /** Stable operator-facing identities for publication and fold refusals. */
@@ -133,7 +133,7 @@ export async function deferredPlacementDescriptions(
 ): Promise<readonly string[] | undefined> {
   const inventory = await deferredPlacementInventory(worktree, slug, dependencies);
   return inventory.kind === 'inventory'
-    ? inventory.placements.map((placement) => `host ${placement.host} round ${placement.roundId}`)
+    ? [...inventory.open, ...inventory.foldable].map((placement) => `host ${placement.host} round ${placement.roundId}`)
     : undefined;
 }
 

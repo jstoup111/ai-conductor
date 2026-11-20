@@ -1279,11 +1279,12 @@ async function establishChildPrs(input: {
     throw new Error('stack child publication boundary unavailable');
   const stackGit = publicationRecordGit(input.git, input.root);
   const deferred = await deferredPlacementInventory(input.root, input.slug, { git: stackGit });
-  if (deferred.kind !== 'inventory' || deferred.placements.length > 0) {
+  const deferredPlacements = deferred.kind === 'inventory' ? [...deferred.open, ...deferred.foldable] : [];
+  if (deferred.kind !== 'inventory' || deferredPlacements.length > 0) {
     const detail =
-      deferred.kind !== 'inventory' || deferred.placements.length === 0
+      deferred.kind !== 'inventory' || deferredPlacements.length === 0
         ? `feature ${input.slug}`
-        : deferred.placements.map((placement) => `host ${placement.host} round ${placement.roundId}`).join(', ');
+        : deferredPlacements.map((placement) => `host ${placement.host} round ${placement.roundId}`).join(', ');
     throw new StackPublicationHaltError(
       'stack_publication_precondition_failed',
       `deferred routed placement remains (${detail}); run the fold rebase before publication`,

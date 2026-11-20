@@ -25,7 +25,7 @@ import type {
   RestackConflictResolution,
   RestackResolver,
 } from '../../../src/engine/restack/restack-resolver.js';
-import { createRouteRecord } from '../../../src/engine/routing/route-record-store.js';
+import { createRouteRecord, readRouteRecord, writeRoutingTransaction } from '../../../src/engine/routing/route-record-store.js';
 import type { FoldCommitPlan } from '../../../src/engine/restack/fold-types.js';
 import { parseRoundId } from '../../../src/engine/routing/route-types.js';
 import type { CommitSha, RestackOpId } from '../../../src/engine/restack/restack-types.js';
@@ -100,11 +100,23 @@ async function fixture(options: { readonly stampedOwner?: boolean; readonly hard
         { findingId: 'finding-c1', kind: 'audit', owner: child(1), host: child(1), reason: 'repair', fallback: [] },
       ],
       allocation: { [child(1)]: { remTaskIds: [], blockBodies: [] } },
-      placements: { [child(1)]: { state: 'deferred', leafEntryTip: c2, exitTip: foldedSource } },
     },
     { git: makeGitRunner(repo) },
   );
   if (route.kind !== 'created') throw new Error(`could not create deferred fold route: ${route.kind}`);
+  const storedRoute = await readRouteRecord(repo, 'demo', parseRoundId('r1')!, { git: makeGitRunner(repo) });
+  if (storedRoute.kind !== 'record') throw new Error('could not read deferred fold route');
+  const finalized = await writeRoutingTransaction(repo, 'demo', [{
+    kind: 'update-record',
+    previous: storedRoute,
+    record: {
+      ...storedRoute.record,
+      phase: 'closed',
+      hosts: { [child(1)]: 'done' },
+      placements: { [child(1)]: { state: 'deferred', leafEntryTip: c2, exitTip: foldedSource } },
+    },
+  }], { git: makeGitRunner(repo) });
+  if (finalized.kind !== 'updated') throw new Error(`could not finalize deferred fold route: ${finalized.kind}`);
   await writeSliceTopologyFixture(repo, {
     version: 1,
     slug: 'demo',
@@ -196,11 +208,23 @@ describe('planned fold recovery (real local Git)', () => {
         execution: 'leaf',
         items: [{ findingId: 'mixed', kind: 'audit', owner: child(1), host: child(1), reason: 'repair', fallback: [] }],
         allocation: { [child(1)]: { remTaskIds: ['rem-prd-audit-T1'], blockBodies: [block] } },
-        placements: { [child(1)]: { state: 'deferred', leafEntryTip: entry, exitTip: source } },
       },
       { git: makeGitRunner(subject.repo) },
     );
     if (route.kind !== 'created') throw new Error(`could not create mixed fold route: ${route.kind}`);
+    const storedRoute = await readRouteRecord(subject.repo, 'demo', parseRoundId('r2')!, { git: makeGitRunner(subject.repo) });
+    if (storedRoute.kind !== 'record') throw new Error('could not read mixed fold route');
+    const finalized = await writeRoutingTransaction(subject.repo, 'demo', [{
+      kind: 'update-record',
+      previous: storedRoute,
+      record: {
+        ...storedRoute.record,
+        phase: 'closed',
+        hosts: { [child(1)]: 'done' },
+        placements: { [child(1)]: { state: 'deferred', leafEntryTip: entry, exitTip: source } },
+      },
+    }], { git: makeGitRunner(subject.repo) });
+    if (finalized.kind !== 'updated') throw new Error(`could not finalize mixed fold route: ${finalized.kind}`);
 
     const folded = await runRestack({
       worktree: subject.repo,

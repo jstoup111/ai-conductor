@@ -125,16 +125,29 @@ export interface RouteRecordStoreDependencies {
 }
 
 /** A deferred leaf placement, read from its owning durable routing round. */
-export interface DeferredPlacement {
+interface DeferredPlacementBase {
   readonly host: ChildId;
   readonly roundId: RoundId;
   readonly leafEntryTip: CommitSha;
-  readonly exitTip?: CommitSha;
   readonly findingIds: readonly string[];
 }
 
+/** An in-progress leaf repair that blocks base refresh and publication. */
+export interface OpenDeferredPlacement extends DeferredPlacementBase {}
+
+/** A completed leaf interval that is eligible for folding. */
+export interface FoldableDeferredPlacement extends DeferredPlacementBase {
+  readonly exitTip: CommitSha;
+}
+
+export type DeferredPlacement = OpenDeferredPlacement | FoldableDeferredPlacement;
+
 export type DeferredPlacementInventory =
-  | { readonly kind: 'inventory'; readonly placements: readonly DeferredPlacement[] }
+  | {
+      readonly kind: 'inventory';
+      readonly open: readonly OpenDeferredPlacement[];
+      readonly foldable: readonly FoldableDeferredPlacement[];
+    }
   | { readonly kind: 'unavailable'; readonly detail: string };
 
 /** Enumerates every deferred placement from one checked route namespace read. */
@@ -151,7 +164,8 @@ export async function deferredPlacementInventory(
     return { kind: 'unavailable', detail: 'cannot enumerate routing rounds' };
   }
   if (listed.exitCode !== 0) return { kind: 'unavailable', detail: 'cannot enumerate routing rounds' };
-  const placements: DeferredPlacement[] = [];
+  const open: OpenDeferredPlacement[] = [];
+  const foldable: FoldableDeferredPlacement[] = [];
   for (const ref of listed.stdout.split('\n').filter(Boolean)) {
     const roundId = parseRoundId(ref.split('/').at(-1) ?? '');
     if (!roundId || ref !== `refs/conductor/${slug}/routes/${roundId}`)
@@ -163,16 +177,17 @@ export async function deferredPlacementInventory(
       const host = parseChildId(Number(rawHost));
       if (!host)
         return { kind: 'unavailable', detail: `routing round ${roundId} has an invalid deferred host ${rawHost}` };
-      placements.push({
+      const base = {
         host,
         roundId,
         leafEntryTip: placement.leafEntryTip,
-        ...(placement.exitTip === undefined ? {} : { exitTip: placement.exitTip }),
         findingIds: stored.record.items.filter((item) => item.host === host).map((item) => item.findingId),
-      });
+      };
+      if (placement.exitTip === undefined) open.push(base);
+      else foldable.push({ ...base, exitTip: placement.exitTip });
     }
   }
-  return { kind: 'inventory', placements };
+  return { kind: 'inventory', open, foldable };
 }
 
 /**
