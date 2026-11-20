@@ -312,7 +312,14 @@ describe('live self-host boundary', () => {
         fingerprintLiveCheckoutSurface(live),
         fingerprintProviderStateSurface(args),
       ]);
-      const withoutElapsed = ({ elapsedMs: _elapsedMs, ...measurement }: { elapsedMs: number; label: string; fileCount: number }) => measurement;
+      const withoutElapsed = ({
+        elapsedMs: _elapsedMs,
+        ...measurement
+      }: {
+        elapsedMs: number;
+        label: string;
+        fileCount: number;
+      }) => measurement;
       expect({ surface: liveSurface.surface, measurement: withoutElapsed(liveSurface.measurement) }).toEqual({
         surface: snapshot.surfaces[0],
         measurement: withoutElapsed(snapshot.measurements[0]),
