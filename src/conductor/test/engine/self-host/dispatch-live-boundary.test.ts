@@ -152,6 +152,36 @@ describe('DispatchLiveBoundary', () => {
     ]);
   });
 
+  // Covers: task:2
+  it('starts a fresh fingerprint when revocation abandons a stalled acquire', async () => {
+    let revoke!: () => void;
+    const never = new Promise<typeof live>(() => {});
+    const fingerprintLiveCheckout = vi.fn().mockReturnValueOnce(never).mockResolvedValueOnce(live);
+    const h = harness({ fingerprintLiveCheckout });
+    const stale = h.boundary.acquire({
+      liveCheckout: '/live',
+      providerHome: '/claude',
+      provider: 'claude',
+      onRevoked: (callback) => {
+        revoke = callback;
+        return () => {};
+      },
+      probe: h.probe,
+    });
+    await Promise.resolve();
+    revoke();
+    const replacement = await h.boundary.acquire({
+      liveCheckout: '/live',
+      providerHome: '/claude',
+      provider: 'claude',
+      probe: h.probe,
+    });
+    await replacement.release();
+    await h.boundary.end();
+    expect(fingerprintLiveCheckout).toHaveBeenCalledTimes(2);
+    void stale.catch(() => {});
+  });
+
   // Covers: task:2, task:3
   it('retains a shared live surface when a sibling provider fingerprint rejects', async () => {
     let resolveLive!: () => void;
@@ -263,6 +293,40 @@ describe('DispatchLiveBoundary', () => {
     await ending;
     expect(violations).toEqual(['verification completed']);
     expect(h.events.filter((event: any) => event.type === 'self_host_containment_verdict')).toHaveLength(1);
+  });
+
+  // Covers: task:3
+  it('releases a revoked lease so end reports its one violation after a replacement', async () => {
+    let revoke!: () => void;
+    const violations: string[] = [];
+    const verify = vi.fn(async () => ({ ok: false as const, reason: 'drift found' }));
+    const h = harness({
+      verify,
+      onViolation: (reason) => violations.push(reason),
+    });
+    const stale = await h.boundary.acquire({
+      liveCheckout: '/live',
+      providerHome: '/claude',
+      provider: 'claude',
+      onRevoked: (callback) => {
+        revoke = callback;
+        return () => {};
+      },
+      probe: h.probe,
+    });
+    revoke();
+    await Promise.resolve();
+    const replacement = await h.boundary.acquire({
+      liveCheckout: '/live',
+      providerHome: '/claude',
+      provider: 'claude',
+      probe: h.probe,
+    });
+    await replacement.release();
+    await h.boundary.end();
+    await stale.release();
+    expect(verify).toHaveBeenCalledOnce();
+    expect(violations).toEqual(['drift found']);
   });
 
   // Covers: task:3, task:4

@@ -491,6 +491,7 @@ describe('provider lifecycle transitions', () => {
       const first = deferred<string>();
       const replacement = deferred<string>();
       let isCurrent: (() => boolean) | undefined;
+      let revocations = 0;
       const supervisor = createProviderLifecycleSupervisor({
         attempt: { logicalStep: 'build', id: 'attempt-1' },
         recoveryCount: 0,
@@ -508,6 +509,9 @@ describe('provider lifecycle transitions', () => {
 
       const timedOutAttempt = supervisor.supervise((lease) => {
         isCurrent = lease.isCurrent;
+        lease.onRevoked(() => {
+          revocations += 1;
+        });
         events.push(`candidate:${lease.isCurrent()}`);
         return first.promise.then((result) => {
           events.push(`late:${result}:${lease.isCurrent()}`);
@@ -535,6 +539,7 @@ describe('provider lifecycle transitions', () => {
           'late:stale-result:false',
         ],
       });
+      expect(revocations).toBe(1);
     } finally {
       vi.useRealTimers();
     }

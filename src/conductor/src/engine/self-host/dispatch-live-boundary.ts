@@ -19,6 +19,7 @@ type SurfaceResult = Awaited<ReturnType<typeof fingerprintLiveCheckoutSurface>>;
 type ProviderSurfaceResult = Awaited<ReturnType<typeof fingerprintProviderStateSurface>>;
 type CachedSurface<T> = {
   promise: Promise<T>;
+  settled: boolean;
   emitted: boolean;
   emission: Promise<void> | undefined;
 };
@@ -45,6 +46,8 @@ export interface DispatchLiveBoundaryAcquire {
   providerHome: string;
   provider: BuiltInProviderId;
   selectedAuthPaths?: readonly string[];
+  /** Preparation lifecycle hook; revocation abandons this acquire immediately. */
+  onRevoked?(callback: () => void): () => void;
   probe(snapshot: LiveBoundarySnapshot): Promise<ContainmentVerdict>;
 }
 
@@ -77,13 +80,44 @@ export class DispatchLiveBoundary {
   async acquire(args: DispatchLiveBoundaryAcquire): Promise<DispatchLiveBoundaryLease> {
     if (this.ended) throw new Error('Self-host dispatch live boundary has ended');
     this.pendingAcquires += 1;
+    let active = true;
+    let unregisterRevocation: (() => void) | undefined;
+    let live: CachedSurface<SurfaceResult> | undefined;
+    let provider: CachedSurface<ProviderSurfaceResult> | undefined;
+    let containment: CachedSurface<ContainmentVerdict> | undefined;
+    let leaseGranted = false;
+    let releaseLease: (() => Promise<void>) | undefined;
+    const finishAcquire = async () => {
+      if (!active) return;
+      active = false;
+      this.pendingAcquires -= 1;
+      if (this.pendingAcquires === 0) {
+        this.closeIfUnused();
+        await this.finalizeIfReady();
+        const waiters = this.acquireWaiters;
+        this.acquireWaiters = [];
+        for (const wake of waiters) wake();
+      }
+    };
+    const abandon = () => {
+      if (leaseGranted) {
+        void releaseLease?.();
+        return;
+      }
+      if (!active) return;
+      this.evictPending(this.liveSurfaces, args.liveCheckout, live);
+      this.evictPending(this.providerSurfaces, `${args.provider}\0${args.providerHome}`, provider);
+      this.evictPending(this.containments, args.liveCheckout, containment);
+      void finishAcquire().finally(() => unregisterRevocation?.());
+    };
+    unregisterRevocation = args.onRevoked?.(abandon);
     try {
       this.openWindow();
-      const live = this.memoize(this.liveSurfaces, args.liveCheckout, () =>
+      live = this.memoize(this.liveSurfaces, args.liveCheckout, () =>
         this.fingerprintLiveCheckout(args.liveCheckout),
       );
       const providerKey = `${args.provider}\0${args.providerHome}`;
-      const provider = this.memoize(this.providerSurfaces, providerKey, () =>
+      provider = this.memoize(this.providerSurfaces, providerKey, () =>
         this.fingerprintProviderState({
           unrelatedProviderState: args.providerHome,
           provider: args.provider,
@@ -91,41 +125,38 @@ export class DispatchLiveBoundary {
         }),
       );
       const [liveSurface, providerSurface] = await Promise.all([live.promise, provider.promise]);
-      const containment = await this.memoize(this.containments, args.liveCheckout, () =>
+      if (!active) throw new DispatchLiveBoundaryExpiredError();
+      containment = this.memoize(this.containments, args.liveCheckout, () =>
         args.probe({
           surfaces: [liveSurface.surface, providerSurface.surface],
           measurements: [liveSurface.measurement, providerSurface.measurement],
         }),
-      ).promise;
+      );
+      const containmentResult = await containment.promise;
+      if (!active) throw new DispatchLiveBoundaryExpiredError();
       await this.emitMeasurementsOnce([
         { cache: live, measurement: liveSurface.measurement },
         { cache: provider, measurement: providerSurface.measurement },
       ]);
-      if (this.ended) throw new DispatchLiveBoundaryExpiredError();
+      if (!active || this.ended) throw new DispatchLiveBoundaryExpiredError();
       this.leases += 1;
       let released = false;
       const lease = {
-        containment,
+        containment: containmentResult,
         release: async () => {
           if (released) return;
           released = true;
+          unregisterRevocation?.();
           this.leases -= 1;
           await this.finalizeIfReady();
         },
       };
+      leaseGranted = true;
+      releaseLease = lease.release;
       return lease;
     } finally {
-      this.pendingAcquires -= 1;
-      if (this.pendingAcquires === 0) {
-        this.closeIfUnused();
-        // Establish and await the shared finalization before releasing end()
-        // callers. This makes its verdict, events and violation visible when
-        // end() resolves, rather than a detached follow-on task.
-        await this.finalizeIfReady();
-        const waiters = this.acquireWaiters;
-        this.acquireWaiters = [];
-        for (const wake of waiters) wake();
-      }
+      await finishAcquire();
+      if (!leaseGranted) unregisterRevocation?.();
     }
   }
 
@@ -151,8 +182,16 @@ export class DispatchLiveBoundary {
     const existing = map.get(key);
     if (existing) return existing;
     const promise = create();
-    const entry = { promise, emitted: false, emission: undefined };
+    const entry: CachedSurface<T> = { promise, settled: false, emitted: false, emission: undefined };
     map.set(key, entry);
+    void promise.then(
+      () => {
+        entry.settled = true;
+      },
+      () => {
+        entry.settled = true;
+      },
+    );
     if (evictOnReject) {
       // Only the rejected entry itself may be evicted. A different acquire can
       // share a successful (or still pending) sibling surface safely.
@@ -161,6 +200,10 @@ export class DispatchLiveBoundary {
       });
     }
     return entry;
+  }
+
+  private evictPending<T>(map: Map<string, CachedSurface<T>>, key: string, entry: CachedSurface<T> | undefined): void {
+    if (entry && !entry.settled && map.get(key) === entry) map.delete(key);
   }
 
   /**

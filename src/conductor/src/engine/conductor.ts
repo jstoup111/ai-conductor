@@ -7550,7 +7550,7 @@ export class Conductor {
         );
         return result;
       };
-      this.providerExecution.prepareCandidateSelfHost = async (candidate, runtime, identity) => {
+      this.providerExecution.prepareCandidateSelfHost = async (candidate, runtime, identity, onRevoked) => {
         // This is a candidate-local setup capability. Check it before opening
         // a live-boundary window or allocating scratch state so fallback has
         // no resource ownership to unwind.
@@ -7587,6 +7587,7 @@ export class Conductor {
             providerHome,
             provider: providerId,
             selectedAuthPaths: [provider.selfHostShape.selectedAuthPath],
+            onRevoked,
             probe: async () =>
               sh.liveContainment
                 ? probeContainment(bindSet, liveCheckout, this.projectRoot, async (executable, args) => {
@@ -7707,10 +7708,10 @@ export class Conductor {
         this.providerExecution.prepareCandidateSelfHost = priorPreparation;
         this.providerExecution.withCandidateSafety = priorSafety;
       }
-      // A preparation timeout can leave a provider fingerprint pending. Do not
-      // hold the supervisor past its timeout; acquire finalization still runs
-      // the one boundary verification when that fingerprint settles.
-      await dispatchLiveBoundary.end({ waitForPending: false });
+      // Revoked preparations abandon their pending acquire synchronously, so
+      // finalization can wait for the remaining leases and report its single
+      // verdict before the dispatch exposes any resulting halt.
+      await dispatchLiveBoundary.end();
     }
   }
 

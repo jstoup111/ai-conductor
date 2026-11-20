@@ -31,6 +31,8 @@ export interface ProviderPreparationLease {
   attempt: ProviderAttemptIdentity;
   deadlineAt: number | undefined;
   isCurrent(): boolean;
+  /** Registers work that must stop owning preparation resources on revocation. */
+  onRevoked(callback: () => void): () => void;
   /** Acknowledges spawn while atomically ending preparation-timeout authority. */
   spawnPermit: SpawnPermit;
 }
@@ -262,6 +264,13 @@ async function superviseAttempt<T>(
     ? undefined
     : preparationStartedAt + deadlineDelayMilliseconds!;
   let current = true;
+  const revocationCallbacks = new Set<() => void>();
+  const revoke = () => {
+    if (!current) return;
+    current = false;
+    for (const callback of revocationCallbacks) callback();
+    revocationCallbacks.clear();
+  };
   publishLifecycleState(options, state);
   let timeout: ProviderLifecycleTimerHandle | undefined;
   const deadline = deadlineDelayMilliseconds === undefined
@@ -269,7 +278,7 @@ async function superviseAttempt<T>(
     : new Promise<never>((_, reject) => {
       timeout = options.timer.schedule(() => {
         if (!current) return;
-        current = false;
+        revoke();
         if (recoveryCount === 0) {
           const recovering = transitionProviderLifecycle(state, {
             phase: 'recovering',
@@ -291,6 +300,14 @@ async function superviseAttempt<T>(
     attempt: { ...attempt },
     deadlineAt,
     isCurrent: () => current,
+    onRevoked: (callback) => {
+      if (!current) {
+        callback();
+        return () => {};
+      }
+      revocationCallbacks.add(callback);
+      return () => revocationCallbacks.delete(callback);
+    },
     spawnPermit: (purpose: SpawnPermitPurpose = 'worker-spawn') => {
       if (!current) {
         return { permitted: false, reason: 'revoked' };
