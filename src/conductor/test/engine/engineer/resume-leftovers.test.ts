@@ -81,7 +81,7 @@ describe('resume local leftovers', () => {
     expect(discard).toHaveBeenCalledOnce();
   });
 
-  it('Covers: Task 13 shows saved remote progress, offers keep-local or discard-local, and backs up dirty docs and commits before attaching remote progress', async () => {
+  it('Covers: Task 13 shows saved remote progress, offers keep-local or discard-local, and backs up dirty docs and commits before attaching remote progress (retry review)', async () => {
     const operations: string[] = [];
     const attach = vi.fn(async () => {
       operations.push('attach remote worktree');
@@ -112,7 +112,7 @@ describe('resume local leftovers', () => {
     ]);
   });
 
-  it('Covers: Task 13 names divergent or non-TTY leftovers and the backup option before any worktree change or landing', async () => {
+  it('Covers: Task 13 names divergent or non-TTY leftovers and the backup option before any worktree change or landing (retry review)', async () => {
     const attach = vi.fn(async () => ({ worktree: '/must-not-attach' }));
     const discard = vi.fn(async () => {});
     for (const localState of [
