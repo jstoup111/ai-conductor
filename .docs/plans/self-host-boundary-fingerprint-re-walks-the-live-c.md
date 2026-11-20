@@ -203,3 +203,12 @@ Task 1 ─> Task 2 ─> Task 3 ─> Task 4 ─> Task 5
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-as-built-R1: Remove the production-unreachable fingerprintLiveBoundary export from src/conductor/src/engine/self-host/live-boundary.ts. Move its two-surface composition (fingerprintLiveCheckoutSurface + fingerprintProviderStateSurface into { surfaces, measurements }) into a local helper in src/conductor/test/engine/self-host/live-boundary.test.ts, so every existing baseline and task 1's deep-equal assertion keep the same inputs and outputs. Drop the fingerprintLiveBoundary mock entry from src/conductor/test/engine/self-host-dispatch-admission.test.ts. Add no entry to LIVE_CHECKOUT_VOLATILE or to any provider-state exclusion list.
+**Gate:** as-built
+**Rationale:** Verified: fingerprintLiveBoundary (src/conductor/src/engine/self-host/live-boundary.ts:511) has no production caller. DispatchLiveBoundary (dispatch-live-boundary.ts) now calls fingerprintLiveCheckoutSurface and fingerprintProviderStateSurface directly. The only remaining references are live-boundary.test.ts, which uses it to build baselines and as the deep-equal oracle, and a vi.fn mock entry in self-host-dispatch-admission.test.ts. This is implementation drift inside task 1, which owns the per-surface extraction in live-boundary.ts. It needs no architecture decision: no ADR, exclusion list, digest rule, or containment rule changes. The repair moves the two-surface composition out of production into a test-local helper with the same name and output. Task 1's coverage survives: its deep-equal criterion and every existing baseline in live-boundary.test.ts are kept against the identical composition, and verifyLiveBoundary stays unchanged. Sibling check: the other production exports (verifyLiveBoundary and the two surface functions) are reached through DispatchLiveBoundary. Earlier features' ADRs that mention fingerprintLiveBoundary are sealed and only describe history, so they are found and excluded with no amendment.
+**Parent task:** 1
+**Governing clause:** Task 1
+**Done when:**
+- Task 1 is satisfied by this task.
+- The repair for task rem-as-built-R1 is committed and its targeted tests pass.
