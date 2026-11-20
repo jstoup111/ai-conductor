@@ -1,12 +1,13 @@
 // Covers: task:19, task:20
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
-import { Conductor } from '../../src/engine/conductor.js';
+import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
-import { REMEDIATION_TYPED_PLAN_PATH } from '../../src/engine/remediation-plan-store.js';
+import { REMEDIATION_TYPED_PLAN_PATH, remediationTypedPlanPath } from '../../src/engine/remediation-plan-store.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 import { readKickbackLedger, settlePendingRepair } from '../../src/engine/kickback-ledger.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
@@ -18,8 +19,21 @@ import type { ConductState } from '../../src/types/index.js';
 import { createRemediationPlanProviderFixture } from './remediation-plan-fixtures.js';
 
 const roots: string[] = [];
+const typedPlanReadCalls = vi.hoisted(() => [] as unknown[][]);
+
+vi.mock('../../src/engine/remediation-plan-store.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/remediation-plan-store.js')>();
+  return {
+    ...actual,
+    readTypedRemediationPlan: async (...args: Parameters<typeof actual.readTypedRemediationPlan>) => {
+      typedPlanReadCalls.push(args);
+      return actual.readTypedRemediationPlan(...args);
+    },
+  };
+});
 
 afterEach(async () => {
+  typedPlanReadCalls.splice(0);
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -70,6 +84,22 @@ function output() {
   };
 }
 
+function buildStallOutput() {
+  return {
+    version: 'v1',
+    dispositions: [
+      {
+        reference: { kind: 'stall', id: 'stall:feature' },
+        disposition: 'build',
+        category: null,
+        rationale: 'The stalled child needs the named repair.',
+        tasks: [{ id: 'repair-stalled-child', title: 'Repair the stalled child build.' }],
+        boundTaskIds: [],
+      },
+    ],
+  };
+}
+
 const refusal = {
   key: 'S9.1',
   decisionId: 'decision-refused-9',
@@ -109,6 +139,7 @@ async function fixture(
     stallQuestion?: string;
     evidenceDirectory?: boolean;
     skipPlanRemediation?: boolean;
+    activeChild?: 3 | 4;
     remediationProjectionLimitOverrides?: Partial<RemediationProjectionLimits>;
   } = {},
 ) {
@@ -189,11 +220,16 @@ async function fixture(
     config,
     remediationProjectionLimitOverrides: options.remediationProjectionLimitOverrides,
   });
+  if (options.activeChild !== undefined) {
+    (conductor as unknown as { activeRegionChild: ReturnType<typeof parseChildId> }).activeRegionChild =
+      parseChildId(options.activeChild);
+  }
   const source = options.source ?? 'prd-audit';
   const evidenceFile = options.evidenceFile ?? '.pipeline/prd-audit.md';
   if (options.evidenceDirectory) {
     await mkdir(join(root, evidenceFile), { recursive: true });
   } else if (options.stallQuestion !== undefined) {
+    await mkdir(dirname(join(root, evidenceFile)), { recursive: true });
     await writeFile(join(root, evidenceFile), options.stallQuestion, 'utf8');
   }
   const state = { session_started_at: Date.now() - 1_000, feature_desc: 'feature' } as ConductState;
@@ -259,6 +295,80 @@ describe('Conductor typed remediation-plan admission', () => {
     );
     return { ...result, outcome };
   }
+
+  // Covers: task:3
+  it('persists and reads a child 3 build-stall gap plan from child 3’s region', async () => {
+    const child3 = parseChildId(3)!;
+    const result = await fixture('claude', [{ kind: 'structured', finalStructuredResult: buildStallOutput() }], 2, {
+      activeChild: 3,
+      source: 'build-stall',
+      evidenceFile: '.pipeline/children/3/build-stall-question.md',
+      stallQuestion: 'Which repair unblocks child 3?',
+    });
+
+    // The stacked-route guard runs after the reader. It halts this focused
+    // fixture because it has no real stack cursor; an absent child plan would
+    // instead return `none` before reaching that guard.
+    expect(result.outcome).toMatchObject({ kind: 'halt' });
+    expect(typedPlanReadCalls).toContainEqual([
+      result.root,
+      { attemptId: expect.any(String) },
+      {},
+      child3,
+    ]);
+    await expect(readFile(remediationTypedPlanPath(result.root, child3), 'utf8')).resolves.toContain(
+      'repair-stalled-child',
+    );
+    await expect(readFile(join(result.root, REMEDIATION_TYPED_PLAN_PATH), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  // Covers: task:3
+  it('does not let child 4 read an earlier child 3 build-stall gap plan', async () => {
+    const child3 = parseChildId(3)!;
+    const child4 = parseChildId(4)!;
+    const result = await fixture('claude', [{ kind: 'structured', finalStructuredResult: buildStallOutput() }], 1, {
+      activeChild: 3,
+      source: 'build-stall',
+      evidenceFile: '.pipeline/children/3/build-stall-question.md',
+      stallQuestion: 'Which repair unblocks child 3?',
+    });
+    const earlierAttempt = JSON.parse(await readFile(remediationTypedPlanPath(result.root, child3), 'utf8')) as {
+      attemptId: string;
+    };
+    const child4Runner: StepRunner = { run: async () => ({ success: true }) };
+    (result.conductor as unknown as { activeRegionChild: typeof child4; stepRunner: StepRunner }).activeRegionChild = child4;
+    (result.conductor as unknown as { stepRunner: StepRunner }).stepRunner = child4Runner;
+    await mkdir(join(result.root, '.pipeline', 'children', '4'), { recursive: true });
+    await writeFile(
+      join(result.root, '.pipeline', 'children', '4', 'build-stall-question.md'),
+      'Which repair unblocks child 4?',
+      'utf8',
+    );
+
+    const child4Outcome = await (result.conductor as unknown as {
+      planRemediation(
+        state: ConductState,
+        steps: typeof ALL_STEPS,
+        context: string,
+        source: { source: string; evidence: readonly { gate: string; evidenceFile: string }[] },
+      ): Promise<{ kind: string; reason?: string }>;
+    }).planRemediation(
+      result.state,
+      ALL_STEPS,
+      'Remediate build stall for child 4.',
+      { source: 'build-stall', evidence: [{ gate: 'build', evidenceFile: '.pipeline/children/4/build-stall-question.md' }] },
+    );
+
+    expect(earlierAttempt.attemptId).not.toBe('');
+    expect(child4Outcome).toEqual({ kind: 'none', reason: 'remediation planner produced no current typed plan' });
+    expect(typedPlanReadCalls).toContainEqual([
+      result.root,
+      { attemptId: expect.any(String) },
+      {},
+      child4,
+    ]);
+    await expect(readFile(remediationTypedPlanPath(result.root, child4), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
 
   // Covers: task:29
   it('routes validated refusal references through the typed plan and appends decision-bound rework tasks', async () => {
