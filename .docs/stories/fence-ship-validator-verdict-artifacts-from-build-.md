@@ -20,7 +20,7 @@ Approved by the operator on 2026-10-02. Scope is skill text only: the `pipeline`
 #### Negative Paths
 
 - Given a BUILD session that believes it has fixed a SHIP finding, when it closes the remediation task, then the `pipeline` skill states that only the validator's own next dispatch produces a new verdict and that the session records its proof through `conduct task done` evidence instead of editing the verdict.
-- Given the read-only rule, when a BUILD session needs the finding's detail, then the `pipeline` and `tdd` skills still direct it to read the typed remediation plan (`.pipeline/remediation-plan.json`) and the cited verdict artifact, so reading is not forbidden.
+- Given the read-only rule, when a BUILD session needs the finding's detail, then the `pipeline` and `tdd` skills still direct it to read the remediation inputs whose paths its prompt names and the cited verdict artifact, so reading is not forbidden.
 
 ### Done When
 

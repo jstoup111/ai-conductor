@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "slug": "child-build-halts-needs-human-on-another-child-s-a",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/child-build-halts-needs-human-on-another-child-s-a.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/child-build-halts-needs-human-on-another-child-s-a.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/child-build-halts-needs-human-on-another-child-s-a.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/2026-11-15-child-build-halts-needs-human-on-another-child-s-a.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-07-10-daemon-stall-remediation.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-11-15-remediation-build-inputs-are-region-state-retired-on-settlement.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/child-build-halts-needs-human-on-another-child-s-a.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/child-build-halts-needs-human-on-another-child-s-a.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/child-build-halts-needs-human-on-another-child-s-a.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/child-build-halts-needs-human-on-another-child-s-a.md"
+    }
+  ]
+}
