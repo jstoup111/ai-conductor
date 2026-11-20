@@ -820,7 +820,9 @@ async function writeFoldCommit(
     ]);
     const tree = merged.exitCode === 0 ? parseCommitSha(merged.stdout.trim()) : undefined;
     if (!tree) throw new Error(`cannot apply fold hunk ${source.sha}:${part.path}: ${merged.stderr}`);
-    const placed = await git(['commit-tree', tree, '-p', placedTip], { input: 'fold replay probe\n' });
+    const placed = await git(['commit-tree', tree, '-p', placedTip], {
+      input: withDaemonCoAuthorTrailer('fold replay probe\n'),
+    });
     const next = placed.exitCode === 0 ? parseCommitSha(placed.stdout.trim()) : undefined;
     if (!next) throw new Error(`cannot write fold replay probe for ${source.sha}:${part.path}: ${placed.stderr}`);
     placedTip = next;
