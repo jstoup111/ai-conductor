@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-11-20T17:44:40.104Z
 Slug: self-host-boundary-fingerprint-re-walks-the-live-c
 Class: needs-human
 Halting step: unknown
