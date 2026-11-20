@@ -1,6 +1,11 @@
 import type { BuildReviewRepairProvenance } from './build-review-inputs.js';
 import type { MalformedCoversMarker } from './build-review-test-scope.js';
-import type { AuthenticationReadiness, CodexProbeFailure, ProviderExitFacts, TokenUsage } from '../execution/llm-provider.js';
+import type {
+  AuthenticationReadiness,
+  CodexProbeFailure,
+  ProviderExitFacts,
+  TokenUsage,
+} from '../execution/llm-provider.js';
 import type { ObservedInterval } from '../execution/observed-interval.js';
 import type { ManagedGhObservationCoverage } from '../execution/managed-session-preparation.js';
 import type { ConductState, ExecutionContext } from '../types/index.js';
@@ -12,7 +17,15 @@ import type { ProviderSetupExhaustion } from '../execution/provider-setup-failur
 import type { AcceptedWideningDecision } from './accepted-widenings.js';
 import type { ReadOnlyReviewCapability } from './build-review-read-only-capability.js';
 import type { RemediationProjection } from './remediation-projection.js';
-import type { CiFailureContext, CiFailureAttempt, GitRunner as RebaseGitRunner, ResolutionContext, ResolutionAttempt, SetupFailureContext, SetupFailureAttempt } from './rebase.js';
+import type {
+  CiFailureContext,
+  CiFailureAttempt,
+  GitRunner as RebaseGitRunner,
+  ResolutionContext,
+  ResolutionAttempt,
+  SetupFailureContext,
+  SetupFailureAttempt,
+} from './rebase.js';
 import type { CitationJudgementInput, CitationJudgementResult } from './done-when-citation-judgement.js';
 import type { RemediationClosureInput, RemediationClosureVerdictResult } from './remediation-closure-judgement.js';
 
@@ -213,12 +226,8 @@ export function toSpotAuditVerifierResult(
   return {
     success: result.success,
     output: result.output ?? '',
-    ...(result.observedIntervals
-      ? { observedIntervals: result.observedIntervals }
-      : {}),
-    ...(result.providerSetupExhaustion
-      ? { providerSetupExhaustion: result.providerSetupExhaustion }
-      : {}),
+    ...(result.observedIntervals ? { observedIntervals: result.observedIntervals } : {}),
+    ...(result.providerSetupExhaustion ? { providerSetupExhaustion: result.providerSetupExhaustion } : {}),
     ...(result.authFailure !== undefined ? { authFailure: result.authFailure } : {}),
     ...(result.authentication ? { authentication: result.authentication } : {}),
   };
@@ -262,15 +271,17 @@ export interface StepRunOptions {
     readonly decisions: readonly AcceptedWideningDecision[];
   };
   /** Engine-owned constrained reconciliation through the existing remediate step. */
-  remediationRequest?: {
-    readonly mode: 'prd-widening-reconciliation';
-    readonly projection: string;
-    readonly nativeSchema: Readonly<Record<string, unknown>>;
-  } | {
-    /** Engine-owned input for a provider-native remediation disposition plan. */
-    readonly mode: 'gap-plan';
-    readonly projection: RemediationProjection;
-  };
+  remediationRequest?:
+    | {
+        readonly mode: 'prd-widening-reconciliation';
+        readonly projection: string;
+        readonly nativeSchema: Readonly<Record<string, unknown>>;
+      }
+    | {
+        /** Engine-owned input for a provider-native remediation disposition plan. */
+        readonly mode: 'gap-plan';
+        readonly projection: RemediationProjection;
+      };
   /**
    * This dispatch's engine-owned run identity, passed INTO the provider
    * lifecycle so its `attempt.id` is this exact value
@@ -364,10 +375,7 @@ export interface StepRunner {
    * Legacy runners omit this seam and continue using scalar branch sessions.
    */
   beginProviderBranch?(step: StepName): ProviderSessionScope | undefined;
-  runInteractive?(
-    step: StepName,
-    failureContext: { reason?: string },
-  ): Promise<void>;
+  runInteractive?(step: StepName, failureContext: { reason?: string }): Promise<void>;
   assessComplexity?(): Promise<ComplexityTier | ComplexityAssessment | null>;
   /**
    * Drop session state so the next invocation creates a fresh provider session.
@@ -432,9 +440,7 @@ export interface StepRunner {
    * Dispatch the engine-owned citation judgement in a fresh, read-only,
    * native-schema-constrained provider session.
    */
-  dispatchDoneWhenCitationJudgement?(
-    input: CitationJudgementInput,
-  ): Promise<CitationJudgementDispatchResult>;
+  dispatchDoneWhenCitationJudgement?(input: CitationJudgementInput): Promise<CitationJudgementDispatchResult>;
   /** Dispatch the engine-owned remediation-closure judgement under BUILD supervision. */
   dispatchRemediationClosureJudgement?(
     input: RemediationClosureInput,

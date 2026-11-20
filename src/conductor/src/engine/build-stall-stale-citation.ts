@@ -8,11 +8,11 @@ import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 
 export type BuildStallStaleCitation =
   | {
-    readonly kind: 'stale';
-    readonly caseId: string;
-    readonly ownerChild: ChildId;
-    readonly state: 'resolved' | 'foreign';
-  }
+      readonly kind: 'stale';
+      readonly caseId: string;
+      readonly ownerChild: ChildId;
+      readonly state: 'resolved' | 'foreign';
+    }
   | { readonly kind: 'not-stale' };
 
 export interface BuildStallStaleCitationInput {
@@ -42,8 +42,10 @@ export function classifyBuildStallStaleCitation(input: BuildStallStaleCitationIn
     }
   }
 
-  if (citedCases.length === 0 || citedCases.some(({ case: record, ownerChild }) =>
-    ownerChild === input.activeChild && record.resolution === 'open')) {
+  if (
+    citedCases.length === 0 ||
+    citedCases.some(({ case: record, ownerChild }) => ownerChild === input.activeChild && record.resolution === 'open')
+  ) {
     return { kind: 'not-stale' };
   }
 
@@ -57,8 +59,7 @@ export function classifyBuildStallStaleCitation(input: BuildStallStaleCitationIn
 }
 
 export type RecordBuildStallStaleCitationResult =
-  | { readonly kind: 'recorded'; readonly attempt: number }
-  | { readonly kind: 'persist-failed' };
+  { readonly kind: 'recorded'; readonly attempt: number } | { readonly kind: 'persist-failed' };
 
 /**
  * The event log, rather than process memory, bounds stale-citation retries so
@@ -76,8 +77,17 @@ export async function recordBuildStallStaleCitation(
     const text = await readFile(join(projectRoot, '.pipeline/events.jsonl'), 'utf8');
     for (const line of text.trim().split('\n').reverse()) {
       let event: unknown;
-      try { event = JSON.parse(line); } catch { continue; }
-      if (typeof event !== 'object' || event === null || (event as { type?: unknown }).type !== 'build_stall_stale_citation') continue;
+      try {
+        event = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (
+        typeof event !== 'object' ||
+        event === null ||
+        (event as { type?: unknown }).type !== 'build_stall_stale_citation'
+      )
+        continue;
       const prior = event as Partial<Extract<ConductorEvent, { type: 'build_stall_stale_citation' }>>;
       if (prior.caseId !== citation.caseId || prior.resolvedTasks !== resolvedTasks) break;
       attempt++;

@@ -629,7 +629,13 @@ export async function coordinateBuildReviewAdjudication(
       effectiveAcceptedSourceIds: await effectiveAcceptedSourceIds(),
       lapId: input.aggregate.lapId,
       readPublishedCaseIds: async (actionEffectIds) => {
-        const order = await readBuildReviewWorkOrder(input.projectRoot, input.feature, actionEffectIds, undefined, input.child);
+        const order = await readBuildReviewWorkOrder(
+          input.projectRoot,
+          input.feature,
+          actionEffectIds,
+          undefined,
+          input.child,
+        );
         if (order.ok) return new Set(order.workOrder.cases.map((row) => row.caseId));
         return classifyBuildReviewDurableRead(order) === 'absent' ? new Set() : undefined;
       },
@@ -726,7 +732,12 @@ export async function coordinateBuildReviewAdjudication(
     readonly dispatchSkipped?: boolean;
   }): Promise<BuildReviewAdjudicationCoordinatorResult> => {
     if (options.settleAbsentAttempted) {
-      const exitAttemptEvidence = await readBuildReviewWorkOrderAttemptedCaseIds(input.projectRoot, input.feature, undefined, input.child);
+      const exitAttemptEvidence = await readBuildReviewWorkOrderAttemptedCaseIds(
+        input.projectRoot,
+        input.feature,
+        undefined,
+        input.child,
+      );
       if (!exitAttemptEvidence.ok && classifyBuildReviewDurableRead(exitAttemptEvidence) === 'invalid') {
         return fail(`build-review work order ${exitAttemptEvidence.reason}`);
       }
@@ -870,13 +881,18 @@ export async function coordinateBuildReviewAdjudication(
         }
         const orderedCases = orderBuildReviewActionCases(workOrderCases);
         const primary = eligible.find((record) => record.id === orderedCases[0]!.caseId)!;
-        const published = await publishBuildReviewWorkOrder(input.projectRoot, {
-          version: 'v1',
-          domain: 'build_review',
-          feature: input.feature,
-          effectId: primary.effect.id,
-          cases: orderedCases,
-        }, undefined, input.child);
+        const published = await publishBuildReviewWorkOrder(
+          input.projectRoot,
+          {
+            version: 'v1',
+            domain: 'build_review',
+            feature: input.feature,
+            effectId: primary.effect.id,
+            cases: orderedCases,
+          },
+          undefined,
+          input.child,
+        );
         if (!published.ok) return { value: { ok: false as const, reason: `work-order ${published.reason}` } };
         return { value: { ok: true as const, cases, retirementTransitions }, nextState: nextState() };
       });
@@ -1103,7 +1119,12 @@ export async function coordinateBuildReviewAdjudication(
   // than process memory. Without it an attempted case is indistinguishable from
   // an interrupted one, so a repeat could take a second free route and an
   // absent repaired case could never resolve.
-  const attemptEvidence = await readBuildReviewWorkOrderAttemptedCaseIds(input.projectRoot, input.feature, undefined, input.child);
+  const attemptEvidence = await readBuildReviewWorkOrderAttemptedCaseIds(
+    input.projectRoot,
+    input.feature,
+    undefined,
+    input.child,
+  );
   if (!attemptEvidence.ok && classifyBuildReviewDurableRead(attemptEvidence) === 'invalid') {
     return fail(`build-review work order ${attemptEvidence.reason}`);
   }

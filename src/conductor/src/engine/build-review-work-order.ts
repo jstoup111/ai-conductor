@@ -414,11 +414,19 @@ export async function markBuildReviewWorkOrderAttempted(
   return publishBuildReviewWorkOrder(projectRoot, { ...order.workOrder, attemptedCaseIds }, filesystem, child);
 }
 
-export async function removeBuildReviewWorkOrder(projectRoot: string, filesystem: BuildReviewWorkOrderFilesystem = defaultFilesystem, child?: ChildId): Promise<void> {
+export async function removeBuildReviewWorkOrder(
+  projectRoot: string,
+  filesystem: BuildReviewWorkOrderFilesystem = defaultFilesystem,
+  child?: ChildId,
+): Promise<void> {
   await filesystem.rm(buildReviewWorkOrderPath(projectRoot, child));
 }
 
-export async function moveBuildReviewWorkOrderToChild(projectRoot: string, child: ChildId, filesystem: BuildReviewWorkOrderFilesystem = defaultFilesystem): Promise<void> {
+export async function moveBuildReviewWorkOrderToChild(
+  projectRoot: string,
+  child: ChildId,
+  filesystem: BuildReviewWorkOrderFilesystem = defaultFilesystem,
+): Promise<void> {
   const target = buildReviewWorkOrderPath(projectRoot, child);
   await filesystem.mkdir(dirname(target));
   await filesystem.rename(buildReviewWorkOrderPath(projectRoot), target);

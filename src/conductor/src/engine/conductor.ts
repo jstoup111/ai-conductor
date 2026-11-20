@@ -109,7 +109,12 @@ import { withDaemonCoAuthorTrailer } from './bot-co-author.js';
 import { executeGithubOperation } from './github-operations.js';
 import { createIntakeFilingOperations, fileIntakeIssue } from './engineer/intake/file-issue.js';
 import { authorizeGithubFeatureIssueCreation } from './github-creation-context.js';
-import { readRemediationCaseJudgement, relocateRemediationCaseJudgement, remediationCaseJudgementPath, removeRemediationCaseJudgement } from './remediation-case-artifact.js';
+import {
+  readRemediationCaseJudgement,
+  relocateRemediationCaseJudgement,
+  remediationCaseJudgementPath,
+  removeRemediationCaseJudgement,
+} from './remediation-case-artifact.js';
 import { parseBuildReviewBranchArtifact } from './build-review-artifacts.js';
 import type { BuildReviewFinding } from './build-review-domain.js';
 import { planContractPointers, priorAttemptPointers, readActivePlanPath } from './remediation-context-pointers.js';
@@ -6422,7 +6427,12 @@ export class Conductor {
     }
     if (!order.ok) return { kind: 'invalid', reason: `work order ${order.reason}` };
     if (!order.workOrder.cases.some((row) => openActionCases.has(row.caseId))) return { kind: 'absent' };
-    const attempt = await markBuildReviewWorkOrderAttempted(this.projectRoot, feature, undefined, this.activeRegionChild);
+    const attempt = await markBuildReviewWorkOrderAttempted(
+      this.projectRoot,
+      feature,
+      undefined,
+      this.activeRegionChild,
+    );
     if (!attempt.ok) return { kind: 'invalid', reason: `work order attempt ${attempt.reason}` };
     const judgementPath = remediationCaseJudgementPath(this.projectRoot, this.activeRegionChild);
     const judgementContext = state.state.cases.some(isBuildEligibleActionCase)
@@ -6431,10 +6441,11 @@ export class Conductor {
     return {
       kind: 'ready',
       caseIds: order.workOrder.cases.map((row) => row.caseId).sort(),
-      context: appendBuildReviewWorkOrderContext(
-        retryHint ?? 'build_review adjudication: resume the durable remediation work order.',
-        order.workOrder,
-      ) + judgementContext,
+      context:
+        appendBuildReviewWorkOrderContext(
+          retryHint ?? 'build_review adjudication: resume the durable remediation work order.',
+          order.workOrder,
+        ) + judgementContext,
     };
   }
 
@@ -14768,7 +14779,11 @@ export class Conductor {
                     let effectiveQuestion: string | null = null;
                     if (stalled === 'halt_marker') {
                       const question = await readHaltMarkerContent(this.projectRoot);
-                      effectiveQuestion = await writeStallQuestionEvidence(this.projectRoot, question, this.activeRegionChild);
+                      effectiveQuestion = await writeStallQuestionEvidence(
+                        this.projectRoot,
+                        question,
+                        this.activeRegionChild,
+                      );
                       // Task 8: save the question for use in degraded remediation error handling
                       stallQuestion = question;
                     } else if (stalled === 'no_task_progress' && this.daemon && this.mode === 'auto') {
@@ -14783,7 +14798,11 @@ export class Conductor {
                         `Build stall: no forward progress (resolved ` +
                         `${resolvedTasksBefore} → ${resolvedTasksAfter} tasks).`;
                       const synthesized = `${lastBuildStallReason ?? progressPart}\n${reasonPart}.`;
-                      effectiveQuestion = await writeStallQuestionEvidence(this.projectRoot, synthesized, this.activeRegionChild);
+                      effectiveQuestion = await writeStallQuestionEvidence(
+                        this.projectRoot,
+                        synthesized,
+                        this.activeRegionChild,
+                      );
                     }
                     const isZeroWorkStall = stalled === 'no_task_progress';
 
@@ -14800,7 +14819,10 @@ export class Conductor {
                           continue;
                         }
                         if (!feature.feature) continue;
-                        caseStores.set(child, await new RemediationCaseStore(this.projectRoot, feature.feature, { child }).read());
+                        caseStores.set(
+                          child,
+                          await new RemediationCaseStore(this.projectRoot, feature.feature, { child }).read(),
+                        );
                       }
                       const citation = classifyBuildStallStaleCitation({
                         question: effectiveQuestion,
@@ -14809,14 +14831,20 @@ export class Conductor {
                       });
                       if (citation.kind === 'stale') {
                         const recorded = await recordBuildStallStaleCitation(
-                          this.projectRoot, this.events, citation, resolvedTasksAfter,
+                          this.projectRoot,
+                          this.events,
+                          citation,
+                          resolvedTasksAfter,
                         );
-                        const mustHalt = recorded.kind === 'persist-failed' || (recorded.kind === 'recorded' && recorded.attempt >= 3);
+                        const mustHalt =
+                          recorded.kind === 'persist-failed' || (recorded.kind === 'recorded' && recorded.attempt >= 3);
                         if (mustHalt) {
-                          const haltClass = recorded.kind === 'persist-failed' || recorded.attempt >= 4 ? 'needs-human' : 'mechanical';
-                          const detail = recorded.kind === 'persist-failed'
-                            ? 'Unable to record stale citation; clear this halt after checking the event spine.'
-                            : `Stale citation ${citation.caseId} is ${citation.state === 'resolved' ? 'settled' : `owned by child ${citation.ownerChild}`}; clear this halt with ai-conductor halt clear --feature ${basename(this.projectRoot)} --rationale "stale citation reviewed".`;
+                          const haltClass =
+                            recorded.kind === 'persist-failed' || recorded.attempt >= 4 ? 'needs-human' : 'mechanical';
+                          const detail =
+                            recorded.kind === 'persist-failed'
+                              ? 'Unable to record stale citation; clear this halt after checking the event spine.'
+                              : `Stale citation ${citation.caseId} is ${citation.state === 'resolved' ? 'settled' : `owned by child ${citation.ownerChild}`}; clear this halt with ai-conductor halt clear --feature ${basename(this.projectRoot)} --rationale "stale citation reviewed".`;
                           await writeStallHalt(this.projectRoot, effectiveQuestion, detail, this.events, haltClass);
                           await this.retireTerminalBuildStallInputs();
                           await this.emitLoopHalt(effectiveQuestion);
@@ -14895,7 +14923,15 @@ export class Conductor {
                           `Remediate build stall: ${effectiveQuestion}`,
                           {
                             source: isZeroWorkStall ? 'build_stall_zero_work' : 'build_stall',
-                            evidence: [{ gate: 'build', evidenceFile: relative(this.projectRoot, pipelinePathFor(this.projectRoot, 'build-stall-question.md', this.activeRegionChild)) }],
+                            evidence: [
+                              {
+                                gate: 'build',
+                                evidenceFile: relative(
+                                  this.projectRoot,
+                                  pipelinePathFor(this.projectRoot, 'build-stall-question.md', this.activeRegionChild),
+                                ),
+                              },
+                            ],
                           },
                         );
                       } catch (err) {
