@@ -28,17 +28,19 @@ function state(id: string): RemediationCaseStoreState {
   return {
     version: 'v2',
     feature: FEATURE,
-    cases: [{
-      id,
-      domain: 'build_review',
-      disposition: 'act',
-      priority: 'high',
-      rationale: 'The child change needs its own regression coverage.',
-      confidence: 'high',
-      resolution: 'open',
-      sources: [{ sourceId: `testQuality:${id}`, outcome: 'acted', recordedAt: '2026-10-09T12:00:00.000Z' }],
-      effect: { id: `effect-${id}`, kind: 'action', status: 'reserved' },
-    }],
+    cases: [
+      {
+        id,
+        domain: 'build_review',
+        disposition: 'act',
+        priority: 'high',
+        rationale: 'The child change needs its own regression coverage.',
+        confidence: 'high',
+        resolution: 'open',
+        sources: [{ sourceId: `testQuality:${id}`, outcome: 'acted', recordedAt: '2026-10-09T12:00:00.000Z' }],
+        effect: { id: `effect-${id}`, kind: 'action', status: 'reserved' },
+      },
+    ],
     prdWideningCases: [],
     suppressions: [],
   };
@@ -61,8 +63,13 @@ function passAggregate(): unknown {
     snapshotDigest: 'sha256:child-settlement',
     results: {
       testQuality: {
-        kind: 'judged', rubric: 'testQuality', lapId: 'child-settlement' as never,
-        snapshotDigest: 'sha256:child-settlement', contractVersion: 'v3', findings: [], verdict: 'PASS',
+        kind: 'judged',
+        rubric: 'testQuality',
+        lapId: 'child-settlement' as never,
+        snapshotDigest: 'sha256:child-settlement',
+        contractVersion: 'v3',
+        findings: [],
+        verdict: 'PASS',
       },
     },
   });
@@ -110,43 +117,72 @@ describe('child-scoped build-review remediation cases', () => {
     const first = new RemediationCaseStore(root, FEATURE, { child: child1 });
     const second = new RemediationCaseStore(root, FEATURE, { child: child2 });
 
-    await expect(first.mutate(async () => ({ value: undefined, nextState: state('child-1-case') }))).resolves.toEqual({ ok: true, value: undefined });
+    await expect(first.mutate(async () => ({ value: undefined, nextState: state('child-1-case') }))).resolves.toEqual({
+      ok: true,
+      value: undefined,
+    });
     const firstBytes = await readFile(remediationCaseStorePath(root, child1), 'utf8');
 
     await expect(second.read()).resolves.toEqual({
       ok: true,
-      state: { version: 'v4', feature: FEATURE, cases: [], prdWideningCases: [], asBuiltCases: [], suppressions: [], outbox: [] },
+      state: {
+        version: 'v4',
+        feature: FEATURE,
+        cases: [],
+        prdWideningCases: [],
+        asBuiltCases: [],
+        suppressions: [],
+        outbox: [],
+      },
     });
-    await expect(second.mutate(async () => ({ value: undefined, nextState: state('child-2-case') }))).resolves.toEqual({ ok: true, value: undefined });
+    await expect(second.mutate(async () => ({ value: undefined, nextState: state('child-2-case') }))).resolves.toEqual({
+      ok: true,
+      value: undefined,
+    });
 
     await expect(readFile(remediationCaseStorePath(root, child1), 'utf8')).resolves.toBe(firstBytes);
-    await expect(second.read()).resolves.toEqual({ ok: true, state: { ...state('child-2-case'), version: 'v4', asBuiltCases: [], outbox: [] } });
-    await expect(readRemediationCaseStoreFeature(root, undefined, child2)).resolves.toEqual({ ok: true, feature: FEATURE });
+    await expect(second.read()).resolves.toEqual({
+      ok: true,
+      state: { ...state('child-2-case'), version: 'v4', asBuiltCases: [], outbox: [] },
+    });
+    await expect(readRemediationCaseStoreFeature(root, undefined, child2)).resolves.toEqual({
+      ok: true,
+      feature: FEATURE,
+    });
   });
 
   it('uses the legacy flat path when there is no active child', async () => {
     const root = await projectRoot();
     const store = new RemediationCaseStore(root, FEATURE);
 
-    await expect(store.mutate(async () => ({ value: undefined, nextState: state('flat-case') }))).resolves.toEqual({ ok: true, value: undefined });
+    await expect(store.mutate(async () => ({ value: undefined, nextState: state('flat-case') }))).resolves.toEqual({
+      ok: true,
+      value: undefined,
+    });
     expect(remediationCaseStorePath(root)).toBe(join(root, '.pipeline', 'remediation-cases.json'));
-    await expect(store.read()).resolves.toEqual({ ok: true, state: { ...state('flat-case'), version: 'v4', asBuiltCases: [], outbox: [] } });
+    await expect(store.read()).resolves.toEqual({
+      ok: true,
+      state: { ...state('flat-case'), version: 'v4', asBuiltCases: [], outbox: [] },
+    });
   });
 
   it('publishes child 4 admitted repair work under its region and sends its tasks to BUILD', async () => {
     const root = await projectRoot();
     const child = parseChildId(4)!;
     const store = new RemediationCaseStore(root, FEATURE, { child });
-    await expect(store.mutate(async () => ({ value: undefined, nextState: appliedState('child-4-case') })))
-      .resolves.toEqual({ ok: true, value: undefined });
-    await expect(publishBuildReviewWorkOrder(root, workOrder('child-4-case', 'Repair child 4'), undefined, child))
-      .resolves.toMatchObject({ ok: true });
+    await expect(
+      store.mutate(async () => ({ value: undefined, nextState: appliedState('child-4-case') })),
+    ).resolves.toEqual({ ok: true, value: undefined });
+    await expect(
+      publishBuildReviewWorkOrder(root, workOrder('child-4-case', 'Repair child 4'), undefined, child),
+    ).resolves.toMatchObject({ ok: true });
 
     await expect(readFile(buildReviewWorkOrderPath(root, child), 'utf8')).resolves.toContain('child-4-case');
     await expect(readFile(buildReviewWorkOrderPath(root), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
 
     await expect(retryContext(root, child).durableBuildReviewRetryContext(undefined)).resolves.toMatchObject({
-      kind: 'ready', context: expect.stringContaining('Repair child 4'),
+      kind: 'ready',
+      context: expect.stringContaining('Repair child 4'),
     });
   });
 
@@ -158,17 +194,23 @@ describe('child-scoped build-review remediation cases', () => {
     await child4Store.mutate(async () => ({ value: undefined, nextState: appliedState('child-4-case') }));
     await publishBuildReviewWorkOrder(root, workOrder('child-4-case', 'Repair child 4 only'), undefined, child4);
 
-    await expect(retryContext(root, child3).durableBuildReviewRetryContext(undefined)).resolves.toEqual({ kind: 'absent' });
+    await expect(retryContext(root, child3).durableBuildReviewRetryContext(undefined)).resolves.toEqual({
+      kind: 'absent',
+    });
   });
 
   it('sends only child 3 admitted tasks to child 3 BUILD when both child regions are open', async () => {
     const root = await projectRoot();
     const child3 = parseChildId(3)!;
     const child4 = parseChildId(4)!;
-    await new RemediationCaseStore(root, FEATURE, { child: child3 })
-      .mutate(async () => ({ value: undefined, nextState: appliedState('child-3-case') }));
-    await new RemediationCaseStore(root, FEATURE, { child: child4 })
-      .mutate(async () => ({ value: undefined, nextState: appliedState('child-4-case') }));
+    await new RemediationCaseStore(root, FEATURE, { child: child3 }).mutate(async () => ({
+      value: undefined,
+      nextState: appliedState('child-3-case'),
+    }));
+    await new RemediationCaseStore(root, FEATURE, { child: child4 }).mutate(async () => ({
+      value: undefined,
+      nextState: appliedState('child-4-case'),
+    }));
     await publishBuildReviewWorkOrder(root, workOrder('child-3-case', 'Repair child 3 only'), undefined, child3);
     await publishBuildReviewWorkOrder(root, workOrder('child-4-case', 'Repair child 4 only'), undefined, child4);
 
@@ -185,7 +227,8 @@ describe('child-scoped build-review remediation cases', () => {
 
     await expect(readFile(buildReviewWorkOrderPath(root), 'utf8')).resolves.toContain('flat-case');
     await expect(retryContext(root).durableBuildReviewRetryContext(undefined)).resolves.toMatchObject({
-      kind: 'ready', context: expect.stringContaining('Repair flat case'),
+      kind: 'ready',
+      context: expect.stringContaining('Repair flat case'),
     });
   });
 
@@ -193,12 +236,18 @@ describe('child-scoped build-review remediation cases', () => {
     const root = await projectRoot();
     const child = parseChildId(2)!;
     const store = new RemediationCaseStore(root, FEATURE, { child });
-    await expect(store.mutate(async () => ({ value: undefined, nextState: appliedState('child-2-case') })))
-      .resolves.toEqual({ ok: true, value: undefined });
-    await expect(publishBuildReviewWorkOrder(root, {
-      version: 'v1', domain: 'build_review', feature: FEATURE, effectId: 'effect-child-2-case',
-      cases: [{ caseId: 'child-2-case', priority: 'high', tasks: [{ title: 'Repair child 2' }] }],
-    })).resolves.toMatchObject({ ok: true });
+    await expect(
+      store.mutate(async () => ({ value: undefined, nextState: appliedState('child-2-case') })),
+    ).resolves.toEqual({ ok: true, value: undefined });
+    await expect(
+      publishBuildReviewWorkOrder(root, {
+        version: 'v1',
+        domain: 'build_review',
+        feature: FEATURE,
+        effectId: 'effect-child-2-case',
+        cases: [{ caseId: 'child-2-case', priority: 'high', tasks: [{ title: 'Repair child 2' }] }],
+      }),
+    ).resolves.toMatchObject({ ok: true });
     await expect(markBuildReviewWorkOrderAttempted(root, FEATURE)).resolves.toMatchObject({ ok: true });
     const verdictPath = join(root, '.pipeline', 'children', '2', 'build-review.json');
     await mkdir(join(root, '.pipeline', 'children', '2'), { recursive: true });
