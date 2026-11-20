@@ -670,6 +670,23 @@ describe('remediation projection', () => {
     });
   });
 
+  // Covers: task:4
+  it('projects a child-region build-stall question from the caller-selected evidence path', async () => {
+    const root = await fixture();
+    const path = '.pipeline/children/3/build-stall-question.md';
+    await mkdir(join(root, '.pipeline', 'children', '3'), { recursive: true });
+    await writeFile(join(root, path), 'Child 3 needs an answer.');
+
+    const result = await buildRemediationProjection(root, {
+      source: 'build-stall', activePlanPath: '.docs/plans/active.md', featureDesc: 'Child stall', evidenceFile: path,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      projection: { evidence: { excerpts: [expect.objectContaining({ path, content: 'Child 3 needs an answer.' })] } },
+    });
+  });
+
   // Covers: task:9
   it('projects finish test failures by their test-stem key without fabricating typed references', async () => {
     const root = await fixture();

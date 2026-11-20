@@ -1357,6 +1357,15 @@ describe('task-progress', () => {
   });
 
   describe('writeStallQuestionEvidence', () => {
+    // Covers: task:4
+    it('writes an active child stall question in that child region without touching the flat path', async () => {
+      const child = parseChildId(3)!;
+      await writeStallQuestionEvidence(dir, 'Child 3 question', child);
+      await expect(readFile(join(dir, '.pipeline', 'children', '3', 'build-stall-question.md'), 'utf8'))
+        .resolves.toBe('Child 3 question');
+      await expect(readFile(join(dir, '.pipeline', 'build-stall-question.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+
     it('writes multi-line content verbatim to .pipeline/build-stall-question.md and returns it', async () => {
       const content = 'line 1\nline 2\nline 3';
       const result = await writeStallQuestionEvidence(dir, content);
