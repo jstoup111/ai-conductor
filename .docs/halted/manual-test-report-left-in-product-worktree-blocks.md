@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-11-20T17:44:49.349Z
 Slug: manual-test-report-left-in-product-worktree-blocks
 Class: needs-human
 Halting step: unknown
