@@ -80,6 +80,8 @@ export interface HandoffDeps {
   worktreePath?: string;
   /** Options forwarded to recordAuthoredKey (e.g. engineerDir for temp-dir isolation). */
   ledgerOpts?: AuthoredLedgerOpts;
+  /** Intake-ledger completion is the durable proof that a ready PR was fully delivered. */
+  deliveryRecorded?: () => Promise<boolean>;
   /**
    * Originating intake reference (`owner/repo#N`). When present and valid, the
    * opened spec PR gets a NON-CLOSING `Refs owner/repo#N` line (links the issue
@@ -313,10 +315,13 @@ export async function openSpecPr(target: TargetRepo, branch: string, deps: Hando
   const payload = createPayload(branch, createArgs);
   const existing = await deps.findExistingSpecPr?.();
   if (existing) {
-    // A completed retry observes the ready PR and must not write another
-    // comment/ledger transition through the CLI. A draft still needs the
-    // landed title/body and its ready-for-review flip.
-    if (!existing.isDraft) return { kind: 'pr-opened', url: existing.url, alreadyDelivered: true };
+    // A ready PR alone is not a completed delivery: an earlier process can have
+    // failed after marking it ready but before intake write-back, cleanup, or
+    // daemon wake-up. Only the durable intake ledger suppresses those retries.
+    if (!existing.isDraft) {
+      const delivered = await deps.deliveryRecorded?.();
+      return { kind: 'pr-opened', url: existing.url, ...(delivered ? { alreadyDelivered: true as const } : {}) };
+    }
 
     const presentation = deps.publication.presentation?.(existing.url) ?? deps.publication.operations;
     await readyExistingSpecPullRequest({

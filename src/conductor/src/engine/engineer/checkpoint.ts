@@ -330,20 +330,18 @@ export async function checkpointComposerRun(
     if (!(error instanceof Error) || !error.message.startsWith('ENOENT')) throw error;
   }
   const acceptingSavedDraft = request.state === 'accepted' && record.steps[step]?.state === 'draft';
-  // A resumed draft is already committed, so it has no dirty files. Recover its
-  // paths from the checkpoint commit before recording the explicit acceptance.
-  const draftPaths =
-    acceptingSavedDraft && dirtyDocs.length === 0
-      ? (await deps.git(['show', '--format=', '--name-only', 'HEAD', '--', '.docs'])).stdout
-          .split('\n')
-          .map((path) => path.trim())
-          .filter((path) => stepForArtifactPath(path) === step)
-      : [];
+  // A saved draft deliberately stores no acceptance state of its own, but the
+  // run record retains the last accepted artifact set for precisely this
+  // re-acceptance boundary. Read those paths from the record rather than HEAD:
+  // another commit may have intervened, and a dirty worktree may add paths.
+  const savedDraftPaths = acceptingSavedDraft
+    ? (record.lastAcceptedArtifacts?.[step] ?? []).map(({ path }) => path)
+    : [];
   const reconfirming =
     request.state === 'accepted' && record.needsReconfirm.includes(step) && record.steps[step]?.state === 'accepted';
   // A clean retry must still publish the previously committed checkpoint.  A
   // clean reconfirmation is the one exception: it changes the run record only.
-  if (dirtyDocs.length === 0 && draftPaths.length === 0 && !reconfirming) {
+  if (dirtyDocs.length === 0 && savedDraftPaths.length === 0 && !reconfirming) {
     if (!recordExists) {
       await deps.emit(event);
       return { slug, state: request.state, committed: false, published: false };
@@ -352,23 +350,20 @@ export async function checkpointComposerRun(
   }
   const notes = await notesFor(request, fs);
   if (request.state === 'accepted') {
-    const paths = dirtyDocs.length > 0 ? dirtyDocs : draftPaths;
+    const paths = [...new Set([...savedDraftPaths, ...dirtyDocs])];
     const priorArtifacts =
       record.lastAcceptedArtifacts?.[step] ??
       (record.steps[step]?.state === 'accepted' ? record.steps[step].artifacts : []);
-    const changedArtifacts =
-      paths.length > 0
-        ? await Promise.all(
-            paths
-              .filter(
-                (path) =>
-                  stepForArtifactPath(path) === step &&
-                  path !== '.docs/coherence/.gitkeep' &&
-                  !path.startsWith('.docs/plan-review/'),
-              )
-              .map(async (path) => digestArtifact(path, Buffer.from(await fs.readFile(join(request.worktree, path))))),
-          )
-        : [];
+    const changedArtifacts = await Promise.all(
+      paths
+        .filter(
+          (path) =>
+            stepForArtifactPath(path) === step &&
+            path !== '.docs/coherence/.gitkeep' &&
+            !path.startsWith('.docs/plan-review/'),
+        )
+        .map(async (path) => digestArtifact(path, Buffer.from(await fs.readFile(join(request.worktree, path))))),
+    );
     // A checkpoint often carries one changed file from a multi-artifact step. Keep
     // the unchanged accepted digests instead of silently dropping them.
     const byPath = new Map(priorArtifacts.map((artifact) => [artifact.path, artifact]));

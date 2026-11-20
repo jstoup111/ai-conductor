@@ -9,6 +9,7 @@ import {
   type RunStepId,
   type RunSummary,
 } from './run-record.js';
+import { findComposerRunRecordRemovalCommit } from './land-spec.js';
 import { strictSlugGithubRef } from './source-ref.js';
 
 export type ResumeTarget =
@@ -93,6 +94,8 @@ export interface ResumeDeps {
   fetch?(branch: string): Promise<void>;
   attach(branch: string): Promise<{ worktree: string }>;
   readRunRecord?(worktree: string, slug: string): Promise<string>;
+  /** Detects land's deliberate run-record removal before treating an absent record as delivered. */
+  findRunRecordRemovalCommit?(worktree: string, recordPath: string): Promise<string | undefined>;
   /** Current committed artifact bytes make acceptance a claim about this checkout, not stale JSON. */
   readArtifact?(worktree: string, path: string): Promise<Uint8Array>;
   recordDeciding?(input: { branch: string; draftPrUrl?: string; sourceRef?: string }): Promise<void>;
@@ -158,9 +161,37 @@ export async function resumeComposerRun(
       ((worktree, name) => readFile(join(worktree, '.docs', 'composer-runs', `${name}.json`), 'utf8'))
     )(attached.worktree, slug);
   } catch (error) {
-    // land-spec intentionally strips the record. A branch which has already
-    // landed resumes at delivery instead of presenting an ENOENT as corruption.
     if (error instanceof Error && /ENOENT/.test(error.message)) {
+      const recordPath = `.docs/composer-runs/${slug}.json`;
+      const removal = await (deps.findRunRecordRemovalCommit ?? findComposerRunRecordRemovalCommit)(
+        attached.worktree,
+        recordPath,
+      );
+      // Only land's committed record removal proves delivery. A branch created
+      // before its first checkpoint is a fresh DECIDE run, not a delivered one.
+      if (!removal) {
+        const context: ResumeContext = {
+          slug,
+          branch: resolved.branch,
+          nextStep: 'explore',
+          acceptedArtifacts: [],
+          decisions: [],
+          openQuestions: [],
+          drafts: [],
+        };
+        const sourceRef = await deps.sourceRef?.(attached.worktree, slug);
+        await deps.recordDeciding?.({
+          branch: resolved.branch,
+          draftPrUrl: resolved.draftPrUrl,
+          ...(sourceRef ? { sourceRef } : {}),
+        });
+        await deps.emit?.({
+          slug,
+          worktreePath: attached.worktree,
+          ownership: ownership === 'taken-over' ? 'taken-over' : 'unchanged',
+        });
+        return { worktree: attached.worktree, context };
+      }
       return {
         worktree: attached.worktree,
         context: {

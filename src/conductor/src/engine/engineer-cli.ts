@@ -1534,7 +1534,9 @@ async function runLocalCheckpoint(
       engineerDir: input.engineerDir,
       resolveOwner: input.opts.resolveCheckpointOwner,
     });
-    return checkpointComposerRun(
+    // Keep the persister subscribed until checkpointComposerRun has emitted its
+    // terminal event. Returning the promise directly would run finally first.
+    return await checkpointComposerRun(
       {
         worktree: input.worktree,
         step: input.step,
@@ -3087,7 +3089,15 @@ export async function dispatchEngineer(dispatch: EngineerDispatch, opts: Dispatc
                     localState: reconcileComposerResumeLocalState({ target, opts, git }),
                     attach: attachComposerResumeWorktree({ target, git, requestedTarget: dispatch.target }),
                     ownership: async ({ worktree, slug, branch }) => {
-                      const committedOwner = await composerCommittedMarkerOwner(git, worktree, branch, slug);
+                      // The fetched remote branch, not an unpushed local retry,
+                      // is the ownership authority. A prior take-over commit can
+                      // therefore be retried only after the approval bound to its
+                      // guarded push is obtained again.
+                      const remoteOwner = target.remote
+                        ? await composerCommittedMarkerOwner(git, worktree, `origin/${branch}`, slug)
+                        : undefined;
+                      const localOwner = await composerCommittedMarkerOwner(git, worktree, branch, slug);
+                      const committedOwner = remoteOwner ?? localOwner;
                       const daemonSession = Boolean((opts.env ?? process.env).CONDUCT_DAEMON_SESSION);
                       const interactive = (
                         opts.isAttachedTerminal ?? (() => Boolean(process.stdin.isTTY && process.stdout.isTTY))
@@ -3130,34 +3140,39 @@ export async function dispatchEngineer(dispatch: EngineerDispatch, opts: Dispatc
                         );
                         return 'local-only';
                       }
-                      await writeIntakeMarker(worktree, slug, undefined, owner.id);
-                      const recordPath = join(worktree, '.docs', 'composer-runs', `${slug}.json`);
-                      try {
-                        const record = parseRunRecord(await readFile(recordPath, 'utf8'));
-                        await writeFile(
-                          recordPath,
-                          serializeRunRecord({
-                            ...record,
-                            ownerHistory: [...record.ownerHistory, { actor: owner.id, at: new Date().toISOString() }],
-                          }),
-                          'utf8',
+                      // An earlier approved push can fail after this local commit.
+                      // Reuse that durable re-stamp on retry instead of attempting
+                      // an empty second commit.
+                      if (localOwner !== owner.id) {
+                        await writeIntakeMarker(worktree, slug, undefined, owner.id);
+                        const recordPath = join(worktree, '.docs', 'composer-runs', `${slug}.json`);
+                        try {
+                          const record = parseRunRecord(await readFile(recordPath, 'utf8'));
+                          await writeFile(
+                            recordPath,
+                            serializeRunRecord({
+                              ...record,
+                              ownerHistory: [...record.ownerHistory, { actor: owner.id, at: new Date().toISOString() }],
+                            }),
+                            'utf8',
+                          );
+                        } catch (error) {
+                          if (!(error instanceof Error) || !/ENOENT/.test(error.message)) throw error;
+                        }
+                        const add = await git(['add', '--', '.docs/intake', '.docs/composer-runs'], { cwd: worktree });
+                        if ((add.exitCode ?? 0) !== 0)
+                          throw new Error(`compose resume: could not stage take-over: ${add.stdout}`);
+                        const commit = await git(
+                          [
+                            'commit',
+                            '-m',
+                            withDaemonCoAuthorTrailer(`composer take-over: ${slug} ${committedOwner} to ${owner.id}`),
+                          ],
+                          { cwd: worktree },
                         );
-                      } catch (error) {
-                        if (!(error instanceof Error) || !/ENOENT/.test(error.message)) throw error;
+                        if ((commit.exitCode ?? 0) !== 0)
+                          throw new Error(`compose resume: could not commit take-over: ${commit.stdout}`);
                       }
-                      const add = await git(['add', '--', '.docs/intake', '.docs/composer-runs'], { cwd: worktree });
-                      if ((add.exitCode ?? 0) !== 0)
-                        throw new Error(`compose resume: could not stage take-over: ${add.stdout}`);
-                      const commit = await git(
-                        [
-                          'commit',
-                          '-m',
-                          withDaemonCoAuthorTrailer(`composer take-over: ${slug} ${committedOwner} to ${owner.id}`),
-                        ],
-                        { cwd: worktree },
-                      );
-                      if ((commit.exitCode ?? 0) !== 0)
-                        throw new Error(`compose resume: could not commit take-over: ${commit.stdout}`);
                       const publication = initialSpecPublication(target, branch, worktree, gh, git, events);
                       const pushed = await executeRemoteGit(['push', '-u', 'origin', `HEAD:refs/heads/${branch}`], {
                         ...publication.remote,
@@ -3379,6 +3394,11 @@ export async function dispatchEngineer(dispatch: EngineerDispatch, opts: Dispatc
             // gh runs in the per-idea worktree (checked out on spec/<slug>) — FR-4.
             worktreePath: worktree,
             ledgerOpts: engineerDir ? { engineerDir } : {},
+            deliveryRecorded: async () => {
+              if (!sourceRef) return false;
+              const ledger = createLedger(join(engineerDir ?? resolveEngineerDir({}), 'ledger.json'));
+              return (await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef))?.status === 'done';
+            },
             // Link the spec PR to its issue with a non-closing `Refs` (does not
             // close — the daemon's implementation PR closes it on merge).
             sourceRef,

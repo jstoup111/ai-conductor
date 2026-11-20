@@ -1004,6 +1004,21 @@ interface LandRunRecord {
   readonly current: boolean;
 }
 
+/** Find the land commit that removed a Composer run record, if this branch has one. */
+export async function findComposerRunRecordRemovalCommit(
+  worktreePath: string,
+  recordPath: string,
+): Promise<string | undefined> {
+  try {
+    const { stdout } = await execFile('git', ['log', '--format=%H', '--diff-filter=D', '--', recordPath], {
+      cwd: worktreePath,
+    });
+    return stdout.split('\n').find((line) => line.length > 0);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Resolve the current record, or the parent of its most recent removal commit on a re-land. */
 async function resolveLandRunRecord(worktreePath: string, recordPath: string): Promise<LandRunRecord | null> {
   try {
@@ -1017,15 +1032,7 @@ async function resolveLandRunRecord(worktreePath: string, recordPath: string): P
     }
   }
 
-  let stripCommit: string | undefined;
-  try {
-    const { stdout } = await execFile('git', ['log', '--format=%H', '--diff-filter=D', '--', recordPath], {
-      cwd: worktreePath,
-    });
-    stripCommit = stdout.split('\n').find((line) => line.length > 0);
-  } catch {
-    return null;
-  }
+  const stripCommit = await findComposerRunRecordRemovalCommit(worktreePath, recordPath);
   if (stripCommit === undefined) return null;
 
   try {

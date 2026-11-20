@@ -127,10 +127,22 @@ describe('resume ownership', () => {
     }
   });
 
-  it('Covers: Task 14 retains remote ownership after a local take-over commit whose push did not execute', () => {
-    // The local B marker is durable for a retry, but origin's A marker remains
-    // the publication authority until that retry has actually pushed.
-    expect(checkpointPublicationOwner({ localMarkerOwner: 'B', remoteMarkerOwner: 'A' })).toBe('A');
+  it('Covers: Task 14 re-approves take-over after a failed push when remote ownership remains foreign', () => {
+    // The failed first push leaves B's local re-stamp durable, while fetched
+    // origin still records A. Resume must use A again so the same guarded
+    // approval/push path is retried instead of silently treating local B as
+    // ownership authority.
+    const ownerAfterFailedPush = checkpointPublicationOwner({ localMarkerOwner: 'B', remoteMarkerOwner: 'A' });
+    expect(ownerAfterFailedPush).toBe('A');
+    expect(
+      resumeOwnershipMode({
+        committedOwner: ownerAfterFailedPush,
+        machineOwner: 'B',
+        interactive: true,
+        daemonSession: false,
+        approved: true,
+      }),
+    ).toBe('taken-over');
     expect(checkpointPublicationOwner({ localMarkerOwner: 'B', remoteMarkerOwner: 'B' })).toBe('B');
   });
 
