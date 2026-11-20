@@ -6439,6 +6439,14 @@ export class Conductor {
     ]).catch(() => undefined);
   }
 
+  /** Terminal build-stall artifacts have already been copied into the HALT. */
+  private async retireTerminalBuildStallInputs(): Promise<void> {
+    await Promise.all([
+      removeTypedRemediationPlan(this.projectRoot, {}, this.activeRegionChild),
+      removeStallQuestionEvidence(this.projectRoot, this.activeRegionChild),
+    ]).catch(() => undefined);
+  }
+
   /** Keep every adjudication gate on the same resolved configuration accessor. */
   private buildReviewAdjudicationEnabled(): boolean {
     return resolveBuildReviewConfig(this.config).adjudication.enabled;
@@ -14757,7 +14765,11 @@ export class Conductor {
                       const caseStores = new Map<ChildId, Awaited<ReturnType<RemediationCaseStore['read']>>>();
                       for (const child of await listExistingChildren(this.projectRoot)) {
                         const feature = await readRemediationCaseStoreFeature(this.projectRoot, undefined, child);
-                        if (!feature.ok || !feature.feature) continue;
+                        if (!feature.ok) {
+                          caseStores.set(child, { ok: false, reason: feature.reason });
+                          continue;
+                        }
+                        if (!feature.feature) continue;
                         caseStores.set(child, await new RemediationCaseStore(this.projectRoot, feature.feature, { child }).read());
                       }
                       const citation = classifyBuildStallStaleCitation({
@@ -14776,7 +14788,7 @@ export class Conductor {
                             ? 'Unable to record stale citation; clear this halt after checking the event spine.'
                             : `Stale citation ${citation.caseId} is ${citation.state === 'resolved' ? 'settled' : `owned by child ${citation.ownerChild}`}; clear this halt with ai-conductor halt clear --feature ${basename(this.projectRoot)} --rationale "stale citation reviewed".`;
                           await writeStallHalt(this.projectRoot, effectiveQuestion, detail, this.events, haltClass);
-                          await removeStallQuestionEvidence(this.projectRoot, this.activeRegionChild);
+                          await this.retireTerminalBuildStallInputs();
                           await this.emitLoopHalt(effectiveQuestion);
                           return;
                         }
@@ -14831,6 +14843,7 @@ export class Conductor {
                           surfaceRemediation: true,
                           loopHaltReason: effectiveQuestion,
                         });
+                        await this.retireTerminalBuildStallInputs();
                         process.off('SIGINT', sigintHandler);
                         process.off('SIGTERM', sigterm);
                         return;
@@ -14873,6 +14886,7 @@ export class Conductor {
                           await writeStallHalt(this.projectRoot, effectiveQuestion, detail, this.events).catch(() => {
                             /* best-effort marker */
                           });
+                          await this.retireTerminalBuildStallInputs();
                           await this.persistPendingStateChanges(state, 'persist conductor transition');
                           const prUrl = await this.surfaceRemediationPr(haltContent);
                           await this.emitLoopHalt(effectiveQuestion, prUrl);
@@ -14922,6 +14936,7 @@ export class Conductor {
                             await writeStallHalt(this.projectRoot, effectiveQuestion, detail, this.events).catch(() => {
                               /* best-effort marker */
                             });
+                            await this.retireTerminalBuildStallInputs();
                             await this.persistPendingStateChanges(state, 'persist conductor transition');
                             const prUrl = await this.surfaceRemediationPr(haltContent);
                             await this.emitLoopHalt(effectiveQuestion, prUrl);
@@ -14950,6 +14965,7 @@ export class Conductor {
                             ).catch(() => {
                               /* best-effort marker */
                             });
+                            await this.retireTerminalBuildStallInputs();
                             await this.persistPendingStateChanges(state, 'persist conductor transition');
                             const prUrl = await this.surfaceRemediationPr(haltContent);
                             await this.emitLoopHalt(effectiveQuestion, prUrl);
@@ -14973,6 +14989,7 @@ export class Conductor {
                             await writeStallHalt(this.projectRoot, effectiveQuestion, detail, this.events).catch(() => {
                               /* best-effort marker */
                             });
+                            await this.retireTerminalBuildStallInputs();
                             await this.persistPendingStateChanges(state, 'persist conductor transition');
                             const prUrl = await this.surfaceRemediationPr(haltContent);
                             await this.emitLoopHalt(effectiveQuestion, prUrl);
@@ -17022,6 +17039,12 @@ export class Conductor {
             (await this.settleCleanBuildReviewSuccess(state, buildReviewAdjudicationSettlement)) === 'halted'
           ) {
             return;
+          }
+
+          if (step.name === 'build') {
+            // A gap plan is single-use routing authority. Once its target BUILD
+            // passes, retaining it would make a later retry read stale input.
+            await removeTypedRemediationPlan(this.projectRoot, {}, this.activeRegionChild).catch(() => undefined);
           }
 
           // For complexity + worktree, 'done' (and tier / worktree fields) are

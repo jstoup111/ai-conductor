@@ -1,5 +1,5 @@
 // Covers: task:11
-import { mkdir, mkdtemp, readFile, rename, rm, utimes, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rename, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -23,9 +23,11 @@ import {
   persistRemediationPlan,
   readTypedRemediationPlan,
   remediationRequiredReferenceDigest,
+  remediationTypedPlanPath,
   type RemediationPlanStoreFilesystem,
 } from '../../src/engine/remediation-plan-store.js';
 import { readRemediationCaseJudgement } from '../../src/engine/remediation-case-artifact.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 
 const roots: string[] = [];
 
@@ -82,6 +84,17 @@ function filesystemWithRenameSpy(renames: [string, string][]): RemediationPlanSt
 }
 
 describe('typed remediation plan store', () => {
+  it('keeps a child typed plan out of sibling and feature regions', async () => {
+    const root = await projectRoot();
+    const child3 = parseChildId(3)!;
+    const child4 = parseChildId(4)!;
+
+    await expect(persistRemediationPlan(root, input(), {}, child3)).resolves.toMatchObject({ kind: 'persisted' });
+    await expect(access(remediationTypedPlanPath(root, child3))).resolves.toBeUndefined();
+    await expect(access(remediationTypedPlanPath(root))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readTypedRemediationPlan(root, { attemptId: 'attempt-current' }, {}, child4)).resolves.toEqual({ kind: 'absent' });
+  });
+
   // Covers: task:11
   it('atomically persists a validated plan with its attempt, source, and required-reference digest', async () => {
     const root = await projectRoot();
