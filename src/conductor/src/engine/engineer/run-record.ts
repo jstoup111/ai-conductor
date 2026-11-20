@@ -217,7 +217,8 @@ function parseStep(value: unknown): RunStep {
       throw new Error('Run record draft step has unknown fields');
     if (value.artifacts === undefined) return { state: 'draft' };
     const artifacts = parseTextList(value.artifacts, 'draft step artifacts');
-    if (artifacts.some((path) => path.length === 0)) throw new Error('Run record draft step artifact paths must be non-empty');
+    if (artifacts.some((path) => path.length === 0))
+      throw new Error('Run record draft step artifact paths must be non-empty');
     return { state: 'draft', artifacts };
   }
   if (value.state !== 'accepted') throw new Error('Run record step state must be accepted or draft');

@@ -333,9 +333,7 @@ export async function checkpointComposerRun(
   const acceptingSavedDraft = request.state === 'accepted' && savedStep?.state === 'draft';
   // Draft paths are durable independently of HEAD. A later commit can move
   // HEAD before the operator explicitly accepts the saved draft.
-  const savedDraftPaths = acceptingSavedDraft
-    ? savedStep.artifacts ?? []
-    : [];
+  const savedDraftPaths = acceptingSavedDraft ? (savedStep.artifacts ?? []) : [];
   const reconfirming =
     request.state === 'accepted' && record.needsReconfirm.includes(step) && record.steps[step]?.state === 'accepted';
   // A clean retry must still publish the previously committed checkpoint.  A
@@ -379,7 +377,9 @@ export async function checkpointComposerRun(
   } else {
     const draftArtifacts = dirtyDocs.filter(
       (path) =>
-        stepForArtifactPath(path) === step && path !== '.docs/coherence/.gitkeep' && !path.startsWith('.docs/plan-review/'),
+        stepForArtifactPath(path) === step &&
+        path !== '.docs/coherence/.gitkeep' &&
+        !path.startsWith('.docs/plan-review/'),
     );
     record = { ...recordDraft(record, step, draftArtifacts), notes: { ...record.notes, [step]: notes } };
   }
