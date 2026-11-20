@@ -223,6 +223,14 @@ const CODEX_PROVIDER_STATE_VOLATILE: readonly string[] = [
                            // guard. Verified 2026-10-10 as the sole diff ("0 added, 0 removed,
                            // 1 changed: changed session_index.jsonl") behind 12 false halts across
                            // 10 features in one day (codex-cli 0.160.1).
+  'app-server-daemon/daemon-updater.stderr.log', // JSONL log the background self-updater appends
+                           // to every hour (installer_fetch/installer_run/package_selected). Only
+                           // this log: the daemon's pid files and socket link stay fingerprinted.
+                           // Verified 2026-11-20 as the sole diff behind 9 false halts across 5
+                           // features — any self-host build spanning the updater's hourly tick halted.
+  'tui-thread-reference-capabilities', // one zero-byte marker per Codex thread id, added as threads
+                           // open — same category as thread-writer-locks. Verified 2026-11-20 as
+                           // the sole diff ("1 added") behind 3 false halts.
   // Codex's own SQLite stores at the provider-state ROOT — `goals_1`, `logs_2`,
   // `memories_1`, `state_5` today — plus their WAL sidecars, written continuously
   // by any running session. Matched by pattern rather than enumerated because the

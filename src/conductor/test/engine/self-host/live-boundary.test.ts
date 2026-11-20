@@ -137,6 +137,7 @@ describe('live self-host boundary', () => {
         'plugins/.remote-plugin-install-staging', 'mcp-oauth-locks',
         'thread-writer-locks', '.tmp', 'tmp', 'packages/standalone',
         'models_cache.json', 'session_index.jsonl',
+        'app-server-daemon/daemon-updater.stderr.log', 'tui-thread-reference-capabilities',
         '*.sqlite', '*.sqlite-shm', '*.sqlite-wal',
         '*.sqlite-journal',
       ],
@@ -1380,6 +1381,33 @@ describe('live self-host boundary', () => {
     try {
       expect(await verifyLiveBoundary(baseline)).toEqual({ ok: true });
       await writeFile(join(provider, 'config.toml'), 'after');
+      expect(await verifyLiveBoundary(baseline)).toMatchObject({ ok: false });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  // Regression: Codex's background self-updater appends to
+  // `app-server-daemon/daemon-updater.stderr.log` every hour, and every thread
+  // adds a zero-byte marker under `tui-thread-reference-capabilities/`.
+  // Observed 2026-11-20 as the sole diff behind 12 false halts across 6 features.
+  it('ignores the Codex updater log and thread capability markers but still halts on the updater pid', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-codex-updater-log-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    const daemon = join(provider, 'app-server-daemon');
+    const markers = join(provider, 'tui-thread-reference-capabilities');
+    await Promise.all([mkdir(live), mkdir(daemon, { recursive: true }), mkdir(markers, { recursive: true })]);
+    await writeFile(join(daemon, 'daemon-updater.stderr.log'), '{"stage":"installer_fetch"}\n');
+    await writeFile(join(daemon, 'daemon-updater.pid'), '{"pid":1}');
+    await writeFile(join(markers, '01a0ddb5-97b6-7313-9fe6-8d097daa8c00'), '');
+
+    const baseline = await fingerprintLiveBoundary({
+      liveCheckout: live, unrelatedProviderState: provider, provider: 'codex',
+    });
+    await writeFile(join(daemon, 'daemon-updater.stderr.log'), '{"stage":"installer_fetch"}\n{"stage":"installer_run"}\n');
+    await writeFile(join(markers, '01a1f9b6-0de4-7bf2-802e-2452d7000000'), '');
+
+    try {
+      expect(await verifyLiveBoundary(baseline)).toEqual({ ok: true });
+      await writeFile(join(daemon, 'daemon-updater.pid'), '{"pid":2}');
       expect(await verifyLiveBoundary(baseline)).toMatchObject({ ok: false });
     } finally { await rm(root, { recursive: true, force: true }); }
   });
