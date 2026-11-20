@@ -1,4 +1,4 @@
-// Covers: task:28
+// Covers: task:2, task:28
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,6 +13,7 @@ import {
 } from '../../src/engine/remediation-case-store.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import {
+  buildReviewWorkOrderPath,
   markBuildReviewWorkOrderAttempted,
   publishBuildReviewWorkOrder,
 } from '../../src/engine/build-review-work-order.js';
@@ -73,6 +74,30 @@ async function projectRoot(): Promise<string> {
   return root;
 }
 
+function workOrder(id: string, title: string) {
+  return {
+    version: 'v1' as const,
+    domain: 'build_review' as const,
+    feature: FEATURE,
+    effectId: `effect-${id}`,
+    cases: [{ caseId: id, priority: 'high' as const, tasks: [{ title }] }],
+  };
+}
+
+function retryContext(root: string, child?: ReturnType<typeof parseChildId>) {
+  const conductor = new Conductor({
+    projectRoot: root,
+    stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+    stepRunner: {} as never,
+    events: new ConductorEventEmitter(),
+  }) as unknown as {
+    activeRegionChild: typeof child;
+    durableBuildReviewRetryContext(hint: string | undefined): Promise<{ kind: string; context?: string }>;
+  };
+  conductor.activeRegionChild = child;
+  return conductor;
+}
+
 afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
@@ -108,30 +133,59 @@ describe('child-scoped build-review remediation cases', () => {
     await expect(store.read()).resolves.toEqual({ ok: true, state: { ...state('flat-case'), version: 'v4', asBuiltCases: [], outbox: [] } });
   });
 
-  it('uses the active child case store for build-review retry recovery', async () => {
+  it('publishes child 4 admitted repair work under its region and sends its tasks to BUILD', async () => {
     const root = await projectRoot();
-    const child = parseChildId(2)!;
+    const child = parseChildId(4)!;
     const store = new RemediationCaseStore(root, FEATURE, { child });
-    await expect(store.mutate(async () => ({ value: undefined, nextState: appliedState('child-2-case') })))
+    await expect(store.mutate(async () => ({ value: undefined, nextState: appliedState('child-4-case') })))
       .resolves.toEqual({ ok: true, value: undefined });
-    await expect(publishBuildReviewWorkOrder(root, {
-      version: 'v1', domain: 'build_review', feature: FEATURE, effectId: 'effect-child-2-case',
-      cases: [{ caseId: 'child-2-case', priority: 'high', tasks: [{ title: 'Repair child 2' }] }],
-    })).resolves.toMatchObject({ ok: true });
+    await expect(publishBuildReviewWorkOrder(root, workOrder('child-4-case', 'Repair child 4'), undefined, child))
+      .resolves.toMatchObject({ ok: true });
 
-    const conductor = new Conductor({
-      projectRoot: root,
-      stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
-      stepRunner: {} as never,
-      events: new ConductorEventEmitter(),
-    }) as unknown as {
-      activeRegionChild: typeof child;
-      durableBuildReviewRetryContext(hint: string | undefined): Promise<{ kind: string; context?: string }>;
-    };
-    conductor.activeRegionChild = child;
+    await expect(readFile(buildReviewWorkOrderPath(root, child), 'utf8')).resolves.toContain('child-4-case');
+    await expect(readFile(buildReviewWorkOrderPath(root), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
 
-    await expect(conductor.durableBuildReviewRetryContext(undefined)).resolves.toMatchObject({
-      kind: 'ready', context: expect.stringContaining('child-2-case'),
+    await expect(retryContext(root, child).durableBuildReviewRetryContext(undefined)).resolves.toMatchObject({
+      kind: 'ready', context: expect.stringContaining('Repair child 4'),
+    });
+  });
+
+  it('does not send child 4 work to child 3 BUILD when child 3 has no open case', async () => {
+    const root = await projectRoot();
+    const child3 = parseChildId(3)!;
+    const child4 = parseChildId(4)!;
+    const child4Store = new RemediationCaseStore(root, FEATURE, { child: child4 });
+    await child4Store.mutate(async () => ({ value: undefined, nextState: appliedState('child-4-case') }));
+    await publishBuildReviewWorkOrder(root, workOrder('child-4-case', 'Repair child 4 only'), undefined, child4);
+
+    await expect(retryContext(root, child3).durableBuildReviewRetryContext(undefined)).resolves.toEqual({ kind: 'absent' });
+  });
+
+  it('sends only child 3 admitted tasks to child 3 BUILD when both child regions are open', async () => {
+    const root = await projectRoot();
+    const child3 = parseChildId(3)!;
+    const child4 = parseChildId(4)!;
+    await new RemediationCaseStore(root, FEATURE, { child: child3 })
+      .mutate(async () => ({ value: undefined, nextState: appliedState('child-3-case') }));
+    await new RemediationCaseStore(root, FEATURE, { child: child4 })
+      .mutate(async () => ({ value: undefined, nextState: appliedState('child-4-case') }));
+    await publishBuildReviewWorkOrder(root, workOrder('child-3-case', 'Repair child 3 only'), undefined, child3);
+    await publishBuildReviewWorkOrder(root, workOrder('child-4-case', 'Repair child 4 only'), undefined, child4);
+
+    const result = await retryContext(root, child3).durableBuildReviewRetryContext(undefined);
+    expect(result).toMatchObject({ kind: 'ready', context: expect.stringContaining('Repair child 3 only') });
+    expect(result.context).not.toContain('Repair child 4 only');
+  });
+
+  it('keeps an admitted no-children work order feature-local and sends its tasks to BUILD', async () => {
+    const root = await projectRoot();
+    const store = new RemediationCaseStore(root, FEATURE);
+    await store.mutate(async () => ({ value: undefined, nextState: appliedState('flat-case') }));
+    await publishBuildReviewWorkOrder(root, workOrder('flat-case', 'Repair flat case'));
+
+    await expect(readFile(buildReviewWorkOrderPath(root), 'utf8')).resolves.toContain('flat-case');
+    await expect(retryContext(root).durableBuildReviewRetryContext(undefined)).resolves.toMatchObject({
+      kind: 'ready', context: expect.stringContaining('Repair flat case'),
     });
   });
 
