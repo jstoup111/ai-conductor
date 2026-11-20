@@ -1,9 +1,12 @@
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, readFile, rename, rm } from 'node:fs/promises';
+import { dirname } from 'node:path';
 
 import { fileIsFreshSinceSession } from './artifacts.js';
+import { pipelinePathFor, type ChildId } from './child-context.js';
 
-const REMEDIATION_CASE_ARTIFACT_PATH = '.pipeline/remediation.json';
+export function remediationCaseJudgementPath(projectRoot: string, child?: ChildId): string {
+  return pipelinePathFor(projectRoot, 'remediation.json', child);
+}
 const MAX_CASE_ROWS = 128;
 const MAX_SOURCE_ROWS = 512;
 const MAX_REFERENCE_LENGTH = 256;
@@ -421,7 +424,7 @@ export async function readRemediationCaseJudgement(
   projectRoot: string,
   sessionStartedAt: number | undefined,
 ): Promise<ReadRemediationCaseJudgementResult> {
-  const path = join(projectRoot, REMEDIATION_CASE_ARTIFACT_PATH);
+  const path = remediationCaseJudgementPath(projectRoot);
   if (!(await fileIsFreshSinceSession(path, sessionStartedAt))) {
     return { ok: false, reason: 'missing-or-stale-artifact' };
   }
@@ -433,4 +436,14 @@ export async function readRemediationCaseJudgement(
   }
   const result = parseRemediationCaseJudgement(parsed);
   return result.ok ? { ok: true, judgement: result.value } : result;
+}
+
+export async function relocateRemediationCaseJudgement(projectRoot: string, child: ChildId): Promise<void> {
+  const destination = remediationCaseJudgementPath(projectRoot, child);
+  await mkdir(dirname(destination), { recursive: true });
+  await rename(remediationCaseJudgementPath(projectRoot), destination);
+}
+
+export async function removeRemediationCaseJudgement(projectRoot: string, child?: ChildId): Promise<void> {
+  await rm(remediationCaseJudgementPath(projectRoot, child), { force: true });
 }

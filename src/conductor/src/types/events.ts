@@ -521,6 +521,15 @@ export interface SessionEventDeliveryDiagnosticEvent {
 
 type ConductorEventBody =
   | {
+      /** BUILD cited a case settled in, or owned by, another child region. */
+      type: 'build_stall_stale_citation';
+      caseId: string;
+      ownerChild: ChildId;
+      state: 'resolved' | 'foreign';
+      resolvedTasks: number;
+      attempt: number;
+    }
+  | {
       /** Operator-run cleanup of transient DECIDE artifacts for shipped work. */
       type: 'decide_artifacts_pruned';
       removed: string[];

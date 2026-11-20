@@ -242,6 +242,8 @@ export interface ComplexityAssessment extends ProviderAttributionMetadata {
 }
 
 export interface StepRunOptions {
+  /** Active stacked-child region for child-local remediation artifacts. */
+  child?: import('./child-context.js').ChildId;
   /** A routed BUILD host alone requests the closed prerequisite-claim result. */
   routedPrerequisiteClaim?: true;
   /** Per-dispatch cancellation authority for the provider invocation. */

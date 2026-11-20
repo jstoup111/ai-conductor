@@ -156,8 +156,8 @@ ship_verdict_artifacts_read_only_contract_holds() {
     && grep -qF 'never write, delete, rename, or recreate' <<<"$tdd_text" \
     && grep -qF "only the validator's own next dispatch produces a new verdict." <<<"$pipeline_text" \
     && grep -qF 'conduct task done <id> --done-when <n>=<evidence>' <<<"$pipeline_text" \
-    && grep -qF 'reading `.pipeline/remediation.json` and the cited verdict artifact remains allowed.' <<<"$pipeline_text" \
-    && grep -qF 'reading `.pipeline/remediation.json` and the cited verdict artifact remains allowed.' <<<"$tdd_text" \
+    && grep -qF 'read the remediation input paths named in the dispatch prompt and the cited verdict artifact.' <<<"$pipeline_text" \
+    && grep -qF 'read the remediation input paths named in the dispatch prompt and the cited verdict artifact.' <<<"$tdd_text" \
     && grep -qF 'every implementer dispatch prompt must carry this ship verdict read-only rule.' <<<"$pipeline_text"
 }
 

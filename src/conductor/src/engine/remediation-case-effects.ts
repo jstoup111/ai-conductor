@@ -533,7 +533,7 @@ export async function applyBuildReviewActionEffects(input: {
       feature: input.feature,
       effectId: primaryEffectId,
       cases: orderBuildReviewActionCases(cases),
-    });
+    }, undefined, input.child);
     if (!published.ok) {
       const diagnostic = `work-order ${published.reason}`;
       return { value: { ok: false as const, reason: diagnostic, failedCaseIds }, nextState: failPending(diagnostic) };
