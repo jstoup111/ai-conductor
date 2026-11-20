@@ -1,0 +1,2 @@
+{"type":"message_end","message":{"role":"assistant","provider":"openrouter","model":"nonexistent-model-xyz","content":"","usage":{"input":0,"output":0},"stopReason":"error","errorMessage":"400: {\"message\":\"nonexistent-model-xyz is not a valid model ID\",\"code\":400}"}}
+{"type":"agent_end"}
