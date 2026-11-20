@@ -1,20 +1,18 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-11-20T17:44:32.313Z
+Status: halted
 Slug: child-executed-features-lose-closing-otel-telemetr
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-child-executed-features-lose-closing-otel-telemetr
-Head SHA: 44909a064ac80e865cefd33cd3e8a61c501aedf6
-Halted at: 2026-11-20T14:44:41.557Z
+Head SHA: c62c9ec102ff7df880a1f6db5c814b8d38041d5f
+Halted at: 2026-11-20T17:50:20.027Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-build_review adjudication halted: semantic remediation case repeat 3018e83d-67e6-4176-b3a0-d6f8eadbc9e8; resolve with ai-conductor build-review resolve-case --feature child-executed-features-lose-closing-otel-telemetr --case 3018e83d-67e6-4176-b3a0-d6f8eadbc9e8 --rationale "<why>"
+build_review adjudication halted: semantic remediation case repeat c43d1fbc-0fee-4172-b7d1-a448b6e20dc5; resolve with ai-conductor build-review resolve-case --feature child-executed-features-lose-closing-otel-telemetr --case c43d1fbc-0fee-4172-b7d1-a448b6e20dc5 --rationale "<why>"
 ```
