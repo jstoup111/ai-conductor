@@ -52,7 +52,9 @@ function makeGh(prState: 'OPEN' | 'MERGED' | 'CLOSED' = 'OPEN') {
   const gh = async (args: string[]) => {
     calls.push(args);
     if (args[0] === 'pr' && args[1] === 'view') {
-      return { stdout: JSON.stringify({ state: prState, mergedAt: prState === 'MERGED' ? '2026-07-04T00:00:00.000Z' : null }) };
+      return {
+        stdout: JSON.stringify({ state: prState, mergedAt: prState === 'MERGED' ? '2026-07-04T00:00:00.000Z' : null }),
+      };
     }
     // For dependency checking (issue list with linked_by filter), return empty
     if (args[0] === 'issue' && args[1] === 'list') {
@@ -88,6 +90,7 @@ function captureOut() {
 }
 
 describe('engineer claim with delivery guard (Task 8: integration of guard into CLI)', () => {
+  // Covers: task:9
   it('claim heals a delivered entry and drops its duplicate envelope (TR-1 + TR-3)', async () => {
     const ledger = createLedger(join(engineerDir, 'ledger.json'));
     const queue = createFileQueue(join(engineerDir, 'inbox'));

@@ -8,22 +8,12 @@ import { readFile, writeFile, mkdir, rename, readdir, mkdtemp, link, unlink, rmd
 import { basename, dirname, join } from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import {
-  createConductStateLease,
-  type ConductStateLease,
-} from '../../conduct-state-lease.js';
+import { createConductStateLease, type ConductStateLease } from '../../conduct-state-lease.js';
 
 // ─── LedgerStatus ─────────────────────────────────────────────────────────────
 
 /** All valid lifecycle states for a ledger entry. */
-export type LedgerStatus =
-  | 'unseen'
-  | 'pending'
-  | 'claimed'
-  | 'routed'
-  | 'deciding'
-  | 'done'
-  | 'needs-manual';
+export type LedgerStatus = 'unseen' | 'pending' | 'claimed' | 'routed' | 'deciding' | 'done' | 'needs-manual';
 
 // ─── LedgerEntry ──────────────────────────────────────────────────────────────
 
@@ -37,6 +27,7 @@ export interface LedgerEntry {
   status: LedgerStatus;
   attempts: number;
   branch?: string;
+  draftPrUrl?: string;
   prUrl?: string;
   capturedAt?: string;
   lastSeenAt?: string;
@@ -80,7 +71,7 @@ export interface Ledger {
     source: string,
     sourceRef: string,
     status: LedgerStatus,
-    meta?: { branch?: string; prUrl?: string; writebackPending?: boolean },
+    meta?: { branch?: string; draftPrUrl?: string; prUrl?: string; writebackPending?: boolean },
   ): Promise<void>;
   get(source: string, sourceRef: string): Promise<LedgerEntry | undefined>;
   forget(source: string, sourceRef: string): Promise<void>;
@@ -112,9 +103,7 @@ interface CreateLedgerOptions {
 }
 
 export type LedgerLoadResult =
-  | { kind: 'absent' }
-  | { kind: 'ok'; store: LedgerStore }
-  | { kind: 'corrupt'; reason: string; bytes?: Buffer };
+  { kind: 'absent' } | { kind: 'ok'; store: LedgerStore } | { kind: 'corrupt'; reason: string; bytes?: Buffer };
 
 const ledgerStatuses: ReadonlySet<LedgerStatus> = new Set([
   'unseen',
@@ -135,13 +124,13 @@ const TRANSIENT_LEASE_OWNER_METADATA_RETRIES = 10;
 // ordinary scheduler and filesystem contention.
 const LEDGER_LEASE_WAIT_TIMEOUT_MS = 5_000;
 
-function isTransientLeaseOwnerMetadataFailure(
-  acquired: Awaited<ReturnType<ConductStateLease['acquire']>>,
-): boolean {
-  return !acquired.ok &&
+function isTransientLeaseOwnerMetadataFailure(acquired: Awaited<ReturnType<ConductStateLease['acquire']>>): boolean {
+  return (
+    !acquired.ok &&
     acquired.kind === 'recovery_refused' &&
     (acquired.message === TRANSIENT_LEASE_OWNER_METADATA_FAILURE ||
-      acquired.message.includes('owner metadata is unavailable (ENOENT:'));
+      acquired.message.includes('owner metadata is unavailable (ENOENT:'))
+  );
 }
 
 function isLedgerEntry(value: unknown): value is LedgerEntry {
@@ -157,6 +146,7 @@ function isLedgerEntry(value: unknown): value is LedgerEntry {
     Number.isInteger(entry.attempts) &&
     entry.attempts >= 0 &&
     (entry.branch === undefined || typeof entry.branch === 'string') &&
+    (entry.draftPrUrl === undefined || typeof entry.draftPrUrl === 'string') &&
     (entry.prUrl === undefined || typeof entry.prUrl === 'string') &&
     (entry.capturedAt === undefined || typeof entry.capturedAt === 'string') &&
     (entry.lastSeenAt === undefined || typeof entry.lastSeenAt === 'string') &&
@@ -166,10 +156,7 @@ function isLedgerEntry(value: unknown): value is LedgerEntry {
 
 function isLedgerStore(value: unknown): value is LedgerStore {
   return (
-    value !== null &&
-    typeof value === 'object' &&
-    !Array.isArray(value) &&
-    Object.values(value).every(isLedgerEntry)
+    value !== null && typeof value === 'object' && !Array.isArray(value) && Object.values(value).every(isLedgerEntry)
   );
 }
 
@@ -268,16 +255,8 @@ async function readStore(path: string): Promise<LedgerStore> {
         quarantineDiagnostic = `failed to quarantine corrupt ledger: ${error instanceof Error ? error.message : String(error)}`;
       }
     }
-    const reason = quarantineDiagnostic === undefined
-      ? result.reason
-      : `${result.reason}; ${quarantineDiagnostic}`;
-    throw new CorruptLedgerError(
-      path,
-      reason,
-      quarantinePath,
-      quarantineDiagnostic,
-      corruptBytesDigest(result.bytes),
-    );
+    const reason = quarantineDiagnostic === undefined ? result.reason : `${result.reason}; ${quarantineDiagnostic}`;
+    throw new CorruptLedgerError(path, reason, quarantinePath, quarantineDiagnostic, corruptBytesDigest(result.bytes));
   }
   return result.store;
 }
@@ -326,10 +305,12 @@ async function withLedgerLease<T>(lease: ConductStateLease, body: () => Promise<
  * - Dedup key is source\0sourceRef; cross-repo same-number issues are distinct.
  */
 export function createLedger(path: string, options: CreateLedgerOptions = {}): Ledger {
-  const lease = options.lease ?? createConductStateLease(path, {
-    label: 'intake ledger',
-    waitTimeoutMs: LEDGER_LEASE_WAIT_TIMEOUT_MS,
-  });
+  const lease =
+    options.lease ??
+    createConductStateLease(path, {
+      label: 'intake ledger',
+      waitTimeoutMs: LEDGER_LEASE_WAIT_TIMEOUT_MS,
+    });
 
   return {
     async known(source: string, sourceRef: string): Promise<boolean> {
@@ -362,22 +343,21 @@ export function createLedger(path: string, options: CreateLedgerOptions = {}): L
       source: string,
       sourceRef: string,
       status: LedgerStatus,
-      meta?: { branch?: string; prUrl?: string; writebackPending?: boolean },
+      meta?: { branch?: string; draftPrUrl?: string; prUrl?: string; writebackPending?: boolean },
     ): Promise<void> {
       await withLedgerLease(lease, async () => {
         const store = await readStore(path);
         const key = makeKey(source, sourceRef);
         const entry = store[key];
         if (!entry) {
-          throw new Error(
-            `Ledger: no entry for (source="${source}", sourceRef="${sourceRef}") — call record() first`,
-          );
+          throw new Error(`Ledger: no entry for (source="${source}", sourceRef="${sourceRef}") — call record() first`);
         }
         const updated: LedgerEntry = {
           ...entry,
           status,
           lastSeenAt: new Date().toISOString(),
           ...(meta?.branch !== undefined ? { branch: meta.branch } : {}),
+          ...(meta?.draftPrUrl !== undefined ? { draftPrUrl: meta.draftPrUrl } : {}),
           ...(meta?.prUrl !== undefined ? { prUrl: meta.prUrl } : {}),
         };
         if (meta?.writebackPending === true) {

@@ -12,11 +12,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { execa } from 'execa';
 import { join } from 'node:path';
-import {
-  ENGINEER_SUBCOMMANDS,
-  SUBCOMMAND_HELP,
-  WORKTREE_ACCEPTED_FLAGS,
-} from '../src/engine/engineer-cli.js';
+import { ENGINEER_SUBCOMMANDS, SUBCOMMAND_HELP, WORKTREE_ACCEPTED_FLAGS } from '../src/engine/engineer-cli.js';
 import { DEFAULT_PROVIDER, requireProviderCapability } from '../src/execution/provider-catalog.js';
 import { discoverInstalledProviders } from '../src/engine/provider-discovery.js';
 
@@ -29,9 +25,8 @@ function defaultComposerArgs(env: NodeJS.ProcessEnv, idea?: string): string[] {
   const prompt = `${host.invocationPrefix}composer${idea?.trim() ? ` ${idea.trim()}` : ''}`;
   return host.interactiveLaunch.argv({
     prompt,
-    permissionMode: env.CONDUCT_ENGINEER_PERMISSION_MODE === 'plan'
-      ? 'default'
-      : env.CONDUCT_ENGINEER_PERMISSION_MODE ?? 'default',
+    permissionMode:
+      env.CONDUCT_ENGINEER_PERMISSION_MODE === 'plan' ? 'default' : (env.CONDUCT_ENGINEER_PERMISSION_MODE ?? 'default'),
   });
 }
 
@@ -72,10 +67,9 @@ describe('compose land, handoff, and worktree help', () => {
 
     const missingWorktreeFlags = (help: string, flags: readonly string[]): string[] =>
       flags.filter((flag) => !help.includes(flag));
-    expect(missingWorktreeFlags(
-      'Flags: --project <name>, --idea <text>, --source-ref <ref>.',
-      WORKTREE_ACCEPTED_FLAGS,
-    )).toEqual(['--body']);
+    expect(
+      missingWorktreeFlags('Flags: --project <name>, --idea <text>, --source-ref <ref>.', WORKTREE_ACCEPTED_FLAGS),
+    ).toEqual(['--body']);
   });
 });
 
@@ -84,11 +78,8 @@ describe('legacy engineer CLI alias — process dispatch boundary', () => {
     // Drive the actual index.ts entry point. An unknown flag selects the
     // deterministic guide path, so no registry, GitHub, or interactive host is involved.
     const entry = join(process.cwd(), 'src', 'index.ts');
-    const run = (verb: 'engineer' | 'compose') => execa(
-      process.execPath,
-      ['--import', 'tsx', entry, verb, '--bogus'],
-      { reject: false, stripFinalNewline: false },
-    );
+    const run = (verb: 'engineer' | 'compose') =>
+      execa(process.execPath, ['--import', 'tsx', entry, verb, '--bogus'], { reject: false, stripFinalNewline: false });
 
     const [engineer, compose] = await Promise.all([run('engineer'), run('compose')]);
 
@@ -127,6 +118,7 @@ describe('legacy engineer CLI alias — process dispatch boundary', () => {
     expect(spawnHost).toHaveBeenCalledOnce();
     expect(spawnHost).toHaveBeenCalledWith('codex', ['$composer'], process.cwd(), {
       AI_CONDUCTOR_AUTHORING_PROVIDER: 'codex',
+      AI_CONDUCTOR_COMPOSE_LAUNCH_ID: expect.any(String),
     });
     expect(vi.mocked(discoverInstalledProviders)).not.toHaveBeenCalled();
   });
@@ -143,6 +135,8 @@ describe('detectEngineerCommand — argv detection', () => {
     phase: ['--worktree', '/tmp/worktree', '--phase', 'stories'],
     land: ['--project', 'project', '--idea', 'idea', '--worktree', '/tmp/worktree'],
     handoff: ['--project', 'project', '--branch', 'spec/idea', '--worktree', '/tmp/worktree'],
+    checkpoint: ['--worktree', '/tmp/worktree', '--step', 'explore', '--accept'],
+    resume: ['spec/resume-demo', '--project', 'project'],
     poll: [],
     claim: [],
     forget: ['owner/repo#1'],
@@ -151,9 +145,7 @@ describe('detectEngineerCommand — argv detection', () => {
     resolve: ['owner/repo#1', '--pr-url', 'https://example.test/pr/1'],
     'migrate-issue-deps': ['--confirm'],
   } satisfies Record<(typeof ENGINEER_SUBCOMMANDS)[number], readonly string[]>;
-  const subcommandCases = ENGINEER_SUBCOMMANDS.map(
-    (subcommand) => [subcommand, subcommandArgs[subcommand]] as const,
-  );
+  const subcommandCases = ENGINEER_SUBCOMMANDS.map((subcommand) => [subcommand, subcommandArgs[subcommand]] as const);
 
   it.each(subcommandCases)('returns the engineer descriptor for compose %s', async (subcommand, args) => {
     const { detectEngineerCommand } = await import('../src/engine/engineer-cli.js');
@@ -172,18 +164,27 @@ describe('detectEngineerCommand — argv detection', () => {
   it.each(['engineer', 'compose'])('parses --provider on %s launch forms in either flag order', async (verb) => {
     const { detectEngineerCommand } = await import('../src/engine/engineer-cli.js');
 
-    expect(detectEngineerCommand(['node', 'conduct', verb, '--provider', 'codex']))
-      .toEqual({ kind: 'launch', provider: 'codex' });
-    expect(detectEngineerCommand(['node', 'conduct', verb, '--provider', 'claude', '--idea', 'add retries']))
-      .toEqual({ kind: 'launch', provider: 'claude', idea: 'add retries' });
-    expect(detectEngineerCommand(['node', 'conduct', verb, '--idea', 'add retries', '--provider', 'claude']))
-      .toEqual({ kind: 'launch', provider: 'claude', idea: 'add retries' });
+    expect(detectEngineerCommand(['node', 'conduct', verb, '--provider', 'codex'])).toEqual({
+      kind: 'launch',
+      provider: 'codex',
+    });
+    expect(detectEngineerCommand(['node', 'conduct', verb, '--provider', 'claude', '--idea', 'add retries'])).toEqual({
+      kind: 'launch',
+      provider: 'claude',
+      idea: 'add retries',
+    });
+    expect(detectEngineerCommand(['node', 'conduct', verb, '--idea', 'add retries', '--provider', 'claude'])).toEqual({
+      kind: 'launch',
+      provider: 'claude',
+      idea: 'add retries',
+    });
   });
 
   it.each(subcommandCases)('returns the same help descriptor for %s %s', async (subcommand, args) => {
     const { detectEngineerCommand } = await import('../src/engine/engineer-cli.js');
-    expect(detectEngineerCommand(['node', 'conduct', 'compose', subcommand, ...args, '--help']))
-      .toEqual(detectEngineerCommand(['node', 'conduct', 'engineer', subcommand, ...args, '--help']));
+    expect(detectEngineerCommand(['node', 'conduct', 'compose', subcommand, ...args, '--help'])).toEqual(
+      detectEngineerCommand(['node', 'conduct', 'engineer', subcommand, ...args, '--help']),
+    );
   });
 
   it('returns the engineer rejection descriptor for compose with an unknown flag', async () => {
@@ -285,7 +286,10 @@ describe('dispatchEngineer — routes to engineer entry', () => {
     const launchInteractive = vi.fn().mockResolvedValue(0);
     const answers = [true, true, false];
     const confirmAnother = vi.fn().mockImplementation(() => answers.shift());
-    const code = await mod.dispatchEngineer({ kind: 'launch' }, { launchInteractive, confirmAnother, isAttachedTerminal: () => true });
+    const code = await mod.dispatchEngineer(
+      { kind: 'launch' },
+      { launchInteractive, confirmAnother, isAttachedTerminal: () => true },
+    );
     expect(launchInteractive).toHaveBeenCalledTimes(3);
     expect(confirmAnother).toHaveBeenCalledTimes(3);
     expect(code).toBe(0);

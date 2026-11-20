@@ -59,17 +59,24 @@ export class SpoolDrainer {
     this.send = options.fetch ?? globalThis.fetch;
     this.now = options.now ?? Date.now;
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
-    this.backlogSleep = options.backlogSleep ?? ((ms, signal) => new Promise((resolve) => {
-      if (signal?.aborted) {
-        resolve();
-        return;
-      }
-      const timeout = setTimeout(resolve, ms);
-      signal?.addEventListener('abort', () => {
-        clearTimeout(timeout);
-        resolve();
-      }, { once: true });
-    }));
+    this.backlogSleep =
+      options.backlogSleep ??
+      ((ms, signal) =>
+        new Promise((resolve) => {
+          if (signal?.aborted) {
+            resolve();
+            return;
+          }
+          const timeout = setTimeout(resolve, ms);
+          signal?.addEventListener(
+            'abort',
+            () => {
+              clearTimeout(timeout);
+              resolve();
+            },
+            { once: true },
+          );
+        }));
     this.random = options.random ?? Math.random;
     this.exportTimeoutMs = options.exportTimeoutMs ?? DEFAULT_EXPORT_TIMEOUT_MS;
   }
@@ -105,75 +112,83 @@ export class SpoolDrainer {
       const batches = await this.store.list(signal);
       if (batches.length === 0) return;
       for (const batch of batches) {
-      if (this.stopped) return;
-      let body: Buffer;
-      try {
-        body = await this.store.read(batch);
-      } catch (error) {
-        // Cap eviction can remove a batch after list() but before read().
-        if (isMissing(error)) continue;
-        throw error;
-      }
-      let backoffMs = INITIAL_BACKOFF_MS;
-
-      while (!this.stopped) {
-        const classification = await this.deliver(signal, body);
         if (this.stopped) return;
-        if (classification.action !== 'keep') {
-          try {
-            await this.store.delete(batch);
-          } catch (error) {
-            // Cap eviction can remove an accepted batch before this delete.
-            if (isMissing(error)) break;
-            throw error;
+        let body: Buffer;
+        try {
+          body = await this.store.read(batch);
+        } catch (error) {
+          // Cap eviction can remove a batch after list() but before read().
+          if (isMissing(error)) continue;
+          throw error;
+        }
+        let backoffMs = INITIAL_BACKOFF_MS;
+
+        while (!this.stopped) {
+          const classification = await this.deliver(signal, body);
+          if (this.stopped) return;
+          if (classification.action !== 'keep') {
+            try {
+              await this.store.delete(batch);
+            } catch (error) {
+              // Cap eviction can remove an accepted batch before this delete.
+              if (isMissing(error)) break;
+              throw error;
+            }
+            if (classification.action === 'delete') await this.reportRecovery(signal);
+            if (classification.action === 'drop') {
+              await this.events?.emit({
+                type: 'otel_spool_drop',
+                signal,
+                reason: classification.reason,
+                batches: 1,
+                items: classification.rejectedItems || batch.items,
+                status: classification.status,
+              });
+            }
+            break;
           }
-          if (classification.action === 'delete') await this.reportRecovery(signal);
-          if (classification.action === 'drop') {
-            await this.events?.emit({
-              type: 'otel_spool_drop',
-              signal,
-              reason: classification.reason,
-              batches: 1,
-              items: classification.rejectedItems || batch.items,
-              status: classification.status,
-            });
+
+          if (classification.failureClass !== 'credential') {
+            this.lastFailures.set(signal, classification.failureClass);
           }
-          break;
-        }
+          await this.reportFailure(
+            signal,
+            classification.failureClass,
+            classification.failureClass === 'credential'
+              ? classification.reason
+              : `OTLP ${signal} delivery failed: ${classification.failureClass}`,
+          );
 
-        if (classification.failureClass !== 'credential') {
-          this.lastFailures.set(signal, classification.failureClass);
-        }
-        await this.reportFailure(signal, classification.failureClass, classification.failureClass === 'credential'
-          ? classification.reason
-          : `OTLP ${signal} delivery failed: ${classification.failureClass}`);
+          // A server-directed delay takes precedence over the ordinary backoff.
+          if ('retryAfterMs' in classification && classification.retryAfterMs !== undefined) {
+            await this.delay(classification.retryAfterMs);
+            continue;
+          }
 
-        // A server-directed delay takes precedence over the ordinary backoff.
-        if ('retryAfterMs' in classification && classification.retryAfterMs !== undefined) {
-          await this.delay(classification.retryAfterMs);
-          continue;
+          await this.delay(this.backoffWithJitter(backoffMs));
+          backoffMs = Math.min(MAX_BACKOFF_MS, backoffMs * 2);
         }
-
-        await this.delay(this.backoffWithJitter(backoffMs));
-        backoffMs = Math.min(MAX_BACKOFF_MS, backoffMs * 2);
-      }
       }
     }
   }
 
   private async runUntilStopped(): Promise<void> {
-    const signalLoops = (['traces', 'metrics'] as const).map((signal) => this.trackLoop((async () => {
-      while (!this.stopped) {
-        try {
-          await this.drainSignal(signal);
-        } catch (error) {
-          await this.reportFailure(signal, 'spool', `OTLP ${signal} spool delivery failed: ${errorMessage(error)}`);
-          if (!this.stopped) await this.delay(INITIAL_BACKOFF_MS);
-          continue;
-        }
-        if (!this.stopped) await this.delay(IDLE_POLL_INTERVAL_MS);
-      }
-    })()));
+    const signalLoops = (['traces', 'metrics'] as const).map((signal) =>
+      this.trackLoop(
+        (async () => {
+          while (!this.stopped) {
+            try {
+              await this.drainSignal(signal);
+            } catch (error) {
+              await this.reportFailure(signal, 'spool', `OTLP ${signal} spool delivery failed: ${errorMessage(error)}`);
+              if (!this.stopped) await this.delay(INITIAL_BACKOFF_MS);
+              continue;
+            }
+            if (!this.stopped) await this.delay(IDLE_POLL_INTERVAL_MS);
+          }
+        })(),
+      ),
+    );
     // The continuous runtime owns the sole reporter; delivery loops do not.
     const backlogLoop = this.trackLoop(this.runBacklogUntilStopped());
     await Promise.all([...signalLoops, backlogLoop]);
@@ -280,19 +295,25 @@ export class SpoolDrainer {
   private async reportRecovery(signal: SpoolSignal): Promise<void> {
     if (!this.reportedFailures.delete(signal)) return;
     await this.events?.emit({
-      type: 'renderer_error', rendererName: 'otel', error: `OTLP ${signal} delivery recovered`,
+      type: 'renderer_error',
+      rendererName: 'otel',
+      error: `OTLP ${signal} delivery recovered`,
     });
   }
 
   private async delay(ms: number): Promise<void> {
     if (this.stopped) return;
-    const due = this.now() + ms;
     let release!: () => void;
-    const interrupted = new Promise<void>((resolve) => { release = resolve; });
+    const interrupted = new Promise<void>((resolve) => {
+      release = resolve;
+    });
     this.pendingDelays.add(release);
     try {
       await Promise.race([
-        this.sleep(Math.max(0, due - this.now())),
+        // The injected sleep boundary owns elapsed-time measurement. Reading
+        // the wall clock twice here can shorten a deterministic retry by one
+        // millisecond before the sleep is even scheduled.
+        this.sleep(ms),
         interrupted,
       ]);
     } finally {
