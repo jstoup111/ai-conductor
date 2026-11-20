@@ -1,20 +1,21 @@
 # Halt record
 
-Status: resolved
-Resolution cause: operator
-Resolved at: 2026-11-20T11:30:33.712Z
+Status: halted
 Slug: manual-test-report-left-in-product-worktree-blocks
 Class: needs-human
 Halting step: unknown
 Phase: unknown
 Branch: feat/daemon-manual-test-report-left-in-product-worktree-blocks
-Head SHA: 992a9daca16f84946cde9ba9595efb0b561fdd0f
-Halted at: 2026-11-20T02:20:52.050Z
+Head SHA: 38eeeeeaeb67821c5146f4cc56fbdefe761dc3a9
+Halted at: 2026-11-20T15:48:54.131Z
 
 Push status: this record may be ahead of the remote; push is not guaranteed.
 
 ## HALT
 
 ```text
-build_review adjudication halted: semantic remediation case repeat bcd12a91-060c-410e-b094-fdb3c653a426; resolve with ai-conductor build-review resolve-case --feature manual-test-report-left-in-product-worktree-blocks --case bcd12a91-060c-410e-b094-fdb3c653a426 --rationale "<why>"
+build_review mechanical fault allowance exhausted: 3 of 3 shared faults consumed.
+Current lap lap-38eeeeeaeb67821c5146f4cc56fbdefe761dc3a9: testQuality closed cause malformed-artifact (invalid-provider-result: build_review grader invocation ended without a result. claude subprocess exited without a classifiable result: exitCode=1 stdoutBytes=9170 stderrBytes=0).
+1. Record a reduced-coverage decision: ai-conductor build-review record-reduced-coverage --feature <feature-slug> --lap lap-38eeeeeaeb67821c5146f4cc56fbdefe761dc3a9 --rubric testQuality --rationale "<rationale>".
+2. Clear the documented terminal state: rm -f .pipeline/HALT .pipeline/HALT.class.
 ```
