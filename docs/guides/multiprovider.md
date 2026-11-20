@@ -177,7 +177,7 @@ A Pi run that exits `0` but ends with an error stop fails the step with that mes
 passing. Keys, precedence, and every validation error are in the
 [configuration reference](../reference/configuration.md#llm_providers).
 
-### Pi auth, rate-limit, and usage failures
+### Pi auth, rate-limit, usage, and unknown-model failures
 
 The engine classifies these Pi failures from the terminal error stop, or from stderr on a non-zero
 exit. A classified failure reports a fixed message and never echoes Pi's text:
@@ -188,6 +188,7 @@ exit. A classified failure reports a fixed message and never echoes Pi's text:
 | `Authentication failed for "`, `OAuth refresh failed for `, `401` | auth, credential rejected | park on Pi's `auth.json` |
 | `429` plus a quota term (for example `insufficient_quota`, `Monthly usage limit reached`, `billing`) | usage exhausted | suppress Pi for 3600 seconds; later walks use the next candidate |
 | `429` without a quota term | rate limited | wait and retry Pi without consuming retry budget |
+| `400: {"message":"<model> is not a valid model ID"` (terminal error stop only) | model unavailable | skip that model for the rest of the run and try the next `llm_providers.pi.model_fallback_ladder` entry; with no ladder or every entry rejected, Pi is unavailable and the walk advances to the next provider |
 
 An auth park watches `$PI_CODING_AGENT_DIR/auth.json` (default `~/.pi/agent/auth.json`). Run Pi's
 `/login` to rewrite it with a valid JSON object; the step resumes at the same attempt. Recovery steps
