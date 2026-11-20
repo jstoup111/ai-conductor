@@ -4,33 +4,27 @@ spec_hash: db4177f200b3499cfec48221572cb7670ac7e97bd97a29a2169f162f86ab8125
 pr: https://github.com/jstoup111/ai-conductor/pull/3711
 shipped: 2026-11-20
 engine_version: 20261118T023224Z-cfa8d246f3c8
-findings:
-  - gate: prd_audit
-    grade: OVER_SCOPE
-    criterion: NC-1
-    summary: "This reformatting is outside the planned tasks. It changes no operator-visible output, CLI result, or persisted state; the only cost is a larger review diff and possible merge-conflict surface."
-    accepted: false
-    authority: engine
 ---
 
 ## Cost
-input: 1400057
-output: 90687
-cache_read: 15246184
+input: 1419479
+output: 90855
+cache_read: 15282920
 cache_creation: 665074
-cost_usd: 12.9114
-dispatches: 37
+cost_usd: 12.9335
+dispatches: 38
 retries: 2
 halts: 3
 unmetered: count: 1, duration_ms: 0
 cost_unmetered: count: 4
 providers:
-  codex: input: 1399959, output: 63355, cache_read: 13380864, cache_creation: 0, cost_usd: 6.6708, dispatches: 24, cost_unmetered: 4
+  codex: input: 1419381, output: 63523, cache_read: 13417600, cache_creation: 0, cost_usd: 6.6929, dispatches: 25, cost_unmetered: 4
   claude: input: 98, output: 27332, cache_read: 1865320, cache_creation: 665074, cost_usd: 6.2407, dispatches: 13, cost_unmetered: 0
 
 ## Time
 state: partial
-reason: open-executions:step:execution\u0000["timing-rollup","persisted-ledger","881b3510-04a7-4e89-949a-f1f08a898dc6","lifecycle-step","finish"]
+active_ms: 13498970
+reason: provider-evidence-incomplete
 
 ## Build Review
 laps_to_pass: 4
