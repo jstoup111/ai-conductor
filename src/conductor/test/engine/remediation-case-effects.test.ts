@@ -404,7 +404,7 @@ describe('remediation case effects', () => {
           admissionRationale: 'Task 35 owns the admitted consistent repair publication boundary.',
         }],
       }],
-    }));
+    }), undefined, undefined);
   });
 
   it('records failed action effects without writing the active plan when the charge is exhausted', async () => {
