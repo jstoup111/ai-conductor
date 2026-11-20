@@ -6,6 +6,7 @@ import { withDaemonCoAuthorTrailer } from '../bot-co-author.js';
 import { type ChildId } from '../child-context.js';
 import { childBranchFor, leafBranchFor } from '../feature-branch-identity.js';
 import { type GitRunner } from '../rebase.js';
+import { unionRemBlocks } from '../routing/rem-block-merge.js';
 import { hasExactRoundOwnerTrailers } from '../round-trailers.js';
 import { parseCommitSha, type CommitSha } from './restack-types.js';
 import type {
@@ -168,7 +169,10 @@ function frozenBlockRuns(
 ): readonly { readonly start: number; readonly end: number }[] | undefined {
   const lines = hunk.patch.replace(/\n$/, '').split('\n');
   const header = lines.findIndex((line) => line.startsWith('@@ '));
-  if (header === -1) return undefined;
+  // A binary, mode-only, or empty-file path has no text hunk and therefore
+  // cannot contain a frozen block.  It must still use the ordinary per-path
+  // planner rather than being mistaken for an unexpressible residual.
+  if (header === -1) return [];
   const body = lines.slice(header + 1);
   const runs: Array<{ readonly start: number; readonly end: number }> = [];
   for (const block of blocks) {
@@ -269,22 +273,68 @@ async function frozenBlocks(
     : undefined;
 }
 
+interface FoldChildTip {
+  readonly child: ChildId;
+  tip: CommitSha;
+}
+
+interface FoldPlanningState {
+  readonly childTips: Map<ChildId, FoldChildTip>;
+  readonly missingChildren: Set<ChildId>;
+  leafTip?: CommitSha;
+}
+
 async function childTips(
   input: PlaceFoldCommitsInput,
   owner: ChildId,
-): Promise<readonly { readonly child: ChildId; readonly tip: CommitSha }[]> {
-  const entries: { child: ChildId; tip: CommitSha }[] = [];
+  state: FoldPlanningState,
+): Promise<readonly FoldChildTip[]> {
+  const entries: FoldChildTip[] = [];
   for (let raw = Number(owner); raw <= 9; raw += 1) {
     const child = raw as ChildId;
+    const cached = state.childTips.get(child);
+    if (cached !== undefined) {
+      entries.push(cached);
+      continue;
+    }
+    if (state.missingChildren.has(child)) continue;
     const branch = childBranchFor(input.slug, child);
     if (!branch.ok) continue;
     const resolved = await input.git(['rev-parse', '-q', '--verify', `refs/heads/${branch.branch}`]);
-    if (resolved.exitCode === 1) continue;
+    if (resolved.exitCode === 1) {
+      state.missingChildren.add(child);
+      continue;
+    }
     const tip = resolved.exitCode === 0 ? parseCommitSha(resolved.stdout.trim()) : undefined;
     if (tip === undefined) throw new Error(`cannot read child ${child} tip`);
-    entries.push({ child, tip });
+    const entry = { child, tip };
+    state.childTips.set(child, entry);
+    entries.push(entry);
   }
   return entries;
+}
+
+async function commitAccumulatedTree(git: GitRunner, tree: CommitSha, parent: CommitSha): Promise<CommitSha> {
+  const commit = await git(['commit-tree', tree, '-p', parent], {
+    input: withDaemonCoAuthorTrailer('fold placement accumulation\n'),
+  });
+  const sha = commit.exitCode === 0 ? parseCommitSha(commit.stdout.trim()) : undefined;
+  if (sha === undefined) throw new Error(`cannot write fold placement accumulation: ${commit.stderr}`);
+  return sha;
+}
+
+async function mergeAccumulatedTree(
+  input: PlaceFoldCommitsInput,
+  parent: CommitSha,
+  tip: CommitSha,
+  probe: CommitSha,
+): Promise<CommitSha | undefined> {
+  const merged = await input.git(['merge-tree', '--write-tree', '--merge-base', parent, tip, probe]);
+  if (merged.exitCode === 1) return undefined;
+  if (merged.exitCode !== 0) throw new Error(`cannot probe fold placement: ${merged.stderr}`);
+  const tree = parseCommitSha(merged.stdout.trim().split('\n', 1)[0] ?? '');
+  if (tree === undefined) throw new Error(`cannot read fold placement tree: ${merged.stderr}`);
+  return commitAccumulatedTree(input.git, tree, tip);
 }
 
 async function materializeHunk(
@@ -328,19 +378,24 @@ async function lowestAcceptingChild(
   input: PlaceFoldCommitsInput,
   parent: CommitSha,
   probe: CommitSha,
-  candidates: readonly { readonly child: ChildId; readonly tip: CommitSha }[],
+  candidates: readonly FoldChildTip[],
+  state: FoldPlanningState,
 ): Promise<ChildId | 'leaf'> {
   for (const candidate of candidates) {
-    const merged = await input.git(['merge-tree', '--write-tree', '--merge-base', parent, candidate.tip, probe]);
-    if (merged.exitCode === 0) return candidate.child;
-    if (merged.exitCode !== 1)
-      throw new Error(`cannot probe fold placement on child ${candidate.child}: ${merged.stderr}`);
+    const accumulated = await mergeAccumulatedTree(input, parent, candidate.tip, probe);
+    if (accumulated !== undefined) {
+      candidate.tip = accumulated;
+      return candidate.child;
+    }
   }
-  const leaf = await input.git(['rev-parse', '--verify', `refs/heads/${leafBranchFor(input.slug)}`]);
-  const leafTip = leaf.exitCode === 0 ? parseCommitSha(leaf.stdout.trim()) : undefined;
-  if (leafTip === undefined) throw new Error('cannot read fold leaf tip');
-  const merged = await input.git(['merge-tree', '--write-tree', '--merge-base', parent, leafTip, probe]);
-  if (merged.exitCode !== 0) throw new Error(`cannot probe fold placement on leaf: ${merged.stderr}`);
+  if (state.leafTip === undefined) {
+    const leaf = await input.git(['rev-parse', '--verify', `refs/heads/${leafBranchFor(input.slug)}`]);
+    state.leafTip = leaf.exitCode === 0 ? parseCommitSha(leaf.stdout.trim()) : undefined;
+    if (state.leafTip === undefined) throw new Error('cannot read fold leaf tip');
+  }
+  const accumulated = await mergeAccumulatedTree(input, parent, state.leafTip, probe);
+  if (accumulated === undefined) throw new Error('cannot probe fold placement on leaf');
+  state.leafTip = accumulated;
   return 'leaf';
 }
 
@@ -354,7 +409,8 @@ type HunkPlacement =
 interface HunkPlacementInput {
   readonly source: FoldSourceCommit;
   readonly parent: CommitSha;
-  readonly candidates: readonly { readonly child: ChildId; readonly tip: CommitSha }[];
+  readonly candidates: readonly FoldChildTip[];
+  readonly state: FoldPlanningState;
   readonly sourceHunk: FoldHunk;
   readonly frozenRuns?: readonly { readonly start: number; readonly end: number }[];
   readonly index: string;
@@ -384,9 +440,92 @@ async function placeFoldHunk(input: PlaceFoldCommitsInput, hunkInput: HunkPlacem
     hunk.wholeFile,
     hunkInput.index,
   );
-  const child = await lowestAcceptingChild(input, hunkInput.parent, probe, hunkInput.candidates);
+  const child = await lowestAcceptingChild(input, hunkInput.parent, probe, hunkInput.candidates, hunkInput.state);
   const reason: FoldPartReason = child === hunkInput.source.owner ? 'owner' : 'introduced-above-owner';
   return { kind: 'placed', part: { kind: 'hunks', child, path: hunk.path, hunk: { ...hunk, probe }, reason } };
+}
+
+function blockOnlyPlan(base: string, blocks: readonly FoldFrozenBlock[]): string {
+  const additions = blocks.map((block) => block.body).join('');
+  return `${base}${base.endsWith('\n') ? '\n' : '\n\n'}${additions}`;
+}
+
+async function textAtRevision(
+  git: GitRunner,
+  revision: string,
+  path: string,
+  env?: NodeJS.ProcessEnv,
+): Promise<string | undefined> {
+  const result = await git(
+    ['show', revision === ':' ? `:${path}` : `${revision}:${path}`],
+    env === undefined ? undefined : { env },
+  );
+  return result.exitCode === 0 ? result.stdout : undefined;
+}
+
+/** Advances the owner's planning tree with the same rem-block merge used at replay. */
+async function accumulateFrozenBlocks(
+  input: PlaceFoldCommitsInput,
+  source: FoldSourceCommit,
+  blocks: readonly FoldFrozenBlock[],
+  state: FoldPlanningState,
+  index: string,
+): Promise<void> {
+  if (blocks.length === 0) return;
+  const owner = (await childTips(input, source.owner, state)).find((candidate) => candidate.child === source.owner);
+  if (owner === undefined) throw new Error(`cannot read fold owner c${source.owner} tip`);
+  const env = { GIT_INDEX_FILE: index };
+  const seeded = await input.git(['read-tree', owner.tip], { env });
+  if (seeded.exitCode !== 0) throw new Error(`cannot seed frozen fold index: ${seeded.stderr}`);
+  const changed = await input.git(['diff-tree', '--no-commit-id', '--name-only', '-r', source.sha]);
+  if (changed.exitCode !== 0) throw new Error(`cannot list frozen fold paths for ${source.sha}: ${changed.stderr}`);
+  let materialized = false;
+  for (const path of changed.stdout
+    .split('\n')
+    .filter((candidate) => candidate.startsWith('.docs/plans/') && candidate.endsWith('.md'))) {
+    const [base, ours] = await Promise.all([
+      textAtRevision(input.git, `${source.sha}^`, path),
+      textAtRevision(input.git, ':', path, env),
+    ]);
+    if (ours === undefined) continue;
+    const text =
+      base === undefined
+        ? blockOnlyPlan(ours, blocks)
+        : (() => {
+            const merged = unionRemBlocks(base, ours, blockOnlyPlan(base, blocks));
+            if (merged.kind === 'body-mismatch')
+              throw new Error(`cannot re-materialize frozen fold block ${merged.remId} for ${source.sha}`);
+            return merged.kind === 'declined'
+              ? blocks.every((block) => ours.includes(block.body))
+                ? ours
+                : blockOnlyPlan(ours, blocks)
+              : merged.text;
+          })();
+    const blob = await input.git(['hash-object', '-w', '--stdin'], { input: text });
+    const blobSha = blob.exitCode === 0 ? parseCommitSha(blob.stdout.trim()) : undefined;
+    if (blobSha === undefined) throw new Error(`cannot write frozen fold block for ${source.sha}: ${blob.stderr}`);
+    const updated = await input.git(['update-index', '--add', '--cacheinfo', `100644,${blobSha},${path}`], { env });
+    if (updated.exitCode !== 0) throw new Error(`cannot stage frozen fold block for ${source.sha}: ${updated.stderr}`);
+    materialized = true;
+  }
+  if (!materialized) throw new Error(`cannot re-materialize frozen fold blocks for ${source.sha}`);
+  const tree = await input.git(['write-tree'], { env });
+  const treeSha = tree.exitCode === 0 ? parseCommitSha(tree.stdout.trim()) : undefined;
+  if (treeSha === undefined) throw new Error(`cannot write frozen fold tree for ${source.sha}: ${tree.stderr}`);
+  owner.tip = await commitAccumulatedTree(input.git, treeSha, owner.tip);
+}
+
+async function accumulateWholePart(
+  input: PlaceFoldCommitsInput,
+  source: FoldSourceCommit,
+  state: FoldPlanningState,
+): Promise<void> {
+  const owner = (await childTips(input, source.owner, state)).find((candidate) => candidate.child === source.owner);
+  if (owner === undefined) throw new Error(`cannot read fold owner c${source.owner} tip`);
+  const tree = await input.git(['rev-parse', `${owner.tip}^{tree}`]);
+  const treeSha = tree.exitCode === 0 ? parseCommitSha(tree.stdout.trim()) : undefined;
+  if (treeSha === undefined) throw new Error(`cannot read fold owner c${source.owner} tree: ${tree.stderr}`);
+  owner.tip = await commitAccumulatedTree(input.git, treeSha, owner.tip);
 }
 
 /** Plans one source commit, classifying whole, block, residual, and hunk parts. */
@@ -394,15 +533,17 @@ async function planFoldCommit(
   input: PlaceFoldCommitsInput,
   source: FoldSourceCommit,
   indexDirectory: string,
+  state: FoldPlanningState,
 ): Promise<FoldCommitPlan | FoldPlanRefusal> {
   const blocks = await frozenBlocks(input, source);
   const paths = await changedPaths(input.git, source.sha);
   if (paths.length === 0) {
+    await accumulateWholePart(input, source, state);
     return { ...source, parts: [{ kind: 'whole', child: source.owner, paths: [], reason: 'owner' }] };
   }
 
   const parent = await sourceParent(input.git, source.sha);
-  const candidates = await childTips(input, source.owner);
+  const candidates = await childTips(input, source.owner, state);
   const parts: FoldPart[] =
     blocks === undefined ? [] : [{ kind: 'blocks', child: source.owner, paths: [], reason: 'owner', blocks }];
   const frozenPaths = new Set<string>();
@@ -432,6 +573,7 @@ async function planFoldCommit(
         source,
         parent,
         candidates,
+        state,
         sourceHunk,
         ...(runs === undefined || runs.length === 0 ? {} : { frozenRuns: runs }),
         index,
@@ -463,6 +605,9 @@ async function planFoldCommit(
   if (unplacedPaths.length > 0) {
     return { kind: 'refused', reason: 'fold-unplaced-path', commit: source.sha, paths: unplacedPaths };
   }
+  if (blocks !== undefined) {
+    await accumulateFrozenBlocks(input, source, blocks, state, join(indexDirectory, `${source.sha}-blocks.index`));
+  }
   return { ...source, parts };
 }
 
@@ -474,9 +619,10 @@ async function planFoldCommit(
 export async function placeFoldCommits(input: PlaceFoldCommitsInput): Promise<FoldPlan> {
   const planned: FoldCommitPlan[] = [];
   const indexDirectory = await mkdtemp(join(tmpdir(), 'fold-plan-index-'));
+  const state: FoldPlanningState = { childTips: new Map(), missingChildren: new Set() };
   try {
     for (const source of input.commits) {
-      const commit = await planFoldCommit(input, source, indexDirectory);
+      const commit = await planFoldCommit(input, source, indexDirectory, state);
       if ('kind' in commit && commit.kind === 'refused') return commit;
       planned.push(commit as FoldCommitPlan);
     }
