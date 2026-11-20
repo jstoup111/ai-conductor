@@ -152,7 +152,7 @@ function hunkPatches(path: string, diff: string): FoldHunk[] {
   // A mode-only change, an empty-file add/delete, and a binary patch have no
   // text hunk.  They still represent one atomic path change and must travel
   // through the same materialize-and-probe path as an ordinary hunk.
-  if (firstHunk === -1) return [{ path, patch: diff, wholeFile: true }];
+  if (firstHunk === -1) return [{ path, patch: diff, wholeFile: true } as FoldHunk];
   const header = lines.slice(0, firstHunk);
   const hunks: FoldHunk[] = [];
   for (let start = firstHunk; start < lines.length;) {
@@ -163,28 +163,32 @@ function hunkPatches(path: string, diff: string): FoldHunk[] {
     // one synthetic final empty line for Git's terminating newline; remove
     // only that terminator before restoring the patch terminator.
     const patch = [...header, ...lines.slice(start, end)].join('\n');
-    hunks.push({ path, patch: `${patch.replace(/\n$/, '')}\n`, wholeFile: false });
+    hunks.push({ path, patch: `${patch.replace(/\n$/, '')}\n`, wholeFile: false } as FoldHunk);
     start = end;
   }
   return hunks;
 }
 
-function containsFrozenBlock(
+/** Exact frozen added runs parsed from hunk bodies, never diff file headers. */
+function frozenBlockRuns(
   hunk: FoldHunk,
   blocks: readonly { readonly id: string; readonly body: string }[],
-): boolean {
-  const added = new Set(
-    hunk.patch
-      .split('\n')
-      .filter((line) => line.startsWith('+') && !line.startsWith('+++'))
-      .map((line) => line.slice(1)),
-  );
-  return blocks.some(({ body }) =>
-    body
-      .replace(/\n$/, '')
-      .split('\n')
-      .every((line) => added.has(line)),
-  );
+): readonly { readonly start: number; readonly end: number }[] | undefined {
+  const lines = hunk.patch.replace(/\n$/, '').split('\n');
+  const header = lines.findIndex((line) => line.startsWith('@@ '));
+  if (header === -1) return undefined;
+  const body = lines.slice(header + 1);
+  const runs: Array<{ readonly start: number; readonly end: number }> = [];
+  for (const block of blocks) {
+    const expected = block.body.replace(/\n$/, '').split('\n').map((line) => `+${line}`);
+    const start = body.findIndex((_, index) => expected.every((line, offset) => body[index + offset] === line));
+    if (start === -1) {
+      if (expected.some((line) => body.includes(line))) return undefined;
+      continue;
+    }
+    runs.push({ start, end: start + expected.length });
+  }
+  return runs;
 }
 
 /**
@@ -195,32 +199,21 @@ function containsFrozenBlock(
  */
 function residualHunk(
   hunk: FoldHunk,
-  blocks: readonly { readonly id: string; readonly body: string }[],
+  runs: readonly { readonly start: number; readonly end: number }[],
 ): FoldHunk | null | undefined {
   const lines = hunk.patch.replace(/\n$/, '').split('\n');
   const start = lines.findIndex((line) => line.startsWith('@@ '));
   const header = start === -1 ? undefined : lines[start]!.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/);
   if (header === undefined || header === null) return undefined;
-  let body = lines.slice(start + 1);
-  for (const block of blocks) {
-    const blockLines = block.body
-      .replace(/\n$/, '')
-      .split('\n')
-      .map((line) => `+${line}`);
-    if (!blockLines.every((line) => body.includes(line))) continue;
-    const at = body.findIndex((_, index) => blockLines.every((line, offset) => body[index + offset] === line));
-    if (at === -1) return undefined;
-    let end = at + blockLines.length;
-    // A no-newline marker belongs to the line before it; drop it with that line.
-    if (body[end]?.startsWith('\\')) end += 1;
-    body = [...body.slice(0, at), ...body.slice(end)];
-  }
+  const remove = new Set(runs.flatMap((run) => Array.from({ length: run.end - run.start }, (_, offset) => run.start + offset)));
+  const original = lines.slice(start + 1);
+  const body = original.filter((line, index) => !remove.has(index) && !(remove.has(index - 1) && line.startsWith('\\')));
   const added = body.filter((line) => line.startsWith('+')).length;
   const removed = body.filter((line) => line.startsWith('-')).length;
   if (added === 0 && removed === 0) return null;
   const [, oldStart, oldCount, newStart, , section] = header;
   const range = `@@ -${oldStart}${oldCount === undefined ? '' : `,${oldCount}`} +${newStart},${added} @@${section}`;
-  return { path: hunk.path, patch: `${[...lines.slice(0, start), range, ...body].join('\n')}\n`, wholeFile: false };
+  return { path: hunk.path, patch: `${[...lines.slice(0, start), range, ...body].join('\n')}\n`, wholeFile: false } as FoldHunk;
 }
 
 async function residualApplies(git: GitRunner, parent: CommitSha, patch: string, index: string): Promise<boolean> {
@@ -235,9 +228,9 @@ async function residualApplies(git: GitRunner, parent: CommitSha, patch: string,
 }
 
 async function changedPaths(git: GitRunner, sha: CommitSha): Promise<string[]> {
-  const changed = await git(['diff-tree', '--no-commit-id', '--name-only', '-r', sha]);
+  const changed = await git(['diff-tree', '--no-commit-id', '--name-only', '-z', '-r', sha]);
   if (changed.exitCode !== 0) throw new Error(`cannot read changed paths for ${sha}`);
-  return changed.stdout.split('\n').filter(Boolean);
+  return changed.stdout.split('\0').filter(Boolean);
 }
 
 async function sourceParent(git: GitRunner, sha: CommitSha): Promise<CommitSha> {
@@ -256,12 +249,13 @@ async function frozenBlocks(
   if (configured === undefined || configured.length === 0) return configured;
   const patch = await input.git(['show', '--format=', '--no-ext-diff', source.sha]);
   if (patch.exitCode !== 0) throw new Error(`cannot read frozen block commit ${source.sha}`);
-  const added = new Set(
-    patch.stdout
-      .split('\n')
-      .filter((line) => line.startsWith('+') && !line.startsWith('+++'))
-      .map((line) => line.slice(1)),
-  );
+  let inHunk = false;
+  const added = new Set<string>();
+  for (const line of patch.stdout.split('\n')) {
+    if (line.startsWith('diff --git ')) inHunk = false;
+    else if (line.startsWith('@@ ')) inHunk = true;
+    else if (inHunk && line.startsWith('+')) added.add(line.slice(1));
+  }
   return configured.every(({ body }) =>
     body
       .replace(/\n$/, '')
@@ -358,16 +352,16 @@ interface HunkPlacementInput {
   readonly source: FoldSourceCommit;
   readonly parent: CommitSha;
   readonly candidates: readonly { readonly child: ChildId; readonly tip: CommitSha }[];
-  readonly blocks: readonly { readonly id: string; readonly body: string }[] | undefined;
   readonly sourceHunk: FoldHunk;
+  readonly frozenRuns?: readonly { readonly start: number; readonly end: number }[];
   readonly index: string;
 }
 
 /** Classifies a hunk's frozen-block residual, then probes and places it. */
 async function placeFoldHunk(input: PlaceFoldCommitsInput, hunkInput: HunkPlacementInput): Promise<HunkPlacement> {
   let hunk = hunkInput.sourceHunk;
-  if (hunkInput.blocks !== undefined && containsFrozenBlock(hunk, hunkInput.blocks)) {
-    const residual = residualHunk(hunk, hunkInput.blocks);
+  if (hunkInput.frozenRuns !== undefined && hunkInput.frozenRuns.length > 0) {
+    const residual = residualHunk(hunk, hunkInput.frozenRuns);
     if (residual === null) return { kind: 'frozen', path: hunk.path };
     if (
       residual === undefined ||
@@ -389,7 +383,7 @@ async function placeFoldHunk(input: PlaceFoldCommitsInput, hunkInput: HunkPlacem
   );
   const child = await lowestAcceptingChild(input, hunkInput.parent, probe, hunkInput.candidates);
   const reason: FoldPartReason = child === hunkInput.source.owner ? 'owner' : 'introduced-above-owner';
-  return { kind: 'placed', part: { kind: 'hunks', child, path: hunk.path, hunk, reason } };
+  return { kind: 'placed', part: { kind: 'hunks', child, path: hunk.path, hunk: { ...hunk, probe }, reason } };
 }
 
 /** Plans one source commit, classifying whole, block, residual, and hunk parts. */
@@ -426,7 +420,19 @@ async function planFoldCommit(
     if (diff.exitCode !== 0) throw new Error(`cannot read fold hunks for ${source.sha}:${path}`);
     for (const [ordinal, sourceHunk] of hunkPatches(path, diff.stdout).entries()) {
       const index = join(indexDirectory, `${source.sha}-${path.replace(/[^A-Za-z0-9_.-]/g, '-')}-${ordinal}.index`);
-      const placement = await placeFoldHunk(input, { source, parent, candidates, blocks, sourceHunk, index });
+      const runs = blocks === undefined ? undefined : frozenBlockRuns(sourceHunk, blocks);
+      if (blocks !== undefined && runs === undefined) {
+        unexpressiblePaths.push(path);
+        continue;
+      }
+      const placement = await placeFoldHunk(input, {
+        source,
+        parent,
+        candidates,
+        sourceHunk,
+        ...(runs === undefined || runs.length === 0 ? {} : { frozenRuns: runs }),
+        index,
+      });
       if (placement.kind === 'frozen') {
         frozenPaths.add(placement.path);
         continue;

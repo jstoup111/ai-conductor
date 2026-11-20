@@ -30,6 +30,8 @@ export interface FoldHunk {
   readonly path: string;
   readonly patch: string;
   readonly wholeFile: boolean;
+  /** Commit produced by the planner before it probes this hunk with merge-tree. */
+  readonly probe: CommitSha;
 }
 
 export type FoldPart =

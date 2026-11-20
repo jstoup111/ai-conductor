@@ -192,10 +192,27 @@ describe('revalidation queue generations', () => {
       args[0] === 'cat-file' && args[2] === queueBlob
         ? { exitCode: 0, stdout: JSON.stringify(afterOwner), stderr: '' }
         : { exitCode: 128, stdout: '', stderr: 'unexpected git call' };
-    expect((await readPinnedQueueFold(pinned, git))?.leafTree).toBe(sha('7'));
+    await expect(readPinnedQueueFold(pinned, git)).resolves.toEqual({ kind: 'fold', fold: expect.objectContaining({ leafTree: sha('7') }) });
 
     // Fold provenance ends only when the queue drains.
     expect(mergeQueueGeneration(afterOwner, [], { acknowledge: child(2) }).fold).toBeUndefined();
+  });
+
+  // Covers: task:22, task:23
+  it('distinguishes an unreadable pinned queue from verified absent fold provenance', async () => {
+    const pinned: StoredRouteRecord = {
+      kind: 'record',
+      slug: 'demo',
+      blob: sha('8'),
+      record: {
+        entry: { host: child(2), pinnedBase: sha('5'), tree: sha('6'), revalidation: { queueBlob: sha('9'), generation: 2, closureSha: sha('4') } },
+      } as unknown as RouteRecord,
+    };
+    const unreadable: GitRunner = async () => ({ exitCode: 128, stdout: '', stderr: 'missing object' });
+    await expect(readPinnedQueueFold(pinned, unreadable)).resolves.toEqual({
+      kind: 'unavailable',
+      detail: 'cannot read pinned revalidation queue',
+    });
   });
 
   // Covers: task:33, task:36

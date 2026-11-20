@@ -483,6 +483,23 @@ describe('placeFoldCommits (real local Git)', () => {
     expect(part?.kind === 'hunks' ? part.hunk.patch : '').toContain('+line with a hard break  \n');
   });
 
+  it('keeps a non-ASCII changed path as a literal pathspec', async () => {
+    const subject = await placementFixture();
+    const source = await subject.commit('src/café.ts', 'export const café = true;\n', `unicode path${trailers('r1', 'c1')}`);
+
+    const result = await placeFoldCommits({
+      worktree: subject.repo,
+      slug,
+      commits: [{ sha: source as never, roundId: parseRoundId('r1')!, owner: hostOne }],
+      git: makeGitRunner(subject.repo),
+    });
+
+    expect(result).toMatchObject({
+      kind: 'planned',
+      commits: [{ parts: [expect.objectContaining({ kind: 'hunks', child: hostOne, path: 'src/café.ts' })] }],
+    });
+  });
+
   const block = '### Task rem-prd-audit-T1: Repair\n**Done when:**\n- fixed\n**Child:** 1\n**Round:** r1\n';
 
   async function frozenFixture(plan: string) {

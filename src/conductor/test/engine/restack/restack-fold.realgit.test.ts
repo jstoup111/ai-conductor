@@ -333,7 +333,12 @@ describe('planned fold recovery (real local Git)', () => {
       return native(...args);
     };
     foldConflictHarness.resolve = async (options) => {
-      expect(options).toMatchObject({ cap: 1, range: { child: child(2) }, restack: { cause: 'fold', roundId: 'r1' } });
+      expect(options).toMatchObject({
+        cap: 1,
+        range: { child: child(2) },
+        restack: { cause: 'fold', roundId: 'r1' },
+        omittedCommits: [subject.foldedSource],
+      });
       await options.resolver({
         conflicts: ['two.txt'],
         projectRoot: options.worktree,

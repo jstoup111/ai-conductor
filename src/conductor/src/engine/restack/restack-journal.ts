@@ -436,14 +436,17 @@ function parseFoldPlan(value: unknown): readonly FoldCommitPlan[] | undefined {
           !isRecord(raw.hunk) ||
           typeof raw.hunk.path !== 'string' ||
           typeof raw.hunk.patch !== 'string' ||
-          typeof raw.hunk.wholeFile !== 'boolean'
+          typeof raw.hunk.wholeFile !== 'boolean' ||
+          typeof raw.hunk.probe !== 'string'
         )
           return undefined;
+        const probe = parseCommitSha(raw.hunk.probe);
+        if (!probe) return undefined;
         parts.push({
           kind: 'hunks',
           child,
           path: raw.path,
-          hunk: { path: raw.hunk.path, patch: raw.hunk.patch, wholeFile: raw.hunk.wholeFile },
+          hunk: { path: raw.hunk.path, patch: raw.hunk.patch, wholeFile: raw.hunk.wholeFile, probe },
           reason: raw.reason,
         });
       } else return undefined;

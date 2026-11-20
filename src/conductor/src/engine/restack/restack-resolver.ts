@@ -147,6 +147,8 @@ export interface ResolveRestackConflictOptions {
   readonly stamp: CommitterStamp;
   /** Commits introduced by the advance; patch-equivalent candidates are omitted. */
   readonly comparisonCommits?: readonly CommitSha[];
+  /** Folded source commits are already re-materialized on their owners. */
+  readonly omittedCommits?: readonly CommitSha[];
   /** Enables deterministic handling of this feature's halt-record bookkeeping. */
   readonly haltRecordSlug?: string;
   /** Whether the range owns this feature's halt record after carried-merge normalization. */
@@ -250,9 +252,11 @@ export async function resolveRestackConflict(
           haltRecordSlug: options.haltRecordSlug,
         })
       : undefined;
-    const candidates =
+    const omitted = new Set(options.omittedCommits);
+    const candidates = (
       handoff?.candidates ??
-      (await selectReplayCandidates(runGit, options.range, options.comparisonCommits, options.haltRecordSlug));
+      (await selectReplayCandidates(runGit, options.range, options.comparisonCommits, options.haltRecordSlug))
+    ).filter((commit) => !omitted.has(commit));
     // An empty engine-authored todo has no resolver work to settle. Its only
     // valid result is the supplied replay parent; never ask Git to run an
     // empty interactive rebase, which reports a synthetic failure.
@@ -294,7 +298,7 @@ export async function resolveRestackConflict(
     if (addedResult.exitCode !== 0) throw new Error(`could not add restack resolver worktree: ${addedResult.stderr}`);
     added = true;
 
-    const todo = (handoff?.todo ?? candidates).map((commit) => `pick ${commit}\n`).join('');
+    const todo = candidates.map((commit) => `pick ${commit}\n`).join('');
     await writeFile(todoPath, todo);
     await writeFile(sequenceEditorPath, `#!/bin/sh\ncp ${shellQuote(todoPath)} "$1"\n`);
     await chmod(sequenceEditorPath, 0o700);
