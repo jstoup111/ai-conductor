@@ -34,7 +34,7 @@ describe('resume ownership', () => {
     ).toBe('local-only');
   });
 
-  it('Covers: Task 14 refuses unresolved ownership before prompts or writes, and daemon sessions never take over another owner', () => {
+  it('Covers: Task 14 refuses unresolved ownership before prompts or writes, and daemon sessions never take over another owner (retry review)', () => {
     expect(() => resumeOwnershipMode({ committedOwner: 'A', daemonSession: false, interactive: true })).toThrow(
       /identity is unresolved/,
     );
@@ -67,7 +67,7 @@ describe('resume ownership', () => {
     ).toBe('local-only');
   });
 
-  it('Covers: Task 14 keeps declined and non-TTY take-overs local-only: owner A stays stamped and checkpoints never push or write a PR', async () => {
+  it('Covers: Task 14 keeps declined and non-TTY take-overs local-only: owner A stays stamped and checkpoints never push or write a PR (retry review)', async () => {
     for (const ownership of [
       { interactive: true, approved: false },
       { interactive: false, approved: true },
@@ -146,7 +146,7 @@ describe('resume ownership', () => {
     expect(checkpointPublicationOwner({ localMarkerOwner: 'B', remoteMarkerOwner: 'B' })).toBe('B');
   });
 
-  it('Covers: Task 14 re-stamps an accepted take-over with A-to-B history and pushes only under exact-ref approval', async () => {
+  it('Covers: Task 14 re-stamps an accepted take-over with A-to-B history and pushes only under exact-ref approval (retry review)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'composer-takeover-retry-'));
     const registryPath = join(root, 'registry.json');
     const slug = 'demo';
@@ -347,7 +347,7 @@ describe('resume ownership', () => {
     }
   });
 
-  it('Covers: Task 14 gates the re-stamped owner branch to that daemon owner only', () => {
+  it('Covers: Task 14 gates the re-stamped owner branch to that daemon owner only (retry review)', () => {
     const stamp = { present: true as const, id: 'B' };
     expect(decideSpecGate({ daemonOwner: { id: 'B' }, stamp, mergeTime: null, cutover: null })).toEqual({
       build: true,

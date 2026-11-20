@@ -57,7 +57,7 @@ describe('Composer resume', () => {
     expect(contextForRun(record).drafts).toContain('architecture_diagram');
   });
 
-  it('Covers: Task 12 fetches and attaches PR, branch, and intake selectors without asking the prior actor for release or permission', async () => {
+  it('Covers: Task 12 fetches and attaches PR, branch, and intake selectors without asking the prior actor for release or permission (retry review)', async () => {
     for (const target of ['17', 'spec/demo', 'acme/demo#12']) {
       const fetch = vi.fn(async () => {});
       const attach = vi.fn(async () => ({ worktree: '/repo/.worktrees/engineer-demo' }));
@@ -73,7 +73,7 @@ describe('Composer resume', () => {
     }
   });
 
-  it('Covers: Task 12 reconstructs accepted context and directs a deliberately stripped landed run to delivery', () => {
+  it('Covers: Task 12 reconstructs accepted context and directs a deliberately stripped landed run to delivery (retry review)', () => {
     expect(contextForRun(record)).toMatchObject({
       nextStep: 'architecture_diagram',
       acceptedArtifacts: ['.docs/track/demo.md'],
@@ -154,7 +154,7 @@ describe('Composer resume', () => {
     expect(context.drafts).toContain('plan');
   });
 
-  it('Covers: Task 12 reports unknown, unregistered, and failed-fetch targets without attaching or changing a worktree', async () => {
+  it('Covers: Task 12 reports unknown, unregistered, and failed-fetch targets without attaching or changing a worktree (retry review)', async () => {
     const attach = vi.fn(async () => ({ worktree: '/should-not-exist' }));
     await expect(
       resumeComposerRun('not a target', {
@@ -204,7 +204,7 @@ describe('Composer resume', () => {
     }
   });
 
-  it('Covers: Task 12 records deciding with the draft PR URL and emits exactly one resumed transition without ledger history', async () => {
+  it('Covers: Task 12 records deciding with the draft PR URL and emits exactly one resumed transition without ledger history (retry review)', async () => {
     const transitions: unknown[] = [];
     const emitted: unknown[] = [];
     await resumeComposerRun('17', {
@@ -379,7 +379,7 @@ describe('Composer resume', () => {
     }
   });
 
-  it('Covers: Tasks 12 and 15 attach a same-machine local spec branch without fetch and launch one Codex resume host', async () => {
+  it('Covers: Tasks 12 and 15 attach a same-machine local spec branch without fetch and launch one Codex resume host (retry review)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'composer-resume-launch-'));
     const registryPath = join(root, 'registry.json');
     const spawned = vi.fn(async (_executable: string, _argv: string[], _cwd: string, _env: NodeJS.ProcessEnv) => 0);
