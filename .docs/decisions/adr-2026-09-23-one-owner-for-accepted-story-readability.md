@@ -105,6 +105,8 @@ poorly-bounded blast radius.
    deliberately exempt from this confinement: it changes derivation rather than adding a
    requirement, and it corrects BUILD-side routing that is already wrong.
 
+> **Amended 2026-11-20 by #3419:** The shared reader returns persisted criterion IDs for opted-in stories. Audit resolves those IDs irrespective of order; legacy stories retain positional identity. See adr-2026-11-19-spec-review-layout-and-criterion-references D3.
+
 ## Consequences
 
 ### Positive

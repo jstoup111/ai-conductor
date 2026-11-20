@@ -113,6 +113,8 @@ rewrite the manifest through a shell command undetected. Once spec 3 moves files
    - **Unchanged:** kinds outside that list keep today's protection, which is none. Legacy features
      keep today's protected set and stem rule.
 
+   > **Amended 2026-11-20 by #3419:** The review-layout plan summary is a protected kind alongside the executable plan (review-layout ADR D5).
+
 5. **The hook reads engine-computed lines.** The phase marker gains `own: <path>` and
    `protect: <path>` lines, which the engine writes from the ownership result.
    - **With lines present:** the pre-commit hook treats a staged path as the feature's own only when
@@ -195,6 +197,8 @@ rewrite the manifest through a shell command undetected. Once spec 3 moves files
      when the manifest was pruned.
 
    Stems without a manifest are selected exactly as today.
+
+   > **Amended 2026-11-20 by #3419:** For review-layout features the plan-summary kind joins the prunable selection. Both plan artifacts participate in whole-feature deferral, and historical lookup still selects the full plan (review-layout ADR D5).
 
 10. **Legacy unchanged, no flag, one spec in three stacked slices.**
     - **Legacy:** specs without a manifest, and consumer repositories, behave exactly as today under

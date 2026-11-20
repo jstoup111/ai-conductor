@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "slug": "spec-review-artifacts-still-mix-reviewer-content-w",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/spec-review-artifacts-still-mix-reviewer-content-w.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/spec-review-artifacts-still-mix-reviewer-content-w.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/spec-review-artifacts-still-mix-reviewer-content-w.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/spec-review-artifacts-still-mix-reviewer-content-w.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-08-31-coverage-binding-judge-step.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-09-23-one-owner-for-accepted-story-readability.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-24-per-feature-artifact-manifest.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-28-path-policy-reads-feature-ownership-from-manifest.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-11-19-spec-review-layout-and-criterion-references.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/spec-review-artifacts-still-mix-reviewer-content-w.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/spec-review-artifacts-still-mix-reviewer-content-w.md"
+    },
+    {
+      "kind": "prd",
+      "path": ".docs/specs/2026-11-19-spec-review-artifacts-still-mix-reviewer-content-w.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/spec-review-artifacts-still-mix-reviewer-content-w.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/spec-review-artifacts-still-mix-reviewer-content-w.md"
+    }
+  ]
+}

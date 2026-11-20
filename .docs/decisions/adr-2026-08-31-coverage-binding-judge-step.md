@@ -94,6 +94,8 @@ that ADR's shared resolver once its feature ships, and until then via the valida
 citation normalization extended with the annotation strip (that ADR's resolver adopts this call
 site when it lands).
 
+> **Amended 2026-11-20 by #3419:** The opt-in review format carries persistent criterion and task/check references in the same tier-specific carriers. Resolve references to canonical wording and check text before applying the existing grounding and disposition rules. The verbatim on-disk format continues for legacy specs. See adr-2026-11-19-spec-review-layout-and-criterion-references D3–D4.
+
 > **Amended 2026-10-07 by #2941:** (adr-2026-10-07-sliced-plan-story-ownership-and-stack-eligibility
 > decision 6) For a sliced, flag-on plan, `coverage_binding` stays feature-scoped. It holds one
 > whole-feature baseline, runs before the first child, and re-runs only on the D16 and D19
