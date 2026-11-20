@@ -922,6 +922,18 @@ async function composerCommittedMarkerOwner(
   }
 }
 
+/**
+ * Publication follows the committed remote owner whenever one exists.  A
+ * take-over commit can be present locally after its guarded push was refused;
+ * that local marker must not unlock ordinary checkpoint publication.
+ */
+export function checkpointPublicationOwner(input: {
+  localMarkerOwner?: string;
+  remoteMarkerOwner?: string;
+}): string | undefined {
+  return input.remoteMarkerOwner ?? input.localMarkerOwner;
+}
+
 function formatDependencyDrift(result: DependencyDriftResult): string {
   if (result.kind === 'repository-indeterminate') {
     return `Dependency drift audit: indeterminate (${result.cause})`;
@@ -1346,7 +1358,7 @@ async function prepareCheckpointDeps(input: {
   const remoteMarkerOwner = input.target.remote
     ? await composerCommittedMarkerOwner(input.git, input.worktree, `origin/${input.branch}`, slug)
     : undefined;
-  const markerOwner = remoteMarkerOwner ?? localMarkerOwner;
+  const markerOwner = checkpointPublicationOwner({ localMarkerOwner, remoteMarkerOwner });
   const owner = await (
     input.resolveOwner ?? (async () => resolveDaemonOwner(await readMachineOwnerConfig(), input.gh, input.worktree))
   )();
