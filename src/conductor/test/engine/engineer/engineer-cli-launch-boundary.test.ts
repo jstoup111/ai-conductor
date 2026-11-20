@@ -198,6 +198,7 @@ describe('Composer launcher boundary', () => {
         if (executable === 'codex') await writeFile(recordPath, `${JSON.stringify(childRecord)}\n`);
         return 0;
       });
+      const print = vi.fn();
       let attached = true;
       const code = await dispatchEngineer(
         { kind: 'launch', provider: 'claude', idea: 'switch providers' },
@@ -208,7 +209,7 @@ describe('Composer launcher boundary', () => {
           checkpoint,
           git,
           gh: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
-          print: () => {},
+          print,
           printErr: () => {},
           isAttachedTerminal: () => attached,
           loadLaunchConfig: async () => ({ ok: true, config: {}, warnings: [] }),
@@ -228,6 +229,10 @@ describe('Composer launcher boundary', () => {
 
       expect(code).toBe(0);
       expect(spawnHost.mock.calls.map(([executable]) => executable)).toEqual(['claude', 'codex']);
+      expect(spawnHost.mock.calls[1][1].join(' ')).toMatch(/\$composer --resume .* --step explore/);
+      expect(print.mock.calls.flat().join('\n')).toMatch(
+        /current step explore; active provider claude.*Choices: continue, switch, hand off/i,
+      );
       expect(
         checkpoint.mock.calls.map(([request]) => ({
           step: request.step,
@@ -242,6 +247,19 @@ describe('Composer launcher boundary', () => {
         explore: { state: 'accepted', provider: 'codex' },
         complexity: { state: 'draft' },
       });
+      const boundaryEvents = (await readFile(join(project, '.pipeline', 'composer-events.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      expect(boundaryEvents).toContainEqual(
+        expect.objectContaining({
+          type: 'composer_provider_switched',
+          slug,
+          step: 'explore',
+          fromProvider: 'claude',
+          toProvider: 'codex',
+        }),
+      );
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -329,7 +347,7 @@ describe('Composer launcher boundary', () => {
         { kind: 'resume', target: `spec/${slug}`, project: 'project', provider: 'codex' },
         {
           registryPath,
-          env: {},
+          env: { AI_CONDUCTOR_COMPOSE_LAUNCH_ID: 'resume-launch-16' },
           spawnHost,
           checkpoint,
           git,
@@ -362,6 +380,13 @@ describe('Composer launcher boundary', () => {
         /current step complexity; active provider codex[\s\S]*current step complexity; active provider codex/,
       );
       expect(print.mock.calls.flat().join('\n')).not.toMatch(/handed off/i);
+      const resumeEvents = (await readFile(join(project, '.pipeline', 'composer-events.jsonl'), 'utf8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      expect(resumeEvents.filter((event) => event.type === 'composer_run_resumed')).toEqual([
+        expect.objectContaining({ slug, launchId: 'resume-launch-16' }),
+      ]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -460,7 +485,9 @@ describe('Composer launcher boundary', () => {
       expect(spawnHost).toHaveBeenCalledTimes(2);
       expect(checkpoint).toHaveBeenCalledTimes(2);
       expect(print.mock.calls.flat().join('\n')).not.toMatch(/handed off/i);
-      expect(printErr.mock.calls.flat().join('\n')).toMatch(/handoff is unavailable until the local checkpoint is published/i);
+      expect(printErr.mock.calls.flat().join('\n')).toMatch(
+        /handoff is unavailable until the local checkpoint is published/i,
+      );
     } finally {
       await rm(root, { recursive: true, force: true });
     }

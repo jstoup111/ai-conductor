@@ -81,6 +81,37 @@ describe('resume local leftovers', () => {
     expect(discard).toHaveBeenCalledOnce();
   });
 
+  it('Covers: Task 13 preserves dirty docs and every local commit in a backup before discard attaches remote progress', async () => {
+    const operations: string[] = [];
+    const attach = vi.fn(async () => {
+      operations.push('attach remote worktree');
+      return { worktree: '/tmp/demo' };
+    });
+    const discard = vi.fn(async () => {
+      operations.push('commit dirty docs as WIP');
+      operations.push('branch composer-backup/demo-<timestamp> at local HEAD');
+      operations.push('reset worktree to origin/spec/demo');
+    });
+    await resumeComposerRun('spec/demo', {
+      resolveBranch: async () => ({ branch: 'spec/demo' }),
+      attach,
+      readRunRecord: async () => record,
+      localState: async () => ({
+        leftovers: { dirtyDocs: ['.docs/specs/demo.md'], unpushedCommits: ['abc123', 'def456'] },
+        interactive: true,
+        choice: 'discard-local',
+        fastForwardable: true,
+        discard,
+      }),
+    });
+    expect(operations).toEqual([
+      'commit dirty docs as WIP',
+      'branch composer-backup/demo-<timestamp> at local HEAD',
+      'reset worktree to origin/spec/demo',
+      'attach remote worktree',
+    ]);
+  });
+
   it('Covers: Task 13 refuses divergent or non-TTY leftovers before it attaches or changes a worktree', async () => {
     const attach = vi.fn(async () => ({ worktree: '/must-not-attach' }));
     const discard = vi.fn(async () => {});
