@@ -21,6 +21,7 @@ export interface SpoolRuntimeOptions {
   environment?: NodeJS.ProcessEnv;
   commandRunner?: CommandRunner;
   now?: () => number;
+  fetch?: typeof globalThis.fetch;
 }
 
 const warnedStarts = new Set<string>();
@@ -74,6 +75,7 @@ export function createSpoolRuntime(
       endpoint: config.endpoint,
       // Resolve references per POST. Credentials never enter the spool.
       headers: createOtelHeaderProvider(config.headerReferences, config.headers, options),
+      ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
       events,
     });
   return { store, lease, drainer };
