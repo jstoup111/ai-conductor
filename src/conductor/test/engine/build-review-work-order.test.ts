@@ -1,6 +1,6 @@
 // Covers: task:9, task:35
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,9 +11,11 @@ import {
   readBuildReviewWorkOrder,
   readBuildReviewWorkOrderAttemptedCaseIds,
   markBuildReviewWorkOrderAttempted,
+  buildReviewWorkOrderPath,
   type BuildReviewWorkOrder,
   type BuildReviewWorkOrderFilesystem,
 } from '../../src/engine/build-review-work-order.js';
+import { parseChildId } from '../../src/engine/child-context.js';
 
 const FEATURE = { version: 'v1', repository: 'acme/conductor', feature: 'work-order' } as const;
 const EFFECT_ID = 'effect-build-1';
@@ -75,6 +77,21 @@ afterEach(async () => {
 });
 
 describe('build-review work order', () => {
+  it('isolates publishing, reading, and attempt stamps to a child region', async () => {
+    const projectRoot = await createProjectRoot();
+    const child4 = parseChildId(4)!;
+    const child3 = parseChildId(3)!;
+
+    await expect(publishBuildReviewWorkOrder(projectRoot, WORK_ORDER, undefined, child4)).resolves.toMatchObject({ ok: true });
+    await expect(access(buildReviewWorkOrderPath(projectRoot, child4))).resolves.toBeUndefined();
+    await expect(access(buildReviewWorkOrderPath(projectRoot))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(readBuildReviewWorkOrder(projectRoot, FEATURE, EFFECT_ID, undefined, child3))
+      .resolves.toEqual({ ok: false, reason: 'missing-work-order' });
+    await expect(markBuildReviewWorkOrderAttempted(projectRoot, FEATURE, undefined, child4)).resolves.toMatchObject({ ok: true });
+    await expect(readBuildReviewWorkOrderAttemptedCaseIds(projectRoot, FEATURE, undefined, child4))
+      .resolves.toEqual({ ok: true, attemptedCaseIds: ['case-critical', 'case-high'] });
+  });
+
   it('persists ordered multi-case work and a later process reads it by the stable effect id', async () => {
     const projectRoot = await createProjectRoot();
 
