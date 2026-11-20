@@ -33,7 +33,7 @@ Approved by the operator on 2026-10-02. Scope is skill text only: the `pipeline`
 
 #### Happy Path
 
-- Given a gap-planning dispatch for PRD-audit or as-built findings, when the planner receives its input, then the findings arrive in the engine-owned projection, the planner reads no verdict file to obtain them, and the engine (not the planner) persists the validated plan, so gap planning has no file inputs and writes no file.
+- Given a gap-planning dispatch for PRD-audit or as-built findings, when the planner receives its input, then the findings arrive in the engine-owned projection and the engine-written remediation history files it names, the planner reads no verdict file to obtain them, and the engine (not the planner) persists the validated plan, so gap planning reads no file other than those history files and writes no file.
 
 #### Negative Paths
 
