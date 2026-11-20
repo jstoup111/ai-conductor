@@ -47,13 +47,13 @@ export class DispatchLiveBoundary {
   private readonly verify: typeof verifyLiveBoundary;
   private readonly liveSurfaces = new Map<string, Promise<SurfaceResult>>();
   private readonly providerSurfaces = new Map<string, Promise<ProviderSurfaceResult>>();
+  private readonly containments = new Map<string, Promise<ContainmentVerdict>>();
   private window: LiveBoundaryWindow | undefined;
-  private containment: Promise<ContainmentVerdict> | undefined;
   private leases = 0;
   private pendingAcquires = 0;
   private acquireWaiters: Array<() => void> = [];
   private ended = false;
-  private verified = false;
+  private verification: Promise<void> | undefined;
 
   constructor(private readonly options: DispatchLiveBoundaryOptions) {
     this.fingerprintLiveCheckout = options.fingerprintLiveCheckout ?? fingerprintLiveCheckoutSurface;
@@ -77,19 +77,10 @@ export class DispatchLiveBoundary {
           selectedAuthPaths: args.selectedAuthPaths,
         }),
       );
-      let liveSurface: SurfaceResult;
-      let providerSurface: ProviderSurfaceResult;
-      try {
-        [liveSurface, providerSurface] = await Promise.all([live.promise, provider.promise]);
-      } catch (error) {
-        if (live.created) this.liveSurfaces.delete(args.liveCheckout);
-        if (provider.created) this.providerSurfaces.delete(providerKey);
-        throw error;
-      }
+      const [liveSurface, providerSurface] = await Promise.all([live.promise, provider.promise]);
 
       const snapshot = await this.snapshot();
-      if (!this.containment) this.containment = args.probe(snapshot);
-      const containment = await this.containment;
+      const containment = await this.memoize(this.containments, args.liveCheckout, () => args.probe(snapshot), false).promise;
       const measurements = [
         ...(live.created ? [liveSurface.measurement] : []),
         ...(provider.created ? [providerSurface.measurement] : []),
@@ -99,31 +90,40 @@ export class DispatchLiveBoundary {
       }
       this.leases += 1;
       let released = false;
-      return {
+      const lease = {
         containment,
         release: async () => {
           if (released) return;
           released = true;
           this.leases -= 1;
-          await this.verifyIfReady();
+          await this.finalizeIfReady();
         },
       };
+      // A preparation timeout can finish the dispatch while its fingerprint is
+      // still in flight. Once it settles, count the lease out before returning
+      // it: no abandoned preparation may keep the admitted window open.
+      if (this.ended) await lease.release();
+      return lease;
     } finally {
       this.pendingAcquires -= 1;
       if (this.pendingAcquires === 0) {
+        this.closeIfUnused();
+        // Establish and await the shared finalization before releasing end()
+        // callers. This makes its verdict, events and violation visible when
+        // end() resolves, rather than a detached follow-on task.
+        await this.finalizeIfReady();
         const waiters = this.acquireWaiters;
         this.acquireWaiters = [];
         for (const wake of waiters) wake();
       }
-      this.closeIfUnused();
-      void this.verifyIfReady();
     }
   }
 
-  async end(): Promise<void> {
+  async end({ waitForPending = true }: { waitForPending?: boolean } = {}): Promise<void> {
     this.ended = true;
-    if (this.pendingAcquires > 0) await new Promise<void>((resolve) => this.acquireWaiters.push(resolve));
-    await this.verifyIfReady();
+    if (waitForPending && this.pendingAcquires > 0)
+      await new Promise<void>((resolve) => this.acquireWaiters.push(resolve));
+    await this.finalizeIfReady();
   }
 
   private openWindow(): void {
@@ -136,41 +136,53 @@ export class DispatchLiveBoundary {
     map: Map<string, Promise<T>>,
     key: string,
     create: () => Promise<T>,
+    evictOnReject = true,
   ): { promise: Promise<T>; created: boolean } {
     const existing = map.get(key);
     if (existing) return { promise: existing, created: false };
     const promise = create();
     map.set(key, promise);
+    if (evictOnReject) {
+      // Only the rejected entry itself may be evicted. A different acquire can
+      // share a successful (or still pending) sibling surface safely.
+      void promise.catch(() => {
+        if (map.get(key) === promise) map.delete(key);
+      });
+    }
     return { promise, created: true };
   }
 
   private async snapshot(): Promise<LiveBoundarySnapshot> {
-    const surfaces = await Promise.all([...this.liveSurfaces.values(), ...this.providerSurfaces.values()]);
+    const liveEntries = [...this.liveSurfaces.entries()];
+    const providerEntries = [...this.providerSurfaces.entries()];
+    const surfaces = await Promise.all([...liveEntries.map(([, surface]) => surface), ...providerEntries.map(([, surface]) => surface)]);
+    const containmentByLiveCheckout = new Map<string, ContainmentVerdict>();
+    for (const [root, containment] of this.containments) containmentByLiveCheckout.set(root, await containment);
     return {
       surfaces: surfaces.map(({ surface }) => surface),
       measurements: surfaces.map(({ measurement }) => measurement),
+      containmentByLiveCheckout,
     };
   }
 
-  private async verifyIfReady(): Promise<void> {
-    if (!this.ended || this.leases !== 0 || this.verified || this.liveSurfaces.size + this.providerSurfaces.size === 0)
-      return;
-    this.verified = true;
+  private finalizeIfReady(): Promise<void> | undefined {
+    if (this.verification) return this.verification;
+    if (!this.ended || this.leases !== 0 || this.pendingAcquires !== 0 || this.liveSurfaces.size + this.providerSurfaces.size === 0)
+      return undefined;
+    this.verification = this.finalize();
+    return this.verification;
+  }
+
+  private async finalize(): Promise<void> {
     try {
-      const containment = await this.containment!;
-      const result = await this.verify(await this.snapshot(), containment);
-      if (containment.contained) {
-        await this.options.emit({
-          type: 'self_host_containment_verdict',
-          contained: true,
-          evidence: containment.evidence,
-        });
-      } else {
-        await this.options.emit({
-          type: 'self_host_containment_verdict',
-          contained: false,
-          reason: containment.reason,
-        });
+      const containments = await Promise.all(this.containments.values());
+      const result = await this.verify(await this.snapshot(), { contained: false, reason: 'containment not evaluated' });
+      for (const containment of containments) {
+        if (containment.contained) {
+          await this.options.emit({ type: 'self_host_containment_verdict', contained: true, evidence: containment.evidence });
+        } else {
+          await this.options.emit({ type: 'self_host_containment_verdict', contained: false, reason: containment.reason });
+        }
       }
       if (result.containedDrift) {
         await this.options.emit({
