@@ -4942,6 +4942,9 @@ export class Conductor {
         config: this.config,
         git: this.prdAuditGit(),
         includedGates: remediationEvidenceSources.map((evidence) => evidence.gate),
+        ...(hintSource.source === 'build_stall'
+          ? { evidenceFile: remediationEvidenceSources.find((evidence) => evidence.gate === 'build')?.evidenceFile }
+          : {}),
         ...(prdAuditOverScopeRoute?.kind === 'refusal-rework' ? { refusals: prdAuditOverScopeRoute.refusals } : {}),
       },
       this.remediationProjectionLimitOverrides,

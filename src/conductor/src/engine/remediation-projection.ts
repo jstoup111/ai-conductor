@@ -147,6 +147,8 @@ export interface RemediationProjectionRequest {
   readonly config?: CompletionContext['config'];
   readonly git?: CompletionContext['git'];
   readonly refusals?: readonly RefusalReworkEvidence[];
+  /** Caller-selected build-stall evidence path; child regions are authoritative. */
+  readonly evidenceFile?: string;
 }
 
 export type RemediationProjectionResult =
@@ -359,7 +361,7 @@ function untypedEvidenceSource(
 ): { readonly key: string; readonly path: string } | undefined {
   if (request.source === 'build-stall') {
     const slug = slugify(request.featureDesc ?? basename(worktree));
-    return { key: `stall:${slug}`, path: '.pipeline/build-stall-question.md' };
+    return { key: `stall:${slug}`, path: request.evidenceFile ?? '.pipeline/build-stall-question.md' };
   }
   if (request.source === 'finish-verification') {
     return { key: 'test:test-failures', path: '.pipeline/test-failures.md' };
