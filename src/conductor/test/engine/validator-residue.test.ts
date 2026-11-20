@@ -195,7 +195,7 @@ describe('validator residue quarantine', () => {
     await writeFile(join(repository, second), 'second\n');
     const ghostGit: GitRunner = async (args, options) => {
       const result = await git(args, options);
-      if (args[0] === 'status' && !args.includes('--')) return { ...result, stdout: `${result.stdout}?? ghost.txt\0` };
+      if (args[0] === 'ls-files') return { ...result, stdout: `${result.stdout}ghost.txt\0` };
       return result;
     };
 

@@ -17,21 +17,11 @@ export interface QuarantineValidatorResidueInput {
   readonly source: string;
 }
 
-/** List Git's non-ignored untracked paths using its NUL-delimited porcelain format. */
+/** List Git's non-ignored untracked paths using its NUL-delimited path listing. */
 export async function listUntrackedPaths(git: GitRunner): Promise<string[]> {
-  const status = await git(['status', '--porcelain=v1', '-z', '--untracked-files=all']);
-  if (status.exitCode !== 0) throw new Error('cannot inspect untracked worktree paths');
-  const records = status.stdout.split('\0');
-  const paths: string[] = [];
-  for (let index = 0; index < records.length; index += 1) {
-    const record = records[index]!;
-    if (record.startsWith('?? ')) paths.push(record.slice(3));
-    // With `-z`, rename/copy records contain an additional, bare old-path
-    // field. It is metadata for the preceding record, never another status
-    // record, so consume it before looking at the next record.
-    if (record.length >= 3 && (record.slice(0, 2).includes('R') || record.slice(0, 2).includes('C'))) index += 1;
-  }
-  return paths;
+  const listing = await git(['ls-files', '--others', '--exclude-standard', '-z']);
+  if (listing.exitCode !== 0) throw new Error('cannot inspect untracked worktree paths');
+  return listing.stdout.split('\0').filter((path) => path.length > 0);
 }
 
 /**
