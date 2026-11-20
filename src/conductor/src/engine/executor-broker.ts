@@ -92,6 +92,7 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
       const heldWorktreeLocks = new Map<string, () => void>();
       const pendingWorktreeAcquires = new Map<string, { cancelled: boolean }>();
       let closed = false;
+      let detached = false;
       let closePromise: Promise<void> | undefined;
       let childReadyForSupervisorEvents = false;
       const pendingSupervisorRendererErrors: ConductorEvent[] = [];
@@ -131,6 +132,25 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
         windows.clear();
         for (const releaseLock of heldWorktreeLocks.values()) releaseLock();
         heldWorktreeLocks.clear();
+      };
+      const abortCoordination = (reason = 'executor broker aborted') => {
+        if (closed) return;
+        closed = true;
+        for (const [requestId, abort] of pendingRateLimitClears) {
+          // A broker shutdown is observable by the child even when the IPC port
+          // itself remains open long enough for its stop protocol.
+          respond(requestId, { error: reason });
+          abort.abort();
+        }
+        pendingRateLimitClears.clear();
+        for (const requestId of pendingLiveOpens) respond(requestId, { error: reason });
+        pendingLiveOpens.clear();
+        for (const [requestId, pending] of pendingWorktreeAcquires) {
+          pending.cancelled = true;
+          respond(requestId, { error: reason });
+        }
+        pendingWorktreeAcquires.clear();
+        release();
       };
       const request = async (requestId: string, method: string, params: unknown) => {
         try {
@@ -270,7 +290,7 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
           return;
         }
         const message = parsed.message;
-        if (closed) {
+        if (detached) {
           if (message.kind === 'request') void request(message.requestId, message.method, message.params);
           return;
         }
@@ -296,38 +316,24 @@ export function createExecutorBroker(deps: ExecutorBrokerDeps): {
       const close = (reason = 'executor broker aborted'): Promise<void> => {
         if (closePromise) return closePromise;
         closePromise = (async () => {
-          closed = true;
-          for (const [requestId, abort] of pendingRateLimitClears) {
-            // A broker shutdown is observable by the child even when the IPC port
-            // itself remains open long enough for its stop protocol.
-            respond(requestId, { error: reason });
-            abort.abort();
-          }
-          pendingRateLimitClears.clear();
-          for (const requestId of pendingLiveOpens) respond(requestId, { error: reason });
-          pendingLiveOpens.clear();
-          for (const [requestId, pending] of pendingWorktreeAcquires) {
-            pending.cancelled = true;
-            respond(requestId, { error: reason });
-          }
-          pendingWorktreeAcquires.clear();
-          release();
+          abortCoordination(reason);
+          detached = true;
           await detachFeatureOtelVisualizer?.();
           featureEvents.off('renderer_error', persistSupervisorRendererError);
           detachFeatureEventRenderer?.();
           ports.delete(port);
-          attachments.delete(close);
+          attachments.delete(abortCoordination);
         })();
         return closePromise;
       };
       port.on('message', onMessage);
       port.on('disconnect', () => close('executor supervisor channel disconnected'));
-      attachments.add(close);
+      attachments.add(abortCoordination);
       broadcastState();
       return { events: featureEvents, close };
     },
     abortAll() {
-      for (const close of [...attachments]) close('executor broker aborted');
+      for (const abortCoordination of [...attachments]) abortCoordination('executor broker aborted');
     },
   };
 }

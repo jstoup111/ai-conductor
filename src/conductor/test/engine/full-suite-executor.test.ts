@@ -19,10 +19,7 @@ describe('executeFullSuite', () => {
       calls.push({ command: forwardedCommand, options });
       return { exitCode: 0, stdout: 'unit: pass\nacceptance: pass\n', stderr: '' };
     };
-    const times = [
-      new Date('2026-07-25T12:00:00.000Z'),
-      new Date('2026-07-25T12:00:03.456Z'),
-    ];
+    const times = [new Date('2026-07-25T12:00:00.000Z'), new Date('2026-07-25T12:00:03.456Z')];
 
     const result = await executeFullSuite({
       projectRoot: '/repo',
@@ -75,13 +72,44 @@ describe('executeFullSuite', () => {
       clock: () => new Date('2026-10-17T00:00:00.000Z'),
     });
 
-    expect(environment).toEqual(expect.objectContaining({
-      PATH: '/fixture/bin',
-      AI_CONDUCTOR_TEST_TMP_ROOT: process.env.AI_CONDUCTOR_TEST_TMP_ROOT,
-      TMPDIR: process.env.TMPDIR,
-      TMP: process.env.TMP,
-      TEMP: process.env.TEMP,
-    }));
+    expect(environment).toEqual(
+      expect.objectContaining({
+        PATH: '/fixture/bin',
+        AI_CONDUCTOR_TEST_TMP_ROOT: process.env.AI_CONDUCTOR_TEST_TMP_ROOT,
+        TMPDIR: process.env.TMPDIR,
+        TMP: process.env.TMP,
+        TEMP: process.env.TEMP,
+      }),
+    );
+  });
+
+  it('overrides a stale real-tmpdir child environment with the active Vitest root', async () => {
+    let environment: NodeJS.ProcessEnv | undefined;
+    await executeFullSuite({
+      projectRoot: '/repo',
+      testSuite: { command: 'npm test' },
+      environment: {
+        PATH: '/fixture/bin',
+        AI_CONDUCTOR_TEST_TMP_ROOT: '/tmp',
+        TMPDIR: '/tmp',
+        TMP: '/tmp',
+        TEMP: '/tmp',
+      },
+      runner: async (_command, options) => {
+        environment = options.env;
+        return { exitCode: 0, stdout: '', stderr: '' };
+      },
+      clock: () => new Date('2026-10-17T00:00:00.000Z'),
+    });
+
+    expect(environment).toEqual(
+      expect.objectContaining({
+        AI_CONDUCTOR_TEST_TMP_ROOT: process.env.AI_CONDUCTOR_TEST_TMP_ROOT,
+        TMPDIR: process.env.TMPDIR,
+        TMP: process.env.TMP,
+        TEMP: process.env.TEMP,
+      }),
+    );
   });
 
   it('uses the aggregate default timeout when none is declared', async () => {
@@ -108,16 +136,20 @@ describe('executeFullSuite', () => {
       mkdir(join(projectRoot, 'packages/integration'), { recursive: true }),
     ]);
     const times = [
-      new Date('2026-09-13T12:00:00.000Z'), new Date('2026-09-13T12:00:00.010Z'),
-      new Date('2026-09-13T12:00:00.020Z'), new Date('2026-09-13T12:00:00.030Z'),
+      new Date('2026-09-13T12:00:00.000Z'),
+      new Date('2026-09-13T12:00:00.010Z'),
+      new Date('2026-09-13T12:00:00.020Z'),
+      new Date('2026-09-13T12:00:00.030Z'),
     ];
     try {
       const result = await executeFullSuite({
         projectRoot,
-        testSuite: { commands: [
-          { command: 'npm run unit', working_directory: 'packages/unit' },
-          { command: 'npm run integration', working_directory: 'packages/integration' },
-        ] },
+        testSuite: {
+          commands: [
+            { command: 'npm run unit', working_directory: 'packages/unit' },
+            { command: 'npm run integration', working_directory: 'packages/integration' },
+          ],
+        },
         runner: async (command) => {
           if (command === 'npm run unit') return { exitCode: 0, stdout: '', stderr: '' };
           throw Object.assign(new Error('integration failed'), { exitCode: 7, stdout: '', stderr: '' });
@@ -125,10 +157,32 @@ describe('executeFullSuite', () => {
         clock: () => times.shift()!,
       });
       expect(result).toMatchObject({
-        ok: false, failedEntryIndex: 1, plannedEntryCount: 2,
+        ok: false,
+        failedEntryIndex: 1,
+        plannedEntryCount: 2,
         entries: [
-          { index: 0, result: 'passed', command: 'npm run unit', workingDirectory: join(projectRoot, 'packages/unit'), exitCode: 0, signal: null, terminationReason: null, stdout: '', stderr: '' },
-          { index: 1, result: 'failed', command: 'npm run integration', workingDirectory: join(projectRoot, 'packages/integration'), exitCode: 7, signal: null, terminationReason: 'nonzero_exit', stdout: '', stderr: '' },
+          {
+            index: 0,
+            result: 'passed',
+            command: 'npm run unit',
+            workingDirectory: join(projectRoot, 'packages/unit'),
+            exitCode: 0,
+            signal: null,
+            terminationReason: null,
+            stdout: '',
+            stderr: '',
+          },
+          {
+            index: 1,
+            result: 'failed',
+            command: 'npm run integration',
+            workingDirectory: join(projectRoot, 'packages/integration'),
+            exitCode: 7,
+            signal: null,
+            terminationReason: 'nonzero_exit',
+            stdout: '',
+            stderr: '',
+          },
         ],
       });
     } finally {
@@ -204,10 +258,7 @@ describe('executeFullSuite', () => {
     const runner: FullSuiteCommandRunner = async () => {
       throw Object.assign(new Error(testCase.name), testCase.failure);
     };
-    const times = [
-      new Date('2026-07-25T13:00:00.000Z'),
-      new Date('2026-07-25T13:00:01.250Z'),
-    ];
+    const times = [new Date('2026-07-25T13:00:00.000Z'), new Date('2026-07-25T13:00:01.250Z')];
 
     const result = await executeFullSuite({
       projectRoot: '/repo',
@@ -232,8 +283,7 @@ describe('executeFullSuite', () => {
   });
 
   it('returns a typed non-zero result from a real failing process', async () => {
-    const command =
-      "printf '%s' 'suite started'; printf '%s' 'terminal failure' >&2; exit 7";
+    const command = "printf '%s' 'suite started'; printf '%s' 'terminal failure' >&2; exit 7";
 
     const result = await executeFullSuite({
       projectRoot: process.cwd(),
@@ -308,9 +358,7 @@ describe('executeFullSuite', () => {
       } catch (error) {
         result = {
           threw: true,
-          timedOut:
-            typeof error === 'object' && error !== null &&
-            (error as Record<string, unknown>).timedOut === true,
+          timedOut: typeof error === 'object' && error !== null && (error as Record<string, unknown>).timedOut === true,
         };
       }
       await delay(500);
@@ -365,11 +413,7 @@ describe('executeFullSuite', () => {
         exitCode: null,
         signal: null,
       },
-      events: [
-        ['/PID', pid, '/T'],
-        `wait:${100}`,
-        ['/PID', pid, '/T', '/F'],
-      ],
+      events: [['/PID', pid, '/T'], `wait:${100}`, ['/PID', pid, '/T', '/F']],
     });
   });
 
