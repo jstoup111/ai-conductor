@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "slug": "manual-test-gate-commits-product-code-invalidating",
+  "artifacts": [
+    {
+      "kind": "architecture",
+      "path": ".docs/architecture/manual-test-gate-commits-product-code-invalidating.md"
+    },
+    {
+      "kind": "coherence",
+      "path": ".docs/coherence/manual-test-gate-commits-product-code-invalidating.md"
+    },
+    {
+      "kind": "coherence-waiver",
+      "path": ".docs/coherence-waivers/manual-test-gate-commits-product-code-invalidating.md"
+    },
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/manual-test-gate-commits-product-code-invalidating.md"
+    },
+    {
+      "kind": "conflicts",
+      "path": ".docs/conflicts/manual-test-gate-commits-product-code-invalidating.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-11-19-ship-validator-protection-fallback.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/manual-test-gate-commits-product-code-invalidating.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/manual-test-gate-commits-product-code-invalidating.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/manual-test-gate-commits-product-code-invalidating.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/manual-test-gate-commits-product-code-invalidating.md"
+    }
+  ]
+}
