@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import { parseChildId, type ChildId } from '../../../src/engine/child-context.js';
 import { acknowledgeQueueEntry, consumeLowestQueued, mergeQueueGeneration } from '../../../src/engine/routing/revalidation-queue.js';
-import { readRepairMarker, readRevalidationQueue, readRouteRecord, transitionHost, writeRouteRecord } from '../../../src/engine/routing/route-record-store.js';
+import { readPinnedQueueFold, readRepairMarker, readRevalidationQueue, readRouteRecord, transitionHost, writeRouteRecord, type StoredRouteRecord } from '../../../src/engine/routing/route-record-store.js';
 import { closureRefFor, repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { readRoutedGrowthSnapshot } from '../../../src/engine/routing/round-receipt.js';
@@ -164,6 +164,38 @@ describe('revalidation queue generations', () => {
       entries: [childTwo],
       outbox: [],
     });
+  });
+
+  // Covers: task:22
+  it('keeps fold provenance for a rebuilt non-owner child after the last fold owner is acknowledged', async () => {
+    // A fold queues every rebuilt non-leaf child but records sources only for
+    // owners: here c1 owns the folded commits and c2 was merely rebuilt.
+    const ownerOne = entry(1, 'a', ['test_suite'], 'b', 'c');
+    const rebuiltTwo = entry(2, 'd', ['test_suite'], 'e', 'f');
+    const fold = { opId: 'op-fold' as NonNullable<RevalidationQueueRecord['fold']>['opId'], sources: { '1': [sha('1')] }, leafTree: sha('7') };
+    const folded = mergeQueueGeneration(queue(1, []), [ownerOne, rebuiltTwo], { fold });
+
+    const afterOwner = mergeQueueGeneration(folded, [], { acknowledge: child(1) });
+
+    expect(afterOwner.fold).toEqual({ opId: fold.opId, sources: {}, leafTree: sha('7') });
+    // c2's revalidate round pins this generation; the drain reads fold mode from it.
+    const queueBlob = sha('9');
+    const pinned: StoredRouteRecord = {
+      kind: 'record',
+      slug: 'demo',
+      blob: sha('8'),
+      record: {
+        entry: { host: child(2), pinnedBase: sha('5'), tree: sha('6'), revalidation: { queueBlob, generation: afterOwner.generation, closureSha: rebuiltTwo.closureSha } },
+      } as unknown as RouteRecord,
+    };
+    const git: GitRunner = async (args) =>
+      args[0] === 'cat-file' && args[2] === queueBlob
+        ? { exitCode: 0, stdout: JSON.stringify(afterOwner), stderr: '' }
+        : { exitCode: 128, stdout: '', stderr: 'unexpected git call' };
+    expect((await readPinnedQueueFold(pinned, git))?.leafTree).toBe(sha('7'));
+
+    // Fold provenance ends only when the queue drains.
+    expect(mergeQueueGeneration(afterOwner, [], { acknowledge: child(2) }).fold).toBeUndefined();
   });
 
   // Covers: task:33, task:36

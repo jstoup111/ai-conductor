@@ -244,6 +244,22 @@ export async function readRevalidationQueue(
   return { kind: value.kind };
 }
 
+/**
+ * Reads fold provenance from the exact queue generation a route pinned when it
+ * was admitted, never from the live queue or branch history.
+ */
+export async function readPinnedQueueFold(
+  stored: StoredRouteRecord,
+  git: GitRunner,
+): Promise<NonNullable<RevalidationQueueRecord['fold']> | undefined> {
+  const pin = stored.record.entry?.revalidation;
+  if (!pin) return undefined;
+  const blob = await git(['cat-file', '-p', pin.queueBlob]);
+  if (blob.exitCode !== 0) return undefined;
+  const queue = parseRevalidationQueueRecord(blob.stdout);
+  return queue?.generation === pin.generation ? queue.fold : undefined;
+}
+
 /** Allocates the next route namespace segment without mutating any ref. */
 export async function nextRoundId(
   worktree: string,

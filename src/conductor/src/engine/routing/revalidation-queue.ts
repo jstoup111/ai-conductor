@@ -40,20 +40,25 @@ export function mergeQueueGeneration(
   }
   if (options.acknowledge !== undefined) entries.delete(options.acknowledge);
 
+  // A fold queues every rebuilt non-leaf child, but records sources only for
+  // the owners whose commits it folded.  Its provenance (opId, leafTree) must
+  // therefore survive until the whole queue drains, not until the last owner
+  // is acknowledged, so the final leaf return still runs in fold mode.
   const foldCandidate = options.fold ?? current.fold;
-  const foldSources =
-    foldCandidate === undefined
+  const fold =
+    foldCandidate === undefined || entries.size === 0
       ? undefined
-      : Object.fromEntries(
-          Object.entries(foldCandidate.sources).filter(([child]) => entries.has(Number(child) as ChildId)),
-        );
+      : {
+          ...foldCandidate,
+          sources: Object.fromEntries(
+            Object.entries(foldCandidate.sources).filter(([child]) => entries.has(Number(child) as ChildId)),
+          ),
+        };
   return {
     generation: current.generation + 1,
     entries: [...entries.values()].sort((left, right) => left.position - right.position),
     outbox: current.outbox,
-    ...(foldCandidate === undefined || Object.keys(foldSources!).length === 0
-      ? {}
-      : { fold: { ...foldCandidate, sources: foldSources! } }),
+    ...(fold === undefined ? {} : { fold }),
   };
 }
 
