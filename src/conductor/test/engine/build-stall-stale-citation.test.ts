@@ -141,12 +141,19 @@ describe('build-stall stale-citation recorder', () => {
   it('persists the citation fields and its first attempt on the active event spine', async () => {
     const { root, events, persister } = await eventSpine();
     try {
-      await expect(recordBuildStallStaleCitation(root, events, resolvedCitation, 2)).resolves.toEqual({ kind: 'recorded', attempt: 1 });
+      await expect(recordBuildStallStaleCitation(root, events, resolvedCitation, 2)).resolves.toEqual({
+        kind: 'recorded',
+        attempt: 1,
+      });
       const lines = (await readFile(join(root, '.pipeline', 'events.jsonl'), 'utf8')).trim().split('\n');
       expect(lines).toHaveLength(1);
       expect(JSON.parse(lines[0]!)).toMatchObject({
-        type: 'build_stall_stale_citation', caseId: 'case-resolved', ownerChild: 4,
-        state: 'resolved', resolvedTasks: 2, attempt: 1,
+        type: 'build_stall_stale_citation',
+        caseId: 'case-resolved',
+        ownerChild: 4,
+        state: 'resolved',
+        resolvedTasks: 2,
+        attempt: 1,
       });
     } finally {
       persister.stop();
@@ -161,8 +168,10 @@ describe('build-stall stale-citation recorder', () => {
       const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
       persister.start();
       try {
-        await expect(recordBuildStallStaleCitation(root, events, resolvedCitation, 2))
-          .resolves.toEqual({ kind: 'recorded', attempt });
+        await expect(recordBuildStallStaleCitation(root, events, resolvedCitation, 2)).resolves.toEqual({
+          kind: 'recorded',
+          attempt,
+        });
       } finally {
         persister.stop();
       }
@@ -174,11 +183,15 @@ describe('build-stall stale-citation recorder', () => {
     try {
       await recordBuildStallStaleCitation(root, events, resolvedCitation, 2);
       await recordBuildStallStaleCitation(root, events, resolvedCitation, 2);
-      await expect(recordBuildStallStaleCitation(root, events, resolvedCitation, 3))
-        .resolves.toEqual({ kind: 'recorded', attempt: 1 });
+      await expect(recordBuildStallStaleCitation(root, events, resolvedCitation, 3)).resolves.toEqual({
+        kind: 'recorded',
+        attempt: 1,
+      });
       const otherCitation = { ...resolvedCitation, caseId: 'case-other' } as const;
-      await expect(recordBuildStallStaleCitation(root, events, otherCitation, 3))
-        .resolves.toEqual({ kind: 'recorded', attempt: 1 });
+      await expect(recordBuildStallStaleCitation(root, events, otherCitation, 3)).resolves.toEqual({
+        kind: 'recorded',
+        attempt: 1,
+      });
     } finally {
       persister.stop();
     }
@@ -189,12 +202,15 @@ describe('build-stall stale-citation recorder', () => {
     temporaryDirectories.push(root);
     const events = new ConductorEventEmitter();
     const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events, undefined, {
-      appendFile: () => { throw new Error('disk unavailable'); },
+      appendFile: () => {
+        throw new Error('disk unavailable');
+      },
     });
     persister.start();
     try {
-      await expect(recordBuildStallStaleCitation(root, events, resolvedCitation, 2))
-        .resolves.toEqual({ kind: 'persist-failed' });
+      await expect(recordBuildStallStaleCitation(root, events, resolvedCitation, 2)).resolves.toEqual({
+        kind: 'persist-failed',
+      });
     } finally {
       persister.stop();
     }
