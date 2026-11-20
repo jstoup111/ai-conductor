@@ -9,6 +9,9 @@
 
 A validation dispatch (`manual_test`, `prd_audit` or `architecture_review_as_built`) can leave untracked files in the feature worktree. Before the engine acts on that dispatch's outcome, those files are moved under `.pipeline/validator-residue/`, so a routed host entry no longer halts with `worktree is dirty` (#3683). Tracked edits, and untracked files that existed before the dispatch, are never moved and still block. The manual-test skill names `.pipeline/manual-test-evidence/` as the home for its evidence. Five tasks.
 
+> **Amended 2026-11-19 by #3685:** In fallback validation, the engine captures unreviewed product changes from the dispatch-owned checkout for the owning BUILD task before residue cleanup. Report quarantine and the dirty-switch guard continue to apply to the feature worktree.
+
+
 ## Technical Approach
 
 - **Verified shape (main at `5d2f96421a`).**
