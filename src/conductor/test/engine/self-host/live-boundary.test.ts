@@ -1139,10 +1139,13 @@ describe('live self-host boundary', () => {
     try {
       expect(await verifyLiveBoundary(baseline, { contained: true, evidence: 'sandboxed' })).toEqual({
         ok: true,
-        containedDrift: {
-          evidence: 'sandboxed',
-          summary: '0 added, 0 removed, 1 changed: changed .claude/settings.local.json',
-        },
+        containedDrifts: [
+          {
+            root: live,
+            evidence: 'sandboxed',
+            summary: '0 added, 0 removed, 1 changed: changed .claude/settings.local.json',
+          },
+        ],
       });
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -1160,10 +1163,13 @@ describe('live self-host boundary', () => {
     try {
       expect(await verifyLiveBoundary(baseline, { contained: true, evidence: 'sandboxed' })).toEqual({
         ok: true,
-        containedDrift: {
-          evidence: 'sandboxed',
-          summary: '1 added, 0 removed, 0 changed: added escaped.txt',
-        },
+        containedDrifts: [
+          {
+            root: live,
+            evidence: 'sandboxed',
+            summary: '1 added, 0 removed, 0 changed: added escaped.txt',
+          },
+        ],
       });
     } finally {
       await rm(root, { recursive: true, force: true });
