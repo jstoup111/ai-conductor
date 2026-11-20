@@ -531,7 +531,11 @@ describe('DispatchLiveBoundary', () => {
     const events: any[] = [];
     try {
       await Promise.all([mkdir(first), mkdir(second), mkdir(providerHome)]);
-      const boundary = new DispatchLiveBoundary({ emit: async (event) => events.push(event) });
+      const boundary = new DispatchLiveBoundary({
+        emit: async (event) => {
+          events.push(event);
+        },
+      });
       const firstLease = await boundary.acquire({
         liveCheckout: first,
         providerHome,
