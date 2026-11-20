@@ -346,8 +346,13 @@ async function foldedSourceForChild(
   stored: Awaited<ReturnType<typeof readRouteRecord>>,
   git: GitRunner,
   child: ChildId,
-): Promise<{ readonly kind: 'folded'; readonly sources: string } | { readonly kind: 'absent' } | { readonly kind: 'unavailable'; readonly detail: string }> {
-  if (stored.kind !== 'record') return { kind: 'unavailable', detail: 'routed prerequisite claim work order is unavailable' };
+): Promise<
+  | { readonly kind: 'folded'; readonly sources: string }
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'unavailable'; readonly detail: string }
+> {
+  if (stored.kind !== 'record')
+    return { kind: 'unavailable', detail: 'routed prerequisite claim work order is unavailable' };
   const fold = await readPinnedQueueFold(stored, git);
   if (fold.kind === 'unavailable') return fold;
   const sources = fold.kind === 'fold' ? fold.fold.sources[String(child)]?.join(', ') : undefined;

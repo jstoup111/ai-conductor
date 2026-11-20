@@ -810,7 +810,14 @@ async function writeFoldCommit(
     // Replay with the same three-way merge-tree operation that established this
     // placement. Direct patch application can choose a different location after
     // an earlier insertion on the child, invalidating the planner's proof.
-    const merged = await git(['merge-tree', '--write-tree', '--merge-base', sourceParentSha, placedTip, part.hunk.probe]);
+    const merged = await git([
+      'merge-tree',
+      '--write-tree',
+      '--merge-base',
+      sourceParentSha,
+      placedTip,
+      part.hunk.probe,
+    ]);
     const tree = merged.exitCode === 0 ? parseCommitSha(merged.stdout.trim()) : undefined;
     if (!tree) throw new Error(`cannot apply fold hunk ${source.sha}:${part.path}: ${merged.stderr}`);
     const placed = await git(['commit-tree', tree, '-p', placedTip], { input: 'fold replay probe\n' });

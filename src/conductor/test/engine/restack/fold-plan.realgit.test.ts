@@ -485,7 +485,11 @@ describe('placeFoldCommits (real local Git)', () => {
 
   it('keeps a non-ASCII changed path as a literal pathspec', async () => {
     const subject = await placementFixture();
-    const source = await subject.commit('src/café.ts', 'export const café = true;\n', `unicode path${trailers('r1', 'c1')}`);
+    const source = await subject.commit(
+      'src/café.ts',
+      'export const café = true;\n',
+      `unicode path${trailers('r1', 'c1')}`,
+    );
 
     const result = await placeFoldCommits({
       worktree: subject.repo,
