@@ -34,7 +34,7 @@ describe('resume ownership', () => {
     ).toBe('local-only');
   });
 
-  it('Covers: Task 14 refuses unresolved ownership and never grants takeover to declined, non-TTY, or daemon sessions', () => {
+  it('Covers: Task 14 refuses unresolved ownership before prompts or writes, and daemon sessions never take over another owner', () => {
     expect(() => resumeOwnershipMode({ committedOwner: 'A', daemonSession: false, interactive: true })).toThrow(
       /identity is unresolved/,
     );
@@ -67,7 +67,7 @@ describe('resume ownership', () => {
     ).toBe('local-only');
   });
 
-  it('Covers: Task 14 keeps declined and non-TTY ownership retries local-only after their checkpoint already committed', async () => {
+  it('Covers: Task 14 keeps declined and non-TTY take-overs local-only: owner A stays stamped and checkpoints never push or write a PR', async () => {
     for (const ownership of [
       { interactive: true, approved: false },
       { interactive: false, approved: true },
@@ -146,7 +146,7 @@ describe('resume ownership', () => {
     expect(checkpointPublicationOwner({ localMarkerOwner: 'B', remoteMarkerOwner: 'B' })).toBe('B');
   });
 
-  it('Covers: Task 14 retries the guarded take-over push after its first transport failure', async () => {
+  it('Covers: Task 14 re-stamps an accepted take-over with A-to-B history and pushes only under exact-ref approval', async () => {
     const root = await mkdtemp(join(tmpdir(), 'composer-takeover-retry-'));
     const registryPath = join(root, 'registry.json');
     const slug = 'demo';
@@ -233,8 +233,17 @@ describe('resume ownership', () => {
 
       expect(pushAttempts).toBe(2);
       expect(confirmation.confirm).toHaveBeenCalledTimes(2);
+      expect(confirmation.confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          operation: 'remote-ref.push',
+          target: { repository: 'acme/demo', kind: 'remote-ref', ref: `refs/heads/${branch}` },
+        }),
+      );
       const worktree = join(root, '.worktrees', `engineer-${slug}`);
       await expect(readFile(join(worktree, '.docs', 'intake', `${slug}.md`), 'utf8')).resolves.toContain('Owner: B');
+      await expect(readFile(join(worktree, '.docs', 'composer-runs', `${slug}.json`), 'utf8')).resolves.toMatch(
+        /"ownerHistory"[\s\S]*"actor": "B"/,
+      );
       const takeOverCommits = await execa('git', ['log', '--format=%s', `${head}..HEAD`], { cwd: worktree });
       expect(
         takeOverCommits.stdout.split('\n').filter((message) => message.startsWith('composer take-over:')),
@@ -244,7 +253,7 @@ describe('resume ownership', () => {
     }
   });
 
-  it('Covers: Task 14 leaves a foreign run local-only when the exact take-over push approval is refused', async () => {
+  it('Covers: Task 14 refuses an exact-ref take-over approval without re-stamping owner A or remotely publishing', async () => {
     const root = await mkdtemp(join(tmpdir(), 'composer-takeover-refused-'));
     const registryPath = join(root, 'registry.json');
     const slug = 'demo';

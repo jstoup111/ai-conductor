@@ -9,7 +9,7 @@ import { resolveBoundaryProvider } from '../../../src/engine/engineer/launch-bou
 import { dispatchEngineer } from '../../../src/engine/engineer-cli.js';
 
 describe('Composer launcher boundary', () => {
-  it('Covers: Task 17 continues, switches only to an interactive provider, and refuses local-only handoff', () => {
+  it('Covers: Task 17 continues the active provider and refuses local-only handoff without changing the run', () => {
     expect(resolveBoundaryProvider({ choice: 'continue', activeProvider: 'claude', hasRemote: true })).toEqual({
       action: 'resume',
       provider: 'claude',
@@ -22,7 +22,7 @@ describe('Composer launcher boundary', () => {
     );
   });
 
-  it('Covers: Task 17 refuses a switch without an interactive provider before it can mutate a run', () => {
+  it('Covers: Task 17 refuses a switch without interactiveLaunch before it can mutate a run', () => {
     expect(() =>
       resolveBoundaryProvider({ choice: 'switch', activeProvider: 'claude', switchTo: undefined, hasRemote: true }),
     ).toThrow(/interactiveLaunch capability/);
@@ -117,7 +117,7 @@ describe('Composer launcher boundary', () => {
     }
   });
 
-  it('Covers: Tasks 16, 17, and 3 reloads the switched child record before checkpointing its first unaccepted step', async () => {
+  it('Covers: Task 17 renders continue/switch/handoff, emits the full Claude-to-Codex switch, and resumes Codex at the first unaccepted step', async () => {
     const root = await mkdtemp(join(tmpdir(), 'composer-launch-exit-'));
     const project = join(root, 'project');
     const registryPath = join(root, 'registry.json');
@@ -258,6 +258,7 @@ describe('Composer launcher boundary', () => {
           step: 'explore',
           fromProvider: 'claude',
           toProvider: 'codex',
+          actor: expect.any(String),
         }),
       );
     } finally {
@@ -392,7 +393,7 @@ describe('Composer launcher boundary', () => {
     }
   });
 
-  it('Covers: Tasks 16 and 17 retry an unpublished clean checkpoint and never hand it off', async () => {
+  it('Covers: Task 17 leaves an unpublished draft local, emits no handoff, and returns to another boundary choice', async () => {
     const root = await mkdtemp(join(tmpdir(), 'composer-resume-unpublished-'));
     const project = join(root, 'project');
     const registryPath = join(root, 'registry.json');

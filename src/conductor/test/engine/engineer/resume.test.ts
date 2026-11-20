@@ -57,7 +57,7 @@ describe('Composer resume', () => {
     expect(contextForRun(record).drafts).toContain('architecture_diagram');
   });
 
-  it('Covers: Task 12 resolves PR, branch, and intake selectors to one fetched attached remote run without owner approval', async () => {
+  it('Covers: Task 12 fetches and attaches PR, branch, and intake selectors without asking the prior actor for release or permission', async () => {
     for (const target of ['17', 'spec/demo', 'acme/demo#12']) {
       const fetch = vi.fn(async () => {});
       const attach = vi.fn(async () => ({ worktree: '/repo/.worktrees/engineer-demo' }));
@@ -73,7 +73,7 @@ describe('Composer resume', () => {
     }
   });
 
-  it('Covers: Task 12 reports complete run context from the durable record and directs a landed record to delivery', () => {
+  it('Covers: Task 12 reconstructs accepted context and directs a deliberately stripped landed run to delivery', () => {
     expect(contextForRun(record)).toMatchObject({
       nextStep: 'architecture_diagram',
       acceptedArtifacts: ['.docs/track/demo.md'],
@@ -154,7 +154,7 @@ describe('Composer resume', () => {
     expect(context.drafts).toContain('plan');
   });
 
-  it('Covers: Task 12 leaves worktrees untouched for unknown targets and failed fetches, while no-remote attach skips fetch', async () => {
+  it('Covers: Task 12 reports unknown, unregistered, and failed-fetch targets without attaching or changing a worktree', async () => {
     const attach = vi.fn(async () => ({ worktree: '/should-not-exist' }));
     await expect(
       resumeComposerRun('not a target', {
@@ -178,14 +178,6 @@ describe('Composer resume', () => {
     ).rejects.toThrow('network unavailable');
     expect(failedAttach).not.toHaveBeenCalled();
 
-    const localFetch = vi.fn(async () => {});
-    const local = await resumeComposerRun('spec/demo', {
-      resolveBranch: async () => undefined,
-      attach: async () => ({ worktree: '/local/.worktrees/engineer-demo' }),
-      readRunRecord: async () => JSON.stringify(record),
-    });
-    expect(localFetch).not.toHaveBeenCalled();
-    expect(local.context.nextStep).toBe('architecture_diagram');
   });
 
   it('Covers: Task 12 refuses an unregistered project before it fetches or creates a worktree', async () => {
@@ -387,7 +379,7 @@ describe('Composer resume', () => {
     }
   });
 
-  it('Covers: Task 15 launches one Codex Composer resume host at the attached worktree and refuses nested hosts before launch', async () => {
+  it('Covers: Tasks 12 and 15 attach a same-machine local spec branch without fetch and launch one Codex resume host', async () => {
     const root = await mkdtemp(join(tmpdir(), 'composer-resume-launch-'));
     const registryPath = join(root, 'registry.json');
     const spawned = vi.fn(async (_executable: string, _argv: string[], _cwd: string, _env: NodeJS.ProcessEnv) => 0);
@@ -426,7 +418,9 @@ describe('Composer resume', () => {
           },
         ]),
       );
+      const gitCalls: string[][] = [];
       const localGit = async (args: string[], options?: { cwd?: string }) => {
+        gitCalls.push(args);
         const result = await execFile('git', args, { cwd: options?.cwd ?? root });
         return { exitCode: 0, stdout: result.stdout };
       };
@@ -444,6 +438,7 @@ describe('Composer resume', () => {
         },
       );
       expect(code).toBe(0);
+      expect(gitCalls.some(([command]) => command === 'fetch')).toBe(false);
       expect(spawned).toHaveBeenCalledOnce();
       expect(spawned.mock.calls[0][1]).toEqual(
         expect.arrayContaining([
