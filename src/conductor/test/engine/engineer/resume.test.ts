@@ -221,7 +221,7 @@ describe('Composer resume', () => {
     const engineerDir = join(root, 'engineer');
     const spawned = vi.fn(async (_executable: string, _argv: string[], _cwd: string, _env: NodeJS.ProcessEnv) => 0);
     try {
-      await execFile('git', ['init', '--bare', remote]);
+      await execFile('git', ['init', '--bare', '-b', 'main', remote]);
       await execFile('git', ['init', '-b', 'main', origin]);
       await execFile('git', ['config', 'user.email', 'test@example.invalid'], { cwd: origin });
       await execFile('git', ['config', 'user.name', 'Test'], { cwd: origin });
