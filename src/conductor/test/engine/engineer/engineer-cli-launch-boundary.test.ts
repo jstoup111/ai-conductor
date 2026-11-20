@@ -194,7 +194,7 @@ describe('Composer launcher boundary', () => {
         const result = await execa('git', args, { cwd: options?.cwd, reject: false });
         return { stdout: result.stdout, exitCode: result.exitCode ?? 0 };
       };
-      const spawnHost = vi.fn(async (executable: string) => {
+      const spawnHost = vi.fn(async (executable: string, _argv: string[], _cwd: string, _env: NodeJS.ProcessEnv) => {
         if (executable === 'codex') await writeFile(recordPath, `${JSON.stringify(childRecord)}\n`);
         return 0;
       });
