@@ -453,6 +453,38 @@ describe('placeFoldCommits (real local Git)', () => {
     });
   });
 
+  it("uses each child's accumulated placement tree for sequential edits", async () => {
+    const subject = await placementFixture();
+    const first = await subject.commit(
+      'src/server/identity.ts',
+      'export function startPlaying(name: string, secret: string) {}\n',
+      `first sequential edit${trailers('r1', 'c1')}`,
+    );
+    const second = await subject.commit(
+      'src/server/identity.ts',
+      'export function startPlaying(name: string, token: string) {}\n',
+      `second sequential edit${trailers('r1', 'c1')}`,
+    );
+
+    await expect(
+      placeFoldCommits({
+        worktree: subject.repo,
+        slug,
+        commits: [
+          { sha: first as never, roundId: parseRoundId('r1')!, owner: hostOne },
+          { sha: second as never, roundId: parseRoundId('r1')!, owner: hostOne },
+        ],
+        git: makeGitRunner(subject.repo),
+      }),
+    ).resolves.toMatchObject({
+      kind: 'planned',
+      commits: [
+        { sha: first, parts: [expect.objectContaining({ child: hostOne, reason: 'owner' })] },
+        { sha: second, parts: [expect.objectContaining({ child: hostOne, reason: 'owner' })] },
+      ],
+    });
+  });
+
   it('records each hunk separately with only its source patch', async () => {
     const subject = await placementFixture();
     await subject.git(['checkout', '-q', 'feat/c1/demo']);
@@ -551,7 +583,7 @@ describe('placeFoldCommits (real local Git)', () => {
 
   const block = '### Task rem-prd-audit-T1: Repair\n**Done when:**\n- fixed\n**Child:** 1\n**Round:** r1\n';
 
-  async function frozenFixture(plan: string) {
+  async function frozenFixture(plan: string, options: { readonly binary?: boolean } = {}) {
     const subject = await placementFixture();
     await mkdir(join(subject.repo, '.docs', 'plans'), { recursive: true });
     await writeFile(join(subject.repo, '.docs', 'plans', 'demo.md'), plan);
@@ -559,7 +591,13 @@ describe('placeFoldCommits (real local Git)', () => {
       join(subject.repo, 'src/server/identity.ts'),
       'export function startPlaying(name: string, secret: string) {}\n',
     );
-    await subject.git(['add', '.docs/plans/demo.md', 'src/server/identity.ts']);
+    if (options.binary) await writeFile(join(subject.repo, 'binary.bin'), Buffer.from([0, 1, 2, 3]));
+    await subject.git([
+      'add',
+      '.docs/plans/demo.md',
+      'src/server/identity.ts',
+      ...(options.binary ? ['binary.bin'] : []),
+    ]);
     await subject.git(['commit', '-qm', `append frozen remediation${trailers('r1', 'c1')}`]);
     const frozen = await subject.head();
     const created = await createRouteRecord(
@@ -657,6 +695,24 @@ describe('placeFoldCommits (real local Git)', () => {
       (part) => part.kind === 'hunks' && part.path === '.docs/plans/demo.md',
     );
     expect(residual?.kind === 'hunks' ? residual.hunk.patch : '').not.toContain('rem-prd-audit-T1');
+  });
+
+  it('places a hunkless path alongside a frozen block without scanning it as a block residual', async () => {
+    const { plan } = await frozenFixture(`# Demo\n\n${block}`, { binary: true });
+
+    expect(plan.kind).toBe('planned');
+    if (plan.kind !== 'planned') return;
+    expect(plan.commits[0]!.parts).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'blocks', child: hostOne }),
+        expect.objectContaining({
+          kind: 'hunks',
+          child: hostOne,
+          path: 'binary.bin',
+          hunk: expect.objectContaining({ wholeFile: true }),
+        }),
+      ]),
+    );
   });
 
   it('refuses a frozen block whose hunk interleaves non-block lines it cannot split out', async () => {
