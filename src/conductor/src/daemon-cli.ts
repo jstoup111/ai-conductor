@@ -1795,6 +1795,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<DaemonResu
       branch: leafBranchFor(trace.slug),
       engineVersion: trace.engineVersionId,
       metrics: false,
+      // The attachment hook owns dispatch visualizer shutdown. In particular,
+      // it waits until the child has forwarded its closing events during a
+      // daemon SIGTERM drain before detaching the visualizer.
+      installProcessSignalHandlers: false,
       harnessVersion: daemonHarnessVersion,
       ...(trace.sourceRef ? { sourceRef: trace.sourceRef } : {}),
     };
