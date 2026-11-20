@@ -1,5 +1,10 @@
 import type { ChildId } from './child-context.js';
 import type { RemediationCaseRecord, RemediationCaseStoreReadResult } from './remediation-case-store.js';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import type { ConductorEvent } from '../types/events.js';
+import { persistOnActiveEventSpine } from './event-persister.js';
+import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 
 export type BuildStallStaleCitation =
   | {
@@ -49,4 +54,48 @@ export function classifyBuildStallStaleCitation(input: BuildStallStaleCitationIn
     ownerChild: cited.ownerChild,
     state: cited.case.resolution === 'resolved' ? 'resolved' : 'foreign',
   };
+}
+
+export type RecordBuildStallStaleCitationResult =
+  | { readonly kind: 'recorded'; readonly attempt: number }
+  | { readonly kind: 'persist-failed' };
+
+/**
+ * The event log, rather than process memory, bounds stale-citation retries so
+ * a daemon re-kick preserves the count.  Only an uninterrupted run for the
+ * same case and resolved-task count contributes to the next attempt.
+ */
+export async function recordBuildStallStaleCitation(
+  projectRoot: string,
+  events: ConductorEventEmitter,
+  citation: Exclude<BuildStallStaleCitation, { kind: 'not-stale' }>,
+  resolvedTasks: number,
+): Promise<RecordBuildStallStaleCitationResult> {
+  let attempt = 1;
+  try {
+    const text = await readFile(join(projectRoot, '.pipeline/events.jsonl'), 'utf8');
+    for (const line of text.trim().split('\n').reverse()) {
+      let event: unknown;
+      try { event = JSON.parse(line); } catch { continue; }
+      if (typeof event !== 'object' || event === null || (event as { type?: unknown }).type !== 'build_stall_stale_citation') continue;
+      const prior = event as Partial<Extract<ConductorEvent, { type: 'build_stall_stale_citation' }>>;
+      if (prior.caseId !== citation.caseId || prior.resolvedTasks !== resolvedTasks) break;
+      attempt++;
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { kind: 'persist-failed' };
+  }
+  try {
+    await persistOnActiveEventSpine(events, {
+      type: 'build_stall_stale_citation',
+      caseId: citation.caseId,
+      ownerChild: citation.ownerChild,
+      state: citation.state,
+      resolvedTasks,
+      attempt,
+    });
+    return { kind: 'recorded', attempt };
+  } catch {
+    return { kind: 'persist-failed' };
+  }
 }

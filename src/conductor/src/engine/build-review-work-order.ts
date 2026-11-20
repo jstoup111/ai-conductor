@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
+import { pipelinePathFor, type ChildId } from './child-context.js';
 
 import type {
   RemediationCaseFeatureIdentity,
@@ -10,7 +11,6 @@ import type {
 import type { RemediationCasePriority } from './remediation-case-artifact.js';
 
 const WORK_ORDER_VERSION = 'v1' as const;
-const WORK_ORDER_PATH = '.pipeline/build-review-work-order.json';
 const MAX_REFERENCE_LENGTH = 256;
 const MAX_TEXT_LENGTH = 8_000;
 const MAX_CASES = 128;
@@ -230,8 +230,8 @@ function isMissing(error: unknown): boolean {
 }
 
 /** The feature-local artifact path, deliberately outside the approved plan. */
-export function buildReviewWorkOrderPath(projectRoot: string): string {
-  return join(projectRoot, WORK_ORDER_PATH);
+export function buildReviewWorkOrderPath(projectRoot: string, child?: ChildId): string {
+  return pipelinePathFor(projectRoot, 'build-review-work-order.json', child);
 }
 
 /**
@@ -243,11 +243,12 @@ export async function publishBuildReviewWorkOrder(
   projectRoot: string,
   workOrderInput: unknown,
   filesystem: BuildReviewWorkOrderFilesystem = defaultFilesystem,
+  child?: ChildId,
 ): Promise<PublishBuildReviewWorkOrderResult> {
   const parsed = parseWorkOrder(workOrderInput);
   if (!parsed.ok) return parsed;
 
-  const path = buildReviewWorkOrderPath(projectRoot);
+  const path = buildReviewWorkOrderPath(projectRoot, child);
   const temporaryPath = `${path}.${randomUUID()}.tmp`;
   try {
     await filesystem.mkdir(dirname(path));
@@ -278,8 +279,9 @@ export async function readBuildReviewWorkOrder(
   feature: RemediationCaseFeatureIdentity,
   stableEffectIds: string | readonly string[],
   filesystem: BuildReviewWorkOrderFilesystem = defaultFilesystem,
+  child?: ChildId,
 ): Promise<ReadBuildReviewWorkOrderResult> {
-  const parsed = await readFeatureWorkOrder(projectRoot, feature, filesystem);
+  const parsed = await readFeatureWorkOrder(projectRoot, feature, filesystem, child);
   if (!parsed.ok) return parsed;
   const bound = typeof stableEffectIds === 'string' ? [stableEffectIds] : stableEffectIds;
   return bound.includes(parsed.workOrder.effectId) ? parsed : { ok: false, reason: 'foreign-effect' };
@@ -319,10 +321,11 @@ async function readFeatureWorkOrder(
   projectRoot: string,
   feature: RemediationCaseFeatureIdentity,
   filesystem: BuildReviewWorkOrderFilesystem = defaultFilesystem,
+  child?: ChildId,
 ): Promise<ReadBuildReviewWorkOrderResult> {
   let serialized: string;
   try {
-    serialized = await filesystem.readFile(buildReviewWorkOrderPath(projectRoot));
+    serialized = await filesystem.readFile(buildReviewWorkOrderPath(projectRoot, child));
   } catch (error) {
     return { ok: false, reason: isMissing(error) ? 'missing-work-order' : 'unreadable-work-order' };
   }
@@ -346,8 +349,9 @@ export async function readBuildReviewWorkOrderAttemptedCaseIds(
   projectRoot: string,
   feature: RemediationCaseFeatureIdentity,
   filesystem: BuildReviewWorkOrderFilesystem = defaultFilesystem,
+  child?: ChildId,
 ): Promise<ReadBuildReviewWorkOrderAttemptedCaseIdsResult> {
-  const order = await readFeatureWorkOrder(projectRoot, feature, filesystem);
+  const order = await readFeatureWorkOrder(projectRoot, feature, filesystem, child);
   return order.ok
     ? { ok: true, attemptedCaseIds: order.workOrder.attemptedCaseIds ?? [] }
     : order;
@@ -362,9 +366,20 @@ export async function markBuildReviewWorkOrderAttempted(
   projectRoot: string,
   feature: RemediationCaseFeatureIdentity,
   filesystem: BuildReviewWorkOrderFilesystem = defaultFilesystem,
+  child?: ChildId,
 ): Promise<PublishBuildReviewWorkOrderResult> {
-  const order = await readFeatureWorkOrder(projectRoot, feature, filesystem);
+  const order = await readFeatureWorkOrder(projectRoot, feature, filesystem, child);
   if (!order.ok) return order;
   const attemptedCaseIds = order.workOrder.cases.map((caseRow) => caseRow.caseId);
-  return publishBuildReviewWorkOrder(projectRoot, { ...order.workOrder, attemptedCaseIds }, filesystem);
+  return publishBuildReviewWorkOrder(projectRoot, { ...order.workOrder, attemptedCaseIds }, filesystem, child);
+}
+
+export async function removeBuildReviewWorkOrder(projectRoot: string, filesystem: BuildReviewWorkOrderFilesystem = defaultFilesystem, child?: ChildId): Promise<void> {
+  await filesystem.rm(buildReviewWorkOrderPath(projectRoot, child));
+}
+
+export async function moveBuildReviewWorkOrderToChild(projectRoot: string, child: ChildId, filesystem: BuildReviewWorkOrderFilesystem = defaultFilesystem): Promise<void> {
+  const target = buildReviewWorkOrderPath(projectRoot, child);
+  await filesystem.mkdir(dirname(target));
+  await filesystem.rename(buildReviewWorkOrderPath(projectRoot), target);
 }

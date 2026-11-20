@@ -1,5 +1,5 @@
 import { readFile, unlink, mkdir, writeFile, rename, rm } from 'node:fs/promises';
-import { basename, isAbsolute, join, relative } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative } from 'node:path';
 import { execa } from 'execa';
 import {
   listCommitsWithTrailers,
@@ -8,7 +8,7 @@ import {
   parsePlanTaskVerifyOnly,
 } from './autoheal.js';
 import { readEngineState } from './engine-state-store.js';
-import type { ChildId } from './child-context.js';
+import { pipelinePathFor, type ChildId } from './child-context.js';
 import { resolveFeaturePlanPath } from './artifacts.js';
 import { featureSlugOf, parseFeatureBranch } from './feature-branch-identity.js';
 import { loadSliceTopology } from './slice-topology.js';
@@ -877,6 +877,7 @@ export async function clearHaltMarker(projectRoot: string): Promise<void> {
 export async function writeStallQuestionEvidence(
   projectRoot: string,
   content: string | null,
+  child?: ChildId,
 ): Promise<string> {
   const placeholder = '(agent wrote no reason into halt-user-input-required)';
 
@@ -887,14 +888,18 @@ export async function writeStallQuestionEvidence(
       : content;
 
   // Create .pipeline directory if needed
-  const pipelineDir = join(projectRoot, '.pipeline');
+  const evidencePath = pipelinePathFor(projectRoot, 'build-stall-question.md', child);
+  const pipelineDir = dirname(evidencePath);
   await mkdir(pipelineDir, { recursive: true });
 
   // Write to .pipeline/build-stall-question.md
-  const evidencePath = join(pipelineDir, 'build-stall-question.md');
   await writeFile(evidencePath, effectiveText, 'utf-8');
 
   return effectiveText;
+}
+
+export async function removeStallQuestionEvidence(projectRoot: string, child?: ChildId): Promise<void> {
+  await unlink(pipelinePathFor(projectRoot, 'build-stall-question.md', child)).catch(() => undefined);
 }
 
 /**

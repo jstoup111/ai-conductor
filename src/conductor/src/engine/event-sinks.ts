@@ -209,6 +209,7 @@ export const EVENT_SINKS = {
   remediation_closure_judged: { render: false, persist: true, audit: false, otel: false },
   done_when_citation_accepted: { render: false, persist: true, audit: false, otel: false },
   build_stall: { render: true, persist: true, audit: false, otel: true },
+  build_stall_stale_citation: { render: false, persist: true, audit: true, otel: false },
   build_progress: { render: true, persist: true, audit: false, otel: true },
   step_in_flight: { render: true, persist: true, audit: false, otel: false },
   build_no_progress: { render: true, persist: true, audit: false, otel: true },

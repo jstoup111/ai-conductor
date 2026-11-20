@@ -1711,7 +1711,7 @@ export class DefaultStepRunner implements StepRunner {
                   dispositions: validated.dispositions,
                 }, this.remediationPlanStoreFilesystem === undefined
                   ? undefined
-                  : { filesystem: this.remediationPlanStoreFilesystem });
+                  : { filesystem: this.remediationPlanStoreFilesystem }, opts?.child);
                 if (persisted.kind === 'persistence-fault') {
                   return {
                     ...this.toStepRunResult(step, result),

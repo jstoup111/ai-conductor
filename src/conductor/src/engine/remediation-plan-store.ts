@@ -1,12 +1,16 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
+import { pipelinePathFor, type ChildId } from './child-context.js';
 
 import { REMEDIATION_PLAN_CONTRACT_VERSION, type AcceptedRemediationPlanDisposition } from './remediation-plan-contract.js';
 import type { RemediationProjectionSource, RemediationRequiredReference } from './remediation-projection.js';
 
 /** Engine-owned authority for validated gap-plan dispositions. */
 export const REMEDIATION_TYPED_PLAN_PATH = '.pipeline/remediation-plan.json';
+export function remediationTypedPlanPath(projectRoot: string, child?: ChildId): string {
+  return pipelinePathFor(projectRoot, 'remediation-plan.json', child);
+}
 
 export interface PersistedRemediationPlan {
   readonly version: typeof REMEDIATION_PLAN_CONTRACT_VERSION;
@@ -138,6 +142,7 @@ export async function persistRemediationPlan(
   projectRoot: string,
   input: PersistRemediationPlanInput,
   dependencies: RemediationPlanStoreDependencies = {},
+  child?: ChildId,
 ): Promise<PersistRemediationPlanResult> {
   const value: PersistedRemediationPlan = {
     version: REMEDIATION_PLAN_CONTRACT_VERSION,
@@ -147,7 +152,7 @@ export async function persistRemediationPlan(
     dispositions: input.dispositions,
   };
   try {
-    await atomicWrite(join(projectRoot, REMEDIATION_TYPED_PLAN_PATH), `${JSON.stringify(value, null, 2)}\n`, dependencies.filesystem ?? filesystem);
+    await atomicWrite(remediationTypedPlanPath(projectRoot, child), `${JSON.stringify(value, null, 2)}\n`, dependencies.filesystem ?? filesystem);
     return { kind: 'persisted', value };
   } catch (error) {
     return {
@@ -162,10 +167,11 @@ export async function readTypedRemediationPlan(
   projectRoot: string,
   request: { readonly attemptId: string },
   dependencies: RemediationPlanStoreDependencies = {},
+  child?: ChildId,
 ): Promise<ReadTypedRemediationPlanResult> {
   let raw: unknown;
   try {
-    raw = JSON.parse(await (dependencies.filesystem ?? filesystem).readFile(join(projectRoot, REMEDIATION_TYPED_PLAN_PATH)));
+    raw = JSON.parse(await (dependencies.filesystem ?? filesystem).readFile(remediationTypedPlanPath(projectRoot, child)));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'absent' };
     return {
@@ -177,4 +183,8 @@ export async function readTypedRemediationPlan(
     return { kind: 'invalid', reason: 'invalid typed remediation plan: invalid persisted envelope' };
   }
   return raw.attemptId === request.attemptId ? { kind: 'present', value: raw } : { kind: 'absent' };
+}
+
+export async function removeTypedRemediationPlan(projectRoot: string, dependencies: RemediationPlanStoreDependencies = {}, child?: ChildId): Promise<void> {
+  await (dependencies.filesystem ?? filesystem).rm(remediationTypedPlanPath(projectRoot, child));
 }
