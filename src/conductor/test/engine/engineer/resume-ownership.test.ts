@@ -223,15 +223,21 @@ describe('resume ownership', () => {
         probeGhVersion: async () => ({ kind: 'ok' as const, version: { major: 2, minor: 73, patch: 0 } }),
       };
 
-      await expect(dispatchEngineer({ kind: 'resume', target: branch, project: 'project', provider: 'codex' }, options)).resolves.toBe(0);
-      await expect(dispatchEngineer({ kind: 'resume', target: branch, project: 'project', provider: 'codex' }, options)).resolves.toBe(0);
+      await expect(
+        dispatchEngineer({ kind: 'resume', target: branch, project: 'project', provider: 'codex' }, options),
+      ).resolves.toBe(0);
+      await expect(
+        dispatchEngineer({ kind: 'resume', target: branch, project: 'project', provider: 'codex' }, options),
+      ).resolves.toBe(0);
 
       expect(pushAttempts).toBe(2);
       expect(confirmation.confirm).toHaveBeenCalledTimes(2);
       const worktree = join(root, '.worktrees', `engineer-${slug}`);
       await expect(readFile(join(worktree, '.docs', 'intake', `${slug}.md`), 'utf8')).resolves.toContain('Owner: B');
       const takeOverCommits = await execa('git', ['log', '--format=%s', `${head}..HEAD`], { cwd: worktree });
-      expect(takeOverCommits.stdout.split('\n').filter((message) => message.startsWith('composer take-over:'))).toHaveLength(1);
+      expect(
+        takeOverCommits.stdout.split('\n').filter((message) => message.startsWith('composer take-over:')),
+      ).toHaveLength(1);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
