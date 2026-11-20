@@ -348,6 +348,14 @@ export class AuditTrailWriter {
           reason: `${event.field}: expected ${event.expected}, requested ${event.requested}`,
           cause: event.intent,
         };
+      case 'build_stall_stale_citation':
+        return {
+          origin: 'build',
+          event: event.type,
+          reason: `case ${event.caseId} is ${event.state} in child ${event.ownerChild}`,
+          caseId: event.caseId,
+          attempt: event.attempt,
+        };
       case 'step_completed':
         // Positive evidence for steps that never produce a gate_verdict
         // (e.g. early-exit steps). If a gate_verdict was already recorded
