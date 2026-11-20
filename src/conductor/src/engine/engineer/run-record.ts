@@ -419,6 +419,7 @@ export function recordDraft(record: RunRecord, step: RunStepId): RunRecord {
 /** Maps each DECIDE-owned artifact family to the checkpoint that accepts it. */
 export function stepForArtifactPath(path: string): RunStepId | undefined {
   if (path.startsWith('.docs/track/')) return 'explore';
+  if (path.startsWith('.docs/applicability/')) return 'explore';
   if (path.startsWith('.docs/complexity/')) return 'complexity';
   if (path.startsWith('.docs/specs/')) return 'prd';
   if (path.startsWith('.docs/architecture/')) return 'architecture_diagram';
