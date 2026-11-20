@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { ChildId } from '../child-context.js';
+import { type ChildId } from '../child-context.js';
 import { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import { FEATURE_EVENT_LOG_PATH, persistOnActiveEventSpine } from '../event-persister.js';
 import { makeGitRunner } from '../rebase.js';
@@ -8,6 +8,7 @@ import { operatorRoundEvent, remediationRoutedEvent, withOutboxEvent } from './r
 import {
   drainOutbox,
   drainRoutingOutboxes,
+  deferredPlacementInventory,
   readRepairMarker,
   readRouteRecord,
   transitionHost,
@@ -103,11 +104,38 @@ export async function routedWorkOutstanding(
 /** Admission may deliver its durable route occurrences only after its marker transaction commits. */
 export type AdmitRoundDependencies = RouteRecordStoreDependencies & {
   readonly persist?: PersistOutboxEvent;
+  /** Audit-only execution mode frozen at admission by the remediation setting. */
+  readonly execution?: 'leaf';
 };
 
 export type RoundAdmissionFenceResult = Extract<AdmitRoundResult, { readonly kind: 'refused' }> & {
   readonly fence: true;
 };
+
+export { deferredPlacementInventory } from './route-record-store.js';
+export type { DeferredPlacement, DeferredPlacementInventory } from './route-record-store.js';
+
+/** Closed rounds with unfurled leaf ranges still own the stack until fold. */
+export async function deferredPlacementsExist(
+  worktree: string,
+  slug: string,
+  dependencies: RouteRecordStoreDependencies = {},
+): Promise<boolean> {
+  const inventory = await deferredPlacementInventory(worktree, slug, dependencies);
+  return inventory.kind !== 'inventory' || inventory.open.length + inventory.foldable.length > 0;
+}
+
+/** Stable operator-facing identities for publication and fold refusals. */
+export async function deferredPlacementDescriptions(
+  worktree: string,
+  slug: string,
+  dependencies: RouteRecordStoreDependencies = {},
+): Promise<readonly string[] | undefined> {
+  const inventory = await deferredPlacementInventory(worktree, slug, dependencies);
+  return inventory.kind === 'inventory'
+    ? [...inventory.open, ...inventory.foldable].map((placement) => `host ${placement.host} round ${placement.roundId}`)
+    : undefined;
+}
 
 /**
  * Reject a new admission while another active round could still make progress.
@@ -217,7 +245,11 @@ export async function admitRound(
   if (hostTransition.kind !== 'updated' || !isLegalRoundPhaseTransition(stored.record.phase, 'open')) {
     return { kind: 'refused', detail: `routing round ${record.roundId} is not prepared for host ${firstHost}` };
   }
-  let next: RouteRecord = { ...hostTransition.record, phase: 'open' };
+  let next: RouteRecord = {
+    ...hostTransition.record,
+    phase: 'open',
+    ...(stored.record.kind === 'audit' && dependencies.execution === 'leaf' ? { execution: 'leaf' as const } : {}),
+  };
   if (next.kind === 'operator' && next.operator !== undefined) {
     next = withOutboxEvent(next, operatorRoundEvent(next.roundId, next.operator, firstHost, 'opened'));
   }
@@ -227,7 +259,14 @@ export async function admitRound(
     slug,
     [
       { kind: 'update-record', previous: stored, record: next },
-      { kind: 'create-marker', marker: { host: firstHost, roundId: record.roundId } },
+      {
+        kind: 'create-marker',
+        marker: {
+          host: firstHost,
+          roundId: record.roundId,
+          ...(next.execution === 'leaf' ? { execution: 'leaf' as const } : {}),
+        },
+      },
     ],
     dependencies,
   );

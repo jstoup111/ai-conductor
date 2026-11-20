@@ -9,6 +9,7 @@ import { closureRefFor, rejectedPinRefFor } from './routing-refs.js';
 import { resolveCitedPaths } from './cannot-host.js';
 import { resolveGitRef } from './git-ref-resolver.js';
 import {
+  readPinnedQueueFold,
   readRepairMarker,
   readRouteRecord,
   transitionHost,
@@ -340,6 +341,24 @@ async function hasOnlyRoundOrHaltCommits(
   }
 }
 
+/** Fold sources belong to the queue generation admitted by this route, never branch history. */
+async function foldedSourceForChild(
+  stored: Awaited<ReturnType<typeof readRouteRecord>>,
+  git: GitRunner,
+  child: ChildId,
+): Promise<
+  | { readonly kind: 'folded'; readonly sources: string }
+  | { readonly kind: 'absent' }
+  | { readonly kind: 'unavailable'; readonly detail: string }
+> {
+  if (stored.kind !== 'record')
+    return { kind: 'unavailable', detail: 'routed prerequisite claim work order is unavailable' };
+  const fold = await readPinnedQueueFold(stored, git);
+  if (fold.kind === 'unavailable') return fold;
+  const sources = fold.kind === 'fold' ? fold.fold.sources[String(child)]?.join(', ') : undefined;
+  return sources === undefined ? { kind: 'absent' } : { kind: 'folded', sources };
+}
+
 /**
  * Atomically preserve a rejected host tip, restore its immutable closure and
  * advance the routing marker.  Tree synchronization deliberately happens in
@@ -553,6 +572,12 @@ export async function settleRoutedBuildClaim(
   const stored = await readRouteRecord(input.worktree, input.slug, input.roundId, { git });
   if (stored.kind !== 'record')
     return { kind: 'needs-human', detail: `routed prerequisite claim work order is ${stored.kind}` };
+  // Leaf-executed audit work already runs at the stack's highest available
+  // prerequisite context. A builder cannot move that host farther upward, so
+  // its claim is an ordinary failed attempt rather than a reroute request.
+  if (stored.record.execution === 'leaf') {
+    return { kind: 'failed', detail: 'routed prerequisite claim cannot reroute a leaf-executed host' };
+  }
   const prerequisitePaths = [
     ...new Set(
       stored.record.items.filter((item) => item.host === input.host).flatMap((item) => item.prerequisitePaths ?? []),
@@ -568,6 +593,16 @@ export async function settleRoutedBuildClaim(
   });
   if (verified.kind !== 'verified')
     return { kind: 'failed', detail: `routed prerequisite claim ${verified.kind}: ${verified.detail}` };
+  if (stored.record.kind === 'revalidate') {
+    const foldedFrom = await foldedSourceForChild(stored, git, input.host);
+    if (foldedFrom.kind === 'unavailable') return { kind: 'needs-human', detail: foldedFrom.detail };
+    if (foldedFrom.kind === 'folded') {
+      return {
+        kind: 'needs-human',
+        detail: `fold-prerequisite-missing: Folded-from ${foldedFrom.sources}; child ${input.host} requires prerequisite from child ${verified.destination}`,
+      };
+    }
+  }
   const moved = await rerouteRound({
     worktree: input.worktree,
     slug: input.slug,

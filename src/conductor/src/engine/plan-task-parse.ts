@@ -6,13 +6,18 @@
 // compatibility with its existing call sites.
 import { createHash } from 'node:crypto';
 import { PROTECTED_ARTIFACT_DIRECTORIES, namesOwnFeature } from './protected-artifact-seal.js';
+import {
+  expandTaskIds,
+  linesWithFenceState,
+  MARKDOWN_HEADING,
+  parsePlanTaskBlocks,
+  TASK_HEADER_PATTERN,
+  TASK_ID_PATTERN,
+} from './plan-task-blocks.js';
+import type { ParsedPlanTaskBlock } from './plan-task-blocks.js';
 
-// Task ID pattern: alphanumeric + dots, underscores, hyphens
-// Supports: 1, 1.2, task_1, task-name, rem-adr-001, etc.
-// (H9 id grammar — exported so callers outside this module, e.g. the
-// post-commit fast-feedback CLI dispatch, validate/derive against the SAME
-// grammar instead of re-deriving a narrower ad hoc regex.)
-export const TASK_ID_PATTERN = '[A-Za-z0-9._-]+';
+export { parsePlanTaskBlocks, TASK_HEADER_PATTERN, TASK_ID_PATTERN };
+export type { ParsedPlanTaskBlock };
 
 /** Exact inline marker for a Done-when check that requires test evidence. */
 export const TEST_DONE_WHEN_TAG = '[test]';
@@ -25,9 +30,7 @@ export const TEST_DONE_WHEN_TAG = '[test]';
 export function isMalformedTestTag(check: string): boolean {
   const trimmed = check.trimStart();
   const token = trimmed.match(/^\[([^\]]+)\]/)?.[1];
-  return token !== undefined
-    && token.toLowerCase().startsWith('test')
-    && !trimmed.startsWith(TEST_DONE_WHEN_TAG);
+  return token !== undefined && token.toLowerCase().startsWith('test') && !trimmed.startsWith(TEST_DONE_WHEN_TAG);
 }
 
 /**
@@ -45,9 +48,7 @@ export function isMalformedTestTag(check: string): boolean {
 export const TASK_TRAILER_LINE_PATTERN = `^Task: (${TASK_ID_PATTERN})[ \\t]*$`;
 
 export type PlanTaskReferenceResolution =
-  | { kind: 'resolved'; ids: string[] }
-  | { kind: 'unresolvable'; ids: string[] }
-  | { kind: 'malformed'; raw: string };
+  { kind: 'resolved'; ids: string[] } | { kind: 'unresolvable'; ids: string[] } | { kind: 'malformed'; raw: string };
 
 /**
  * The cited plan-task id with any trailing annotation removed.
@@ -64,10 +65,7 @@ export function normalizePlanTaskId(raw: string): string {
 }
 
 /** Resolves a cited plan-task id against the active plan's declared task ids. */
-export function resolvePlanTaskReference(
-  raw: string,
-  planTaskIds: ReadonlySet<string>,
-): PlanTaskReferenceResolution {
+export function resolvePlanTaskReference(raw: string, planTaskIds: ReadonlySet<string>): PlanTaskReferenceResolution {
   // A citation may name more than one task: a criterion's evidence legitimately
   // spans several, and the single-id form made that honest answer
   // unrepresentable — the auditor either wrote the truth and had the row
@@ -84,9 +82,7 @@ export function resolvePlanTaskReference(
   if (ids.length === 0) return { kind: 'malformed', raw };
 
   const absent = ids.filter((id) => !planTaskIds.has(id));
-  return absent.length === 0
-    ? { kind: 'resolved', ids }
-    : { kind: 'unresolvable', ids: absent };
+  return absent.length === 0 ? { kind: 'resolved', ids } : { kind: 'unresolvable', ids: absent };
 }
 
 /** Resolves criterion-carrier citations against plan headings. */
@@ -96,17 +92,8 @@ export function resolveCitedPlanTaskIds(
 ): PlanTaskReferenceResolution {
   // `task-` is carrier presentation only. The shared resolver owns all
   // remaining normalization, grammar, de-duplication, and membership rules.
-  return resolvePlanTaskReference(
-    citedIds.map((segment) => segment.replace(/^\s*task-/i, '')).join(','),
-    planTaskIds,
-  );
+  return resolvePlanTaskReference(citedIds.map((segment) => segment.replace(/^\s*task-/i, '')).join(','), planTaskIds);
 }
-
-// Shared task-header grammar for parsers that identify task blocks without
-// requiring a title. Keep every consumer on this expression so a supported
-// heading form cannot silently drift between Files and Verify-only metadata.
-export const TASK_HEADER_PATTERN =
-  /^#{1,6}\s+(?:Task\s+([A-Za-z0-9._,\s-]+?)(?::|\s[—–])|Task\s+([A-Za-z._,-]*\d[A-Za-z0-9._,-]*)\s*$|(T\d[A-Za-z0-9._,\s-]*?)(?::|\s[—–])|(T\d[A-Za-z0-9._,-]*)\s*$)/;
 
 const PATH_EXTENSIONS = /\.(?:ts|tsx|js|jsx|mjs|cjs|md|json|yml|yaml|sh|rb|py|go|rs|html|css|scss|vue|toml)$/i;
 const BACKTICK_TOKEN = /`([^`\s]+)`/g;
@@ -143,13 +130,18 @@ export function parsePlanTaskStoryLineIds(text: string): string[][] {
       /(^|[,;&+\s/])n\/a(?=$|[,;&+\s/])/gi,
       `$1${STORY_N_A_PLACEHOLDER}`,
     );
-    storyLines.push(slashSafeValue
-      .split(/[,;&+/]|\band\b/i)
-      .map((token) => token.trim()
-        .replaceAll(STORY_N_A_PLACEHOLDER, 'n/a')
-        .replace(/^(?:story|stories|epic)\b[-\t ]*/i, '')
-        .trim())
-      .filter((token) => token.length > 0));
+    storyLines.push(
+      slashSafeValue
+        .split(/[,;&+/]|\band\b/i)
+        .map((token) =>
+          token
+            .trim()
+            .replaceAll(STORY_N_A_PLACEHOLDER, 'n/a')
+            .replace(/^(?:story|stories|epic)\b[-\t ]*/i, '')
+            .trim(),
+        )
+        .filter((token) => token.length > 0),
+    );
   }
   return storyLines;
 }
@@ -216,59 +208,6 @@ function extractFilesLinePaths(rest: string): string[] {
   return paths;
 }
 
-function expandTaskIds(raw: string): string[] {
-  const ids: string[] = [];
-  for (const piece of raw.split(',')) {
-    const trimmed = piece.trim();
-    if (!trimmed) continue;
-
-    // Try numeric range expansion only for numeric ids (e.g., 1-3)
-    const rangeMatch = trimmed.match(/^(\d+)\s*-\s*(\d+)$/);
-    if (rangeMatch) {
-      const start = parseInt(rangeMatch[1], 10);
-      const end = parseInt(rangeMatch[2], 10);
-      for (let n = start; n <= end; n++) ids.push(String(n));
-    } else if (new RegExp(`^${TASK_ID_PATTERN}$`).test(trimmed)) {
-      // Accept any id matching the TASK_ID_PATTERN (numeric, dotted, hyphenated, underscore)
-      ids.push(trimmed);
-    }
-  }
-  return ids;
-}
-
-// Markdown fenced code is illustration, never structure. adr-2026-08-21 D1
-// requires fenced content to be excluded before task matching: a plan that
-// documents `### Task N` or a `**Done when:**` block inside a fence must not
-// mint a phantom task id or phantom criteria, which would falsely reject a
-// valid plan at land time.
-const FENCE_LINE = /^\s*(`{3,}|~{3,})(.*)$/;
-
-/** Yields every line with a flag marking lines inside a fenced code block. */
-function* linesWithFenceState(text: string): Generator<{ line: string; fenced: boolean }> {
-  let openMarker: string | null = null;
-  for (const line of text.split('\n')) {
-    const fence = line.match(FENCE_LINE);
-    if (fence) {
-      const marker = fence[1];
-      if (openMarker === null) {
-        openMarker = marker;
-        yield { line, fenced: true };
-        continue;
-      }
-      // A closing fence uses the same character and is at least as long as
-      // the opener, and carries no info string.
-      if (marker[0] === openMarker[0] && marker.length >= openMarker.length && !fence[2].trim()) {
-        openMarker = null;
-        yield { line, fenced: true };
-        continue;
-      }
-    }
-    yield { line, fenced: openMarker !== null };
-  }
-}
-
-const MARKDOWN_HEADING = /^(#{1,6})(?:\s|$)/;
-
 function normalizedTaskDigestText(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
@@ -328,58 +267,6 @@ export function planTaskDigests(text: string): Map<string, string> {
   return result;
 }
 
-/** A task heading and its committed body, both retaining authored line endings. */
-export interface ParsedPlanTaskBlock {
-  readonly heading: string;
-  readonly body: string;
-}
-
-/**
- * Returns the heading and committed body for every recognized task.
- *
- * This is the one structural task-block parser: fenced code is illustration,
- * and a task ends at the next Markdown heading at its level or above. Callers
- * that need the complete stored block can therefore share the same boundaries
- * as evidence, slicing, and title readers rather than re-deriving a narrower
- * `### Task <id>:` expression.
- */
-export function parsePlanTaskBlocks(text: string): Map<string, ParsedPlanTaskBlock> {
-  const result = new Map<string, ParsedPlanTaskBlock>();
-  let currentIds: string[] = [];
-  let currentLevel = 0;
-  let currentHeading = '';
-  let bodyLines: string[] = [];
-
-  const saveCurrentBlock = () => {
-    if (currentIds.length === 0) return;
-    const block = { heading: currentHeading, body: bodyLines.join('\n') };
-    for (const id of currentIds) result.set(id, block);
-    currentIds = [];
-  };
-
-  for (const { line, fenced } of linesWithFenceState(text)) {
-    const heading = fenced ? null : line.match(MARKDOWN_HEADING);
-    if (heading && currentIds.length > 0 && heading[1].length <= currentLevel) saveCurrentBlock();
-
-    const headerMatch = fenced ? null : line.match(TASK_HEADER_PATTERN);
-    if (headerMatch) {
-      saveCurrentBlock();
-      currentIds = expandTaskIds(
-        headerMatch[1] ?? headerMatch[2] ?? headerMatch[3] ?? headerMatch[4],
-      );
-      currentLevel = line.match(MARKDOWN_HEADING)![1].length;
-      currentHeading = line;
-      bodyLines = [];
-      continue;
-    }
-
-    if (currentIds.length > 0) bodyLines.push(line);
-  }
-
-  saveCurrentBlock();
-  return result;
-}
-
 /**
  * Returns the committed body text for every recognized task heading.
  *
@@ -409,9 +296,7 @@ export function parsePlanTaskTitles(text: string): Map<string, string> {
     const headerMatch = fenced ? null : line.match(TASK_HEADER_PATTERN);
     if (!headerMatch) continue;
 
-    const ids = expandTaskIds(
-      headerMatch[1] ?? headerMatch[2] ?? headerMatch[3] ?? headerMatch[4],
-    );
+    const ids = expandTaskIds(headerMatch[1] ?? headerMatch[2] ?? headerMatch[3] ?? headerMatch[4]);
     const title = line.slice(headerMatch[0].length).trim();
     for (const id of ids) result.set(id, title);
   }
@@ -446,9 +331,7 @@ export function parsePlanTaskDoneWhen(text: string): ParsedPlanTaskDoneWhen {
     const headerMatch = line.match(TASK_HEADER_PATTERN);
     if (headerMatch) {
       finishBlock();
-      currentIds = expandTaskIds(
-        headerMatch[1] ?? headerMatch[2] ?? headerMatch[3] ?? headerMatch[4],
-      );
+      currentIds = expandTaskIds(headerMatch[1] ?? headerMatch[2] ?? headerMatch[3] ?? headerMatch[4]);
       continue;
     }
     if (currentIds.length === 0) continue;
@@ -539,9 +422,7 @@ export function parsePlanTaskPaths(text: string, featureDesc = ''): ParsedPlanTa
     const headerMatch = fenced ? null : line.match(TASK_HEADER_PATTERN);
     if (headerMatch) {
       current = {
-        ids: expandTaskIds(
-          headerMatch[1] ?? headerMatch[2] ?? headerMatch[3] ?? headerMatch[4],
-        ),
+        ids: expandTaskIds(headerMatch[1] ?? headerMatch[2] ?? headerMatch[3] ?? headerMatch[4]),
         filesPaths: new Set(),
         sameRef: null,
         hasFilesLine: false,
@@ -654,9 +535,12 @@ export function parsePlanTaskPaths(text: string, featureDesc = ''): ParsedPlanTa
       let match: RegExpExecArray | null;
       while ((match = BACKTICK_TOKEN.exec(s.bodyLines.join('\n'))) !== null) {
         const path = match[1].replace(/:\d+(?:-\d+)?$/, '').replace(/^\.\//, '');
-        if (PROTECTED_ARTIFACT_DIRECTORIES.some((directory) =>
-          path.startsWith(`${directory}/`) && !path.slice(directory.length + 1).includes('/'),
-        ) && !namesOwnFeature(path, featureDesc)) {
+        if (
+          PROTECTED_ARTIFACT_DIRECTORIES.some(
+            (directory) => path.startsWith(`${directory}/`) && !path.slice(directory.length + 1).includes('/'),
+          ) &&
+          !namesOwnFeature(path, featureDesc)
+        ) {
           references.add(path);
         }
       }

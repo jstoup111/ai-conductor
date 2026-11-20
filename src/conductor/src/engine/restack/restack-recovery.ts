@@ -29,7 +29,12 @@ import {
 import { replayChildRange, RemBlockBodyMismatchError } from './restack-replay.js';
 import { consumeRecordedResolution, retireRecordedResolution } from './restack-conflict-record.js';
 import { prepareRestackDecisionDelivery, restackDecisionDetailLines } from './restack-decision-delivery.js';
-import { adaptedPathsFor, checkPathOwnership, checkResolvedTipOwnership, parentOverlapPaths } from './restack-ownership.js';
+import {
+  adaptedPathsFor,
+  checkPathOwnership,
+  checkResolvedTipOwnership,
+  parentOverlapPaths,
+} from './restack-ownership.js';
 import { RestackSyncOperatorEditError, syncRestackedWorktree } from './restack-sync.js';
 import { applyRestackTransition } from './restack-transition.js';
 import {
@@ -39,13 +44,18 @@ import {
   RoutedApplyPlanRefChangedError,
   runRestack,
 } from './restack-executor.js';
-import { haltRecordedRestackConflict, replayCandidateSubjects, resolveRestackConflict, type RestackResolver } from './restack-resolver.js';
+import {
+  haltRecordedRestackConflict,
+  replayCandidateSubjects,
+  resolveRestackConflict,
+  type RestackResolver,
+} from './restack-resolver.js';
 import { resolveUnenteredLeafOwner, type ConsumedTipCorrespondence } from './restack-unentered-leaf.js';
 import { haltRecordPathFor } from './halt-record-bookkeeping.js';
 import { readHaltRecordRef } from '../halt-record-ref.js';
 import { resolveRebaseResolutionAttempts } from '../resolved-config.js';
 import { publishedStackRefusal } from '../stack-publication.js';
-import { routedRoundOpen } from '../routing/round-admission.js';
+import { deferredPlacementsExist, routedRoundOpen } from '../routing/round-admission.js';
 import { emitRestackRefused } from './restack-events.js';
 import {
   isLegalJournalTransition,
@@ -55,6 +65,7 @@ import {
   type CommitSha,
   type JournalState,
   type RefName,
+  type RestackCause,
 } from './restack-types.js';
 
 /** Result of attempting recovery of the one durable journal for a feature. */
@@ -93,6 +104,36 @@ function ref(raw: string): RefName {
   const value = parseRefName(raw);
   if (!value) throw new Error(`invalid restack ref: ${raw}`);
   return value;
+}
+
+function assertNever(value: never): never {
+  throw new Error(`unhandled restack cause: ${String(value)}`);
+}
+
+function isFeatureRepair(cause: RestackCause): boolean {
+  switch (cause) {
+    case 'feature-repair':
+      return true;
+    case 'base-refresh':
+    case 'fold':
+      return false;
+    default:
+      return assertNever(cause);
+  }
+}
+
+function oldDefaultForTransition(journal: StoredRestackJournal): CommitSha | undefined {
+  const first = journal.journal.ranges[0];
+  if (!first) return undefined;
+  switch (journal.journal.cause) {
+    case 'feature-repair':
+      return journal.journal.newDefault ?? first.oldParent;
+    case 'base-refresh':
+    case 'fold':
+      return first.oldParent;
+    default:
+      return assertNever(journal.journal.cause);
+  }
 }
 
 async function runGit(git: GitRunner, args: string[], input?: string) {
@@ -152,21 +193,30 @@ async function transition(
   } catch {
     return undefined;
   }
-  const updated = await runGit(git, ['update-ref', '--stdin'], transaction(journalStateUpdateLines(stored, blob, state)));
+  const updated = await runGit(
+    git,
+    ['update-ref', '--stdin'],
+    transaction(journalStateUpdateLines(stored, blob, state)),
+  );
   return updated?.exitCode === 0 ? { slug: stored.slug, blob, journal } : undefined;
 }
 
 async function cleanJournal(worktree: string, journal: StoredRestackJournal, git: GitRunner): Promise<boolean> {
-  const listed = await runGit(git, ['for-each-ref', '--format=%(refname) %(objectname)', `refs/conductor/${journal.slug}/restack/staging/`]);
+  const listed = await runGit(git, [
+    'for-each-ref',
+    '--format=%(refname) %(objectname)',
+    `refs/conductor/${journal.slug}/restack/staging/`,
+  ]);
   if (!listed || listed.exitCode !== 0) return false;
   const deletes = listed.stdout.split('\n').flatMap((line) => {
     const [name, object] = line.trim().split(/\s+/, 2);
     return name && object ? [`delete ${name} ${object}`] : [];
   });
-  const deleted = await runGit(git, ['update-ref', '--stdin'], transaction([
-    `delete ${journalRefFor(journal.slug)} ${journal.blob}`,
-    ...deletes,
-  ]));
+  const deleted = await runGit(
+    git,
+    ['update-ref', '--stdin'],
+    transaction([`delete ${journalRefFor(journal.slug)} ${journal.blob}`, ...deletes]),
+  );
   if (deleted?.exitCode !== 0) return false;
   // Resolver worktrees are transient by contract. A process crash before its
   // finally can leave only this ignored directory behind.
@@ -181,7 +231,7 @@ async function checkedOutRef(git: GitRunner): Promise<RefName | undefined> {
 
 async function refsStillAtOldValues(journal: StoredRestackJournal, git: GitRunner): Promise<boolean> {
   for (const entry of journal.journal.refs) {
-    if (await resolveSha(git, entry.ref) !== entry.oldSha) return false;
+    if ((await resolveSha(git, entry.ref)) !== entry.oldSha) return false;
   }
   return true;
 }
@@ -192,14 +242,16 @@ async function refValue(git: GitRunner, name: string): Promise<string> {
 }
 
 async function journaledRefValues(journal: StoredRestackJournal, git: GitRunner): Promise<string> {
-  return Promise.all(journal.journal.refs.map(async ({ ref: name }) => `${name} ${await refValue(git, name)}`))
-    .then((values) => values.join('\n'));
+  return Promise.all(journal.journal.refs.map(async ({ ref: name }) => `${name} ${await refValue(git, name)}`)).then(
+    (values) => values.join('\n'),
+  );
 }
 
 /** Include every durable ref which can identify this feature if its journal is corrupt. */
 async function corruptJournalRefValues(slug: string, git: GitRunner): Promise<string> {
   const listed = await runGit(git, [
-    'for-each-ref', '--format=%(refname) %(objectname)',
+    'for-each-ref',
+    '--format=%(refname) %(objectname)',
     'refs/heads/feat/',
     `refs/conductor/${slug}/closed/`,
     `refs/conductor/${slug}/restack/staging/`,
@@ -255,8 +307,12 @@ async function movedRefSides(
       sides.set(move.ref, 'unchanged');
     } else if (live === move.oldSha) {
       sides.set(move.ref, 'old');
-    } else if (live === move.newSha || (live !== undefined && move.ref === checkedOut
-      && await isHaltRecordOnlyDescendant(git, move.newSha, live, journal.slug))) {
+    } else if (
+      live === move.newSha ||
+      (live !== undefined &&
+        move.ref === checkedOut &&
+        (await isHaltRecordOnlyDescendant(git, move.newSha, live, journal.slug)))
+    ) {
       sides.set(move.ref, 'new');
     } else {
       sides.set(move.ref, 'unknown');
@@ -294,7 +350,9 @@ async function verifyMovedRecovery(
     if (!live) return { kind: 'unavailable', detail: `cannot resolve moved ref ${move.ref}` };
     liveByRef.set(move.ref, live);
   }
-  const hasHaltRecordExtension = moves.some((move) => move.ref === checkedOut && liveByRef.get(move.ref) !== move.newSha);
+  const hasHaltRecordExtension = moves.some(
+    (move) => move.ref === checkedOut && liveByRef.get(move.ref) !== move.newSha,
+  );
   const unenteredLeafOwners = new Map<ChildId, ChildId>();
   for (const range of journal.journal.ranges) {
     if (range.kind !== 'leaf-unentered') continue;
@@ -302,7 +360,9 @@ async function verifyMovedRecovery(
     if (owner) unenteredLeafOwners.set(range.child, owner.child);
   }
   const verificationRanges = journal.journal.ranges.flatMap((range) => [
-    ...journal.journal.ranges.filter((candidate) => candidate.kind === 'leaf-unentered' && unenteredLeafOwners.get(candidate.child) === range.child),
+    ...journal.journal.ranges.filter(
+      (candidate) => candidate.kind === 'leaf-unentered' && unenteredLeafOwners.get(candidate.child) === range.child,
+    ),
     ...(range.kind !== 'leaf-unentered' || !unenteredLeafOwners.has(range.child) ? [range] : []),
   ]);
   const verificationJournal = { ...journal, journal: { ...journal.journal, ranges: verificationRanges } };
@@ -320,7 +380,8 @@ async function verifyMovedRecovery(
         resolveSha(git, `${live}^{tree}`),
         resolveSha(git, `${staging}^{tree}`),
       ]);
-      if (!movedTree || !stagedTree) return { kind: 'unavailable', detail: `cannot read tree for child ${range.child}` };
+      if (!movedTree || !stagedTree)
+        return { kind: 'unavailable', detail: `cannot read tree for child ${range.child}` };
       if (movedTree !== stagedTree) return { kind: 'failed', detail: `tree mismatch for child ${range.child}` };
     }
     if (previous !== undefined) {
@@ -349,36 +410,57 @@ async function unenteredLeafOwner(
   git: GitRunner,
 ): Promise<{ readonly child: ChildId; readonly rewritten: CommitSha } | undefined> {
   if (range.kind !== 'leaf-unentered') return undefined;
-  const exactRewrites = new Map(journal.journal.children
-    .filter((entry) => entry.child !== range.child)
-    .map((entry) => [entry.child, new Map(entry.rewrites?.map(({ from, to }) => [from, to]))] as const));
+  const exactRewrites = new Map(
+    journal.journal.children
+      .filter((entry) => entry.child !== range.child)
+      .map((entry) => [entry.child, new Map(entry.rewrites?.map(({ from, to }) => [from, to]))] as const),
+  );
   const consumed = journal.journal.consumedResolution;
-  const consumedRange = consumed === undefined ? undefined : journal.journal.ranges.find((candidate) => candidate.child === consumed.child);
-  const consumedTip = consumedRange === undefined ? undefined : await resolveSha(git, stagingRefFor(journal.slug, consumedRange.child));
-  const correspondences: readonly ConsumedTipCorrespondence[] = consumedRange === undefined || consumedTip === undefined || consumed === undefined
-    ? []
-    : [{ child: consumedRange.child, oldParent: consumedRange.oldParent, oldTip: consumedRange.oldTip, newParent: consumed.parent, tip: consumedTip }];
+  const consumedRange =
+    consumed === undefined ? undefined : journal.journal.ranges.find((candidate) => candidate.child === consumed.child);
+  const consumedTip =
+    consumedRange === undefined ? undefined : await resolveSha(git, stagingRefFor(journal.slug, consumedRange.child));
+  const correspondences: readonly ConsumedTipCorrespondence[] =
+    consumedRange === undefined || consumedTip === undefined || consumed === undefined
+      ? []
+      : [
+          {
+            child: consumedRange.child,
+            oldParent: consumedRange.oldParent,
+            oldTip: consumedRange.oldTip,
+            newParent: consumed.parent,
+            tip: consumedTip,
+          },
+        ];
   const rewrittenMatches = (await resolveUnenteredLeafOwner(git, range.oldTip, exactRewrites, correspondences)).matches;
   if (rewrittenMatches.length > 0) return rewrittenMatches.length === 1 ? rewrittenMatches[0] : undefined;
-  if (journal.journal.cause !== 'feature-repair') return undefined;
+  if (!isFeatureRepair(journal.journal.cause)) return undefined;
   // Every child through the highest origin is adopted unchanged, whether or
   // not it originated the repair; an adopted owner maps the leaf to itself.
-  const lastOriginIndex = Math.max(-1, ...journal.journal.ranges.map((candidate, index) =>
-    journal.journal.originatingChildren?.includes(candidate.child) ? index : -1));
-  const identityMatches = (await Promise.all(journal.journal.ranges.map(async (candidate, index) => {
-    if (candidate.kind === 'leaf-unentered' || index > lastOriginIndex) return undefined;
-    const child = journal.journal.children.find((entry) => entry.child === candidate.child);
-    if (child?.status !== 'replayed' || (child.rewrites?.length ?? 0) !== 0) return undefined;
-    const inside = await leafIsInsideRange(git, range.oldTip, candidate);
-    return inside ? { child: candidate.child, rewritten: range.oldTip } : undefined;
-  }))).filter((match): match is { child: ChildId; rewritten: CommitSha } => match !== undefined);
+  const lastOriginIndex = Math.max(
+    -1,
+    ...journal.journal.ranges.map((candidate, index) =>
+      journal.journal.originatingChildren?.includes(candidate.child) ? index : -1,
+    ),
+  );
+  const identityMatches = (
+    await Promise.all(
+      journal.journal.ranges.map(async (candidate, index) => {
+        if (candidate.kind === 'leaf-unentered' || index > lastOriginIndex) return undefined;
+        const child = journal.journal.children.find((entry) => entry.child === candidate.child);
+        if (child?.status !== 'replayed' || (child.rewrites?.length ?? 0) !== 0) return undefined;
+        const inside = await leafIsInsideRange(git, range.oldTip, candidate);
+        return inside ? { child: candidate.child, rewritten: range.oldTip } : undefined;
+      }),
+    )
+  ).filter((match): match is { child: ChildId; rewritten: CommitSha } => match !== undefined);
   return identityMatches.length === 1 ? identityMatches[0] : undefined;
 }
 
 /** The ref-backed record wins over a legacy committed record while a stack upgrades. */
 async function hasOutstandingHalt(worktree: string, slug: string, git: GitRunner): Promise<boolean> {
   const record = await readHaltRecordRef(worktree, slug, { git });
-  return record.kind === 'record' && /^Status:\s*halted\s*$/mi.test(record.text);
+  return record.kind === 'record' && /^Status:\s*halted\s*$/im.test(record.text);
 }
 
 /**
@@ -397,7 +479,7 @@ export async function cleanClearedAbortedRestackJournal(
   if (read.kind !== 'journal') return 'unavailable';
   if (read.journal.state !== 'aborted') return 'none';
   if (await hasOutstandingHalt(worktree, slug, git)) return 'none';
-  return await cleanJournal(worktree, { slug: read.slug, blob: read.blob, journal: read.journal }, git)
+  return (await cleanJournal(worktree, { slug: read.slug, blob: read.blob, journal: read.journal }, git))
     ? 'cleaned'
     : 'unavailable';
 }
@@ -410,37 +492,39 @@ interface MergeAudit {
 
 type ResumePlannedResult =
   | { readonly kind: 'resumed'; readonly journal: StoredRestackJournal; readonly mergeAudit?: MergeAudit }
+  /** A fold's source-to-placement replay is not expressible as generic ranges. */
+  | { readonly kind: 'fold-rollback'; readonly journal: StoredRestackJournal }
   | {
-    readonly kind: 'ownership-refused';
-    readonly journal: StoredRestackJournal;
-    readonly child: ChildRange['child'];
-    readonly paths: readonly string[];
-    /** Resolver-settled tips retain enough context for a conflict hand-off. */
-    readonly refusedTip?: CommitSha;
-    readonly refusedPaths?: readonly { readonly path: string; readonly cause: string }[];
-    readonly newParent?: CommitSha;
-    readonly candidateSubjects?: readonly string[];
-    readonly commit?: CommitSha;
-  }
+      readonly kind: 'ownership-refused';
+      readonly journal: StoredRestackJournal;
+      readonly child: ChildRange['child'];
+      readonly paths: readonly string[];
+      /** Resolver-settled tips retain enough context for a conflict hand-off. */
+      readonly refusedTip?: CommitSha;
+      readonly refusedPaths?: readonly { readonly path: string; readonly cause: string }[];
+      readonly newParent?: CommitSha;
+      readonly candidateSubjects?: readonly string[];
+      readonly commit?: CommitSha;
+    }
   | {
-    readonly kind: 'resolution-stale';
-    readonly journal: StoredRestackJournal;
-    readonly child: ChildRange['child'];
-    readonly field: 'record' | 'range' | 'parent-tree';
-    readonly newParent: CommitSha;
-  }
+      readonly kind: 'resolution-stale';
+      readonly journal: StoredRestackJournal;
+      readonly child: ChildRange['child'];
+      readonly field: 'record' | 'range' | 'parent-tree';
+      readonly newParent: CommitSha;
+    }
   | {
-    readonly kind: 'conflict-unresolved';
-    readonly journal: StoredRestackJournal;
-    readonly child: ChildRange['child'];
-    /** The live parent used for this replay, not the range's historical parent. */
-    readonly newParent: CommitSha;
-    /** Ordered subjects from the resolver's engine-owned replay todo. */
-    readonly candidateSubjects: readonly string[];
-    readonly commit: CommitSha;
-    readonly paths: readonly string[];
-    readonly detail?: string;
-  }
+      readonly kind: 'conflict-unresolved';
+      readonly journal: StoredRestackJournal;
+      readonly child: ChildRange['child'];
+      /** The live parent used for this replay, not the range's historical parent. */
+      readonly newParent: CommitSha;
+      /** Ordered subjects from the resolver's engine-owned replay todo. */
+      readonly candidateSubjects: readonly string[];
+      readonly commit: CommitSha;
+      readonly paths: readonly string[];
+      readonly detail?: string;
+    }
   | { readonly kind: 'unavailable' };
 
 interface ReplayConflict {
@@ -457,8 +541,14 @@ async function replayConflict(git: GitRunner, slug: string, error: unknown): Pro
   const changed = await runGit(git, ['diff', '--no-renames', '--name-only', `${commit}^`, commit]);
   if (changed?.exitCode !== 0) throw new Error(`cannot determine conflicted paths for ${commit}`);
   const haltRecordPath = haltRecordPathFor(slug);
-  const paths = [...new Set((changed?.stdout ?? '').split('\n').map((path) => path.trim()).filter((path) => path && path !== haltRecordPath))]
-    .sort((left, right) => left.localeCompare(right));
+  const paths = [
+    ...new Set(
+      (changed?.stdout ?? '')
+        .split('\n')
+        .map((path) => path.trim())
+        .filter((path) => path && path !== haltRecordPath),
+    ),
+  ].sort((left, right) => left.localeCompare(right));
   return { commit, paths };
 }
 
@@ -468,13 +558,31 @@ async function resumePlanned(
   git: GitRunner,
   options: Pick<RecoverRestackJournalOptions, 'events' | 'resolver' | 'resolverCap'>,
 ): Promise<ResumePlannedResult> {
-  if (!await refsStillAtOldValues(journal, git)) return { kind: 'unavailable' };
+  if (!(await refsStillAtOldValues(journal, git))) return { kind: 'unavailable' };
   let current = journal;
+  // A FoldPlan describes placement commits which generic ChildRanges cannot
+  // reproduce.  Before the move, all production refs still name their old
+  // values, so retire this abandoned operation instead of replaying it as a
+  // normal restack and accidentally retaining the folded sources on the leaf.
+  switch (current.journal.cause) {
+    case 'fold':
+      return { kind: 'fold-rollback', journal: current };
+    case 'feature-repair':
+    case 'base-refresh':
+      break;
+    default:
+      return assertNever(current.journal.cause);
+  }
   let parent = current.journal.newDefault ?? current.journal.ranges[0]?.oldParent;
   if (!parent) return { kind: 'unavailable' };
   const mergeAudit = { flattenedMerges: [] as CommitSha[], ancestryOnlyMerges: [] as CommitSha[], sideLineageCount: 0 };
-  const lastOriginIndex = current.journal.cause === 'feature-repair'
-    ? Math.max(-1, ...current.journal.ranges.map((range, index) => current.journal.originatingChildren?.includes(range.child) ? index : -1))
+  const lastOriginIndex = isFeatureRepair(current.journal.cause)
+    ? Math.max(
+        -1,
+        ...current.journal.ranges.map((range, index) =>
+          current.journal.originatingChildren?.includes(range.child) ? index : -1,
+        ),
+      )
     : -1;
   for (const [rangeIndex, range] of current.journal.ranges.entries()) {
     const child = current.journal.children.find((entry) => entry.child === range.child);
@@ -489,7 +597,16 @@ async function resumePlanned(
       const owner = await unenteredLeafOwner(current, range, git);
       if (!owner) return { kind: 'unavailable' };
       const rewrites = new Map([[range.oldTip, owner.rewritten]]);
-      const updated = await updateRestackChildStatus(worktree, current.slug, current, range.child, 'replayed', owner.rewritten, rewrites, { git });
+      const updated = await updateRestackChildStatus(
+        worktree,
+        current.slug,
+        current,
+        range.child,
+        'replayed',
+        owner.rewritten,
+        rewrites,
+        { git },
+      );
       if (updated.kind !== 'updated') return { kind: 'unavailable' };
       current = updated.journal;
       parent = owner.rewritten;
@@ -499,17 +616,29 @@ async function resumePlanned(
     // originating child. Only descendants beyond that point are rebuilt.
     // A lower child that no longer descends from its adopted parent is
     // replayed onto it, exactly as the executor does.
-    const adoptable = current.journal.cause === 'feature-repair' && rangeIndex <= lastOriginIndex
-      ? await resolveSha(git, branchRefForRange(current.slug, range))
-      : undefined;
-    if (current.journal.cause === 'feature-repair' && rangeIndex <= lastOriginIndex && !adoptable) return { kind: 'unavailable' };
-    const parentContained = adoptable === undefined || rangeIndex === 0
-      ? true
-      : await runGit(git, ['merge-base', '--is-ancestor', parent, adoptable]);
+    const adoptable =
+      isFeatureRepair(current.journal.cause) && rangeIndex <= lastOriginIndex
+        ? await resolveSha(git, branchRefForRange(current.slug, range))
+        : undefined;
+    if (isFeatureRepair(current.journal.cause) && rangeIndex <= lastOriginIndex && !adoptable)
+      return { kind: 'unavailable' };
+    const parentContained =
+      adoptable === undefined || rangeIndex === 0
+        ? true
+        : await runGit(git, ['merge-base', '--is-ancestor', parent, adoptable]);
     if (parentContained !== true && (!parentContained || parentContained.exitCode > 1)) return { kind: 'unavailable' };
     if (adoptable !== undefined && (parentContained === true || parentContained.exitCode === 0)) {
       const adopted = adoptable;
-      const updated = await updateRestackChildStatus(worktree, current.slug, current, range.child, 'replayed', adopted, new Map(), { git });
+      const updated = await updateRestackChildStatus(
+        worktree,
+        current.slug,
+        current,
+        range.child,
+        'replayed',
+        adopted,
+        new Map(),
+        { git },
+      );
       if (updated.kind !== 'updated') return { kind: 'unavailable' };
       current = updated.journal;
       parent = adopted;
@@ -517,28 +646,51 @@ async function resumePlanned(
     }
     {
       const recorded = await consumeRecordedResolution({
-        slug: current.slug, range, parent, committer: current.journal.committer, git,
-        replay: (replayRange, replayParent, replayCommitter, replayGit) => replayChildRange(
-          replayRange, replayParent, replayCommitter, replayGit, {
+        slug: current.slug,
+        range,
+        parent,
+        committer: current.journal.committer,
+        git,
+        replay: (replayRange, replayParent, replayCommitter, replayGit) =>
+          replayChildRange(replayRange, replayParent, replayCommitter, replayGit, {
             comparisonCommits: [],
             haltRecordSlug: current.slug,
-          },
-        ),
+          }),
       });
-      if (recorded.kind === 'stale') return { kind: 'resolution-stale', journal: current, child: range.child, field: recorded.field, newParent: parent };
+      if (recorded.kind === 'stale')
+        return {
+          kind: 'resolution-stale',
+          journal: current,
+          child: range.child,
+          field: recorded.field,
+          newParent: parent,
+        };
       if (recorded.kind === 'consumed') {
         const ownership = await checkResolvedTipOwnership(range, parent, recorded.tip, git, {
           normaliseInheritedRemBlocks: current.journal.routed !== undefined,
         });
         if (ownership.kind === 'refused') {
           return {
-            kind: 'ownership-refused', journal: current, child: range.child,
-            paths: ownership.paths.map(({ path }) => path), refusedPaths: ownership.paths,
+            kind: 'ownership-refused',
+            journal: current,
+            child: range.child,
+            paths: ownership.paths.map(({ path }) => path),
+            refusedPaths: ownership.paths,
           };
         }
-        const updated = await updateRestackChildStatus(worktree, current.slug, current, range.child, 'resolved', recorded.tip, recorded.rewrites, {
-          git, consumedResolution: recorded.resolution,
-        });
+        const updated = await updateRestackChildStatus(
+          worktree,
+          current.slug,
+          current,
+          range.child,
+          'resolved',
+          recorded.tip,
+          recorded.rewrites,
+          {
+            git,
+            consumedResolution: recorded.resolution,
+          },
+        );
         if (updated.kind !== 'updated') return { kind: 'unavailable' };
         current = updated.journal;
         await options.events?.emit({
@@ -564,15 +716,28 @@ async function resumePlanned(
         const candidates = await runGit(git, ['rev-list', '--reverse', `${range.oldParent}..${range.oldTip}`]);
         if (candidates?.exitCode !== 0) return { kind: 'unavailable' };
         return {
-          kind: 'conflict-unresolved', journal: current, child: range.child, newParent: parent,
-          candidateSubjects: await replayCandidateSubjects(git, (candidates?.stdout ?? '').split('\n').filter(Boolean) as CommitSha[]),
-          commit: error.commit, paths: [error.path], detail: `remediation block body mismatch: ${error.remId}`,
+          kind: 'conflict-unresolved',
+          journal: current,
+          child: range.child,
+          newParent: parent,
+          candidateSubjects: await replayCandidateSubjects(
+            git,
+            (candidates?.stdout ?? '').split('\n').filter(Boolean) as CommitSha[],
+          ),
+          commit: error.commit,
+          paths: [error.path],
+          detail: `remediation block body mismatch: ${error.remId}`,
         };
       }
       const conflict = await replayConflict(git, current.slug, error);
       if (!conflict) throw error;
       const decisionDelivery = await prepareRestackDecisionDelivery({
-        worktree, slug: current.slug, range, opId: current.journal.opId, git, events: options.events,
+        worktree,
+        slug: current.slug,
+        range,
+        opId: current.journal.opId,
+        git,
+        events: options.events,
       });
       if (decisionDelivery === undefined) return { kind: 'unavailable' };
       const resolution = await resolveRestackConflict({
@@ -584,7 +749,9 @@ async function resumePlanned(
         haltRecordSlug: current.slug,
         resolver: options.resolver ?? (async () => ({ resolved: false, reason: 'restack resolver unavailable' })),
         cap: options.resolverCap ?? resolveRebaseResolutionAttempts(),
-        ...(decisionDelivery.operatorDecision === undefined ? {} : { operatorDecision: decisionDelivery.operatorDecision }),
+        ...(decisionDelivery.operatorDecision === undefined
+          ? {}
+          : { operatorDecision: decisionDelivery.operatorDecision }),
         git,
       });
       if ((resolution.outcome.kind !== 'changed' && resolution.outcome.kind !== 'noop') || !resolution.tip) {
@@ -596,19 +763,27 @@ async function resumePlanned(
           candidateSubjects: await replayCandidateSubjects(git, resolution.candidates),
           commit: conflict.commit,
           paths: conflict.paths,
-          detail: [
-            ...restackDecisionDetailLines(decisionDelivery),
-            ...('reason' in resolution.outcome ? [resolution.outcome.reason] : []),
-          ].join('\n') || undefined,
+          detail:
+            [
+              ...restackDecisionDetailLines(decisionDelivery),
+              ...('reason' in resolution.outcome ? [resolution.outcome.reason] : []),
+            ].join('\n') || undefined,
         };
       }
-      const ownership = await checkResolvedTipOwnership(range, parent, resolution.tip, git, { normaliseInheritedRemBlocks: current.journal.routed !== undefined });
+      const ownership = await checkResolvedTipOwnership(range, parent, resolution.tip, git, {
+        normaliseInheritedRemBlocks: current.journal.routed !== undefined,
+      });
       if (ownership.kind === 'refused') {
         return {
-          kind: 'ownership-refused', journal: current, child: range.child,
-          paths: ownership.paths.map(({ path }) => path), refusedTip: resolution.tip,
-          refusedPaths: ownership.paths, newParent: parent,
-          candidateSubjects: await replayCandidateSubjects(git, resolution.candidates), commit: conflict.commit,
+          kind: 'ownership-refused',
+          journal: current,
+          child: range.child,
+          paths: ownership.paths.map(({ path }) => path),
+          refusedTip: resolution.tip,
+          refusedPaths: ownership.paths,
+          newParent: parent,
+          candidateSubjects: await replayCandidateSubjects(git, resolution.candidates),
+          commit: conflict.commit,
         };
       }
       const updated = await updateRestackChildStatus(
@@ -621,7 +796,9 @@ async function resumePlanned(
         resolution.rewrites,
         {
           git,
-          ...(decisionDelivery.deliveredDecision === undefined ? {} : { deliveredDecision: decisionDelivery.deliveredDecision }),
+          ...(decisionDelivery.deliveredDecision === undefined
+            ? {}
+            : { deliveredDecision: decisionDelivery.deliveredDecision }),
         },
       );
       if (updated.kind !== 'updated') return { kind: 'unavailable' };
@@ -634,20 +811,38 @@ async function resumePlanned(
       }
       continue;
     }
-    const ownership = await checkPathOwnership(range, parent, replay.tip, git, { normaliseInheritedRemBlocks: current.journal.routed !== undefined });
+    const ownership = await checkPathOwnership(range, parent, replay.tip, git, {
+      normaliseInheritedRemBlocks: current.journal.routed !== undefined,
+    });
     if (ownership.kind === 'refused') {
       return { kind: 'ownership-refused', journal: current, child: range.child, paths: ownership.paths };
     }
-    const updated = await updateRestackChildStatus(worktree, current.slug, current, range.child, 'replayed', replay.tip, replay.rewrites, { git });
+    const updated = await updateRestackChildStatus(
+      worktree,
+      current.slug,
+      current,
+      range.child,
+      'replayed',
+      replay.tip,
+      replay.rewrites,
+      { git },
+    );
     if (updated.kind !== 'updated') return { kind: 'unavailable' };
     current = updated.journal;
     parent = replay.tip;
   }
   const ready = await transition(worktree, current, 'ready', git);
-  return ready === undefined ? { kind: 'unavailable' } : {
-    kind: 'resumed', journal: ready,
-    ...(mergeAudit.flattenedMerges.length === 0 && mergeAudit.ancestryOnlyMerges.length === 0 && mergeAudit.sideLineageCount === 0 ? {} : { mergeAudit }),
-  };
+  return ready === undefined
+    ? { kind: 'unavailable' }
+    : {
+        kind: 'resumed',
+        journal: ready,
+        ...(mergeAudit.flattenedMerges.length === 0 &&
+        mergeAudit.ancestryOnlyMerges.length === 0 &&
+        mergeAudit.sideLineageCount === 0
+          ? {}
+          : { mergeAudit }),
+      };
 }
 
 async function rollBackFromRolling(
@@ -674,14 +869,19 @@ async function rollBackFromRolling(
     else if (live === move.newSha) reverse.push(`update ${move.ref} ${move.oldSha} ${move.newSha}`);
     else return undefined;
   }
-  const reversed = await runGit(git, ['update-ref', '--stdin'], transaction([
-    ...reverse,
-    ...journalStateUpdateLines(journal, blob, 'aborted'),
-  ]));
+  const reversed = await runGit(
+    git,
+    ['update-ref', '--stdin'],
+    transaction([...reverse, ...journalStateUpdateLines(journal, blob, 'aborted')]),
+  );
   return reversed?.exitCode === 0 ? { slug: journal.slug, blob, journal: aborted } : undefined;
 }
 
-async function haltVerificationFailure(worktree: string, detail: string, events: ConductorEventEmitter | undefined): Promise<void> {
+async function haltVerificationFailure(
+  worktree: string,
+  detail: string,
+  events: ConductorEventEmitter | undefined,
+): Promise<void> {
   await haltRestack(worktree, 'verification-failed', events, { detail });
 }
 
@@ -709,7 +909,9 @@ async function abortHaltTargetRecovery(
  * Continue or roll back a dead process's journal using only Git refs and the
  * journal blob.  `.pipeline` is deliberately neither read nor required.
  */
-export async function recoverRestackJournal(options: RecoverRestackJournalOptions): Promise<RecoverRestackJournalResult> {
+export async function recoverRestackJournal(
+  options: RecoverRestackJournalOptions,
+): Promise<RecoverRestackJournalResult> {
   const git = options.git ?? makeGitRunner(options.worktree);
   const stopAtSynced = options.target === 'synced';
   const read = await readRestackJournal(options.worktree, options.slug, { git });
@@ -722,9 +924,12 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
   // An aborted journal is terminal: its owner wrote its last state and only
   // leaves cleanup behind.  A long-lived daemon that halted a restack is still
   // that owner at its next dispatch, so liveness must not block the cleanup.
-  if (read.journal.state !== 'aborted'
-    && !(read.journal.state === 'applied' && options.suppressFollowOn)
-    && await isJournalOwnerAlive(read.journal.owner)) return { kind: 'live-owner', owner: read.journal.owner };
+  if (
+    read.journal.state !== 'aborted' &&
+    !(read.journal.state === 'applied' && options.suppressFollowOn) &&
+    (await isJournalOwnerAlive(read.journal.owner))
+  )
+    return { kind: 'live-owner', owner: read.journal.owner };
 
   let journal: StoredRestackJournal | undefined = { slug: read.slug, blob: read.blob, journal: read.journal };
   let moves: RestackMoveRef[] = [];
@@ -737,16 +942,28 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
     if (journal.journal.state === 'applied') {
       if (journal.journal.followOnCause !== undefined) {
         if (options.suppressFollowOn) {
-          return await cleanJournal(options.worktree, journal, git)
+          return (await cleanJournal(options.worktree, journal, git))
             ? { kind: 'cleaned' }
             : { kind: 'unavailable', detail: 'cannot remove applied restack journal' };
         }
-        if (journal.journal.followOnCause === 'base-refresh' && await routedRoundOpen(options.worktree, options.slug, { git })) {
-          await options.rearmRekick?.();
-          await options.events?.emit(emitRestackRefused({ reason: 'deferred-base-refresh' }));
-          return await cleanJournal(options.worktree, journal, git)
-            ? { kind: 'cleaned' }
-            : { kind: 'unavailable', detail: 'cannot remove deferred applied restack journal' };
+        switch (journal.journal.followOnCause) {
+          case 'base-refresh':
+            if (
+              (await routedRoundOpen(options.worktree, options.slug, { git })) ||
+              (await deferredPlacementsExist(options.worktree, options.slug, { git }))
+            ) {
+              await options.rearmRekick?.();
+              await options.events?.emit(emitRestackRefused({ reason: 'deferred-base-refresh' }));
+              return (await cleanJournal(options.worktree, journal, git))
+                ? { kind: 'cleaned' }
+                : { kind: 'unavailable', detail: 'cannot remove deferred applied restack journal' };
+            }
+            break;
+          case 'feature-repair':
+          case 'fold':
+            break;
+          default:
+            return assertNever(journal.journal.followOnCause);
         }
         if (await publishedStackRefusal(options.worktree, options.slug, { git })) {
           await haltRestack(options.worktree, 'published-stack', options.events, {
@@ -773,12 +990,16 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
           ? { kind: 'live-owner', owner: current.journal.owner }
           : { kind: 'live-owner' };
       }
-      return await cleanJournal(options.worktree, journal, git) ? { kind: 'cleaned' } : { kind: 'unavailable', detail: 'cannot remove applied restack journal' };
+      return (await cleanJournal(options.worktree, journal, git))
+        ? { kind: 'cleaned' }
+        : { kind: 'unavailable', detail: 'cannot remove applied restack journal' };
     }
     if (journal.journal.state === 'aborted') {
       const cleaned = await cleanClearedAbortedRestackJournal(options.worktree, options.slug, { git });
-      return cleaned === 'cleaned' ? { kind: 'cleaned' }
-        : cleaned === 'unavailable' ? { kind: 'unavailable', detail: 'cannot remove aborted restack journal' }
+      return cleaned === 'cleaned'
+        ? { kind: 'cleaned' }
+        : cleaned === 'unavailable'
+          ? { kind: 'unavailable', detail: 'cannot remove aborted restack journal' }
           : { kind: 'none' };
     }
     const fromState = journal.journal.state as Exclude<JournalState, 'applied' | 'aborted'>;
@@ -789,6 +1010,14 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
         return { kind: 'recovered', fromState };
       }
       let resumed = await resumePlanned(options.worktree, journal, git, options);
+      if (resumed.kind === 'fold-rollback') {
+        const aborted = await transition(options.worktree, resumed.journal, 'aborted', git);
+        if (!aborted || !(await cleanJournal(options.worktree, aborted, git))) {
+          return { kind: 'unavailable', detail: 'cannot roll back planned fold journal' };
+        }
+        await options.events?.emit({ type: 'restack_recovered', opId: resumed.journal.journal.opId, fromState });
+        return { kind: 'recovered', fromState };
+      }
       // A resolution with no matching record belongs to an interrupted or
       // superseded hand-off. Retire only that answer, preserve another
       // child's record, then resume the untouched planned journal normally.
@@ -799,14 +1028,29 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
           return { kind: 'unavailable', detail: 'cannot retire successive orphaned restack resolutions' };
         }
         const retired = await retireRecordedResolution(options.worktree, options.slug, resumed.child, { git });
-        if (retired.kind !== 'retired') return { kind: 'unavailable', detail: `cannot retire orphaned restack resolution: ${retired.kind}` };
-        await options.events?.emit({ type: 'restack_resolution', opId: resumed.journal.journal.opId, child: resumed.child, action: 'retired', tip: retired.tip });
+        if (retired.kind !== 'retired')
+          return { kind: 'unavailable', detail: `cannot retire orphaned restack resolution: ${retired.kind}` };
+        await options.events?.emit({
+          type: 'restack_resolution',
+          opId: resumed.journal.journal.opId,
+          child: resumed.child,
+          action: 'retired',
+          tip: retired.tip,
+        });
         resumed = await resumePlanned(options.worktree, resumed.journal, git, options);
         orphanRetirements += 1;
       }
       if (resumed.kind === 'conflict-unresolved') {
         journal = resumed.journal;
-        if (!await pinStagingRef(options.worktree, options.slug, resumed.child, journal.journal.ranges.find((range) => range.child === resumed.child)!.oldTip, { git })) {
+        if (
+          !(await pinStagingRef(
+            options.worktree,
+            options.slug,
+            resumed.child,
+            journal.journal.ranges.find((range) => range.child === resumed.child)!.oldTip,
+            { git },
+          ))
+        ) {
           return { kind: 'unavailable', detail: `cannot pin original tip for conflicted child ${resumed.child}` };
         }
         const aborted = await transition(options.worktree, journal, 'aborted', git);
@@ -821,11 +1065,20 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
         const detail = `commit ${resumed.commit}; paths: ${resumed.paths.join(', ')}${resumed.detail === undefined ? '' : `\n${resumed.detail}`}`;
         const range = journal.journal.ranges.find((candidate) => candidate.child === resumed.child)!;
         await haltRecordedRestackConflict({
-          worktree: options.worktree, slug: options.slug, journal, range,
+          worktree: options.worktree,
+          slug: options.slug,
+          journal,
+          range,
           replayParent: resumed.newParent,
-          comparisonCommits: journal.journal.comparisonCommits, haltRecordSlug: options.slug,
-          candidateSubjects: resumed.candidateSubjects, commit: resumed.commit, paths: resumed.paths,
-          detail, events: options.events, git, writeHalt: haltRestackConflict,
+          comparisonCommits: journal.journal.comparisonCommits,
+          haltRecordSlug: options.slug,
+          candidateSubjects: resumed.candidateSubjects,
+          commit: resumed.commit,
+          paths: resumed.paths,
+          detail,
+          events: options.events,
+          git,
+          writeHalt: haltRestackConflict,
         });
         return { kind: 'halted' };
       }
@@ -833,29 +1086,50 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
         journal = resumed.journal;
         if (resumed.refusedTip !== undefined) {
           const range = journal.journal.ranges.find((candidate) => candidate.child === resumed.child);
-          if (!range || resumed.newParent === undefined || resumed.candidateSubjects === undefined || resumed.commit === undefined) {
+          if (
+            !range ||
+            resumed.newParent === undefined ||
+            resumed.candidateSubjects === undefined ||
+            resumed.commit === undefined
+          ) {
             return { kind: 'unavailable', detail: 'cannot reconstruct refused recovered resolver conflict' };
           }
-          if (!await pinStagingRef(options.worktree, options.slug, resumed.child, range.oldTip, { git })) {
+          if (!(await pinStagingRef(options.worktree, options.slug, resumed.child, range.oldTip, { git }))) {
             return { kind: 'unavailable', detail: `cannot pin original tip for refused child ${resumed.child}` };
           }
           const aborted = await transition(options.worktree, journal, 'aborted', git);
           if (!aborted) return { kind: 'unavailable', detail: 'cannot abort ownership-refused recovered restack' };
           await options.events?.emit({
-            type: 'restack_conflict', opId: journal.journal.opId, child: resumed.child,
-            commit: resumed.commit, paths: [...resumed.paths],
+            type: 'restack_conflict',
+            opId: journal.journal.opId,
+            child: resumed.child,
+            commit: resumed.commit,
+            paths: [...resumed.paths],
           });
           const refusedPaths = resumed.refusedPaths ?? resumed.paths.map((path) => ({ path, cause: 'unowned' }));
-          await options.events?.emit(emitRestackRefused({
-            reason: 'replay-mismatch', child: resumed.child,
-            detail: refusedPaths.map(({ path, cause }) => `${path} (${cause})`).join(', '),
-          }));
+          await options.events?.emit(
+            emitRestackRefused({
+              reason: 'replay-mismatch',
+              child: resumed.child,
+              detail: refusedPaths.map(({ path, cause }) => `${path} (${cause})`).join(', '),
+            }),
+          );
           await haltRecordedRestackConflict({
-            worktree: options.worktree, slug: options.slug, journal, range, replayParent: resumed.newParent,
-            comparisonCommits: journal.journal.comparisonCommits, haltRecordSlug: options.slug,
-            candidateSubjects: resumed.candidateSubjects, commit: resumed.commit, paths: resumed.paths,
+            worktree: options.worktree,
+            slug: options.slug,
+            journal,
+            range,
+            replayParent: resumed.newParent,
+            comparisonCommits: journal.journal.comparisonCommits,
+            haltRecordSlug: options.slug,
+            candidateSubjects: resumed.candidateSubjects,
+            commit: resumed.commit,
+            paths: resumed.paths,
             detail: `commit ${resumed.commit}; paths: ${resumed.paths.join(', ')}\nrefused tip: refs/conductor/${options.slug}/restack/conflict/refused-tip\n${refusedPaths.map(({ path, cause }) => `${path} (${cause})`).join('\n')}`,
-            refusedTip: resumed.refusedTip, events: options.events, git, writeHalt: haltRestackConflict,
+            refusedTip: resumed.refusedTip,
+            events: options.events,
+            git,
+            writeHalt: haltRestackConflict,
           });
           return { kind: 'halted' };
         }
@@ -875,21 +1149,39 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
         if (retired.kind !== 'retired' || !retired.record) {
           return { kind: 'unavailable', detail: `cannot retire stale recovered restack resolution: ${retired.kind}` };
         }
-        await options.events?.emit({ type: 'restack_resolution', opId: journal.journal.opId, child: resumed.child, action: 'retired', tip: retired.tip });
-        await options.events?.emit(emitRestackRefused({ reason: 'restack-resolution-stale', child: resumed.child, detail: resumed.field }));
+        await options.events?.emit({
+          type: 'restack_resolution',
+          opId: journal.journal.opId,
+          child: resumed.child,
+          action: 'retired',
+          tip: retired.tip,
+        });
+        await options.events?.emit(
+          emitRestackRefused({ reason: 'restack-resolution-stale', child: resumed.child, detail: resumed.field }),
+        );
         const range = journal.journal.ranges.find((candidate) => candidate.child === resumed.child);
         if (!range) return { kind: 'unavailable', detail: 'cannot find stale recovered restack range' };
         const candidates = await runGit(git, ['rev-list', '--reverse', `${range.oldParent}..${range.oldTip}`]);
-        if (candidates?.exitCode !== 0) return { kind: 'unavailable', detail: 'cannot list stale recovered restack candidates' };
+        if (candidates?.exitCode !== 0)
+          return { kind: 'unavailable', detail: 'cannot list stale recovered restack candidates' };
         const parsedCandidates = (candidates?.stdout ?? '').split('\n').filter(Boolean).map(parseCommitSha);
-        if (parsedCandidates.some((candidate) => !candidate)) return { kind: 'unavailable', detail: 'cannot parse stale recovered restack candidate' };
+        if (parsedCandidates.some((candidate) => !candidate))
+          return { kind: 'unavailable', detail: 'cannot parse stale recovered restack candidate' };
         await haltRecordedRestackConflict({
-          worktree: options.worktree, slug: options.slug, journal, range, replayParent: resumed.newParent,
-          comparisonCommits: journal.journal.comparisonCommits, haltRecordSlug: options.slug,
+          worktree: options.worktree,
+          slug: options.slug,
+          journal,
+          range,
+          replayParent: resumed.newParent,
+          comparisonCommits: journal.journal.comparisonCommits,
+          haltRecordSlug: options.slug,
           candidateSubjects: await replayCandidateSubjects(git, parsedCandidates as CommitSha[]),
-          commit: retired.record.commit, paths: retired.record.paths,
+          commit: retired.record.commit,
+          paths: retired.record.paths,
           detail: `restack-resolution-stale\n${resumed.field}`,
-          events: options.events, git, writeHalt: haltRestackConflict,
+          events: options.events,
+          git,
+          writeHalt: haltRestackConflict,
         });
         return { kind: 'halted' };
       }
@@ -897,12 +1189,15 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
         // A planned journal has never moved a production ref.  If an operator
         // changed one of its inputs, discard its now-untrustworthy staged
         // commits rather than replaying across a different stack.
-        if (!await refsStillAtOldValues(journal, git)) {
+        if (!(await refsStillAtOldValues(journal, git))) {
           const aborted = await transition(options.worktree, journal, 'aborted', git);
-          if (!aborted || !await cleanJournal(options.worktree, aborted, git)) {
+          if (!aborted || !(await cleanJournal(options.worktree, aborted, git))) {
             return { kind: 'unavailable', detail: 'cannot abort changed planned restack journal' };
           }
-          if (!stopAtSynced) await haltRestack(options.worktree, 'stack-ref-changed', options.events, { detail: 'a journaled input ref changed before recovery' });
+          if (!stopAtSynced)
+            await haltRestack(options.worktree, 'stack-ref-changed', options.events, {
+              detail: 'a journaled input ref changed before recovery',
+            });
           await options.events?.emit({ type: 'restack_recovered', opId: journal.journal.opId, fromState });
           return { kind: 'recovered', fromState };
         }
@@ -912,7 +1207,7 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
       recoveredMergeAudit = resumed.mergeAudit;
     }
 
-    moves = await movesFor(journal, git) ?? [];
+    moves = (await movesFor(journal, git)) ?? [];
     if (moves.length === 0) return unavailableAfterHaltTargetAbort('cannot reconstruct restack move from journal refs');
     const checkedOut = await checkedOutRef(git);
     if (!checkedOut) return unavailableAfterHaltTargetAbort('restack recovery requires a checked-out feature branch');
@@ -929,7 +1224,8 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
       if (preMove.kind === 'refused') {
         const aborted = await transition(options.worktree, journal, 'aborted', git);
         if (!aborted) return { kind: 'unavailable', detail: 'cannot abort refused recovered restack' };
-        if (!stopAtSynced) await haltRestack(options.worktree, preMove.reason, options.events, { detail: preMove.detail });
+        if (!stopAtSynced)
+          await haltRestack(options.worktree, preMove.reason, options.events, { detail: preMove.detail });
         await options.events?.emit({ type: 'restack_recovered', opId: journal.journal.opId, fromState });
         return { kind: 'recovered', fromState };
       }
@@ -984,22 +1280,27 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
         return { kind: 'recovered', fromState };
       }
       const activeMove = moves.find((move) => move.ref === checkedOut);
-      if (!activeMove?.child) return { kind: 'unavailable', detail: 'cannot identify active child for recovered transition' };
+      if (!activeMove?.child)
+        return { kind: 'unavailable', detail: 'cannot identify active child for recovered transition' };
+      const transitionOldDefault = oldDefaultForTransition(journal);
+      if (!transitionOldDefault) return { kind: 'unavailable', detail: 'cannot identify recovered restack default' };
       const transitionResult = await applyRestackTransition({
         worktree: options.worktree,
         cause: journal.journal.cause,
         opId: journal.journal.opId,
-        oldDefault: journal.journal.cause === 'feature-repair'
-          ? journal.journal.newDefault ?? journal.journal.ranges[0]!.oldParent
-          : journal.journal.ranges[0]!.oldParent,
-        newDefault: journal.journal.newDefault ?? journal.journal.ranges[0]!.oldParent,
+        oldDefault: transitionOldDefault,
+        newDefault: journal.journal.newDefault ?? transitionOldDefault,
         activeChild: activeMove.child,
         ranges: journal.journal.ranges,
         moves,
         git,
-        rewritesByChild: new Map(journal.journal.children.flatMap((entry) => entry.rewrites === undefined
-          ? []
-          : [[entry.child, new Map(entry.rewrites.map(({ from, to }) => [from, to]))] as const])),
+        rewritesByChild: new Map(
+          journal.journal.children.flatMap((entry) =>
+            entry.rewrites === undefined
+              ? []
+              : [[entry.child, new Map(entry.rewrites.map(({ from, to }) => [from, to]))] as const],
+          ),
+        ),
         ...(options.events === undefined ? {} : { events: options.events }),
       });
       try {
@@ -1011,7 +1312,11 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
         }
         throw error;
       }
-      const appliedTransaction = await restackTransactionBuilder.appliedTransactionLines(options.worktree, journal, git);
+      const appliedTransaction = await restackTransactionBuilder.appliedTransactionLines(
+        options.worktree,
+        journal,
+        git,
+      );
       const appliedWrite = await runGit(git, ['update-ref', '--stdin'], transaction(appliedTransaction.lines));
       if (appliedWrite?.exitCode !== 0) {
         const changed = await changedRoutedAppliedRef(journal, git);
@@ -1022,7 +1327,7 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
         return { kind: 'unavailable', detail: 'cannot apply recovered restack transition' };
       }
       const applied = appliedTransaction.journal;
-      if (applied.journal.followOnCause === undefined && !await cleanJournal(options.worktree, applied, git)) {
+      if (applied.journal.followOnCause === undefined && !(await cleanJournal(options.worktree, applied, git))) {
         return { kind: 'unavailable', detail: 'cannot clean recovered restack journal' };
       }
       let replayParent = journal.journal.newDefault ?? journal.journal.ranges[0]!.oldParent;
@@ -1030,8 +1335,12 @@ export async function recoverRestackJournal(options: RecoverRestackJournalOption
         const move = moves.find((candidate) => candidate.child === range.child);
         if (!move) return { kind: 'unavailable', detail: `cannot find recovered move for child ${range.child}` };
         await options.events?.emit({
-          type: 'restack_applied', opId: journal.journal.opId, cause: journal.journal.cause, child: range.child,
-          oldTip: range.oldTip, newTip: move.newSha,
+          type: 'restack_applied',
+          opId: journal.journal.opId,
+          cause: journal.journal.cause,
+          child: range.child,
+          oldTip: range.oldTip,
+          newTip: move.newSha,
           wouldInvalidate: [...(transitionResult.wouldInvalidate.get(range.child) ?? [])],
           parentOverlapPaths: await parentOverlapPaths(range, replayParent, git),
           adaptedPaths: await adaptedPathsFor(range, replayParent, move.newSha, git),

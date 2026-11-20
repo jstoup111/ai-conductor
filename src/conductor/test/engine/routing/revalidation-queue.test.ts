@@ -5,12 +5,36 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { parseChildId, type ChildId } from '../../../src/engine/child-context.js';
-import { acknowledgeQueueEntry, consumeLowestQueued, mergeQueueGeneration } from '../../../src/engine/routing/revalidation-queue.js';
-import { readRepairMarker, readRevalidationQueue, readRouteRecord, transitionHost, writeRouteRecord } from '../../../src/engine/routing/route-record-store.js';
-import { closureRefFor, repairMarkerRefFor, revalidationQueueRefFor, routeRecordRefFor } from '../../../src/engine/routing/routing-refs.js';
+import {
+  acknowledgeQueueEntry,
+  consumeLowestQueued,
+  mergeQueueGeneration,
+} from '../../../src/engine/routing/revalidation-queue.js';
+import {
+  readPinnedQueueFold,
+  readRepairMarker,
+  readRevalidationQueue,
+  readRouteRecord,
+  transitionHost,
+  writeRouteRecord,
+  type StoredRouteRecord,
+} from '../../../src/engine/routing/route-record-store.js';
+import {
+  closureRefFor,
+  repairMarkerRefFor,
+  revalidationQueueRefFor,
+  routeRecordRefFor,
+} from '../../../src/engine/routing/routing-refs.js';
 import { makeGitRunner, type GitRunner } from '../../../src/engine/rebase.js';
 import { readRoutedGrowthSnapshot } from '../../../src/engine/routing/round-receipt.js';
-import { emptyUnsettledReceipt, parseRoundId, type RegionGate, type RevalidationQueueEntry, type RevalidationQueueRecord, type RouteRecord } from '../../../src/engine/routing/route-types.js';
+import {
+  emptyUnsettledReceipt,
+  parseRoundId,
+  type RegionGate,
+  type RevalidationQueueEntry,
+  type RevalidationQueueRecord,
+  type RouteRecord,
+} from '../../../src/engine/routing/route-types.js';
 import { parseCommitSha } from '../../../src/engine/restack/restack-types.js';
 
 function child(value: number): ChildId {
@@ -78,7 +102,16 @@ async function seedClosedRound(
     sealedAuthored: 1,
     kind: 'audit',
     phase: 'closed',
-    items: [{ findingId: 'prior-round', kind: 'audit', owner: child(1), host: child(1), reason: 'prior repair', fallback: [] }],
+    items: [
+      {
+        findingId: 'prior-round',
+        kind: 'audit',
+        owner: child(1),
+        host: child(1),
+        reason: 'prior repair',
+        fallback: [],
+      },
+    ],
     allocation: { [child(1)]: { remTaskIds: ['rem-prior'], blockBodies: ['### Task rem-prior\n'] } },
     hosts: { [child(1)]: 'done' },
     currentHostIndex: 0,
@@ -98,33 +131,57 @@ describe('revalidation queue generations', () => {
       const queueRecord = await readRevalidationQueue(subject.repo, 'demo', { git: subject.git });
       if (queueRecord.kind !== 'queue') throw new Error('missing queue');
       const closure = parseCommitSha((await subject.git(['rev-parse', closureRefFor('demo', child(2))])).stdout.trim());
-      const tree = parseCommitSha((await subject.git(['rev-parse', `${closureRefFor('demo', child(2))}^{tree}`])).stdout.trim());
+      const tree = parseCommitSha(
+        (await subject.git(['rev-parse', `${closureRefFor('demo', child(2))}^{tree}`])).stdout.trim(),
+      );
       if (!closure || !tree) throw new Error('invalid operator route pin');
       const operator: RouteRecord = {
-        roundId, sealedAuthored: 0, kind: 'operator', phase: 'open', items: [],
+        roundId,
+        sealedAuthored: 0,
+        kind: 'operator',
+        phase: 'open',
+        items: [],
         allocation: { [child(2)]: { remTaskIds: [], blockBodies: [] } },
-        hosts: { [child(2)]: 'repairing' }, currentHostIndex: 0, receipt: emptyUnsettledReceipt(), outbox: [],
+        hosts: { [child(2)]: 'repairing' },
+        currentHostIndex: 0,
+        receipt: emptyUnsettledReceipt(),
+        outbox: [],
         entry: {
-          host: child(2), pinnedBase: closure, tree,
+          host: child(2),
+          pinnedBase: closure,
+          tree,
           revalidation: { queueBlob: queueRecord.blob, generation: queueRecord.queue.generation, closureSha: closure },
         },
         operator: {
-          origin: 'land', reason: 'reviewer request', operator: 'operator@example.test', entryStep: 'acceptance_specs',
-          carried: [], otherTips: { 'feat/daemon-demo': closure },
-          priorRegion: { statuses: { acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' }, verdicts: {} },
+          origin: 'land',
+          reason: 'reviewer request',
+          operator: 'operator@example.test',
+          entryStep: 'acceptance_specs',
+          carried: [],
+          otherTips: { 'feat/daemon-demo': closure },
+          priorRegion: {
+            statuses: { acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done' },
+            verdicts: {},
+          },
         },
       };
-      const blob = (await subject.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(operator) })).stdout.trim();
+      const blob = (
+        await subject.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify(operator) })
+      ).stdout.trim();
       await subject.git(['update-ref', routeRecordRefFor('demo', roundId), blob]);
-      const markerBlob = (await subject.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify({ host: child(2), roundId }) })).stdout.trim();
+      const markerBlob = (
+        await subject.git(['hash-object', '-w', '--stdin'], { input: JSON.stringify({ host: child(2), roundId }) })
+      ).stdout.trim();
       await subject.git(['update-ref', repairMarkerRefFor('demo'), markerBlob]);
       const stored = await readRouteRecord(subject.repo, 'demo', roundId, { git: subject.git });
       if (stored.kind !== 'record') throw new Error('missing operator route');
 
-      await expect(acknowledgeQueueEntry(subject.repo, 'demo', stored, child(2), { git: subject.git }))
-        .resolves.toEqual({ kind: 'acknowledged', leavesRoundOpen: false });
+      await expect(
+        acknowledgeQueueEntry(subject.repo, 'demo', stored, child(2), { git: subject.git }),
+      ).resolves.toEqual({ kind: 'acknowledged', leavesRoundOpen: false });
       await expect(readRouteRecord(subject.repo, 'demo', roundId, { git: subject.git })).resolves.toMatchObject({
-        kind: 'record', record: { phase: 'open', hosts: { 2: 'done' } },
+        kind: 'record',
+        record: { phase: 'open', hosts: { 2: 'done' } },
       });
     } finally {
       await rm(subject.repo, { recursive: true, force: true });
@@ -166,12 +223,82 @@ describe('revalidation queue generations', () => {
     });
   });
 
+  // Covers: task:22
+  it('keeps fold provenance for a rebuilt non-owner child after the last fold owner is acknowledged', async () => {
+    // A fold queues every rebuilt non-leaf child but records sources only for
+    // owners: here c1 owns the folded commits and c2 was merely rebuilt.
+    const ownerOne = entry(1, 'a', ['test_suite'], 'b', 'c');
+    const rebuiltTwo = entry(2, 'd', ['test_suite'], 'e', 'f');
+    const fold = {
+      opId: 'op-fold' as NonNullable<RevalidationQueueRecord['fold']>['opId'],
+      sources: { '1': [sha('1')] },
+      leafTree: sha('7'),
+    };
+    const folded = mergeQueueGeneration(queue(1, []), [ownerOne, rebuiltTwo], { fold });
+
+    const afterOwner = mergeQueueGeneration(folded, [], { acknowledge: child(1) });
+
+    expect(afterOwner.fold).toEqual({ opId: fold.opId, sources: {}, leafTree: sha('7') });
+    // c2's revalidate round pins this generation; the drain reads fold mode from it.
+    const queueBlob = sha('9');
+    const pinned: StoredRouteRecord = {
+      kind: 'record',
+      slug: 'demo',
+      blob: sha('8'),
+      record: {
+        entry: {
+          host: child(2),
+          pinnedBase: sha('5'),
+          tree: sha('6'),
+          revalidation: { queueBlob, generation: afterOwner.generation, closureSha: rebuiltTwo.closureSha },
+        },
+      } as unknown as RouteRecord,
+    };
+    const git: GitRunner = async (args) =>
+      args[0] === 'cat-file' && args[2] === queueBlob
+        ? { exitCode: 0, stdout: JSON.stringify(afterOwner), stderr: '' }
+        : { exitCode: 128, stdout: '', stderr: 'unexpected git call' };
+    await expect(readPinnedQueueFold(pinned, git)).resolves.toEqual({
+      kind: 'fold',
+      fold: expect.objectContaining({ leafTree: sha('7') }),
+    });
+
+    // Fold provenance ends only when the queue drains.
+    expect(mergeQueueGeneration(afterOwner, [], { acknowledge: child(2) }).fold).toBeUndefined();
+  });
+
+  // Covers: task:22, task:23
+  it('distinguishes an unreadable pinned queue from verified absent fold provenance', async () => {
+    const pinned: StoredRouteRecord = {
+      kind: 'record',
+      slug: 'demo',
+      blob: sha('8'),
+      record: {
+        entry: {
+          host: child(2),
+          pinnedBase: sha('5'),
+          tree: sha('6'),
+          revalidation: { queueBlob: sha('9'), generation: 2, closureSha: sha('4') },
+        },
+      } as unknown as RouteRecord,
+    };
+    const unreadable: GitRunner = async () => ({ exitCode: 128, stdout: '', stderr: 'missing object' });
+    await expect(readPinnedQueueFold(pinned, unreadable)).resolves.toEqual({
+      kind: 'unavailable',
+      detail: 'cannot read pinned revalidation queue',
+    });
+  });
+
   // Covers: task:33, task:36
   it('admits only the queue head, then acknowledges it with marker, route, closure and queue in one durable transaction', async () => {
     const subject = await durableQueueFixture();
     try {
       await seedClosedRound(subject);
-      await expect(consumeLowestQueued(subject.repo, 'demo', { git: subject.git })).resolves.toEqual({ kind: 'admitted', roundId: expect.any(String), host: child(2) });
+      await expect(consumeLowestQueued(subject.repo, 'demo', { git: subject.git })).resolves.toEqual({
+        kind: 'admitted',
+        roundId: expect.any(String),
+        host: child(2),
+      });
       const marker = await readRepairMarker(subject.repo, 'demo', { git: subject.git });
       expect(marker).toMatchObject({ kind: 'marker', marker: { host: 2, roundId: 'r2' } });
       const stored = await readRouteRecord(subject.repo, 'demo', parseRoundId('r2')!, { git: subject.git });
@@ -183,13 +310,22 @@ describe('revalidation queue generations', () => {
       if (current.kind !== 'record') throw new Error('expected repairing record');
       const pinnedQueue = await readRevalidationQueue(subject.repo, 'demo', { git: subject.git });
       if (pinnedQueue.kind !== 'queue') throw new Error('expected pinned queue');
-      const closure = parseCommitSha((await subject.git(['rev-parse', closureRefFor('demo', child(2))])).stdout.trim())!;
+      const closure = parseCommitSha(
+        (await subject.git(['rev-parse', closureRefFor('demo', child(2))])).stdout.trim(),
+      )!;
       const tree = parseCommitSha((await subject.git(['rev-parse', `${closure}^{tree}`])).stdout.trim())!;
       const pinned = {
         ...current.record,
-        entry: { host: child(2), pinnedBase: closure, tree, revalidation: {
-          queueBlob: pinnedQueue.blob, generation: pinnedQueue.queue.generation, closureSha: closure,
-        } },
+        entry: {
+          host: child(2),
+          pinnedBase: closure,
+          tree,
+          revalidation: {
+            queueBlob: pinnedQueue.blob,
+            generation: pinnedQueue.queue.generation,
+            closureSha: closure,
+          },
+        },
       };
       await writeRouteRecord(subject.repo, current, pinned, { git: subject.git });
       const acknowledged = await readRouteRecord(subject.repo, 'demo', parseRoundId('r2')!, { git: subject.git });
@@ -200,23 +336,42 @@ describe('revalidation queue generations', () => {
         calls.push({ args: [...args], input: options?.input, stdout: result.stdout });
         return result;
       };
-      await expect(acknowledgeQueueEntry(subject.repo, 'demo', acknowledged, child(2), { git }))
-        .resolves.toEqual({ kind: 'acknowledged', leavesRoundOpen: false });
+      await expect(acknowledgeQueueEntry(subject.repo, 'demo', acknowledged, child(2), { git })).resolves.toEqual({
+        kind: 'acknowledged',
+        leavesRoundOpen: false,
+      });
       const refWrites = calls.filter((call) => call.args[0] === 'update-ref');
-      expect(refWrites).toEqual([expect.objectContaining({
-        args: ['update-ref', '--stdin'],
-        input: expect.stringMatching(new RegExp(
-          `(?=.*delete ${repairMarkerRefFor('demo')} )(?=.*update ${routeRecordRefFor('demo', parseRoundId('r2')!)} )(?=.*verify ${closureRefFor('demo', child(2))} )(?=.*update ${revalidationQueueRefFor('demo')} )`,
-          's',
-        )),
-      })]);
-      const generationFiveQueueBlob = calls.find((call) => call.args[0] === 'hash-object' && call.input?.includes('"generation":5'))?.stdout.trim();
+      expect(refWrites).toEqual([
+        expect.objectContaining({
+          args: ['update-ref', '--stdin'],
+          input: expect.stringMatching(
+            new RegExp(
+              `(?=.*delete ${repairMarkerRefFor('demo')} )(?=.*update ${routeRecordRefFor('demo', parseRoundId('r2')!)} )(?=.*verify ${closureRefFor('demo', child(2))} )(?=.*update ${revalidationQueueRefFor('demo')} )`,
+              's',
+            ),
+          ),
+        }),
+      ]);
+      const generationFiveQueueBlob = calls
+        .find((call) => call.args[0] === 'hash-object' && call.input?.includes('"generation":5'))
+        ?.stdout.trim();
       expect(generationFiveQueueBlob).toMatch(/^[0-9a-f]{40}$/);
-      expect(refWrites[0]?.input).toContain(`update ${revalidationQueueRefFor('demo')} ${generationFiveQueueBlob} ${pinnedQueue.blob}`);
+      expect(refWrites[0]?.input).toContain(
+        `update ${revalidationQueueRefFor('demo')} ${generationFiveQueueBlob} ${pinnedQueue.blob}`,
+      );
       expect((await subject.git(['show-ref', '--verify', '--hash', `refs/conductor/demo/routes/r2`])).exitCode).toBe(0);
       await expect(readRepairMarker(subject.repo, 'demo', { git: subject.git })).resolves.toEqual({ kind: 'absent' });
       await expect(readRevalidationQueue(subject.repo, 'demo', { git: subject.git })).resolves.toMatchObject({
-        kind: 'queue', queue: { generation: 5, entries: [expect.objectContaining({ child: 4 })], outbox: [expect.objectContaining({ event: expect.objectContaining({ type: 'child_revalidated', outcome: 'passed' }) })] },
+        kind: 'queue',
+        queue: {
+          generation: 5,
+          entries: [expect.objectContaining({ child: 4 })],
+          outbox: [
+            expect.objectContaining({
+              event: expect.objectContaining({ type: 'child_revalidated', outcome: 'passed' }),
+            }),
+          ],
+        },
       });
     } finally {
       await rm(subject.repo, { recursive: true, force: true });
@@ -233,13 +388,16 @@ describe('revalidation queue generations', () => {
       const subject = await durableQueueFixture();
       try {
         await seedClosedRound(subject, { sealedAuthored: 17 });
-        await expect(consumeLowestQueued(subject.repo, 'demo', { git: subject.git })).resolves.toMatchObject({ kind: 'admitted' });
+        await expect(consumeLowestQueued(subject.repo, 'demo', { git: subject.git })).resolves.toMatchObject({
+          kind: 'admitted',
+        });
         const stored = await readRouteRecord(subject.repo, 'demo', parseRoundId('r2')!, { git: subject.git });
         if (stored.kind !== 'record') throw new Error('expected revalidate record');
         expect(stored.record.kind).toBe('revalidate');
         expect(stored.record.sealedAuthored).toBeUndefined();
-        await expect(readRoutedGrowthSnapshot(subject.repo, 'demo', routing, subject.git))
-          .resolves.toMatchObject({ sealedAuthored: 17 });
+        await expect(readRoutedGrowthSnapshot(subject.repo, 'demo', routing, subject.git)).resolves.toMatchObject({
+          sealedAuthored: 17,
+        });
       } finally {
         await rm(subject.repo, { recursive: true, force: true });
       }
@@ -251,11 +409,15 @@ describe('revalidation queue generations', () => {
         await seedClosedRound(subject, { sealedAuthored: 17 });
         // Shape written before revalidation rounds stopped sealing a placeholder.
         await seedClosedRound(subject, {
-          roundId: parseRoundId('r2')!, kind: 'revalidate', sealedAuthored: 0, items: [],
+          roundId: parseRoundId('r2')!,
+          kind: 'revalidate',
+          sealedAuthored: 0,
+          items: [],
           allocation: { [child(1)]: { remTaskIds: [], blockBodies: [] } },
         });
-        await expect(readRoutedGrowthSnapshot(subject.repo, 'demo', routing, subject.git))
-          .resolves.toMatchObject({ sealedAuthored: 17 });
+        await expect(readRoutedGrowthSnapshot(subject.repo, 'demo', routing, subject.git)).resolves.toMatchObject({
+          sealedAuthored: 17,
+        });
       } finally {
         await rm(subject.repo, { recursive: true, force: true });
       }

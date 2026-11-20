@@ -38,19 +38,19 @@ export interface DescribeRoutingRoundsDependencies {
 
 export type RoundSupersessionCheck =
   | {
-    readonly kind: 'supersedable';
-    readonly stored: Extract<ReadRouteRecordResult, { readonly kind: 'record' }>;
-    readonly supersededBy: RoundId;
-    readonly survivor: StoredRouteRecord;
-    readonly droppedHosts: readonly ChildId[];
-    readonly findingIds: readonly string[];
-  }
+      readonly kind: 'supersedable';
+      readonly stored: Extract<ReadRouteRecordResult, { readonly kind: 'record' }>;
+      readonly supersededBy: RoundId;
+      readonly survivor: StoredRouteRecord;
+      readonly droppedHosts: readonly ChildId[];
+      readonly findingIds: readonly string[];
+    }
   | {
-    readonly kind: 'leaf-return';
-    readonly stored: Extract<ReadRouteRecordResult, { readonly kind: 'record' }>;
-    readonly hosts: readonly ChildId[];
-    readonly marker?: Extract<ReadRepairMarkerResult, { readonly kind: 'marker' }>;
-  }
+      readonly kind: 'leaf-return';
+      readonly stored: Extract<ReadRouteRecordResult, { readonly kind: 'record' }>;
+      readonly hosts: readonly ChildId[];
+      readonly marker?: Extract<ReadRepairMarkerResult, { readonly kind: 'marker' }>;
+    }
   | { readonly kind: 'refused'; readonly detail: string };
 
 export interface SupersedeRoundInput {
@@ -65,7 +65,13 @@ export interface SupersedeRoundInput {
 }
 
 export type SupersedeRoundResult =
-  | { readonly kind: 'superseded'; readonly event: Extract<import('../types/events.js').ConductorEvent, { readonly type: 'routing_round_superseded' }> }
+  | {
+      readonly kind: 'superseded';
+      readonly event: Extract<
+        import('../types/events.js').ConductorEvent,
+        { readonly type: 'routing_round_superseded' }
+      >;
+    }
   | { readonly kind: 'refused'; readonly detail: string };
 
 /** Close one already-checked audit round with its durable occurrence in one CAS. */
@@ -75,49 +81,68 @@ export async function supersedeRound(input: SupersedeRoundInput): Promise<Supers
   const leafReturn = checked.kind === 'leaf-return';
   const leafReturnBranch = leafBranchFor(slug);
   const leafReturnHead = leafReturn ? await resolveGitRef(git, leafReturnBranch) : undefined;
-  const leafReturnRecord = leafReturn && typeof leafReturnHead === 'string'
-    ? { branch: leafReturnBranch, head: leafReturnHead }
-    : undefined;
+  const leafReturnRecord =
+    leafReturn && typeof leafReturnHead === 'string' ? { branch: leafReturnBranch, head: leafReturnHead } : undefined;
   if (leafReturn && leafReturnRecord === undefined) {
-    return { kind: 'refused', detail: `cannot resolve leaf return head for routing round ${checked.stored.record.roundId}` };
+    return {
+      kind: 'refused',
+      detail: `cannot resolve leaf return head for routing round ${checked.stored.record.roundId}`,
+    };
   }
-  const hosts = Object.fromEntries(Object.entries(checked.stored.record.hosts).map(([host, state]) => [
-    host,
-    state === 'pending' || (leafReturn && state === 'admitted') ? 'done' : state,
-  ])) as typeof checked.stored.record.hosts;
+  const hosts = Object.fromEntries(
+    Object.entries(checked.stored.record.hosts).map(([host, state]) => [
+      host,
+      state === 'pending' || (leafReturn && state === 'admitted') ? 'done' : state,
+    ]),
+  ) as typeof checked.stored.record.hosts;
   const droppedHosts = leafReturn
     ? checked.hosts.filter((host) => {
-      const state = checked.stored.record.hosts[host];
-      return state === 'pending' || state === 'admitted';
-    })
+        const state = checked.stored.record.hosts[host];
+        return state === 'pending' || state === 'admitted';
+      })
     : checked.droppedHosts;
   const findingIds = leafReturn ? [] : checked.findingIds;
   const event = routingRoundSupersededEvent(
     checked.stored.record,
-    leafReturn
-      ? { disposition: 'leaf-return' }
-      : { disposition: 'superseded', supersededBy: checked.supersededBy },
+    leafReturn ? { disposition: 'leaf-return' } : { disposition: 'superseded', supersededBy: checked.supersededBy },
     droppedHosts,
     findingIds,
     input.reason.trim(),
     input.operator.trim(),
   );
-  const record = withOutboxEvent({
-    ...checked.stored.record,
-    phase: 'closed',
-    hosts,
-    ...(leafReturnRecord === undefined ? {} : { leafReturn: leafReturnRecord }),
-  }, event);
-  const wrote = await (input.writeRoutingTransaction ?? writeRoutingTransaction)(worktree, slug, [
-    { kind: 'update-record', previous: checked.stored, record },
-    ...(leafReturn
-      ? checked.marker === undefined ? [] : [{ kind: 'delete-marker' as const, old: checked.marker.blob }]
-      : [{ kind: 'verify-ref' as const, ref: `refs/conductor/${slug}/routes/${checked.supersededBy}`, value: checked.survivor.blob }]),
-  ], { ...(input.git === undefined ? {} : { git }) });
+  const record = withOutboxEvent(
+    {
+      ...checked.stored.record,
+      phase: 'closed',
+      hosts,
+      ...(leafReturnRecord === undefined ? {} : { leafReturn: leafReturnRecord }),
+    },
+    event,
+  );
+  const wrote = await (input.writeRoutingTransaction ?? writeRoutingTransaction)(
+    worktree,
+    slug,
+    [
+      { kind: 'update-record', previous: checked.stored, record },
+      ...(leafReturn
+        ? checked.marker === undefined
+          ? []
+          : [{ kind: 'delete-marker' as const, old: checked.marker.blob }]
+        : [
+            {
+              kind: 'verify-ref' as const,
+              ref: `refs/conductor/${slug}/routes/${checked.supersededBy}`,
+              value: checked.survivor.blob,
+            },
+          ]),
+    ],
+    { ...(input.git === undefined ? {} : { git }) },
+  );
   if (wrote.kind === 'updated') return { kind: 'superseded', event };
-  const detail = wrote.kind === 'cas-failed'
-    ? `contested write for routing round ${checked.stored.record.roundId}`
-    : `failed write for routing round ${checked.stored.record.roundId} (${wrote.kind})`;
+  const detail =
+    wrote.kind === 'cas-failed'
+      ? `contested write for routing round ${checked.stored.record.roundId}`
+      : `failed write for routing round ${checked.stored.record.roundId} (${wrote.kind})`;
   return { kind: 'refused', detail };
 }
 
@@ -136,14 +161,23 @@ export interface StackRoundsCliDeps extends DescribeRoutingRoundsDependencies {
 
 type StackRoundsEligibility = { readonly kind: 'eligible' } | { readonly kind: 'refused'; readonly detail: string };
 
-async function checkStackRoundsEligibility(worktree: string, slug: string, deps: StackRoundsCliDeps): Promise<StackRoundsEligibility> {
+async function checkStackRoundsEligibility(
+  worktree: string,
+  slug: string,
+  deps: StackRoundsCliDeps,
+): Promise<StackRoundsEligibility> {
   const config = await (deps.loadConfig ?? loadConfig)(worktree);
   if (!routingSettingOn(config.ok ? config.config : undefined)) {
-    return { kind: 'refused', detail: 'Routing is disabled by stacked_prs.route_whole_feature_fixes; enable it before using stack rounds.' };
+    return {
+      kind: 'refused',
+      detail: 'Routing is disabled by stacked_prs.route_whole_feature_fixes; enable it before using stack rounds.',
+    };
   }
   const durable = await (deps.hasDurableChildState ?? hasDurableChildState)(worktree, slug);
-  if (durable === 'git-error') return { kind: 'refused', detail: 'Cannot determine durable child state; refusing stack rounds.' };
-  if (!durable) return { kind: 'refused', detail: `Feature ${slug} is not a stacked feature; stack rounds is unavailable.` };
+  if (durable === 'git-error')
+    return { kind: 'refused', detail: 'Cannot determine durable child state; refusing stack rounds.' };
+  if (!durable)
+    return { kind: 'refused', detail: `Feature ${slug} is not a stacked feature; stack rounds is unavailable.` };
   return { kind: 'eligible' };
 }
 
@@ -181,9 +215,7 @@ export async function checkRoundSupersession(
   }
   if (stored.record.kind !== 'audit') {
     // ai-conductor:session-command-context=operator-only
-    const abandon = stored.record.kind === 'operator'
-      ? `; use ai-conductor stack land --slug ${slug} --abandon`
-      : '';
+    const abandon = stored.record.kind === 'operator' ? `; use ai-conductor stack land --slug ${slug} --abandon` : '';
     // /ai-conductor:session-command-context
     return {
       kind: 'refused',
@@ -231,7 +263,8 @@ export async function checkRoundSupersession(
 
   const listed = await git(['for-each-ref', '--format=%(refname)', `refs/conductor/${slug}/routes/`]);
   if (listed.exitCode !== 0) return { kind: 'refused', detail: `could not list routing rounds for ${slug}` };
-  const roundIds = listed.stdout.split('\n')
+  const roundIds = listed.stdout
+    .split('\n')
     .filter(Boolean)
     .map((ref) => parseRoundId(ref.slice(`refs/conductor/${slug}/routes/`.length)))
     .filter((id): id is RoundId => id !== undefined)
@@ -241,7 +274,10 @@ export async function checkRoundSupersession(
     if (otherRoundId === roundId) continue;
     const other = await readRecord(worktree, slug, otherRoundId, { git });
     if (other.kind !== 'record') {
-      return { kind: 'refused', detail: `other routing round ${otherRoundId} is ${other.kind === 'absent' ? 'missing' : 'unreadable'}` };
+      return {
+        kind: 'refused',
+        detail: `other routing round ${otherRoundId} is ${other.kind === 'absent' ? 'missing' : 'unreadable'}`,
+      };
     }
     if (survivor === undefined && other.record.phase !== 'closed') survivor = other;
   }
@@ -251,13 +287,16 @@ export async function checkRoundSupersession(
       return { kind: 'refused', detail: `routing round ${roundId}: marker holds ${marker.marker.roundId}` };
     }
     return {
-      kind: 'leaf-return', stored, hosts: leafReturnHosts,
+      kind: 'leaf-return',
+      stored,
+      hosts: leafReturnHosts,
       ...(marker.kind === 'marker' ? { marker } : {}),
     };
   }
 
   if (hostRefusal !== undefined) return { kind: 'refused', detail: hostRefusal };
-  if (admittedHost !== undefined) return { kind: 'refused', detail: `routing round ${roundId} host ${admittedHost} is admitted` };
+  if (admittedHost !== undefined)
+    return { kind: 'refused', detail: `routing round ${roundId} host ${admittedHost} is admitted` };
   if (marker.kind === 'marker' && marker.marker.roundId === roundId) {
     return { kind: 'refused', detail: `routing round ${roundId}: marker holds ${roundId}` };
   }
@@ -294,7 +333,8 @@ export async function describeRoutingRounds(
     if (listed.exitCode !== 0) {
       listedReadable = false;
     } else {
-      roundIds = listed.stdout.split('\n')
+      roundIds = listed.stdout
+        .split('\n')
         .filter(Boolean)
         .map((ref) => parseRoundId(ref.slice(`refs/conductor/${slug}/routes/`.length)))
         .filter((roundId): roundId is RoundId => roundId !== undefined)
@@ -304,16 +344,20 @@ export async function describeRoutingRounds(
     listedReadable = false;
   }
 
-  const rounds = await Promise.all(roundIds.map(async (roundId) => ({
-    roundId,
-    stored: await readRecord(worktree, slug, roundId, { git }),
-  })));
+  const rounds = await Promise.all(
+    roundIds.map(async (roundId) => ({
+      roundId,
+      stored: await readRecord(worktree, slug, roundId, { git }),
+    })),
+  );
   const marker = await readMarker(worktree, slug, { git });
   return {
     rounds,
     marker,
-    readable: listedReadable && rounds.every((round) => round.stored.kind === 'record')
-      && (marker.kind === 'absent' || marker.kind === 'marker'),
+    readable:
+      listedReadable &&
+      rounds.every((round) => round.stored.kind === 'record') &&
+      (marker.kind === 'absent' || marker.kind === 'marker'),
   };
 }
 
@@ -336,7 +380,9 @@ function wedges(slug: string, description: RoutingRoundsDescription): readonly s
     // ai-conductor:session-command-context=operator-only
     return pending === undefined
       ? []
-      : [`wedge: ${roundId} host ${pending[0]} pending unadmitted behind marker ${marker.roundId}; ai-conductor stack rounds --slug ${slug} --close ${roundId} --reason <text>`];
+      : [
+          `wedge: ${roundId} host ${pending[0]} pending unadmitted behind marker ${marker.roundId}; ai-conductor stack rounds --slug ${slug} --close ${roundId} --reason <text>`,
+        ];
     // /ai-conductor:session-command-context
   });
 }
@@ -348,15 +394,30 @@ export function renderRoutingRounds(slug: string, description: RoutingRoundsDesc
   }
   const lines = description.rounds.map(({ roundId, stored }) => {
     if (stored.kind === 'record') {
-      const hosts = Object.entries(stored.record.hosts).map(([host, state]) => `${host}:${state}`).join(', ');
+      const execution = stored.record.execution ?? 'owner';
+      const hosts = Object.entries(stored.record.hosts)
+        .map(([host, state]) => {
+          const child = parseChildId(host);
+          const placement = child === undefined ? 'none' : (stored.record.placements?.[child]?.state ?? 'none');
+          return `${host}:${state} execution=${execution} placement=${placement}`;
+        })
+        .join(', ');
       return `${roundId} ${stored.record.kind} ${stored.record.phase} hosts ${hosts} current host ${currentHost(stored.record)} ${receiptState(stored.record.receipt)} outbox ${stored.record.outbox.length}`;
     }
     return `${roundId} ${stored.kind}${stored.kind === 'unreadable' && stored.blob !== undefined ? ` ${stored.blob}` : ''}`;
   });
   switch (description.marker.kind) {
-    case 'marker': lines.push(`repair marker: host ${description.marker.marker.host} round ${description.marker.marker.roundId}`); break;
-    case 'absent': lines.push('repair marker: absent'); break;
-    case 'unreadable': lines.push(`repair marker: unreadable${description.marker.blob === undefined ? '' : ` ${description.marker.blob}`}`); break;
+    case 'marker':
+      lines.push(`repair marker: host ${description.marker.marker.host} round ${description.marker.marker.roundId}`);
+      break;
+    case 'absent':
+      lines.push('repair marker: absent');
+      break;
+    case 'unreadable':
+      lines.push(
+        `repair marker: unreadable${description.marker.blob === undefined ? '' : ` ${description.marker.blob}`}`,
+      );
+      break;
   }
   lines.push(...wedges(slug, description));
   return lines.join('\n');
@@ -373,10 +434,14 @@ export async function dispatchStackRoundsCommand(
   const print = deps.print ?? ((message: string) => process.stderr.write(`${message}\n`));
   const cwd = deps.cwd ?? process.cwd();
   const root = await (deps.resolveMainRoot ?? resolveMainRepoRoot)(cwd);
-  const worktree = await (deps.resolveWorktree ?? ((slug) => resolveCliFeatureWorktree(slug, {
-    cwd,
-    resolveMainRoot: deps.resolveMainRoot,
-  })))(command.slug);
+  const worktree = await (
+    deps.resolveWorktree ??
+    ((slug) =>
+      resolveCliFeatureWorktree(slug, {
+        cwd,
+        resolveMainRoot: deps.resolveMainRoot,
+      }))
+  )(command.slug);
   if (worktree === undefined) return refused(print, `feature '${command.slug}' is unavailable.`);
 
   const eligibility = await checkStackRoundsEligibility(worktree, command.slug, deps);
@@ -411,9 +476,13 @@ export async function dispatchStackRoundsCommand(
     if (result.kind === 'refused') return refused(print, result.detail);
     // ai-conductor:session-command-context=operator-only
     if (checked.kind === 'leaf-return') {
-      print(`stack rounds: leaf return closed ${roundId}; closed hosts ${checked.hosts.join(', ') || 'none'}; reason ${reason}. Clear any HALT with ai-conductor halt clear before the daemon resumes.`);
+      print(
+        `stack rounds: leaf return closed ${roundId}; closed hosts ${checked.hosts.join(', ') || 'none'}; reason ${reason}. Clear any HALT with ai-conductor halt clear before the daemon resumes.`,
+      );
     } else {
-      print(`stack rounds: closed ${roundId}; dropped hosts ${checked.droppedHosts.join(', ') || 'none'}; finding ids ${checked.findingIds.join(', ') || 'none'}; reason ${reason}. Clear any HALT with ai-conductor halt clear before the daemon resumes.`);
+      print(
+        `stack rounds: closed ${roundId}; dropped hosts ${checked.droppedHosts.join(', ') || 'none'}; finding ids ${checked.findingIds.join(', ') || 'none'}; reason ${reason}. Clear any HALT with ai-conductor halt clear before the daemon resumes.`,
+      );
     }
     // /ai-conductor:session-command-context
     return 0;

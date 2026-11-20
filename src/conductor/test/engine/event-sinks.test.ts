@@ -22,11 +22,7 @@ import { parseChildId } from '../../src/engine/child-context.js';
 import { emitRestackRefused } from '../../src/engine/restack/restack-events.js';
 import { parseCommitSha, parseRefName, type RestackOpId } from '../../src/engine/restack/restack-types.js';
 import { parseRoundId } from '../../src/engine/routing/route-types.js';
-import type {
-  ConductorEvent,
-  MaintenancePhase,
-  MaintenancePhaseOutcome,
-} from '../../src/types/events.js';
+import type { ConductorEvent, MaintenancePhase, MaintenancePhaseOutcome } from '../../src/types/events.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { toProviderId } from '../../src/execution/provider-catalog.js';
 
@@ -68,6 +64,16 @@ it('declares restack decisions as durable, unaudited event-spine records', () =>
   expect(persistedEventTypes()).toContain('restack_decision');
 });
 
+it('declares fold plans as durable, unaudited event-spine records', () => {
+  expect(EVENT_SINKS.fold_planned).toEqual({
+    render: false,
+    persist: true,
+    audit: false,
+    otel: false,
+  });
+  expect(persistedEventTypes()).toContain('fold_planned');
+});
+
 it('declares remediation-closure judgements as durable, unaudited event-spine records', () => {
   expect(EVENT_SINKS.remediation_closure_judged).toEqual({
     render: false,
@@ -79,28 +85,29 @@ it('declares remediation-closure judgements as durable, unaudited event-spine re
 });
 
 type Equal<Left, Right> =
-  (<Value>() => Value extends Left ? 1 : 2) extends
-  (<Value>() => Value extends Right ? 1 : 2)
-    ? (<Value>() => Value extends Right ? 1 : 2) extends
-      (<Value>() => Value extends Left ? 1 : 2) ? true : false
+  (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2
+    ? (<Value>() => Value extends Right ? 1 : 2) extends <Value>() => Value extends Left ? 1 : 2
+      ? true
+      : false
     : false;
 type Assert<Condition extends true> = Condition;
-type MaintenancePhaseIsClosed = Assert<Equal<
-  MaintenancePhase,
-  | 'startup-refresh'
-  | 'first-claim'
-  | 'rekick'
-  | 'startup-dashboard'
-  | 'halt-pr-reconcile'
-  | 'parked-reconcile'
-  | 'provider-scratch'
-  | 'mergeable-sweep'
-  | 'repair'
->>;
-type MaintenancePhaseOutcomeIsClosed = Assert<Equal<
-  MaintenancePhaseOutcome,
-  'completed' | 'skipped-unchanged' | 'failed' | 'deferred'
->>;
+type MaintenancePhaseIsClosed = Assert<
+  Equal<
+    MaintenancePhase,
+    | 'startup-refresh'
+    | 'first-claim'
+    | 'rekick'
+    | 'startup-dashboard'
+    | 'halt-pr-reconcile'
+    | 'parked-reconcile'
+    | 'provider-scratch'
+    | 'mergeable-sweep'
+    | 'repair'
+  >
+>;
+type MaintenancePhaseOutcomeIsClosed = Assert<
+  Equal<MaintenancePhaseOutcome, 'completed' | 'skipped-unchanged' | 'failed' | 'deferred'>
+>;
 const maintenancePhaseContract: MaintenancePhaseIsClosed & MaintenancePhaseOutcomeIsClosed = true;
 void maintenancePhaseContract;
 const maintenancePhaseFixtures = [
@@ -112,23 +119,72 @@ const maintenancePhaseFixtures = [
   { type: 'daemon_maintenance_phase', phase: 'parked-reconcile', durationMs: 1, outcome: 'skipped-unchanged' },
   { type: 'daemon_maintenance_phase', phase: 'provider-scratch', durationMs: 1, outcome: 'completed' },
   { type: 'daemon_maintenance_phase', phase: 'mergeable-sweep', durationMs: 1, outcome: 'completed' },
-  { type: 'daemon_maintenance_phase', phase: 'repair', durationMs: 1, outcome: 'deferred', prUrl: 'https://example.test/pr/1', slug: 'repair-slug' },
+  {
+    type: 'daemon_maintenance_phase',
+    phase: 'repair',
+    durationMs: 1,
+    outcome: 'deferred',
+    prUrl: 'https://example.test/pr/1',
+    slug: 'repair-slug',
+  },
 ] satisfies ConductorEvent[];
 void maintenancePhaseFixtures;
-// @ts-expect-error repairs always identify their PR.
-const repairWithoutPrUrl: ConductorEvent = { type: 'daemon_maintenance_phase', phase: 'repair', durationMs: 1, outcome: 'completed' };
-// @ts-expect-error non-repair phases cannot carry repair identity.
-const refreshWithPrUrl: ConductorEvent = { type: 'daemon_maintenance_phase', phase: 'startup-refresh', durationMs: 1, outcome: 'completed', prUrl: 'https://example.test/pr/1' };
-// @ts-expect-error only repairs are deferred.
-const deferredRefresh: ConductorEvent = { type: 'daemon_maintenance_phase', phase: 'startup-refresh', durationMs: 1, outcome: 'deferred' };
-// @ts-expect-error only parked reconciliation skips unchanged inputs.
-const skippedRepair: ConductorEvent = { type: 'daemon_maintenance_phase', phase: 'repair', durationMs: 1, outcome: 'skipped-unchanged', prUrl: 'https://example.test/pr/1' };
-// @ts-expect-error parked reconciliation is never deferred.
-const deferredParkedReconcile: ConductorEvent = { type: 'daemon_maintenance_phase', phase: 'parked-reconcile', durationMs: 1, outcome: 'deferred' };
-// @ts-expect-error parked reconciliation summaries have a closed vocabulary.
-const parkedSummaryWithUnknownKey: ConductorEvent = { type: 'daemon_maintenance_phase', phase: 'parked-reconcile', durationMs: 1, outcome: 'completed', summary: { retained: 1 } };
-// @ts-expect-error summaries are only meaningful for the reconciliation phase.
-const refreshWithSummary: ConductorEvent = { type: 'daemon_maintenance_phase', phase: 'startup-refresh', durationMs: 1, outcome: 'completed', summary: { reconciled: 1 } };
+const repairWithoutPrUrl: ConductorEvent = {
+  type: 'daemon_maintenance_phase',
+  phase: 'repair',
+  durationMs: 1,
+  outcome: 'completed',
+  // @ts-expect-error repairs always identify their PR.
+  prUrl: undefined,
+};
+const refreshWithPrUrl: ConductorEvent = {
+  type: 'daemon_maintenance_phase',
+  phase: 'startup-refresh',
+  durationMs: 1,
+  outcome: 'completed',
+  // @ts-expect-error non-repair phases cannot carry repair identity.
+  prUrl: 'https://example.test/pr/1',
+};
+const deferredRefresh: ConductorEvent = {
+  type: 'daemon_maintenance_phase',
+  phase: 'startup-refresh',
+  durationMs: 1,
+  // @ts-expect-error only repairs are deferred.
+  outcome: 'deferred',
+};
+const skippedRepair: ConductorEvent = {
+  type: 'daemon_maintenance_phase',
+  phase: 'repair',
+  durationMs: 1,
+  // @ts-expect-error only parked reconciliation skips unchanged inputs.
+  outcome: 'skipped-unchanged',
+  prUrl: 'https://example.test/pr/1',
+};
+const deferredParkedReconcile: ConductorEvent = {
+  type: 'daemon_maintenance_phase',
+  phase: 'parked-reconcile',
+  durationMs: 1,
+  // @ts-expect-error parked reconciliation is never deferred.
+  outcome: 'deferred',
+};
+const parkedSummaryWithUnknownKey: ConductorEvent = {
+  type: 'daemon_maintenance_phase',
+  phase: 'parked-reconcile',
+  durationMs: 1,
+  outcome: 'completed',
+  summary: {
+    // @ts-expect-error parked reconciliation summaries have a closed vocabulary.
+    retained: 1,
+  },
+};
+const refreshWithSummary: ConductorEvent = {
+  type: 'daemon_maintenance_phase',
+  phase: 'startup-refresh',
+  durationMs: 1,
+  outcome: 'completed',
+  // @ts-expect-error summaries are only meaningful for the reconciliation phase.
+  summary: { reconciled: 1 },
+};
 void repairWithoutPrUrl;
 void refreshWithPrUrl;
 void deferredRefresh;
@@ -136,56 +192,60 @@ void skippedRepair;
 void deferredParkedReconcile;
 void parkedSummaryWithUnknownKey;
 void refreshWithSummary;
-type GithubWriteCredentialFallbackEvent = Extract<
-  ConductorEvent,
-  { type: 'github_write_credential_fallback' }
+type GithubWriteCredentialFallbackEvent = Extract<ConductorEvent, { type: 'github_write_credential_fallback' }>;
+type GithubWriteCredentialFallbackEventHasClosedFields = Assert<
+  Equal<keyof GithubWriteCredentialFallbackEvent, 'type' | 'operation' | 'target' | 'reason' | 'child'>
 >;
-type GithubWriteCredentialFallbackEventHasClosedFields = Assert<Equal<
-  keyof GithubWriteCredentialFallbackEvent,
-  'type' | 'operation' | 'target' | 'reason' | 'child'
->>;
-type GithubWriteCredentialFallbackReasonIsClosed = Assert<Equal<
-  GithubWriteCredentialFallbackEvent['reason'],
-  'token-unavailable' | 'auth-refused' | 'unsupported-remote-transport'
->>;
-const githubWriteCredentialFallbackEventContract: GithubWriteCredentialFallbackEventHasClosedFields
-  & GithubWriteCredentialFallbackReasonIsClosed = true;
+type GithubWriteCredentialFallbackReasonIsClosed = Assert<
+  Equal<
+    GithubWriteCredentialFallbackEvent['reason'],
+    'token-unavailable' | 'auth-refused' | 'unsupported-remote-transport'
+  >
+>;
+const githubWriteCredentialFallbackEventContract: GithubWriteCredentialFallbackEventHasClosedFields &
+  GithubWriteCredentialFallbackReasonIsClosed = true;
 void githubWriteCredentialFallbackEventContract;
 
 type RestackRefusedEvent = Extract<ConductorEvent, { type: 'restack_refused' }>;
-type RestackRefusalReasonIsClosed = Assert<Equal<
-  RestackRefusedEvent['reason'],
-  | 'cascade-cap'
-  | 'dirty-overlap'
-  | 'sync-collision'
-  | 'checked-out-elsewhere'
-  | 'stack-ref-changed'
-  | 'lock-unavailable'
-  | 'verification-failed'
-  | 'replay-mismatch'
-  | 'range-not-ancestor'
-  | 'closed-child-rewritten'
-  | 'restack-outstanding'
-  | 'journal-live-owner'
-  | 'published-stack'
-  | 'deferred-base-refresh'
-  | 'restack-resolution-stale'
->>;
+type RestackRefusalReasonIsClosed = Assert<
+  Equal<
+    RestackRefusedEvent['reason'],
+    | 'cascade-cap'
+    | 'dirty-overlap'
+    | 'sync-collision'
+    | 'checked-out-elsewhere'
+    | 'stack-ref-changed'
+    | 'lock-unavailable'
+    | 'verification-failed'
+    | 'replay-mismatch'
+    | 'range-not-ancestor'
+    | 'closed-child-rewritten'
+    | 'restack-outstanding'
+    | 'journal-live-owner'
+    | 'published-stack'
+    | 'deferred-base-refresh'
+    | 'restack-resolution-stale'
+    | 'fold-owner-invalid'
+    | 'fold-misrouted'
+    | 'fold-tree-mismatch'
+    | 'fold-boundary-lost'
+  >
+>;
 const restackRefusalReasonContract: RestackRefusalReasonIsClosed = true;
 void restackRefusalReasonContract;
 
-// @ts-expect-error -- restack refusals use the closed ADR reason vocabulary.
-const restackRefusalWithUnknownReason = { type: 'restack_refused', reason: 'unexpected-reason' } satisfies ConductorEvent;
+const restackRefusalWithUnknownReason = {
+  type: 'restack_refused',
+  // @ts-expect-error -- restack refusals use the closed ADR reason vocabulary.
+  reason: 'unexpected-reason',
+} satisfies ConductorEvent;
 void restackRefusalWithUnknownReason;
 
 // @ts-expect-error -- closeout telemetry is not part of the engine event union.
 const retiredPipelineCloseout = { type: 'pipeline_closeout' } satisfies ConductorEvent;
 void retiredPipelineCloseout;
 
-const DEPENDENCY_EVENT_TYPES = [
-  'land_dependency_decided',
-  'dependency_drift_swept',
-] as const;
+const DEPENDENCY_EVENT_TYPES = ['land_dependency_decided', 'dependency_drift_swept'] as const;
 
 const PRE_REFACTOR_PERSISTED_EVENT_TYPES = [
   'step_started',
@@ -271,10 +331,9 @@ const ROUTING_EVENT_TYPES = [
   'child_revalidated',
 ] satisfies Array<ConductorEvent['type']>;
 
-const RESEAL_EVENT_TYPES = [
-  'protected_artifact_reseal',
-  'protected_artifact_reseal_refused',
-] satisfies Array<ConductorEvent['type']>;
+const RESEAL_EVENT_TYPES = ['protected_artifact_reseal', 'protected_artifact_reseal_refused'] satisfies Array<
+  ConductorEvent['type']
+>;
 
 const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   ...PRE_REFACTOR_PERSISTED_EVENT_TYPES,
@@ -423,6 +482,7 @@ const PINNED_PERSISTED_EVENT_TYPES = [
   'stack_tip_diverged',
   'rebase_skipped_for_stack',
   'restack_planned',
+  'fold_planned',
   'restack_applied',
   'restack_conflict',
   'restack_resolution',
@@ -600,28 +660,115 @@ const readOnlyReviewFault = {
 } satisfies ConductorEvent;
 void [nativeSchemaUnsupportedFault, invalidStructuredResultFault, readOnlyReviewFault];
 
-// @ts-expect-error -- retained reclamation reasons are a closed union.
-const reclaimRetentionWithUnlistedReason = { type: 'worktree_reclaim_retained', slug: 'feature', reason: 'operator-maybe' } satisfies ConductorEvent;
+const reclaimRetentionWithUnlistedReason = {
+  type: 'worktree_reclaim_retained',
+  slug: 'feature',
+  // @ts-expect-error -- retained reclamation reasons are a closed union.
+  reason: 'operator-maybe',
+} satisfies ConductorEvent;
 void reclaimRetentionWithUnlistedReason;
 
-// @ts-expect-error -- probe-failure progress requires its closed kind and next disposition.
-const probeFailureMissingClosedMetadata = { type: 'credentials_park_progress', provider: 'codex', source: 'cached-login', readiness: 'probe-failed', elapsedSeconds: 3, degradation: 'probe-failure' } satisfies ConductorEvent;
-// @ts-expect-error -- a terminal probe-failure disposition has no next polling delay.
-const probeFailureWithPollingDelay = { type: 'credentials_park_progress', provider: 'codex', source: 'cached-login', readiness: 'probe-failed', elapsedSeconds: 3, degradation: 'probe-failure', probeFailureKind: 'timeout', nextDisposition: 'trial-required', nextProbeDelaySeconds: 4 } satisfies ConductorEvent;
-// @ts-expect-error -- recovery progress retains only the closed parser-rejection union, never raw doctor diagnostics.
-const probeFailureWithRawParserRejection = { type: 'credentials_park_progress', provider: 'codex', source: 'cached-login', readiness: 'probe-failed', elapsedSeconds: 3, degradation: 'probe-failure', probeFailureKind: 'unparseable-output', parserRejection: 'sk-live-super-secret-token /private/codex/credentials.json', nextDisposition: 'trial-required' } satisfies ConductorEvent;
-// @ts-expect-error -- conclusive credential progress cannot carry probe-only metadata.
-const credentialFailureWithProbeMetadata = { type: 'credentials_park_progress', provider: 'codex', source: 'cached-login', readiness: 'unusable', elapsedSeconds: 3, nextProbeDelaySeconds: 4, degradation: 'credential-failure', probeFailureKind: 'timeout', nextDisposition: 'trial-required' } satisfies ConductorEvent;
-// @ts-expect-error -- probe-failure degradation is valid only with probe-failed readiness.
-const probeFailureWithConclusiveReadiness = { type: 'credentials_park_progress', provider: 'codex', source: 'cached-login', readiness: 'ready', elapsedSeconds: 3, degradation: 'probe-failure', probeFailureKind: 'timeout', nextDisposition: 'trial-required' } satisfies ConductorEvent;
-// @ts-expect-error -- missing is conclusive readiness, not probe failure.
-const probeFailureWithMissingReadiness = { type: 'credentials_park_progress', provider: 'codex', source: 'cached-login', readiness: 'missing', elapsedSeconds: 3, degradation: 'probe-failure', probeFailureKind: 'timeout', nextDisposition: 'trial-required' } satisfies ConductorEvent;
-// @ts-expect-error -- unusable is conclusive readiness, not probe failure.
-const probeFailureWithUnusableReadiness = { type: 'credentials_park_progress', provider: 'codex', source: 'cached-login', readiness: 'unusable', elapsedSeconds: 3, degradation: 'probe-failure', probeFailureKind: 'timeout', nextDisposition: 'trial-required' } satisfies ConductorEvent;
-// @ts-expect-error -- probe-failed readiness cannot be represented as credential failure.
-const credentialFailureWithProbeFailedReadiness = { type: 'credentials_park_progress', provider: 'codex', source: 'cached-login', readiness: 'probe-failed', elapsedSeconds: 3, nextProbeDelaySeconds: 4, degradation: 'credential-failure' } satisfies ConductorEvent;
-// @ts-expect-error -- probe-failed readiness cannot be represented as unrelated degradation.
-const unrelatedDegradationWithProbeFailedReadiness = { type: 'credentials_park_progress', provider: 'codex', source: 'cached-login', readiness: 'probe-failed', elapsedSeconds: 3, nextProbeDelaySeconds: 4, degradation: 'unrelated-diagnostic-degradation' } satisfies ConductorEvent;
+const probeFailureMissingClosedMetadata = {
+  type: 'credentials_park_progress',
+  provider: toProviderId('codex'),
+  source: 'cached-login',
+  readiness: 'probe-failed',
+  elapsedSeconds: 3,
+  degradation: 'probe-failure',
+  // @ts-expect-error -- probe-failure progress requires its closed kind.
+  probeFailureKind: undefined,
+  // @ts-expect-error -- probe-failure progress requires its next disposition.
+  nextDisposition: undefined,
+} satisfies ConductorEvent;
+const probeFailureWithPollingDelay = {
+  type: 'credentials_park_progress',
+  provider: toProviderId('codex'),
+  source: 'cached-login',
+  readiness: 'probe-failed',
+  elapsedSeconds: 3,
+  degradation: 'probe-failure',
+  probeFailureKind: 'timeout',
+  nextDisposition: 'trial-required',
+  // @ts-expect-error -- a terminal probe-failure disposition has no next polling delay.
+  nextProbeDelaySeconds: 4,
+} satisfies ConductorEvent;
+const probeFailureWithRawParserRejection = {
+  type: 'credentials_park_progress',
+  provider: toProviderId('codex'),
+  source: 'cached-login',
+  readiness: 'probe-failed',
+  elapsedSeconds: 3,
+  degradation: 'probe-failure',
+  probeFailureKind: 'unparseable-output',
+  // @ts-expect-error -- recovery progress retains only the closed parser-rejection union, never raw doctor diagnostics.
+  parserRejection: 'sk-live-super-secret-token /private/codex/credentials.json',
+  nextDisposition: 'trial-required',
+} satisfies ConductorEvent;
+const credentialFailureWithProbeMetadata = {
+  type: 'credentials_park_progress',
+  provider: toProviderId('codex'),
+  source: 'cached-login',
+  readiness: 'unusable',
+  elapsedSeconds: 3,
+  nextProbeDelaySeconds: 4,
+  degradation: 'credential-failure',
+  // @ts-expect-error -- conclusive credential progress cannot carry probe-only metadata.
+  probeFailureKind: 'timeout',
+  // @ts-expect-error -- conclusive credential progress cannot carry probe-only metadata.
+  nextDisposition: 'trial-required',
+} satisfies ConductorEvent;
+const probeFailureWithConclusiveReadiness = {
+  type: 'credentials_park_progress',
+  provider: toProviderId('codex'),
+  source: 'cached-login',
+  readiness: 'ready',
+  elapsedSeconds: 3,
+  nextProbeDelaySeconds: 4,
+  // @ts-expect-error -- probe-failure degradation is valid only with probe-failed readiness.
+  degradation: 'probe-failure',
+} satisfies ConductorEvent;
+const probeFailureWithMissingReadiness = {
+  type: 'credentials_park_progress',
+  provider: toProviderId('codex'),
+  source: 'cached-login',
+  readiness: 'missing',
+  elapsedSeconds: 3,
+  nextProbeDelaySeconds: 4,
+  // @ts-expect-error -- missing is conclusive readiness, not probe failure.
+  degradation: 'probe-failure',
+} satisfies ConductorEvent;
+const probeFailureWithUnusableReadiness = {
+  type: 'credentials_park_progress',
+  provider: toProviderId('codex'),
+  source: 'cached-login',
+  readiness: 'unusable',
+  elapsedSeconds: 3,
+  nextProbeDelaySeconds: 4,
+  // @ts-expect-error -- unusable is conclusive readiness, not probe failure.
+  degradation: 'probe-failure',
+} satisfies ConductorEvent;
+const credentialFailureWithProbeFailedReadiness = {
+  type: 'credentials_park_progress',
+  provider: toProviderId('codex'),
+  source: 'cached-login',
+  readiness: 'probe-failed',
+  elapsedSeconds: 3,
+  // @ts-expect-error -- probe-failed readiness cannot be represented as credential failure.
+  degradation: 'credential-failure',
+  probeFailureKind: 'timeout',
+  nextDisposition: 'trial-required',
+} satisfies ConductorEvent;
+const unrelatedDegradationWithProbeFailedReadiness = {
+  type: 'credentials_park_progress',
+  provider: toProviderId('codex'),
+  source: 'cached-login',
+  readiness: 'probe-failed',
+  elapsedSeconds: 3,
+  // @ts-expect-error -- probe-failed readiness cannot be represented as unrelated degradation.
+  degradation: 'unrelated-diagnostic-degradation',
+  probeFailureKind: 'timeout',
+  nextDisposition: 'trial-required',
+} satisfies ConductorEvent;
 void [
   probeFailureMissingClosedMetadata,
   probeFailureWithPollingDelay,
@@ -723,8 +870,9 @@ const phaseWithoutEventId = (({ eventId: _eventId, ...event }) => event)(routing
 const phaseWithInvalidHostState = { ...routingEvents[2], phase: 'unrecognized' } satisfies ConductorEvent;
 // @ts-expect-error -- revalidation occurrences always retain their execution child.
 const revalidatedWithoutChild = (({ child: _child, ...event }) => event)(routingEvents[3]) satisfies ConductorEvent;
+const revalidatedWithoutEventIdShape = (({ eventId: _eventId, ...event }) => event)(routingEvents[3]);
 // @ts-expect-error -- revalidation occurrences are at-least-once deliveries and require stable ids.
-const revalidatedWithoutEventId = (({ eventId: _eventId, ...event }) => event)(routingEvents[3]) satisfies ConductorEvent;
+const revalidatedWithoutEventId: ConductorEvent = revalidatedWithoutEventIdShape;
 void [
   routedWithoutChild,
   routedWithoutEventId,
@@ -835,11 +983,13 @@ describe('event sink subscriptions', () => {
   it('keeps a named child and optional detail when emitting a restack refusal', () => {
     const child = parseChildId(2)!;
 
-    expect(emitRestackRefused({
-      reason: 'checked-out-elsewhere',
-      child,
-      detail: 'feat/c2/demo',
-    })).toEqual({
+    expect(
+      emitRestackRefused({
+        reason: 'checked-out-elsewhere',
+        child,
+        detail: 'feat/c2/demo',
+      }),
+    ).toEqual({
       type: 'restack_refused',
       reason: 'checked-out-elsewhere',
       child,
@@ -1087,11 +1237,17 @@ describe('event sink subscriptions', () => {
     }).toEqual({
       drop: {
         sink: { render: false, persist: true, audit: false, otel: false, otelTrace: false },
-        rendered: false, persisted: true, audited: false, otel: false,
+        rendered: false,
+        persisted: true,
+        audited: false,
+        otel: false,
       },
       backlog: {
         sink: { render: false, persist: true, audit: false, otel: false, otelTrace: false },
-        rendered: false, persisted: true, audited: false, otel: false,
+        rendered: false,
+        persisted: true,
+        audited: false,
+        otel: false,
       },
     });
   });
@@ -1209,11 +1365,9 @@ describe('event sink subscriptions', () => {
         at: '2026-09-22T00:00:00.000Z',
       },
     ] satisfies ConductorEvent[];
-    const daemonEventTypes = [
-      'daemon_memory_sample',
-      'daemon_heap_dump_written',
-      'daemon_exited',
-    ] satisfies Array<ConductorEvent['type']>;
+    const daemonEventTypes = ['daemon_memory_sample', 'daemon_heap_dump_written', 'daemon_exited'] satisfies Array<
+      ConductorEvent['type']
+    >;
     const expected = { render: false, persist: true, audit: false, otel: false, otelTrace: false };
 
     expect({
@@ -1286,7 +1440,9 @@ describe('event sink subscriptions', () => {
       persister.stop();
 
       const records = (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
-        .trim().split('\n').map((line) => JSON.parse(line));
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
       expect({
         sinks: EVENT_SINKS.gate_verdict,
         persisted: persistedEventTypes().includes('gate_verdict'),
@@ -1308,7 +1464,9 @@ describe('event sink subscriptions', () => {
     const persister = new EventPersister(join(projectRoot, '.pipeline', 'events.jsonl'), events);
     const event = {
       type: 'build_review_outer_verdict' as const,
-      lapId: 'lap-current', rawVerdict: 'FAIL' as const, effectiveVerdict: 'PASS' as const,
+      lapId: 'lap-current',
+      rawVerdict: 'FAIL' as const,
+      effectiveVerdict: 'PASS' as const,
     };
 
     try {
@@ -1316,7 +1474,9 @@ describe('event sink subscriptions', () => {
       await events.emit(event);
       persister.stop();
       const records = (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
-        .trim().split('\n').map((line) => JSON.parse(line));
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
       expect(records).toEqual([{ ...event, ts: expect.any(String) }]);
     } finally {
       persister.stop();
@@ -1343,7 +1503,9 @@ describe('event sink subscriptions', () => {
       persister.stop();
 
       const records = (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
-        .trim().split('\n').map((line) => JSON.parse(line));
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
       expect(records).toEqual([{ ...event, ts: expect.any(String) }]);
       expect(await readdir(join(projectRoot, '.pipeline'))).toEqual(['events.jsonl']);
     } finally {
@@ -1364,7 +1526,9 @@ describe('event sink subscriptions', () => {
       persister.stop();
 
       const records = (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
-        .trim().split('\n').map((line) => JSON.parse(line));
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
       expect(records).toEqual(faultLap.map((event) => ({ ...event, ts: expect.any(String) })));
       expect(await readdir(join(projectRoot, '.pipeline'))).toEqual(['events.jsonl']);
     } finally {
@@ -1384,7 +1548,9 @@ describe('event sink subscriptions', () => {
       persister.stop();
 
       const records = (await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf8'))
-        .trim().split('\n').map((line) => JSON.parse(line));
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
       expect(records).toEqual([{ ...readOnlyReviewFault, ts: expect.any(String) }]);
       expect(await readdir(join(projectRoot, '.pipeline'))).toEqual(['events.jsonl']);
     } finally {
@@ -1396,30 +1562,48 @@ describe('event sink subscriptions', () => {
   it('declares every remediation case lifecycle occurrence for persistence without extra render, audit, or OTel subscriptions', () => {
     const expected = { render: false, persist: true, audit: false, otel: false };
 
-    expect(
+    expect(Object.fromEntries(REMEDIATION_CASE_LIFECYCLE_EVENT_TYPES.map((type) => [type, EVENT_SINKS[type]]))).toEqual(
       Object.fromEntries(
-        REMEDIATION_CASE_LIFECYCLE_EVENT_TYPES.map((type) => [type, EVENT_SINKS[type]]),
+        REMEDIATION_CASE_LIFECYCLE_EVENT_TYPES.map((type) => [
+          type,
+          type === 'remediation_adjudication_completed' ? { ...expected, render: true } : expected,
+        ]),
       ),
-    ).toEqual(Object.fromEntries(
-      REMEDIATION_CASE_LIFECYCLE_EVENT_TYPES.map((type) => [type, type === 'remediation_adjudication_completed'
-        ? { ...expected, render: true }
-        : expected]),
-    ));
+    );
   });
 
   it('keeps remediation re-raise telemetry on the registered lifecycle sinks', () => {
     const reconciled: ConductorEvent = {
-      type: 'remediation_case_reconciled', domain: 'build_review', lapId: 'lap-1' as never,
-      caseId: 'N', resolution: 'open', recurrenceOf: ['case-R'], reRaiseKind: 'residual-gap', boundCaseId: 'case-R',
+      type: 'remediation_case_reconciled',
+      domain: 'build_review',
+      lapId: 'lap-1' as never,
+      caseId: 'N',
+      resolution: 'open',
+      recurrenceOf: ['case-R'],
+      reRaiseKind: 'residual-gap',
+      boundCaseId: 'case-R',
     };
     const halted: ConductorEvent = {
-      type: 'remediation_semantic_repeat_halt', domain: 'build_review', lapId: 'lap-1' as never,
-      caseId: 'case-R', reason: 'recurrence-limit', reRaiseKind: 'undeclared', lineageCaseIds: ['case-R'], appliedAttempts: 3,
+      type: 'remediation_semantic_repeat_halt',
+      domain: 'build_review',
+      lapId: 'lap-1' as never,
+      caseId: 'case-R',
+      reason: 'recurrence-limit',
+      reRaiseKind: 'undeclared',
+      lineageCaseIds: ['case-R'],
+      appliedAttempts: 3,
     };
     expect(REMEDIATION_CASE_LIFECYCLE_EVENT_TYPES).toEqual([
-      'remediation_adjudication_started', 'remediation_adjudication_completed', 'remediation_adjudication_failed',
-      'build_review_acceptance_carried', 'remediation_case_operator_resolved', 'remediation_case_reconciled',
-      'remediation_effect_reserved', 'remediation_effect_applied', 'remediation_effect_failed', 'remediation_semantic_repeat_halt',
+      'remediation_adjudication_started',
+      'remediation_adjudication_completed',
+      'remediation_adjudication_failed',
+      'build_review_acceptance_carried',
+      'remediation_case_operator_resolved',
+      'remediation_case_reconciled',
+      'remediation_effect_reserved',
+      'remediation_effect_applied',
+      'remediation_effect_failed',
+      'remediation_semantic_repeat_halt',
     ]);
     expect(EVENT_SINKS[reconciled.type]).toEqual({ render: false, persist: true, audit: false, otel: false });
     expect(EVENT_SINKS[halted.type]).toEqual({ render: false, persist: true, audit: false, otel: false });
@@ -1474,9 +1658,10 @@ describe('event sink subscriptions', () => {
       await events.emit(event);
       persister.stop();
 
-      expect(
-        JSON.parse(await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf-8')),
-      ).toEqual({ ...event, ts: expect.any(String) });
+      expect(JSON.parse(await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf-8'))).toEqual({
+        ...event,
+        ts: expect.any(String),
+      });
     } finally {
       persister.stop();
       await rm(projectRoot, { recursive: true, force: true });
@@ -1566,7 +1751,9 @@ describe('event sink subscriptions', () => {
       persister.stop();
 
       const ledger = JSON.parse((await readFile(join(projectRoot, '.pipeline', 'events.jsonl'), 'utf-8')).trim());
-      const auditRecord = JSON.parse((await readFile(join(projectRoot, '.pipeline', 'audit-trail', 'events.jsonl'), 'utf-8')).trim());
+      const auditRecord = JSON.parse(
+        (await readFile(join(projectRoot, '.pipeline', 'audit-trail', 'events.jsonl'), 'utf-8')).trim(),
+      );
 
       expect({ ledger, auditRecord }).toMatchObject({
         ledger: { ...kickback, ts: expect.any(String) },
@@ -1648,16 +1835,16 @@ describe('event sink subscriptions', () => {
     }).toEqual({
       accepted: { render: false, persist: false, audit: false, otel: false },
       refused: { render: false, persist: false, audit: false, otel: false },
-      persisted: expect.not.arrayContaining([
-        'build_review_disposition_accepted',
-        'build_review_disposition_refused',
-      ]),
+      persisted: expect.not.arrayContaining(['build_review_disposition_accepted', 'build_review_disposition_refused']),
     });
   });
 
   it('audits engine-reported non-binding build-review dispositions', () => {
     expect(EVENT_SINKS.build_review_disposition_version_invalidated).toEqual({
-      render: false, persist: true, audit: true, otel: false,
+      render: false,
+      persist: true,
+      audit: true,
+      otel: false,
     });
   });
 
@@ -1828,46 +2015,51 @@ describe('event sink subscriptions', () => {
       ...NON_PERSISTED_REBASE_LIFECYCLE_EVENT_TYPES,
     ] satisfies Array<ConductorEvent['type']>;
 
-    expect(Object.fromEntries(neverPersisted.map((type) => [type, EVENT_SINKS[type].persist])))
-      .toEqual(Object.fromEntries(neverPersisted.map((type) => [type, false])));
+    expect(Object.fromEntries(neverPersisted.map((type) => [type, EVENT_SINKS[type].persist]))).toEqual(
+      Object.fromEntries(neverPersisted.map((type) => [type, false])),
+    );
   });
 
   it('derives the audited set without changing prior routing', () => {
-    expect(new Set(auditedEventTypes())).toEqual(new Set([
-      ...PRE_REFACTOR_AUDITED_EVENT_TYPES,
-      'decide_artifacts_pruned',
-      'verdict_freshness',
-      'halt_marker_write_failed',
-      'halt_record_written',
-      'halt_record_write_failed',
-      'halt_record_push_failed',
-      'shipment_evidence_refused',
-      'build_review_disposition_version_invalidated',
-      'build_review_cache_discarded',
-      'remediation_case_refuted',
-      ...REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES,
-      ...RESEAL_EVENT_TYPES,
-    ]));
+    expect(new Set(auditedEventTypes())).toEqual(
+      new Set([
+        ...PRE_REFACTOR_AUDITED_EVENT_TYPES,
+        'decide_artifacts_pruned',
+        'verdict_freshness',
+        'halt_marker_write_failed',
+        'halt_record_written',
+        'halt_record_write_failed',
+        'halt_record_push_failed',
+        'shipment_evidence_refused',
+        'build_review_disposition_version_invalidated',
+        'build_review_cache_discarded',
+        'remediation_case_refuted',
+        ...REMEDIATION_SEALED_ARTIFACT_REDIRECT_EVENT_TYPES,
+        ...RESEAL_EVENT_TYPES,
+      ]),
+    );
   });
 
   it('derives the daemon-rendered set from switch-handled and declarative render event types', () => {
-    expect(new Set(renderedEventTypes())).toEqual(new Set([
-      ...DAEMON_SWITCH_HANDLED_EVENT_TYPES,
-      'build_active_stall',
-      'executor_started',
-      'executor_protocol_mismatch',
-      'tracker_backend_unavailable',
-      'halt_marker_write_failed',
-      'halt_record_written',
-      'halt_record_write_failed',
-      'halt_record_push_failed',
-      'shipment_evidence_refused',
-      'preemption_boundary',
-      'step_in_flight',
-      'step_inapplicable',
-      'step_inapplicable_ignored',
-      'step_inapplicable_refused',
-    ]));
+    expect(new Set(renderedEventTypes())).toEqual(
+      new Set([
+        ...DAEMON_SWITCH_HANDLED_EVENT_TYPES,
+        'build_active_stall',
+        'executor_started',
+        'executor_protocol_mismatch',
+        'tracker_backend_unavailable',
+        'halt_marker_write_failed',
+        'halt_record_written',
+        'halt_record_write_failed',
+        'halt_record_push_failed',
+        'shipment_evidence_refused',
+        'preemption_boundary',
+        'step_in_flight',
+        'step_inapplicable',
+        'step_inapplicable_ignored',
+        'step_inapplicable_refused',
+      ]),
+    );
   });
 
   it('declares rendered, persisted, unaudited OpenTelemetry rows for every applicability event', () => {

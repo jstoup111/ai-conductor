@@ -1248,6 +1248,7 @@ async function dispatchCliCommand(): Promise<void> {
       await runRoundStamp({
         projectRoot,
         commitMessagePath: roundStampCmd.commitMessagePath,
+        verify: roundStampCmd.verify,
       }),
     );
   }

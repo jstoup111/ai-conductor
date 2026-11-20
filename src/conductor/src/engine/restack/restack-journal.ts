@@ -4,7 +4,12 @@ import { hostname } from 'node:os';
 import type { ChildId } from '../child-context.js';
 import { parseChildId } from '../child-context.js';
 import { makeGitRunner, type GitRunner } from '../rebase.js';
-import { parseRevalidationQueueRecord, parseRoundId, type RevalidationQueueEntry, type RoundId } from '../routing/route-types.js';
+import {
+  parseRevalidationQueueRecord,
+  parseRoundId,
+  type RevalidationQueueEntry,
+  type RoundId,
+} from '../routing/route-types.js';
 import type { ConductorEventEmitter } from '../conductor-event-emitter.js';
 import { emitRestackRefused } from './restack-events.js';
 import {
@@ -22,6 +27,7 @@ import {
 } from './restack-types.js';
 import type { CommitterStamp } from './restack-replay.js';
 import type { ConsumedConflictRefs } from './restack-conflict-record.js';
+import type { FoldCommitPlan, FoldPart } from './fold-types.js';
 
 export interface RestackJournalOwner {
   readonly host: string;
@@ -74,6 +80,8 @@ export interface DeliveredRestackDecision {
 export interface RestackJournalDraft {
   readonly opId: RestackOpId;
   readonly cause: RestackCause;
+  /** Immutable source-to-target correspondence for a leaf fold. */
+  readonly foldPlan?: readonly FoldCommitPlan[];
   readonly followOnCause?: RestackCause;
   readonly committer: CommitterStamp;
   /** The exact target default used by this operation, never re-resolved on recovery. */
@@ -148,10 +156,16 @@ export interface RestackJournalDependencies {
 }
 
 const journalStates = new Set<JournalState>([
-  'planned', 'ready', 'moved', 'synced', 'applied', 'aborted', 'rolling-back',
+  'planned',
+  'ready',
+  'moved',
+  'synced',
+  'applied',
+  'aborted',
+  'rolling-back',
 ]);
 const childStatuses = new Set<ChildStatus>(['pending', 'replayed', 'resolved']);
-const causes = new Set<RestackCause>(['feature-repair', 'base-refresh']);
+const causes = new Set<RestackCause>(['feature-repair', 'base-refresh', 'fold']);
 
 export function journalRefFor(slug: string): RefName {
   return `refs/conductor/${slug}/restack/journal` as RefName;
@@ -182,18 +196,35 @@ function isStringArray(value: unknown): value is readonly string[] {
 }
 
 function parseCause(value: unknown): RestackCause | undefined {
-  return typeof value === 'string' && causes.has(value as RestackCause) ? value as RestackCause : undefined;
+  return typeof value === 'string' && causes.has(value as RestackCause) ? (value as RestackCause) : undefined;
 }
 
 function parseOwner(value: unknown): RestackJournalOwner | undefined {
-  if (!isRecord(value) || typeof value.host !== 'string' || value.host === '' || typeof value.pid !== 'number' || !Number.isInteger(value.pid) || value.pid <= 0
-    || typeof value.processStartTime !== 'string' || value.processStartTime === '') return undefined;
+  if (
+    !isRecord(value) ||
+    typeof value.host !== 'string' ||
+    value.host === '' ||
+    typeof value.pid !== 'number' ||
+    !Number.isInteger(value.pid) ||
+    value.pid <= 0 ||
+    typeof value.processStartTime !== 'string' ||
+    value.processStartTime === ''
+  )
+    return undefined;
   return { host: value.host, pid: value.pid, processStartTime: value.processStartTime };
 }
 
 function parseCommitter(value: unknown): CommitterStamp | undefined {
-  if (!isRecord(value) || typeof value.name !== 'string' || value.name === '' || typeof value.email !== 'string' || value.email === ''
-    || typeof value.date !== 'string' || value.date === '') return undefined;
+  if (
+    !isRecord(value) ||
+    typeof value.name !== 'string' ||
+    value.name === '' ||
+    typeof value.email !== 'string' ||
+    value.email === '' ||
+    typeof value.date !== 'string' ||
+    value.date === ''
+  )
+    return undefined;
   return { name: value.name, email: value.email, date: value.date };
 }
 
@@ -214,8 +245,17 @@ function parseRanges(value: unknown): readonly ChildRange[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const ranges: ChildRange[] = [];
   for (const item of value) {
-    if (!isRecord(item) || typeof item.child !== 'number' || typeof item.oldParent !== 'string' || typeof item.oldTip !== 'string'
-      || (item.kind !== 'closed' && item.kind !== 'active' && item.kind !== 'leaf-active' && item.kind !== 'leaf-unentered')) return undefined;
+    if (
+      !isRecord(item) ||
+      typeof item.child !== 'number' ||
+      typeof item.oldParent !== 'string' ||
+      typeof item.oldTip !== 'string' ||
+      (item.kind !== 'closed' &&
+        item.kind !== 'active' &&
+        item.kind !== 'leaf-active' &&
+        item.kind !== 'leaf-unentered')
+    )
+      return undefined;
     const child = parseChildId(item.child);
     const oldParent = parseCommitSha(item.oldParent);
     const oldTip = parseCommitSha(item.oldTip);
@@ -253,8 +293,14 @@ function parseRewrites(value: unknown): readonly RestackJournalRewrite[] | undef
 }
 
 function parseConsumedResolution(value: unknown): ConsumedConflictRefs | undefined {
-  if (!isRecord(value) || typeof value.child !== 'number' || typeof value.tip !== 'string'
-    || typeof value.record !== 'string' || typeof value.parent !== 'string') return undefined;
+  if (
+    !isRecord(value) ||
+    typeof value.child !== 'number' ||
+    typeof value.tip !== 'string' ||
+    typeof value.record !== 'string' ||
+    typeof value.parent !== 'string'
+  )
+    return undefined;
   const child = parseChildId(value.child);
   const tip = parseCommitSha(value.tip);
   const record = parseCommitSha(value.record);
@@ -263,19 +309,46 @@ function parseConsumedResolution(value: unknown): ConsumedConflictRefs | undefin
 }
 
 function parseRouted(value: unknown): RestackJournalRouted | undefined {
-  if (!isRecord(value) || typeof value.roundId !== 'string' || typeof value.host !== 'number'
-    || typeof value.routeOld !== 'string' || typeof value.markerOld !== 'string') return undefined;
+  if (
+    !isRecord(value) ||
+    typeof value.roundId !== 'string' ||
+    typeof value.host !== 'number' ||
+    typeof value.routeOld !== 'string' ||
+    typeof value.markerOld !== 'string'
+  )
+    return undefined;
   const roundId = parseRoundId(value.roundId);
   const host = parseChildId(value.host);
   const routeOld = parseCommitSha(value.routeOld);
   const markerOld = parseCommitSha(value.markerOld);
-  const queueOld = value.queueOld === undefined ? undefined : typeof value.queueOld === 'string' ? parseCommitSha(value.queueOld) : undefined;
-  const routeNew = value.routeNew === undefined ? undefined : typeof value.routeNew === 'string' ? parseCommitSha(value.routeNew) : undefined;
-  const queueNew = value.queueNew === undefined ? undefined : typeof value.queueNew === 'string' ? parseCommitSha(value.queueNew) : undefined;
-  if (!roundId || !host || !routeOld || !markerOld
-    || (value.queueOld !== undefined && !queueOld)
-    || (value.routeNew !== undefined && !routeNew)
-    || (value.queueNew !== undefined && !queueNew)) return undefined;
+  const queueOld =
+    value.queueOld === undefined
+      ? undefined
+      : typeof value.queueOld === 'string'
+        ? parseCommitSha(value.queueOld)
+        : undefined;
+  const routeNew =
+    value.routeNew === undefined
+      ? undefined
+      : typeof value.routeNew === 'string'
+        ? parseCommitSha(value.routeNew)
+        : undefined;
+  const queueNew =
+    value.queueNew === undefined
+      ? undefined
+      : typeof value.queueNew === 'string'
+        ? parseCommitSha(value.queueNew)
+        : undefined;
+  if (
+    !roundId ||
+    !host ||
+    !routeOld ||
+    !markerOld ||
+    (value.queueOld !== undefined && !queueOld) ||
+    (value.routeNew !== undefined && !routeNew) ||
+    (value.queueNew !== undefined && !queueNew)
+  )
+    return undefined;
   return {
     roundId,
     host,
@@ -304,8 +377,88 @@ function parseQueueInvalidation(value: unknown): readonly RevalidationQueueEntry
   return parseRevalidationQueueRecord(JSON.stringify({ generation: 0, entries: value, outbox: [] }))?.entries;
 }
 
+/** Fold plans are durable recovery input, so reject a malformed correspondence. */
+function parseFoldPlan(value: unknown): readonly FoldCommitPlan[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const commits: FoldCommitPlan[] = [];
+  for (const item of value) {
+    if (
+      !isRecord(item) ||
+      typeof item.sha !== 'string' ||
+      typeof item.roundId !== 'string' ||
+      typeof item.owner !== 'number' ||
+      !Array.isArray(item.parts)
+    )
+      return undefined;
+    const sha = parseCommitSha(item.sha);
+    const roundId = parseRoundId(item.roundId);
+    const owner = parseChildId(item.owner);
+    if (!sha || !roundId || !owner) return undefined;
+    const parts: FoldPart[] = [];
+    for (const raw of item.parts) {
+      if (
+        !isRecord(raw) ||
+        typeof raw.kind !== 'string' ||
+        (raw.reason !== 'owner' && raw.reason !== 'introduced-above-owner')
+      )
+        return undefined;
+      const child = raw.child === 'leaf' ? 'leaf' : typeof raw.child === 'number' ? parseChildId(raw.child) : undefined;
+      if (!child) return undefined;
+      if (raw.kind === 'whole') {
+        if (child === 'leaf' || raw.reason !== 'owner' || !Array.isArray(raw.paths) || raw.paths.length !== 0)
+          return undefined;
+        parts.push({ kind: 'whole', child, paths: [], reason: 'owner' });
+      } else if (raw.kind === 'blocks') {
+        if (
+          child === 'leaf' ||
+          raw.reason !== 'owner' ||
+          !Array.isArray(raw.paths) ||
+          raw.paths.length !== 0 ||
+          !Array.isArray(raw.blocks) ||
+          !raw.blocks.every(
+            (block) => isRecord(block) && typeof block.id === 'string' && typeof block.body === 'string',
+          )
+        )
+          return undefined;
+        parts.push({
+          kind: 'blocks',
+          child,
+          paths: [],
+          reason: 'owner',
+          blocks: raw.blocks.map((block) => ({
+            id: (block as Record<string, string>).id,
+            body: (block as Record<string, string>).body,
+          })),
+        });
+      } else if (raw.kind === 'hunks') {
+        if (
+          typeof raw.path !== 'string' ||
+          !isRecord(raw.hunk) ||
+          typeof raw.hunk.path !== 'string' ||
+          typeof raw.hunk.patch !== 'string' ||
+          typeof raw.hunk.wholeFile !== 'boolean' ||
+          typeof raw.hunk.probe !== 'string'
+        )
+          return undefined;
+        const probe = parseCommitSha(raw.hunk.probe);
+        if (!probe) return undefined;
+        parts.push({
+          kind: 'hunks',
+          child,
+          path: raw.path,
+          hunk: { path: raw.hunk.path, patch: raw.hunk.patch, wholeFile: raw.hunk.wholeFile, probe },
+          reason: raw.reason,
+        });
+      } else return undefined;
+    }
+    commits.push({ sha, roundId, owner, parts });
+  }
+  return commits;
+}
+
 function parseJournal(value: unknown): RestackJournal | undefined {
-  if (!isRecord(value) || typeof value.opId !== 'string' || value.opId === '' || typeof value.state !== 'string') return undefined;
+  if (!isRecord(value) || typeof value.opId !== 'string' || value.opId === '' || typeof value.state !== 'string')
+    return undefined;
   const cause = parseCause(value.cause);
   const followOnCause = value.followOnCause === undefined ? undefined : parseCause(value.followOnCause);
   const owner = parseOwner(value.owner);
@@ -313,35 +466,70 @@ function parseJournal(value: unknown): RestackJournal | undefined {
   const refs = parseRefs(value.refs);
   const ranges = parseRanges(value.ranges);
   const children = parseChildren(value.children);
-  const newDefault = value.newDefault === undefined ? undefined : typeof value.newDefault === 'string' ? parseCommitSha(value.newDefault) : undefined;
-  const comparisonCommits = value.comparisonCommits === undefined ? undefined
-    : Array.isArray(value.comparisonCommits)
-      ? value.comparisonCommits.map((commit) => typeof commit === 'string' ? parseCommitSha(commit) : undefined)
-      : undefined;
-  const originatingChildren = value.originatingChildren === undefined ? undefined
-    : Array.isArray(value.originatingChildren)
-      ? value.originatingChildren.map((child) => typeof child === 'number' ? parseChildId(child) : undefined)
-      : undefined;
+  const newDefault =
+    value.newDefault === undefined
+      ? undefined
+      : typeof value.newDefault === 'string'
+        ? parseCommitSha(value.newDefault)
+        : undefined;
+  const comparisonCommits =
+    value.comparisonCommits === undefined
+      ? undefined
+      : Array.isArray(value.comparisonCommits)
+        ? value.comparisonCommits.map((commit) => (typeof commit === 'string' ? parseCommitSha(commit) : undefined))
+        : undefined;
+  const originatingChildren =
+    value.originatingChildren === undefined
+      ? undefined
+      : Array.isArray(value.originatingChildren)
+        ? value.originatingChildren.map((child) => (typeof child === 'number' ? parseChildId(child) : undefined))
+        : undefined;
   const routed = value.routed === undefined ? undefined : parseRouted(value.routed);
   const invalidation = value.invalidation === undefined ? undefined : parseInvalidation(value.invalidation);
-  const queueOld = value.queueOld === undefined ? undefined : typeof value.queueOld === 'string' ? parseCommitSha(value.queueOld) : undefined;
-  const queueNew = value.queueNew === undefined ? undefined : typeof value.queueNew === 'string' ? parseCommitSha(value.queueNew) : undefined;
-  const queueInvalidation = value.queueInvalidation === undefined ? undefined : parseQueueInvalidation(value.queueInvalidation);
-  const consumedResolution = value.consumedResolution === undefined ? undefined : parseConsumedResolution(value.consumedResolution);
-  const deliveredDecision = value.deliveredDecision === undefined ? undefined : parseDeliveredDecision(value.deliveredDecision);
-  if (!cause || (value.followOnCause !== undefined && !followOnCause) || !journalStates.has(value.state as JournalState) || !owner || !committer
-    || !isStringArray(value.dirtyPaths) || !refs || !ranges || !children
-    || (value.newDefault !== undefined && !newDefault)
-    || (value.comparisonCommits !== undefined && (!comparisonCommits || comparisonCommits.some((commit) => !commit)))
-    || (value.originatingChildren !== undefined && (!originatingChildren || originatingChildren.some((child) => !child)))
-    || (value.routed !== undefined && !routed)
-    || (value.invalidation !== undefined && !invalidation)
-    || (value.queueTracked !== undefined && value.queueTracked !== true)
-    || (value.queueOld !== undefined && !queueOld)
-    || (value.queueNew !== undefined && !queueNew)
-    || (value.queueInvalidation !== undefined && !queueInvalidation)
-    || (value.consumedResolution !== undefined && !consumedResolution)
-    || (value.deliveredDecision !== undefined && !deliveredDecision)) return undefined;
+  const queueOld =
+    value.queueOld === undefined
+      ? undefined
+      : typeof value.queueOld === 'string'
+        ? parseCommitSha(value.queueOld)
+        : undefined;
+  const queueNew =
+    value.queueNew === undefined
+      ? undefined
+      : typeof value.queueNew === 'string'
+        ? parseCommitSha(value.queueNew)
+        : undefined;
+  const queueInvalidation =
+    value.queueInvalidation === undefined ? undefined : parseQueueInvalidation(value.queueInvalidation);
+  const consumedResolution =
+    value.consumedResolution === undefined ? undefined : parseConsumedResolution(value.consumedResolution);
+  const deliveredDecision =
+    value.deliveredDecision === undefined ? undefined : parseDeliveredDecision(value.deliveredDecision);
+  const foldPlan = value.foldPlan === undefined ? undefined : parseFoldPlan(value.foldPlan);
+  if (
+    !cause ||
+    (value.followOnCause !== undefined && !followOnCause) ||
+    !journalStates.has(value.state as JournalState) ||
+    !owner ||
+    !committer ||
+    !isStringArray(value.dirtyPaths) ||
+    !refs ||
+    !ranges ||
+    !children ||
+    (value.newDefault !== undefined && !newDefault) ||
+    (value.comparisonCommits !== undefined && (!comparisonCommits || comparisonCommits.some((commit) => !commit))) ||
+    (value.originatingChildren !== undefined &&
+      (!originatingChildren || originatingChildren.some((child) => !child))) ||
+    (value.routed !== undefined && !routed) ||
+    (value.invalidation !== undefined && !invalidation) ||
+    (value.queueTracked !== undefined && value.queueTracked !== true) ||
+    (value.queueOld !== undefined && !queueOld) ||
+    (value.queueNew !== undefined && !queueNew) ||
+    (value.queueInvalidation !== undefined && !queueInvalidation) ||
+    (value.consumedResolution !== undefined && !consumedResolution) ||
+    (value.deliveredDecision !== undefined && !deliveredDecision) ||
+    (value.foldPlan !== undefined && !foldPlan)
+  )
+    return undefined;
   return {
     opId: value.opId as RestackOpId,
     cause,
@@ -358,6 +546,7 @@ function parseJournal(value: unknown): RestackJournal | undefined {
     ...(queueInvalidation === undefined ? {} : { queueInvalidation }),
     ...(consumedResolution === undefined ? {} : { consumedResolution }),
     ...(deliveredDecision === undefined ? {} : { deliveredDecision }),
+    ...(foldPlan === undefined ? {} : { foldPlan }),
     dirtyPaths: [...value.dirtyPaths],
     refs,
     ranges,
@@ -368,7 +557,14 @@ function parseJournal(value: unknown): RestackJournal | undefined {
 }
 
 function parseDeliveredDecision(value: unknown): DeliveredRestackDecision | undefined {
-  if (!isRecord(value) || typeof value.child !== 'number' || typeof value.blob !== 'string' || typeof value.record !== 'string' || typeof value.parent !== 'string') return undefined;
+  if (
+    !isRecord(value) ||
+    typeof value.child !== 'number' ||
+    typeof value.blob !== 'string' ||
+    typeof value.record !== 'string' ||
+    typeof value.parent !== 'string'
+  )
+    return undefined;
   const child = parseChildId(value.child);
   const blob = parseCommitSha(value.blob);
   const record = parseCommitSha(value.record);
@@ -379,7 +575,10 @@ function parseDeliveredDecision(value: unknown): DeliveredRestackDecision | unde
 async function processStartTime(pid: number): Promise<string | undefined> {
   try {
     const stat = await readFile(`/proc/${pid}/stat`, 'utf8');
-    const afterCommand = stat.slice(stat.lastIndexOf(') ') + 2).trim().split(/\s+/);
+    const afterCommand = stat
+      .slice(stat.lastIndexOf(') ') + 2)
+      .trim()
+      .split(/\s+/);
     // Field 3 is index zero after the command; field 22 is the process start time.
     return afterCommand[19];
   } catch {
@@ -407,7 +606,8 @@ export async function writeRestackJournalBlob(
   const git = dependencies.git ?? makeGitRunner(worktree);
   const written = await runGit(git, ['hash-object', '-w', '--stdin'], JSON.stringify(journal));
   const blob = written?.exitCode === 0 ? parseCommitSha(written.stdout.trim()) : undefined;
-  if (!blob) throw new Error(`could not write restack journal blob: ${written ? resultDetail(written) : 'Git unavailable'}`);
+  if (!blob)
+    throw new Error(`could not write restack journal blob: ${written ? resultDetail(written) : 'Git unavailable'}`);
   return blob;
 }
 
@@ -466,25 +666,30 @@ export async function recordRoutedApplyPlan(
   plan: RoutedApplyPlan,
   dependencies: RestackJournalDependencies = {},
 ): Promise<RecordRoutedApplyPlanResult> {
-  if (previous.journal.state !== 'synced' || (plan.routeNew !== undefined && !previous.journal.routed)) return { kind: 'stale' };
+  if (previous.journal.state !== 'synced' || (plan.routeNew !== undefined && !previous.journal.routed))
+    return { kind: 'stale' };
   const journal: RestackJournal = {
     ...previous.journal,
-    ...(previous.journal.routed === undefined ? {} : {
-      routed: {
-        ...previous.journal.routed,
-        ...(plan.routeNew === undefined ? {} : { routeNew: plan.routeNew }),
-        ...(plan.queueNew === undefined ? {} : { queueNew: plan.queueNew }),
-      },
-    }),
+    ...(previous.journal.routed === undefined
+      ? {}
+      : {
+          routed: {
+            ...previous.journal.routed,
+            ...(plan.routeNew === undefined ? {} : { routeNew: plan.routeNew }),
+            ...(plan.queueNew === undefined ? {} : { queueNew: plan.queueNew }),
+          },
+        }),
     ...(plan.queueNew === undefined ? {} : { queueNew: plan.queueNew }),
     invalidation: plan.invalidation.map((entry) => ({ ...entry, gates: [...entry.gates] })),
-    ...(plan.queueInvalidation === undefined ? {} : {
-      queueInvalidation: plan.queueInvalidation.map((entry) => ({
-        ...entry,
-        gates: [...entry.gates],
-        replay: { ...entry.replay },
-      })),
-    }),
+    ...(plan.queueInvalidation === undefined
+      ? {}
+      : {
+          queueInvalidation: plan.queueInvalidation.map((entry) => ({
+            ...entry,
+            gates: [...entry.gates],
+            replay: { ...entry.replay },
+          })),
+        }),
   };
   const git = dependencies.git ?? makeGitRunner(worktree);
   const blob = await writeRestackJournalBlob(worktree, journal, { git });
@@ -546,12 +751,14 @@ function childWithStatus(
     found = true;
     return { ...entry, status, rewrites: [...rewrites].map(([from, to]) => ({ from, to })) };
   });
-  return found ? {
-    ...journal,
-    children,
-    ...(consumedResolution === undefined ? {} : { consumedResolution }),
-    ...(deliveredDecision === undefined ? {} : { deliveredDecision }),
-  } : undefined;
+  return found
+    ? {
+        ...journal,
+        children,
+        ...(consumedResolution === undefined ? {} : { consumedResolution }),
+        ...(deliveredDecision === undefined ? {} : { deliveredDecision }),
+      }
+    : undefined;
 }
 
 /** Atomically record a planned child's replay result and pin its staged commit. */
@@ -570,7 +777,12 @@ export async function updateRestackChildStatus(
 ): Promise<UpdateRestackChildStatusResult> {
   if (previous.slug !== slug) return { kind: 'unavailable', detail: 'journal slug does not match staging slug' };
   const journal = childWithStatus(
-    previous.journal, child, status, rewrites, dependencies.consumedResolution, dependencies.deliveredDecision,
+    previous.journal,
+    child,
+    status,
+    rewrites,
+    dependencies.consumedResolution,
+    dependencies.deliveredDecision,
   );
   if (!journal) return { kind: 'unavailable', detail: 'invalid restack child-status transition' };
   const git = dependencies.git ?? makeGitRunner(worktree);
@@ -580,7 +792,14 @@ export async function updateRestackChildStatus(
   if (oldStage === undefined) return { kind: 'unavailable', detail: 'cannot read staging ref' };
   // Child progress changes are not journal *state* transitions; keeping this
   // CAS separate is what lets the state-transition guard stay exact.
-  const input = ['start', `update ${journalRefFor(slug)} ${blob} ${previous.blob}`, `update ${stage} ${tip} ${oldStage}`, 'prepare', 'commit', ''].join('\n');
+  const input = [
+    'start',
+    `update ${journalRefFor(slug)} ${blob} ${previous.blob}`,
+    `update ${stage} ${tip} ${oldStage}`,
+    'prepare',
+    'commit',
+    '',
+  ].join('\n');
   const updated = await runGit(git, ['update-ref', '--stdin'], input);
   if (updated?.exitCode !== 0) return { kind: 'stale' };
   if (!updated) return { kind: 'unavailable', detail: 'Git unavailable while updating restack journal' };
@@ -614,7 +833,11 @@ export async function replaceAppliedJournalWithFollowOn(
   followOn: RestackJournalDraft,
   dependencies: RestackJournalDependencies = {},
 ): Promise<CreateRestackJournalResult> {
-  if (applied.slug !== slug || applied.journal.state !== 'applied' || applied.journal.followOnCause !== followOn.cause) {
+  if (
+    applied.slug !== slug ||
+    applied.journal.state !== 'applied' ||
+    applied.journal.followOnCause !== followOn.cause
+  ) {
     return { kind: 'refused', reason: 'restack-outstanding' };
   }
   const owner = await currentOwner();
@@ -624,7 +847,14 @@ export async function replaceAppliedJournalWithFollowOn(
   const blob = await writeRestackJournalBlob(worktree, journal, { git });
   const deletes = await stagingDeleteLines(git, slug);
   if (deletes === undefined) return { kind: 'unavailable', detail: 'cannot list restack staging refs' };
-  const input = ['start', `update ${journalRefFor(slug)} ${blob} ${applied.blob}`, ...deletes, 'prepare', 'commit', ''].join('\n');
+  const input = [
+    'start',
+    `update ${journalRefFor(slug)} ${blob} ${applied.blob}`,
+    ...deletes,
+    'prepare',
+    'commit',
+    '',
+  ].join('\n');
   const replaced = await runGit(git, ['update-ref', '--stdin'], input);
   if (replaced?.exitCode === 0) return { kind: 'created', journal: { slug, blob, journal } };
   if (replaced !== undefined) return { kind: 'refused', reason: 'restack-outstanding' };
