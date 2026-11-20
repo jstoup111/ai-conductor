@@ -938,7 +938,7 @@ function formatDependencyDrift(result: DependencyDriftResult): string {
   if (result.kind === 'repository-indeterminate') {
     return `Dependency drift audit: indeterminate (${result.cause})`;
   }
-  const findings = <T>(name: string, values: readonly T[], render: (value: T) => string): string =>
+  const findings = <T,>(name: string, values: readonly T[], render: (value: T) => string): string =>
     values.length === 0
       ? `${name}: 0 findings`
       : `${name}: ${values.length} finding(s)\n${values.map((value) => `  ${render(value)}`).join('\n')}`;
