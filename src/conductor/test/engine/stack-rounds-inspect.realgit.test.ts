@@ -19,6 +19,7 @@ const cleanup: string[] = [];
 const slug = 'demo';
 const c1 = parseChildId(1)!;
 const c2 = parseChildId(2)!;
+const c3 = parseChildId(3)!;
 const r3 = parseRoundId('r3')!;
 const r4 = parseRoundId('r4')!;
 const r5 = parseRoundId('r5')!;
@@ -38,7 +39,11 @@ async function fixture() {
       items: [],
       allocation:
         roundId === r4
-          ? { [c1]: { remTaskIds: [], blockBodies: [] }, [c2]: { remTaskIds: [], blockBodies: [] } }
+          ? {
+              [c1]: { remTaskIds: [], blockBodies: [] },
+              [c2]: { remTaskIds: [], blockBodies: [] },
+              [c3]: { remTaskIds: [], blockBodies: [] },
+            }
           : { [c1]: { remTaskIds: [], blockBodies: [] } },
     });
     if (created.kind !== 'created') throw new Error(`could not create ${roundId}: ${created.kind}`);
@@ -54,10 +59,10 @@ async function fixture() {
     ...stored4.record,
     phase: 'open',
     execution: 'leaf',
-    hosts: { [c1]: 'done', [c2]: 'pending' },
+    hosts: { [c1]: 'done', [c2]: 'pending', [c3]: 'done' },
     placements: {
       [c1]: { state: 'deferred', leafEntryTip: boundary, exitTip: boundary },
-      [c2]: { state: 'placed', leafEntryTip: boundary, exitTip: boundary },
+      [c3]: { state: 'placed', leafEntryTip: boundary, exitTip: boundary },
     },
     receipt: settled,
   };
@@ -101,7 +106,7 @@ describe('stack rounds inspection (real local Git)', () => {
     expect(described.rounds.map((round) => round.roundId)).toEqual([r4, r5]);
     expect(described.marker).toMatchObject({ kind: 'marker', marker: { host: c1, roundId: r5 } });
     expect(renderRoutingRounds(slug, described)).toContain(
-      'r4 audit open hosts 1:done execution=leaf placement=deferred, 2:pending execution=leaf placement=placed current host 1 settled outbox 0',
+      'r4 audit open hosts 1:done execution=leaf placement=deferred, 2:pending execution=leaf placement=none, 3:done execution=leaf placement=placed current host 1 settled outbox 0',
     );
     expect(renderRoutingRounds(slug, described)).toContain(
       'r5 audit open hosts 1:repairing execution=owner placement=none current host 1 unsettled outbox 0',
