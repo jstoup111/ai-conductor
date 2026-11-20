@@ -201,6 +201,17 @@ describe('composer run records', () => {
     expect(parseRunRecord(serializeRunRecord(reaccepted))).toEqual(reaccepted);
   });
 
+  it('retains draft artifact paths without granting them acceptance provenance', () => {
+    const drafted = recordDraft(emptyRecord(), 'architecture_diagram', ['.docs/architecture/composer-run.md']);
+
+    expect(drafted.steps.architecture_diagram).toEqual({
+      state: 'draft',
+      artifacts: ['.docs/architecture/composer-run.md'],
+    });
+    expect(serializeRunRecord(drafted)).not.toContain('sha256');
+    expect(parseRunRecord(serializeRunRecord(drafted))).toEqual(drafted);
+  });
+
   it('rejects unknown schema versions and step states, and never serializes an owner marker', () => {
     expect(() =>
       parseRunRecord(

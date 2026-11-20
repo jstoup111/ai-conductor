@@ -35,6 +35,11 @@ export interface AcceptedRunStep {
 
 export interface DraftRunStep {
   readonly state: 'draft';
+  /**
+   * Paths saved with this draft. They deliberately have no digest or accepting
+   * actor: a later explicit acceptance computes the digest from the worktree.
+   */
+  readonly artifacts?: readonly string[];
 }
 
 export type RunStep = AcceptedRunStep | DraftRunStep;
@@ -208,8 +213,12 @@ function parseTextList(value: unknown, field: string): readonly string[] {
 function parseStep(value: unknown): RunStep {
   if (!isObject(value)) throw new Error('Run record step must be an object');
   if (value.state === 'draft') {
-    if (Object.keys(value).some((key) => key !== 'state')) throw new Error('Run record draft step has unknown fields');
-    return { state: 'draft' };
+    if (Object.keys(value).some((key) => key !== 'state' && key !== 'artifacts'))
+      throw new Error('Run record draft step has unknown fields');
+    if (value.artifacts === undefined) return { state: 'draft' };
+    const artifacts = parseTextList(value.artifacts, 'draft step artifacts');
+    if (artifacts.some((path) => path.length === 0)) throw new Error('Run record draft step artifact paths must be non-empty');
+    return { state: 'draft', artifacts };
   }
   if (value.state !== 'accepted') throw new Error('Run record step state must be accepted or draft');
   if (Object.keys(value).some((key) => !['state', 'actor', 'provider', 'at', 'artifacts'].includes(key))) {
@@ -405,14 +414,19 @@ export function recordAcceptance(record: RunRecord, input: RecordAcceptanceInput
 }
 
 /**
- * Save a step as draft without retaining actor or accepted artifacts on that
- * draft step. The last accepted revision remains in the record for a later
- * explicit acceptance comparison.
+ * Save a step as draft without retaining actor or accepted digests on that
+ * draft step. Paths let a later explicit acceptance recover the draft even
+ * after another commit moves HEAD; accepted provenance stays separate.
  */
-export function recordDraft(record: RunRecord, step: RunStepId): RunRecord {
+export function recordDraft(record: RunRecord, step: RunStepId, artifacts: readonly string[] = []): RunRecord {
+  const prior = record.steps[step];
+  const savedArtifacts = [...new Set([...(prior?.state === 'draft' ? (prior.artifacts ?? []) : []), ...artifacts])];
   return {
     ...record,
-    steps: { ...record.steps, [step]: { state: 'draft' } },
+    steps: {
+      ...record.steps,
+      [step]: { state: 'draft', ...(savedArtifacts.length > 0 ? { artifacts: savedArtifacts } : {}) },
+    },
   };
 }
 
