@@ -329,13 +329,12 @@ export async function checkpointComposerRun(
     recordExists = false;
     if (!(error instanceof Error) || !error.message.startsWith('ENOENT')) throw error;
   }
-  const acceptingSavedDraft = request.state === 'accepted' && record.steps[step]?.state === 'draft';
-  // A saved draft deliberately stores no acceptance state of its own, but the
-  // run record retains the last accepted artifact set for precisely this
-  // re-acceptance boundary. Read those paths from the record rather than HEAD:
-  // another commit may have intervened, and a dirty worktree may add paths.
+  const savedStep = record.steps[step];
+  const acceptingSavedDraft = request.state === 'accepted' && savedStep?.state === 'draft';
+  // Draft paths are durable independently of HEAD. A later commit can move
+  // HEAD before the operator explicitly accepts the saved draft.
   const savedDraftPaths = acceptingSavedDraft
-    ? (record.lastAcceptedArtifacts?.[step] ?? []).map(({ path }) => path)
+    ? savedStep.artifacts ?? []
     : [];
   const reconfirming =
     request.state === 'accepted' && record.needsReconfirm.includes(step) && record.steps[step]?.state === 'accepted';
@@ -378,7 +377,11 @@ export async function checkpointComposerRun(
       ...notes,
     });
   } else {
-    record = { ...recordDraft(record, step), notes: { ...record.notes, [step]: notes } };
+    const draftArtifacts = dirtyDocs.filter(
+      (path) =>
+        stepForArtifactPath(path) === step && path !== '.docs/coherence/.gitkeep' && !path.startsWith('.docs/plan-review/'),
+    );
+    record = { ...recordDraft(record, step, draftArtifacts), notes: { ...record.notes, [step]: notes } };
   }
 
   const checkpointAt = (deps.now ?? (() => new Date().toISOString()))();
