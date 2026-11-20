@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { DispatchLiveBoundary } from '../../../src/engine/self-host/dispatch-live-boundary.js';
+import {
+  DispatchLiveBoundary,
+  DispatchLiveBoundaryExpiredError,
+} from '../../../src/engine/self-host/dispatch-live-boundary.js';
 import { LiveBoundaryCoordinator } from '../../../src/engine/self-host/live-boundary-coordinator.js';
 import { verifyLiveBoundary } from '../../../src/engine/self-host/live-boundary.js';
 
@@ -51,7 +54,7 @@ describe('DispatchLiveBoundary', () => {
           probe: h.probe,
         });
         expect(lease.containment).toEqual({ contained: true, evidence: 'contained' });
-        lease.release();
+        await lease.release();
       }
       await h.boundary.end();
     });
@@ -76,14 +79,14 @@ describe('DispatchLiveBoundary', () => {
         provider: 'claude',
         probe: h.probe,
       });
-      first.release();
+      await first.release();
       const second = await h.boundary.acquire({
         liveCheckout: '/live',
         providerHome: '/codex',
         provider: 'codex',
         probe: h.probe,
       });
-      second.release();
+      await second.release();
       await h.boundary.end();
     });
     expect(h.fingerprintLiveCheckout).toHaveBeenCalledOnce();
@@ -113,7 +116,7 @@ describe('DispatchLiveBoundary', () => {
       await Promise.resolve();
       expect(fingerprintLiveCheckout).toHaveBeenCalledOnce();
       resolveLive();
-      for (const lease of await Promise.all(leases)) lease.release();
+      for (const lease of await Promise.all(leases)) await lease.release();
       await h.boundary.end();
     });
     expect(fingerprintLiveCheckout).toHaveBeenCalledOnce();
@@ -138,14 +141,14 @@ describe('DispatchLiveBoundary', () => {
         provider: 'claude',
         probe: h.probe,
       });
-      lease.release();
+      await lease.release();
       await h.boundary.end();
     });
     await queuedMutation;
     expect(mutation).toHaveBeenCalledOnce();
     expect(fingerprintLiveCheckout).toHaveBeenCalledTimes(2);
     expect(h.events.filter((event: any) => event.type === 'self_host_boundary_fingerprint')).toEqual([
-      { type: 'self_host_boundary_fingerprint', surfaces: [live.measurement] },
+      { type: 'self_host_boundary_fingerprint', surfaces: [live.measurement, provider('/claude').measurement] },
     ]);
   });
 
@@ -192,6 +195,35 @@ describe('DispatchLiveBoundary', () => {
     expect(fingerprintLiveCheckout).toHaveBeenCalledOnce();
     expect(verify).toHaveBeenCalledOnce();
     expect(violations).toEqual(['live checkout drift reported']);
+  });
+
+  // Covers: task:2
+  it('does not await a sibling candidate with a different live checkout or pending provider state', async () => {
+    let resolvePending!: () => void;
+    const pendingProvider = new Promise<ReturnType<typeof provider>>((resolve) => {
+      resolvePending = () => resolve(provider('/pending-home'));
+    });
+    const fingerprintProviderState = vi.fn(({ unrelatedProviderState }: { unrelatedProviderState: string }) =>
+      unrelatedProviderState === '/pending-home' ? pendingProvider : Promise.resolve(provider(unrelatedProviderState)),
+    );
+    const h = harness({ fingerprintProviderState });
+    const sibling = h.boundary.acquire({
+      liveCheckout: '/sibling-live',
+      providerHome: '/pending-home',
+      provider: 'claude',
+      probe: h.probe,
+    });
+    const lease = await h.boundary.acquire({
+      liveCheckout: '/ready-live',
+      providerHome: '/ready-home',
+      provider: 'claude',
+      probe: h.probe,
+    });
+    expect(lease.containment).toEqual({ contained: true, evidence: 'contained' });
+    await lease.release();
+    resolvePending();
+    await (await sibling).release();
+    await h.boundary.end();
   });
 
   // Covers: task:3
@@ -258,7 +290,7 @@ describe('DispatchLiveBoundary', () => {
     await Promise.resolve();
     expect(mutation).not.toHaveBeenCalled();
     resolveProvider();
-    await pending;
+    await expect(pending).rejects.toBeInstanceOf(DispatchLiveBoundaryExpiredError);
     expect(h.verify).toHaveBeenCalledOnce();
     await queuedMutation;
     expect(mutation).toHaveBeenCalledOnce();
@@ -485,6 +517,41 @@ describe('DispatchLiveBoundary', () => {
       ]);
       expect(events.filter((event: any) => event.type === 'contained_live_checkout_drift')).toHaveLength(1);
       expect(violations).toEqual([]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Covers: task:3
+  it('reports each drifted contained live-checkout root', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dispatch-live-boundary-two-contained-'));
+    const first = join(root, 'first');
+    const second = join(root, 'second');
+    const providerHome = join(root, 'provider');
+    const events: any[] = [];
+    try {
+      await Promise.all([mkdir(first), mkdir(second), mkdir(providerHome)]);
+      const boundary = new DispatchLiveBoundary({ emit: async (event) => events.push(event) });
+      const firstLease = await boundary.acquire({
+        liveCheckout: first,
+        providerHome,
+        provider: 'claude',
+        probe: async () => ({ contained: true, evidence: 'first containment' }),
+      });
+      const secondLease = await boundary.acquire({
+        liveCheckout: second,
+        providerHome,
+        provider: 'claude',
+        probe: async () => ({ contained: true, evidence: 'second containment' }),
+      });
+      await Promise.all([writeFile(join(first, 'first.txt'), 'drift'), writeFile(join(second, 'second.txt'), 'drift')]);
+      await boundary.end();
+      await firstLease.release();
+      await secondLease.release();
+      expect(events.filter((event) => event.type === 'contained_live_checkout_drift')).toEqual([
+        expect.objectContaining({ evidence: 'first containment', summary: expect.stringContaining('added first.txt') }),
+        expect.objectContaining({ evidence: 'second containment', summary: expect.stringContaining('added second.txt') }),
+      ]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -15,6 +15,7 @@ import { EventPersister } from '../../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
 import * as liveBoundary from '../../src/engine/self-host/live-boundary.js';
+import { DispatchLiveBoundary, DispatchLiveBoundaryExpiredError } from '../../src/engine/self-host/dispatch-live-boundary.js';
 
 const BUILD_ONLY: ConductState = {
   worktree: 'done',
@@ -165,6 +166,7 @@ describe('self-host live-boundary events', () => {
       }),
       eventEmitter: events,
       persister,
+      guardrails,
     };
   }
 
@@ -287,6 +289,19 @@ describe('self-host live-boundary events', () => {
     expect(emitted).toEqual([]);
     expect(failedSteps).toEqual([expect.objectContaining({ step: 'build', retryCount: 0, error: '' })]);
     expect((await events()).filter((event) => event.type === 'self_host_boundary_fingerprint')).toEqual([]);
+  });
+
+  // Covers: task:4
+  it('treats an expired boundary acquisition as failed preparation before provisioning or provider invocation', async () => {
+    const provider = vi.fn(async (): Promise<StepRunResult> => ({ success: true, output: 'done' }));
+    vi.spyOn(DispatchLiveBoundary.prototype, 'acquire').mockRejectedValue(new DispatchLiveBoundaryExpiredError());
+    const { conductor, persister, guardrails } = harness(provider, { maxRetries: 0 });
+
+    await conductor.run();
+    persister.stop();
+
+    expect(provider).not.toHaveBeenCalled();
+    expect(guardrails.provisionSandbox).not.toHaveBeenCalled();
   });
 
   // Covers: task:4

@@ -17,6 +17,19 @@ type DispatchLiveBoundaryEvent = Extract<
 >;
 type SurfaceResult = Awaited<ReturnType<typeof fingerprintLiveCheckoutSurface>>;
 type ProviderSurfaceResult = Awaited<ReturnType<typeof fingerprintProviderStateSurface>>;
+type CachedSurface<T> = {
+  promise: Promise<T>;
+  emitted: boolean;
+  emission: Promise<void> | undefined;
+};
+
+/** Acquisition finished after its dispatch closed; it never grants a usable lease. */
+export class DispatchLiveBoundaryExpiredError extends Error {
+  constructor() {
+    super('Self-host dispatch live boundary ended while acquisition was pending');
+    this.name = 'DispatchLiveBoundaryExpiredError';
+  }
+}
 
 export interface DispatchLiveBoundaryOptions {
   openWindow?: OpenAdmittedWindow;
@@ -45,9 +58,9 @@ export class DispatchLiveBoundary {
   private readonly fingerprintLiveCheckout: typeof fingerprintLiveCheckoutSurface;
   private readonly fingerprintProviderState: typeof fingerprintProviderStateSurface;
   private readonly verify: typeof verifyLiveBoundary;
-  private readonly liveSurfaces = new Map<string, Promise<SurfaceResult>>();
-  private readonly providerSurfaces = new Map<string, Promise<ProviderSurfaceResult>>();
-  private readonly containments = new Map<string, Promise<ContainmentVerdict>>();
+  private readonly liveSurfaces = new Map<string, CachedSurface<SurfaceResult>>();
+  private readonly providerSurfaces = new Map<string, CachedSurface<ProviderSurfaceResult>>();
+  private readonly containments = new Map<string, CachedSurface<ContainmentVerdict>>();
   private window: LiveBoundaryWindow | undefined;
   private leases = 0;
   private pendingAcquires = 0;
@@ -78,17 +91,17 @@ export class DispatchLiveBoundary {
         }),
       );
       const [liveSurface, providerSurface] = await Promise.all([live.promise, provider.promise]);
-
-      const snapshot = await this.snapshot();
-      const containment = await this.memoize(this.containments, args.liveCheckout, () => args.probe(snapshot), false)
-        .promise;
-      const measurements = [
-        ...(live.created ? [liveSurface.measurement] : []),
-        ...(provider.created ? [providerSurface.measurement] : []),
-      ];
-      if (measurements.length > 0) {
-        await this.options.emit({ type: 'self_host_boundary_fingerprint', surfaces: measurements });
-      }
+      const containment = await this.memoize(this.containments, args.liveCheckout, () =>
+        args.probe({
+          surfaces: [liveSurface.surface, providerSurface.surface],
+          measurements: [liveSurface.measurement, providerSurface.measurement],
+        }),
+      ).promise;
+      await this.emitMeasurementsOnce([
+        { cache: live, measurement: liveSurface.measurement },
+        { cache: provider, measurement: providerSurface.measurement },
+      ]);
+      if (this.ended) throw new DispatchLiveBoundaryExpiredError();
       this.leases += 1;
       let released = false;
       const lease = {
@@ -100,10 +113,6 @@ export class DispatchLiveBoundary {
           await this.finalizeIfReady();
         },
       };
-      // A preparation timeout can finish the dispatch while its fingerprint is
-      // still in flight. Once it settles, count the lease out before returning
-      // it: no abandoned preparation may keep the admitted window open.
-      if (this.ended) await lease.release();
       return lease;
     } finally {
       this.pendingAcquires -= 1;
@@ -134,34 +143,66 @@ export class DispatchLiveBoundary {
   }
 
   private memoize<T>(
-    map: Map<string, Promise<T>>,
+    map: Map<string, CachedSurface<T>>,
     key: string,
     create: () => Promise<T>,
     evictOnReject = true,
-  ): { promise: Promise<T>; created: boolean } {
+  ): CachedSurface<T> {
     const existing = map.get(key);
-    if (existing) return { promise: existing, created: false };
+    if (existing) return existing;
     const promise = create();
-    map.set(key, promise);
+    const entry = { promise, emitted: false, emission: undefined };
+    map.set(key, entry);
     if (evictOnReject) {
       // Only the rejected entry itself may be evicted. A different acquire can
       // share a successful (or still pending) sibling surface safely.
       void promise.catch(() => {
-        if (map.get(key) === promise) map.delete(key);
+        if (map.get(key)?.promise === promise) map.delete(key);
       });
     }
-    return { promise, created: true };
+    return entry;
+  }
+
+  /**
+   * Serializes reporting for cached surfaces.  A concurrent acquire waits for
+   * an in-flight report instead of treating it as successful prematurely: if
+   * the emitter rejects, its own acquisition rejects and the next successful
+   * acquisition still reports the cached measurements.
+   */
+  private async emitMeasurementsOnce(
+    entries: Array<{ cache: CachedSurface<unknown>; measurement: SurfaceResult['measurement'] }>,
+  ): Promise<void> {
+    const inFlight = [...new Set(entries.map(({ cache }) => cache.emission).filter((emission): emission is Promise<void> => emission !== undefined))];
+    if (inFlight.length > 0) {
+      await Promise.all(inFlight);
+      return this.emitMeasurementsOnce(entries);
+    }
+    const unreported = entries.filter(({ cache }) => !cache.emitted);
+    if (unreported.length === 0) return;
+    const emission = Promise.resolve(this.options.emit({
+      type: 'self_host_boundary_fingerprint',
+      surfaces: unreported.map(({ measurement }) => measurement),
+    }));
+    for (const { cache } of unreported) cache.emission = emission;
+    try {
+      await emission;
+      for (const { cache } of unreported) cache.emitted = true;
+    } finally {
+      for (const { cache } of unreported) {
+        if (cache.emission === emission) cache.emission = undefined;
+      }
+    }
   }
 
   private async snapshot(): Promise<LiveBoundarySnapshot> {
     const liveEntries = [...this.liveSurfaces.entries()];
     const providerEntries = [...this.providerSurfaces.entries()];
     const surfaces = await Promise.all([
-      ...liveEntries.map(([, surface]) => surface),
-      ...providerEntries.map(([, surface]) => surface),
+      ...liveEntries.map(([, surface]) => surface.promise),
+      ...providerEntries.map(([, surface]) => surface.promise),
     ]);
     const containmentByLiveCheckout = new Map<string, ContainmentVerdict>();
-    for (const [root, containment] of this.containments) containmentByLiveCheckout.set(root, await containment);
+    for (const [root, containment] of this.containments) containmentByLiveCheckout.set(root, await containment.promise);
     return {
       surfaces: surfaces.map(({ surface }) => surface),
       measurements: surfaces.map(({ measurement }) => measurement),
@@ -184,7 +225,7 @@ export class DispatchLiveBoundary {
 
   private async finalize(): Promise<void> {
     try {
-      const containments = await Promise.all(this.containments.values());
+      const containments = await Promise.all([...this.containments.values()].map((containment) => containment.promise));
       const result = await this.verify(await this.snapshot(), {
         contained: false,
         reason: 'containment not evaluated',
@@ -204,14 +245,13 @@ export class DispatchLiveBoundary {
           });
         }
       }
-      if (result.containedDrift) {
+      for (const drift of result.containedDrifts ?? [])
         await this.options.emit({
           type: 'contained_live_checkout_drift',
-          evidence: result.containedDrift.evidence,
+          evidence: drift.evidence,
           attribution: 'concurrent-operator',
-          summary: result.containedDrift.summary,
+          summary: drift.summary,
         });
-      }
       if (!result.ok) this.options.onViolation?.(result.reason ?? 'Live boundary could not be verified.');
     } catch {
       this.options.onViolation?.('Live boundary could not be verified.');
