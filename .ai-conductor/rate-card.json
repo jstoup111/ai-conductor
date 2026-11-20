@@ -1,5 +1,5 @@
 {
-  "as_of": "2026-11-03T11:19:23.030Z",
+  "as_of": "2026-11-19T16:34:01.421Z",
   "source": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
   "models": {
     "gpt-5.6-luna": {
@@ -49,6 +49,18 @@
       "output_cost_per_token": 0.000005,
       "cache_read_input_token_cost": 5e-8,
       "cache_creation_input_token_cost": 0.00000125
+    },
+    "gpt-6.2-astra": {
+      "input_cost_per_token": 0.000008,
+      "output_cost_per_token": 0.00004,
+      "cache_read_input_token_cost": 4e-7,
+      "cache_creation_input_token_cost": 0.00001
+    },
+    "gpt-6.2-sol": {
+      "input_cost_per_token": 0.000002,
+      "output_cost_per_token": 0.00001,
+      "cache_read_input_token_cost": 1e-7,
+      "cache_creation_input_token_cost": 0.0000025
     }
   }
 }
