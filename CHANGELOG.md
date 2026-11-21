@@ -72,6 +72,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Readers gain dependency-hygiene review for changed dependency manifests and lockfiles. ([implementation PR #3668](https://github.com/jstoup111/ai-conductor/pull/3668)).
 - Readers can query and filter the local decision corpus from the CLI. ([implementation PR #3627](https://github.com/jstoup111/ai-conductor/pull/3627)).
 - Contributors receive automated formatting checks for changed source files. ([implementation PR #3673](https://github.com/jstoup111/ai-conductor/pull/3673)).
+- BUILD can run a configured `test_suite.pre_check` (bounded static checks such as format and typecheck) before it completes; a failure returns its output to the builder instead of reaching `test_suite` or `build_review`. ([implementation PR #3735](https://github.com/jstoup111/ai-conductor/pull/3735)).
 
 ### Changed
 
