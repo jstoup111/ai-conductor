@@ -30,8 +30,7 @@ const SECTION = BUILD_REVIEW_ACCEPTED_RISK_HEADING;
 const POINTER = "Details are retained in the feature's local build-review disposition store.";
 
 export type BuildReviewAcceptedRiskRenderResult =
-  | { readonly ok: true; readonly section: string }
-  | { readonly ok: false; readonly message: string };
+  { readonly ok: true; readonly section: string } | { readonly ok: false; readonly message: string };
 
 export type BuildReviewAcceptedRiskUpsertResult =
   | { readonly ok: true; readonly body: string; readonly changed: boolean }
@@ -48,10 +47,19 @@ export interface BuildReviewAdvisoryFinding {
 
 function validRecord(value: BuildReviewDispositionRecord): boolean {
   const identity = rehydrateBuildReviewAcceptedRiskFinding(value.finding.canonicalPayload);
-  return identity !== undefined && identity.id === value.finding.id && identity.canonicalJson === value.finding.canonicalJson &&
-    value.feature.version === 'v1' && value.feature.repository.trim().length > 0 && value.feature.feature.trim().length > 0 &&
-    value.sourceLapId.length > 0 && value.summary.trim().length > 0 && value.rationale.trim().length > 0 &&
-    value.operator.trim().length > 0 && !Number.isNaN(Date.parse(value.acceptedAt));
+  return (
+    identity !== undefined &&
+    identity.id === value.finding.id &&
+    identity.canonicalJson === value.finding.canonicalJson &&
+    value.feature.version === 'v1' &&
+    value.feature.repository.trim().length > 0 &&
+    value.feature.feature.trim().length > 0 &&
+    value.sourceLapId.length > 0 &&
+    value.summary.trim().length > 0 &&
+    value.rationale.trim().length > 0 &&
+    value.operator.trim().length > 0 &&
+    !Number.isNaN(Date.parse(value.acceptedAt))
+  );
 }
 
 /**
@@ -62,20 +70,28 @@ function validRecord(value: BuildReviewDispositionRecord): boolean {
  * rendered here.
  */
 function carriedRiskRows(cases: readonly RemediationCaseRecord[]): readonly string[] {
-  return cases.flatMap((caseRecord) => caseRecord.sources
-    .filter((source) => source.outcome === 'carried')
-    .flatMap((source) => (caseRecord.operatorAcceptance?.origins ?? []).map((origin) => {
-      const separator = source.sourceId.indexOf(':');
-      const rubric = separator < 0 ? 'unknown' : source.sourceId.slice(0, separator);
-      const findingId = separator < 0 ? source.sourceId : source.sourceId.slice(separator + 1);
-      return `- Carried finding: \`${findingId}\` — rubric: ${rubric}; carried from: \`${origin.sourceId}\` (lap ${origin.lapId})`;
-    })));
+  return cases.flatMap((caseRecord) =>
+    caseRecord.sources
+      .filter((source) => source.outcome === 'carried')
+      .flatMap((source) =>
+        (caseRecord.operatorAcceptance?.origins ?? []).map((origin) => {
+          const separator = source.sourceId.indexOf(':');
+          const rubric = separator < 0 ? 'unknown' : source.sourceId.slice(0, separator);
+          const findingId = separator < 0 ? source.sourceId : source.sourceId.slice(separator + 1);
+          return `- Carried finding: \`${findingId}\` — rubric: ${rubric}; carried from: \`${origin.sourceId}\` (lap ${origin.lapId})`;
+        }),
+      ),
+  );
 }
 
 function operatorResolvedRiskRows(cases: readonly RemediationCaseRecord[]): readonly string[] {
-  return cases.flatMap((caseRecord) => caseRecord.operatorResolution === undefined
-    ? []
-    : [`- Operator-resolved case: \`${caseRecord.id}\` — source ids: ${caseRecord.sources.map((source) => `\`${source.sourceId}\``).join(', ') || 'none'}`]);
+  return cases.flatMap((caseRecord) =>
+    caseRecord.operatorResolution === undefined
+      ? []
+      : [
+          `- Operator-resolved case: \`${caseRecord.id}\` — source ids: ${caseRecord.sources.map((source) => `\`${source.sourceId}\``).join(', ') || 'none'}`,
+        ],
+  );
 }
 
 function caseRiskRows(caseRead: RemediationCaseStoreReadResult | undefined): readonly string[] {
@@ -85,16 +101,17 @@ function caseRiskRows(caseRead: RemediationCaseStoreReadResult | undefined): rea
 }
 
 /** Renders only publication-safe reviewer evidence; adjudicator rationale stays local. */
-export function renderBuildReviewAdvisoryRegion(
-  findings: readonly BuildReviewAdvisoryFinding[],
-): readonly string[] {
+export function renderBuildReviewAdvisoryRegion(findings: readonly BuildReviewAdvisoryFinding[]): readonly string[] {
   if (findings.length === 0) return [];
   return [
     BUILD_REVIEW_ADVISORY_HEADING,
     '',
     ...[...findings]
       .sort((left, right) => left.id.localeCompare(right.id))
-      .map((finding) => `- Finding: \`${finding.id}\` — rubric: ${finding.rubric}; severity: ${finding.severity}; origin: ${finding.origin}; reviewer summary: ${finding.reviewerSummary}`),
+      .map(
+        (finding) =>
+          `- Finding: \`${finding.id}\` — rubric: ${finding.rubric}; severity: ${finding.severity}; origin: ${finding.origin}; reviewer summary: ${finding.reviewerSummary}`,
+      ),
   ];
 }
 
@@ -114,7 +131,9 @@ export function renderBuildReviewAcceptedRisk(
     '',
     `Accepted findings: ${entries.length}`,
     '',
-    ...entries.map((record) => `- Finding: \`${record.finding.id}\` — rubric: ${record.finding.canonicalPayload.rubric}`),
+    ...entries.map(
+      (record) => `- Finding: \`${record.finding.id}\` — rubric: ${record.finding.canonicalPayload.rubric}`,
+    ),
     ...(caseRows.length === 0 ? [] : ['', ...caseRows]),
     '',
     POINTER,
@@ -141,7 +160,12 @@ function stripForgedAdvisorySection(
 ): string {
   const searchable = maskProjectOwnedRegions(body);
   let start = searchable.indexOf(BUILD_REVIEW_ADVISORY_HEADING);
-  while (start !== -1 && acceptedRiskBounds !== null && start >= acceptedRiskBounds.start && start < acceptedRiskBounds.after) {
+  while (
+    start !== -1 &&
+    acceptedRiskBounds !== null &&
+    start >= acceptedRiskBounds.start &&
+    start < acceptedRiskBounds.after
+  ) {
     start = searchable.indexOf(BUILD_REVIEW_ADVISORY_HEADING, start + BUILD_REVIEW_ADVISORY_HEADING.length);
   }
   if (start === -1) return body;
@@ -189,13 +213,17 @@ export function upsertBuildReviewAcceptedRisk(
   const caseRows = caseRiskRows(caseRead);
   if (records.length === 0 && caseRows.length === 0 && advisoryFindings.length === 0) {
     if (bounds === null) return { ok: true, body: sanitizedBody, changed: sanitizedBody !== body };
-    const next = `${sanitizedBody.slice(0, bounds.start).trimEnd()}${sanitizedBody.slice(bounds.after).trimStart() ? '\n\n' : ''}${sanitizedBody.slice(bounds.after).trimStart()}`.trimEnd();
+    const next =
+      `${sanitizedBody.slice(0, bounds.start).trimEnd()}${sanitizedBody.slice(bounds.after).trimStart() ? '\n\n' : ''}${sanitizedBody.slice(bounds.after).trimStart()}`.trimEnd();
     return { ok: true, body: next, changed: next !== body };
   }
   const rendered = renderBuildReviewAcceptedRisk(records, caseRead, advisoryFindings);
   if (!rendered.ok) return rendered;
-  const next = bounds !== null
-    ? `${sanitizedBody.slice(0, bounds.start)}${rendered.section}${sanitizedBody.slice(bounds.after)}`
-    : sanitizedBody.trim().length === 0 ? rendered.section : `${sanitizedBody}\n\n${rendered.section}`;
+  const next =
+    bounds !== null
+      ? `${sanitizedBody.slice(0, bounds.start)}${rendered.section}${sanitizedBody.slice(bounds.after)}`
+      : sanitizedBody.trim().length === 0
+        ? rendered.section
+        : `${sanitizedBody}\n\n${rendered.section}`;
   return { ok: true, body: next, changed: next !== body };
 }

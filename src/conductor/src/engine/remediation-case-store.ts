@@ -111,7 +111,12 @@ export interface RemediationCasePrdWideningCurrentSourceLink {
 export type RemediationCasePrdWideningRelationship =
   | { readonly currentSourceId: string; readonly kind: 'same-case'; readonly caseId: string; readonly reason: string }
   | { readonly currentSourceId: string; readonly kind: 'different'; readonly reason: string }
-  | { readonly currentSourceId: string; readonly kind: 'uncertain'; readonly candidateCaseIds: readonly string[]; readonly reason: string };
+  | {
+      readonly currentSourceId: string;
+      readonly kind: 'uncertain';
+      readonly candidateCaseIds: readonly string[];
+      readonly reason: string;
+    };
 
 /** Effect-free PRD widening history, separate from build-review case authority. */
 export interface RemediationCasePrdWideningRecord {
@@ -156,7 +161,8 @@ export interface RemediationCaseAsBuiltRecord {
 }
 
 /** The tagged case-record vocabulary for the version-two shared envelope. */
-export type RemediationCaseDomainRecord = RemediationCaseRecord | RemediationCasePrdWideningRecord | RemediationCaseAsBuiltRecord;
+export type RemediationCaseDomainRecord =
+  RemediationCaseRecord | RemediationCasePrdWideningRecord | RemediationCaseAsBuiltRecord;
 
 /** One source link and the case whose disposition and effect govern it. */
 export interface CurrentBuildReviewSourceLink {
@@ -188,9 +194,11 @@ export function currentBuildReviewSourceLinks(
   for (const record of cases) {
     for (const link of record.sources) {
       const prior = current.get(link.sourceId);
-      if (!prior ||
+      if (
+        !prior ||
         (prior.record.resolution === 'resolved' &&
-          (record.resolution === 'open' || Date.parse(link.recordedAt) >= Date.parse(prior.link.recordedAt)))) {
+          (record.resolution === 'open' || Date.parse(link.recordedAt) >= Date.parse(prior.link.recordedAt)))
+      ) {
         current.set(link.sourceId, { record, link });
       }
     }
@@ -226,7 +234,12 @@ export function classifyBuildReviewRecurrence(
   const sourceLinks = currentBuildReviewSourceLinks(cases);
   for (const sourceId of sourceIds) {
     const source = sourceLinks.get(sourceId);
-    if (source?.record.resolution !== 'resolved' || source.record.disposition !== 'act' || ownerIds.has(source.record.id)) continue;
+    if (
+      source?.record.resolution !== 'resolved' ||
+      source.record.disposition !== 'act' ||
+      ownerIds.has(source.record.id)
+    )
+      continue;
     ownerIds.add(source.record.id);
     owners.push(source.record.id);
   }
@@ -287,28 +300,34 @@ export function finalizedBuildReviewSourceIds(
   cases: readonly RemediationCaseRecord[],
   thresholdPolicies: Readonly<Partial<Record<string, BuildReviewSeverityThresholdPolicy>>>,
 ): ReadonlySet<string> {
-  return new Set([...currentBuildReviewSourceLinks(cases)].flatMap(([sourceId, { record, link }]) =>
-    record.operatorResolution !== undefined
-      ? [sourceId]
-      : link.outcome === 'carried'
-      ? [sourceId]
-      : record.disposition === 'advisory'
-        ? record.adjudicatedSeverity !== undefined && sourceId.includes(':') && (() => {
-          const rubric = sourceId.slice(0, sourceId.indexOf(':'));
-          const threshold = thresholdPolicies[rubric]?.min_severity;
-          return threshold !== undefined && isBelowSeverityThreshold(record.adjudicatedSeverity, threshold);
-        })()
-          ? [sourceId]
-          : []
-      : record.disposition === 'refute' && (record.effect.kind === 'none' || record.effect.status === 'applied')
-      ? [sourceId]
-      : record.disposition !== 'act' && (record.effect.kind === 'none' || record.effect.status === 'applied')
-      ? [sourceId]
-      : record.resolution === 'resolved' && record.effect.kind !== 'none' &&
-          record.effect.status === 'applied' && link.outcome === 'merged'
+  return new Set(
+    [...currentBuildReviewSourceLinks(cases)].flatMap(([sourceId, { record, link }]) =>
+      record.operatorResolution !== undefined
         ? [sourceId]
-        : [],
-  ));
+        : link.outcome === 'carried'
+          ? [sourceId]
+          : record.disposition === 'advisory'
+            ? record.adjudicatedSeverity !== undefined &&
+              sourceId.includes(':') &&
+              (() => {
+                const rubric = sourceId.slice(0, sourceId.indexOf(':'));
+                const threshold = thresholdPolicies[rubric]?.min_severity;
+                return threshold !== undefined && isBelowSeverityThreshold(record.adjudicatedSeverity, threshold);
+              })()
+              ? [sourceId]
+              : []
+            : record.disposition === 'refute' && (record.effect.kind === 'none' || record.effect.status === 'applied')
+              ? [sourceId]
+              : record.disposition !== 'act' && (record.effect.kind === 'none' || record.effect.status === 'applied')
+                ? [sourceId]
+                : record.resolution === 'resolved' &&
+                    record.effect.kind !== 'none' &&
+                    record.effect.status === 'applied' &&
+                    link.outcome === 'merged'
+                  ? [sourceId]
+                  : [],
+    ),
+  );
 }
 
 /** Return only autonomous BUILD-review records from the shared domain vocabulary. */
@@ -340,9 +359,7 @@ export function prdWideningCasesForState(
 }
 
 /** Read as-built history without coupling consumers to the envelope revision. */
-export function asBuiltCasesForState(
-  state: RemediationCaseStoreState,
-): readonly RemediationCaseAsBuiltRecord[] {
+export function asBuiltCasesForState(state: RemediationCaseStoreState): readonly RemediationCaseAsBuiltRecord[] {
   return state.version === STORE_VERSION ? state.asBuiltCases : [];
 }
 
@@ -354,7 +371,8 @@ export function withPrdWideningCases(
   state: RemediationCaseStoreState,
   prdWideningCases: readonly RemediationCasePrdWideningRecord[],
 ): RemediationCaseStoreState {
-  if (state.version === STORE_VERSION || state.version === PREVIOUS_STORE_VERSION) return { ...state, prdWideningCases };
+  if (state.version === STORE_VERSION || state.version === PREVIOUS_STORE_VERSION)
+    return { ...state, prdWideningCases };
   return {
     version: LEGACY_STORE_VERSION,
     feature: state.feature,
@@ -367,23 +385,23 @@ export function withPrdWideningCases(
 /** Engine-owned history of a sub-floor finding; never operator authority. */
 export type RemediationCaseSuppressionEntry =
   | {
-  readonly kind: 'confidence';
-  readonly findingId: string;
-  readonly rubric: string;
-  readonly summary: string;
-  readonly confidence: number;
-  readonly floor: number;
-  readonly lastSeenLap: string;
-  }
+      readonly kind: 'confidence';
+      readonly findingId: string;
+      readonly rubric: string;
+      readonly summary: string;
+      readonly confidence: number;
+      readonly floor: number;
+      readonly lastSeenLap: string;
+    }
   | {
-  readonly kind: 'severity';
-  readonly findingId: string;
-  readonly rubric: string;
-  readonly summary: string;
-  readonly severity: import('./build-review-domain.js').BuildReviewSeverity;
-  readonly threshold: import('./build-review-domain.js').BuildReviewSeverity;
-  readonly lastSeenLap: string;
-  };
+      readonly kind: 'severity';
+      readonly findingId: string;
+      readonly rubric: string;
+      readonly summary: string;
+      readonly severity: import('./build-review-domain.js').BuildReviewSeverity;
+      readonly threshold: import('./build-review-domain.js').BuildReviewSeverity;
+      readonly lastSeenLap: string;
+    };
 
 /** Predecessor state accepted at the mutation boundary and upgraded before write. */
 export interface RemediationCaseStoreV1State {
@@ -404,9 +422,16 @@ export interface RemediationCaseStoreV2State {
   readonly suppressions: readonly RemediationCaseSuppressionEntry[];
 }
 
-type RemediationCaseOutboxEvent = Extract<ConductorEvent, {
-  type: 'build_review_acceptance_carried' | 'remediation_case_operator_resolved' | 'remediation_case_reconciled' | 'as_built_finding_reconciled';
-}>;
+type RemediationCaseOutboxEvent = Extract<
+  ConductorEvent,
+  {
+    type:
+      | 'build_review_acceptance_carried'
+      | 'remediation_case_operator_resolved'
+      | 'remediation_case_reconciled'
+      | 'as_built_finding_reconciled';
+  }
+>;
 
 /** Durable event handoff paired atomically with version-three case state. */
 export interface RemediationCaseOutboxEntry {
@@ -438,7 +463,8 @@ export interface RemediationCaseStoreV4State {
   readonly outbox: readonly RemediationCaseOutboxEntry[];
 }
 
-export type RemediationCaseStoreState = RemediationCaseStoreV1State | RemediationCaseStoreV2State | RemediationCaseStoreV3State | RemediationCaseStoreV4State;
+export type RemediationCaseStoreState =
+  RemediationCaseStoreV1State | RemediationCaseStoreV2State | RemediationCaseStoreV3State | RemediationCaseStoreV4State;
 
 /** Upgrade once at the mutation seam and atomically retain an occurrence for delivery. */
 export function appendRemediationCaseOutbox(
@@ -453,9 +479,10 @@ export function appendRemediationCaseOutbox(
     prdWideningCases: state.version === OLDEST_STORE_VERSION ? [] : state.prdWideningCases,
     asBuiltCases: [],
     suppressions: state.suppressions ?? [],
-    outbox: state.version === OLDEST_STORE_VERSION || state.version === LEGACY_STORE_VERSION
-      ? [entry]
-      : [...state.outbox, entry],
+    outbox:
+      state.version === OLDEST_STORE_VERSION || state.version === LEGACY_STORE_VERSION
+        ? [entry]
+        : [...state.outbox, entry],
   };
 }
 
@@ -490,7 +517,8 @@ export type RemediationCaseStoreFailureReason =
 
 /** The invariant that refused a proposed next case-store state. */
 export interface RemediationCaseTransitionViolation {
-  readonly invariant: 'source-linked-by-multiple-cases' | 'duplicate-case-id' | 'duplicate-effect-id' | 'invalid-next-state';
+  readonly invariant:
+    'source-linked-by-multiple-cases' | 'duplicate-case-id' | 'duplicate-effect-id' | 'invalid-next-state';
   readonly caseIds: readonly string[];
   readonly sourceIds: readonly string[];
 }
@@ -518,7 +546,11 @@ export interface RemediationCaseStoreMutation<Value> {
 export type RemediationCaseStoreMutationResult<Value> =
   | { readonly ok: true; readonly value: Value }
   | { readonly ok: false; readonly reason: Exclude<RemediationCaseStoreFailureReason, 'rejected-transition'> }
-  | { readonly ok: false; readonly reason: 'rejected-transition'; readonly violation?: RemediationCaseTransitionViolation };
+  | {
+      readonly ok: false;
+      readonly reason: 'rejected-transition';
+      readonly violation?: RemediationCaseTransitionViolation;
+    };
 
 export type RemediationCaseOperatorResolutionResult =
   | { readonly kind: 'resolved'; readonly record: RemediationCaseRecord }
@@ -554,8 +586,14 @@ function oneOf<T extends string>(value: unknown, values: readonly T[]): value is
 }
 
 function parseFeature(value: unknown): RemediationCaseFeatureIdentity | undefined {
-  if (!isRecord(value) || !exactKeys(value, ['version', 'repository', 'feature']) || value.version !== FEATURE_VERSION ||
-    !boundedString(value.repository, MAX_REFERENCE_LENGTH) || !boundedString(value.feature, MAX_REFERENCE_LENGTH)) return undefined;
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, ['version', 'repository', 'feature']) ||
+    value.version !== FEATURE_VERSION ||
+    !boundedString(value.repository, MAX_REFERENCE_LENGTH) ||
+    !boundedString(value.feature, MAX_REFERENCE_LENGTH)
+  )
+    return undefined;
   return { version: FEATURE_VERSION, repository: value.repository, feature: value.feature };
 }
 
@@ -564,15 +602,34 @@ function sameFeature(left: RemediationCaseFeatureIdentity, right: RemediationCas
 }
 
 function parseSourceLink(value: unknown): RemediationCaseSourceLink | undefined {
-  if (!isRecord(value) || !exactKeys(value, ['sourceId', 'outcome', 'recordedAt']) ||
-    !boundedString(value.sourceId, MAX_REFERENCE_LENGTH) || !validTimestamp(value.recordedAt) ||
-    !oneOf(value.outcome, ['acted', 'deferred', 'rejected', 'refuted', 'advisory', 'merged', 'carried', 'escalate'] as const)) return undefined;
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, ['sourceId', 'outcome', 'recordedAt']) ||
+    !boundedString(value.sourceId, MAX_REFERENCE_LENGTH) ||
+    !validTimestamp(value.recordedAt) ||
+    !oneOf(value.outcome, [
+      'acted',
+      'deferred',
+      'rejected',
+      'refuted',
+      'advisory',
+      'merged',
+      'carried',
+      'escalate',
+    ] as const)
+  )
+    return undefined;
   return { sourceId: value.sourceId, outcome: value.outcome, recordedAt: value.recordedAt };
 }
 
 function parseEffect(value: unknown, disposition: RemediationCaseDisposition): RemediationCaseEffect | undefined {
   if (!isRecord(value)) return undefined;
-  if (disposition === 'reject' || disposition === 'advisory' || disposition === 'escalate' || disposition === 'refute' && exactKeys(value, ['kind']) && value.kind === 'none') {
+  if (
+    disposition === 'reject' ||
+    disposition === 'advisory' ||
+    disposition === 'escalate' ||
+    (disposition === 'refute' && exactKeys(value, ['kind']) && value.kind === 'none')
+  ) {
     return exactKeys(value, ['kind']) && value.kind === 'none' ? { kind: 'none' } : undefined;
   }
   const expectedKind = disposition === 'act' ? 'action' : 'deferral';
@@ -582,35 +639,72 @@ function parseEffect(value: unknown, disposition: RemediationCaseDisposition): R
       ? { id: value.id, kind: 'action', status: 'reserved' }
       : { id: value.id, kind: 'deferral', status: 'reserved' };
   }
-  if (value.status === 'failed' && exactKeys(value, ['id', 'kind', 'status', 'diagnostic']) && boundedString(value.diagnostic)) {
+  if (
+    value.status === 'failed' &&
+    exactKeys(value, ['id', 'kind', 'status', 'diagnostic']) &&
+    boundedString(value.diagnostic)
+  ) {
     return expectedKind === 'action'
       ? { id: value.id, kind: 'action', status: 'failed', diagnostic: value.diagnostic }
       : { id: value.id, kind: 'deferral', status: 'failed', diagnostic: value.diagnostic };
   }
-  if (expectedKind === 'action' && value.status === 'applied' && exactKeys(value, ['id', 'kind', 'status', 'workOrderId']) && boundedString(value.workOrderId, MAX_REFERENCE_LENGTH)) {
+  if (
+    expectedKind === 'action' &&
+    value.status === 'applied' &&
+    exactKeys(value, ['id', 'kind', 'status', 'workOrderId']) &&
+    boundedString(value.workOrderId, MAX_REFERENCE_LENGTH)
+  ) {
     return { id: value.id, kind: 'action', status: 'applied', workOrderId: value.workOrderId };
   }
-  if (expectedKind === 'deferral' && value.status === 'applied' && exactKeys(value, ['id', 'kind', 'status', 'issueUrl']) && boundedString(value.issueUrl, MAX_TEXT_LENGTH)) {
+  if (
+    expectedKind === 'deferral' &&
+    value.status === 'applied' &&
+    exactKeys(value, ['id', 'kind', 'status', 'issueUrl']) &&
+    boundedString(value.issueUrl, MAX_TEXT_LENGTH)
+  ) {
     return { id: value.id, kind: 'deferral', status: 'applied', issueUrl: value.issueUrl };
   }
   return undefined;
 }
 
 function parseRefutation(value: unknown): RemediationCaseRefutation | undefined {
-  if (!isRecord(value) || !exactKeys(value, ['claim', 'assertions']) || !boundedString(value.claim) ||
-    !Array.isArray(value.assertions) || value.assertions.length === 0 || value.assertions.length > MAX_REFUTATION_ASSERTIONS) return undefined;
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, ['claim', 'assertions']) ||
+    !boundedString(value.claim) ||
+    !Array.isArray(value.assertions) ||
+    value.assertions.length === 0 ||
+    value.assertions.length > MAX_REFUTATION_ASSERTIONS
+  )
+    return undefined;
   const assertions = value.assertions.map((assertion) => {
-    if (!isRecord(assertion) || !exactKeys(assertion, ['assertion', 'verdict', 'evidence']) ||
-      !boundedString(assertion.assertion) || !oneOf(assertion.verdict, ['refuted', 'upheld'] as const) ||
-      !Array.isArray(assertion.evidence) || assertion.evidence.length === 0 || assertion.evidence.length > MAX_REFUTATION_EVIDENCE_PER_ASSERTION) return undefined;
+    if (
+      !isRecord(assertion) ||
+      !exactKeys(assertion, ['assertion', 'verdict', 'evidence']) ||
+      !boundedString(assertion.assertion) ||
+      !oneOf(assertion.verdict, ['refuted', 'upheld'] as const) ||
+      !Array.isArray(assertion.evidence) ||
+      assertion.evidence.length === 0 ||
+      assertion.evidence.length > MAX_REFUTATION_EVIDENCE_PER_ASSERTION
+    )
+      return undefined;
     const evidence = assertion.evidence.map((entry) => {
-      if (!isRecord(entry) || !exactKeys(entry, ['path', 'excerpt']) ||
-        !boundedString(entry.path, MAX_REFERENCE_LENGTH) || !boundedString(entry.excerpt)) return undefined;
+      if (
+        !isRecord(entry) ||
+        !exactKeys(entry, ['path', 'excerpt']) ||
+        !boundedString(entry.path, MAX_REFERENCE_LENGTH) ||
+        !boundedString(entry.excerpt)
+      )
+        return undefined;
       return { path: entry.path, excerpt: entry.excerpt };
     });
     return evidence.some((entry) => entry === undefined)
       ? undefined
-      : { assertion: assertion.assertion, verdict: assertion.verdict, evidence: evidence as { path: string; excerpt: string }[] };
+      : {
+          assertion: assertion.assertion,
+          verdict: assertion.verdict,
+          evidence: evidence as { path: string; excerpt: string }[],
+        };
   });
   return assertions.some((assertion) => assertion === undefined)
     ? undefined
@@ -618,11 +712,21 @@ function parseRefutation(value: unknown): RemediationCaseRefutation | undefined 
 }
 
 function parseOperatorAcceptance(value: unknown): RemediationCaseOperatorAcceptance | undefined {
-  if (!isRecord(value) || !exactKeys(value, ['origins']) || !Array.isArray(value.origins) ||
-    value.origins.length > MAX_SOURCES_PER_CASE) return undefined;
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, ['origins']) ||
+    !Array.isArray(value.origins) ||
+    value.origins.length > MAX_SOURCES_PER_CASE
+  )
+    return undefined;
   const origins = value.origins.map((origin) => {
-    if (!isRecord(origin) || !exactKeys(origin, ['sourceId', 'lapId']) ||
-      !boundedString(origin.sourceId, MAX_REFERENCE_LENGTH) || !boundedString(origin.lapId, MAX_REFERENCE_LENGTH)) return undefined;
+    if (
+      !isRecord(origin) ||
+      !exactKeys(origin, ['sourceId', 'lapId']) ||
+      !boundedString(origin.sourceId, MAX_REFERENCE_LENGTH) ||
+      !boundedString(origin.lapId, MAX_REFERENCE_LENGTH)
+    )
+      return undefined;
     return { sourceId: origin.sourceId, lapId: origin.lapId };
   });
   return origins.some((origin) => origin === undefined)
@@ -631,15 +735,25 @@ function parseOperatorAcceptance(value: unknown): RemediationCaseOperatorAccepta
 }
 
 function parseOperatorResolution(value: unknown): RemediationCaseOperatorResolution | undefined {
-  if (!isRecord(value) || !exactKeys(value, ['operator', 'rationale', 'resolvedAt']) ||
-    !boundedString(value.operator, MAX_REFERENCE_LENGTH) || !boundedString(value.rationale) ||
-    !validTimestamp(value.resolvedAt)) return undefined;
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, ['operator', 'rationale', 'resolvedAt']) ||
+    !boundedString(value.operator, MAX_REFERENCE_LENGTH) ||
+    !boundedString(value.rationale) ||
+    !validTimestamp(value.resolvedAt)
+  )
+    return undefined;
   return { operator: value.operator, rationale: value.rationale, resolvedAt: value.resolvedAt };
 }
 
 function parseRecurrenceOf(value: unknown, caseId: string): readonly string[] | undefined {
-  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_SOURCES_PER_CASE ||
-    !value.every((priorCaseId) => boundedString(priorCaseId, MAX_REFERENCE_LENGTH) && priorCaseId !== caseId)) return undefined;
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > MAX_SOURCES_PER_CASE ||
+    !value.every((priorCaseId) => boundedString(priorCaseId, MAX_REFERENCE_LENGTH) && priorCaseId !== caseId)
+  )
+    return undefined;
   return value;
 }
 
@@ -649,17 +763,24 @@ function parseDistinctFrom(
 ): readonly { readonly caseId: string; readonly reason: string }[] | undefined {
   if (!Array.isArray(value) || value.length === 0 || value.length > MAX_SOURCES_PER_CASE) return undefined;
   const distinctions = value.map((distinction) => {
-    if (!isRecord(distinction) || !exactKeys(distinction, ['caseId', 'reason']) ||
-      !boundedString(distinction.caseId, MAX_REFERENCE_LENGTH) || distinction.caseId === caseId ||
-      !boundedString(distinction.reason)) return undefined;
+    if (
+      !isRecord(distinction) ||
+      !exactKeys(distinction, ['caseId', 'reason']) ||
+      !boundedString(distinction.caseId, MAX_REFERENCE_LENGTH) ||
+      distinction.caseId === caseId ||
+      !boundedString(distinction.reason)
+    )
+      return undefined;
     return { caseId: distinction.caseId, reason: distinction.reason };
   });
   return distinctions.some((distinction) => distinction === undefined)
     ? undefined
-    : distinctions as { caseId: string; reason: string }[];
+    : (distinctions as { caseId: string; reason: string }[]);
 }
 
-function parseCase(value: unknown):
+function parseCase(
+  value: unknown,
+):
   | { readonly ok: true; readonly record: RemediationCaseRecord }
   | { readonly ok: false; readonly reason: 'foreign-domain' | 'malformed-state' } {
   if (!isRecord(value)) return { ok: false, reason: 'malformed-state' };
@@ -671,41 +792,109 @@ function parseCase(value: unknown):
     ...(Object.hasOwn(value, 'recurrenceOf') ? ['recurrenceOf'] : []),
     ...(Object.hasOwn(value, 'distinctFrom') ? ['distinctFrom'] : []),
   ];
-  const expectedKeys = value.disposition === 'refute'
-    ? ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect', 'refutation', ...optionalRelationshipKeys, ...optionalOperatorKeys]
-    : value.disposition === 'escalate'
-      ? ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect',
-        ...(Object.hasOwn(value, 'escalation') ? ['escalation'] : []),
-        ...(Object.hasOwn(value, 'consistencyStop') ? ['consistencyStop'] : []),
-        ...optionalRelationshipKeys, ...optionalOperatorKeys]
-    : value.disposition === 'advisory'
-      ? ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect', 'adjudicatedSeverity', ...optionalRelationshipKeys, ...optionalOperatorKeys]
-      : ['id', 'domain', 'disposition', 'priority', 'rationale', 'confidence', 'resolution', 'sources', 'effect', ...optionalRelationshipKeys, ...optionalOperatorKeys];
+  const expectedKeys =
+    value.disposition === 'refute'
+      ? [
+          'id',
+          'domain',
+          'disposition',
+          'priority',
+          'rationale',
+          'confidence',
+          'resolution',
+          'sources',
+          'effect',
+          'refutation',
+          ...optionalRelationshipKeys,
+          ...optionalOperatorKeys,
+        ]
+      : value.disposition === 'escalate'
+        ? [
+            'id',
+            'domain',
+            'disposition',
+            'priority',
+            'rationale',
+            'confidence',
+            'resolution',
+            'sources',
+            'effect',
+            ...(Object.hasOwn(value, 'escalation') ? ['escalation'] : []),
+            ...(Object.hasOwn(value, 'consistencyStop') ? ['consistencyStop'] : []),
+            ...optionalRelationshipKeys,
+            ...optionalOperatorKeys,
+          ]
+        : value.disposition === 'advisory'
+          ? [
+              'id',
+              'domain',
+              'disposition',
+              'priority',
+              'rationale',
+              'confidence',
+              'resolution',
+              'sources',
+              'effect',
+              'adjudicatedSeverity',
+              ...optionalRelationshipKeys,
+              ...optionalOperatorKeys,
+            ]
+          : [
+              'id',
+              'domain',
+              'disposition',
+              'priority',
+              'rationale',
+              'confidence',
+              'resolution',
+              'sources',
+              'effect',
+              ...optionalRelationshipKeys,
+              ...optionalOperatorKeys,
+            ];
   if (!exactKeys(value, expectedKeys)) return { ok: false, reason: 'malformed-state' };
   if (value.domain !== 'build_review') return { ok: false, reason: 'foreign-domain' };
-  if (!boundedString(value.id, MAX_REFERENCE_LENGTH) ||
+  if (
+    !boundedString(value.id, MAX_REFERENCE_LENGTH) ||
     !oneOf(value.disposition, ['act', 'defer', 'reject', 'refute', 'advisory', 'escalate'] as const) ||
     !oneOf(value.priority, ['critical', 'high', 'medium', 'low'] as const) ||
-    !boundedString(value.rationale) || !oneOf(value.confidence, ['high', 'medium', 'low'] as const) ||
-    !oneOf(value.resolution, ['open', 'resolved'] as const) || !Array.isArray(value.sources) ||
-    value.sources.length === 0 || value.sources.length > MAX_SOURCES_PER_CASE) return { ok: false, reason: 'malformed-state' };
+    !boundedString(value.rationale) ||
+    !oneOf(value.confidence, ['high', 'medium', 'low'] as const) ||
+    !oneOf(value.resolution, ['open', 'resolved'] as const) ||
+    !Array.isArray(value.sources) ||
+    value.sources.length === 0 ||
+    value.sources.length > MAX_SOURCES_PER_CASE
+  )
+    return { ok: false, reason: 'malformed-state' };
   const sources = value.sources.map(parseSourceLink);
   const effect = parseEffect(value.effect, value.disposition);
   const refutation = value.disposition === 'refute' ? parseRefutation(value.refutation) : undefined;
-  const escalation = value.disposition === 'escalate' && isRecord(value.escalation) &&
-    exactKeys(value.escalation, ['owner']) && oneOf(value.escalation.owner, ['product', 'plan', 'architecture'] as const)
-    ? { owner: value.escalation.owner }
-    : undefined;
-  const consistencyStop = value.disposition === 'escalate' && isRecord(value.consistencyStop) &&
-    exactKeys(value.consistencyStop, ['sourceIds', 'rationale']) && Array.isArray(value.consistencyStop.sourceIds) &&
-    value.consistencyStop.sourceIds.length > 0 && value.consistencyStop.sourceIds.length <= MAX_SOURCES_PER_CASE &&
+  const escalation =
+    value.disposition === 'escalate' &&
+    isRecord(value.escalation) &&
+    exactKeys(value.escalation, ['owner']) &&
+    oneOf(value.escalation.owner, ['product', 'plan', 'architecture'] as const)
+      ? { owner: value.escalation.owner }
+      : undefined;
+  const consistencyStop =
+    value.disposition === 'escalate' &&
+    isRecord(value.consistencyStop) &&
+    exactKeys(value.consistencyStop, ['sourceIds', 'rationale']) &&
+    Array.isArray(value.consistencyStop.sourceIds) &&
+    value.consistencyStop.sourceIds.length > 0 &&
+    value.consistencyStop.sourceIds.length <= MAX_SOURCES_PER_CASE &&
     value.consistencyStop.sourceIds.every((sourceId) => boundedString(sourceId, MAX_REFERENCE_LENGTH)) &&
     boundedString(value.consistencyStop.rationale)
-    ? { sourceIds: value.consistencyStop.sourceIds, rationale: value.consistencyStop.rationale }
-    : undefined;
-  const adjudicatedSeverity = value.disposition === 'advisory' &&
-    (value.adjudicatedSeverity === 'critical' || value.adjudicatedSeverity === 'major' || value.adjudicatedSeverity === 'minor' || value.adjudicatedSeverity === 'nit')
-    ? value.adjudicatedSeverity : undefined;
+      ? { sourceIds: value.consistencyStop.sourceIds, rationale: value.consistencyStop.rationale }
+      : undefined;
+  const adjudicatedSeverity =
+    value.disposition === 'advisory' &&
+    (value.adjudicatedSeverity === 'critical' ||
+      value.adjudicatedSeverity === 'major' ||
+      value.adjudicatedSeverity === 'minor' ||
+      value.adjudicatedSeverity === 'nit')
+      ? value.adjudicatedSeverity
+      : undefined;
   const recurrenceOf = Object.hasOwn(value, 'recurrenceOf')
     ? parseRecurrenceOf(value.recurrenceOf, value.id)
     : undefined;
@@ -718,97 +907,145 @@ function parseCase(value: unknown):
   const operatorResolution = Object.hasOwn(value, 'operatorResolution')
     ? parseOperatorResolution(value.operatorResolution)
     : undefined;
-  if (sources.some((source) => source === undefined) || effect === undefined ||
-    value.disposition === 'refute' && refutation === undefined ||
-    value.disposition === 'escalate' && escalation === undefined && consistencyStop === undefined ||
-    value.disposition === 'advisory' && (adjudicatedSeverity === undefined || effect.kind !== 'none') ||
-    Object.hasOwn(value, 'recurrenceOf') && recurrenceOf === undefined ||
-    Object.hasOwn(value, 'distinctFrom') && distinctFrom === undefined ||
-    Object.hasOwn(value, 'operatorAcceptance') && (operatorAcceptance === undefined ||
-      (operatorAcceptance.origins.length === 0 && operatorResolution === undefined)) ||
-    Object.hasOwn(value, 'operatorResolution') && operatorResolution === undefined) return { ok: false, reason: 'malformed-state' };
-  return { ok: true, record: {
-    id: value.id,
-    domain: 'build_review',
-    disposition: value.disposition,
-    priority: value.priority,
-    rationale: value.rationale,
-    confidence: value.confidence,
-    resolution: value.resolution,
-    sources: sources as RemediationCaseSourceLink[],
-    effect,
-    ...(refutation === undefined ? {} : { refutation }),
-    ...(escalation === undefined ? {} : { escalation }),
-    ...(consistencyStop === undefined ? {} : { consistencyStop }),
-    ...(adjudicatedSeverity === undefined ? {} : { adjudicatedSeverity }),
-    ...(recurrenceOf === undefined ? {} : { recurrenceOf }),
-    ...(distinctFrom === undefined ? {} : { distinctFrom }),
-    ...(operatorAcceptance === undefined ? {} : { operatorAcceptance }),
-    ...(operatorResolution === undefined ? {} : { operatorResolution }),
-  } };
+  if (
+    sources.some((source) => source === undefined) ||
+    effect === undefined ||
+    (value.disposition === 'refute' && refutation === undefined) ||
+    (value.disposition === 'escalate' && escalation === undefined && consistencyStop === undefined) ||
+    (value.disposition === 'advisory' && (adjudicatedSeverity === undefined || effect.kind !== 'none')) ||
+    (Object.hasOwn(value, 'recurrenceOf') && recurrenceOf === undefined) ||
+    (Object.hasOwn(value, 'distinctFrom') && distinctFrom === undefined) ||
+    (Object.hasOwn(value, 'operatorAcceptance') &&
+      (operatorAcceptance === undefined ||
+        (operatorAcceptance.origins.length === 0 && operatorResolution === undefined))) ||
+    (Object.hasOwn(value, 'operatorResolution') && operatorResolution === undefined)
+  )
+    return { ok: false, reason: 'malformed-state' };
+  return {
+    ok: true,
+    record: {
+      id: value.id,
+      domain: 'build_review',
+      disposition: value.disposition,
+      priority: value.priority,
+      rationale: value.rationale,
+      confidence: value.confidence,
+      resolution: value.resolution,
+      sources: sources as RemediationCaseSourceLink[],
+      effect,
+      ...(refutation === undefined ? {} : { refutation }),
+      ...(escalation === undefined ? {} : { escalation }),
+      ...(consistencyStop === undefined ? {} : { consistencyStop }),
+      ...(adjudicatedSeverity === undefined ? {} : { adjudicatedSeverity }),
+      ...(recurrenceOf === undefined ? {} : { recurrenceOf }),
+      ...(distinctFrom === undefined ? {} : { distinctFrom }),
+      ...(operatorAcceptance === undefined ? {} : { operatorAcceptance }),
+      ...(operatorResolution === undefined ? {} : { operatorResolution }),
+    },
+  };
 }
 
 function parsePrdWideningOriginalSourceSnapshot(
   value: unknown,
 ): RemediationCasePrdWideningOriginalSourceSnapshot | undefined {
-  if (!isRecord(value) || !exactKeys(value, ['sourceId', 'snapshot']) ||
-    !boundedString(value.sourceId, MAX_REFERENCE_LENGTH) || !boundedString(value.snapshot)) return undefined;
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, ['sourceId', 'snapshot']) ||
+    !boundedString(value.sourceId, MAX_REFERENCE_LENGTH) ||
+    !boundedString(value.snapshot)
+  )
+    return undefined;
   return { sourceId: value.sourceId, snapshot: value.snapshot };
 }
 
-function parsePrdWideningCurrentSourceLink(
-  value: unknown,
-): RemediationCasePrdWideningCurrentSourceLink | undefined {
-  if (!isRecord(value) || !exactKeys(value, ['sourceId', 'snapshot', 'recordedAt']) ||
-    !boundedString(value.sourceId, MAX_REFERENCE_LENGTH) || !boundedString(value.snapshot) || !validTimestamp(value.recordedAt)) return undefined;
+function parsePrdWideningCurrentSourceLink(value: unknown): RemediationCasePrdWideningCurrentSourceLink | undefined {
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, ['sourceId', 'snapshot', 'recordedAt']) ||
+    !boundedString(value.sourceId, MAX_REFERENCE_LENGTH) ||
+    !boundedString(value.snapshot) ||
+    !validTimestamp(value.recordedAt)
+  )
+    return undefined;
   return { sourceId: value.sourceId, snapshot: value.snapshot, recordedAt: value.recordedAt };
 }
 
-function parsePrdWideningRelationship(
-  value: unknown,
-): RemediationCasePrdWideningRelationship | undefined {
-  if (!isRecord(value) || !boundedString(value.currentSourceId, MAX_REFERENCE_LENGTH) ||
-    !boundedString(value.reason)) return undefined;
-  if (value.kind === 'same-case' && exactKeys(value, ['currentSourceId', 'kind', 'caseId', 'reason']) &&
-    boundedString(value.caseId, MAX_REFERENCE_LENGTH)) {
+function parsePrdWideningRelationship(value: unknown): RemediationCasePrdWideningRelationship | undefined {
+  if (!isRecord(value) || !boundedString(value.currentSourceId, MAX_REFERENCE_LENGTH) || !boundedString(value.reason))
+    return undefined;
+  if (
+    value.kind === 'same-case' &&
+    exactKeys(value, ['currentSourceId', 'kind', 'caseId', 'reason']) &&
+    boundedString(value.caseId, MAX_REFERENCE_LENGTH)
+  ) {
     return { currentSourceId: value.currentSourceId, kind: 'same-case', caseId: value.caseId, reason: value.reason };
   }
   if (value.kind === 'different' && exactKeys(value, ['currentSourceId', 'kind', 'reason'])) {
     return { currentSourceId: value.currentSourceId, kind: 'different', reason: value.reason };
   }
-  if (value.kind === 'uncertain' && exactKeys(value, ['currentSourceId', 'kind', 'candidateCaseIds', 'reason']) &&
-    Array.isArray(value.candidateCaseIds) && value.candidateCaseIds.length > 0 &&
+  if (
+    value.kind === 'uncertain' &&
+    exactKeys(value, ['currentSourceId', 'kind', 'candidateCaseIds', 'reason']) &&
+    Array.isArray(value.candidateCaseIds) &&
+    value.candidateCaseIds.length > 0 &&
     value.candidateCaseIds.length <= MAX_CASES &&
     value.candidateCaseIds.every((caseId) => boundedString(caseId, MAX_REFERENCE_LENGTH)) &&
-    new Set(value.candidateCaseIds).size === value.candidateCaseIds.length) {
-    return { currentSourceId: value.currentSourceId, kind: 'uncertain', candidateCaseIds: value.candidateCaseIds, reason: value.reason };
+    new Set(value.candidateCaseIds).size === value.candidateCaseIds.length
+  ) {
+    return {
+      currentSourceId: value.currentSourceId,
+      kind: 'uncertain',
+      candidateCaseIds: value.candidateCaseIds,
+      reason: value.reason,
+    };
   }
   return undefined;
 }
 
 function parsePrdWideningCase(value: unknown): RemediationCasePrdWideningRecord | undefined {
-  if (!isRecord(value) || !exactKeys(value, ['id', 'domain', 'originalSources', 'currentSources', 'relationships',
-    ...(Object.hasOwn(value, 'offeredCriterion') ? ['offeredCriterion'] : []),
-    ...(Object.hasOwn(value, 'reconciliationDigest') ? ['reconciliationDigest'] : [])]) ||
-    value.domain !== 'prd_widening' || !boundedString(value.id, MAX_REFERENCE_LENGTH) ||
+  if (
+    !isRecord(value) ||
+    !exactKeys(value, [
+      'id',
+      'domain',
+      'originalSources',
+      'currentSources',
+      'relationships',
+      ...(Object.hasOwn(value, 'offeredCriterion') ? ['offeredCriterion'] : []),
+      ...(Object.hasOwn(value, 'reconciliationDigest') ? ['reconciliationDigest'] : []),
+    ]) ||
+    value.domain !== 'prd_widening' ||
+    !boundedString(value.id, MAX_REFERENCE_LENGTH) ||
     (Object.hasOwn(value, 'offeredCriterion') && !boundedString(value.offeredCriterion, MAX_REFERENCE_LENGTH)) ||
-    !Array.isArray(value.originalSources) || value.originalSources.length === 0 ||
-    value.originalSources.length > MAX_SOURCES_PER_CASE || !Array.isArray(value.currentSources) ||
-    value.currentSources.length > MAX_SOURCES_PER_CASE || !Array.isArray(value.relationships) ||
-    value.relationships.length > MAX_SOURCES_PER_CASE) return undefined;
+    !Array.isArray(value.originalSources) ||
+    value.originalSources.length === 0 ||
+    value.originalSources.length > MAX_SOURCES_PER_CASE ||
+    !Array.isArray(value.currentSources) ||
+    value.currentSources.length > MAX_SOURCES_PER_CASE ||
+    !Array.isArray(value.relationships) ||
+    value.relationships.length > MAX_SOURCES_PER_CASE
+  )
+    return undefined;
   const originalSources = value.originalSources.map(parsePrdWideningOriginalSourceSnapshot);
   const currentSources = value.currentSources.map(parsePrdWideningCurrentSourceLink);
   const relationships = value.relationships.map(parsePrdWideningRelationship);
-  if (originalSources.some((source) => source === undefined) || currentSources.some((source) => source === undefined) ||
-    relationships.some((relationship) => relationship === undefined)) return undefined;
+  if (
+    originalSources.some((source) => source === undefined) ||
+    currentSources.some((source) => source === undefined) ||
+    relationships.some((relationship) => relationship === undefined)
+  )
+    return undefined;
   const originalSourceIds = originalSources.map((source) => source!.sourceId);
   const currentSourceIds = currentSources.map((source) => source!.sourceId);
   const relationshipSourceIds = relationships.map((relationship) => relationship!.currentSourceId);
-  if (new Set(originalSourceIds).size !== originalSourceIds.length ||
+  if (
+    new Set(originalSourceIds).size !== originalSourceIds.length ||
     new Set(currentSourceIds).size !== currentSourceIds.length ||
     new Set(relationshipSourceIds).size !== relationshipSourceIds.length ||
     !relationshipSourceIds.every((sourceId) => currentSourceIds.includes(sourceId)) ||
-    (Object.hasOwn(value, 'reconciliationDigest') && !boundedString(value.reconciliationDigest, MAX_REFERENCE_LENGTH))) return undefined;
+    (Object.hasOwn(value, 'reconciliationDigest') && !boundedString(value.reconciliationDigest, MAX_REFERENCE_LENGTH))
+  )
+    return undefined;
   return {
     id: value.id,
     domain: 'prd_widening',
@@ -816,33 +1053,55 @@ function parsePrdWideningCase(value: unknown): RemediationCasePrdWideningRecord 
     originalSources: originalSources as RemediationCasePrdWideningOriginalSourceSnapshot[],
     currentSources: currentSources as RemediationCasePrdWideningCurrentSourceLink[],
     relationships: relationships as RemediationCasePrdWideningRelationship[],
-    ...(Object.hasOwn(value, 'reconciliationDigest') ? { reconciliationDigest: value.reconciliationDigest as string } : {}),
+    ...(Object.hasOwn(value, 'reconciliationDigest')
+      ? { reconciliationDigest: value.reconciliationDigest as string }
+      : {}),
   };
 }
 
 function isRemediationCaseAsBuiltReference(value: unknown): value is RemediationCaseAsBuiltReference {
   if (!isRecord(value)) return false;
   if (value.kind === 'adr-decision') {
-    return exactKeys(value, ['kind', 'stem', 'decision']) &&
-      boundedString(value.stem, MAX_REFERENCE_LENGTH) && Number.isInteger(value.decision);
+    return (
+      exactKeys(value, ['kind', 'stem', 'decision']) &&
+      boundedString(value.stem, MAX_REFERENCE_LENGTH) &&
+      Number.isInteger(value.decision)
+    );
   }
-  return value.kind === 'plan-task' && exactKeys(value, ['kind', 'taskId']) &&
-    boundedString(value.taskId, MAX_REFERENCE_LENGTH);
+  return (
+    value.kind === 'plan-task' &&
+    exactKeys(value, ['kind', 'taskId']) &&
+    boundedString(value.taskId, MAX_REFERENCE_LENGTH)
+  );
 }
 
 function parseAsBuiltSource(value: unknown): RemediationCaseAsBuiltSource | undefined {
-  if (!isRecord(value) || !boundedString(value.findingId, MAX_REFERENCE_LENGTH) ||
-    !boundedString(value.attemptId, MAX_REFERENCE_LENGTH) || !boundedString(value.summary) ||
-    !boundedString(value.reason) || !oneOf(value.class, ['REMEDIABLE', 'DESIGN'] as const) ||
-    !oneOf(value.relation, ['same', 'recurrence', 'materially-changed', 'new', 'needs-human'] as const)) return undefined;
+  if (
+    !isRecord(value) ||
+    !boundedString(value.findingId, MAX_REFERENCE_LENGTH) ||
+    !boundedString(value.attemptId, MAX_REFERENCE_LENGTH) ||
+    !boundedString(value.summary) ||
+    !boundedString(value.reason) ||
+    !oneOf(value.class, ['REMEDIABLE', 'DESIGN'] as const) ||
+    !oneOf(value.relation, ['same', 'recurrence', 'materially-changed', 'new', 'needs-human'] as const)
+  )
+    return undefined;
   const expectedKeys = [
-    'findingId', 'attemptId', 'class', 'summary', 'relation', 'reason',
+    'findingId',
+    'attemptId',
+    'class',
+    'summary',
+    'relation',
+    'reason',
     ...(Object.hasOwn(value, 'reference') ? ['reference'] : []),
     ...(Object.hasOwn(value, 'priorCaseId') ? ['priorCaseId'] : []),
   ];
-  if (!exactKeys(value, expectedKeys) ||
+  if (
+    !exactKeys(value, expectedKeys) ||
     (Object.hasOwn(value, 'reference') && !isRemediationCaseAsBuiltReference(value.reference)) ||
-    (Object.hasOwn(value, 'priorCaseId') && !boundedString(value.priorCaseId, MAX_REFERENCE_LENGTH))) return undefined;
+    (Object.hasOwn(value, 'priorCaseId') && !boundedString(value.priorCaseId, MAX_REFERENCE_LENGTH))
+  )
+    return undefined;
   return {
     findingId: value.findingId,
     attemptId: value.attemptId,
@@ -856,17 +1115,42 @@ function parseAsBuiltSource(value: unknown): RemediationCaseAsBuiltSource | unde
 }
 
 function parseAsBuiltCase(value: unknown): RemediationCaseAsBuiltRecord | undefined {
-  if (!isRecord(value) || value.domain !== 'as_built' || !boundedString(value.id, MAX_REFERENCE_LENGTH) ||
-    !oneOf(value.status, ['open', 'resolved', 'needs-human'] as const) || !Array.isArray(value.sources) ||
-    value.sources.length === 0 || value.sources.length > MAX_SOURCES_PER_CASE || !Array.isArray(value.repairTaskIds) ||
-    value.repairTaskIds.length > MAX_CASES || !value.repairTaskIds.every((id) => boundedString(id, MAX_REFERENCE_LENGTH)) ||
-    typeof value.recurrenceCount !== 'number' || !Number.isInteger(value.recurrenceCount) || value.recurrenceCount < 0) return undefined;
-  const expectedKeys = ['id', 'domain', 'sources', 'status', 'repairTaskIds', 'recurrenceCount',
-    ...(Object.hasOwn(value, 'changedFrom') ? ['changedFrom'] : [])];
-  if (!exactKeys(value, expectedKeys) ||
-    (Object.hasOwn(value, 'changedFrom') && !boundedString(value.changedFrom, MAX_REFERENCE_LENGTH))) return undefined;
+  if (
+    !isRecord(value) ||
+    value.domain !== 'as_built' ||
+    !boundedString(value.id, MAX_REFERENCE_LENGTH) ||
+    !oneOf(value.status, ['open', 'resolved', 'needs-human'] as const) ||
+    !Array.isArray(value.sources) ||
+    value.sources.length === 0 ||
+    value.sources.length > MAX_SOURCES_PER_CASE ||
+    !Array.isArray(value.repairTaskIds) ||
+    value.repairTaskIds.length > MAX_CASES ||
+    !value.repairTaskIds.every((id) => boundedString(id, MAX_REFERENCE_LENGTH)) ||
+    typeof value.recurrenceCount !== 'number' ||
+    !Number.isInteger(value.recurrenceCount) ||
+    value.recurrenceCount < 0
+  )
+    return undefined;
+  const expectedKeys = [
+    'id',
+    'domain',
+    'sources',
+    'status',
+    'repairTaskIds',
+    'recurrenceCount',
+    ...(Object.hasOwn(value, 'changedFrom') ? ['changedFrom'] : []),
+  ];
+  if (
+    !exactKeys(value, expectedKeys) ||
+    (Object.hasOwn(value, 'changedFrom') && !boundedString(value.changedFrom, MAX_REFERENCE_LENGTH))
+  )
+    return undefined;
   const sources = value.sources.map(parseAsBuiltSource);
-  if (sources.some((source) => source === undefined) || new Set(sources.map((source) => source!.findingId)).size !== sources.length) return undefined;
+  if (
+    sources.some((source) => source === undefined) ||
+    new Set(sources.map((source) => source!.findingId)).size !== sources.length
+  )
+    return undefined;
   return {
     id: value.id,
     domain: 'as_built',
@@ -883,16 +1167,16 @@ function parseAsBuiltCase(value: unknown): RemediationCaseAsBuiltRecord | undefi
  * migration and envelope loading; this contract stays independently usable by
  * the migration and every domain-specific writer.
  */
-export function parseRemediationCaseDomainRecord(value: unknown):
+export function parseRemediationCaseDomainRecord(
+  value: unknown,
+):
   | { readonly ok: true; readonly record: RemediationCaseDomainRecord }
   | { readonly ok: false; readonly reason: 'foreign-domain' | 'malformed-state' } {
   if (!isRecord(value)) return { ok: false, reason: 'malformed-state' };
   if (value.domain === 'build_review') return parseCase(value);
   if (value.domain === 'prd_widening') {
     const record = parsePrdWideningCase(value);
-    return record === undefined
-      ? { ok: false, reason: 'malformed-state' }
-      : { ok: true, record };
+    return record === undefined ? { ok: false, reason: 'malformed-state' } : { ok: true, record };
   }
   if (value.domain === 'as_built') {
     const record = parseAsBuiltCase(value);
@@ -904,29 +1188,87 @@ export function parseRemediationCaseDomainRecord(value: unknown):
 function parseSuppression(value: unknown): RemediationCaseSuppressionEntry | undefined {
   if (!isRecord(value)) return undefined;
   if (value.kind === undefined || value.kind === 'confidence') {
-    if (!exactKeys(value, [...(value.kind === undefined ? [] : ['kind']), 'findingId', 'rubric', 'summary', 'confidence', 'floor', 'lastSeenLap']) ||
-      !boundedString(value.findingId, MAX_REFERENCE_LENGTH) || !boundedString(value.rubric, MAX_REFERENCE_LENGTH) ||
-      !boundedString(value.summary) || !boundedString(value.lastSeenLap, MAX_REFERENCE_LENGTH) ||
-      typeof value.confidence !== 'number' || !Number.isInteger(value.confidence) || value.confidence < 0 || value.confidence > 100 ||
-      typeof value.floor !== 'number' || !Number.isInteger(value.floor) || value.floor < 0 || value.floor > 100) return undefined;
-    return { kind: 'confidence', findingId: value.findingId, rubric: value.rubric, summary: value.summary, confidence: value.confidence, floor: value.floor, lastSeenLap: value.lastSeenLap };
+    if (
+      !exactKeys(value, [
+        ...(value.kind === undefined ? [] : ['kind']),
+        'findingId',
+        'rubric',
+        'summary',
+        'confidence',
+        'floor',
+        'lastSeenLap',
+      ]) ||
+      !boundedString(value.findingId, MAX_REFERENCE_LENGTH) ||
+      !boundedString(value.rubric, MAX_REFERENCE_LENGTH) ||
+      !boundedString(value.summary) ||
+      !boundedString(value.lastSeenLap, MAX_REFERENCE_LENGTH) ||
+      typeof value.confidence !== 'number' ||
+      !Number.isInteger(value.confidence) ||
+      value.confidence < 0 ||
+      value.confidence > 100 ||
+      typeof value.floor !== 'number' ||
+      !Number.isInteger(value.floor) ||
+      value.floor < 0 ||
+      value.floor > 100
+    )
+      return undefined;
+    return {
+      kind: 'confidence',
+      findingId: value.findingId,
+      rubric: value.rubric,
+      summary: value.summary,
+      confidence: value.confidence,
+      floor: value.floor,
+      lastSeenLap: value.lastSeenLap,
+    };
   }
-  if (!exactKeys(value, ['kind', 'findingId', 'rubric', 'summary', 'severity', 'threshold', 'lastSeenLap']) || value.kind !== 'severity' ||
-    !boundedString(value.findingId, MAX_REFERENCE_LENGTH) || !boundedString(value.rubric, MAX_REFERENCE_LENGTH) || !boundedString(value.summary) || !boundedString(value.lastSeenLap, MAX_REFERENCE_LENGTH) ||
-    !['critical', 'major', 'minor', 'nit'].includes(value.severity as string) || !['critical', 'major', 'minor', 'nit'].includes(value.threshold as string)) return undefined;
-  return { kind: 'severity', findingId: value.findingId, rubric: value.rubric, summary: value.summary, severity: value.severity as import('./build-review-domain.js').BuildReviewSeverity, threshold: value.threshold as import('./build-review-domain.js').BuildReviewSeverity, lastSeenLap: value.lastSeenLap };
+  if (
+    !exactKeys(value, ['kind', 'findingId', 'rubric', 'summary', 'severity', 'threshold', 'lastSeenLap']) ||
+    value.kind !== 'severity' ||
+    !boundedString(value.findingId, MAX_REFERENCE_LENGTH) ||
+    !boundedString(value.rubric, MAX_REFERENCE_LENGTH) ||
+    !boundedString(value.summary) ||
+    !boundedString(value.lastSeenLap, MAX_REFERENCE_LENGTH) ||
+    !['critical', 'major', 'minor', 'nit'].includes(value.severity as string) ||
+    !['critical', 'major', 'minor', 'nit'].includes(value.threshold as string)
+  )
+    return undefined;
+  return {
+    kind: 'severity',
+    findingId: value.findingId,
+    rubric: value.rubric,
+    summary: value.summary,
+    severity: value.severity as import('./build-review-domain.js').BuildReviewSeverity,
+    threshold: value.threshold as import('./build-review-domain.js').BuildReviewSeverity,
+    lastSeenLap: value.lastSeenLap,
+  };
 }
 
 function parseOutboxEvent(value: unknown): RemediationCaseOutboxEvent | undefined {
   if (!isRecord(value) || !boundedString(value.eventId, MAX_REFERENCE_LENGTH)) return undefined;
-  if (value.type === 'build_review_acceptance_carried' &&
-    exactKeys(value, ['type', 'eventId', 'feature', 'lapId', 'sourceId', 'caseId', 'originSourceIds', 'originLapIds']) &&
-    boundedString(value.feature, MAX_REFERENCE_LENGTH) && boundedString(value.lapId, MAX_REFERENCE_LENGTH) &&
-    boundedString(value.sourceId, MAX_REFERENCE_LENGTH) && boundedString(value.caseId, MAX_REFERENCE_LENGTH) &&
-    Array.isArray(value.originSourceIds) && value.originSourceIds.length <= MAX_SOURCES_PER_CASE &&
+  if (
+    value.type === 'build_review_acceptance_carried' &&
+    exactKeys(value, [
+      'type',
+      'eventId',
+      'feature',
+      'lapId',
+      'sourceId',
+      'caseId',
+      'originSourceIds',
+      'originLapIds',
+    ]) &&
+    boundedString(value.feature, MAX_REFERENCE_LENGTH) &&
+    boundedString(value.lapId, MAX_REFERENCE_LENGTH) &&
+    boundedString(value.sourceId, MAX_REFERENCE_LENGTH) &&
+    boundedString(value.caseId, MAX_REFERENCE_LENGTH) &&
+    Array.isArray(value.originSourceIds) &&
+    value.originSourceIds.length <= MAX_SOURCES_PER_CASE &&
     value.originSourceIds.every((sourceId) => boundedString(sourceId, MAX_REFERENCE_LENGTH)) &&
-    Array.isArray(value.originLapIds) && value.originLapIds.length <= MAX_SOURCES_PER_CASE &&
-    value.originLapIds.every((lapId) => boundedString(lapId, MAX_REFERENCE_LENGTH))) {
+    Array.isArray(value.originLapIds) &&
+    value.originLapIds.length <= MAX_SOURCES_PER_CASE &&
+    value.originLapIds.every((lapId) => boundedString(lapId, MAX_REFERENCE_LENGTH))
+  ) {
     return {
       type: value.type,
       eventId: value.eventId,
@@ -938,17 +1280,32 @@ function parseOutboxEvent(value: unknown): RemediationCaseOutboxEvent | undefine
       originLapIds: value.originLapIds,
     };
   }
-  if (value.type === 'remediation_case_operator_resolved' &&
+  if (
+    value.type === 'remediation_case_operator_resolved' &&
     exactKeys(value, ['type', 'eventId', 'feature', 'caseId', 'sourceIds']) &&
-    boundedString(value.feature, MAX_REFERENCE_LENGTH) && boundedString(value.caseId, MAX_REFERENCE_LENGTH) &&
-    Array.isArray(value.sourceIds) && value.sourceIds.length > 0 && value.sourceIds.length <= MAX_SOURCES_PER_CASE &&
-    value.sourceIds.every((sourceId) => boundedString(sourceId, MAX_REFERENCE_LENGTH))) {
-    return { type: value.type, eventId: value.eventId, feature: value.feature, caseId: value.caseId, sourceIds: value.sourceIds };
+    boundedString(value.feature, MAX_REFERENCE_LENGTH) &&
+    boundedString(value.caseId, MAX_REFERENCE_LENGTH) &&
+    Array.isArray(value.sourceIds) &&
+    value.sourceIds.length > 0 &&
+    value.sourceIds.length <= MAX_SOURCES_PER_CASE &&
+    value.sourceIds.every((sourceId) => boundedString(sourceId, MAX_REFERENCE_LENGTH))
+  ) {
+    return {
+      type: value.type,
+      eventId: value.eventId,
+      feature: value.feature,
+      caseId: value.caseId,
+      sourceIds: value.sourceIds,
+    };
   }
-  if (value.type === 'remediation_case_reconciled' &&
-    exactKeys(value, ['type', 'eventId', 'domain', 'lapId', 'caseId', 'resolution']) && value.domain === 'build_review' &&
-    boundedString(value.lapId, MAX_REFERENCE_LENGTH) && boundedString(value.caseId, MAX_REFERENCE_LENGTH) &&
-    oneOf(value.resolution, ['open', 'resolved'] as const)) {
+  if (
+    value.type === 'remediation_case_reconciled' &&
+    exactKeys(value, ['type', 'eventId', 'domain', 'lapId', 'caseId', 'resolution']) &&
+    value.domain === 'build_review' &&
+    boundedString(value.lapId, MAX_REFERENCE_LENGTH) &&
+    boundedString(value.caseId, MAX_REFERENCE_LENGTH) &&
+    oneOf(value.resolution, ['open', 'resolved'] as const)
+  ) {
     return {
       type: value.type,
       eventId: value.eventId,
@@ -958,18 +1315,30 @@ function parseOutboxEvent(value: unknown): RemediationCaseOutboxEvent | undefine
       resolution: value.resolution,
     };
   }
-  if (value.type === 'as_built_finding_reconciled' &&
-    exactKeys(value, value.priorCaseId === undefined
-      ? ['type', 'eventId', 'findingId', 'caseId', 'attemptId', 'outcome', 'reason']
-      : ['type', 'eventId', 'findingId', 'caseId', 'attemptId', 'outcome', 'priorCaseId', 'reason']) &&
-    boundedString(value.findingId, MAX_REFERENCE_LENGTH) && boundedString(value.caseId, MAX_REFERENCE_LENGTH) &&
-    boundedString(value.attemptId, MAX_REFERENCE_LENGTH) && boundedString(value.reason) &&
+  if (
+    value.type === 'as_built_finding_reconciled' &&
+    exactKeys(
+      value,
+      value.priorCaseId === undefined
+        ? ['type', 'eventId', 'findingId', 'caseId', 'attemptId', 'outcome', 'reason']
+        : ['type', 'eventId', 'findingId', 'caseId', 'attemptId', 'outcome', 'priorCaseId', 'reason'],
+    ) &&
+    boundedString(value.findingId, MAX_REFERENCE_LENGTH) &&
+    boundedString(value.caseId, MAX_REFERENCE_LENGTH) &&
+    boundedString(value.attemptId, MAX_REFERENCE_LENGTH) &&
+    boundedString(value.reason) &&
     oneOf(value.outcome, ['same', 'recurrence', 'materially-changed', 'new', 'needs-human'] as const) &&
-    (value.priorCaseId === undefined || boundedString(value.priorCaseId, MAX_REFERENCE_LENGTH))) {
+    (value.priorCaseId === undefined || boundedString(value.priorCaseId, MAX_REFERENCE_LENGTH))
+  ) {
     return {
-      type: value.type, eventId: value.eventId, findingId: value.findingId, caseId: value.caseId,
-      attemptId: value.attemptId, outcome: value.outcome,
-      ...(value.priorCaseId === undefined ? {} : { priorCaseId: value.priorCaseId }), reason: value.reason,
+      type: value.type,
+      eventId: value.eventId,
+      findingId: value.findingId,
+      caseId: value.caseId,
+      attemptId: value.attemptId,
+      outcome: value.outcome,
+      ...(value.priorCaseId === undefined ? {} : { priorCaseId: value.priorCaseId }),
+      reason: value.reason,
     };
   }
   return undefined;
@@ -978,37 +1347,50 @@ function parseOutboxEvent(value: unknown): RemediationCaseOutboxEvent | undefine
 function parseOutbox(value: unknown): RemediationCaseOutboxEntry[] | undefined {
   if (!Array.isArray(value) || value.length > MAX_CASES) return undefined;
   const entries = value.map((entry) => {
-    if (!isRecord(entry) || !exactKeys(entry, ['eventId', 'occurredAt', 'event']) ||
-      !boundedString(entry.eventId, MAX_REFERENCE_LENGTH) || !validTimestamp(entry.occurredAt)) return undefined;
+    if (
+      !isRecord(entry) ||
+      !exactKeys(entry, ['eventId', 'occurredAt', 'event']) ||
+      !boundedString(entry.eventId, MAX_REFERENCE_LENGTH) ||
+      !validTimestamp(entry.occurredAt)
+    )
+      return undefined;
     const event = parseOutboxEvent(entry.event);
     return event === undefined || event.eventId !== entry.eventId
       ? undefined
       : { eventId: entry.eventId, occurredAt: entry.occurredAt, event };
   });
-  return entries.some((entry) => entry === undefined) || new Set(entries.map((entry) => entry?.eventId)).size !== entries.length
+  return entries.some((entry) => entry === undefined) ||
+    new Set(entries.map((entry) => entry?.eventId)).size !== entries.length
     ? undefined
-    : entries as RemediationCaseOutboxEntry[];
+    : (entries as RemediationCaseOutboxEntry[]);
 }
 
 type ParsedState =
   | { readonly ok: true; readonly state: RemediationCaseStoreState }
   | {
-    readonly ok: false;
-    readonly reason: 'unknown-version' | 'foreign-domain' | 'malformed-state';
-    readonly violation?: RemediationCaseTransitionViolation;
-  };
+      readonly ok: false;
+      readonly reason: 'unknown-version' | 'foreign-domain' | 'malformed-state';
+      readonly violation?: RemediationCaseTransitionViolation;
+    };
 
 function parseSuppressions(value: unknown): RemediationCaseSuppressionEntry[] | undefined {
   const suppressions = value === undefined ? [] : Array.isArray(value) ? value.map(parseSuppression) : undefined;
-  return !suppressions || suppressions.some((entry) => entry === undefined) ||
+  return !suppressions ||
+    suppressions.some((entry) => entry === undefined) ||
     new Set(suppressions.map((entry) => entry!.findingId)).size !== suppressions.length
     ? undefined
-    : suppressions as RemediationCaseSuppressionEntry[];
+    : (suppressions as RemediationCaseSuppressionEntry[]);
 }
 
-function parseBuildReviewCases(value: unknown):
+function parseBuildReviewCases(
+  value: unknown,
+):
   | { readonly ok: true; readonly cases: RemediationCaseRecord[] }
-  | { readonly ok: false; readonly reason: 'foreign-domain' | 'malformed-state'; readonly violation?: RemediationCaseTransitionViolation } {
+  | {
+      readonly ok: false;
+      readonly reason: 'foreign-domain' | 'malformed-state';
+      readonly violation?: RemediationCaseTransitionViolation;
+    } {
   if (!Array.isArray(value) || value.length > MAX_CASES) return { ok: false, reason: 'malformed-state' };
   // Canonical identity: one row per case id, one case per durable effect id,
   // one link per source within a case. Downstream readers index by these ids
@@ -1074,7 +1456,9 @@ function parsePrdWideningCases(value: unknown): RemediationCasePrdWideningRecord
   if (!Array.isArray(value) || value.length > MAX_CASES) return undefined;
   const parsed = value.map(parseRemediationCaseDomainRecord);
   if (parsed.some((record) => !record.ok || (record.ok && record.record.domain !== 'prd_widening'))) return undefined;
-  const cases = parsed.map((record) => (record as Extract<typeof record, { readonly ok: true }>).record as RemediationCasePrdWideningRecord);
+  const cases = parsed.map(
+    (record) => (record as Extract<typeof record, { readonly ok: true }>).record as RemediationCasePrdWideningRecord,
+  );
   const caseIds = new Set<string>();
   const sourceOwners = new Map<string, string>();
   for (const record of cases) {
@@ -1089,7 +1473,9 @@ function parsePrdWideningCases(value: unknown): RemediationCasePrdWideningRecord
   return cases;
 }
 
-function parseAsBuiltCases(value: unknown):
+function parseAsBuiltCases(
+  value: unknown,
+):
   | { readonly ok: true; readonly cases: RemediationCaseAsBuiltRecord[] }
   | { readonly ok: false; readonly reason: 'foreign-domain' | 'malformed-state' } {
   if (!Array.isArray(value) || value.length > MAX_CASES) return { ok: false, reason: 'malformed-state' };
@@ -1112,8 +1498,11 @@ function parseAsBuiltCases(value: unknown):
 }
 
 function parseV1State(value: Record<string, unknown>): ParsedState {
-  if (!Object.keys(value).every((key) => ['version', 'feature', 'cases', 'suppressions'].includes(key)) ||
-    !['version', 'feature', 'cases'].every((key) => Object.hasOwn(value, key))) return { ok: false, reason: 'malformed-state' };
+  if (
+    !Object.keys(value).every((key) => ['version', 'feature', 'cases', 'suppressions'].includes(key)) ||
+    !['version', 'feature', 'cases'].every((key) => Object.hasOwn(value, key))
+  )
+    return { ok: false, reason: 'malformed-state' };
   const feature = parseFeature(value.feature);
   const cases = parseBuildReviewCases(value.cases);
   const suppressions = parseSuppressions(value.suppressions);
@@ -1131,12 +1520,14 @@ function parseV1State(value: Record<string, unknown>): ParsedState {
 }
 
 function parseV2State(value: Record<string, unknown>): ParsedState {
-  if (!exactKeys(value, ['version', 'feature', 'cases', 'prdWideningCases', 'suppressions'])) return { ok: false, reason: 'malformed-state' };
+  if (!exactKeys(value, ['version', 'feature', 'cases', 'prdWideningCases', 'suppressions']))
+    return { ok: false, reason: 'malformed-state' };
   const feature = parseFeature(value.feature);
   const cases = parseBuildReviewCases(value.cases);
   const prdWideningCases = parsePrdWideningCases(value.prdWideningCases);
   const suppressions = parseSuppressions(value.suppressions);
-  if (!feature || !cases.ok || !prdWideningCases || !suppressions) return !cases.ok ? cases : { ok: false, reason: 'malformed-state' };
+  if (!feature || !cases.ok || !prdWideningCases || !suppressions)
+    return !cases.ok ? cases : { ok: false, reason: 'malformed-state' };
   const domainRecords: readonly RemediationCaseDomainRecord[] = [...cases.cases, ...prdWideningCases];
   return {
     ok: true,
@@ -1177,7 +1568,9 @@ function parseV3State(value: Record<string, unknown>): ParsedState {
 }
 
 function parseV4State(value: Record<string, unknown>): ParsedState {
-  if (!exactKeys(value, ['version', 'feature', 'cases', 'prdWideningCases', 'asBuiltCases', 'suppressions', 'outbox'])) {
+  if (
+    !exactKeys(value, ['version', 'feature', 'cases', 'prdWideningCases', 'asBuiltCases', 'suppressions', 'outbox'])
+  ) {
     return { ok: false, reason: 'malformed-state' };
   }
   const feature = parseFeature(value.feature);
@@ -1251,18 +1644,28 @@ export class RemediationCaseStore {
   ) {
     this.filesystem = options.filesystem ?? defaultFilesystem;
     this.statePath = remediationCaseStorePath(projectRoot, options.child);
-    this.lock = options.lock ?? createConductStateLease(this.statePath, {
-      ...options.leaseOptions,
-      label: 'remediation-case-store',
-    });
+    this.lock =
+      options.lock ??
+      createConductStateLease(this.statePath, {
+        ...options.leaseOptions,
+        label: 'remediation-case-store',
+      });
   }
 
-  private async acquire(): Promise<{ readonly ok: true; readonly release: () => Promise<void> } | { readonly ok: false; readonly reason: RemediationCaseStoreFailureReason }> {
+  private async acquire(): Promise<
+    | { readonly ok: true; readonly release: () => Promise<void> }
+    | { readonly ok: false; readonly reason: RemediationCaseStoreFailureReason }
+  > {
     const acquired = await this.lock.acquire();
     if (!acquired.ok) {
       return { ok: false, reason: acquired.kind === 'timeout' ? 'lock-timeout' : 'lock-failed' };
     }
-    return { ok: true, release: async () => { await acquired.handle.release(); } };
+    return {
+      ok: true,
+      release: async () => {
+        await acquired.handle.release();
+      },
+    };
   }
 
   private async load(): Promise<RemediationCaseStoreReadResult> {
@@ -1271,7 +1674,18 @@ export class RemediationCaseStore {
       serialized = await this.filesystem.readFile(this.statePath);
     } catch (error) {
       return isMissing(error)
-        ? { ok: true, state: { version: STORE_VERSION, feature: this.feature, cases: [], prdWideningCases: [], asBuiltCases: [], suppressions: [], outbox: [] } }
+        ? {
+            ok: true,
+            state: {
+              version: STORE_VERSION,
+              feature: this.feature,
+              cases: [],
+              prdWideningCases: [],
+              asBuiltCases: [],
+              suppressions: [],
+              outbox: [],
+            },
+          }
         : { ok: false, reason: 'unreadable' };
     }
     let raw: unknown;
@@ -1282,9 +1696,7 @@ export class RemediationCaseStore {
     }
     const parsed = parseState(raw);
     if (!parsed.ok) return { ok: false, reason: parsed.reason };
-    return sameFeature(parsed.state.feature, this.feature)
-      ? parsed
-      : { ok: false, reason: 'foreign-feature' };
+    return sameFeature(parsed.state.feature, this.feature) ? parsed : { ok: false, reason: 'foreign-feature' };
   }
 
   private async atomicReplace(state: RemediationCaseStoreState): Promise<RemediationCaseStoreReplaceResult> {
@@ -1343,9 +1755,7 @@ export class RemediationCaseStore {
       }
       if (!sameFeature(parsed.state.feature, this.feature)) return { ok: false, reason: 'foreign-feature' };
       const replaced = await this.atomicReplace(migrateForWrite(parsed.state));
-      return replaced.ok
-        ? { ok: true, value: mutation.value }
-        : replaced;
+      return replaced.ok ? { ok: true, value: mutation.value } : replaced;
     } catch {
       return { ok: false, reason: 'lease-operation-failed' };
     } finally {
@@ -1377,38 +1787,44 @@ export class RemediationCaseStore {
           rationale: input.rationale,
           resolvedAt: input.resolvedAt,
         },
-        effect: record.effect.kind !== 'none' && record.effect.status === 'reserved'
-          ? { ...record.effect, status: 'failed', diagnostic: 'Resolved by operator.' }
-          : record.effect,
+        effect:
+          record.effect.kind !== 'none' && record.effect.status === 'reserved'
+            ? { ...record.effect, status: 'failed', diagnostic: 'Resolved by operator.' }
+            : record.effect,
       };
       const eventId = randomUUID();
-      const upgraded: RemediationCaseStoreV4State = state.version === STORE_VERSION
-        ? state
-        : {
-          version: STORE_VERSION,
-          feature: state.feature,
-          cases: state.cases,
-          prdWideningCases: state.version === OLDEST_STORE_VERSION ? [] : state.prdWideningCases,
-          asBuiltCases: [],
-          suppressions: state.suppressions ?? [],
-          outbox: state.version === OLDEST_STORE_VERSION || state.version === LEGACY_STORE_VERSION ? [] : state.outbox,
-        };
+      const upgraded: RemediationCaseStoreV4State =
+        state.version === STORE_VERSION
+          ? state
+          : {
+              version: STORE_VERSION,
+              feature: state.feature,
+              cases: state.cases,
+              prdWideningCases: state.version === OLDEST_STORE_VERSION ? [] : state.prdWideningCases,
+              asBuiltCases: [],
+              suppressions: state.suppressions ?? [],
+              outbox:
+                state.version === OLDEST_STORE_VERSION || state.version === LEGACY_STORE_VERSION ? [] : state.outbox,
+            };
       return {
         value: { kind: 'resolved', record: resolved },
         nextState: {
           ...upgraded,
-          cases: upgraded.cases.map((candidate) => candidate.id === input.caseId ? resolved : candidate),
-          outbox: [...upgraded.outbox, {
-            eventId,
-            occurredAt: input.resolvedAt,
-            event: {
-              type: 'remediation_case_operator_resolved',
+          cases: upgraded.cases.map((candidate) => (candidate.id === input.caseId ? resolved : candidate)),
+          outbox: [
+            ...upgraded.outbox,
+            {
               eventId,
-              feature: this.feature.feature,
-              caseId: input.caseId,
-              sourceIds: record.sources.map((source) => source.sourceId),
+              occurredAt: input.resolvedAt,
+              event: {
+                type: 'remediation_case_operator_resolved',
+                eventId,
+                feature: this.feature.feature,
+                caseId: input.caseId,
+                sourceIds: record.sources.map((source) => source.sourceId),
+              },
             },
-          }],
+          ],
         },
       };
     });
@@ -1467,9 +1883,7 @@ export async function readRemediationCaseStoreFeature(
   try {
     serialized = await filesystem.readFile(remediationCaseStorePath(projectRoot, child));
   } catch (error) {
-    return isMissing(error)
-      ? { ok: true, feature: undefined }
-      : { ok: false, reason: 'unreadable' };
+    return isMissing(error) ? { ok: true, feature: undefined } : { ok: false, reason: 'unreadable' };
   }
   let raw: unknown;
   try {
@@ -1478,7 +1892,5 @@ export async function readRemediationCaseStoreFeature(
     return { ok: false, reason: 'malformed-json' };
   }
   const parsed = parseState(raw);
-  return parsed.ok
-    ? { ok: true, feature: parsed.state.feature }
-    : { ok: false, reason: parsed.reason };
+  return parsed.ok ? { ok: true, feature: parsed.state.feature } : { ok: false, reason: parsed.reason };
 }

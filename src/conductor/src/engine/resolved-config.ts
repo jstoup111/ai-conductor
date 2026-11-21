@@ -13,10 +13,7 @@ import type {
   SelfHostActivation,
 } from '../types/config.js';
 import { getStepDefinition } from './steps.js';
-import {
-  resolveProviderModelPolicy,
-  type ProviderModelPolicy,
-} from './provider-model-policy.js';
+import { resolveProviderModelPolicy, type ProviderModelPolicy } from './provider-model-policy.js';
 import { DEFAULT_PROVIDER, providerDescriptor } from '../execution/provider-catalog.js';
 import { selectFallbackLadder } from './model-availability.js';
 import { escalateAttempt } from './escalation.js';
@@ -88,11 +85,11 @@ export const DEFAULT_STEP_REVIEW: Record<StepName, ReviewMode> = {
   build_review: 'conditional', // marker written only on FAIL verdict (kickback)
   test_suite: 'auto', // deterministic native verifier; no generative review
   manual_test: 'auto',
-  prd_audit: 'conditional',          // marker written only when an FR is non-ALIGNED
+  prd_audit: 'conditional', // marker written only when an FR is non-ALIGNED
   architecture_review_as_built: 'conditional', // prompt derived from the typed verdict for non-clean results
   rebase: 'auto',
   finish: 'auto',
-  remediate: 'auto',       // conductor routes deterministically from remediation.json
+  remediate: 'auto', // conductor routes deterministically from remediation.json
   attribution_verify: 'auto', // automated verification of commit attribution metadata
 };
 
@@ -129,9 +126,9 @@ export function resolveDaemonConcurrency(config?: HarnessConfig): number {
 export const DEFAULT_STEP_ESCALATE = true;
 
 /** Resolve the project-only feature applicability opt-in. */
-export function resolveFeatureApplicabilityConfig(
-  config: Pick<HarnessConfig, 'feature_applicability'> | undefined,
-): { enabled: boolean } {
+export function resolveFeatureApplicabilityConfig(config: Pick<HarnessConfig, 'feature_applicability'> | undefined): {
+  enabled: boolean;
+} {
   return { enabled: config?.feature_applicability?.enabled ?? false };
 }
 
@@ -159,9 +156,7 @@ export interface ResolvedProviderNativeStepConfig {
   effort: EffortLevel;
 }
 
-export interface ResolvedStepConfig
-  extends ResolvedProviderNeutralStepConfig,
-    ResolvedProviderNativeStepConfig {}
+export interface ResolvedStepConfig extends ResolvedProviderNeutralStepConfig, ResolvedProviderNativeStepConfig {}
 
 export interface ResolveOptions {
   /** CLI `--model` override. Beats every other source. */
@@ -197,8 +192,7 @@ export interface ResolveFallbackProviderNativeInput {
   escalate: boolean;
 }
 
-export interface ResolvedFallbackProviderNativeConfig
-  extends ResolvedProviderNativeStepConfig {
+export interface ResolvedFallbackProviderNativeConfig extends ResolvedProviderNativeStepConfig {
   modelFallbackLadder: readonly string[];
 }
 
@@ -237,15 +231,11 @@ export function resolveStepConfig(
   legacyOptions: ResolveOptions = {},
 ): ResolvedStepConfig {
   const hasExplicitPolicy = policyOrConfig !== undefined && 'stepModels' in policyOrConfig;
-  const policy = hasExplicitPolicy
-    ? policyOrConfig as ProviderModelPolicy
-    : DEFAULT_PROVIDER_MODEL_POLICY;
+  const policy = hasExplicitPolicy ? (policyOrConfig as ProviderModelPolicy) : DEFAULT_PROVIDER_MODEL_POLICY;
   const config = hasExplicitPolicy
-    ? configOrOptions as HarnessConfig | undefined
-    : policyOrConfig as HarnessConfig | undefined;
-  const options = hasExplicitPolicy
-    ? legacyOptions
-    : configOrOptions as ResolveOptions | undefined ?? {};
+    ? (configOrOptions as HarnessConfig | undefined)
+    : (policyOrConfig as HarnessConfig | undefined);
+  const options = hasExplicitPolicy ? legacyOptions : ((configOrOptions as ResolveOptions | undefined) ?? {});
   const neutral = resolveProviderNeutralStepConfig(step, phase, policy, config, options);
   const native = resolveProviderNativeStepConfig(step, phase, policy, config, options);
   return {
@@ -277,9 +267,7 @@ export function resolveProviderNativeStepConfig(
   const stepTier = tier ? stepCfg?.by_tier?.[tier] : undefined;
   const phaseTier = tier ? phaseCfg?.by_tier?.[tier] : undefined;
 
-  const policyStepTier = tier
-    ? policy.stepTierOverrides[step]?.[tier]
-    : undefined;
+  const policyStepTier = tier ? policy.stepTierOverrides[step]?.[tier] : undefined;
 
   const model =
     options.modelCliOverride ??
@@ -325,22 +313,15 @@ export function resolvePreferredProviderNativeStepConfig({
   attempt = 1,
   escalate = false,
 }: ResolvePreferredProviderNativeInput): ResolvedProviderNativeStepConfig {
-  const base = preferredProvider === inheritedProvider
-    ? resolveProviderNativeStepConfig(step, phase, policy, config, options)
-    : (() => {
-        const stepConfig = config?.steps?.[step];
-        const specializedConfig: HarnessConfig | undefined =
-          stepConfig === undefined
-            ? undefined
-            : { steps: { [step]: stepConfig } };
-        return resolveProviderNativeStepConfig(
-          step,
-          phase,
-          policy,
-          specializedConfig,
-          options,
-        );
-      })();
+  const base =
+    preferredProvider === inheritedProvider
+      ? resolveProviderNativeStepConfig(step, phase, policy, config, options)
+      : (() => {
+          const stepConfig = config?.steps?.[step];
+          const specializedConfig: HarnessConfig | undefined =
+            stepConfig === undefined ? undefined : { steps: { [step]: stepConfig } };
+          return resolveProviderNativeStepConfig(step, phase, policy, specializedConfig, options);
+        })();
 
   // Serial callers pass their already-escalated values as overrides. Only
   // candidate dispatches with no override climb here, preventing a retry from
@@ -370,25 +351,11 @@ export function resolveFallbackProviderNativeStepConfig({
   // fallback cannot inherit the primary provider's model, phase, or defaults.
   const authoredStep = config?.steps?.[step];
   const authoredEffort = policy.requiresConfiguredModels
-    ? (tier ? authoredStep?.by_tier?.[tier]?.effort : undefined) ?? authoredStep?.effort
+    ? ((tier ? authoredStep?.by_tier?.[tier]?.effort : undefined) ?? authoredStep?.effort)
     : undefined;
-  const fallbackConfig = authoredEffort === undefined
-    ? undefined
-    : { steps: { [step]: { effort: authoredEffort } } };
-  const base = resolveProviderNativeStepConfig(
-    step,
-    phaseForStep(step),
-    policy,
-    fallbackConfig,
-    { tier },
-  );
-  const native = escalateAttempt(
-    base.model,
-    base.effort,
-    attempt,
-    escalate,
-    policy,
-  );
+  const fallbackConfig = authoredEffort === undefined ? undefined : { steps: { [step]: { effort: authoredEffort } } };
+  const base = resolveProviderNativeStepConfig(step, phaseForStep(step), policy, fallbackConfig, { tier });
+  const native = escalateAttempt(base.model, base.effort, attempt, escalate, policy);
 
   return {
     ...native,
@@ -409,9 +376,7 @@ export function resolveProviderNeutralStepConfig(
   const tier = options.tier;
   const stepTier = tier ? stepCfg?.by_tier?.[tier] : undefined;
   const phaseTier = tier ? phaseCfg?.by_tier?.[tier] : undefined;
-  const policyStepTier = tier
-    ? policy.stepTierOverrides[step]?.[tier]
-    : undefined;
+  const policyStepTier = tier ? policy.stepTierOverrides[step]?.[tier] : undefined;
 
   const max_retries =
     stepTier?.max_retries ??
@@ -430,11 +395,7 @@ export function resolveProviderNeutralStepConfig(
   // #188: escalate follows the same step → phase → defaults precedence as the
   // other knobs (no tier/CLI override — it's a coarse per-step policy switch),
   // defaulting to DEFAULT_STEP_ESCALATE (true) when unset everywhere.
-  const escalate: boolean =
-    stepCfg?.escalate ??
-    phaseCfg?.escalate ??
-    defaultsCfg?.escalate ??
-    DEFAULT_STEP_ESCALATE;
+  const escalate: boolean = stepCfg?.escalate ?? phaseCfg?.escalate ?? defaultsCfg?.escalate ?? DEFAULT_STEP_ESCALATE;
 
   return {
     step,
@@ -613,9 +574,7 @@ export function resolveProviderPreparationTimeoutMinutes(config?: HarnessConfig)
     );
   }
   if (!Number.isFinite(override)) {
-    throw new Error(
-      `Invalid provider_preparation_timeout_minutes: must be a finite number, got ${override}`,
-    );
+    throw new Error(`Invalid provider_preparation_timeout_minutes: must be a finite number, got ${override}`);
   }
   return override;
 }
@@ -701,9 +660,7 @@ export function resolveSelfHostConfig(config?: HarnessConfig): ResolvedSelfHostC
   return {
     activation: block?.activation ?? DEFAULT_SELF_HOST_ACTIVATION,
     sandboxBuildEnv: block?.sandbox_build_env ?? true,
-    liveContainment: typeof block?.live_containment === 'boolean'
-      ? block.live_containment
-      : true,
+    liveContainment: typeof block?.live_containment === 'boolean' ? block.live_containment : true,
     versionApprovalGate: block?.version_approval_gate ?? true,
     releaseArtifactGate: block?.release_artifact_gate ?? true,
     // Blank/whitespace normalizes to null so a freeze can never "match" an
@@ -775,8 +732,7 @@ export interface ResolvedBuildReviewCustomCatalogEntry {
 }
 
 export type ResolvedBuildReviewCatalogEntry =
-  | ResolvedBuildReviewBuiltinCatalogEntry
-  | ResolvedBuildReviewCustomCatalogEntry;
+  ResolvedBuildReviewBuiltinCatalogEntry | ResolvedBuildReviewCustomCatalogEntry;
 
 /** Concrete post-join remediation adjudication setting. */
 export interface ResolvedBuildReviewAdjudicationConfig {
@@ -802,15 +758,19 @@ export interface ResolvedBuildReviewConfig {
 export function resolveBuildReviewCustomCatalog(
   entries: readonly ResolvedBuildReviewCustomCatalogEntry[],
 ): readonly ResolvedBuildReviewCustomCatalogEntry[] {
-  const validated = resolveBuildReviewContractCatalog(entries.map((entry) => ({
-    id: entry.id,
-    contract: entry.contract,
-  })));
-  return Object.freeze(validated.map(({ id }, index) => {
-    const entry = entries[index]!;
-    if (entry.id !== id) throw new Error(`Build-review custom catalog order changed for ${id}`);
-    return entry;
-  }));
+  const validated = resolveBuildReviewContractCatalog(
+    entries.map((entry) => ({
+      id: entry.id,
+      contract: entry.contract,
+    })),
+  );
+  return Object.freeze(
+    validated.map(({ id }, index) => {
+      const entry = entries[index]!;
+      if (entry.id !== id) throw new Error(`Build-review custom catalog order changed for ${id}`);
+      return entry;
+    }),
+  );
 }
 
 /**
@@ -829,14 +789,10 @@ const DEFAULT_RUBRIC_EFFORT: Readonly<Record<BuildReviewRubricId, 'medium' | 'hi
 };
 
 function freezeProviderSelection(selection: ProviderSelection): ProviderSelection {
-  return Array.isArray(selection)
-    ? Object.freeze([...selection]) as unknown as string[]
-    : selection;
+  return Array.isArray(selection) ? (Object.freeze([...selection]) as unknown as string[]) : selection;
 }
 
-function freezeRubricPolicy(
-  policy: ResolvedBuildReviewRubricPolicy,
-): ResolvedBuildReviewRubricPolicy {
+function freezeRubricPolicy(policy: ResolvedBuildReviewRubricPolicy): ResolvedBuildReviewRubricPolicy {
   return Object.freeze({
     ...policy,
     llm_provider: freezeProviderSelection(policy.llm_provider),
@@ -853,9 +809,10 @@ export function resolveBuildReviewConfig(
   const outerStepConfig = config?.steps?.build_review;
   const inheritedProviderSelection = outerStepConfig?.llm_provider ?? config?.llm_provider ?? DEFAULT_PROVIDER;
   const inheritedPrimaryProvider = normalizeProviderSelection(inheritedProviderSelection)[0] ?? DEFAULT_PROVIDER;
-  const inheritedPolicy = outerStepConfig?.llm_provider === undefined && config?.llm_provider === undefined
-    ? policy
-    : resolveProviderModelPolicy(inheritedPrimaryProvider, { config });
+  const inheritedPolicy =
+    outerStepConfig?.llm_provider === undefined && config?.llm_provider === undefined
+      ? policy
+      : resolveProviderModelPolicy(inheritedPrimaryProvider, { config });
   const resolveRubricPolicy = (
     rubric: BuildReviewRubricConfig | BuildReviewCustomRubricConfig | undefined,
     defaultEnabled: boolean,
@@ -864,13 +821,13 @@ export function resolveBuildReviewConfig(
     // Default efforts weight the judgement-heavy rubrics up and the narrow
     // root-cause check down. They apply only when neither the rubric nor the
     // outer step authored an effort — explicit config always wins.
-    const rubricEffort = rubric?.effort
-      ?? (outerStepConfig?.effort === undefined ? defaultEffort : undefined);
+    const rubricEffort = rubric?.effort ?? (outerStepConfig?.effort === undefined ? defaultEffort : undefined);
     const rubricProvider = rubric?.llm_provider ?? inheritedProviderSelection;
     const rubricPrimaryProvider = normalizeProviderSelection(rubricProvider)[0] ?? inheritedPrimaryProvider;
-    const rubricPolicy = rubric?.llm_provider === undefined
-      ? inheritedPolicy
-      : resolveProviderModelPolicy(rubricPrimaryProvider, { config });
+    const rubricPolicy =
+      rubric?.llm_provider === undefined
+        ? inheritedPolicy
+        : resolveProviderModelPolicy(rubricPrimaryProvider, { config });
     const rubricConfig: HarnessConfig = {
       ...config,
       steps: {
@@ -887,16 +844,17 @@ export function resolveBuildReviewConfig(
     // An explicitly routed rubric must not inherit native Claude/Codex values
     // from its siblings. Keep only its own authored native overrides, while
     // provider-neutral retry settings continue to inherit normally.
-    const nativeConfig = rubricPrimaryProvider === inheritedPrimaryProvider
-      ? rubricConfig
-      : {
-        steps: {
-          build_review: {
-            ...(rubric?.model === undefined ? {} : { model: rubric.model }),
-            ...(rubricEffort === undefined ? {} : { effort: rubricEffort }),
-          },
-        },
-      } satisfies HarnessConfig;
+    const nativeConfig =
+      rubricPrimaryProvider === inheritedPrimaryProvider
+        ? rubricConfig
+        : ({
+            steps: {
+              build_review: {
+                ...(rubric?.model === undefined ? {} : { model: rubric.model }),
+                ...(rubricEffort === undefined ? {} : { effort: rubricEffort }),
+              },
+            },
+          } satisfies HarnessConfig);
     const resolvedNative = resolveProviderNativeStepConfig(
       'build_review',
       'BUILD',
@@ -918,8 +876,9 @@ export function resolveBuildReviewConfig(
       llm_provider: rubricProvider,
       model: resolvedNative.model,
       effort: resolvedNative.effort,
-      model_fallback_ladder: rubric?.model_fallback_ladder
-        ?? (rubricPrimaryProvider === inheritedPrimaryProvider
+      model_fallback_ladder:
+        rubric?.model_fallback_ladder ??
+        (rubricPrimaryProvider === inheritedPrimaryProvider
           ? selectFallbackLadder(inheritedPolicy, inheritedPrimaryProvider, config ?? {})
           : rubricPolicy.modelFallbackLadder),
       max_retries: resolvedNeutral.max_retries,
@@ -928,51 +887,54 @@ export function resolveBuildReviewConfig(
       ...(rubric?.min_severity === undefined ? {} : { min_severity: rubric.min_severity }),
     });
   };
-  const rubrics = Object.fromEntries(BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [
-    rubricId,
-    resolveRubricPolicy(
-      block?.rubrics?.[rubricId],
-      BUILD_REVIEW_RUBRIC_DEFAULT_ENABLED[rubricId],
-      DEFAULT_RUBRIC_EFFORT[rubricId],
-    ),
-  ])) as Record<BuildReviewRubricId, ResolvedBuildReviewRubricPolicy>;
+  const rubrics = Object.fromEntries(
+    BUILD_REVIEW_RUBRIC_IDS.map((rubricId) => [
+      rubricId,
+      resolveRubricPolicy(
+        block?.rubrics?.[rubricId],
+        BUILD_REVIEW_RUBRIC_DEFAULT_ENABLED[rubricId],
+        DEFAULT_RUBRIC_EFFORT[rubricId],
+      ),
+    ]),
+  ) as Record<BuildReviewRubricId, ResolvedBuildReviewRubricPolicy>;
   const customRubrics = block?.custom_rubrics;
-  const customEntries = customRubrics !== null
-    && typeof customRubrics === 'object'
-    && !Array.isArray(customRubrics)
-    ? Object.entries(customRubrics)
-    : [];
-  const customCatalog = block?.enabled === false
-    ? Object.freeze([]) as readonly ResolvedBuildReviewCustomCatalogEntry[]
-    : resolveBuildReviewCustomCatalog(customEntries.flatMap(
-      ([id, custom]): ResolvedBuildReviewCustomCatalogEntry[] => {
-        const declaration = custom as BuildReviewCustomRubricConfig;
-        const policy = resolveRubricPolicy(declaration, false);
-        return policy.enabled
-          ? [resolveBuildReviewCustomContract({
-              id,
-              kind: 'custom' as const,
-              skill: declaration.skill,
-              question: declaration.question,
-              ...(declaration.source === undefined ? {} : { source: declaration.source }),
-              resources: Object.freeze([...(declaration.resources ?? [])]),
-              ...(declaration.paths === undefined ? {} : { paths: Object.freeze([...declaration.paths]) }),
-              policy,
-            })]
-          : [];
-      },
-    ));
-  const catalog = block?.enabled === false
-    ? Object.freeze([]) as readonly ResolvedBuildReviewCatalogEntry[]
-    : Object.freeze([
-      ...BUILD_REVIEW_RUBRIC_IDS.flatMap((id): ResolvedBuildReviewCatalogEntry[] => {
-        const policy = rubrics[id];
-        return policy.enabled
-          ? [Object.freeze({ id, kind: 'builtin' as const, policy })]
-          : [];
-      }),
-      ...customCatalog,
-    ]);
+  const customEntries =
+    customRubrics !== null && typeof customRubrics === 'object' && !Array.isArray(customRubrics)
+      ? Object.entries(customRubrics)
+      : [];
+  const customCatalog =
+    block?.enabled === false
+      ? (Object.freeze([]) as readonly ResolvedBuildReviewCustomCatalogEntry[])
+      : resolveBuildReviewCustomCatalog(
+          customEntries.flatMap(([id, custom]): ResolvedBuildReviewCustomCatalogEntry[] => {
+            const declaration = custom as BuildReviewCustomRubricConfig;
+            const policy = resolveRubricPolicy(declaration, false);
+            return policy.enabled
+              ? [
+                  resolveBuildReviewCustomContract({
+                    id,
+                    kind: 'custom' as const,
+                    skill: declaration.skill,
+                    question: declaration.question,
+                    ...(declaration.source === undefined ? {} : { source: declaration.source }),
+                    resources: Object.freeze([...(declaration.resources ?? [])]),
+                    ...(declaration.paths === undefined ? {} : { paths: Object.freeze([...declaration.paths]) }),
+                    policy,
+                  }),
+                ]
+              : [];
+          }),
+        );
+  const catalog =
+    block?.enabled === false
+      ? (Object.freeze([]) as readonly ResolvedBuildReviewCatalogEntry[])
+      : Object.freeze([
+          ...BUILD_REVIEW_RUBRIC_IDS.flatMap((id): ResolvedBuildReviewCatalogEntry[] => {
+            const policy = rubrics[id];
+            return policy.enabled ? [Object.freeze({ id, kind: 'builtin' as const, policy })] : [];
+          }),
+          ...customCatalog,
+        ]);
   const enabledRubricCount = catalog.length;
 
   return {
@@ -984,10 +946,7 @@ export function resolveBuildReviewConfig(
       typeof block?.scopeContainmentEnforced === 'boolean'
         ? block.scopeContainmentEnforced
         : DEFAULT_SCOPE_CONTAINMENT_ENFORCED,
-    maxParallel: Math.min(
-      block?.maxParallel ?? DEFAULT_BUILD_REVIEW_MAX_PARALLEL,
-      enabledRubricCount,
-    ),
+    maxParallel: Math.min(block?.maxParallel ?? DEFAULT_BUILD_REVIEW_MAX_PARALLEL, enabledRubricCount),
     rubrics,
     catalog,
   };

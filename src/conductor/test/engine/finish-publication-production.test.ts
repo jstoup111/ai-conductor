@@ -35,18 +35,20 @@ async function observeImplementationEvidence(input: {
   activeLeafChild?: number;
 }): Promise<'valid' | 'invalid' | 'indeterminate'> {
   let observation: 'valid' | 'invalid' | 'indeterminate' | undefined;
-  const advanceFinishPublication = vi.fn(async (args: { observe: () => Promise<{ implementationEvidence: 'valid' | 'invalid' | 'indeterminate' }> }) => {
-    observation = (await args.observe()).implementationEvidence;
-    return { kind: 'complete' as const };
-  });
+  const advanceFinishPublication = vi.fn(
+    async (args: { observe: () => Promise<{ implementationEvidence: 'valid' | 'invalid' | 'indeterminate' }> }) => {
+      observation = (await args.observe()).implementationEvidence;
+      return { kind: 'complete' as const };
+    },
+  );
   vi.resetModules();
   vi.doMock('../../src/engine/finish-publication.js', async () => ({
-    ...await vi.importActual('../../src/engine/finish-publication.js'),
+    ...(await vi.importActual('../../src/engine/finish-publication.js')),
     advanceFinishPublication,
   }));
   if (input.substituteGateSatisfied) {
     vi.doMock('../../src/engine/selector.js', async () => ({
-      ...await vi.importActual('../../src/engine/selector.js'),
+      ...(await vi.importActual('../../src/engine/selector.js')),
       gateSatisfied: input.substituteGateSatisfied,
     }));
   }
@@ -63,9 +65,8 @@ async function observeImplementationEvidence(input: {
   }
 
   try {
-    const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
-      '../../src/engine/finish-publication-production.js'
-    );
+    const { createProductionFinishPublicationCoordinator: createCoordinator } =
+      await import('../../src/engine/finish-publication-production.js');
     const coordinator = createCoordinator({
       projectRoot: input.root,
       stateFilePath: join(input.root, '.pipeline', 'conduct-state.json'),
@@ -94,8 +95,11 @@ async function observeImplementationEvidence(input: {
 function remoteMutation(): GithubMutationExecutionContext {
   return {
     provenance: {
-      repository: 'acme/widget', defaultBranch: 'main', specBranch: 'feat/feature',
-      featureMarker: '.docs/intake/feature.md', publication: 'initial',
+      repository: 'acme/widget',
+      defaultBranch: 'main',
+      specBranch: 'feat/feature',
+      featureMarker: '.docs/intake/feature.md',
+      publication: 'initial',
     },
     dependencies: {
       resolveMachineOwner: async () => ({ resolved: true, id: 'alice' }),
@@ -109,7 +113,15 @@ function remoteMutation(): GithubMutationExecutionContext {
 function guardedRemoteGit() {
   return vi.fn(async () => ({
     kind: 'executed' as const,
-    targets: [{ operation: 'remote-ref.push' as const, repository: 'acme/widget', kind: 'remote-ref' as const, ref: 'refs/heads/feat/feature', endpoint: 'https' as const }],
+    targets: [
+      {
+        operation: 'remote-ref.push' as const,
+        repository: 'acme/widget',
+        kind: 'remote-ref' as const,
+        ref: 'refs/heads/feat/feature',
+        endpoint: 'https' as const,
+      },
+    ],
   }));
 }
 
@@ -184,21 +196,20 @@ describe('production FINISH publication composition', () => {
       );
       return {
         ...actual,
-        advanceFinishPublication: vi.fn(async (input: { observe: () => Promise<Parameters<typeof actual.nextFinishPublicationTransition>[0]> }) => {
-          const snapshot = await input.observe();
-          observed = snapshot;
-          return { kind: 'advanced' as const, transition: actual.nextFinishPublicationTransition(snapshot) };
-        }),
+        advanceFinishPublication: vi.fn(
+          async (input: { observe: () => Promise<Parameters<typeof actual.nextFinishPublicationTransition>[0]> }) => {
+            const snapshot = await input.observe();
+            observed = snapshot;
+            return { kind: 'advanced' as const, transition: actual.nextFinishPublicationTransition(snapshot) };
+          },
+        ),
       };
     });
 
     try {
       const pipeline = join(root, '.pipeline');
       const plans = join(root, '.docs', 'plans');
-      await Promise.all([
-        mkdir(pipeline, { recursive: true }),
-        mkdir(plans, { recursive: true }),
-      ]);
+      await Promise.all([mkdir(pipeline, { recursive: true }), mkdir(plans, { recursive: true })]);
       await writeFile(join(plans, fixture.planName), 'plan\n');
       if (fixture.recordName && fixture.record) {
         const shipped = join(root, '.docs', 'shipped');
@@ -210,35 +221,44 @@ describe('production FINISH publication composition', () => {
       const body = 'Reader-facing summary.';
       const revision = `${prUrl}\u0000${JSON.stringify([title, body])}`;
       const digest = createHash('sha256').update(revision, 'utf8').digest('hex');
-      await writeFile(join(pipeline, 'prose-judgment.json'), JSON.stringify({
-        version: 1, records: { [digest]: { kind: 'accepted' } },
-      }));
-      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
-      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
-        '../../src/engine/finish-publication-production.js'
+      await writeFile(
+        join(pipeline, 'prose-judgment.json'),
+        JSON.stringify({
+          version: 1,
+          records: { [digest]: { kind: 'accepted' } },
+        }),
       );
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      const { createProductionFinishPublicationCoordinator: createCoordinator } =
+        await import('../../src/engine/finish-publication-production.js');
       const coordinator = createCoordinator({
         projectRoot: root,
         stateFilePath: join(pipeline, 'conduct-state.json'),
         baseBranch: 'main',
-        git: async (args) => args[0] === 'rev-parse'
-          ? { stdout: 'refs/remotes/origin/feat/foo\n' }
-          : commandResult,
-        gh: async (args) => args[0] === 'pr' && args[1] === 'view'
-          ? { stdout: JSON.stringify({ url: prUrl, title, body, isDraft: false, labels: [] }) }
-          : commandResult,
+        git: async (args) => (args[0] === 'rev-parse' ? { stdout: 'refs/remotes/origin/feat/foo\n' } : commandResult),
+        gh: async (args) =>
+          args[0] === 'pr' && args[1] === 'view'
+            ? { stdout: JSON.stringify({ url: prUrl, title, body, isDraft: false, labels: [] }) }
+            : commandResult,
         observeReleaseReadiness: async () => 'present',
       });
 
-      await expect(coordinator.advance({
-        state: {
-          feature_desc: fixture.featureDesc,
-          pr_url: prUrl,
-          build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
-        } as ConductState,
-        mode: 'auto', daemon: true,
-        dispatchJudgment: async () => ({ success: true }), emit: async () => {},
-      })).resolves.toEqual({ kind: 'publication_progress', transition: fixture.transition });
+      await expect(
+        coordinator.advance({
+          state: {
+            feature_desc: fixture.featureDesc,
+            pr_url: prUrl,
+            build_review: 'done',
+            test_suite: 'done',
+            manual_test: 'done',
+            architecture_review_as_built: 'done',
+          } as ConductState,
+          mode: 'auto',
+          daemon: true,
+          dispatchJudgment: async () => ({ success: true }),
+          emit: async () => {},
+        }),
+      ).resolves.toEqual({ kind: 'publication_progress', transition: fixture.transition });
       expect(observed?.shippedRecord).toBe(fixture.shippedRecord);
     } finally {
       vi.doUnmock('../../src/engine/finish-publication.js');
@@ -274,32 +294,43 @@ describe('production FINISH publication composition', () => {
       const body = 'Reader-facing summary.';
       const revision = `${prUrl}\u0000${JSON.stringify([title, body])}`;
       const digest = createHash('sha256').update(revision, 'utf8').digest('hex');
-      await writeFile(join(pipeline, 'prose-judgment.json'), JSON.stringify({
-        version: 1, records: { [digest]: { kind: 'accepted' } },
-      }));
+      await writeFile(
+        join(pipeline, 'prose-judgment.json'),
+        JSON.stringify({
+          version: 1,
+          records: { [digest]: { kind: 'accepted' } },
+        }),
+      );
       const writeShippedRecord = vi.fn(async () => 0);
       const coordinator = createProductionFinishPublicationCoordinator({
         projectRoot: root,
         stateFilePath: join(pipeline, 'conduct-state.json'),
         baseBranch: 'main',
-        git: async (args) => args[0] === 'rev-parse'
-          ? { stdout: 'refs/remotes/origin/feat/foo\n' }
-          : commandResult,
-        gh: async (args) => args[0] === 'pr' && args[1] === 'view'
-          ? { stdout: JSON.stringify({ url: prUrl, title, body, isDraft: false, labels: [] }) }
-          : commandResult,
+        git: async (args) => (args[0] === 'rev-parse' ? { stdout: 'refs/remotes/origin/feat/foo\n' } : commandResult),
+        gh: async (args) =>
+          args[0] === 'pr' && args[1] === 'view'
+            ? { stdout: JSON.stringify({ url: prUrl, title, body, isDraft: false, labels: [] }) }
+            : commandResult,
         writeShippedRecord,
         observeReleaseReadiness: async () => 'present',
       });
 
-      await expect(coordinator.advance({
-        state: {
-          feature_desc: 'foo', pr_url: prUrl,
-          build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
-        } as ConductState,
-        mode: 'auto', daemon: true,
-        dispatchJudgment: async () => ({ success: true }), emit: async () => {},
-      })).resolves.toEqual({ kind: 'human_required', reason: 'invalid_shipped_record' });
+      await expect(
+        coordinator.advance({
+          state: {
+            feature_desc: 'foo',
+            pr_url: prUrl,
+            build_review: 'done',
+            test_suite: 'done',
+            manual_test: 'done',
+            architecture_review_as_built: 'done',
+          } as ConductState,
+          mode: 'auto',
+          daemon: true,
+          dispatchJudgment: async () => ({ success: true }),
+          emit: async () => {},
+        }),
+      ).resolves.toEqual({ kind: 'human_required', reason: 'invalid_shipped_record' });
       expect(writeShippedRecord).not.toHaveBeenCalled();
       await expect(readFile(recordPath, 'utf8')).resolves.toBe(before);
     } finally {
@@ -326,32 +357,43 @@ describe('production FINISH publication composition', () => {
       const body = 'Reader-facing summary.';
       const revision = `${prUrl}\u0000${JSON.stringify([title, body])}`;
       const digest = createHash('sha256').update(revision, 'utf8').digest('hex');
-      await writeFile(join(pipeline, 'prose-judgment.json'), JSON.stringify({
-        version: 1, records: { [digest]: { kind: 'accepted' } },
-      }));
+      await writeFile(
+        join(pipeline, 'prose-judgment.json'),
+        JSON.stringify({
+          version: 1,
+          records: { [digest]: { kind: 'accepted' } },
+        }),
+      );
       const writeShippedRecord = vi.fn(async () => 0);
       const coordinator = createProductionFinishPublicationCoordinator({
         projectRoot: root,
         stateFilePath: join(pipeline, 'conduct-state.json'),
         baseBranch: 'main',
-        git: async (args) => args[0] === 'rev-parse'
-          ? { stdout: 'refs/remotes/origin/feat/foo\n' }
-          : commandResult,
-        gh: async (args) => args[0] === 'pr' && args[1] === 'view'
-          ? { stdout: JSON.stringify({ url: prUrl, title, body, isDraft: false, labels: [] }) }
-          : commandResult,
+        git: async (args) => (args[0] === 'rev-parse' ? { stdout: 'refs/remotes/origin/feat/foo\n' } : commandResult),
+        gh: async (args) =>
+          args[0] === 'pr' && args[1] === 'view'
+            ? { stdout: JSON.stringify({ url: prUrl, title, body, isDraft: false, labels: [] }) }
+            : commandResult,
         writeShippedRecord,
         observeReleaseReadiness: async () => 'present',
       });
 
-      await expect(coordinator.advance({
-        state: {
-          feature_desc: 'foo', pr_url: prUrl,
-          build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
-        } as ConductState,
-        mode: 'auto', daemon: true,
-        dispatchJudgment: async () => ({ success: true }), emit: async () => {},
-      })).resolves.not.toMatchObject({ transition: 'write_shipped_record' });
+      await expect(
+        coordinator.advance({
+          state: {
+            feature_desc: 'foo',
+            pr_url: prUrl,
+            build_review: 'done',
+            test_suite: 'done',
+            manual_test: 'done',
+            architecture_review_as_built: 'done',
+          } as ConductState,
+          mode: 'auto',
+          daemon: true,
+          dispatchJudgment: async () => ({ success: true }),
+          emit: async () => {},
+        }),
+      ).resolves.not.toMatchObject({ transition: 'write_shipped_record' });
       expect(writeShippedRecord).not.toHaveBeenCalled();
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -376,30 +418,41 @@ describe('production FINISH publication composition', () => {
       const body = 'Reader-facing summary.';
       const revision = `${prUrl}\u0000${JSON.stringify([title, body])}`;
       const digest = createHash('sha256').update(revision, 'utf8').digest('hex');
-      await writeFile(join(pipeline, 'prose-judgment.json'), JSON.stringify({
-        version: 1, records: { [digest]: { kind: 'accepted' } },
-      }));
+      await writeFile(
+        join(pipeline, 'prose-judgment.json'),
+        JSON.stringify({
+          version: 1,
+          records: { [digest]: { kind: 'accepted' } },
+        }),
+      );
       const coordinator = createProductionFinishPublicationCoordinator({
         projectRoot: root,
         stateFilePath: join(pipeline, 'conduct-state.json'),
         baseBranch: 'main',
-        git: async (args) => args[0] === 'rev-parse'
-          ? { stdout: 'refs/remotes/origin/feat/foo\n' }
-          : commandResult,
-        gh: async (args) => args[0] === 'pr' && args[1] === 'view'
-          ? { stdout: JSON.stringify({ url: prUrl, title, body, isDraft: false, labels: [] }) }
-          : commandResult,
+        git: async (args) => (args[0] === 'rev-parse' ? { stdout: 'refs/remotes/origin/feat/foo\n' } : commandResult),
+        gh: async (args) =>
+          args[0] === 'pr' && args[1] === 'view'
+            ? { stdout: JSON.stringify({ url: prUrl, title, body, isDraft: false, labels: [] }) }
+            : commandResult,
         observeReleaseReadiness: async () => 'present',
       });
 
-      await expect(coordinator.advance({
-        state: {
-          feature_desc: 'foo', pr_url: prUrl,
-          build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
-        } as ConductState,
-        mode: 'auto', daemon: true,
-        dispatchJudgment: async () => ({ success: true }), emit: async () => {},
-      })).resolves.toEqual({ kind: 'human_required', reason: 'invalid_shipped_record' });
+      await expect(
+        coordinator.advance({
+          state: {
+            feature_desc: 'foo',
+            pr_url: prUrl,
+            build_review: 'done',
+            test_suite: 'done',
+            manual_test: 'done',
+            architecture_review_as_built: 'done',
+          } as ConductState,
+          mode: 'auto',
+          daemon: true,
+          dispatchJudgment: async () => ({ success: true }),
+          emit: async () => {},
+        }),
+      ).resolves.toEqual({ kind: 'human_required', reason: 'invalid_shipped_record' });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -415,11 +468,13 @@ describe('production FINISH publication composition', () => {
       );
       return {
         ...actual,
-        advanceFinishPublication: vi.fn(async (input: { observe: () => Promise<Parameters<typeof actual.nextFinishPublicationTransition>[0]> }) => {
-          const snapshot = await input.observe();
-          observed = snapshot;
-          return { kind: 'advanced' as const, transition: actual.nextFinishPublicationTransition(snapshot) };
-        }),
+        advanceFinishPublication: vi.fn(
+          async (input: { observe: () => Promise<Parameters<typeof actual.nextFinishPublicationTransition>[0]> }) => {
+            const snapshot = await input.observe();
+            observed = snapshot;
+            return { kind: 'advanced' as const, transition: actual.nextFinishPublicationTransition(snapshot) };
+          },
+        ),
       };
     });
 
@@ -428,12 +483,9 @@ describe('production FINISH publication composition', () => {
         mkdir(join(root, '.docs', 'plans'), { recursive: true }),
         mkdir(join(root, '.docs', 'shipped', 'foo.md'), { recursive: true }),
       ]);
-      await Promise.all([
-        writeFile(join(root, '.docs', 'plans', 'foo.md'), 'plan\n'),
-      ]);
-      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
-        '../../src/engine/finish-publication-production.js'
-      );
+      await Promise.all([writeFile(join(root, '.docs', 'plans', 'foo.md'), 'plan\n')]);
+      const { createProductionFinishPublicationCoordinator: createCoordinator } =
+        await import('../../src/engine/finish-publication-production.js');
       const coordinator = createCoordinator({
         projectRoot: root,
         stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
@@ -445,8 +497,10 @@ describe('production FINISH publication composition', () => {
 
       await coordinator.advance({
         state: { feature_desc: 'foo' } as ConductState,
-        mode: 'auto', daemon: true,
-        dispatchJudgment: async () => ({ success: true }), emit: async () => {},
+        mode: 'auto',
+        daemon: true,
+        dispatchJudgment: async () => ({ success: true }),
+        emit: async () => {},
       });
       expect(observed?.shippedRecord).toBe('indeterminate');
     } finally {
@@ -475,9 +529,13 @@ describe('production FINISH publication composition', () => {
       const body = 'Reader-facing summary.';
       const revision = `${prUrl}\u0000${JSON.stringify([title, body])}`;
       const digest = createHash('sha256').update(revision, 'utf8').digest('hex');
-      await writeFile(join(pipeline, 'prose-judgment.json'), JSON.stringify({
-        version: 1, records: { [digest]: { kind: 'accepted' } },
-      }));
+      await writeFile(
+        join(pipeline, 'prose-judgment.json'),
+        JSON.stringify({
+          version: 1,
+          records: { [digest]: { kind: 'accepted' } },
+        }),
+      );
       const writeShippedRecord = vi.fn(async () => {
         await writeFile(join(shipped, 'foo.md'), '---\nslug: bar\n---\n');
         return 0;
@@ -486,32 +544,39 @@ describe('production FINISH publication composition', () => {
         projectRoot: root,
         stateFilePath: join(pipeline, 'conduct-state.json'),
         baseBranch: 'main',
-        git: async (args) => args[0] === 'rev-parse'
-          ? { stdout: 'refs/remotes/origin/feat/foo\n' }
-          : commandResult,
-        gh: async (args) => args[0] === 'pr' && args[1] === 'view'
-          ? { stdout: JSON.stringify({ url: prUrl, title, body, isDraft: false, labels: [] }) }
-          : commandResult,
+        git: async (args) => (args[0] === 'rev-parse' ? { stdout: 'refs/remotes/origin/feat/foo\n' } : commandResult),
+        gh: async (args) =>
+          args[0] === 'pr' && args[1] === 'view'
+            ? { stdout: JSON.stringify({ url: prUrl, title, body, isDraft: false, labels: [] }) }
+            : commandResult,
         writeShippedRecord,
         observeReleaseReadiness: async () => 'present',
       });
 
       const state = {
-        feature_desc: 'foo', pr_url: prUrl,
-        build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+        feature_desc: 'foo',
+        pr_url: prUrl,
+        build_review: 'done',
+        test_suite: 'done',
+        manual_test: 'done',
+        architecture_review_as_built: 'done',
       } as ConductState;
       const input = {
         state,
-        mode: 'auto' as const, daemon: true,
-        dispatchJudgment: async () => ({ success: true }), emit: async () => {},
+        mode: 'auto' as const,
+        daemon: true,
+        dispatchJudgment: async () => ({ success: true }),
+        emit: async () => {},
       };
       await expect(coordinator.advance(input)).resolves.toEqual({
-        kind: 'publication_progress', transition: 'write_shipped_record',
+        kind: 'publication_progress',
+        transition: 'write_shipped_record',
       });
       expect(writeShippedRecord).toHaveBeenCalledOnce();
       await expect(readFile(join(shipped, 'foo.md'), 'utf8')).resolves.toBe('---\nslug: bar\n---\n');
       await expect(coordinator.advance(input)).resolves.toEqual({
-        kind: 'human_required', reason: 'invalid_shipped_record',
+        kind: 'human_required',
+        reason: 'invalid_shipped_record',
       });
       expect(writeShippedRecord).toHaveBeenCalledOnce();
     } finally {
@@ -523,29 +588,34 @@ describe('production FINISH publication composition', () => {
     {
       label: 'satisfied verdicts without step-state keys',
       state: { feature_desc: 'feature', worktree_branch: 'feat/feature' } as ConductState,
-      writeVerdicts: async (root: string) => Promise.all([
-        writeVerdict(root, 'build_review', { satisfied: true, checkedAt: 0 }),
-        writeVerdict(root, 'test_suite', { satisfied: true, checkedAt: 0 }),
-      ]),
+      writeVerdicts: async (root: string) =>
+        Promise.all([
+          writeVerdict(root, 'build_review', { satisfied: true, checkedAt: 0 }),
+          writeVerdict(root, 'test_suite', { satisfied: true, checkedAt: 0 }),
+        ]),
     },
     {
       label: 'satisfied verdicts alongside done step-state keys',
       state: {
-        feature_desc: 'feature', worktree_branch: 'feat/feature',
-        build_review: 'done', test_suite: 'done',
+        feature_desc: 'feature',
+        worktree_branch: 'feat/feature',
+        build_review: 'done',
+        test_suite: 'done',
       } as ConductState,
-      writeVerdicts: async (root: string) => Promise.all([
-        writeVerdict(root, 'build_review', { satisfied: true, checkedAt: 0 }),
-        writeVerdict(root, 'test_suite', { satisfied: true, checkedAt: 0 }),
-      ]),
+      writeVerdicts: async (root: string) =>
+        Promise.all([
+          writeVerdict(root, 'build_review', { satisfied: true, checkedAt: 0 }),
+          writeVerdict(root, 'test_suite', { satisfied: true, checkedAt: 0 }),
+        ]),
     },
     {
       label: 'a skip verdict',
       state: { feature_desc: 'feature', worktree_branch: 'feat/feature' } as ConductState,
-      writeVerdicts: async (root: string) => Promise.all([
-        recordSkipVerdict(root, 'build_review', 'technical track'),
-        writeVerdict(root, 'test_suite', { satisfied: true, checkedAt: 0 }),
-      ]),
+      writeVerdicts: async (root: string) =>
+        Promise.all([
+          recordSkipVerdict(root, 'build_review', 'technical track'),
+          writeVerdict(root, 'test_suite', { satisfied: true, checkedAt: 0 }),
+        ]),
     },
   ])('observes implementation evidence as present for $label', async ({ state, writeVerdicts }) => {
     const root = await mkdtemp(join(tmpdir(), 'finish-production-gate-verdict-'));
@@ -562,8 +632,9 @@ describe('production FINISH publication composition', () => {
     const gateSatisfied = vi.fn(() => true);
     const state = { feature_desc: 'feature', worktree_branch: 'feat/feature' } as ConductState;
     try {
-      await expect(observeImplementationEvidence({ root, state, substituteGateSatisfied: gateSatisfied }))
-        .resolves.toBe('valid');
+      await expect(
+        observeImplementationEvidence({ root, state, substituteGateSatisfied: gateSatisfied }),
+      ).resolves.toBe('valid');
       expect(gateSatisfied).toHaveBeenNthCalledWith(1, 'build_review', state, expect.any(Object));
       expect(gateSatisfied).toHaveBeenNthCalledWith(2, 'test_suite', state, expect.any(Object));
       expect(gateSatisfied).toHaveBeenCalledTimes(2);
@@ -582,12 +653,16 @@ describe('production FINISH publication composition', () => {
         writeVerdict(root, 'build_review', { satisfied: false, checkedAt: 0 }),
         writeVerdict(root, 'test_suite', { satisfied: true, checkedAt: 0 }),
       ]);
-      await expect(observeImplementationEvidence({
-        root,
-        state: {
-          feature_desc: 'feature', worktree_branch: 'feat/feature', ...stepState,
-        } as ConductState,
-      })).resolves.toBe('invalid');
+      await expect(
+        observeImplementationEvidence({
+          root,
+          state: {
+            feature_desc: 'feature',
+            worktree_branch: 'feat/feature',
+            ...stepState,
+          } as ConductState,
+        }),
+      ).resolves.toBe('invalid');
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -597,10 +672,12 @@ describe('production FINISH publication composition', () => {
     const root = await mkdtemp(join(tmpdir(), 'finish-production-unrecorded-test-suite-'));
     try {
       await writeVerdict(root, 'build_review', { satisfied: true, checkedAt: 0 });
-      await expect(observeImplementationEvidence({
-        root,
-        state: { feature_desc: 'feature', worktree_branch: 'feat/feature' } as ConductState,
-      })).resolves.toBe('invalid');
+      await expect(
+        observeImplementationEvidence({
+          root,
+          state: { feature_desc: 'feature', worktree_branch: 'feat/feature' } as ConductState,
+        }),
+      ).resolves.toBe('invalid');
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -613,12 +690,16 @@ describe('production FINISH publication composition', () => {
         writeVerdict(root, 'build_review', { satisfied: true, checkedAt: 0 }),
         writeVerdict(root, 'test_suite', { satisfied: true, checkedAt: 0 }),
       ]);
-      await expect(observeImplementationEvidence({
-        root,
-        state: {
-          feature_desc: 'feature', worktree_branch: 'feat/feature', build_review: 'stale',
-        } as ConductState,
-      })).resolves.toBe('invalid');
+      await expect(
+        observeImplementationEvidence({
+          root,
+          state: {
+            feature_desc: 'feature',
+            worktree_branch: 'feat/feature',
+            build_review: 'stale',
+          } as ConductState,
+        }),
+      ).resolves.toBe('invalid');
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -634,11 +715,13 @@ describe('production FINISH publication composition', () => {
         writeVerdict(root, 'build_review', { satisfied: true, checkedAt: 0 }, child),
         writeVerdict(root, 'test_suite', { satisfied: true, checkedAt: 0 }, child),
       ]);
-      await expect(observeImplementationEvidence({
-        root,
-        state: { feature_desc: 'feature', worktree_branch: 'feat/daemon-feature' } as ConductState,
-        activeLeafChild: child,
-      })).resolves.toBe('valid');
+      await expect(
+        observeImplementationEvidence({
+          root,
+          state: { feature_desc: 'feature', worktree_branch: 'feat/daemon-feature' } as ConductState,
+          activeLeafChild: child,
+        }),
+      ).resolves.toBe('valid');
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -647,13 +730,17 @@ describe('production FINISH publication composition', () => {
   it('falls back to done step state when the verdict directory is absent', async () => {
     const root = await mkdtemp(join(tmpdir(), 'finish-production-absent-verdict-directory-'));
     try {
-      await expect(observeImplementationEvidence({
-        root,
-        state: {
-          feature_desc: 'feature', worktree_branch: 'feat/feature',
-          build_review: 'done', test_suite: 'done',
-        } as ConductState,
-      })).resolves.toBe('valid');
+      await expect(
+        observeImplementationEvidence({
+          root,
+          state: {
+            feature_desc: 'feature',
+            worktree_branch: 'feat/feature',
+            build_review: 'done',
+            test_suite: 'done',
+          } as ConductState,
+        }),
+      ).resolves.toBe('valid');
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -667,10 +754,12 @@ describe('production FINISH publication composition', () => {
         writeFile(join(root, '.pipeline', 'gates', 'build_review.json'), '{not json'),
         writeVerdict(root, 'test_suite', { satisfied: true, checkedAt: 0 }),
       ]);
-      await expect(observeImplementationEvidence({
-        root,
-        state: { feature_desc: 'feature', worktree_branch: 'feat/feature' } as ConductState,
-      })).resolves.toBe('invalid');
+      await expect(
+        observeImplementationEvidence({
+          root,
+          state: { feature_desc: 'feature', worktree_branch: 'feat/feature' } as ConductState,
+        }),
+      ).resolves.toBe('invalid');
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -705,100 +794,119 @@ describe('production FINISH publication composition', () => {
       expectedBody: 'Reader-facing summary.\nPlan: .docs/plans/2026-09-06-feature.md\n',
       expectedTrace: ['repair', 'declaration', 'outcome'],
     },
-  ])('stamps $label after presentation repair and before outcome recording', async ({
-    planName, initialBody, expectedBody, expectedTrace,
-  }) => {
-    const root = await mkdtemp(join(tmpdir(), 'finish-production-plan-declaration-'));
-    const advanceFinishPublication = vi.fn(async (input: {
-      effects: {
-        repairPresentation?: () => Promise<void>;
-        recordOutcome?: (request: { choice: 'pr'; prUrl: string }) => Promise<void>;
-      };
-    }) => {
-      await input.effects.repairPresentation!();
-      await input.effects.recordOutcome!({ choice: 'pr', prUrl: 'https://github.com/acme/widget/pull/3' });
-      return { kind: 'advanced' as const, transition: 'record_outcome' as const };
-    });
-    vi.resetModules();
-    vi.doMock('../../src/engine/finish-publication.js', async () => ({
-      ...await vi.importActual('../../src/engine/finish-publication.js'),
-      advanceFinishPublication,
-    }));
-
-    try {
-      await mkdir(join(root, '.docs', 'plans'), { recursive: true });
-      await mkdir(join(root, '.pipeline'));
-      await writeFile(join(root, '.docs', 'plans', planName), 'plan\n');
-      let body = initialBody;
-      const trace: string[] = [];
-      const gh = vi.fn(async (args: string[]) => {
-        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ body }) };
-        if (args[0] === 'pr' && args[1] === 'edit') {
-          body = args[args.indexOf('--body') + 1]!;
-          trace.push('declaration');
-          return commandResult;
-        }
-        throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
-      });
-      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
-        '../../src/engine/finish-publication-production.js'
+  ])(
+    'stamps $label after presentation repair and before outcome recording',
+    async ({ planName, initialBody, expectedBody, expectedTrace }) => {
+      const root = await mkdtemp(join(tmpdir(), 'finish-production-plan-declaration-'));
+      const advanceFinishPublication = vi.fn(
+        async (input: {
+          effects: {
+            repairPresentation?: () => Promise<void>;
+            recordOutcome?: (request: { choice: 'pr'; prUrl: string }) => Promise<void>;
+          };
+        }) => {
+          await input.effects.repairPresentation!();
+          await input.effects.recordOutcome!({ choice: 'pr', prUrl: 'https://github.com/acme/widget/pull/3' });
+          return { kind: 'advanced' as const, transition: 'record_outcome' as const };
+        },
       );
-      const coordinator = createCoordinator({
-        projectRoot: root,
-        stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
-        baseBranch: 'main',
-        git: async () => commandResult,
-        gh,
-        operations: guardedOperations(gh),
-        acquireInteractiveIntent: async () => 'pr',
-        observeReleaseReadiness: async () => 'present',
-        repairPresentation: async () => { trace.push('repair'); },
-        recordFinish: async () => { trace.push('outcome'); return 0; },
-      });
-
-      await coordinator.advance({
-        state: {
-          feature_desc: 'feature',
-          worktree_branch: 'feat/feature',
-          pr_url: 'https://github.com/acme/widget/pull/3',
-        } as ConductState,
-        mode: 'interactive',
-        daemon: false,
-        dispatchJudgment: async () => ({ success: true }),
-        emit: async () => {},
-      });
-
-      expect({ body, trace }).toEqual({
-        body: expectedBody,
-        trace: expectedTrace,
-      });
-    } finally {
-      vi.doUnmock('../../src/engine/finish-publication.js');
       vi.resetModules();
-      await rm(root, { recursive: true, force: true });
-    }
-  });
+      vi.doMock('../../src/engine/finish-publication.js', async () => ({
+        ...(await vi.importActual('../../src/engine/finish-publication.js')),
+        advanceFinishPublication,
+      }));
+
+      try {
+        await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+        await mkdir(join(root, '.pipeline'));
+        await writeFile(join(root, '.docs', 'plans', planName), 'plan\n');
+        let body = initialBody;
+        const trace: string[] = [];
+        const gh = vi.fn(async (args: string[]) => {
+          if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ body }) };
+          if (args[0] === 'pr' && args[1] === 'edit') {
+            body = args[args.indexOf('--body') + 1]!;
+            trace.push('declaration');
+            return commandResult;
+          }
+          throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
+        });
+        const { createProductionFinishPublicationCoordinator: createCoordinator } =
+          await import('../../src/engine/finish-publication-production.js');
+        const coordinator = createCoordinator({
+          projectRoot: root,
+          stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+          baseBranch: 'main',
+          git: async () => commandResult,
+          gh,
+          operations: guardedOperations(gh),
+          acquireInteractiveIntent: async () => 'pr',
+          observeReleaseReadiness: async () => 'present',
+          repairPresentation: async () => {
+            trace.push('repair');
+          },
+          recordFinish: async () => {
+            trace.push('outcome');
+            return 0;
+          },
+        });
+
+        await coordinator.advance({
+          state: {
+            feature_desc: 'feature',
+            worktree_branch: 'feat/feature',
+            pr_url: 'https://github.com/acme/widget/pull/3',
+          } as ConductState,
+          mode: 'interactive',
+          daemon: false,
+          dispatchJudgment: async () => ({ success: true }),
+          emit: async () => {},
+        });
+
+        expect({ body, trace }).toEqual({
+          body: expectedBody,
+          trace: expectedTrace,
+        });
+      } finally {
+        vi.doUnmock('../../src/engine/finish-publication.js');
+        vi.resetModules();
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it.each([
     { label: 'a missing plan', plans: [], githubFailure: undefined, expected: 'plan not found' },
-    { label: 'ambiguous date-prefixed plans', plans: ['2026-09-05-feature.md', '2026-09-06-feature.md'], githubFailure: undefined, expected: 'ambiguous plan candidates' },
+    {
+      label: 'ambiguous date-prefixed plans',
+      plans: ['2026-09-05-feature.md', '2026-09-06-feature.md'],
+      githubFailure: undefined,
+      expected: 'ambiguous plan candidates',
+    },
     { label: 'a GitHub body read failure', plans: ['feature.md'], githubFailure: 'read', expected: 'body read failed' },
-    { label: 'a GitHub body write failure', plans: ['feature.md'], githubFailure: 'write', expected: 'body write failed' },
+    {
+      label: 'a GitHub body write failure',
+      plans: ['feature.md'],
+      githubFailure: 'write',
+      expected: 'body write failed',
+    },
   ] as const)('does not record a PR outcome after $label', async ({ plans, githubFailure, expected }) => {
     const root = await mkdtemp(join(tmpdir(), 'finish-production-plan-declaration-failure-'));
-    const advanceFinishPublication = vi.fn(async (input: {
-      effects: {
-        repairPresentation?: () => Promise<void>;
-        recordOutcome?: (request: { choice: 'pr'; prUrl: string }) => Promise<void>;
-      };
-    }) => {
-      await input.effects.repairPresentation!();
-      await input.effects.recordOutcome!({ choice: 'pr', prUrl: 'https://github.com/acme/widget/pull/3' });
-      return { kind: 'advanced' as const, transition: 'record_outcome' as const };
-    });
+    const advanceFinishPublication = vi.fn(
+      async (input: {
+        effects: {
+          repairPresentation?: () => Promise<void>;
+          recordOutcome?: (request: { choice: 'pr'; prUrl: string }) => Promise<void>;
+        };
+      }) => {
+        await input.effects.repairPresentation!();
+        await input.effects.recordOutcome!({ choice: 'pr', prUrl: 'https://github.com/acme/widget/pull/3' });
+        return { kind: 'advanced' as const, transition: 'record_outcome' as const };
+      },
+    );
     vi.resetModules();
     vi.doMock('../../src/engine/finish-publication.js', async () => ({
-      ...await vi.importActual('../../src/engine/finish-publication.js'),
+      ...(await vi.importActual('../../src/engine/finish-publication.js')),
       advanceFinishPublication,
     }));
 
@@ -807,9 +915,8 @@ describe('production FINISH publication composition', () => {
       await mkdir(join(root, '.pipeline'));
       await Promise.all(plans.map((plan) => writeFile(join(root, '.docs', 'plans', plan), 'plan\n')));
       const recordFinish = vi.fn(async () => 0);
-      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
-        '../../src/engine/finish-publication-production.js'
-      );
+      const { createProductionFinishPublicationCoordinator: createCoordinator } =
+        await import('../../src/engine/finish-publication-production.js');
       const gh = async (args: string[]) => {
         if (args[0] === 'pr' && args[1] === 'view') {
           if (githubFailure === 'read') throw new Error('body read failed');
@@ -833,15 +940,19 @@ describe('production FINISH publication composition', () => {
         recordFinish,
       });
 
-      await expect(coordinator.advance({
-        state: {
-          feature_desc: 'feature',
-          worktree_branch: 'feat/feature',
-          pr_url: 'https://github.com/acme/widget/pull/3',
-        } as ConductState,
-        mode: 'interactive', daemon: false,
-        dispatchJudgment: async () => ({ success: true }), emit: async () => {},
-      })).rejects.toThrow(expected);
+      await expect(
+        coordinator.advance({
+          state: {
+            feature_desc: 'feature',
+            worktree_branch: 'feat/feature',
+            pr_url: 'https://github.com/acme/widget/pull/3',
+          } as ConductState,
+          mode: 'interactive',
+          daemon: false,
+          dispatchJudgment: async () => ({ success: true }),
+          emit: async () => {},
+        }),
+      ).rejects.toThrow(expected);
       expect(recordFinish).not.toHaveBeenCalled();
     } finally {
       vi.doUnmock('../../src/engine/finish-publication.js');
@@ -869,97 +980,102 @@ describe('production FINISH publication composition', () => {
       expectedBody: 'Reader-facing summary.\nPlan: .docs/plans/feature.md\n',
       expectedEdits: 0,
     },
-  ])('stamps the declaration on the PR record-outcome rung for $label', async ({
-    initialBody, expectedBody, expectedEdits,
-  }) => {
-    const root = await mkdtemp(join(tmpdir(), 'finish-production-declaration-record-outcome-'));
-    // nextFinishPublicationTransition returns record_outcome directly for an
-    // already-ready PR (asserted in finish-publication.test.ts, "all preceding
-    // PR publication progress complete"), so this fixture reproduces that
-    // transition exactly: recordOutcome is
-    // the ONLY effect the coordinator reaches. repairPresentation is not wired.
-    const advanceFinishPublication = vi.fn(async (input: {
-      effects: { recordOutcome?: (request: { choice: 'pr'; prUrl: string }) => Promise<void> };
-    }) => {
-      await input.effects.recordOutcome!({ choice: 'pr', prUrl: 'https://github.com/acme/widget/pull/3' });
-      return { kind: 'advanced' as const, transition: 'record_outcome' as const };
-    });
-    vi.resetModules();
-    vi.doMock('../../src/engine/finish-publication.js', async () => ({
-      ...await vi.importActual('../../src/engine/finish-publication.js'),
-      advanceFinishPublication,
-    }));
-
-    try {
-      await mkdir(join(root, '.docs', 'plans'), { recursive: true });
-      await mkdir(join(root, '.pipeline'));
-      await writeFile(join(root, '.docs', 'plans', 'feature.md'), 'plan\n');
-      let body = initialBody;
-      let edits = 0;
-      const order: string[] = [];
-      const gh = vi.fn(async (args: string[]) => {
-        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ body }) };
-        if (args[0] === 'pr' && args[1] === 'edit') {
-          body = args[args.indexOf('--body') + 1]!;
-          edits += 1;
-          order.push('declaration');
-          return commandResult;
-        }
-        throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
-      });
-      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
-        '../../src/engine/finish-publication-production.js'
+  ])(
+    'stamps the declaration on the PR record-outcome rung for $label',
+    async ({ initialBody, expectedBody, expectedEdits }) => {
+      const root = await mkdtemp(join(tmpdir(), 'finish-production-declaration-record-outcome-'));
+      // nextFinishPublicationTransition returns record_outcome directly for an
+      // already-ready PR (asserted in finish-publication.test.ts, "all preceding
+      // PR publication progress complete"), so this fixture reproduces that
+      // transition exactly: recordOutcome is
+      // the ONLY effect the coordinator reaches. repairPresentation is not wired.
+      const advanceFinishPublication = vi.fn(
+        async (input: { effects: { recordOutcome?: (request: { choice: 'pr'; prUrl: string }) => Promise<void> } }) => {
+          await input.effects.recordOutcome!({ choice: 'pr', prUrl: 'https://github.com/acme/widget/pull/3' });
+          return { kind: 'advanced' as const, transition: 'record_outcome' as const };
+        },
       );
-      const coordinator = createCoordinator({
-        projectRoot: root,
-        stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
-        baseBranch: 'main',
-        git: async () => commandResult,
-        gh,
-        operations: guardedOperations(gh),
-        acquireInteractiveIntent: async () => 'pr',
-        observeReleaseReadiness: async () => 'present',
-        repairPresentation: async () => { order.push('repair'); },
-        recordFinish: async () => { order.push('outcome'); return 0; },
-      });
-
-      await coordinator.advance({
-        state: {
-          feature_desc: 'feature',
-          worktree_branch: 'feat/feature',
-          pr_url: 'https://github.com/acme/widget/pull/3',
-        } as ConductState,
-        mode: 'interactive',
-        daemon: false,
-        dispatchJudgment: async () => ({ success: true }),
-        emit: async () => {},
-      });
-
-      // The declaration is stamped before the finish recorder runs, so a
-      // completed PR outcome can never be recorded without it.
-      expect({ body, edits, order }).toEqual({
-        body: expectedBody,
-        edits: expectedEdits,
-        order: expectedEdits === 0 ? ['outcome'] : ['declaration', 'outcome'],
-      });
-    } finally {
-      vi.doUnmock('../../src/engine/finish-publication.js');
       vi.resetModules();
-      await rm(root, { recursive: true, force: true });
-    }
-  });
+      vi.doMock('../../src/engine/finish-publication.js', async () => ({
+        ...(await vi.importActual('../../src/engine/finish-publication.js')),
+        advanceFinishPublication,
+      }));
+
+      try {
+        await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+        await mkdir(join(root, '.pipeline'));
+        await writeFile(join(root, '.docs', 'plans', 'feature.md'), 'plan\n');
+        let body = initialBody;
+        let edits = 0;
+        const order: string[] = [];
+        const gh = vi.fn(async (args: string[]) => {
+          if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ body }) };
+          if (args[0] === 'pr' && args[1] === 'edit') {
+            body = args[args.indexOf('--body') + 1]!;
+            edits += 1;
+            order.push('declaration');
+            return commandResult;
+          }
+          throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
+        });
+        const { createProductionFinishPublicationCoordinator: createCoordinator } =
+          await import('../../src/engine/finish-publication-production.js');
+        const coordinator = createCoordinator({
+          projectRoot: root,
+          stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
+          baseBranch: 'main',
+          git: async () => commandResult,
+          gh,
+          operations: guardedOperations(gh),
+          acquireInteractiveIntent: async () => 'pr',
+          observeReleaseReadiness: async () => 'present',
+          repairPresentation: async () => {
+            order.push('repair');
+          },
+          recordFinish: async () => {
+            order.push('outcome');
+            return 0;
+          },
+        });
+
+        await coordinator.advance({
+          state: {
+            feature_desc: 'feature',
+            worktree_branch: 'feat/feature',
+            pr_url: 'https://github.com/acme/widget/pull/3',
+          } as ConductState,
+          mode: 'interactive',
+          daemon: false,
+          dispatchJudgment: async () => ({ success: true }),
+          emit: async () => {},
+        });
+
+        // The declaration is stamped before the finish recorder runs, so a
+        // completed PR outcome can never be recorded without it.
+        expect({ body, edits, order }).toEqual({
+          body: expectedBody,
+          edits: expectedEdits,
+          order: expectedEdits === 0 ? ['outcome'] : ['declaration', 'outcome'],
+        });
+      } finally {
+        vi.doUnmock('../../src/engine/finish-publication.js');
+        vi.resetModules();
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('does not record a PR outcome when declaration maintenance fails on the record-outcome rung', async () => {
     const root = await mkdtemp(join(tmpdir(), 'finish-production-declaration-record-outcome-failure-'));
-    const advanceFinishPublication = vi.fn(async (input: {
-      effects: { recordOutcome?: (request: { choice: 'pr'; prUrl: string }) => Promise<void> };
-    }) => {
-      await input.effects.recordOutcome!({ choice: 'pr', prUrl: 'https://github.com/acme/widget/pull/3' });
-      return { kind: 'advanced' as const, transition: 'record_outcome' as const };
-    });
+    const advanceFinishPublication = vi.fn(
+      async (input: { effects: { recordOutcome?: (request: { choice: 'pr'; prUrl: string }) => Promise<void> } }) => {
+        await input.effects.recordOutcome!({ choice: 'pr', prUrl: 'https://github.com/acme/widget/pull/3' });
+        return { kind: 'advanced' as const, transition: 'record_outcome' as const };
+      },
+    );
     vi.resetModules();
     vi.doMock('../../src/engine/finish-publication.js', async () => ({
-      ...await vi.importActual('../../src/engine/finish-publication.js'),
+      ...(await vi.importActual('../../src/engine/finish-publication.js')),
       advanceFinishPublication,
     }));
 
@@ -967,31 +1083,34 @@ describe('production FINISH publication composition', () => {
       await mkdir(join(root, '.docs', 'plans'), { recursive: true });
       await mkdir(join(root, '.pipeline'));
       const recordFinish = vi.fn(async () => 0);
-      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
-        '../../src/engine/finish-publication-production.js'
-      );
+      const { createProductionFinishPublicationCoordinator: createCoordinator } =
+        await import('../../src/engine/finish-publication-production.js');
       const coordinator = createCoordinator({
         projectRoot: root,
         stateFilePath: join(root, '.pipeline', 'conduct-state.json'),
         baseBranch: 'main',
         git: async () => commandResult,
-        gh: async () => { throw new Error('unexpected GitHub command'); },
+        gh: async () => {
+          throw new Error('unexpected GitHub command');
+        },
         acquireInteractiveIntent: async () => 'pr',
         observeReleaseReadiness: async () => 'present',
         recordFinish,
       });
 
-      await expect(coordinator.advance({
-        state: {
-          feature_desc: 'feature',
-          worktree_branch: 'feat/feature',
-          pr_url: 'https://github.com/acme/widget/pull/3',
-        } as ConductState,
-        mode: 'interactive',
-        daemon: false,
-        dispatchJudgment: async () => ({ success: true }),
-        emit: async () => {},
-      })).rejects.toThrow('plan not found');
+      await expect(
+        coordinator.advance({
+          state: {
+            feature_desc: 'feature',
+            worktree_branch: 'feat/feature',
+            pr_url: 'https://github.com/acme/widget/pull/3',
+          } as ConductState,
+          mode: 'interactive',
+          daemon: false,
+          dispatchJudgment: async () => ({ success: true }),
+          emit: async () => {},
+        }),
+      ).rejects.toThrow('plan not found');
       expect(recordFinish).not.toHaveBeenCalled();
     } finally {
       vi.doUnmock('../../src/engine/finish-publication.js');
@@ -1016,9 +1135,14 @@ describe('production FINISH publication composition', () => {
       const gh = vi.fn(async (args: string[]) => {
         if (args[0] === 'auth') return commandResult;
         if (args[0] === 'pr' && args[1] === 'view') {
-          return { stdout: JSON.stringify({
-            url: prUrl, title: 'feat: retained publication', body, isDraft: false,
-          }) };
+          return {
+            stdout: JSON.stringify({
+              url: prUrl,
+              title: 'feat: retained publication',
+              body,
+              isDraft: false,
+            }),
+          };
         }
         if (args[0] === 'pr' && args[1] === 'edit') {
           body = args[args.indexOf('--body') + 1]!;
@@ -1041,9 +1165,8 @@ describe('production FINISH publication composition', () => {
         baseBranch: 'main',
         gh,
         operations: guardedOperations(gh),
-        git: async (args) => args[0] === 'remote'
-          ? { stdout: 'origin\n' }
-          : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        git: async (args) =>
+          args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
         observeReleaseReadiness: async () => 'present',
         acquireInteractiveIntent: async () => 'pr',
         repairPresentation,
@@ -1051,8 +1174,13 @@ describe('production FINISH publication composition', () => {
       });
       const input = {
         state: {
-          feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
-          build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+          feature_desc: 'feature',
+          worktree_branch: 'feat/feature',
+          pr_url: prUrl,
+          build_review: 'done',
+          test_suite: 'done',
+          manual_test: 'done',
+          architecture_review_as_built: 'done',
         } as ConductState,
         mode: 'interactive' as const,
         daemon: false,
@@ -1079,33 +1207,40 @@ describe('production FINISH publication composition', () => {
   });
 
   it('does not project a shipment declaration for a keep outcome', async () => {
-    const advanceFinishPublication = vi.fn(async (input: {
-      effects: { recordOutcome?: (request: { choice: 'keep' }) => Promise<void> };
-    }) => {
-      await input.effects.recordOutcome!({ choice: 'keep' });
-      return { kind: 'advanced' as const, transition: 'record_outcome' as const };
-    });
+    const advanceFinishPublication = vi.fn(
+      async (input: { effects: { recordOutcome?: (request: { choice: 'keep' }) => Promise<void> } }) => {
+        await input.effects.recordOutcome!({ choice: 'keep' });
+        return { kind: 'advanced' as const, transition: 'record_outcome' as const };
+      },
+    );
     vi.resetModules();
     vi.doMock('../../src/engine/finish-publication.js', async () => ({
-      ...await vi.importActual('../../src/engine/finish-publication.js'),
+      ...(await vi.importActual('../../src/engine/finish-publication.js')),
       advanceFinishPublication,
     }));
     try {
       const recordFinish = vi.fn(async () => 0);
-      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
-        '../../src/engine/finish-publication-production.js'
-      );
+      const { createProductionFinishPublicationCoordinator: createCoordinator } =
+        await import('../../src/engine/finish-publication-production.js');
       const coordinator = createCoordinator({
-        projectRoot: '/project', stateFilePath: '/project/.pipeline/conduct-state.json', baseBranch: 'main',
+        projectRoot: '/project',
+        stateFilePath: '/project/.pipeline/conduct-state.json',
+        baseBranch: 'main',
         git: async () => commandResult,
-        gh: async () => { throw new Error('keep must not call GitHub'); },
-        acquireInteractiveIntent: async () => 'keep', observeReleaseReadiness: async () => 'present', recordFinish,
+        gh: async () => {
+          throw new Error('keep must not call GitHub');
+        },
+        acquireInteractiveIntent: async () => 'keep',
+        observeReleaseReadiness: async () => 'present',
+        recordFinish,
       });
 
       await coordinator.advance({
         state: { feature_desc: 'feature' } as ConductState,
-        mode: 'interactive', daemon: false,
-        dispatchJudgment: async () => ({ success: true }), emit: async () => {},
+        mode: 'interactive',
+        daemon: false,
+        dispatchJudgment: async () => ({ success: true }),
+        emit: async () => {},
       });
       expect(recordFinish).toHaveBeenCalledOnce();
     } finally {
@@ -1121,16 +1256,16 @@ describe('production FINISH publication composition', () => {
   ] as const)('classifies the current persisted %s prose verdict as %s', async (_label, verdict, expectedProse) => {
     const root = await mkdtemp(join(tmpdir(), 'finish-production-persisted-prose-'));
     const observedProse: string[] = [];
-    const advanceFinishPublication = vi.fn(async (input: {
-      observe(): Promise<{ pr: { identity: string; prose?: string } }>;
-    }) => {
-      const snapshot = await input.observe();
-      if (snapshot.pr.identity === 'one') observedProse.push(snapshot.pr.prose!);
-      return { kind: 'advanced' as const, transition: 'judge_pr_prose' as const };
-    });
+    const advanceFinishPublication = vi.fn(
+      async (input: { observe(): Promise<{ pr: { identity: string; prose?: string } }> }) => {
+        const snapshot = await input.observe();
+        if (snapshot.pr.identity === 'one') observedProse.push(snapshot.pr.prose!);
+        return { kind: 'advanced' as const, transition: 'judge_pr_prose' as const };
+      },
+    );
     vi.resetModules();
     vi.doMock('../../src/engine/finish-publication.js', async () => ({
-      ...await vi.importActual('../../src/engine/finish-publication.js'),
+      ...(await vi.importActual('../../src/engine/finish-publication.js')),
       advanceFinishPublication,
     }));
 
@@ -1143,20 +1278,21 @@ describe('production FINISH publication composition', () => {
       const body = 'A reader-facing explanation of the completed feature.';
       const revision = `${prUrl}\u0000${JSON.stringify([title, body])}`;
       const digest = createHash('sha256').update(revision, 'utf8').digest('hex');
-      await writeFile(join(pipeline, 'prose-judgment.json'), JSON.stringify({
-        version: 1,
-        records: { [digest]: verdict },
-      }));
-      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
-        '../../src/engine/finish-publication-production.js'
+      await writeFile(
+        join(pipeline, 'prose-judgment.json'),
+        JSON.stringify({
+          version: 1,
+          records: { [digest]: verdict },
+        }),
       );
+      const { createProductionFinishPublicationCoordinator: createCoordinator } =
+        await import('../../src/engine/finish-publication-production.js');
       const coordinator = createCoordinator({
         projectRoot: root,
         stateFilePath: join(pipeline, 'conduct-state.json'),
         baseBranch: 'main',
-        git: async (args) => args[0] === 'remote'
-          ? { stdout: 'origin\n' }
-          : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        git: async (args) =>
+          args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
         gh: async (args) => {
           if (args[0] === 'auth') return commandResult;
           if (args[0] === 'pr' && args[1] === 'view') {
@@ -1169,10 +1305,16 @@ describe('production FINISH publication composition', () => {
 
       await coordinator.advance({
         state: {
-          feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
-          build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+          feature_desc: 'feature',
+          worktree_branch: 'feat/feature',
+          pr_url: prUrl,
+          build_review: 'done',
+          test_suite: 'done',
+          manual_test: 'done',
+          architecture_review_as_built: 'done',
         } as ConductState,
-        mode: 'auto', daemon: true,
+        mode: 'auto',
+        daemon: true,
         dispatchJudgment: async () => ({ success: true }),
         emit: async () => {},
       });
@@ -1217,16 +1359,16 @@ describe('production FINISH publication composition', () => {
   ] as const)('pins judgment-store precedence for $label', async (fixture) => {
     const root = await mkdtemp(join(tmpdir(), 'finish-production-prose-precedence-'));
     const observedProse: string[] = [];
-    const advanceFinishPublication = vi.fn(async (input: {
-      observe(): Promise<{ pr: { identity: string; prose?: string } }>;
-    }) => {
-      const snapshot = await input.observe();
-      if (snapshot.pr.identity === 'one') observedProse.push(snapshot.pr.prose!);
-      return { kind: 'advanced' as const, transition: 'judge_pr_prose' as const };
-    });
+    const advanceFinishPublication = vi.fn(
+      async (input: { observe(): Promise<{ pr: { identity: string; prose?: string } }> }) => {
+        const snapshot = await input.observe();
+        if (snapshot.pr.identity === 'one') observedProse.push(snapshot.pr.prose!);
+        return { kind: 'advanced' as const, transition: 'judge_pr_prose' as const };
+      },
+    );
     vi.resetModules();
     vi.doMock('../../src/engine/finish-publication.js', async () => ({
-      ...await vi.importActual('../../src/engine/finish-publication.js'),
+      ...(await vi.importActual('../../src/engine/finish-publication.js')),
       advanceFinishPublication,
     }));
 
@@ -1243,42 +1385,57 @@ describe('production FINISH publication composition', () => {
       } else if (fixture.storedVerdict) {
         const revision = `${prUrl}\u0000${JSON.stringify([title, persistedBody])}`;
         const digest = createHash('sha256').update(revision, 'utf8').digest('hex');
-        await writeFile(join(pipeline, 'prose-judgment.json'), JSON.stringify({
-          version: 1,
-          records: { [digest]: fixture.storedVerdict },
-        }));
+        await writeFile(
+          join(pipeline, 'prose-judgment.json'),
+          JSON.stringify({
+            version: 1,
+            records: { [digest]: fixture.storedVerdict },
+          }),
+        );
       }
-      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
-        '../../src/engine/finish-publication-production.js'
-      );
+      const { createProductionFinishPublicationCoordinator: createCoordinator } =
+        await import('../../src/engine/finish-publication-production.js');
       const coordinator = createCoordinator({
         projectRoot: root,
         stateFilePath: join(pipeline, 'conduct-state.json'),
         baseBranch: 'main',
-        git: async (args) => args[0] === 'remote'
-          ? { stdout: 'origin\n' }
-          : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        git: async (args) =>
+          args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
         gh: async (args) => {
           if (args[0] === 'auth') return commandResult;
           if (args[0] === 'pr' && args[1] === 'view') {
-            return { stdout: JSON.stringify({
-              url: prUrl, title, body, isDraft: true, labels: fixture.labels ?? [],
-            }) };
+            return {
+              stdout: JSON.stringify({
+                url: prUrl,
+                title,
+                body,
+                isDraft: true,
+                labels: fixture.labels ?? [],
+              }),
+            };
           }
           throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
         },
         observeReleaseReadiness: async () => 'present',
       });
 
-      await expect(coordinator.advance({
-        state: {
-          feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
-          build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
-        } as ConductState,
-        mode: 'auto', daemon: true,
-        dispatchJudgment: async () => ({ success: true }),
-        emit: async () => {},
-      })).resolves.toEqual({ kind: 'publication_progress', transition: 'judge_pr_prose' });
+      await expect(
+        coordinator.advance({
+          state: {
+            feature_desc: 'feature',
+            worktree_branch: 'feat/feature',
+            pr_url: prUrl,
+            build_review: 'done',
+            test_suite: 'done',
+            manual_test: 'done',
+            architecture_review_as_built: 'done',
+          } as ConductState,
+          mode: 'auto',
+          daemon: true,
+          dispatchJudgment: async () => ({ success: true }),
+          emit: async () => {},
+        }),
+      ).resolves.toEqual({ kind: 'publication_progress', transition: 'judge_pr_prose' });
 
       expect(observedProse).toEqual([fixture.expectedProse]);
     } finally {
@@ -1290,7 +1447,9 @@ describe('production FINISH publication composition', () => {
 
   it('upserts accepted build-review risk into the retained PR and blocks unrenderable records', async () => {
     const finding = canonicalizeBuildReviewFindingIdentity({
-      rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
+      rubric: 'testQuality',
+      contractVersion: 'v3',
+      concernKind: 'test-insensitive',
       anchor: {
         rubric: 'testQuality',
         locus: {
@@ -1301,28 +1460,48 @@ describe('production FINISH publication composition', () => {
       },
     })!;
     const accepted: BuildReviewDispositionRecord = {
-      version: 'v1', feature: { version: 'v1', repository: 'github.com/acme/conductor', feature: 'review-rubrics' },
-      finding, sourceLapId: parseBuildReviewLapId('lap-7')!, summary: 'summary', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z',
+      version: 'v1',
+      feature: { version: 'v1', repository: 'github.com/acme/conductor', feature: 'review-rubrics' },
+      finding,
+      sourceLapId: parseBuildReviewLapId('lap-7')!,
+      summary: 'summary',
+      rationale: 'reason',
+      operator: 'james',
+      acceptedAt: '2026-08-14T12:00:00.000Z',
     };
     const gh = vi.fn(async () => commandResult);
     const operations = { run: vi.fn(async () => ({})) };
 
-    await expect(publishAcceptedBuildReviewRiskToRetainedPr({
-      prUrl: 'https://github.com/acme/conductor/pull/1', body: '## Summary', records: [accepted], operations,
-    })).resolves.toEqual({ ok: true, changed: true });
-    expect(operations.run).toHaveBeenCalledWith(expect.objectContaining({
-      operation: 'pull-request.edit',
-      target: { repository: 'acme/conductor', kind: 'pull-request', number: 1 },
-    }));
+    await expect(
+      publishAcceptedBuildReviewRiskToRetainedPr({
+        prUrl: 'https://github.com/acme/conductor/pull/1',
+        body: '## Summary',
+        records: [accepted],
+        operations,
+      }),
+    ).resolves.toEqual({ ok: true, changed: true });
+    expect(operations.run).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: 'pull-request.edit',
+        target: { repository: 'acme/conductor', kind: 'pull-request', number: 1 },
+      }),
+    );
     expect(gh).not.toHaveBeenCalled();
-    await expect(publishAcceptedBuildReviewRiskToRetainedPr({
-      prUrl: 'https://github.com/acme/conductor/pull/1', body: '## Summary', records: [{ ...accepted, rationale: '' }], operations,
-    })).resolves.toMatchObject({ ok: false });
+    await expect(
+      publishAcceptedBuildReviewRiskToRetainedPr({
+        prUrl: 'https://github.com/acme/conductor/pull/1',
+        body: '## Summary',
+        records: [{ ...accepted, rationale: '' }],
+        operations,
+      }),
+    ).resolves.toMatchObject({ ok: false });
   });
 
   it('appends accepted build-review risk after a final project-owned region without interpreting its bytes', async () => {
     const finding = canonicalizeBuildReviewFindingIdentity({
-      rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
+      rubric: 'testQuality',
+      contractVersion: 'v3',
+      concernKind: 'test-insensitive',
       anchor: {
         rubric: 'testQuality',
         locus: {
@@ -1333,8 +1512,14 @@ describe('production FINISH publication composition', () => {
       },
     })!;
     const accepted: BuildReviewDispositionRecord = {
-      version: 'v1', feature: { version: 'v1', repository: 'github.com/acme/conductor', feature: 'review-rubrics' },
-      finding, sourceLapId: parseBuildReviewLapId('lap-7')!, summary: 'summary', rationale: 'reason', operator: 'james', acceptedAt: '2026-08-14T12:00:00.000Z',
+      version: 'v1',
+      feature: { version: 'v1', repository: 'github.com/acme/conductor', feature: 'review-rubrics' },
+      finding,
+      sourceLapId: parseBuildReviewLapId('lap-7')!,
+      summary: 'summary',
+      rationale: 'reason',
+      operator: 'james',
+      acceptedAt: '2026-08-14T12:00:00.000Z',
     };
     const capturedRegion = [
       '<!-- ai-conductor:step compliance-attest -->',
@@ -1346,14 +1531,21 @@ describe('production FINISH publication composition', () => {
     const run = vi.fn(async (_request: Parameters<GithubOperationRunner['run']>[0]) => ({}));
     const operations: GithubOperationRunner = { run };
 
-    await expect(publishAcceptedBuildReviewRiskToRetainedPr({
-      prUrl: 'https://github.com/acme/conductor/pull/1', body, records: [accepted], operations,
-    })).resolves.toEqual({ ok: true, changed: true });
+    await expect(
+      publishAcceptedBuildReviewRiskToRetainedPr({
+        prUrl: 'https://github.com/acme/conductor/pull/1',
+        body,
+        records: [accepted],
+        operations,
+      }),
+    ).resolves.toEqual({ ok: true, changed: true });
 
     const request = run.mock.calls[0]![0];
     const published = (request.payload as { body: string }).body;
     expect(published).toContain(capturedRegion);
-    expect(published.indexOf('## Accepted build-review risk', published.indexOf(capturedRegion) + capturedRegion.length)).toBeGreaterThan(-1);
+    expect(
+      published.indexOf('## Accepted build-review risk', published.indexOf(capturedRegion) + capturedRegion.length),
+    ).toBeGreaterThan(-1);
   });
 
   it('reports a verified advance as publication progress', async () => {
@@ -1363,14 +1555,13 @@ describe('production FINISH publication composition', () => {
     }));
     vi.resetModules();
     vi.doMock('../../src/engine/finish-publication.js', async () => ({
-      ...await vi.importActual('../../src/engine/finish-publication.js'),
+      ...(await vi.importActual('../../src/engine/finish-publication.js')),
       advanceFinishPublication,
     }));
 
     try {
-      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
-        '../../src/engine/finish-publication-production.js'
-      );
+      const { createProductionFinishPublicationCoordinator: createCoordinator } =
+        await import('../../src/engine/finish-publication-production.js');
       const coordinator = createCoordinator({
         projectRoot: '/project',
         stateFilePath: '/project/.pipeline/conduct-state.json',
@@ -1379,13 +1570,15 @@ describe('production FINISH publication composition', () => {
         gh: async () => commandResult,
       });
 
-      await expect(coordinator.advance({
-        state: {} as ConductState,
-        mode: 'auto',
-        daemon: true,
-        dispatchJudgment: async () => ({ success: true }),
-        emit: async () => {},
-      })).resolves.toEqual({ kind: 'publication_progress', transition: 'write_shipped_record' });
+      await expect(
+        coordinator.advance({
+          state: {} as ConductState,
+          mode: 'auto',
+          daemon: true,
+          dispatchJudgment: async () => ({ success: true }),
+          emit: async () => {},
+        }),
+      ).resolves.toEqual({ kind: 'publication_progress', transition: 'write_shipped_record' });
     } finally {
       vi.doUnmock('../../src/engine/finish-publication.js');
       vi.resetModules();
@@ -1393,30 +1586,40 @@ describe('production FINISH publication composition', () => {
   });
 
   it('refuses FINISH publication when the shipped-record dispatch reports required-evidence failure', async () => {
-    const advanceFinishPublication = vi.fn(async (input: { effects: { createShippedRecord?: () => Promise<void> } }) => {
-      await input.effects.createShippedRecord!();
-      return { kind: 'advanced' as const, transition: 'write_shipped_record' as const };
-    });
+    const advanceFinishPublication = vi.fn(
+      async (input: { effects: { createShippedRecord?: () => Promise<void> } }) => {
+        await input.effects.createShippedRecord!();
+        return { kind: 'advanced' as const, transition: 'write_shipped_record' as const };
+      },
+    );
     vi.resetModules();
     vi.doMock('../../src/engine/finish-publication.js', async () => ({
-      ...await vi.importActual('../../src/engine/finish-publication.js'),
+      ...(await vi.importActual('../../src/engine/finish-publication.js')),
       advanceFinishPublication,
     }));
 
     try {
-      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
-        '../../src/engine/finish-publication-production.js'
-      );
+      const { createProductionFinishPublicationCoordinator: createCoordinator } =
+        await import('../../src/engine/finish-publication-production.js');
       const writeShippedRecord = vi.fn(async () => 1);
       const coordinator = createCoordinator({
-        projectRoot: '/project', stateFilePath: '/project/.pipeline/conduct-state.json', baseBranch: 'main',
-        git: async () => commandResult, gh: async () => commandResult, writeShippedRecord,
+        projectRoot: '/project',
+        stateFilePath: '/project/.pipeline/conduct-state.json',
+        baseBranch: 'main',
+        git: async () => commandResult,
+        gh: async () => commandResult,
+        writeShippedRecord,
       });
 
-      await expect(coordinator.advance({
-        state: { feature_desc: 'feature', pr_url: 'https://example.test/pr/1' } as ConductState,
-        mode: 'auto', daemon: true, dispatchJudgment: async () => ({ success: true }), emit: async () => {},
-      })).rejects.toThrow('required shipped-record accepted-risk evidence');
+      await expect(
+        coordinator.advance({
+          state: { feature_desc: 'feature', pr_url: 'https://example.test/pr/1' } as ConductState,
+          mode: 'auto',
+          daemon: true,
+          dispatchJudgment: async () => ({ success: true }),
+          emit: async () => {},
+        }),
+      ).rejects.toThrow('required shipped-record accepted-risk evidence');
       expect(writeShippedRecord).toHaveBeenCalledOnce();
     } finally {
       vi.doUnmock('../../src/engine/finish-publication.js');
@@ -1432,14 +1635,13 @@ describe('production FINISH publication composition', () => {
     }));
     vi.resetModules();
     vi.doMock('../../src/engine/finish-publication.js', async () => ({
-      ...await vi.importActual('../../src/engine/finish-publication.js'),
+      ...(await vi.importActual('../../src/engine/finish-publication.js')),
       advanceFinishPublication,
     }));
 
     try {
-      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
-        '../../src/engine/finish-publication-production.js'
-      );
+      const { createProductionFinishPublicationCoordinator: createCoordinator } =
+        await import('../../src/engine/finish-publication-production.js');
       const coordinator = createCoordinator({
         projectRoot: '/project',
         stateFilePath: '/project/.pipeline/conduct-state.json',
@@ -1486,9 +1688,7 @@ describe('production FINISH publication composition', () => {
       const runStartedAt = Date.UTC(2026, 7, 1, 12, 0, 0);
       if (fixture === 'stale' || fixture === 'present') {
         await writeFile(marker, 'PASS\n');
-        const markerDate = new Date(
-          runStartedAt + (fixture === 'present' ? 60_000 : -60_000),
-        );
+        const markerDate = new Date(runStartedAt + (fixture === 'present' ? 60_000 : -60_000));
         await utimes(marker, markerDate, markerDate);
       } else if (fixture === 'malformed') {
         await mkdir(marker);
@@ -1551,9 +1751,8 @@ describe('production FINISH publication composition', () => {
         projectRoot: root,
         stateFilePath: join(pipeline, 'conduct-state.json'),
         baseBranch: 'main',
-        git: async (args) => args[0] === 'remote'
-          ? { stdout: 'origin\n' }
-          : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        git: async (args) =>
+          args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
         gh,
       });
 
@@ -1607,7 +1806,9 @@ describe('production FINISH publication composition', () => {
     })),
     {
       label: 'unavailable',
-      observe: async (): Promise<never> => { throw new Error('readiness store unavailable'); },
+      observe: async (): Promise<never> => {
+        throw new Error('readiness store unavailable');
+      },
       condition: {
         code: 'release_readiness_indeterminate',
         message: 'Release readiness could not be determined. Restore the readiness observer, then retry FINISH.',
@@ -1747,7 +1948,9 @@ describe('production FINISH publication composition', () => {
           mode: 'auto',
           daemon: true,
           dispatchJudgment: async () => ({ success: true, publicationDisposition: { kind: 'accepted' } }),
-          emit: async (event) => { events.push(event); },
+          emit: async (event) => {
+            events.push(event);
+          },
         }),
       ).resolves.toEqual({ kind: 'publication_progress', transition: 'establish_pr' });
 
@@ -1755,9 +1958,13 @@ describe('production FINISH publication composition', () => {
       expect(git).toHaveBeenCalledWith(['rev-list', '--count', 'trunk..HEAD'], { cwd: root });
       expect(gh).toHaveBeenCalledWith(expect.arrayContaining(['--base', 'trunk']), expect.anything());
       expect(gh).toHaveBeenCalledWith(['pr', 'view', prUrl, '--json', 'url,title,body,isDraft,labels'], { cwd: root });
-      expect(events).toContainEqual(expect.objectContaining({
-        type: 'finish_publication_transition', phase: 'completed', transition: 'establish_pr',
-      }));
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'finish_publication_transition',
+          phase: 'completed',
+          transition: 'establish_pr',
+        }),
+      );
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -1795,9 +2002,7 @@ describe('production FINISH publication composition', () => {
         if (args[0] === 'push') {
           pushes.push([...args]);
           if (!args.some((arg) => arg.startsWith('--force-with-lease='))) {
-            throw new Error(
-              '! [rejected] feat/feature -> feat/feature (non-fast-forward)',
-            );
+            throw new Error('! [rejected] feat/feature -> feat/feature (non-fast-forward)');
           }
           return { stdout: '' };
         }
@@ -1848,9 +2053,7 @@ describe('production FINISH publication composition', () => {
         ['push', 'origin', 'HEAD:refs/heads/feat/feature', `--force-with-lease=refs/heads/feat/feature:${remoteTip}`],
         expect.anything(),
       );
-      await expect(readFile(join(pipeline, 'conduct-state.json'), 'utf8')).resolves.toContain(
-        `"pr_url": "${prUrl}"`,
-      );
+      await expect(readFile(join(pipeline, 'conduct-state.json'), 'utf8')).resolves.toContain(`"pr_url": "${prUrl}"`);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -1899,15 +2102,16 @@ describe('production FINISH publication composition', () => {
         success: true,
         publicationDisposition: { kind: 'accepted' },
       }));
-      const makeCoordinator = () => createProductionFinishPublicationCoordinator({
-        projectRoot: root,
-        stateFilePath: join(pipeline, 'conduct-state.json'),
-        baseBranch: 'main',
-        git,
-        gh,
-        operations: guardedOperations(gh),
-        observeReleaseReadiness: async () => 'present',
-      });
+      const makeCoordinator = () =>
+        createProductionFinishPublicationCoordinator({
+          projectRoot: root,
+          stateFilePath: join(pipeline, 'conduct-state.json'),
+          baseBranch: 'main',
+          git,
+          gh,
+          operations: guardedOperations(gh),
+          observeReleaseReadiness: async () => 'present',
+        });
       const input = {
         state,
         mode: 'auto' as const,
@@ -1942,16 +2146,27 @@ describe('production FINISH publication composition', () => {
       const gh = vi.fn(async (args: string[]) => {
         if (args[0] === 'auth') return commandResult;
         if (args[0] === 'pr' && args[1] === 'view') {
-          return { stdout: JSON.stringify({
-            url: prUrl, title: 'feat: publication prose', body, isDraft: true, labels: [],
-          }) };
+          return {
+            stdout: JSON.stringify({
+              url: prUrl,
+              title: 'feat: publication prose',
+              body,
+              isDraft: true,
+              labels: [],
+            }),
+          };
         }
         throw new Error(`unexpected GitHub mutation: ${args.join(' ')}`);
       });
       const input = {
         state: {
-          feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
-          build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+          feature_desc: 'feature',
+          worktree_branch: 'feat/feature',
+          pr_url: prUrl,
+          build_review: 'done',
+          test_suite: 'done',
+          manual_test: 'done',
+          architecture_review_as_built: 'done',
         } as ConductState,
         mode: 'auto' as const,
         daemon: true,
@@ -1962,20 +2177,25 @@ describe('production FINISH publication composition', () => {
         }),
         emit: async () => {},
       };
-      const makeCoordinator = () => createProductionFinishPublicationCoordinator({
-        projectRoot: root, stateFilePath: join(pipeline, 'conduct-state.json'), baseBranch: 'main', gh,
-        git: async (args) => args[0] === 'remote'
-          ? { stdout: 'origin\n' }
-          : { stdout: 'refs/remotes/origin/feat/feature\n' },
-        observeReleaseReadiness: async () => 'present',
-      });
+      const makeCoordinator = () =>
+        createProductionFinishPublicationCoordinator({
+          projectRoot: root,
+          stateFilePath: join(pipeline, 'conduct-state.json'),
+          baseBranch: 'main',
+          gh,
+          git: async (args) =>
+            args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
+          observeReleaseReadiness: async () => 'present',
+        });
 
       await expect(makeCoordinator().advance(input)).resolves.toEqual({
-        kind: 'publication_progress', transition: 'judge_pr_prose',
+        kind: 'publication_progress',
+        transition: 'judge_pr_prose',
       });
       body = `${PR_BODY_FLOOR_MARKER}\n\nDraft opened automatically.`;
       await expect(makeCoordinator().advance(input)).resolves.toEqual({
-        kind: 'advanced', transition: 'author_pr_prose',
+        kind: 'advanced',
+        transition: 'author_pr_prose',
       });
       expect(input.dispatchJudgment).toHaveBeenCalledOnce();
       expect(input.dispatchAuthoring).toHaveBeenCalledOnce();
@@ -1998,7 +2218,8 @@ describe('production FINISH publication composition', () => {
       let body = 'Reader-facing summary.';
       const gh = vi.fn(async (args: string[]) => {
         if (args[0] === 'auth') return commandResult;
-        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: prUrl, title: 'feat: publish', body, isDraft: true }) };
+        if (args[0] === 'pr' && args[1] === 'view')
+          return { stdout: JSON.stringify({ url: prUrl, title: 'feat: publish', body, isDraft: true }) };
         if (args[0] === 'pr' && args[1] === 'edit') {
           body = args[args.indexOf('--body') + 1]!;
           return commandResult;
@@ -2010,36 +2231,46 @@ describe('production FINISH publication composition', () => {
         projectRoot: root,
         stateFilePath: join(pipeline, 'conduct-state.json'),
         baseBranch: 'main',
-        git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        git: async (args) =>
+          args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
         gh,
         operations: guardedOperations(gh),
         observeReleaseReadiness: async () => 'present',
         repairPresentation,
       });
       const state = {
-        feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
-        build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+        feature_desc: 'feature',
+        worktree_branch: 'feat/feature',
+        pr_url: prUrl,
+        build_review: 'done',
+        test_suite: 'done',
+        manual_test: 'done',
+        architecture_review_as_built: 'done',
       } as ConductState;
-      await expect(coordinator.advance({
-        state,
-        mode: 'auto',
-        daemon: true,
-        dispatchJudgment: async () => ({
-          success: true,
-          publicationDisposition: { kind: 'accepted' },
+      await expect(
+        coordinator.advance({
+          state,
+          mode: 'auto',
+          daemon: true,
+          dispatchJudgment: async () => ({
+            success: true,
+            publicationDisposition: { kind: 'accepted' },
+          }),
+          emit: async () => {},
         }),
-        emit: async () => {},
-      })).resolves.toEqual({ kind: 'publication_progress', transition: 'judge_pr_prose' });
-      await expect(coordinator.advance({
-        state,
-        mode: 'auto',
-        daemon: true,
-        dispatchJudgment: async () => ({
-          success: true,
-          publicationDisposition: { kind: 'accepted' },
+      ).resolves.toEqual({ kind: 'publication_progress', transition: 'judge_pr_prose' });
+      await expect(
+        coordinator.advance({
+          state,
+          mode: 'auto',
+          daemon: true,
+          dispatchJudgment: async () => ({
+            success: true,
+            publicationDisposition: { kind: 'accepted' },
+          }),
+          emit: async () => {},
         }),
-        emit: async () => {},
-      })).resolves.toMatchObject({ kind: 'human_required', reason: 'publication_transition_unmoved' });
+      ).resolves.toMatchObject({ kind: 'human_required', reason: 'publication_transition_unmoved' });
       expect(repairPresentation).toHaveBeenCalledWith({ prUrl, state });
       expect(gh.mock.calls.some(([args]) => args[0] === 'pr' && args[1] === 'ready')).toBe(false);
     } finally {
@@ -2068,13 +2299,21 @@ describe('production FINISH publication composition', () => {
       // A prior FINISH attempt left coverage before a region restored at the
       // tail. Replacing that existing section must stop at the region opener.
       let body = [
-        'Reader-facing summary.', '', '## Reduced build-review coverage', '',
-        'Stale reduced coverage.', '', capturedRegion,
+        'Reader-facing summary.',
+        '',
+        '## Reduced build-review coverage',
+        '',
+        'Stale reduced coverage.',
+        '',
+        capturedRegion,
       ].join('\n');
       const feature = { version: 'v1' as const, repository: 'github.com/acme/conductor', feature: 'review-rubrics' };
       const finding = canonicalizeBuildReviewFindingIdentity({
-        rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
-        summary: 'Actionable finding summary', evidenceLocations: ['src/a.ts:1'],
+        rubric: 'testQuality',
+        contractVersion: 'v3',
+        concernKind: 'test-insensitive',
+        summary: 'Actionable finding summary',
+        evidenceLocations: ['src/a.ts:1'],
         anchor: {
           rubric: 'testQuality',
           locus: {
@@ -2085,54 +2324,115 @@ describe('production FINISH publication composition', () => {
         },
       })!;
       const accepted: BuildReviewDispositionRecord = {
-        version: 'v1', feature, finding, sourceLapId: parseBuildReviewLapId('lap-7')!,
-        summary: 'DIRECT-SUMMARY-MUST-NOT-PUBLISH', rationale: 'DIRECT-RATIONALE-MUST-NOT-PUBLISH',
-        operator: 'DIRECT-OPERATOR-MUST-NOT-PUBLISH', acceptedAt: '2026-08-14T12:00:00.000Z',
+        version: 'v1',
+        feature,
+        finding,
+        sourceLapId: parseBuildReviewLapId('lap-7')!,
+        summary: 'DIRECT-SUMMARY-MUST-NOT-PUBLISH',
+        rationale: 'DIRECT-RATIONALE-MUST-NOT-PUBLISH',
+        operator: 'DIRECT-OPERATOR-MUST-NOT-PUBLISH',
+        acceptedAt: '2026-08-14T12:00:00.000Z',
       };
       const carried = canonicalizeBuildReviewFindingIdentity({
-        rubric: 'testQuality', contractVersion: 'v3', concernKind: 'test-insensitive',
-        anchor: { rubric: 'testQuality', locus: { path: 'test/carried.test.ts', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'carried' } },
+        rubric: 'testQuality',
+        contractVersion: 'v3',
+        concernKind: 'test-insensitive',
+        anchor: {
+          rubric: 'testQuality',
+          locus: {
+            path: 'test/carried.test.ts',
+            contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            display: 'carried',
+          },
+        },
       })!;
       const caseState = {
-        version: 'v3', feature, prdWideningCases: [], suppressions: [], outbox: [],
-        cases: [{
-          id: 'case-carried', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'CARRIED-RATIONALE-MUST-NOT-PUBLISH', resolution: 'resolved',
-          sources: [
-            { sourceId: `testQuality:${finding.id}`, outcome: 'acted', recordedAt: '2026-10-22T10:00:00.000Z' },
-            { sourceId: `testQuality:${carried.id}`, outcome: 'carried', recordedAt: '2026-10-22T11:00:00.000Z' },
-          ],
-          effect: { id: 'effect-carried', kind: 'action', status: 'applied', workOrderId: 'order-carried' },
-          operatorAcceptance: { origins: [{ sourceId: `testQuality:${finding.id}`, lapId: 'lap-7' }] },
-        }, {
-          id: 'case-operator-resolved', domain: 'build_review', disposition: 'act', priority: 'high', confidence: 'high', rationale: 'RESOLVED-RATIONALE-MUST-NOT-PUBLISH', resolution: 'resolved',
-          sources: [{ sourceId: `testQuality:${finding.id}`, outcome: 'acted', recordedAt: '2026-10-22T10:00:00.000Z' }],
-          effect: { id: 'effect-resolved', kind: 'action', status: 'failed', diagnostic: 'resolved by operator' },
-          operatorResolution: { operator: 'RESOLUTION-OPERATOR-MUST-NOT-PUBLISH', rationale: 'RESOLUTION-RATIONALE-MUST-NOT-PUBLISH', resolvedAt: '2026-10-22T12:00:00.000Z' },
-        }],
+        version: 'v3',
+        feature,
+        prdWideningCases: [],
+        suppressions: [],
+        outbox: [],
+        cases: [
+          {
+            id: 'case-carried',
+            domain: 'build_review',
+            disposition: 'act',
+            priority: 'high',
+            confidence: 'high',
+            rationale: 'CARRIED-RATIONALE-MUST-NOT-PUBLISH',
+            resolution: 'resolved',
+            sources: [
+              { sourceId: `testQuality:${finding.id}`, outcome: 'acted', recordedAt: '2026-10-22T10:00:00.000Z' },
+              { sourceId: `testQuality:${carried.id}`, outcome: 'carried', recordedAt: '2026-10-22T11:00:00.000Z' },
+            ],
+            effect: { id: 'effect-carried', kind: 'action', status: 'applied', workOrderId: 'order-carried' },
+            operatorAcceptance: { origins: [{ sourceId: `testQuality:${finding.id}`, lapId: 'lap-7' }] },
+          },
+          {
+            id: 'case-operator-resolved',
+            domain: 'build_review',
+            disposition: 'act',
+            priority: 'high',
+            confidence: 'high',
+            rationale: 'RESOLVED-RATIONALE-MUST-NOT-PUBLISH',
+            resolution: 'resolved',
+            sources: [
+              { sourceId: `testQuality:${finding.id}`, outcome: 'acted', recordedAt: '2026-10-22T10:00:00.000Z' },
+            ],
+            effect: { id: 'effect-resolved', kind: 'action', status: 'failed', diagnostic: 'resolved by operator' },
+            operatorResolution: {
+              operator: 'RESOLUTION-OPERATOR-MUST-NOT-PUBLISH',
+              rationale: 'RESOLUTION-RATIONALE-MUST-NOT-PUBLISH',
+              resolvedAt: '2026-10-22T12:00:00.000Z',
+            },
+          },
+        ],
       } satisfies RemediationCaseStoreState;
       const coverage = {
-        kind: 'reduced-coverage' as const, version: 'v1' as const, feature,
+        kind: 'reduced-coverage' as const,
+        version: 'v1' as const,
+        feature,
         identity: { rubric: 'testQuality' as const, reason: 'provider-error' as const },
-        rationale: 'The provider was unavailable for this current lap.', operator: 'james', acceptedAt: '2026-08-20T00:00:00.000Z',
+        rationale: 'The provider was unavailable for this current lap.',
+        operator: 'james',
+        acceptedAt: '2026-08-20T00:00:00.000Z',
       };
       const currentLap = parseBuildReviewLapId('lap-current')!;
-      await writeFile(join(pipeline, 'build-review.json'), JSON.stringify(joinBuildReviewRubricOutcomes({
-        lapId: currentLap, snapshotDigest: 'sha256:current', results: {
-          testQuality: { kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'provider-error', detail: 'provider unavailable' },
-        },
-      })));
+      await writeFile(
+        join(pipeline, 'build-review.json'),
+        JSON.stringify(
+          joinBuildReviewRubricOutcomes({
+            lapId: currentLap,
+            snapshotDigest: 'sha256:current',
+            results: {
+              testQuality: {
+                kind: 'infrastructure-failure',
+                rubric: 'testQuality',
+                reason: 'provider-error',
+                detail: 'provider unavailable',
+              },
+            },
+          }),
+        ),
+      );
       const edits: string[][] = [];
       const gh = vi.fn(async (args: string[]) => {
         if (args[0] === 'auth') return commandResult;
-        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: prUrl, title: 'feat: publish', body, isDraft: true }) };
-        if (args[0] === 'pr' && args[1] === 'edit') { body = args[args.indexOf('--body') + 1]!; edits.push(args); return commandResult; }
+        if (args[0] === 'pr' && args[1] === 'view')
+          return { stdout: JSON.stringify({ url: prUrl, title: 'feat: publish', body, isDraft: true }) };
+        if (args[0] === 'pr' && args[1] === 'edit') {
+          body = args[args.indexOf('--body') + 1]!;
+          edits.push(args);
+          return commandResult;
+        }
         throw new Error(`unexpected direct mutation: ${args.join(' ')}`);
       });
       const coordinator = createProductionFinishPublicationCoordinator({
         projectRoot: root,
         stateFilePath: join(pipeline, 'conduct-state.json'),
         baseBranch: 'main',
-        git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        git: async (args) =>
+          args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
         gh,
         operations: guardedOperations(gh),
         observeReleaseReadiness: async () => 'present',
@@ -2145,8 +2445,13 @@ describe('production FINISH publication composition', () => {
         createCaseStore: () => ({ read: async () => ({ ok: true as const, state: caseState }) }),
       });
       const state = {
-        feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
-        build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+        feature_desc: 'feature',
+        worktree_branch: 'feat/feature',
+        pr_url: prUrl,
+        build_review: 'done',
+        test_suite: 'done',
+        manual_test: 'done',
+        architecture_review_as_built: 'done',
       } as ConductState;
 
       // The rebased flow judges stale prose before any retained-PR maintenance
@@ -2168,17 +2473,27 @@ describe('production FINISH publication composition', () => {
       expect(publishedBody.indexOf('## Accepted build-review risk', regionEnd)).toBeGreaterThan(regionEnd);
       expect(publishedBody).toContain('Current diagnostic: provider unavailable');
       expect(publishedBody).toContain(`- Finding: \`${finding.id}\` — rubric: testQuality`);
-      expect(publishedBody).toContain(`- Carried finding: \`${carried.id}\` — rubric: testQuality; carried from: \`testQuality:${finding.id}\` (lap lap-7)`);
-      expect(publishedBody).toContain(`- Operator-resolved case: \`case-operator-resolved\` — source ids: \`testQuality:${finding.id}\``);
+      expect(publishedBody).toContain(
+        `- Carried finding: \`${carried.id}\` — rubric: testQuality; carried from: \`testQuality:${finding.id}\` (lap lap-7)`,
+      );
+      expect(publishedBody).toContain(
+        `- Operator-resolved case: \`case-operator-resolved\` — source ids: \`testQuality:${finding.id}\``,
+      );
       expect(publishedBody).not.toContain('**Rationale:**');
       for (const privateValue of [
-        accepted.summary, accepted.rationale, accepted.operator, accepted.acceptedAt,
+        accepted.summary,
+        accepted.rationale,
+        accepted.operator,
+        accepted.acceptedAt,
         // Every case-source timestamp remains private, including the carried source.
         ...caseState.cases.flatMap(({ sources }) => sources.map(({ recordedAt }) => recordedAt)),
-        'CARRIED-RATIONALE-MUST-NOT-PUBLISH', 'RESOLVED-RATIONALE-MUST-NOT-PUBLISH',
-        'RESOLUTION-OPERATOR-MUST-NOT-PUBLISH', 'RESOLUTION-RATIONALE-MUST-NOT-PUBLISH',
+        'CARRIED-RATIONALE-MUST-NOT-PUBLISH',
+        'RESOLVED-RATIONALE-MUST-NOT-PUBLISH',
+        'RESOLUTION-OPERATOR-MUST-NOT-PUBLISH',
+        'RESOLUTION-RATIONALE-MUST-NOT-PUBLISH',
         '2026-10-22T12:00:00.000Z',
-      ]) expect(publishedBody).not.toContain(privateValue);
+      ])
+        expect(publishedBody).not.toContain(privateValue);
       expect(publishedBody).toContain('Operator: james');
       expect(publishedBody).toContain('Decision time: 2026-08-20T00:00:00.000Z');
       expect(maskProjectOwnedRegions(publishedBody).match(/## Reduced build-review coverage/g)).toHaveLength(1);
@@ -2199,62 +2514,166 @@ describe('production FINISH publication composition', () => {
       const prUrl = 'https://github.com/acme/widget/pull/1175';
       const feature = { version: 'v1' as const, repository: 'github.com/acme/conductor', feature: 'review-rubrics' };
       const thresholdFinding = {
-        concernKind: 'test-insensitive', summary: 'The threshold advisory is still visible to reviewers.', severity: 'minor' as const,
+        concernKind: 'test-insensitive',
+        summary: 'The threshold advisory is still visible to reviewers.',
+        severity: 'minor' as const,
         evidenceLocations: ['test/threshold.test.ts:1'],
-        anchor: { rubric: 'testQuality' as const, locus: { path: 'test/threshold.test.ts', contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', display: 'threshold test' } },
+        anchor: {
+          rubric: 'testQuality' as const,
+          locus: {
+            path: 'test/threshold.test.ts',
+            contentHash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            display: 'threshold test',
+          },
+        },
       };
       const adjudicatedFinding = {
-        concernKind: 'test-insensitive', summary: 'The adjudicated advisory remains visible without its private rationale.', severity: 'major' as const,
+        concernKind: 'test-insensitive',
+        summary: 'The adjudicated advisory remains visible without its private rationale.',
+        severity: 'major' as const,
         evidenceLocations: ['test/adjudicated.test.ts:1'],
-        anchor: { rubric: 'testQuality' as const, locus: { path: 'test/adjudicated.test.ts', contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', display: 'adjudicated test' } },
+        anchor: {
+          rubric: 'testQuality' as const,
+          locus: {
+            path: 'test/adjudicated.test.ts',
+            contentHash: 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+            display: 'adjudicated test',
+          },
+        },
       };
       const carriedFinding = {
-        concernKind: 'test-insensitive', summary: 'The carried source must not be rendered as an adjudicated advisory.', severity: 'major' as const,
+        concernKind: 'test-insensitive',
+        summary: 'The carried source must not be rendered as an adjudicated advisory.',
+        severity: 'major' as const,
         evidenceLocations: ['test/carried.test.ts:1'],
-        anchor: { rubric: 'testQuality' as const, locus: { path: 'test/carried.test.ts', contentHash: 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', display: 'carried test' } },
+        anchor: {
+          rubric: 'testQuality' as const,
+          locus: {
+            path: 'test/carried.test.ts',
+            contentHash: 'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+            display: 'carried test',
+          },
+        },
       };
       const operatorResolvedFinding = {
-        concernKind: 'test-insensitive', summary: 'The operator-resolved source must not be rendered as an adjudicated advisory.', severity: 'major' as const,
+        concernKind: 'test-insensitive',
+        summary: 'The operator-resolved source must not be rendered as an adjudicated advisory.',
+        severity: 'major' as const,
         evidenceLocations: ['test/operator-resolved.test.ts:1'],
-        anchor: { rubric: 'testQuality' as const, locus: { path: 'test/operator-resolved.test.ts', contentHash: 'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd', display: 'operator-resolved test' } },
+        anchor: {
+          rubric: 'testQuality' as const,
+          locus: {
+            path: 'test/operator-resolved.test.ts',
+            contentHash: 'sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd',
+            display: 'operator-resolved test',
+          },
+        },
       };
-      const thresholdId = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v4', ...thresholdFinding })!.id;
-      const adjudicatedId = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v4', ...adjudicatedFinding })!.id;
-      const carriedId = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v4', ...carriedFinding })!.id;
-      const operatorResolvedId = canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v4', ...operatorResolvedFinding })!.id;
+      const thresholdId = canonicalizeBuildReviewFindingIdentity({
+        rubric: 'testQuality',
+        contractVersion: 'v4',
+        ...thresholdFinding,
+      })!.id;
+      const adjudicatedId = canonicalizeBuildReviewFindingIdentity({
+        rubric: 'testQuality',
+        contractVersion: 'v4',
+        ...adjudicatedFinding,
+      })!.id;
+      const carriedId = canonicalizeBuildReviewFindingIdentity({
+        rubric: 'testQuality',
+        contractVersion: 'v4',
+        ...carriedFinding,
+      })!.id;
+      const operatorResolvedId = canonicalizeBuildReviewFindingIdentity({
+        rubric: 'testQuality',
+        contractVersion: 'v4',
+        ...operatorResolvedFinding,
+      })!.id;
       const aggregate = joinBuildReviewRubricOutcomes({
-        lapId: parseBuildReviewLapId('lap-advisories')!, snapshotDigest: 'sha256:advisories',
+        lapId: parseBuildReviewLapId('lap-advisories')!,
+        snapshotDigest: 'sha256:advisories',
         results: {
           testQuality: {
-            kind: 'judged', rubric: 'testQuality', lapId: parseBuildReviewLapId('lap-advisories')!, snapshotDigest: 'sha256:advisories',
-            contractVersion: 'v4', findings: [thresholdFinding, adjudicatedFinding, carriedFinding, operatorResolvedFinding], verdict: 'FAIL',
+            kind: 'judged',
+            rubric: 'testQuality',
+            lapId: parseBuildReviewLapId('lap-advisories')!,
+            snapshotDigest: 'sha256:advisories',
+            contractVersion: 'v4',
+            findings: [thresholdFinding, adjudicatedFinding, carriedFinding, operatorResolvedFinding],
+            verdict: 'FAIL',
           },
         },
       });
       await writeFile(join(pipeline, 'build-review.json'), JSON.stringify(aggregate));
       const caseState = {
-        version: 'v3', feature, prdWideningCases: [], outbox: [],
-        suppressions: [{
-          kind: 'severity' as const, findingId: thresholdId, rubric: 'testQuality', summary: thresholdFinding.summary,
-          severity: 'minor' as const, threshold: 'major' as const, lastSeenLap: 'lap-advisories',
-        }],
-        cases: [{
-          id: 'case-advisory', domain: 'build_review', disposition: 'advisory', priority: 'low', confidence: 'high',
-          rationale: 'ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL', resolution: 'resolved',
-          sources: [{ sourceId: `testQuality:${adjudicatedId}`, outcome: 'merged', recordedAt: '2026-10-23T00:00:00.000Z' }],
-          effect: { kind: 'none' }, adjudicatedSeverity: 'nit' as const,
-        }, {
-          id: 'case-carried', domain: 'build_review', disposition: 'advisory', priority: 'low', confidence: 'high',
-          rationale: 'CARRIED-ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL', resolution: 'resolved',
-          sources: [{ sourceId: `testQuality:${carriedId}`, outcome: 'carried', recordedAt: '2026-10-23T00:00:00.000Z' }],
-          effect: { kind: 'none' }, adjudicatedSeverity: 'nit' as const,
-        }, {
-          id: 'case-operator-resolved', domain: 'build_review', disposition: 'advisory', priority: 'low', confidence: 'high',
-          rationale: 'OPERATOR-RESOLVED-ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL', resolution: 'resolved',
-          sources: [{ sourceId: `testQuality:${operatorResolvedId}`, outcome: 'merged', recordedAt: '2026-10-23T00:00:00.000Z' }],
-          effect: { kind: 'none' }, adjudicatedSeverity: 'nit' as const,
-          operatorResolution: { operator: 'operator', rationale: 'OPERATOR-RESOLUTION-RATIONALE-MUST-STAY-LOCAL', resolvedAt: '2026-10-23T00:00:00.000Z' },
-        }],
+        version: 'v3',
+        feature,
+        prdWideningCases: [],
+        outbox: [],
+        suppressions: [
+          {
+            kind: 'severity' as const,
+            findingId: thresholdId,
+            rubric: 'testQuality',
+            summary: thresholdFinding.summary,
+            severity: 'minor' as const,
+            threshold: 'major' as const,
+            lastSeenLap: 'lap-advisories',
+          },
+        ],
+        cases: [
+          {
+            id: 'case-advisory',
+            domain: 'build_review',
+            disposition: 'advisory',
+            priority: 'low',
+            confidence: 'high',
+            rationale: 'ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL',
+            resolution: 'resolved',
+            sources: [
+              { sourceId: `testQuality:${adjudicatedId}`, outcome: 'merged', recordedAt: '2026-10-23T00:00:00.000Z' },
+            ],
+            effect: { kind: 'none' },
+            adjudicatedSeverity: 'nit' as const,
+          },
+          {
+            id: 'case-carried',
+            domain: 'build_review',
+            disposition: 'advisory',
+            priority: 'low',
+            confidence: 'high',
+            rationale: 'CARRIED-ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL',
+            resolution: 'resolved',
+            sources: [
+              { sourceId: `testQuality:${carriedId}`, outcome: 'carried', recordedAt: '2026-10-23T00:00:00.000Z' },
+            ],
+            effect: { kind: 'none' },
+            adjudicatedSeverity: 'nit' as const,
+          },
+          {
+            id: 'case-operator-resolved',
+            domain: 'build_review',
+            disposition: 'advisory',
+            priority: 'low',
+            confidence: 'high',
+            rationale: 'OPERATOR-RESOLVED-ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL',
+            resolution: 'resolved',
+            sources: [
+              {
+                sourceId: `testQuality:${operatorResolvedId}`,
+                outcome: 'merged',
+                recordedAt: '2026-10-23T00:00:00.000Z',
+              },
+            ],
+            effect: { kind: 'none' },
+            adjudicatedSeverity: 'nit' as const,
+            operatorResolution: {
+              operator: 'operator',
+              rationale: 'OPERATOR-RESOLUTION-RATIONALE-MUST-STAY-LOCAL',
+              resolvedAt: '2026-10-23T00:00:00.000Z',
+            },
+          },
+        ],
       } satisfies RemediationCaseStoreState;
       let body = [
         'Reader-facing summary.',
@@ -2266,15 +2685,21 @@ describe('production FINISH publication composition', () => {
       const edits: string[][] = [];
       const gh = vi.fn(async (args: string[]) => {
         if (args[0] === 'auth') return commandResult;
-        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: prUrl, title: 'feat: publish', body, isDraft: true }) };
-        if (args[0] === 'pr' && args[1] === 'edit') { body = args[args.indexOf('--body') + 1]!; edits.push(args); return commandResult; }
+        if (args[0] === 'pr' && args[1] === 'view')
+          return { stdout: JSON.stringify({ url: prUrl, title: 'feat: publish', body, isDraft: true }) };
+        if (args[0] === 'pr' && args[1] === 'edit') {
+          body = args[args.indexOf('--body') + 1]!;
+          edits.push(args);
+          return commandResult;
+        }
         throw new Error(`unexpected direct mutation: ${args.join(' ')}`);
       });
       const coordinator = createProductionFinishPublicationCoordinator({
         projectRoot: root,
         stateFilePath: join(pipeline, 'conduct-state.json'),
         baseBranch: 'main',
-        git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        git: async (args) =>
+          args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
         gh,
         operations: guardedOperations(gh),
         observeReleaseReadiness: async () => 'present',
@@ -2287,8 +2712,13 @@ describe('production FINISH publication composition', () => {
         createCaseStore: () => ({ read: async () => ({ ok: true as const, state: caseState }) }),
       });
       const state = {
-        feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
-        build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+        feature_desc: 'feature',
+        worktree_branch: 'feat/feature',
+        pr_url: prUrl,
+        build_review: 'done',
+        test_suite: 'done',
+        manual_test: 'done',
+        architecture_review_as_built: 'done',
       } as ConductState;
       const dispatchJudgment = async () => ({ success: true, publicationDisposition: { kind: 'accepted' } }) as never;
       for (let index = 0; index < 6 && edits.length === 0; index++) {
@@ -2299,10 +2729,18 @@ describe('production FINISH publication composition', () => {
       const publishedBody = edits[0]![edits[0]!.indexOf('--body') + 1]!;
       expect(publishedBody).toContain('## Advisory build-review findings');
       expect(publishedBody.match(/## Advisory build-review findings/g)).toHaveLength(1);
-      expect(publishedBody).toContain(`- Finding: \`${thresholdId}\` — rubric: testQuality; severity: minor; origin: threshold; reviewer summary: ${thresholdFinding.summary}`);
-      expect(publishedBody).toContain(`- Finding: \`${adjudicatedId}\` — rubric: testQuality; severity: nit; origin: adjudicated; reviewer summary: ${adjudicatedFinding.summary}`);
-      expect(publishedBody).not.toContain(`- Finding: \`${carriedId}\` — rubric: testQuality; severity: nit; origin: adjudicated; reviewer summary: ${carriedFinding.summary}`);
-      expect(publishedBody).not.toContain(`- Finding: \`${operatorResolvedId}\` — rubric: testQuality; severity: nit; origin: adjudicated; reviewer summary: ${operatorResolvedFinding.summary}`);
+      expect(publishedBody).toContain(
+        `- Finding: \`${thresholdId}\` — rubric: testQuality; severity: minor; origin: threshold; reviewer summary: ${thresholdFinding.summary}`,
+      );
+      expect(publishedBody).toContain(
+        `- Finding: \`${adjudicatedId}\` — rubric: testQuality; severity: nit; origin: adjudicated; reviewer summary: ${adjudicatedFinding.summary}`,
+      );
+      expect(publishedBody).not.toContain(
+        `- Finding: \`${carriedId}\` — rubric: testQuality; severity: nit; origin: adjudicated; reviewer summary: ${carriedFinding.summary}`,
+      );
+      expect(publishedBody).not.toContain(
+        `- Finding: \`${operatorResolvedId}\` — rubric: testQuality; severity: nit; origin: adjudicated; reviewer summary: ${operatorResolvedFinding.summary}`,
+      );
       expect(publishedBody).not.toContain('ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL');
       expect(publishedBody).not.toContain('CARRIED-ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL');
       expect(publishedBody).not.toContain('OPERATOR-RESOLVED-ADJUDICATOR-RATIONALE-MUST-STAY-LOCAL');
@@ -2341,15 +2779,20 @@ describe('production FINISH publication composition', () => {
       const edits: string[][] = [];
       const gh = vi.fn(async (args: string[]) => {
         if (args[0] === 'auth') return commandResult;
-        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: prUrl, title: 'feat: publish', body: staleBody, isDraft: true }) };
-        if (args[0] === 'pr' && args[1] === 'edit') { edits.push(args); return commandResult; }
+        if (args[0] === 'pr' && args[1] === 'view')
+          return { stdout: JSON.stringify({ url: prUrl, title: 'feat: publish', body: staleBody, isDraft: true }) };
+        if (args[0] === 'pr' && args[1] === 'edit') {
+          edits.push(args);
+          return commandResult;
+        }
         throw new Error(`unexpected direct mutation: ${args.join(' ')}`);
       });
       const coordinator = createProductionFinishPublicationCoordinator({
         projectRoot: root,
         stateFilePath: join(pipeline, 'conduct-state.json'),
         baseBranch: 'main',
-        git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        git: async (args) =>
+          args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
         gh,
         operations: guardedOperations(gh),
         observeReleaseReadiness: async () => 'present',
@@ -2361,8 +2804,13 @@ describe('production FINISH publication composition', () => {
         }),
       });
       const state = {
-        feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
-        build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+        feature_desc: 'feature',
+        worktree_branch: 'feat/feature',
+        pr_url: prUrl,
+        build_review: 'done',
+        test_suite: 'done',
+        manual_test: 'done',
+        architecture_review_as_built: 'done',
       } as ConductState;
 
       const dispatchJudgment = async () => ({ success: true, publicationDisposition: { kind: 'accepted' } }) as never;
@@ -2394,23 +2842,38 @@ describe('production FINISH publication composition', () => {
       const prUrl = 'https://github.com/acme/widget/pull/1174';
       const feature = { version: 'v1' as const, repository: 'github.com/acme/conductor', feature: 'review-rubrics' };
       const coverage = {
-        kind: 'reduced-coverage' as const, version: 'v1' as const, feature,
+        kind: 'reduced-coverage' as const,
+        version: 'v1' as const,
+        feature,
         identity: { rubric: 'testQuality' as const, reason: 'provider-error' as const },
-        rationale: 'approved', operator: 'james', acceptedAt: '2026-08-20T00:00:00.000Z',
+        rationale: 'approved',
+        operator: 'james',
+        acceptedAt: '2026-08-20T00:00:00.000Z',
       };
       const gh = vi.fn(async (args: string[]) => {
         if (args[0] === 'auth') return commandResult;
-        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: prUrl, title: 'feat: publish', body: 'Reader-facing summary.', isDraft: true }) };
+        if (args[0] === 'pr' && args[1] === 'view')
+          return {
+            stdout: JSON.stringify({
+              url: prUrl,
+              title: 'feat: publish',
+              body: 'Reader-facing summary.',
+              isDraft: true,
+            }),
+          };
         throw new Error(`unexpected direct mutation: ${args.join(' ')}`);
       });
       const coordinator = createProductionFinishPublicationCoordinator({
         projectRoot: root,
         stateFilePath: join(pipeline, 'conduct-state.json'),
         baseBranch: 'main',
-        git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        git: async (args) =>
+          args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
         gh,
         observeReleaseReadiness: async () => 'present',
-        repairPresentation: async () => { throw new Error('presentation repair must not run before the risk projection settles'); },
+        repairPresentation: async () => {
+          throw new Error('presentation repair must not run before the risk projection settles');
+        },
         resolveFeatureIdentity: async () => feature,
         createDispositionStore: () => ({
           list: async () => ({ ok: true as const, records: [] }),
@@ -2418,8 +2881,13 @@ describe('production FINISH publication composition', () => {
         }),
       });
       const state = {
-        feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
-        build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+        feature_desc: 'feature',
+        worktree_branch: 'feat/feature',
+        pr_url: prUrl,
+        build_review: 'done',
+        test_suite: 'done',
+        manual_test: 'done',
+        architecture_review_as_built: 'done',
       } as ConductState;
 
       // The core coordinator converts the projection failure into a bounded
@@ -2429,13 +2897,19 @@ describe('production FINISH publication composition', () => {
       let result: unknown;
       for (let i = 0; i < 6; i++) {
         result = await coordinator.advance({
-          state, mode: 'auto', daemon: true,
+          state,
+          mode: 'auto',
+          daemon: true,
           dispatchJudgment: async () => ({ success: true, publicationDisposition: { kind: 'accepted' } }) as never,
           emit: async () => {},
         });
         if ((result as { reason?: string }).reason === 'presentation_repair_failed') break;
       }
-      expect(result).toEqual({ kind: 'publication_retry', transition: 'ready_pr', reason: 'presentation_repair_failed' });
+      expect(result).toEqual({
+        kind: 'publication_retry',
+        transition: 'ready_pr',
+        reason: 'presentation_repair_failed',
+      });
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -2460,21 +2934,25 @@ describe('production FINISH publication composition', () => {
         throw new Error(`unexpected GitHub mutation: ${args.join(' ')}`);
       });
       const writeShippedRecord = vi.fn(async () => 0);
-      const makeCoordinator = (operations: GithubOperationRunner, events?: ConductorEventEmitter) => createProductionFinishPublicationCoordinator({
-        projectRoot: root,
-        stateFilePath: join(pipeline, 'conduct-state.json'),
-        baseBranch: 'main',
-        gh,
-        git: async (args) => args[0] === 'remote'
-          ? { stdout: 'origin\n' }
-          : { stdout: 'refs/remotes/origin/feat/feature\n' },
-        observeReleaseReadiness: async () => 'present',
-        writeShippedRecord,
-        repairPresentation: async () => {},
-        operations,
-        events,
-      });
-      const input = (dispatchAuthoring: NonNullable<Parameters<ReturnType<typeof makeCoordinator>['advance']>[0]['dispatchAuthoring']>) => ({
+      const makeCoordinator = (operations: GithubOperationRunner, events?: ConductorEventEmitter) =>
+        createProductionFinishPublicationCoordinator({
+          projectRoot: root,
+          stateFilePath: join(pipeline, 'conduct-state.json'),
+          baseBranch: 'main',
+          gh,
+          git: async (args) =>
+            args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
+          observeReleaseReadiness: async () => 'present',
+          writeShippedRecord,
+          repairPresentation: async () => {},
+          operations,
+          events,
+        });
+      const input = (
+        dispatchAuthoring: NonNullable<
+          Parameters<ReturnType<typeof makeCoordinator>['advance']>[0]['dispatchAuthoring']
+        >,
+      ) => ({
         state: {
           feature_desc: 'feature',
           worktree_branch: 'feat/feature',
@@ -2503,24 +2981,46 @@ describe('production FINISH publication composition', () => {
         '',
         '_Not yet authored_',
         '',
-        '<!-- ai-conductor:step alpha -->', currentRegions.alpha.trim(), '<!-- /ai-conductor:step -->',
-        '<!-- ai-conductor:step beta -->', currentRegions.beta.trim(), '<!-- /ai-conductor:step -->',
-        '<!-- ai-conductor:step gamma -->', currentRegions.gamma.trim(), '<!-- /ai-conductor:step -->',
+        '<!-- ai-conductor:step alpha -->',
+        currentRegions.alpha.trim(),
+        '<!-- /ai-conductor:step -->',
+        '<!-- ai-conductor:step beta -->',
+        currentRegions.beta.trim(),
+        '<!-- /ai-conductor:step -->',
+        '<!-- ai-conductor:step gamma -->',
+        currentRegions.gamma.trim(),
+        '<!-- /ai-conductor:step -->',
       ].join('\n');
       const handoffBody = [
-        '## Why', '', 'The teardown hook now completes before the daemon records shipment.', '',
-        '<!-- ai-conductor:step beta -->', 'Changed beta bytes.', '<!-- /ai-conductor:step -->',
-        '<!-- ai-conductor:step gamma -->', 'Changed gamma bytes.', '<!-- /ai-conductor:step -->',
-        '<!-- ai-conductor:step gamma -->', 'Repeated gamma bytes.', '<!-- /ai-conductor:step -->',
+        '## Why',
+        '',
+        'The teardown hook now completes before the daemon records shipment.',
+        '',
+        '<!-- ai-conductor:step beta -->',
+        'Changed beta bytes.',
+        '<!-- /ai-conductor:step -->',
+        '<!-- ai-conductor:step gamma -->',
+        'Changed gamma bytes.',
+        '<!-- /ai-conductor:step -->',
+        '<!-- ai-conductor:step gamma -->',
+        'Repeated gamma bytes.',
+        '<!-- /ai-conductor:step -->',
       ].join('\n');
       const featureEvents = new ConductorEventEmitter();
       const emittedFailures: unknown[] = [];
-      featureEvents.on('github_operation_failed', (event) => { emittedFailures.push(event); });
+      featureEvents.on('github_operation_failed', (event) => {
+        emittedFailures.push(event);
+      });
       const edits: Parameters<GithubOperationRunner['run']>[0][] = [];
       const operations: GithubOperationRunner = {
         run: vi.fn(async (request) => {
           edits.push(request);
-          if (request.operation !== 'pull-request.edit' || !request.payload || !('title' in request.payload) || !('body' in request.payload)) {
+          if (
+            request.operation !== 'pull-request.edit' ||
+            !request.payload ||
+            !('title' in request.payload) ||
+            !('body' in request.payload)
+          ) {
             throw new Error('expected an engine-owned prose edit');
           }
           title = request.payload.title;
@@ -2535,9 +3035,14 @@ describe('production FINISH publication composition', () => {
           target: { kind: 'pull-request' as const, repository: 'acme/widget', number: 1364 },
           error: 'a prior provider-side operation failed',
         };
-        await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({
-          version: 1, title: '  feat: authored publication  ', body: handoffBody,
-        }));
+        await writeFile(
+          join(pipeline, 'finish-pr-prose.json'),
+          JSON.stringify({
+            version: 1,
+            title: '  feat: authored publication  ',
+            body: handoffBody,
+          }),
+        );
         await appendFile(join(pipeline, 'pipeline-events.jsonl'), `${JSON.stringify(failedEdit)}\n`);
         await featureEvents.emit(failedEdit);
         return { success: true };
@@ -2545,45 +3050,77 @@ describe('production FINISH publication composition', () => {
 
       const authoringCoordinator = makeCoordinator(operations, featureEvents);
       await expect(authoringCoordinator.advance(input(dispatchAuthoring))).resolves.toEqual({
-        kind: 'advanced', transition: 'author_pr_prose',
+        kind: 'advanced',
+        transition: 'author_pr_prose',
       });
       expect(writeShippedRecord).not.toHaveBeenCalled();
       expect(edits).toHaveLength(1);
       expect(edits[0]).toMatchObject({
-        operation: 'pull-request.edit', payload: { title: 'feat: authored publication' },
+        operation: 'pull-request.edit',
+        payload: { title: 'feat: authored publication' },
       });
       const published = edits[0]!.payload;
-      if (!published || !('body' in published) || typeof published.body !== 'string') throw new Error('missing published body');
-      expect(published.body).toBe([
-        '## Why', '', 'The teardown hook now completes before the daemon records shipment.', '',
-        '<!-- ai-conductor:step beta -->', 'Current beta bytes.', '<!-- /ai-conductor:step -->',
-        '<!-- ai-conductor:step gamma -->', 'Current gamma bytes.', '<!-- /ai-conductor:step -->', '', '',
-        '<!-- ai-conductor:step alpha -->', 'Current alpha bytes.', '<!-- /ai-conductor:step -->',
-      ].join('\n'));
+      if (!published || !('body' in published) || typeof published.body !== 'string')
+        throw new Error('missing published body');
+      expect(published.body).toBe(
+        [
+          '## Why',
+          '',
+          'The teardown hook now completes before the daemon records shipment.',
+          '',
+          '<!-- ai-conductor:step beta -->',
+          'Current beta bytes.',
+          '<!-- /ai-conductor:step -->',
+          '<!-- ai-conductor:step gamma -->',
+          'Current gamma bytes.',
+          '<!-- /ai-conductor:step -->',
+          '',
+          '',
+          '<!-- ai-conductor:step alpha -->',
+          'Current alpha bytes.',
+          '<!-- /ai-conductor:step -->',
+        ].join('\n'),
+      );
       expect(emittedFailures).toHaveLength(1);
-      await expect(readFile(join(pipeline, 'pipeline-events.jsonl'), 'utf8')).resolves.toContain('github_operation_failed');
+      await expect(readFile(join(pipeline, 'pipeline-events.jsonl'), 'utf8')).resolves.toContain(
+        'github_operation_failed',
+      );
 
       body = `${PR_BODY_FLOOR_MARKER}\n\n## Why\n\n_Not yet authored_\n`;
-      await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({ version: 1, title: 'stale', body: 'stale prose' }));
+      await writeFile(
+        join(pipeline, 'finish-pr-prose.json'),
+        JSON.stringify({ version: 1, title: 'stale', body: 'stale prose' }),
+      );
       const staleOperations: GithubOperationRunner = { run: vi.fn(async () => ({})) };
       const dispatchWithoutHandoff = vi.fn(async () => {
-        await expect(readFile(join(pipeline, 'finish-pr-prose.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+        await expect(readFile(join(pipeline, 'finish-pr-prose.json'), 'utf8')).rejects.toMatchObject({
+          code: 'ENOENT',
+        });
         return { success: true };
       });
       await expect(makeCoordinator(staleOperations).advance(input(dispatchWithoutHandoff))).resolves.toMatchObject({
-        kind: 'publication_retry', transition: 'author_pr_prose', reason: 'prose_not_returned',
+        kind: 'publication_retry',
+        transition: 'author_pr_prose',
+        reason: 'prose_not_returned',
       });
       expect(staleOperations.run).not.toHaveBeenCalled();
 
       const failedOperations: GithubOperationRunner = { run: vi.fn(async () => ({})) };
       const failedDispatch = vi.fn(async () => {
-        await writeFile(join(pipeline, 'finish-pr-prose.json'), JSON.stringify({
-          version: 1, title: 'feat: ignored authoring output', body: '## Why\n\nThis output must not publish.\n',
-        }));
+        await writeFile(
+          join(pipeline, 'finish-pr-prose.json'),
+          JSON.stringify({
+            version: 1,
+            title: 'feat: ignored authoring output',
+            body: '## Why\n\nThis output must not publish.\n',
+          }),
+        );
         return { success: false };
       });
       await expect(makeCoordinator(failedOperations).advance(input(failedDispatch))).resolves.toEqual({
-        kind: 'publication_retry', transition: 'author_pr_prose', reason: 'authoring_dispatch_failed',
+        kind: 'publication_retry',
+        transition: 'author_pr_prose',
+        reason: 'authoring_dispatch_failed',
       });
       expect(failedOperations.run).not.toHaveBeenCalled();
     } finally {
@@ -2618,31 +3155,32 @@ describe('production FINISH publication composition', () => {
         stateFilePath: join(pipeline, 'conduct-state.json'),
         baseBranch: 'main',
         gh,
-        git: async (args) => args[0] === 'remote'
-          ? { stdout: 'origin\n' }
-          : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        git: async (args) =>
+          args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
         observeReleaseReadiness: async () => 'present',
         writeShippedRecord: vi.fn(async () => 0),
         repairPresentation: async () => {},
         prTemplateBytes: template,
       });
 
-      await expect(coordinator.advance({
-        state: {
-          feature_desc: 'feature',
-          worktree_branch: 'feat/feature',
-          pr_url: prUrl,
-          build_review: 'done',
-          test_suite: 'done',
-          manual_test: 'done',
-          architecture_review_as_built: 'done',
-        } as ConductState,
-        mode: 'auto' as const,
-        daemon: true,
-        dispatchJudgment,
-        dispatchAuthoring,
-        emit: async () => {},
-      })).resolves.toEqual({ kind: 'advanced', transition: 'author_pr_prose' });
+      await expect(
+        coordinator.advance({
+          state: {
+            feature_desc: 'feature',
+            worktree_branch: 'feat/feature',
+            pr_url: prUrl,
+            build_review: 'done',
+            test_suite: 'done',
+            manual_test: 'done',
+            architecture_review_as_built: 'done',
+          } as ConductState,
+          mode: 'auto' as const,
+          daemon: true,
+          dispatchJudgment,
+          dispatchAuthoring,
+          emit: async () => {},
+        }),
+      ).resolves.toEqual({ kind: 'advanced', transition: 'author_pr_prose' });
 
       expect(dispatchAuthoring).toHaveBeenCalledOnce();
       expect(dispatchJudgment).not.toHaveBeenCalled();
@@ -2667,7 +3205,15 @@ describe('production FINISH publication composition', () => {
       const gh = vi.fn(async (args: string[]) => {
         if (args[0] === 'auth') return commandResult;
         if (args[0] === 'pr' && args[1] === 'view') {
-          return { stdout: JSON.stringify({ url: prUrl, title: 'fix: author the retained PR body', body, isDraft: true, labels: [] }) };
+          return {
+            stdout: JSON.stringify({
+              url: prUrl,
+              title: 'fix: author the retained PR body',
+              body,
+              isDraft: true,
+              labels: [],
+            }),
+          };
         }
         throw new Error(`unexpected GitHub mutation: ${args.join(' ')}`);
       });
@@ -2697,30 +3243,31 @@ describe('production FINISH publication composition', () => {
         stateFilePath: join(pipeline, 'conduct-state.json'),
         baseBranch: 'main',
         gh,
-        git: async (args) => args[0] === 'remote'
-          ? { stdout: 'origin\n' }
-          : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        git: async (args) =>
+          args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
         observeReleaseReadiness: async () => 'present',
         writeShippedRecord: vi.fn(async () => 0),
         repairPresentation: async () => {},
       });
 
-      await expect(coordinator.advance({
-        state: {
-          feature_desc: 'feature',
-          worktree_branch: 'feat/feature',
-          pr_url: prUrl,
-          build_review: 'done',
-          test_suite: 'done',
-          manual_test: 'done',
-          architecture_review_as_built: 'done',
-        } as ConductState,
-        mode: 'auto' as const,
-        daemon: true,
-        dispatchJudgment,
-        dispatchAuthoring,
-        emit: async () => {},
-      })).resolves.toEqual({ kind: 'advanced', transition: 'author_pr_prose' });
+      await expect(
+        coordinator.advance({
+          state: {
+            feature_desc: 'feature',
+            worktree_branch: 'feat/feature',
+            pr_url: prUrl,
+            build_review: 'done',
+            test_suite: 'done',
+            manual_test: 'done',
+            architecture_review_as_built: 'done',
+          } as ConductState,
+          mode: 'auto' as const,
+          daemon: true,
+          dispatchJudgment,
+          dispatchAuthoring,
+          emit: async () => {},
+        }),
+      ).resolves.toEqual({ kind: 'advanced', transition: 'author_pr_prose' });
 
       expect(dispatchAuthoring).toHaveBeenCalledOnce();
       expect(dispatchJudgment).not.toHaveBeenCalled();
@@ -2730,63 +3277,108 @@ describe('production FINISH publication composition', () => {
   });
 
   it.each([
-    ['halt', { success: true, publicationDisposition: { kind: 'revision_required', reason: 'halt' } }, { kind: 'human_required', reason: 'judgment_halt_prose' }],
-    ['refused', { success: true, publicationDisposition: { kind: 'refused', detail: 'provider declined' } }, { kind: 'human_required', reason: 'judgment_refused', detail: 'provider declined' }],
-    ['timed_out', { success: true, publicationDisposition: { kind: 'timed_out' } }, { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_timed_out' }],
-    ['provider_unavailable', { success: true, publicationDisposition: { kind: 'provider_unavailable' } }, { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_provider_unavailable' }],
-    ['undecodable', { success: true, output: 'not a judgment result' }, { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_malformed_response' }],
-    ['incompleteness', { success: true, publicationDisposition: { kind: 'revision_required', reason: 'structurally_incomplete' } }, { kind: 'publication_revision_progress', transition: 'author_pr_prose' }],
-    ['raw-placeholder', { success: true, output: '{"kind":"revision_required","reason":"placeholder"}' }, { kind: 'publication_revision_progress', transition: 'author_pr_prose' }],
-  ])('maps each $0 prose judgment response without readying or recording the PR', async (_label, judgmentResponse, expected) => {
-    const root = await mkdtemp(join(tmpdir(), 'finish-production-judgment-outcome-'));
-    try {
-      const pipeline = join(root, '.pipeline');
-      await mkdir(pipeline);
-      await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
-      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
-      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), '---\nslug: feature\n---\n');
-      const prUrl = 'https://github.com/acme/widget/pull/1172';
-      const gh = vi.fn(async (args: string[]) => {
-        if (args[0] === 'auth') return commandResult;
-        if (args[0] === 'pr' && args[1] === 'view') {
-          return { stdout: JSON.stringify({ url: prUrl, title: 'feat: authored publication', body: 'Reader-facing summary.', isDraft: true, labels: [] }) };
-        }
-        throw new Error(`unexpected GitHub mutation: ${args.join(' ')}`);
-      });
-      const writeShippedRecord = vi.fn(async () => 0);
-      const recordFinish = vi.fn(async () => 0);
-      const coordinator = createProductionFinishPublicationCoordinator({
-        projectRoot: root,
-        stateFilePath: join(pipeline, 'conduct-state.json'),
-        baseBranch: 'main',
-        gh,
-        git: async (args) => args[0] === 'remote'
-          ? { stdout: 'origin\n' }
-          : { stdout: 'refs/remotes/origin/feat/feature\n' },
-        observeReleaseReadiness: async () => 'present',
-        writeShippedRecord,
-        recordFinish,
-      });
+    [
+      'halt',
+      { success: true, publicationDisposition: { kind: 'revision_required', reason: 'halt' } },
+      { kind: 'human_required', reason: 'judgment_halt_prose' },
+    ],
+    [
+      'refused',
+      { success: true, publicationDisposition: { kind: 'refused', detail: 'provider declined' } },
+      { kind: 'human_required', reason: 'judgment_refused', detail: 'provider declined' },
+    ],
+    [
+      'timed_out',
+      { success: true, publicationDisposition: { kind: 'timed_out' } },
+      { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_timed_out' },
+    ],
+    [
+      'provider_unavailable',
+      { success: true, publicationDisposition: { kind: 'provider_unavailable' } },
+      { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_provider_unavailable' },
+    ],
+    [
+      'undecodable',
+      { success: true, output: 'not a judgment result' },
+      { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_malformed_response' },
+    ],
+    [
+      'incompleteness',
+      { success: true, publicationDisposition: { kind: 'revision_required', reason: 'structurally_incomplete' } },
+      { kind: 'publication_revision_progress', transition: 'author_pr_prose' },
+    ],
+    [
+      'raw-placeholder',
+      { success: true, output: '{"kind":"revision_required","reason":"placeholder"}' },
+      { kind: 'publication_revision_progress', transition: 'author_pr_prose' },
+    ],
+  ])(
+    'maps each $0 prose judgment response without readying or recording the PR',
+    async (_label, judgmentResponse, expected) => {
+      const root = await mkdtemp(join(tmpdir(), 'finish-production-judgment-outcome-'));
+      try {
+        const pipeline = join(root, '.pipeline');
+        await mkdir(pipeline);
+        await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
+        await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+        await writeFile(join(root, '.docs', 'shipped', 'feature.md'), '---\nslug: feature\n---\n');
+        const prUrl = 'https://github.com/acme/widget/pull/1172';
+        const gh = vi.fn(async (args: string[]) => {
+          if (args[0] === 'auth') return commandResult;
+          if (args[0] === 'pr' && args[1] === 'view') {
+            return {
+              stdout: JSON.stringify({
+                url: prUrl,
+                title: 'feat: authored publication',
+                body: 'Reader-facing summary.',
+                isDraft: true,
+                labels: [],
+              }),
+            };
+          }
+          throw new Error(`unexpected GitHub mutation: ${args.join(' ')}`);
+        });
+        const writeShippedRecord = vi.fn(async () => 0);
+        const recordFinish = vi.fn(async () => 0);
+        const coordinator = createProductionFinishPublicationCoordinator({
+          projectRoot: root,
+          stateFilePath: join(pipeline, 'conduct-state.json'),
+          baseBranch: 'main',
+          gh,
+          git: async (args) =>
+            args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
+          observeReleaseReadiness: async () => 'present',
+          writeShippedRecord,
+          recordFinish,
+        });
 
-      const dispatchJudgment = vi.fn(async () => judgmentResponse);
-      await expect(coordinator.advance({
-        state: {
-          feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
-          build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
-        } as ConductState,
-        mode: 'auto',
-        daemon: true,
-        dispatchJudgment,
-        emit: async () => {},
-      })).resolves.toEqual(expected);
+        const dispatchJudgment = vi.fn(async () => judgmentResponse);
+        await expect(
+          coordinator.advance({
+            state: {
+              feature_desc: 'feature',
+              worktree_branch: 'feat/feature',
+              pr_url: prUrl,
+              build_review: 'done',
+              test_suite: 'done',
+              manual_test: 'done',
+              architecture_review_as_built: 'done',
+            } as ConductState,
+            mode: 'auto',
+            daemon: true,
+            dispatchJudgment,
+            emit: async () => {},
+          }),
+        ).resolves.toEqual(expected);
 
-      expect(dispatchJudgment).toHaveBeenCalledOnce();
-      expect(gh.mock.calls.filter(([args]) => args[0] === 'pr' && args[1] === 'ready')).toEqual([]);
-      expect(recordFinish).not.toHaveBeenCalled();
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
+        expect(dispatchJudgment).toHaveBeenCalledOnce();
+        expect(gh.mock.calls.filter(([args]) => args[0] === 'pr' && args[1] === 'ready')).toEqual([]);
+        expect(recordFinish).not.toHaveBeenCalled();
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('does not spend a provider judgment on a persistent remediation-state PR', async () => {
     const root = await mkdtemp(join(tmpdir(), 'finish-production-judgment-cache-'));
@@ -2799,18 +3391,41 @@ describe('production FINISH publication composition', () => {
       const prUrl = 'https://github.com/acme/widget/pull/1172';
       const gh = vi.fn(async (args: string[]) => {
         if (args[0] === 'auth') return commandResult;
-        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: prUrl, title: 'Needs remediation: publication', body: `${HALT_PR_BANNER_SENTINEL}\n\nHuman remediation required.`, isDraft: true }) };
+        if (args[0] === 'pr' && args[1] === 'view')
+          return {
+            stdout: JSON.stringify({
+              url: prUrl,
+              title: 'Needs remediation: publication',
+              body: `${HALT_PR_BANNER_SENTINEL}\n\nHuman remediation required.`,
+              isDraft: true,
+            }),
+          };
         throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
       });
       const coordinator = createProductionFinishPublicationCoordinator({
-        projectRoot: root, stateFilePath: join(pipeline, 'conduct-state.json'), baseBranch: 'main', gh,
-        git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        gh,
+        git: async (args) =>
+          args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
         observeReleaseReadiness: async () => 'present',
       });
       const dispatchJudgment = vi.fn(async () => ({ success: true }));
       const input = {
-        state: { feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl, build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done' } as ConductState,
-        mode: 'auto' as const, daemon: true, dispatchJudgment, emit: async () => {},
+        state: {
+          feature_desc: 'feature',
+          worktree_branch: 'feat/feature',
+          pr_url: prUrl,
+          build_review: 'done',
+          test_suite: 'done',
+          manual_test: 'done',
+          architecture_review_as_built: 'done',
+        } as ConductState,
+        mode: 'auto' as const,
+        daemon: true,
+        dispatchJudgment,
+        emit: async () => {},
       };
       await expect(coordinator.advance(input)).resolves.toEqual({ kind: 'human_required', reason: 'halt_state_pr' });
       await expect(coordinator.advance(input)).resolves.toEqual({ kind: 'human_required', reason: 'halt_state_pr' });
@@ -2834,21 +3449,54 @@ describe('production FINISH publication composition', () => {
       const prUrl = 'https://github.com/acme/widget/pull/1172';
       const gh = vi.fn(async (args: string[]) => {
         if (args[0] === 'auth') return commandResult;
-        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: prUrl, title: 'Needs remediation: publication', body: `${HALT_PR_BANNER_SENTINEL}\n\nHuman remediation required.`, isDraft: true }) };
+        if (args[0] === 'pr' && args[1] === 'view')
+          return {
+            stdout: JSON.stringify({
+              url: prUrl,
+              title: 'Needs remediation: publication',
+              body: `${HALT_PR_BANNER_SENTINEL}\n\nHuman remediation required.`,
+              isDraft: true,
+            }),
+          };
         throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
       });
-      const makeCoordinator = () => createProductionFinishPublicationCoordinator({
-        projectRoot: root, stateFilePath: join(pipeline, 'conduct-state.json'), baseBranch: 'main', gh,
-        git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
-        observeReleaseReadiness: async () => 'present',
-      });
-      const dispatchJudgment = vi.fn(async () => ({ success: true, publicationDisposition: { kind: 'revision_required', reason: 'halt' } }));
+      const makeCoordinator = () =>
+        createProductionFinishPublicationCoordinator({
+          projectRoot: root,
+          stateFilePath: join(pipeline, 'conduct-state.json'),
+          baseBranch: 'main',
+          gh,
+          git: async (args) =>
+            args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
+          observeReleaseReadiness: async () => 'present',
+        });
+      const dispatchJudgment = vi.fn(async () => ({
+        success: true,
+        publicationDisposition: { kind: 'revision_required', reason: 'halt' },
+      }));
       const input = {
-        state: { feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl, build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done' } as ConductState,
-        mode: 'auto' as const, daemon: true, dispatchJudgment, emit: async () => {},
+        state: {
+          feature_desc: 'feature',
+          worktree_branch: 'feat/feature',
+          pr_url: prUrl,
+          build_review: 'done',
+          test_suite: 'done',
+          manual_test: 'done',
+          architecture_review_as_built: 'done',
+        } as ConductState,
+        mode: 'auto' as const,
+        daemon: true,
+        dispatchJudgment,
+        emit: async () => {},
       };
-      await expect(makeCoordinator().advance(input)).resolves.toEqual({ kind: 'human_required', reason: 'halt_state_pr' });
-      await expect(makeCoordinator().advance(input)).resolves.toEqual({ kind: 'human_required', reason: 'halt_state_pr' });
+      await expect(makeCoordinator().advance(input)).resolves.toEqual({
+        kind: 'human_required',
+        reason: 'halt_state_pr',
+      });
+      await expect(makeCoordinator().advance(input)).resolves.toEqual({
+        kind: 'human_required',
+        reason: 'halt_state_pr',
+      });
       // The halt banner is classified deterministically before any judgment,
       // so no provider session is spent on either fresh coordinator.
       expect(dispatchJudgment).not.toHaveBeenCalled();
@@ -2931,8 +3579,14 @@ describe('production FINISH publication composition', () => {
         }
         throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
       });
-      const writeShippedRecord = vi.fn(async () => { trace.push('shipped-record'); return 0; });
-      const recordFinish = vi.fn(async () => { trace.push('outcome-record'); return 0; });
+      const writeShippedRecord = vi.fn(async () => {
+        trace.push('shipped-record');
+        return 0;
+      });
+      const recordFinish = vi.fn(async () => {
+        trace.push('outcome-record');
+        return 0;
+      });
       const coordinator = createProductionFinishPublicationCoordinator({
         projectRoot: root,
         stateFilePath: join(pipeline, 'conduct-state.json'),
@@ -2942,8 +3596,14 @@ describe('production FINISH publication composition', () => {
         operations: guardedOperations(gh),
         remoteMutation: remoteMutation(),
         remoteGit: guardedRemoteGit(),
-        acquireInteractiveIntent: async () => { trace.push('operator-choice'); return 'pr'; },
-        observeReleaseReadiness: async () => { trace.push('release-readiness'); return 'present'; },
+        acquireInteractiveIntent: async () => {
+          trace.push('operator-choice');
+          return 'pr';
+        },
+        observeReleaseReadiness: async () => {
+          trace.push('release-readiness');
+          return 'present';
+        },
         writeShippedRecord,
         recordFinish,
       });
@@ -2966,7 +3626,9 @@ describe('production FINISH publication composition', () => {
       expect(result).toMatchObject({ kind: 'publication_retry', transition: 'establish_pr' });
       expect(trace[0]).toBe('operator-choice');
       expect(trace.indexOf('operator-choice')).toBeLessThan(trace.indexOf('release-readiness'));
-      expect(trace.indexOf('operator-choice')).toBeLessThan(trace.findIndex((entry) => entry.startsWith('gh:pr create')));
+      expect(trace.indexOf('operator-choice')).toBeLessThan(
+        trace.findIndex((entry) => entry.startsWith('gh:pr create')),
+      );
       expect(writeShippedRecord).not.toHaveBeenCalled();
       expect(recordFinish).not.toHaveBeenCalled();
       await expect(readFile(join(pipeline, 'finish-choice'), 'utf8')).rejects.toThrow();
@@ -3058,13 +3720,15 @@ describe('production FINISH publication composition', () => {
           observeReleaseReadiness: async () => 'present',
         });
 
-        await expect(coordinator.advance({
-          state: { feature_desc: 'feature' } as ConductState,
-          mode,
-          daemon: false,
-          dispatchJudgment: vi.fn(async () => ({ success: true })),
-          emit: async () => {},
-        })).resolves.toEqual({ kind: 'human_required', reason: 'interactive_intent_deferred' });
+        await expect(
+          coordinator.advance({
+            state: { feature_desc: 'feature' } as ConductState,
+            mode,
+            daemon: false,
+            dispatchJudgment: vi.fn(async () => ({ success: true })),
+            emit: async () => {},
+          }),
+        ).resolves.toEqual({ kind: 'human_required', reason: 'interactive_intent_deferred' });
         expect(acquireInteractiveIntent).toHaveBeenCalledOnce();
         expect(git).not.toHaveBeenCalled();
         expect(gh).not.toHaveBeenCalled();
