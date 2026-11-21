@@ -199,8 +199,8 @@ not yet delivered; `--json` reports them under `carriedSources`, `operatorResolv
 `pendingOutbox`, each omitted when empty. It also lists each advisory finding — below its rubric's
 `min_severity` threshold, or downgraded by the adjudicator — with its rubric, severity, reviewer summary,
 and any adjudicator rationale; `--json` reports them under `advisoryFindings` as `id`, `rubric`,
-`severity`, `threshold`, and `origin` (`threshold` or `adjudicated`), omitting summaries and rationales,
-and omits the key when empty. Human output also lists `Out-of-delta findings` — findings outside
+`severity`, `threshold`, and `origin` (`threshold` or `adjudicated`), omitting summaries and rationales. A finding made advisory because its rubric is past its [`max_blocking_laps`](configuration.md#build_review) limit is listed with origin `lap-limit` and reports `blockingLaps` and `limit` instead of `threshold`. `--json`
+omits the key when empty. Human output also lists `Out-of-delta findings` — findings outside
 the lap's [review delta](../explanation/gates.md#later-laps-judge-only-the-unsettled-delta), which
 never block. `findings` reads the same shared effective-verdict resolver the live gate uses. `accept` changes state only from an interactive terminal with
 a resolved local operator identity. It requires the exact current lap identity, canonical finding ID,

@@ -880,6 +880,12 @@ export interface BuildReviewRubricConfig {
   min_confidence?: number;
   /** Lowest finding severity that remains blocking for this rubric. */
   min_severity?: BuildReviewSeverity;
+  /**
+   * Review laps this rubric may block before its later findings become
+   * advisory. Omitted uses the rubric default (implementationQuality: 2,
+   * every other rubric unlimited); `0` means unlimited.
+   */
+  max_blocking_laps?: number;
 }
 
 /** A project-declared build-review rubric, identified by its map key. */

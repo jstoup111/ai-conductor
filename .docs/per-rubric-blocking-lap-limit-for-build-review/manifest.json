@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "slug": "per-rubric-blocking-lap-limit-for-build-review",
+  "artifacts": [
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/per-rubric-blocking-lap-limit-for-build-review.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-08-29-mixed-build-review-laps-preserve-content-adjudication.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-10-19-build-review-finding-severity-advisory-threshold.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/per-rubric-blocking-lap-limit-for-build-review.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/per-rubric-blocking-lap-limit-for-build-review.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/per-rubric-blocking-lap-limit-for-build-review.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/per-rubric-blocking-lap-limit-for-build-review.md"
+    }
+  ]
+}

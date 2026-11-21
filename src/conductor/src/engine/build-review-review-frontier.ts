@@ -1,32 +1,18 @@
-import { createHash } from "node:crypto";
+import { createHash } from 'node:crypto';
 
-import type { BuildReviewRubricId } from "../types/config.js";
-import type {
-  BuildReviewArtifactReviewScope,
-  BuildReviewReviewScope,
-  ReviewedHunk,
-} from "./build-review-artifacts.js";
-import type { BuildReviewLapId } from "./build-review-domain.js";
-import type {
-  BuildReviewCustomFinding,
-  BuildReviewFinding,
-} from "./build-review-domain.js";
-import type {
-  BuildReviewCandidateScopeResolutionIndeterminate,
-} from "./build-review-domain.js";
-import type { ChangedFileReference } from "./build-review-projections.js";
-import type { BuildReviewUnresolvedMarker } from "./build-review-inputs.js";
-import { buildReviewAdjudicationSourceId } from "./build-review-adjudication-context.js";
-import { canonicalizeBuildReviewFindingIdentity } from "./build-review-finding-identity.js";
-import {
-  mapBuildReviewFindingToHunks,
-  type BuildReviewFindingHunkTarget,
-} from "./build-review-finding-hunks.js";
-import type { RemediationCaseRow } from "./remediation-case-artifact.js";
-import {
-  currentBuildReviewSourceLinks,
-  type RemediationCaseRecord,
-} from "./remediation-case-store.js";
+import type { BuildReviewRubricId } from '../types/config.js';
+import type { BuildReviewArtifactReviewScope, BuildReviewReviewScope, ReviewedHunk } from './build-review-artifacts.js';
+import type { BuildReviewLapId } from './build-review-domain.js';
+import type { ResolvedBuildReviewRubricPolicy } from './resolved-config.js';
+import type { BuildReviewCustomFinding, BuildReviewFinding } from './build-review-domain.js';
+import type { BuildReviewCandidateScopeResolutionIndeterminate } from './build-review-domain.js';
+import type { ChangedFileReference } from './build-review-projections.js';
+import type { BuildReviewUnresolvedMarker } from './build-review-inputs.js';
+import { buildReviewAdjudicationSourceId } from './build-review-adjudication-context.js';
+import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
+import { mapBuildReviewFindingToHunks, type BuildReviewFindingHunkTarget } from './build-review-finding-hunks.js';
+import type { RemediationCaseRow } from './remediation-case-artifact.js';
+import { currentBuildReviewSourceLinks, type RemediationCaseRecord } from './remediation-case-store.js';
 
 /** Test-quality analysis facts that determine whether a prior lap is reusable. */
 export interface BuildReviewTestScopePolicyIdentity {
@@ -53,6 +39,16 @@ export interface BuildReviewPolicyIdentityInputs {
 }
 
 /**
+ * The declaration part of a rubric's lap-scope identity. `max_blocking_laps`
+ * is applied after judgement (adr-2026-10-19 D8), so it is omitted: declaring
+ * or changing it never resets a rubric's delta scope.
+ */
+export function buildReviewScopeDeclarationFingerprint(policy: ResolvedBuildReviewRubricPolicy): string {
+  const { max_blocking_laps: _appliedAfterJudgement, ...judgedPolicy } = policy;
+  return `sha256:${createHash('sha256').update(JSON.stringify(judgedPolicy)).digest('hex')}`;
+}
+
+/**
  * Canonical, path-free identity for the policy governing one rubric's lap.
  *
  * This is intentionally narrower than a semantic cache key: per-lap review
@@ -72,12 +68,14 @@ export function buildReviewPolicyIdentity(
     provider: inputs.provider,
     model: inputs.model,
     effort: inputs.effort,
-    ...(rubric === "testQuality" ? {
-      testScopeAnalysisVersion: inputs.testScope?.analysisVersion ?? null,
-      testScopeBindingIdentity: inputs.testScope?.bindingIdentity ?? null,
-    } : {}),
+    ...(rubric === 'testQuality'
+      ? {
+          testScopeAnalysisVersion: inputs.testScope?.analysisVersion ?? null,
+          testScopeBindingIdentity: inputs.testScope?.bindingIdentity ?? null,
+        }
+      : {}),
   };
-  return `sha256:${createHash("sha256").update(JSON.stringify(canonical)).digest("hex")}`;
+  return `sha256:${createHash('sha256').update(JSON.stringify(canonical)).digest('hex')}`;
 }
 
 /** One readable or unreadable branch-artifact scope from an earlier lap. */
@@ -103,7 +101,7 @@ export interface DecideBuildReviewReviewScopeInput {
 function isReadableReviewScope(
   reviewScope: BuildReviewArtifactReviewScope | undefined,
 ): reviewScope is BuildReviewReviewScope {
-  return reviewScope !== undefined && !("kind" in reviewScope);
+  return reviewScope !== undefined && !('kind' in reviewScope);
 }
 
 function currentHunks(changedFiles: readonly ChangedFileReference[]): readonly ReviewedHunk[] {
@@ -129,43 +127,49 @@ export function decideBuildReviewReviewScope(
   input: DecideBuildReviewReviewScopeInput,
 ): BuildReviewReviewScope | undefined {
   const reviewedHunks = currentHunks(input.changedFiles);
-  const readablePriorLaps = input.priorLaps.filter((lap) => isReadableReviewScope(lap.reviewScope)) as readonly (BuildReviewReviewScopePriorLap & { readonly reviewScope: BuildReviewReviewScope })[];
+  const readablePriorLaps = input.priorLaps.filter((lap) =>
+    isReadableReviewScope(lap.reviewScope),
+  ) as readonly (BuildReviewReviewScopePriorLap & { readonly reviewScope: BuildReviewReviewScope })[];
   // A retry at the same lap is a replay, not new evidence.  Keeping the
   // original record also makes cache recovery and disposition-only rejoin
   // idempotent.
-  const currentRecord = readablePriorLaps.find((lap) =>
-    lap.lapId === input.lapId && lap.reviewScope.mergeBase === input.mergeBase && lap.reviewScope.policyIdentity === input.policyIdentity,
+  const currentRecord = readablePriorLaps.find(
+    (lap) =>
+      lap.lapId === input.lapId &&
+      lap.reviewScope.mergeBase === input.mergeBase &&
+      lap.reviewScope.policyIdentity === input.policyIdentity,
   );
   if (currentRecord !== undefined) return currentRecord.reviewScope;
   const latestReadable = readablePriorLaps.reduce<(typeof readablePriorLaps)[number] | undefined>(
-    (latest, lap) => latest === undefined || lap.reviewScope.sequence > latest.reviewScope.sequence ? lap : latest,
+    (latest, lap) => (latest === undefined || lap.reviewScope.sequence > latest.reviewScope.sequence ? lap : latest),
     undefined,
   );
   const sequence = latestReadable === undefined ? 1 : latestReadable.reviewScope.sequence + 1;
-  const accountedUnreadableLapIds = new Set(
-    readablePriorLaps.flatMap((lap) => lap.reviewScope.unreadableLapIds),
-  );
+  const accountedUnreadableLapIds = new Set(readablePriorLaps.flatMap((lap) => lap.reviewScope.unreadableLapIds));
   const unreadableLapIds = input.priorLaps
-    .filter((lap) => lap.reviewScope !== undefined && "kind" in lap.reviewScope && !accountedUnreadableLapIds.has(lap.lapId))
+    .filter(
+      (lap) => lap.reviewScope !== undefined && 'kind' in lap.reviewScope && !accountedUnreadableLapIds.has(lap.lapId),
+    )
     .map((lap) => lap.lapId);
-  const reason = unreadableLapIds.length > 0
-    ? "record-unreadable"
-    : latestReadable === undefined
-      ? "first-lap"
-      : latestReadable.reviewScope.mergeBase !== input.mergeBase
-        ? "merge-base-changed"
-        : latestReadable.reviewScope.policyIdentity !== input.policyIdentity
-          ? "version-changed"
-          : input.openSourceUnmapped
-            ? "open-source-unmapped"
-            : undefined;
+  const reason =
+    unreadableLapIds.length > 0
+      ? 'record-unreadable'
+      : latestReadable === undefined
+        ? 'first-lap'
+        : latestReadable.reviewScope.mergeBase !== input.mergeBase
+          ? 'merge-base-changed'
+          : latestReadable.reviewScope.policyIdentity !== input.policyIdentity
+            ? 'version-changed'
+            : input.openSourceUnmapped
+              ? 'open-source-unmapped'
+              : undefined;
 
   if (reason === undefined) {
     const settled = new Set((input.settledHunks ?? []).map(hunkKey));
     const deltaHunks = reviewedHunks.filter((hunk) => !settled.has(hunkKey(hunk)));
     return {
-      mode: "delta",
-      reason: "delta",
+      mode: 'delta',
+      reason: 'delta',
       sequence,
       unreadableLapIds: [],
       mergeBase: input.mergeBase,
@@ -182,10 +186,10 @@ export function decideBuildReviewReviewScope(
   }
 
   return {
-    mode: "full",
+    mode: 'full',
     reason,
     sequence,
-    unreadableLapIds: reason === "record-unreadable" ? unreadableLapIds : [],
+    unreadableLapIds: reason === 'record-unreadable' ? unreadableLapIds : [],
     mergeBase: input.mergeBase,
     headSha: input.headSha,
     policyIdentity: input.policyIdentity,
@@ -196,7 +200,7 @@ export function decideBuildReviewReviewScope(
   };
 }
 
-export { mapBuildReviewFindingToHunks, type BuildReviewFindingHunkTarget } from "./build-review-finding-hunks.js";
+export { mapBuildReviewFindingToHunks, type BuildReviewFindingHunkTarget } from './build-review-finding-hunks.js';
 
 function hunkKey(hunk: ReviewedHunk): string {
   return `${hunk.path}\u0000${hunk.contentHash}`;
@@ -220,16 +224,15 @@ export interface BuildReviewLiveActSourceIds {
  * failed or reserved action is likewise still a live obligation.  Resolve
  * source ownership first so superseded case links cannot revive old risk.
  */
-export function buildReviewLiveActSourceIds(
-  cases: readonly RemediationCaseRecord[],
-): BuildReviewLiveActSourceIds {
+export function buildReviewLiveActSourceIds(cases: readonly RemediationCaseRecord[]): BuildReviewLiveActSourceIds {
   const unappliedLiveSourceIds = new Set<string>();
   const appliedLiveSourceIds = new Set<string>();
   for (const [sourceId, { record }] of currentBuildReviewSourceLinks(cases)) {
-    if (record.disposition !== "act") continue;
-    const applied = record.effect.kind === "action" && record.effect.status === "applied";
-    const live = record.resolution === "open" ||
-      (record.effect.kind === "action" && (record.effect.status === "failed" || record.effect.status === "reserved"));
+    if (record.disposition !== 'act') continue;
+    const applied = record.effect.kind === 'action' && record.effect.status === 'applied';
+    const live =
+      record.resolution === 'open' ||
+      (record.effect.kind === 'action' && (record.effect.status === 'failed' || record.effect.status === 'reserved'));
     if (!live) continue;
     if (applied) appliedLiveSourceIds.add(sourceId);
     else unappliedLiveSourceIds.add(sourceId);
@@ -247,26 +250,29 @@ export function buildReviewTestScopeUnknownSources(input: {
   readonly indeterminateCandidates: readonly BuildReviewCandidateScopeResolutionIndeterminate[];
 }): readonly BuildReviewSettledHunkFinding[] {
   const markerSources = input.unresolvedMarkers.map((marker) => {
-    const sourceId = `testQuality:unknown-marker:${createHash("sha256").update(`${marker.selector}\u0000${marker.reference}`).digest("hex")}`;
+    const sourceId = `testQuality:unknown-marker:${createHash('sha256').update(`${marker.selector}\u0000${marker.reference}`).digest('hex')}`;
     return {
       sourceId,
       finding: {
-        concernKind: "test-scope-unresolved",
+        concernKind: 'test-scope-unresolved',
         summary: `Unresolved test marker: ${marker.reference}`,
         evidenceLocations: [],
-        anchor: { rubric: "testQuality" as const, locus: { path: marker.selector, contentHash: sourceId, display: marker.reference } },
+        anchor: {
+          rubric: 'testQuality' as const,
+          locus: { path: marker.selector, contentHash: sourceId, display: marker.reference },
+        },
       },
     } satisfies BuildReviewSettledHunkFinding;
   });
   const candidateSources = input.indeterminateCandidates.map((candidate) => {
-    const sourceId = `testQuality:unknown-candidate:${createHash("sha256").update(candidate.candidateId).digest("hex")}`;
+    const sourceId = `testQuality:unknown-candidate:${createHash('sha256').update(candidate.candidateId).digest('hex')}`;
     return {
       sourceId,
       finding: {
-        concernKind: "test-scope-indeterminate",
+        concernKind: 'test-scope-indeterminate',
         summary: `Indeterminate test candidate: ${candidate.candidateId}`,
         evidenceLocations: [],
-        anchor: { rubric: "testQuality" as const, locus: candidate.sourceRegion },
+        anchor: { rubric: 'testQuality' as const, locus: candidate.sourceRegion },
       },
     } satisfies BuildReviewSettledHunkFinding;
   });
@@ -283,10 +289,14 @@ export function hasUnappliedLiveSourceWithoutCurrentHunk(input: {
   readonly unappliedLiveSourceIds: ReadonlySet<string>;
   readonly changedFiles: readonly ChangedFileReference[];
 }): boolean {
-  return input.sources.some((source) => input.unappliedLiveSourceIds.has(source.sourceId) &&
-    mapBuildReviewFindingToHunks(source.finding, input.changedFiles).some((target) =>
-      target.kind === "file" && !(input.changedFiles.find((file) => file.path === target.path)?.hunks.length),
-    ));
+  return input.sources.some(
+    (source) =>
+      input.unappliedLiveSourceIds.has(source.sourceId) &&
+      mapBuildReviewFindingToHunks(source.finding, input.changedFiles).some(
+        (target) =>
+          target.kind === 'file' && !input.changedFiles.find((file) => file.path === target.path)?.hunks.length,
+      ),
+  );
 }
 
 /** Evidence from one policy-compatible, successfully judged rubric lap. */
@@ -326,8 +336,8 @@ export interface SettledBuildReviewHunksInput {
  */
 export function settledBuildReviewHunks(input: SettledBuildReviewHunksInput): readonly ReviewedHunk[] {
   const current = currentHunks(input.changedFiles);
-  const eligible = input.laps.filter((lap) =>
-    lap.reviewScope.mergeBase === input.mergeBase && lap.reviewScope.policyIdentity === input.policyIdentity,
+  const eligible = input.laps.filter(
+    (lap) => lap.reviewScope.mergeBase === input.mergeBase && lap.reviewScope.policyIdentity === input.policyIdentity,
   );
   const nonBlocking = input.nonBlockingSourceIds ?? new Set<string>();
   const resolvedAppliedAct = input.resolvedAppliedActSourceIds ?? new Set<string>();
@@ -337,19 +347,27 @@ export function settledBuildReviewHunks(input: SettledBuildReviewHunksInput): re
   const unknownSources = input.unknownSources ?? [];
   return current.filter((hunk) => {
     const key = hunkKey(hunk);
-    const reviewed = eligible.some((lap) => lap.reviewScope.reviewedHunks.some((candidate) => hunkKey(candidate) === key));
+    const reviewed = eligible.some((lap) =>
+      lap.reviewScope.reviewedHunks.some((candidate) => hunkKey(candidate) === key),
+    );
     if (!reviewed) return false;
-    if (unknownSources.some((source) => unknown.has(source.sourceId) &&
-      mapBuildReviewFindingToHunks(source.finding, input.changedFiles).some((target) =>
-        target.kind === "hunks"
-          ? target.hunks.some((candidate) => hunkKey(candidate) === key)
-          : target.path === hunk.path,
-      ))) return false;
+    if (
+      unknownSources.some(
+        (source) =>
+          unknown.has(source.sourceId) &&
+          mapBuildReviewFindingToHunks(source.finding, input.changedFiles).some((target) =>
+            target.kind === 'hunks'
+              ? target.hunks.some((candidate) => hunkKey(candidate) === key)
+              : target.path === hunk.path,
+          ),
+      )
+    )
+      return false;
     for (const lap of eligible) {
       for (const source of lap.findings) {
         const targets = mapBuildReviewFindingToHunks(source.finding, input.changedFiles);
         const mapsHere = targets.some((target) =>
-          target.kind === "hunks"
+          target.kind === 'hunks'
             ? target.hunks.some((candidate) => hunkKey(candidate) === key)
             : target.path === hunk.path,
         );
@@ -358,15 +376,20 @@ export function settledBuildReviewHunks(input: SettledBuildReviewHunksInput): re
         if (appliedLive.has(source.sourceId)) {
           // A repair can rewrite its old anchor. Its file fallback must not
           // re-open unrelated hunks; only a concrete current anchor stays live.
-          if (targets.some((target) => target.kind === "hunks" &&
-            target.hunks.some((candidate) => hunkKey(candidate) === key))) return false;
+          if (
+            targets.some(
+              (target) => target.kind === 'hunks' && target.hunks.some((candidate) => hunkKey(candidate) === key),
+            )
+          )
+            return false;
           continue;
         }
         // Scope records predate the adjudication source-id prefix. A rubric
         // already namespaces its own record, so preserve those durable bare
         // finding IDs while accepting newer fully-qualified values too.
         const bareFindingId = source.sourceId.slice(source.sourceId.indexOf(':') + 1);
-        const outOfDelta = lap.reviewScope.outOfDeltaSourceIds.includes(source.sourceId) ||
+        const outOfDelta =
+          lap.reviewScope.outOfDeltaSourceIds.includes(source.sourceId) ||
           lap.reviewScope.outOfDeltaSourceIds.includes(bareFindingId);
         if (!nonBlocking.has(source.sourceId) && !resolvedAppliedAct.has(source.sourceId) && !outOfDelta) return false;
       }
@@ -409,21 +432,35 @@ function predecessorSourcePaths(
   };
   for (const artifact of artifacts) {
     const result = artifact.result;
-    if (result.kind !== "judged" || result.findings === undefined) continue;
-    if (artifact.rubric === "testQuality" || artifact.rubric === "security" || artifact.rubric === "implementationQuality") {
+    if (result.kind !== 'judged' || result.findings === undefined) continue;
+    if (
+      artifact.rubric === 'testQuality' ||
+      artifact.rubric === 'security' ||
+      artifact.rubric === 'implementationQuality'
+    ) {
       for (const finding of result.findings) {
         const identity = canonicalizeBuildReviewFindingIdentity({
-          ...(finding as Record<string, unknown>), rubric: artifact.rubric, contractVersion: result.contractVersion,
+          ...(finding as Record<string, unknown>),
+          rubric: artifact.rubric,
+          contractVersion: result.contractVersion,
         });
-        if (identity) add(buildReviewAdjudicationSourceId({ rubric: artifact.rubric, findingId: identity.id }), identity.canonicalPayload.anchor.locus.path);
+        if (identity)
+          add(
+            buildReviewAdjudicationSourceId({ rubric: artifact.rubric, findingId: identity.id }),
+            identity.canonicalPayload.anchor.locus.path,
+          );
       }
       continue;
     }
     for (const finding of result.findings) {
-      const source = finding as { readonly identity?: { readonly id?: unknown }; readonly sourceRegions?: readonly { readonly path?: unknown }[] };
-      if (typeof source.identity?.id !== "string") continue;
+      const source = finding as {
+        readonly identity?: { readonly id?: unknown };
+        readonly sourceRegions?: readonly { readonly path?: unknown }[];
+      };
+      if (typeof source.identity?.id !== 'string') continue;
       for (const region of source.sourceRegions ?? []) {
-        if (typeof region.path === "string") add(buildReviewAdjudicationSourceId({ rubric: artifact.rubric, findingId: source.identity.id }), region.path);
+        if (typeof region.path === 'string')
+          add(buildReviewAdjudicationSourceId({ rubric: artifact.rubric, findingId: source.identity.id }), region.path);
       }
     }
   }
@@ -438,22 +475,32 @@ function predecessorSourcePaths(
 export function buildReviewProvenanceCandidates(
   input: BuildReviewProvenanceCandidatesInput,
 ): readonly RemediationCaseRecord[] {
-  if (input.caseRow.disposition !== "act" || input.caseRow.existingCaseId !== undefined) return [];
+  if (input.caseRow.disposition !== 'act' || input.caseRow.existingCaseId !== undefined) return [];
   const sourceLinks = currentBuildReviewSourceLinks(input.cases);
-  if (input.caseSources.some(({ sourceId }) => {
-    const owner = sourceLinks.get(sourceId)?.record;
-    return owner?.resolution === "resolved" && owner.disposition === "act";
-  })) return [];
+  if (
+    input.caseSources.some(({ sourceId }) => {
+      const owner = sourceLinks.get(sourceId)?.record;
+      return owner?.resolution === 'resolved' && owner.disposition === 'act';
+    })
+  )
+    return [];
 
   const delta = new Set(input.deltaHunks.map(hunkKey));
-  const deltaPaths = new Set(input.caseSources.flatMap(({ targets }) => targets.flatMap((target) =>
-    target.kind === "hunks" ? target.hunks.filter((hunk) => delta.has(hunkKey(hunk))).map((hunk) => hunk.path) : [],
-  )));
+  const deltaPaths = new Set(
+    input.caseSources.flatMap(({ targets }) =>
+      targets.flatMap((target) =>
+        target.kind === 'hunks' ? target.hunks.filter((hunk) => delta.has(hunkKey(hunk))).map((hunk) => hunk.path) : [],
+      ),
+    ),
+  );
   if (deltaPaths.size === 0) return [];
 
   const predecessor = predecessorSourcePaths(input.predecessorArtifacts);
   return input.cases.filter((record) => {
-    if (record.disposition !== "act" || record.effect.kind !== "action" || record.effect.status !== "applied") return false;
-    return record.sources.some(({ sourceId }) => [...(predecessor.get(sourceId) ?? [])].some((path) => deltaPaths.has(path)));
+    if (record.disposition !== 'act' || record.effect.kind !== 'action' || record.effect.status !== 'applied')
+      return false;
+    return record.sources.some(({ sourceId }) =>
+      [...(predecessor.get(sourceId) ?? [])].some((path) => deltaPaths.has(path)),
+    );
   });
 }

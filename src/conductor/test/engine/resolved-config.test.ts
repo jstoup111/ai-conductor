@@ -428,6 +428,7 @@ describe('engine/resolved-config', () => {
             max_retries: 4,
             escalate: true,
             min_confidence: 0,
+            max_blocking_laps: 2,
           },
         },
       });

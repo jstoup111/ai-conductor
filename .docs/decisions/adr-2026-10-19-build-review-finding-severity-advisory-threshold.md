@@ -96,6 +96,11 @@ Option A. Each decision below states how it extends the existing suppression arc
 > is not decided here; reintroducing it would need its own decision. The severity values, their order,
 > reviewer ownership of the value, and its exclusion from identity are unchanged.
 
+> **Amended 2026-11-21 by per-rubric-blocking-lap-limit-for-build-review:** Severity is no longer the only route to
+> advisory. Under D8 a finding of any severity, `critical` included, is advisory once its rubric has
+> used its blocking laps. The four values, their order, reviewer ownership of the value, and its
+> exclusion from identity are unchanged.
+
 ### D2 — The contracts bump to built-in v4 and custom v2, and built-in finding ids re-key once
 
 - **Fresh results.** A fresh built-in rubric result must declare `contractVersion: v4`. A fresh
@@ -141,6 +146,13 @@ Option A. Each decision below states how it extends the existing suppression arc
 
 > **Amended 2026-10-24 by #3294:** Both keys are still applied after judgement, and neither enters the cache fingerprint. They now also feed the engine's pre-projection scope decision: a finding below a threshold is non-blocking, so its hunk can settle. Lowering or removing a threshold unsettles that hunk on the next lap. A threshold change can therefore change a later lap's delta and its projection digest (adr-2026-10-24-lap-monotonic-build-review-scope D2).
 
+> **Amended 2026-11-21 by per-rubric-blocking-lap-limit-for-build-review:** `min_severity` is no longer the only per-rubric key that
+> makes a finding non-blocking. D8 adds `max_blocking_laps` beside it, resolved through the same
+> threshold helper and likewise kept out of the cache fingerprint. The rule that an undeclared
+> threshold leaves behavior identical to today now holds for `min_severity` alone:
+> `implementationQuality` has a default blocking-lap limit of 2, so an undeclared limit is not legacy
+> behavior for that rubric.
+
 ### D4 — A below-threshold finding is advisory at the effective verdict and never reaches remediate
 
 - **Order.** Both effective reducers, built-in and custom, classify each finding in this order:
@@ -170,6 +182,15 @@ Option A. Each decision below states how it extends the existing suppression arc
   2026-10-23.
 
 > **Amended 2026-10-24 by #3294:** Both reducers insert `outOfDelta` after settled or carried and before declared replication. Out-of-delta findings follow the advisory rules here: they are excluded from live sources, never judged, routed, kicked back or charged, never accepted risk, and outside the absence rule. They are recorded in the lap's `reviewScope.outOfDeltaSourceIds`, and `build_review_outer_verdict` carries their count (adr-2026-10-24-lap-monotonic-build-review-scope D6).
+
+> **Amended 2026-11-21 by per-rubric-blocking-lap-limit-for-build-review:** Both reducers add `lap-limited` after `advisory`
+> and before `unresolved`. A finding that would otherwise be `unresolved`, from a rubric that the lap
+> aggregate names as past its blocking-lap limit (D8), joins the advisory bucket and follows every rule
+> above: it is excluded from live sources, never judged, routed, kicked back or charged, never accepted
+> risk, and outside the absence rule, so an open action case whose only sources are lap-limited retires
+> by absence on a mechanically healthy lap. Accepted, settled, out-of-delta, declared-replication,
+> suppressed and below-threshold findings keep their earlier buckets. Advisory therefore depends on
+> the feature's review history as well as on severity, which D4 previously excluded.
 
 ### D5 — Every advisory finding is durable and visible
 
@@ -239,6 +260,51 @@ Option A. Each decision below states how it extends the existing suppression arc
   - The mixed-laps ADR's D5.1 list of finalized dispositions.
   - Decision 4 of `adr-2026-10-20-operator-acceptance-is-durable-case-state`: the same function also
     settles advisory sources, conditioned on the thresholds it now requires.
+
+> **Amended 2026-11-21 by per-rubric-blocking-lap-limit-for-build-review:** A lap-limited finding (D8) never reaches remediate, so it
+> never creates an `advisory` case and this predicate is unchanged. If the operator raises or removes a
+> rubric's limit, that rubric's findings are live again on the next lap, as when a threshold is lowered.
+
+> **Amended 2026-11-21 by per-rubric-blocking-lap-limit-for-build-review:** Self-host builds showed
+> implementationQuality re-raising design-level findings lap after lap while every other rubric had
+> settled, so features ran until the kickback cap or an operator stopped them. The operator decided
+> that a rubric may block only a bounded number of laps, with a default of 2 for implementationQuality
+> and an explicit per-rubric override. This amendment adds the decisions below.
+>
+> **D8 — A rubric may block a bounded number of laps; past the bound its findings are advisory.**
+> - **Key.** `build_review.rubrics.<id>.max_blocking_laps` and
+>   `build_review.custom_rubrics.<id>.max_blocking_laps` take a non-negative integer. Omitted means the
+>   rubric's default, and `0` means unlimited. Config validation rejects any other value.
+> - **Defaults.** `implementationQuality` defaults to 2. Every other built-in rubric (`testQuality`,
+>   `security`) and every custom rubric defaults to unlimited. The default applies to every project.
+> - **Blocking lap.** A lap is a blocking lap for a rubric when that lap's effective verdict carries at
+>   least one `unresolved` finding from it. Laps are identified by lap id, so re-evaluating one lap never
+>   counts it twice. Counts are kept per feature, and per child for a stacked feature.
+> - **Decision point.** When a lap is joined, a rubric with limit N is lap-limited for that lap when it
+>   has already blocked N laps other than this one. The engine stamps the lap-limited rubrics, each with
+>   its count and limit, into that lap's aggregate as `blockingLapLimits`. Every later reader of the lap
+>   (the gate predicate, the adjudication coordinator, the CLI) derives the same effective verdict from
+>   the aggregate without re-reading the count.
+> - **Effect.** The reducers classify a lap-limited rubric's findings as the D4 amendment of this date
+>   states. Nothing reaches remediate, so lap-limited findings never produce a semantic repeat or
+>   recurrence halt.
+> - **Scope.** The key is applied after judgement. It enters neither the rubric cache fingerprint nor
+>   the lap-scope policy identity, so declaring it reuses cached judgements and keeps delta scope.
+>
+> **D9 — The blocking-lap count is durable state; a demotion is reported on the spine.**
+> - **State.** `.pipeline/engine-state.json` holds `buildReviewBlockingLaps`, keyed by scope (`feature`
+>   or `child-<k>`), then by rubric, listing the lap ids that rubric blocked. The build_review step adds
+>   the current lap id after the effective verdict resolves and before the pass/fail fork. The record is
+>   an engine-owned budget read by name, so it is state under the event-spine exception C. An absent or
+>   unreadable record counts as no blocking laps, so the rubric keeps blocking. A write failure fails the
+>   step with a named reason, as a suppression-history write failure does.
+> - **Event.** `build_review_outer_verdict` gains an optional `blockingLapLimits` list of
+>   `{rubric, blockingLaps, limit, findingIds}`, one entry per lap-limited rubric, and the daemon log
+>   renders one line per entry. No new event type, sink entry or sidecar is added.
+> - **CLI.** `build-review findings` lists a lap-limited finding with origin `lap-limit`.
+> - **No new durable advisory history.** Lap-limited findings are not written to the case store's
+>   suppression entries, so the store schema and version are unchanged. The lap aggregate and the
+>   event carry them.
 
 ## Assumptions
 

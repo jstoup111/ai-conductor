@@ -265,6 +265,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'build_review.rubrics.escalate': consumer(RESOLVED_CONFIG),
   'build_review.rubrics.min_confidence': consumer(RESOLVED_CONFIG),
   'build_review.rubrics.min_severity': consumer(RESOLVED_CONFIG),
+  'build_review.rubrics.max_blocking_laps': consumer(RESOLVED_CONFIG),
   'build_review.custom_rubrics': consumer(RESOLVED_CONFIG),
   'build_review.custom_rubrics.timeout_seconds': consumer(RESOLVED_CONFIG),
   'build_review.custom_rubrics.skill': consumer(RESOLVED_CONFIG),
@@ -281,6 +282,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'build_review.custom_rubrics.escalate': consumer(RESOLVED_CONFIG),
   'build_review.custom_rubrics.min_confidence': consumer(RESOLVED_CONFIG),
   'build_review.custom_rubrics.min_severity': consumer(RESOLVED_CONFIG),
+  'build_review.custom_rubrics.max_blocking_laps': consumer(RESOLVED_CONFIG),
 
   'feature_applicability.enabled': consumer(['src/conductor/src/engine/engineer/land-spec.ts', CONDUCTOR]),
 
