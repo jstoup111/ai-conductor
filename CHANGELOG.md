@@ -109,6 +109,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The pipeline, tdd, remediate, prd-audit and as-built skills are 3,346 words shorter (pipeline −32%), with engine-internal narration and contradictory trailer and task-reset instructions removed. ([implementation PR #3614](https://github.com/jstoup111/ai-conductor/pull/3614)).
 - Daemon features now always run in isolated child executors pinned to the engine build available when claimed. ([implementation PR #3665](https://github.com/jstoup111/ai-conductor/pull/3665)).
 - build_review deferrals no longer halt "remediation effect is not finalized". Filing a GitHub issue for each deferred finding is now opt-in via `build_review.fileDeferredFindingIssues` (default false). When the option is off, deferrals are recorded and listed in the PR's "Deferred findings" section. When it is on, they are filed, and missing issue-creation authority fails with a named cause. ([implementation PR #3734](https://github.com/jstoup111/ai-conductor/pull/3734)).
+- build_review rubrics now have a per-rubric `max_blocking_laps` budget (default 2 for implementationQuality, unlimited for every other rubric, 0 = unlimited); once a rubric has blocked that many review laps, its later findings are reported as advisory instead of failing the gate, and the demotion is shown on the outer verdict event, the daemon log, and `build-review findings`. ([implementation PR #3736](https://github.com/jstoup111/ai-conductor/pull/3736)).
 
 ### Removed
 
