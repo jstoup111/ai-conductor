@@ -252,7 +252,9 @@ named smoke tests (`test/smoke/**` or `*.smoke.test.*`) may use the real third p
 are opt-in and excluded from the default test command and CI aggregate suite.
 
 The engine-native `test_suite` step owns full-suite or aggregate suite execution and evidence,
-as selected by project configuration. Other skills inspect existing evidence and run only minimal
+as selected by project configuration. A project may also configure `test_suite.pre_check`: bounded static
+checks the engine itself runs before BUILD completes, returning any failure to BUILD. A pre-check is
+not aggregate proof; it writes no suite evidence and never satisfies `test_suite`. Other skills inspect existing evidence and run only minimal
 targeted tests when needed to implement, repair, or reproduce changed behavior; they never
 launch full-suite or aggregate runs. Missing or stale suite proof returns to `test_suite`.
 BUILD skills record uncertain affected-test scope and defer aggregate proof to that gate;

@@ -223,6 +223,11 @@ run it now. A type error returns straight to GREEN — do NOT dispatch the domai
 advance to COMMIT) against code that does not type-check. Skip silently for stacks with no compile
 step (e.g. Rails — the linter at COMMIT covers static checks there).
 
+When the project configures `test_suite.pre_check`, run those commands here instead: they are the
+project's static checks, and the engine runs the same commands before BUILD completes, returning any
+failure to BUILD. They are a bounded completion check, not the aggregate suite, which stays with
+`test_suite`.
+
 **Agent:** Domain Reviewer (see `agents/domain-reviewer.md` for full criteria)
 **Goal:** Review the implementation for domain integrity — primitive obsession, leaky
 abstractions, missing domain types, naming, and **derivation-reached-at-every-call-site** (every
@@ -236,7 +241,8 @@ inputs without failing open or closed). Has veto authority to send back to GREEN
 1. Scoped affected-test set passes (the engine's dedicated aggregate gate and CI own broad verification, not each task)
 2. Linter passes (if tech-context specifies one — e.g., `bundle exec standardrb` for Rails)
 3. Type-check passes (if tech-context specifies a type-checker — e.g., `tsc --noEmit` /
-   `npm run typecheck` for TypeScript). Already run as the Phase 4 pre-check; re-confirm clean here.
+   `npm run typecheck` for TypeScript), or the configured `test_suite.pre_check` commands when set.
+   Already run as the Phase 4 pre-check; re-confirm clean here.
 4. Working tree is clean (no uncommitted changes outside this task)
 5. **Pre-diff sensitivity check** — for every NEW or CHANGED test in this task that claims to
    cover new or changed behavior: create a temporary detached worktree at the base commit (`git worktree add --detach «tmp» «base»`), copy only the new or changed test files into it, run them there, then remove that temporary worktree with `git worktree remove --force «tmp»`.

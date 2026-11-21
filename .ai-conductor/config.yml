@@ -169,6 +169,13 @@ test_suite:
       working_directory: .
   # The detached counterfactual checkout materializes this ignored dependency
   # installation at its root before the scoped command runs.
+  # BUILD completion pre-check (adr-2026-08-01 D11): the same static checks
+  # that lead `commands`, run by the engine before BUILD hands off so a format
+  # or type error returns to the builder instead of costing a test_suite or
+  # build_review lap. Not aggregate proof; `commands` still owns the suite.
+  pre_check:
+    - command: npm run format:check --silent && npm run typecheck --silent && npm run typecheck:test --silent
+      working_directory: src/conductor
   scoped_command: './node_modules/.bin/vitest run {selectors}'
   # `changed` mode: each BUILD-lap test_suite run executes only the tests
   # Vitest relates to files changed since the merge-base with origin/<default>
