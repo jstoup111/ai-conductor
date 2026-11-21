@@ -124,3 +124,33 @@ export async function recordBuildReviewBlockingLaps(
   });
   return result.ok ? { ok: true } : { ok: false, reason: `${result.kind}: ${result.message}` };
 }
+
+/** One lap-limited rubric and the findings this lap demoted because of it. */
+export interface BuildReviewLapLimitedFindings extends BuildReviewBlockingLapLimit {
+  readonly findingIds: readonly string[];
+}
+
+/**
+ * Attributes each advisory finding of a lap-limited rubric to that limit,
+ * leaving findings a severity threshold already made advisory to that origin.
+ */
+export function lapLimitedFindingsByRubric(
+  aggregate: BuildReviewAggregate,
+  effective: Pick<BuildReviewEffectiveVerdict, 'advisoryFindingIds'>,
+  thresholdAdvisories: readonly { readonly rubric: string; readonly findingId: string }[],
+): BuildReviewLapLimitedFindings[] {
+  const advisory = new Set(effective.advisoryFindingIds ?? []);
+  const claimed = new Set(thresholdAdvisories.map((entry) => `${entry.rubric}:${entry.findingId}`));
+  const sources = projectBuildReviewAggregateSources(aggregate) ?? [];
+  return (aggregate.blockingLapLimits ?? []).map((limit) => ({
+    ...limit,
+    findingIds: sources
+      .filter(
+        (source) =>
+          source.rubric === limit.rubric &&
+          advisory.has(source.findingId) &&
+          !claimed.has(`${source.rubric}:${source.findingId}`),
+      )
+      .map((source) => source.findingId),
+  }));
+}

@@ -224,7 +224,17 @@ import {
   joinBuildReviewRubricOutcomes,
   projectBuildReviewAggregateSources,
   type BuildReviewAggregate,
+  type BuildReviewBlockingLapLimit,
+  type BuildReviewEffectiveVerdict,
 } from './build-review-aggregate.js';
+import {
+  blockingBuildReviewRubrics,
+  buildReviewBlockingLapLimits,
+  lapLimitedBuildReviewRubrics,
+  lapLimitedFindingsByRubric,
+  readBuildReviewBlockingLaps,
+  recordBuildReviewBlockingLaps,
+} from './build-review-blocking-laps.js';
 import {
   buildReviewLiveActSourceIds,
   buildReviewPolicyIdentity,
@@ -4509,6 +4519,7 @@ export class DefaultStepRunner implements StepRunner {
             customResults,
             currentCustomRubrics: customEntries.map((entry) => entry.id),
           }),
+      blockingLapLimits: await this.lapLimitedBuildReviewRubricsFor(config, lapId, child),
     });
     const aggregatePath = join(effectivePipelineDir, 'build-review.json');
     const effective = await this.buildReviewEffectiveResolver(this.projectDir, aggregate, {
@@ -4637,6 +4648,8 @@ export class DefaultStepRunner implements StepRunner {
         output: `build_review suppression history persistence failed: ${persistedSuppressions.reason}`,
       };
     }
+    const blockingLapFailure = await this.recordBuildReviewBlockingLap(aggregate, effective.effective, child);
+    if (blockingLapFailure) return blockingLapFailure;
     if (
       infrastructureFailure?.reason === 'projection-oversized' &&
       effective.effective.uncoveredInfrastructureFailureRubrics.includes(infrastructureFailure.rubric)
@@ -5707,6 +5720,7 @@ export class DefaultStepRunner implements StepRunner {
       results: { testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' } },
       customResults: input.customResults,
       currentCustomRubrics: input.currentCustomRubrics,
+      blockingLapLimits: await this.lapLimitedBuildReviewRubricsFor(input.config, input.lapId, input.child),
     });
     // An infrastructure-only lap belongs to the mechanical retry lane: below
     // the allowance no aggregate, effective resolution, or verdict may exist,
@@ -5818,6 +5832,8 @@ export class DefaultStepRunner implements StepRunner {
         output: `build_review suppression history persistence failed: ${persistedSuppressions.reason}`,
       };
     }
+    const blockingLapFailure = await this.recordBuildReviewBlockingLap(aggregate, effective.effective, input.child);
+    if (blockingLapFailure) return blockingLapFailure;
     if (effective.effective.verdict === 'PASS') await this.stampBuildReviewVerdict(input.child);
     return {
       success: effective.effective.verdict === 'PASS' || hasFinding,
@@ -5840,6 +5856,36 @@ export class DefaultStepRunner implements StepRunner {
         verdict: member.result.verdict,
       });
     }
+  }
+
+  /** Rubrics that already blocked their limit of other laps (adr-2026-10-19 D8). */
+  private async lapLimitedBuildReviewRubricsFor(
+    config: ReturnType<typeof resolveBuildReviewConfig>,
+    lapId: BuildReviewLapId,
+    child: import('./child-context.js').ChildId | undefined,
+  ): Promise<BuildReviewBlockingLapLimit[]> {
+    return lapLimitedBuildReviewRubrics({
+      limits: buildReviewBlockingLapLimits(config),
+      laps: await readBuildReviewBlockingLaps(this.projectDir, child),
+      lapId,
+    });
+  }
+
+  /** Counts this lap against every rubric it blocked; an unwritable count fails the step (D9). */
+  private async recordBuildReviewBlockingLap(
+    aggregate: BuildReviewAggregate,
+    effective: BuildReviewEffectiveVerdict,
+    child: import('./child-context.js').ChildId | undefined,
+  ): Promise<StepRunResult | undefined> {
+    const recorded = await recordBuildReviewBlockingLaps(
+      this.projectDir,
+      child,
+      aggregate.lapId,
+      blockingBuildReviewRubrics(aggregate, effective),
+    );
+    return recorded.ok
+      ? undefined
+      : { success: false, output: `build_review blocking-lap persistence failed: ${recorded.reason}` };
   }
 
   /** Shares the verdict occurrence and suppression projection across lap shapes. */
@@ -5869,6 +5915,7 @@ export class DefaultStepRunner implements StepRunner {
           ),
         })
       : [];
+    const lapLimits = effective.ok ? lapLimitedFindingsByRubric(aggregate, effective.effective, advisoryEntries) : [];
     await this.events?.emit({
       type: 'build_review_outer_verdict',
       lapId,
@@ -5891,6 +5938,7 @@ export class DefaultStepRunner implements StepRunner {
       ...(effective.ok && (effective.effective.outOfDeltaFindingIds?.length ?? 0) > 0
         ? { outOfDeltaCount: effective.effective.outOfDeltaFindingIds!.length }
         : {}),
+      ...(lapLimits.length > 0 ? { blockingLapLimits: lapLimits } : {}),
     });
     return [...suppressionEntries, ...advisoryEntries];
   }

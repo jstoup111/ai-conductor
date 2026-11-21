@@ -978,6 +978,13 @@ type ConductorEventBody =
       }[];
       /** Scope bookkeeping: visible, never accepted risk or remediation work. */
       outOfDeltaCount?: number;
+      /** Rubrics past their blocking-lap limit on this lap, with the findings made advisory. */
+      blockingLapLimits?: readonly {
+        rubric: string;
+        blockingLaps: number;
+        limit: number;
+        findingIds: readonly string[];
+      }[];
     }
   | {
       /** A post-join remediation judgement is about to run for one build-review lap. */
