@@ -104,9 +104,16 @@ async function seedAllArtifactsExceptTaskStatus(dir: string): Promise<void> {
     ['.docs/coherence/2026-07-12-plan.md', 'x'],
     ['.docs/architecture/arch.md', 'x'],
     ['.docs/decisions/adr-001.md', 'x'],
-    ['.pipeline/coverage-binding.json', JSON.stringify({
-      version: 1, slug: 'progress-halt', runId: 'test-run', status: 'disabled', entries: [],
-    })],
+    [
+      '.pipeline/coverage-binding.json',
+      JSON.stringify({
+        version: 1,
+        slug: 'progress-halt',
+        runId: 'test-run',
+        status: 'disabled',
+        entries: [],
+      }),
+    ],
     ['spec/acceptance/feature_spec.rb', 'x'],
     ['.pipeline/acceptance-specs-red.json', RED_EVIDENCE_JSON],
   ];
@@ -148,7 +155,12 @@ async function writeTaskStatus(dir: string, completed: number, total: number): P
   }
   await writeFile(
     join(dir, '.pipeline/task-evidence.json'),
-    JSON.stringify({ evidenceStamps: stamps, noEvidenceAttempts: 0, migrationGrandfather: [], ...(lastResolvedCount !== undefined && { lastResolvedCount }) }),
+    JSON.stringify({
+      evidenceStamps: stamps,
+      noEvidenceAttempts: 0,
+      migrationGrandfather: [],
+      ...(lastResolvedCount !== undefined && { lastResolvedCount }),
+    }),
   );
 }
 
@@ -401,13 +413,18 @@ describe('S4: absolute attempt ceiling backstops slow-drip within a dispatch (ne
     const ledger = (await readFile(join(dir, '.pipeline', 'events.jsonl'), 'utf-8'))
       .trim()
       .split('\n')
-      .map((line) => JSON.parse(line) as {
-        type: string;
-        step?: string;
-        activeInterval?: { startedAtMs: number; durationMs: number };
-      });
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            type: string;
+            step?: string;
+            activeInterval?: { startedAtMs: number; durationMs: number };
+          },
+      );
     const terminalIndexes = ledger.flatMap((event, index) =>
-      event.type === 'step_completed' || event.type === 'step_failed' || event.type === 'step_interrupted' ? [index] : [],
+      event.type === 'step_completed' || event.type === 'step_failed' || event.type === 'step_interrupted'
+        ? [index]
+        : [],
     );
     const terminals = terminalIndexes.map((index) => ledger[index]!);
     const loopHaltIndex = ledger.findIndex((event) => event.type === 'loop_halt');
@@ -422,9 +439,9 @@ describe('S4: absolute attempt ceiling backstops slow-drip within a dispatch (ne
     const terminalByStep = countsByStep(terminals);
 
     expect([...terminalByStep.entries()].sort()).toEqual([...startedByStep.entries()].sort());
-    expect(terminals.every((event) =>
-      event.activeInterval !== undefined && event.activeInterval.durationMs >= 0,
-    )).toBe(true);
+    expect(terminals.every((event) => event.activeInterval !== undefined && event.activeInterval.durationMs >= 0)).toBe(
+      true,
+    );
     expect(terminalIndexes.every((index) => index < loopHaltIndex)).toBe(true);
     expect(terminals.some((event) => event.step === 'build')).toBe(true);
     const timing = await computeTimingRollup(dir);

@@ -134,14 +134,16 @@ describe('daemon stall remediation — cross-module acceptance flows', () => {
   ): Promise<void> {
     await persistFixtureRemediationPlan(dir, options, {
       version: 'v1',
-      dispositions: [{
-        reference: { kind: 'stall', id: 'stall:daemon-stall-fixture' },
-        disposition,
-        category,
-        rationale,
-        tasks: [],
-        boundTaskIds: [],
-      }],
+      dispositions: [
+        {
+          reference: { kind: 'stall', id: 'stall:daemon-stall-fixture' },
+          disposition,
+          category,
+          rationale,
+          tasks: [],
+          boundTaskIds: [],
+        },
+      ],
     });
   }
 
@@ -153,12 +155,7 @@ describe('daemon stall remediation — cross-module acceptance flows', () => {
     }
   }
 
-  function makeConductor(
-    dir: string,
-    statePath: string,
-    runner: StepRunner,
-    events: ConductorEventEmitter,
-  ): Conductor {
+  function makeConductor(dir: string, statePath: string, runner: StepRunner, events: ConductorEventEmitter): Conductor {
     return new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
@@ -423,9 +420,7 @@ describe('daemon stall remediation — cross-module acceptance flows', () => {
       await writeFile(
         join(dir, '.pipeline/remediation.json'),
         JSON.stringify({
-          dispositions: [
-            { id: 'stall:x', disposition: 'build', category: null, rationale: 'stale answer', tasks: [] },
-          ],
+          dispositions: [{ id: 'stall:x', disposition: 'build', category: null, rationale: 'stale answer', tasks: [] }],
         }),
       );
 
@@ -480,14 +475,16 @@ describe('daemon stall remediation — cross-module acceptance flows', () => {
       };
       const conductor = makeConductor(dir, statePath, runner, new ConductorEventEmitter());
       const sources: string[] = [];
-      (conductor as unknown as {
-        planRemediation: (
-          state: ConductState,
-          steps: unknown,
-          context: string,
-          hint: { source: string },
-        ) => Promise<{ kind: 'none'; reason: string }>;
-      }).planRemediation = vi.fn(async (_state, _steps, _context, hint) => {
+      (
+        conductor as unknown as {
+          planRemediation: (
+            state: ConductState,
+            steps: unknown,
+            context: string,
+            hint: { source: string },
+          ) => Promise<{ kind: 'none'; reason: string }>;
+        }
+      ).planRemediation = vi.fn(async (_state, _steps, _context, hint) => {
         sources.push(hint.source);
         return { kind: 'none' as const, reason: 'last planner fault: structured result missing' };
       });
@@ -521,14 +518,16 @@ describe('daemon stall remediation — cross-module acceptance flows', () => {
       };
       const conductor = makeConductor(dir, statePath, runner, new ConductorEventEmitter());
       const sources: string[] = [];
-      (conductor as unknown as {
-        planRemediation: (
-          state: ConductState,
-          steps: unknown,
-          context: string,
-          hint: { source: string },
-        ) => Promise<{ kind: 'none'; reason: string }>;
-      }).planRemediation = vi.fn(async (_state, _steps, _context, hint) => {
+      (
+        conductor as unknown as {
+          planRemediation: (
+            state: ConductState,
+            steps: unknown,
+            context: string,
+            hint: { source: string },
+          ) => Promise<{ kind: 'none'; reason: string }>;
+        }
+      ).planRemediation = vi.fn(async (_state, _steps, _context, hint) => {
         sources.push(hint.source);
         return { kind: 'none' as const, reason: 'last planner fault: attempt allowance exhausted' };
       });
@@ -591,9 +590,7 @@ describe('daemon stall remediation — cross-module acceptance flows', () => {
       const halt = await readHaltFile(dir);
       expect(halt).not.toBeNull();
       expect(halt).toContain(QUESTION_3);
-      await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).resolves.toBe(
-        'needs-human',
-      );
+      await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).resolves.toBe('needs-human');
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

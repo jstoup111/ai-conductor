@@ -31,9 +31,7 @@ import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact
 const execFile = promisify(execFileCb);
 const PR_URL = 'https://github.com/jstoup111/ai-conductor/pull/358';
 
-function makeGhFake(
-  opts: { state?: string; throws?: boolean } = {},
-): { runGh: GhRunner; calls: string[][] } {
+function makeGhFake(opts: { state?: string; throws?: boolean } = {}): { runGh: GhRunner; calls: string[][] } {
   const calls: string[][] = [];
   const runGh: GhRunner = async (args) => {
     calls.push([...args]);
@@ -68,9 +66,7 @@ async function seedPreRebaseState(
   (state as Record<string, unknown>).finish = 'done';
   Object.assign(state, overrides);
   await writeState(statePath, state);
-  const baselineCommit = (
-    await execFile('git', ['rev-parse', 'HEAD'], { cwd: repo })
-  ).stdout.trim();
+  const baselineCommit = (await execFile('git', ['rev-parse', 'HEAD'], { cwd: repo })).stdout.trim();
   await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
 }
 
@@ -304,9 +300,12 @@ describe('engine/merged-pr-guard — rebase entry backstop (#358, TS-2)', () => 
     });
     const docsOutcome = await rebaseModule.performRebase(rebaseModule.makeGitRunner(repo), repo, 'main');
     await rebaseModule.emitRebaseEvent(events, docsOutcome);
-    expect(docsEvents).toContainEqual(expect.objectContaining({
-      changedPaths: [], allChangedPaths: ['docs/c.md'],
-    }));
+    expect(docsEvents).toContainEqual(
+      expect.objectContaining({
+        changedPaths: [],
+        allChangedPaths: ['docs/c.md'],
+      }),
+    );
     await rm(repo, { recursive: true, force: true });
 
     ({ repo, g } = await buildCleanRepo('c.md'));

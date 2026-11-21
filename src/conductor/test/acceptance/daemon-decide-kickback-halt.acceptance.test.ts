@@ -19,15 +19,8 @@ import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { renderPlanReviewArtifact } from '../../src/engine/plan-review-artifact.js';
 import { parsePlanTaskPaths } from '../../src/engine/plan-task-parse.js';
 import { createTaskEvidence } from '../../src/engine/task-evidence.js';
-import {
-  HALT_MARKER,
-  HALT_CLASS_MARKER,
-  readHaltClass,
-} from '../../src/engine/halt-marker.js';
-import {
-  readKickbackLedger,
-  KICKBACK_LEDGER_PATH,
-} from '../../src/engine/kickback-ledger.js';
+import { HALT_MARKER, HALT_CLASS_MARKER, readHaltClass } from '../../src/engine/halt-marker.js';
+import { readKickbackLedger, KICKBACK_LEDGER_PATH } from '../../src/engine/kickback-ledger.js';
 import { MAX_KICKBACKS_PER_GATE } from '../../src/engine/remediation-caps.js';
 import {
   rekickSweep,
@@ -114,8 +107,7 @@ const FRONT_DONE: ConductState = {
   acceptance_specs: 'skipped',
 };
 
-const KICKBACK_EVIDENCE =
-  'architectural gap: the approved plan has no task for the retry-budget seam';
+const KICKBACK_EVIDENCE = 'architectural gap: the approved plan has no task for the retry-budget seam';
 
 const validShipmentEvidence = async () => ({
   kind: 'valid' as const,
@@ -127,9 +119,7 @@ const validShipmentEvidence = async () => ({
 });
 
 const fakeGit: GitRunner = async (args) =>
-  args.includes('--symbolic-full-name')
-    ? { stdout: 'refs/remotes/origin/feature/x\n' }
-    : { stdout: '' };
+  args.includes('--symbolic-full-name') ? { stdout: 'refs/remotes/origin/feature/x\n' } : { stdout: '' };
 
 describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#551)', () => {
   let dir: string;
@@ -145,9 +135,16 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
     // The default-off coverage_binding gate predates this fixture; satisfy its
     // run-scoped envelope up front so it never interleaves with the steps
     // these specs assert on.
-    await writeFile(join(dir, '.pipeline/coverage-binding.json'), JSON.stringify({
-      version: 1, slug: 'decide-kickback-halt', runId: 'test-run', status: 'disabled', entries: [],
-    }));
+    await writeFile(
+      join(dir, '.pipeline/coverage-binding.json'),
+      JSON.stringify({
+        version: 1,
+        slug: 'decide-kickback-halt',
+        runId: 'test-run',
+        status: 'disabled',
+        entries: [],
+      }),
+    );
   });
 
   afterEach(async () => {
@@ -184,17 +181,15 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
         }),
       );
     } else if (step === 'manual_test') {
-      await writeFile(
-        join(dir, '.pipeline/manual-test-results.md'),
-        '| Story | Result |\n|---|---|\n| foo | PASS |\n',
-      );
+      await writeFile(join(dir, '.pipeline/manual-test-results.md'), '| Story | Result |\n|---|---|\n| foo | PASS |\n');
     } else if (step === 'prd_audit') {
       await writeFile(
         join(dir, '.pipeline/prd-audit.md'),
         '| FR | Verdict | Evidence |\n|---|---|---|\n| FR-1 | ALIGNED | foo.ts:1 |\n',
       );
     } else if (step === 'architecture_review_as_built') {
-      await persistAsBuiltVerdict(dir,
+      await persistAsBuiltVerdict(
+        dir,
         { version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [] },
         { attemptId: options?.runId ?? 'test-run', codeStamp: null, policy: AS_BUILT_TEST_POLICY },
       );
@@ -229,7 +224,13 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
           independence: 'cross-provider',
           findings: [],
           dispositions: [],
-          reviewedDigest: { digest: 'sha256:fixture', planTaskDigests: {}, storyDigests: {}, adrDecisionDigests: {}, artifactDigests: {} },
+          reviewedDigest: {
+            digest: 'sha256:fixture',
+            planTaskDigests: {},
+            storyDigests: {},
+            adrDecisionDigests: {},
+            artifactDigests: {},
+          },
         }),
       );
     }
@@ -252,10 +253,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
     );
   }
 
-  function conductorAtBuild(
-    runner: StepRunner,
-    opts: { daemon: boolean; disablePrdAudit?: boolean },
-  ): Conductor {
+  function conductorAtBuild(runner: StepRunner, opts: { daemon: boolean; disablePrdAudit?: boolean }): Conductor {
     return new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
@@ -277,10 +275,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
    * on its first pass — the shape `test/integration/gate-loop.test.ts:224`
    * proves re-opens the gate interactively.
    */
-  function buildKicksBackToPlan(
-    ran: StepName[],
-    kickFrom: StepName = 'build',
-  ): StepRunner {
+  function buildKicksBackToPlan(ran: StepName[], kickFrom: StepName = 'build'): StepRunner {
     let buildRuns = 0;
     return {
       run: async (step: StepName, _state, options) => {
@@ -311,7 +306,9 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
   }
 
   async function exists(rel: string): Promise<boolean> {
-    return access(join(dir, rel)).then(() => true).catch(() => false);
+    return access(join(dir, rel))
+      .then(() => true)
+      .catch(() => false);
   }
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -356,9 +353,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
         .map((l) => l.trim())
         .find((l) => l.length > 0);
       expect(firstLine).toBeDefined();
-      expect(firstLine).toBe(
-        'DECIDE entry refused — autonomous run may not enter DECIDE without operator direction.',
-      );
+      expect(firstLine).toBe('DECIDE entry refused — autonomous run may not enter DECIDE without operator direction.');
       // The structured body names the requested target separately from the
       // canonical first-line refusal.
       expect(body).toMatch(/Requested target:\s*plan/i);
@@ -402,10 +397,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
       // The build scan must not attribute it to build. The normal loop later
       // reaches build_review, whose matching verdict re-opens plan until the
       // existing selection cap halts the unresolved gate.
-      await conductorAtBuild(
-        buildKicksBackToPlan(ran, 'build_review' as StepName),
-        { daemon: true },
-      ).run();
+      await conductorAtBuild(buildKicksBackToPlan(ran, 'build_review' as StepName), { daemon: true }).run();
 
       expect(kicks).not.toContainEqual({ from: 'build', to: 'plan' });
       expect(halted).toBe(true);
@@ -610,10 +602,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
           ran.push(step);
           if (step === 'conflict_check') {
             await mkdir(join(dir, '.docs/conflicts'), { recursive: true });
-            await writeFile(
-              join(dir, '.docs/conflicts/report.md'),
-              '# Conflict Check\n\nNo blocking conflicts.\n',
-            );
+            await writeFile(join(dir, '.docs/conflicts/report.md'), '# Conflict Check\n\nNo blocking conflicts.\n');
             await writeVerdict(dir, 'architecture_review', {
               satisfied: false,
               checkedAt: 1,
@@ -670,18 +659,21 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
      */
     async function seedExhaustedPlanLedger(): Promise<void> {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeFile(join(dir, KICKBACK_LEDGER_PATH), JSON.stringify({
-        version: 1,
-        gates: {
-          plan: {
-            count: MAX_KICKBACKS_PER_GATE,
-            treeHash: null,
-            lastReason: 'prior ping-pong round',
-            priorVerdict: true,
-            resolvedBefore: 1_000,
+      await writeFile(
+        join(dir, KICKBACK_LEDGER_PATH),
+        JSON.stringify({
+          version: 1,
+          gates: {
+            plan: {
+              count: MAX_KICKBACKS_PER_GATE,
+              treeHash: null,
+              lastReason: 'prior ping-pong round',
+              priorVerdict: true,
+              resolvedBefore: 1_000,
+            },
           },
-        },
-      }));
+        }),
+      );
 
       expect((await readKickbackLedger(dir)).gates.plan?.cumulative).toBe(0);
     }
@@ -736,9 +728,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
       expect(order).toEqual(['kickback', 'loop_halt']);
 
       // The durable per-gate counter was persisted, not skipped.
-      const ledger = JSON.parse(
-        await readFile(join(dir, '.pipeline/kickback-ledger.json'), 'utf-8'),
-      );
+      const ledger = JSON.parse(await readFile(join(dir, '.pipeline/kickback-ledger.json'), 'utf-8'));
       expect(ledger.gates.plan.count).toBe(1);
     });
   });

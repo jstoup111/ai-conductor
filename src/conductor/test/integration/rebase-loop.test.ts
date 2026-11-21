@@ -158,10 +158,7 @@ describe('integration/rebase-loop', () => {
 
   // Initialize a real git repo on BASE with an initial commit, then carve out
   // the feature branch with one feature commit. Returns to the feature branch.
-  async function initRepoOnFeatureBranch(featureFile: {
-    path: string;
-    content: string;
-  }): Promise<void> {
+  async function initRepoOnFeatureBranch(featureFile: { path: string; content: string }): Promise<void> {
     await execFileAsync('git', ['init', '-b', BASE, dir]);
     await git('config', 'user.email', 'test@example.com');
     await git('config', 'user.name', 'Test');
@@ -172,20 +169,33 @@ describe('integration/rebase-loop', () => {
 
     // Feature branch + a feature commit.
     await git('checkout', '-b', 'feature/foo');
-    await mkdir(join(dir, featureFile.path, '..'), { recursive: true }).catch(
-      () => {},
-    );
+    await mkdir(join(dir, featureFile.path, '..'), { recursive: true }).catch(() => {});
     await writeFile(join(dir, featureFile.path), featureFile.content);
     await git('add', '.');
     await git('commit', '-m', 'feature work');
   }
 
   it.each([
-    ['.docs/stories/add-foo.md', ['prd_audit', 'build_review', 'test_suite', 'manual_test', 'architecture_review_as_built']],
-    ['.docs/specs/add-foo.md', ['prd_audit', 'build_review', 'test_suite', 'manual_test', 'architecture_review_as_built']],
-    ['.docs/plans/add-foo.md', ['build_review', 'test_suite', 'manual_test', 'prd_audit', 'architecture_review_as_built']],
-    ['.docs/coherence/add-foo.md', ['build_review', 'test_suite', 'manual_test', 'prd_audit', 'architecture_review_as_built']],
-    ['.docs/decisions/adr-add-foo.md', ['build_review', 'test_suite', 'manual_test', 'prd_audit', 'architecture_review_as_built']],
+    [
+      '.docs/stories/add-foo.md',
+      ['prd_audit', 'build_review', 'test_suite', 'manual_test', 'architecture_review_as_built'],
+    ],
+    [
+      '.docs/specs/add-foo.md',
+      ['prd_audit', 'build_review', 'test_suite', 'manual_test', 'architecture_review_as_built'],
+    ],
+    [
+      '.docs/plans/add-foo.md',
+      ['build_review', 'test_suite', 'manual_test', 'prd_audit', 'architecture_review_as_built'],
+    ],
+    [
+      '.docs/coherence/add-foo.md',
+      ['build_review', 'test_suite', 'manual_test', 'prd_audit', 'architecture_review_as_built'],
+    ],
+    [
+      '.docs/decisions/adr-add-foo.md',
+      ['build_review', 'test_suite', 'manual_test', 'prd_audit', 'architecture_review_as_built'],
+    ],
     ['.docs/stories/another-feature.md', []],
   ])('rebase reviews only the active inputs changed at %s', async (path, expected) => {
     await initRepoOnFeatureBranch({ path: 'src/foo.ts', content: 'export const foo = 1;\n' });
@@ -195,9 +205,7 @@ describe('integration/rebase-loop', () => {
     events.on('rebase_gate_invalidated', (event) => {
       if (event.type !== 'rebase_gate_invalidated') return;
       invalidated.push(event.gate);
-      expect(event.matchedPaths).toEqual(
-        event.gate === 'prd_audit' ? [path] : [],
-      );
+      expect(event.matchedPaths).toEqual(event.gate === 'prd_audit' ? [path] : []);
     });
     const outcome = await performRebase(makeRebaseGitRunner(dir), dir, BASE, { finishMergeabilityCheck: true });
     const preVerify = vi.fn();
@@ -218,15 +226,22 @@ describe('integration/rebase-loop', () => {
     const runner = makeRebaseGitRunner(dir);
     const conflict = await performRebase(runner, dir, BASE);
     expect(conflict.kind).toBe('conflict_halt');
-    const outcome = await resolveRebaseConflicts(runner, dir, conflict, async () => {
-      await writeFile(join(dir, path), '# feature criteria\n# accepted base criteria\n');
-      await git('add', path);
-      await git('-c', 'core.editor=true', 'rebase', '--continue');
-      return { resolved: true };
-    }, 1);
+    const outcome = await resolveRebaseConflicts(
+      runner,
+      dir,
+      conflict,
+      async () => {
+        await writeFile(join(dir, path), '# feature criteria\n# accepted base criteria\n');
+        await git('add', path);
+        await git('-c', 'core.editor=true', 'rebase', '--continue');
+        return { resolved: true };
+      },
+      1,
+    );
     expect(outcome.kind).toBe('changed');
     const result = await applyRebaseVerdicts(dir, outcome, true);
-    expect(result.kickedBack).toEqual(['prd_audit',
+    expect(result.kickedBack).toEqual([
+      'prd_audit',
       'build_review',
       'test_suite',
       'manual_test',
@@ -250,14 +265,7 @@ describe('integration/rebase-loop', () => {
   // Does the feature branch's history contain `sha`?
   async function branchContains(sha: string): Promise<boolean> {
     try {
-      await execFileAsync('git', [
-        '-C',
-        dir,
-        'merge-base',
-        '--is-ancestor',
-        sha,
-        'feature/foo',
-      ]);
+      await execFileAsync('git', ['-C', dir, 'merge-base', '--is-ancestor', sha, 'feature/foo']);
       return true;
     } catch {
       return false;
@@ -275,14 +283,8 @@ describe('integration/rebase-loop', () => {
     await mkdir(join(dir, '.docs/stories'), { recursive: true });
     await mkdir(join(dir, '.docs/plans'), { recursive: true });
     // The prd_audit fixture below cites Plan task 1; the plan declares it.
-    await writeFile(
-      join(dir, '.docs/plans/add-foo.md'),
-      '### Task 1: add foo\n\n**Files:** foo.ts\n',
-    );
-    await writeFile(
-      join(dir, '.docs/specs/add-foo.md'),
-      '## Functional Requirements\n\nFR-1\n',
-    );
+    await writeFile(join(dir, '.docs/plans/add-foo.md'), '### Task 1: add foo\n\n**Files:** foo.ts\n');
+    await writeFile(join(dir, '.docs/specs/add-foo.md'), '## Functional Requirements\n\nFR-1\n');
     await writeFile(
       join(dir, '.docs/stories/add-foo.md'),
       [
@@ -313,9 +315,7 @@ describe('integration/rebase-loop', () => {
     fullSuiteVerifier?: ConstructorParameters<typeof Conductor>[0]['fullSuiteVerifier'],
   ): Conductor {
     const fakeGit: GitRunner = async (args) =>
-      args.includes('--symbolic-full-name')
-        ? { stdout: 'refs/remotes/origin/feature/x\n' }
-        : { stdout: '' };
+      args.includes('--symbolic-full-name') ? { stdout: 'refs/remotes/origin/feature/x\n' } : { stdout: '' };
     return new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
@@ -346,7 +346,11 @@ describe('integration/rebase-loop', () => {
         status: 'applied',
         transition: { preserved: [], invalidated: ['test_suite'], reverified: [] },
         replay: {
-          preRebaseHead: 'a', mergeBase: 'b', target: 'c', completedHead: 'd', expectedTree: 'e',
+          preRebaseHead: 'a',
+          mergeBase: 'b',
+          target: 'c',
+          completedHead: 'd',
+          expectedTree: 'e',
         },
       },
     });
@@ -358,8 +362,12 @@ describe('integration/rebase-loop', () => {
     // or deliberately parks.
     await conductorWith(runner).run();
     for (let attempt = 0; attempt < 5; attempt++) {
-      const done = await access(join(dir, '.pipeline/DONE')).then(() => true).catch(() => false);
-      const halted = await access(join(dir, '.pipeline/HALT')).then(() => true).catch(() => false);
+      const done = await access(join(dir, '.pipeline/DONE'))
+        .then(() => true)
+        .catch(() => false);
+      const halted = await access(join(dir, '.pipeline/HALT'))
+        .then(() => true)
+        .catch(() => false);
       if (done || halted) return;
       await conductorWith(runner, 'rebase').run();
     }
@@ -395,46 +403,57 @@ describe('integration/rebase-loop', () => {
       );
     } else if (step === 'manual_test') {
       const codeStamp = await git('rev-parse', 'HEAD');
-      await writeFile(
-        join(dir, '.pipeline/manual-test-results.md'),
-        '| Story | Result |\n|---|---|\n| foo | PASS |\n',
-      );
-      await writeFile(
-        join(dir, '.pipeline/manual-test-failures.json'),
-        JSON.stringify({ codeStamp }),
-      );
+      await writeFile(join(dir, '.pipeline/manual-test-results.md'), '| Story | Result |\n|---|---|\n| foo | PASS |\n');
+      await writeFile(join(dir, '.pipeline/manual-test-failures.json'), JSON.stringify({ codeStamp }));
       await writeFile(
         join(dir, '.pipeline/manual-test-code-stamp.json'),
         JSON.stringify({ codeStamp, runId: 'test-run' }),
       );
     } else if (step === 'prd_audit') {
       const codeStamp = await git('rev-parse', 'HEAD');
-      await persistPrdAuditVerdict(dir, {
-        complete: true,
-        judgment: {
-          version: 'v1',
-          criterionJudgments: [{
-            // The fixture story's heading id is `1-1`, so its sole criterion
-            // is `S1-1.1` — the criterion id carries the whole heading id.
-            criterion: { storyId: '1-1', ordinal: 1 }, criterionId: 'S1-1.1', grade: 'PASS',
-            evidence: 'foo.ts:1', rationale: 'The fixture supplies a complete typed audit judgment.',
-            requirementAssociations: [], evidenceTaskIds: ['1'],
-          }],
-          noOwnerObservations: [],
+      await persistPrdAuditVerdict(
+        dir,
+        {
+          complete: true,
+          judgment: {
+            version: 'v1',
+            criterionJudgments: [
+              {
+                // The fixture story's heading id is `1-1`, so its sole criterion
+                // is `S1-1.1` — the criterion id carries the whole heading id.
+                criterion: { storyId: '1-1', ordinal: 1 },
+                criterionId: 'S1-1.1',
+                grade: 'PASS',
+                evidence: 'foo.ts:1',
+                rationale: 'The fixture supplies a complete typed audit judgment.',
+                requirementAssociations: [],
+                evidenceTaskIds: ['1'],
+              },
+            ],
+            noOwnerObservations: [],
+          },
+          diagnostics: [],
+          recordedDispositions: [],
         },
-        diagnostics: [],
-        recordedDispositions: [],
-      }, { attemptId: options?.runId ?? 'test-run', codeStamp });
+        { attemptId: options?.runId ?? 'test-run', codeStamp },
+      );
     } else if (step === 'architecture_review_as_built') {
       const codeStamp = await git('rev-parse', 'HEAD');
       await mkdir(join(dir, '.docs/decisions'), { recursive: true });
-      await persistAsBuiltVerdict(dir, {
-        version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],
-      }, {
-        attemptId: options?.runId ?? 'test-run',
-        codeStamp,
-        policy: AS_BUILT_TEST_POLICY,
-      });
+      await persistAsBuiltVerdict(
+        dir,
+        {
+          version: 'v2',
+          verdict: 'APPROVED',
+          reachability: [],
+          driftNotes: [],
+        },
+        {
+          attemptId: options?.runId ?? 'test-run',
+          codeStamp,
+          policy: AS_BUILT_TEST_POLICY,
+        },
+      );
     } else if (step === 'finish') {
       await writeFile(join(dir, '.pipeline/finish-choice'), 'pr\n');
       const stateResult = await readState(statePath);
@@ -525,14 +544,16 @@ describe('integration/rebase-loop', () => {
       expect(dispatched).toContain('build');
       expect(retryReasons).toContainEqual(expect.stringContaining('fixture suite assertion failed'));
       expect(kickbacks).toEqual([expect.stringContaining('nonzero_exit')]);
-      expect(dispatched).toEqual(expect.arrayContaining([
-        'build',
-        'build_review',
-        'manual_test',
-        'prd_audit',
-        'architecture_review_as_built',
-        'finish',
-      ]));
+      expect(dispatched).toEqual(
+        expect.arrayContaining([
+          'build',
+          'build_review',
+          'manual_test',
+          'prd_audit',
+          'architecture_review_as_built',
+          'finish',
+        ]),
+      );
       expect(dispatched.indexOf('build_review')).toBeGreaterThan(dispatched.indexOf('build'));
       expect(dispatched.indexOf('manual_test')).toBeGreaterThan(dispatched.indexOf('build_review'));
     });
@@ -584,8 +605,7 @@ describe('integration/rebase-loop', () => {
         });
 
         await conductorWith(runner, 'test_suite', 0, {
-          inspect: async () =>
-            proofEstablished ? { status: 'CURRENT' as const, evidence: {} as never } : inspection,
+          inspect: async () => (proofEstablished ? { status: 'CURRENT' as const, evidence: {} as never } : inspection),
           ensure,
         }).run();
 
@@ -600,12 +620,9 @@ describe('integration/rebase-loop', () => {
         expect(dispatched.filter((step) => step === 'build')).toEqual([]);
         expect(suiteKickbacks).toEqual([]);
         // ...and the flow carried on into downstream validation.
-        expect(dispatched).toEqual(expect.arrayContaining([
-          'manual_test',
-          'prd_audit',
-          'architecture_review_as_built',
-          'finish',
-        ]));
+        expect(dispatched).toEqual(
+          expect.arrayContaining(['manual_test', 'prd_audit', 'architecture_review_as_built', 'finish']),
+        );
       },
     );
 
@@ -626,15 +643,20 @@ describe('integration/rebase-loop', () => {
           reason,
           message: `fixture ${reason}`,
         }));
-        await conductorWith({
-          run: async (step, _state, options) => {
-            dispatched.push(step);
-            return satisfy(step, options);
+        await conductorWith(
+          {
+            run: async (step, _state, options) => {
+              dispatched.push(step);
+              return satisfy(step, options);
+            },
           },
-        }, 'test_suite', 0, {
-          inspect: async () => ({ status: 'STALE' as const, reason: 'missing' as const }),
-          ensure,
-        }).run();
+          'test_suite',
+          0,
+          {
+            inspect: async () => ({ status: 'STALE' as const, reason: 'missing' as const }),
+            ensure,
+          },
+        ).run();
 
         expect(ensure).toHaveBeenCalledTimes(3);
         expect(dispatched).toEqual([]);
@@ -713,19 +735,19 @@ describe('integration/rebase-loop', () => {
       });
       await advanceBaseNonConflicting();
 
-      const { resumeRebaseFirst, REKICK_SENTINEL } = await import(
-        '../../src/engine/daemon-rekick.js'
-      );
+      const { resumeRebaseFirst, REKICK_SENTINEL } = await import('../../src/engine/daemon-rekick.js');
       await writeFile(join(dir, REKICK_SENTINEL), 'rekick\n', 'utf-8');
 
       const translateAfterRebase = vi.fn().mockResolvedValue(undefined);
-      const res = await (resumeRebaseFirst as unknown as (opts: {
-        worktreePath: string;
-        localBase: string;
-        events: ConductorEventEmitter;
-        ranManualTest: boolean;
-        translateAfterRebase?: typeof translateAfterRebase;
-      }) => Promise<string>)({
+      const res = await (
+        resumeRebaseFirst as unknown as (opts: {
+          worktreePath: string;
+          localBase: string;
+          events: ConductorEventEmitter;
+          ranManualTest: boolean;
+          translateAfterRebase?: typeof translateAfterRebase;
+        }) => Promise<string>
+      )({
         worktreePath: dir,
         localBase: BASE,
         events,
@@ -745,7 +767,6 @@ describe('integration/rebase-loop', () => {
   // gate (59e21fd5, dc2dacc0). Build is now unconditionally re-dispatched
   // on every rebase kickback; there is no mechanical skip path left to
   // pin.
-
 
   it('HALTs (worktree kept, rebase paused, no PR) on a non-CHANGELOG conflict (FR-8)', async () => {
     // Base and branch modify the SAME source file differently → real conflict.
@@ -867,9 +888,12 @@ describe('integration/rebase-loop', () => {
     });
     const docsOutcome = await performRebase(makeRebaseGitRunner(dir), dir, BASE);
     await (await import('../../src/engine/rebase.js')).emitRebaseEvent(events, docsOutcome);
-    expect(docsEvents).toContainEqual(expect.objectContaining({
-      changedPaths: [], allChangedPaths: ['docs/SIBLING.md'],
-    }));
+    expect(docsEvents).toContainEqual(
+      expect.objectContaining({
+        changedPaths: [],
+        allChangedPaths: ['docs/SIBLING.md'],
+      }),
+    );
 
     await rm(dir, { recursive: true, force: true });
     dir = await mkdtemp(join(tmpdir(), 'rebase-loop-'));
@@ -887,9 +911,12 @@ describe('integration/rebase-loop', () => {
     await (await import('../../src/engine/rebase.js')).emitRebaseEvent(events, rootOutcome);
 
     expect(await branchContains(baseSha)).toBe(true);
-    expect(rebaseEvents).toContainEqual(expect.objectContaining({
-      changedPaths: ['SIBLING.md'], allChangedPaths: ['SIBLING.md'],
-    }));
+    expect(rebaseEvents).toContainEqual(
+      expect.objectContaining({
+        changedPaths: ['SIBLING.md'],
+        allChangedPaths: ['SIBLING.md'],
+      }),
+    );
   });
 
   it('uses the same local base for conflict recovery when prospective merge conflicts', async () => {
@@ -1062,9 +1089,11 @@ describe('integration/rebase-loop', () => {
     expect(halted).toBe(true);
     expect(ran).not.toContain('finish');
     expect(await rebaseInProgress()).toBe(true);
-    expect(gitCommandSpy.mock.calls.filter(
-      ([command, args]) => command === 'git' && Array.isArray(args) && args[0] === 'merge-tree',
-    )).toEqual([]);
+    expect(
+      gitCommandSpy.mock.calls.filter(
+        ([command, args]) => command === 'git' && Array.isArray(args) && args[0] === 'merge-tree',
+      ),
+    ).toEqual([]);
   });
 
   it('refuses setup-only rebase resolution before generic completion telemetry', async () => {
@@ -1151,9 +1180,11 @@ describe('integration/rebase-loop', () => {
     expect(completed).toBe(false);
     expect(halted).toBe(true);
     expect(ran).not.toContain('finish');
-    expect(gitCommandSpy.mock.calls.filter(
-      ([command, args]) => command === 'git' && Array.isArray(args) && args[0] === 'merge-tree',
-    )).toEqual([]);
+    expect(
+      gitCommandSpy.mock.calls.filter(
+        ([command, args]) => command === 'git' && Array.isArray(args) && args[0] === 'merge-tree',
+      ),
+    ).toEqual([]);
   });
 
   // ── #655: delta-aware post-rebase gate invalidation ─────────────────────
@@ -1178,10 +1209,7 @@ describe('integration/rebase-loop', () => {
     // initRepoOnFeatureBranch) and a test file (`src/feature.test.ts`) — its
     // "claimed surface" F includes both paths.
     async function addFeatureTestFile(): Promise<void> {
-      await writeFile(
-        join(dir, 'src/feature.test.ts'),
-        "it('foo works', () => {});\n",
-      );
+      await writeFile(join(dir, 'src/feature.test.ts'), "it('foo works', () => {});\n");
       await git('add', '.');
       await git('commit', '-m', 'feature test coverage');
     }
@@ -1276,11 +1304,7 @@ describe('integration/rebase-loop', () => {
         await writeFile(join(dir, t.path), t.content);
       }
       await git('add', '.');
-      await git(
-        'commit',
-        '-m',
-        'base independently extends feature.ts (non-overlapping insert)',
-      );
+      await git('commit', '-m', 'base independently extends feature.ts (non-overlapping insert)');
       await git('checkout', 'feature/foo');
     }
 
@@ -1395,10 +1419,9 @@ describe('integration/rebase-loop', () => {
         // Base coincidentally re-touches the feature's OWN test file (so it
         // lands in D and is also feature-owned, i.e. D_test) plus a genuinely
         // foreign runtime file (D_foreignSrc) — D_featureSrc stays empty.
-        await advanceBaseCoincidentally(
-          [{ path: 'src/feature.test.ts', content: "it('foo works', () => {});\n" }],
-          { alsoForeignRuntime: true },
-        );
+        await advanceBaseCoincidentally([{ path: 'src/feature.test.ts', content: "it('foo works', () => {});\n" }], {
+          alsoForeignRuntime: true,
+        });
         forceIndeterminateProspectiveMerge();
 
         await writeState(statePath, { ...FRONT_DONE_M });
@@ -1444,10 +1467,9 @@ describe('integration/rebase-loop', () => {
           content: 'export const foo = 1;\n',
         });
         await addFeatureTestFile();
-        await advanceBaseCoincidentally(
-          [{ path: 'src/feature.test.ts', content: "it('foo works', () => {});\n" }],
-          { alsoForeignRuntime: true },
-        );
+        await advanceBaseCoincidentally([{ path: 'src/feature.test.ts', content: "it('foo works', () => {});\n" }], {
+          alsoForeignRuntime: true,
+        });
 
         // prd_audit's verdict is unsatisfied BEFORE the rebase runs — it never
         // actually passed for this feature.
@@ -1549,8 +1571,9 @@ describe('integration/rebase-loop', () => {
 
         const rebaseBefore = await readGateVerdict('rebase');
         expect(rebaseBefore?.rebaseOperation?.status).toBe('applied');
-        const judged = (rebaseBefore.rebaseOperation.transition.preserved as string[])
-          .filter((gate) => ['build_review', 'prd_audit', 'architecture_review_as_built'].includes(gate));
+        const judged = (rebaseBefore.rebaseOperation.transition.preserved as string[]).filter((gate) =>
+          ['build_review', 'prd_audit', 'architecture_review_as_built'].includes(gate),
+        );
         expect(judged.length).toBeGreaterThan(0);
         const before = Object.fromEntries(
           await Promise.all(judged.map(async (gate) => [gate, (await readGateVerdict(gate))?.preservation])),
@@ -1566,9 +1589,7 @@ describe('integration/rebase-loop', () => {
           completed = true;
         });
         const fakeGit: GitRunner = async (args) =>
-          args.includes('--symbolic-full-name')
-            ? { stdout: 'refs/remotes/origin/feature/x\n' }
-            : { stdout: '' };
+          args.includes('--symbolic-full-name') ? { stdout: 'refs/remotes/origin/feature/x\n' } : { stdout: '' };
         const restartedCounts: Record<string, number> = {};
         await new Conductor({
           stateFilePath: statePath,
@@ -1598,7 +1619,7 @@ describe('integration/rebase-loop', () => {
 
     // ── Story: A change to the feature's own runtime source re-runs the
     // judged audit gates ──────────────────────────────────────────────────────
-    describe("Story: feature-owned runtime source in the delta re-runs prd_audit and architecture_review_as_built", () => {
+    describe('Story: feature-owned runtime source in the delta re-runs prd_audit and architecture_review_as_built', () => {
       it('retains both judged audits when clean replay proves D_featureSrc unchanged', async () => {
         // Shared-ancestry fixture (see comment above) — a byte-identical
         // "coincidental" touch of a feature-owned path can never register in
@@ -1643,9 +1664,7 @@ describe('integration/rebase-loop', () => {
         // Base coincidentally touches the SAME docs path only — docs are
         // excluded from D upstream (isCodeOrTestPath), so this can never
         // force a re-audit on that basis alone.
-        await advanceBaseCoincidentally([
-          { path: '.docs/feature-notes.md', content: '# notes\n' },
-        ]);
+        await advanceBaseCoincidentally([{ path: '.docs/feature-notes.md', content: '# notes\n' }]);
 
         await writeState(statePath, { ...FRONT_DONE_M });
         const counts: Record<string, number> = {};
@@ -1689,9 +1708,7 @@ describe('integration/rebase-loop', () => {
 
         expect(invalidated.find((i) => i.gate === 'manual_test')).toBeDefined();
         expect(preserved.find((p) => p.gate === 'prd_audit')).toBeDefined();
-        expect(
-          preserved.find((p) => p.gate === 'architecture_review_as_built'),
-        ).toBeDefined();
+        expect(preserved.find((p) => p.gate === 'architecture_review_as_built')).toBeDefined();
       });
 
       it('does not invalidate manual_test when it never ran for this feature (ranManualTest = false)', async () => {
@@ -1898,8 +1915,7 @@ describe('integration/rebase-loop', () => {
         await writeState(statePath, { ...FRONT_DONE_M });
         const counts: Record<string, number> = {};
         const { preserved } = trackPreservedInvalidated();
-        events.on('feature_complete', () => {
-        });
+        events.on('feature_complete', () => {});
 
         await runThroughShip(runCountingRunner(counts));
 

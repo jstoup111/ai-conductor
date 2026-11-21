@@ -82,10 +82,7 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
     return stdout.trim();
   }
 
-  async function initRepoOnFeatureBranch(featureFile: {
-    path: string;
-    content: string;
-  }): Promise<void> {
+  async function initRepoOnFeatureBranch(featureFile: { path: string; content: string }): Promise<void> {
     await execFileAsync('git', ['init', '-b', BASE, dir]);
     await git('config', 'user.email', 'test@example.com');
     await git('config', 'user.name', 'Test');
@@ -110,16 +107,14 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
     await writeFile(
       join(dir, '.docs/coherence/add-foo.md'),
       '| Row Class | Criterion | Cited Task Ids | Verdict | Quote | Disposition |\n' +
-      '| --- | --- | --- | --- | --- | --- |\n' +
-      '| criterion | Foo is implemented | task-1 | covered | "Foo is implemented." | diff-local |\n',
+        '| --- | --- | --- | --- | --- | --- |\n' +
+        '| criterion | Foo is implemented | task-1 | covered | "Foo is implemented." | diff-local |\n',
     );
     await git('add', '.');
     await git('commit', '-m', 'initial commit on base');
 
     await git('checkout', '-b', 'feature/foo');
-    await mkdir(join(dir, featureFile.path, '..'), { recursive: true }).catch(
-      () => {},
-    );
+    await mkdir(join(dir, featureFile.path, '..'), { recursive: true }).catch(() => {});
     await writeFile(join(dir, featureFile.path), featureFile.content);
     await git('add', '.');
     await git('commit', '-m', 'feature work');
@@ -159,9 +154,7 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
     fromStep: 'build' = 'build',
   ): Conductor {
     const fakeGit: GitRunner = async (args) =>
-      args.includes('--symbolic-full-name')
-        ? { stdout: 'refs/remotes/origin/feature/x\n' }
-        : { stdout: '' };
+      args.includes('--symbolic-full-name') ? { stdout: 'refs/remotes/origin/feature/x\n' } : { stdout: '' };
     return new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
@@ -205,34 +198,47 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
         }),
       );
     } else if (step === 'manual_test') {
-      await writeFile(
-        join(dir, '.pipeline/manual-test-results.md'),
-        '| Story | Result |\n|---|---|\n| foo | PASS |\n',
-      );
+      await writeFile(join(dir, '.pipeline/manual-test-results.md'), '| Story | Result |\n|---|---|\n| foo | PASS |\n');
     } else if (step === 'prd_audit') {
-      await persistPrdAuditVerdict(dir, {
-        complete: true,
-        judgment: {
-          version: 'v1',
-          criterionJudgments: [{
-            criterion: { storyId: '1', ordinal: 1 }, criterionId: 'S1.1', grade: 'PASS',
-            evidence: 'The fixture supplies a complete typed audit judgment.',
-            rationale: 'The rebase-tail fixture requires a current typed verdict.',
-            requirementAssociations: [], evidenceTaskIds: [],
-          }],
-          noOwnerObservations: [],
+      await persistPrdAuditVerdict(
+        dir,
+        {
+          complete: true,
+          judgment: {
+            version: 'v1',
+            criterionJudgments: [
+              {
+                criterion: { storyId: '1', ordinal: 1 },
+                criterionId: 'S1.1',
+                grade: 'PASS',
+                evidence: 'The fixture supplies a complete typed audit judgment.',
+                rationale: 'The rebase-tail fixture requires a current typed verdict.',
+                requirementAssociations: [],
+                evidenceTaskIds: [],
+              },
+            ],
+            noOwnerObservations: [],
+          },
+          diagnostics: [],
+          recordedDispositions: [],
         },
-        diagnostics: [],
-        recordedDispositions: [],
-      }, { attemptId: options?.runId ?? 'test-run', codeStamp: await git('rev-parse', 'HEAD') });
+        { attemptId: options?.runId ?? 'test-run', codeStamp: await git('rev-parse', 'HEAD') },
+      );
     } else if (step === 'architecture_review_as_built') {
-      await persistAsBuiltVerdict(dir, {
-        version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],
-      }, {
-        attemptId: options?.runId ?? 'test-run',
-        codeStamp: null,
-        policy: AS_BUILT_TEST_POLICY,
-      });
+      await persistAsBuiltVerdict(
+        dir,
+        {
+          version: 'v2',
+          verdict: 'APPROVED',
+          reachability: [],
+          driftNotes: [],
+        },
+        {
+          attemptId: options?.runId ?? 'test-run',
+          codeStamp: null,
+          policy: AS_BUILT_TEST_POLICY,
+        },
+      );
     } else if (step === 'finish') {
       await writeFile(join(dir, '.pipeline/finish-choice'), 'pr\n');
       const stateResult = await readState(statePath);
@@ -315,22 +321,26 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
     // (which moves HEAD onto the foreign runtime change) makes it stale.
     let provedHead: string | undefined;
     const headBeforeReplay = await git('rev-parse', 'HEAD');
-    await conductorWith(runner, {}, {
-      inspect: async () =>
-        provedHead === (await git('rev-parse', 'HEAD'))
-          ? { status: 'CURRENT', evidence: {} as never }
-          : { status: 'STALE', reason: 'fingerprint_mismatch' },
-      ensure: async () => {
-        provedHead = await git('rev-parse', 'HEAD');
-        order.push(`suite-proof@${provedHead}`);
-        postReplayProofEstablished = provedHead !== headBeforeReplay;
-        return {
-          status: 'EXECUTED',
-          freshness: { status: 'STALE', reason: 'fingerprint_mismatch' },
-          evidence: {} as never,
-        };
+    await conductorWith(
+      runner,
+      {},
+      {
+        inspect: async () =>
+          provedHead === (await git('rev-parse', 'HEAD'))
+            ? { status: 'CURRENT', evidence: {} as never }
+            : { status: 'STALE', reason: 'fingerprint_mismatch' },
+        ensure: async () => {
+          provedHead = await git('rev-parse', 'HEAD');
+          order.push(`suite-proof@${provedHead}`);
+          postReplayProofEstablished = provedHead !== headBeforeReplay;
+          return {
+            status: 'EXECUTED',
+            freshness: { status: 'STALE', reason: 'fingerprint_mismatch' },
+            evidence: {} as never,
+          };
+        },
       },
-    }).run();
+    ).run();
 
     const replayedHead = await git('rev-parse', 'HEAD');
     expect(replayedHead).not.toBe(headBeforeReplay);
@@ -346,13 +356,10 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
 
     const reviews = ['build_review', 'prd_audit', 'architecture_review_as_built'];
     const dispatchedReviews = reviews.filter((step) => afterReplay.includes(step));
-    expect(dispatchedReviews).toEqual(
-      expect.arrayContaining(['prd_audit', 'architecture_review_as_built']),
-    );
+    expect(dispatchedReviews).toEqual(expect.arrayContaining(['prd_audit', 'architecture_review_as_built']));
     for (const review of dispatchedReviews) {
       expect(afterReplay.indexOf(review)).toBeGreaterThan(proofAt);
     }
     expect(afterReplay.indexOf('manual_test')).toBeGreaterThan(proofAt);
   });
-
 });

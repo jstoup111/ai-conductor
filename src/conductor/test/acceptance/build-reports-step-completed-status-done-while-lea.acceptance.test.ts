@@ -65,21 +65,16 @@ async function seedArtifacts(dir: string): Promise<void> {
   }
 }
 
-async function writePlanAndStatus(
-  dir: string,
-  status: 'pending' | 'completed',
-): Promise<void> {
+async function writePlanAndStatus(dir: string, status: 'pending' | 'completed'): Promise<void> {
   await mkdir(join(dir, '.docs/plans'), { recursive: true });
   await mkdir(join(dir, '.pipeline'), { recursive: true });
   await writeFile(join(dir, '.docs/plans/2026-08-04-plan.md'), '# Plan\n\n### Task 1: Work\n');
-  await writeFile(
-    join(dir, '.pipeline/task-status.json'),
-    JSON.stringify({ tasks: [{ id: 1, status }] }),
-  );
+  await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks: [{ id: 1, status }] }));
   const resolvedBeforeBuild = Object.fromEntries(
-    ALL_STEPS
-      .slice(0, ALL_STEPS.findIndex((step) => step.name === 'build'))
-      .map((step) => [step.name, 'done']),
+    ALL_STEPS.slice(
+      0,
+      ALL_STEPS.findIndex((step) => step.name === 'build'),
+    ).map((step) => [step.name, 'done']),
   );
   await writeFile(
     join(dir, '.pipeline/conduct-state.json'),
@@ -124,15 +119,13 @@ describe('#1270 BUILD completion floor (real Conductor.run() retry loop)', () =>
     });
     await initGitRepo(dir);
     await seedArtifacts(dir);
-    currentCommitSha = vi.spyOn(projectPrelude, 'currentCommitSha').mockImplementation(
-      async (projectRoot) => {
-        try {
-          return (await execa('git', ['rev-parse', 'HEAD'], { cwd: projectRoot })).stdout.trim();
-        } catch {
-          return null;
-        }
-      },
-    );
+    currentCommitSha = vi.spyOn(projectPrelude, 'currentCommitSha').mockImplementation(async (projectRoot) => {
+      try {
+        return (await execa('git', ['rev-parse', 'HEAD'], { cwd: projectRoot })).stdout.trim();
+      } catch {
+        return null;
+      }
+    });
   });
 
   afterEach(async () => {
@@ -215,11 +208,13 @@ describe('#1270 BUILD completion floor (real Conductor.run() retry loop)', () =>
       expect(attempt).toBe(2);
       expect(completedBuilds).toBe(1);
       expect(stepStarts).toContain('build_review');
-      expect(forwardedVerdict).toEqual(expect.objectContaining({
-        satisfied: true,
-        reason: expect.stringMatching(/commit movement/),
-        checkedAt: expect.any(Number),
-      }));
+      expect(forwardedVerdict).toEqual(
+        expect.objectContaining({
+          satisfied: true,
+          reason: expect.stringMatching(/commit movement/),
+          checkedAt: expect.any(Number),
+        }),
+      );
     });
   });
 

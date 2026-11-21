@@ -17,10 +17,7 @@ import { promisify } from 'node:util';
 
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
-import {
-  createProtectedArtifactSeal,
-  PROTECTED_ARTIFACT_SEAL_PATH,
-} from '../../src/engine/protected-artifact-seal.js';
+import { createProtectedArtifactSeal, PROTECTED_ARTIFACT_SEAL_PATH } from '../../src/engine/protected-artifact-seal.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -65,10 +62,7 @@ describe('mergeability-first daemon finish', () => {
     await mkdir(join(repo, '.docs', 'plans'), { recursive: true });
     await mkdir(join(repo, 'src'), { recursive: true });
     await writeFile(join(repo, 'README.md'), '# base\n');
-    await writeFile(
-      join(repo, '.docs', 'plans', 'feature.md'),
-      '# Approved plan\n\n### Task 1: Implement feature\n',
-    );
+    await writeFile(join(repo, '.docs', 'plans', 'feature.md'), '# Approved plan\n\n### Task 1: Implement feature\n');
     await git('add', '.');
     await git('commit', '-m', 'initial base');
 
@@ -110,157 +104,145 @@ describe('mergeability-first daemon finish', () => {
     await rm(repo, { recursive: true, force: true });
   });
 
-  it(
-    'preserves a clean-behind feature and its verification evidence with a distinct mergeable outcome',
-    async () => {
-      const { featureHead, featureCommits } = await initCleanBehindFeature();
-      const statePath = join(repo, '.pipeline', 'conduct-state.json');
-      const initialState = {
-        feature_desc: 'mergeability-first finish',
-        manual_test: 'done',
-        build: 'done',
-        build_review: 'done',
-        test_suite: 'done',
-        prd_audit: 'done',
-        architecture_review_as_built: 'done',
-        rebase: 'pending',
-      } as ConductState;
-      await writeState(statePath, initialState);
+  it('preserves a clean-behind feature and its verification evidence with a distinct mergeable outcome', async () => {
+    const { featureHead, featureCommits } = await initCleanBehindFeature();
+    const statePath = join(repo, '.pipeline', 'conduct-state.json');
+    const initialState = {
+      feature_desc: 'mergeability-first finish',
+      manual_test: 'done',
+      build: 'done',
+      build_review: 'done',
+      test_suite: 'done',
+      prd_audit: 'done',
+      architecture_review_as_built: 'done',
+      rebase: 'pending',
+    } as ConductState;
+    await writeState(statePath, initialState);
 
-      const preservedGatePaths = [
-        'build',
-        'build_review',
-        'test_suite',
-        'manual_test',
-        'prd_audit',
-        'architecture_review_as_built',
-      ].map((gate) => join(repo, '.pipeline', 'gates', `${gate}.json`));
-      for (const [index, path] of preservedGatePaths.entries()) {
-        await writeFile(
-          path,
-          `${JSON.stringify({
-            satisfied: true,
-            reason: `pre-finish evidence ${index}`,
-            checkedAt: 1_700_000_000_000 + index,
-          })}\n`,
-        );
-      }
-      const evidenceBefore = await Promise.all(
-        preservedGatePaths.map((path) => readFile(path, 'utf8')),
+    const preservedGatePaths = [
+      'build',
+      'build_review',
+      'test_suite',
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+    ].map((gate) => join(repo, '.pipeline', 'gates', `${gate}.json`));
+    for (const [index, path] of preservedGatePaths.entries()) {
+      await writeFile(
+        path,
+        `${JSON.stringify({
+          satisfied: true,
+          reason: `pre-finish evidence ${index}`,
+          checkedAt: 1_700_000_000_000 + index,
+        })}\n`,
       );
-      const sealPath = join(repo, PROTECTED_ARTIFACT_SEAL_PATH);
-      const sealBefore = await readFile(sealPath, 'utf8');
-      const worktreeStatusBefore = await git('status', '--porcelain');
+    }
+    const evidenceBefore = await Promise.all(preservedGatePaths.map((path) => readFile(path, 'utf8')));
+    const sealPath = join(repo, PROTECTED_ARTIFACT_SEAL_PATH);
+    const sealBefore = await readFile(sealPath, 'utf8');
+    const worktreeStatusBefore = await git('status', '--porcelain');
 
-      const translateAfterRebase = vi.fn(async () => {});
-      const runner: StepRunner = {
-        run: async () => ({ success: true }),
-        translateAfterRebase,
-      };
-      const events = new ConductorEventEmitter();
-      const emit = vi.spyOn(events, 'emit');
-      const conductor = new Conductor({
-        stateFilePath: statePath,
-        stepRunner: runner,
-        events,
-        projectRoot: repo,
-        daemon: true,
-        mode: 'auto',
-        baseBranch: BASE,
-      });
-      const subject = conductor as unknown as RebaseStepSubject;
-      // `run()` normally establishes this optimistic-concurrency baseline
-      // before it dispatches the rebase step. This focused fixture enters the
-      // owning step directly, so it supplies the same precondition.
-      subject.persistedStateSnapshot = { ...initialState };
+    const translateAfterRebase = vi.fn(async () => {});
+    const runner: StepRunner = {
+      run: async () => ({ success: true }),
+      translateAfterRebase,
+    };
+    const events = new ConductorEventEmitter();
+    const emit = vi.spyOn(events, 'emit');
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: repo,
+      daemon: true,
+      mode: 'auto',
+      baseBranch: BASE,
+    });
+    const subject = conductor as unknown as RebaseStepSubject;
+    // `run()` normally establishes this optimistic-concurrency baseline
+    // before it dispatches the rebase step. This focused fixture enters the
+    // owning step directly, so it supplies the same precondition.
+    subject.persistedStateSnapshot = { ...initialState };
 
-      const result = await subject.runRebaseStep(initialState);
+    const result = await subject.runRebaseStep(initialState);
 
-      const finalStateResult = await readState(statePath);
-      const finalState = finalStateResult.ok ? finalStateResult.value : {};
-      const evidenceAfter = await Promise.all(
-        preservedGatePaths.map((path) => readFile(path, 'utf8')),
-      );
-      const eventTypes = emit.mock.calls.map(([event]) => String(event.type));
+    const finalStateResult = await readState(statePath);
+    const finalState = finalStateResult.ok ? finalStateResult.value : {};
+    const evidenceAfter = await Promise.all(preservedGatePaths.map((path) => readFile(path, 'utf8')));
+    const eventTypes = emit.mock.calls.map(([event]) => String(event.type));
 
-      expect({
-        success: result.success,
-        outcome: subject.lastRebaseOutcome?.kind,
-        head: await git('rev-parse', 'HEAD'),
-        commits: (await git('rev-list', '--reverse', 'HEAD')).split('\n'),
-        worktreeStatus: await git('status', '--porcelain'),
-        evidencePreserved: evidenceAfter,
-        sealPreserved: await readFile(sealPath, 'utf8'),
-        translationCalls: translateAfterRebase.mock.calls.length,
-        rebaseState: finalState.rebase,
-        hasExactMergeableSkipEvent: eventTypes.includes('rebase_mergeable_skip'),
-      }).toEqual({
-        success: true,
-        outcome: 'mergeable_skip',
-        head: featureHead,
-        commits: featureCommits,
-        worktreeStatus: worktreeStatusBefore,
-        evidencePreserved: evidenceBefore,
-        sealPreserved: sealBefore,
-        translationCalls: 0,
-        rebaseState: 'done',
-        hasExactMergeableSkipEvent: true,
-      });
-    },
-    30_000,
-  );
+    expect({
+      success: result.success,
+      outcome: subject.lastRebaseOutcome?.kind,
+      head: await git('rev-parse', 'HEAD'),
+      commits: (await git('rev-list', '--reverse', 'HEAD')).split('\n'),
+      worktreeStatus: await git('status', '--porcelain'),
+      evidencePreserved: evidenceAfter,
+      sealPreserved: await readFile(sealPath, 'utf8'),
+      translationCalls: translateAfterRebase.mock.calls.length,
+      rebaseState: finalState.rebase,
+      hasExactMergeableSkipEvent: eventTypes.includes('rebase_mergeable_skip'),
+    }).toEqual({
+      success: true,
+      outcome: 'mergeable_skip',
+      head: featureHead,
+      commits: featureCommits,
+      worktreeStatus: worktreeStatusBefore,
+      evidencePreserved: evidenceBefore,
+      sealPreserved: sealBefore,
+      translationCalls: 0,
+      rebaseState: 'done',
+      hasExactMergeableSkipEvent: true,
+    });
+  }, 30_000);
 
-  it(
-    'does NOT skip when the base advanced with code — the gates were graded against a base that moved',
-    async () => {
-      const { featureHead } = await initCleanBehindFeature({
-        path: 'src/sibling.ts',
-        content: 'export const sibling = true;\n',
-      });
-      const statePath = join(repo, '.pipeline', 'conduct-state.json');
-      const initialState = {
-        feature_desc: 'mergeability-first finish',
-        manual_test: 'done',
-        build: 'done',
-        build_review: 'done',
-        rebase: 'pending',
-      } as ConductState;
-      await writeState(statePath, initialState);
+  it('does NOT skip when the base advanced with code — the gates were graded against a base that moved', async () => {
+    const { featureHead } = await initCleanBehindFeature({
+      path: 'src/sibling.ts',
+      content: 'export const sibling = true;\n',
+    });
+    const statePath = join(repo, '.pipeline', 'conduct-state.json');
+    const initialState = {
+      feature_desc: 'mergeability-first finish',
+      manual_test: 'done',
+      build: 'done',
+      build_review: 'done',
+      rebase: 'pending',
+    } as ConductState;
+    await writeState(statePath, initialState);
 
-      const events = new ConductorEventEmitter();
-      const emit = vi.spyOn(events, 'emit');
-      const conductor = new Conductor({
-        stateFilePath: statePath,
-        stepRunner: { run: async () => ({ success: true }) } as StepRunner,
-        events,
-        projectRoot: repo,
-        daemon: true,
-        mode: 'auto',
-        baseBranch: BASE,
-      });
-      const subject = conductor as unknown as RebaseStepSubject;
-      subject.persistedStateSnapshot = { ...initialState };
+    const events = new ConductorEventEmitter();
+    const emit = vi.spyOn(events, 'emit');
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: async () => ({ success: true }) } as StepRunner,
+      events,
+      projectRoot: repo,
+      daemon: true,
+      mode: 'auto',
+      baseBranch: BASE,
+    });
+    const subject = conductor as unknown as RebaseStepSubject;
+    subject.persistedStateSnapshot = { ...initialState };
 
-      const result = await subject.runRebaseStep(initialState);
-      const eventTypes = emit.mock.calls.map(([event]) => String(event.type));
+    const result = await subject.runRebaseStep(initialState);
+    const eventTypes = emit.mock.calls.map(([event]) => String(event.type));
 
-      expect({
-        success: result.success,
-        outcome: subject.lastRebaseOutcome?.kind,
-        headMoved: (await git('rev-parse', 'HEAD')) !== featureHead,
-        skipped: eventTypes.includes('rebase_mergeable_skip'),
-      }).toEqual({
-        success: true,
-        // The branch is textually mergeable, so the real rebase runs cleanly and
-        // classifies as a code-changing rebase — which kicks the downstream
-        // gates back for re-verification instead of shipping stale verdicts.
-        outcome: 'changed',
-        headMoved: true,
-        skipped: false,
-      });
-    },
-    30_000,
-  );
+    expect({
+      success: result.success,
+      outcome: subject.lastRebaseOutcome?.kind,
+      headMoved: (await git('rev-parse', 'HEAD')) !== featureHead,
+      skipped: eventTypes.includes('rebase_mergeable_skip'),
+    }).toEqual({
+      success: true,
+      // The branch is textually mergeable, so the real rebase runs cleanly and
+      // classifies as a code-changing rebase — which kicks the downstream
+      // gates back for re-verification instead of shipping stale verdicts.
+      outcome: 'changed',
+      headMoved: true,
+      skipped: false,
+    });
+  }, 30_000);
 
   it('fails closed into the existing integration recovery when the target disappears', async () => {
     const { featureHead } = await initCleanBehindFeature();
@@ -294,9 +276,7 @@ describe('mergeability-first daemon finish', () => {
       success: result.success,
       outcome: subject.lastRebaseOutcome?.kind,
       head: await git('rev-parse', 'HEAD'),
-      mergeableSkipReported: eventTypes.some(
-        (type) => type.includes('mergeable') && type.includes('skip'),
-      ),
+      mergeableSkipReported: eventTypes.some((type) => type.includes('mergeable') && type.includes('skip')),
       halted: halt.length > 0,
     }).toEqual({
       success: true,
