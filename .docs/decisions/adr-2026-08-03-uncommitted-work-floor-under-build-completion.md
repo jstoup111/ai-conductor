@@ -185,3 +185,23 @@ part of this design depends on resolving it** — outcomes 1, 2 and 4 follow fro
 alone, and Decision 7 deliberately adds a label rather than machinery built on the unverified chain.
 
 > **Amended 2026-08-22 by #1805:** build_review's completeness rubric is retired; prd_audit at SHIP is the completion authority (adr-2026-08-22-one-owner-per-review-question). Every other decision here stands.
+
+> **Amended 2026-11-21 by engine-enforced-whole-feature-simplify-before-firs:** a second routing floor
+> now sits beside the uncommitted-work floor, under the same two-door rule. Live evidence: 7 of 13
+> daemon builds reached `build_review` with no `batch-*-simplification.md` record at all, so the
+> batch-boundary simplify pass that the `simplify` skill describes was prompt discipline that did not
+> hold, and every duplication or domain-modelling defect it would have caught cost a review lap.
+>
+> **D9 — BUILD hands off to `build_review` only after one whole-feature simplify pass records CLEAN, at both doors.**
+> After task resolution and the uncommitted-work floor, the `build` completion predicate requires
+> `.pipeline/audit-trail/feature-simplification.md` (for an active stacked child `k`,
+> `.pipeline/audit-trail/child-<k>-simplification.md`) to contain the line `## Verdict: CLEAN`. The
+> pass reviews the whole feature diff (`base...HEAD`) against the same closed kind vocabulary and
+> non-finding clauses the `build-review-implementation-quality` rubric judges, so its definitions are
+> shared rather than restated. The record persists across remediation laps, so the pass runs once per
+> feature or child; a feature or child whose `build-review.json` already exists is treated as past its
+> first completion and is not re-gated. The `anyAttemptMovedHead` exhaustion escape refuses to route
+> while the record is missing or not CLEAN, exactly as Decision 2 requires for the dirty-tree floor, so
+> an exhausted budget halts naming the missing pass instead of bypassing it. A miss is routing, not
+> authority (Decision 1): it never asserts completion, its retry hint names the record path, and a
+> simplify-only follow-up attempt that moves no HEAD is exempt from the no-task-progress stall breaker.
