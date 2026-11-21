@@ -7,7 +7,13 @@ import { basename, join } from 'node:path';
 import { execa } from 'execa';
 import { WorktreeLifecycleQueue } from '../../src/engine/worktree.js';
 import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/execution/llm-provider.js';
-import type { ConductState, ConductorEvent, ExecutionContext, ProviderAttemptEvent, StepName } from '../../src/types/index.js';
+import type {
+  ConductState,
+  ConductorEvent,
+  ExecutionContext,
+  ProviderAttemptEvent,
+  StepName,
+} from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { StepRunnerOptions } from '../../src/engine/step-runners.js';
 import {
@@ -16,10 +22,7 @@ import {
   parseSignalCountsFromOutput,
   scoreComplexityFromCounts,
 } from '../../src/engine/step-runners.js';
-import {
-  CLAUDE_MODEL_POLICY as CLAUDE_POLICY,
-  CODEX_MODEL_POLICY,
-} from '../../src/engine/provider-model-policy.js';
+import { CLAUDE_MODEL_POLICY as CLAUDE_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
@@ -34,8 +37,14 @@ import { OtelVisualizer } from '../../src/engine/otel/otel-visualizer.js';
 import { resolveOtelConfig } from '../../src/engine/otel/otel-config.js';
 import { CapturingSpanExporter } from '../fixtures/capturing-span-exporter.js';
 import { RemediationCaseStore } from '../../src/engine/remediation-case-store.js';
-import { deriveEffectiveBuildReviewVerdict, projectBuildReviewAggregateSources } from '../../src/engine/build-review-aggregate.js';
-import { canonicalizeBuildReviewFindingIdentity, stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
+import {
+  deriveEffectiveBuildReviewVerdict,
+  projectBuildReviewAggregateSources,
+} from '../../src/engine/build-review-aggregate.js';
+import {
+  canonicalizeBuildReviewFindingIdentity,
+  stampBuildReviewCustomJudgedResult,
+} from '../../src/engine/build-review-finding-identity.js';
 import { buildReviewPolicyIdentity } from '../../src/engine/build-review-review-frontier.js';
 import { deriveChangedFileReferences } from '../../src/engine/build-review-projections.js';
 import { getBuildReviewRubricDescriptor } from '../../src/engine/build-review-registry.js';
@@ -51,7 +60,7 @@ const { buildPrdAuditProjection } = vi.hoisted(() => ({
 }));
 
 vi.mock('../../src/engine/prd-audit-projection.js', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../../src/engine/prd-audit-projection.js')>(),
+  ...(await importOriginal<typeof import('../../src/engine/prd-audit-projection.js')>()),
   buildPrdAuditProjection,
 }));
 
@@ -67,7 +76,9 @@ function prdAuditProjectionFixture() {
       version: 1 as const,
       plan: { intent: 'Audit the typed verdict.' },
       criteria: [{ id: 'S1.1', storyId: '1', kind: 'happy' as const, text: 'The audit returns a typed verdict.' }],
-      tasks: [], prd: { kind: 'absent' as const }, coherence: { kind: 'absent' as const },
+      tasks: [],
+      prd: { kind: 'absent' as const },
+      coherence: { kind: 'absent' as const },
       changes: { base: 'base', head: 'head', changedFiles: [], excerpts: [], omittedFiles: [] },
       history: { kind: 'absent' as const },
     },
@@ -81,12 +92,16 @@ function prdAuditPassResult(): InvokeResult {
     exitCode: 0,
     finalStructuredResult: {
       version: 'v1',
-      criterionJudgments: [{
-        criterion: { storyId: '1', ordinal: 1 }, grade: 'PASS',
-        evidence: 'The fixture returns a valid terminal judgment.',
-        rationale: 'The only active criterion is satisfied.',
-        requirementAssociations: [], evidenceTaskIds: [],
-      }],
+      criterionJudgments: [
+        {
+          criterion: { storyId: '1', ordinal: 1 },
+          grade: 'PASS',
+          evidence: 'The fixture returns a valid terminal judgment.',
+          rationale: 'The only active criterion is satisfied.',
+          requirementAssociations: [],
+          evidenceTaskIds: [],
+        },
+      ],
       noOwnerObservations: [],
     },
   };
@@ -113,9 +128,14 @@ describe('build_review declared replication suppressions', () => {
   const sourcePath = 'src/source-widget.ts';
   const targetPath = 'src/target-widget.ts';
   const duplication = (path = targetPath, evidence = `${sourcePath}:8`) => ({
-    concernKind: 'duplication' as const, severity: 'minor' as const, summary: 'The declared copy repeats the source implementation.',
+    concernKind: 'duplication' as const,
+    severity: 'minor' as const,
+    summary: 'The declared copy repeats the source implementation.',
     evidenceLocations: [evidence],
-    anchor: { rubric: 'implementationQuality' as const, locus: { path, contentHash: `sha256:${'a'.repeat(64)}`, display: 'declared target copy' } },
+    anchor: {
+      rubric: 'implementationQuality' as const,
+      locus: { path, contentHash: `sha256:${'a'.repeat(64)}`, display: 'declared target copy' },
+    },
   });
   const otherPath = 'src/other-widget.ts';
   const declaredPlanBody = `# Plan\n\n**Pattern-source:** ${sourcePath}\n**Rename-map:** source-widget -> target-widget\n`;
@@ -136,18 +156,31 @@ describe('build_review declared replication suppressions', () => {
       await writeFile(join(projectDir, targetPath), 'export const widget = true;\n', 'utf8');
       const gitRunner = async (args: string[]) => {
         if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
-        if (args[0] === 'rev-parse') return { exitCode: 0, stdout: args[1] === 'HEAD' ? 'head\n' : 'base-tip\n', stderr: '' };
+        if (args[0] === 'rev-parse')
+          return { exitCode: 0, stdout: args[1] === 'HEAD' ? 'head\n' : 'base-tip\n', stderr: '' };
         if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'base\n', stderr: '' };
-        if (args[0] === 'diff' && args.includes('--name-status')) return { exitCode: 0, stdout: `M\0${targetPath}\0M\0${otherPath}\0`, stderr: '' };
-        if (args[0] === 'diff') return { exitCode: 0, stdout: [
-          `diff --git a/${targetPath} b/${targetPath}\n@@ -1 +1 @@\n-export const widget = false;\n+export const widget = true;`,
-          `diff --git a/${otherPath} b/${otherPath}\n@@ -1 +1 @@\n-export const other = false;\n+export const other = true;`,
-        ].join('\n') + '\n', stderr: '' };
-        if (args[0] === 'show' && args[1] === 'head:.docs/plans/feature.md') return { exitCode: 0, stdout: planBody, stderr: '' };
-        if (args[0] === 'show' && args[1] === `head:${targetPath}`) return { exitCode: 0, stdout: 'export const widget = true;\n', stderr: '' };
-        if (args[0] === 'show' && args[1] === `base:${targetPath}`) return { exitCode: 0, stdout: 'export const widget = false;\n', stderr: '' };
-        if (args[0] === 'show' && args[1] === `head:${otherPath}`) return { exitCode: 0, stdout: 'export const other = true;\n', stderr: '' };
-        if (args[0] === 'show' && args[1] === `base:${otherPath}`) return { exitCode: 0, stdout: 'export const other = false;\n', stderr: '' };
+        if (args[0] === 'diff' && args.includes('--name-status'))
+          return { exitCode: 0, stdout: `M\0${targetPath}\0M\0${otherPath}\0`, stderr: '' };
+        if (args[0] === 'diff')
+          return {
+            exitCode: 0,
+            stdout:
+              [
+                `diff --git a/${targetPath} b/${targetPath}\n@@ -1 +1 @@\n-export const widget = false;\n+export const widget = true;`,
+                `diff --git a/${otherPath} b/${otherPath}\n@@ -1 +1 @@\n-export const other = false;\n+export const other = true;`,
+              ].join('\n') + '\n',
+            stderr: '',
+          };
+        if (args[0] === 'show' && args[1] === 'head:.docs/plans/feature.md')
+          return { exitCode: 0, stdout: planBody, stderr: '' };
+        if (args[0] === 'show' && args[1] === `head:${targetPath}`)
+          return { exitCode: 0, stdout: 'export const widget = true;\n', stderr: '' };
+        if (args[0] === 'show' && args[1] === `base:${targetPath}`)
+          return { exitCode: 0, stdout: 'export const widget = false;\n', stderr: '' };
+        if (args[0] === 'show' && args[1] === `head:${otherPath}`)
+          return { exitCode: 0, stdout: 'export const other = true;\n', stderr: '' };
+        if (args[0] === 'show' && args[1] === `base:${otherPath}`)
+          return { exitCode: 0, stdout: 'export const other = false;\n', stderr: '' };
         if (args[0] === 'ls-tree') return { exitCode: 0, stdout: '', stderr: '' };
         return { exitCode: 1, stdout: '', stderr: '' };
       };
@@ -157,11 +190,16 @@ describe('build_review declared replication suppressions', () => {
         config: {
           build_review: {
             enabled: true,
-            rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: true } },
+            rubrics: {
+              testQuality: { enabled: false },
+              security: { enabled: false },
+              implementationQuality: { enabled: true },
+            },
           },
         } as HarnessConfig,
         buildReviewInputOptions: {
-          inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: 'head', outcome: 'PASS' } } as never),
+          inspectTestSuite: async () =>
+            ({ status: 'CURRENT', evidence: { provenanceHeadSha: 'head', outcome: 'PASS' } }) as never,
         },
         buildReviewEffectiveResolver: async (_projectRoot, result) => {
           const resolved = deriveEffectiveBuildReviewVerdict(result);
@@ -170,16 +208,28 @@ describe('build_review declared replication suppressions', () => {
           return { ok: true, feature: { version: 'v1', repository: projectDir, feature: 'replication' }, effective };
         },
       });
-      vi.spyOn(runner as any, 'fileExists').mockImplementation(async (...args: any[]) => args[0] === join(projectDir, sourcePath));
+      vi.spyOn(runner as any, 'fileExists').mockImplementation(
+        async (...args: any[]) => args[0] === join(projectDir, sourcePath),
+      );
       vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any) => {
-        const loci = Object.fromEntries(projection.changedFiles.map((file: any) => [file.path, {
-          path: file.path,
-          contentHash: file.hunks[0].contentHash,
-          display: `${file.path}:1`,
-        }]));
+        const loci = Object.fromEntries(
+          projection.changedFiles.map((file: any) => [
+            file.path,
+            {
+              path: file.path,
+              contentHash: file.hunks[0].contentHash,
+              display: `${file.path}:1`,
+            },
+          ]),
+        );
         return {
-          kind: 'judged', rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-          contractVersion: 'v4', findings: [finding = makeFinding({ target: loci[targetPath], other: loci[otherPath] })], verdict: 'FAIL',
+          kind: 'judged',
+          rubric: branch.rubric,
+          lapId: projection.lapId,
+          snapshotDigest: projection.snapshotDigest,
+          contractVersion: 'v4',
+          findings: [(finding = makeFinding({ target: loci[targetPath], other: loci[otherPath] }))],
+          verdict: 'FAIL',
         };
       });
 
@@ -187,7 +237,12 @@ describe('build_review declared replication suppressions', () => {
       expect(runResult).toMatchObject({ success: true });
 
       const persisted = JSON.parse(await readFile(join(projectDir, '.pipeline/build-review.json'), 'utf8'));
-      const identity = canonicalizeBuildReviewFindingIdentity({ rubric: 'implementationQuality', contractVersion: 'v4', concernKind: finding!.concernKind, anchor: finding!.anchor })!;
+      const identity = canonicalizeBuildReviewFindingIdentity({
+        rubric: 'implementationQuality',
+        contractVersion: 'v4',
+        concernKind: finding!.concernKind,
+        anchor: finding!.anchor,
+      })!;
       return { persisted, effective, identity };
     } finally {
       await rm(projectDir, { recursive: true, force: true });
@@ -205,15 +260,21 @@ describe('build_review declared replication suppressions', () => {
   });
 
   it.each([
-    ['an off-target anchor', ({ other }: any) => ({
-      ...duplication(otherPath),
-      anchor: { rubric: 'implementationQuality' as const, locus: other },
-    })],
-    ['mixed source and foreign evidence', ({ target }: any) => ({
-      ...duplication(),
-      evidenceLocations: [`${sourcePath}:8`, `${otherPath}:8`],
-      anchor: { rubric: 'implementationQuality' as const, locus: target },
-    })],
+    [
+      'an off-target anchor',
+      ({ other }: any) => ({
+        ...duplication(otherPath),
+        anchor: { rubric: 'implementationQuality' as const, locus: other },
+      }),
+    ],
+    [
+      'mixed source and foreign evidence',
+      ({ target }: any) => ({
+        ...duplication(),
+        evidenceLocations: [`${sourcePath}:8`, `${otherPath}:8`],
+        anchor: { rubric: 'implementationQuality' as const, locus: target },
+      }),
+    ],
   ])('does not suppress declared replication with %s', async (_label, makeFinding) => {
     const { persisted, effective, identity } = await runDeclaredReplication(makeFinding);
 
@@ -222,22 +283,21 @@ describe('build_review declared replication suppressions', () => {
   });
 
   it('does not suppress a source-only duplication when the plan has no Pattern-source declaration', async () => {
-    const { persisted, effective, identity } = await runDeclaredReplication(({ target }) => ({
-      ...duplication(),
-      anchor: { rubric: 'implementationQuality', locus: target },
-    }), '# Plan\n\nThis plan declares no replication source.\n');
+    const { persisted, effective, identity } = await runDeclaredReplication(
+      ({ target }) => ({
+        ...duplication(),
+        anchor: { rubric: 'implementationQuality', locus: target },
+      }),
+      '# Plan\n\nThis plan declares no replication source.\n',
+    );
 
     expect(persisted.declaredReplicationSuppressions).toEqual([]);
     expect(effective).toMatchObject({ verdict: 'FAIL', unresolvedFindingIds: [identity.id] });
   });
 });
 
-function interactiveRuntime(
-  key: 'claude' | 'codex',
-  invokeResponse: LLMProvider['invoke'],
-) {
-  const policy =
-    key === 'claude' ? CLAUDE_POLICY : CODEX_MODEL_POLICY;
+function interactiveRuntime(key: 'claude' | 'codex', invokeResponse: LLMProvider['invoke']) {
+  const policy = key === 'claude' ? CLAUDE_POLICY : CODEX_MODEL_POLICY;
   const lifecycleCapability = { synchronousSpawnPermit: true } as const;
   const nativeSchemaCapability = { nativeOutputSchema: true } as const;
   return {
@@ -262,8 +322,7 @@ const emptyState: ConductState = {};
 // Session reuse was removed by design: every provider invocation mints its
 // own fresh UUID (never a store-derived id) and never resumes. Tests assert
 // uniqueness + UUID shape instead of pinning store-supplied session names.
-const FRESH_SESSION_ID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const FRESH_SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function expectUniqueFreshSessionIds(sessionIds: ReadonlyArray<string | undefined>): void {
   expect(sessionIds.length).toBeGreaterThan(0);
@@ -274,19 +333,23 @@ function expectUniqueFreshSessionIds(sessionIds: ReadonlyArray<string | undefine
 describe('DefaultStepRunner', () => {
   it('carries the provider that produced provider exit facts onto the step result', () => {
     const runner = new DefaultStepRunner(createMockProvider(), 'session-1', '/tmp/project');
-    const toStepRunResult = (runner as unknown as {
-      toStepRunResult(step: StepName, result: ProviderExecutionResult): unknown;
-    }).toStepRunResult.bind(runner);
+    const toStepRunResult = (
+      runner as unknown as {
+        toStepRunResult(step: StepName, result: ProviderExecutionResult): unknown;
+      }
+    ).toStepRunResult.bind(runner);
 
-    expect(toStepRunResult('remediate', {
-      success: false,
-      output: 'provider failed',
-      exitCode: 1,
-      preferredProvider: 'codex',
-      actualProvider: 'claude',
-      exitFacts: { processErrorCode: 'E2BIG' },
-      attempts: [],
-    })).toMatchObject({
+    expect(
+      toStepRunResult('remediate', {
+        success: false,
+        output: 'provider failed',
+        exitCode: 1,
+        preferredProvider: 'codex',
+        actualProvider: 'claude',
+        exitFacts: { processErrorCode: 'E2BIG' },
+        attempts: [],
+      }),
+    ).toMatchObject({
       provider: 'claude',
       exitFacts: { processErrorCode: 'E2BIG' },
     });
@@ -307,40 +370,73 @@ describe('DefaultStepRunner', () => {
     const settle = vi.fn(async (_memberId: string) => {});
     const source = {
       identity: {
-        snapshotDigest: 'sha256:snapshot', contentDigest: 'sha256:content',
-        mergeBase: 'a'.repeat(40), headSha: 'b'.repeat(40),
+        snapshotDigest: 'sha256:snapshot',
+        contentDigest: 'sha256:content',
+        mergeBase: 'a'.repeat(40),
+        headSha: 'b'.repeat(40),
       },
       baselinePath: join(projectDir, 'baseline'),
       headPath: join(projectDir, 'head'),
     };
     const runner = new DefaultStepRunner(createMockProvider(), 'materialization-settlement', projectDir, {
-      buildReviewEffectiveResolver: async () => ({
-        ok: true,
-        feature: { version: 'v1', repository: projectDir, feature: 'materialization-settlement' },
-        effective: {
-          rawVerdict: 'FAIL', verdict: 'FAIL', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
-          skippedRubrics: ['testQuality'], infrastructureFailureRubrics: ['portable'],
-          uncoveredInfrastructureFailureRubrics: ['portable'], uncoveredScopeIncompleteRubrics: [],
-        },
-      }) as never,
+      buildReviewEffectiveResolver: async () =>
+        ({
+          ok: true,
+          feature: { version: 'v1', repository: projectDir, feature: 'materialization-settlement' },
+          effective: {
+            rawVerdict: 'FAIL',
+            verdict: 'FAIL',
+            acceptedFindingIds: [],
+            unresolvedFindingIds: [],
+            suppressedFindingIds: [],
+            skippedRubrics: ['testQuality'],
+            infrastructureFailureRubrics: ['portable'],
+            uncoveredInfrastructureFailureRubrics: ['portable'],
+            uncoveredScopeIncompleteRubrics: [],
+          },
+        }) as never,
     });
-    const config = resolveBuildReviewConfig({
-      llm_provider: 'claude',
-      build_review: {
-        enabled: true,
-        rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
-        custom_rubrics: {
-          portable: { enabled: true, skill: 'portable-policy', question: 'Check the frozen input.', llm_provider: 'claude' },
-          portableTwo: { enabled: true, skill: 'portable-two-policy', question: 'Check the frozen input again.', llm_provider: 'claude' },
+    const config = resolveBuildReviewConfig(
+      {
+        llm_provider: 'claude',
+        build_review: {
+          enabled: true,
+          rubrics: {
+            testQuality: { enabled: false },
+            security: { enabled: false },
+            implementationQuality: { enabled: false },
+          },
+          custom_rubrics: {
+            portable: {
+              enabled: true,
+              skill: 'portable-policy',
+              question: 'Check the frozen input.',
+              llm_provider: 'claude',
+            },
+            portableTwo: {
+              enabled: true,
+              skill: 'portable-two-policy',
+              question: 'Check the frozen input again.',
+              llm_provider: 'claude',
+            },
+          },
         },
-      },
-    } as HarnessConfig, CLAUDE_POLICY);
+      } as HarnessConfig,
+      CLAUDE_POLICY,
+    );
     expect(config.catalog).toHaveLength(2);
     const inputs = {
       sourceSnapshot: {
-        digest: 'sha256:snapshot', contentDigest: 'sha256:content', baseRef: 'origin/main',
-        mergeBase: 'a'.repeat(40), headSha: 'b'.repeat(40), diff: '', planBody: '', repairContext: [],
-        removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, sourceChanges: [],
+        digest: 'sha256:snapshot',
+        contentDigest: 'sha256:content',
+        baseRef: 'origin/main',
+        mergeBase: 'a'.repeat(40),
+        headSha: 'b'.repeat(40),
+        diff: '',
+        planBody: '',
+        repairContext: [],
+        removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
+        sourceChanges: [],
       },
       sourceMaterialization: {
         source,
@@ -350,13 +446,17 @@ describe('DefaultStepRunner', () => {
     } as never;
 
     try {
-      await (runner as unknown as {
-        runRubricBuildReview(value: unknown, resolved: typeof config, tier: ConductState['complexity_tier']): Promise<unknown>;
-      }).runRubricBuildReview(inputs, config, 'S');
+      await (
+        runner as unknown as {
+          runRubricBuildReview(
+            value: unknown,
+            resolved: typeof config,
+            tier: ConductState['complexity_tier'],
+          ): Promise<unknown>;
+        }
+      ).runRubricBuildReview(inputs, config, 'S');
 
-      expect(settle.mock.calls.map(([memberId]) => memberId).sort()).toEqual(
-        ['portable', 'portableTwo'],
-      );
+      expect(settle.mock.calls.map(([memberId]) => memberId).sort()).toEqual(['portable', 'portableTwo']);
     } finally {
       await rm(projectDir, { recursive: true, force: true });
     }
@@ -388,59 +488,92 @@ describe('DefaultStepRunner', () => {
     });
     const source = {
       identity: {
-        snapshotDigest: 'sha256:snapshot', contentDigest: 'sha256:content',
-        mergeBase: 'a'.repeat(40), headSha: 'b'.repeat(40),
+        snapshotDigest: 'sha256:snapshot',
+        contentDigest: 'sha256:content',
+        mergeBase: 'a'.repeat(40),
+        headSha: 'b'.repeat(40),
       },
       baselinePath,
       headPath,
     };
-    const config = resolveBuildReviewConfig({
-      llm_provider: 'claude',
-      build_review: {
-        enabled: true,
-        rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
-        custom_rubrics: {
-          portable: {
-            enabled: true, skill: 'portable-policy', question: 'Check the frozen input.',
-            llm_provider: ['pi', 'claude'], max_retries: 1,
+    const config = resolveBuildReviewConfig(
+      {
+        llm_provider: 'claude',
+        build_review: {
+          enabled: true,
+          rubrics: {
+            testQuality: { enabled: false },
+            security: { enabled: false },
+            implementationQuality: { enabled: false },
+          },
+          custom_rubrics: {
+            portable: {
+              enabled: true,
+              skill: 'portable-policy',
+              question: 'Check the frozen input.',
+              llm_provider: ['pi', 'claude'],
+              max_retries: 1,
+            },
           },
         },
-      },
-    } as HarnessConfig, CLAUDE_POLICY);
+      } as HarnessConfig,
+      CLAUDE_POLICY,
+    );
     const runner = new DefaultStepRunner(createMockProvider(), 'custom-policy-catalog', projectDir, {
-      providerRuntimes: new ProviderRuntimeSet([
-        runtime('pi', piInvoke),
-        runtime('claude', claudeInvoke),
-      ]),
+      providerRuntimes: new ProviderRuntimeSet([runtime('pi', piInvoke), runtime('claude', claudeInvoke)]),
       sessionStore: new ProviderSessionStore(),
       configuredProviders: ['pi', 'claude'],
-      providerAttempt: (step, attempt) => { attempts.push({ type: 'provider_attempt', step, ...attempt }); },
-      buildReviewPolicyCatalog: async () => [{
-        semanticName: 'portable-policy', source: 'project', installationOrigin: '/fixture/project',
-        canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project',
-        declaredDependencies: [], availability: 'available',
-      }],
+      providerAttempt: (step, attempt) => {
+        attempts.push({ type: 'provider_attempt', step, ...attempt });
+      },
+      buildReviewPolicyCatalog: async () => [
+        {
+          semanticName: 'portable-policy',
+          source: 'project',
+          installationOrigin: '/fixture/project',
+          canonicalSkillPath: '/fixture/project/SKILL.md',
+          packageRoot: '/fixture/project',
+          declaredDependencies: [],
+          availability: 'available',
+        },
+      ],
       buildReviewPolicyCapture: async (policy) => ({
-        policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md',
+        policy,
+        materialPath: '/runtime/policy',
+        definitionPath: '/runtime/policy/SKILL.md',
         manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Portable policy\n') }],
         metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
         digest: `sha256-v1:${'a'.repeat(64)}`,
       }),
-      buildReviewEffectiveResolver: async () => ({
-        ok: true,
-        feature: { version: 'v1', repository: projectDir, feature: 'custom-policy-catalog' },
-        effective: {
-          rawVerdict: 'PASS', verdict: 'PASS', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
-          skippedRubrics: ['testQuality'], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
-          uncoveredScopeIncompleteRubrics: [],
-        },
-      }) as never,
+      buildReviewEffectiveResolver: async () =>
+        ({
+          ok: true,
+          feature: { version: 'v1', repository: projectDir, feature: 'custom-policy-catalog' },
+          effective: {
+            rawVerdict: 'PASS',
+            verdict: 'PASS',
+            acceptedFindingIds: [],
+            unresolvedFindingIds: [],
+            suppressedFindingIds: [],
+            skippedRubrics: ['testQuality'],
+            infrastructureFailureRubrics: [],
+            uncoveredInfrastructureFailureRubrics: [],
+            uncoveredScopeIncompleteRubrics: [],
+          },
+        }) as never,
     });
     const inputs = {
       sourceSnapshot: {
-        digest: 'sha256:snapshot', contentDigest: 'sha256:content', baseRef: 'origin/main',
-        mergeBase: 'a'.repeat(40), headSha: 'b'.repeat(40), diff: '', planBody: '', repairContext: [],
-        removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, sourceChanges: [],
+        digest: 'sha256:snapshot',
+        contentDigest: 'sha256:content',
+        baseRef: 'origin/main',
+        mergeBase: 'a'.repeat(40),
+        headSha: 'b'.repeat(40),
+        diff: '',
+        planBody: '',
+        repairContext: [],
+        removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
+        sourceChanges: [],
       },
       sourceMaterialization: {
         source,
@@ -451,9 +584,18 @@ describe('DefaultStepRunner', () => {
     } as never;
 
     try {
-      await (runner as unknown as {
-        runRubricBuildReview(value: unknown, resolved: typeof config, tier: ConductState['complexity_tier'], planPath: undefined, context: undefined, capabilities: unknown): Promise<unknown>;
-      }).runRubricBuildReview(inputs, config, 'S', undefined, undefined, {
+      await (
+        runner as unknown as {
+          runRubricBuildReview(
+            value: unknown,
+            resolved: typeof config,
+            tier: ConductState['complexity_tier'],
+            planPath: undefined,
+            context: undefined,
+            capabilities: unknown,
+          ): Promise<unknown>;
+        }
+      ).runRubricBuildReview(inputs, config, 'S', undefined, undefined, {
         claude: { provider: 'claude', platform: process.platform, status: 'available' },
       });
 
@@ -472,17 +614,28 @@ describe('DefaultStepRunner', () => {
         deltaHunks: [{ path: 'src/current.ts', contentHash: `sha256:${'e'.repeat(64)}` }],
         outOfDeltaSourceIds: ['portable:prior-finding'],
       };
-      await (runner as unknown as {
-        dispatchInstalledBuildReviewPolicy(...args: readonly unknown[]): Promise<unknown>;
-      }).dispatchInstalledBuildReviewPolicy(
-        config.catalog[0], inputs, 'lap-scope-projection', 'S', undefined,
+      await (
+        runner as unknown as {
+          dispatchInstalledBuildReviewPolicy(...args: readonly unknown[]): Promise<unknown>;
+        }
+      ).dispatchInstalledBuildReviewPolicy(
+        config.catalog[0],
+        inputs,
+        'lap-scope-projection',
+        'S',
+        undefined,
         async () => ({ provider: 'claude', platform: process.platform, status: 'available' }),
-        join(projectDir, '.pipeline'), undefined, durableScope, undefined, undefined,
+        join(projectDir, '.pipeline'),
+        undefined,
+        durableScope,
+        undefined,
+        undefined,
         async (policyIdentity: string) => ({ ...durableScope, policyIdentity }),
       );
       // Covers: task:rem-as-built-6-r2
-      const serializedCustomInput = (claudeInvoke.mock.calls[1]![0] as InvokeOptions).prompt
-        .match(/Frozen build-review input [^\n]+\.\nReview scope: (.+)\n/)?.[1];
+      const serializedCustomInput = (claudeInvoke.mock.calls[1]![0] as InvokeOptions).prompt.match(
+        /Frozen build-review input [^\n]+\.\nReview scope: (.+)\n/,
+      )?.[1];
       expect(serializedCustomInput).toBeDefined();
       expect(JSON.parse(serializedCustomInput!)).toEqual({
         reviewScope: {
@@ -493,13 +646,18 @@ describe('DefaultStepRunner', () => {
       expect(serializedCustomInput).not.toContain('predecessorLapId');
       expect(serializedCustomInput).not.toContain('reviewedHunks');
       expect(serializedCustomInput).not.toContain('outOfDeltaSourceIds');
-      expect(attempts).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          provider: 'pi', outcome: 'unavailable', invoked: false,
-          skipReason: 'setup-unavailable', reason: expect.stringContaining('#2852'),
-        }),
-        expect.objectContaining({ provider: 'claude', invoked: true }),
-      ]));
+      expect(attempts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            provider: 'pi',
+            outcome: 'unavailable',
+            invoked: false,
+            skipReason: 'setup-unavailable',
+            reason: expect.stringContaining('#2852'),
+          }),
+          expect.objectContaining({ provider: 'claude', invoked: true }),
+        ]),
+      );
     } finally {
       await rm(projectDir, { recursive: true, force: true });
     }
@@ -511,32 +669,54 @@ describe('DefaultStepRunner', () => {
       ok: true,
       feature: { version: 'v1', repository: projectDir, feature: 'custom-only-allowance' },
       effective: {
-        rawVerdict: 'FAIL', verdict: 'FAIL', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
-        skippedRubrics: ['testQuality'], infrastructureFailureRubrics: ['portable'],
-        uncoveredInfrastructureFailureRubrics: ['portable'], uncoveredScopeIncompleteRubrics: [],
+        rawVerdict: 'FAIL',
+        verdict: 'FAIL',
+        acceptedFindingIds: [],
+        unresolvedFindingIds: [],
+        suppressedFindingIds: [],
+        skippedRubrics: ['testQuality'],
+        infrastructureFailureRubrics: ['portable'],
+        uncoveredInfrastructureFailureRubrics: ['portable'],
+        uncoveredScopeIncompleteRubrics: [],
       },
     }));
     const runner = new DefaultStepRunner(createMockProvider(), 'custom-only-allowance', projectDir, {
       buildReviewEffectiveResolver: resolver as never,
     });
     const declaration = {
-      version: 'v1' as const, rubricId: 'portable', semanticSkill: 'portable-policy',
-      question: 'Check the frozen input.', resources: [],
+      version: 'v1' as const,
+      rubricId: 'portable',
+      semanticSkill: 'portable-policy',
+      question: 'Check the frozen input.',
+      resources: [],
     };
-    const publish = (lap: number) => (runner as unknown as {
-      publishCustomOnlyBuildReview(input: unknown): Promise<{ success: boolean; output: string; currentLapMechanicalFault?: boolean }>;
-    }).publishCustomOnlyBuildReview({
-      lapId: `lap-${lap}`,
-      inputs: { sourceSnapshot: { digest: 'sha256:snapshot' } },
-      customResults: {
-        portable: {
-          declaration,
-          result: { kind: 'infrastructure-failure', rubric: 'portable', reason: 'policy-load-failed', detail: 'catalog unavailable' },
+    const publish = (lap: number) =>
+      (
+        runner as unknown as {
+          publishCustomOnlyBuildReview(
+            input: unknown,
+          ): Promise<{ success: boolean; output: string; currentLapMechanicalFault?: boolean }>;
+        }
+      ).publishCustomOnlyBuildReview({
+        lapId: `lap-${lap}`,
+        inputs: { sourceSnapshot: { digest: 'sha256:snapshot' } },
+        customResults: {
+          portable: {
+            declaration,
+            result: {
+              kind: 'infrastructure-failure',
+              rubric: 'portable',
+              reason: 'policy-load-failed',
+              detail: 'catalog unavailable',
+            },
+          },
         },
-      },
-      currentCustomRubrics: ['portable'],
-      config: resolveBuildReviewConfig({ llm_provider: 'claude', build_review: { enabled: true } } as HarnessConfig, CLAUDE_POLICY),
-    });
+        currentCustomRubrics: ['portable'],
+        config: resolveBuildReviewConfig(
+          { llm_provider: 'claude', build_review: { enabled: true } } as HarnessConfig,
+          CLAUDE_POLICY,
+        ),
+      });
     const aggregatePath = join(projectDir, '.pipeline', 'build-review.json');
 
     try {
@@ -568,21 +748,30 @@ describe('DefaultStepRunner', () => {
       providerLifecycleTimer: {
         now: () => now,
         schedule: (callback) => {
-          queueMicrotask(() => { now += 1; callback(); });
+          queueMicrotask(() => {
+            now += 1;
+            callback();
+          });
           return {};
         },
         cancel: () => undefined,
       },
       providerLifecycleEpisodeStore: episodeStore,
     });
-    const dispatch = (runner as unknown as {
-      dispatchProviderWithLifecycleSupervision: (
-        step: StepName,
-        options: ExecuteProviderCandidatesInput['options'],
-        run: () => Promise<never>,
-      ) => Promise<ProviderExecutionResult>;
-    }).dispatchProviderWithLifecycleSupervision.bind(runner);
-    return dispatch('build', { prompt: 'prepare provider', cwd: projectDir }, () => new Promise<never>(() => undefined));
+    const dispatch = (
+      runner as unknown as {
+        dispatchProviderWithLifecycleSupervision: (
+          step: StepName,
+          options: ExecuteProviderCandidatesInput['options'],
+          run: () => Promise<never>,
+        ) => Promise<ProviderExecutionResult>;
+      }
+    ).dispatchProviderWithLifecycleSupervision.bind(runner);
+    return dispatch(
+      'build',
+      { prompt: 'prepare provider', cwd: projectDir },
+      () => new Promise<never>(() => undefined),
+    );
   }
 
   it('preserves a failed lifecycle halt-marker write for the provider caller', async () => {
@@ -655,7 +844,10 @@ describe('DefaultStepRunner', () => {
           providerExecution: {
             configuredProviders: ['codex'],
             runtimes: new ProviderRuntimeSet([
-              interactiveRuntime('codex', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 }))),
+              interactiveRuntime(
+                'codex',
+                vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })),
+              ),
             ]),
             sessions: new ProviderSessionStore(),
             executor: providerExecutor,
@@ -681,7 +873,10 @@ describe('DefaultStepRunner', () => {
           providerExecution: {
             configuredProviders: ['claude'],
             runtimes: new ProviderRuntimeSet([
-              interactiveRuntime('claude', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 }))),
+              interactiveRuntime(
+                'claude',
+                vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })),
+              ),
             ]),
             sessions: new ProviderSessionStore(),
             executor: providerExecutor,
@@ -723,7 +918,8 @@ describe('DefaultStepRunner', () => {
   });
 
   it('forwards resolved effort only when the provider-aware result resolves it', async () => {
-    const providerExecutor = vi.fn()
+    const providerExecutor = vi
+      .fn()
       .mockResolvedValueOnce({
         success: true,
         output: 'done',
@@ -745,22 +941,24 @@ describe('DefaultStepRunner', () => {
       providerExecution: {
         configuredProviders: ['codex'],
         runtimes: new ProviderRuntimeSet([
-          interactiveRuntime('codex', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 }))),
+          interactiveRuntime(
+            'codex',
+            vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })),
+          ),
         ]),
         sessions: new ProviderSessionStore(),
         executor: providerExecutor,
       },
     });
 
-    const results = [
-      await runner.run('build', emptyState),
-      await runner.run('build', emptyState),
-    ];
+    const results = [await runner.run('build', emptyState), await runner.run('build', emptyState)];
 
-    expect(results.map((result) => ({
-      hasEffort: Object.hasOwn(result, 'effort'),
-      effort: (result as { effort?: string }).effort,
-    }))).toEqual([
+    expect(
+      results.map((result) => ({
+        hasEffort: Object.hasOwn(result, 'effort'),
+        effort: (result as { effort?: string }).effort,
+      })),
+    ).toEqual([
       { hasEffort: true, effort: 'high' },
       { hasEffort: false, effort: undefined },
     ]);
@@ -778,7 +976,12 @@ describe('DefaultStepRunner', () => {
     const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
       providerExecution: {
         configuredProviders: ['codex'],
-        runtimes: new ProviderRuntimeSet([interactiveRuntime('codex', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })))]),
+        runtimes: new ProviderRuntimeSet([
+          interactiveRuntime(
+            'codex',
+            vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })),
+          ),
+        ]),
         sessions: new ProviderSessionStore(),
         executor: providerExecutor,
         taskAttribution: {
@@ -814,7 +1017,12 @@ describe('DefaultStepRunner', () => {
     const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
       providerExecution: {
         configuredProviders: ['claude'],
-        runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })))]),
+        runtimes: new ProviderRuntimeSet([
+          interactiveRuntime(
+            'claude',
+            vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })),
+          ),
+        ]),
         sessions: new ProviderSessionStore(),
         executor: providerExecutor,
       },
@@ -849,7 +1057,12 @@ describe('DefaultStepRunner', () => {
     const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
       providerExecution: {
         configuredProviders: ['claude'],
-        runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })))]),
+        runtimes: new ProviderRuntimeSet([
+          interactiveRuntime(
+            'claude',
+            vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })),
+          ),
+        ]),
         sessions: new ProviderSessionStore(),
         executor: providerExecutor,
       },
@@ -885,7 +1098,12 @@ describe('DefaultStepRunner', () => {
     const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
       providerExecution: {
         configuredProviders: ['claude'],
-        runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })))]),
+        runtimes: new ProviderRuntimeSet([
+          interactiveRuntime(
+            'claude',
+            vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })),
+          ),
+        ]),
         sessions: new ProviderSessionStore(),
         executor: providerExecutor,
       },
@@ -914,7 +1132,12 @@ describe('DefaultStepRunner', () => {
     const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
       providerExecution: {
         configuredProviders: ['claude'],
-        runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })))]),
+        runtimes: new ProviderRuntimeSet([
+          interactiveRuntime(
+            'claude',
+            vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })),
+          ),
+        ]),
         sessions: new ProviderSessionStore(),
         executor: providerExecutor,
         diagnosticLog: featureLog,
@@ -997,13 +1220,15 @@ describe('DefaultStepRunner', () => {
       const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
         config: { llm_provider: providerKey, steps: { remediate: { llm_provider: providerKey } } },
         configuredProviders: [providerKey],
-        providerRuntimes: new ProviderRuntimeSet([{
-          key: providerKey,
-          provider,
-          policy,
-          builtIn: true,
-          availability: new ModelAvailability(policy.modelFallbackLadder),
-        }]),
+        providerRuntimes: new ProviderRuntimeSet([
+          {
+            key: providerKey,
+            provider,
+            policy,
+            builtIn: true,
+            availability: new ModelAvailability(policy.modelFallbackLadder),
+          },
+        ]),
         sessionStore: new ProviderSessionStore(),
       });
 
@@ -1037,13 +1262,15 @@ describe('DefaultStepRunner', () => {
     const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
       config: { llm_provider: 'claude', steps: { remediate: { llm_provider: 'claude' } } },
       configuredProviders: ['claude'],
-      providerRuntimes: new ProviderRuntimeSet([{
-        key: 'claude',
-        provider,
-        policy: CLAUDE_POLICY,
-        builtIn: true,
-        availability: new ModelAvailability(CLAUDE_POLICY.modelFallbackLadder),
-      }]),
+      providerRuntimes: new ProviderRuntimeSet([
+        {
+          key: 'claude',
+          provider,
+          policy: CLAUDE_POLICY,
+          builtIn: true,
+          availability: new ModelAvailability(CLAUDE_POLICY.modelFallbackLadder),
+        },
+      ]),
       sessionStore: new ProviderSessionStore(),
     });
 
@@ -1101,7 +1328,12 @@ describe('DefaultStepRunner', () => {
       const runner = new DefaultStepRunner(createMockProvider(), 'session', projectDir, {
         providerExecution: {
           configuredProviders: ['claude'],
-          runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })))]),
+          runtimes: new ProviderRuntimeSet([
+            interactiveRuntime(
+              'claude',
+              vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })),
+            ),
+          ]),
           sessions: new ProviderSessionStore(),
           executor: providerExecutor,
         },
@@ -1146,7 +1378,12 @@ describe('DefaultStepRunner', () => {
         },
         providerExecution: {
           configuredProviders: ['claude'],
-          runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })))]),
+          runtimes: new ProviderRuntimeSet([
+            interactiveRuntime(
+              'claude',
+              vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })),
+            ),
+          ]),
           sessions: new ProviderSessionStore(),
           executor: providerExecutor as unknown as typeof executeProviderCandidates,
         },
@@ -1201,7 +1438,12 @@ describe('DefaultStepRunner', () => {
         heartbeatWatchdog: { pollIntervalMs: 5, now: () => Date.now() + 60 * 60_000 },
         providerExecution: {
           configuredProviders: ['claude'],
-          runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })))]),
+          runtimes: new ProviderRuntimeSet([
+            interactiveRuntime(
+              'claude',
+              vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })),
+            ),
+          ]),
           sessions: new ProviderSessionStore(),
           executor: providerExecutor as unknown as typeof executeProviderCandidates,
         },
@@ -1228,7 +1470,12 @@ describe('DefaultStepRunner', () => {
         config,
         providerExecution: {
           configuredProviders: ['claude'],
-          runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })))]),
+          runtimes: new ProviderRuntimeSet([
+            interactiveRuntime(
+              'claude',
+              vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })),
+            ),
+          ]),
           sessions: new ProviderSessionStore(),
           executor: providerExecutor,
         },
@@ -1260,20 +1507,23 @@ describe('DefaultStepRunner', () => {
     };
     const sessions = new ProviderSessionStore();
     const runner = new DefaultStepRunner(provider, 'session', projectDir, {
-      gitRunner: async (args) => args[0] === 'rev-parse' && args[1] === 'HEAD'
-        ? { exitCode: 0, stdout: 'head\n', stderr: '' }
-        : { exitCode: 1, stdout: '', stderr: 'unexpected git command' },
+      gitRunner: async (args) =>
+        args[0] === 'rev-parse' && args[1] === 'HEAD'
+          ? { exitCode: 0, stdout: 'head\n', stderr: '' }
+          : { exitCode: 1, stdout: '', stderr: 'unexpected git command' },
       providerExecution: {
         configuredProviders: ['claude'],
-        runtimes: new ProviderRuntimeSet([{
-          key: 'claude',
-          provider,
-          lifecycleCapability: provider.lifecycleCapability,
-          nativeSchemaCapability: { nativeOutputSchema: true },
-          policy: CLAUDE_POLICY,
-          builtIn: true,
-          availability: new ModelAvailability(CLAUDE_POLICY.modelFallbackLadder),
-        }]),
+        runtimes: new ProviderRuntimeSet([
+          {
+            key: 'claude',
+            provider,
+            lifecycleCapability: provider.lifecycleCapability,
+            nativeSchemaCapability: { nativeOutputSchema: true },
+            policy: CLAUDE_POLICY,
+            builtIn: true,
+            availability: new ModelAvailability(CLAUDE_POLICY.modelFallbackLadder),
+          },
+        ]),
         sessions,
       },
     });
@@ -1287,11 +1537,7 @@ describe('DefaultStepRunner', () => {
       const ship = await runner.run('prd_audit', emptyState);
 
       expect(ship).toMatchObject({ success: true });
-      expect(permits).toEqual([
-        { permitted: true },
-        { permitted: true },
-        { permitted: true },
-      ]);
+      expect(permits).toEqual([{ permitted: true }, { permitted: true }, { permitted: true }]);
     } finally {
       buildPrdAuditProjection.mockReset();
       await rm(projectDir, { recursive: true, force: true });
@@ -1303,14 +1549,29 @@ describe('DefaultStepRunner', () => {
       const candidate = { step: 'build', providerKey: 'codex', model: 'gpt', effort: 'medium' };
       await input.prepareCandidateSelfHost(candidate, {});
       await input.withCandidateSafety(candidate, async () => ({ success: true, output: 'done', exitCode: 0 }));
-      return { success: true, output: 'done', exitCode: 0, preferredProvider: 'codex', actualProvider: 'codex', attempts: [] };
+      return {
+        success: true,
+        output: 'done',
+        exitCode: 0,
+        preferredProvider: 'codex',
+        actualProvider: 'codex',
+        attempts: [],
+      };
     });
     const context: any = {
       configuredProviders: ['codex'],
-      runtimes: new ProviderRuntimeSet([interactiveRuntime('codex', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })))]),
-      sessions: new ProviderSessionStore(), executor,
+      runtimes: new ProviderRuntimeSet([
+        interactiveRuntime(
+          'codex',
+          vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })),
+        ),
+      ]),
+      sessions: new ProviderSessionStore(),
+      executor,
     };
-    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', { providerExecution: context });
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
+      providerExecution: context,
+    });
     const prepared = vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 }));
     const safety = vi.fn(async (_candidate, invoke) => invoke());
     context.prepareCandidateSelfHost = prepared;
@@ -1327,24 +1588,47 @@ describe('DefaultStepRunner', () => {
     const executor = vi.fn(async (input: any) => {
       input.onCandidateStart('build', {
         provider: { kind: 'known', id: 'codex' },
-        executionContext: { executionId: 'configured-run', subject: { kind: 'configured-member', parentGroup: 'review', member: 'security' } },
+        executionContext: {
+          executionId: 'configured-run',
+          subject: { kind: 'configured-member', parentGroup: 'review', member: 'security' },
+        },
       });
-      return { success: true, output: 'done', exitCode: 0, preferredProvider: 'codex', actualProvider: 'codex', attempts: [] };
+      return {
+        success: true,
+        output: 'done',
+        exitCode: 0,
+        preferredProvider: 'codex',
+        actualProvider: 'codex',
+        attempts: [],
+      };
     });
     const context: any = {
       configuredProviders: ['codex'],
       runtimes: new ProviderRuntimeSet([interactiveRuntime('codex', vi.fn())]),
-      sessions: new ProviderSessionStore(), executor, onCandidateStart,
+      sessions: new ProviderSessionStore(),
+      executor,
+      onCandidateStart,
     };
-    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', { providerExecution: context });
-
-    await runner.run('build', emptyState, {
-      executionContext: { executionId: 'configured-run', subject: { kind: 'configured-member', parentGroup: 'review', member: 'security' } },
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
+      providerExecution: context,
     });
 
-    expect(onCandidateStart).toHaveBeenCalledWith('build', expect.objectContaining({
-      executionContext: { executionId: 'configured-run', subject: { kind: 'configured-member', parentGroup: 'review', member: 'security' } },
-    }));
+    await runner.run('build', emptyState, {
+      executionContext: {
+        executionId: 'configured-run',
+        subject: { kind: 'configured-member', parentGroup: 'review', member: 'security' },
+      },
+    });
+
+    expect(onCandidateStart).toHaveBeenCalledWith(
+      'build',
+      expect.objectContaining({
+        executionContext: {
+          executionId: 'configured-run',
+          subject: { kind: 'configured-member', parentGroup: 'review', member: 'security' },
+        },
+      }),
+    );
   });
 
   it('does not await a candidate-start listener before entering the provider runtime', async () => {
@@ -1382,7 +1666,9 @@ describe('DefaultStepRunner', () => {
       sessions: new ProviderSessionStore(),
       executor,
     };
-    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', { providerExecution: context });
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
+      providerExecution: context,
+    });
 
     await expect(runner.run('build', emptyState)).resolves.toMatchObject({
       success: false,
@@ -1395,17 +1681,33 @@ describe('DefaultStepRunner', () => {
       const candidate = { step: 'build_review', providerKey: 'claude', model: 'sonnet', effort: 'medium' };
       const selfHost = await input.prepareCandidateSelfHost(candidate, {});
       await selfHost.teardown();
-      return { success: true, output: 'reviewed', exitCode: 0, preferredProvider: 'claude', actualProvider: 'claude', attempts: [] };
+      return {
+        success: true,
+        output: 'reviewed',
+        exitCode: 0,
+        preferredProvider: 'claude',
+        actualProvider: 'claude',
+        attempts: [],
+      };
     });
     const teardown = vi.fn(async () => {});
     const prepared = vi.fn(async () => ({ executable: 'claude', env: {}, args: [], teardown }));
     const context: any = {
       configuredProviders: ['claude'],
-      runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })))]),
-      sessions: new ProviderSessionStore(), executor, prepareCandidateSelfHost: prepared,
+      runtimes: new ProviderRuntimeSet([
+        interactiveRuntime(
+          'claude',
+          vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })),
+        ),
+      ]),
+      sessions: new ProviderSessionStore(),
+      executor,
+      prepareCandidateSelfHost: prepared,
       withCandidateSafety: async (_candidate: unknown, invoke: () => Promise<InvokeResult>) => invoke(),
     };
-    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', { providerExecution: context });
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
+      providerExecution: context,
+    });
     const execute = (runner as any).executeProviderAwareOneShot.bind(runner);
 
     await execute('build_review', { prompt: 'review', cwd: '/tmp/project', dangerouslySkipPermissions: true });
@@ -1427,28 +1729,18 @@ describe('DefaultStepRunner', () => {
       exitCode: 0,
     }));
     const claudeInteractive = vi.fn().mockResolvedValue(undefined);
-    const codexInvoke = vi.fn(
-      async (options: InvokeOptions): Promise<InvokeResult> => ({
-        success: true,
-        output: options.prompt.endsWith('conduct complexity')
-          ? [
-              'MODELS: 6',
-              'INTEGRATIONS: 1',
-              'AUTH: 0',
-              'STATE_MACHINES: 1',
-              'STORIES: 8',
-              'TIER: M',
-            ].join('\n')
-          : options.prompt.endsWith('rebase')
-            ? '{"resolved": true}'
-            : 'done',
-        exitCode: 0,
-      }),
-    );
+    const codexInvoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => ({
+      success: true,
+      output: options.prompt.endsWith('conduct complexity')
+        ? ['MODELS: 6', 'INTEGRATIONS: 1', 'AUTH: 0', 'STATE_MACHINES: 1', 'STORIES: 8', 'TIER: M'].join('\n')
+        : options.prompt.endsWith('rebase')
+          ? '{"resolved": true}'
+          : 'done',
+      exitCode: 0,
+    }));
     const provider = (
       invoke: LLMProvider['invoke'],
-      _invokeInteractive: LLMProvider['invoke'] =
-        vi.fn().mockResolvedValue(undefined),
+      _invokeInteractive: LLMProvider['invoke'] = vi.fn().mockResolvedValue(undefined),
     ): LLMProvider => ({
       lifecycleCapability: { synchronousSpawnPermit: true },
       invoke,
@@ -1530,12 +1822,14 @@ describe('DefaultStepRunner', () => {
       hint: 'typecheck failed',
       slug: 'ci-feature',
     });
-    const executeOneShot = (runner as unknown as {
-      executeProviderAwareOneShot: (
-        step: StepName,
-        options: ExecuteProviderCandidatesInput['options'],
-      ) => Promise<InvokeResult>;
-    }).executeProviderAwareOneShot.bind(runner);
+    const executeOneShot = (
+      runner as unknown as {
+        executeProviderAwareOneShot: (
+          step: StepName,
+          options: ExecuteProviderCandidatesInput['options'],
+        ) => Promise<InvokeResult>;
+      }
+    ).executeProviderAwareOneShot.bind(runner);
     await executeOneShot('attribution_verify', {
       prompt: 'Judge attribution exactly as supplied.\nTask: runtime-07',
       cwd: '/wt/attribution',
@@ -1549,45 +1843,39 @@ describe('DefaultStepRunner', () => {
     const transportedOptions = codexInvoke.mock.calls.map(([options]) => options);
     const freeFormDispatches = [3, 4, 5, 6].map((index) => ({
       step: executionInputs[index]?.step,
-      byteIdentical:
-        executionInputs[index]?.options.prompt === transportedOptions[index]?.prompt,
+      byteIdentical: executionInputs[index]?.options.prompt === transportedOptions[index]?.prompt,
       hasCandidateFactory: executionInputs[index]?.optionsForCandidate !== undefined,
     }));
-    const claudeSkillInvoke = vi.fn(
-      async (options: InvokeOptions): Promise<InvokeResult> => ({
-        success: true,
-        output: options.prompt.endsWith('conduct complexity')
-          ? 'MODELS: 0\nINTEGRATIONS: 0\nAUTH: 0\nSTATE_MACHINES: 0\nSTORIES: 1\nTIER: S'
-          : options.prompt.endsWith('rebase')
-            ? '{"resolved": true}'
-            : 'done',
-        exitCode: 0,
-      }),
-    );
-    const claudeSkillRunner = new DefaultStepRunner(
-      provider(claudeSkillInvoke),
-      'claude-session',
-      '/tmp/project',
-      {
-        config: {
-          llm_provider: 'claude',
-          steps: {
-            complexity: { llm_provider: 'claude' },
-            remediate: { llm_provider: 'claude' },
-            rebase: { llm_provider: 'claude' },
-          },
+    const claudeSkillInvoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => ({
+      success: true,
+      output: options.prompt.endsWith('conduct complexity')
+        ? 'MODELS: 0\nINTEGRATIONS: 0\nAUTH: 0\nSTATE_MACHINES: 0\nSTORIES: 1\nTIER: S'
+        : options.prompt.endsWith('rebase')
+          ? '{"resolved": true}'
+          : 'done',
+      exitCode: 0,
+    }));
+    const claudeSkillRunner = new DefaultStepRunner(provider(claudeSkillInvoke), 'claude-session', '/tmp/project', {
+      config: {
+        llm_provider: 'claude',
+        steps: {
+          complexity: { llm_provider: 'claude' },
+          remediate: { llm_provider: 'claude' },
+          rebase: { llm_provider: 'claude' },
         },
-        providerRuntimes: new ProviderRuntimeSet([{
+      },
+      providerRuntimes: new ProviderRuntimeSet([
+        {
           key: 'claude',
           provider: provider(claudeSkillInvoke),
           policy: CLAUDE_POLICY,
           builtIn: true,
           availability: new ModelAvailability(CLAUDE_POLICY.modelFallbackLadder),
-        }]),
-        sessionStore: new ProviderSessionStore(),
-        configuredProviders: ['claude'],
-      },
-    );
+        },
+      ]),
+      sessionStore: new ProviderSessionStore(),
+      configuredProviders: ['claude'],
+    });
     await claudeSkillRunner.assessComplexity();
     await claudeSkillRunner.run('remediate', emptyState);
     await claudeSkillRunner.resolveRebaseConflict({
@@ -1595,12 +1883,8 @@ describe('DefaultStepRunner', () => {
       projectRoot: '/wt/rebase',
       baseRef: 'origin/main',
     });
-    const claudeSkillPrompts = claudeSkillInvoke.mock.calls.map(
-      ([options]) => options.prompt,
-    );
-    const codexSessionIds = codexInvoke.mock.calls.map(
-      ([options]) => options.sessionId,
-    );
+    const claudeSkillPrompts = claudeSkillInvoke.mock.calls.map(([options]) => options.prompt);
+    const codexSessionIds = codexInvoke.mock.calls.map(([options]) => options.sessionId);
     expectUniqueFreshSessionIds(codexSessionIds);
 
     expect({
@@ -1613,9 +1897,7 @@ describe('DefaultStepRunner', () => {
         interactive: claudeInteractive.mock.calls,
       },
       beginBranchCalls: beginBranch.mock.calls,
-      remediateRetryInput: providerExecutor.mock.calls
-        .map(([input]) => input)
-        .find(({ step }) => step === 'remediate'),
+      remediateRetryInput: providerExecutor.mock.calls.map(([input]) => input).find(({ step }) => step === 'remediate'),
       codexCalls: codexInvoke.mock.calls.map(([options]) => ({
         prompt: options.prompt,
         sessionId: options.sessionId,
@@ -1767,10 +2049,7 @@ describe('DefaultStepRunner', () => {
       provider: 'codex' as const,
       tokenUsage: { input: 13, output: 7, cacheRead: 9, cacheCreation: 2 },
     },
-  ])('records $provider streaming-envelope usage in its provider_attempt event', async ({
-    provider,
-    tokenUsage,
-  }) => {
+  ])('records $provider streaming-envelope usage in its provider_attempt event', async ({ provider, tokenUsage }) => {
     const emitted: ProviderAttemptEvent[] = [];
     const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
       // Faithful provider fake: REPL output is plaintext and has no machine
@@ -1827,84 +2106,87 @@ describe('DefaultStepRunner', () => {
         outputTokens: 9,
       },
     },
-  ])('reports $provider live streaming burn before the provider invocation finishes', async ({
-    provider,
-    observation,
-  }) => {
-    const root = await mkdtemp(join(tmpdir(), 'streaming-live-status-'));
-    const worktreeBase = join(root, '.worktrees');
-    const projectDir = join(worktreeBase, 'streaming-feature');
-    const pipelineDir = join(projectDir, '.pipeline');
-    const events = new ConductorEventEmitter();
-    const persister = new EventPersister(join(pipelineDir, 'events.jsonl'), events);
-    persister.start();
-    let invocationFinished = false;
-    let liveStatusWasReadWhileInvocationOpen = false;
-    let resolveLiveStatus!: () => void;
-    const liveStatusRead = new Promise<void>((resolve) => {
-      resolveLiveStatus = resolve;
-    });
-    let liveStatus: Awaited<ReturnType<typeof scanInheritedState>> | undefined;
-    events.once('provider_stream_progress', async () => {
-      liveStatus = await scanInheritedState({
-        worktreeBase,
-        processedDir: join(root, '.daemon/processed'),
-        discover: async () => [],
+  ])(
+    'reports $provider live streaming burn before the provider invocation finishes',
+    async ({ provider, observation }) => {
+      const root = await mkdtemp(join(tmpdir(), 'streaming-live-status-'));
+      const worktreeBase = join(root, '.worktrees');
+      const projectDir = join(worktreeBase, 'streaming-feature');
+      const pipelineDir = join(projectDir, '.pipeline');
+      const events = new ConductorEventEmitter();
+      const persister = new EventPersister(join(pipelineDir, 'events.jsonl'), events);
+      persister.start();
+      let invocationFinished = false;
+      let liveStatusWasReadWhileInvocationOpen = false;
+      let resolveLiveStatus!: () => void;
+      const liveStatusRead = new Promise<void>((resolve) => {
+        resolveLiveStatus = resolve;
       });
-      liveStatusWasReadWhileInvocationOpen = !invocationFinished;
-      resolveLiveStatus();
-    });
-    const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
-      if (!options.onProviderStream) {
-        return { success: false, output: 'stream observer missing', exitCode: 1 };
+      let liveStatus: Awaited<ReturnType<typeof scanInheritedState>> | undefined;
+      events.once('provider_stream_progress', async () => {
+        liveStatus = await scanInheritedState({
+          worktreeBase,
+          processedDir: join(root, '.daemon/processed'),
+          discover: async () => [],
+        });
+        liveStatusWasReadWhileInvocationOpen = !invocationFinished;
+        resolveLiveStatus();
+      });
+      const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+        if (!options.onProviderStream) {
+          return { success: false, output: 'stream observer missing', exitCode: 1 };
+        }
+        options.onProviderStream(observation);
+        await liveStatusRead;
+        invocationFinished = true;
+        return { success: true, output: 'stream complete', exitCode: 0 };
+      });
+      const runner = new DefaultStepRunner(createMockProvider(), 'session', projectDir, {
+        mode: 'auto',
+        config: {
+          llm_provider: [provider],
+          steps: { explore: { llm_provider: provider } },
+        },
+        events,
+        providerRuntimes: new ProviderRuntimeSet([interactiveRuntime(provider, invoke)]),
+        configuredProviders: [provider],
+        sessionStore: new ProviderSessionStore(),
+      });
+
+      try {
+        await mkdir(pipelineDir, { recursive: true });
+        await writeFile(join(pipelineDir, 'conduct-state.json'), JSON.stringify({ explore: 'in_progress' }));
+        await events.emit({ type: 'step_started', step: 'explore', index: 1 });
+
+        const result = await runner.run('explore', emptyState);
+        const progress = liveStatus?.inProgress.find(
+          (entry) => entry.slug === 'streaming-feature',
+        )?.providerStreamProgress;
+
+        expect(invoke).toHaveBeenCalledWith(
+          expect.objectContaining({
+            interactive: false,
+            onProviderStream: expect.any(Function),
+          }),
+        );
+        expect(liveStatusWasReadWhileInvocationOpen).toBe(true);
+        expect(invocationFinished).toBe(true);
+        expect(progress).toMatchObject(observation);
+        expect(progress?.uncachedInputTokens).toBeGreaterThan(0);
+        expect(progress?.outputTokens).toBeGreaterThan(0);
+        if (observation.childObservability === 'unsupported') {
+          expect(progress).toMatchObject({ childObservability: 'unsupported' });
+          expect(progress).not.toHaveProperty('activeChildren');
+        } else {
+          expect(progress).toMatchObject({ childObservability: 'observed', activeChildren: 2 });
+        }
+        expect(result).toMatchObject({ success: true, output: 'stream complete' });
+      } finally {
+        persister.stop();
+        await rm(root, { recursive: true, force: true });
       }
-      options.onProviderStream(observation);
-      await liveStatusRead;
-      invocationFinished = true;
-      return { success: true, output: 'stream complete', exitCode: 0 };
-    });
-    const runner = new DefaultStepRunner(createMockProvider(), 'session', projectDir, {
-      mode: 'auto',
-      config: {
-        llm_provider: [provider],
-        steps: { explore: { llm_provider: provider } },
-      },
-      events,
-      providerRuntimes: new ProviderRuntimeSet([interactiveRuntime(provider, invoke)]),
-      configuredProviders: [provider],
-      sessionStore: new ProviderSessionStore(),
-    });
-
-    try {
-      await mkdir(pipelineDir, { recursive: true });
-      await writeFile(join(pipelineDir, 'conduct-state.json'), JSON.stringify({ explore: 'in_progress' }));
-      await events.emit({ type: 'step_started', step: 'explore', index: 1 });
-
-      const result = await runner.run('explore', emptyState);
-      const progress = liveStatus?.inProgress.find((entry) => entry.slug === 'streaming-feature')
-        ?.providerStreamProgress;
-
-      expect(invoke).toHaveBeenCalledWith(expect.objectContaining({
-        interactive: false,
-        onProviderStream: expect.any(Function),
-      }));
-      expect(liveStatusWasReadWhileInvocationOpen).toBe(true);
-      expect(invocationFinished).toBe(true);
-      expect(progress).toMatchObject(observation);
-      expect(progress?.uncachedInputTokens).toBeGreaterThan(0);
-      expect(progress?.outputTokens).toBeGreaterThan(0);
-      if (observation.childObservability === 'unsupported') {
-        expect(progress).toMatchObject({ childObservability: 'unsupported' });
-        expect(progress).not.toHaveProperty('activeChildren');
-      } else {
-        expect(progress).toMatchObject({ childObservability: 'observed', activeChildren: 2 });
-      }
-      expect(result).toMatchObject({ success: true, output: 'stream complete' });
-    } finally {
-      persister.stop();
-      await rm(root, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 
   it('keeps a quiet streaming step working from its activity heartbeat, not stream observations', async () => {
     const root = await mkdtemp(join(tmpdir(), 'quiet-stream-status-'));
@@ -1969,10 +2251,12 @@ describe('DefaultStepRunner', () => {
       });
       const entry = liveStatus.inProgress.find((candidate) => candidate.slug === 'quiet-stream-feature');
 
-      expect(invoke).toHaveBeenCalledWith(expect.objectContaining({
-        interactive: false,
-        onActivity: expect.any(Function),
-      }));
+      expect(invoke).toHaveBeenCalledWith(
+        expect.objectContaining({
+          interactive: false,
+          onActivity: expect.any(Function),
+        }),
+      );
       expect(pulseWasSupplied).toBe(true);
       expect(progressEvents).not.toHaveBeenCalled();
       expect(entry).toMatchObject({ step: 'explore', activityState: 'working' });
@@ -2016,25 +2300,17 @@ describe('DefaultStepRunner', () => {
       output: 'legacy provider must not run',
       exitCode: 0,
     }));
-    const provider = (
-      invoke: LLMProvider['invoke'],
-      _invokeInteractive: LLMProvider['invoke'],
-    ): LLMProvider => ({
+    const provider = (invoke: LLMProvider['invoke'], _invokeInteractive: LLMProvider['invoke']): LLMProvider => ({
       lifecycleCapability: { synchronousSpawnPermit: true },
       invoke,
     });
     const runtimes = new ProviderRuntimeSet([
       {
         key: 'claude',
-        provider: provider(
-          claudeInvoke,
-          claudeInteractive,
-        ),
+        provider: provider(claudeInvoke, claudeInteractive),
         policy: CLAUDE_POLICY,
         builtIn: true,
-        availability: new ModelAvailability(
-          CLAUDE_POLICY.modelFallbackLadder,
-        ),
+        availability: new ModelAvailability(CLAUDE_POLICY.modelFallbackLadder),
       },
       {
         key: 'codex',
@@ -2048,36 +2324,26 @@ describe('DefaultStepRunner', () => {
         ),
         policy: CODEX_MODEL_POLICY,
         builtIn: true,
-        availability: new ModelAvailability(
-          CODEX_MODEL_POLICY.modelFallbackLadder,
-        ),
+        availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
       },
     ]);
-    const sessionIds = [
-      'build-codex-session',
-      'explore-claude-session',
-    ][Symbol.iterator]();
+    const sessionIds = ['build-codex-session', 'explore-claude-session'][Symbol.iterator]();
     const sessions = new ProviderSessionStore({
       createSessionId: () => sessionIds.next().value ?? 'unexpected-session',
     });
     const beginStep = vi.spyOn(sessions, 'beginStep');
-    const runner = new DefaultStepRunner(
-      provider(legacyInvoke, legacyInteractive),
-      'legacy-session',
-      '/tmp/project',
-      {
-        config: {
-          llm_provider: ['claude', 'codex'],
-          steps: {
-            build: { llm_provider: 'codex' },
-            explore: { llm_provider: 'claude' },
-          },
+    const runner = new DefaultStepRunner(provider(legacyInvoke, legacyInteractive), 'legacy-session', '/tmp/project', {
+      config: {
+        llm_provider: ['claude', 'codex'],
+        steps: {
+          build: { llm_provider: 'codex' },
+          explore: { llm_provider: 'claude' },
         },
-        sessionStore: sessions,
-        providerRuntimes: runtimes,
-        configuredProviders: ['claude', 'codex'],
-      } satisfies StepRunnerOptions,
-    );
+      },
+      sessionStore: sessions,
+      providerRuntimes: runtimes,
+      configuredProviders: ['claude', 'codex'],
+    } satisfies StepRunnerOptions);
 
     await runner.resetSession('build');
     const build = await runner.run('build', emptyState);
@@ -2088,12 +2354,8 @@ describe('DefaultStepRunner', () => {
     // Each dispatch mints its own fresh session id; the store's ids are never
     // consulted and the step scope records nothing. The zero-arg mock typing
     // hides the real (options) call shape, so recover it explicitly.
-    const buildSessionId = (
-      codexInvoke.mock.calls as unknown as Array<[InvokeOptions]>
-    )[0]?.[0]?.sessionId;
-    const exploreSessionId = (
-      claudeInvoke.mock.calls as unknown as Array<[InvokeOptions]>
-    )[0]?.[0]?.sessionId;
+    const buildSessionId = (codexInvoke.mock.calls as unknown as Array<[InvokeOptions]>)[0]?.[0]?.sessionId;
+    const exploreSessionId = (claudeInvoke.mock.calls as unknown as Array<[InvokeOptions]>)[0]?.[0]?.sessionId;
     expectUniqueFreshSessionIds([buildSessionId, exploreSessionId]);
 
     expect({
@@ -2213,28 +2475,23 @@ describe('DefaultStepRunner', () => {
         return () => `cached-${++id}`;
       })(),
     });
-    const cachedRunner = new DefaultStepRunner(
-      createMockProvider(),
-      'legacy-cache-session',
-      '/tmp/project',
-      {
-        mode: 'interactive',
-        config: {
-          llm_provider: ['codex', 'claude'],
-          steps: {
-            explore: { llm_provider: 'codex' },
-            stories: { llm_provider: 'codex' },
-          },
+    const cachedRunner = new DefaultStepRunner(createMockProvider(), 'legacy-cache-session', '/tmp/project', {
+      mode: 'interactive',
+      config: {
+        llm_provider: ['codex', 'claude'],
+        steps: {
+          explore: { llm_provider: 'codex' },
+          stories: { llm_provider: 'codex' },
         },
-        sessionStore: cachedSessions,
-        providerRuntimes: new ProviderRuntimeSet([
-          interactiveRuntime('codex', unavailableCodex),
-          interactiveRuntime('claude', claudeFallback),
-        ]),
-        configuredProviders: ['codex', 'claude'],
-        providerWarn: vi.fn(),
       },
-    );
+      sessionStore: cachedSessions,
+      providerRuntimes: new ProviderRuntimeSet([
+        interactiveRuntime('codex', unavailableCodex),
+        interactiveRuntime('claude', claudeFallback),
+      ]),
+      configuredProviders: ['codex', 'claude'],
+      providerWarn: vi.fn(),
+    });
 
     await cachedRunner.resetSession('explore');
     await cachedRunner.run('explore', emptyState);
@@ -2276,23 +2533,16 @@ describe('DefaultStepRunner', () => {
     const retrySessions = new ProviderSessionStore({
       createSessionId: () => 'retry-claude-session',
     });
-    const retryRunner = new DefaultStepRunner(
-      createMockProvider(),
-      'legacy-retry-session',
-      '/tmp/project',
-      {
-        mode: 'interactive',
-        config: {
-          llm_provider: 'claude',
-          steps: { explore: { llm_provider: 'claude' } },
-        },
-        sessionStore: retrySessions,
-        providerRuntimes: new ProviderRuntimeSet([
-          interactiveRuntime('claude', throwingInteractive),
-        ]),
-        configuredProviders: ['claude'],
+    const retryRunner = new DefaultStepRunner(createMockProvider(), 'legacy-retry-session', '/tmp/project', {
+      mode: 'interactive',
+      config: {
+        llm_provider: 'claude',
+        steps: { explore: { llm_provider: 'claude' } },
       },
-    );
+      sessionStore: retrySessions,
+      providerRuntimes: new ProviderRuntimeSet([interactiveRuntime('claude', throwingInteractive)]),
+      configuredProviders: ['claude'],
+    });
 
     await retryRunner.resetSession('explore');
     const failed = await retryRunner.run('explore', emptyState);
@@ -2370,18 +2620,14 @@ describe('DefaultStepRunner', () => {
 
     await runner.resetSession('explore');
     await (
-      runner.runInteractive as unknown as (
-        step: StepName,
-        context: { step: StepName; reason: string },
-      ) => Promise<void>
+      runner.runInteractive as unknown as (step: StepName, context: { step: StepName; reason: string }) => Promise<void>
     )('explore', { step: 'explore', reason: failureReason });
 
     // Each recovery candidate mints its own fresh session id; the store's
     // 'recovery-N' ids never reach a provider.
-    const recoverySessionIds = [
-      ...unavailableCodex.mock.calls,
-      ...claudeFallback.mock.calls,
-    ].map(([options]) => options.sessionId);
+    const recoverySessionIds = [...unavailableCodex.mock.calls, ...claudeFallback.mock.calls].map(
+      ([options]) => options.sessionId,
+    );
     expectUniqueFreshSessionIds(recoverySessionIds);
     expect({
       capturedCalls: capturedInteractive.mock.calls,
@@ -2441,10 +2687,7 @@ describe('DefaultStepRunner', () => {
     const failureReason = 'manual test returned a failing acceptance scenario';
 
     await (
-      runner.runInteractive as unknown as (
-        step: StepName,
-        context: { step: StepName; reason: string },
-      ) => Promise<void>
+      runner.runInteractive as unknown as (step: StepName, context: { step: StepName; reason: string }) => Promise<void>
     )('manual_test', { step: 'manual_test', reason: failureReason });
 
     const options = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
@@ -2473,10 +2716,7 @@ describe('DefaultStepRunner', () => {
     const runner = new DefaultStepRunner(provider, 'legacy-session', '/tmp/project');
 
     await (
-      runner.runInteractive as unknown as (
-        step: StepName,
-        context: { step: StepName; reason: string },
-      ) => Promise<void>
+      runner.runInteractive as unknown as (step: StepName, context: { step: StepName; reason: string }) => Promise<void>
     )('build', { step: 'build', reason: '  ' });
 
     const options = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
@@ -2511,8 +2751,9 @@ describe('DefaultStepRunner', () => {
 
     expect(provider.invoke).toHaveBeenCalledTimes(2);
 
-    const [serial, branch] = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls
-      .map(([options]) => options as InvokeOptions);
+    const [serial, branch] = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([options]) => options as InvokeOptions,
+    );
     expect(serial).toMatchObject({
       prompt: '/explore',
       resume: false,
@@ -2534,14 +2775,18 @@ describe('DefaultStepRunner', () => {
       model: serial.model,
       effort: serial.effort,
     });
-    expect(serial.streamConsumer).toEqual(expect.objectContaining({
-      onProviderStream: expect.any(Function),
-      close: expect.any(Function),
-    }));
-    expect(branch.streamConsumer).toEqual(expect.objectContaining({
-      onProviderStream: expect.any(Function),
-      close: expect.any(Function),
-    }));
+    expect(serial.streamConsumer).toEqual(
+      expect.objectContaining({
+        onProviderStream: expect.any(Function),
+        close: expect.any(Function),
+      }),
+    );
+    expect(branch.streamConsumer).toEqual(
+      expect.objectContaining({
+        onProviderStream: expect.any(Function),
+        close: expect.any(Function),
+      }),
+    );
 
     const replProvider = createMockProvider();
     const replRunner = new DefaultStepRunner(replProvider, 'session-2', '/tmp/project');
@@ -2570,18 +2815,13 @@ describe('DefaultStepRunner', () => {
 
     for (const providerKey of ['claude', 'codex'] as const) {
       const provider = createMockProvider();
-      const runner = new DefaultStepRunner(
-        provider,
-        'shared-session',
-        '/wt/feature-x',
-        {
-          mode: 'interactive',
-          featureDesc: 'Provider-native skill invocation',
-          totalSteps: 14,
-          config: { llm_provider: providerKey },
-          providerKey,
-        },
-      );
+      const runner = new DefaultStepRunner(provider, 'shared-session', '/wt/feature-x', {
+        mode: 'interactive',
+        featureDesc: 'Provider-native skill invocation',
+        totalSteps: 14,
+        config: { llm_provider: providerKey },
+        providerKey,
+      });
 
       await runner.run('stories', emptyState);
 
@@ -2669,11 +2909,8 @@ describe('DefaultStepRunner', () => {
       { step: 'prd_audit', prompt: '$prd-audit' },
       { step: 'finish', prompt: '$finish' },
     ] satisfies ReadonlyArray<{ step: StepName; prompt: string }>;
-    const codexBoundary = vi.fn(
-      async (options: InvokeOptions): Promise<InvokeResult> =>
-        options.nativeSchema === undefined
-          ? { success: true, output: 'done', exitCode: 0 }
-          : prdAuditPassResult(),
+    const codexBoundary = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> =>
+      options.nativeSchema === undefined ? { success: true, output: 'done', exitCode: 0 } : prdAuditPassResult(),
     );
     const codexProvider: LLMProvider = {
       lifecycleCapability: { synchronousSpawnPermit: true },
@@ -2702,22 +2939,15 @@ describe('DefaultStepRunner', () => {
     const sessions = new ProviderSessionStore({
       createSessionId: () => `codex-normal-${++sessionSequence}`,
     });
-    const runner = new DefaultStepRunner(
-      createMockProvider(),
-      'legacy-session',
-      '/tmp/project',
-      {
-        config: {
-          llm_provider: ['claude', 'codex'],
-          steps: Object.fromEntries(
-            cases.map(({ step }) => [step, { llm_provider: 'codex' }]),
-          ),
-        } as HarnessConfig,
-        sessionStore: sessions,
-        providerRuntimes: runtimes,
-        configuredProviders: ['claude', 'codex'],
-      },
-    );
+    const runner = new DefaultStepRunner(createMockProvider(), 'legacy-session', '/tmp/project', {
+      config: {
+        llm_provider: ['claude', 'codex'],
+        steps: Object.fromEntries(cases.map(({ step }) => [step, { llm_provider: 'codex' }])),
+      } as HarnessConfig,
+      sessionStore: sessions,
+      providerRuntimes: runtimes,
+      configuredProviders: ['claude', 'codex'],
+    });
     const observed: Array<{ step: StepName; prompt: string }> = [];
 
     buildPrdAuditProjection.mockResolvedValue(prdAuditProjectionFixture());
@@ -2727,9 +2957,7 @@ describe('DefaultStepRunner', () => {
       const options = codexBoundary.mock.calls.at(-1)?.[0] as InvokeOptions;
       observed.push({
         step,
-        prompt: options.prompt.startsWith('$prd-audit\n\nPRD-AUDIT EVIDENCE')
-          ? '$prd-audit'
-          : options.prompt,
+        prompt: options.prompt.startsWith('$prd-audit\n\nPRD-AUDIT EVIDENCE') ? '$prd-audit' : options.prompt,
       });
     }
 
@@ -2954,9 +3182,7 @@ describe('DefaultStepRunner', () => {
 
   it('logs and surfaces the real thrown error instead of swallowing it (interactive dispatch)', async () => {
     const provider = createMockProvider();
-    (provider.invoke as ReturnType<typeof vi.fn>).mockRejectedValue(
-      new Error('ECONNRESET: provider process died'),
-    );
+    (provider.invoke as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('ECONNRESET: provider process died'));
     const log = vi.fn();
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', { log });
 
@@ -2966,9 +3192,7 @@ describe('DefaultStepRunner', () => {
       success: false,
       output: 'Session for explore exited with error: ECONNRESET: provider process died',
     });
-    expect(log).toHaveBeenCalledWith(
-      expect.stringContaining('ECONNRESET: provider process died'),
-    );
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('ECONNRESET: provider process died'));
   });
 
   it('logs and surfaces the real thrown error instead of swallowing it (provider-aware normal dispatch)', async () => {
@@ -2980,7 +3204,12 @@ describe('DefaultStepRunner', () => {
       log,
       providerExecution: {
         configuredProviders: ['claude'],
-        runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })))]),
+        runtimes: new ProviderRuntimeSet([
+          interactiveRuntime(
+            'claude',
+            vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })),
+          ),
+        ]),
         sessions: new ProviderSessionStore(),
         executor: providerExecutor,
       },
@@ -2992,9 +3221,7 @@ describe('DefaultStepRunner', () => {
       success: false,
       output: 'Session for build exited with error: candidate ladder exhausted: no live model',
     });
-    expect(log).toHaveBeenCalledWith(
-      expect.stringContaining('candidate ladder exhausted: no live model'),
-    );
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('candidate ladder exhausted: no live model'));
   });
 
   it('does not resume legacy scalar steps', async () => {
@@ -3002,7 +3229,7 @@ describe('DefaultStepRunner', () => {
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
 
     await runner.run('worktree', emptyState); // autonomous → invoke
-    await runner.run('memory', emptyState);   // autonomous → invoke
+    await runner.run('memory', emptyState); // autonomous → invoke
 
     const call1 = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     const call2 = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[1][0] as InvokeOptions;
@@ -3096,7 +3323,9 @@ describe('DefaultStepRunner', () => {
     expect(opts.systemPrompt).not.toContain('Read the full diff');
     expect(opts.systemPrompt).toContain('`/pr`');
     expect(opts.systemPrompt).toContain('`$pr`');
-    expect(opts.systemPrompt).toContain('Write only `.pipeline/finish-pr-prose.json` as `{"version":1,"title":"…","body":"…"}`');
+    expect(opts.systemPrompt).toContain(
+      'Write only `.pipeline/finish-pr-prose.json` as `{"version":1,"title":"…","body":"…"}`',
+    );
     expect(opts.systemPrompt).toContain('The engine validates and publishes that handoff');
     expect(opts.systemPrompt).toContain('leave every `ai-conductor:step` region and its markers unchanged');
     // It authors; it does not grade, and it makes no publication mechanics.
@@ -3127,7 +3356,9 @@ describe('DefaultStepRunner', () => {
     const opts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(opts.systemPrompt).toContain('FINISH PR PROSE REVISION');
     expect(opts.systemPrompt).toContain(guidance);
-    expect(opts.systemPrompt).toContain('Write only `.pipeline/finish-pr-prose.json` as `{"version":1,"title":"…","body":"…"}`');
+    expect(opts.systemPrompt).toContain(
+      'Write only `.pipeline/finish-pr-prose.json` as `{"version":1,"title":"…","body":"…"}`',
+    );
     expect(opts.systemPrompt).toContain('The engine validates and publishes that handoff');
     expect(opts.systemPrompt).toContain('Do not print the whole branch diff');
     expect(opts.systemPrompt).not.toContain('still carries the engine-seeded placeholder body');
@@ -3183,9 +3414,12 @@ describe('DefaultStepRunner', () => {
     });
     await interactiveRunner.run('finish', emptyState, { finishProsePass: 'judge' });
 
-    const interactivePrompt = ((provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions).systemPrompt;
+    const interactivePrompt = ((provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions)
+      .systemPrompt;
     expect(interactivePrompt).toContain('{"kind":"accepted"}');
-    expect(interactivePrompt).toContain('{"kind":"revision_required","reason":"placeholder|halt|structurally_incomplete"}');
+    expect(interactivePrompt).toContain(
+      '{"kind":"revision_required","reason":"placeholder|halt|structurally_incomplete"}',
+    );
     expect(interactivePrompt).toContain('{"kind":"timed_out"}');
     expect(interactivePrompt).toContain('{"kind":"provider_unavailable"}');
     expect(interactivePrompt).toContain('{"kind":"refused"}');
@@ -3195,8 +3429,17 @@ describe('DefaultStepRunner', () => {
     for (const prompt of [autoPrompt, interactivePrompt]) {
       if (prompt === undefined) throw new Error('FINISH judgment prompt was not supplied');
       for (const forbidden of [
-        'may repair', 'repair only', 'may edit', 'edit the PR', 'edit only', 'may rewrite', 'rewrite', 'in place',
-        'ai-conductor github-operation', '--request-file', 'pull-request.edit',
+        'may repair',
+        'repair only',
+        'may edit',
+        'edit the PR',
+        'edit only',
+        'may rewrite',
+        'rewrite',
+        'in place',
+        'ai-conductor github-operation',
+        '--request-file',
+        'pull-request.edit',
       ]) {
         expect(prompt.toLowerCase()).not.toContain(forbidden);
       }
@@ -3319,7 +3562,12 @@ describe('DefaultStepRunner', () => {
 
       // Marker file should exist
       const markerPath = join(pipeDir, 'session-created');
-      await expect(access(markerPath).then(() => true, () => false)).resolves.toBe(true);
+      await expect(
+        access(markerPath).then(
+          () => true,
+          () => false,
+        ),
+      ).resolves.toBe(true);
     });
 
     it('cold-starts a legacy scalar retry with a fresh session id', async () => {
@@ -3417,7 +3665,12 @@ describe('DefaultStepRunner', () => {
       await runner.run('worktree', emptyState);
 
       const markerPath = join(pipeDir, 'session-created');
-      await expect(access(markerPath).then(() => true, () => false)).resolves.toBe(false);
+      await expect(
+        access(markerPath).then(
+          () => true,
+          () => false,
+        ),
+      ).resolves.toBe(false);
     });
   });
 
@@ -3479,9 +3732,17 @@ describe('DefaultStepRunner', () => {
       // Run 11 steps (first has no cooldown, steps 2-10 use base, step 11 uses 2x).
       // complexity is engine-managed, so it is excluded from runner.run paths.
       const steps: StepName[] = [
-        'worktree', 'memory', 'explore', 'stories', 'conflict_check',
-        'plan', 'architecture_diagram', 'architecture_review',
-        'acceptance_specs', 'build', 'manual_test',
+        'worktree',
+        'memory',
+        'explore',
+        'stories',
+        'conflict_check',
+        'plan',
+        'architecture_diagram',
+        'architecture_review',
+        'acceptance_specs',
+        'build',
+        'manual_test',
       ];
       for (const step of steps) {
         await runner.run(step, emptyState);
@@ -3611,18 +3872,14 @@ describe('DefaultStepRunner', () => {
       const provider = createMockProvider();
       const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
 
-      await expect(runner.run('complexity' as StepName, emptyState)).rejects.toThrow(
-        /engine/i,
-      );
+      await expect(runner.run('complexity' as StepName, emptyState)).rejects.toThrow(/engine/i);
     });
 
     it('refuses to run() the rebase step (engine-managed)', async () => {
       const provider = createMockProvider();
       const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
 
-      await expect(runner.run('rebase' as StepName, emptyState)).rejects.toThrow(
-        /engine/i,
-      );
+      await expect(runner.run('rebase' as StepName, emptyState)).rejects.toThrow(/engine/i);
     });
 
     it('assessComplexity calls provider.invoke in print mode', async () => {
@@ -3728,11 +3985,11 @@ STORIES: 10`;
     it('scores a Large project (many models + integrations)', () => {
       expect(
         scoreComplexityFromCounts({
-          models: 12,     // L
+          models: 12, // L
           integrations: 3, // L
-          auth: 2,         // L
+          auth: 2, // L
           stateMachines: 2, // L
-          stories: 25,     // L
+          stories: 25, // L
         }),
       ).toBe('L');
     });
@@ -3752,11 +4009,11 @@ STORIES: 10`;
     it('breaks ties toward the higher tier (2S + 2L + 1M → L)', () => {
       expect(
         scoreComplexityFromCounts({
-          models: 2,        // S
-          integrations: 0,  // S
-          auth: 1,          // M
+          models: 2, // S
+          integrations: 0, // S
+          auth: 1, // M
           stateMachines: 2, // L
-          stories: 50,      // L
+          stories: 50, // L
         }),
       ).toBe('L');
     });
@@ -3764,16 +4021,12 @@ STORIES: 10`;
     it('returns null when fewer than 3 signals are available', () => {
       expect(scoreComplexityFromCounts({})).toBeNull();
       expect(scoreComplexityFromCounts({ models: 5 })).toBeNull();
-      expect(
-        scoreComplexityFromCounts({ models: 5, integrations: 1 }),
-      ).toBeNull();
+      expect(scoreComplexityFromCounts({ models: 5, integrations: 1 })).toBeNull();
     });
 
     it('scores with exactly 3 signals (borderline)', () => {
       // 3 signals: 1S + 1M + 1L → tie break toward L per assessTier
-      expect(
-        scoreComplexityFromCounts({ models: 2, integrations: 2, stories: 20 }),
-      ).toBe('L');
+      expect(scoreComplexityFromCounts({ models: 2, integrations: 2, stories: 20 })).toBe('L');
     });
   });
 
@@ -3795,8 +4048,7 @@ STORIES: 10`;
 
       try {
         await runner.assessComplexity();
-        const options = (provider.invoke as ReturnType<typeof vi.fn>).mock
-          .calls[0][0] as InvokeOptions;
+        const options = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
         expect({
           resume: options.resume,
           freshSessionId: options.sessionId !== 'legacy-session',
@@ -4013,8 +4265,10 @@ TIER: M`,
       await runner.resetSession();
 
       // Marker gone
-      const stillExists = await access(join(pipeDir, 'session-created'))
-        .then(() => true, () => false);
+      const stillExists = await access(join(pipeDir, 'session-created')).then(
+        () => true,
+        () => false,
+      );
       expect(stillExists).toBe(false);
 
       await runner.run('worktree', emptyState);
@@ -4056,21 +4310,14 @@ TIER: M`,
       await runner.run('acceptance_specs', emptyState);
 
       const calls = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls;
-      expect(calls[0][0].resume).toBe(false);  // first
-      expect(calls[1][0].resume).toBe(false);  // second
-      expect(calls[2][0].resume).toBe(false);  // post-reset
+      expect(calls[0][0].resume).toBe(false); // first
+      expect(calls[1][0].resume).toBe(false); // second
+      expect(calls[2][0].resume).toBe(false); // post-reset
     });
   });
 
   describe('interactive REPL dispatch for conversational steps', () => {
-    const replSteps: StepName[] = [
-      'explore',
-      'stories',
-      'plan',
-      'architecture_review',
-      'manual_test',
-      'finish',
-    ];
+    const replSteps: StepName[] = ['explore', 'stories', 'plan', 'architecture_review', 'manual_test', 'finish'];
 
     for (const step of replSteps) {
       it(`${step}: passes interactive: true when mode is 'default'`, async () => {
@@ -4158,10 +4405,7 @@ TIER: M`,
     });
 
     it('dispatchable one-shot steps stay print-mode even in default mode', async () => {
-      const oneShotSteps: StepName[] = [
-        'conflict_check',
-        'architecture_diagram',
-      ];
+      const oneShotSteps: StepName[] = ['conflict_check', 'architecture_diagram'];
       for (const step of oneShotSteps) {
         const provider = createMockProvider();
         const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
@@ -4176,10 +4420,7 @@ TIER: M`,
     });
 
     it('surviving one-shot steps stay print-mode even in interactive mode', async () => {
-      const oneShotSteps: StepName[] = [
-        'conflict_check',
-        'architecture_diagram',
-      ];
+      const oneShotSteps: StepName[] = ['conflict_check', 'architecture_diagram'];
       for (const step of oneShotSteps) {
         const provider = createMockProvider();
         const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
@@ -4221,8 +4462,9 @@ TIER: M`,
         modelOverride: 'fable',
       });
       // Simulate fable already known-dead from a prior invocation in this process.
-      (runner as unknown as { modelAvailability: { markDead: (m: string) => void } })
-        .modelAvailability.markDead('fable');
+      (runner as unknown as { modelAvailability: { markDead: (m: string) => void } }).modelAvailability.markDead(
+        'fable',
+      );
 
       const result = await runner.run('build', emptyState); // build is autonomous → invoke()
 
@@ -4245,12 +4487,15 @@ TIER: M`,
       const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
         modelOverride: 'fable',
       });
-      (runner as unknown as { modelAvailability: { markDead: (m: string) => void } })
-        .modelAvailability.markDead('fable');
-      (runner as unknown as { modelAvailability: { markDead: (m: string) => void } })
-        .modelAvailability.markDead('opus');
-      (runner as unknown as { modelAvailability: { markDead: (m: string) => void } })
-        .modelAvailability.markDead('sonnet');
+      (runner as unknown as { modelAvailability: { markDead: (m: string) => void } }).modelAvailability.markDead(
+        'fable',
+      );
+      (runner as unknown as { modelAvailability: { markDead: (m: string) => void } }).modelAvailability.markDead(
+        'opus',
+      );
+      (runner as unknown as { modelAvailability: { markDead: (m: string) => void } }).modelAvailability.markDead(
+        'sonnet',
+      );
 
       const result = await runner.run('build', emptyState);
 
@@ -4266,8 +4511,9 @@ TIER: M`,
         modelOverride: 'fable',
         mode: 'auto',
       });
-      (runner as unknown as { modelAvailability: { markDead: (m: string) => void } })
-        .modelAvailability.markDead('fable');
+      (runner as unknown as { modelAvailability: { markDead: (m: string) => void } }).modelAvailability.markDead(
+        'fable',
+      );
 
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       // explore is collaborative (not in AUTONOMOUS_STEPS) → invoke()
@@ -4276,9 +4522,7 @@ TIER: M`,
       expect(invoke).toHaveBeenCalledOnce();
       const opts = invoke.mock.calls[0][0] as InvokeOptions;
       expect(opts.model).toBe('opus');
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Downgraded from fable to opus'),
-      );
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Downgraded from fable to opus'));
       warnSpy.mockRestore();
     });
 
@@ -4291,9 +4535,11 @@ TIER: M`,
         modelOverride: 'fable',
         mode: 'auto',
       });
-      const availability = (runner as unknown as {
-        modelAvailability: { markDead: (model: string) => void };
-      }).modelAvailability;
+      const availability = (
+        runner as unknown as {
+          modelAvailability: { markDead: (model: string) => void };
+        }
+      ).modelAvailability;
       availability.markDead('fable');
       availability.markDead('opus');
       availability.markDead('sonnet');
@@ -4319,74 +4565,112 @@ TIER: M`,
       await writeFile(planPath, '# Plan\n\nDo the thing.\n', 'utf-8');
     });
 
-    it.each(['claude', 'codex'] as const)('correlates build-review provider attempts with the owning execution on %s', async (providerKey) => {
-      const executionContext: ExecutionContext = {
-        executionId: 'review-execution', subject: { kind: 'lifecycle-step', step: 'build_review' },
-      };
-      const attempts: ProviderAttemptEvent[] = [];
-      const events = new ConductorEventEmitter();
-      const spanExporter = new CapturingSpanExporter();
-      const warnings: string[] = [];
-      const visualizer = new OtelVisualizer(
-        resolveOtelConfig({ otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } }, join(dir, '.pipeline')),
-        { spanExporter, onWarning: (warning) => warnings.push(warning) },
-      );
-      visualizer.start(events);
-      const invoke = vi.fn(async (options: InvokeOptions) => {
-        options.spawnPermit?.();
-        return { success: true, output: '{"findings":[]}', exitCode: 0, finalStructuredResult: { findings: [] } };
-      });
-      const runner = new DefaultStepRunner(createMockProvider(), 'correlation', dir, {
-        gitRunner: scriptedGit(), planPath,
-        buildReviewEffectiveResolver: async () => ({
-          ok: true, feature: { version: 'v1', repository: dir, feature: 'correlation' },
-          effective: {
-            rawVerdict: 'PASS', verdict: 'PASS', acceptedFindingIds: [], unresolvedFindingIds: [],
-            suppressedFindingIds: [], skippedRubrics: ['testQuality'], infrastructureFailureRubrics: [],
-            uncoveredInfrastructureFailureRubrics: [],
+    it.each(['claude', 'codex'] as const)(
+      'correlates build-review provider attempts with the owning execution on %s',
+      async (providerKey) => {
+        const executionContext: ExecutionContext = {
+          executionId: 'review-execution',
+          subject: { kind: 'lifecycle-step', step: 'build_review' },
+        };
+        const attempts: ProviderAttemptEvent[] = [];
+        const events = new ConductorEventEmitter();
+        const spanExporter = new CapturingSpanExporter();
+        const warnings: string[] = [];
+        const visualizer = new OtelVisualizer(
+          resolveOtelConfig({ otel: { exporter: 'otlp', endpoint: 'http://localhost:4318' } }, join(dir, '.pipeline')),
+          { spanExporter, onWarning: (warning) => warnings.push(warning) },
+        );
+        visualizer.start(events);
+        const invoke = vi.fn(async (options: InvokeOptions) => {
+          options.spawnPermit?.();
+          return { success: true, output: '{"findings":[]}', exitCode: 0, finalStructuredResult: { findings: [] } };
+        });
+        const runner = new DefaultStepRunner(createMockProvider(), 'correlation', dir, {
+          gitRunner: scriptedGit(),
+          planPath,
+          buildReviewEffectiveResolver: async () => ({
+            ok: true,
+            feature: { version: 'v1', repository: dir, feature: 'correlation' },
+            effective: {
+              rawVerdict: 'PASS',
+              verdict: 'PASS',
+              acceptedFindingIds: [],
+              unresolvedFindingIds: [],
+              suppressedFindingIds: [],
+              skippedRubrics: ['testQuality'],
+              infrastructureFailureRubrics: [],
+              uncoveredInfrastructureFailureRubrics: [],
+            },
+          }),
+          ...currentBuildReviewProof(),
+          config: {
+            llm_provider: providerKey,
+            build_review: {
+              enabled: true,
+              rubrics: {
+                testQuality: { enabled: false },
+                security: { enabled: true, llm_provider: providerKey },
+                implementationQuality: { enabled: false },
+              },
+            },
+          } as HarnessConfig,
+          providerRuntimes: new ProviderRuntimeSet([interactiveRuntime(providerKey, invoke)]),
+          sessionStore: new ProviderSessionStore(),
+          configuredProviders: [providerKey],
+          buildReviewPolicyCatalog: async () => [
+            {
+              semanticName: 'build-review-security',
+              source: 'project',
+              installationOrigin: '/fixture/project',
+              canonicalSkillPath: '/fixture/project/SKILL.md',
+              packageRoot: '/fixture/project',
+              declaredDependencies: [],
+              availability: 'available',
+            },
+          ],
+          buildReviewPolicyCapture: async (policy) => ({
+            policy,
+            materialPath: '/runtime/policy',
+            definitionPath: '/runtime/policy/SKILL.md',
+            manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Build review security\n') }],
+            metadata: {
+              version: 1,
+              semanticName: policy.semanticName,
+              source: policy.source,
+              declaredDependencies: [],
+            },
+            digest: `sha256-v1:${'a'.repeat(64)}`,
+          }),
+          providerAttempt: async (step, attempt) => {
+            const event: ProviderAttemptEvent = { type: 'provider_attempt', step, ...attempt };
+            attempts.push(event);
+            await events.emit(event);
           },
-        }),
-        ...currentBuildReviewProof(),
-        config: { llm_provider: providerKey, build_review: {
-          enabled: true, rubrics: { testQuality: { enabled: false }, security: { enabled: true, llm_provider: providerKey }, implementationQuality: { enabled: false } },
-        } } as HarnessConfig,
-        providerRuntimes: new ProviderRuntimeSet([interactiveRuntime(providerKey, invoke)]),
-        sessionStore: new ProviderSessionStore(), configuredProviders: [providerKey],
-        buildReviewPolicyCatalog: async () => [{
-          semanticName: 'build-review-security', source: 'project', installationOrigin: '/fixture/project',
-          canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project',
-          declaredDependencies: [], availability: 'available',
-        }],
-        buildReviewPolicyCapture: async (policy) => ({
-          policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md',
-          manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Build review security\n') }],
-          metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
-          digest: `sha256-v1:${'a'.repeat(64)}`,
-        }),
-        providerAttempt: async (step, attempt) => {
-          const event: ProviderAttemptEvent = { type: 'provider_attempt', step, ...attempt };
-          attempts.push(event);
-          await events.emit(event);
-        },
-      });
+        });
 
-      try {
-        await events.emit({ type: 'step_started', step: 'build_review', index: 0, executionContext });
-        const result = await runner.run('build_review', { complexity_tier: 'M' }, { executionContext });
-        expect(result.success, JSON.stringify(result)).toBe(true);
-        await events.emit({ type: 'step_completed', step: 'build_review', status: 'done', executionContext });
-      } finally {
-        await visualizer.stop();
-      }
+        try {
+          await events.emit({ type: 'step_started', step: 'build_review', index: 0, executionContext });
+          const result = await runner.run('build_review', { complexity_tier: 'M' }, { executionContext });
+          expect(result.success, JSON.stringify(result)).toBe(true);
+          await events.emit({ type: 'step_completed', step: 'build_review', status: 'done', executionContext });
+        } finally {
+          await visualizer.stop();
+        }
 
-      expect(warnings).toEqual([]);
-      expect(spanExporter.getFinishedSpans().find((span) => span.name === 'build_review')?.attributes)
-        .toMatchObject({ 'conductor.provider': providerKey, 'conductor.complexity_tier': 'M' });
-      expect(attempts.some((attempt) => attempt.invoked)).toBe(true);
-      expect(attempts.filter((attempt) => attempt.lifecycle).map((attempt) => attempt.lifecycle!.phase))
-        .toEqual(['preparing', 'running', 'settled']);
-      for (const attempt of attempts) expect(attempt.executionContext).toEqual(executionContext);
-    });
+        expect(warnings).toEqual([]);
+        expect(spanExporter.getFinishedSpans().find((span) => span.name === 'build_review')?.attributes).toMatchObject({
+          'conductor.provider': providerKey,
+          'conductor.complexity_tier': 'M',
+        });
+        expect(attempts.some((attempt) => attempt.invoked)).toBe(true);
+        expect(attempts.filter((attempt) => attempt.lifecycle).map((attempt) => attempt.lifecycle!.phase)).toEqual([
+          'preparing',
+          'running',
+          'settled',
+        ]);
+        for (const attempt of attempts) expect(attempt.executionContext).toEqual(executionContext);
+      },
+    );
 
     it('routes an expired counterfactual deadline to the guarded scoped-run timeout without launching', async () => {
       const launcher = vi.fn<BuildReviewScopedLauncher>(() => {
@@ -4399,11 +4683,19 @@ TIER: M`,
       const controller = new AbortController();
       controller.abort();
 
-      const result = await (runner as unknown as {
-        runScopedTautologyCommand(cwd: string, selectors: readonly string[], signal: AbortSignal): Promise<{
-          kind: 'timeout'; stdout: string; stderr: string;
-        }>;
-      }).runScopedTautologyCommand('/counterfactual', ['test/engine/example.test.ts'], controller.signal);
+      const result = await (
+        runner as unknown as {
+          runScopedTautologyCommand(
+            cwd: string,
+            selectors: readonly string[],
+            signal: AbortSignal,
+          ): Promise<{
+            kind: 'timeout';
+            stdout: string;
+            stderr: string;
+          }>;
+        }
+      ).runScopedTautologyCommand('/counterfactual', ['test/engine/example.test.ts'], controller.signal);
 
       expect(launcher).not.toHaveBeenCalled();
       expect(result).toEqual({ kind: 'timeout', stdout: '', stderr: '' });
@@ -4414,17 +4706,21 @@ TIER: M`,
       const provider = createMockProvider();
       const coordinate = vi.fn(async () => ({ success: true, output: 'five rubric branches settled' }));
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        gitRunner: scriptedGit(), planPath,
+        gitRunner: scriptedGit(),
+        planPath,
         buildReviewCoordinator: coordinate,
         buildReviewInputOptions: {
-          inspectTestSuite: async () => ({
-            status: 'CURRENT', evidence: { provenanceHeadSha: 'head', outcome: 'PASS' },
-          } as never),
+          inspectTestSuite: async () =>
+            ({
+              status: 'CURRENT',
+              evidence: { provenanceHeadSha: 'head', outcome: 'PASS' },
+            }) as never,
         },
       });
 
       await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({
-        success: true, output: 'five rubric branches settled',
+        success: true,
+        output: 'five rubric branches settled',
       });
       expect(coordinate).toHaveBeenCalledOnce();
       expect(provider.invoke).not.toHaveBeenCalled();
@@ -4433,50 +4729,56 @@ TIER: M`,
     it.each([
       ['failed', false, 'review failed: missing coverage'],
       ['passed', true, 'review passed'],
-    ])('places a containment advisory around %s review output without changing its success result', async (_caseName, success, reviewOutput) => {
-      const provider = createMockProvider();
-      const warnings: string[] = [];
-      const coordinate = vi.fn(async () => ({ success, output: reviewOutput }));
-      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        gitRunner: scriptedGit(),
-        planPath,
-        config: { build_review: { scopeContainmentEnforced: true } } as HarnessConfig,
-        buildReviewCoordinator: coordinate,
-        log: (message) => warnings.push(message),
-        ...currentBuildReviewProof(),
-      });
+    ])(
+      'places a containment advisory around %s review output without changing its success result',
+      async (_caseName, success, reviewOutput) => {
+        const provider = createMockProvider();
+        const warnings: string[] = [];
+        const coordinate = vi.fn(async () => ({ success, output: reviewOutput }));
+        const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+          gitRunner: scriptedGit(),
+          planPath,
+          config: { build_review: { scopeContainmentEnforced: true } } as HarnessConfig,
+          buildReviewCoordinator: coordinate,
+          log: (message) => warnings.push(message),
+          ...currentBuildReviewProof(),
+        });
 
-      const result = await runner.run('build_review', emptyState);
+        const result = await runner.run('build_review', emptyState);
 
-      expect(result.success).toBe(success);
-      const advisory =
-        'Advisory: containment-floor: git repository check failed: fatal: not a git repository (or any of the parent directories): .git.';
-      expect(result.output).toContain(advisory);
-      expect(result.output?.startsWith(success
-        ? advisory
-        : reviewOutput)).toBe(true);
-      expect(warnings).toEqual([
-        `WARNING: ${advisory}`,
-      ]);
-      expect(coordinate).toHaveBeenCalledOnce();
-    });
+        expect(result.success).toBe(success);
+        const advisory =
+          'Advisory: containment-floor: git repository check failed: fatal: not a git repository (or any of the parent directories): .git.';
+        expect(result.output).toContain(advisory);
+        expect(result.output?.startsWith(success ? advisory : reviewOutput)).toBe(true);
+        expect(warnings).toEqual([`WARNING: ${advisory}`]);
+        expect(coordinate).toHaveBeenCalledOnce();
+      },
+    );
 
     it('leaves coordinator output untouched when containment is off or non-string', async () => {
       const provider = createMockProvider();
-      const coordinator = vi.fn()
+      const coordinator = vi
+        .fn()
         .mockResolvedValueOnce({ success: false, output: 'review failed: untouched' })
         .mockResolvedValueOnce({ success: false });
       const withoutContainment = new DefaultStepRunner(provider, 'session-1', dir, {
-        gitRunner: scriptedGit(), planPath, buildReviewCoordinator: coordinator, ...currentBuildReviewProof(),
+        gitRunner: scriptedGit(),
+        planPath,
+        buildReviewCoordinator: coordinator,
+        ...currentBuildReviewProof(),
       });
       const withNonStringOutput = new DefaultStepRunner(provider, 'session-1', dir, {
-        gitRunner: scriptedGit(), planPath,
+        gitRunner: scriptedGit(),
+        planPath,
         config: { build_review: { scopeContainmentEnforced: true } } as HarnessConfig,
-        buildReviewCoordinator: coordinator, ...currentBuildReviewProof(),
+        buildReviewCoordinator: coordinator,
+        ...currentBuildReviewProof(),
       });
 
       await expect(withoutContainment.run('build_review', emptyState)).resolves.toMatchObject({
-        success: false, output: 'review failed: untouched',
+        success: false,
+        output: 'review failed: untouched',
       });
       const nonStringResult = await withNonStringOutput.run('build_review', emptyState);
       expect(nonStringResult.success).toBe(false);
@@ -4549,7 +4851,10 @@ TIER: M`,
 
     it.each([
       { name: 'a singleton plan', plans: ['this-feature-has-no-plan.md'] },
-      { name: 'a stem-matched plan in a multi-plan corpus', plans: ['another-feature.md', 'this-feature-has-no-plan.md'] },
+      {
+        name: 'a stem-matched plan in a multi-plan corpus',
+        plans: ['another-feature.md', 'this-feature-has-no-plan.md'],
+      },
     ])('reviews $name instead of empty-passing', async ({ plans }) => {
       const provider = createMockProvider();
       const coordinate = vi.fn(async () => ({ success: true, output: 'reviewed resolved plan' }));
@@ -4587,28 +4892,43 @@ TIER: M`,
     // Covers: task:8, task:9
     it('passes resolved and live act sources into the runner frontier', async () => {
       const provider = createMockProvider();
-      const config = resolveBuildReviewConfig({
-        build_review: {
-          enabled: true,
-          rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: true } },
-        },
-      } as HarnessConfig, CLAUDE_POLICY);
+      const config = resolveBuildReviewConfig(
+        {
+          build_review: {
+            enabled: true,
+            rubrics: {
+              testQuality: { enabled: false },
+              security: { enabled: false },
+              implementationQuality: { enabled: true },
+            },
+          },
+        } as HarnessConfig,
+        CLAUDE_POLICY,
+      );
       const entry = config.catalog.find((candidate) => candidate.id === 'implementationQuality')!;
-      const hunk = deriveChangedFileReferences([
-        'diff --git a/src/example.ts b/src/example.ts',
-        '@@ -1 +1 @@',
-        '-export const value = false;',
-        '+export const value = true;',
-      ].join('\n'))[0]!.hunks[0]!;
+      const hunk = deriveChangedFileReferences(
+        [
+          'diff --git a/src/example.ts b/src/example.ts',
+          '@@ -1 +1 @@',
+          '-export const value = false;',
+          '+export const value = true;',
+        ].join('\n'),
+      )[0]!.hunks[0]!;
       const finding = {
         concernKind: 'duplication' as const,
         severity: 'major' as const,
         summary: 'The revised branch duplicates the existing implementation.',
         evidenceLocations: ['src/example.ts:1'],
-        anchor: { rubric: 'implementationQuality' as const, locus: { path: 'src/example.ts', contentHash: hunk.contentHash, display: 'value' } },
+        anchor: {
+          rubric: 'implementationQuality' as const,
+          locus: { path: 'src/example.ts', contentHash: hunk.contentHash, display: 'value' },
+        },
       };
       const findingId = canonicalizeBuildReviewFindingIdentity({
-        rubric: 'implementationQuality', contractVersion: 'v4', concernKind: finding.concernKind, anchor: finding.anchor,
+        rubric: 'implementationQuality',
+        contractVersion: 'v4',
+        concernKind: finding.concernKind,
+        anchor: finding.anchor,
       })!.id;
       const sourceId = `implementationQuality:${findingId}`;
       const engineIdentity = {
@@ -4621,28 +4941,45 @@ TIER: M`,
         projectionVersion: descriptor.projection.version,
         declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify(entry.policy)).digest('hex')}`,
         effectiveBundleDigest: 'sha256:bundle-a',
-        provider: Array.isArray(entry.policy.llm_provider) ? entry.policy.llm_provider.join(',') : entry.policy.llm_provider,
+        provider: Array.isArray(entry.policy.llm_provider)
+          ? entry.policy.llm_provider.join(',')
+          : entry.policy.llm_provider,
         model: entry.policy.model,
         effort: entry.policy.effort,
         engineStamp: engineIdentity.engineStamp,
       });
       await mkdir(join(dir, '.pipeline', 'build-review', 'lap-prior'), { recursive: true });
-      await writeFile(join(dir, '.pipeline', 'build-review', 'lap-prior', 'implementationQuality.json'), JSON.stringify({
-        version: 2,
-        rubric: 'implementationQuality',
-        lapId: 'lap-prior',
-        snapshotDigest: 'sha256:prior',
-        provenance: { kind: 'fresh' },
-        result: {
-          kind: 'judged', rubric: 'implementationQuality', lapId: 'lap-prior', snapshotDigest: 'sha256:prior',
-          contractVersion: 'v4', findings: [finding], verdict: 'FAIL',
-        },
-        reviewScope: {
-          mode: 'full', reason: 'first-lap', sequence: 1, unreadableLapIds: [], mergeBase: 'base', headSha: 'prior',
-          policyIdentity, reviewedHunks: [{ path: 'src/example.ts', contentHash: hunk.contentHash }],
-          deltaHunks: [{ path: 'src/example.ts', contentHash: hunk.contentHash }], outOfDeltaSourceIds: [],
-        },
-      }));
+      await writeFile(
+        join(dir, '.pipeline', 'build-review', 'lap-prior', 'implementationQuality.json'),
+        JSON.stringify({
+          version: 2,
+          rubric: 'implementationQuality',
+          lapId: 'lap-prior',
+          snapshotDigest: 'sha256:prior',
+          provenance: { kind: 'fresh' },
+          result: {
+            kind: 'judged',
+            rubric: 'implementationQuality',
+            lapId: 'lap-prior',
+            snapshotDigest: 'sha256:prior',
+            contractVersion: 'v4',
+            findings: [finding],
+            verdict: 'FAIL',
+          },
+          reviewScope: {
+            mode: 'full',
+            reason: 'first-lap',
+            sequence: 1,
+            unreadableLapIds: [],
+            mergeBase: 'base',
+            headSha: 'prior',
+            policyIdentity,
+            reviewedHunks: [{ path: 'src/example.ts', contentHash: hunk.contentHash }],
+            deltaHunks: [{ path: 'src/example.ts', contentHash: hunk.contentHash }],
+            outOfDeltaSourceIds: [],
+          },
+        }),
+      );
       const runner = new DefaultStepRunner(provider, 'session-1', dir, { config: {} as HarnessConfig });
       vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue(engineIdentity);
       vi.spyOn(runner as any, 'resolvedAppliedBuildReviewActSourceIds').mockResolvedValue(new Set([sourceId]));
@@ -4652,19 +4989,32 @@ TIER: M`,
         throw new Error('expected frontier observation');
       });
 
-      await expect((runner as any).runRubricBuildReviewInner({
-        sourceSnapshot: {
-          digest: 'sha256:current', mergeBase: 'base', headSha: 'current', diff: [
-            'diff --git a/src/example.ts b/src/example.ts', '@@ -1 +1 @@',
-            '-export const value = false;', '+export const value = true;',
-          ].join('\n'),
-        },
-      }, config, 'M', 'plan.md')).rejects.toThrow('expected frontier observation');
+      await expect(
+        (runner as any).runRubricBuildReviewInner(
+          {
+            sourceSnapshot: {
+              digest: 'sha256:current',
+              mergeBase: 'base',
+              headSha: 'current',
+              diff: [
+                'diff --git a/src/example.ts b/src/example.ts',
+                '@@ -1 +1 @@',
+                '-export const value = false;',
+                '+export const value = true;',
+              ].join('\n'),
+            },
+          },
+          config,
+          'M',
+          'plan.md',
+        ),
+      ).rejects.toThrow('expected frontier observation');
 
       expect(observedScope).toMatchObject({ mode: 'delta', deltaHunks: [] });
 
       vi.spyOn(runner as any, 'liveBuildReviewActSourceIds').mockResolvedValue({
-        unappliedLiveSourceIds: new Set([sourceId]), appliedLiveSourceIds: new Set(),
+        unappliedLiveSourceIds: new Set([sourceId]),
+        appliedLiveSourceIds: new Set(),
       });
       observedScope = undefined;
       vi.mocked(coordinateBuildReviewRubrics).mockImplementationOnce(async (input) => {
@@ -4672,134 +5022,247 @@ TIER: M`,
         throw new Error('expected live frontier observation');
       });
 
-      await expect((runner as any).runRubricBuildReviewInner({
-        sourceSnapshot: {
-          digest: 'sha256:current', mergeBase: 'base', headSha: 'current', diff: [
-            'diff --git a/src/example.ts b/src/example.ts', '@@ -1 +1 @@',
-            '-export const value = false;', '+export const value = true;',
-          ].join('\n'),
-        },
-      }, config, 'M', 'plan.md')).rejects.toThrow('expected live frontier observation');
+      await expect(
+        (runner as any).runRubricBuildReviewInner(
+          {
+            sourceSnapshot: {
+              digest: 'sha256:current',
+              mergeBase: 'base',
+              headSha: 'current',
+              diff: [
+                'diff --git a/src/example.ts b/src/example.ts',
+                '@@ -1 +1 @@',
+                '-export const value = false;',
+                '+export const value = true;',
+              ].join('\n'),
+            },
+          },
+          config,
+          'M',
+          'plan.md',
+        ),
+      ).rejects.toThrow('expected live frontier observation');
 
-      expect(observedScope).toMatchObject({ mode: 'delta', deltaHunks: [{ path: 'src/example.ts', contentHash: hunk.contentHash }] });
+      expect(observedScope).toMatchObject({
+        mode: 'delta',
+        deltaHunks: [{ path: 'src/example.ts', contentHash: hunk.contentHash }],
+      });
 
       observedScope = undefined;
       vi.mocked(coordinateBuildReviewRubrics).mockImplementationOnce(async (input) => {
         observedScope = input.reviewScopes?.implementationQuality;
         throw new Error('expected unmapped frontier observation');
       });
-      await expect((runner as any).runRubricBuildReviewInner({
-        sourceSnapshot: {
-          digest: 'sha256:unmapped', mergeBase: 'base', headSha: 'unmapped', diff: [
-            'diff --git a/src/other.ts b/src/other.ts', '@@ -1 +1 @@',
-            '-export const other = false;', '+export const other = true;',
-          ].join('\n'),
-        },
-      }, config, 'M', 'plan.md')).rejects.toThrow('expected unmapped frontier observation');
+      await expect(
+        (runner as any).runRubricBuildReviewInner(
+          {
+            sourceSnapshot: {
+              digest: 'sha256:unmapped',
+              mergeBase: 'base',
+              headSha: 'unmapped',
+              diff: [
+                'diff --git a/src/other.ts b/src/other.ts',
+                '@@ -1 +1 @@',
+                '-export const other = false;',
+                '+export const other = true;',
+              ].join('\n'),
+            },
+          },
+          config,
+          'M',
+          'plan.md',
+        ),
+      ).rejects.toThrow('expected unmapped frontier observation');
       expect(observedScope).toMatchObject({ mode: 'full', reason: 'open-source-unmapped' });
     });
 
     // Covers: task:8, task:11
     it('settles a custom prior finding into an empty delta after its candidate resolves the policy identity', async () => {
       const provider = createMockProvider();
-      const config = resolveBuildReviewConfig({
-        build_review: {
-          enabled: true,
-          rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
-          custom_rubrics: {
-            portable: { enabled: true, skill: 'portable-policy', question: 'Check the portable contract.', source: 'project', llm_provider: 'claude' },
+      const config = resolveBuildReviewConfig(
+        {
+          build_review: {
+            enabled: true,
+            rubrics: {
+              testQuality: { enabled: false },
+              security: { enabled: false },
+              implementationQuality: { enabled: false },
+            },
+            custom_rubrics: {
+              portable: {
+                enabled: true,
+                skill: 'portable-policy',
+                question: 'Check the portable contract.',
+                source: 'project',
+                llm_provider: 'claude',
+              },
+            },
           },
-        },
-      } as HarnessConfig, CLAUDE_POLICY);
+        } as HarnessConfig,
+        CLAUDE_POLICY,
+      );
       const entry = customCatalogEntry(config);
       const diff = [
-        'diff --git a/src/custom.ts b/src/custom.ts', '@@ -1 +1 @@',
-        '-export const portable = false;', '+export const portable = true;',
+        'diff --git a/src/custom.ts b/src/custom.ts',
+        '@@ -1 +1 @@',
+        '-export const portable = false;',
+        '+export const portable = true;',
       ].join('\n');
       const hunk = deriveChangedFileReferences(diff)[0]!.hunks[0]!;
       const engineIdentity = { engineStamp: 'engine-a', skillDigests: {} };
       const declaration = {
-        version: 'v1' as const, rubricId: entry.id, semanticSkill: entry.skill,
-        question: entry.question, source: 'project' as const, resources: entry.resources,
+        version: 'v1' as const,
+        rubricId: entry.id,
+        semanticSkill: entry.skill,
+        question: entry.question,
+        source: 'project' as const,
+        resources: entry.resources,
       };
       const stamp = {
-        rubric: entry.id, lapId: 'lap-prior', declaration,
+        rubric: entry.id,
+        lapId: 'lap-prior',
+        declaration,
         policy: { version: 'v1' as const, bundleDigest: `sha256:${'a'.repeat(64)}` },
         candidate: { provider: 'claude', model: entry.policy.model, effort: entry.policy.effort },
         reviewedInput: { version: 'v1' as const, contentDigest: `sha256:${'b'.repeat(64)}` },
       };
       const references = {
-        sourceRegions: [{ path: 'src/custom.ts', startLine: 1, endLine: 1, contentHash: hunk.contentHash, display: 'custom hunk' }],
+        sourceRegions: [
+          { path: 'src/custom.ts', startLine: 1, endLine: 1, contentHash: hunk.contentHash, display: 'custom hunk' },
+        ],
       };
-      const judged = stampBuildReviewCustomJudgedResult({
-        kind: 'custom-findings', version: 'v2', findings: [{
-          concernId: 'portable-policy-gap', summary: 'The changed boundary lacks portability evidence.', severity: 'major',
-          evidenceLocations: ['src/custom.ts:1'], sourceRegions: references.sourceRegions,
-        }],
-      }, stamp, references)!;
+      const judged = stampBuildReviewCustomJudgedResult(
+        {
+          kind: 'custom-findings',
+          version: 'v2',
+          findings: [
+            {
+              concernId: 'portable-policy-gap',
+              summary: 'The changed boundary lacks portability evidence.',
+              severity: 'major',
+              evidenceLocations: ['src/custom.ts:1'],
+              sourceRegions: references.sourceRegions,
+            },
+          ],
+        },
+        stamp,
+        references,
+      )!;
       const policyIdentity = buildReviewPolicyIdentity(entry.id, {
         contractVersion: entry.contract.output.version,
         projectionVersion: entry.contract.projection.version,
-        declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources })).digest('hex')}`,
+        declarationFingerprint: `sha256:${createHash('sha256')
+          .update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources }))
+          .digest('hex')}`,
         effectiveBundleDigest: stamp.policy.bundleDigest,
-        provider: Array.isArray(entry.policy.llm_provider) ? entry.policy.llm_provider.join(',') : entry.policy.llm_provider,
-        model: entry.policy.model, effort: entry.policy.effort, engineStamp: engineIdentity.engineStamp,
+        provider: Array.isArray(entry.policy.llm_provider)
+          ? entry.policy.llm_provider.join(',')
+          : entry.policy.llm_provider,
+        model: entry.policy.model,
+        effort: entry.policy.effort,
+        engineStamp: engineIdentity.engineStamp,
       });
       await mkdir(join(dir, '.pipeline', 'build-review', 'lap-prior'), { recursive: true });
-      await writeFile(join(dir, '.pipeline', 'build-review', 'lap-prior', 'portable.json'), JSON.stringify({
-        version: 2, rubric: entry.id, lapId: 'lap-prior', snapshotDigest: 'sha256:prior', provenance: { kind: 'fresh' },
-        descriptor: {
-          version: 'v1', semanticSkill: entry.skill, declaration,
-          installation: { source: 'project' }, effectivePolicy: stamp.policy,
-          reviewedInput: stamp.reviewedInput, producer: stamp.candidate,
-        },
-        result: judged,
-        reviewScope: {
-          mode: 'full', reason: 'first-lap', sequence: 1, unreadableLapIds: [], mergeBase: 'base', headSha: 'prior', policyIdentity,
-          reviewedHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }],
-          deltaHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }], outOfDeltaSourceIds: [],
-        },
-      }));
+      await writeFile(
+        join(dir, '.pipeline', 'build-review', 'lap-prior', 'portable.json'),
+        JSON.stringify({
+          version: 2,
+          rubric: entry.id,
+          lapId: 'lap-prior',
+          snapshotDigest: 'sha256:prior',
+          provenance: { kind: 'fresh' },
+          descriptor: {
+            version: 'v1',
+            semanticSkill: entry.skill,
+            declaration,
+            installation: { source: 'project' },
+            effectivePolicy: stamp.policy,
+            reviewedInput: stamp.reviewedInput,
+            producer: stamp.candidate,
+          },
+          result: judged,
+          reviewScope: {
+            mode: 'full',
+            reason: 'first-lap',
+            sequence: 1,
+            unreadableLapIds: [],
+            mergeBase: 'base',
+            headSha: 'prior',
+            policyIdentity,
+            reviewedHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }],
+            deltaHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }],
+            outOfDeltaSourceIds: [],
+          },
+        }),
+      );
       const baselinePath = join(dir, 'baseline');
       const headPath = join(dir, 'head');
       await Promise.all([mkdir(baselinePath), mkdir(headPath)]);
       const capture: NonNullable<StepRunnerOptions['buildReviewPolicyCapture']> = vi.fn(async (policy) => ({
-        policy, materialPath: '/fixture/material', definitionPath: '/fixture/material/SKILL.md',
+        policy,
+        materialPath: '/fixture/material',
+        definitionPath: '/fixture/material/SKILL.md',
         manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# policy bundle') }],
-        metadata: { version: 1 as const, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+        metadata: {
+          version: 1 as const,
+          semanticName: policy.semanticName,
+          source: policy.source,
+          declaredDependencies: [],
+        },
         digest: stamp.policy.bundleDigest,
       }));
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         config: {} as HarnessConfig,
-        providerRuntimes: new ProviderRuntimeSet([{
-          key: 'claude',
-          provider: {
+        providerRuntimes: new ProviderRuntimeSet([
+          {
+            key: 'claude',
+            provider: {
+              lifecycleCapability: { synchronousSpawnPermit: true },
+              nativeSchemaCapability: { nativeOutputSchema: true },
+              invoke: provider.invoke,
+            },
             lifecycleCapability: { synchronousSpawnPermit: true },
             nativeSchemaCapability: { nativeOutputSchema: true },
-            invoke: provider.invoke,
+            policy: CLAUDE_POLICY,
+            builtIn: true,
+            availability: new ModelAvailability(CLAUDE_POLICY.modelFallbackLadder),
           },
-          lifecycleCapability: { synchronousSpawnPermit: true },
-          nativeSchemaCapability: { nativeOutputSchema: true },
-          policy: CLAUDE_POLICY,
-          builtIn: true,
-          availability: new ModelAvailability(CLAUDE_POLICY.modelFallbackLadder),
-        }]),
+        ]),
         sessionStore: new ProviderSessionStore(),
         configuredProviders: ['claude'],
-        probeReadOnlyReviewCapability: async ({ provider: providerKey, platform }) => ({ provider: providerKey, platform, status: 'available' as const }),
-        buildReviewPolicyCatalog: async () => [{
-          semanticName: entry.skill, source: 'project', installationOrigin: '/fixture/policy',
-          canonicalSkillPath: '/fixture/policy/SKILL.md', packageRoot: '/fixture/policy', declaredDependencies: [], availability: 'available',
-        }],
-        buildReviewPolicyCapture: capture,
-        buildReviewEffectiveResolver: async () => ({
-          ok: true as const,
-          feature: { version: 'v1' as const, repository: dir, feature: 'custom-settlement' },
-          effective: {
-            rawVerdict: 'PASS' as const, verdict: 'PASS' as const, acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
-            skippedRubrics: ['portable'], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [],
+        probeReadOnlyReviewCapability: async ({ provider: providerKey, platform }) => ({
+          provider: providerKey,
+          platform,
+          status: 'available' as const,
+        }),
+        buildReviewPolicyCatalog: async () => [
+          {
+            semanticName: entry.skill,
+            source: 'project',
+            installationOrigin: '/fixture/policy',
+            canonicalSkillPath: '/fixture/policy/SKILL.md',
+            packageRoot: '/fixture/policy',
+            declaredDependencies: [],
+            availability: 'available',
           },
-        }) as never,
+        ],
+        buildReviewPolicyCapture: capture,
+        buildReviewEffectiveResolver: async () =>
+          ({
+            ok: true as const,
+            feature: { version: 'v1' as const, repository: dir, feature: 'custom-settlement' },
+            effective: {
+              rawVerdict: 'PASS' as const,
+              verdict: 'PASS' as const,
+              acceptedFindingIds: [],
+              unresolvedFindingIds: [],
+              suppressedFindingIds: [],
+              skippedRubrics: ['portable'],
+              infrastructureFailureRubrics: [],
+              uncoveredInfrastructureFailureRubrics: [],
+              uncoveredScopeIncompleteRubrics: [],
+            },
+          }) as never,
       });
       vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue(engineIdentity);
       vi.spyOn(runner as any, 'resolvedAppliedBuildReviewActSourceIds').mockResolvedValue(
@@ -4808,25 +5271,56 @@ TIER: M`,
       vi.spyOn(runner as any, 'dispatchInstalledBuildReviewPolicy').mockImplementation((async (...args: unknown[]) => {
         const resolveScope = args[11] as ((policyIdentity: string) => Promise<unknown>) | undefined;
         await resolveScope?.(policyIdentity);
-        return { id: entry.id, success: true, member: { declaration, result: { kind: 'scope-empty' as const, rubric: entry.id } } };
+        return {
+          id: entry.id,
+          success: true,
+          member: { declaration, result: { kind: 'scope-empty' as const, rubric: entry.id } },
+        };
       }) as any);
 
-      await expect((runner as any).runRubricBuildReviewInner({
-        sourceSnapshot: {
-          digest: 'sha256:current', contentDigest: `sha256:${'c'.repeat(64)}`, mergeBase: 'base', headSha: 'current', diff,
-        },
-        sourceMaterialization: {
-          source: {
-            identity: { snapshotDigest: 'sha256:current', contentDigest: `sha256:${'c'.repeat(64)}`, mergeBase: 'base', headSha: 'current' },
-            baselinePath, headPath,
+      await expect(
+        (runner as any).runRubricBuildReviewInner(
+          {
+            sourceSnapshot: {
+              digest: 'sha256:current',
+              contentDigest: `sha256:${'c'.repeat(64)}`,
+              mergeBase: 'base',
+              headSha: 'current',
+              diff,
+            },
+            sourceMaterialization: {
+              source: {
+                identity: {
+                  snapshotDigest: 'sha256:current',
+                  contentDigest: `sha256:${'c'.repeat(64)}`,
+                  mergeBase: 'base',
+                  headSha: 'current',
+                },
+                baselinePath,
+                headPath,
+              },
+              contextFor: (memberId: string) => ({
+                memberId,
+                source: {
+                  identity: {
+                    snapshotDigest: 'sha256:current',
+                    contentDigest: `sha256:${'c'.repeat(64)}`,
+                    mergeBase: 'base',
+                    headSha: 'current',
+                  },
+                  baselinePath,
+                  headPath,
+                },
+              }),
+              settle: async () => {},
+              finish: async () => {},
+            },
           },
-          contextFor: (memberId: string) => ({ memberId, source: {
-            identity: { snapshotDigest: 'sha256:current', contentDigest: `sha256:${'c'.repeat(64)}`, mergeBase: 'base', headSha: 'current' },
-            baselinePath, headPath,
-          } }),
-          settle: async () => {}, finish: async () => {},
-        },
-      }, config, 'M', 'plan.md')).resolves.toMatchObject({ success: true });
+          config,
+          'M',
+          'plan.md',
+        ),
+      ).resolves.toMatchObject({ success: true });
 
       expect(capture).not.toHaveBeenCalled();
       expect(provider.invoke).not.toHaveBeenCalled();
@@ -4835,81 +5329,150 @@ TIER: M`,
     // Covers: task:rem-prd-audit-6-r1
     it('uses the candidate-resolved custom policy identity for a version-changed lap', async () => {
       const provider = createMockProvider();
-      const config = resolveBuildReviewConfig({
-        build_review: {
-          enabled: true,
-          rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
-          custom_rubrics: {
-            portable: { enabled: true, skill: 'portable-policy', question: 'Check the portable contract.', source: 'project', llm_provider: 'claude' },
+      const config = resolveBuildReviewConfig(
+        {
+          build_review: {
+            enabled: true,
+            rubrics: {
+              testQuality: { enabled: false },
+              security: { enabled: false },
+              implementationQuality: { enabled: false },
+            },
+            custom_rubrics: {
+              portable: {
+                enabled: true,
+                skill: 'portable-policy',
+                question: 'Check the portable contract.',
+                source: 'project',
+                llm_provider: 'claude',
+              },
+            },
           },
-        },
-      } as HarnessConfig, CLAUDE_POLICY);
+        } as HarnessConfig,
+        CLAUDE_POLICY,
+      );
       const entry = customCatalogEntry(config);
       const diff = [
-        'diff --git a/src/custom.ts b/src/custom.ts', '@@ -1 +1 @@',
-        '-export const portable = false;', '+export const portable = true;',
+        'diff --git a/src/custom.ts b/src/custom.ts',
+        '@@ -1 +1 @@',
+        '-export const portable = false;',
+        '+export const portable = true;',
       ].join('\n');
       const hunk = deriveChangedFileReferences(diff)[0]!.hunks[0]!;
       const engineIdentity = { engineStamp: 'engine-a', skillDigests: {} };
       const declaration = {
-        version: 'v1' as const, rubricId: entry.id, semanticSkill: entry.skill,
-        question: entry.question, source: 'project' as const, resources: entry.resources,
+        version: 'v1' as const,
+        rubricId: entry.id,
+        semanticSkill: entry.skill,
+        question: entry.question,
+        source: 'project' as const,
+        resources: entry.resources,
       };
       const priorBundleDigest = `sha256:${'a'.repeat(64)}`;
       const currentBundleDigest = `sha256:${'b'.repeat(64)}`;
       const stamp = {
-        rubric: entry.id, lapId: 'lap-prior', declaration,
+        rubric: entry.id,
+        lapId: 'lap-prior',
+        declaration,
         policy: { version: 'v1' as const, bundleDigest: priorBundleDigest },
         candidate: { provider: 'claude', model: entry.policy.model, effort: entry.policy.effort },
         reviewedInput: { version: 'v1' as const, contentDigest: `sha256:${'c'.repeat(64)}` },
       };
       const judged = stampBuildReviewCustomJudgedResult(
-        { kind: 'custom-findings', version: 'v2', findings: [] }, stamp, { sourceRegions: [] },
+        { kind: 'custom-findings', version: 'v2', findings: [] },
+        stamp,
+        { sourceRegions: [] },
       )!;
       const priorPolicyIdentity = buildReviewPolicyIdentity(entry.id, {
         contractVersion: entry.contract.output.version,
         projectionVersion: entry.contract.projection.version,
-        declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources })).digest('hex')}`,
+        declarationFingerprint: `sha256:${createHash('sha256')
+          .update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources }))
+          .digest('hex')}`,
         effectiveBundleDigest: priorBundleDigest,
-        provider: Array.isArray(entry.policy.llm_provider) ? entry.policy.llm_provider.join(',') : entry.policy.llm_provider,
-        model: entry.policy.model, effort: entry.policy.effort, engineStamp: engineIdentity.engineStamp,
+        provider: Array.isArray(entry.policy.llm_provider)
+          ? entry.policy.llm_provider.join(',')
+          : entry.policy.llm_provider,
+        model: entry.policy.model,
+        effort: entry.policy.effort,
+        engineStamp: engineIdentity.engineStamp,
       });
       await mkdir(join(dir, '.pipeline', 'build-review', 'lap-prior'), { recursive: true });
-      await writeFile(join(dir, '.pipeline', 'build-review', 'lap-prior', 'portable.json'), JSON.stringify({
-        version: 2, rubric: entry.id, lapId: 'lap-prior', snapshotDigest: 'sha256:prior', provenance: { kind: 'fresh' },
-        descriptor: {
-          version: 'v1', semanticSkill: entry.skill, declaration,
-          installation: { source: 'project' }, effectivePolicy: stamp.policy,
-          reviewedInput: stamp.reviewedInput, producer: stamp.candidate,
-        },
-        result: judged,
-        reviewScope: {
-          mode: 'full', reason: 'first-lap', sequence: 1, unreadableLapIds: [], mergeBase: 'base', headSha: 'prior', policyIdentity: priorPolicyIdentity,
-          reviewedHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }],
-          deltaHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }], outOfDeltaSourceIds: [],
-        },
-      }));
+      await writeFile(
+        join(dir, '.pipeline', 'build-review', 'lap-prior', 'portable.json'),
+        JSON.stringify({
+          version: 2,
+          rubric: entry.id,
+          lapId: 'lap-prior',
+          snapshotDigest: 'sha256:prior',
+          provenance: { kind: 'fresh' },
+          descriptor: {
+            version: 'v1',
+            semanticSkill: entry.skill,
+            declaration,
+            installation: { source: 'project' },
+            effectivePolicy: stamp.policy,
+            reviewedInput: stamp.reviewedInput,
+            producer: stamp.candidate,
+          },
+          result: judged,
+          reviewScope: {
+            mode: 'full',
+            reason: 'first-lap',
+            sequence: 1,
+            unreadableLapIds: [],
+            mergeBase: 'base',
+            headSha: 'prior',
+            policyIdentity: priorPolicyIdentity,
+            reviewedHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }],
+            deltaHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }],
+            outOfDeltaSourceIds: [],
+          },
+        }),
+      );
       const capture: NonNullable<StepRunnerOptions['buildReviewPolicyCapture']> = vi.fn(async (policy) => ({
-        policy, materialPath: '/fixture/material', definitionPath: '/fixture/material/SKILL.md',
+        policy,
+        materialPath: '/fixture/material',
+        definitionPath: '/fixture/material/SKILL.md',
         manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# changed policy bundle') }],
-        metadata: { version: 1 as const, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+        metadata: {
+          version: 1 as const,
+          semanticName: policy.semanticName,
+          source: policy.source,
+          declaredDependencies: [],
+        },
         digest: currentBundleDigest,
       }));
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         config: {} as HarnessConfig,
-        buildReviewPolicyCatalog: async () => [{
-          semanticName: entry.skill, source: 'project', installationOrigin: '/fixture/policy',
-          canonicalSkillPath: '/fixture/policy/SKILL.md', packageRoot: '/fixture/policy', declaredDependencies: [], availability: 'available',
-        }],
-        buildReviewPolicyCapture: capture,
-        buildReviewEffectiveResolver: async () => ({
-          ok: true as const,
-          feature: { version: 'v1' as const, repository: dir, feature: 'custom-policy-version-change' },
-          effective: {
-            rawVerdict: 'PASS' as const, verdict: 'PASS' as const, acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
-            skippedRubrics: ['portable'], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [],
+        buildReviewPolicyCatalog: async () => [
+          {
+            semanticName: entry.skill,
+            source: 'project',
+            installationOrigin: '/fixture/policy',
+            canonicalSkillPath: '/fixture/policy/SKILL.md',
+            packageRoot: '/fixture/policy',
+            declaredDependencies: [],
+            availability: 'available',
           },
-        }) as never,
+        ],
+        buildReviewPolicyCapture: capture,
+        buildReviewEffectiveResolver: async () =>
+          ({
+            ok: true as const,
+            feature: { version: 'v1' as const, repository: dir, feature: 'custom-policy-version-change' },
+            effective: {
+              rawVerdict: 'PASS' as const,
+              verdict: 'PASS' as const,
+              acceptedFindingIds: [],
+              unresolvedFindingIds: [],
+              suppressedFindingIds: [],
+              skippedRubrics: ['portable'],
+              infrastructureFailureRubrics: [],
+              uncoveredInfrastructureFailureRubrics: [],
+              uncoveredScopeIncompleteRubrics: [],
+            },
+          }) as never,
       });
       vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue(engineIdentity);
       let observedScope: unknown;
@@ -4920,22 +5483,39 @@ TIER: M`,
         const currentPolicyIdentity = buildReviewPolicyIdentity(entry.id, {
           contractVersion: entry.contract.output.version,
           projectionVersion: entry.contract.projection.version,
-          declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources })).digest('hex')}`,
+          declarationFingerprint: `sha256:${createHash('sha256')
+            .update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources }))
+            .digest('hex')}`,
           effectiveBundleDigest: currentBundleDigest,
-          provider: 'claude', model: entry.policy.model, effort: entry.policy.effort, engineStamp: engineIdentity.engineStamp,
+          provider: 'claude',
+          model: entry.policy.model,
+          effort: entry.policy.effort,
+          engineStamp: engineIdentity.engineStamp,
         });
         observedScope = await resolveReviewScope(currentPolicyIdentity);
         return {
-          id: entry.id, success: true,
+          id: entry.id,
+          success: true,
           member: { declaration, result: { kind: 'scope-empty' as const, rubric: entry.id } },
         };
       });
 
-      await expect((runner as any).runRubricBuildReviewInner({
-        sourceSnapshot: {
-          digest: 'sha256:current', contentDigest: `sha256:${'d'.repeat(64)}`, mergeBase: 'base', headSha: 'current', diff,
-        },
-      }, config, 'M', 'plan.md')).resolves.toMatchObject({ success: true });
+      await expect(
+        (runner as any).runRubricBuildReviewInner(
+          {
+            sourceSnapshot: {
+              digest: 'sha256:current',
+              contentDigest: `sha256:${'d'.repeat(64)}`,
+              mergeBase: 'base',
+              headSha: 'current',
+              diff,
+            },
+          },
+          config,
+          'M',
+          'plan.md',
+        ),
+      ).resolves.toMatchObject({ success: true });
 
       expect(capture).not.toHaveBeenCalled();
       expect(observedScope).toMatchObject({ mode: 'full', reason: 'version-changed' });
@@ -4944,71 +5524,126 @@ TIER: M`,
     // Covers: task:rem-as-built-6-r6
     it('does not prefetch a custom policy identity before candidate dispatch', async () => {
       const provider = createMockProvider();
-      const config = resolveBuildReviewConfig({
-        build_review: {
-          enabled: true,
-          rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
-          custom_rubrics: {
-            portable: { enabled: true, skill: 'portable-policy', question: 'Check the portable contract.', source: 'project', llm_provider: 'claude' },
+      const config = resolveBuildReviewConfig(
+        {
+          build_review: {
+            enabled: true,
+            rubrics: {
+              testQuality: { enabled: false },
+              security: { enabled: false },
+              implementationQuality: { enabled: false },
+            },
+            custom_rubrics: {
+              portable: {
+                enabled: true,
+                skill: 'portable-policy',
+                question: 'Check the portable contract.',
+                source: 'project',
+                llm_provider: 'claude',
+              },
+            },
           },
-        },
-      } as HarnessConfig, CLAUDE_POLICY);
+        } as HarnessConfig,
+        CLAUDE_POLICY,
+      );
       const entry = customCatalogEntry(config);
       const diff = [
-        'diff --git a/src/custom.ts b/src/custom.ts', '@@ -1 +1 @@',
-        '-export const portable = false;', '+export const portable = true;',
+        'diff --git a/src/custom.ts b/src/custom.ts',
+        '@@ -1 +1 @@',
+        '-export const portable = false;',
+        '+export const portable = true;',
       ].join('\n');
       const hunk = deriveChangedFileReferences(diff)[0]!.hunks[0]!;
       const engineIdentity = { engineStamp: 'engine-a', skillDigests: {} };
       const declaration = {
-        version: 'v1' as const, rubricId: entry.id, semanticSkill: entry.skill,
-        question: entry.question, source: 'project' as const, resources: entry.resources,
+        version: 'v1' as const,
+        rubricId: entry.id,
+        semanticSkill: entry.skill,
+        question: entry.question,
+        source: 'project' as const,
+        resources: entry.resources,
       };
       const priorBundleDigest = `sha256:${'a'.repeat(64)}`;
       const stamp = {
-        rubric: entry.id, lapId: 'lap-prior', declaration,
+        rubric: entry.id,
+        lapId: 'lap-prior',
+        declaration,
         policy: { version: 'v1' as const, bundleDigest: priorBundleDigest },
         candidate: { provider: 'claude', model: entry.policy.model, effort: entry.policy.effort },
         reviewedInput: { version: 'v1' as const, contentDigest: `sha256:${'b'.repeat(64)}` },
       };
       const judged = stampBuildReviewCustomJudgedResult(
-        { kind: 'custom-findings', version: 'v2', findings: [] }, stamp, { sourceRegions: [] },
+        { kind: 'custom-findings', version: 'v2', findings: [] },
+        stamp,
+        { sourceRegions: [] },
       )!;
       const unavailablePolicyIdentity = buildReviewPolicyIdentity(entry.id, {
         contractVersion: entry.contract.output.version,
         projectionVersion: entry.contract.projection.version,
-        declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources })).digest('hex')}`,
+        declarationFingerprint: `sha256:${createHash('sha256')
+          .update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources }))
+          .digest('hex')}`,
         effectiveBundleDigest: 'unavailable',
-        provider: Array.isArray(entry.policy.llm_provider) ? entry.policy.llm_provider.join(',') : entry.policy.llm_provider,
-        model: entry.policy.model, effort: entry.policy.effort, engineStamp: engineIdentity.engineStamp,
+        provider: Array.isArray(entry.policy.llm_provider)
+          ? entry.policy.llm_provider.join(',')
+          : entry.policy.llm_provider,
+        model: entry.policy.model,
+        effort: entry.policy.effort,
+        engineStamp: engineIdentity.engineStamp,
       });
       await mkdir(join(dir, '.pipeline', 'build-review', 'lap-prior'), { recursive: true });
-      await writeFile(join(dir, '.pipeline', 'build-review', 'lap-prior', 'portable.json'), JSON.stringify({
-        version: 2, rubric: entry.id, lapId: 'lap-prior', snapshotDigest: 'sha256:prior', provenance: { kind: 'fresh' },
-        descriptor: {
-          version: 'v1', semanticSkill: entry.skill, declaration,
-          installation: { source: 'project' }, effectivePolicy: stamp.policy,
-          reviewedInput: stamp.reviewedInput, producer: stamp.candidate,
-        },
-        result: judged,
-        reviewScope: {
-          mode: 'full', reason: 'first-lap', sequence: 1, unreadableLapIds: [], mergeBase: 'base', headSha: 'prior', policyIdentity: unavailablePolicyIdentity,
-          reviewedHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }],
-          deltaHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }], outOfDeltaSourceIds: [],
-        },
-      }));
+      await writeFile(
+        join(dir, '.pipeline', 'build-review', 'lap-prior', 'portable.json'),
+        JSON.stringify({
+          version: 2,
+          rubric: entry.id,
+          lapId: 'lap-prior',
+          snapshotDigest: 'sha256:prior',
+          provenance: { kind: 'fresh' },
+          descriptor: {
+            version: 'v1',
+            semanticSkill: entry.skill,
+            declaration,
+            installation: { source: 'project' },
+            effectivePolicy: stamp.policy,
+            reviewedInput: stamp.reviewedInput,
+            producer: stamp.candidate,
+          },
+          result: judged,
+          reviewScope: {
+            mode: 'full',
+            reason: 'first-lap',
+            sequence: 1,
+            unreadableLapIds: [],
+            mergeBase: 'base',
+            headSha: 'prior',
+            policyIdentity: unavailablePolicyIdentity,
+            reviewedHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }],
+            deltaHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }],
+            outOfDeltaSourceIds: [],
+          },
+        }),
+      );
       const catalog = vi.fn().mockRejectedValueOnce(new Error('preliminary catalog unavailable'));
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         config: {} as HarnessConfig,
         buildReviewPolicyCatalog: catalog,
-        buildReviewEffectiveResolver: async () => ({
-          ok: true as const,
-          feature: { version: 'v1' as const, repository: dir, feature: 'custom-policy-identity-unavailable' },
-          effective: {
-            rawVerdict: 'PASS' as const, verdict: 'PASS' as const, acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
-            skippedRubrics: ['portable'], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [],
-          },
-        }) as never,
+        buildReviewEffectiveResolver: async () =>
+          ({
+            ok: true as const,
+            feature: { version: 'v1' as const, repository: dir, feature: 'custom-policy-identity-unavailable' },
+            effective: {
+              rawVerdict: 'PASS' as const,
+              verdict: 'PASS' as const,
+              acceptedFindingIds: [],
+              unresolvedFindingIds: [],
+              suppressedFindingIds: [],
+              skippedRubrics: ['portable'],
+              infrastructureFailureRubrics: [],
+              uncoveredInfrastructureFailureRubrics: [],
+              uncoveredScopeIncompleteRubrics: [],
+            },
+          }) as never,
       });
       vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue(engineIdentity);
       let observedScope: unknown;
@@ -5019,22 +5654,39 @@ TIER: M`,
         const candidatePolicyIdentity = buildReviewPolicyIdentity(entry.id, {
           contractVersion: entry.contract.output.version,
           projectionVersion: entry.contract.projection.version,
-          declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources })).digest('hex')}`,
+          declarationFingerprint: `sha256:${createHash('sha256')
+            .update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources }))
+            .digest('hex')}`,
           effectiveBundleDigest: `sha256:${'b'.repeat(64)}`,
-          provider: 'claude', model: entry.policy.model, effort: entry.policy.effort, engineStamp: engineIdentity.engineStamp,
+          provider: 'claude',
+          model: entry.policy.model,
+          effort: entry.policy.effort,
+          engineStamp: engineIdentity.engineStamp,
         });
         observedScope = await resolveReviewScope(candidatePolicyIdentity);
         return {
-          id: entry.id, success: true,
+          id: entry.id,
+          success: true,
           member: { declaration, result: { kind: 'scope-empty' as const, rubric: entry.id } },
         };
       });
 
-      await expect((runner as any).runRubricBuildReviewInner({
-        sourceSnapshot: {
-          digest: 'sha256:current', contentDigest: `sha256:${'c'.repeat(64)}`, mergeBase: 'base', headSha: 'current', diff,
-        },
-      }, config, 'M', 'plan.md')).resolves.toMatchObject({ success: true });
+      await expect(
+        (runner as any).runRubricBuildReviewInner(
+          {
+            sourceSnapshot: {
+              digest: 'sha256:current',
+              contentDigest: `sha256:${'c'.repeat(64)}`,
+              mergeBase: 'base',
+              headSha: 'current',
+              diff,
+            },
+          },
+          config,
+          'M',
+          'plan.md',
+        ),
+      ).resolves.toMatchObject({ success: true });
 
       expect(catalog).not.toHaveBeenCalled();
       expect(observedScope).toMatchObject({ mode: 'full', reason: 'version-changed' });
@@ -5042,98 +5694,199 @@ TIER: M`,
 
     it('persists the fallback candidate policy identity and reuses it for the next delta lap', async () => {
       const provider = createMockProvider();
-      const config = resolveBuildReviewConfig({
-        build_review: {
-          enabled: true,
-          rubrics: { testQuality: { enabled: false }, security: { enabled: false }, implementationQuality: { enabled: false } },
-          custom_rubrics: {
-            portable: {
-              enabled: true, skill: 'portable-policy', question: 'Check the portable contract.', source: 'project',
-              llm_provider: ['pi', 'claude'], max_retries: 1,
+      const config = resolveBuildReviewConfig(
+        {
+          build_review: {
+            enabled: true,
+            rubrics: {
+              testQuality: { enabled: false },
+              security: { enabled: false },
+              implementationQuality: { enabled: false },
+            },
+            custom_rubrics: {
+              portable: {
+                enabled: true,
+                skill: 'portable-policy',
+                question: 'Check the portable contract.',
+                source: 'project',
+                llm_provider: ['pi', 'claude'],
+                max_retries: 1,
+              },
             },
           },
-        },
-      } as HarnessConfig, CLAUDE_POLICY);
+        } as HarnessConfig,
+        CLAUDE_POLICY,
+      );
       const entry = customCatalogEntry(config);
       const diff = [
-        'diff --git a/src/custom.ts b/src/custom.ts', '@@ -1 +1 @@',
-        '-export const portable = false;', '+export const portable = true;',
+        'diff --git a/src/custom.ts b/src/custom.ts',
+        '@@ -1 +1 @@',
+        '-export const portable = false;',
+        '+export const portable = true;',
       ].join('\n');
       const hunk = deriveChangedFileReferences(diff)[0]!.hunks[0]!;
       const engineIdentity = { engineStamp: 'engine-a', skillDigests: {} };
       const bundleA = `sha256:${'a'.repeat(64)}`;
       const bundleB = `sha256:${'b'.repeat(64)}`;
       const preliminaryIdentity = buildReviewPolicyIdentity(entry.id, {
-        contractVersion: entry.contract.output.version, projectionVersion: entry.contract.projection.version,
-        declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources })).digest('hex')}`,
-        effectiveBundleDigest: bundleA, provider: 'pi,claude', model: entry.policy.model,
-        effort: entry.policy.effort, engineStamp: engineIdentity.engineStamp,
+        contractVersion: entry.contract.output.version,
+        projectionVersion: entry.contract.projection.version,
+        declarationFingerprint: `sha256:${createHash('sha256')
+          .update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources }))
+          .digest('hex')}`,
+        effectiveBundleDigest: bundleA,
+        provider: 'pi,claude',
+        model: entry.policy.model,
+        effort: entry.policy.effort,
+        engineStamp: engineIdentity.engineStamp,
       });
       const baselinePath = join(dir, 'baseline');
       const headPath = join(dir, 'head');
       await Promise.all([mkdir(baselinePath), mkdir(headPath)]);
       const claudeInvoke = vi.fn(async (_options: InvokeOptions): Promise<InvokeResult> => ({
-        success: true, output: JSON.stringify({ kind: 'custom-findings', version: 'v2', findings: [] }), exitCode: 0,
+        success: true,
+        output: JSON.stringify({ kind: 'custom-findings', version: 'v2', findings: [] }),
+        exitCode: 0,
         finalStructuredResult: { kind: 'custom-findings', version: 'v2', findings: [] },
       }));
       const runtime = (key: 'pi' | 'claude', invoke: LLMProvider['invoke']) => ({
-        key, provider: { lifecycleCapability: { synchronousSpawnPermit: true as const }, nativeSchemaCapability: { nativeOutputSchema: true as const }, invoke },
-        lifecycleCapability: { synchronousSpawnPermit: true as const }, nativeSchemaCapability: { nativeOutputSchema: true as const },
-        policy: CLAUDE_POLICY, builtIn: true, availability: new ModelAvailability(CLAUDE_POLICY.modelFallbackLadder),
+        key,
+        provider: {
+          lifecycleCapability: { synchronousSpawnPermit: true as const },
+          nativeSchemaCapability: { nativeOutputSchema: true as const },
+          invoke,
+        },
+        lifecycleCapability: { synchronousSpawnPermit: true as const },
+        nativeSchemaCapability: { nativeOutputSchema: true as const },
+        policy: CLAUDE_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CLAUDE_POLICY.modelFallbackLadder),
       });
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        config: {} as HarnessConfig, providerRuntimes: new ProviderRuntimeSet([runtime('pi', vi.fn()), runtime('claude', claudeInvoke)]),
-        sessionStore: new ProviderSessionStore(), configuredProviders: ['pi', 'claude'],
-        buildReviewPolicyCatalog: async ({ provider: catalogProvider }) => [{
-          semanticName: entry.skill, source: 'project', installationOrigin: `/fixture/${catalogProvider}`,
-          canonicalSkillPath: `/fixture/${catalogProvider}/SKILL.md`, packageRoot: `/fixture/${catalogProvider}`,
-          declaredDependencies: [], availability: 'available',
-        }],
+        config: {} as HarnessConfig,
+        providerRuntimes: new ProviderRuntimeSet([runtime('pi', vi.fn()), runtime('claude', claudeInvoke)]),
+        sessionStore: new ProviderSessionStore(),
+        configuredProviders: ['pi', 'claude'],
+        buildReviewPolicyCatalog: async ({ provider: catalogProvider }) => [
+          {
+            semanticName: entry.skill,
+            source: 'project',
+            installationOrigin: `/fixture/${catalogProvider}`,
+            canonicalSkillPath: `/fixture/${catalogProvider}/SKILL.md`,
+            packageRoot: `/fixture/${catalogProvider}`,
+            declaredDependencies: [],
+            availability: 'available',
+          },
+        ],
         buildReviewPolicyCapture: async (policy) => ({
-          policy, materialPath: `/fixture/material/${policy.packageRoot.endsWith('/pi') ? 'a' : 'b'}`,
+          policy,
+          materialPath: `/fixture/material/${policy.packageRoot.endsWith('/pi') ? 'a' : 'b'}`,
           definitionPath: `/fixture/material/${policy.packageRoot.endsWith('/pi') ? 'a' : 'b'}/SKILL.md`,
           manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# policy') }],
-          metadata: { version: 1 as const, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
+          metadata: {
+            version: 1 as const,
+            semanticName: policy.semanticName,
+            source: policy.source,
+            declaredDependencies: [],
+          },
           digest: policy.packageRoot.endsWith('/pi') ? bundleA : bundleB,
         }),
-        buildReviewEffectiveResolver: async () => ({
-          ok: true as const, feature: { version: 'v1' as const, repository: dir, feature: 'custom-policy-fallback-identity' },
-          effective: {
-            rawVerdict: 'PASS' as const, verdict: 'PASS' as const, acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
-            skippedRubrics: ['portable'], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [], uncoveredScopeIncompleteRubrics: [],
-          },
-        }) as never,
+        buildReviewEffectiveResolver: async () =>
+          ({
+            ok: true as const,
+            feature: { version: 'v1' as const, repository: dir, feature: 'custom-policy-fallback-identity' },
+            effective: {
+              rawVerdict: 'PASS' as const,
+              verdict: 'PASS' as const,
+              acceptedFindingIds: [],
+              unresolvedFindingIds: [],
+              suppressedFindingIds: [],
+              skippedRubrics: ['portable'],
+              infrastructureFailureRubrics: [],
+              uncoveredInfrastructureFailureRubrics: [],
+              uncoveredScopeIncompleteRubrics: [],
+            },
+          }) as never,
       });
       vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue(engineIdentity);
 
       const inputs = {
-        sourceSnapshot: { digest: 'sha256:current', contentDigest: `sha256:${'d'.repeat(64)}`, mergeBase: 'base', headSha: 'current', diff },
+        sourceSnapshot: {
+          digest: 'sha256:current',
+          contentDigest: `sha256:${'d'.repeat(64)}`,
+          mergeBase: 'base',
+          headSha: 'current',
+          diff,
+        },
         sourceMaterialization: {
-          source: { identity: { snapshotDigest: 'sha256:current', contentDigest: `sha256:${'d'.repeat(64)}`, mergeBase: 'base', headSha: 'current' }, baselinePath, headPath },
-          contextFor: (memberId: string) => ({ memberId, source: { identity: { snapshotDigest: 'sha256:current', contentDigest: `sha256:${'d'.repeat(64)}`, mergeBase: 'base', headSha: 'current' }, baselinePath, headPath } }),
-          settle: async () => {}, finish: async () => {},
+          source: {
+            identity: {
+              snapshotDigest: 'sha256:current',
+              contentDigest: `sha256:${'d'.repeat(64)}`,
+              mergeBase: 'base',
+              headSha: 'current',
+            },
+            baselinePath,
+            headPath,
+          },
+          contextFor: (memberId: string) => ({
+            memberId,
+            source: {
+              identity: {
+                snapshotDigest: 'sha256:current',
+                contentDigest: `sha256:${'d'.repeat(64)}`,
+                mergeBase: 'base',
+                headSha: 'current',
+              },
+              baselinePath,
+              headPath,
+            },
+          }),
+          settle: async () => {},
+          finish: async () => {},
         },
       } as any;
       await (runner as any).dispatchInstalledBuildReviewPolicy(
-        entry, inputs, 'lap-current', 'M', undefined,
-        async (providerKey: string) => providerKey === 'pi'
-          ? { provider: 'pi', platform: process.platform, status: 'unavailable', reason: 'fixture fallback' }
-          : { provider: 'claude', platform: process.platform, status: 'available' },
-        join(dir, '.pipeline'), undefined,
+        entry,
+        inputs,
+        'lap-current',
+        'M',
+        undefined,
+        async (providerKey: string) =>
+          providerKey === 'pi'
+            ? { provider: 'pi', platform: process.platform, status: 'unavailable', reason: 'fixture fallback' }
+            : { provider: 'claude', platform: process.platform, status: 'available' },
+        join(dir, '.pipeline'),
+        undefined,
         {
-          mode: 'delta', reason: 'delta', sequence: 2, unreadableLapIds: [], mergeBase: 'base', headSha: 'current',
-          policyIdentity: preliminaryIdentity, predecessorLapId: 'lap-prior',
+          mode: 'delta',
+          reason: 'delta',
+          sequence: 2,
+          unreadableLapIds: [],
+          mergeBase: 'base',
+          headSha: 'current',
+          policyIdentity: preliminaryIdentity,
+          predecessorLapId: 'lap-prior',
           reviewedHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }],
-          deltaHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }], outOfDeltaSourceIds: [],
+          deltaHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }],
+          outOfDeltaSourceIds: [],
         },
       );
 
-      const current = JSON.parse(await readFile(join(dir, '.pipeline', 'build-review', 'lap-current', 'portable.json'), 'utf8'));
+      const current = JSON.parse(
+        await readFile(join(dir, '.pipeline', 'build-review', 'lap-current', 'portable.json'), 'utf8'),
+      );
       const actualIdentity = buildReviewPolicyIdentity(entry.id, {
-        contractVersion: entry.contract.output.version, projectionVersion: entry.contract.projection.version,
-        declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources })).digest('hex')}`,
-        effectiveBundleDigest: bundleB, provider: 'claude', model: current.descriptor.producer.model,
-        effort: current.descriptor.producer.effort, engineStamp: engineIdentity.engineStamp,
+        contractVersion: entry.contract.output.version,
+        projectionVersion: entry.contract.projection.version,
+        declarationFingerprint: `sha256:${createHash('sha256')
+          .update(JSON.stringify({ skill: entry.skill, question: entry.question, resources: entry.resources }))
+          .digest('hex')}`,
+        effectiveBundleDigest: bundleB,
+        provider: 'claude',
+        model: current.descriptor.producer.model,
+        effort: current.descriptor.producer.effort,
+        engineStamp: engineIdentity.engineStamp,
       });
       let nextScope: unknown;
       vi.spyOn(runner as any, 'dispatchInstalledBuildReviewPolicy').mockImplementation(async (...args: any[]) => {
@@ -5143,116 +5896,290 @@ TIER: M`,
         nextScope = await resolveReviewScope(actualIdentity);
         return { id: entry.id, success: true, member: { result: { kind: 'scope-empty' as const, rubric: entry.id } } };
       });
-      await (runner as any).runRubricBuildReviewInner({
-        ...inputs,
-        sourceSnapshot: { ...inputs.sourceSnapshot, digest: 'sha256:next', headSha: 'next' },
-      }, config, 'M', 'plan.md');
+      await (runner as any).runRubricBuildReviewInner(
+        {
+          ...inputs,
+          sourceSnapshot: { ...inputs.sourceSnapshot, digest: 'sha256:next', headSha: 'next' },
+        },
+        config,
+        'M',
+        'plan.md',
+      );
       vi.mocked((runner as any).dispatchInstalledBuildReviewPolicy).mockRestore();
       await (runner as any).dispatchInstalledBuildReviewPolicy(
         entry,
         {
-          sourceSnapshot: { digest: 'sha256:open-source', contentDigest: `sha256:${'d'.repeat(64)}`, mergeBase: 'base', headSha: 'open-source', diff },
+          sourceSnapshot: {
+            digest: 'sha256:open-source',
+            contentDigest: `sha256:${'d'.repeat(64)}`,
+            mergeBase: 'base',
+            headSha: 'open-source',
+            diff,
+          },
           sourceMaterialization: {
-            source: { identity: { snapshotDigest: 'sha256:open-source', contentDigest: `sha256:${'d'.repeat(64)}`, mergeBase: 'base', headSha: 'open-source' }, baselinePath, headPath },
-            contextFor: (memberId: string) => ({ memberId, source: { identity: { snapshotDigest: 'sha256:open-source', contentDigest: `sha256:${'d'.repeat(64)}`, mergeBase: 'base', headSha: 'open-source' }, baselinePath, headPath } }),
-            settle: async () => {}, finish: async () => {},
+            source: {
+              identity: {
+                snapshotDigest: 'sha256:open-source',
+                contentDigest: `sha256:${'d'.repeat(64)}`,
+                mergeBase: 'base',
+                headSha: 'open-source',
+              },
+              baselinePath,
+              headPath,
+            },
+            contextFor: (memberId: string) => ({
+              memberId,
+              source: {
+                identity: {
+                  snapshotDigest: 'sha256:open-source',
+                  contentDigest: `sha256:${'d'.repeat(64)}`,
+                  mergeBase: 'base',
+                  headSha: 'open-source',
+                },
+                baselinePath,
+                headPath,
+              },
+            }),
+            settle: async () => {},
+            finish: async () => {},
           },
         },
-        'lap-open-source', 'M', undefined,
-        async (providerKey: string) => providerKey === 'pi'
-          ? { provider: 'pi', platform: process.platform, status: 'unavailable', reason: 'fixture fallback' }
-          : { provider: 'claude', platform: process.platform, status: 'available' },
-        join(dir, '.pipeline'), undefined,
+        'lap-open-source',
+        'M',
+        undefined,
+        async (providerKey: string) =>
+          providerKey === 'pi'
+            ? { provider: 'pi', platform: process.platform, status: 'unavailable', reason: 'fixture fallback' }
+            : { provider: 'claude', platform: process.platform, status: 'available' },
+        join(dir, '.pipeline'),
+        undefined,
         {
-          mode: 'full', reason: 'open-source-unmapped', sequence: 3, unreadableLapIds: [], mergeBase: 'base', headSha: 'open-source',
-          policyIdentity: preliminaryIdentity, predecessorLapId: 'lap-current',
+          mode: 'full',
+          reason: 'open-source-unmapped',
+          sequence: 3,
+          unreadableLapIds: [],
+          mergeBase: 'base',
+          headSha: 'open-source',
+          policyIdentity: preliminaryIdentity,
+          predecessorLapId: 'lap-current',
           reviewedHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }],
-          deltaHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }], outOfDeltaSourceIds: [],
+          deltaHunks: [{ path: 'src/custom.ts', contentHash: hunk.contentHash }],
+          outOfDeltaSourceIds: [],
         },
       );
-      const openSource = JSON.parse(await readFile(join(dir, '.pipeline', 'build-review', 'lap-open-source', 'portable.json'), 'utf8'));
+      const openSource = JSON.parse(
+        await readFile(join(dir, '.pipeline', 'build-review', 'lap-open-source', 'portable.json'), 'utf8'),
+      );
       expect(claudeInvoke).toHaveBeenCalledOnce();
-      expect(current.descriptor).toMatchObject({ effectivePolicy: { bundleDigest: bundleB }, producer: { provider: 'claude' } });
+      expect(current.descriptor).toMatchObject({
+        effectivePolicy: { bundleDigest: bundleB },
+        producer: { provider: 'claude' },
+      });
       expect(current.reviewScope).toMatchObject({
-        mode: 'full', reason: 'version-changed', policyIdentity: actualIdentity,
+        mode: 'full',
+        reason: 'version-changed',
+        policyIdentity: actualIdentity,
       });
       // The fallback lap persisted Claude's actual identity. Re-resolving that
       // same candidate is compatible evidence, so only a delta is needed.
       expect(nextScope).toMatchObject({ mode: 'delta', reason: 'delta', policyIdentity: actualIdentity });
       expect(openSource.reviewScope).toMatchObject({
-        mode: 'full', reason: 'version-changed', policyIdentity: actualIdentity,
+        mode: 'full',
+        reason: 'version-changed',
+        policyIdentity: actualIdentity,
       });
     });
 
     // Covers: task:2, task:6, task:9, task:rem-as-built-rem-2, task:rem-as-built-rem-5
     it('uses compatible current test-scope resolutions for the frontier and policy identity', async () => {
       const provider = createMockProvider();
-      const config = resolveBuildReviewConfig({
-        build_review: {
-          enabled: true,
-          rubrics: { testQuality: { enabled: true }, security: { enabled: false }, implementationQuality: { enabled: false } },
-        },
-      } as HarnessConfig, CLAUDE_POLICY);
+      const config = resolveBuildReviewConfig(
+        {
+          build_review: {
+            enabled: true,
+            rubrics: {
+              testQuality: { enabled: true },
+              security: { enabled: false },
+              implementationQuality: { enabled: false },
+            },
+          },
+        } as HarnessConfig,
+        CLAUDE_POLICY,
+      );
       const entry = config.catalog.find((candidate) => candidate.id === 'testQuality')!;
       const diff = [
-        'diff --git a/src/example.ts b/src/example.ts', '@@ -1 +1 @@',
-        '-export const value = false;', '+export const value = true;',
-        '@@ -10 +10 @@', '-export const other = false;', '+export const other = true;',
+        'diff --git a/src/example.ts b/src/example.ts',
+        '@@ -1 +1 @@',
+        '-export const value = false;',
+        '+export const value = true;',
+        '@@ -10 +10 @@',
+        '-export const other = false;',
+        '+export const other = true;',
       ].join('\n');
       const [resolvedHunk, indeterminateHunk] = deriveChangedFileReferences(diff)[0]!.hunks;
       const candidates = [
-        { id: 'candidate-resolved', source: { fileName: 'src/example.ts', side: 'head' as const }, region: { start: 0, end: 1 } },
-        { id: 'candidate-current', source: { fileName: 'src/example.ts', side: 'head' as const }, region: { start: 2, end: 3 } },
+        {
+          id: 'candidate-resolved',
+          source: { fileName: 'src/example.ts', side: 'head' as const },
+          region: { start: 0, end: 1 },
+        },
+        {
+          id: 'candidate-current',
+          source: { fileName: 'src/example.ts', side: 'head' as const },
+          region: { start: 2, end: 3 },
+        },
       ];
-      const testScope = { candidates: candidates.map((candidate) => ({
-        source: candidate.source, declaration: { span: candidate.region }, markers: [], associationChanges: [], reasons: ['uncertain-association'],
-      })) };
+      const testScope = {
+        candidates: candidates.map((candidate) => ({
+          source: candidate.source,
+          declaration: { span: candidate.region },
+          markers: [],
+          associationChanges: [],
+          reasons: ['uncertain-association'],
+        })),
+      };
       const engineIdentity = {
-        engineStamp: 'engine-a', skillDigests: { testQuality: { kind: 'resolved' as const, digest: 'sha256:bundle-a' } },
+        engineStamp: 'engine-a',
+        skillDigests: { testQuality: { kind: 'resolved' as const, digest: 'sha256:bundle-a' } },
       };
       const descriptor = getBuildReviewRubricDescriptor('testQuality').contract;
       const policyIdentity = buildReviewPolicyIdentity('testQuality', {
-        contractVersion: descriptor.output.version, projectionVersion: descriptor.projection.version,
+        contractVersion: descriptor.output.version,
+        projectionVersion: descriptor.projection.version,
         declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify(entry.policy)).digest('hex')}`,
         effectiveBundleDigest: 'sha256:bundle-a',
-        provider: Array.isArray(entry.policy.llm_provider) ? entry.policy.llm_provider.join(',') : entry.policy.llm_provider,
-        model: entry.policy.model, effort: entry.policy.effort, engineStamp: engineIdentity.engineStamp,
+        provider: Array.isArray(entry.policy.llm_provider)
+          ? entry.policy.llm_provider.join(',')
+          : entry.policy.llm_provider,
+        model: entry.policy.model,
+        effort: entry.policy.effort,
+        engineStamp: engineIdentity.engineStamp,
         testScope: {
           analysisVersion: 'test-scope-v2',
-          bindingIdentity: `sha256:${createHash('sha256').update(JSON.stringify(candidates.map((candidate) => candidate.id).sort())).digest('hex')}`,
+          bindingIdentity: `sha256:${createHash('sha256')
+            .update(JSON.stringify(candidates.map((candidate) => candidate.id).sort()))
+            .digest('hex')}`,
         },
       });
       await mkdir(join(dir, '.pipeline', 'build-review', 'lap-prior'), { recursive: true });
-      await writeFile(join(dir, '.pipeline', 'build-review', 'lap-prior', 'testQuality.json'), JSON.stringify({
-        version: 2, rubric: 'testQuality', lapId: 'lap-prior', snapshotDigest: 'sha256:prior', provenance: { kind: 'fresh' },
-        result: {
-          kind: 'judged', rubric: 'testQuality', lapId: 'lap-prior', snapshotDigest: 'sha256:prior', contractVersion: 'v4', findings: [], verdict: 'PASS',
-          scopeResolutions: [{
-            candidateId: 'candidate-resolved', status: 'indeterminate', missingEvidenceReason: 'pinned source unreadable',
-            sourceRegion: { path: 'src/example.ts', startLine: 1, endLine: 1, contentHash: resolvedHunk!.contentHash, display: 'covered test' },
-            obligationReferences: ['task:1'],
-          }],
-        },
-        reviewScope: {
-          mode: 'full', reason: 'first-lap', sequence: 1, unreadableLapIds: [], mergeBase: 'base', headSha: 'prior', policyIdentity,
-          reviewedHunks: [resolvedHunk, indeterminateHunk].map((hunk) => ({ path: 'src/example.ts', contentHash: hunk!.contentHash })), deltaHunks: [resolvedHunk, indeterminateHunk].map((hunk) => ({ path: 'src/example.ts', contentHash: hunk!.contentHash })), outOfDeltaSourceIds: [],
-        },
-      }));
+      await writeFile(
+        join(dir, '.pipeline', 'build-review', 'lap-prior', 'testQuality.json'),
+        JSON.stringify({
+          version: 2,
+          rubric: 'testQuality',
+          lapId: 'lap-prior',
+          snapshotDigest: 'sha256:prior',
+          provenance: { kind: 'fresh' },
+          result: {
+            kind: 'judged',
+            rubric: 'testQuality',
+            lapId: 'lap-prior',
+            snapshotDigest: 'sha256:prior',
+            contractVersion: 'v4',
+            findings: [],
+            verdict: 'PASS',
+            scopeResolutions: [
+              {
+                candidateId: 'candidate-resolved',
+                status: 'indeterminate',
+                missingEvidenceReason: 'pinned source unreadable',
+                sourceRegion: {
+                  path: 'src/example.ts',
+                  startLine: 1,
+                  endLine: 1,
+                  contentHash: resolvedHunk!.contentHash,
+                  display: 'covered test',
+                },
+                obligationReferences: ['task:1'],
+              },
+            ],
+          },
+          reviewScope: {
+            mode: 'full',
+            reason: 'first-lap',
+            sequence: 1,
+            unreadableLapIds: [],
+            mergeBase: 'base',
+            headSha: 'prior',
+            policyIdentity,
+            reviewedHunks: [resolvedHunk, indeterminateHunk].map((hunk) => ({
+              path: 'src/example.ts',
+              contentHash: hunk!.contentHash,
+            })),
+            deltaHunks: [resolvedHunk, indeterminateHunk].map((hunk) => ({
+              path: 'src/example.ts',
+              contentHash: hunk!.contentHash,
+            })),
+            outOfDeltaSourceIds: [],
+          },
+        }),
+      );
       await mkdir(join(dir, '.pipeline', 'build-review', 'lap-resolved'), { recursive: true });
-      await writeFile(join(dir, '.pipeline', 'build-review', 'lap-resolved', 'testQuality.json'), JSON.stringify({
-        version: 2, rubric: 'testQuality', lapId: 'lap-resolved', snapshotDigest: 'sha256:resolved', provenance: { kind: 'fresh' },
-        result: {
-          kind: 'judged', rubric: 'testQuality', lapId: 'lap-resolved', snapshotDigest: 'sha256:resolved', contractVersion: 'v4', findings: [], verdict: 'PASS',
-          scopeResolutions: [
-            { candidateId: 'candidate-resolved', status: 'resolved', sourceRegion: { path: 'src/example.ts', startLine: 1, endLine: 1, contentHash: resolvedHunk!.contentHash, display: 'covered test' }, obligationReferences: ['task:1'], associationReason: 'The candidate is now covered.' },
-            { candidateId: 'candidate-current', status: 'indeterminate', missingEvidenceReason: 'pinned source unreadable', sourceRegion: { path: 'src/example.ts', startLine: 10, endLine: 10, contentHash: indeterminateHunk!.contentHash, display: 'current test' }, obligationReferences: ['task:2'] },
-          ],
-        },
-        reviewScope: {
-          mode: 'full', reason: 'first-lap', sequence: 2, unreadableLapIds: [], mergeBase: 'base', headSha: 'resolved', policyIdentity,
-          reviewedHunks: [resolvedHunk, indeterminateHunk].map((hunk) => ({ path: 'src/example.ts', contentHash: hunk!.contentHash })), deltaHunks: [resolvedHunk, indeterminateHunk].map((hunk) => ({ path: 'src/example.ts', contentHash: hunk!.contentHash })), outOfDeltaSourceIds: [],
-        },
-      }));
+      await writeFile(
+        join(dir, '.pipeline', 'build-review', 'lap-resolved', 'testQuality.json'),
+        JSON.stringify({
+          version: 2,
+          rubric: 'testQuality',
+          lapId: 'lap-resolved',
+          snapshotDigest: 'sha256:resolved',
+          provenance: { kind: 'fresh' },
+          result: {
+            kind: 'judged',
+            rubric: 'testQuality',
+            lapId: 'lap-resolved',
+            snapshotDigest: 'sha256:resolved',
+            contractVersion: 'v4',
+            findings: [],
+            verdict: 'PASS',
+            scopeResolutions: [
+              {
+                candidateId: 'candidate-resolved',
+                status: 'resolved',
+                sourceRegion: {
+                  path: 'src/example.ts',
+                  startLine: 1,
+                  endLine: 1,
+                  contentHash: resolvedHunk!.contentHash,
+                  display: 'covered test',
+                },
+                obligationReferences: ['task:1'],
+                associationReason: 'The candidate is now covered.',
+              },
+              {
+                candidateId: 'candidate-current',
+                status: 'indeterminate',
+                missingEvidenceReason: 'pinned source unreadable',
+                sourceRegion: {
+                  path: 'src/example.ts',
+                  startLine: 10,
+                  endLine: 10,
+                  contentHash: indeterminateHunk!.contentHash,
+                  display: 'current test',
+                },
+                obligationReferences: ['task:2'],
+              },
+            ],
+          },
+          reviewScope: {
+            mode: 'full',
+            reason: 'first-lap',
+            sequence: 2,
+            unreadableLapIds: [],
+            mergeBase: 'base',
+            headSha: 'resolved',
+            policyIdentity,
+            reviewedHunks: [resolvedHunk, indeterminateHunk].map((hunk) => ({
+              path: 'src/example.ts',
+              contentHash: hunk!.contentHash,
+            })),
+            deltaHunks: [resolvedHunk, indeterminateHunk].map((hunk) => ({
+              path: 'src/example.ts',
+              contentHash: hunk!.contentHash,
+            })),
+            outOfDeltaSourceIds: [],
+          },
+        }),
+      );
       const runner = new DefaultStepRunner(provider, 'session-1', dir, { config: {} as HarnessConfig });
       vi.spyOn(runner as any, 'resolveBuildReviewEngineIdentity').mockResolvedValue(engineIdentity);
       let observedScope: unknown;
@@ -5261,14 +6188,29 @@ TIER: M`,
         throw new Error('expected unknown frontier observation');
       });
 
-      await expect((runner as any).runRubricBuildReviewInner({
-        sourceSnapshot: {
-          digest: 'sha256:current', mergeBase: 'base', headSha: 'current',
-          diff, testScopeAnalysisVersion: 'test-scope-v2', testScope, testScopeEvidence: candidates,
-        },
-      }, config, 'M', 'plan.md')).rejects.toThrow('expected unknown frontier observation');
+      await expect(
+        (runner as any).runRubricBuildReviewInner(
+          {
+            sourceSnapshot: {
+              digest: 'sha256:current',
+              mergeBase: 'base',
+              headSha: 'current',
+              diff,
+              testScopeAnalysisVersion: 'test-scope-v2',
+              testScope,
+              testScopeEvidence: candidates,
+            },
+          },
+          config,
+          'M',
+          'plan.md',
+        ),
+      ).rejects.toThrow('expected unknown frontier observation');
 
-      expect(observedScope).toMatchObject({ mode: 'delta', deltaHunks: [{ path: 'src/example.ts', contentHash: indeterminateHunk!.contentHash }] });
+      expect(observedScope).toMatchObject({
+        mode: 'delta',
+        deltaHunks: [{ path: 'src/example.ts', contentHash: indeterminateHunk!.contentHash }],
+      });
 
       observedScope = undefined;
       vi.mocked(coordinateBuildReviewRubrics).mockImplementationOnce(async (input) => {
@@ -5276,9 +6218,24 @@ TIER: M`,
         throw new Error('expected stale unknown to be ignored');
       });
 
-      await expect((runner as any).runRubricBuildReviewInner({
-        sourceSnapshot: { digest: 'sha256:version-changed', mergeBase: 'base', headSha: 'version-changed', diff, testScope, testScopeEvidence: candidates, testScopeAnalysisVersion: 'test-scope-v3' },
-      }, config, 'M', 'plan.md')).rejects.toThrow('expected stale unknown to be ignored');
+      await expect(
+        (runner as any).runRubricBuildReviewInner(
+          {
+            sourceSnapshot: {
+              digest: 'sha256:version-changed',
+              mergeBase: 'base',
+              headSha: 'version-changed',
+              diff,
+              testScope,
+              testScopeEvidence: candidates,
+              testScopeAnalysisVersion: 'test-scope-v3',
+            },
+          },
+          config,
+          'M',
+          'plan.md',
+        ),
+      ).rejects.toThrow('expected stale unknown to be ignored');
       expect(observedScope).toMatchObject({ mode: 'full', reason: 'version-changed' });
 
       observedScope = undefined;
@@ -5287,9 +6244,24 @@ TIER: M`,
         throw new Error('expected child-local frontier observation');
       });
 
-      await expect((runner as any).runRubricBuildReviewInner({
-        sourceSnapshot: { digest: 'sha256:binding-changed', mergeBase: 'base', headSha: 'binding-changed', diff, testScope, testScopeEvidence: [...candidates.slice(0, 1), { ...candidates[1]!, id: 'candidate-rebound' }], testScopeAnalysisVersion: 'test-scope-v2' },
-      }, config, 'M', 'plan.md')).rejects.toThrow('expected child-local frontier observation');
+      await expect(
+        (runner as any).runRubricBuildReviewInner(
+          {
+            sourceSnapshot: {
+              digest: 'sha256:binding-changed',
+              mergeBase: 'base',
+              headSha: 'binding-changed',
+              diff,
+              testScope,
+              testScopeEvidence: [...candidates.slice(0, 1), { ...candidates[1]!, id: 'candidate-rebound' }],
+              testScopeAnalysisVersion: 'test-scope-v2',
+            },
+          },
+          config,
+          'M',
+          'plan.md',
+        ),
+      ).rejects.toThrow('expected child-local frontier observation');
 
       expect(observedScope).toMatchObject({ mode: 'full', reason: 'version-changed' });
 
@@ -5299,14 +6271,64 @@ TIER: M`,
         throw new Error('expected sibling child frontier isolation');
       });
       await mkdir(join(dir, '.pipeline', 'children', '2', 'build-review', 'lap-sibling'), { recursive: true });
-      await writeFile(join(dir, '.pipeline', 'children', '2', 'build-review', 'lap-sibling', 'testQuality.json'), JSON.stringify({
-        version: 2, rubric: 'testQuality', lapId: 'lap-sibling', snapshotDigest: 'sha256:sibling', provenance: { kind: 'fresh' },
-        result: { kind: 'judged', rubric: 'testQuality', lapId: 'lap-sibling', snapshotDigest: 'sha256:sibling', contractVersion: 'v4', findings: [], verdict: 'PASS' },
-        reviewScope: { mode: 'full', reason: 'first-lap', sequence: 1, unreadableLapIds: [], mergeBase: 'base', headSha: 'sibling', policyIdentity, reviewedHunks: [resolvedHunk, indeterminateHunk].map((hunk) => ({ path: 'src/example.ts', contentHash: hunk!.contentHash })), deltaHunks: [resolvedHunk, indeterminateHunk].map((hunk) => ({ path: 'src/example.ts', contentHash: hunk!.contentHash })), outOfDeltaSourceIds: [] },
-      }));
-      await expect((runner as any).runRubricBuildReviewInner({
-        sourceSnapshot: { digest: 'sha256:child-current', mergeBase: 'base', headSha: 'child-current', diff, testScope, testScopeEvidence: candidates, testScopeAnalysisVersion: 'test-scope-v2' },
-      }, config, 'M', 'plan.md', undefined, undefined, parseChildId('1'))).rejects.toThrow('expected sibling child frontier isolation');
+      await writeFile(
+        join(dir, '.pipeline', 'children', '2', 'build-review', 'lap-sibling', 'testQuality.json'),
+        JSON.stringify({
+          version: 2,
+          rubric: 'testQuality',
+          lapId: 'lap-sibling',
+          snapshotDigest: 'sha256:sibling',
+          provenance: { kind: 'fresh' },
+          result: {
+            kind: 'judged',
+            rubric: 'testQuality',
+            lapId: 'lap-sibling',
+            snapshotDigest: 'sha256:sibling',
+            contractVersion: 'v4',
+            findings: [],
+            verdict: 'PASS',
+          },
+          reviewScope: {
+            mode: 'full',
+            reason: 'first-lap',
+            sequence: 1,
+            unreadableLapIds: [],
+            mergeBase: 'base',
+            headSha: 'sibling',
+            policyIdentity,
+            reviewedHunks: [resolvedHunk, indeterminateHunk].map((hunk) => ({
+              path: 'src/example.ts',
+              contentHash: hunk!.contentHash,
+            })),
+            deltaHunks: [resolvedHunk, indeterminateHunk].map((hunk) => ({
+              path: 'src/example.ts',
+              contentHash: hunk!.contentHash,
+            })),
+            outOfDeltaSourceIds: [],
+          },
+        }),
+      );
+      await expect(
+        (runner as any).runRubricBuildReviewInner(
+          {
+            sourceSnapshot: {
+              digest: 'sha256:child-current',
+              mergeBase: 'base',
+              headSha: 'child-current',
+              diff,
+              testScope,
+              testScopeEvidence: candidates,
+              testScopeAnalysisVersion: 'test-scope-v2',
+            },
+          },
+          config,
+          'M',
+          'plan.md',
+          undefined,
+          undefined,
+          parseChildId('1'),
+        ),
+      ).rejects.toThrow('expected sibling child frontier isolation');
 
       expect(observedScope).toMatchObject({ mode: 'full', reason: 'first-lap' });
     });
@@ -5316,135 +6338,188 @@ TIER: M`,
     it.each([
       ['an untracked root dependency path', false],
       ['a tracked root node_modules symlink', true],
-    ])('materializes checkout-local dependencies before uuid- and execa-importing counterfactual selectors run with %s', async (_case, tracksRootDependencyLink) => {
-      const repository = await mkdtemp(join(tmpdir(), 'build-review-checkout-dependencies-'));
-      const featureRoot = join(repository, '.worktrees', 'feature');
-      const selector = 'src/conductor/spec/example.test.mjs';
-      const sourceDependencies = join(featureRoot, 'src/conductor/node_modules');
-      const selectorMarker = join(repository, 'counterfactual-selector-ran');
-      const selectorMarkerEnv = 'BUILD_REVIEW_COUNTERFACTUAL_SELECTOR_MARKER';
-      const priorSelectorMarker = process.env[selectorMarkerEnv];
-      let checkoutRoot: string | undefined;
-      const observedProjections: Array<{ preflight: { classification: string; excerpt: string } }> = [];
-      const observedPrompts: string[] = [];
-      try {
-        await execa('git', ['init', '-q', '-b', 'main'], { cwd: repository });
-        await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: repository });
-        await execa('git', ['config', 'user.name', 'Test'], { cwd: repository });
-        await execa('git', ['config', 'commit.gpgsign', 'false'], { cwd: repository });
-        await writeFile(join(repository, '.gitignore'), '.pipeline/\nnode_modules/\n');
-        await mkdir(join(repository, 'src/conductor/src'), { recursive: true });
-        await mkdir(join(repository, 'src/conductor/spec'), { recursive: true });
-        await mkdir(join(repository, '.docs/plans'), { recursive: true });
-        await writeFile(join(repository, '.docs/plans/feature.md'), `### Task 1: distinguish the selector\n**Files:** ${selector}\n`);
-        await writeFile(join(repository, 'src/conductor/src/example.mjs'), 'export const answer = 1;\n');
-        await writeFile(join(repository, selector), "import { v4 as uuidv4 } from 'uuid';\nimport { answer } from '../src/example.mjs';\nif (!uuidv4() || answer !== 1) process.exit(1);\n");
-        await execa('git', ['add', '.'], { cwd: repository });
-        await execa('git', ['commit', '-q', '-m', 'base behavior'], { cwd: repository });
-        await execa('git', ['remote', 'add', 'origin', repository], { cwd: repository });
-        await execa('git', ['update-ref', 'refs/remotes/origin/main', 'refs/heads/main'], { cwd: repository });
-        await execa('git', ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main'], { cwd: repository });
-        await mkdir(join(repository, '.worktrees'), { recursive: true });
-        await execa('git', ['worktree', 'add', '-q', '-b', 'feature/proof', featureRoot], { cwd: repository });
-        await writeFile(join(featureRoot, 'src/conductor/src/example.mjs'), 'export const answer = 2;\n');
-        await writeFile(join(featureRoot, selector), "import { writeFile } from 'node:fs/promises';\nimport { v4 as uuidv4 } from 'uuid';\nimport { execa } from 'execa';\nimport { answer } from '../src/example.mjs';\nfunction it(_title, body) { body(); }\n// Covers: task:1\nit('loads checkout dependencies', () => { if (!uuidv4() || !execa || answer !== 2) { writeFile(process.env.BUILD_REVIEW_COUNTERFACTUAL_SELECTOR_MARKER, 'selector-loaded-checkout-dependencies').then(() => process.exit(1)); } });\n");
-        await execa('git', ['add', 'src/conductor'], { cwd: featureRoot });
-        if (tracksRootDependencyLink) {
-          await symlink('src/conductor/node_modules', join(featureRoot, 'node_modules'));
-          await execa('git', ['add', 'node_modules'], { cwd: featureRoot });
-        }
-        await execa('git', ['commit', '-q', '-m', 'change behavior and selector'], { cwd: featureRoot });
-        await mkdir(join(sourceDependencies, 'uuid'), { recursive: true });
-        await writeFile(join(sourceDependencies, 'uuid/package.json'), '{"name":"uuid","type":"module","exports":"./index.mjs"}\n');
-        await writeFile(join(sourceDependencies, 'uuid/index.mjs'), "export function v4() { return 'fixture-uuid'; }\n");
-        await mkdir(join(sourceDependencies, 'execa'), { recursive: true });
-        await writeFile(join(sourceDependencies, 'execa/package.json'), '{"name":"execa","type":"module","exports":"./index.mjs"}\n');
-        await writeFile(join(sourceDependencies, 'execa/index.mjs'), 'export function execa() {}\n');
-
-        const provider: LLMProvider = {
-          invoke: vi.fn(async (options) => {
-            const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!) as typeof observedProjections[number];
-            observedProjections.push(projection);
-            observedPrompts.push(options.prompt);
-            const scopeContext = JSON.parse(options.prompt.match(/Candidate-resolution authority \(use only these ids, regions, and obligations\):\n(\{[\s\S]*?\})\n\nYour final/)![1]);
-            const payload = {
-              findings: [],
-              scopeResolutions: scopeContext.candidates.map((candidate: any) => ({
-                candidateId: candidate.candidateId,
-                status: 'resolved',
-                sourceRegion: candidate.sourceRegion,
-                obligationReferences: candidate.obligationReferences,
-                associationReason: 'The pinned declaration is a test target.',
-              })),
-            };
-            return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
-          }),
-        };
-        // AB-1 (Task 20): every shared-`.git` worktree mutation the preflight
-        // issues must flow through the dispatcher-owned lifecycle queue, so a
-        // concurrent slug's add/remove/prune can never overlap it.
-        let queueDepth = 0;
-        const queuedMutations: string[] = [];
-        const worktreeLifecycle = new WorktreeLifecycleQueue();
-        const originalRun = worktreeLifecycle.run.bind(worktreeLifecycle);
-        worktreeLifecycle.run = (operation) => originalRun(async () => {
-          queueDepth += 1;
-          try { return await operation(); } finally { queueDepth -= 1; }
-        });
-        const gitRunner = async (args: string[]) => {
-          if (args[0] === 'worktree' && (args[1] === 'add' || args[1] === 'remove')) {
-            queuedMutations.push(queueDepth > 0 ? `${args[1]}:queued` : `${args[1]}:unqueued`);
+    ])(
+      'materializes checkout-local dependencies before uuid- and execa-importing counterfactual selectors run with %s',
+      async (_case, tracksRootDependencyLink) => {
+        const repository = await mkdtemp(join(tmpdir(), 'build-review-checkout-dependencies-'));
+        const featureRoot = join(repository, '.worktrees', 'feature');
+        const selector = 'src/conductor/spec/example.test.mjs';
+        const sourceDependencies = join(featureRoot, 'src/conductor/node_modules');
+        const selectorMarker = join(repository, 'counterfactual-selector-ran');
+        const selectorMarkerEnv = 'BUILD_REVIEW_COUNTERFACTUAL_SELECTOR_MARKER';
+        const priorSelectorMarker = process.env[selectorMarkerEnv];
+        let checkoutRoot: string | undefined;
+        const observedProjections: Array<{ preflight: { classification: string; excerpt: string } }> = [];
+        const observedPrompts: string[] = [];
+        try {
+          await execa('git', ['init', '-q', '-b', 'main'], { cwd: repository });
+          await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: repository });
+          await execa('git', ['config', 'user.name', 'Test'], { cwd: repository });
+          await execa('git', ['config', 'commit.gpgsign', 'false'], { cwd: repository });
+          await writeFile(join(repository, '.gitignore'), '.pipeline/\nnode_modules/\n');
+          await mkdir(join(repository, 'src/conductor/src'), { recursive: true });
+          await mkdir(join(repository, 'src/conductor/spec'), { recursive: true });
+          await mkdir(join(repository, '.docs/plans'), { recursive: true });
+          await writeFile(
+            join(repository, '.docs/plans/feature.md'),
+            `### Task 1: distinguish the selector\n**Files:** ${selector}\n`,
+          );
+          await writeFile(join(repository, 'src/conductor/src/example.mjs'), 'export const answer = 1;\n');
+          await writeFile(
+            join(repository, selector),
+            "import { v4 as uuidv4 } from 'uuid';\nimport { answer } from '../src/example.mjs';\nif (!uuidv4() || answer !== 1) process.exit(1);\n",
+          );
+          await execa('git', ['add', '.'], { cwd: repository });
+          await execa('git', ['commit', '-q', '-m', 'base behavior'], { cwd: repository });
+          await execa('git', ['remote', 'add', 'origin', repository], { cwd: repository });
+          await execa('git', ['update-ref', 'refs/remotes/origin/main', 'refs/heads/main'], { cwd: repository });
+          await execa('git', ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main'], {
+            cwd: repository,
+          });
+          await mkdir(join(repository, '.worktrees'), { recursive: true });
+          await execa('git', ['worktree', 'add', '-q', '-b', 'feature/proof', featureRoot], { cwd: repository });
+          await writeFile(join(featureRoot, 'src/conductor/src/example.mjs'), 'export const answer = 2;\n');
+          await writeFile(
+            join(featureRoot, selector),
+            "import { writeFile } from 'node:fs/promises';\nimport { v4 as uuidv4 } from 'uuid';\nimport { execa } from 'execa';\nimport { answer } from '../src/example.mjs';\nfunction it(_title, body) { body(); }\n// Covers: task:1\nit('loads checkout dependencies', () => { if (!uuidv4() || !execa || answer !== 2) { writeFile(process.env.BUILD_REVIEW_COUNTERFACTUAL_SELECTOR_MARKER, 'selector-loaded-checkout-dependencies').then(() => process.exit(1)); } });\n",
+          );
+          await execa('git', ['add', 'src/conductor'], { cwd: featureRoot });
+          if (tracksRootDependencyLink) {
+            await symlink('src/conductor/node_modules', join(featureRoot, 'node_modules'));
+            await execa('git', ['add', 'node_modules'], { cwd: featureRoot });
           }
-          if (args[0] === 'worktree' && args[1] === 'add') checkoutRoot = args[3];
-          if (args[0] === 'worktree' && args[1] === 'remove') return { exitCode: 0, stdout: '', stderr: '' };
-          const result = await execa('git', args, { cwd: featureRoot, reject: false });
-          return { exitCode: result.exitCode ?? 1, stdout: result.stdout, stderr: result.stderr };
-        };
-        const head = (await execa('git', ['rev-parse', 'HEAD'], { cwd: featureRoot })).stdout;
-        process.env[selectorMarkerEnv] = selectorMarker;
-        const runner = new DefaultStepRunner(provider, 'checkout-proof', featureRoot, {
-          gitRunner,
-          worktreeLifecycle,
-          planPath: join(featureRoot, '.docs/plans/feature.md'),
-          pipelineDir: join(featureRoot, '.pipeline'),
-          config: { test_suite: { scoped_command: 'node {selectors}' }, build_review: {
-            enabled: true,
-            rubrics: { testQuality: { enabled: true }, security: { enabled: false }, implementationQuality: { enabled: false } },
-          } } as HarnessConfig,
-          buildReviewInputOptions: { inspectTestSuite: async () => ({ status: 'CURRENT', evidence: { provenanceHeadSha: head, outcome: 'PASS', fingerprint: 'proof' } } as never) },
-        });
+          await execa('git', ['commit', '-q', '-m', 'change behavior and selector'], { cwd: featureRoot });
+          await mkdir(join(sourceDependencies, 'uuid'), { recursive: true });
+          await writeFile(
+            join(sourceDependencies, 'uuid/package.json'),
+            '{"name":"uuid","type":"module","exports":"./index.mjs"}\n',
+          );
+          await writeFile(
+            join(sourceDependencies, 'uuid/index.mjs'),
+            "export function v4() { return 'fixture-uuid'; }\n",
+          );
+          await mkdir(join(sourceDependencies, 'execa'), { recursive: true });
+          await writeFile(
+            join(sourceDependencies, 'execa/package.json'),
+            '{"name":"execa","type":"module","exports":"./index.mjs"}\n',
+          );
+          await writeFile(join(sourceDependencies, 'execa/index.mjs'), 'export function execa() {}\n');
 
-        await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: true });
-        expect(checkoutRoot).toBe(join(featureRoot, '.pipeline', 'build-review-preflight', head));
-        const checkoutDependencies = join(checkoutRoot!, 'src/conductor/node_modules');
-        expect((await lstat(checkoutDependencies)).isSymbolicLink()).toBe(true);
-        expect(await realpath(checkoutDependencies)).toBe(await realpath(sourceDependencies));
-        const checkoutCommandDependencies = join(checkoutRoot!, 'node_modules');
-        expect((await lstat(checkoutCommandDependencies)).isSymbolicLink()).toBe(true);
-        expect(await realpath(checkoutCommandDependencies)).toBe(await realpath(sourceDependencies));
-        expect(await readFile(selectorMarker, 'utf8')).toBe('selector-loaded-checkout-dependencies');
-        // The preflight reaches the grader as typed evidence only: its
-        // classification plus a bounded excerpt, never a verdict.
-        expect(observedProjections[0]).toMatchObject({ preflight: { classification: 'nonzero-exit' } });
-        expect(typeof observedProjections[0].preflight.excerpt).toBe('string');
-        expect(queuedMutations).toEqual(['add:queued', 'remove:queued']);
-        // The grader is told each status's validator-required fields, so a
-        // `resolved` copy of the authority cannot omit `associationReason`.
-        expect(observedPrompts[0]).toContain('`resolved` requires `sourceRegion` and `obligationReferences` copied verbatim from that candidate in the authority (a non-empty subset of its obligations, no duplicates) plus a non-blank `associationReason`; `out-of-scope` requires a non-blank `exclusionReason`; `indeterminate` requires a non-blank `missingEvidenceReason`.');
-      } finally {
-        if (priorSelectorMarker === undefined) delete process.env[selectorMarkerEnv];
-        else process.env[selectorMarkerEnv] = priorSelectorMarker;
-        await rm(repository, { recursive: true, force: true });
-      }
-    });
+          const provider: LLMProvider = {
+            invoke: vi.fn(async (options) => {
+              const projection = JSON.parse(
+                options.prompt.split('\n\n').at(-1)!,
+              ) as (typeof observedProjections)[number];
+              observedProjections.push(projection);
+              observedPrompts.push(options.prompt);
+              const scopeContext = JSON.parse(
+                options.prompt.match(
+                  /Candidate-resolution authority \(use only these ids, regions, and obligations\):\n(\{[\s\S]*?\})\n\nYour final/,
+                )![1],
+              );
+              const payload = {
+                findings: [],
+                scopeResolutions: scopeContext.candidates.map((candidate: any) => ({
+                  candidateId: candidate.candidateId,
+                  status: 'resolved',
+                  sourceRegion: candidate.sourceRegion,
+                  obligationReferences: candidate.obligationReferences,
+                  associationReason: 'The pinned declaration is a test target.',
+                })),
+              };
+              return { success: true, exitCode: 0, output: JSON.stringify(payload), finalStructuredResult: payload };
+            }),
+          };
+          // AB-1 (Task 20): every shared-`.git` worktree mutation the preflight
+          // issues must flow through the dispatcher-owned lifecycle queue, so a
+          // concurrent slug's add/remove/prune can never overlap it.
+          let queueDepth = 0;
+          const queuedMutations: string[] = [];
+          const worktreeLifecycle = new WorktreeLifecycleQueue();
+          const originalRun = worktreeLifecycle.run.bind(worktreeLifecycle);
+          worktreeLifecycle.run = (operation) =>
+            originalRun(async () => {
+              queueDepth += 1;
+              try {
+                return await operation();
+              } finally {
+                queueDepth -= 1;
+              }
+            });
+          const gitRunner = async (args: string[]) => {
+            if (args[0] === 'worktree' && (args[1] === 'add' || args[1] === 'remove')) {
+              queuedMutations.push(queueDepth > 0 ? `${args[1]}:queued` : `${args[1]}:unqueued`);
+            }
+            if (args[0] === 'worktree' && args[1] === 'add') checkoutRoot = args[3];
+            if (args[0] === 'worktree' && args[1] === 'remove') return { exitCode: 0, stdout: '', stderr: '' };
+            const result = await execa('git', args, { cwd: featureRoot, reject: false });
+            return { exitCode: result.exitCode ?? 1, stdout: result.stdout, stderr: result.stderr };
+          };
+          const head = (await execa('git', ['rev-parse', 'HEAD'], { cwd: featureRoot })).stdout;
+          process.env[selectorMarkerEnv] = selectorMarker;
+          const runner = new DefaultStepRunner(provider, 'checkout-proof', featureRoot, {
+            gitRunner,
+            worktreeLifecycle,
+            planPath: join(featureRoot, '.docs/plans/feature.md'),
+            pipelineDir: join(featureRoot, '.pipeline'),
+            config: {
+              test_suite: { scoped_command: 'node {selectors}' },
+              build_review: {
+                enabled: true,
+                rubrics: {
+                  testQuality: { enabled: true },
+                  security: { enabled: false },
+                  implementationQuality: { enabled: false },
+                },
+              },
+            } as HarnessConfig,
+            buildReviewInputOptions: {
+              inspectTestSuite: async () =>
+                ({
+                  status: 'CURRENT',
+                  evidence: { provenanceHeadSha: head, outcome: 'PASS', fingerprint: 'proof' },
+                }) as never,
+            },
+          });
+
+          await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: true });
+          expect(checkoutRoot).toBe(join(featureRoot, '.pipeline', 'build-review-preflight', head));
+          const checkoutDependencies = join(checkoutRoot!, 'src/conductor/node_modules');
+          expect((await lstat(checkoutDependencies)).isSymbolicLink()).toBe(true);
+          expect(await realpath(checkoutDependencies)).toBe(await realpath(sourceDependencies));
+          const checkoutCommandDependencies = join(checkoutRoot!, 'node_modules');
+          expect((await lstat(checkoutCommandDependencies)).isSymbolicLink()).toBe(true);
+          expect(await realpath(checkoutCommandDependencies)).toBe(await realpath(sourceDependencies));
+          expect(await readFile(selectorMarker, 'utf8')).toBe('selector-loaded-checkout-dependencies');
+          // The preflight reaches the grader as typed evidence only: its
+          // classification plus a bounded excerpt, never a verdict.
+          expect(observedProjections[0]).toMatchObject({ preflight: { classification: 'nonzero-exit' } });
+          expect(typeof observedProjections[0].preflight.excerpt).toBe('string');
+          expect(queuedMutations).toEqual(['add:queued', 'remove:queued']);
+          // The grader is told each status's validator-required fields, so a
+          // `resolved` copy of the authority cannot omit `associationReason`.
+          expect(observedPrompts[0]).toContain(
+            '`resolved` requires `sourceRegion` and `obligationReferences` copied verbatim from that candidate in the authority (a non-empty subset of its obligations, no duplicates) plus a non-blank `associationReason`; `out-of-scope` requires a non-blank `exclusionReason`; `indeterminate` requires a non-blank `missingEvidenceReason`.',
+          );
+        } finally {
+          if (priorSelectorMarker === undefined) delete process.env[selectorMarkerEnv];
+          else process.env[selectorMarkerEnv] = priorSelectorMarker;
+          await rm(repository, { recursive: true, force: true });
+        }
+      },
+    );
 
     it('writes the raw aggregate but returns and emits the shared effective verdict', async () => {
       await scopedPlan();
       const provider = createMockProvider();
-      const events = { emit: vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })) } as any;
+      const events = {
+        emit: vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })),
+      } as any;
       let rawAggregate: unknown;
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        gitRunner: scopedTestGit(), planPath, events,
+        gitRunner: scopedTestGit(),
+        planPath,
+        events,
         buildReviewArtifactReader: async (_projectRoot, rubric, lapId, snapshotDigest, _fs) => ({
           version: 1,
           rubric,
@@ -5457,11 +6532,15 @@ TIER: M`,
             lapId,
             snapshotDigest,
             contractVersion: 'v4' as never,
-            findings: [{
-              concernKind: 'test-insensitive', severity: 'major', summary: 'The changed test does not observe the behavior it should.',
-              evidenceLocations: ['x:1'],
-              anchor: { rubric: 'testQuality', locus: SCOPED_TEST_REGION },
-            }],
+            findings: [
+              {
+                concernKind: 'test-insensitive',
+                severity: 'major',
+                summary: 'The changed test does not observe the behavior it should.',
+                evidenceLocations: ['x:1'],
+                anchor: { rubric: 'testQuality', locus: SCOPED_TEST_REGION },
+              },
+            ],
             verdict: 'FAIL' as const,
           },
         }),
@@ -5471,8 +6550,14 @@ TIER: M`,
             ok: true as const,
             feature: { version: 'v1' as const, repository: '/repo', feature: 'feature' },
             effective: {
-              rawVerdict: 'FAIL' as const, verdict: 'PASS' as const, acceptedFindingIds: ['accepted'], unresolvedFindingIds: [], suppressedFindingIds: [],
-              skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
+              rawVerdict: 'FAIL' as const,
+              verdict: 'PASS' as const,
+              acceptedFindingIds: ['accepted'],
+              unresolvedFindingIds: [],
+              suppressedFindingIds: [],
+              skippedRubrics: [],
+              infrastructureFailureRubrics: [],
+              uncoveredInfrastructureFailureRubrics: [],
             },
           };
         }),
@@ -5480,21 +6565,34 @@ TIER: M`,
         ...currentBuildReviewProof(),
       });
       vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any) => ({
-        kind: 'judged', rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+        kind: 'judged',
+        rubric: branch.rubric,
+        lapId: projection.lapId,
+        snapshotDigest: projection.snapshotDigest,
         contractVersion: 'v4',
-        findings: [{
-          concernKind: 'test-insensitive', severity: 'major', summary: 'The changed test does not observe the behavior it should.',
-          evidenceLocations: ['x:1'],
-          anchor: { rubric: 'testQuality', locus: SCOPED_TEST_REGION },
-        }],
+        findings: [
+          {
+            concernKind: 'test-insensitive',
+            severity: 'major',
+            summary: 'The changed test does not observe the behavior it should.',
+            evidenceLocations: ['x:1'],
+            anchor: { rubric: 'testQuality', locus: SCOPED_TEST_REGION },
+          },
+        ],
         verdict: 'FAIL',
       }));
 
       await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: true });
-      expect(JSON.parse(await readFile(join(dir, '.pipeline/build-review.json'), 'utf8'))).toMatchObject(rawAggregate as object);
-      expect(events.emit).toHaveBeenCalledWith(expect.objectContaining({
-        type: 'build_review_outer_verdict', rawVerdict: 'FAIL', effectiveVerdict: 'PASS',
-      }));
+      expect(JSON.parse(await readFile(join(dir, '.pipeline/build-review.json'), 'utf8'))).toMatchObject(
+        rawAggregate as object,
+      );
+      expect(events.emit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'build_review_outer_verdict',
+          rawVerdict: 'FAIL',
+          effectiveVerdict: 'PASS',
+        }),
+      );
     });
 
     // adr-2026-08-29 D4.4 keeps a fully suppressed lap out of post-join
@@ -5505,14 +6603,25 @@ TIER: M`,
     it('persists durable suppression entries on a fully suppressed lap that never reaches adjudication', async () => {
       await scopedPlan();
       const provider = createMockProvider();
-      const events = { emit: vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })) } as any;
+      const events = {
+        emit: vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })),
+      } as any;
       const feature = { version: 'v1' as const, repository: '/repo', feature: 'feature' };
       let suppressedFindingId: string | undefined;
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        gitRunner: scopedTestGit(), planPath, events,
+        gitRunner: scopedTestGit(),
+        planPath,
+        events,
         config: {
           test_suite: { scoped_command: 'exit 1' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true, min_confidence: 70 }, security: { enabled: false }, implementationQuality: { enabled: false } } },
+          build_review: {
+            enabled: true,
+            rubrics: {
+              testQuality: { enabled: true, min_confidence: 70 },
+              security: { enabled: false },
+              implementationQuality: { enabled: false },
+            },
+          },
         } as HarnessConfig,
         buildReviewEffectiveResolver: vi.fn(async (_projectRoot, aggregate) => {
           suppressedFindingId = projectBuildReviewAggregateSources(aggregate as never)![0]!.findingId;
@@ -5520,23 +6629,35 @@ TIER: M`,
             ok: true as const,
             feature,
             effective: {
-              rawVerdict: 'FAIL' as const, verdict: 'PASS' as const, acceptedFindingIds: [],
-              unresolvedFindingIds: [], suppressedFindingIds: [suppressedFindingId],
-              skippedRubrics: [], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
+              rawVerdict: 'FAIL' as const,
+              verdict: 'PASS' as const,
+              acceptedFindingIds: [],
+              unresolvedFindingIds: [],
+              suppressedFindingIds: [suppressedFindingId],
+              skippedRubrics: [],
+              infrastructureFailureRubrics: [],
+              uncoveredInfrastructureFailureRubrics: [],
             },
           };
         }),
         ...currentBuildReviewProof(),
       });
       vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any) => ({
-        kind: 'judged', rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
+        kind: 'judged',
+        rubric: branch.rubric,
+        lapId: projection.lapId,
+        snapshotDigest: projection.snapshotDigest,
         contractVersion: 'v4',
-        findings: [{
-          concernKind: 'test-insensitive', severity: 'minor', summary: 'The changed test does not observe the behavior it should.',
-          evidenceLocations: ['x:1'],
-          anchor: { rubric: 'testQuality', locus: SCOPED_TEST_REGION },
-          confidence: 40,
-        }],
+        findings: [
+          {
+            concernKind: 'test-insensitive',
+            severity: 'minor',
+            summary: 'The changed test does not observe the behavior it should.',
+            evidenceLocations: ['x:1'],
+            anchor: { rubric: 'testQuality', locus: SCOPED_TEST_REGION },
+            confidence: 40,
+          },
+        ],
         verdict: 'FAIL',
       }));
 
@@ -5546,20 +6667,24 @@ TIER: M`,
 
       const persisted = await new RemediationCaseStore(dir, feature).read();
       if (!persisted.ok) throw new Error(`unexpected case-store failure: ${persisted.reason}`);
-      expect(persisted.state.suppressions).toEqual([{
-        kind: 'confidence',
-        findingId: suppressedFindingId,
-        rubric: 'testQuality',
-        summary: 'The changed test does not observe the behavior it should.',
-        confidence: 40,
-        floor: 70,
-        lastSeenLap: 'lap-head',
-      }]);
+      expect(persisted.state.suppressions).toEqual([
+        {
+          kind: 'confidence',
+          findingId: suppressedFindingId,
+          rubric: 'testQuality',
+          summary: 'The changed test does not observe the behavior it should.',
+          confidence: 40,
+          floor: 70,
+          lastSeenLap: 'lap-head',
+        },
+      ]);
     });
 
     it('publishes an empty registered-rubric set as a reasoned PASS when security and implementation quality opt out over the test-quality default', async () => {
       const provider = createMockProvider();
-      const events = { emit: vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })) } as any;
+      const events = {
+        emit: vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })),
+      } as any;
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
         gitRunner: scriptedGit(),
         planPath,
@@ -5599,21 +6724,32 @@ TIER: M`,
     it('leaves a missing current-lap branch artifact absent until the mechanical allowance is exhausted', async () => {
       await scopedPlan();
       const provider = createMockProvider();
-      const events = { emit: vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })) } as any;
+      const events = {
+        emit: vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: '', exitCode: 0 })),
+      } as any;
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        gitRunner: scopedGit(), planPath, events,
+        gitRunner: scopedGit(),
+        planPath,
+        events,
         buildReviewArtifactReader: async () => undefined,
         ...testQualityOptIn(),
         ...currentBuildReviewProof(),
       });
       vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any, projection: any) => ({
-        kind: 'judged', rubric: branch.rubric, lapId: projection.lapId, snapshotDigest: projection.snapshotDigest,
-        contractVersion: 'v3', findings: [], verdict: 'PASS',
+        kind: 'judged',
+        rubric: branch.rubric,
+        lapId: projection.lapId,
+        snapshotDigest: projection.snapshotDigest,
+        contractVersion: 'v3',
+        findings: [],
+        verdict: 'PASS',
       }));
 
       await expect(runner.run('build_review', emptyState)).resolves.toMatchObject({ success: false });
       expect(events.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'build_review_outer_verdict' }));
-      await expect(readFile(join(dir, '.pipeline/build-review.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(dir, '.pipeline/build-review.json'), 'utf8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
       expect(JSON.parse(await readFile(join(dir, '.pipeline/kickback-ledger.json'), 'utf8'))).toMatchObject({
         gates: { build_review: { mechanicalFaults: 1, cumulative: 0 } },
       });
@@ -5623,24 +6759,27 @@ TIER: M`,
       await scopedPlan();
       const provider = createMockProvider();
       const runner = new DefaultStepRunner(provider, 'session-1', dir, {
-        gitRunner: scopedGit(), planPath,
+        gitRunner: scopedGit(),
+        planPath,
         ...testQualityOptIn(),
         ...currentBuildReviewProof(),
       });
       const dispatch = vi.spyOn(runner as any, 'dispatchBuildReviewRubric').mockImplementation(async (branch: any) => ({
-        kind: 'dispatch-failure', detail: `${branch.rubric} omitted the required verdict`,
+        kind: 'dispatch-failure',
+        detail: `${branch.rubric} omitted the required verdict`,
       }));
 
       const result = await runner.run('build_review', emptyState);
       expect(result).toMatchObject({
         success: false,
         currentLapMechanicalFault: true,
-        output: 'build_review mechanical fault in testQuality (invalid-structured-result): invalid-structured-result: testQuality omitted the required verdict',
+        output:
+          'build_review mechanical fault in testQuality (invalid-structured-result): invalid-structured-result: testQuality omitted the required verdict',
       });
-      expect(dispatch.mock.calls.map(([branch]) => (branch as { rubric: string }).rubric)).toEqual([
-        'testQuality',
-      ]);
-      await expect(readFile(join(dir, '.pipeline/build-review.json'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(dispatch.mock.calls.map(([branch]) => (branch as { rubric: string }).rubric)).toEqual(['testQuality']);
+      await expect(readFile(join(dir, '.pipeline/build-review.json'), 'utf8')).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
       expect((await readKickbackLedger(dir)).gates.build_review).toMatchObject({
         mechanicalFaults: 1,
         lastMechanicalFault: {
@@ -5655,7 +6794,8 @@ TIER: M`,
     it('persists a preflight materialization excerpt when the mechanical allowance is exhausted', async () => {
       await scopedPlan();
       const runner = new DefaultStepRunner(createMockProvider(), 'session-1', dir, {
-        gitRunner: scopedGit(), planPath,
+        gitRunner: scopedGit(),
+        planPath,
         ...testQualityOptIn(),
         ...currentBuildReviewProof(),
         buildReviewEffectiveResolver: vi.fn(async () => ({
@@ -5674,8 +6814,12 @@ TIER: M`,
         })),
       });
       vi.spyOn(runner as any, 'runTautologyPreflight').mockResolvedValue({
-        classification: 'infrastructure-failure', reason: 'materialization-failed', failureExcerpt: 'boom-checkout',
-        changedPaths: [], changedTestSelectors: [], sourceIdentities: { mergeBase: 'abc123', headSha: 'head' },
+        classification: 'infrastructure-failure',
+        reason: 'materialization-failed',
+        failureExcerpt: 'boom-checkout',
+        changedPaths: [],
+        changedTestSelectors: [],
+        sourceIdentities: { mergeBase: 'abc123', headSha: 'head' },
       });
 
       await runner.run('build_review', emptyState);
@@ -5692,7 +6836,14 @@ TIER: M`,
         name: 'test-quality is enabled explicitly',
         config: {
           test_suite: { scoped_command: 'true' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, security: { enabled: false }, implementationQuality: { enabled: false } } },
+          build_review: {
+            enabled: true,
+            rubrics: {
+              testQuality: { enabled: true },
+              security: { enabled: false },
+              implementationQuality: { enabled: false },
+            },
+          },
         } as HarnessConfig,
         expectedInvokeCalls: 1,
       },
@@ -5702,7 +6853,11 @@ TIER: M`,
           test_suite: { scoped_command: 'true' },
           build_review: {
             enabled: true,
-            rubrics: { testQuality: { enabled: true, model: 'opus' }, security: { enabled: false }, implementationQuality: { enabled: false } },
+            rubrics: {
+              testQuality: { enabled: true, model: 'opus' },
+              security: { enabled: false },
+              implementationQuality: { enabled: false },
+            },
           },
           wiring: { entry_points: ['src/index.ts'] },
         } as HarnessConfig,
@@ -5716,9 +6871,11 @@ TIER: M`,
         planPath,
         config,
         buildReviewInputOptions: {
-          inspectTestSuite: async () => ({
-            status: 'CURRENT', evidence: { provenanceHeadSha: 'head', outcome: 'PASS' },
-          } as never),
+          inspectTestSuite: async () =>
+            ({
+              status: 'CURRENT',
+              evidence: { provenanceHeadSha: 'head', outcome: 'PASS' },
+            }) as never,
         },
       });
 
@@ -5726,11 +6883,7 @@ TIER: M`,
 
       expect(provider.invoke).toHaveBeenCalledTimes(expectedInvokeCalls);
       const prompts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls.map(([options]) => options.prompt);
-      expect(prompts).toEqual(
-        expect.arrayContaining([
-          expect.stringContaining('Build Review Test Quality rubric'),
-        ]),
-      );
+      expect(prompts).toEqual(expect.arrayContaining([expect.stringContaining('Build Review Test Quality rubric')]));
       expect(prompts.join('\n')).not.toContain('Build Review Scope rubric');
     });
 
@@ -5739,8 +6892,12 @@ TIER: M`,
       const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
         const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
         const result = {
-          kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
-          snapshotDigest: projection.snapshotDigest, contractVersion: 'v3', findings: [],
+          kind: 'judged',
+          rubric: projection.rubric,
+          lapId: projection.lapId,
+          snapshotDigest: projection.snapshotDigest,
+          contractVersion: 'v3',
+          findings: [],
         };
         return { success: true, output: JSON.stringify(result), exitCode: 0, finalStructuredResult: result };
       });
@@ -5752,13 +6909,21 @@ TIER: M`,
         providerRuntimes: new ProviderRuntimeSet([interactiveRuntime('codex', invoke)]),
         sessionStore: new ProviderSessionStore(),
         configuredProviders: ['codex'],
-        buildReviewPolicyCatalog: async ({ skill }) => [{
-          semanticName: skill, source: 'project', installationOrigin: '/fixture/project',
-          canonicalSkillPath: `/fixture/project/${skill}/SKILL.md`, packageRoot: `/fixture/project/${skill}`,
-          declaredDependencies: [], availability: 'available',
-        }],
+        buildReviewPolicyCatalog: async ({ skill }) => [
+          {
+            semanticName: skill,
+            source: 'project',
+            installationOrigin: '/fixture/project',
+            canonicalSkillPath: `/fixture/project/${skill}/SKILL.md`,
+            packageRoot: `/fixture/project/${skill}`,
+            declaredDependencies: [],
+            availability: 'available',
+          },
+        ],
         buildReviewPolicyCapture: async (policy) => ({
-          policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md',
+          policy,
+          materialPath: '/runtime/policy',
+          definitionPath: '/runtime/policy/SKILL.md',
           manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from(`# ${policy.semanticName}\n`) }],
           metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
           digest: `sha256-v1:${'a'.repeat(64)}`,
@@ -5795,24 +6960,41 @@ TIER: M`,
       const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
         const projection = JSON.parse(options.prompt.split('\n\n').at(-1)!);
         const result = {
-          kind: 'judged', rubric: projection.rubric, lapId: projection.lapId,
-          snapshotDigest: projection.snapshotDigest, contractVersion: 'v3', findings: [],
+          kind: 'judged',
+          rubric: projection.rubric,
+          lapId: projection.lapId,
+          snapshotDigest: projection.snapshotDigest,
+          contractVersion: 'v3',
+          findings: [],
         };
         return { success: true, output: JSON.stringify(result), exitCode: 0, finalStructuredResult: result };
       });
       const runner = new DefaultStepRunner({ invoke }, 'session-1', dir, {
-        gitRunner: scopedGit(), planPath, providerKey: 'codex',
-        config: { llm_provider: 'codex', build_review: { enabled: true, rubrics: { security: { enabled: false } } } } as HarnessConfig,
+        gitRunner: scopedGit(),
+        planPath,
+        providerKey: 'codex',
+        config: {
+          llm_provider: 'codex',
+          build_review: { enabled: true, rubrics: { security: { enabled: false } } },
+        } as HarnessConfig,
         providerRuntimes: new ProviderRuntimeSet([interactiveRuntime('codex', invoke)]),
         sessionStore: new ProviderSessionStore(),
         configuredProviders: ['codex'],
-        buildReviewPolicyCatalog: async ({ skill }) => [{
-          semanticName: skill, source: 'project', installationOrigin: '/fixture/project',
-          canonicalSkillPath: `/fixture/project/${skill}/SKILL.md`, packageRoot: `/fixture/project/${skill}`,
-          declaredDependencies: [], availability: 'available',
-        }],
+        buildReviewPolicyCatalog: async ({ skill }) => [
+          {
+            semanticName: skill,
+            source: 'project',
+            installationOrigin: '/fixture/project',
+            canonicalSkillPath: `/fixture/project/${skill}/SKILL.md`,
+            packageRoot: `/fixture/project/${skill}`,
+            declaredDependencies: [],
+            availability: 'available',
+          },
+        ],
         buildReviewPolicyCapture: async (policy) => ({
-          policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md',
+          policy,
+          materialPath: '/runtime/policy',
+          definitionPath: '/runtime/policy/SKILL.md',
           manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from(`# ${policy.semanticName}\n`) }],
           metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
           digest: `sha256-v1:${'a'.repeat(64)}`,
@@ -5822,8 +7004,14 @@ TIER: M`,
           ok: true as const,
           feature: { version: 'v1' as const, repository: dir, feature: 'feature' },
           effective: {
-            rawVerdict: 'PASS' as const, verdict: 'PASS' as const, acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
-            skippedRubrics: ['testQuality', 'security'] as const, infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
+            rawVerdict: 'PASS' as const,
+            verdict: 'PASS' as const,
+            acceptedFindingIds: [],
+            unresolvedFindingIds: [],
+            suppressedFindingIds: [],
+            skippedRubrics: ['testQuality', 'security'] as const,
+            infrastructureFailureRubrics: [],
+            uncoveredInfrastructureFailureRubrics: [],
           },
         }),
       });
@@ -5845,12 +7033,21 @@ TIER: M`,
         planPath,
         config: {
           test_suite: { scoped_command: 'true' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, security: { enabled: false }, implementationQuality: { enabled: false } } },
+          build_review: {
+            enabled: true,
+            rubrics: {
+              testQuality: { enabled: true },
+              security: { enabled: false },
+              implementationQuality: { enabled: false },
+            },
+          },
         } as HarnessConfig,
         buildReviewInputOptions: {
-          inspectTestSuite: async () => ({
-            status: 'CURRENT', evidence: { provenanceHeadSha: 'head', outcome: 'PASS' },
-          } as never),
+          inspectTestSuite: async () =>
+            ({
+              status: 'CURRENT',
+              evidence: { provenanceHeadSha: 'head', outcome: 'PASS' },
+            }) as never,
         },
       });
 
@@ -5861,8 +7058,13 @@ TIER: M`,
         .find((prompt) => prompt.includes('Build Review Test Quality rubric'));
       expect(dispatched).toBeDefined();
       const laps = await readdir(join(dir, '.pipeline/build-review'));
-      const stored = await Promise.all(laps.filter((lap) => lap.startsWith('lap-')).map((lap) =>
-        readFile(join(dir, '.pipeline/build-review', lap, 'testQuality.prompt.txt'), 'utf8').catch(() => undefined)));
+      const stored = await Promise.all(
+        laps
+          .filter((lap) => lap.startsWith('lap-'))
+          .map((lap) =>
+            readFile(join(dir, '.pipeline/build-review', lap, 'testQuality.prompt.txt'), 'utf8').catch(() => undefined),
+          ),
+      );
       const prompt = stored.find((body) => body !== undefined);
       expect(prompt).toContain('Build Review Test Quality rubric');
       // The provider prompt only prefixes the skill command; the rest is byte-identical.
@@ -5928,7 +7130,8 @@ TIER: M`,
       const baselineProvider = createMockProvider();
       (baselineProvider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue(response);
       const baselineEvents = new ConductorEventEmitter();
-      const baselineFailures: Array<Extract<ConductorEvent, { type: 'build_review_rubric_infrastructure_failure' }>> = [];
+      const baselineFailures: Array<Extract<ConductorEvent, { type: 'build_review_rubric_infrastructure_failure' }>> =
+        [];
       baselineEvents.on('build_review_rubric_infrastructure_failure', (event) => {
         if (event.type === 'build_review_rubric_infrastructure_failure') baselineFailures.push(event);
       });
@@ -5952,7 +7155,8 @@ TIER: M`,
         const blockedProvider = createMockProvider();
         (blockedProvider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue(response);
         const blockedEvents = new ConductorEventEmitter();
-        const blockedFailures: Array<Extract<ConductorEvent, { type: 'build_review_rubric_infrastructure_failure' }>> = [];
+        const blockedFailures: Array<Extract<ConductorEvent, { type: 'build_review_rubric_infrastructure_failure' }>> =
+          [];
         blockedEvents.on('build_review_rubric_infrastructure_failure', (event) => {
           if (event.type === 'build_review_rubric_infrastructure_failure') blockedFailures.push(event);
         });
@@ -6030,7 +7234,14 @@ TIER: M`,
         planPath,
         config: {
           test_suite: { scoped_command: 'true' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, security: { enabled: false }, implementationQuality: { enabled: false } } },
+          build_review: {
+            enabled: true,
+            rubrics: {
+              testQuality: { enabled: true },
+              security: { enabled: false },
+              implementationQuality: { enabled: false },
+            },
+          },
         } as HarnessConfig,
         ...currentBuildReviewProof(),
       });
@@ -6075,13 +7286,18 @@ TIER: M`,
     function scriptedGit(planRepoPath = 'plan.md') {
       const git = async (args: string[]) => {
         if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
-        if (args[0] === 'rev-parse') return { exitCode: 0, stdout: args[1] === 'HEAD' ? 'head\n' : 'base-tip\n', stderr: '' };
+        if (args[0] === 'rev-parse')
+          return { exitCode: 0, stdout: args[1] === 'HEAD' ? 'head\n' : 'base-tip\n', stderr: '' };
         if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'abc123\n', stderr: '' };
-        if (args[0] === 'diff' && args.includes('--name-status')) return { exitCode: 0, stdout: 'M\u0000x\u0000', stderr: '' };
+        if (args[0] === 'diff' && args.includes('--name-status'))
+          return { exitCode: 0, stdout: 'M\u0000x\u0000', stderr: '' };
         if (args[0] === 'diff') return { exitCode: 0, stdout: 'diff --git a/x b/x\n', stderr: '' };
-        if (args[0] === 'show' && args[1] === `head:${planRepoPath}`) return { exitCode: 0, stdout: '# Plan\n', stderr: '' };
-        if (args[0] === 'show' && args[1] === `head:.docs/stories/${basename(planRepoPath)}`) return { exitCode: 0, stdout: '# Stories\n', stderr: '' };
-        if (args[0] === 'show' && args[1] === 'head:x') return { exitCode: 0, stdout: 'export const x = true;\n', stderr: '' };
+        if (args[0] === 'show' && args[1] === `head:${planRepoPath}`)
+          return { exitCode: 0, stdout: '# Plan\n', stderr: '' };
+        if (args[0] === 'show' && args[1] === `head:.docs/stories/${basename(planRepoPath)}`)
+          return { exitCode: 0, stdout: '# Stories\n', stderr: '' };
+        if (args[0] === 'show' && args[1] === 'head:x')
+          return { exitCode: 0, stdout: 'export const x = true;\n', stderr: '' };
         if (args[0] === 'ls-tree') return { exitCode: 0, stdout: '', stderr: '' };
         return { exitCode: 1, stdout: '', stderr: '' };
       };
@@ -6092,7 +7308,14 @@ TIER: M`,
       return {
         config: {
           test_suite: { scoped_command: 'true' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, security: { enabled: false }, implementationQuality: { enabled: false } } },
+          build_review: {
+            enabled: true,
+            rubrics: {
+              testQuality: { enabled: true },
+              security: { enabled: false },
+              implementationQuality: { enabled: false },
+            },
+          },
         } as HarnessConfig,
       };
     }
@@ -6100,9 +7323,11 @@ TIER: M`,
     function currentBuildReviewProof() {
       return {
         buildReviewInputOptions: {
-          inspectTestSuite: async () => ({
-            status: 'CURRENT', evidence: { provenanceHeadSha: 'head', outcome: 'PASS' },
-          } as never),
+          inspectTestSuite: async () =>
+            ({
+              status: 'CURRENT',
+              evidence: { provenanceHeadSha: 'head', outcome: 'PASS' },
+            }) as never,
         },
       };
     }
@@ -6115,22 +7340,41 @@ TIER: M`,
     function scopedGit() {
       const git = async (args: string[]) => {
         if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
-        if (args[0] === 'rev-parse') return { exitCode: 0, stdout: args[1] === 'HEAD' ? 'head\n' : 'base-tip\n', stderr: '' };
+        if (args[0] === 'rev-parse')
+          return { exitCode: 0, stdout: args[1] === 'HEAD' ? 'head\n' : 'base-tip\n', stderr: '' };
         if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'abc123\n', stderr: '' };
-        if (args[0] === 'diff' && args.includes('--name-status')) return { exitCode: 0, stdout: `M\u0000${SCOPED_SELECTOR}\u0000M\u0000${SCOPED_TEST}\u0000`, stderr: '' };
-        if (args[0] === 'diff') return { exitCode: 0, stdout: `diff --git a/${SCOPED_SELECTOR} b/${SCOPED_SELECTOR}\ndiff --git a/${SCOPED_TEST} b/${SCOPED_TEST}\n`, stderr: '' };
+        if (args[0] === 'diff' && args.includes('--name-status'))
+          return { exitCode: 0, stdout: `M\u0000${SCOPED_SELECTOR}\u0000M\u0000${SCOPED_TEST}\u0000`, stderr: '' };
+        if (args[0] === 'diff')
+          return {
+            exitCode: 0,
+            stdout: `diff --git a/${SCOPED_SELECTOR} b/${SCOPED_SELECTOR}\ndiff --git a/${SCOPED_TEST} b/${SCOPED_TEST}\n`,
+            stderr: '',
+          };
         if (args[0] === 'show' && args[1]?.startsWith('head:') && args[1].endsWith('.md')) {
-          return { exitCode: 0, stdout: `# Plan\n\n### Task 1: Cover the thing\n**Files:** ${SCOPED_SELECTOR}\n`, stderr: '' };
+          return {
+            exitCode: 0,
+            stdout: `# Plan\n\n### Task 1: Cover the thing\n**Files:** ${SCOPED_SELECTOR}\n`,
+            stderr: '',
+          };
         }
         if (args[0] === 'show' && args[1]?.endsWith(`:${SCOPED_TEST}`)) {
-          return { exitCode: 0, stdout: args[1].startsWith('head:')
-            ? "// Covers: task:1\nit('covered', () => {});\n"
-            : "it('covered', () => {});\n", stderr: '' };
+          return {
+            exitCode: 0,
+            stdout: args[1].startsWith('head:')
+              ? "// Covers: task:1\nit('covered', () => {});\n"
+              : "it('covered', () => {});\n",
+            stderr: '',
+          };
         }
         if (args[0] === 'show' && args[1]?.endsWith(`:${SCOPED_SELECTOR}`)) {
-          return { exitCode: 0, stdout: args[1].startsWith('head:')
-            ? '// Covers: task:1\nexport const covered = true;\n'
-            : 'export const covered = false;\n', stderr: '' };
+          return {
+            exitCode: 0,
+            stdout: args[1].startsWith('head:')
+              ? '// Covers: task:1\nexport const covered = true;\n'
+              : 'export const covered = false;\n',
+            stderr: '',
+          };
         }
         if (args[0] === 'worktree' && args[1] === 'add') {
           await mkdir(join(args[3]!, 'test'), { recursive: true });
@@ -6183,29 +7427,45 @@ TIER: M`,
     function scopedTestGit() {
       const git = async (args: string[]) => {
         if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
-        if (args[0] === 'rev-parse') return { exitCode: 0, stdout: args[1] === 'HEAD' ? 'head\n' : 'base-tip\n', stderr: '' };
+        if (args[0] === 'rev-parse')
+          return { exitCode: 0, stdout: args[1] === 'HEAD' ? 'head\n' : 'base-tip\n', stderr: '' };
         if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'abc123\n', stderr: '' };
         if (args[0] === 'diff') {
           if (args.includes('--name-status')) {
             return { exitCode: 0, stdout: `M\u0000${SCOPED_SELECTOR}\u0000M\u0000${SCOPED_TEST}\u0000`, stderr: '' };
           }
-          return { exitCode: 0, stdout: [
-            `diff --git a/${SCOPED_SELECTOR} b/${SCOPED_SELECTOR}`,
-            `diff --git a/${SCOPED_TEST} b/${SCOPED_TEST}`,
-          ].join('\n') + '\n', stderr: '' };
+          return {
+            exitCode: 0,
+            stdout:
+              [
+                `diff --git a/${SCOPED_SELECTOR} b/${SCOPED_SELECTOR}`,
+                `diff --git a/${SCOPED_TEST} b/${SCOPED_TEST}`,
+              ].join('\n') + '\n',
+            stderr: '',
+          };
         }
         if (args[0] === 'show' && args[1]?.startsWith('head:') && args[1].endsWith('.md')) {
-          return { exitCode: 0, stdout: `# Plan\n\n### Task 1: Cover the thing\n**Files:** ${SCOPED_SELECTOR}\n`, stderr: '' };
+          return {
+            exitCode: 0,
+            stdout: `# Plan\n\n### Task 1: Cover the thing\n**Files:** ${SCOPED_SELECTOR}\n`,
+            stderr: '',
+          };
         }
         if (args[0] === 'show' && args[1]?.endsWith(`:${SCOPED_TEST}`)) {
-          return { exitCode: 0, stdout: args[1].startsWith('head:')
-            ? "// Covers: task:1\nit('covered', () => {});\n"
-            : "it('covered', () => {});\n", stderr: '' };
+          return {
+            exitCode: 0,
+            stdout: args[1].startsWith('head:')
+              ? "// Covers: task:1\nit('covered', () => {});\n"
+              : "it('covered', () => {});\n",
+            stderr: '',
+          };
         }
         if (args[0] === 'show' && args[1]?.endsWith(`:${SCOPED_SELECTOR}`)) {
-          return { exitCode: 0, stdout: args[1].startsWith('head:')
-            ? 'export const covered = false;\n'
-            : 'export const covered = true;\n', stderr: '' };
+          return {
+            exitCode: 0,
+            stdout: args[1].startsWith('head:') ? 'export const covered = false;\n' : 'export const covered = true;\n',
+            stderr: '',
+          };
         }
         if (args[0] === 'worktree' && args[1] === 'add') {
           const checkout = args[3]!;
@@ -6222,7 +7482,14 @@ TIER: M`,
       return {
         config: {
           test_suite: { scoped_command: 'exit 1' },
-          build_review: { enabled: true, rubrics: { testQuality: { enabled: true }, security: { enabled: false }, implementationQuality: { enabled: false } } },
+          build_review: {
+            enabled: true,
+            rubrics: {
+              testQuality: { enabled: true },
+              security: { enabled: false },
+              implementationQuality: { enabled: false },
+            },
+          },
         } as HarnessConfig,
       };
     }
@@ -6232,21 +7499,28 @@ TIER: M`,
       const invoke = vi.fn().mockResolvedValue({
         success: true,
         output: JSON.stringify({
-          kind: 'judged', rubric: 'testQuality', contractVersion: 'v3', lapId: 'lap-head',
-          snapshotDigest: 'sha256:source', findings: [{
-            concernKind: 'not-test-insensitive', summary: 'A rejected catch-all.',
-            evidenceLocations: ['src/example.ts:1'],
-            anchor: { rubric: 'testQuality' },
-          }],
+          kind: 'judged',
+          rubric: 'testQuality',
+          contractVersion: 'v3',
+          lapId: 'lap-head',
+          snapshotDigest: 'sha256:source',
+          findings: [
+            {
+              concernKind: 'not-test-insensitive',
+              summary: 'A rejected catch-all.',
+              evidenceLocations: ['src/example.ts:1'],
+              anchor: { rubric: 'testQuality' },
+            },
+          ],
         }),
         exitCode: 0,
       });
-      const runner = new DefaultStepRunner(
-        { invoke },
-        'session-1',
-        dir,
-        { gitRunner: scopedGit(), planPath, ...testQualityOptIn(), ...currentBuildReviewProof() },
-      );
+      const runner = new DefaultStepRunner({ invoke }, 'session-1', dir, {
+        gitRunner: scopedGit(),
+        planPath,
+        ...testQualityOptIn(),
+        ...currentBuildReviewProof(),
+      });
 
       const result = await runner.run('build_review', emptyState);
 
@@ -6281,7 +7555,7 @@ TIER: M`,
       }
     });
 
-    it('resolves the feature\'s own plan by featureDesc stem, not the alphabetically-last plan file (#788)', async () => {
+    it("resolves the feature's own plan by featureDesc stem, not the alphabetically-last plan file (#788)", async () => {
       const { mkdir } = await import('node:fs/promises');
       const plansDir = join(dir, '.docs', 'plans');
       await mkdir(plansDir, { recursive: true });
@@ -6469,7 +7743,7 @@ TIER: M`,
         gitRunner: scriptedGit(),
         planPath,
         buildReviewInputOptions: {
-          inspectTestSuite: async () => ({ status: 'STALE' } as never),
+          inspectTestSuite: async () => ({ status: 'STALE' }) as never,
         },
       });
       const mergeBaseRunner = new DefaultStepRunner(provider, 'session-1', dir, {
@@ -6502,7 +7776,6 @@ TIER: M`,
 
       expect(result.success).toBe(false);
     });
-
   });
 
   describe('resolveSetupFailure one-shot dispatch', () => {
@@ -6615,14 +7888,25 @@ TIER: M`,
 
   describe('resolveCiFailure one-shot dispatch', () => {
     it.each([
-      [{ success: false, output: 'readiness unavailable', exitCode: 1, executionDisposition: 'not-started' as const }, 'not-started'],
+      [
+        { success: false, output: 'readiness unavailable', exitCode: 1, executionDisposition: 'not-started' as const },
+        'not-started',
+      ],
       [{ success: false, output: 'provider exited', exitCode: 1 }, 'failed'],
-      [{ success: true, output: 'completed', exitCode: 0, executionDisposition: 'not-started' as const }, 'session-completed'],
+      [
+        { success: true, output: 'completed', exitCode: 0, executionDisposition: 'not-started' as const },
+        'session-completed',
+      ],
     ])('preserves legacy scalar disposition (%s)', async (result, expectedKind) => {
       const runner = new DefaultStepRunner({ invoke: vi.fn().mockResolvedValue(result) }, 'session-1', '/tmp/project');
-      await expect(runner.resolveCiFailure({
-        worktreePath: '/wt/feature-x', prUrl: 'https://github.com/org/repo/pull/42', hint: 'failure', slug: 'my-feature',
-      })).resolves.toMatchObject({ kind: expectedKind, preferredProvider: 'claude' });
+      await expect(
+        runner.resolveCiFailure({
+          worktreePath: '/wt/feature-x',
+          prUrl: 'https://github.com/org/repo/pull/42',
+          hint: 'failure',
+          slug: 'my-feature',
+        }),
+      ).resolves.toMatchObject({ kind: expectedKind, preferredProvider: 'claude' });
     });
 
     it('invokes the model ladder once with resume:false, dangerouslySkipPermissions:true, cwd=worktreePath, and the hint in the prompt', async () => {
@@ -6639,7 +7923,7 @@ TIER: M`,
       await runner.resolveCiFailure({
         worktreePath: '/wt/feature-x',
         prUrl: 'https://github.com/org/repo/pull/42',
-        hint: 'TypeError: Cannot read properties of undefined (reading \'foo\')',
+        hint: "TypeError: Cannot read properties of undefined (reading 'foo')",
         slug: 'my-feature',
       });
 
@@ -6658,16 +7942,35 @@ TIER: M`,
 });
 
 describe('auxiliary provider dispatch tier telemetry', () => {
-  const rubric = { rubric: 'testQuality' as const, skillName: 'build-review-test-quality', policy: {
-    enabled: true, llm_provider: 'claude' as const, model: 'opus', effort: 'high' as const,
-    model_fallback_ladder: ['opus'], max_retries: 1, escalate: false,
-  } };
+  const rubric = {
+    rubric: 'testQuality' as const,
+    skillName: 'build-review-test-quality',
+    policy: {
+      enabled: true,
+      llm_provider: 'claude' as const,
+      model: 'opus',
+      effort: 'high' as const,
+      model_fallback_ladder: ['opus'],
+      max_retries: 1,
+      escalate: false,
+    },
+  };
   const projection = {
-    rubric: 'testQuality', contractVersion: 'v3', projectionVersion: 'v2',
-    lapId: 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8', snapshotDigest: 'sha256:projection',
-    digest: 'sha256:projection', mergeBase: 'base', headSha: 'head', changedFiles: [],
-    removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] }, changedTestSelectors: [],
-    testSuiteProof: {}, revertedProductionManifest: [], preflight: {}, repairContext: [],
+    rubric: 'testQuality',
+    contractVersion: 'v3',
+    projectionVersion: 'v2',
+    lapId: 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8',
+    snapshotDigest: 'sha256:projection',
+    digest: 'sha256:projection',
+    mergeBase: 'base',
+    headSha: 'head',
+    changedFiles: [],
+    removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
+    changedTestSelectors: [],
+    testSuiteProof: {},
+    revertedProductionManifest: [],
+    preflight: {},
+    repairContext: [],
   } as unknown as import('../../src/engine/build-review-projections.js').BuildReviewRubricProjection;
 
   it.each([
@@ -6680,14 +7983,23 @@ describe('auxiliary provider dispatch tier telemetry', () => {
     const runner = new DefaultStepRunner(createMockProvider(), 'tier-build-review', projectDir, {
       config: { llm_provider: ['claude'] },
       providerRuntimes: new ProviderRuntimeSet([interactiveRuntime('claude', invoke)]),
-      sessionStore: new ProviderSessionStore(), configuredProviders: ['claude'],
-      providerAttempt: (step, attempt) => { attempts.push({ type: 'provider_attempt', step, ...attempt }); },
+      sessionStore: new ProviderSessionStore(),
+      configuredProviders: ['claude'],
+      providerAttempt: (step, attempt) => {
+        attempts.push({ type: 'provider_attempt', step, ...attempt });
+      },
     });
 
     try {
-      await (runner as unknown as {
-        dispatchBuildReviewRubric: (branch: typeof rubric, value: typeof projection, valueTier?: ConductState['complexity_tier']) => Promise<unknown>;
-      }).dispatchBuildReviewRubric(rubric, projection, tier);
+      await (
+        runner as unknown as {
+          dispatchBuildReviewRubric: (
+            branch: typeof rubric,
+            value: typeof projection,
+            valueTier?: ConductState['complexity_tier'],
+          ) => Promise<unknown>;
+        }
+      ).dispatchBuildReviewRubric(rubric, projection, tier);
 
       const invocation = attempts.find((attempt) => attempt.invoked);
       expect(invocation).toBeDefined();
@@ -6703,21 +8015,39 @@ describe('build_review rubric dispatch', () => {
   const lapId = 'lap-a237011e9f263dd47ca1a2c7cfe929865c2e99b8';
   const snapshotDigest = 'sha256:434fa33612c7d7188d5ba5398a748b54a28400bcb534988863610f64a70896f8';
   const projection = {
-    rubric: 'testQuality', contractVersion: 'v3', projectionVersion: 'v2',
-    lapId, snapshotDigest, digest: 'sha256:projection',
-    mergeBase: 'base', headSha: 'head', changedFiles: [{ path: 'test/engine/event-sinks.test.ts', changeKind: 'modified', hunks: [] }], removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
-    changedTestSelectors: ['test/engine/event-sinks.test.ts'], testSuiteProof: {}, revertedProductionManifest: [], preflight: {}, repairContext: [],
+    rubric: 'testQuality',
+    contractVersion: 'v3',
+    projectionVersion: 'v2',
+    lapId,
+    snapshotDigest,
+    digest: 'sha256:projection',
+    mergeBase: 'base',
+    headSha: 'head',
+    changedFiles: [{ path: 'test/engine/event-sinks.test.ts', changeKind: 'modified', hunks: [] }],
+    removalContext: { deletedFiles: [], removedDeclarations: [], removedMembers: [] },
+    changedTestSelectors: ['test/engine/event-sinks.test.ts'],
+    testSuiteProof: {},
+    revertedProductionManifest: [],
+    preflight: {},
+    repairContext: [],
   } as unknown as import('../../src/engine/build-review-projections.js').BuildReviewRubricProjection;
   const policy = {
-    enabled: true, llm_provider: 'claude' as const, model: 'opus', effort: 'high' as const,
-    model_fallback_ladder: ['opus'], max_retries: 1, escalate: false,
+    enabled: true,
+    llm_provider: 'claude' as const,
+    model: 'opus',
+    effort: 'high' as const,
+    model_fallback_ladder: ['opus'],
+    max_retries: 1,
+    escalate: false,
   };
   const branch = { rubric: 'testQuality' as const, skillName: 'build-review-test-quality', policy };
 
   function dispatch(runner: DefaultStepRunner) {
-    return (runner as unknown as {
-      dispatchBuildReviewRubric: (branch: unknown, projection: unknown) => Promise<unknown>;
-    }).dispatchBuildReviewRubric(branch, projection);
+    return (
+      runner as unknown as {
+        dispatchBuildReviewRubric: (branch: unknown, projection: unknown) => Promise<unknown>;
+      }
+    ).dispatchBuildReviewRubric(branch, projection);
   }
 
   it('records an unresolved rubric skill command as a named dispatch failure', async () => {
@@ -6735,10 +8065,7 @@ describe('build_review rubric dispatch', () => {
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(result).toEqual({
       kind: 'dispatch-failure',
-      detail: renderBuildReviewUnresolvedSkillRemedy(
-        'build-review-test-quality',
-        '$build-review-test-quality',
-      ),
+      detail: renderBuildReviewUnresolvedSkillRemedy('build-review-test-quality', '$build-review-test-quality'),
     });
   });
 
@@ -6775,20 +8102,27 @@ describe('build_review rubric dispatch', () => {
     });
     const attempts: ProviderAttemptEvent[] = [];
     const runner = new DefaultStepRunner(createMockProvider(), 'session-1', '/tmp/project', {
-      providerRuntimes: new ProviderRuntimeSet([
-        runtime('pi', piInvoke),
-        runtime('claude', claudeInvoke),
-      ]),
+      providerRuntimes: new ProviderRuntimeSet([runtime('pi', piInvoke), runtime('claude', claudeInvoke)]),
       sessionStore: new ProviderSessionStore(),
       configuredProviders: ['pi', 'claude'],
-      providerAttempt: (step, attempt) => { attempts.push({ type: 'provider_attempt', step, ...attempt }); },
-      buildReviewPolicyCatalog: async () => [{
-        semanticName: 'build-review-test-quality', source: 'project', installationOrigin: '/fixture/project',
-        canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project',
-        declaredDependencies: [], availability: 'available',
-      }],
+      providerAttempt: (step, attempt) => {
+        attempts.push({ type: 'provider_attempt', step, ...attempt });
+      },
+      buildReviewPolicyCatalog: async () => [
+        {
+          semanticName: 'build-review-test-quality',
+          source: 'project',
+          installationOrigin: '/fixture/project',
+          canonicalSkillPath: '/fixture/project/SKILL.md',
+          packageRoot: '/fixture/project',
+          declaredDependencies: [],
+          availability: 'available',
+        },
+      ],
       buildReviewPolicyCapture: async (policy) => ({
-        policy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md',
+        policy,
+        materialPath: '/runtime/policy',
+        definitionPath: '/runtime/policy/SKILL.md',
         manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Build review test quality\n') }],
         metadata: { version: 1, semanticName: policy.semanticName, source: policy.source, declaredDependencies: [] },
         digest: `sha256-v1:${'a'.repeat(64)}`,
@@ -6809,18 +8143,22 @@ describe('build_review rubric dispatch', () => {
       engineStamp: 'engine-stamp',
       skillDigests: { testQuality: { kind: 'resolved' as const, digest: `sha256-v1:${'b'.repeat(64)}` } },
     };
-    await (runner as unknown as {
-      dispatchBuildReviewRubric: (
-        branch: unknown, projection: unknown, tier: undefined, context: undefined,
-        inputs: unknown, engineIdentity: unknown,
-      ) => Promise<unknown>;
-    }).dispatchBuildReviewRubric(piThenClaudeBranch, projection, undefined, undefined, inputs, engineIdentity);
+    await (
+      runner as unknown as {
+        dispatchBuildReviewRubric: (
+          branch: unknown,
+          projection: unknown,
+          tier: undefined,
+          context: undefined,
+          inputs: unknown,
+          engineIdentity: unknown,
+        ) => Promise<unknown>;
+      }
+    ).dispatchBuildReviewRubric(piThenClaudeBranch, projection, undefined, undefined, inputs, engineIdentity);
 
     expect(piInvoke).not.toHaveBeenCalled();
     expect(claudeInvoke).toHaveBeenCalledOnce();
-    expect(attempts).toEqual(expect.arrayContaining([
-      expect.objectContaining({ provider: 'claude', invoked: true }),
-    ]));
+    expect(attempts).toEqual(expect.arrayContaining([expect.objectContaining({ provider: 'claude', invoked: true })]));
   });
 
   it.each([
@@ -6853,29 +8191,66 @@ describe('build_review rubric dispatch', () => {
       providerRuntimes: new ProviderRuntimeSet([interactiveRuntime('claude', invoke)]),
       sessionStore: new ProviderSessionStore(),
       configuredProviders: ['claude'],
-      buildReviewPolicyCatalog: async () => [{
-        semanticName: 'build-review-test-quality', source: 'project', installationOrigin: '/fixture/project',
-        canonicalSkillPath: '/fixture/project/SKILL.md', packageRoot: '/fixture/project',
-        declaredDependencies: [], availability: 'available',
-      }],
+      buildReviewPolicyCatalog: async () => [
+        {
+          semanticName: 'build-review-test-quality',
+          source: 'project',
+          installationOrigin: '/fixture/project',
+          canonicalSkillPath: '/fixture/project/SKILL.md',
+          packageRoot: '/fixture/project',
+          declaredDependencies: [],
+          availability: 'available',
+        },
+      ],
       buildReviewPolicyCapture: async (capturedPolicy) => ({
-        policy: capturedPolicy, materialPath: '/runtime/policy', definitionPath: '/runtime/policy/SKILL.md',
+        policy: capturedPolicy,
+        materialPath: '/runtime/policy',
+        definitionPath: '/runtime/policy/SKILL.md',
         manifest: [{ relativePath: 'SKILL.md', bytes: Buffer.from('# Build review test quality\n') }],
-        metadata: { version: 1, semanticName: capturedPolicy.semanticName, source: capturedPolicy.source, declaredDependencies: [] },
+        metadata: {
+          version: 1,
+          semanticName: capturedPolicy.semanticName,
+          source: capturedPolicy.source,
+          declaredDependencies: [],
+        },
         digest: `sha256-v1:${'a'.repeat(64)}`,
       }),
     });
     const peerProjection = {
-      rubric: 'testQuality', contractVersion: 'v4', projectionVersion: 'v4',
-      lapId, snapshotDigest, contentDigest: 'sha256:content', digest: 'sha256:peer-projection',
-      mergeBase: 'base', headSha: 'head', changedFiles: [], reviewScope,
-      runnerSelectors: [], changedTestSelectors: [], unresolvedMarkers: [], changedTestTitles: [],
-      testScope: { analysisVersion: 'test-scope-v1', changedDeclarations: [], targets: [], candidates: [], notes: [], affectedGroups: [], sharedSources: [], evidence: [] },
-      testSuiteProof: {}, revertedProductionManifest: [], preflight: { classification: 'not-requested' },
+      rubric: 'testQuality',
+      contractVersion: 'v4',
+      projectionVersion: 'v4',
+      lapId,
+      snapshotDigest,
+      contentDigest: 'sha256:content',
+      digest: 'sha256:peer-projection',
+      mergeBase: 'base',
+      headSha: 'head',
+      changedFiles: [],
+      reviewScope,
+      runnerSelectors: [],
+      changedTestSelectors: [],
+      unresolvedMarkers: [],
+      changedTestTitles: [],
+      testScope: {
+        analysisVersion: 'test-scope-v1',
+        changedDeclarations: [],
+        targets: [],
+        candidates: [],
+        notes: [],
+        affectedGroups: [],
+        sharedSources: [],
+        evidence: [],
+      },
+      testSuiteProof: {},
+      revertedProductionManifest: [],
+      preflight: { classification: 'not-requested' },
     };
     const inputs = {
       sourceSnapshot: {
-        contentDigest: 'sha256:content', mergeBase: 'base', headSha: 'head',
+        contentDigest: 'sha256:content',
+        mergeBase: 'base',
+        headSha: 'head',
         sourceChanges: [{ kind: 'M', path: 'src/current.ts' }],
       },
       sourceMaterialization: {
@@ -6892,19 +8267,29 @@ describe('build_review rubric dispatch', () => {
     };
 
     try {
-      await (runner as unknown as {
-        dispatchBuildReviewRubric: (
-          branch: unknown, projection: unknown, tier: undefined, context: undefined,
-          inputs: unknown, engineIdentity: unknown, customPolicyLap: boolean,
-          readOnlyReviewCapabilityFor: (provider: string) => Promise<unknown>,
-        ) => Promise<unknown>;
-      }).dispatchBuildReviewRubric(
+      await (
+        runner as unknown as {
+          dispatchBuildReviewRubric: (
+            branch: unknown,
+            projection: unknown,
+            tier: undefined,
+            context: undefined,
+            inputs: unknown,
+            engineIdentity: unknown,
+            customPolicyLap: boolean,
+            readOnlyReviewCapabilityFor: (provider: string) => Promise<unknown>,
+          ) => Promise<unknown>;
+        }
+      ).dispatchBuildReviewRubric(
         branch,
         peerProjection,
         undefined,
         undefined,
         inputs,
-        { engineStamp: 'engine-stamp', skillDigests: { testQuality: { kind: 'resolved', digest: `sha256-v1:${'a'.repeat(64)}` } } },
+        {
+          engineStamp: 'engine-stamp',
+          skillDigests: { testQuality: { kind: 'resolved', digest: `sha256-v1:${'a'.repeat(64)}` } },
+        },
         true,
         async (provider) => ({ provider, platform: process.platform, status: 'available' }),
       );
@@ -6919,5 +8304,4 @@ describe('build_review rubric dispatch', () => {
       await rm(projectDir, { recursive: true, force: true });
     }
   });
-
 });

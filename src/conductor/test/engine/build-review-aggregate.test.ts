@@ -2,7 +2,11 @@
 import { describe, expect, it } from 'vitest';
 
 import { deriveBuildReviewScopeIncompleteFault, parseBuildReviewLapId } from '../../src/engine/build-review-domain.js';
-import type { BuildReviewFinding, BuildReviewJudgedResult, BuildReviewRubricResult } from '../../src/engine/build-review-domain.js';
+import type {
+  BuildReviewFinding,
+  BuildReviewJudgedResult,
+  BuildReviewRubricResult,
+} from '../../src/engine/build-review-domain.js';
 import {
   deriveEffectiveBuildReviewVerdict,
   deriveEffectiveBuildReviewVerdictWithDispositions,
@@ -11,7 +15,10 @@ import {
   parseBuildReviewAggregate,
   projectBuildReviewAggregateSources,
 } from '../../src/engine/build-review-aggregate.js';
-import { canonicalizeBuildReviewFindingIdentity, stampBuildReviewCustomJudgedResult } from '../../src/engine/build-review-finding-identity.js';
+import {
+  canonicalizeBuildReviewFindingIdentity,
+  stampBuildReviewCustomJudgedResult,
+} from '../../src/engine/build-review-finding-identity.js';
 
 // Surviving coverage in test/engine/build-review-verdict.test.ts (gate wiring,
 // mechanical-fault lane, incomplete `results`) and test/build-review-compat.test.ts
@@ -24,42 +31,89 @@ const CUSTOM_DIGEST = `sha256:${'c'.repeat(64)}`;
 
 const customAggregateMember = {
   descriptor: {
-    version: 'v1', semanticSkill: 'security-review',
-    declaration: { version: 'v1', rubricId: 'security', semanticSkill: 'security-review', question: 'Find security regressions.', source: 'plugin', resources: ['references/security.md'] },
+    version: 'v1',
+    semanticSkill: 'security-review',
+    declaration: {
+      version: 'v1',
+      rubricId: 'security',
+      semanticSkill: 'security-review',
+      question: 'Find security regressions.',
+      source: 'plugin',
+      resources: ['references/security.md'],
+    },
     installation: { source: 'plugin', plugin: { id: 'security-suite', version: '2.1.0' } },
     effectivePolicy: { version: 'v1', bundleDigest: CUSTOM_DIGEST },
     reviewedInput: { version: 'v1', contentDigest: CUSTOM_DIGEST },
     producer: { provider: 'codex', model: 'gpt-5.6', effort: 'high' },
   },
   result: {
-    kind: 'judged', contractVersion: 'custom-v1', rubric: 'security', lapId: 'lap-current',
-    declaration: { version: 'v1', rubricId: 'security', semanticSkill: 'security-review', question: 'Find security regressions.', source: 'plugin', resources: ['references/security.md'] },
-    policy: { version: 'v1', bundleDigest: CUSTOM_DIGEST }, candidate: { provider: 'codex', model: 'gpt-5.6', effort: 'high' },
-    reviewedInput: { version: 'v1', contentDigest: CUSTOM_DIGEST }, findings: [], verdict: 'PASS',
+    kind: 'judged',
+    contractVersion: 'custom-v1',
+    rubric: 'security',
+    lapId: 'lap-current',
+    declaration: {
+      version: 'v1',
+      rubricId: 'security',
+      semanticSkill: 'security-review',
+      question: 'Find security regressions.',
+      source: 'plugin',
+      resources: ['references/security.md'],
+    },
+    policy: { version: 'v1', bundleDigest: CUSTOM_DIGEST },
+    candidate: { provider: 'codex', model: 'gpt-5.6', effort: 'high' },
+    reviewedInput: { version: 'v1', contentDigest: CUSTOM_DIGEST },
+    findings: [],
+    verdict: 'PASS',
     identity: { id: CUSTOM_DIGEST, canonicalPayload: {}, canonicalJson: '{}' },
   },
 } as const;
 
 function judged(findings: readonly BuildReviewFinding[] = []): BuildReviewJudgedResult {
   return {
-    kind: 'judged', rubric: 'testQuality', lapId, snapshotDigest, contractVersion: 'v3',
-    findings, verdict: findings.length === 0 ? 'PASS' : 'FAIL',
+    kind: 'judged',
+    rubric: 'testQuality',
+    lapId,
+    snapshotDigest,
+    contractVersion: 'v3',
+    findings,
+    verdict: findings.length === 0 ? 'PASS' : 'FAIL',
   };
 }
 
 function securityJudged(findings: readonly BuildReviewFinding[] = []): BuildReviewJudgedResult {
   return {
-    kind: 'judged', rubric: 'security', lapId, snapshotDigest, contractVersion: 'v3',
-    findings, verdict: findings.length === 0 ? 'PASS' : 'FAIL',
+    kind: 'judged',
+    rubric: 'security',
+    lapId,
+    snapshotDigest,
+    contractVersion: 'v3',
+    findings,
+    verdict: findings.length === 0 ? 'PASS' : 'FAIL',
   };
 }
 
 function implementationQualityJudged(findings: readonly BuildReviewFinding[] = []): BuildReviewJudgedResult {
-  return { kind: 'judged', rubric: 'implementationQuality', lapId, snapshotDigest, contractVersion: 'v3', findings, verdict: findings.length ? 'FAIL' : 'PASS' };
+  return {
+    kind: 'judged',
+    rubric: 'implementationQuality',
+    lapId,
+    snapshotDigest,
+    contractVersion: 'v3',
+    findings,
+    verdict: findings.length ? 'FAIL' : 'PASS',
+  };
 }
 
 function implementationQualityFinding(): BuildReviewFinding {
-  return { concernKind: 'duplication', summary: 'The changed target duplicates the declared source.', evidenceLocations: ['src/source.ts:8'], anchor: { rubric: 'implementationQuality', locus: { path: 'src/target.ts', contentHash: HASH, display: 'copied branch' } } };
+  return {
+    concernKind: 'duplication',
+    summary: 'The changed target duplicates the declared source.',
+    evidenceLocations: ['src/source.ts:8'],
+    anchor: {
+      rubric: 'implementationQuality',
+      locus: { path: 'src/target.ts', contentHash: HASH, display: 'copied branch' },
+    },
+  };
 }
 
 function results(testQuality: BuildReviewRubricResult, security: BuildReviewRubricResult = securityJudged()) {
@@ -71,13 +125,20 @@ function results(testQuality: BuildReviewRubricResult, security: BuildReviewRubr
 }
 
 const finding: BuildReviewFinding = {
-  concernKind: 'test-insensitive', summary: 'The assertion passes against reverted production.', evidenceLocations: ['test/widget.test.ts:8'],
-  anchor: { rubric: 'testQuality', locus: { path: 'test/widget.test.ts', contentHash: HASH, display: 'widget persists state' } },
+  concernKind: 'test-insensitive',
+  summary: 'The assertion passes against reverted production.',
+  evidenceLocations: ['test/widget.test.ts:8'],
+  anchor: {
+    rubric: 'testQuality',
+    locus: { path: 'test/widget.test.ts', contentHash: HASH, display: 'widget persists state' },
+  },
 };
 
 function confidenceFinding(confidence: number | undefined, label: string): BuildReviewFinding {
   return {
-    concernKind: 'test-insensitive', summary: `Finding ${label}`, evidenceLocations: [`test/${label}.test.ts:8`],
+    concernKind: 'test-insensitive',
+    summary: `Finding ${label}`,
+    evidenceLocations: [`test/${label}.test.ts:8`],
     anchor: { rubric: 'testQuality', locus: { path: `test/${label}.test.ts`, contentHash: HASH, display: label } },
     ...(confidence === undefined ? {} : { confidence }),
   };
@@ -85,7 +146,10 @@ function confidenceFinding(confidence: number | undefined, label: string): Build
 
 function findingId(value: BuildReviewFinding): string {
   return canonicalizeBuildReviewFindingIdentity({
-    rubric: 'testQuality', contractVersion: 'v3', concernKind: value.concernKind, anchor: value.anchor,
+    rubric: 'testQuality',
+    contractVersion: 'v3',
+    concernKind: value.concernKind,
+    anchor: value.anchor,
   })!.id;
 }
 
@@ -97,111 +161,218 @@ describe('build-review raw aggregate', () => {
   // Covers: task:15
   it('classifies a non-critical settled-hunk finding as out of delta without accepting risk', () => {
     const securityFinding: BuildReviewFinding = {
-      concernKind: 'injection', summary: 'A stale sink remains.', evidenceLocations: ['src/a.ts:8'],
-      anchor: { rubric: 'security', locus: { path: 'src/a.ts', contentHash: HASH, display: 'sink' } }, severity: 'major',
+      concernKind: 'injection',
+      summary: 'A stale sink remains.',
+      evidenceLocations: ['src/a.ts:8'],
+      anchor: { rubric: 'security', locus: { path: 'src/a.ts', contentHash: HASH, display: 'sink' } },
+      severity: 'major',
     };
-    const raw = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: results(judged(), securityJudged([securityFinding])) });
+    const raw = joinBuildReviewRubricOutcomes({
+      lapId,
+      snapshotDigest,
+      results: results(judged(), securityJudged([securityFinding])),
+    });
     const scope: BuildReviewEffectiveScope = {
       reviewScope: { mode: 'delta', deltaHunks: [{ path: 'src/other.ts', contentHash: 'sha256:other' }] },
       changedFiles: [
-        { path: 'src/a.ts', changeKind: 'modified', hunks: [{ oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, contentHash: HASH }] },
-        { path: 'src/other.ts', changeKind: 'modified', hunks: [{ oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, contentHash: 'sha256:other' }] },
+        {
+          path: 'src/a.ts',
+          changeKind: 'modified',
+          hunks: [{ oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, contentHash: HASH }],
+        },
+        {
+          path: 'src/other.ts',
+          changeKind: 'modified',
+          hunks: [{ oldStart: 1, oldCount: 1, newStart: 1, newCount: 1, contentHash: 'sha256:other' }],
+        },
       ],
     };
-    const id = canonicalizeBuildReviewFindingIdentity({ rubric: 'security', contractVersion: 'v3', concernKind: securityFinding.concernKind, anchor: securityFinding.anchor })!.id;
-    expect(deriveEffectiveBuildReviewVerdict(raw, new Set(), [], {}, new Set(), {}, { security: scope })).toMatchObject({
-      verdict: 'PASS', outOfDeltaFindingIds: [id], unresolvedFindingIds: [], acceptedFindingIds: [],
-    });
-    expect(deriveEffectiveBuildReviewVerdict(raw, new Set(), [], {}, new Set(), {}, { security: { ...scope, reviewScope: { ...scope.reviewScope, deltaHunks: [{ path: 'src/a.ts', contentHash: HASH }] } } })).toMatchObject({
-      verdict: 'FAIL', unresolvedFindingIds: [id],
+    const id = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'security',
+      contractVersion: 'v3',
+      concernKind: securityFinding.concernKind,
+      anchor: securityFinding.anchor,
+    })!.id;
+    expect(deriveEffectiveBuildReviewVerdict(raw, new Set(), [], {}, new Set(), {}, { security: scope })).toMatchObject(
+      {
+        verdict: 'PASS',
+        outOfDeltaFindingIds: [id],
+        unresolvedFindingIds: [],
+        acceptedFindingIds: [],
+      },
+    );
+    expect(
+      deriveEffectiveBuildReviewVerdict(
+        raw,
+        new Set(),
+        [],
+        {},
+        new Set(),
+        {},
+        {
+          security: {
+            ...scope,
+            reviewScope: { ...scope.reviewScope, deltaHunks: [{ path: 'src/a.ts', contentHash: HASH }] },
+          },
+        },
+      ),
+    ).toMatchObject({
+      verdict: 'FAIL',
+      unresolvedFindingIds: [id],
     });
   });
   it('preserves passing peers beside an implementation-quality failure and suppresses a declared replication identity', () => {
     const finding = implementationQualityFinding();
-    const identity = canonicalizeBuildReviewFindingIdentity({ rubric: 'implementationQuality', contractVersion: 'v3', concernKind: finding.concernKind, anchor: finding.anchor })!;
+    const identity = canonicalizeBuildReviewFindingIdentity({
+      rubric: 'implementationQuality',
+      contractVersion: 'v3',
+      concernKind: finding.concernKind,
+      anchor: finding.anchor,
+    })!;
     const aggregate = joinBuildReviewRubricOutcomes({
-      lapId, snapshotDigest,
-      results: { testQuality: judged(), security: securityJudged(), implementationQuality: implementationQualityJudged([finding]) },
-      declaredReplicationSuppressions: [{ findingId: identity.id, sourcePath: 'src/source.ts', targetPath: 'src/target.ts' }],
+      lapId,
+      snapshotDigest,
+      results: {
+        testQuality: judged(),
+        security: securityJudged(),
+        implementationQuality: implementationQualityJudged([finding]),
+      },
+      declaredReplicationSuppressions: [
+        { findingId: identity.id, sourcePath: 'src/source.ts', targetPath: 'src/target.ts' },
+      ],
     });
 
     expect(aggregate.verdict).toBe('FAIL');
     expect(aggregate.results.testQuality).toEqual(judged());
     expect(aggregate.results.security).toEqual(securityJudged());
-    expect(deriveEffectiveBuildReviewVerdict(aggregate)).toMatchObject({ verdict: 'PASS', suppressedFindingIds: [identity.id], unresolvedFindingIds: [] });
+    expect(deriveEffectiveBuildReviewVerdict(aggregate)).toMatchObject({
+      verdict: 'PASS',
+      suppressedFindingIds: [identity.id],
+      unresolvedFindingIds: [],
+    });
   });
   it('normalizes omitted default-off security at the join boundary while the persisted parser stays exhaustive', () => {
     const aggregate = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: { testQuality: judged() } });
 
     expect(aggregate.results.security).toEqual({ kind: 'skipped', rubric: 'security', reason: 'disabled' });
-    expect(parseBuildReviewAggregate({
-      ...aggregate,
-      results: { testQuality: aggregate.results.testQuality },
-    })).toBeUndefined();
+    expect(
+      parseBuildReviewAggregate({
+        ...aggregate,
+        results: { testQuality: aggregate.results.testQuality },
+      }),
+    ).toBeUndefined();
   });
 
   it('joins security findings into the failure verdict and adjudication sources', () => {
     const securityFinding: BuildReviewFinding = {
-      concernKind: 'committed-secret', summary: 'A credential is committed to the diff.', evidenceLocations: ['src/config.ts:12'],
-      anchor: { rubric: 'security', locus: { path: 'src/config.ts', contentHash: HASH, display: 'credential assignment' } },
+      concernKind: 'committed-secret',
+      summary: 'A credential is committed to the diff.',
+      evidenceLocations: ['src/config.ts:12'],
+      anchor: {
+        rubric: 'security',
+        locus: { path: 'src/config.ts', contentHash: HASH, display: 'credential assignment' },
+      },
     };
-    const aggregate = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: results(judged(), securityJudged([securityFinding])) });
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId,
+      snapshotDigest,
+      results: results(judged(), securityJudged([securityFinding])),
+    });
 
     expect(aggregate).toMatchObject({ verdict: 'FAIL', rubric: { security: true } });
-    expect(projectBuildReviewAggregateSources(aggregate)).toEqual([expect.objectContaining({
-      rubric: 'security', concernKind: 'committed-secret', findingId: expect.stringMatching(/^sha256:/),
-    })]);
+    expect(projectBuildReviewAggregateSources(aggregate)).toEqual([
+      expect.objectContaining({
+        rubric: 'security',
+        concernKind: 'committed-secret',
+        findingId: expect.stringMatching(/^sha256:/),
+      }),
+    ]);
   });
 
   it('passes a clean security result and preserves it beside a test-quality infrastructure failure', () => {
     const securityFinding: BuildReviewFinding = {
-      concernKind: 'injection', summary: 'Input reaches a shell.', evidenceLocations: ['src/run.ts:12'],
+      concernKind: 'injection',
+      summary: 'Input reaches a shell.',
+      evidenceLocations: ['src/run.ts:12'],
       anchor: { rubric: 'security', locus: { path: 'src/run.ts', contentHash: HASH, display: 'shell invocation' } },
     };
     const clean = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: results(judged()) });
-    const mixed = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: results(
-      { kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'provider-error', detail: 'provider unavailable' },
-      securityJudged([securityFinding]),
-    ) });
+    const mixed = joinBuildReviewRubricOutcomes({
+      lapId,
+      snapshotDigest,
+      results: results(
+        {
+          kind: 'infrastructure-failure',
+          rubric: 'testQuality',
+          reason: 'provider-error',
+          detail: 'provider unavailable',
+        },
+        securityJudged([securityFinding]),
+      ),
+    });
 
     expect(clean).toMatchObject({ verdict: 'PASS', rubric: { security: false } });
-    expect(mixed).toMatchObject({ verdict: 'FAIL', coverage: { testQuality: 'infrastructure-failure' }, results: { security: { findings: [securityFinding] } } });
+    expect(mixed).toMatchObject({
+      verdict: 'FAIL',
+      coverage: { testQuality: 'infrastructure-failure' },
+      results: { security: { findings: [securityFinding] } },
+    });
   });
 
   it('routes a security infrastructure failure to the mechanical-fault lane', () => {
-    const aggregate = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: results(
-      judged(),
-      { kind: 'infrastructure-failure', rubric: 'security', reason: 'provider-error', detail: 'security provider unavailable' },
-    ) });
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId,
+      snapshotDigest,
+      results: results(judged(), {
+        kind: 'infrastructure-failure',
+        rubric: 'security',
+        reason: 'provider-error',
+        detail: 'security provider unavailable',
+      }),
+    });
 
     expect(deriveEffectiveBuildReviewVerdict(aggregate)).toMatchObject({
-      verdict: 'FAIL', infrastructureFailureRubrics: ['security'], uncoveredInfrastructureFailureRubrics: ['security'],
+      verdict: 'FAIL',
+      infrastructureFailureRubrics: ['security'],
+      uncoveredInfrastructureFailureRubrics: ['security'],
     });
   });
 
   it('retains historic custom descriptors while the lap catalog alone selects current custom membership', () => {
     const current = joinBuildReviewRubricOutcomes({
-      lapId, snapshotDigest, results: { testQuality: judged() },
-      customResults: { security: customAggregateMember }, currentCustomRubrics: ['security'],
+      lapId,
+      snapshotDigest,
+      results: { testQuality: judged() },
+      customResults: { security: customAggregateMember },
+      currentCustomRubrics: ['security'],
     } as never);
     const disabledLater = { ...current, currentCustomRubrics: [] };
 
     expect(parseBuildReviewAggregate(current)).toMatchObject({
-      customResults: { security: { descriptor: customAggregateMember.descriptor, result: { kind: 'judged', rubric: 'security' } } },
+      customResults: {
+        security: { descriptor: customAggregateMember.descriptor, result: { kind: 'judged', rubric: 'security' } },
+      },
       currentCustomRubrics: ['security'],
     });
     expect(parseBuildReviewAggregate(disabledLater)).toMatchObject({
-      customResults: { security: { descriptor: customAggregateMember.descriptor } }, currentCustomRubrics: [],
+      customResults: { security: { descriptor: customAggregateMember.descriptor } },
+      currentCustomRubrics: [],
     });
   });
 
   it('rejects a custom failure that tries to carry a judged descriptor', () => {
     const aggregate = {
-      ...currentAggregate(), aggregateVersion: 'v2',
+      ...currentAggregate(),
+      aggregateVersion: 'v2',
       customResults: {
         security: {
           ...customAggregateMember,
-          result: { kind: 'infrastructure-failure', rubric: 'security', reason: 'policy-load-failed', detail: 'plugin unavailable' },
+          result: {
+            kind: 'infrastructure-failure',
+            rubric: 'security',
+            reason: 'policy-load-failed',
+            detail: 'plugin unavailable',
+          },
         },
       },
       currentCustomRubrics: ['security'],
@@ -212,34 +383,55 @@ describe('build-review raw aggregate', () => {
 
   it('counts only catalog-selected custom evidence as a current blocker', () => {
     const failedCustom = {
-      result: { kind: 'infrastructure-failure', rubric: 'security', reason: 'policy-load-failed', detail: 'plugin unavailable' },
+      result: {
+        kind: 'infrastructure-failure',
+        rubric: 'security',
+        reason: 'policy-load-failed',
+        detail: 'plugin unavailable',
+      },
     } as const;
     const active = joinBuildReviewRubricOutcomes({
-      lapId, snapshotDigest, results: { testQuality: judged() },
-      customResults: { security: failedCustom }, currentCustomRubrics: ['security'],
+      lapId,
+      snapshotDigest,
+      results: { testQuality: judged() },
+      customResults: { security: failedCustom },
+      currentCustomRubrics: ['security'],
     } as never);
     const disabled = joinBuildReviewRubricOutcomes({
-      lapId, snapshotDigest, results: { testQuality: judged() },
-      customResults: { security: failedCustom }, currentCustomRubrics: [],
+      lapId,
+      snapshotDigest,
+      results: { testQuality: judged() },
+      customResults: { security: failedCustom },
+      currentCustomRubrics: [],
     } as never);
 
     expect(active.verdict).toBe('FAIL');
-    expect(disabled).toMatchObject({ verdict: 'PASS', customResults: { security: failedCustom }, currentCustomRubrics: [] });
+    expect(disabled).toMatchObject({
+      verdict: 'PASS',
+      customResults: { security: failedCustom },
+      currentCustomRubrics: [],
+    });
   });
 
   // Covers: task:11
   it('treats an all-scope-empty custom lap as a passing non-judged result', () => {
     const scopeEmpty = {
       declaration: {
-        version: 'v1', rubricId: 'portablePolicy', semanticSkill: 'portable-policy',
-        question: 'Does this preserve the portable policy contract?', source: 'project', resources: [],
+        version: 'v1',
+        rubricId: 'portablePolicy',
+        semanticSkill: 'portable-policy',
+        question: 'Does this preserve the portable policy contract?',
+        source: 'project',
+        resources: [],
       },
       result: { kind: 'scope-empty', rubric: 'portablePolicy' },
     } as const;
     const aggregate = joinBuildReviewRubricOutcomes({
-      lapId, snapshotDigest,
+      lapId,
+      snapshotDigest,
       results: { testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' } },
-      customResults: { portablePolicy: scopeEmpty }, currentCustomRubrics: ['portablePolicy'],
+      customResults: { portablePolicy: scopeEmpty },
+      currentCustomRubrics: ['portablePolicy'],
     } as never);
 
     expect(aggregate).toMatchObject({
@@ -249,64 +441,133 @@ describe('build-review raw aggregate', () => {
     expect(parseBuildReviewAggregate(aggregate)?.customResults?.portablePolicy.result).toEqual(scopeEmpty.result);
   });
 
-  it('keeps a disabled rubric\'s cached findings inspectable while supplying no current blocker or repair source', () => {
-    const declaration = { version: 'v1', rubricId: 'portablePolicy', semanticSkill: 'portable-policy', question: 'Does this preserve the portable policy contract?', source: 'project', resources: [] } as const;
+  it("keeps a disabled rubric's cached findings inspectable while supplying no current blocker or repair source", () => {
+    const declaration = {
+      version: 'v1',
+      rubricId: 'portablePolicy',
+      semanticSkill: 'portable-policy',
+      question: 'Does this preserve the portable policy contract?',
+      source: 'project',
+      resources: [],
+    } as const;
     const stamp = {
-      rubric: 'portablePolicy', lapId: 'lap-current', declaration,
-      policy: { version: 'v1', bundleDigest: CUSTOM_DIGEST }, candidate: { provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium' },
+      rubric: 'portablePolicy',
+      lapId: 'lap-current',
+      declaration,
+      policy: { version: 'v1', bundleDigest: CUSTOM_DIGEST },
+      candidate: { provider: 'codex', model: 'gpt-5.6-sol', effort: 'medium' },
       reviewedInput: { version: 'v1', contentDigest: CUSTOM_DIGEST },
     } as const;
-    const judgedWithFinding = stampBuildReviewCustomJudgedResult({ kind: 'custom-findings', version: 'v2', findings: [{
-      concernId: 'portable-policy-gap', summary: 'The changed boundary lacks compatibility evidence.', evidenceLocations: ['src/widget.ts:8'],
-      severity: 'minor', sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: HASH, display: 'public boundary' }],
-    }] }, stamp, { sourceRegions: [{ path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: HASH, display: 'public boundary' }] })!;
+    const judgedWithFinding = stampBuildReviewCustomJudgedResult(
+      {
+        kind: 'custom-findings',
+        version: 'v2',
+        findings: [
+          {
+            concernId: 'portable-policy-gap',
+            summary: 'The changed boundary lacks compatibility evidence.',
+            evidenceLocations: ['src/widget.ts:8'],
+            severity: 'minor',
+            sourceRegions: [
+              { path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: HASH, display: 'public boundary' },
+            ],
+          },
+        ],
+      },
+      stamp,
+      {
+        sourceRegions: [
+          { path: 'src/widget.ts', startLine: 8, endLine: 12, contentHash: HASH, display: 'public boundary' },
+        ],
+      },
+    )!;
     const member = {
-      descriptor: { version: 'v1', semanticSkill: 'portable-policy', declaration, installation: { source: 'project' }, effectivePolicy: stamp.policy, reviewedInput: stamp.reviewedInput, producer: stamp.candidate },
+      descriptor: {
+        version: 'v1',
+        semanticSkill: 'portable-policy',
+        declaration,
+        installation: { source: 'project' },
+        effectivePolicy: stamp.policy,
+        reviewedInput: stamp.reviewedInput,
+        producer: stamp.candidate,
+      },
       result: judgedWithFinding,
     };
     const enabled = joinBuildReviewRubricOutcomes({
-      lapId, snapshotDigest, results: { testQuality: judged() }, customResults: { portablePolicy: member }, currentCustomRubrics: ['portablePolicy'],
+      lapId,
+      snapshotDigest,
+      results: { testQuality: judged() },
+      customResults: { portablePolicy: member },
+      currentCustomRubrics: ['portablePolicy'],
     } as never);
     const disabledLater = joinBuildReviewRubricOutcomes({
-      lapId, snapshotDigest, results: { testQuality: judged() }, customResults: { portablePolicy: member }, currentCustomRubrics: [],
+      lapId,
+      snapshotDigest,
+      results: { testQuality: judged() },
+      customResults: { portablePolicy: member },
+      currentCustomRubrics: [],
     } as never);
 
     expect(enabled.verdict).toBe('FAIL');
-    expect(projectBuildReviewAggregateSources(enabled)).toEqual([expect.objectContaining({ rubric: 'portablePolicy', concernKind: 'portable-policy-gap' })]);
+    expect(projectBuildReviewAggregateSources(enabled)).toEqual([
+      expect.objectContaining({ rubric: 'portablePolicy', concernKind: 'portable-policy-gap' }),
+    ]);
     // Disabled: the historical judged evidence is still readable in full, yet
     // it is neither a current blocker nor a source that could seed repair work.
     expect(disabledLater.verdict).toBe('PASS');
     expect(disabledLater.customResults?.portablePolicy).toEqual(member);
-    expect(parseBuildReviewAggregate(disabledLater)?.customResults?.portablePolicy.result).toMatchObject({ kind: 'judged', findings: [expect.objectContaining({ concernId: 'portable-policy-gap' })] });
+    expect(parseBuildReviewAggregate(disabledLater)?.customResults?.portablePolicy.result).toMatchObject({
+      kind: 'judged',
+      findings: [expect.objectContaining({ concernId: 'portable-policy-gap' })],
+    });
     expect(projectBuildReviewAggregateSources(disabledLater)).toEqual([]);
   });
 
   it('retains judged findings while deriving a blocking scope-incomplete fault from validated indeterminacy', () => {
     const result = {
       ...judged([finding]),
-      scopeResolutions: [{
-        candidateId: 'candidate:setup', status: 'indeterminate',
-        sourceRegion: { path: 'test/widget.test.ts', startLine: 3, endLine: 8, contentHash: HASH, display: 'widget setup' },
-        obligationReferences: ['story:S6.1'],
-        missingEvidenceReason: 'the helper association is ambiguous',
-      }],
+      scopeResolutions: [
+        {
+          candidateId: 'candidate:setup',
+          status: 'indeterminate',
+          sourceRegion: {
+            path: 'test/widget.test.ts',
+            startLine: 3,
+            endLine: 8,
+            contentHash: HASH,
+            display: 'widget setup',
+          },
+          obligationReferences: ['story:S6.1'],
+          missingEvidenceReason: 'the helper association is ambiguous',
+        },
+      ],
     } as BuildReviewJudgedResult;
 
     const fault = deriveBuildReviewScopeIncompleteFault(result);
     const aggregate = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: results(result) });
 
     expect(fault).toMatchObject({
-      rubric: 'testQuality', reason: 'scope-incomplete',
-      candidates: [{ candidateId: 'candidate:setup', obligationReferences: ['story:S6.1'], missingEvidenceReason: 'the helper association is ambiguous' }],
+      rubric: 'testQuality',
+      reason: 'scope-incomplete',
+      candidates: [
+        {
+          candidateId: 'candidate:setup',
+          obligationReferences: ['story:S6.1'],
+          missingEvidenceReason: 'the helper association is ambiguous',
+        },
+      ],
     });
     expect(aggregate).toMatchObject({
-      verdict: 'FAIL', coverage: { testQuality: 'scope-incomplete' },
+      verdict: 'FAIL',
+      coverage: { testQuality: 'scope-incomplete' },
       results: { testQuality: { findings: [finding] } },
       scopeIncomplete: [fault],
     });
     expect(parseBuildReviewAggregate(aggregate)).toEqual(aggregate);
     expect(deriveEffectiveBuildReviewVerdict(aggregate)).toMatchObject({
-      verdict: 'FAIL', unresolvedFindingIds: [expect.any(String)], scopeIncompleteRubrics: ['testQuality'],
+      verdict: 'FAIL',
+      unresolvedFindingIds: [expect.any(String)],
+      scopeIncompleteRubrics: ['testQuality'],
       uncoveredScopeIncompleteRubrics: ['testQuality'],
     });
   });
@@ -314,29 +575,61 @@ describe('build-review raw aggregate', () => {
   it('allows reduced coverage to cover only the derived scope fault, never an independent finding', () => {
     const scopeOnly = {
       ...judged(),
-      scopeResolutions: [{
-        candidateId: 'candidate:setup', status: 'indeterminate',
-        sourceRegion: { path: 'test/widget.test.ts', startLine: 3, endLine: 8, contentHash: HASH, display: 'widget setup' },
-        obligationReferences: ['story:S6.1'], missingEvidenceReason: 'the helper association is ambiguous',
-      }],
+      scopeResolutions: [
+        {
+          candidateId: 'candidate:setup',
+          status: 'indeterminate',
+          sourceRegion: {
+            path: 'test/widget.test.ts',
+            startLine: 3,
+            endLine: 8,
+            contentHash: HASH,
+            display: 'widget setup',
+          },
+          obligationReferences: ['story:S6.1'],
+          missingEvidenceReason: 'the helper association is ambiguous',
+        },
+      ],
     } as BuildReviewJudgedResult;
     const scopeAndFinding: BuildReviewJudgedResult = { ...scopeOnly, findings: [finding], verdict: 'FAIL' };
     const feature = { version: 'v1' as const, repository: '/repo', feature: 'feature' };
-    const coverage = [{
-      kind: 'reduced-coverage' as const, version: 'v1' as const, feature,
-      identity: { rubric: 'testQuality' as const, reason: 'scope-incomplete' as const },
-      rationale: 'operator accepts the bounded missing association', operator: 'operator', acceptedAt: '2026-09-06T00:00:00.000Z',
-    }];
+    const coverage = [
+      {
+        kind: 'reduced-coverage' as const,
+        version: 'v1' as const,
+        feature,
+        identity: { rubric: 'testQuality' as const, reason: 'scope-incomplete' as const },
+        rationale: 'operator accepts the bounded missing association',
+        operator: 'operator',
+        acceptedAt: '2026-09-06T00:00:00.000Z',
+      },
+    ];
 
-    expect(deriveEffectiveBuildReviewVerdictWithDispositions(
-      joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: results(scopeOnly) }), feature, [], coverage,
-    )).toMatchObject({
-      verdict: 'PASS', scopeIncompleteRubrics: ['testQuality'], uncoveredScopeIncompleteRubrics: [], unresolvedFindingIds: [],
+    expect(
+      deriveEffectiveBuildReviewVerdictWithDispositions(
+        joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: results(scopeOnly) }),
+        feature,
+        [],
+        coverage,
+      ),
+    ).toMatchObject({
+      verdict: 'PASS',
+      scopeIncompleteRubrics: ['testQuality'],
+      uncoveredScopeIncompleteRubrics: [],
+      unresolvedFindingIds: [],
     });
-    expect(deriveEffectiveBuildReviewVerdictWithDispositions(
-      joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: results(scopeAndFinding) }), feature, [], coverage,
-    )).toMatchObject({
-      verdict: 'FAIL', scopeIncompleteRubrics: ['testQuality'], uncoveredScopeIncompleteRubrics: [], unresolvedFindingIds: [expect.any(String)],
+    expect(
+      deriveEffectiveBuildReviewVerdictWithDispositions(
+        joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: results(scopeAndFinding) }),
+        feature,
+        [],
+        coverage,
+      ),
+    ).toMatchObject({
+      verdict: 'FAIL',
+      scopeIncompleteRubrics: ['testQuality'],
+      uncoveredScopeIncompleteRubrics: [],
+      unresolvedFindingIds: [expect.any(String)],
     });
   });
 
@@ -350,8 +643,19 @@ describe('build-review raw aggregate', () => {
         results: {
           ...aggregate.results,
           [retired]: {
-            kind: 'judged', rubric: retired, lapId, snapshotDigest, contractVersion: 'v1',
-            findings: [{ concernKind: 'unreached surface', summary: 'orphan', evidenceLocations: ['src/a.ts:1'], anchor: { rubric: retired, path: 'src/a.ts', relation: 'outside-plan' } }],
+            kind: 'judged',
+            rubric: retired,
+            lapId,
+            snapshotDigest,
+            contractVersion: 'v1',
+            findings: [
+              {
+                concernKind: 'unreached surface',
+                summary: 'orphan',
+                evidenceLocations: ['src/a.ts:1'],
+                anchor: { rubric: retired, path: 'src/a.ts', relation: 'outside-plan' },
+              },
+            ],
             verdict: 'FAIL',
           },
         },
@@ -402,7 +706,9 @@ describe('build-review raw aggregate', () => {
   it('does not let a bare [wiring] reason string authorize a mismatched verdict', () => {
     const aggregate = currentAggregate();
 
-    expect(parseBuildReviewAggregate({ ...aggregate, verdict: 'FAIL', reasons: ['[wiring] historical reason'] })).toBeUndefined();
+    expect(
+      parseBuildReviewAggregate({ ...aggregate, verdict: 'FAIL', reasons: ['[wiring] historical reason'] }),
+    ).toBeUndefined();
     expect(parseBuildReviewAggregate({ ...aggregate, reasons: ['[wiring] historical reason'] })).toBeUndefined();
   });
 
@@ -410,52 +716,84 @@ describe('build-review raw aggregate', () => {
     const wholeFeatureDigest = 'sha256:whole-feature';
     const leafSecurity = { ...securityJudged(), snapshotDigest: wholeFeatureDigest };
 
-    expect(() => joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: results(judged(), leafSecurity) })).toThrow();
+    expect(() =>
+      joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: results(judged(), leafSecurity) }),
+    ).toThrow();
     const aggregate = joinBuildReviewRubricOutcomes({
-      lapId, snapshotDigest, securitySnapshotDigest: wholeFeatureDigest, results: results(judged(), leafSecurity),
+      lapId,
+      snapshotDigest,
+      securitySnapshotDigest: wholeFeatureDigest,
+      results: results(judged(), leafSecurity),
     });
 
     expect(aggregate).toMatchObject({ verdict: 'PASS', snapshotDigest, securitySnapshotDigest: wholeFeatureDigest });
     expect(parseBuildReviewAggregate(JSON.parse(JSON.stringify(aggregate)))).toEqual(aggregate);
-    expect(parseBuildReviewAggregate({
-      ...aggregate, results: { ...aggregate.results, testQuality: { ...judged(), snapshotDigest: wholeFeatureDigest } },
-    })).toBeUndefined();
+    expect(
+      parseBuildReviewAggregate({
+        ...aggregate,
+        results: { ...aggregate.results, testQuality: { ...judged(), snapshotDigest: wholeFeatureDigest } },
+      }),
+    ).toBeUndefined();
     expect(parseBuildReviewAggregate({ ...aggregate, securitySnapshotDigest: '' })).toBeUndefined();
-    expect(joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, securitySnapshotDigest: snapshotDigest, results: results(judged()) }))
-      .not.toHaveProperty('securitySnapshotDigest');
+    expect(
+      joinBuildReviewRubricOutcomes({
+        lapId,
+        snapshotDigest,
+        securitySnapshotDigest: snapshotDigest,
+        results: results(judged()),
+      }),
+    ).not.toHaveProperty('securitySnapshotDigest');
   });
 
   it('rejects a stale-lap result, a mismatched snapshot, and an extra top-level key', () => {
     const aggregate = currentAggregate();
 
-    expect(parseBuildReviewAggregate({
-      ...aggregate, results: { testQuality: { ...aggregate.results.testQuality, lapId: parseBuildReviewLapId('lap-old')! } },
-    })).toBeUndefined();
+    expect(
+      parseBuildReviewAggregate({
+        ...aggregate,
+        results: { testQuality: { ...aggregate.results.testQuality, lapId: parseBuildReviewLapId('lap-old')! } },
+      }),
+    ).toBeUndefined();
     expect(parseBuildReviewAggregate({ ...aggregate, lapId: parseBuildReviewLapId('lap-old')! })).toBeUndefined();
-    expect(parseBuildReviewAggregate({
-      ...aggregate, results: { testQuality: { ...aggregate.results.testQuality, snapshotDigest: 'sha256:other' } },
-    })).toBeUndefined();
+    expect(
+      parseBuildReviewAggregate({
+        ...aggregate,
+        results: { testQuality: { ...aggregate.results.testQuality, snapshotDigest: 'sha256:other' } },
+      }),
+    ).toBeUndefined();
     expect(parseBuildReviewAggregate({ ...aggregate, extra: true })).toBeUndefined();
-    expect(parseBuildReviewAggregate({ ...aggregate, results: { ...aggregate.results, extra: judged() } })).toBeUndefined();
+    expect(
+      parseBuildReviewAggregate({ ...aggregate, results: { ...aggregate.results, extra: judged() } }),
+    ).toBeUndefined();
   });
 
   it('records a skipped rubric as coverage, derives FAIL with no judged rubric, and reports it as skipped', () => {
     const aggregate = joinBuildReviewRubricOutcomes({
-      lapId, snapshotDigest, results: results(
+      lapId,
+      snapshotDigest,
+      results: results(
         { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
         { kind: 'skipped', rubric: 'security', reason: 'disabled' },
       ),
     });
 
     expect(aggregate).toMatchObject({
-      verdict: 'FAIL', coverage: { testQuality: 'skipped', security: 'skipped' }, rubric: { testQuality: false, security: false },
+      verdict: 'FAIL',
+      coverage: { testQuality: 'skipped', security: 'skipped' },
+      rubric: { testQuality: false, security: false },
       findings: { testQuality: ['skipped: disabled'], security: ['skipped: disabled'] },
       reasons: ['[testQuality] skipped: disabled', '[security] skipped: disabled'],
     });
     expect(parseBuildReviewAggregate(aggregate)).toEqual(aggregate);
     expect(deriveEffectiveBuildReviewVerdict(aggregate)).toEqual({
-      rawVerdict: 'FAIL', verdict: 'FAIL', acceptedFindingIds: [], unresolvedFindingIds: [], suppressedFindingIds: [],
-      skippedRubrics: ['testQuality', 'security', 'implementationQuality'], infrastructureFailureRubrics: [], uncoveredInfrastructureFailureRubrics: [],
+      rawVerdict: 'FAIL',
+      verdict: 'FAIL',
+      acceptedFindingIds: [],
+      unresolvedFindingIds: [],
+      suppressedFindingIds: [],
+      skippedRubrics: ['testQuality', 'security', 'implementationQuality'],
+      infrastructureFailureRubrics: [],
+      uncoveredInfrastructureFailureRubrics: [],
       uncoveredScopeIncompleteRubrics: [],
     });
   });
@@ -463,11 +801,9 @@ describe('build-review raw aggregate', () => {
   // Covers: task:11
   it('treats scope-empty coverage as a passing non-judged result', () => {
     const aggregate = joinBuildReviewRubricOutcomes({
-      lapId, snapshotDigest,
-      results: results(
-        { kind: 'scope-empty', rubric: 'testQuality' },
-        { kind: 'scope-empty', rubric: 'security' },
-      ),
+      lapId,
+      snapshotDigest,
+      results: results({ kind: 'scope-empty', rubric: 'testQuality' }, { kind: 'scope-empty', rubric: 'security' }),
     });
 
     expect(aggregate).toMatchObject({
@@ -476,41 +812,66 @@ describe('build-review raw aggregate', () => {
       rubric: { testQuality: false, security: false },
     });
     expect(deriveEffectiveBuildReviewVerdict(aggregate)).toMatchObject({
-      rawVerdict: 'PASS', verdict: 'PASS', skippedRubrics: ['implementationQuality'],
+      rawVerdict: 'PASS',
+      verdict: 'PASS',
+      skippedRubrics: ['implementationQuality'],
     });
   });
 
   it('records an infrastructure failure as blocking coverage rather than a judgement', () => {
     const aggregate = joinBuildReviewRubricOutcomes({
-      lapId, snapshotDigest,
-      results: results({ kind: 'infrastructure-failure', rubric: 'testQuality', reason: 'provider-error', detail: 'provider unavailable' }),
+      lapId,
+      snapshotDigest,
+      results: results({
+        kind: 'infrastructure-failure',
+        rubric: 'testQuality',
+        reason: 'provider-error',
+        detail: 'provider unavailable',
+      }),
     });
 
     expect(aggregate).toMatchObject({
-      verdict: 'FAIL', coverage: { testQuality: 'infrastructure-failure' }, rubric: { testQuality: true },
+      verdict: 'FAIL',
+      coverage: { testQuality: 'infrastructure-failure' },
+      rubric: { testQuality: true },
       reasons: ['[testQuality] infrastructure failure: provider unavailable'],
     });
     expect(deriveEffectiveBuildReviewVerdict(aggregate, new Set(['fabricated']))).toMatchObject({
-      verdict: 'FAIL', skippedRubrics: ['implementationQuality'], infrastructureFailureRubrics: ['testQuality'],
+      verdict: 'FAIL',
+      skippedRubrics: ['implementationQuality'],
+      infrastructureFailureRubrics: ['testQuality'],
     });
   });
 
   it('joins an infrastructure failure that carries its structured-output rejection beside a judged peer', () => {
     const aggregate = joinBuildReviewRubricOutcomes({
-      lapId, snapshotDigest,
-      results: { ...results(judged()), implementationQuality: {
-        kind: 'infrastructure-failure', rubric: 'implementationQuality', reason: 'invalid-structured-result',
-        detail: 'invalid-structured-result: findings[0].anchor.locus.contentHash',
-        rejection: { kind: 'explained', problems: [{
-          field: 'findings[0].anchor.locus.contentHash',
-          required: 'must equal a contentHash listed by the projected changed content regions',
-          detail: 'findings[0].anchor.locus must reference a projected changed content region',
-        }] },
-      } },
+      lapId,
+      snapshotDigest,
+      results: {
+        ...results(judged()),
+        implementationQuality: {
+          kind: 'infrastructure-failure',
+          rubric: 'implementationQuality',
+          reason: 'invalid-structured-result',
+          detail: 'invalid-structured-result: findings[0].anchor.locus.contentHash',
+          rejection: {
+            kind: 'explained',
+            problems: [
+              {
+                field: 'findings[0].anchor.locus.contentHash',
+                required: 'must equal a contentHash listed by the projected changed content regions',
+                detail: 'findings[0].anchor.locus must reference a projected changed content region',
+              },
+            ],
+          },
+        },
+      },
     });
 
     expect(aggregate).toMatchObject({
-      verdict: 'FAIL', coverage: { implementationQuality: 'infrastructure-failure' }, rubric: { implementationQuality: true },
+      verdict: 'FAIL',
+      coverage: { implementationQuality: 'infrastructure-failure' },
+      rubric: { implementationQuality: true },
     });
     expect(parseBuildReviewAggregate(JSON.parse(JSON.stringify(aggregate)))).toEqual(aggregate);
   });
@@ -518,7 +879,12 @@ describe('build-review raw aggregate', () => {
   it('cross-checks legacy top-level fields against the raw results instead of trusting them', () => {
     const aggregate = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: results(judged([finding])) });
 
-    expect(aggregate).toMatchObject({ verdict: 'FAIL', rubric: { testQuality: true }, findings: { testQuality: ['test-insensitive'] }, reasons: ['[testQuality] test-insensitive'] });
+    expect(aggregate).toMatchObject({
+      verdict: 'FAIL',
+      rubric: { testQuality: true },
+      findings: { testQuality: ['test-insensitive'] },
+      reasons: ['[testQuality] test-insensitive'],
+    });
     expect(parseBuildReviewAggregate({ ...aggregate, rubric: { testQuality: false } })).toBeUndefined();
     expect(parseBuildReviewAggregate({ ...aggregate, coverage: { testQuality: 'skipped' } })).toBeUndefined();
     expect(parseBuildReviewAggregate({ ...aggregate, findings: { testQuality: [] } })).toBeUndefined();
@@ -529,7 +895,11 @@ describe('build-review raw aggregate', () => {
     const below = confidenceFinding(69, 'below-floor');
     const at = confidenceFinding(70, 'at-floor');
     const above = confidenceFinding(90, 'above-floor');
-    const aggregate = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: results(judged([below, at, above])) });
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId,
+      snapshotDigest,
+      results: results(judged([below, at, above])),
+    });
 
     expect(deriveEffectiveBuildReviewVerdict(aggregate, new Set(), [], { testQuality: 70 })).toMatchObject({
       suppressedFindingIds: [findingId(below)],
@@ -541,14 +911,27 @@ describe('build-review raw aggregate', () => {
     const lower = confidenceFinding(20, 'lower');
     const low = confidenceFinding(69, 'low');
     const unscored = confidenceFinding(undefined, 'unscored');
-    const allSuppressed = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: results(judged([lower, low])) });
-    const withUnscored = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: results(judged([lower, low, unscored])) });
+    const allSuppressed = joinBuildReviewRubricOutcomes({
+      lapId,
+      snapshotDigest,
+      results: results(judged([lower, low])),
+    });
+    const withUnscored = joinBuildReviewRubricOutcomes({
+      lapId,
+      snapshotDigest,
+      results: results(judged([lower, low, unscored])),
+    });
 
     expect(deriveEffectiveBuildReviewVerdict(allSuppressed, new Set(), [], { testQuality: 70 })).toMatchObject({
-      rawVerdict: 'FAIL', verdict: 'PASS', unresolvedFindingIds: [], suppressedFindingIds: [findingId(lower), findingId(low)],
+      rawVerdict: 'FAIL',
+      verdict: 'PASS',
+      unresolvedFindingIds: [],
+      suppressedFindingIds: [findingId(lower), findingId(low)],
     });
     expect(deriveEffectiveBuildReviewVerdict(withUnscored, new Set(), [], { testQuality: 70 })).toMatchObject({
-      verdict: 'FAIL', suppressedFindingIds: [findingId(lower), findingId(low)], unresolvedFindingIds: [findingId(unscored)],
+      verdict: 'FAIL',
+      suppressedFindingIds: [findingId(lower), findingId(low)],
+      unresolvedFindingIds: [findingId(unscored)],
     });
   });
 
@@ -556,10 +939,16 @@ describe('build-review raw aggregate', () => {
     const below = confidenceFinding(69, 'disposition-below');
     const at = confidenceFinding(70, 'disposition-at');
     const above = confidenceFinding(90, 'disposition-above');
-    const aggregate = joinBuildReviewRubricOutcomes({ lapId, snapshotDigest, results: results(judged([below, at, above])) });
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId,
+      snapshotDigest,
+      results: results(judged([below, at, above])),
+    });
     const feature = { version: 'v1' as const, repository: '/repo', feature: 'feature' };
 
-    expect(deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, [], [], { testQuality: 70 })).toMatchObject({
+    expect(
+      deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, [], [], { testQuality: 70 }),
+    ).toMatchObject({
       suppressedFindingIds: [findingId(below)],
       unresolvedFindingIds: [findingId(at), findingId(above)],
     });

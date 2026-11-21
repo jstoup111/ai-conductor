@@ -2,17 +2,57 @@ import { access, readFile as readFileDefault, realpath as realpathDefault } from
 import { userInfo } from 'node:os';
 import { relative } from 'node:path';
 
-import { deriveEffectiveBuildReviewVerdictWithDispositions, parseBuildReviewAggregate, projectBuildReviewAggregateSources } from './build-review-aggregate.js';
-import { BuildReviewDispositionStore, matchesBuildReviewReducedCoverageDisposition, rehydrateBuildReviewAcceptedRiskFinding, type BuildReviewDispositionAppendResult, type BuildReviewDispositionListResult, type BuildReviewDispositionRecord, type BuildReviewFeatureIdentity, type BuildReviewReducedCoverageAppendResult, type BuildReviewReducedCoverageListResult, type BuildReviewReducedCoverageDispositionRecord } from './build-review-dispositions.js';
+import {
+  deriveEffectiveBuildReviewVerdictWithDispositions,
+  parseBuildReviewAggregate,
+  projectBuildReviewAggregateSources,
+} from './build-review-aggregate.js';
+import {
+  BuildReviewDispositionStore,
+  matchesBuildReviewReducedCoverageDisposition,
+  rehydrateBuildReviewAcceptedRiskFinding,
+  type BuildReviewDispositionAppendResult,
+  type BuildReviewDispositionListResult,
+  type BuildReviewDispositionRecord,
+  type BuildReviewFeatureIdentity,
+  type BuildReviewReducedCoverageAppendResult,
+  type BuildReviewReducedCoverageListResult,
+  type BuildReviewReducedCoverageDispositionRecord,
+} from './build-review-dispositions.js';
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
-import { deriveBuildReviewScopeIncompleteFault, parseBuildReviewLapId, type BuildReviewInfrastructureFailureReason } from './build-review-domain.js';
-import { buildReviewConfidenceFloors, buildReviewSeverityThresholds, resolveBuildReviewFeatureIdentity, resolveEffectiveBuildReviewVerdict } from './build-review-effective.js';
-import type { BuildReviewCustomDeclaration, BuildReviewCustomInfrastructureFailureReason } from './build-review-artifacts.js';
-import { BUILD_REVIEW_RECURRENCE_ATTEMPT_LIMIT, buildReviewRecurrenceLineage, currentBuildReviewSourceLinks, RemediationCaseStore, type RemediationCaseOutboxEntry, type RemediationCaseRecord, type RemediationCaseStoreReadResult } from './remediation-case-store.js';
+import {
+  deriveBuildReviewScopeIncompleteFault,
+  parseBuildReviewLapId,
+  type BuildReviewInfrastructureFailureReason,
+} from './build-review-domain.js';
+import {
+  buildReviewConfidenceFloors,
+  buildReviewSeverityThresholds,
+  resolveBuildReviewFeatureIdentity,
+  resolveEffectiveBuildReviewVerdict,
+} from './build-review-effective.js';
+import type {
+  BuildReviewCustomDeclaration,
+  BuildReviewCustomInfrastructureFailureReason,
+} from './build-review-artifacts.js';
+import {
+  BUILD_REVIEW_RECURRENCE_ATTEMPT_LIMIT,
+  buildReviewRecurrenceLineage,
+  currentBuildReviewSourceLinks,
+  RemediationCaseStore,
+  type RemediationCaseOutboxEntry,
+  type RemediationCaseRecord,
+  type RemediationCaseStoreReadResult,
+} from './remediation-case-store.js';
 import { resolveMainRepoRoot } from './park-marker.js';
 import { resolveCliFeatureWorktree } from './cli-operator-authority.js';
 import { appendCloseoutEvent, type BuildReviewExternalEvent } from './closeout-events.js';
-import { MAX_MECHANICAL_FAULTS_BUILD_REVIEW, isUnreadableKickbackGate, readKickbackLedger, type KickbackGateEntry } from './kickback-ledger.js';
+import {
+  MAX_MECHANICAL_FAULTS_BUILD_REVIEW,
+  isUnreadableKickbackGate,
+  readKickbackLedger,
+  type KickbackGateEntry,
+} from './kickback-ledger.js';
 import { loadConfig as loadConfigDefault, type ConfigResult } from './config.js';
 import { resolveBuildReviewConfig } from './resolved-config.js';
 import type { BuildReviewRubricId } from '../types/config.js';
@@ -36,8 +76,15 @@ export interface BuildReviewFindingsDeps {
   /** Reads the exact diff named by a persisted lap scope for shared verdict resolution. */
   readonly readCurrentLapChangedFiles?: import('./build-review-effective.js').BuildReviewEffectiveResolverDeps['readCurrentLapChangedFiles'];
   readonly createStore?: (worktree: string) => DispositionStore;
-  readonly createCaseStore?: (worktree: string, feature: BuildReviewFeatureIdentity, child?: ChildId) => RemediationCaseStoreReader;
-  readonly readKickbackGateEntry?: (worktree: string, child?: ChildId) => Promise<Pick<KickbackGateEntry, 'mechanicalFaults' | 'lastMechanicalFault'> | undefined>;
+  readonly createCaseStore?: (
+    worktree: string,
+    feature: BuildReviewFeatureIdentity,
+    child?: ChildId,
+  ) => RemediationCaseStoreReader;
+  readonly readKickbackGateEntry?: (
+    worktree: string,
+    child?: ChildId,
+  ) => Promise<Pick<KickbackGateEntry, 'mechanicalFaults' | 'lastMechanicalFault'> | undefined>;
   readonly readMechanicalFaults?: (worktree: string, child?: ChildId) => Promise<number | undefined>;
   readonly loadConfig?: (worktree: string) => Promise<ConfigResult>;
   readonly print?: (output: string) => void;
@@ -90,7 +137,10 @@ type RemediationCaseStoreResolver = {
 };
 
 type ReducedCoverageDispositionStore = {
-  appendReducedCoverageIfCurrent(input: Parameters<BuildReviewDispositionStore['appendReducedCoverageIfCurrent']>[0], validate: Parameters<BuildReviewDispositionStore['appendReducedCoverageIfCurrent']>[1]): Promise<BuildReviewReducedCoverageAppendResult>;
+  appendReducedCoverageIfCurrent(
+    input: Parameters<BuildReviewDispositionStore['appendReducedCoverageIfCurrent']>[0],
+    validate: Parameters<BuildReviewDispositionStore['appendReducedCoverageIfCurrent']>[1],
+  ): Promise<BuildReviewReducedCoverageAppendResult>;
 };
 
 export interface BuildReviewAcceptDeps extends BuildReviewFindingsDeps {
@@ -99,7 +149,13 @@ export interface BuildReviewAcceptDeps extends BuildReviewFindingsDeps {
   readonly resolveRepository?: (root: string) => string | undefined;
   readonly createStore?: (worktree: string) => DispositionStore;
   /** Same-schema external-process event writer (exceptions A/B of the event spine). */
-  readonly appendEvent?: (worktree: string, event: Extract<BuildReviewExternalEvent, { type: 'build_review_disposition_accepted' | 'build_review_disposition_refused' }>) => void;
+  readonly appendEvent?: (
+    worktree: string,
+    event: Extract<
+      BuildReviewExternalEvent,
+      { type: 'build_review_disposition_accepted' | 'build_review_disposition_refused' }
+    >,
+  ) => void;
 }
 
 export interface BuildReviewRecordReducedCoverageDeps extends Omit<BuildReviewFindingsDeps, 'createStore'> {
@@ -107,13 +163,26 @@ export interface BuildReviewRecordReducedCoverageDeps extends Omit<BuildReviewFi
   readonly resolveOperator?: () => string | undefined;
   readonly createStore?: (worktree: string) => ReducedCoverageDispositionStore;
   readonly readMechanicalFaults?: (worktree: string, child?: ChildId) => Promise<number | undefined>;
-  readonly appendEvent?: (worktree: string, event: Extract<BuildReviewExternalEvent, { type: 'build_review_reduced_coverage_accepted' | 'build_review_disposition_refused' }>) => void;
+  readonly appendEvent?: (
+    worktree: string,
+    event: Extract<
+      BuildReviewExternalEvent,
+      { type: 'build_review_reduced_coverage_accepted' | 'build_review_disposition_refused' }
+    >,
+  ) => void;
 }
 
-export interface BuildReviewResolveCaseDeps extends Pick<BuildReviewFindingsDeps, 'cwd' | 'resolveMainRoot' | 'realpath' | 'print'> {
+export interface BuildReviewResolveCaseDeps extends Pick<
+  BuildReviewFindingsDeps,
+  'cwd' | 'resolveMainRoot' | 'realpath' | 'print'
+> {
   readonly isInteractive?: boolean;
   readonly resolveOperator?: () => string | undefined;
-  readonly createCaseStore?: (worktree: string, feature: BuildReviewFeatureIdentity, child?: ChildId) => RemediationCaseStoreResolver;
+  readonly createCaseStore?: (
+    worktree: string,
+    feature: BuildReviewFeatureIdentity,
+    child?: ChildId,
+  ) => RemediationCaseStoreResolver;
   readonly now?: () => Date;
 }
 
@@ -140,7 +209,9 @@ type CurrentReducedCoverageFault = {
 };
 
 /** The closed faults an operator may cover after the existing allowance is exhausted. */
-function reducedCoverageFault(result: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>['results'][BuildReviewRubricId]): ExhaustedMechanicalFault | undefined {
+function reducedCoverageFault(
+  result: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>['results'][BuildReviewRubricId],
+): ExhaustedMechanicalFault | undefined {
   if (result.kind === 'infrastructure-failure') {
     return { rubric: result.rubric, cause: result.reason, diagnostic: result.detail };
   }
@@ -194,27 +265,46 @@ function advisoryFindings(
   if (!sources) return undefined;
   const thresholdAdvisories = new Set(effective.advisoryFindingIds ?? []);
   const settled = new Set(effective.settledFindingIds ?? []);
-  const adjudicated = new Map<string, {
-    readonly severity: import('./build-review-domain.js').BuildReviewSeverity;
-    readonly rationale: string;
-  }>();
+  const adjudicated = new Map<
+    string,
+    {
+      readonly severity: import('./build-review-domain.js').BuildReviewSeverity;
+      readonly rationale: string;
+    }
+  >();
   for (const [sourceId, { record, link }] of currentBuildReviewSourceLinks(cases)) {
-    if (record.disposition !== 'advisory' || record.adjudicatedSeverity === undefined ||
-      (link.outcome !== 'advisory' && link.outcome !== 'merged')) continue;
+    if (
+      record.disposition !== 'advisory' ||
+      record.adjudicatedSeverity === undefined ||
+      (link.outcome !== 'advisory' && link.outcome !== 'merged')
+    )
+      continue;
     adjudicated.set(sourceId, { severity: record.adjudicatedSeverity, rationale: record.rationale });
   }
   const projected: AdvisoryFindingProjection[] = [];
   for (const source of sources) {
     const threshold = thresholds[source.rubric];
     if (thresholdAdvisories.has(source.findingId) && source.severity !== undefined && threshold !== undefined) {
-      projected.push({ id: source.findingId, rubric: source.rubric, severity: source.severity, threshold, origin: 'threshold', summary: source.summary });
+      projected.push({
+        id: source.findingId,
+        rubric: source.rubric,
+        severity: source.severity,
+        threshold,
+        origin: 'threshold',
+        summary: source.summary,
+      });
       continue;
     }
     const adjudicatedFinding = adjudicated.get(`${source.rubric}:${source.findingId}`);
     if (settled.has(source.findingId) && adjudicatedFinding !== undefined && threshold !== undefined) {
       projected.push({
-        id: source.findingId, rubric: source.rubric, severity: adjudicatedFinding.severity, threshold, origin: 'adjudicated',
-        summary: source.summary, adjudicatorRationale: adjudicatedFinding.rationale,
+        id: source.findingId,
+        rubric: source.rubric,
+        severity: adjudicatedFinding.severity,
+        threshold,
+        origin: 'adjudicated',
+        summary: source.summary,
+        adjudicatorRationale: adjudicatedFinding.rationale,
       });
     }
   }
@@ -231,22 +321,30 @@ function jsonCases(cases: readonly RemediationCaseRecord[]): readonly object[] {
 }
 
 /** Rehydrates the stamped custom identity rather than accepting a CLI supplied payload. */
-function currentFindings(aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>): readonly CurrentFinding[] {
-  const builtin = Object.values(aggregate.results).flatMap((result) => result.kind === 'judged'
-    ? result.findings.flatMap((finding) => {
-      const identity = canonicalizeBuildReviewFindingIdentity({
-        rubric: result.rubric, contractVersion: result.contractVersion, concernKind: finding.concernKind, anchor: finding.anchor,
-      });
-      return identity ? [{ summary: finding.summary, identity }] : [];
-    })
-    : []);
+function currentFindings(
+  aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>,
+): readonly CurrentFinding[] {
+  const builtin = Object.values(aggregate.results).flatMap((result) =>
+    result.kind === 'judged'
+      ? result.findings.flatMap((finding) => {
+          const identity = canonicalizeBuildReviewFindingIdentity({
+            rubric: result.rubric,
+            contractVersion: result.contractVersion,
+            concernKind: finding.concernKind,
+            anchor: finding.anchor,
+          });
+          return identity ? [{ summary: finding.summary, identity }] : [];
+        })
+      : [],
+  );
   const custom = (aggregate.currentCustomRubrics ?? []).flatMap((rubric) => {
     const result = aggregate.customResults?.[rubric]?.result;
     if (result?.kind !== 'judged') return [];
     return result.findings.flatMap((finding) => {
-      const value = typeof finding === 'object' && finding !== null && !Array.isArray(finding)
-        ? finding as Record<string, unknown>
-        : undefined;
+      const value =
+        typeof finding === 'object' && finding !== null && !Array.isArray(finding)
+          ? (finding as Record<string, unknown>)
+          : undefined;
       const identity = rehydrateBuildReviewAcceptedRiskFinding(
         typeof value?.identity === 'object' && value.identity !== null
           ? (value.identity as Record<string, unknown>).canonicalPayload
@@ -267,14 +365,19 @@ function exhaustedMechanicalFaults(
 ): readonly ExhaustedMechanicalFault[] {
   const builtin = Object.values(aggregate.results).flatMap((result) => {
     const fault = reducedCoverageFault(result);
-    return fault && (fault.cause === 'projection-oversized' || fault.cause === 'read-only-review-unavailable' || mechanicalFaults >= MAX_MECHANICAL_FAULTS_BUILD_REVIEW)
+    return fault &&
+      (fault.cause === 'projection-oversized' ||
+        fault.cause === 'read-only-review-unavailable' ||
+        mechanicalFaults >= MAX_MECHANICAL_FAULTS_BUILD_REVIEW)
       ? [fault]
       : [];
   });
   const custom = (aggregate.currentCustomRubrics ?? []).flatMap((rubric): ExhaustedMechanicalFault[] => {
     const result = aggregate.customResults?.[rubric]?.result;
-    return result?.kind === 'infrastructure-failure'
-      && (result.reason === 'projection-oversized' || result.reason === 'read-only-review-unavailable' || mechanicalFaults >= MAX_MECHANICAL_FAULTS_BUILD_REVIEW)
+    return result?.kind === 'infrastructure-failure' &&
+      (result.reason === 'projection-oversized' ||
+        result.reason === 'read-only-review-unavailable' ||
+        mechanicalFaults >= MAX_MECHANICAL_FAULTS_BUILD_REVIEW)
       ? [{ rubric, cause: result.reason, diagnostic: result.detail }]
       : [];
   });
@@ -292,7 +395,10 @@ function acceptedDispositions(
     if (result.kind !== 'judged') continue;
     for (const finding of result.findings) {
       const identity = canonicalizeBuildReviewFindingIdentity({
-        rubric: result.rubric, contractVersion: result.contractVersion, concernKind: finding.concernKind, anchor: finding.anchor,
+        rubric: result.rubric,
+        contractVersion: result.contractVersion,
+        concernKind: finding.concernKind,
+        anchor: finding.anchor,
       });
       if (identity) identities.set(identity.id, identity);
     }
@@ -300,36 +406,52 @@ function acceptedDispositions(
   for (const member of Object.values(aggregate.customResults ?? {})) {
     if (member.result.kind !== 'judged') continue;
     for (const finding of member.result.findings) {
-      const identity = typeof finding === 'object' && finding !== null && 'identity' in finding
-        ? rehydrateBuildReviewAcceptedRiskFinding((finding as { identity?: { canonicalPayload?: unknown } }).identity?.canonicalPayload)
-        : undefined;
+      const identity =
+        typeof finding === 'object' && finding !== null && 'identity' in finding
+          ? rehydrateBuildReviewAcceptedRiskFinding(
+              (finding as { identity?: { canonicalPayload?: unknown } }).identity?.canonicalPayload,
+            )
+          : undefined;
       if (identity) identities.set(identity.id, identity);
     }
   }
   return effective.acceptedFindingIds.flatMap((findingId) => {
     const identity = identities.get(findingId);
-    const disposition = identity && records.find((record) =>
-      record.feature.version === feature.version && record.feature.repository === feature.repository && record.feature.feature === feature.feature &&
-      record.finding.id === identity.id && record.finding.canonicalJson === identity.canonicalJson,
-    );
+    const disposition =
+      identity &&
+      records.find(
+        (record) =>
+          record.feature.version === feature.version &&
+          record.feature.repository === feature.repository &&
+          record.feature.feature === feature.feature &&
+          record.finding.id === identity.id &&
+          record.finding.canonicalJson === identity.canonicalJson,
+      );
     return disposition ? [{ findingId, disposition }] : [];
   });
 }
 
 function renderCase(caseRecord: RemediationCaseRecord, cases: readonly RemediationCaseRecord[]): string {
-  const effect = caseRecord.effect.kind === 'none'
-    ? 'none'
-    : `${caseRecord.effect.kind}/${caseRecord.effect.status}`;
-  const assertions = caseRecord.refutation?.assertions
-    .map((assertion) => `${assertion.assertion} (${assertion.verdict})`).join('; ') ?? 'none';
+  const effect = caseRecord.effect.kind === 'none' ? 'none' : `${caseRecord.effect.kind}/${caseRecord.effect.status}`;
+  const assertions =
+    caseRecord.refutation?.assertions.map((assertion) => `${assertion.assertion} (${assertion.verdict})`).join('; ') ??
+    'none';
   const distinctFrom = caseRecord.distinctFrom?.map(({ caseId, reason }) => `distinct from ${caseId}: ${reason}`) ?? [];
-  const recurrence = caseRecord.recurrenceOf === undefined ? [] : (() => {
-    const lineage = buildReviewRecurrenceLineage(cases, [caseRecord.id]);
-    return [`recurs from ${caseRecord.recurrenceOf.join(', ')}; ${lineage.appliedAttempts} of ${BUILD_REVIEW_RECURRENCE_ATTEMPT_LIMIT} applied attempts`];
-  })();
-  const declaredDistinct = cases.flatMap((other) => other.distinctFrom
-    ?.filter(({ caseId }) => caseId === caseRecord.id)
-    .map(({ reason }) => `declared distinct by ${other.id}: ${reason}`) ?? []);
+  const recurrence =
+    caseRecord.recurrenceOf === undefined
+      ? []
+      : (() => {
+          const lineage = buildReviewRecurrenceLineage(cases, [caseRecord.id]);
+          return [
+            `recurs from ${caseRecord.recurrenceOf.join(', ')}; ${lineage.appliedAttempts} of ${BUILD_REVIEW_RECURRENCE_ATTEMPT_LIMIT} applied attempts`,
+          ];
+        })();
+  const declaredDistinct = cases.flatMap(
+    (other) =>
+      other.distinctFrom
+        ?.filter(({ caseId }) => caseId === caseRecord.id)
+        .map(({ reason }) => `declared distinct by ${other.id}: ${reason}`) ?? [],
+  );
   return [
     `Autonomous case outcome: ${caseRecord.id}; disposition: ${caseRecord.disposition}; resolution: ${caseRecord.resolution}; source ids: ${caseRecord.sources.map((source) => source.sourceId).join(', ') || 'none'}; effect: ${effect}; claim: ${caseRecord.refutation?.claim ?? 'none'}; assertions: ${assertions}; rationale: ${caseRecord.rationale}`,
     ...distinctFrom,
@@ -368,43 +490,66 @@ function carriedSourceFindings(
   cases: readonly RemediationCaseRecord[],
   records: readonly BuildReviewDispositionRecord[],
 ): readonly CarriedSourceFinding[] {
-  return cases.flatMap((caseRecord) => caseRecord.sources
-    .filter((source) => source.outcome === 'carried')
-    .map((source) => {
-      const origins = caseRecord.operatorAcceptance?.origins ?? [];
-      return {
-        sourceId: source.sourceId,
-        caseId: caseRecord.id,
-        originSourceIds: origins.map((origin) => origin.sourceId),
-        originLapIds: origins.map((origin) => origin.lapId),
-        originDispositions: origins.map((origin) => {
-          const findingId = findingIdForSource(origin.sourceId);
-          const disposition = findingId === undefined
-            ? undefined
-            : records.find((record) => `${record.finding.canonicalPayload.rubric}:${record.finding.id}` === origin.sourceId);
-          return {
-            sourceId: origin.sourceId,
-            lapId: origin.lapId,
-            ...(disposition === undefined ? {} : { operator: disposition.operator, rationale: disposition.rationale }),
-          };
-        }),
-      };
-    }));
+  return cases.flatMap((caseRecord) =>
+    caseRecord.sources
+      .filter((source) => source.outcome === 'carried')
+      .map((source) => {
+        const origins = caseRecord.operatorAcceptance?.origins ?? [];
+        return {
+          sourceId: source.sourceId,
+          caseId: caseRecord.id,
+          originSourceIds: origins.map((origin) => origin.sourceId),
+          originLapIds: origins.map((origin) => origin.lapId),
+          originDispositions: origins.map((origin) => {
+            const findingId = findingIdForSource(origin.sourceId);
+            const disposition =
+              findingId === undefined
+                ? undefined
+                : records.find(
+                    (record) => `${record.finding.canonicalPayload.rubric}:${record.finding.id}` === origin.sourceId,
+                  );
+            return {
+              sourceId: origin.sourceId,
+              lapId: origin.lapId,
+              ...(disposition === undefined
+                ? {}
+                : { operator: disposition.operator, rationale: disposition.rationale }),
+            };
+          }),
+        };
+      }),
+  );
 }
 
 function operatorResolvedCaseFindings(cases: readonly RemediationCaseRecord[]): readonly OperatorResolvedCaseFinding[] {
-  return cases.flatMap((caseRecord) => caseRecord.operatorResolution === undefined
-    ? []
-    : [{
-      caseId: caseRecord.id,
-      sourceIds: caseRecord.sources.map((source) => source.sourceId),
-      operator: caseRecord.operatorResolution.operator,
-      rationale: caseRecord.operatorResolution.rationale,
-      resolvedAt: caseRecord.operatorResolution.resolvedAt,
-    }]);
+  return cases.flatMap((caseRecord) =>
+    caseRecord.operatorResolution === undefined
+      ? []
+      : [
+          {
+            caseId: caseRecord.id,
+            sourceIds: caseRecord.sources.map((source) => source.sourceId),
+            operator: caseRecord.operatorResolution.operator,
+            rationale: caseRecord.operatorResolution.rationale,
+            resolvedAt: caseRecord.operatorResolution.resolvedAt,
+          },
+        ],
+  );
 }
 
-function renderHuman(feature: string, aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>, effective: NonNullable<ReturnType<typeof deriveEffectiveBuildReviewVerdictWithDispositions>>, accepted: readonly AcceptedDisposition[], cases: readonly RemediationCaseRecord[], advisories: readonly AdvisoryFindingProjection[], carriedSources: readonly CarriedSourceFinding[], operatorResolvedCases: readonly OperatorResolvedCaseFinding[], pendingOutbox: readonly RemediationCaseOutboxEntry[], faults: readonly ExhaustedMechanicalFault[], lastMechanicalFault: KickbackGateEntry['lastMechanicalFault']): string {
+function renderHuman(
+  feature: string,
+  aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>>,
+  effective: NonNullable<ReturnType<typeof deriveEffectiveBuildReviewVerdictWithDispositions>>,
+  accepted: readonly AcceptedDisposition[],
+  cases: readonly RemediationCaseRecord[],
+  advisories: readonly AdvisoryFindingProjection[],
+  carriedSources: readonly CarriedSourceFinding[],
+  operatorResolvedCases: readonly OperatorResolvedCaseFinding[],
+  pendingOutbox: readonly RemediationCaseOutboxEntry[],
+  faults: readonly ExhaustedMechanicalFault[],
+  lastMechanicalFault: KickbackGateEntry['lastMechanicalFault'],
+): string {
   return [
     `Build review findings: ${feature}`,
     `Lap: ${aggregate.lapId}`,
@@ -412,25 +557,49 @@ function renderHuman(feature: string, aggregate: NonNullable<ReturnType<typeof p
     `Effective verdict: ${effective.verdict}`,
     `Accepted findings: ${effective.acceptedFindingIds.join(', ') || 'none'}`,
     `Operator dispositions: ${accepted.length === 0 ? 'none' : ''}`,
-    ...accepted.map(({ findingId, disposition }) => `Accepted disposition: ${findingId} (lap ${disposition.sourceLapId}; operator ${disposition.operator}; rationale: ${disposition.rationale})`),
-    ...carriedSources.map((source) => `Carried source: ${source.sourceId}; case: ${source.caseId}; origin source ids: ${source.originSourceIds.join(', ') || 'none'}; origin laps: ${source.originLapIds.join(', ') || 'none'}; origin dispositions: ${source.originDispositions.map((origin) => `${origin.operator ?? 'unavailable'} (${origin.rationale ?? 'unavailable'})`).join(', ') || 'none'}`),
-    ...operatorResolvedCases.map((caseRecord) => `Operator-resolved case: ${caseRecord.caseId}; source ids: ${caseRecord.sourceIds.join(', ') || 'none'}; operator: ${caseRecord.operator}; rationale: ${caseRecord.rationale}; resolved at: ${caseRecord.resolvedAt}`),
-    ...pendingOutbox.map((entry) => `Pending case-store outbox entry: ${entry.eventId}; occurred at: ${entry.occurredAt}; event: ${entry.event.type}`),
+    ...accepted.map(
+      ({ findingId, disposition }) =>
+        `Accepted disposition: ${findingId} (lap ${disposition.sourceLapId}; operator ${disposition.operator}; rationale: ${disposition.rationale})`,
+    ),
+    ...carriedSources.map(
+      (source) =>
+        `Carried source: ${source.sourceId}; case: ${source.caseId}; origin source ids: ${source.originSourceIds.join(', ') || 'none'}; origin laps: ${source.originLapIds.join(', ') || 'none'}; origin dispositions: ${source.originDispositions.map((origin) => `${origin.operator ?? 'unavailable'} (${origin.rationale ?? 'unavailable'})`).join(', ') || 'none'}`,
+    ),
+    ...operatorResolvedCases.map(
+      (caseRecord) =>
+        `Operator-resolved case: ${caseRecord.caseId}; source ids: ${caseRecord.sourceIds.join(', ') || 'none'}; operator: ${caseRecord.operator}; rationale: ${caseRecord.rationale}; resolved at: ${caseRecord.resolvedAt}`,
+    ),
+    ...pendingOutbox.map(
+      (entry) =>
+        `Pending case-store outbox entry: ${entry.eventId}; occurred at: ${entry.occurredAt}; event: ${entry.event.type}`,
+    ),
     `Autonomous case outcomes: ${cases.length === 0 ? 'none' : ''}`,
     ...cases.map((caseRecord) => renderCase(caseRecord, cases)),
     `Unresolved findings: ${effective.unresolvedFindingIds.join(', ') || 'none'}`,
     `Out-of-delta findings: ${effective.outOfDeltaFindingIds?.join(', ') || 'none'}`,
     `Advisory build-review findings: ${advisories.length === 0 ? 'none' : ''}`,
-    ...advisories.map((advisory) => `Advisory finding: ${advisory.id}; rubric: ${advisory.rubric}; severity: ${advisory.severity}; summary: ${advisory.summary}${advisory.adjudicatorRationale === undefined ? '' : `; adjudicator rationale: ${advisory.adjudicatorRationale}`}`),
+    ...advisories.map(
+      (advisory) =>
+        `Advisory finding: ${advisory.id}; rubric: ${advisory.rubric}; severity: ${advisory.severity}; summary: ${advisory.summary}${advisory.adjudicatorRationale === undefined ? '' : `; adjudicator rationale: ${advisory.adjudicatorRationale}`}`,
+    ),
     `Skipped rubrics: ${effective.skippedRubrics.join(', ') || 'none'}`,
     `Infrastructure failures: ${effective.infrastructureFailureRubrics.join(', ') || 'none'}`,
-    ...(lastMechanicalFault === undefined ? [] : [
-      `Last mechanical fault: ${lastMechanicalFault.rubric}; cause: ${lastMechanicalFault.reason}; lap: ${lastMechanicalFault.lapId}; diagnostic: ${lastMechanicalFault.detail}`,
-    ]),
-    ...(faults.length === 0 ? [] : [
-      ...(effective.unresolvedFindingIds.length === 0 ? ['Blocked by exhausted mechanical faults, not unresolved findings.'] : []),
-      ...faults.map((fault) => `Exhausted mechanical fault: ${fault.rubric}; cause: ${fault.cause}; diagnostic: ${fault.diagnostic}`),
-    ]),
+    ...(lastMechanicalFault === undefined
+      ? []
+      : [
+          `Last mechanical fault: ${lastMechanicalFault.rubric}; cause: ${lastMechanicalFault.reason}; lap: ${lastMechanicalFault.lapId}; diagnostic: ${lastMechanicalFault.detail}`,
+        ]),
+    ...(faults.length === 0
+      ? []
+      : [
+          ...(effective.unresolvedFindingIds.length === 0
+            ? ['Blocked by exhausted mechanical faults, not unresolved findings.']
+            : []),
+          ...faults.map(
+            (fault) =>
+              `Exhausted mechanical fault: ${fault.rubric}; cause: ${fault.cause}; diagnostic: ${fault.diagnostic}`,
+          ),
+        ]),
   ].join('\n');
 }
 
@@ -440,7 +609,10 @@ type ResolvedCliFeature = {
 };
 
 class FindingsDispositionStoreError extends Error {
-  constructor(readonly kind: string, readonly detail: string) {
+  constructor(
+    readonly kind: string,
+    readonly detail: string,
+  ) {
     super(detail);
   }
 }
@@ -453,7 +625,12 @@ class FindingsLedgerGateError extends Error {
 
 type CliAggregateReadResult =
   | { readonly ok: true; readonly aggregate: NonNullable<ReturnType<typeof parseBuildReviewAggregate>> }
-  | { readonly ok: false; readonly path: string; readonly cause: 'missing' | 'unreadable' | 'malformed'; readonly detail?: string };
+  | {
+      readonly ok: false;
+      readonly path: string;
+      readonly cause: 'missing' | 'unreadable' | 'malformed';
+      readonly detail?: string;
+    };
 
 type CliAggregateFailure = Extract<CliAggregateReadResult, { readonly ok: false }>;
 
@@ -474,7 +651,8 @@ function pipelineRelativePath(worktree: string, artifact: string, child: ChildId
 }
 
 function readErrorDetail(error: unknown): string {
-  if (typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string') return error.code;
+  if (typeof error === 'object' && error !== null && 'code' in error && typeof error.code === 'string')
+    return error.code;
   return error instanceof Error ? error.message : String(error);
 }
 
@@ -509,14 +687,16 @@ async function readCliBuildReviewAggregate(
 
 async function defaultListChildAggregates(worktree: string): Promise<readonly ChildId[]> {
   const children = await listExistingChildren(worktree);
-  const aggregates = await Promise.all(children.map(async (child) => {
-    try {
-      await access(pipelinePathFor(worktree, 'build-review.json', child));
-      return child;
-    } catch {
-      return undefined;
-    }
-  }));
+  const aggregates = await Promise.all(
+    children.map(async (child) => {
+      try {
+        await access(pipelinePathFor(worktree, 'build-review.json', child));
+        return child;
+      } catch {
+        return undefined;
+      }
+    }),
+  );
   return aggregates.filter((child): child is ChildId => child !== undefined);
 }
 
@@ -530,18 +710,14 @@ async function describeCliAggregateFailure(
   child: ChildId | undefined,
   listChildAggregates: (worktree: string) => Promise<readonly ChildId[]>,
 ): Promise<CliAggregateFailureDescription> {
-  const children = failure.cause === 'missing' && child === undefined
-    ? await listChildAggregates(worktree)
-    : [];
-  const predicate = failure.cause === 'missing'
-    ? 'is missing'
-    : failure.cause === 'malformed'
-      ? 'is malformed'
-      : 'could not be read';
+  const children = failure.cause === 'missing' && child === undefined ? await listChildAggregates(worktree) : [];
+  const predicate =
+    failure.cause === 'missing' ? 'is missing' : failure.cause === 'malformed' ? 'is malformed' : 'could not be read';
   const trailingDetail = failure.detail === undefined ? '' : ` (${failure.detail})`;
-  const stackedChildHint = children.length === 0
-    ? ''
-    : ` This feature is stacked; pass --child <k> (children with a build-review aggregate: ${children.join(', ')}).`;
+  const stackedChildHint =
+    children.length === 0
+      ? ''
+      : ` This feature is stacked; pass --child <k> (children with a build-review aggregate: ${children.join(', ')}).`;
   return { path: failure.path, predicate, trailingDetail, stackedChildHint };
 }
 
@@ -553,7 +729,10 @@ async function resolveCliMinConfidence(
   if (!loaded.ok) throw new Error(loaded.error.message);
   return buildReviewConfidenceFloors(resolveBuildReviewConfig(loaded.config));
 }
-async function resolveCliMinSeverity(worktree: string, deps: Pick<BuildReviewFindingsDeps, 'loadConfig'>): Promise<Partial<Record<string, import('./build-review-domain.js').BuildReviewSeverity>>> {
+async function resolveCliMinSeverity(
+  worktree: string,
+  deps: Pick<BuildReviewFindingsDeps, 'loadConfig'>,
+): Promise<Partial<Record<string, import('./build-review-domain.js').BuildReviewSeverity>>> {
   const loaded = await (deps.loadConfig ?? loadConfigDefault)(worktree);
   if (!loaded.ok) throw new Error(loaded.error.message);
   return buildReviewSeverityThresholds(resolveBuildReviewConfig(loaded.config));
@@ -586,7 +765,10 @@ async function resolveCliFeature(
 }
 
 /** Read only current feature artifacts; this deliberately never constructs a pipeline or state lease. */
-export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCommand, deps: BuildReviewFindingsDeps = {}): Promise<number> {
+export async function dispatchBuildReviewFindings(
+  command: BuildReviewFindingsCommand,
+  deps: BuildReviewFindingsDeps = {},
+): Promise<number> {
   const print = deps.print ?? console.log;
   const child = command.child === undefined ? undefined : parseChildId(command.child);
   if (command.child !== undefined && child === undefined) {
@@ -601,18 +783,28 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
     const aggregateRead = await readCliBuildReviewAggregate(worktree, child, readFile);
     if (!aggregateRead.ok) {
       const failure = await describeCliAggregateFailure(
-        aggregateRead, worktree, child, deps.listChildAggregates ?? defaultListChildAggregates,
+        aggregateRead,
+        worktree,
+        child,
+        deps.listChildAggregates ?? defaultListChildAggregates,
       );
-      print(`build-review findings: ${failure.path} ${failure.predicate} for '${command.feature}'${failure.trailingDetail}.${failure.stackedChildHint}`);
+      print(
+        `build-review findings: ${failure.path} ${failure.predicate} for '${command.feature}'${failure.trailingDetail}.${failure.stackedChildHint}`,
+      );
       return 1;
     }
     const aggregate = aggregateRead.aggregate;
-    const store = (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(worktree);
+    const store = (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(
+      worktree,
+    );
     const listed = await store.list(feature);
     if (!listed.ok) throw new FindingsDispositionStoreError(listed.kind, listed.message);
     const records = listed.records;
-    const caseStore = (deps.createCaseStore ?? ((projectRoot: string, caseFeature: BuildReviewFeatureIdentity, selectedChild?: ChildId) =>
-      new RemediationCaseStore(projectRoot, caseFeature, { child: selectedChild })))(worktree, feature, child);
+    const caseStore = (
+      deps.createCaseStore ??
+      ((projectRoot: string, caseFeature: BuildReviewFeatureIdentity, selectedChild?: ChildId) =>
+        new RemediationCaseStore(projectRoot, caseFeature, { child: selectedChild }))
+    )(worktree, feature, child);
     const caseRead = await caseStore.read();
     if (!caseRead.ok) throw new Error(`remediation case store is ${caseRead.reason}`);
     const cases = caseRead.state.cases;
@@ -627,12 +819,12 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
       : deps.readMechanicalFaults
         ? { mechanicalFaults: await deps.readMechanicalFaults(worktree, child) }
         : await (async () => {
-          const ledger = await readKickbackLedger(worktree, child);
-          if (isUnreadableKickbackGate(ledger, 'build_review')) {
-            throw new FindingsLedgerGateError(pipelineRelativePath(worktree, 'kickback-ledger.json', child));
-          }
-          return ledger.gates.build_review;
-        })();
+            const ledger = await readKickbackLedger(worktree, child);
+            if (isUnreadableKickbackGate(ledger, 'build_review')) {
+              throw new FindingsLedgerGateError(pipelineRelativePath(worktree, 'kickback-ledger.json', child));
+            }
+            return ledger.gates.build_review;
+          })();
     // The shared resolver is the only reader that combines current-lap scope,
     // dispositions, and case settlement.  Keeping this command on that seam
     // prevents a findings report from disagreeing with the live gate.
@@ -660,7 +852,8 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
     if (advisories === undefined) throw new Error('current advisory findings are invalid');
     const carriedSources = carriedSourceFindings(cases, records);
     const operatorResolvedCases = operatorResolvedCaseFindings(cases);
-    const pendingOutbox = caseRead.state.version === 'v1' || caseRead.state.version === 'v2' ? [] : caseRead.state.outbox;
+    const pendingOutbox =
+      caseRead.state.version === 'v1' || caseRead.state.version === 'v2' ? [] : caseRead.state.outbox;
     const faults = exhaustedMechanicalFaults(aggregate, gateEntry?.mechanicalFaults ?? 0);
     // Uncovered coverage projections are engine-routing-only. The operator
     // already sees coverage through the rendered failures and reduced-coverage
@@ -673,20 +866,48 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
       ...reported
     } = effective;
     const output = {
-      feature: command.feature, lapId: aggregate.lapId, snapshotDigest: aggregate.snapshotDigest, ...reported, acceptedDispositions: accepted,
+      feature: command.feature,
+      lapId: aggregate.lapId,
+      snapshotDigest: aggregate.snapshotDigest,
+      ...reported,
+      acceptedDispositions: accepted,
       cases: jsonCases(cases),
       ...(carriedSources.length === 0 ? {} : { carriedSources }),
       ...(operatorResolvedCases.length === 0 ? {} : { operatorResolvedCases }),
       ...(pendingOutbox.length === 0 ? {} : { pendingOutbox }),
-      ...(advisories.length === 0 ? {} : { advisoryFindings: advisories.map(({ summary: _summary, adjudicatorRationale: _adjudicatorRationale, ...advisory }) => advisory) }),
+      ...(advisories.length === 0
+        ? {}
+        : {
+            advisoryFindings: advisories.map(
+              ({ summary: _summary, adjudicatorRationale: _adjudicatorRationale, ...advisory }) => advisory,
+            ),
+          }),
       ...(gateEntry?.lastMechanicalFault === undefined ? {} : { lastMechanicalFault: gateEntry.lastMechanicalFault }),
       ...(faults.length > 0 ? { exhaustedMechanicalFaults: faults } : {}),
     };
-    print(command.format === 'json' ? JSON.stringify(output) : renderHuman(command.feature, aggregate, effective, accepted, cases, advisories, carriedSources, operatorResolvedCases, pendingOutbox, faults, gateEntry?.lastMechanicalFault));
+    print(
+      command.format === 'json'
+        ? JSON.stringify(output)
+        : renderHuman(
+            command.feature,
+            aggregate,
+            effective,
+            accepted,
+            cases,
+            advisories,
+            carriedSources,
+            operatorResolvedCases,
+            pendingOutbox,
+            faults,
+            gateEntry?.lastMechanicalFault,
+          ),
+    );
     return 0;
   } catch (error) {
     if (error instanceof FindingsDispositionStoreError) {
-      print(`build-review findings: .pipeline/build-review-dispositions.json is ${error.kind} for '${command.feature}' (${error.detail}).`);
+      print(
+        `build-review findings: .pipeline/build-review-dispositions.json is ${error.kind} for '${command.feature}' (${error.detail}).`,
+      );
       return 1;
     }
     if (error instanceof FindingsLedgerGateError) {
@@ -698,7 +919,9 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
       return 1;
     }
     const detail = error instanceof Error ? error.message : String(error);
-    print(`build-review findings: current feature state is invalid or unavailable for '${command.feature}' (${detail}).`);
+    print(
+      `build-review findings: current feature state is invalid or unavailable for '${command.feature}' (${detail}).`,
+    );
     return 1;
   }
 }
@@ -708,7 +931,10 @@ export async function dispatchBuildReviewFindings(command: BuildReviewFindingsCo
  * before any artifact or store access: provider children and piped scripts
  * cannot turn CLI arguments into an operator disposition.
  */
-export async function dispatchBuildReviewAccept(command: BuildReviewAcceptCommand, deps: BuildReviewAcceptDeps = {}): Promise<number> {
+export async function dispatchBuildReviewAccept(
+  command: BuildReviewAcceptCommand,
+  deps: BuildReviewAcceptDeps = {},
+): Promise<number> {
   const print = deps.print ?? console.log;
   // Resolve the feature-owned external-event target before validating any
   // mutable review state. Every refusal can then be observed through the
@@ -722,7 +948,10 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
   const refuse = (reason: string, message: string): number => {
     try {
       (deps.appendEvent ?? appendCloseoutEvent)(worktree, {
-        type: 'build_review_disposition_refused', feature: command.feature, reason, ts: new Date().toISOString(),
+        type: 'build_review_disposition_refused',
+        feature: command.feature,
+        reason,
+        ts: new Date().toISOString(),
       });
     } catch {
       // The refusal remains authoritative when best-effort external telemetry cannot append.
@@ -732,15 +961,24 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
   };
   const operator = (deps.resolveOperator ?? (() => userInfo().username))();
   if (!(deps.isInteractive ?? (process.stdin.isTTY === true && process.stdout.isTTY === true)) || !operator?.trim()) {
-    return refuse('non-interactive-or-unidentified-operator', 'build-review accept: requires an interactive terminal and a verified local operator identity.');
+    return refuse(
+      'non-interactive-or-unidentified-operator',
+      'build-review accept: requires an interactive terminal and a verified local operator identity.',
+    );
   }
   const requestedLap = parseBuildReviewLapId(command.lapId);
   if (!requestedLap || !command.rationale.trim()) {
-    return refuse('invalid-lap-or-blank-rationale', 'build-review accept: requires an exact current lap and non-empty rationale.');
+    return refuse(
+      'invalid-lap-or-blank-rationale',
+      'build-review accept: requires an exact current lap and non-empty rationale.',
+    );
   }
   const child = command.child === undefined ? undefined : parseChildId(command.child);
   if (command.child !== undefined && child === undefined) {
-    return refuse('invalid-child', `build-review accept: refused for '${command.feature}'; invalid child id '${command.child}'.`);
+    return refuse(
+      'invalid-child',
+      `build-review accept: refused for '${command.feature}'; invalid child id '${command.child}'.`,
+    );
   }
   const readFile = deps.readFile ?? ((path: string) => readFileDefault(path, 'utf8'));
   const readAggregate = () => readCliBuildReviewAggregate(worktree, child, readFile);
@@ -750,59 +988,119 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
   const aggregateRead = await readAggregate();
   if (!aggregateRead.ok) {
     const failure = await describeCliAggregateFailure(
-      aggregateRead, worktree, child, deps.listChildAggregates ?? defaultListChildAggregates,
+      aggregateRead,
+      worktree,
+      child,
+      deps.listChildAggregates ?? defaultListChildAggregates,
     );
-    return refuse('aggregate-unreadable', `build-review accept: refused for '${command.feature}'; ${failure.path} ${failure.predicate}${failure.trailingDetail}.${failure.stackedChildHint}`);
+    return refuse(
+      'aggregate-unreadable',
+      `build-review accept: refused for '${command.feature}'; ${failure.path} ${failure.predicate}${failure.trailingDetail}.${failure.stackedChildHint}`,
+    );
   }
   const aggregate = aggregateRead.aggregate;
   if (aggregate.lapId !== requestedLap) {
-    return refuse('requested-lap-not-current', `build-review accept: refused for '${command.feature}'; lap '${command.lapId}' is not the current lap ('${aggregate.lapId}').`);
+    return refuse(
+      'requested-lap-not-current',
+      `build-review accept: refused for '${command.feature}'; lap '${command.lapId}' is not the current lap ('${aggregate.lapId}').`,
+    );
   }
   const currentFinding = currentFindings(aggregate).find((candidate) => candidate.identity.id === command.findingId);
   if (!currentFinding?.identity) {
-    return refuse('finding-not-current', `build-review accept: refused for '${command.feature}'; '${command.findingId}' is not a current judged finding on lap '${aggregate.lapId}'.`);
+    return refuse(
+      'finding-not-current',
+      `build-review accept: refused for '${command.feature}'; '${command.findingId}' is not a current judged finding on lap '${aggregate.lapId}'.`,
+    );
   }
   const identity = currentFinding.identity;
   try {
     const minConfidence = await resolveCliMinConfidence(worktree, deps);
-    const store = (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(worktree);
-    const appendInput = { feature, finding: identity, sourceLapId: requestedLap, summary: currentFinding.summary, rationale: command.rationale.trim(), operator: operator.trim() };
+    const store = (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(
+      worktree,
+    );
+    const appendInput = {
+      feature,
+      finding: identity,
+      sourceLapId: requestedLap,
+      summary: currentFinding.summary,
+      rationale: command.rationale.trim(),
+      operator: operator.trim(),
+    };
     const unchanged = async (): Promise<boolean> => {
       const currentRead = await readAggregate();
       if (!currentRead.ok) return false;
       const current = currentRead.aggregate;
-      return current.lapId === requestedLap && current.snapshotDigest === aggregate.snapshotDigest &&
+      return (
+        current.lapId === requestedLap &&
+        current.snapshotDigest === aggregate.snapshotDigest &&
         JSON.stringify(current.results) === JSON.stringify(aggregate.results) &&
         JSON.stringify(current.customResults) === JSON.stringify(aggregate.customResults) &&
-        JSON.stringify(current.currentCustomRubrics) === JSON.stringify(aggregate.currentCustomRubrics);
+        JSON.stringify(current.currentCustomRubrics) === JSON.stringify(aggregate.currentCustomRubrics)
+      );
     };
     const appended = store.appendIfCurrent
       ? await store.appendIfCurrent(appendInput, async (records) => {
-        if (!await unchanged()) return false;
-        const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, records, [], minConfidence);
-        return isRegisteredRubric(identity.canonicalPayload.rubric) && 'concernKind' in identity.canonicalPayload
-          ? effective?.unresolvedFindingIds.includes(identity.id) === true
-          : !records.some((record) => record.finding.id === identity.id && record.finding.canonicalJson === identity.canonicalJson);
-      })
+          if (!(await unchanged())) return false;
+          const effective = deriveEffectiveBuildReviewVerdictWithDispositions(
+            aggregate,
+            feature,
+            records,
+            [],
+            minConfidence,
+          );
+          return isRegisteredRubric(identity.canonicalPayload.rubric) && 'concernKind' in identity.canonicalPayload
+            ? effective?.unresolvedFindingIds.includes(identity.id) === true
+            : !records.some(
+                (record) =>
+                  record.finding.id === identity.id && record.finding.canonicalJson === identity.canonicalJson,
+              );
+        })
       : await (async () => {
-        const listed = await store.list(feature);
-        if (!listed.ok) return listed;
-        if (!await unchanged()) {
-          return { ok: false as const, kind: 'invalid' as const, message: 'current review lap changed while waiting for disposition state' };
-        }
-        const effective = deriveEffectiveBuildReviewVerdictWithDispositions(aggregate, feature, listed.records, [], minConfidence);
-        const actionable = isRegisteredRubric(identity.canonicalPayload.rubric) && 'concernKind' in identity.canonicalPayload
-          ? effective?.unresolvedFindingIds.includes(identity.id) === true
-          : !listed.records.some((record) => record.finding.id === identity.id && record.finding.canonicalJson === identity.canonicalJson);
-        if (!actionable) return { ok: false as const, kind: 'invalid' as const, message: 'finding is already accepted or not actionable' };
-        return store.append(appendInput);
-      })();
+          const listed = await store.list(feature);
+          if (!listed.ok) return listed;
+          if (!(await unchanged())) {
+            return {
+              ok: false as const,
+              kind: 'invalid' as const,
+              message: 'current review lap changed while waiting for disposition state',
+            };
+          }
+          const effective = deriveEffectiveBuildReviewVerdictWithDispositions(
+            aggregate,
+            feature,
+            listed.records,
+            [],
+            minConfidence,
+          );
+          const actionable =
+            isRegisteredRubric(identity.canonicalPayload.rubric) && 'concernKind' in identity.canonicalPayload
+              ? effective?.unresolvedFindingIds.includes(identity.id) === true
+              : !listed.records.some(
+                  (record) =>
+                    record.finding.id === identity.id && record.finding.canonicalJson === identity.canonicalJson,
+                );
+          if (!actionable)
+            return {
+              ok: false as const,
+              kind: 'invalid' as const,
+              message: 'finding is already accepted or not actionable',
+            };
+          return store.append(appendInput);
+        })();
     if (!appended.ok) {
-      return refuse(`disposition-store-${appended.kind}`, `build-review accept: refused for '${command.feature}'; the disposition store rejected the acceptance (${appended.kind}): ${appended.message}`);
+      return refuse(
+        `disposition-store-${appended.kind}`,
+        `build-review accept: refused for '${command.feature}'; the disposition store rejected the acceptance (${appended.kind}): ${appended.message}`,
+      );
     }
     try {
       (deps.appendEvent ?? appendCloseoutEvent)(worktree, {
-        type: 'build_review_disposition_accepted', feature: command.feature, lapId: requestedLap, findingId: identity.id, operator: operator.trim(), ts: new Date().toISOString(),
+        type: 'build_review_disposition_accepted',
+        feature: command.feature,
+        lapId: requestedLap,
+        findingId: identity.id,
+        operator: operator.trim(),
+        ts: new Date().toISOString(),
       });
     } catch {
       // The disposition is already durable; best-effort telemetry must never
@@ -811,7 +1109,10 @@ export async function dispatchBuildReviewAccept(command: BuildReviewAcceptComman
     print(`build-review accept: accepted ${identity.id} for lap ${requestedLap}.`);
     return 0;
   } catch (error) {
-    return refuse('disposition-store-unavailable', `build-review accept: refused for '${command.feature}'; the disposition store could not be reached: ${error instanceof Error ? error.message : String(error)}`);
+    return refuse(
+      'disposition-store-unavailable',
+      `build-review accept: refused for '${command.feature}'; the disposition store could not be reached: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 }
 
@@ -837,12 +1138,17 @@ export async function dispatchBuildReviewResolveCase(
   }
   const resolved = await resolveCliFeature(command, deps).catch(() => undefined);
   if (!resolved) {
-    print(`build-review resolve-case: refused for '${command.feature}'; the feature worktree could not be resolved (feature mismatch).`);
+    print(
+      `build-review resolve-case: refused for '${command.feature}'; the feature worktree could not be resolved (feature mismatch).`,
+    );
     return 1;
   }
   const { worktree, feature } = resolved;
-  const caseStore = (deps.createCaseStore ?? ((projectRoot: string, caseFeature: BuildReviewFeatureIdentity, selectedChild?: ChildId) =>
-    new RemediationCaseStore(projectRoot, caseFeature, { child: selectedChild })))(worktree, feature, child);
+  const caseStore = (
+    deps.createCaseStore ??
+    ((projectRoot: string, caseFeature: BuildReviewFeatureIdentity, selectedChild?: ChildId) =>
+      new RemediationCaseStore(projectRoot, caseFeature, { child: selectedChild }))
+  )(worktree, feature, child);
   const resolvedAt = (deps.now ?? (() => new Date()))().toISOString();
   const result = await caseStore.resolveByOperator({
     caseId: command.caseId,
@@ -886,7 +1192,10 @@ export async function dispatchBuildReviewRecordReducedCoverage(
     const refuse = (reason: string, message: string): number => {
       try {
         (deps.appendEvent ?? appendCloseoutEvent)(worktree!, {
-          type: 'build_review_disposition_refused', feature: command.feature, reason, ts: new Date().toISOString(),
+          type: 'build_review_disposition_refused',
+          feature: command.feature,
+          reason,
+          ts: new Date().toISOString(),
         });
       } catch {
         // The refusal remains authoritative when best-effort telemetry cannot append.
@@ -896,22 +1205,34 @@ export async function dispatchBuildReviewRecordReducedCoverage(
     };
     const operator = (deps.resolveOperator ?? (() => userInfo().username))();
     if (!(deps.isInteractive ?? (process.stdin.isTTY === true && process.stdout.isTTY === true)) || !operator?.trim()) {
-      return refuse('non-interactive-or-unidentified-operator', 'build-review record-reduced-coverage: requires an interactive terminal and a verified local operator identity.');
+      return refuse(
+        'non-interactive-or-unidentified-operator',
+        'build-review record-reduced-coverage: requires an interactive terminal and a verified local operator identity.',
+      );
     }
     const requestedLap = parseBuildReviewLapId(command.lapId);
     if (!requestedLap || !command.rationale.trim()) {
-      return refuse('invalid-lap-or-blank-rationale', 'build-review record-reduced-coverage: requires an exact current lap and non-empty rationale.');
+      return refuse(
+        'invalid-lap-or-blank-rationale',
+        'build-review record-reduced-coverage: requires an exact current lap and non-empty rationale.',
+      );
     }
     const child = command.child === undefined ? undefined : parseChildId(command.child);
     if (command.child !== undefined && child === undefined) {
-      return refuse('invalid-child', `build-review record-reduced-coverage: refused for '${command.feature}'; invalid child id '${command.child}'.`);
+      return refuse(
+        'invalid-child',
+        `build-review record-reduced-coverage: refused for '${command.feature}'; invalid child id '${command.child}'.`,
+      );
     }
     const rubric = command.rubric;
     const readFile = deps.readFile ?? ((path: string) => readFileDefault(path, 'utf8'));
     const aggregateRead = await readCliBuildReviewAggregate(worktree, child, readFile);
     if (!aggregateRead.ok) {
       const failure = await describeCliAggregateFailure(
-        aggregateRead, worktree, child, deps.listChildAggregates ?? defaultListChildAggregates,
+        aggregateRead,
+        worktree,
+        child,
+        deps.listChildAggregates ?? defaultListChildAggregates,
       );
       return refuse(
         'aggregate-unreadable',
@@ -920,39 +1241,73 @@ export async function dispatchBuildReviewRecordReducedCoverage(
     }
     const aggregate = aggregateRead.aggregate;
     if (aggregate.lapId !== requestedLap) {
-      return refuse('requested-lap-not-current', `build-review record-reduced-coverage: refused for '${command.feature}'; lap '${requestedLap}' is not the current lap ('${aggregate.lapId}') in ${pipelineRelativePath(worktree, 'build-review.json', child)}.`);
+      return refuse(
+        'requested-lap-not-current',
+        `build-review record-reduced-coverage: refused for '${command.feature}'; lap '${requestedLap}' is not the current lap ('${aggregate.lapId}') in ${pipelineRelativePath(worktree, 'build-review.json', child)}.`,
+      );
     }
     if (!isBuildReviewRubricId(rubric) && !aggregate.currentCustomRubrics?.includes(rubric)) {
-      return refuse('unknown-rubric', `build-review record-reduced-coverage: '${rubric}' is not a known rubric on the current lap.`);
+      return refuse(
+        'unknown-rubric',
+        `build-review record-reduced-coverage: '${rubric}' is not a known rubric on the current lap.`,
+      );
     }
     const fault = currentReducedCoverageFault(aggregate, rubric);
     if (!fault) {
-      return refuse('rubric-not-reduced-coverage-fault', `build-review record-reduced-coverage: '${rubric}' has no current infrastructure failure or scope-incomplete fault.`);
+      return refuse(
+        'rubric-not-reduced-coverage-fault',
+        `build-review record-reduced-coverage: '${rubric}' has no current infrastructure failure or scope-incomplete fault.`,
+      );
     }
     if (!feature) throw new Error('feature identity is unavailable');
     let stateRefusal: string | undefined;
     let ledgerRefusal: string | undefined;
-    const readMechanicalFaults = deps.readMechanicalFaults ?? (async (root: string, selectedChild?: ChildId) => {
-      const ledger = await readKickbackLedger(root, selectedChild);
-      if (isUnreadableKickbackGate(ledger, 'build_review')) {
-        ledgerRefusal = `${pipelineRelativePath(root, 'kickback-ledger.json', selectedChild)} gate 'build_review' is unreadable`;
-        return undefined;
-      }
-      return ledger.gates.build_review?.mechanicalFaults;
-    });
-    const input = fault.declaration === undefined
-      ? { feature, rubric: fault.rubric as BuildReviewRubricId, reason: fault.cause as BuildReviewInfrastructureFailureReason, rationale: command.rationale.trim(), operator: operator.trim() }
-      : { feature, declaration: fault.declaration, reason: fault.cause as BuildReviewCustomInfrastructureFailureReason, rationale: command.rationale.trim(), operator: operator.trim() };
-    const appended = await (deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot)))(worktree).appendReducedCoverageIfCurrent(input, async (records) => {
+    const readMechanicalFaults =
+      deps.readMechanicalFaults ??
+      (async (root: string, selectedChild?: ChildId) => {
+        const ledger = await readKickbackLedger(root, selectedChild);
+        if (isUnreadableKickbackGate(ledger, 'build_review')) {
+          ledgerRefusal = `${pipelineRelativePath(root, 'kickback-ledger.json', selectedChild)} gate 'build_review' is unreadable`;
+          return undefined;
+        }
+        return ledger.gates.build_review?.mechanicalFaults;
+      });
+    const input =
+      fault.declaration === undefined
+        ? {
+            feature,
+            rubric: fault.rubric as BuildReviewRubricId,
+            reason: fault.cause as BuildReviewInfrastructureFailureReason,
+            rationale: command.rationale.trim(),
+            operator: operator.trim(),
+          }
+        : {
+            feature,
+            declaration: fault.declaration,
+            reason: fault.cause as BuildReviewCustomInfrastructureFailureReason,
+            rationale: command.rationale.trim(),
+            operator: operator.trim(),
+          };
+    const appended = await (
+      deps.createStore ?? ((projectRoot: string) => new BuildReviewDispositionStore(projectRoot))
+    )(worktree).appendReducedCoverageIfCurrent(input, async (records) => {
       const currentRead = await readCliBuildReviewAggregate(worktree!, child, readFile);
       const current = currentRead.ok ? currentRead.aggregate : undefined;
-      if (!current || current.lapId !== requestedLap || current.snapshotDigest !== aggregate.snapshotDigest || JSON.stringify(current.results) !== JSON.stringify(aggregate.results)) {
+      if (
+        !current ||
+        current.lapId !== requestedLap ||
+        current.snapshotDigest !== aggregate.snapshotDigest ||
+        JSON.stringify(current.results) !== JSON.stringify(aggregate.results)
+      ) {
         stateRefusal = 'the inspected review lap changed';
         return false;
       }
       const currentFault = currentReducedCoverageFault(current, rubric);
-      if (!currentFault || currentFault.cause !== fault.cause ||
-        JSON.stringify(currentFault.declaration) !== JSON.stringify(fault.declaration)) {
+      if (
+        !currentFault ||
+        currentFault.cause !== fault.cause ||
+        JSON.stringify(currentFault.declaration) !== JSON.stringify(fault.declaration)
+      ) {
         stateRefusal = `the current '${rubric}' reduced-coverage fault changed`;
         return false;
       }
@@ -963,9 +1318,13 @@ export async function dispatchBuildReviewRecordReducedCoverage(
           return false;
         }
       }
-      const identity = fault.declaration === undefined
-        ? { rubric: fault.rubric as BuildReviewRubricId, reason: fault.cause as BuildReviewInfrastructureFailureReason }
-        : { declaration: fault.declaration, reason: fault.cause as BuildReviewCustomInfrastructureFailureReason };
+      const identity =
+        fault.declaration === undefined
+          ? {
+              rubric: fault.rubric as BuildReviewRubricId,
+              reason: fault.cause as BuildReviewInfrastructureFailureReason,
+            }
+          : { declaration: fault.declaration, reason: fault.cause as BuildReviewCustomInfrastructureFailureReason };
       if (records.some((record) => matchesBuildReviewReducedCoverageDisposition(feature!, identity, [record]))) {
         stateRefusal = `reduced coverage is already recorded for '${rubric}'`;
         return false;
@@ -974,9 +1333,16 @@ export async function dispatchBuildReviewRecordReducedCoverage(
     });
     if (!appended.ok) {
       if (ledgerRefusal) {
-        return refuse('kickback-ledger-unreadable', `build-review record-reduced-coverage: refused for '${command.feature}'; ${ledgerRefusal}.`);
+        return refuse(
+          'kickback-ledger-unreadable',
+          `build-review record-reduced-coverage: refused for '${command.feature}'; ${ledgerRefusal}.`,
+        );
       }
-      if (stateRefusal) return refuse('current-rubric-lap-or-state-invalid', `build-review record-reduced-coverage: refused because ${stateRefusal}.`);
+      if (stateRefusal)
+        return refuse(
+          'current-rubric-lap-or-state-invalid',
+          `build-review record-reduced-coverage: refused because ${stateRefusal}.`,
+        );
       return refuse(
         `disposition-store-${appended.kind}`,
         `build-review record-reduced-coverage: refused for '${command.feature}'; .pipeline/build-review-dispositions.json rejected the decision (${appended.kind}): ${appended.message}.`,
@@ -1006,15 +1372,20 @@ export async function dispatchBuildReviewRecordReducedCoverage(
     if (worktree) {
       try {
         (deps.appendEvent ?? appendCloseoutEvent)(worktree, {
-          type: 'build_review_disposition_refused', feature: command.feature, reason: 'current-rubric-lap-or-state-invalid', ts: new Date().toISOString(),
+          type: 'build_review_disposition_refused',
+          feature: command.feature,
+          reason: 'current-rubric-lap-or-state-invalid',
+          ts: new Date().toISOString(),
         });
       } catch {
         // The refusal remains authoritative when best-effort telemetry cannot append.
       }
     }
-    print(worktree === undefined
-      ? `build-review record-reduced-coverage: refused for '${command.feature}'; the feature worktree could not be resolved.`
-      : `build-review record-reduced-coverage: refused for '${command.feature}'; the current rubric, lap, or state could not be verified.`);
+    print(
+      worktree === undefined
+        ? `build-review record-reduced-coverage: refused for '${command.feature}'; the feature worktree could not be resolved.`
+        : `build-review record-reduced-coverage: refused for '${command.feature}'; the current rubric, lap, or state could not be verified.`,
+    );
     return 1;
   }
 }

@@ -1,11 +1,7 @@
 // Covers: task:1, task:2
 import { describe, expect, it, vi } from 'vitest';
 import chalk from 'chalk';
-import {
-  createDaemonModeLogger,
-  createFeatureDaemonLogger,
-  formatDaemonLogLine,
-} from '../../src/engine/daemon-log.js';
+import { createDaemonModeLogger, createFeatureDaemonLogger, formatDaemonLogLine } from '../../src/engine/daemon-log.js';
 import { DAEMON_EVENT_DEPTH } from '../../src/engine/daemon-line-shape.js';
 import { attachFeatureEventRenderer, renderDaemonEvent, resetRenderedReclaimRetentions } from '../../src/daemon-cli.js';
 import { ConductorEventEmitter } from '../../src/engine/conductor-event-emitter.js';
@@ -76,9 +72,7 @@ describe('daemon logger line shape', () => {
     featureLog('▶ start feature-a');
 
     expect(live).toEqual(['[daemon][feature-a] ▶ start feature-a']);
-    expect(persisted).toEqual([
-      '2026-10-29T00:00:00.000Z [daemon][feature-a] ▶ start feature-a',
-    ]);
+    expect(persisted).toEqual(['2026-10-29T00:00:00.000Z [daemon][feature-a] ▶ start feature-a']);
   });
 
   it('applies the declared depth through the real event emitter and both logger instances', async () => {
@@ -131,7 +125,10 @@ describe('daemon logger line shape', () => {
       expect(first, event.type).not.toEqual([]);
       const marker = DAEMON_EVENT_DEPTH[event.type];
       const shape = marker === 0 ? /^(?:│|[^\s·])/ : marker === 1 ? /^· (?:│|[^\s·])/ : /^·   (?:│|[^\s·])/;
-      expect(first.every((line) => shape.test(line)), event.type).toBe(true);
+      expect(
+        first.every((line) => shape.test(line)),
+        event.type,
+      ).toBe(true);
     }
   });
 
@@ -145,22 +142,46 @@ describe('daemon logger line shape', () => {
     detach();
 
     expect(DAEMON_EVENT_DEPTH.kickback).toBe(0);
-    expect(persisted).toEqual([
-      '2026-10-29T00:00:00.000Z [daemon][feature-a] ↩ KICKBACK: build re-opened plan (×1)',
-    ]);
+    expect(persisted).toEqual(['2026-10-29T00:00:00.000Z [daemon][feature-a] ↩ KICKBACK: build re-opened plan (×1)']);
     expect(persisted[0]).not.toContain('· ');
   });
 
   it('uses one depth for provider lifecycle and every outer-review line', () => {
     chalk.level = 0;
     const output: string[] = [];
-    renderDaemonEvent({ type: 'provider_attempt', step: 'build', provider: 'codex', outcome: 'success', invoked: false,
-      lifecycle: { phase: 'preparing', attemptId: 'one', recoveryCount: 0 } }, (line) => output.push(line));
-    renderDaemonEvent({ type: 'provider_attempt', step: 'build', provider: 'codex', outcome: 'success', invoked: false,
-      lifecycle: { phase: 'exhausted', attemptId: 'two', recoveryCount: 1 } }, (line) => output.push(line));
-    renderDaemonEvent({ type: 'build_review_outer_verdict', lapId: 'lap', rawVerdict: 'FAIL', effectiveVerdict: 'PASS',
-      suppressedFindings: [{ rubric: 'testQuality', findingId: 'one', confidence: 1, floor: 2 }],
-      advisoryFindings: [{ rubric: 'security', findingId: 'two', severity: 'minor', threshold: 'major' }] }, (line) => output.push(line));
+    renderDaemonEvent(
+      {
+        type: 'provider_attempt',
+        step: 'build',
+        provider: 'codex',
+        outcome: 'success',
+        invoked: false,
+        lifecycle: { phase: 'preparing', attemptId: 'one', recoveryCount: 0 },
+      },
+      (line) => output.push(line),
+    );
+    renderDaemonEvent(
+      {
+        type: 'provider_attempt',
+        step: 'build',
+        provider: 'codex',
+        outcome: 'success',
+        invoked: false,
+        lifecycle: { phase: 'exhausted', attemptId: 'two', recoveryCount: 1 },
+      },
+      (line) => output.push(line),
+    );
+    renderDaemonEvent(
+      {
+        type: 'build_review_outer_verdict',
+        lapId: 'lap',
+        rawVerdict: 'FAIL',
+        effectiveVerdict: 'PASS',
+        suppressedFindings: [{ rubric: 'testQuality', findingId: 'one', confidence: 1, floor: 2 }],
+        advisoryFindings: [{ rubric: 'security', findingId: 'two', severity: 'minor', threshold: 'major' }],
+      },
+      (line) => output.push(line),
+    );
     expect(output).toHaveLength(5);
     expect(output.every((line) => line.startsWith('·   '))).toBe(true);
   });
