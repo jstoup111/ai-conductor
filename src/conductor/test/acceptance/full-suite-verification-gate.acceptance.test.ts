@@ -256,6 +256,13 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
         { command: 'npm test', working_directory: 'src/conductor' },
         { command: 'test/test_harness_integrity.sh', working_directory: '.' },
       ],
+      // BUILD's completion pre-check (adr-2026-08-01 D11) — not aggregate proof.
+      pre_check: [
+        {
+          command: 'npm run format:check --silent && npm run typecheck --silent && npm run typecheck:test --silent',
+          working_directory: 'src/conductor',
+        },
+      ],
       scoped_command: './node_modules/.bin/vitest run {selectors}',
       // Changed-only BUILD laps; the FINISH fence requires one aggregate PASS.
       changed_command: expect.stringContaining('--changed {base}'),
