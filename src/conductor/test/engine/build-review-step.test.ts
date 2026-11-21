@@ -41,7 +41,10 @@ import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import type { ProviderAttemptMetadata } from '../../src/engine/provider-execution.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
-import type { ResolvedBuildReviewCustomCatalogEntry } from '../../src/engine/resolved-config.js';
+import {
+  resolveBuildReviewConfig,
+  type ResolvedBuildReviewCustomCatalogEntry,
+} from '../../src/engine/resolved-config.js';
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import type { GitRunner } from '../../src/engine/rebase.js';
 import type { ChildId } from '../../src/engine/child-context.js';
@@ -238,7 +241,8 @@ describe('build_review oversized projection step', () => {
         },
       },
       currentCustomRubrics: ['custom-policy'],
-      config: {} as ReturnType<typeof import('../../src/engine/resolved-config.js').resolveBuildReviewConfig>,
+      // The lap join reads every rubric's blocking-lap limit from a resolved config.
+      config: resolveBuildReviewConfig({}),
     };
 
     await expect(publish(input)).resolves.toMatchObject({ currentLapMechanicalFault: true });

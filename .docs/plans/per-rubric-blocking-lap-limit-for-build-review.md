@@ -128,7 +128,7 @@ reported on `build_review_outer_verdict`, the daemon log, and `build-review find
 **Done when:**
 - [test] `deriveEffectiveBuildReviewVerdict` over an aggregate whose `blockingLapLimits` names `implementationQuality` and whose only finding is a `critical` `implementationQuality` finding returns verdict PASS with that id in `advisoryFindingIds` and not in `unresolvedFindingIds`.
 - [test] The same aggregate with an added `testQuality` finding returns FAIL with only the `testQuality` id unresolved; a lap-limited finding below `minConfidence` is in `suppressedFindingIds`; a lap-limited `implementationQuality` infrastructure failure returns FAIL with `implementationQuality` in `uncoveredInfrastructureFailureRubrics`.
-- [test] `resolveEffectiveBuildReviewVerdict` over a custom-rubric aggregate whose `blockingLapLimits` names the custom rubric returns that custom finding in `advisoryFindingIds` and verdict PASS.
+- [test] `deriveComposedBuildReviewEffectiveVerdict` over a custom-rubric aggregate whose `blockingLapLimits` names the custom rubric returns that custom finding in `advisoryFindingIds` and verdict PASS.
 - [test] `parseBuildReviewAggregate` returns `undefined` for a `blockingLapLimits` entry with limit 0 and for one with `blockingLaps` 1 and limit 2, and round-trips a valid entry unchanged.
 
 **Files likely touched:**

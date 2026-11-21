@@ -45,7 +45,10 @@ import {
   canonicalizeBuildReviewFindingIdentity,
   stampBuildReviewCustomJudgedResult,
 } from '../../src/engine/build-review-finding-identity.js';
-import { buildReviewPolicyIdentity } from '../../src/engine/build-review-review-frontier.js';
+import {
+  buildReviewPolicyIdentity,
+  buildReviewScopeDeclarationFingerprint,
+} from '../../src/engine/build-review-review-frontier.js';
 import { deriveChangedFileReferences } from '../../src/engine/build-review-projections.js';
 import { getBuildReviewRubricDescriptor } from '../../src/engine/build-review-registry.js';
 import { coordinateBuildReviewRubrics } from '../../src/engine/build-review-coordinator.js';
@@ -4939,7 +4942,7 @@ TIER: M`,
       const policyIdentity = buildReviewPolicyIdentity('implementationQuality', {
         contractVersion: descriptor.output.version,
         projectionVersion: descriptor.projection.version,
-        declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify(entry.policy)).digest('hex')}`,
+        declarationFingerprint: buildReviewScopeDeclarationFingerprint(entry.policy),
         effectiveBundleDigest: 'sha256:bundle-a',
         provider: Array.isArray(entry.policy.llm_provider)
           ? entry.policy.llm_provider.join(',')
@@ -6046,7 +6049,7 @@ TIER: M`,
       const policyIdentity = buildReviewPolicyIdentity('testQuality', {
         contractVersion: descriptor.output.version,
         projectionVersion: descriptor.projection.version,
-        declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify(entry.policy)).digest('hex')}`,
+        declarationFingerprint: buildReviewScopeDeclarationFingerprint(entry.policy),
         effectiveBundleDigest: 'sha256:bundle-a',
         provider: Array.isArray(entry.policy.llm_provider)
           ? entry.policy.llm_provider.join(',')
