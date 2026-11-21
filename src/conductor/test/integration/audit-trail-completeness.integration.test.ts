@@ -1103,6 +1103,7 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   build_stall_stale_citation: {
     type: 'build_stall_stale_citation',
     caseId: 'case-1',
+    stalledChild: parseChildId(3)!,
     ownerChild: parseChildId(4)!,
     state: 'resolved',
     resolvedTasks: 1,
