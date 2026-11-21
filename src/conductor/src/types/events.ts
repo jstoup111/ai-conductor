@@ -1096,6 +1096,12 @@ type ConductorEventBody =
       caseId: string;
       effectId: string;
       effectKind: 'action' | 'deferral';
+      /**
+       * Deferrals only: `filed` when a follow-up issue was filed or reused;
+       * `unfiled` when filing is off (`build_review.fileDeferredFindingIssues`)
+       * and the deferral was recorded for the PR body instead.
+       */
+      filing?: 'filed' | 'unfiled';
     }
   | {
       /** One reserved remediation effect failed and remains blocking. */

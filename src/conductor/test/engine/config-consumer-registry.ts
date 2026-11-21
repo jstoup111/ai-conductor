@@ -251,6 +251,7 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'build_review.maxParallel': consumer(RESOLVED_CONFIG),
   'build_review.adjudication': consumer(RESOLVED_CONFIG),
   'build_review.adjudication.enabled': consumer(RESOLVED_CONFIG),
+  'build_review.fileDeferredFindingIssues': consumer(RESOLVED_CONFIG),
   'build_review.rubrics': consumer(RESOLVED_CONFIG),
   'build_review.rubrics.timeout_seconds': consumer(RESOLVED_CONFIG),
   'build_review.rubrics.enabled': consumer(RESOLVED_CONFIG),

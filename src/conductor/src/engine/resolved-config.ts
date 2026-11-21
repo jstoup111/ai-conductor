@@ -743,6 +743,8 @@ export interface ResolvedBuildReviewAdjudicationConfig {
 export interface ResolvedBuildReviewConfig {
   enabled: boolean;
   adjudication: ResolvedBuildReviewAdjudicationConfig;
+  /** Opt-in GitHub issue filing for deferred findings; off records them unfiled. */
+  fileDeferredFindingIssues: boolean;
   scopeContainmentEnforced: boolean;
   maxParallel: number;
   rubrics: Record<BuildReviewRubricId, ResolvedBuildReviewRubricPolicy>;
@@ -942,6 +944,7 @@ export function resolveBuildReviewConfig(
     adjudication: {
       enabled: block?.adjudication?.enabled ?? DEFAULT_BUILD_REVIEW_ADJUDICATION_ENABLED,
     },
+    fileDeferredFindingIssues: block?.fileDeferredFindingIssues === true,
     scopeContainmentEnforced:
       typeof block?.scopeContainmentEnforced === 'boolean'
         ? block.scopeContainmentEnforced

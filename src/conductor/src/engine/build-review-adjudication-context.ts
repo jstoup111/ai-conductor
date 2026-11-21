@@ -483,6 +483,9 @@ function validateEffect(caseRecord: RemediationCaseRecord): BuildReviewAdjudicat
   if (!['reserved', 'applied', 'failed'].includes(effect.status))
     return { code: 'unrepresentable-prior-case', caseId: caseRecord.id, field: 'effect.status' };
   if (effect.status === 'applied') {
+    if (effect.kind === 'deferral' && 'filing' in effect) {
+      return boundedString(effect.title, LIMITS.maxTextBytes, 'prior-case', 'effect.title', caseRecord.id);
+    }
     const reference = effect.kind === 'action' ? effect.workOrderId : effect.issueUrl;
     return boundedString(
       reference,
@@ -618,7 +621,9 @@ function effectPointerFor(caseRecord: RemediationCaseRecord, attempted: Readonly
     effect.status === 'applied'
       ? effect.kind === 'action'
         ? ` (work order ${effect.workOrderId})`
-        : ` (issue ${effect.issueUrl})`
+        : 'filing' in effect
+          ? ' (recorded, issue not filed)'
+          : ` (issue ${effect.issueUrl})`
       : effect.status === 'failed'
         ? ` (${effect.diagnostic})`
         : '';

@@ -338,6 +338,17 @@ describe('engine/resolved-config', () => {
       expect(resolveBuildReviewConfig(config).adjudication.enabled).toBe(enabled);
     });
 
+    it.each([
+      [undefined, false],
+      [{}, false],
+      [{ fileDeferredFindingIssues: false }, false],
+      [{ fileDeferredFindingIssues: true }, true],
+    ] as const)('resolves default-off deferred-finding issue filing from %j', (buildReview, enabled) => {
+      const config = buildReview === undefined ? undefined : ({ build_review: buildReview } as HarnessConfig);
+
+      expect(resolveBuildReviewConfig(config).fileDeferredFindingIssues).toBe(enabled);
+    });
+
     it('resolves a closed rubric policy map by inheriting the outer policy, applying independent overrides, and clamping fan-out', () => {
       const config = {
         llm_provider: ['claude', 'codex'],

@@ -80,7 +80,13 @@ import { selectFinishPrerequisiteSteps } from './finish-custom-step-prerequisite
 import { buildStepRegistry } from './steps.js';
 import { decodePrProseJudgment } from './finish-pr-prose-judgment.js';
 import { applyAuthoredPrProse, clearPrProseHandoff, readPrProseHandoff } from './finish-pr-prose-handoff.js';
-import { type BuildReviewAdvisoryFinding, upsertBuildReviewAcceptedRisk } from './build-review-accepted-risk.js';
+import {
+  BUILD_REVIEW_DEFERRED_FINDINGS_HEADING,
+  type BuildReviewAdvisoryFinding,
+  REDUCED_BUILD_REVIEW_COVERAGE_HEADING,
+  renderBuildReviewDeferredFindings,
+  upsertBuildReviewAcceptedRisk,
+} from './build-review-accepted-risk.js';
 import { maskProjectOwnedRegions, restoreRegion } from './pr-body-regions.js';
 import { readRegionCaptures } from './pr-body-region-store.js';
 import {
@@ -1513,7 +1519,15 @@ function upsertReducedCoverageEvidence(
   body: string,
   section: string | undefined,
 ): { ok: true; body: string; changed: boolean } | { ok: false; message: string } {
-  const heading = '## Reduced build-review coverage';
+  return upsertEngineOwnedSection(body, REDUCED_BUILD_REVIEW_COVERAGE_HEADING, section);
+}
+
+/** Replace, insert, or remove one engine-owned `## ` section; other bytes stay untouched. */
+function upsertEngineOwnedSection(
+  body: string,
+  heading: string,
+  section: string | undefined,
+): { ok: true; body: string; changed: boolean } | { ok: false; message: string } {
   // Project-owned regions are opaque. Mask them at identical byte offsets so
   // the engine never mistakes a project heading for its own section.
   const searchable = maskProjectOwnedRegions(body);
@@ -1851,9 +1865,16 @@ export function createProductionFinishPublicationCoordinator(
       renderedReducedCoverage.section,
     );
     if (!reducedCoverageBody.ok) throw new Error(`accepted-risk projection: ${reducedCoverageBody.message}`);
+    // Recorded-unfiled deferrals (issue filing off) are listed for the operator.
+    const deferredBody = upsertEngineOwnedSection(
+      reducedCoverageBody.body,
+      BUILD_REVIEW_DEFERRED_FINDINGS_HEADING,
+      renderBuildReviewDeferredFindings(readableCaseReads.flatMap((read) => read.state.cases)),
+    );
+    if (!deferredBody.ok) throw new Error(`accepted-risk projection: ${deferredBody.message}`);
     const published = await publishAcceptedBuildReviewRiskToRetainedPr({
       prUrl,
-      body: reducedCoverageBody.body,
+      body: deferredBody.body,
       originalBody: typeof body === 'string' ? body : '',
       records: listed.records,
       caseRead,

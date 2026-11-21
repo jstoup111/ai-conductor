@@ -682,3 +682,41 @@ export async function applyBuildReviewDeferralEffect(input: {
   });
   return mutation.ok ? mutation.value : { ok: false, reason: `case store ${mutation.reason}` };
 }
+
+/**
+ * Default-off issue filing (`build_review.fileDeferredFindingIssues`): finalize
+ * a deferral as recorded but unfiled, with no tracker read or write. The case
+ * keeps its rationale and priority; FINISH lists it in the PR body so the
+ * operator decides at review whether to file it. A deferral never halts for
+ * want of filing.
+ */
+export async function recordBuildReviewDeferralUnfiled(input: {
+  readonly store: RemediationCaseStore;
+  readonly caseId: string;
+  readonly effect: RemediationCaseDeferralEffect;
+}): Promise<RemediationEffectResult> {
+  const mutation = await input.store.mutate<RemediationEffectResult>(async (state) => {
+    const record = state.cases.find((item) => item.id === input.caseId);
+    if (!record || record.effect.kind !== 'deferral')
+      return { value: { ok: false as const, reason: 'unknown deferral case' } };
+    const deferral = record as DeferralCase;
+    if (deferral.effect.status === 'applied')
+      return { value: { ok: true as const, status: 'already-applied' as const, effectId: deferral.effect.id } };
+    const next = replaceCases(state, (item) =>
+      item.id === deferral.id
+        ? {
+            ...item,
+            effect: {
+              id: deferral.effect.id,
+              kind: 'deferral',
+              status: 'applied',
+              filing: 'unfiled',
+              title: input.effect.title,
+            },
+          }
+        : item,
+    );
+    return { value: { ok: true as const, status: 'applied' as const, effectId: deferral.effect.id }, nextState: next };
+  });
+  return mutation.ok ? mutation.value : { ok: false, reason: `case store ${mutation.reason}` };
+}

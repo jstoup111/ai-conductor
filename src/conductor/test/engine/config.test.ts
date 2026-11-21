@@ -3751,6 +3751,24 @@ steps:
     });
 
     it.each([
+      ['absent', {}, undefined],
+      ['explicit false', { fileDeferredFindingIssues: false }, false],
+      ['explicit true', { fileDeferredFindingIssues: true }, true],
+    ])('preserves build_review.fileDeferredFindingIssues for %s', (_label, buildReview, value) => {
+      const result = validateConfig({ build_review: buildReview });
+
+      expect(result.ok && result.config.build_review?.fileDeferredFindingIssues).toBe(value);
+      expect(result.ok && result.warnings).toEqual([]);
+    });
+
+    it('warns and omits a non-boolean build_review.fileDeferredFindingIssues', () => {
+      const result = validateConfig({ build_review: { fileDeferredFindingIssues: 'yes' } });
+
+      expect(result.ok && result.config.build_review).not.toHaveProperty('fileDeferredFindingIssues');
+      expect(result.ok && result.warnings.join('\n')).toContain('fileDeferredFindingIssues');
+    });
+
+    it.each([
       [{ adjudication: false }, 'build_review.adjudication must be an object'],
       [{ adjudication: { enabled: 'yes' } }, 'build_review.adjudication.enabled must be a boolean'],
       [{ adjudication: { unknown: true } }, 'Unknown key in build_review.adjudication: "unknown"'],

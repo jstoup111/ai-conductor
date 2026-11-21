@@ -36,6 +36,7 @@ import { persistBuildReviewSuppressions } from './build-review-suppression-histo
 import {
   applyBuildReviewActionEffects,
   applyBuildReviewDeferralEffect,
+  recordBuildReviewDeferralUnfiled,
   hasReservedOrFailedRemediationEffect,
   isBuildEligibleActionCase,
   isBuildReviewDecisionStop,
@@ -376,6 +377,12 @@ export interface BuildReviewAdjudicationCoordinatorInput {
     body: string;
     priority: 'critical' | 'high' | 'medium' | 'low';
   }) => Promise<{ issueUrl: string }>;
+  /**
+   * Set when `build_review.fileDeferredFindingIssues` is off (the default):
+   * deferrals finalize as recorded-unfiled without any tracker call, and the
+   * filing dependencies above are not consulted.
+   */
+  readonly recordDeferralsUnfiled?: boolean;
   /** Injected in tests; production sources both from the feature worktree. */
   readonly readPlanContract?: () => Promise<BuildReviewAdjudicationPlanContract>;
   readonly readTaskStatus?: () => Promise<BuildReviewAdjudicationTaskStatus>;
@@ -2082,7 +2089,11 @@ export async function coordinateBuildReviewAdjudication(
       }
     }
   }
-  if (input.tracker && input.repo && input.fileIssue) {
+  const fileDeferrals =
+    input.recordDeferralsUnfiled !== true && input.tracker && input.repo && input.fileIssue
+      ? { tracker: input.tracker, repo: input.repo, fileIssue: input.fileIssue }
+      : undefined;
+  if (fileDeferrals || input.recordDeferralsUnfiled === true) {
     let deferredFailureRetiredByAcceptance = false;
     for (const proposed of admitted) {
       if (carriedCaseRefs.has(proposed.case.caseRef)) continue;
@@ -2104,16 +2115,19 @@ export async function coordinateBuildReviewAdjudication(
       if (proposed.sources.every((source) => !liveSourceIdsFor(resolved).has(source.sourceId))) continue;
       const caseId = caseIdsByRef.get(proposed.case.caseRef);
       if (!caseId) return fail('deferral case identity was not reconciled');
-      const deferred = await applyBuildReviewDeferralEffect({
-        projectRoot: input.projectRoot,
-        feature: input.feature,
-        store,
-        caseId,
-        effect: proposed.case.effect as RemediationCaseDeferralEffect,
-        repo: input.repo,
-        tracker: input.tracker,
-        fileIssue: input.fileIssue,
-      });
+      const effect = proposed.case.effect as RemediationCaseDeferralEffect;
+      const deferred = fileDeferrals
+        ? await applyBuildReviewDeferralEffect({
+            projectRoot: input.projectRoot,
+            feature: input.feature,
+            store,
+            caseId,
+            effect,
+            repo: fileDeferrals.repo,
+            tracker: fileDeferrals.tracker,
+            fileIssue: fileDeferrals.fileIssue,
+          })
+        : await recordBuildReviewDeferralUnfiled({ store, caseId, effect });
       const record = reconciledCasesById.get(caseId);
       if (!record || record.effect.kind !== 'deferral') return fail('deferral case effect was not reconciled');
       if (!deferred.ok) {
@@ -2176,6 +2190,7 @@ export async function coordinateBuildReviewAdjudication(
           caseId,
           effectId: record.effect.id,
           effectKind: 'deferral',
+          filing: fileDeferrals ? 'filed' : 'unfiled',
         });
       }
     }

@@ -1970,8 +1970,11 @@ build_review adjudication halted: remediation effect is not finalized for case <
 
 **Diagnosis:** an action case's BUILD effect failed or never finished, and the engine cannot retire it:
 at least one of its sources is still raised and not accepted, or the lap was not mechanically healthy
-enough to treat an absent source as gone. For a `deferral` case, its intake issue was never filed (the
-effect is `reserved`) or filing failed (`failed`); the engine never drops a deferral silently.
+enough to treat an absent source as gone. For a `deferral` case, this halt arises only when
+`build_review.fileDeferredFindingIssues` is `true`: its intake issue was never filed (the effect is
+`reserved`) or filing failed (`failed`, for example because GitHub issue-creation authority is
+unavailable); the engine never drops a deferral silently. With the option off (the default) a deferral
+finalizes as recorded-unfiled and appears in the PR's `## Deferred findings` section instead.
 
 **Recovery:**
 

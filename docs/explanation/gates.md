@@ -856,7 +856,9 @@ no digest. Digests are binding context for the judge, not report text.
 The engine validates the judgement as a complete source-to-case mapping, assigns durable case and
 effect identities, and records the feature-local state before applying an effect. An action publishes
 a durable BUILD work order and returns to `build`; a justified deferral files or reuses its marked
-intake issue; a rejection has no external effect. A `refute` row can instead settle an already attempted
+intake issue when `build_review.fileDeferredFindingIssues` is `true`, and otherwise (the default)
+finalizes as a recorded, unfiled deferral listed in the PR's `## Deferred findings` section, never
+halting for want of filing; a rejection has no external effect. A `refute` row can instead settle an already attempted
 action case once: it must bind that case, carry high-confidence path/excerpt evidence and at least one
 refuted assertion, and changes the case to a resolved refutation without charging another BUILD route.
 It emits `remediation_case_refuted`. A refutation may retain only a complete deferral for a narrow

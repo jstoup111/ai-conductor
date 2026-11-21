@@ -61,6 +61,17 @@ export type RemediationCaseEffect =
   | { readonly id: string; readonly kind: 'action'; readonly status: 'failed'; readonly diagnostic: string }
   | { readonly id: string; readonly kind: 'deferral'; readonly status: 'reserved' }
   | { readonly id: string; readonly kind: 'deferral'; readonly status: 'applied'; readonly issueUrl: string }
+  /**
+   * Issue filing is opt-in (`build_review.fileDeferredFindingIssues`). Off, a
+   * deferral finalizes as recorded but unfiled; FINISH lists it in the PR body.
+   */
+  | {
+      readonly id: string;
+      readonly kind: 'deferral';
+      readonly status: 'applied';
+      readonly filing: 'unfiled';
+      readonly title: string;
+    }
   | { readonly id: string; readonly kind: 'deferral'; readonly status: 'failed'; readonly diagnostic: string };
 
 export interface RemediationCaseRecord {
@@ -663,6 +674,15 @@ function parseEffect(value: unknown, disposition: RemediationCaseDisposition): R
     boundedString(value.issueUrl, MAX_TEXT_LENGTH)
   ) {
     return { id: value.id, kind: 'deferral', status: 'applied', issueUrl: value.issueUrl };
+  }
+  if (
+    expectedKind === 'deferral' &&
+    value.status === 'applied' &&
+    exactKeys(value, ['id', 'kind', 'status', 'filing', 'title']) &&
+    value.filing === 'unfiled' &&
+    boundedString(value.title, MAX_TEXT_LENGTH)
+  ) {
+    return { id: value.id, kind: 'deferral', status: 'applied', filing: 'unfiled', title: value.title };
   }
   return undefined;
 }
@@ -1382,9 +1402,7 @@ function parseSuppressions(value: unknown): RemediationCaseSuppressionEntry[] | 
     : (suppressions as RemediationCaseSuppressionEntry[]);
 }
 
-function parseBuildReviewCases(
-  value: unknown,
-):
+function parseBuildReviewCases(value: unknown):
   | { readonly ok: true; readonly cases: RemediationCaseRecord[] }
   | {
       readonly ok: false;

@@ -10,14 +10,17 @@ import {
   PR_BODY_FLOOR_MARKER,
 } from './pr-body-engine-markers.js';
 import type { BuildReviewSeverity } from './build-review-domain.js';
+import { sanitizeIntakeText } from './engineer/intake/sanitize.js';
 
 export const BUILD_REVIEW_ACCEPTED_RISK_START = '<!-- build-review-accepted-risk:start -->';
 export const BUILD_REVIEW_ACCEPTED_RISK_END = '<!-- build-review-accepted-risk:end -->';
 export const REDUCED_BUILD_REVIEW_COVERAGE_HEADING = '## Reduced build-review coverage';
 export const BUILD_REVIEW_ACCEPTED_RISK_HEADING = '## Accepted build-review risk';
 export const BUILD_REVIEW_ADVISORY_HEADING = '## Advisory build-review findings';
+export const BUILD_REVIEW_DEFERRED_FINDINGS_HEADING = '## Deferred findings';
 export const ENGINE_OWNED_PR_BODY_TEXTS = [
   REDUCED_BUILD_REVIEW_COVERAGE_HEADING,
+  BUILD_REVIEW_DEFERRED_FINDINGS_HEADING,
   BUILD_REVIEW_ACCEPTED_RISK_HEADING,
   BUILD_REVIEW_ADVISORY_HEADING,
   BUILD_REVIEW_ACCEPTED_RISK_START,
@@ -226,4 +229,34 @@ export function upsertBuildReviewAcceptedRisk(
         ? rendered.section
         : `${sanitizedBody}\n\n${rendered.section}`;
   return { ok: true, body: next, changed: next !== body };
+}
+
+/**
+ * Deferrals recorded but not filed (`build_review.fileDeferredFindingIssues`
+ * off, the default) surface here so the operator decides at review whether to
+ * file each one. Filed deferrals already carry their issue and are omitted.
+ * Title and rationale pass the same intake sanitizer an issue filing would.
+ */
+export function renderBuildReviewDeferredFindings(cases: readonly RemediationCaseRecord[]): string | undefined {
+  const rows = cases.flatMap((record) => {
+    const effect = record.effect;
+    if (effect.kind !== 'deferral' || effect.status !== 'applied' || !('filing' in effect)) return [];
+    const title = sanitizeIntakeText(effect.title).text.replace(/\s+/g, ' ').trim();
+    const rationale = sanitizeIntakeText(record.rationale).text.replace(/\s+/g, ' ').trim();
+    const sources = record.sources.map((source) => `\`${source.sourceId}\``).join(', ') || 'none';
+    return [
+      {
+        id: record.id,
+        line: `- ${title} — case \`${record.id}\`; priority: ${record.priority}; findings: ${sources}; rationale: ${rationale}`,
+      },
+    ];
+  });
+  if (rows.length === 0) return undefined;
+  return [
+    BUILD_REVIEW_DEFERRED_FINDINGS_HEADING,
+    '',
+    'build_review deferred these findings without filing follow-up issues (`build_review.fileDeferredFindingIssues` is off). Decide at review whether to file each one.',
+    '',
+    ...rows.sort((left, right) => left.id.localeCompare(right.id)).map((row) => row.line),
+  ].join('\n');
 }

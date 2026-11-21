@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import { validateConfig } from '../../src/engine/config.js';
 import { resolveRemediationLapAllowance } from '../../src/engine/remediation-caps.js';
+import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
 
 const repoRoot = resolve(process.cwd(), '../..');
 
@@ -23,5 +24,14 @@ describe('repository remediation configuration', () => {
     expect(resolveRemediationLapAllowance('prd_audit', validated.config, 'L').limit).toBe(4);
     expect(resolveRemediationLapAllowance('architecture_review_as_built', validated.config, 'L').limit).toBe(4);
     expect(resolveRemediationLapAllowance('architecture_review_as_built', validated.config, 'S').limit).toBe(2);
+  });
+
+  it('opts this repository into filing deferred build_review findings as issues', async () => {
+    const raw = loadYaml(await readFile(resolve(repoRoot, '.ai-conductor/config.yml'), 'utf8'));
+    const validated = validateConfig(raw, repoRoot);
+    if (!validated.ok) throw new Error(validated.error.message);
+
+    // The engine default is off; this repository files its deferrals.
+    expect(resolveBuildReviewConfig(validated.config).fileDeferredFindingIssues).toBe(true);
   });
 });
