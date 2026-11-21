@@ -83,7 +83,7 @@ describe('build_review blocking-lap limit at the lap join', () => {
     resolved = [];
     const emitter = new ConductorEventEmitter();
     emitter.on('build_review_outer_verdict', (event) => {
-      verdicts.push(event);
+      if (event.type === 'build_review_outer_verdict') verdicts.push(event);
     });
     const provider: LLMProvider = { invoke: vi.fn() };
     runner = new DefaultStepRunner(provider, 'blocking-lap-runner', projectDir, {
