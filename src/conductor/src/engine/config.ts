@@ -247,6 +247,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
     'commands',
     'scoped_command',
     'changed_command',
+    'pre_check',
     'working_directory',
     'timeout_seconds',
     'inputs',
@@ -254,6 +255,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
     'verification',
   ],
   'test_suite.commands[]': TEST_SUITE_COMMAND_ENTRY_KEYS,
+  'test_suite.pre_check[]': TEST_SUITE_COMMAND_ENTRY_KEYS,
   'test_suite.verification': ['mode', 'full_suite', 'drift_budget'],
   build_progress: [
     'poll_seconds',
@@ -2401,58 +2403,10 @@ function validateTestSuiteBlock(
     };
   }
 
-  if (raw.commands !== undefined) {
-    if (!Array.isArray(raw.commands) || raw.commands.length === 0) {
-      return {
-        type: 'validation_error',
-        message: 'test_suite.commands must be a non-empty array',
-      };
-    }
-
-    const allowedCommandKeys = new Set<string>(TEST_SUITE_COMMAND_ENTRY_KEYS);
-    for (const [index, entry] of raw.commands.entries()) {
-      if (!isPlainObject(entry)) {
-        return {
-          type: 'validation_error',
-          message: `test_suite.commands[${index}] must be an object`,
-        };
-      }
-
-      for (const key of Object.keys(entry)) {
-        if (!allowedCommandKeys.has(key)) {
-          return {
-            type: 'validation_error',
-            message: `Unknown key in test_suite.commands[${index}]: "${key}"`,
-          };
-        }
-      }
-
-      if (typeof entry.command !== 'string' || entry.command.trim() === '') {
-        return {
-          type: 'validation_error',
-          message: `test_suite.commands[${index}].command must be a non-empty string`,
-        };
-      }
-
-      if (
-        entry.timeout_seconds !== undefined &&
-        (typeof entry.timeout_seconds !== 'number' ||
-          !Number.isFinite(entry.timeout_seconds) ||
-          entry.timeout_seconds <= 0)
-      ) {
-        return {
-          type: 'validation_error',
-          message: `test_suite.commands[${index}].timeout_seconds must be a finite positive number`,
-        };
-      }
-
-      const workingDirectoryError = validateTestSuiteWorkingDirectory(
-        entry.working_directory,
-        projectRoot,
-        `test_suite.commands[${index}].working_directory`,
-      );
-      if (workingDirectoryError) return workingDirectoryError;
-    }
+  for (const field of ['commands', 'pre_check'] as const) {
+    if (raw[field] === undefined) continue;
+    const entriesError = validateTestSuiteCommandEntries(raw[field], `test_suite.${field}`, projectRoot);
+    if (entriesError) return entriesError;
   }
 
   if (raw.changed_command !== undefined) {
@@ -2519,6 +2473,66 @@ function validateTestSuiteBlock(
     raw.verification = resolveTestSuiteVerification(raw.verification);
   }
 
+  return null;
+}
+
+/** Validates an ordered `test_suite` command list (`commands`, `pre_check`). */
+function validateTestSuiteCommandEntries(
+  entries: unknown,
+  field: string,
+  projectRoot: string | undefined,
+): ConfigError | null {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return {
+      type: 'validation_error',
+      message: `${field} must be a non-empty array`,
+    };
+  }
+
+  const allowedCommandKeys = new Set<string>(TEST_SUITE_COMMAND_ENTRY_KEYS);
+  for (const [index, entry] of entries.entries()) {
+    if (!isPlainObject(entry)) {
+      return {
+        type: 'validation_error',
+        message: `${field}[${index}] must be an object`,
+      };
+    }
+
+    for (const key of Object.keys(entry)) {
+      if (!allowedCommandKeys.has(key)) {
+        return {
+          type: 'validation_error',
+          message: `Unknown key in ${field}[${index}]: "${key}"`,
+        };
+      }
+    }
+
+    if (typeof entry.command !== 'string' || entry.command.trim() === '') {
+      return {
+        type: 'validation_error',
+        message: `${field}[${index}].command must be a non-empty string`,
+      };
+    }
+
+    if (
+      entry.timeout_seconds !== undefined &&
+      (typeof entry.timeout_seconds !== 'number' ||
+        !Number.isFinite(entry.timeout_seconds) ||
+        entry.timeout_seconds <= 0)
+    ) {
+      return {
+        type: 'validation_error',
+        message: `${field}[${index}].timeout_seconds must be a finite positive number`,
+      };
+    }
+
+    const workingDirectoryError = validateTestSuiteWorkingDirectory(
+      entry.working_directory,
+      projectRoot,
+      `${field}[${index}].working_directory`,
+    );
+    if (workingDirectoryError) return workingDirectoryError;
+  }
   return null;
 }
 

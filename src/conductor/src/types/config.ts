@@ -526,6 +526,11 @@ export interface TestSuiteConfig {
   scoped_command?: string;
   /** Changed-only lap command; `{base}` is replaced with the merge-base SHA. */
   changed_command?: string;
+  /**
+   * Bounded static checks BUILD runs before it completes (adr-2026-08-01 D11).
+   * Never aggregate proof: it writes no evidence and never satisfies `test_suite`.
+   */
+  pre_check?: TestSuiteCommandConfig[];
   working_directory?: string;
   timeout_seconds?: number;
   inputs?: string[];

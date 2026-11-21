@@ -6,6 +6,7 @@ import { readNoEvidenceAttempts } from './task-evidence.js';
 import { makeGitRunner } from './rebase.js';
 import { resolveBuildProgressConfig } from './config.js';
 import { heartbeatBelongsToDispatch, readStepHeartbeat } from './step-heartbeat.js';
+import { BUILD_PRE_CHECK_FAILED_PREFIX } from './build-pre-check.js';
 import type { ResolvedBuildProgressConfig } from './config.js';
 import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import type { StepName } from '../types/index.js';
@@ -41,7 +42,8 @@ export function isNoTaskProgressBuildStall(input: {
   headMovedThisAttempt: boolean;
   completionReason?: string;
 }): boolean {
-  return input.attempt >= 2 &&
+  return (
+    input.attempt >= 2 &&
     input.resolvedTasksAfter <= input.resolvedTasksBefore &&
     !input.headMovedThisAttempt &&
     // These reasons describe bounded completion work the conductor has
@@ -49,7 +51,10 @@ export function isNoTaskProgressBuildStall(input: {
     // no-progress stall would prevent its one permitted follow-up lap.
     !input.completionReason?.startsWith('unverified Done-when checks require one BUILD review pass:') &&
     !input.completionReason?.startsWith('Done-when citation refused:') &&
-    !input.completionReason?.startsWith('Remediation closure reopened:');
+    // A pre-check repair may land in a later attempt; adr-2026-08-01 D11.
+    !input.completionReason?.startsWith(BUILD_PRE_CHECK_FAILED_PREFIX) &&
+    !input.completionReason?.startsWith('Remediation closure reopened:')
+  );
 }
 
 /**
@@ -89,13 +94,8 @@ export function isNoTaskProgressBuildStall(input: {
  * error, and a throw here falls back to the row count rather than aborting the
  * poll tick.
  */
-async function countResolvedForTasks(
-  projectRoot: string,
-  tasks: NormalizedTask[],
-): Promise<number> {
-  const rowResolved = tasks.filter(
-    (t) => t.status === 'completed' || t.status === 'skipped',
-  ).length;
+async function countResolvedForTasks(projectRoot: string, tasks: NormalizedTask[]): Promise<number> {
+  const rowResolved = tasks.filter((t) => t.status === 'completed' || t.status === 'skipped').length;
   const planIds = tasks.map((t) => t.id).filter((id): id is string => id !== undefined);
   if (planIds.length === 0) return rowResolved;
   try {
@@ -347,9 +347,7 @@ export class BuildProgressWatcher {
     if (lastActivityAt === undefined) return 'quiet';
 
     const ageMs = Math.max(0, this.now() - lastActivityAt);
-    return ageMs < this.resolvedConfig.quiet_minutes * 60 * 1000
-      ? 'active-not-committing'
-      : 'quiet';
+    return ageMs < this.resolvedConfig.quiet_minutes * 60 * 1000 ? 'active-not-committing' : 'quiet';
   }
 
   /** Return the latest valid heartbeat timestamp only for this dispatch. */
@@ -370,16 +368,8 @@ export class BuildProgressWatcher {
   }
 
   /** Emit one active-stall warning per movement episode. */
-  private async checkActiveStall(
-    activity: BuildActivity,
-    resolved: number,
-    total: number,
-  ): Promise<void> {
-    if (
-      this.lastMovementAt === null ||
-      this.activeStallFired ||
-      activity !== 'active-not-committing'
-    ) {
+  private async checkActiveStall(activity: BuildActivity, resolved: number, total: number): Promise<void> {
+    if (this.lastMovementAt === null || this.activeStallFired || activity !== 'active-not-committing') {
       return;
     }
 

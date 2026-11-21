@@ -2,21 +2,14 @@ import { access, lstat, mkdir, readdir, readFile, rm, stat, writeFile } from 'fs
 import { basename, dirname, isAbsolute, join, relative } from 'path';
 import type { StepName, ComplexityTier, Track } from '../types/index.js';
 import type { BuildReviewRubricId, HarnessConfig } from '../types/config.js';
-import type {
-  VerdictFreshnessClassification,
-  VerdictFreshnessOutcome,
-} from '../types/events.js';
+import type { VerdictFreshnessClassification, VerdictFreshnessOutcome } from '../types/events.js';
 import { slugify } from './worktree.js';
 import { planStem } from './plan-stem.js';
 import { parseWorkRef, formatWorkRef } from './engineer/source-ref.js';
 import type { GhRunner } from './pr-labels.js';
 import { makeProductionGh } from './pr-labels.js';
 import { runTrackerUrlRead } from './tracker-client.js';
-import {
-  readFlooredBody,
-  readStaleHaltBanner,
-  readStaleHaltTitle,
-} from './halt-pr-rehabilitation.js';
+import { readFlooredBody, readStaleHaltBanner, readStaleHaltTitle } from './halt-pr-rehabilitation.js';
 import { readRegionCaptures } from './pr-body-region-store.js';
 import { seedTaskStatus, TaskReopenError } from './task-seed.js';
 import type { GitRunner } from './rebase.js';
@@ -28,14 +21,9 @@ import {
   verdictProducedByRun,
 } from './gate-code-validity.js';
 import type { VerdictRunIdentity } from './gate-code-validity.js';
-import {
-  type IntentRelation,
-} from './accepted-widenings.js';
+import { type IntentRelation } from './accepted-widenings.js';
 import { AcceptedWideningDecisionStore } from './accepted-widenings.js';
-import {
-  classifyPrdWideningProjection,
-  type PrdWideningClassification,
-} from './prd-widening-classification.js';
+import { classifyPrdWideningProjection, type PrdWideningClassification } from './prd-widening-classification.js';
 import {
   prdWideningCasesForState,
   readRemediationCaseStoreFeature,
@@ -56,10 +44,7 @@ import {
   resolveFeatureArtifact,
   worktreeManifestSource,
 } from './feature-manifest-source.js';
-import {
-  FullSuiteVerifier,
-  type FullSuiteInspectionResult,
-} from './full-suite-verifier.js';
+import { FullSuiteVerifier, type FullSuiteInspectionResult } from './full-suite-verifier.js';
 import {
   evaluateShipmentEvidence,
   resolveImplementationPrBinding,
@@ -69,9 +54,7 @@ import {
 import { currentCommitSha } from './project-prelude.js';
 import { createEngineStateStore } from './engine-state-store.js';
 import { readCommittedRemediationTaskChildren } from './routing/owner-derivation.js';
-import {
-  parsePlanTaskStoryIds,
-} from './plan-task-parse.js';
+import { parsePlanTaskStoryIds } from './plan-task-parse.js';
 import { parsePlanReviewArtifact } from './plan-review-artifact.js';
 import { collectUnverifiedDoneWhenChecks } from './done-when-test-reference.js';
 import {
@@ -86,12 +69,7 @@ import {
   type BuildReviewEffectiveResolverDeps,
   type BuildReviewEffectiveResolution,
 } from './build-review-effective.js';
-import {
-  assessAcceptedStoryReadability,
-  listItems,
-  sectionBody,
-  splitStoryBlocks,
-} from './story-criteria.js';
+import { assessAcceptedStoryReadability, listItems, sectionBody, splitStoryBlocks } from './story-criteria.js';
 import {
   asBuiltFindingDetail,
   asBuiltOutcome,
@@ -106,10 +84,7 @@ import {
   readPrdAuditVerdict,
   type PersistedPrdAuditVerdict,
 } from './prd-audit-verdict-store.js';
-import {
-  artifactPresenceAtMergeBase,
-  evaluateAdrAssumptionLedgers,
-} from './adr-assumption-ledger-scope.js';
+import { artifactPresenceAtMergeBase, evaluateAdrAssumptionLedgers } from './adr-assumption-ledger-scope.js';
 
 export { splitStoryBlocks, type StoryBlock } from './story-criteria.js';
 import { loadSliceTopology, validatePlanDependencies } from './slice-topology.js';
@@ -122,7 +97,9 @@ export type ArtifactLifecycleScope = 'feature' | 'repository' | 'run';
  * This keeps gate completion aligned with the runner for both built-in and
  * custom rubrics, including severity advisory thresholds.
  */
-function buildReviewEffectiveResolverThresholds(config: HarnessConfig | undefined): Pick<BuildReviewEffectiveResolverDeps, 'minConfidence' | 'minSeverity'> {
+function buildReviewEffectiveResolverThresholds(
+  config: HarnessConfig | undefined,
+): Pick<BuildReviewEffectiveResolverDeps, 'minConfidence' | 'minSeverity'> {
   const thresholds = buildReviewThresholds(resolveBuildReviewConfig(config ?? {}));
   return {
     minConfidence: Object.fromEntries(
@@ -156,9 +133,7 @@ export type ArtifactPatternContract =
       identity?: never;
     };
 
-const FEATURE_CONTRACT_PATTERN_KINDS: Partial<
-  Record<StepName, Readonly<Record<string, FeatureScopedKind>>>
-> = {
+const FEATURE_CONTRACT_PATTERN_KINDS: Partial<Record<StepName, Readonly<Record<string, FeatureScopedKind>>>> = {
   prd: { '.docs/specs/*.md': 'prd' },
   stories: { '.docs/stories/**/*.md': 'stories' },
   conflict_check: { '.docs/conflicts/*.md': 'conflicts' },
@@ -407,24 +382,15 @@ export const STEP_ARTIFACT_CONTRACTS = {
   manual_test: [{ pattern: '.pipeline/manual-test-results.md', scope: 'run' }],
   // The typed verdict is authority; the adjacent report is its derived view.
   prd_audit: [{ pattern: PRD_AUDIT_VERDICT_PATH, scope: 'run' }],
-  architecture_review_as_built: [
-    { pattern: AS_BUILT_VERDICT_PATH, scope: 'run' },
-  ],
+  architecture_review_as_built: [{ pattern: AS_BUILT_VERDICT_PATH, scope: 'run' }],
   rebase: [],
   finish: [],
   remediate: [],
   attribution_verify: [],
 } satisfies Record<StepName, readonly ArtifactPatternContract[]>;
 
-export function stepArtifactContracts(
-  step: StepName,
-): readonly ArtifactPatternContract[] {
-  return (
-    STEP_ARTIFACT_CONTRACTS as Record<
-      string,
-      readonly ArtifactPatternContract[] | undefined
-    >
-  )[step] ?? [];
+export function stepArtifactContracts(step: StepName): readonly ArtifactPatternContract[] {
+  return (STEP_ARTIFACT_CONTRACTS as Record<string, readonly ArtifactPatternContract[] | undefined>)[step] ?? [];
 }
 
 export interface FeatureArtifactStemValidationEntry {
@@ -525,13 +491,9 @@ export function validateFeatureArtifactStems(
  * until all legacy consumers have migrated to scoped artifact resolution.
  */
 export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = Object.fromEntries(
-  (Object.entries(STEP_ARTIFACT_CONTRACTS) as [
-    StepName,
-    readonly ArtifactPatternContract[],
-  ][]).map(([step, contracts]) => [
-    step,
-    contracts.map(({ pattern }) => pattern),
-  ]),
+  (Object.entries(STEP_ARTIFACT_CONTRACTS) as [StepName, readonly ArtifactPatternContract[]][]).map(
+    ([step, contracts]) => [step, contracts.map(({ pattern }) => pattern)],
+  ),
 ) as Record<StepName, string[]>;
 
 /**
@@ -545,10 +507,7 @@ export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = Object.fromEntrie
  * or callers that opt out), returns true on file presence — fail open
  * rather than break in-flight features on upgrade.
  */
-export async function fileIsFreshSinceSession(
-  path: string,
-  sessionStartedAt: number | undefined,
-): Promise<boolean> {
+export async function fileIsFreshSinceSession(path: string, sessionStartedAt: number | undefined): Promise<boolean> {
   try {
     const s = await stat(path);
     if (sessionStartedAt === undefined) return true;
@@ -619,10 +578,7 @@ export { planStem };
  * have no consumer override and return []. Kept here so the gate and the
  * dashboard resolve the same effective glob set.
  */
-export function extraArtifactGlobs(
-  step: StepName,
-  config: HarnessConfig | undefined,
-): string[] {
+export function extraArtifactGlobs(step: StepName, config: HarnessConfig | undefined): string[] {
   if (step === 'acceptance_specs') return config?.acceptance_spec_globs ?? [];
   return [];
 }
@@ -633,11 +589,7 @@ export function extraArtifactGlobs(
  * leading `*\/` package-prefix wildcard. `extraGlobs` (project-declared) are
  * appended to the step's built-in globs.
  */
-export async function findArtifactFiles(
-  dir: string,
-  step: StepName,
-  extraGlobs: string[] = [],
-): Promise<string[]> {
+export async function findArtifactFiles(dir: string, step: StepName, extraGlobs: string[] = []): Promise<string[]> {
   const patterns = [...(STEP_ARTIFACT_GLOBS[step] ?? []), ...extraGlobs];
   if (patterns.length === 0) return [];
 
@@ -650,10 +602,7 @@ export async function findArtifactFiles(
 
 const findArtifactFilesForStep = findArtifactFiles;
 
-export async function snapshotArtifactMtimes(
-  projectRoot: string,
-  step: StepName,
-): Promise<Map<string, number>> {
+export async function snapshotArtifactMtimes(projectRoot: string, step: StepName): Promise<Map<string, number>> {
   const snapshot = new Map<string, number>();
   // findArtifactFilesForStep returns absolute paths.
   const files = await findArtifactFilesForStep(projectRoot, step);
@@ -668,10 +617,7 @@ export async function snapshotArtifactMtimes(
   return snapshot;
 }
 
-export async function selectChangedArtifacts(
-  files: string[],
-  snapshot: Map<string, number> | null,
-): Promise<string[]> {
+export async function selectChangedArtifacts(files: string[], snapshot: Map<string, number> | null): Promise<string[]> {
   if (snapshot === null) return files;
   const changed: string[] = [];
   for (const file of files) {
@@ -722,9 +668,7 @@ export async function resolveArtifactFiles(
       identity.stripDatePrefix ? 'date prefix stripped' : undefined,
       ...(identity.stripPrefixes ?? []).map((prefix) => `"${prefix}" prefix stripped`),
     ].filter((qualifier): qualifier is string => Boolean(qualifier));
-    return qualifiers.length > 0
-      ? `${identity.strategy} (${qualifiers.join(', ')})`
-      : identity.strategy;
+    return qualifiers.length > 0 ? `${identity.strategy} (${qualifiers.join(', ')})` : identity.strategy;
   };
   const exampleExpectedPathFor = (
     contract: Extract<ArtifactPatternContract, { scope: 'feature' }>,
@@ -770,16 +714,10 @@ export async function resolveArtifactFiles(
       const repoPath = relative(dir, file).replaceAll('\\', '/');
       return (
         context.changedPaths.has(repoPath) ||
-        context.featureIdentities.some((identity) =>
-          artifactMatchesFeatureIdentity(file, identity, contract.identity),
-        )
+        context.featureIdentities.some((identity) => artifactMatchesFeatureIdentity(file, identity, contract.identity))
       );
     });
-    const legacyFiles = associated.length > 0
-      ? associated
-      : candidates.length === 1
-        ? [candidates[0]]
-        : [];
+    const legacyFiles = associated.length > 0 ? associated : candidates.length === 1 ? [candidates[0]] : [];
     const kind = contractPatternKind(step, contract.pattern);
     if (kind !== null && manifestSlug) {
       const manifestResolution = await resolveFeatureArtifact(
@@ -873,11 +811,12 @@ export async function recordAppendedRemediationTaskIds(
       ? state.appendedRemediationTaskIds.filter((value): value is string => typeof value === 'string')
       : [];
     const appendedRemediationTaskIds = Array.from(new Set([...prior, ...ids]));
-    const priorChildren = typeof state.appendedRemediationTaskChildren === 'object'
-      && state.appendedRemediationTaskChildren !== null
-      && !Array.isArray(state.appendedRemediationTaskChildren)
-      ? state.appendedRemediationTaskChildren
-      : {};
+    const priorChildren =
+      typeof state.appendedRemediationTaskChildren === 'object' &&
+      state.appendedRemediationTaskChildren !== null &&
+      !Array.isArray(state.appendedRemediationTaskChildren)
+        ? state.appendedRemediationTaskChildren
+        : {};
     const appendedRemediationTaskChildren = {
       ...priorChildren,
       ...(child === undefined ? {} : Object.fromEntries(ids.map((id) => [id, child]))),
@@ -886,9 +825,7 @@ export async function recordAppendedRemediationTaskIds(
     return {
       ...state,
       appendedRemediationTaskIds,
-      ...(Object.keys(appendedRemediationTaskChildren).length > 0
-        ? { appendedRemediationTaskChildren }
-        : {}),
+      ...(Object.keys(appendedRemediationTaskChildren).length > 0 ? { appendedRemediationTaskChildren } : {}),
     };
   });
   if (!result.ok) {
@@ -919,9 +856,7 @@ export async function readAppendedRemediationTaskIds(projectRoot: string): Promi
  * tasks. Missing or malformed state has no membership; callers decide whether
  * that absence is recoverable for their operation.
  */
-export async function readAppendedRemediationTaskChildren(
-  projectRoot: string,
-): Promise<Record<string, ChildId>> {
+export async function readAppendedRemediationTaskChildren(projectRoot: string): Promise<Record<string, ChildId>> {
   try {
     const raw = await readFile(join(projectRoot, '.pipeline/engine-state.json'), 'utf-8');
     const parsed = JSON.parse(raw) as Record<string, unknown>;
@@ -941,9 +876,7 @@ export async function readAppendedRemediationTaskChildren(
 }
 
 export type FeaturePlanSelection =
-  | { kind: 'resolved'; path: string }
-  | { kind: 'unresolvable'; candidates: string[] }
-  | { kind: 'empty' };
+  { kind: 'resolved'; path: string } | { kind: 'unresolvable'; candidates: string[] } | { kind: 'empty' };
 
 /**
  * Select this feature's plan while preserving why no plan path can be returned.
@@ -982,22 +915,20 @@ export async function resolveFeaturePlanPath(
   featureDesc: string | undefined,
 ): Promise<string | undefined> {
   const selection = await selectFeaturePlan(projectRoot, featureDesc);
-  const legacy = async (): Promise<readonly string[]> => selection.kind === 'resolved'
-    ? [relative(projectRoot, selection.path).replaceAll('\\', '/')]
-    : [];
-  const slug = featureDesc ? slugify(featureDesc) : selection.kind === 'resolved' ? planStem(selection.path) : undefined;
+  const legacy = async (): Promise<readonly string[]> =>
+    selection.kind === 'resolved' ? [relative(projectRoot, selection.path).replaceAll('\\', '/')] : [];
+  const slug = featureDesc
+    ? slugify(featureDesc)
+    : selection.kind === 'resolved'
+      ? planStem(selection.path)
+      : undefined;
   if (!slug) {
     const path = (await legacy())[0];
     return path === undefined ? undefined : join(projectRoot, path);
   }
-  const resolution = await resolveFeatureArtifact(
-    worktreeManifestSource(projectRoot),
-    slug,
-    'plan',
-    legacy,
-  );
-  const path = resolution.paths.find((candidate) =>
-    resolution.origin === 'legacy' || !resolution.missing.includes(candidate),
+  const resolution = await resolveFeatureArtifact(worktreeManifestSource(projectRoot), slug, 'plan', legacy);
+  const path = resolution.paths.find(
+    (candidate) => resolution.origin === 'legacy' || !resolution.missing.includes(candidate),
   );
   return path === undefined ? undefined : join(projectRoot, path);
 }
@@ -1017,8 +948,7 @@ export async function readActivePlanText(
 ): Promise<string | undefined> {
   const resolved = planPath ?? (await resolveFeaturePlanPath(projectRoot, featureDesc));
   if (!resolved) return undefined;
-  return readFile(isAbsolute(resolved) ? resolved : join(projectRoot, resolved), 'utf-8')
-    .catch(() => undefined);
+  return readFile(isAbsolute(resolved) ? resolved : join(projectRoot, resolved), 'utf-8').catch(() => undefined);
 }
 
 /**
@@ -1054,14 +984,9 @@ export async function resolveFeatureStoriesPath(
     const path = (await legacy())[0];
     return path === undefined ? undefined : join(projectRoot, path);
   }
-  const resolution = await resolveFeatureArtifact(
-    worktreeManifestSource(projectRoot),
-    slug,
-    'stories',
-    legacy,
-  );
-  const path = resolution.paths.find((candidate) =>
-    resolution.origin === 'legacy' || !resolution.missing.includes(candidate),
+  const resolution = await resolveFeatureArtifact(worktreeManifestSource(projectRoot), slug, 'stories', legacy);
+  const path = resolution.paths.find(
+    (candidate) => resolution.origin === 'legacy' || !resolution.missing.includes(candidate),
   );
   return path === undefined ? undefined : join(projectRoot, path);
 }
@@ -1082,9 +1007,8 @@ export async function resolveFeaturePrdPaths(
       (path) => !basename(path).startsWith('SUPERSEDED-'),
     );
     const prdIdentity = STEP_ARTIFACT_CONTRACTS.prd[0].identity;
-    const matchesIdentity = (identity: string): string[] => prdFiles.filter((path) =>
-      artifactMatchesFeatureIdentity(path, identity, prdIdentity),
-    );
+    const matchesIdentity = (identity: string): string[] =>
+      prdFiles.filter((path) => artifactMatchesFeatureIdentity(path, identity, prdIdentity));
     const identities = [
       context.activePlanPath ? planStem(context.activePlanPath) : undefined,
       context.featureDesc ? slugify(context.featureDesc) : undefined,
@@ -1094,9 +1018,9 @@ export async function resolveFeaturePrdPaths(
       const matches = matchesIdentity(identity);
       if (matches.length > 0) return matches.map((path) => relative(projectRoot, path).replaceAll('\\', '/'));
     }
-    const matches = prdFiles.filter((path) => context.featureIdentities.some((identity) =>
-      artifactMatchesFeatureIdentity(path, identity, prdIdentity),
-    ));
+    const matches = prdFiles.filter((path) =>
+      context.featureIdentities.some((identity) => artifactMatchesFeatureIdentity(path, identity, prdIdentity)),
+    );
     return matches.map((path) => relative(projectRoot, path).replaceAll('\\', '/'));
   };
   const slug = context.activePlanPath
@@ -1107,12 +1031,7 @@ export async function resolveFeaturePrdPaths(
         ? slugify(context.featureDesc)
         : undefined;
   if (!slug) return (await legacy()).map((path) => join(projectRoot, path));
-  const resolution = await resolveFeatureArtifact(
-    worktreeManifestSource(projectRoot),
-    slug,
-    'prd',
-    legacy,
-  );
+  const resolution = await resolveFeatureArtifact(worktreeManifestSource(projectRoot), slug, 'prd', legacy);
   const missing = new Set(resolution.origin === 'manifest' ? resolution.missing : []);
   return resolution.paths.filter((path) => !missing.has(path)).map((path) => join(projectRoot, path));
 }
@@ -1121,10 +1040,7 @@ export async function resolveFeaturePrdPaths(
  * True if the step has at least one artifact on disk. True for steps that
  * produce no artifacts (nothing to verify).
  */
-export async function stepHasArtifacts(
-  dir: string,
-  step: StepName,
-): Promise<boolean> {
+export async function stepHasArtifacts(dir: string, step: StepName): Promise<boolean> {
   const patterns = STEP_ARTIFACT_GLOBS[step];
   if (!patterns || patterns.length === 0) return true;
   const files = await findArtifactFiles(dir, step);
@@ -1194,9 +1110,7 @@ async function sweptArtifactStillValid(
         marker.headSha === undefined &&
         (marker.failRows === undefined || marker.failRows.length === 0);
       if (!cleanPass) return false;
-      return (
-        (await gateVerdictStillValid(ctx, 'manual_test', marker.codeStamp)) === 'preserve'
-      );
+      return (await gateVerdictStillValid(ctx, 'manual_test', marker.codeStamp)) === 'preserve';
     }
     if (step === 'prd_audit') {
       const stored = await readPrdAuditVerdict(dir);
@@ -1208,11 +1122,7 @@ async function sweptArtifactStillValid(
     if (step === 'architecture_review_as_built') {
       const stored = await readAsBuiltVerdict(dir);
       if (stored.kind !== 'present' || stored.value.codeStamp === null) return false;
-      const validity = await gateVerdictStillValid(
-        ctx,
-        'architecture_review_as_built',
-        stored.value.codeStamp,
-      );
+      const validity = await gateVerdictStillValid(ctx, 'architecture_review_as_built', stored.value.codeStamp);
       if (validity !== 'preserve') return false;
       return asBuiltOutcome(stored.value.verdict) === 'approved';
     }
@@ -1262,18 +1172,25 @@ export async function sweepStaleReviewArtifacts(
   const artifacts = await findArtifactFiles(dir, step);
   if (step === 'prd_audit') {
     const reportPath = join(dir, PRD_AUDIT_REPORT_PATH);
-    if (await access(reportPath).then(() => true, () => false)) artifacts.push(reportPath);
+    if (
+      await access(reportPath).then(
+        () => true,
+        () => false,
+      )
+    )
+      artifacts.push(reportPath);
   }
   for (const f of new Set(artifacts)) {
     if (await fileIsFreshSinceSession(f, sessionStartedAt)) continue; // fresh → keep
     if (await sweptArtifactStillValid(dir, step, config, expectedRunId)) continue; // still code-valid → spare
     // The as-built report is a derived view of the typed verdict. Never leave
     // either half of that authority/view pair behind after a stale sweep.
-    const targets = step === 'architecture_review_as_built'
-      ? [f, join(dir, AS_BUILT_REPORT_PATH)]
-      : step === 'prd_audit'
-        ? [f, join(dir, PRD_AUDIT_VERDICT_PATH), join(dir, PRD_AUDIT_REPORT_PATH)]
-        : [f];
+    const targets =
+      step === 'architecture_review_as_built'
+        ? [f, join(dir, AS_BUILT_REPORT_PATH)]
+        : step === 'prd_audit'
+          ? [f, join(dir, PRD_AUDIT_VERDICT_PATH), join(dir, PRD_AUDIT_REPORT_PATH)]
+          : [f];
     for (const target of targets) {
       try {
         await rm(target);
@@ -1358,12 +1275,12 @@ async function verdictFreshnessFor(
   outcome: VerdictFreshnessOutcome,
 ): Promise<NonNullable<CompletionResult['verdictFreshness']>> {
   const classification: VerdictFreshnessClassification =
-    outcome === 'stale_invalidated'
-      ? { outcome, fresh: false }
-      : { outcome, fresh: true };
+    outcome === 'stale_invalidated' ? { outcome, fresh: false } : { outcome, fresh: true };
   return {
     artifact,
-    mtimeMs: await stat(artifact).then((s) => s.mtimeMs).catch(() => undefined),
+    mtimeMs: await stat(artifact)
+      .then((s) => s.mtimeMs)
+      .catch(() => undefined),
     floorMs: verdictFreshnessFloor(ctx),
     floorSource: ctx.attemptStartedAt !== undefined ? 'attempt' : 'session',
     ...classification,
@@ -1438,6 +1355,12 @@ export interface CompletionContext {
    * unverified Done-when closes. Task 9 persists and supplies this flag.
    */
   unverifiedDoneWhenNudgeSpent?: boolean;
+  /**
+   * BUILD's configured `test_suite.pre_check` probe (adr-2026-08-01 D11):
+   * resolves to the completion miss, or `null` when it passes or is unset.
+   * Absent → the floor is skipped.
+   */
+  buildPreCheck?: () => Promise<string | null>;
   /**
    * Completion is being checked only to decide whether an existing verdict can
    * be preserved before dispatch. Predicates must not update evidence in this
@@ -1537,10 +1460,7 @@ export interface CompletionContext {
    * If the injectable is absent, repair is skipped (backward compatible).
    * If repair throws, a warning is logged and the gate proceeds (warn-only).
    */
-  repairFinishPr?: (
-    prUrl: string,
-    opts?: { mode?: 'capture-only' | 'full' },
-  ) => Promise<void>;
+  repairFinishPr?: (prUrl: string, opts?: { mode?: 'capture-only' | 'full' }) => Promise<void>;
   /**
    * Process-free current-PASS inspection for the native test_suite gate.
    * Conductor injects its shared verifier; standalone completion checks use a
@@ -1594,9 +1514,7 @@ export async function uncommittedPathsOrNull(ctx: CompletionContext): Promise<st
   }
 }
 
-async function dirtyWorktreeCompletionOrNull(
-  ctx: CompletionContext,
-): Promise<CompletionResult | null> {
+async function dirtyWorktreeCompletionOrNull(ctx: CompletionContext): Promise<CompletionResult | null> {
   const uncommittedPaths = await uncommittedPathsOrNull(ctx);
   if (!uncommittedPaths) return null;
 
@@ -1690,8 +1608,7 @@ async function hasFreshFailEvidenceAtHead(
   }
   if (!marker || typeof marker.headSha !== 'string') return false;
   const fresh =
-    sessionStartedAt === undefined ||
-    (typeof marker.observedAt === 'number' && marker.observedAt >= sessionStartedAt);
+    sessionStartedAt === undefined || (typeof marker.observedAt === 'number' && marker.observedAt >= sessionStartedAt);
   return fresh && marker.headSha === headSha;
 }
 
@@ -1732,9 +1649,7 @@ export async function readManualTestFailRows(dir: string): Promise<string[]> {
   // back to the marker so the manual_test→build kickback path retains
   // concrete bug evidence rather than seeing a laundered "clean" result.
   try {
-    const marker = JSON.parse(
-      await readFile(join(dir, MANUAL_TEST_FAIL_EVIDENCE), 'utf-8'),
-    ) as { failRows?: unknown };
+    const marker = JSON.parse(await readFile(join(dir, MANUAL_TEST_FAIL_EVIDENCE), 'utf-8')) as { failRows?: unknown };
     if (Array.isArray(marker.failRows)) {
       return marker.failRows.filter((r): r is string => typeof r === 'string');
     }
@@ -1790,9 +1705,7 @@ export function hasManualTestWarnRows(content: string): boolean {
  * mode, no endpoint/UI stories) rather than carrying a PASS/FAIL table.
  */
 export function isSkipAttempt(section: string): boolean {
-  return section
-    .split('\n')
-    .some((line) => line.trim() === MANUAL_TEST_SKIP_SENTINEL);
+  return section.split('\n').some((line) => line.trim() === MANUAL_TEST_SKIP_SENTINEL);
 }
 
 /**
@@ -1821,9 +1734,7 @@ export interface AcceptanceRedPriorChildGreenException {
   attribution: string;
 }
 
-export type AcceptanceRedException =
-  | AcceptanceRedRemediationException
-  | AcceptanceRedPriorChildGreenException;
+export type AcceptanceRedException = AcceptanceRedRemediationException | AcceptanceRedPriorChildGreenException;
 
 export interface AcceptanceSpecsGeneratedEvidence {
   outcome: 'specs-generated';
@@ -1868,9 +1779,7 @@ export type AcceptanceCriterionDisposition =
       layer: string;
     };
 
-export type AcceptanceRedEvidence =
-  | AcceptanceSpecsGeneratedEvidence
-  | AcceptanceDispositionOnlyEvidence;
+export type AcceptanceRedEvidence = AcceptanceSpecsGeneratedEvidence | AcceptanceDispositionOnlyEvidence;
 
 /**
  * Validate a parsed acceptance-specs RED evidence object. RED is only
@@ -1973,8 +1882,7 @@ export function validateAcceptanceRedEvidence(
     };
   }
   if (
-    (!hasRecordedException &&
-      (!Array.isArray(e.failingTests) || e.failingTests.length === 0)) ||
+    (!hasRecordedException && (!Array.isArray(e.failingTests) || e.failingTests.length === 0)) ||
     (Array.isArray(e.failingTests) &&
       e.failingTests.some(
         (test) =>
@@ -2035,8 +1943,10 @@ function validateDispositionOnlyEvidence(
     const criterion = disposition.criterion;
     const citation = disposition.citation;
     if (
-      typeof criterion !== 'string' || criterion.trim() === '' ||
-      typeof citation !== 'string' || !isVerifiableCitation(citation) ||
+      typeof criterion !== 'string' ||
+      criterion.trim() === '' ||
+      typeof citation !== 'string' ||
+      !isVerifiableCitation(citation) ||
       criteria.has(criterion)
     ) {
       return invalidDispositionRecord();
@@ -2049,8 +1959,10 @@ function validateDispositionOnlyEvidence(
     if (
       disposition.disposition !== 'planned-lower-layer-test' ||
       !hasOnlyKeys(disposition, ['criterion', 'disposition', 'citation', 'owningTask', 'layer']) ||
-      typeof disposition.owningTask !== 'string' || disposition.owningTask.trim() === '' ||
-      typeof disposition.layer !== 'string' || disposition.layer.trim() === ''
+      typeof disposition.owningTask !== 'string' ||
+      disposition.owningTask.trim() === '' ||
+      typeof disposition.layer !== 'string' ||
+      disposition.layer.trim() === ''
     ) {
       return invalidDispositionRecord();
     }
@@ -2102,8 +2014,8 @@ async function coherenceArtifactHasCriterionRows(dir: string, ctx: CompletionCon
       'coherence',
       async () => [`.docs/coherence/${stem}.md`],
     );
-    const coherenceRepoPath = coherence.paths.find((path) =>
-      coherence.origin === 'legacy' || !coherence.missing.includes(path),
+    const coherenceRepoPath = coherence.paths.find(
+      (path) => coherence.origin === 'legacy' || !coherence.missing.includes(path),
     );
     if (coherenceRepoPath === undefined) return false;
     const coherencePath = join(dir, coherenceRepoPath);
@@ -2114,7 +2026,6 @@ async function coherenceArtifactHasCriterionRows(dir: string, ctx: CompletionCon
     return false;
   }
 }
-
 
 /**
  * Ground disposition-only evidence in the feature's authoritative artifacts
@@ -2159,16 +2070,17 @@ async function groundDispositionOnlyEvidence(
   const allAuthoritativeCriteria = extractAuthoritativeStoryCriteria(storiesText);
   let authoritativeCriteria = allAuthoritativeCriteria;
   if (ctx.activeChild !== undefined) {
-    const topology = ctx.featureDesc === undefined
-      ? undefined
-      : await loadSliceTopology(dir, ctx.featureDesc);
+    const topology = ctx.featureDesc === undefined ? undefined : await loadSliceTopology(dir, ctx.featureDesc);
     if (topology?.kind !== 'sliced') {
       return dispositionGroundingRefusal(
         `disposition-only evidence cannot be validated for child ${ctx.activeChild}: sealed-plan story ownership is unavailable`,
       );
     }
-    const ownedStories = new Set(Object.entries(topology.storyOwnership)
-      .flatMap(([storyId, position]) => position === ctx.activeChild ? [storyId] : []));
+    const ownedStories = new Set(
+      Object.entries(topology.storyOwnership).flatMap(([storyId, position]) =>
+        position === ctx.activeChild ? [storyId] : [],
+      ),
+    );
     authoritativeCriteria = allAuthoritativeCriteria.filter((criterion) =>
       [...ownedStories].some((storyId) => criterion.startsWith(`Story ${storyId} `)),
     );
@@ -2179,11 +2091,10 @@ async function groundDispositionOnlyEvidence(
   );
   const recordedSet = new Set(recordedCriteria);
   const allAuthoritativeSet = new Set(allAuthoritativeCriteria);
-  const foreign = ctx.activeChild === undefined
-    ? []
-    : recordedCriteria.filter((criterion) =>
-      allAuthoritativeSet.has(criterion) && !authoritativeSet.has(criterion),
-    );
+  const foreign =
+    ctx.activeChild === undefined
+      ? []
+      : recordedCriteria.filter((criterion) => allAuthoritativeSet.has(criterion) && !authoritativeSet.has(criterion));
   const unexpected = recordedCriteria.filter((criterion) => !allAuthoritativeSet.has(criterion));
   const omitted = authoritativeCriteria.filter((criterion) => !recordedSet.has(criterion));
   if (foreign.length > 0 || unexpected.length > 0 || omitted.length > 0) {
@@ -2244,10 +2155,7 @@ export function extractAuthoritativeStoryCriteria(storiesText: string): string[]
   const criteria: string[] = [];
   for (const block of splitStoryBlocks(storiesText)) {
     for (const type of ['happy', 'negative'] as const) {
-      const body = sectionBody(
-        block.text,
-        type === 'happy' ? /happy\s*path/i : /negative\s*paths?/i,
-      );
+      const body = sectionBody(block.text, type === 'happy' ? /happy\s*path/i : /negative\s*paths?/i);
       if (body === null) continue;
       const prefix = `${block.id ? `Story ${block.id} ` : ''}${type}: `;
       for (const item of listItems(body)) {
@@ -2323,7 +2231,7 @@ function hasRecordedAcceptanceRedException(exception: unknown): boolean {
 function priorChildGreenAttribution(exception: unknown): string | undefined {
   if (!hasRecordedAcceptanceRedException(exception)) return undefined;
   const candidate = exception as Record<string, unknown>;
-  return candidate.kind === 'prior-child-green' ? candidate.attribution as string : undefined;
+  return candidate.kind === 'prior-child-green' ? (candidate.attribution as string) : undefined;
 }
 
 async function validatePriorChildGreenAttribution(
@@ -2338,12 +2246,9 @@ async function validatePriorChildGreenAttribution(
       reason: `prior-child-green exception attribution ${JSON.stringify(attribution)} requires an active child and feature slug`,
     };
   }
-  const childBase = await resolveChildBase(
-    dir,
-    slugify(ctx.featureDesc),
-    ctx.activeChild,
-    { ...(ctx.git === undefined ? {} : { git: ctx.git }) },
-  );
+  const childBase = await resolveChildBase(dir, slugify(ctx.featureDesc), ctx.activeChild, {
+    ...(ctx.git === undefined ? {} : { git: ctx.git }),
+  });
   if (childBase.kind === 'none') {
     return {
       done: false,
@@ -2510,9 +2415,7 @@ export function buildReviewFailureDetails(verdict: Pick<BuildReviewVerdict, 'rea
  * but only unresolved findings and infrastructure failures route back to
  * build.
  */
-function effectiveBuildReviewFailureDetails(
-  effective: BuildReviewEffectiveVerdict,
-): string[] {
+function effectiveBuildReviewFailureDetails(effective: BuildReviewEffectiveVerdict): string[] {
   const details: string[] = [];
   if (effective.unresolvedFindingIds.length > 0) {
     details.push(`unresolved findings: ${effective.unresolvedFindingIds.join(', ')}`);
@@ -2536,9 +2439,7 @@ function effectiveBuildReviewFailureDetails(
  * parse as FAIL, never as PASS. Missing-file handling is the completion
  * predicate's job (Task 8), not this validator's.
  */
-export function validateBuildReviewVerdict(
-  ev: unknown,
-):
+export function validateBuildReviewVerdict(ev: unknown):
   | {
       ok: true;
       verdict: 'PASS' | 'FAIL';
@@ -2560,9 +2461,10 @@ export function validateBuildReviewVerdict(
   // derive here. Their current custom membership is resolved by the shared
   // disposition resolver below; insisting on the legacy built-in reducer
   // would make every valid custom FAIL look malformed before it can route.
-  if (e.aggregateVersion !== undefined && (!aggregate || (
-    (aggregate.currentCustomRubrics?.length ?? 0) === 0 && !deriveEffectiveBuildReviewVerdict(e)
-  ))) {
+  if (
+    e.aggregateVersion !== undefined &&
+    (!aggregate || ((aggregate.currentCustomRubrics?.length ?? 0) === 0 && !deriveEffectiveBuildReviewVerdict(e)))
+  ) {
     return { ok: false, reason: `${BUILD_REVIEW_VERDICT} aggregate is incomplete, malformed, or identity-mismatched` };
   }
   if (e.verdict !== 'PASS' && e.verdict !== 'FAIL') {
@@ -2587,9 +2489,11 @@ export function validateBuildReviewVerdict(
   const legacyScalarVerdict = e.aggregateVersion === undefined;
   const rubric = {} as BuildReviewRubric;
   for (const rubricName of BUILD_REVIEW_RUBRIC_NAMES) {
-    if (legacyScalarVerdict &&
+    if (
+      legacyScalarVerdict &&
       (rubricName === 'security' || rubricName === 'implementationQuality') &&
-      rubricSrc[rubricName] === undefined) {
+      rubricSrc[rubricName] === undefined
+    ) {
       rubric[rubricName] = false;
       continue;
     }
@@ -2622,18 +2526,19 @@ export function validateBuildReviewVerdict(
     }
   }
 
-  const failedRubrics = BUILD_REVIEW_RUBRIC_NAMES
-    .filter((name) => rubric[name] === true);
+  const failedRubrics = BUILD_REVIEW_RUBRIC_NAMES.filter((name) => rubric[name] === true);
   if (e.verdict === 'PASS' && failedRubrics.length > 0) {
     return {
       ok: false,
       reason: `${BUILD_REVIEW_VERDICT} "verdict" PASS requires every rubric flag to be false (failed: ${failedRubrics.join(', ')})`,
     };
   }
-  const customFailure = aggregate?.verdict === 'FAIL' && (aggregate.currentCustomRubrics ?? []).some((rubricName) => {
-    const result = aggregate.customResults?.[rubricName]?.result;
-    return result?.kind === 'infrastructure-failure' || (result?.kind === 'judged' && result.findings.length > 0);
-  });
+  const customFailure =
+    aggregate?.verdict === 'FAIL' &&
+    (aggregate.currentCustomRubrics ?? []).some((rubricName) => {
+      const result = aggregate.customResults?.[rubricName]?.result;
+      return result?.kind === 'infrastructure-failure' || (result?.kind === 'judged' && result.findings.length > 0);
+    });
   if (e.verdict === 'FAIL' && failedRubrics.length === 0 && !customFailure) {
     return {
       ok: false,
@@ -2642,10 +2547,12 @@ export function validateBuildReviewVerdict(
   }
   if (findings !== undefined) {
     for (const rubricName of failedRubrics) {
-      const hasScopeIncompleteFault = Array.isArray(e.scopeIncomplete) && e.scopeIncomplete.some(
-        (fault) => typeof fault === 'object' && fault !== null &&
-          (fault as Record<string, unknown>).rubric === rubricName,
-      );
+      const hasScopeIncompleteFault =
+        Array.isArray(e.scopeIncomplete) &&
+        e.scopeIncomplete.some(
+          (fault) =>
+            typeof fault === 'object' && fault !== null && (fault as Record<string, unknown>).rubric === rubricName,
+        );
       if ((findings[rubricName]?.length ?? 0) === 0 && !hasScopeIncompleteFault) {
         return {
           ok: false,
@@ -2684,9 +2591,7 @@ export function validateBuildReviewVerdict(
  * rubric booleans. Canonical legacy artifacts remain accepted so in-flight
  * providers and redispatches retain their existing fail-closed behavior.
  */
-export function canonicalizeBuildReviewGraderVerdict(
-  ev: unknown,
-): ReturnType<typeof validateBuildReviewVerdict> {
+export function canonicalizeBuildReviewGraderVerdict(ev: unknown): ReturnType<typeof validateBuildReviewVerdict> {
   if (typeof ev !== 'object' || ev === null || Array.isArray(ev)) {
     return validateBuildReviewVerdict(ev);
   }
@@ -2808,8 +2713,7 @@ export const PRD_AUDIT_CODE_STAMP = '.pipeline/prd-audit-code-stamp.json';
  * Sidecar path for architecture_review_as_built's code stamp (see
  * `GateCodeStampMarker`).
  */
-export const ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP =
-  '.pipeline/architecture-review-as-built-code-stamp.json';
+export const ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP = '.pipeline/architecture-review-as-built-code-stamp.json';
 
 /** Sidecar path for manual_test's code stamp (see `GateCodeStampMarker`). */
 export const MANUAL_TEST_CODE_STAMP = '.pipeline/manual-test-code-stamp.json';
@@ -2835,7 +2739,7 @@ async function readGateCodeStampMarker(path: string): Promise<GateCodeStampMarke
   try {
     const parsed: unknown = JSON.parse(await readFile(path, 'utf-8'));
     return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as GateCodeStampMarker
+      ? (parsed as GateCodeStampMarker)
       : {};
   } catch {
     return {};
@@ -2843,11 +2747,7 @@ async function readGateCodeStampMarker(path: string): Promise<GateCodeStampMarke
 }
 
 /** Records the engine-owned identity of a verdict dispatch at settle. */
-export async function stampGateRunIdentity(
-  dir: string,
-  step: StepName,
-  runId: string | undefined,
-): Promise<void> {
+export async function stampGateRunIdentity(dir: string, step: StepName, runId: string | undefined): Promise<void> {
   const sidecarPath = VERDICT_RUN_ID_SIDECARS[step];
   if (!sidecarPath || !runId) return;
 
@@ -2869,11 +2769,7 @@ export async function stampGateRunIdentity(
  * Writes `{ codeStamp }` to a `GateCodeStampMarker` sidecar at true-completion
  * exit. Best-effort — never throws, never blocks returning `done: true`.
  */
-async function writeGateCodeStamp(
-  dir: string,
-  sidecarPath: string,
-  ctx: CompletionContext,
-): Promise<void> {
+async function writeGateCodeStamp(dir: string, sidecarPath: string, ctx: CompletionContext): Promise<void> {
   const codeStamp = await stampCode(ctx);
   const path = join(dir, sidecarPath);
   const existing = await readGateCodeStampMarker(path);
@@ -2952,19 +2848,15 @@ export async function prdAuditVerdictIdentity(
 ): Promise<PrdAuditVerdictIdentity> {
   let codeStampStillValid = false;
   let codeStampValidity: 'preserve' | 'rerun' | undefined;
-  const attemptMismatch =
-    input.attemptRunId !== undefined && verdict.attemptId !== input.attemptRunId;
-  if (
-    !input.skipCodeValidity &&
-    verdict.codeStamp !== null &&
-    resolveGateCodeValidityConfig(input.config).enabled
-  ) {
+  const attemptMismatch = input.attemptRunId !== undefined && verdict.attemptId !== input.attemptRunId;
+  if (!input.skipCodeValidity && verdict.codeStamp !== null && resolveGateCodeValidityConfig(input.config).enabled) {
     const git = input.git ?? makeGitRunner(dir);
     // A failed validity probe is an uncomputable delta, which ADR D2 scores
     // fail-closed as rerun.  Keep that decision inside the shared reader so a
     // caller cannot accidentally recover the stored PASS after a git failure.
-    codeStampValidity = await gateVerdictStillValid({ projectRoot: dir, git }, 'prd_audit', verdict.codeStamp)
-      .catch(() => 'rerun' as const);
+    codeStampValidity = await gateVerdictStillValid({ projectRoot: dir, git }, 'prd_audit', verdict.codeStamp).catch(
+      () => 'rerun' as const,
+    );
     codeStampStillValid = codeStampValidity === 'preserve';
   }
   const codeStampInvalidated = codeStampValidity === 'rerun';
@@ -3012,7 +2904,8 @@ export async function prdAuditBlockingFindings(
   const typed = prdAuditTypedRouteReport(verdict);
   const classifications = await classifyPrdAuditWideningProjection(dir, typed.relations, typed.report.findings);
   const settled = (id: string, grade: string, relation: IntentRelation | undefined) =>
-    grade === 'OVER_SCOPE' && (relation === 'within' || relation === 'outside-harmless' || classifications.get(id)?.kind === 'accepted');
+    grade === 'OVER_SCOPE' &&
+    (relation === 'within' || relation === 'outside-harmless' || classifications.get(id)?.kind === 'accepted');
   // An unresolved widening names why it still blocks; a missing decision is
   // the operator's to record, so it reads as awaiting rather than a defect.
   const unresolvedReason = (id: string): string | undefined => {
@@ -3026,7 +2919,9 @@ export async function prdAuditBlockingFindings(
   };
   const blocking = [
     ...verdict.judgment.criterionJudgments
-      .filter((finding) => finding.grade !== 'PASS' && !settled(finding.criterionId, finding.grade, finding.intentRelation))
+      .filter(
+        (finding) => finding.grade !== 'PASS' && !settled(finding.criterionId, finding.grade, finding.intentRelation),
+      )
       .map((finding) => ({ id: finding.criterionId, grade: finding.grade })),
     ...verdict.judgment.noOwnerObservations
       .filter((finding) => !settled(finding.presentationOrdinal, finding.grade, finding.intentRelation))
@@ -3034,8 +2929,8 @@ export async function prdAuditBlockingFindings(
   ];
   return {
     labels: blocking.map(({ id, grade }) => label(id, grade)),
-    awaitingDecisionOnly: blocking.length > 0
-      && blocking.every(({ id }) => unresolvedReason(id) === 'awaiting-decision'),
+    awaitingDecisionOnly:
+      blocking.length > 0 && blocking.every(({ id }) => unresolvedReason(id) === 'awaiting-decision'),
   };
 }
 
@@ -3049,17 +2944,11 @@ export function prdAuditBlockingReason(blocking: { labels: readonly string[]; aw
 }
 // /ai-conductor:session-command-context
 
-async function writeArchitectureReviewAsBuiltCodeStamp(
-  dir: string,
-  ctx: CompletionContext,
-): Promise<void> {
+async function writeArchitectureReviewAsBuiltCodeStamp(dir: string, ctx: CompletionContext): Promise<void> {
   await writeGateCodeStamp(dir, ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP, ctx);
 }
 
-function unverifiedDoneWhenNudgeCompletion(
-  status: unknown,
-  ctx: CompletionContext,
-): CompletionResult | undefined {
+function unverifiedDoneWhenNudgeCompletion(status: unknown, ctx: CompletionContext): CompletionResult | undefined {
   if (ctx.unverifiedDoneWhenNudgeSpent) return undefined;
   const checks = collectUnverifiedDoneWhenChecks(status);
   if (checks.length === 0) return undefined;
@@ -3086,12 +2975,15 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     const artifact = parsePlanReviewArtifact(text);
     if ('kind' in artifact) return { done: false, reason: `plan review artifact is ${artifact.kind}` };
     const settled = new Set(artifact.dispositions.map(({ findingId }) => findingId));
-    const unresolved = artifact.findings.filter((finding) =>
-      finding.severity === 'blocking' && !settled.has(finding.id),
+    const unresolved = artifact.findings.filter(
+      (finding) => finding.severity === 'blocking' && !settled.has(finding.id),
     );
     return unresolved.length === 0
       ? { done: true }
-      : { done: false, reason: `plan review has unresolved blocking finding(s): ${unresolved.map(({ id }) => id).join(', ')}` };
+      : {
+          done: false,
+          reason: `plan review has unresolved blocking finding(s): ${unresolved.map(({ id }) => id).join(', ')}`,
+        };
   },
   // Build is "done" only when (a) no halt marker is present and (b) every
   // task in .pipeline/task-status.json is completed or skipped. The halt-
@@ -3144,9 +3036,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
             : { childBase: { slug: ctx.featureDesc, child: ctx.activeChild } }),
         });
       } catch (err) {
-        console.error(
-          `[build] seedTaskStatus failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        console.error(`[build] seedTaskStatus failed: ${err instanceof Error ? err.message : String(err)}`);
         return {
           done: false,
           reason: `${err instanceof TaskReopenError ? 'task reopen failed' : 'failed to seed task-status from plan'}: ${err instanceof Error ? err.message : 'unknown error'}`,
@@ -3298,9 +3188,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       if (unresolved.length > 0) {
         const { parsePlanTasks } = await import('./autoheal.js');
         const planTasks = parsePlanTasks(planText!);
-        const statusNames = new Map(
-          statusRows.flatMap((task) => task.id && task.name ? [[task.id, task.name]] : []),
-        );
+        const statusNames = new Map(statusRows.flatMap((task) => (task.id && task.name ? [[task.id, task.name]] : [])));
         const ids = unresolved.join(', ');
         const titles = unresolved
           .map((id) => {
@@ -3313,7 +3201,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           .find((reason): reason is string => Boolean(reason));
         return {
           done: false,
-          reason: `${unresolved.length}/${scopedTaskIds.length} tasks pending/not completed: ${ids} — ${titles}` +
+          reason:
+            `${unresolved.length}/${scopedTaskIds.length} tasks pending/not completed: ${ids} — ${titles}` +
             (repairReason ? `; ${repairReason}` : ''),
         };
       }
@@ -3322,6 +3211,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       if (dirtyWorktree) return dirtyWorktree;
       const unverifiedNudge = unverifiedDoneWhenNudgeCompletion(status, ctx);
       if (unverifiedNudge) return unverifiedNudge;
+      const preCheckMiss = await ctx.buildPreCheck?.();
+      if (preCheckMiss) return { done: false, reason: preCheckMiss };
       return { done: true };
     }
 
@@ -3350,7 +3241,10 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     }
     const incomplete = tasks.filter((t) => t.status !== 'completed' && t.status !== 'skipped');
     if (incomplete.length > 0) {
-      const names = incomplete.slice(0, 3).map((t) => t.id ?? '?').join(', ');
+      const names = incomplete
+        .slice(0, 3)
+        .map((t) => t.id ?? '?')
+        .join(', ');
       const more = incomplete.length > 3 ? ` (+${incomplete.length - 3} more)` : '';
       return {
         done: false,
@@ -3372,16 +3266,16 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     if (ctx.routedVerifyGreen !== undefined) {
       const expected = ctx.routedVerifyGreen;
       try {
-        const recorded = JSON.parse(await readFile(
-          pipelinePathFor(dir, 'acceptance-verify-green.json', expected.host),
-          'utf-8',
-        )) as Record<string, unknown>;
+        const recorded = JSON.parse(
+          await readFile(pipelinePathFor(dir, 'acceptance-verify-green.json', expected.host), 'utf-8'),
+        ) as Record<string, unknown>;
         if (
           recorded.roundId === expected.roundId &&
           recorded.host === expected.host &&
           recorded.headSha === expected.headSha &&
           recorded.done === true
-        ) return { done: true, viaException: false };
+        )
+          return { done: true, viaException: false };
       } catch {
         // A missing/stale record is an ordinary failed routed verification.
       }
@@ -3399,11 +3293,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         return { done: true, acceptanceOutcome: 'no-owned-criteria' };
       }
     }
-    const files = await findArtifactFiles(
-      dir,
-      'acceptance_specs',
-      extraArtifactGlobs('acceptance_specs', ctx.config),
-    );
+    const files = await findArtifactFiles(dir, 'acceptance_specs', extraArtifactGlobs('acceptance_specs', ctx.config));
     const evidencePath = pipelinePathFor(dir, basename(ACCEPTANCE_SPECS_RED_EVIDENCE), ctx.activeChild);
     let raw: string;
     try {
@@ -3430,9 +3320,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       return { done: false, reason: verdict.reason, acceptanceRedRefusalClass: verdict.class };
     }
     const priorChildGreen = priorChildGreenAttribution(
-      typeof parsed === 'object' && parsed !== null
-        ? (parsed as Record<string, unknown>).exception
-        : undefined,
+      typeof parsed === 'object' && parsed !== null ? (parsed as Record<string, unknown>).exception : undefined,
     );
     if (priorChildGreen !== undefined) {
       const attributionRefusal = await validatePriorChildGreenAttribution(dir, ctx, priorChildGreen);
@@ -3459,12 +3347,9 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
             reason: `disposition-only acceptance evidence cannot resolve child ${ctx.activeChild}'s base without the feature slug`,
           };
         }
-        const childBase = await resolveChildBase(
-          dir,
-          slugify(ctx.featureDesc),
-          ctx.activeChild,
-          { ...(ctx.git === undefined ? {} : { git: ctx.git }) },
-        );
+        const childBase = await resolveChildBase(dir, slugify(ctx.featureDesc), ctx.activeChild, {
+          ...(ctx.git === undefined ? {} : { git: ctx.git }),
+        });
         if (childBase.kind === 'parent-missing') {
           return {
             done: false,
@@ -3499,7 +3384,10 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
             };
           }
           childChangedPaths = new Set(
-            changed.stdout.split(/\r?\n/).map((path) => path.trim()).filter(Boolean),
+            changed.stdout
+              .split(/\r?\n/)
+              .map((path) => path.trim())
+              .filter(Boolean),
           );
         }
       }
@@ -3515,12 +3403,13 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
             const repoPath = relative(dir, file).replaceAll('\\', '/');
             return (
               changedPaths.has(repoPath) ||
-              (childChangedPaths === undefined && featureIdentities.some((identity) =>
-                artifactMatchesFeatureIdentity(acceptanceSpecStem(file), identity, {
-                  strategy: 'normalized-stem',
-                  stripDatePrefix: true,
-                }),
-              ))
+              (childChangedPaths === undefined &&
+                featureIdentities.some((identity) =>
+                  artifactMatchesFeatureIdentity(acceptanceSpecStem(file), identity, {
+                    strategy: 'normalized-stem',
+                    stripDatePrefix: true,
+                  }),
+                ))
             );
           })
         : files;
@@ -3552,8 +3441,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     if (files.length === 0) {
       return {
         done: false,
-        reason:
-          'no acceptance spec files present — specs-generated evidence requires failing specs',
+        reason: 'no acceptance spec files present — specs-generated evidence requires failing specs',
       };
     }
     return {
@@ -3589,10 +3477,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     // could bypass the guard below. Missing marker, parse failure, no
     // codeStamp, or any FAIL/whitewash residue all fall through unchanged
     // to the existing logic (invariant C2/C3).
-    if (
-      runIdentity.state !== 'stale-run-identity' &&
-      resolveGateCodeValidityConfig(ctx.config).enabled
-    ) {
+    if (runIdentity.state !== 'stale-run-identity' && resolveGateCodeValidityConfig(ctx.config).enabled) {
       try {
         const raw = await readFile(markerPath, 'utf-8');
         const marker = JSON.parse(raw) as ManualTestFailEvidence;
@@ -3622,7 +3507,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     } catch {
       return {
         done: false,
-        reason: '.pipeline/manual-test-results.md is missing — the manual-test skill must record per-story PASS/WARN/FAIL results before exiting',
+        reason:
+          '.pipeline/manual-test-results.md is missing — the manual-test skill must record per-story PASS/WARN/FAIL results before exiting',
       };
     }
     const headSha = ctx.getHeadSha ? await ctx.getHeadSha().catch(() => null) : null;
@@ -3671,13 +3557,11 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     // sha means the gate is still blocked; fall through to the whitewash-guard
     // done:false path below instead of returning done:true here.
     if (failRows.length === 0 && isSkipAttempt(region)) {
-      if (
-        runIdentity.state !== 'match' &&
-        !(await fileIsFreshSinceSession(file, ctx.sessionStartedAt))
-      ) {
+      if (runIdentity.state !== 'match' && !(await fileIsFreshSinceSession(file, ctx.sessionStartedAt))) {
         return {
           done: false,
-          reason: '.pipeline/manual-test-results.md exists but is stale (mtime predates this conductor session); manual-test must re-run for the current feature',
+          reason:
+            '.pipeline/manual-test-results.md exists but is stale (mtime predates this conductor session); manual-test must re-run for the current feature',
         };
       }
       const laundered = headSha ? await hasFreshFailEvidenceAtHead(markerPath, headSha, ctx.sessionStartedAt) : false;
@@ -3694,11 +3578,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       if (headSha && !ctx.preserveProbe) {
         await writeFile(
           markerPath,
-          JSON.stringify(
-            { observedAt: Date.now(), headSha, failRows: failRows.slice(0, 20) },
-            null,
-            2,
-          ),
+          JSON.stringify({ observedAt: Date.now(), headSha, failRows: failRows.slice(0, 20) }, null, 2),
           'utf-8',
         ).catch(() => {
           /* best-effort evidence — the FAIL verdict below stands regardless */
@@ -3706,16 +3586,15 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       }
       return {
         done: false,
-        reason: '.pipeline/manual-test-results.md contains FAIL rows (latest attempt) — fix the bugs (commits required) and re-run manual-test',
+        reason:
+          '.pipeline/manual-test-results.md contains FAIL rows (latest attempt) — fix the bugs (commits required) and re-run manual-test',
       };
     }
-    if (
-      runIdentity.state !== 'match' &&
-      !(await fileIsFreshSinceSession(file, ctx.sessionStartedAt))
-    ) {
+    if (runIdentity.state !== 'match' && !(await fileIsFreshSinceSession(file, ctx.sessionStartedAt))) {
       return {
         done: false,
-        reason: '.pipeline/manual-test-results.md exists but is stale (mtime predates this conductor session); manual-test must re-run for the current feature',
+        reason:
+          '.pipeline/manual-test-results.md exists but is stale (mtime predates this conductor session); manual-test must re-run for the current feature',
       };
     }
     // Whitewash guard (#367): a FAIL was recorded this session and the results
@@ -3764,11 +3643,9 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       } catch {
         existing = {};
       }
-      await writeFile(
-        markerPath,
-        JSON.stringify({ ...existing, codeStamp: headSha }, null, 2),
-        'utf-8',
-      ).catch(() => {});
+      await writeFile(markerPath, JSON.stringify({ ...existing, codeStamp: headSha }, null, 2), 'utf-8').catch(
+        () => {},
+      );
     }
     return { done: true };
   },
@@ -3834,7 +3711,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         return {
           done: false,
           routeClass: 'absent',
-          reason: 'prd-audit verdict was not rewritten by this judging session (mtime predates the review dispatch) — scoring \'no fresh verdict\'; a prior session\'s verdict is never reused',
+          reason:
+            "prd-audit verdict was not rewritten by this judging session (mtime predates the review dispatch) — scoring 'no fresh verdict'; a prior session's verdict is never reused",
           verdictFreshness: await verdictFreshnessFor(artifact, ctx, 'stale_invalidated'),
         };
       }
@@ -3847,7 +3725,6 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         identity.codeStampStillValid ? 'preserved_surface_miss' : 'rewritten',
       ),
     };
-
   },
 
   // As-built architecture gate is FAIL-CLOSED: it passes only when a fresh
@@ -3884,11 +3761,14 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     if (stored.value.codeStamp !== null) {
       const git = ctx.git ?? makeGitRunner(dir);
       const validity = await gateVerdictStillValid(
-        { projectRoot: dir, git }, 'architecture_review_as_built', stored.value.codeStamp,
+        { projectRoot: dir, git },
+        'architecture_review_as_built',
+        stored.value.codeStamp,
       );
       if (validity !== 'preserve') {
         return {
-          done: false, routeClass: 'absent',
+          done: false,
+          routeClass: 'absent',
           reason: `${AS_BUILT_VERDICT_PATH} prior code stamp ${stored.value.codeStamp} cannot vouch for current run identity ${ctx.attemptRunId ?? 'unresolved'} as-built inputs`,
         };
       }
@@ -3921,17 +3801,23 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     }
     if (outcome === 'plan-gap-undelivered') {
       const verdict = stored.value.verdict;
-      return { done: false, routeClass: 'named-route', reason: `as-built review found PLAN_GAP and records outcome undelivered — ${verdict.verdict === 'PLAN_GAP' ? verdict.affectedOutcome : 'unknown outcome'}` };
+      return {
+        done: false,
+        routeClass: 'named-route',
+        reason: `as-built review found PLAN_GAP and records outcome undelivered — ${verdict.verdict === 'PLAN_GAP' ? verdict.affectedOutcome : 'unknown outcome'}`,
+      };
     }
     if (outcome === 'blocked-design') {
       const verdict = stored.value.verdict;
       return {
-        done: false, routeClass: 'named-route',
+        done: false,
+        routeClass: 'named-route',
         reason: `as-built review verdict is BLOCKED and needs a human decision — Blocking findings: ${verdict.verdict === 'BLOCKED' ? asBuiltFindingDetail(verdict.findings) : 'unknown finding'}`,
       };
     }
     return {
-      done: false, routeClass: 'named-route',
+      done: false,
+      routeClass: 'named-route',
       reason: 'as-built review verdict is BLOCKED and every blocking finding is REMEDIABLE — a repair, not a decision',
     };
   },
@@ -4020,16 +3906,16 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     if (!(await fileIsFreshSinceSession(path, cmpFloor))) {
       // fileIsFreshSinceSession returns false both for "missing" and "stale";
       // distinguish them so the reason message is accurate.
-      const mtimeMs = await stat(path).then((s) => s.mtimeMs).catch(() => undefined);
+      const mtimeMs = await stat(path)
+        .then((s) => s.mtimeMs)
+        .catch(() => undefined);
       const exists = mtimeMs !== undefined;
       return {
         done: false,
         reason: exists
           ? "build-review verdict was not rewritten by this judging session (mtime predates the review dispatch) — scoring 'no fresh verdict'; a prior session's verdict is never reused"
           : `no build-review verdict at ${BUILD_REVIEW_VERDICT} — the build_review grader must run and record a PASS/FAIL verdict`,
-        verdictFreshness: exists
-          ? await verdictFreshnessFor(path, ctx, 'stale_invalidated')
-          : undefined,
+        verdictFreshness: exists ? await verdictFreshnessFor(path, ctx, 'stale_invalidated') : undefined,
         routeClass: 'absent',
       };
     }
@@ -4061,9 +3947,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         try {
           const git = ctx.git ?? makeGitRunner(dir);
           const head = await git(['rev-parse', 'HEAD']);
-          const currentLapId = head.exitCode === 0 && head.stdout.trim()
-            ? `lap-${head.stdout.trim()}`
-            : undefined;
+          const currentLapId = head.exitCode === 0 && head.stdout.trim() ? `lap-${head.stdout.trim()}` : undefined;
           if (currentLapId && aggregate.lapId !== currentLapId) {
             return {
               done: false,
@@ -4077,13 +3961,15 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           // aggregate behavior when git is unavailable.
         }
       }
-      const effectiveResolution = await (
-        ctx.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict
-      )(dir, aggregate, {
-        ...buildReviewEffectiveResolverThresholds(ctx.config),
-        child: ctx.activeChild,
-        adjudicationEnabled: resolveBuildReviewConfig(ctx.config ?? {}).adjudication.enabled,
-      });
+      const effectiveResolution = await (ctx.buildReviewEffectiveResolver ?? resolveEffectiveBuildReviewVerdict)(
+        dir,
+        aggregate,
+        {
+          ...buildReviewEffectiveResolverThresholds(ctx.config),
+          child: ctx.activeChild,
+          adjudicationEnabled: resolveBuildReviewConfig(ctx.config ?? {}).adjudication.enabled,
+        },
+      );
       if (!effectiveResolution.ok) {
         return {
           done: false,
@@ -4105,9 +3991,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     }
     if (result.verdict === 'FAIL') {
       const details = buildReviewFailureDetails(result);
-      const reasons = details.length > 0
-        ? details.join('; ')
-        : 'no reasons recorded';
+      const reasons = details.length > 0 ? details.join('; ') : 'no reasons recorded';
       return {
         done: false,
         reason: `build_review FAILed: ${reasons} — fix in build, then the gate re-runs build_review`,
@@ -4123,19 +4007,14 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   test_suite: async (dir, ctx): Promise<CompletionResult> => {
     let inspection: FullSuiteInspectionResult;
     try {
-      inspection = await (
-        ctx.fullSuiteInspect?.() ?? new FullSuiteVerifier({ projectRoot: dir }).inspect()
-      );
+      inspection = await (ctx.fullSuiteInspect?.() ?? new FullSuiteVerifier({ projectRoot: dir }).inspect());
     } catch (error) {
       return {
         done: false,
         reason: `full-suite completion inspection failed: ${error instanceof Error ? error.message : String(error)}`,
       };
     }
-    if (
-      inspection.status === 'CURRENT' ||
-      inspection.status === 'PRESERVED_WITHIN_BUDGET'
-    ) return { done: true };
+    if (inspection.status === 'CURRENT' || inspection.status === 'PRESERVED_WITHIN_BUDGET') return { done: true };
     if (inspection.status === 'STALE') {
       return {
         done: false,
@@ -4256,7 +4135,6 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
 
       const durableEvidence = await verifyDurableShipmentEvidence(dir, ctx, prUrl);
       if (durableEvidence) return durableEvidence;
-
     }
 
     // ---- Phase 2: presentation — only reached once every Phase 1 evidence
@@ -4363,7 +4241,13 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       // completing. Fail-open on any gh error: network unavailability never blocks
       // a ship.
       try {
-        const stdout = await runTrackerUrlRead(ghRunner, dir, 'pull-request', prUrl, ['pr', 'view', prUrl, '--json', 'isDraft']);
+        const stdout = await runTrackerUrlRead(ghRunner, dir, 'pull-request', prUrl, [
+          'pr',
+          'view',
+          prUrl,
+          '--json',
+          'isDraft',
+        ]);
         const parsed = JSON.parse(stdout || '{}') as { isDraft?: unknown };
         const isDraft = Boolean(parsed.isDraft);
         if (isDraft) {
@@ -4503,8 +4387,7 @@ export const GATE_ONLY_PREDICATES: Partial<
       if (covered.has(`${r.id}|${r.type}`)) continue;
       // Fallback: if the plan declares no path-type for this story at all,
       // accept a story-level reference as covering both paths.
-      const hasPathType =
-        covered.has(`${r.id}|happy`) || covered.has(`${r.id}|negative`);
+      const hasPathType = covered.has(`${r.id}|happy`) || covered.has(`${r.id}|negative`);
       if (!hasPathType && covered.has(`${r.id}|*`)) continue;
       gaps.push(`${r.id} ${r.type}`);
     }
@@ -4527,10 +4410,7 @@ export const GATE_ONLY_PREDICATES: Partial<
           'plan has no task dependency tree — add a "## Task Dependency Graph" section or per-task "**Dependencies:**" lines',
       };
     };
-    const presence = await artifactPresenceAtMergeBase(
-      dir,
-      relative(dir, scopedPlan).replaceAll('\\', '/'),
-    );
+    const presence = await artifactPresenceAtMergeBase(dir, relative(dir, scopedPlan).replaceAll('\\', '/'));
     if (presence.kind === 'absent') {
       const violations = validatePlanDependencies(planText);
       if (violations.length > 0) {
@@ -4560,10 +4440,7 @@ export const GATE_ONLY_PREDICATES: Partial<
  */
 export function planHasDependencyTree(planText: string | null | undefined): boolean {
   if (!planText) return false;
-  return (
-    /^##\s+task\s+dependency\s+graph/im.test(planText) ||
-    /\*\*dependencies:\*\*/i.test(planText)
-  );
+  return /^##\s+task\s+dependency\s+graph/im.test(planText) || /\*\*dependencies:\*\*/i.test(planText);
 }
 
 /**
@@ -4595,9 +4472,7 @@ export function isCanonicalAdrFilename(filename: string): boolean {
   const date = new Date(0);
   date.setUTCFullYear(year, month - 1, day);
 
-  return date.getUTCFullYear() === year
-    && date.getUTCMonth() === month - 1
-    && date.getUTCDate() === day;
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
 /**
@@ -4634,10 +4509,7 @@ export const ADR_ASSUMPTION_LEDGER_HEADER =
 
 /** Remove fenced examples before interpreting an ADR's Markdown structure. */
 export function stripFencedCodeBlocks(content: string): string {
-  return content.replace(
-    /^ {0,3}(`{3,}|~{3,})[^\r\n]*(?:\r?\n|\r)[\s\S]*?^ {0,3}\1[^\r\n]*(?:\r?\n|\r|$)/gm,
-    '',
-  );
+  return content.replace(/^ {0,3}(`{3,}|~{3,})[^\r\n]*(?:\r?\n|\r)[\s\S]*?^ {0,3}\1[^\r\n]*(?:\r?\n|\r|$)/gm, '');
 }
 
 export type AdrLedgerDiagnostic = {
@@ -4653,8 +4525,7 @@ export type AdrLedgerDiagnostic = {
 };
 
 export type AdrAssumptionLedgerParseResult =
-  | { kind: 'ok' }
-  | { kind: 'diagnostics'; diagnostics: AdrLedgerDiagnostic[] };
+  { kind: 'ok' } | { kind: 'diagnostics'; diagnostics: AdrLedgerDiagnostic[] };
 
 const ADR_DECISION_HEADING_RE = /^\s{0,3}##\s+Decision\s*$/i;
 const ADR_SECTION_HEADING_RE = /^\s{0,3}##\s+/;
@@ -4724,7 +4595,10 @@ export function parseAdrAssumptionLedger(content: string): AdrAssumptionLedgerPa
   const diagnostics: AdrLedgerDiagnostic[] = [];
   const entryIds = new Set<string>();
   for (const row of dataRows) {
-    const cells = row.split('|').slice(1, -1).map((cell) => cell.trim());
+    const cells = row
+      .split('|')
+      .slice(1, -1)
+      .map((cell) => cell.trim());
     const [id = '', assumption = '', basis = '', confidence = '', loadBearing = '', impact = '', approval = ''] = cells;
     const entryId = id === '' ? undefined : id;
     const normalizedBasis = basis.toLowerCase();
@@ -4751,9 +4625,9 @@ export function parseAdrAssumptionLedger(content: string): AdrAssumptionLedgerPa
     }
 
     if (
-      normalizedLoadBearing === 'yes'
-      && ['inferred', 'unverified'].includes(normalizedBasis)
-      && !hasValidAdrAssumptionApproval(approval)
+      normalizedLoadBearing === 'yes' &&
+      ['inferred', 'unverified'].includes(normalizedBasis) &&
+      !hasValidAdrAssumptionApproval(approval)
     ) {
       diagnostics.push({
         rule: 'missing-approval',
@@ -4790,9 +4664,7 @@ function hasValidAdrAssumptionApproval(approval: string): boolean {
   const date = new Date(0);
   date.setUTCFullYear(year, month - 1, day);
 
-  return date.getUTCFullYear() === year
-    && date.getUTCMonth() === month - 1
-    && date.getUTCDate() === day;
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
 /**
@@ -4879,9 +4751,7 @@ export function parseStackedDeliverySignoff(content: string | null): 'approved' 
   if (!content) return 'absent';
   const match = content.match(/^\s*(?:\*\*)?Stacked-Delivery(?:\*\*)?\s*:(?:\*\*)?\s*(\S+)\s*$/im);
   if (!match) return 'absent';
-  return match[1].replace(/[.,;:!?]+$/u, '').toLowerCase() === 'approved'
-    ? 'approved'
-    : 'absent';
+  return match[1].replace(/[.,;:!?]+$/u, '').toLowerCase() === 'approved' ? 'approved' : 'absent';
 }
 
 /**
@@ -4945,14 +4815,8 @@ export function parseApplicability(content: string): ParseApplicabilityResult {
     // The ordinary separator includes a space after the dash. A declaration
     // ending in ` —` is the same separator with an empty (or whitespace-only)
     // reason, and must retain the more useful empty-reason diagnostic.
-    const terminalEmDashIndex = body.trimEnd().endsWith(' —')
-      ? body.trimEnd().length - 2
-      : -1;
-    const separatorIndex = emDashIndex >= 0
-      ? emDashIndex
-      : terminalEmDashIndex >= 0
-        ? terminalEmDashIndex
-        : undefined;
+    const terminalEmDashIndex = body.trimEnd().endsWith(' —') ? body.trimEnd().length - 2 : -1;
+    const separatorIndex = emDashIndex >= 0 ? emDashIndex : terminalEmDashIndex >= 0 ? terminalEmDashIndex : undefined;
     const lineNumber = index + 1;
 
     if (separatorIndex === undefined) {
@@ -5021,8 +4885,8 @@ export async function classifyPrdAuditWideningProjection(
   relations: ReadonlyMap<string, IntentRelation>,
   findings: readonly PrdAuditFinding[],
 ): Promise<ReadonlyMap<string, PrdWideningClassification>> {
-  const visible = findings.filter((finding) =>
-    finding.grade === 'OVER_SCOPE' && relations.get(finding.criterion) === 'outside-visible',
+  const visible = findings.filter(
+    (finding) => finding.grade === 'OVER_SCOPE' && relations.get(finding.criterion) === 'outside-visible',
   );
   let decisions: readonly import('./accepted-widenings.js').AcceptedWideningDecision[] = [];
   let cases: readonly import('./remediation-case-store.js').RemediationCasePrdWideningRecord[] = [];
@@ -5056,12 +4920,14 @@ export async function classifyPrdAuditWideningProjection(
     }
   }
 
-  const projected = new Map(classifyPrdWideningProjection({
-    findings,
-    decisions,
-    cases,
-    ...(evidenceFault ? { evidenceFault } : {}),
-  }));
+  const projected = new Map(
+    classifyPrdWideningProjection({
+      findings,
+      decisions,
+      cases,
+      ...(evidenceFault ? { evidenceFault } : {}),
+    }),
+  );
   // Intent relation is raw reviewer classification, not authority. A row the
   // reviewer explicitly marked non-visible stays non-blocking, while every
   // visible row above must have durable freshness evidence.
@@ -5091,7 +4957,12 @@ export function prdAuditTypedRouteReport(value: PersistedPrdAuditVerdict): {
   });
   for (const observation of value.judgment.noOwnerObservations) {
     relations.set(observation.presentationOrdinal, observation.intentRelation);
-    findings.push({ criterion: observation.presentationOrdinal, grade: observation.grade, prdIds: [], evidence: observation.evidence });
+    findings.push({
+      criterion: observation.presentationOrdinal,
+      grade: observation.grade,
+      prdIds: [],
+      evidence: observation.evidence,
+    });
   }
   return { report: { prd: 'none', findings, rejectedRows: [] }, relations };
 }
@@ -5114,43 +4985,65 @@ export async function classifyPrdAuditGaps(
   void featureDesc;
   const current = await readCurrentPrdAuditVerdict(dir, { attemptRunId: expectedRunId, config, git });
   if (current.kind === 'absent') {
-    return { kind: 'invalid-evidence', summary: `missing current typed PRD-audit verdict at ${PRD_AUDIT_VERDICT_PATH}` };
+    return {
+      kind: 'invalid-evidence',
+      summary: `missing current typed PRD-audit verdict at ${PRD_AUDIT_VERDICT_PATH}`,
+    };
   }
   if (current.kind === 'unreadable' || current.kind === 'invalidated') {
     return { kind: 'invalid-evidence', summary: `invalid typed PRD-audit evidence: ${current.reason}` };
   }
   const { value } = current;
   if (!value.complete) {
-    return { kind: 'invalid-evidence', summary: `${PRD_AUDIT_VERDICT_PATH} is incomplete: ${value.diagnostics.join('; ')}` };
+    return {
+      kind: 'invalid-evidence',
+      summary: `${PRD_AUDIT_VERDICT_PATH} is incomplete: ${value.diagnostics.join('; ')}`,
+    };
   }
   const typed = prdAuditTypedRouteReport(value);
   const findings = typed.report.findings;
-    // An OVER_SCOPE criterion the operator already accepted, or one whose
-    // intent relation never made it blocking, is not a gap this routing should
-    // act on. Reading only the fresh rows made an accepted widening re-route
-    // the next lap exactly as it did before the operator decided (ADR D8).
+  // An OVER_SCOPE criterion the operator already accepted, or one whose
+  // intent relation never made it blocking, is not a gap this routing should
+  // act on. Reading only the fresh rows made an accepted widening re-route
+  // the next lap exactly as it did before the operator decided (ADR D8).
   const classifications = await classifyPrdAuditWideningProjection(dir, typed.relations, findings);
   const unresolvedWidenings = findings.filter((finding) => {
-        if (finding.grade !== 'OVER_SCOPE') return false;
-        const classification = classifications.get(finding.criterion);
-        return classification?.kind === 'refused' || classification?.kind === 'unresolved';
-      });
+    if (finding.grade !== 'OVER_SCOPE') return false;
+    const classification = classifications.get(finding.criterion);
+    return classification?.kind === 'refused' || classification?.kind === 'unresolved';
+  });
   if (unresolvedWidenings.length > 0) {
-        const summary = unresolvedWidenings.slice(0, 5).map((finding) => {
-          const classification = classifications.get(finding.criterion)!;
-          return `${finding.criterion} (${classification.kind === 'unresolved' ? classification.reason : 'refused'})`;
-        }).join('; ');
-        return { kind: 'needs-decide', summary: `PRD widening evidence blocks routing: ${summary}` };
+    const summary = unresolvedWidenings
+      .slice(0, 5)
+      .map((finding) => {
+        const classification = classifications.get(finding.criterion)!;
+        return `${finding.criterion} (${classification.kind === 'unresolved' ? classification.reason : 'refused'})`;
+      })
+      .join('; ');
+    return { kind: 'needs-decide', summary: `PRD widening evidence blocks routing: ${summary}` };
   }
-  const settled = new Set(findings
-    .filter((finding) => finding.grade === 'OVER_SCOPE' && ['accepted', 'not-blocking'].includes(classifications.get(finding.criterion)?.kind ?? 'unresolved'))
-    .map((finding) => finding.criterion));
+  const settled = new Set(
+    findings
+      .filter(
+        (finding) =>
+          finding.grade === 'OVER_SCOPE' &&
+          ['accepted', 'not-blocking'].includes(classifications.get(finding.criterion)?.kind ?? 'unresolved'),
+      )
+      .map((finding) => finding.criterion),
+  );
   const blocking = findings
     .filter((finding) => finding.grade !== 'PASS' && !settled.has(finding.criterion))
-    .flatMap((finding) => (finding.prdIds.length > 0 ? finding.prdIds : [finding.criterion]).map((fr) => ({
-      fr,
-      gapClass: finding.grade === 'FIXABLE' ? 'impl-gap' as const : finding.grade === 'PLAN_GAP' ? 'plan-gap' as const : 'intended-drift' as const,
-    })));
+    .flatMap((finding) =>
+      (finding.prdIds.length > 0 ? finding.prdIds : [finding.criterion]).map((fr) => ({
+        fr,
+        gapClass:
+          finding.grade === 'FIXABLE'
+            ? ('impl-gap' as const)
+            : finding.grade === 'PLAN_GAP'
+              ? ('plan-gap' as const)
+              : ('intended-drift' as const),
+      })),
+    );
   if (blocking.length === 0) return { kind: 'clean', summary: 'no blocking FRs' };
 
   const summary = blocking
@@ -5234,12 +5127,7 @@ export function classifyRetryDecision(input: {
   const namedRoute = step === 'prd_audit' ? prdAuditNonClean === true : completion.routeClass === 'named-route';
   if (namedRoute) return { decision: 'route', signal: 'named-route' };
 
-  if (
-    attempt >= 2 &&
-    priorReason !== undefined &&
-    priorReason === completion.reason &&
-    inputsUnchanged
-  ) {
+  if (attempt >= 2 && priorReason !== undefined && priorReason === completion.reason && inputsUnchanged) {
     return { decision: 'route', signal: 'identical-repeat' };
   }
 
@@ -5249,12 +5137,7 @@ export function classifyRetryDecision(input: {
 // --- Remediation plan (the /remediate skill's structured output) -------------
 
 /** Steps a remediation gap may be routed back to (must be earlier than prd_audit). */
-export const REMEDIATION_TARGET_STEPS = [
-  'build',
-  'acceptance_specs',
-  'architecture_review',
-  'plan',
-] as const;
+export const REMEDIATION_TARGET_STEPS = ['build', 'acceptance_specs', 'architecture_review', 'plan'] as const;
 export type RemediationTarget = (typeof REMEDIATION_TARGET_STEPS)[number];
 
 /**
@@ -5286,9 +5169,7 @@ export type RemediationDisposition =
   | 'halt';
 
 /** The step a disposition rewinds to. */
-export function remediationDispositionStep(
-  disposition: RemediationDisposition,
-): string {
+export function remediationDispositionStep(disposition: RemediationDisposition): string {
   switch (disposition) {
     case REMEDIATION_PUBLICATION_DISPOSITION:
       return 'finish';
@@ -5303,9 +5184,7 @@ export function remediationDispositionStep(
  * True when this disposition's tasks are appended to the plan file. Only the
  * step-valued targets are; `publication` and `halt` never amend the plan.
  */
-export function remediationDispositionAppendsToPlan(
-  disposition: RemediationDisposition,
-): boolean {
+export function remediationDispositionAppendsToPlan(disposition: RemediationDisposition): boolean {
   return (
     disposition !== REMEDIATION_EXISTING_TASK_DISPOSITION &&
     (REMEDIATION_TARGET_STEPS as readonly string[]).includes(disposition)
@@ -5343,10 +5222,7 @@ export interface RemediationDispositionRejection {
 
 /** True if the block has a Happy/Negative path section containing a G/W/T bullet. */
 function hasPathSection(blockText: string, type: 'happy' | 'negative'): boolean {
-  const body = sectionBody(
-    blockText,
-    type === 'happy' ? /happy\s*path/i : /negative\s*paths?/i,
-  );
+  const body = sectionBody(blockText, type === 'happy' ? /happy\s*path/i : /negative\s*paths?/i);
   if (body === null) return false;
   return /\bgiven\b/i.test(body) && /\bthen\b/i.test(body);
 }
@@ -5405,8 +5281,7 @@ export function collectPlanCoverage(planText: string): Set<string> {
   }
 
   // Coverage Check table rows: `| 1 | happy | ... |` or `| 1 happy | ... |`.
-  const tableRow =
-    /^\|\s*(?:story\s+)?([A-Za-z0-9.\-]+)\s*\|?\s*(happy|negative)\b/gim;
+  const tableRow = /^\|\s*(?:story\s+)?([A-Za-z0-9.\-]+)\s*\|?\s*(happy|negative)\b/gim;
   let tm: RegExpExecArray | null;
   while ((tm = tableRow.exec(planText)) !== null) {
     set.add(`${tm[1]}|*`);
@@ -5444,9 +5319,7 @@ interface TaskEntry {
 function extractTasks(parsed: unknown): TaskEntry[] {
   if (!parsed || typeof parsed !== 'object') return [];
   // Shape 1: { tasks: [...] } or { tasks: {id: {status}, ...} }
-  const container = 'tasks' in (parsed as Record<string, unknown>)
-    ? (parsed as Record<string, unknown>).tasks
-    : parsed;
+  const container = 'tasks' in (parsed as Record<string, unknown>) ? (parsed as Record<string, unknown>).tasks : parsed;
   if (Array.isArray(container)) {
     return container
       .filter((t): t is Record<string, unknown> => typeof t === 'object' && t !== null)
@@ -5665,10 +5538,7 @@ function compileSegmentMatcher(pattern: string): (name: string) => boolean {
   return (name: string): boolean => re.test(name);
 }
 
-async function walkDir(
-  dir: string,
-  match: (name: string) => boolean,
-): Promise<string[]> {
+async function walkDir(dir: string, match: (name: string) => boolean): Promise<string[]> {
   const found: string[] = [];
   let entries;
   try {

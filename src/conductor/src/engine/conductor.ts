@@ -217,6 +217,7 @@ import {
   pipelinePathFor,
   type ChildId,
 } from './child-context.js';
+import { BUILD_PRE_CHECK_FAILED_PREFIX, runBuildPreCheck } from './build-pre-check.js';
 import { activePublicationRecord } from './stack-publication-record.js';
 import { publishedStackRefusal } from './stack-publication.js';
 import {
@@ -773,6 +774,8 @@ export class Conductor {
   private readonly transcriptCaptureDispatches = new Map<string, TranscriptCaptureDispatchIdentity>();
   /** Cursor-selected owner of the current stacked BUILD region. */
   private activeRegionChild: ChildId | undefined;
+  /** HEAD at which BUILD's configured pre-check last passed (process memory only). */
+  private buildPreCheckPassHead: string | undefined;
   /** The cursor's leaf bit travels with child-local suite evidence. */
   private activeRegionIsLeaf: boolean | undefined;
 
@@ -2118,7 +2121,23 @@ export class Conductor {
         return retained ?? this.fullSuiteVerifier.inspect(this.fullSuiteVerifyOptions());
       },
       unverifiedDoneWhenNudgeSpent: await this.unverifiedDoneWhenNudgeSpent(state),
+      buildPreCheck: () => this.buildPreCheckMissReason(),
     };
+  }
+
+  /**
+   * BUILD's configured `test_suite.pre_check` (adr-2026-08-01 D11). A PASS is
+   * held for the HEAD it ran at, so re-evaluating completion at that HEAD does
+   * not re-run it; a failure is never held.
+   */
+  private async buildPreCheckMissReason(): Promise<string | null> {
+    const testSuite = this.config.test_suite;
+    if (testSuite?.pre_check === undefined) return null;
+    const head = await currentCommitSha(this.projectRoot);
+    if (head !== null && head === this.buildPreCheckPassHead) return null;
+    const miss = await runBuildPreCheck(this.projectRoot, testSuite);
+    if (miss === null && head !== null) this.buildPreCheckPassHead = head;
+    return miss;
   }
 
   /**
@@ -15014,11 +15033,17 @@ export class Conductor {
                 // code path) so the run proceeds to `build_review`, and record
                 // which plan task ids were left unresolved so an operator can
                 // still see the gap in `conduct-state.json`.
-                if (
+                const escapeTreeClean =
                   step.name === 'build' &&
                   anyAttemptMovedHead &&
-                  (await uncommittedPathsOrNull(await this.completionCtx(state))) === null
-                ) {
+                  (await uncommittedPathsOrNull(await this.completionCtx(state))) === null;
+                // D11 (both doors): the escape never bypasses the pre-check, and
+                // its miss becomes the reason the exhausted BUILD halts with.
+                const escapePreCheckMiss = escapeTreeClean ? await this.buildPreCheckMissReason() : null;
+                if (escapePreCheckMiss) {
+                  lastError = `Step '${step.name}' completed but completion check failed: ${escapePreCheckMiss}`;
+                }
+                if (escapeTreeClean && escapePreCheckMiss === null) {
                   let routedReason: string | undefined;
                   try {
                     const statusPath = join(this.projectRoot, '.pipeline/task-status.json');
@@ -16682,6 +16707,9 @@ export class Conductor {
                     uncommittedPaths.length > 3 ? ` (+${uncommittedPaths.length - 3} more)` : ''
                   }`
                 : undefined;
+              // D11: a BUILD whose last miss was its pre-check halts naming it.
+              const buildPreCheckHaltReason =
+                step.name === 'build' && lastError.includes(BUILD_PRE_CHECK_FAILED_PREFIX) ? lastError : undefined;
               // #569 Task 5: a no_task_progress build stall is a more specific
               // and actionable diagnosis than a generic unchanged-input note,
               // so it takes precedence over `unchangedInputNote` (but never
@@ -16697,17 +16725,19 @@ export class Conductor {
                         `Re-run '${unretryableInputFailure.retryAfterStep}' before retrying '${unretryableInputFailure.failingStep}'.`
                       : uncommittedPathsReason
                         ? uncommittedPathsReason
-                        : acceptanceRedHealFailureReason
-                          ? acceptanceRedHealFailureReason
-                          : lastBuildStallReason
-                            ? lastBuildStallReason
-                            : graderDispatchFailureReason
-                              ? `${graderDispatchFailureReason} (retries exhausted with backoff — this is an infrastructure failure, not a code-quality rejection; the build's completed work is intact)`
-                              : unchangedInputNote
-                                ? `step '${step.name}' failed in auto mode: ${unchangedInputNote}`
-                                : buildReviewSchemaFailureReason
-                                  ? buildReviewSchemaFailureReason
-                                  : `step '${step.name}' failed in auto mode (retries exhausted)`;
+                        : buildPreCheckHaltReason
+                          ? buildPreCheckHaltReason
+                          : acceptanceRedHealFailureReason
+                            ? acceptanceRedHealFailureReason
+                            : lastBuildStallReason
+                              ? lastBuildStallReason
+                              : graderDispatchFailureReason
+                                ? `${graderDispatchFailureReason} (retries exhausted with backoff — this is an infrastructure failure, not a code-quality rejection; the build's completed work is intact)`
+                                : unchangedInputNote
+                                  ? `step '${step.name}' failed in auto mode: ${unchangedInputNote}`
+                                  : buildReviewSchemaFailureReason
+                                    ? buildReviewSchemaFailureReason
+                                    : `step '${step.name}' failed in auto mode (retries exhausted)`;
               const terminalReason =
                 finishRemediationPlannerFault === undefined
                   ? reason
