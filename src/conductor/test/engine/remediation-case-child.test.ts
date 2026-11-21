@@ -304,4 +304,28 @@ describe('child-scoped build-review remediation cases', () => {
       }),
     ]);
   });
+
+  // Covers: task:13
+  it('keeps a flat order when any child case store is unreadable', async () => {
+    const root = await projectRoot();
+    const child3 = parseChildId(3)!;
+    const child4 = parseChildId(4)!;
+    const child5 = parseChildId(5)!;
+    await new RemediationCaseStore(root, FEATURE, { child: child4 }).mutate(async () => ({
+      value: undefined,
+      nextState: appliedState('child-4-case'),
+    }));
+    await publishBuildReviewWorkOrder(root, workOrder('child-4-case', 'Repair child 4 after recovery'));
+    await new RemediationCaseStore(root, FEATURE, { child: child5 }).mutate(async () => ({
+      value: undefined,
+      nextState: appliedState('child-5-case'),
+    }));
+    await writeFile(remediationCaseStorePath(root, child5), '{malformed');
+
+    await expect(retryContext(root, child3).durableBuildReviewRetryContext(undefined)).resolves.toEqual({
+      kind: 'absent',
+    });
+    await expect(readFile(buildReviewWorkOrderPath(root), 'utf8')).resolves.toContain('Repair child 4 after recovery');
+    await expect(readFile(buildReviewWorkOrderPath(root, child4), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  });
 });

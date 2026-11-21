@@ -11,6 +11,7 @@ import {
 import { parseChildId } from '../../src/engine/child-context.js';
 import { ConductorEventEmitter } from '../../src/engine/conductor-event-emitter.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
+import { AuditTrailWriter } from '../../src/engine/audit-trail.js';
 import type {
   RemediationCaseRecord,
   RemediationCaseStoreReadResult,
@@ -147,7 +148,7 @@ describe('build-stall stale-citation recorder', () => {
   it('persists the citation fields and its first attempt on the active event spine', async () => {
     const { root, events, persister } = await eventSpine();
     try {
-      await expect(recordBuildStallStaleCitation(root, events, resolvedCitation, 2)).resolves.toEqual({
+      await expect(recordBuildStallStaleCitation(root, events, resolvedCitation, child3, 2)).resolves.toEqual({
         kind: 'recorded',
         attempt: 1,
       });
@@ -156,6 +157,7 @@ describe('build-stall stale-citation recorder', () => {
       expect(JSON.parse(lines[0]!)).toMatchObject({
         type: 'build_stall_stale_citation',
         caseId: 'case-resolved',
+        stalledChild: 3,
         ownerChild: 4,
         state: 'resolved',
         resolvedTasks: 2,
@@ -175,7 +177,7 @@ describe('build-stall stale-citation recorder', () => {
       const persister = new EventPersister(join(root, '.pipeline', 'events.jsonl'), events);
       persister.start();
       try {
-        await expect(recordBuildStallStaleCitation(root, events, resolvedCitation, 2)).resolves.toEqual({
+        await expect(recordBuildStallStaleCitation(root, events, resolvedCitation, child3, 2)).resolves.toEqual({
           kind: 'recorded',
           attempt,
         });
@@ -189,14 +191,14 @@ describe('build-stall stale-citation recorder', () => {
   it('restarts at one after task progress or a different case', async () => {
     const { root, events, persister } = await eventSpine();
     try {
-      await recordBuildStallStaleCitation(root, events, resolvedCitation, 2);
-      await recordBuildStallStaleCitation(root, events, resolvedCitation, 2);
-      await expect(recordBuildStallStaleCitation(root, events, resolvedCitation, 3)).resolves.toEqual({
+      await recordBuildStallStaleCitation(root, events, resolvedCitation, child3, 2);
+      await recordBuildStallStaleCitation(root, events, resolvedCitation, child3, 2);
+      await expect(recordBuildStallStaleCitation(root, events, resolvedCitation, child3, 3)).resolves.toEqual({
         kind: 'recorded',
         attempt: 1,
       });
       const otherCitation = { ...resolvedCitation, caseId: 'case-other' } as const;
-      await expect(recordBuildStallStaleCitation(root, events, otherCitation, 3)).resolves.toEqual({
+      await expect(recordBuildStallStaleCitation(root, events, otherCitation, child3, 3)).resolves.toEqual({
         kind: 'recorded',
         attempt: 1,
       });
@@ -217,9 +219,39 @@ describe('build-stall stale-citation recorder', () => {
     });
     persister.start();
     try {
-      await expect(recordBuildStallStaleCitation(root, events, resolvedCitation, 2)).resolves.toEqual({
+      await expect(recordBuildStallStaleCitation(root, events, resolvedCitation, child3, 2)).resolves.toEqual({
         kind: 'persist-failed',
       });
+    } finally {
+      persister.stop();
+    }
+  });
+
+  // Covers: task:19
+  it('restarts the streak when the stalled child changes', async () => {
+    const { root, events, persister } = await eventSpine();
+    try {
+      await recordBuildStallStaleCitation(root, events, resolvedCitation, child3, 2);
+      await recordBuildStallStaleCitation(root, events, resolvedCitation, child3, 2);
+      await expect(recordBuildStallStaleCitation(root, events, resolvedCitation, child4, 2)).resolves.toEqual({
+        kind: 'recorded',
+        attempt: 1,
+      });
+    } finally {
+      persister.stop();
+    }
+  });
+
+  // Covers: task:15
+  it('delivers the persisted citation to the audit-trail subscriber', async () => {
+    const { root, events, persister } = await eventSpine();
+    const audit = new AuditTrailWriter(root);
+    audit.subscribe(events);
+    try {
+      await recordBuildStallStaleCitation(root, events, resolvedCitation, child3, 2);
+      await expect(readFile(join(root, '.pipeline', 'audit-trail', 'events.jsonl'), 'utf8')).resolves.toContain(
+        'build_stall_stale_citation',
+      );
     } finally {
       persister.stop();
     }

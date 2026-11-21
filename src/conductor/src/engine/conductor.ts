@@ -65,6 +65,7 @@ import {
   prdWideningCasesForState,
   readRemediationCaseStoreFeature,
   RemediationCaseStore,
+  type RemediationCaseFeatureIdentity,
 } from './remediation-case-store.js';
 import {
   recordAsBuiltNeedsHuman,
@@ -291,7 +292,11 @@ import { settleDerivedNoOpHost } from './routing/routed-exit.js';
 import type { requestRoutedExit } from './routing/routed-exit.js';
 import { admitQueuedRevalidation } from './routing/queue-admission.js';
 import { persistOnActiveEventSpine } from './event-persister.js';
-import { classifyBuildStallStaleCitation, recordBuildStallStaleCitation } from './build-stall-stale-citation.js';
+import {
+  buildStallStaleCitationOutcome,
+  classifyBuildStallStaleCitation,
+  recordBuildStallStaleCitation,
+} from './build-stall-stale-citation.js';
 import { childBranchFor, leafBranchFor } from './feature-branch-identity.js';
 import { emitRestackRefused } from './restack/restack-events.js';
 import { commitEngineChangeWhenStacked } from './guarded-engine-commit.js';
@@ -1327,12 +1332,13 @@ export class Conductor {
     persistState?: () => Promise<void>;
     surfaceRemediation?: boolean;
     loopHaltReason?: string;
-  }): Promise<void> {
+  }): Promise<Awaited<ReturnType<Conductor['writeHaltMarker']>>> {
     await this.closeOpenExecutions();
-    await this.writeHaltMarker(input.reason + '\n', input.haltClass);
+    const haltWrite = await this.writeHaltMarker(input.reason + '\n', input.haltClass);
     await input.persistState?.();
     const prUrl = input.surfaceRemediation ? await this.surfaceRemediationPr(input.reason) : undefined;
     await this.emitLoopHalt(input.loopHaltReason ?? input.reason, prUrl);
+    return haltWrite;
   }
 
   /**
@@ -5127,7 +5133,7 @@ export class Conductor {
     // but never applied while the build burned its last retry.
     const buildStallEvidenceFile =
       hintSource.source === 'build_stall' || hintSource.source === 'build_stall_zero_work'
-        ? '.pipeline/build-stall-question.md'
+        ? relative(this.projectRoot, pipelinePathFor(this.projectRoot, 'build-stall-question.md', this.activeRegionChild))
         : hintSource.source === 'build-stall'
           ? '.pipeline/halt-user-input-required'
           : undefined;
@@ -6457,16 +6463,22 @@ export class Conductor {
     if (this.activeRegionChild === undefined) return;
     const children = await listExistingChildren(this.projectRoot);
     let adopted = false;
+    const openChildEffects: Array<{ child: ChildId; feature: RemediationCaseFeatureIdentity; effectIds: string[] }> = [];
     for (const child of children) {
       const feature = await readRemediationCaseStoreFeature(this.projectRoot, undefined, child);
-      if (!feature.ok || !feature.feature) continue;
+      // A flat order can be retired only after every child region has been
+      // observed. An unreadable region might be its open owner.
+      if (!feature.ok) return;
+      if (!feature.feature) continue;
       const store = await new RemediationCaseStore(this.projectRoot, feature.feature, { child }).read();
-      if (!store.ok) continue;
+      if (!store.ok) return;
       const effectIds = store.state.cases.flatMap((record) =>
         record.resolution === 'open' && record.effect.kind === 'action' ? [record.effect.id] : [],
       );
-      if (effectIds.length === 0) continue;
-      const order = await readBuildReviewWorkOrder(this.projectRoot, feature.feature, effectIds);
+      if (effectIds.length > 0) openChildEffects.push({ child, feature: feature.feature, effectIds });
+    }
+    for (const { child, feature, effectIds } of openChildEffects) {
+      const order = await readBuildReviewWorkOrder(this.projectRoot, feature, effectIds);
       if (order.ok) {
         await moveBuildReviewWorkOrderToChild(this.projectRoot, child).catch(() => undefined);
         adopted = true;
@@ -6580,7 +6592,12 @@ export class Conductor {
       await drainRemediationCaseOutbox(store, async (event) => this.events.emitOrThrow(event));
     };
     await drainOutbox();
-    const attemptEvidence = await readBuildReviewWorkOrderAttemptedCaseIds(this.projectRoot, feature);
+    const attemptEvidence = await readBuildReviewWorkOrderAttemptedCaseIds(
+      this.projectRoot,
+      feature,
+      undefined,
+      this.activeRegionChild,
+    );
     if (!attemptEvidence.ok && classifyBuildReviewDurableRead(attemptEvidence) !== 'absent') {
       return { kind: 'invalid', reason: `work order attempt ${attemptEvidence.reason}` };
     }
@@ -14847,25 +14864,26 @@ export class Conductor {
                           this.projectRoot,
                           this.events,
                           citation,
+                          this.activeRegionChild,
                           resolvedTasksAfter,
                         );
-                        const mustHalt =
-                          recorded.kind === 'persist-failed' || (recorded.kind === 'recorded' && recorded.attempt >= 3);
-                        if (mustHalt) {
-                          const haltClass =
-                            recorded.kind === 'persist-failed' || recorded.attempt >= 4 ? 'needs-human' : 'mechanical';
-                          const detail =
-                            recorded.kind === 'persist-failed'
-                              ? 'Unable to record stale citation; clear this halt after checking the event spine.'
-                              : `Stale citation ${citation.caseId} is ${citation.state === 'resolved' ? 'settled' : `owned by child ${citation.ownerChild}`}; clear this halt after reviewing the stale citation.`;
-                          await writeStallHalt(this.projectRoot, effectiveQuestion, detail, this.events, haltClass);
-                          await this.retireTerminalBuildStallInputs();
+                        const staleOutcome = buildStallStaleCitationOutcome(citation, recorded);
+                        if (staleOutcome.kind === 'halt') {
+                          const haltWrite = await writeStallHalt(
+                            this.projectRoot,
+                            effectiveQuestion,
+                            staleOutcome.detail,
+                            this.events,
+                            staleOutcome.haltClass,
+                          );
+                          if (haltWrite.status === 'written') await this.retireTerminalBuildStallInputs();
                           await this.emitLoopHalt(effectiveQuestion);
                           return;
                         }
+                        if (staleOutcome.kind === 'fall-through') continue;
                         await clearHaltMarker(this.projectRoot);
                         await removeStallQuestionEvidence(this.projectRoot, this.activeRegionChild);
-                        retryHint = `Case ${citation.caseId} is ${citation.state === 'resolved' ? 'settled' : `owned by child ${citation.ownerChild}`} and is not this session's work.`;
+                        retryHint = staleOutcome.hint;
                         attempt--;
                         continue;
                       }
@@ -14907,14 +14925,14 @@ export class Conductor {
                           '\n\nRemediation budget exhausted (max ' +
                           MAX_KICKBACKS_PER_GATE +
                           ' kickbacks per gate).';
-                        await this.haltSerialExecution({
+                        const haltWrite = await this.haltSerialExecution({
                           reason: haltContent,
                           haltClass: 'needs-human',
                           persistState: () => this.persistPendingStateChanges(state, 'persist conductor transition'),
                           surfaceRemediation: true,
                           loopHaltReason: effectiveQuestion,
                         });
-                        await this.retireTerminalBuildStallInputs();
+                        if (haltWrite.status === 'written') await this.retireTerminalBuildStallInputs();
                         process.off('SIGINT', sigintHandler);
                         process.off('SIGTERM', sigterm);
                         return;
@@ -14962,10 +14980,10 @@ export class Conductor {
                         if (!isZeroWorkStall) {
                           const detail = 'remediation dispatch failed: ' + String(err);
                           const haltContent = effectiveQuestion + '\n\n' + detail;
-                          await writeStallHalt(this.projectRoot, effectiveQuestion, detail, this.events).catch(() => {
+                          const haltWrite = await writeStallHalt(this.projectRoot, effectiveQuestion, detail, this.events).catch(() => {
                             /* best-effort marker */
                           });
-                          await this.retireTerminalBuildStallInputs();
+                          if (haltWrite?.status === 'written') await this.retireTerminalBuildStallInputs();
                           await this.persistPendingStateChanges(state, 'persist conductor transition');
                           const prUrl = await this.surfaceRemediationPr(haltContent);
                           await this.emitLoopHalt(effectiveQuestion, prUrl);
@@ -15012,10 +15030,10 @@ export class Conductor {
                               `misrouted to '${outcome.target}': build stall answers must be ` +
                               `disposition='build', not routed elsewhere.`;
                             const haltContent = effectiveQuestion + '\n\n' + detail;
-                            await writeStallHalt(this.projectRoot, effectiveQuestion, detail, this.events).catch(() => {
+                            const haltWrite = await writeStallHalt(this.projectRoot, effectiveQuestion, detail, this.events).catch(() => {
                               /* best-effort marker */
                             });
-                            await this.retireTerminalBuildStallInputs();
+                            if (haltWrite?.status === 'written') await this.retireTerminalBuildStallInputs();
                             await this.persistPendingStateChanges(state, 'persist conductor transition');
                             const prUrl = await this.surfaceRemediationPr(haltContent);
                             await this.emitLoopHalt(effectiveQuestion, prUrl);
@@ -15035,7 +15053,7 @@ export class Conductor {
                           // retry/auto-park path.
                           if (!isZeroWorkStall) {
                             const haltContent = effectiveQuestion + '\n\n' + outcome.detail;
-                            await writeStallHalt(
+                            const haltWrite = await writeStallHalt(
                               this.projectRoot,
                               effectiveQuestion,
                               outcome.detail,
@@ -15044,7 +15062,7 @@ export class Conductor {
                             ).catch(() => {
                               /* best-effort marker */
                             });
-                            await this.retireTerminalBuildStallInputs();
+                            if (haltWrite?.status === 'written') await this.retireTerminalBuildStallInputs();
                             await this.persistPendingStateChanges(state, 'persist conductor transition');
                             const prUrl = await this.surfaceRemediationPr(haltContent);
                             await this.emitLoopHalt(effectiveQuestion, prUrl);
@@ -15065,10 +15083,10 @@ export class Conductor {
                           // actionable without changing auto-park admission.
                           if (!isZeroWorkStall) {
                             const haltContent = effectiveQuestion + '\n\n' + detail;
-                            await writeStallHalt(this.projectRoot, effectiveQuestion, detail, this.events).catch(() => {
+                            const haltWrite = await writeStallHalt(this.projectRoot, effectiveQuestion, detail, this.events).catch(() => {
                               /* best-effort marker */
                             });
-                            await this.retireTerminalBuildStallInputs();
+                            if (haltWrite?.status === 'written') await this.retireTerminalBuildStallInputs();
                             await this.persistPendingStateChanges(state, 'persist conductor transition');
                             const prUrl = await this.surfaceRemediationPr(haltContent);
                             await this.emitLoopHalt(effectiveQuestion, prUrl);

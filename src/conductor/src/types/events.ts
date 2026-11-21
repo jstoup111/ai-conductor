@@ -524,6 +524,8 @@ type ConductorEventBody =
       /** BUILD cited a case settled in, or owned by, another child region. */
       type: 'build_stall_stale_citation';
       caseId: string;
+      /** Child whose BUILD stall cited the case. */
+      stalledChild: ChildId;
       ownerChild: ChildId;
       state: 'resolved' | 'foreign';
       resolvedTasks: number;

@@ -3,7 +3,6 @@ import type { RemediationCaseRecord, RemediationCaseStoreReadResult } from './re
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ConductorEvent } from '../types/events.js';
-import { persistOnActiveEventSpine } from './event-persister.js';
 import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 
 export type BuildStallStaleCitation =
@@ -61,6 +60,36 @@ export function classifyBuildStallStaleCitation(input: BuildStallStaleCitationIn
 export type RecordBuildStallStaleCitationResult =
   { readonly kind: 'recorded'; readonly attempt: number } | { readonly kind: 'persist-failed' };
 
+/** The BUILD loop's one-time routing decision for a stale-citation record. */
+export type BuildStallStaleCitationOutcome =
+  | { readonly kind: 'fall-through' }
+  | { readonly kind: 'retry'; readonly hint: string }
+  | { readonly kind: 'halt'; readonly haltClass: 'mechanical' | 'needs-human'; readonly detail: string };
+
+export function buildStallStaleCitationOutcome(
+  citation: Exclude<BuildStallStaleCitation, { kind: 'not-stale' }>,
+  recorded: RecordBuildStallStaleCitationResult,
+): BuildStallStaleCitationOutcome {
+  if (recorded.kind === 'persist-failed') {
+    return {
+      kind: 'halt',
+      haltClass: 'needs-human',
+      detail: 'Unable to record stale citation; clear this halt after checking the event spine.',
+    };
+  }
+  if (recorded.attempt >= 3) {
+    return {
+      kind: 'halt',
+      haltClass: recorded.attempt >= 4 ? 'needs-human' : 'mechanical',
+      detail: `Stale citation ${citation.caseId} is ${citation.state === 'resolved' ? 'settled' : `owned by child ${citation.ownerChild}`}; clear this halt after reviewing the stale citation.`,
+    };
+  }
+  return {
+    kind: 'retry',
+    hint: `Case ${citation.caseId} is ${citation.state === 'resolved' ? 'settled' : `owned by child ${citation.ownerChild}`} and is not this session's work.`,
+  };
+}
+
 /**
  * The event log, rather than process memory, bounds stale-citation retries so
  * a daemon re-kick preserves the count.  Only an uninterrupted run for the
@@ -70,6 +99,7 @@ export async function recordBuildStallStaleCitation(
   projectRoot: string,
   events: ConductorEventEmitter,
   citation: Exclude<BuildStallStaleCitation, { kind: 'not-stale' }>,
+  activeChild: ChildId,
   resolvedTasks: number,
 ): Promise<RecordBuildStallStaleCitationResult> {
   let attempt = 1;
@@ -89,16 +119,25 @@ export async function recordBuildStallStaleCitation(
       )
         continue;
       const prior = event as Partial<Extract<ConductorEvent, { type: 'build_stall_stale_citation' }>>;
-      if (prior.caseId !== citation.caseId || prior.resolvedTasks !== resolvedTasks) break;
+      if (
+        prior.caseId !== citation.caseId ||
+        prior.resolvedTasks !== resolvedTasks ||
+        prior.stalledChild !== activeChild
+      )
+        break;
       attempt++;
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return { kind: 'persist-failed' };
   }
   try {
-    await persistOnActiveEventSpine(events, {
+    // emitOrThrow reaches every live subscriber (including the audit trail)
+    // and its composition-owned EventPersister. Unlike emit(), it reports a
+    // durable write failure so the caller can halt rather than lose the bound.
+    await events.emitOrThrow({
       type: 'build_stall_stale_citation',
       caseId: citation.caseId,
+      stalledChild: activeChild,
       ownerChild: citation.ownerChild,
       state: citation.state,
       resolvedTasks,
