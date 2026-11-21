@@ -3383,10 +3383,12 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
       halt: _halt,
       ...rest
     }: Awaited<ReturnType<typeof advanceR2AfterBuildReview>>) => rest;
-    const [afterCleanPass, afterAdjudicationSettlement] = (await Promise.all([
-      advanceR2AfterBuildReview({ adjudicated: false }),
-      advanceR2AfterBuildReview({ adjudicated: true }),
-    ])).map(handoff);
+    const [afterCleanPass, afterAdjudicationSettlement] = (
+      await Promise.all([
+        advanceR2AfterBuildReview({ adjudicated: false }),
+        advanceR2AfterBuildReview({ adjudicated: true }),
+      ])
+    ).map(handoff);
 
     expect(afterCleanPass.r1Host).toBe('restacked');
     expect(afterAdjudicationSettlement.r1Host).toBe('restacked');

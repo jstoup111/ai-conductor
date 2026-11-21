@@ -5133,7 +5133,10 @@ export class Conductor {
     // but never applied while the build burned its last retry.
     const buildStallEvidenceFile =
       hintSource.source === 'build_stall' || hintSource.source === 'build_stall_zero_work'
-        ? relative(this.projectRoot, pipelinePathFor(this.projectRoot, 'build-stall-question.md', this.activeRegionChild))
+        ? relative(
+            this.projectRoot,
+            pipelinePathFor(this.projectRoot, 'build-stall-question.md', this.activeRegionChild),
+          )
         : hintSource.source === 'build-stall'
           ? '.pipeline/halt-user-input-required'
           : undefined;
@@ -6463,7 +6466,8 @@ export class Conductor {
     if (this.activeRegionChild === undefined) return;
     const children = await listExistingChildren(this.projectRoot);
     let adopted = false;
-    const openChildEffects: Array<{ child: ChildId; feature: RemediationCaseFeatureIdentity; effectIds: string[] }> = [];
+    const openChildEffects: Array<{ child: ChildId; feature: RemediationCaseFeatureIdentity; effectIds: string[] }> =
+      [];
     for (const child of children) {
       const feature = await readRemediationCaseStoreFeature(this.projectRoot, undefined, child);
       // A flat order can be retired only after every child region has been
@@ -14980,7 +14984,12 @@ export class Conductor {
                         if (!isZeroWorkStall) {
                           const detail = 'remediation dispatch failed: ' + String(err);
                           const haltContent = effectiveQuestion + '\n\n' + detail;
-                          const haltWrite = await writeStallHalt(this.projectRoot, effectiveQuestion, detail, this.events).catch(() => {
+                          const haltWrite = await writeStallHalt(
+                            this.projectRoot,
+                            effectiveQuestion,
+                            detail,
+                            this.events,
+                          ).catch(() => {
                             /* best-effort marker */
                           });
                           if (haltWrite?.status === 'written') await this.retireTerminalBuildStallInputs();
@@ -15030,7 +15039,12 @@ export class Conductor {
                               `misrouted to '${outcome.target}': build stall answers must be ` +
                               `disposition='build', not routed elsewhere.`;
                             const haltContent = effectiveQuestion + '\n\n' + detail;
-                            const haltWrite = await writeStallHalt(this.projectRoot, effectiveQuestion, detail, this.events).catch(() => {
+                            const haltWrite = await writeStallHalt(
+                              this.projectRoot,
+                              effectiveQuestion,
+                              detail,
+                              this.events,
+                            ).catch(() => {
                               /* best-effort marker */
                             });
                             if (haltWrite?.status === 'written') await this.retireTerminalBuildStallInputs();
@@ -15083,7 +15097,12 @@ export class Conductor {
                           // actionable without changing auto-park admission.
                           if (!isZeroWorkStall) {
                             const haltContent = effectiveQuestion + '\n\n' + detail;
-                            const haltWrite = await writeStallHalt(this.projectRoot, effectiveQuestion, detail, this.events).catch(() => {
+                            const haltWrite = await writeStallHalt(
+                              this.projectRoot,
+                              effectiveQuestion,
+                              detail,
+                              this.events,
+                            ).catch(() => {
                               /* best-effort marker */
                             });
                             if (haltWrite?.status === 'written') await this.retireTerminalBuildStallInputs();
