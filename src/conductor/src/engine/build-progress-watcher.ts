@@ -6,6 +6,7 @@ import { readNoEvidenceAttempts } from './task-evidence.js';
 import { makeGitRunner } from './rebase.js';
 import { resolveBuildProgressConfig } from './config.js';
 import { heartbeatBelongsToDispatch, readStepHeartbeat } from './step-heartbeat.js';
+import { BUILD_PRE_CHECK_FAILED_PREFIX } from './build-pre-check.js';
 import type { ResolvedBuildProgressConfig } from './config.js';
 import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import type { StepName } from '../types/index.js';
@@ -50,6 +51,8 @@ export function isNoTaskProgressBuildStall(input: {
     // no-progress stall would prevent its one permitted follow-up lap.
     !input.completionReason?.startsWith('unverified Done-when checks require one BUILD review pass:') &&
     !input.completionReason?.startsWith('Done-when citation refused:') &&
+    // A pre-check repair may land in a later attempt; adr-2026-08-01 D11.
+    !input.completionReason?.startsWith(BUILD_PRE_CHECK_FAILED_PREFIX) &&
     !input.completionReason?.startsWith('Remediation closure reopened:')
   );
 }

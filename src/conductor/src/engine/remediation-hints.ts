@@ -6,6 +6,7 @@ import {
   type RemediationDispositionRejection,
   type RemediationGap,
 } from './artifacts.js';
+import { BUILD_PRE_CHECK_FAILED_PREFIX } from './build-pre-check.js';
 import { resolvePlanTaskReference } from './plan-task-parse.js';
 import { scanPlanProtectedTargets } from './plan-protected-targets.js';
 import type { RemediationProjectionSource } from './remediation-projection.js';
@@ -398,6 +399,13 @@ export function buildRetryHint(
       return (
         `Previous attempt did not satisfy the completion check: ${r}. ` +
         'Commit the uncommitted paths, then re-run the build step.'
+      );
+    }
+    if (r.startsWith(BUILD_PRE_CHECK_FAILED_PREFIX)) {
+      return (
+        `Previous attempt did not satisfy the completion check: ${r}\n` +
+        'The configured test_suite pre-check failed with the output above: fix the failure, commit the repair, ' +
+        'then complete the BUILD step. Do not run the aggregate suite; `test_suite` owns the aggregate suite.'
       );
     }
     if (/^unverified Done-when checks require one BUILD review pass:/i.test(r)) {

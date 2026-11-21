@@ -34,6 +34,7 @@ const AS_BUILT_POLICY = 'src/conductor/src/engine/as-built-policy.ts';
 const PROJECT_PRELUDE = 'src/conductor/src/engine/project-prelude.ts';
 const BUILD_PROGRESS_WATCHER = 'src/conductor/src/engine/build-progress-watcher.ts';
 const FULL_SUITE_EXECUTOR = 'src/conductor/src/engine/full-suite-executor.ts';
+const BUILD_PRE_CHECK = 'src/conductor/src/engine/build-pre-check.ts';
 const FULL_SUITE_FINGERPRINT = 'src/conductor/src/engine/full-suite-fingerprint.ts';
 const FULL_SUITE_VERIFIER = 'src/conductor/src/engine/full-suite-verifier.ts';
 const HARNESS_COMMON = 'bin/lib/harness-common.sh';
@@ -332,6 +333,11 @@ export const configConsumerRegistry: Record<string, ConsumerDeclaration> = {
   'test_suite.commands[].command': consumer(FULL_SUITE_EXECUTOR),
   'test_suite.commands[].working_directory': consumer(FULL_SUITE_EXECUTOR),
   'test_suite.commands[].timeout_seconds': consumer(FULL_SUITE_EXECUTOR),
+  // BUILD's completion pre-check runs these entries through the executor.
+  'test_suite.pre_check': consumer(BUILD_PRE_CHECK),
+  'test_suite.pre_check[].command': consumer(BUILD_PRE_CHECK),
+  'test_suite.pre_check[].working_directory': consumer(BUILD_PRE_CHECK),
+  'test_suite.pre_check[].timeout_seconds': consumer(BUILD_PRE_CHECK),
   'test_suite.verification.mode': consumer(FULL_SUITE_VERIFIER),
   'test_suite.verification.full_suite': consumer(FULL_SUITE_VERIFIER),
   'test_suite.verification.drift_budget': consumer(FULL_SUITE_VERIFIER),

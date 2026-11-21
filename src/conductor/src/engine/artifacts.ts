@@ -1356,6 +1356,12 @@ export interface CompletionContext {
    */
   unverifiedDoneWhenNudgeSpent?: boolean;
   /**
+   * BUILD's configured `test_suite.pre_check` probe (adr-2026-08-01 D11):
+   * resolves to the completion miss, or `null` when it passes or is unset.
+   * Absent → the floor is skipped.
+   */
+  buildPreCheck?: () => Promise<string | null>;
+  /**
    * Completion is being checked only to decide whether an existing verdict can
    * be preserved before dispatch. Predicates must not update evidence in this
    * mode because the upcoming dispatch still owns a failed verdict's record.
@@ -3205,6 +3211,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       if (dirtyWorktree) return dirtyWorktree;
       const unverifiedNudge = unverifiedDoneWhenNudgeCompletion(status, ctx);
       if (unverifiedNudge) return unverifiedNudge;
+      const preCheckMiss = await ctx.buildPreCheck?.();
+      if (preCheckMiss) return { done: false, reason: preCheckMiss };
       return { done: true };
     }
 
