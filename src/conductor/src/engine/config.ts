@@ -204,6 +204,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
     'escalate',
     'min_confidence',
     'min_severity',
+    'max_blocking_laps',
   ],
   'build_review.custom_rubrics': [
     'timeout_seconds',
@@ -221,6 +222,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
     'escalate',
     'min_confidence',
     'min_severity',
+    'max_blocking_laps',
   ],
   build_review: [
     'enabled',
@@ -453,8 +455,16 @@ function validateBuildReviewRubrics(
     if (policy.min_severity !== undefined && parseBuildReviewSeverity(policy.min_severity) === undefined) {
       return { type: 'validation_error', message: `${path}.min_severity must be ${BUILD_REVIEW_SEVERITIES.join('|')}` };
     }
+    if (!isValidMaxBlockingLaps(policy.max_blocking_laps)) {
+      return { type: 'validation_error', message: `${path}.max_blocking_laps must be a non-negative integer` };
+    }
   }
   return null;
+}
+
+/** Omitted keeps the rubric default; `0` is the explicit unlimited value. */
+function isValidMaxBlockingLaps(value: unknown): boolean {
+  return value === undefined || (typeof value === 'number' && Number.isInteger(value) && value >= 0);
 }
 
 function validateBuildReviewCustomRubrics(customRubrics: unknown, adjudicationEnabled: boolean): ConfigError | null {
@@ -601,6 +611,9 @@ function validateBuildReviewCustomRubrics(customRubrics: unknown, adjudicationEn
         type: 'validation_error',
         message: `${path}.min_severity must be ${BUILD_REVIEW_SEVERITIES.join('|')}`,
       };
+    }
+    if (!isValidMaxBlockingLaps(declaration.max_blocking_laps)) {
+      return { type: 'validation_error', message: `${path}.max_blocking_laps must be a non-negative integer` };
     }
     if (declaration.enabled === true && !adjudicationEnabled) {
       return {

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import type { BuildReviewRubricId } from '../types/config.js';
 import type { BuildReviewArtifactReviewScope, BuildReviewReviewScope, ReviewedHunk } from './build-review-artifacts.js';
 import type { BuildReviewLapId } from './build-review-domain.js';
+import type { ResolvedBuildReviewRubricPolicy } from './resolved-config.js';
 import type { BuildReviewCustomFinding, BuildReviewFinding } from './build-review-domain.js';
 import type { BuildReviewCandidateScopeResolutionIndeterminate } from './build-review-domain.js';
 import type { ChangedFileReference } from './build-review-projections.js';
@@ -35,6 +36,16 @@ export interface BuildReviewPolicyIdentityInputs {
   readonly effort: string;
   readonly engineStamp: string;
   readonly testScope?: BuildReviewTestScopePolicyIdentity;
+}
+
+/**
+ * The declaration part of a rubric's lap-scope identity. `max_blocking_laps`
+ * is applied after judgement (adr-2026-10-19 D8), so it is omitted: declaring
+ * or changing it never resets a rubric's delta scope.
+ */
+export function buildReviewScopeDeclarationFingerprint(policy: ResolvedBuildReviewRubricPolicy): string {
+  const { max_blocking_laps: _appliedAfterJudgement, ...judgedPolicy } = policy;
+  return `sha256:${createHash('sha256').update(JSON.stringify(judgedPolicy)).digest('hex')}`;
 }
 
 /**

@@ -228,6 +228,7 @@ import {
 import {
   buildReviewLiveActSourceIds,
   buildReviewPolicyIdentity,
+  buildReviewScopeDeclarationFingerprint,
   buildReviewTestScopeUnknownSources,
   decideBuildReviewReviewScope,
   hasUnappliedLiveSourceWithoutCurrentHunk,
@@ -3626,7 +3627,7 @@ export class DefaultStepRunner implements StepRunner {
       const policyIdentity = buildReviewPolicyIdentity(entry.id, {
         contractVersion: descriptor.output.version,
         projectionVersion: descriptor.projection.version,
-        declarationFingerprint: `sha256:${createHash('sha256').update(JSON.stringify(entry.policy)).digest('hex')}`,
+        declarationFingerprint: buildReviewScopeDeclarationFingerprint(entry.policy),
         effectiveBundleDigest: skill?.kind === 'resolved' ? skill.digest : 'unavailable',
         provider: Array.isArray(entry.policy.llm_provider)
           ? entry.policy.llm_provider.join(',')

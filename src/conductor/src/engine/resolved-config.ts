@@ -704,6 +704,8 @@ export interface ResolvedBuildReviewRubricPolicy {
   readonly min_confidence: number;
   /** Absent preserves legacy behavior; no severity threshold is defaulted. */
   readonly min_severity?: BuildReviewSeverity;
+  /** Positive blocking-lap limit; absent means unlimited. */
+  readonly max_blocking_laps?: number;
 }
 
 /** An enabled built-in rubric published for build-review execution. */
@@ -802,6 +804,20 @@ function freezeRubricPolicy(policy: ResolvedBuildReviewRubricPolicy): ResolvedBu
   });
 }
 
+/**
+ * Review laps a rubric may block before its later findings become advisory
+ * (adr-2026-10-19-build-review-finding-severity-advisory-threshold D8).
+ * Rubrics absent here are unlimited unless their config declares a limit.
+ */
+const DEFAULT_RUBRIC_MAX_BLOCKING_LAPS: Partial<Record<BuildReviewRubricId, number>> = {
+  implementationQuality: 2,
+};
+
+/** `0` is the explicit unlimited value, resolved as an absent limit. */
+function resolveMaxBlockingLaps(limit: number | undefined): { readonly max_blocking_laps?: number } {
+  return limit === undefined || limit === 0 ? {} : { max_blocking_laps: limit };
+}
+
 export function resolveBuildReviewConfig(
   config?: HarnessConfig,
   policy: ProviderModelPolicy = DEFAULT_PROVIDER_MODEL_POLICY,
@@ -819,6 +835,7 @@ export function resolveBuildReviewConfig(
     rubric: BuildReviewRubricConfig | BuildReviewCustomRubricConfig | undefined,
     defaultEnabled: boolean,
     defaultEffort?: EffortLevel,
+    defaultMaxBlockingLaps?: number,
   ): ResolvedBuildReviewRubricPolicy => {
     // Default efforts weight the judgement-heavy rubrics up and the narrow
     // root-cause check down. They apply only when neither the rubric nor the
@@ -887,6 +904,7 @@ export function resolveBuildReviewConfig(
       escalate: resolvedNeutral.escalate,
       min_confidence: rubric?.min_confidence ?? 0,
       ...(rubric?.min_severity === undefined ? {} : { min_severity: rubric.min_severity }),
+      ...resolveMaxBlockingLaps(rubric?.max_blocking_laps ?? defaultMaxBlockingLaps),
     });
   };
   const rubrics = Object.fromEntries(
@@ -896,6 +914,7 @@ export function resolveBuildReviewConfig(
         block?.rubrics?.[rubricId],
         BUILD_REVIEW_RUBRIC_DEFAULT_ENABLED[rubricId],
         DEFAULT_RUBRIC_EFFORT[rubricId],
+        DEFAULT_RUBRIC_MAX_BLOCKING_LAPS[rubricId],
       ),
     ]),
   ) as Record<BuildReviewRubricId, ResolvedBuildReviewRubricPolicy>;
