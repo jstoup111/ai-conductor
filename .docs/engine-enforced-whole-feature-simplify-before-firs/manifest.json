@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "slug": "engine-enforced-whole-feature-simplify-before-firs",
+  "artifacts": [
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/engine-enforced-whole-feature-simplify-before-firs.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-08-03-uncommitted-work-floor-under-build-completion.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/engine-enforced-whole-feature-simplify-before-firs.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/engine-enforced-whole-feature-simplify-before-firs.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/engine-enforced-whole-feature-simplify-before-firs.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/engine-enforced-whole-feature-simplify-before-firs.md"
+    }
+  ]
+}
