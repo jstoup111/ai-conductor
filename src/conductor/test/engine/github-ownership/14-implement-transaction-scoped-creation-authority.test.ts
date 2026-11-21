@@ -43,31 +43,40 @@ describe('engine/github-creation-context — transaction-scoped creation authori
   it('binds an explicitly authorized intake creation and its immediate metadata to the returned canonical issue', async () => {
     const { executeGithubIssueCreationTransaction } = await creationContext();
     const runner = {
-      run: vi.fn(async (request: GithubOperationRequest) => request.operation === 'issue.create'
-        ? { created: { repository: 'acme/intake', kind: 'issue' as const, number: 41 } }
-        : {}),
+      run: vi.fn(async (request: GithubOperationRequest) =>
+        request.operation === 'issue.create'
+          ? { created: { repository: 'acme/intake', kind: 'issue' as const, number: 41 } }
+          : {},
+      ),
     };
 
-    await expect(executeGithubIssueCreationTransaction({
-      authority: {
-        resolveActor: async () => ({ resolved: true, id: 'Alice' }),
-        intent: { kind: 'explicit-intake', repository: 'acme/intake' },
-      },
-      creation: {
-        operation: 'issue.create',
-        access: 'create',
-        target: { repository: 'acme/intake', kind: 'repository' },
-        context: { actor: 'alice' },
-        payload: { title: 'Triage', body: 'Route this intake.' },
-      },
-      metadata: [{
-        operation: 'issue.label.add',
-        access: 'feature-write',
-        target: { repository: 'acme/intake', kind: 'issue', number: 41 },
-        context: { actor: 'alice' },
-        payload: { label: 'triage' },
-      }],
-    }, runner)).resolves.toMatchObject({
+    await expect(
+      executeGithubIssueCreationTransaction(
+        {
+          authority: {
+            resolveActor: async () => ({ resolved: true, id: 'Alice' }),
+            intent: { kind: 'explicit-intake', repository: 'acme/intake' },
+          },
+          creation: {
+            operation: 'issue.create',
+            access: 'create',
+            target: { repository: 'acme/intake', kind: 'repository' },
+            context: { actor: 'alice' },
+            payload: { title: 'Triage', body: 'Route this intake.' },
+          },
+          metadata: [
+            {
+              operation: 'issue.label.add',
+              access: 'feature-write',
+              target: { repository: 'acme/intake', kind: 'issue', number: 41 },
+              context: { actor: 'alice' },
+              payload: { label: 'triage' },
+            },
+          ],
+        },
+        runner,
+      ),
+    ).resolves.toMatchObject({
       kind: 'executed',
       created: { repository: 'acme/intake', kind: 'issue', number: 41 },
     });
@@ -76,50 +85,69 @@ describe('engine/github-creation-context — transaction-scoped creation authori
 
   it.each([
     ['an unresolved operator', async () => ({ resolved: false as const }), 'acme/intake', 'unresolved-actor'],
-    ['a destination outside the explicit intake action', async () => ({ resolved: true as const, id: 'alice' }), 'acme/other', 'explicit-authorization-required'],
+    [
+      'a destination outside the explicit intake action',
+      async () => ({ resolved: true as const, id: 'alice' }),
+      'acme/other',
+      'explicit-authorization-required',
+    ],
   ])('refuses %s before the fake creation boundary', async (_caseName, resolveActor, repository, reason) => {
     const { executeGithubIssueCreationTransaction } = await creationContext();
     const runner = { run: vi.fn() };
 
-    await expect(executeGithubIssueCreationTransaction({
-      authority: {
-        resolveActor,
-        intent: { kind: 'explicit-intake', repository: 'acme/intake' },
-      },
-      creation: {
-        operation: 'issue.create',
-        access: 'create',
-        target: { repository, kind: 'repository' },
-        context: { actor: 'alice' },
-        payload: { title: 'Triage', body: 'Route this intake.' },
-      },
-    }, runner)).resolves.toMatchObject({ kind: 'refused', reason });
+    await expect(
+      executeGithubIssueCreationTransaction(
+        {
+          authority: {
+            resolveActor,
+            intent: { kind: 'explicit-intake', repository: 'acme/intake' },
+          },
+          creation: {
+            operation: 'issue.create',
+            access: 'create',
+            target: { repository, kind: 'repository' },
+            context: { actor: 'alice' },
+            payload: { title: 'Triage', body: 'Route this intake.' },
+          },
+        },
+        runner,
+      ),
+    ).resolves.toMatchObject({ kind: 'refused', reason });
 
     expect(runner.run).not.toHaveBeenCalled();
   });
 
   it('reports ambiguous creation as partial and never guesses a target for metadata', async () => {
     const { executeGithubIssueCreationTransaction } = await creationContext();
-    const runner = { run: vi.fn().mockResolvedValue({ created: { repository: 'acme/intake', kind: 'pull-request', number: 41 } }) };
+    const runner = {
+      run: vi.fn().mockResolvedValue({ created: { repository: 'acme/intake', kind: 'pull-request', number: 41 } }),
+    };
     const authority = await authorizedFeatureAuthority();
 
-    await expect(executeGithubIssueCreationTransaction({
-      authority,
-      creation: {
-        operation: 'issue.create',
-        access: 'create',
-        target: { repository: 'acme/intake', kind: 'repository' },
-        context: { actor: 'alice' },
-        payload: { title: 'Triage', body: 'Route this intake.' },
-      },
-      metadata: [{
-        operation: 'issue.label.add',
-        access: 'feature-write',
-        target: { repository: 'acme/intake', kind: 'issue', number: 999 },
-        context: { actor: 'alice' },
-        payload: { label: 'triage' },
-      }],
-    }, runner)).resolves.toMatchObject({
+    await expect(
+      executeGithubIssueCreationTransaction(
+        {
+          authority,
+          creation: {
+            operation: 'issue.create',
+            access: 'create',
+            target: { repository: 'acme/intake', kind: 'repository' },
+            context: { actor: 'alice' },
+            payload: { title: 'Triage', body: 'Route this intake.' },
+          },
+          metadata: [
+            {
+              operation: 'issue.label.add',
+              access: 'feature-write',
+              target: { repository: 'acme/intake', kind: 'issue', number: 999 },
+              context: { actor: 'alice' },
+              payload: { label: 'triage' },
+            },
+          ],
+        },
+        runner,
+      ),
+    ).resolves.toMatchObject({
       kind: 'partial',
       metadataFailures: [{ operation: 'issue.create' }],
     });
@@ -131,17 +159,24 @@ describe('engine/github-creation-context — transaction-scoped creation authori
     const { executeGithubIssueCreationTransaction } = await creationContext();
     const runner = { run: vi.fn() };
 
-    await expect(executeGithubIssueCreationTransaction({
-      authority: {
-        resolveActor: async () => ({ resolved: true, id: 'alice' }),
-        intent: { kind: 'authorized-feature', repository: 'acme/intake' },
-      } as unknown,
-      creation: {
-        operation: 'issue.create', access: 'create',
-        target: { repository: 'acme/intake', kind: 'repository' },
-        context: { actor: 'alice' }, payload: { title: 'Forged', body: 'Must not publish.' },
-      },
-    }, runner)).resolves.toMatchObject({ kind: 'refused', reason: 'explicit-authorization-required' });
+    await expect(
+      executeGithubIssueCreationTransaction(
+        {
+          authority: {
+            resolveActor: async () => ({ resolved: true, id: 'alice' }),
+            intent: { kind: 'authorized-feature', repository: 'acme/intake' },
+          } as unknown,
+          creation: {
+            operation: 'issue.create',
+            access: 'create',
+            target: { repository: 'acme/intake', kind: 'repository' },
+            context: { actor: 'alice' },
+            payload: { title: 'Forged', body: 'Must not publish.' },
+          },
+        },
+        runner,
+      ),
+    ).resolves.toMatchObject({ kind: 'refused', reason: 'explicit-authorization-required' });
 
     expect(runner.run).not.toHaveBeenCalled();
   });
@@ -173,14 +208,21 @@ describe('engine/github-creation-context — transaction-scoped creation authori
     const runner = {
       run: vi.fn().mockResolvedValue({ created: { repository: 'acme/intake', kind: 'issue', number: 41 } }),
     };
-    await expect(executeGithubIssueCreationTransaction({
-      authority,
-      creation: {
-        operation: 'issue.create', access: 'create',
-        target: { repository: 'acme/intake', kind: 'repository' },
-        context: { actor: 'alice' }, payload: { title: 'Deferred', body: 'Filed from a feature.' },
-      },
-    }, runner)).resolves.toMatchObject({ kind: 'executed' });
+    await expect(
+      executeGithubIssueCreationTransaction(
+        {
+          authority,
+          creation: {
+            operation: 'issue.create',
+            access: 'create',
+            target: { repository: 'acme/intake', kind: 'repository' },
+            context: { actor: 'alice' },
+            payload: { title: 'Deferred', body: 'Filed from a feature.' },
+          },
+        },
+        runner,
+      ),
+    ).resolves.toMatchObject({ kind: 'executed' });
   });
 
   it('consumes a provenance-bound feature capability after one creation transaction', async () => {
@@ -192,45 +234,61 @@ describe('engine/github-creation-context — transaction-scoped creation authori
     const transaction = {
       authority,
       creation: {
-        operation: 'issue.create', access: 'create',
+        operation: 'issue.create',
+        access: 'create',
         target: { repository: 'acme/intake', kind: 'repository' },
-        context: { actor: 'alice' }, payload: { title: 'One shot', body: 'Bound to this creation.' },
+        context: { actor: 'alice' },
+        payload: { title: 'One shot', body: 'Bound to this creation.' },
       },
     };
 
-    await expect(executeGithubIssueCreationTransaction(transaction, runner)).resolves.toMatchObject({ kind: 'executed' });
     await expect(executeGithubIssueCreationTransaction(transaction, runner)).resolves.toMatchObject({
-      kind: 'refused', reason: 'explicit-authorization-required',
+      kind: 'executed',
+    });
+    await expect(executeGithubIssueCreationTransaction(transaction, runner)).resolves.toMatchObject({
+      kind: 'refused',
+      reason: 'explicit-authorization-required',
     });
     expect(runner.run).toHaveBeenCalledTimes(1);
   });
 
   it('consumes creation authority within one transaction instead of using it for a different metadata target', async () => {
     const { executeGithubIssueCreationTransaction } = await creationContext();
-    const runner = { run: vi.fn(async (request: GithubOperationRequest) => request.operation === 'issue.create'
-      ? { created: { repository: 'acme/intake', kind: 'issue' as const, number: 41 } }
-      : {}) };
+    const runner = {
+      run: vi.fn(async (request: GithubOperationRequest) =>
+        request.operation === 'issue.create'
+          ? { created: { repository: 'acme/intake', kind: 'issue' as const, number: 41 } }
+          : {},
+      ),
+    };
 
-    await expect(executeGithubIssueCreationTransaction({
-      authority: {
-        resolveActor: async () => ({ resolved: true, id: 'alice' }),
-        intent: { kind: 'explicit-intake', repository: 'acme/intake' },
-      },
-      creation: {
-        operation: 'issue.create',
-        access: 'create',
-        target: { repository: 'acme/intake', kind: 'repository' },
-        context: { actor: 'alice' },
-        payload: { title: 'Triage', body: 'Route this intake.' },
-      },
-      metadata: [{
-        operation: 'issue.label.add',
-        access: 'feature-write',
-        target: { repository: 'acme/intake', kind: 'issue', number: 42 },
-        context: { actor: 'alice' },
-        payload: { label: 'wrong-target' },
-      }],
-    }, runner)).resolves.toMatchObject({
+    await expect(
+      executeGithubIssueCreationTransaction(
+        {
+          authority: {
+            resolveActor: async () => ({ resolved: true, id: 'alice' }),
+            intent: { kind: 'explicit-intake', repository: 'acme/intake' },
+          },
+          creation: {
+            operation: 'issue.create',
+            access: 'create',
+            target: { repository: 'acme/intake', kind: 'repository' },
+            context: { actor: 'alice' },
+            payload: { title: 'Triage', body: 'Route this intake.' },
+          },
+          metadata: [
+            {
+              operation: 'issue.label.add',
+              access: 'feature-write',
+              target: { repository: 'acme/intake', kind: 'issue', number: 42 },
+              context: { actor: 'alice' },
+              payload: { label: 'wrong-target' },
+            },
+          ],
+        },
+        runner,
+      ),
+    ).resolves.toMatchObject({
       kind: 'partial',
       created: { repository: 'acme/intake', kind: 'issue', number: 41 },
       metadataFailures: [{ operation: 'issue.label.add' }],
@@ -241,10 +299,13 @@ describe('engine/github-creation-context — transaction-scoped creation authori
 
   it('resolves identity again for a later transaction rather than retaining the first run identity', async () => {
     const { executeGithubIssueCreationTransaction } = await creationContext();
-    const resolveActor = vi.fn()
+    const resolveActor = vi
+      .fn()
       .mockResolvedValueOnce({ resolved: true, id: 'alice' })
       .mockResolvedValueOnce({ resolved: true, id: 'bob' });
-    const runner = { run: vi.fn().mockResolvedValue({ created: { repository: 'acme/intake', kind: 'issue', number: 41 } }) };
+    const runner = {
+      run: vi.fn().mockResolvedValue({ created: { repository: 'acme/intake', kind: 'issue', number: 41 } }),
+    };
     const transaction = {
       authority: {
         resolveActor,
@@ -259,7 +320,9 @@ describe('engine/github-creation-context — transaction-scoped creation authori
       },
     };
 
-    await expect(executeGithubIssueCreationTransaction(transaction, runner)).resolves.toMatchObject({ kind: 'executed' });
+    await expect(executeGithubIssueCreationTransaction(transaction, runner)).resolves.toMatchObject({
+      kind: 'executed',
+    });
     await expect(executeGithubIssueCreationTransaction(transaction, runner)).resolves.toMatchObject({
       kind: 'refused',
       reason: 'explicit-authorization-required',

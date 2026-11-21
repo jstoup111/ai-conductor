@@ -904,7 +904,11 @@ async function fixture(options: FixtureOptions = {}) {
               featureMarker: '.docs/intake/adjudicated-feature.md',
               publication: 'initial',
               // Production-shaped: resolveFeatureRemoteMutation binds the branch (#3265).
-              target: { repository: 'acme/conductor', kind: 'remote-ref', ref: 'refs/heads/feature/adjudicated-feature' },
+              target: {
+                repository: 'acme/conductor',
+                kind: 'remote-ref',
+                ref: 'refs/heads/feature/adjudicated-feature',
+              },
             },
             dependencies: {
               resolveMachineOwner: async () => ({ resolved: true as const, id: 'alice' }),
@@ -3175,7 +3179,11 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
   });
 
   it('does not file a deferred issue when current feature provenance cannot authorize creation', async () => {
-    const run = await fixture({ judgement: deferralJudgement(), featureCreationAuthorized: false, persistEvents: true });
+    const run = await fixture({
+      judgement: deferralJudgement(),
+      featureCreationAuthorized: false,
+      persistEvents: true,
+    });
 
     expect(run.ghCalls.some((args) => args[0] === 'issue' && args[1] === 'create')).toBe(false);
     // #3265: the deferral must not strand at `reserved`; it fails durably and
