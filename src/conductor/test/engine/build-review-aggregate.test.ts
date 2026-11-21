@@ -954,3 +954,69 @@ describe('build-review raw aggregate', () => {
     });
   });
 });
+
+// Covers: task:2
+describe('build-review blocking-lap limits', () => {
+  const critical: BuildReviewFinding = { ...implementationQualityFinding(), severity: 'critical', confidence: 90 };
+  const criticalId = canonicalizeBuildReviewFindingIdentity({
+    rubric: 'implementationQuality',
+    contractVersion: 'v3',
+    concernKind: critical.concernKind,
+    anchor: critical.anchor,
+  })!.id;
+  const limited = [{ rubric: 'implementationQuality', blockingLaps: 2, limit: 2 }] as const;
+  const join = (implementationQuality: BuildReviewRubricResult, testQuality: BuildReviewRubricResult = judged()) =>
+    joinBuildReviewRubricOutcomes({
+      lapId,
+      snapshotDigest,
+      results: { testQuality, security: securityJudged(), implementationQuality },
+      blockingLapLimits: limited,
+    });
+
+  it('makes a lap-limited rubric finding advisory regardless of severity', () => {
+    const effective = deriveEffectiveBuildReviewVerdict(join(implementationQualityJudged([critical])));
+    expect(effective).toMatchObject({ verdict: 'PASS', unresolvedFindingIds: [], advisoryFindingIds: [criticalId] });
+  });
+
+  it('keeps unlimited siblings blocking, sub-floor findings suppressed, and infrastructure failures blocking', () => {
+    const sibling = deriveEffectiveBuildReviewVerdict(join(implementationQualityJudged([critical]), judged([finding])));
+    expect(sibling).toMatchObject({
+      verdict: 'FAIL',
+      unresolvedFindingIds: [findingId(finding)],
+      advisoryFindingIds: [criticalId],
+    });
+
+    const subFloor = deriveEffectiveBuildReviewVerdict(join(implementationQualityJudged([critical])), new Set(), [], {
+      implementationQuality: 95,
+    });
+    expect(subFloor).toMatchObject({ suppressedFindingIds: [criticalId], unresolvedFindingIds: [] });
+    expect(subFloor?.advisoryFindingIds).toBeUndefined();
+
+    const outage = deriveEffectiveBuildReviewVerdict(
+      join({
+        kind: 'infrastructure-failure',
+        rubric: 'implementationQuality',
+        reason: 'provider-error',
+        detail: 'fixture outage',
+      } as BuildReviewRubricResult),
+    );
+    expect(outage).toMatchObject({ verdict: 'FAIL', uncoveredInfrastructureFailureRubrics: ['implementationQuality'] });
+  });
+
+  it('rejects a malformed limit entry and round-trips a valid one', () => {
+    const aggregate = join(implementationQualityJudged([critical]));
+    expect(parseBuildReviewAggregate(aggregate)?.blockingLapLimits).toEqual(limited);
+    expect(
+      parseBuildReviewAggregate({
+        ...aggregate,
+        blockingLapLimits: [{ rubric: 'implementationQuality', blockingLaps: 2, limit: 0 }],
+      }),
+    ).toBeUndefined();
+    expect(
+      parseBuildReviewAggregate({
+        ...aggregate,
+        blockingLapLimits: [{ rubric: 'implementationQuality', blockingLaps: 1, limit: 2 }],
+      }),
+    ).toBeUndefined();
+  });
+});

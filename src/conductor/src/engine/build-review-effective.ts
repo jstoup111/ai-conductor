@@ -216,6 +216,7 @@ function applyCurrentCustomEffectiveVerdict(
   const advisory = [...(effective.advisoryFindingIds ?? [])];
   const outOfDelta = [...(effective.outOfDeltaFindingIds ?? [])];
   const settled = [...(effective.settledFindingIds ?? [])];
+  const lapLimitedRubrics = new Set(aggregate.blockingLapLimits?.map((entry) => entry.rubric) ?? []);
   const acceptedCustomFindingIds = new Set(
     Object.values(aggregate.customResults ?? {}).flatMap((member) =>
       member.result.kind !== 'judged'
@@ -266,6 +267,7 @@ function applyCurrentCustomEffectiveVerdict(
       isBelowSeverityThreshold(source.severity, minSeverity[source.rubric]!)
     )
       advisory.push(source.findingId);
+    else if (lapLimitedRubrics.has(source.rubric)) advisory.push(source.findingId);
     else unresolved.push(source.findingId);
   }
   const builtinCompleted = Object.values(aggregate.results).filter(

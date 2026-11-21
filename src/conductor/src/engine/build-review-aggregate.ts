@@ -48,6 +48,16 @@ export type BuildReviewVerdictEnvelopeValidation =
   | { readonly kind: 'invalid' }
   | { readonly kind: 'mechanical-fault'; readonly fault: BuildReviewInfrastructureFailure };
 
+/**
+ * A rubric that had already blocked its limit of review laps when this lap was
+ * joined (adr-2026-10-19-build-review-finding-severity-advisory-threshold D8).
+ */
+export interface BuildReviewBlockingLapLimit {
+  readonly rubric: string;
+  readonly blockingLaps: number;
+  readonly limit: number;
+}
+
 /** The sole raw join: four attributable outcomes plus legacy gate fields. */
 export interface BuildReviewAggregate {
   readonly aggregateVersion: typeof AGGREGATE_VERSION | typeof CUSTOM_AGGREGATE_VERSION;
@@ -75,6 +85,8 @@ export interface BuildReviewAggregate {
   }[];
   /** Engine-stamped current-lap reduced-coverage evidence, when an allowance was used. */
   readonly reducedCoverageEvidence?: string;
+  /** Engine-stamped rubrics whose otherwise-unresolved findings are advisory on this lap. */
+  readonly blockingLapLimits?: readonly BuildReviewBlockingLapLimit[];
   readonly codeStamp?: string | null;
   /** Self-describing evidence remains readable even after its policy is removed. */
   readonly customResults?: Readonly<Record<string, BuildReviewCustomArtifactMember>>;
@@ -101,6 +113,7 @@ export interface BuildReviewAggregateInput {
     readonly sourcePath: string;
     readonly targetPath: string;
   }[];
+  readonly blockingLapLimits?: readonly BuildReviewBlockingLapLimit[];
 }
 
 /** Raw and accepted-risk state remain independently inspectable after join. */
@@ -523,6 +536,9 @@ export function joinBuildReviewRubricOutcomes(input: BuildReviewAggregateInput):
     ...(input.declaredReplicationSuppressions === undefined
       ? {}
       : { declaredReplicationSuppressions: Object.freeze([...input.declaredReplicationSuppressions]) }),
+    ...(input.blockingLapLimits === undefined || input.blockingLapLimits.length === 0
+      ? {}
+      : { blockingLapLimits: Object.freeze([...input.blockingLapLimits]) }),
     ...(custom === undefined ? {} : { customResults: custom.results, currentCustomRubrics: custom.current }),
   };
   const validated = parseBuildReviewAggregate(aggregate);
@@ -586,6 +602,7 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
       ...(source.reducedCoverageEvidence === undefined ? [] : ['reducedCoverageEvidence']),
       ...(source.codeStamp === undefined ? [] : ['codeStamp']),
       ...(source.declaredReplicationSuppressions === undefined ? [] : ['declaredReplicationSuppressions']),
+      ...(source.blockingLapLimits === undefined ? [] : ['blockingLapLimits']),
       ...(isV2 ? ['customResults', 'currentCustomRubrics'] : []),
     ]) ||
     (!isV1 && !isV2) ||
@@ -604,7 +621,8 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
             !isNonEmptyString(item.sourcePath) ||
             !isNonEmptyString(item.targetPath)
           );
-        })))
+        }))) ||
+    (source.blockingLapLimits !== undefined && !isBlockingLapLimits(source.blockingLapLimits))
   )
     return undefined;
   const lapId = parseBuildReviewLapId(source.lapId);
@@ -700,8 +718,31 @@ export function parseBuildReviewAggregate(value: unknown): BuildReviewAggregate 
             }[],
           ),
         }),
+    ...(source.blockingLapLimits === undefined
+      ? {}
+      : { blockingLapLimits: Object.freeze(source.blockingLapLimits as BuildReviewBlockingLapLimit[]) }),
     ...(custom === undefined ? {} : { customResults: custom.results, currentCustomRubrics: custom.current }),
   };
+}
+
+/** A limited rubric has a positive limit and has already used all of it. */
+function isBlockingLapLimits(value: unknown): value is BuildReviewBlockingLapLimit[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((entry) => {
+      const item = record(entry);
+      return (
+        !!item &&
+        exactKeys(item, ['rubric', 'blockingLaps', 'limit']) &&
+        isNonEmptyString(item.rubric) &&
+        Number.isInteger(item.limit) &&
+        (item.limit as number) > 0 &&
+        Number.isInteger(item.blockingLaps) &&
+        (item.blockingLaps as number) >= (item.limit as number)
+      );
+    })
+  );
 }
 
 /**
@@ -775,6 +816,7 @@ export function deriveEffectiveBuildReviewVerdict(
   const declaredReplicationIds = new Set(
     aggregate.declaredReplicationSuppressions?.map((entry) => entry.findingId) ?? [],
   );
+  const lapLimitedRubrics = new Set(aggregate.blockingLapLimits?.map((entry) => entry.rubric) ?? []);
   const skipped: BuildReviewRubricId[] = [];
   const infrastructure: BuildReviewRubricId[] = [];
   const uncoveredInfrastructure: BuildReviewRubricId[] = [];
@@ -834,6 +876,7 @@ export function deriveEffectiveBuildReviewVerdict(
         isBelowSeverityThreshold(finding.severity, minSeverity[rubric]!)
       )
         advisory.push(identity.id);
+      else if (lapLimitedRubrics.has(rubric)) advisory.push(identity.id);
       else unresolved.push(identity.id);
     }
   }

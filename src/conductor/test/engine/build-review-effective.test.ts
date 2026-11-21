@@ -1514,3 +1514,20 @@ describe('live build-review effective resolver', () => {
     ).toEqual([]);
   });
 });
+
+// Covers: task:2
+describe('custom rubric blocking-lap limit', () => {
+  it('makes a lap-limited custom finding advisory in the composed reducer', () => {
+    const { aggregate: raw, findingId } = customAggregate(undefined);
+    const limited = { ...raw, blockingLapLimits: [{ rubric: 'portablePolicy', blockingLaps: 1, limit: 1 }] };
+    expect(deriveComposedBuildReviewEffectiveVerdict(raw, feature, [], [], {}, new Set(), {})).toMatchObject({
+      verdict: 'FAIL',
+      unresolvedFindingIds: [findingId],
+    });
+    expect(deriveComposedBuildReviewEffectiveVerdict(limited, feature, [], [], {}, new Set(), {})).toMatchObject({
+      verdict: 'PASS',
+      unresolvedFindingIds: [],
+      advisoryFindingIds: [findingId],
+    });
+  });
+});
