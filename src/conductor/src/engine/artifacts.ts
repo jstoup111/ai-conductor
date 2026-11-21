@@ -89,7 +89,12 @@ import { artifactPresenceAtMergeBase, evaluateAdrAssumptionLedgers } from './adr
 export { splitStoryBlocks, type StoryBlock } from './story-criteria.js';
 import { loadSliceTopology, validatePlanDependencies } from './slice-topology.js';
 import { parseChildId, pipelinePathFor, type ChildId } from './child-context.js';
-import { FEATURE_SIMPLIFY_REQUIRED_PREFIX, featureSimplifyRecordPath } from './feature-simplify.js';
+import {
+  FEATURE_SIMPLIFY_CLEAN_VERDICT,
+  FEATURE_SIMPLIFY_REQUIRED_PREFIX,
+  featureSimplifyRecordPath,
+  recordsCleanFeatureSimplify,
+} from './feature-simplify.js';
 
 export type ArtifactLifecycleScope = 'feature' | 'repository' | 'run';
 
@@ -1524,7 +1529,7 @@ export async function uncommittedPathsOrNull(ctx: CompletionContext): Promise<st
 export async function featureSimplifyMissingReason(root: string, activeChild?: ChildId): Promise<string | null> {
   const record = featureSimplifyRecordPath(activeChild);
   const text = await readFile(join(root, record), 'utf8').catch(() => '');
-  if (/^## Verdict: CLEAN\b/m.test(text)) return null;
+  if (recordsCleanFeatureSimplify(text)) return null;
   const pastFirstCompletion = await access(pipelinePathFor(root, 'build-review.json', activeChild)).then(
     () => true,
     () => false,
@@ -1532,7 +1537,7 @@ export async function featureSimplifyMissingReason(root: string, activeChild?: C
   if (pastFirstCompletion) return null;
   return (
     `${FEATURE_SIMPLIFY_REQUIRED_PREFIX} run the simplify workflow in whole-feature mode over base...HEAD ` +
-    `and record ${record} ending "## Verdict: CLEAN"`
+    `and record ${record} ending "${FEATURE_SIMPLIFY_CLEAN_VERDICT}"`
   );
 }
 

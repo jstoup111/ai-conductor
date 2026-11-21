@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { checkStepCompletion, type CompletionContext } from '../../src/engine/artifacts.js';
 import { buildRetryHint, isNoTaskProgressBuildStall } from '../../src/engine/conductor.js';
 import { parseChildId } from '../../src/engine/child-context.js';
-import { FEATURE_SIMPLIFY_REQUIRED_PREFIX } from '../../src/engine/feature-simplify.js';
+import { FEATURE_SIMPLIFY_REQUIRED_PREFIX, recordsCleanFeatureSimplify } from '../../src/engine/feature-simplify.js';
 import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
 
 const filesystem: SliceTopologyFixtureFilesystem = {
@@ -170,5 +170,15 @@ describe('BUILD completion requires a CLEAN whole-feature simplify record', () =
         completionReason: '1/3 tasks pending/not completed: 2',
       }),
     ).toBe(true);
+  });
+});
+
+describe('recordsCleanFeatureSimplify', () => {
+  it('accepts a CLEAN verdict line with or without trailing counts and rejects other verdicts', () => {
+    expect(recordsCleanFeatureSimplify('# x\n\n## Verdict: CLEAN\n')).toBe(true);
+    expect(recordsCleanFeatureSimplify('## Verdict: CLEAN (0 must-fix, 2 advisory)')).toBe(true);
+    expect(recordsCleanFeatureSimplify('## Verdict: SIMPLIFY_REQUIRED\n')).toBe(false);
+    expect(recordsCleanFeatureSimplify('## Verdict: CLEANUP_PENDING\n')).toBe(false);
+    expect(recordsCleanFeatureSimplify('text ## Verdict: CLEAN\n')).toBe(false);
   });
 });
