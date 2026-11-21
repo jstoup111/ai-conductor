@@ -61,7 +61,7 @@ As the build_review coordinator, I want a structured result that fails the descr
 #### Happy Path
 - Given a structured result whose finding cites a content-region `contentHash` absent from the projection, when it is validated, then the rejection names `findings[0].anchor.locus.contentHash` and states that it must equal a hash the projection lists, and the branch settles `absent` with cause `invalid-structured-result`.
 - Given a structured result whose `concernKind` is outside the descriptor enum, when it is validated, then the rejection names `findings[0].concernKind` and lists the admitted members, and the branch settles `absent` with cause `invalid-structured-result`.
-- Given two findings in one structured result that canonicalize to the same identity, when it is validated, then the rejection names the duplicate finding id and the branch settles `absent`.
+- Given two findings in one structured result that canonicalize to the same identity, when it is validated, then the engine merges them into one finding that keeps every summary and evidence location with the gravest severity and highest confidence, the result is accepted, and no mechanical fault is charged.
 - Given an `invalid-structured-result` fault, when the lap settles, then no aggregate is published for that rubric, no kickback is charged, no convergence cap ticks, and the fault event carries the field-named rejection.
 
 #### Negative Paths
@@ -71,7 +71,7 @@ As the build_review coordinator, I want a structured result that fails the descr
 - Given a structured result rejected for a contract violation and a second rubric in the same lap that judged cleanly, when the lap settles, then the clean rubric's result is retained and only the rejected rubric is `absent`.
 
 ### Done When
-- [ ] `describeBuildReviewJudgedResultRejection` runs over the structured result and its enumerated problems name the field path and the form required for hash membership, enum membership, and duplicate identity.
+- [ ] `describeBuildReviewJudgedResultRejection` runs over the structured result and its enumerated problems name the field path and the form required for hash membership and enum membership, and never name a duplicate identity because colliding findings are merged rather than rejected.
 - [ ] The coordinator's terminal classification maps a rejected structured result to `invalid-structured-result` and the fault-cause mapping is total with the prose-scrape causes removed.
 - [ ] A test asserts exactly one invocation per branch on rejection and that the repair-prompt path has no remaining caller.
 - [ ] A test asserts three consecutive `invalid-structured-result` laps halt `needs-human` and a clean sibling rubric survives a rejected one.

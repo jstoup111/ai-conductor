@@ -513,9 +513,7 @@ describe('build-review domain', () => {
     expect(describe(envelope([valid]), { changedTests: [], changedTestRegions: [{ ...locus, path: 'test/other.test.ts' }], changedContentRegions: [], changedPaths: [], planTasks: [] })).toBe(
       'findings[0].anchor.locus must reference a projected in-scope content region (path, contentHash, and occurrence must match one)',
     );
-    expect(describe(envelope([valid, { ...valid, summary: 'Reworded.' }]))).toMatch(
-      /^findings must not repeat one concern on one content region \(duplicated identity: sha256:[a-f0-9]{64}\) — merge equivalent findings$/,
-    );
+    expect(describe(envelope([valid, { ...valid, summary: 'Reworded.' }]))).not.toMatch(/duplicat/);
     // Bounded: six named problems, then a count.
     const many = envelope(Array.from({ length: 8 }, () => ({ summary: 'x' })));
     expect(describe(many)).toMatch(/; and \d+ more problem\(s\)$/);
@@ -543,16 +541,25 @@ describe('build-review domain', () => {
       problems: [{ field: 'findings[0].concernKind', required: 'must be one of "test-insensitive" (got "invented-kind")' }],
     });
 
-    const duplicate = judged([finding(), finding({ summary: 'Same identity, different wording.' })], { contractVersion: 'v4' });
-    const duplicateRejection = diagnose(duplicate);
-    const duplicateIdentity = canonicalizeBuildReviewFindingIdentity({
-      rubric: 'testQuality', contractVersion: 'v4', concernKind: 'test-insensitive', anchor: { rubric: 'testQuality', locus },
-    })!.id;
-    expect(parseBuildReviewJudgedResult(duplicate, references)).toBeUndefined();
-    expect(duplicateRejection).toMatchObject({
-      kind: 'explained',
-      problems: [{ field: 'findings[1].identity', required: `must not duplicate finding identity ${duplicateIdentity}` }],
+    // Distinct same-kind concerns on one region (e.g. a whole added file) share an identity;
+    // the engine merges them into one finding instead of rejecting the result (#3721).
+    const duplicate = judged([
+      finding({ confidence: 60 }),
+      finding({ summary: 'A second concern on the same region.', severity: 'major', confidence: 80, evidenceLocations: ['test/widget.test.ts:8', 'test/widget.test.ts:20'] }),
+      finding(),
+    ], { contractVersion: 'v4' });
+    expect(diagnose(duplicate)).toEqual({ kind: 'unexplained', problems: [] });
+    const merged = parseBuildReviewJudgedResult(duplicate, references);
+    expect(merged).toMatchObject({ verdict: 'FAIL' });
+    expect(merged!.findings).toHaveLength(1);
+    expect(merged!.findings[0]).toMatchObject({
+      concernKind: 'test-insensitive',
+      summary: 'The assertion passes against reverted production.\n\nA second concern on the same region.',
+      severity: 'major', confidence: 80,
+      evidenceLocations: ['test/widget.test.ts:8', 'test/widget.test.ts:20'],
     });
+    expect(canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v4', concernKind: merged!.findings[0]!.concernKind, anchor: merged!.findings[0]!.anchor })!.id)
+      .toBe(canonicalizeBuildReviewFindingIdentity({ rubric: 'testQuality', contractVersion: 'v4', concernKind: 'test-insensitive', anchor: { rubric: 'testQuality', locus } })!.id);
 
     expect(diagnose(JSON.stringify(judged([])))).toEqual({
       kind: 'explained',

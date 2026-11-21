@@ -359,9 +359,6 @@ describe("build-review coordinator: registered dispatch", () => {
     ['an out-of-enum concern kind', () => ({
       findings: [{ ...testQualityFinding(), concernKind: 'invented-kind' }],
     }), 'findings[0].concernKind'],
-    ['a duplicate finding identity', () => ({
-      findings: [testQualityFinding(), testQualityFinding('Same identity, different wording.')],
-    }), 'findings[1].identity'],
   ])('settles a dispatched result with %s absent as an invalid structured result', async (_caseName, resultFactory, field) => {
     const dispatchModel = vi.fn(async () => resultFactory());
     const writeArtifact = vi.fn(async (artifact) => ({ version: 1, ...artifact }));
@@ -1303,7 +1300,7 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
     expect(testQualityBranch(result)).toMatchObject({ kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-structured-result", detail });
   });
 
-  it("rejects colliding finding identities in one judged result as infrastructure, never a verdict", async () => {
+  it("merges colliding finding identities in one judged result into one finding, never a mechanical fault", async () => {
     const input = coordinationInput(true, {
       inputs: titledInputs(),
       dispatchModel: vi.fn(async () => ({ findings: [testQualityFinding("first wording"), testQualityFinding("second wording")] })),
@@ -1311,12 +1308,13 @@ describe("build-review coordinator: dispatch-failure detail carry-through", () =
 
     const result = await coordinateBuildReviewRubrics(input);
 
-    expect(testQualityBranch(result)).toMatchObject({
-      kind: "infrastructure-failure", rubric: "testQuality", reason: "invalid-structured-result",
-      detail: expect.stringContaining('findings must not repeat one concern on one content region (duplicated identity: sha256:'),
-    });
-    expect(input.writeArtifact).not.toHaveBeenCalled();
-    expect(input.writeCache).not.toHaveBeenCalled();
+    const branch = testQualityBranch(result);
+    expect(branch).toMatchObject({ kind: "dispatched", rubric: "testQuality", result: { kind: "judged", verdict: "FAIL" } });
+    expect(branch).not.toHaveProperty("reason");
+    const findings = branch?.kind === "dispatched" && branch.result.kind === "judged" ? branch.result.findings : [];
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.summary).toContain("first wording");
+    expect(findings[0]!.summary).toContain("second wording");
   });
 
   // The Record below is keyed BY the closed union, so `typecheck:test` fails on
