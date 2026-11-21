@@ -15,11 +15,11 @@ Five tasks.
 
 ## Technical Approach
 
-- **Module (`src/conductor/src/engine/feature-simplify.ts`, new).** Exports
-  `FEATURE_SIMPLIFY_REQUIRED_PREFIX = 'whole-feature simplify pass required:'`,
+- **Module (`src/conductor/src/engine/feature-simplify.ts`, new, no I/O).** Exports
+  `FEATURE_SIMPLIFY_REQUIRED_PREFIX = 'whole-feature simplify pass required:'` and
   `featureSimplifyRecordPath(activeChild?: ChildId)` returning
-  `.pipeline/audit-trail/feature-simplification.md` or `.pipeline/audit-trail/child-<k>-simplification.md`,
-  and `featureSimplifyMissingReason(root, activeChild?)` returning `null` when the record contains a line
+  `.pipeline/audit-trail/feature-simplification.md` or `.pipeline/audit-trail/child-<k>-simplification.md`.
+  `artifacts.ts` (already a filesystem boundary) exports `featureSimplifyMissingReason(root, activeChild?)` returning `null` when the record contains a line
   matching `/^## Verdict: CLEAN\b/m`, or when `pipelinePathFor(root, 'build-review.json', activeChild)`
   exists (a feature or child already past its first completion); otherwise the reason
   `whole-feature simplify pass required: run the simplify workflow in whole-feature mode over base...HEAD and record <path> ending "## Verdict: CLEAN"`.
@@ -32,7 +32,8 @@ Five tasks.
 - **Escape (`conductor.ts`, the `anyAttemptMovedHead` exhaustion branch).** Add the conjunct
   `(await featureSimplifyMissingReason(this.projectRoot, this.activeRegionChild)) === null` beside the
   existing `uncommittedPathsOrNull(...) === null`; when it fails the branch falls through to the existing
-  `!succeeded` HALT path, whose reason is the last completion miss.
+  `!succeeded` HALT path. That path's reason chain names the simplify miss (the last completion error
+  when it carries the prefix) right after the uncommitted-paths reason, as D4 does for dirty paths.
 - **Hint (`remediation-hints.ts`, `buildRetryHint`, `step === 'build'`).** A reason starting with the
   prefix returns the completion-miss sentence plus: run the `simplify` workflow in whole-feature mode over
   the whole feature diff (`base...HEAD`), fix every must-fix finding, write the named record ending
@@ -56,9 +57,9 @@ Five tasks.
 **Type:** happy-path
 
 **Steps:**
-1. Write failing tests in `src/conductor/test/engine/feature-simplify.test.ts` and the build-predicate tests in `src/conductor/test/engine/artifacts.test.ts` for every Done-when check below.
+1. Write failing tests in `src/conductor/test/engine/feature-simplify.test.ts` for every Done-when check below.
 2. Verify RED.
-3. Implement `src/conductor/src/engine/feature-simplify.ts` and the predicate call as in Technical Approach; add a CLEAN feature record to the existing fixtures that expect BUILD completion (artifacts, gate-loop, trailer-union, conductor-loop-policies, task-seed, build-child-scope tests).
+3. Implement `src/conductor/src/engine/feature-simplify.ts` and the predicate call as in Technical Approach; seed a CLEAN feature record (shared `test/fixtures/feature-simplify-record.ts` helper) in the existing fixtures whose subject is another gate but which expect BUILD to complete.
 4. Verify GREEN.
 5. Commit: "feat(build): require a CLEAN whole-feature simplify record before build_review".
 
@@ -69,10 +70,11 @@ Five tasks.
 - [test] `checkStepCompletion('build')` returns `done: true` for a resolved build with no feature record when `.pipeline/build-review.json` exists, and for a resolved build with a CLEAN record and an existing `.pipeline/build-review.json`.
 
 **Files likely touched:**
-- `src/conductor/src/engine/feature-simplify.ts` — record path, reason, past-first-completion check
-- `src/conductor/src/engine/artifacts.ts` — predicate call
+- `src/conductor/src/engine/feature-simplify.ts` — prefix and record path
+- `src/conductor/src/engine/artifacts.ts` — `featureSimplifyMissingReason` and the predicate call
 - `src/conductor/test/engine/feature-simplify.test.ts` — module tests
-- `src/conductor/test/engine/artifacts.test.ts` — predicate tests and fixtures
+- `src/conductor/test/fixtures/feature-simplify-record.ts` — shared fixture seeding
+- existing build-completion fixtures (artifacts, task-seed, build-child-scope, conductor, gate-loop, rebase-loop, acceptance) — seed the record
 
 **Dependencies:** none
 
@@ -81,7 +83,7 @@ Five tasks.
 **Type:** negative-path
 
 **Steps:**
-1. Write tests in `src/conductor/test/engine/artifacts.test.ts` for every Done-when check below.
+1. Write tests in `src/conductor/test/engine/feature-simplify.test.ts` for every Done-when check below.
 2. Prove each can fail by temporarily moving the simplify check ahead of task resolution; observe RED and restore.
 3. Implement: no production change beyond Task 1 is expected.
 4. Verify GREEN.
@@ -92,7 +94,7 @@ Five tasks.
 - [test] `checkStepCompletion('build')` with a `worktreeStatus` probe reporting an uncommitted path and no feature record returns `missing: 'uncommitted'` with a reason not containing `whole-feature simplify`.
 
 **Files likely touched:**
-- `src/conductor/test/engine/artifacts.test.ts` — ordering tests
+- `src/conductor/test/engine/feature-simplify.test.ts` — ordering tests
 
 **Dependencies:** Task 1
 
@@ -122,7 +124,7 @@ Five tasks.
 **Type:** happy-path
 
 **Steps:**
-1. Write failing tests in `src/conductor/test/engine/remediation-hints.test.ts` and `src/conductor/test/engine/build-progress-watcher.test.ts` for every Done-when check below.
+1. Write failing tests in `src/conductor/test/engine/feature-simplify.test.ts` for every Done-when check below.
 2. Verify RED.
 3. Implement the hint branch and the stall exemption as in Technical Approach, using `FEATURE_SIMPLIFY_REQUIRED_PREFIX`.
 4. Verify GREEN.
@@ -136,8 +138,7 @@ Five tasks.
 **Files likely touched:**
 - `src/conductor/src/engine/remediation-hints.ts` — hint branch
 - `src/conductor/src/engine/build-progress-watcher.ts` — exemption
-- `src/conductor/test/engine/remediation-hints.test.ts` — hint test
-- `src/conductor/test/engine/build-progress-watcher.test.ts` — stall tests
+- `src/conductor/test/engine/feature-simplify.test.ts` — hint and stall tests
 
 **Dependencies:** Task 1
 
