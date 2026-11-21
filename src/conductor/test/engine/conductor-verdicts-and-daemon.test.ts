@@ -83,6 +83,7 @@ import {
   persistFixtureRemediationPlan,
   persistFixtureTestRemediationPlan,
 } from './remediation-plan-fixtures.js';
+import { seedCleanFeatureSimplifyRecord } from '../fixtures/feature-simplify-record.js';
 
 function passingBuildReviewAggregate() {
   const lapId = parseBuildReviewLapId('fixture-lap')!;
@@ -1581,6 +1582,7 @@ describe('engine/conductor', () => {
     // Seed every step before prd_audit as done so the loop can start at the
     // SHIP tail; write the build + manual-test fixtures the predicates need.
     async function seedToPrdAudit(): Promise<void> {
+      await seedCleanFeatureSimplifyRecord(dir);
       const res = await readState(statePath);
       const state = (res.ok ? res.value : {}) as Record<string, unknown>;
       let reachedPrdAudit = false;
@@ -3053,6 +3055,7 @@ describe('engine/conductor', () => {
 
     // Seed state to build gate so the loop starts at build directly
     async function seedToBuildStep(): Promise<void> {
+      await seedCleanFeatureSimplifyRecord(dir);
       const res = await readState(statePath);
       const state = (res.ok ? res.value : {}) as Record<string, unknown>;
       for (const s of ALL_STEPS) {
@@ -3377,6 +3380,7 @@ describe('engine/conductor', () => {
     const STALL_QUESTION = 'Need user decision: which auth provider — Auth0 or Cognito?';
 
     async function seedToBuildStep(): Promise<void> {
+      await seedCleanFeatureSimplifyRecord(dir);
       const res = await readState(statePath);
       const state = (res.ok ? res.value : {}) as Record<string, unknown>;
       for (const s of ALL_STEPS) {

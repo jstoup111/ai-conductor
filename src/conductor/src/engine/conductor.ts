@@ -218,6 +218,7 @@ import {
   type ChildId,
 } from './child-context.js';
 import { BUILD_PRE_CHECK_FAILED_PREFIX, runBuildPreCheck } from './build-pre-check.js';
+import { FEATURE_SIMPLIFY_REQUIRED_PREFIX } from './feature-simplify.js';
 import { activePublicationRecord } from './stack-publication-record.js';
 import { publishedStackRefusal } from './stack-publication.js';
 import {
@@ -341,6 +342,7 @@ import {
   discardStaleLapBuildReviewFail,
   removeBuildReviewVerdict,
   uncommittedPathsOrNull,
+  featureSimplifyMissingReason,
   stampGateRunIdentity,
   isVerdictRunIdentityStep,
 } from './artifacts.js';
@@ -15033,17 +15035,20 @@ export class Conductor {
                 // code path) so the run proceeds to `build_review`, and record
                 // which plan task ids were left unresolved so an operator can
                 // still see the gap in `conduct-state.json`.
-                const escapeTreeClean =
+                const escapeFloorsClear =
                   step.name === 'build' &&
                   anyAttemptMovedHead &&
-                  (await uncommittedPathsOrNull(await this.completionCtx(state))) === null;
+                  (await uncommittedPathsOrNull(await this.completionCtx(state))) === null &&
+                  // D9 (both doors): the escape never bypasses the
+                  // whole-feature simplify floor the completion gate enforces.
+                  (await featureSimplifyMissingReason(this.projectRoot, this.activeRegionChild)) === null;
                 // D11 (both doors): the escape never bypasses the pre-check, and
                 // its miss becomes the reason the exhausted BUILD halts with.
-                const escapePreCheckMiss = escapeTreeClean ? await this.buildPreCheckMissReason() : null;
+                const escapePreCheckMiss = escapeFloorsClear ? await this.buildPreCheckMissReason() : null;
                 if (escapePreCheckMiss) {
                   lastError = `Step '${step.name}' completed but completion check failed: ${escapePreCheckMiss}`;
                 }
-                if (escapeTreeClean && escapePreCheckMiss === null) {
+                if (escapeFloorsClear && escapePreCheckMiss === null) {
                   let routedReason: string | undefined;
                   try {
                     const statusPath = join(this.projectRoot, '.pipeline/task-status.json');
@@ -16707,6 +16712,10 @@ export class Conductor {
                     uncommittedPaths.length > 3 ? ` (+${uncommittedPaths.length - 3} more)` : ''
                   }`
                 : undefined;
+              // D9: a BUILD whose last miss was the whole-feature simplify floor
+              // halts naming that pass, as the dirty-tree floor names its paths.
+              const featureSimplifyHaltReason =
+                step.name === 'build' && lastError.includes(FEATURE_SIMPLIFY_REQUIRED_PREFIX) ? lastError : undefined;
               // D11: a BUILD whose last miss was its pre-check halts naming it.
               const buildPreCheckHaltReason =
                 step.name === 'build' && lastError.includes(BUILD_PRE_CHECK_FAILED_PREFIX) ? lastError : undefined;
@@ -16725,19 +16734,21 @@ export class Conductor {
                         `Re-run '${unretryableInputFailure.retryAfterStep}' before retrying '${unretryableInputFailure.failingStep}'.`
                       : uncommittedPathsReason
                         ? uncommittedPathsReason
-                        : buildPreCheckHaltReason
-                          ? buildPreCheckHaltReason
-                          : acceptanceRedHealFailureReason
-                            ? acceptanceRedHealFailureReason
-                            : lastBuildStallReason
-                              ? lastBuildStallReason
-                              : graderDispatchFailureReason
-                                ? `${graderDispatchFailureReason} (retries exhausted with backoff — this is an infrastructure failure, not a code-quality rejection; the build's completed work is intact)`
-                                : unchangedInputNote
-                                  ? `step '${step.name}' failed in auto mode: ${unchangedInputNote}`
-                                  : buildReviewSchemaFailureReason
-                                    ? buildReviewSchemaFailureReason
-                                    : `step '${step.name}' failed in auto mode (retries exhausted)`;
+                        : featureSimplifyHaltReason
+                          ? featureSimplifyHaltReason
+                          : buildPreCheckHaltReason
+                            ? buildPreCheckHaltReason
+                            : acceptanceRedHealFailureReason
+                              ? acceptanceRedHealFailureReason
+                              : lastBuildStallReason
+                                ? lastBuildStallReason
+                                : graderDispatchFailureReason
+                                  ? `${graderDispatchFailureReason} (retries exhausted with backoff — this is an infrastructure failure, not a code-quality rejection; the build's completed work is intact)`
+                                  : unchangedInputNote
+                                    ? `step '${step.name}' failed in auto mode: ${unchangedInputNote}`
+                                    : buildReviewSchemaFailureReason
+                                      ? buildReviewSchemaFailureReason
+                                      : `step '${step.name}' failed in auto mode (retries exhausted)`;
               const terminalReason =
                 finishRemediationPlannerFault === undefined
                   ? reason

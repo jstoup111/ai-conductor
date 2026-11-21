@@ -7,6 +7,7 @@ import { makeGitRunner } from './rebase.js';
 import { resolveBuildProgressConfig } from './config.js';
 import { heartbeatBelongsToDispatch, readStepHeartbeat } from './step-heartbeat.js';
 import { BUILD_PRE_CHECK_FAILED_PREFIX } from './build-pre-check.js';
+import { FEATURE_SIMPLIFY_REQUIRED_PREFIX } from './feature-simplify.js';
 import type { ResolvedBuildProgressConfig } from './config.js';
 import type { ConductorEventEmitter } from './conductor-event-emitter.js';
 import type { StepName } from '../types/index.js';
@@ -47,12 +48,14 @@ export function isNoTaskProgressBuildStall(input: {
     input.resolvedTasksAfter <= input.resolvedTasksBefore &&
     !input.headMovedThisAttempt &&
     // These reasons describe bounded completion work the conductor has
-    // deliberately admitted after task resolution.  Treating either as a
-    // no-progress stall would prevent its one permitted follow-up lap.
+    // deliberately admitted after task resolution.  Treating any as a
+    // no-progress stall would prevent its permitted follow-up lap (a CLEAN
+    // whole-feature simplify pass may change no code).
     !input.completionReason?.startsWith('unverified Done-when checks require one BUILD review pass:') &&
     !input.completionReason?.startsWith('Done-when citation refused:') &&
     // A pre-check repair may land in a later attempt; adr-2026-08-01 D11.
     !input.completionReason?.startsWith(BUILD_PRE_CHECK_FAILED_PREFIX) &&
+    !input.completionReason?.startsWith(FEATURE_SIMPLIFY_REQUIRED_PREFIX) &&
     !input.completionReason?.startsWith('Remediation closure reopened:')
   );
 }

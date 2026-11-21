@@ -48,11 +48,7 @@ async function commitWithTaskTrailer(dir: string, taskId: string, seq: number): 
   const file = `work-${seq}.txt`;
   await writeFile(join(dir, file), `work for task ${taskId}\n`);
   await execa('git', ['add', file], { cwd: dir });
-  await execa(
-    'git',
-    ['commit', '-m', `feat: implement task ${taskId}\n\nTask: ${taskId}\n`],
-    { cwd: dir },
-  );
+  await execa('git', ['commit', '-m', `feat: implement task ${taskId}\n\nTask: ${taskId}\n`], { cwd: dir });
 }
 
 // Fast-forwards every pre-build step's completion check by seeding the
@@ -69,6 +65,8 @@ async function seedAllArtifactsExceptTaskStatus(dir: string): Promise<void> {
     ['.docs/architecture/arch.md', 'x'],
     ['.docs/decisions/adr-001.md', 'x'],
     ['spec/acceptance/feature_spec.rb', 'x'],
+    // BUILD's whole-feature simplify floor (adr-2026-08-03 D9) is not under test here.
+    ['.pipeline/audit-trail/feature-simplification.md', '## Verdict: CLEAN\n'],
     [
       '.pipeline/acceptance-specs-red.json',
       JSON.stringify({
@@ -98,11 +96,7 @@ async function seedAllArtifactsExceptTaskStatus(dir: string): Promise<void> {
 // artifacts.ts's Task 10 (#773) comment, a `completed` row is never demoted
 // for lacking an evidence-sidecar stamp, so no `task-evidence.json` sidecar
 // is required to model "row-resolved" progress.
-async function writePlanAndStatus(
-  dir: string,
-  total: number,
-  completedIds: number[] = [],
-): Promise<void> {
+async function writePlanAndStatus(dir: string, total: number, completedIds: number[] = []): Promise<void> {
   await mkdir(join(dir, '.pipeline'), { recursive: true });
   await mkdir(join(dir, '.docs/plans'), { recursive: true });
   const planLines: string[] = ['# Plan', ''];

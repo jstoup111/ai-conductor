@@ -11,6 +11,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState } from '../../src/engine/state.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 import { Conductor } from '../test-conductor.js';
+import { seedCleanFeatureSimplifyRecord } from '../fixtures/feature-simplify-record.js';
 
 // The retries-exhausted escape (`anyAttemptMovedHead`) routes a commit-moving
 // BUILD to build_review. adr-2026-08-01 D11 puts the configured pre-check on
@@ -87,6 +88,7 @@ describe('retries-exhausted escape honors the configured test_suite pre-check', 
     await initTestRepo(dir);
     await commit(dir, 'README.md', 'Initial commit');
     await seedDecideArtifacts(dir);
+    await seedCleanFeatureSimplifyRecord(dir);
     await writeState(statePath, { plan_review: 'done' });
   });
 

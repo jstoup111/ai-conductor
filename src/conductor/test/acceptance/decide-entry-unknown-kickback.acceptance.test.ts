@@ -6,10 +6,7 @@ import type { StepName } from '../../src/types/index.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import { renderDecideEntryHalt } from '../../src/engine/decide-entry-policy.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
-import {
-  KICKBACK_LEDGER_PATH,
-  readKickbackLedger,
-} from '../../src/engine/kickback-ledger.js';
+import { KICKBACK_LEDGER_PATH, readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 import { MAX_KICKBACKS_PER_GATE } from '../../src/engine/remediation-caps.js';
 import {
   cleanupDecideEntryFixture,
@@ -21,15 +18,14 @@ import {
   type DecideEntryFixture,
   writeFixtureState,
 } from './decide-entry-fixture.js';
+import { seedCleanFeatureSimplifyRecord } from '../fixtures/feature-simplify-record.js';
 
 // Story 3 and Story 5. Production call site: both Conductor.run() kickback scans.
 describe('acceptance: unknown persisted kickback targets fail closed', () => {
   let fixture: DecideEntryFixture;
 
   beforeEach(async () => {
-    fixture = await createDecideEntryFixture(
-      await mkdtemp(join(tmpdir(), 'decide-entry-unknown-kickback-')),
-    );
+    fixture = await createDecideEntryFixture(await mkdtemp(join(tmpdir(), 'decide-entry-unknown-kickback-')));
   });
 
   afterEach(async () => {
@@ -48,6 +44,7 @@ describe('acceptance: unknown persisted kickback targets fail closed', () => {
       JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }),
       'utf-8',
     );
+    await seedCleanFeatureSimplifyRecord(fixture.root);
   }
 
   it('persists the shared refusal payload for an unknown target outside gate topology', async () => {
@@ -115,27 +112,28 @@ describe('acceptance: unknown persisted kickback targets fail closed', () => {
     expect(dispatched.filter((step) => step === 'build_review')).toHaveLength(1);
     // The failed verdict is owned by build_review and records the BUILD rewind.
     const ledger = await readKickbackLedger(fixture.root);
-    expect(ledger.gates.build_review?.lastReason).toContain(
-      'review must be re-run after BUILD work',
-    );
+    expect(ledger.gates.build_review?.lastReason).toContain('review must be re-run after BUILD work');
   });
 
   it('keeps the ping-pong cap reason ahead of an unknown-target refusal', async () => {
     await seedPlanTask();
     const unknownTarget = 'custom_decide_target' as StepName;
     await mkdir(join(fixture.root, '.pipeline'), { recursive: true });
-    await writeFile(join(fixture.root, KICKBACK_LEDGER_PATH), JSON.stringify({
-      version: 1,
-      gates: {
-        [unknownTarget]: {
-          count: MAX_KICKBACKS_PER_GATE,
-          treeHash: null,
-          lastReason: 'prior ping-pong round',
-          priorVerdict: true,
-          resolvedBefore: 1_000,
+    await writeFile(
+      join(fixture.root, KICKBACK_LEDGER_PATH),
+      JSON.stringify({
+        version: 1,
+        gates: {
+          [unknownTarget]: {
+            count: MAX_KICKBACKS_PER_GATE,
+            treeHash: null,
+            lastReason: 'prior ping-pong round',
+            priorVerdict: true,
+            resolvedBefore: 1_000,
+          },
         },
-      },
-    }));
+      }),
+    );
     expect((await readKickbackLedger(fixture.root)).gates[unknownTarget]?.cumulative).toBe(0);
     await writeFixtureState(fixture, resolvedState({ build: 'pending', run_started_at: 1 }));
     const runner: StepRunner = {

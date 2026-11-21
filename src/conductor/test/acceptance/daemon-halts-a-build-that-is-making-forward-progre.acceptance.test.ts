@@ -12,6 +12,7 @@ import { countResolvedTasks } from '../../src/engine/task-progress.js';
 import { validateConfig } from '../../src/engine/config.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { runDaemon, type BacklogItem, type DaemonDeps } from '../../src/engine/daemon.js';
+import { seedCleanFeatureSimplifyRecord } from '../fixtures/feature-simplify-record.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for issue #280 "Daemon halts a build that is making
@@ -104,9 +105,16 @@ async function seedAllArtifactsExceptTaskStatus(dir: string): Promise<void> {
     ['.docs/coherence/2026-07-12-plan.md', 'x'],
     ['.docs/architecture/arch.md', 'x'],
     ['.docs/decisions/adr-001.md', 'x'],
-    ['.pipeline/coverage-binding.json', JSON.stringify({
-      version: 1, slug: 'progress-halt', runId: 'test-run', status: 'disabled', entries: [],
-    })],
+    [
+      '.pipeline/coverage-binding.json',
+      JSON.stringify({
+        version: 1,
+        slug: 'progress-halt',
+        runId: 'test-run',
+        status: 'disabled',
+        entries: [],
+      }),
+    ],
     ['spec/acceptance/feature_spec.rb', 'x'],
     ['.pipeline/acceptance-specs-red.json', RED_EVIDENCE_JSON],
   ];
@@ -137,6 +145,7 @@ async function writeTaskStatus(dir: string, completed: number, total: number): P
     if (done) stamps[String(i)] = { sha: `${'0'.repeat(38)}${String(i).padStart(2, '0')}`, form: 'trailer' };
   }
   await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
+  await seedCleanFeatureSimplifyRecord(dir);
   let lastResolvedCount: number | undefined;
   try {
     const previous = JSON.parse(await readFile(join(dir, '.pipeline/task-evidence.json'), 'utf8')) as {
@@ -148,7 +157,12 @@ async function writeTaskStatus(dir: string, completed: number, total: number): P
   }
   await writeFile(
     join(dir, '.pipeline/task-evidence.json'),
-    JSON.stringify({ evidenceStamps: stamps, noEvidenceAttempts: 0, migrationGrandfather: [], ...(lastResolvedCount !== undefined && { lastResolvedCount }) }),
+    JSON.stringify({
+      evidenceStamps: stamps,
+      noEvidenceAttempts: 0,
+      migrationGrandfather: [],
+      ...(lastResolvedCount !== undefined && { lastResolvedCount }),
+    }),
   );
 }
 
@@ -177,6 +191,7 @@ async function seedSidecarProgress(
     status: i < resolvedNow ? 'completed' : 'pending',
   }));
   await writeFile(join(worktreeDir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
+  await seedCleanFeatureSimplifyRecord(worktreeDir);
   await writeFile(
     join(worktreeDir, '.pipeline/task-evidence.json'),
     JSON.stringify({
@@ -401,13 +416,18 @@ describe('S4: absolute attempt ceiling backstops slow-drip within a dispatch (ne
     const ledger = (await readFile(join(dir, '.pipeline', 'events.jsonl'), 'utf-8'))
       .trim()
       .split('\n')
-      .map((line) => JSON.parse(line) as {
-        type: string;
-        step?: string;
-        activeInterval?: { startedAtMs: number; durationMs: number };
-      });
+      .map(
+        (line) =>
+          JSON.parse(line) as {
+            type: string;
+            step?: string;
+            activeInterval?: { startedAtMs: number; durationMs: number };
+          },
+      );
     const terminalIndexes = ledger.flatMap((event, index) =>
-      event.type === 'step_completed' || event.type === 'step_failed' || event.type === 'step_interrupted' ? [index] : [],
+      event.type === 'step_completed' || event.type === 'step_failed' || event.type === 'step_interrupted'
+        ? [index]
+        : [],
     );
     const terminals = terminalIndexes.map((index) => ledger[index]!);
     const loopHaltIndex = ledger.findIndex((event) => event.type === 'loop_halt');
@@ -422,9 +442,9 @@ describe('S4: absolute attempt ceiling backstops slow-drip within a dispatch (ne
     const terminalByStep = countsByStep(terminals);
 
     expect([...terminalByStep.entries()].sort()).toEqual([...startedByStep.entries()].sort());
-    expect(terminals.every((event) =>
-      event.activeInterval !== undefined && event.activeInterval.durationMs >= 0,
-    )).toBe(true);
+    expect(terminals.every((event) => event.activeInterval !== undefined && event.activeInterval.durationMs >= 0)).toBe(
+      true,
+    );
     expect(terminalIndexes.every((index) => index < loopHaltIndex)).toBe(true);
     expect(terminals.some((event) => event.step === 'build')).toBe(true);
     const timing = await computeTimingRollup(dir);
@@ -710,6 +730,7 @@ describe('S8: corrupt/missing progress inputs never crash the decision (negative
     await mkdir(join(root, '.pipeline'), { recursive: true });
     // Truncated/corrupt JSON — never valid.
     await writeFile(join(root, '.pipeline/task-status.json'), '{"tasks": [ { "id": 1, "status": "comple');
+    await seedCleanFeatureSimplifyRecord(root);
     // Sidecar entirely missing.
 
     // Already-shipped, real primitive: confirms the corrupt status file alone

@@ -70,11 +70,7 @@ async function commitWithTaskTrailer(dir: string, taskId: string, seq: number): 
   const file = `work-${seq}.txt`;
   await writeFile(join(dir, file), `work for task ${taskId}\n`);
   await execa('git', ['add', file], { cwd: dir });
-  await execa(
-    'git',
-    ['commit', '-m', `feat: implement task ${taskId}\n\nTask: ${taskId}\n`],
-    { cwd: dir },
-  );
+  await execa('git', ['commit', '-m', `feat: implement task ${taskId}\n\nTask: ${taskId}\n`], { cwd: dir });
 }
 
 // Real committed work that carries NO `Task:` trailer — models the
@@ -107,6 +103,8 @@ async function seedAllArtifactsExceptTaskStatus(dir: string): Promise<void> {
     ['.docs/decisions/adr-001.md', 'x'],
     ['.docs/coherence/coherence.md', 'x'],
     ['spec/acceptance/feature_spec.rb', 'x'],
+    // BUILD's whole-feature simplify floor (adr-2026-08-03 D9) is not under test here.
+    ['.pipeline/audit-trail/feature-simplification.md', '## Verdict: CLEAN\n'],
     [
       '.pipeline/acceptance-specs-red.json',
       JSON.stringify({
@@ -133,11 +131,7 @@ async function seedAllArtifactsExceptTaskStatus(dir: string): Promise<void> {
 
 // Writes the plan (Task 1..total headings) and task-status.json rows.
 // `completedIds` become `completed` rows; every other id is `pending`.
-async function writePlanAndStatus(
-  dir: string,
-  total: number,
-  completedIds: number[] = [],
-): Promise<void> {
+async function writePlanAndStatus(dir: string, total: number, completedIds: number[] = []): Promise<void> {
   await mkdir(join(dir, '.pipeline'), { recursive: true });
   await mkdir(join(dir, '.docs/plans'), { recursive: true });
   const planLines: string[] = ['# Plan', ''];
@@ -209,10 +203,13 @@ describe('commit-movement liveness floor (real Conductor.run() build retry loop)
     // `unattributed_progress` does not exist in the ConductorEvent union yet
     // (plan Task 1) — subscribe by raw type string so this spec exercises
     // the real event bus rather than a type that hasn't been added.
-    events.on('unattributed_progress' as unknown as never, ((e: unknown) => {
-      const evt = e as UnattributedProgressEvent;
-      if (evt.type === 'unattributed_progress') unattributedEvents.push(evt);
-    }) as never);
+    events.on(
+      'unattributed_progress' as unknown as never,
+      ((e: unknown) => {
+        const evt = e as UnattributedProgressEvent;
+        if (evt.type === 'unattributed_progress') unattributedEvents.push(evt);
+      }) as never,
+    );
     const onRecovery = vi.fn().mockResolvedValue('quit' as const);
     const conductor = new Conductor({
       stateFilePath: statePath,
@@ -480,10 +477,13 @@ describe('budget exhaustion with real, unattributed commits every attempt (RED �
       if (e.type === 'build_stall') stallEvents.push({ reason: e.reason });
     });
     const unattributedEvents: UnattributedProgressEvent[] = [];
-    events.on('unattributed_progress' as unknown as never, ((e: unknown) => {
-      const evt = e as UnattributedProgressEvent;
-      if (evt.type === 'unattributed_progress') unattributedEvents.push(evt);
-    }) as never);
+    events.on(
+      'unattributed_progress' as unknown as never,
+      ((e: unknown) => {
+        const evt = e as UnattributedProgressEvent;
+        if (evt.type === 'unattributed_progress') unattributedEvents.push(evt);
+      }) as never,
+    );
     const stepStarts: StepName[] = [];
     events.on('step_started', (e) => {
       if (e.type === 'step_started') stepStarts.push(e.step);
@@ -700,9 +700,12 @@ describe('genuine wedge preserved — remediation and HALT shapes unchanged (pla
       if (e.type === 'build_stall') stallEvents.push({ reason: e.reason });
     });
     const unattributedEvents: unknown[] = [];
-    events.on('unattributed_progress' as unknown as never, ((e: unknown) => {
-      unattributedEvents.push(e);
-    }) as never);
+    events.on(
+      'unattributed_progress' as unknown as never,
+      ((e: unknown) => {
+        unattributedEvents.push(e);
+      }) as never,
+    );
     const stepStarts: StepName[] = [];
     events.on('step_started', (e) => {
       if (e.type === 'step_started') stepStarts.push(e.step);
@@ -734,10 +737,7 @@ describe('genuine wedge preserved — remediation and HALT shapes unchanged (pla
     // writing a usable `.pipeline/remediation.json`, so the dispatch
     // degrades and the synthesized question surfaces into the stall
     // question evidence file exactly as it does today.
-    const questionContent = await readFile(
-      join(dir, '.pipeline/build-stall-question.md'),
-      'utf-8',
-    ).catch(() => null);
+    const questionContent = await readFile(join(dir, '.pipeline/build-stall-question.md'), 'utf-8').catch(() => null);
     expect(questionContent).toContain(
       'build stalled: no task progress (resolved tasks stayed at 0 after 3 attempt(s))',
     );
@@ -960,9 +960,7 @@ describe('C3 — routing-only is never always-pass (plan Task 12)', () => {
     // NEXT dispatch, after build_review's FAIL) names task 3's gap.
     const hintsAfterKickback = buildRetryReasons.filter((r) => r !== undefined);
     expect(hintsAfterKickback.length).toBeGreaterThan(0);
-    expect(hintsAfterKickback.some((r) => r!.includes('plan task 3 was never resolved'))).toBe(
-      true,
-    );
+    expect(hintsAfterKickback.some((r) => r!.includes('plan task 3 was never resolved'))).toBe(true);
 
     // The routed-reason persisted to state also names task 3, specifically
     // — never silently drops the gap, and never mis-names a resolved task
@@ -1117,10 +1115,13 @@ describe('invariant — count alone can never kill a build (plan Task 14)', () =
         if (e.type === 'build_stall') stallEvents.push({ reason: e.reason });
       });
       const unattributedEvents: UnattributedProgressEvent[] = [];
-      events.on('unattributed_progress' as unknown as never, ((e: unknown) => {
-        const evt = e as UnattributedProgressEvent;
-        if (evt.type === 'unattributed_progress') unattributedEvents.push(evt);
-      }) as never);
+      events.on(
+        'unattributed_progress' as unknown as never,
+        ((e: unknown) => {
+          const evt = e as UnattributedProgressEvent;
+          if (evt.type === 'unattributed_progress') unattributedEvents.push(evt);
+        }) as never,
+      );
 
       const conductor = new Conductor({
         stateFilePath: statePath,
@@ -1153,8 +1154,10 @@ describe('invariant — count alone can never kill a build (plan Task 14)', () =
   });
 
   it('mixed (attempt 1 commits, attempts 2+ wedge): both classifications occur, count matches the mock-owned ledger exactly — proving per-attempt correlation, not aggregate coincidence', async () => {
-    const { stallEvents, unattributedEvents, committedAttempts, skippedAttempts } =
-      await runFixture('mixed', (attempt) => attempt === 1);
+    const { stallEvents, unattributedEvents, committedAttempts, skippedAttempts } = await runFixture(
+      'mixed',
+      (attempt) => attempt === 1,
+    );
 
     expect(committedAttempts).toEqual([1]);
     expect(skippedAttempts.length).toBeGreaterThan(0);

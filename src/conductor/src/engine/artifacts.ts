@@ -89,6 +89,12 @@ import { artifactPresenceAtMergeBase, evaluateAdrAssumptionLedgers } from './adr
 export { splitStoryBlocks, type StoryBlock } from './story-criteria.js';
 import { loadSliceTopology, validatePlanDependencies } from './slice-topology.js';
 import { parseChildId, pipelinePathFor, type ChildId } from './child-context.js';
+import {
+  FEATURE_SIMPLIFY_CLEAN_VERDICT,
+  FEATURE_SIMPLIFY_REQUIRED_PREFIX,
+  featureSimplifyRecordPath,
+  recordsCleanFeatureSimplify,
+} from './feature-simplify.js';
 
 export type ArtifactLifecycleScope = 'feature' | 'repository' | 'run';
 
@@ -1512,6 +1518,27 @@ export async function uncommittedPathsOrNull(ctx: CompletionContext): Promise<st
   } catch {
     return null;
   }
+}
+
+/**
+ * The whole-feature simplify floor's routing miss (adr-2026-08-03 D9), or
+ * `null` when the feature (or active child) record contains `## Verdict: CLEAN`
+ * or the feature/child is past its first completion (its `build-review.json`
+ * already exists). Unreadable files read as absent.
+ */
+export async function featureSimplifyMissingReason(root: string, activeChild?: ChildId): Promise<string | null> {
+  const record = featureSimplifyRecordPath(activeChild);
+  const text = await readFile(join(root, record), 'utf8').catch(() => '');
+  if (recordsCleanFeatureSimplify(text)) return null;
+  const pastFirstCompletion = await access(pipelinePathFor(root, 'build-review.json', activeChild)).then(
+    () => true,
+    () => false,
+  );
+  if (pastFirstCompletion) return null;
+  return (
+    `${FEATURE_SIMPLIFY_REQUIRED_PREFIX} run the simplify workflow in whole-feature mode over base...HEAD ` +
+    `and record ${record} ending "${FEATURE_SIMPLIFY_CLEAN_VERDICT}"`
+  );
 }
 
 async function dirtyWorktreeCompletionOrNull(ctx: CompletionContext): Promise<CompletionResult | null> {
@@ -3209,6 +3236,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
 
       const dirtyWorktree = await dirtyWorktreeCompletionOrNull(ctx);
       if (dirtyWorktree) return dirtyWorktree;
+      const featureSimplifyMiss = await featureSimplifyMissingReason(dir, ctx.activeChild);
+      if (featureSimplifyMiss) return { done: false, reason: featureSimplifyMiss };
       const unverifiedNudge = unverifiedDoneWhenNudgeCompletion(status, ctx);
       if (unverifiedNudge) return unverifiedNudge;
       const preCheckMiss = await ctx.buildPreCheck?.();

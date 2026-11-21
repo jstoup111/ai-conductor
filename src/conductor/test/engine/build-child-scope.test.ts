@@ -4,10 +4,7 @@ import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
-import {
-  writeSliceTopologyFixture,
-  type SliceTopologyFixtureFilesystem,
-} from './slice-topology-fixture.js';
+import { writeSliceTopologyFixture, type SliceTopologyFixtureFilesystem } from './slice-topology-fixture.js';
 import { parseChildId } from '../../src/engine/child-context.js';
 import { countResolvedTasks } from '../../src/engine/task-progress.js';
 import { isNoTaskProgressBuildStall } from '../../src/engine/build-progress-watcher.js';
@@ -27,24 +24,31 @@ describe('build child task scope', () => {
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'build-child-scope-'));
     await mkdir(join(root, '.docs', 'plans'), { recursive: true });
-    await writeFile(join(root, '.docs', 'plans', 'feature.md'), [
-      '### Task T1: First',
-      '### Task T2: Second',
-      '### Task T3: Third',
-      '### Task T4: Fourth',
-      '### Task rem-1: Remediation',
-    ].join('\n'));
-    await writeSliceTopologyFixture(root, {
-      version: 1,
-      slug: 'feature',
-      runId: 'scope-test',
-      status: 'done',
-      entries: [],
-      sliceMembership: {
-        taskSlices: { T1: 1, T2: 1, T3: 2, T4: 2 },
-        titles: ['first', 'second'],
+    await writeFile(
+      join(root, '.docs', 'plans', 'feature.md'),
+      [
+        '### Task T1: First',
+        '### Task T2: Second',
+        '### Task T3: Third',
+        '### Task T4: Fourth',
+        '### Task rem-1: Remediation',
+      ].join('\n'),
+    );
+    await writeSliceTopologyFixture(
+      root,
+      {
+        version: 1,
+        slug: 'feature',
+        runId: 'scope-test',
+        status: 'done',
+        entries: [],
+        sliceMembership: {
+          taskSlices: { T1: 1, T2: 1, T3: 2, T4: 2 },
+          titles: ['first', 'second'],
+        },
       },
-    }, filesystem);
+      filesystem,
+    );
   });
 
   afterEach(async () => {
@@ -64,6 +68,8 @@ describe('build child task scope', () => {
   }
 
   it('completes child 1 without waiting for pending child 2 tasks', async () => {
+    await mkdir(join(root, '.pipeline', 'audit-trail'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'audit-trail', 'child-1-simplification.md'), '## Verdict: CLEAN\n');
     await writeStatus([
       { id: 'T1', status: 'completed' },
       { id: 'T2', status: 'completed' },
@@ -101,20 +107,24 @@ describe('build child task scope', () => {
 
     expect(await countResolvedTasks(root, child1)).toBe(2);
     expect(await countResolvedTasks(root, child2)).toBe(0);
-    expect(isNoTaskProgressBuildStall({
-      attempt: 2,
-      resolvedTasksBefore: 0,
-      resolvedTasksAfter: 0,
-      headMovedThisAttempt: false,
-      completionReason: '2/2 tasks pending/not completed: T3, T4',
-    })).toBe(true);
-    expect(isNoTaskProgressBuildStall({
-      attempt: 2,
-      resolvedTasksBefore: 0,
-      resolvedTasksAfter: 0,
-      headMovedThisAttempt: true,
-      completionReason: '2/2 tasks pending/not completed: T3, T4',
-    })).toBe(false);
+    expect(
+      isNoTaskProgressBuildStall({
+        attempt: 2,
+        resolvedTasksBefore: 0,
+        resolvedTasksAfter: 0,
+        headMovedThisAttempt: false,
+        completionReason: '2/2 tasks pending/not completed: T3, T4',
+      }),
+    ).toBe(true);
+    expect(
+      isNoTaskProgressBuildStall({
+        attempt: 2,
+        resolvedTasksBefore: 0,
+        resolvedTasksAfter: 0,
+        headMovedThisAttempt: true,
+        completionReason: '2/2 tasks pending/not completed: T3, T4',
+      }),
+    ).toBe(false);
   });
 
   it('includes remediation recorded to the active child and refuses an unowned remediation id', async () => {
@@ -125,18 +135,24 @@ describe('build child task scope', () => {
       { id: 'T4', status: 'completed' },
       { id: 'rem-1', status: 'pending' },
     ]);
-    await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({
-      appendedRemediationTaskIds: ['rem-1'],
-      appendedRemediationTaskChildren: { 'rem-1': 2 },
-    }));
+    await writeFile(
+      join(root, '.pipeline', 'engine-state.json'),
+      JSON.stringify({
+        appendedRemediationTaskIds: ['rem-1'],
+        appendedRemediationTaskChildren: { 'rem-1': 2 },
+      }),
+    );
 
     const pendingRemediation = await checkStepCompletion(root, 'build', completionContext(child2));
     expect(pendingRemediation.reason).toContain('rem-1');
     expect(await countResolvedTasks(root, child2)).toBe(2);
 
-    await writeFile(join(root, '.pipeline', 'engine-state.json'), JSON.stringify({
-      appendedRemediationTaskIds: ['rem-1'],
-    }));
+    await writeFile(
+      join(root, '.pipeline', 'engine-state.json'),
+      JSON.stringify({
+        appendedRemediationTaskIds: ['rem-1'],
+      }),
+    );
     const unownedRemediation = await checkStepCompletion(root, 'build', completionContext(child2));
     expect(unownedRemediation).toMatchObject({ done: false });
     expect(unownedRemediation.reason).toContain('rem-1');

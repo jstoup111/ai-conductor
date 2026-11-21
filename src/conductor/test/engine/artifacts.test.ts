@@ -33,25 +33,20 @@ const readStaleHaltBannerSpy = vi.fn<typeof realReadStaleHaltBanner>(async () =>
 // Spy target for the finish predicate's floored-placeholder body check. Default
 // null (fail-open); tests override to exercise the bounded kickback.
 const readFlooredBodySpy = vi.fn<typeof realReadFlooredBody>(async () => null);
-const evaluateShipmentEvidenceSpy = vi.fn(async (input: {
-  slug: string;
-  implementationPr: string;
-  candidateCommit: string;
-}) => ({
-  kind: 'valid' as const,
-  slug: input.slug,
-  pr: input.implementationPr,
-  recordPath: `.docs/shipped/${input.slug}.md`,
-  hash: 'test-hash',
-  commit: input.candidateCommit,
-}));
+const evaluateShipmentEvidenceSpy = vi.fn(
+  async (input: { slug: string; implementationPr: string; candidateCommit: string }) => ({
+    kind: 'valid' as const,
+    slug: input.slug,
+    pr: input.implementationPr,
+    recordPath: `.docs/shipped/${input.slug}.md`,
+    hash: 'test-hash',
+    commit: input.candidateCommit,
+  }),
+);
 vi.mock('../../src/engine/halt-pr-rehabilitation.js', () => ({
-  readStaleHaltTitle: (...args: Parameters<typeof realReadStaleHaltTitle>) =>
-    readStaleHaltTitleSpy(...args),
-  readStaleHaltBanner: (...args: Parameters<typeof realReadStaleHaltBanner>) =>
-    readStaleHaltBannerSpy(...args),
-  readFlooredBody: (...args: Parameters<typeof realReadFlooredBody>) =>
-    readFlooredBodySpy(...args),
+  readStaleHaltTitle: (...args: Parameters<typeof realReadStaleHaltTitle>) => readStaleHaltTitleSpy(...args),
+  readStaleHaltBanner: (...args: Parameters<typeof realReadStaleHaltBanner>) => readStaleHaltBannerSpy(...args),
+  readFlooredBody: (...args: Parameters<typeof realReadFlooredBody>) => readFlooredBodySpy(...args),
 }));
 vi.mock('../../src/engine/shipment-evidence.js', () => ({
   evaluateShipmentEvidence: (...args: Parameters<typeof evaluateShipmentEvidenceSpy>) =>
@@ -95,11 +90,7 @@ import {
   isCanonicalAdrFilename,
   parseAdrDecisions,
 } from '../../src/engine/artifacts.js';
-import type {
-  CompletionResult,
-  CompletionContext,
-  ArtifactResolutionContext,
-} from '../../src/engine/artifacts.js';
+import type { CompletionResult, CompletionContext, ArtifactResolutionContext } from '../../src/engine/artifacts.js';
 import type { StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { joinBuildReviewRubricOutcomes } from '../../src/engine/build-review-aggregate.js';
@@ -150,10 +141,7 @@ describe('engine/artifacts', () => {
   describe('gate code-stamp marker contract', () => {
     it('round-trips an engine-stamped run identity through the manual-test sidecar', async () => {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeFile(
-        join(dir, MANUAL_TEST_CODE_STAMP),
-        '{\n  "codeStamp": "abc123"\n}\n',
-      );
+      await writeFile(join(dir, MANUAL_TEST_CODE_STAMP), '{\n  "codeStamp": "abc123"\n}\n');
 
       await stampGateRunIdentity(dir, 'manual_test', 'run-123');
 
@@ -186,10 +174,7 @@ describe('engine/artifacts', () => {
         coherence_check: ['.docs/coherence/*.md'],
         plan_review: ['.docs/plan-review/*.md'],
         architecture_diagram: ['.docs/architecture/*.md'],
-        architecture_review: [
-          '.docs/decisions/architecture-review-*.md',
-          '.docs/decisions/adr-*.md',
-        ],
+        architecture_review: ['.docs/decisions/architecture-review-*.md', '.docs/decisions/adr-*.md'],
         worktree: [],
         acceptance_specs: [
           'spec/acceptance/**/*',
@@ -210,12 +195,10 @@ describe('engine/artifacts', () => {
         ],
         build: ['.pipeline/task-status.json'],
         build_review: ['.pipeline/build-review.json'],
-         test_suite: ['.pipeline/test-suite-evidence.json'],
+        test_suite: ['.pipeline/test-suite-evidence.json'],
         manual_test: ['.pipeline/manual-test-results.md'],
         prd_audit: ['.pipeline/prd-audit.json'],
-        architecture_review_as_built: [
-          '.pipeline/architecture-review-as-built.json',
-        ],
+        architecture_review_as_built: ['.pipeline/architecture-review-as-built.json'],
         rebase: [],
         finish: [],
         remediate: [],
@@ -225,12 +208,8 @@ describe('engine/artifacts', () => {
 
       expect({
         projection: STEP_ARTIFACT_GLOBS,
-        mixedScopes: STEP_ARTIFACT_CONTRACTS.architecture_review.map(
-          ({ pattern, scope }) => [pattern, scope],
-        ),
-        derivedProjection: /export const STEP_ARTIFACT_GLOBS[^=]*=\s*Object\.fromEntries/.test(
-          source,
-        ),
+        mixedScopes: STEP_ARTIFACT_CONTRACTS.architecture_review.map(({ pattern, scope }) => [pattern, scope]),
+        derivedProjection: /export const STEP_ARTIFACT_GLOBS[^=]*=\s*Object\.fromEntries/.test(source),
       }).toEqual({
         projection: expected,
         mixedScopes: [
@@ -298,10 +277,7 @@ describe('engine/artifacts', () => {
           [
             {
               step: 'conflict_check',
-              paths: [
-                `.docs/conflicts/${featureIdentity}.md`,
-                `.docs/conflicts/2026-08-19-${featureIdentity}.md`,
-              ],
+              paths: [`.docs/conflicts/${featureIdentity}.md`, `.docs/conflicts/2026-08-19-${featureIdentity}.md`],
             },
           ],
           featureIdentity,
@@ -509,11 +485,7 @@ describe('engine/artifacts', () => {
       await createFile('.docs/plans/unrelated-feature.md');
       await createFile('.pipeline/maintain-documentation-pass');
       const context = { featureIdentities: [], changedPaths: new Set<string>() };
-      const absentContractResult = await resolveArtifactFiles(
-        dir,
-        'maintain-documentation' as StepName,
-        context,
-      );
+      const absentContractResult = await resolveArtifactFiles(dir, 'maintain-documentation' as StepName, context);
       const complexityResult = await resolveArtifactFiles(dir, 'complexity', context);
 
       expect(complexityResult).toEqual(absentContractResult);
@@ -549,10 +521,7 @@ describe('engine/artifacts', () => {
       await createFile('.docs/decisions/technical-assessment-two.md');
       await createFile('.pipeline/task-status.json', '{}');
 
-      const featureB: Pick<
-        ArtifactResolutionContext,
-        'featureIdentities' | 'changedPaths'
-      > = {
+      const featureB: Pick<ArtifactResolutionContext, 'featureIdentities' | 'changedPaths'> = {
         featureIdentities: ['feature-b'],
         changedPaths: new Set(),
       };
@@ -587,10 +556,7 @@ describe('engine/artifacts', () => {
         prd: ['.docs/specs/2026-07-28-feature-b.md'],
         plan: ['.docs/plans/feature-b.md'],
         changed: ['.docs/conflicts/unconventional-current.md'],
-        repository: [
-          '.docs/decisions/technical-assessment-one.md',
-          '.docs/decisions/technical-assessment-two.md',
-        ],
+        repository: ['.docs/decisions/technical-assessment-one.md', '.docs/decisions/technical-assessment-two.md'],
         run: ['.pipeline/task-status.json'],
         raw: ['.docs/specs/2026-07-28-feature-b.md', '.docs/specs/feature-a.md'],
       });
@@ -679,7 +645,7 @@ describe('engine/artifacts', () => {
 
     it('rejects stale evidence through inspection without launching verification', async () => {
       await createFile('.pipeline/test-suite-evidence.json', JSON.stringify({ outcome: 'PASS' }));
-      const inspect = vi.fn(async () => ({ status: 'STALE', reason: 'fingerprint_mismatch' } as const));
+      const inspect = vi.fn(async () => ({ status: 'STALE', reason: 'fingerprint_mismatch' }) as const);
 
       const result = await checkStepCompletion(dir, 'test_suite', {
         fullSuiteInspect: inspect,
@@ -1116,11 +1082,12 @@ describe('engine/artifacts', () => {
   describe('acceptance_specs: criterion-coherence remediation hint', () => {
     const criterion = 'Story 1 happy: Given a widget, when it ships, then it arrives';
     const omitted = 'Story 1 negative: Given a broken widget, when it ships, then it is rejected';
-    const legacyMessage =
-      `disposition-only records must be an exact one-to-one set of the authoritative story criteria — omitted: ${omitted}`;
+    const legacyMessage = `disposition-only records must be an exact one-to-one set of the authoritative story criteria — omitted: ${omitted}`;
 
     async function writeDispositionFixture(withCriterionRow: boolean) {
-      await createFile('.docs/stories/foo.md', `# Stories
+      await createFile(
+        '.docs/stories/foo.md',
+        `# Stories
 
 ## Story 1: Widget
 
@@ -1129,7 +1096,8 @@ describe('engine/artifacts', () => {
 
 ### Negative Paths
 - Given a broken widget, when it ships, then it is rejected
-`);
+`,
+      );
       await createFile('.docs/plans/foo.md', '# Plan\n\n### Task 1: Widget\n');
       await createFile('test/cover.ts', 'covered\n');
       await createFile(
@@ -1154,7 +1122,9 @@ describe('engine/artifacts', () => {
       await writeDispositionFixture(true);
       const result = await checkStepCompletion(dir, 'acceptance_specs', { featureDesc: 'foo' });
       expect(result.done).toBe(false);
-      expect(result.reason).toBe(`${legacyMessage}; the DECIDE-time criterion coherence check should have caught the omitted criterion before BUILD`);
+      expect(result.reason).toBe(
+        `${legacyMessage}; the DECIDE-time criterion coherence check should have caught the omitted criterion before BUILD`,
+      );
     });
 
     it('preserves the legacy omitted-criterion message byte-for-byte without criterion rows', async () => {
@@ -1209,10 +1179,7 @@ describe('engine/artifacts', () => {
   describe('checkStepCompletion: finish predicate', () => {
     it('rejects a fresh PR marker when strict shipment evidence refuses it', async () => {
       await createFile(FINISH_CHOICE_MARKER, 'pr');
-      await createFile(
-        '.pipeline/conduct-state.json',
-        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
-      );
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }));
 
       const result = await checkStepCompletion(dir, 'finish', {
         sessionStartedAt: 0,
@@ -1231,10 +1198,7 @@ describe('engine/artifacts', () => {
 
     it('passes when finish-choice="pr" AND state.pr_url is set', async () => {
       await createFile(FINISH_CHOICE_MARKER, 'pr');
-      await createFile(
-        '.pipeline/conduct-state.json',
-        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
-      );
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }));
       const result = await checkStepCompletion(dir, 'finish');
       expect(result).toEqual({ done: true });
     });
@@ -1259,10 +1223,7 @@ describe('engine/artifacts', () => {
     });
 
     it('fails when state.pr_url is set but finish-choice marker is missing', async () => {
-      await createFile(
-        '.pipeline/conduct-state.json',
-        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
-      );
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }));
       const result = await checkStepCompletion(dir, 'finish');
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/finish-choice/);
@@ -1348,10 +1309,7 @@ describe('engine/artifacts', () => {
 
     it('allows finish-choice="merge-local" in interactive mode (daemon: false)', async () => {
       await createFile(FINISH_CHOICE_MARKER, 'merge-local');
-      await createFile(
-        '.pipeline/conduct-state.json',
-        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
-      );
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }));
       const result = await checkStepCompletion(dir, 'finish', {
         sessionStartedAt: 0,
         daemon: false,
@@ -1370,10 +1328,7 @@ describe('engine/artifacts', () => {
 
     it('allows finish-choice="pr" in daemon mode (pr is safe to ship autonomously)', async () => {
       await createFile(FINISH_CHOICE_MARKER, 'pr');
-      await createFile(
-        '.pipeline/conduct-state.json',
-        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
-      );
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }));
       const result = await checkStepCompletion(dir, 'finish', {
         sessionStartedAt: 0,
         daemon: true,
@@ -1383,10 +1338,7 @@ describe('engine/artifacts', () => {
 
     it('passes when finish-choice="pr" and isHeadPushed returns true (happy path: evidence pass)', async () => {
       await createFile(FINISH_CHOICE_MARKER, 'pr');
-      await createFile(
-        '.pipeline/conduct-state.json',
-        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
-      );
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }));
       const result = await checkStepCompletion(dir, 'finish', {
         sessionStartedAt: 0,
         isHeadPushed: async () => true,
@@ -1396,10 +1348,7 @@ describe('engine/artifacts', () => {
 
     it('fails when finish-choice="pr" and isHeadPushed returns false (evidence check)', async () => {
       await createFile(FINISH_CHOICE_MARKER, 'pr');
-      await createFile(
-        '.pipeline/conduct-state.json',
-        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
-      );
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }));
       const result = await checkStepCompletion(dir, 'finish', {
         sessionStartedAt: 0,
         isHeadPushed: async () => false,
@@ -1412,10 +1361,7 @@ describe('engine/artifacts', () => {
       const prUrl = 'https://github.com/foo/bar/pull/1';
       await createFile(FINISH_CHOICE_MARKER, 'pr');
       await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: prUrl }));
-      await createFile(
-        'CHANGELOG.md',
-        '## [Unreleased]\n\n- Fixed the thing ({{IMPLEMENTATION_PR}}).\n',
-      );
+      await createFile('CHANGELOG.md', '## [Unreleased]\n\n- Fixed the thing ({{IMPLEMENTATION_PR}}).\n');
       const result = await checkStepCompletion(dir, 'finish', {
         sessionStartedAt: 0,
         isHeadPushed: async () => true,
@@ -1425,14 +1371,8 @@ describe('engine/artifacts', () => {
 
     it('does not block finish-choice="merge-local" on a stale {{IMPLEMENTATION_PR}} token (no PR URL to substitute)', async () => {
       await createFile(FINISH_CHOICE_MARKER, 'merge-local');
-      await createFile(
-        '.pipeline/conduct-state.json',
-        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
-      );
-      await createFile(
-        'CHANGELOG.md',
-        '## [Unreleased]\n\n- Fixed the thing ({{IMPLEMENTATION_PR}}).\n',
-      );
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }));
+      await createFile('CHANGELOG.md', '## [Unreleased]\n\n- Fixed the thing ({{IMPLEMENTATION_PR}}).\n');
       const result = await checkStepCompletion(dir, 'finish', {
         sessionStartedAt: 0,
       });
@@ -1441,10 +1381,7 @@ describe('engine/artifacts', () => {
 
     it('two-phase ordering: does not invoke the presentation (gh) check when push evidence fails', async () => {
       await createFile(FINISH_CHOICE_MARKER, 'pr');
-      await createFile(
-        '.pipeline/conduct-state.json',
-        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
-      );
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }));
       const result = await checkStepCompletion(dir, 'finish', {
         sessionStartedAt: 0,
         isHeadPushed: async () => false,
@@ -1455,10 +1392,7 @@ describe('engine/artifacts', () => {
 
     it('fails when finish-choice="pr" and isHeadPushed returns null (indeterminate evidence)', async () => {
       await createFile(FINISH_CHOICE_MARKER, 'pr');
-      await createFile(
-        '.pipeline/conduct-state.json',
-        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
-      );
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }));
       const result = await checkStepCompletion(dir, 'finish', {
         sessionStartedAt: 0,
         isHeadPushed: async () => null,
@@ -1469,10 +1403,7 @@ describe('engine/artifacts', () => {
 
     it('passes when finish-choice="pr" and isHeadPushed injectable is absent (fail-open legacy)', async () => {
       await createFile(FINISH_CHOICE_MARKER, 'pr');
-      await createFile(
-        '.pipeline/conduct-state.json',
-        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
-      );
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }));
       const result = await checkStepCompletion(dir, 'finish', {
         sessionStartedAt: 0,
         // isHeadPushed is undefined/absent
@@ -1491,10 +1422,7 @@ describe('engine/artifacts', () => {
 
     it('fails when finish-choice="pr" and isHeadPushed throws an error (corrupt repo)', async () => {
       await createFile(FINISH_CHOICE_MARKER, 'pr');
-      await createFile(
-        '.pipeline/conduct-state.json',
-        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
-      );
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }));
       const result = await checkStepCompletion(dir, 'finish', {
         sessionStartedAt: 0,
         isHeadPushed: async () => {
@@ -1509,10 +1437,7 @@ describe('engine/artifacts', () => {
     it('Phase 2 presentation: fails when fakeGh returns a needs-remediation-titled PR (through-the-gate stale title check)', async () => {
       const prUrl = 'https://github.com/foo/bar/pull/1';
       await createFile(FINISH_CHOICE_MARKER, 'pr');
-      await createFile(
-        '.pipeline/conduct-state.json',
-        JSON.stringify({ pr_url: prUrl }),
-      );
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: prUrl }));
       // fakeGh that returns a PR with a needs-remediation: title
       const fakeGh = async (args: string[]) => {
         if (args[0] === 'pr' && args[1] === 'view') {
@@ -1548,10 +1473,7 @@ describe('engine/artifacts', () => {
     it('Phase 2 presentation: passes when fakeGh returns a clean ready PR (through-the-gate clean title check)', async () => {
       const prUrl = 'https://github.com/foo/bar/pull/1';
       await createFile(FINISH_CHOICE_MARKER, 'pr');
-      await createFile(
-        '.pipeline/conduct-state.json',
-        JSON.stringify({ pr_url: prUrl }),
-      );
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: prUrl }));
       // fakeGh that returns a PR with a clean title (no needs-remediation prefix)
       const fakeGh = async (args: string[]) => {
         if (args[0] === 'pr' && args[1] === 'view') {
@@ -1585,10 +1507,7 @@ describe('engine/artifacts', () => {
     it('Phase 2 presentation: fails when fakeGh returns a PR body containing the halt banner (through-the-gate stale banner check)', async () => {
       const prUrl = 'https://github.com/foo/bar/pull/1';
       await createFile(FINISH_CHOICE_MARKER, 'pr');
-      await createFile(
-        '.pipeline/conduct-state.json',
-        JSON.stringify({ pr_url: prUrl }),
-      );
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: prUrl }));
       const fakeGh = async (args: string[]) => {
         if (args[0] === 'pr' && args[1] === 'view' && args.includes('title')) {
           return { stdout: JSON.stringify({ title: 'Clean feature title' }) };
@@ -1626,10 +1545,7 @@ describe('engine/artifacts', () => {
     it('Phase 2 presentation: passes when the banner-check gh read throws (fail-open, Story 2 negative path)', async () => {
       const prUrl = 'https://github.com/foo/bar/pull/1';
       await createFile(FINISH_CHOICE_MARKER, 'pr');
-      await createFile(
-        '.pipeline/conduct-state.json',
-        JSON.stringify({ pr_url: prUrl }),
-      );
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: prUrl }));
       const fakeGh = async (args: string[]) => {
         if (args[0] === 'pr' && args[1] === 'view' && args.includes('title')) {
           return { stdout: JSON.stringify({ title: 'Clean feature title' }) };
@@ -1651,10 +1567,7 @@ describe('engine/artifacts', () => {
     it('Phase 2 presentation: passes when fakeGh returns a clean body with no halt banner (through-the-gate clean banner check)', async () => {
       const prUrl = 'https://github.com/foo/bar/pull/1';
       await createFile(FINISH_CHOICE_MARKER, 'pr');
-      await createFile(
-        '.pipeline/conduct-state.json',
-        JSON.stringify({ pr_url: prUrl }),
-      );
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: prUrl }));
       const calls: string[][] = [];
       const fakeGh = async (args: string[]) => {
         calls.push(args);
@@ -1689,10 +1602,7 @@ describe('engine/artifacts', () => {
     it('Story 3: Phase 2 presentation (isDraft): fails when fakeGh returns isDraft=true with clean title (ship-readiness check)', async () => {
       const prUrl = 'https://github.com/foo/bar/pull/1';
       await createFile(FINISH_CHOICE_MARKER, 'pr');
-      await createFile(
-        '.pipeline/conduct-state.json',
-        JSON.stringify({ pr_url: prUrl }),
-      );
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: prUrl }));
       // fakeGh that returns a draft PR with clean title (no needs-remediation prefix)
       const fakeGh = async (args: string[]) => {
         if (args[0] === 'pr' && args[1] === 'view') {
@@ -1721,10 +1631,7 @@ describe('engine/artifacts', () => {
     it('Story 3: Phase 2 presentation (isDraft): passes when fakeGh returns isDraft=false with clean title (ready to ship)', async () => {
       const prUrl = 'https://github.com/foo/bar/pull/1';
       await createFile(FINISH_CHOICE_MARKER, 'pr');
-      await createFile(
-        '.pipeline/conduct-state.json',
-        JSON.stringify({ pr_url: prUrl }),
-      );
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: prUrl }));
       // fakeGh that returns a ready (non-draft) PR with clean title
       const fakeGh = async (args: string[]) => {
         if (args[0] === 'pr' && args[1] === 'view') {
@@ -1747,10 +1654,7 @@ describe('engine/artifacts', () => {
     it('Story 3: Phase 2 fail-open: passes when fakeGh throws during presentation check (gh error → logged warning)', async () => {
       const prUrl = 'https://github.com/foo/bar/pull/1';
       await createFile(FINISH_CHOICE_MARKER, 'pr');
-      await createFile(
-        '.pipeline/conduct-state.json',
-        JSON.stringify({ pr_url: prUrl }),
-      );
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: prUrl }));
       // fakeGh that throws an error (network failure, auth error, etc.)
       const fakeGh = async (_args: string[]) => {
         throw new Error('network error: connection refused');
@@ -1766,10 +1670,7 @@ describe('engine/artifacts', () => {
     it('Story 3: Phase 2 fail-open: passes when fakeGh returns malformed JSON (unparseable → logged warning)', async () => {
       const prUrl = 'https://github.com/foo/bar/pull/1';
       await createFile(FINISH_CHOICE_MARKER, 'pr');
-      await createFile(
-        '.pipeline/conduct-state.json',
-        JSON.stringify({ pr_url: prUrl }),
-      );
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: prUrl }));
       // fakeGh that returns invalid JSON
       const fakeGh = async (args: string[]) => {
         if (args[0] === 'pr' && args[1] === 'view') {
@@ -1811,10 +1712,7 @@ describe('engine/artifacts', () => {
       it('happy path: repair invoked exactly once after phase 1 passes, AFTER the phase 2 presentation reads', async () => {
         const prUrl = 'https://github.com/foo/bar/pull/1';
         await createFile(FINISH_CHOICE_MARKER, 'pr');
-        await createFile(
-          '.pipeline/conduct-state.json',
-          JSON.stringify({ pr_url: prUrl }),
-        );
+        await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: prUrl }));
 
         const callLog: string[] = [];
         const repairFinishPr = vi.fn(async () => {
@@ -1879,10 +1777,7 @@ describe('engine/artifacts', () => {
       it('phase 1 miss: repair not invoked when push verification fails', async () => {
         const prUrl = 'https://github.com/foo/bar/pull/1';
         await createFile(FINISH_CHOICE_MARKER, 'pr');
-        await createFile(
-          '.pipeline/conduct-state.json',
-          JSON.stringify({ pr_url: prUrl }),
-        );
+        await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: prUrl }));
 
         const repairFinishPr = vi.fn(async () => {
           throw new Error('repair should not be called');
@@ -1902,10 +1797,7 @@ describe('engine/artifacts', () => {
       it('repair throws: warning logged, predicate continues to phase 2', async () => {
         const prUrl = 'https://github.com/foo/bar/pull/1';
         await createFile(FINISH_CHOICE_MARKER, 'pr');
-        await createFile(
-          '.pipeline/conduct-state.json',
-          JSON.stringify({ pr_url: prUrl }),
-        );
+        await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: prUrl }));
 
         const repairError = new Error('repair failed: network error');
         const repairFinishPr = vi.fn(async () => {
@@ -1936,9 +1828,7 @@ describe('engine/artifacts', () => {
         expect(result).toEqual({ done: true });
         expect(repairFinishPr).toHaveBeenCalledTimes(1);
         expect(logSpy).toHaveBeenCalled();
-        const warningCall = logSpy.mock.calls.find((call) =>
-          String(call[0]).includes('repair'),
-        );
+        const warningCall = logSpy.mock.calls.find((call) => String(call[0]).includes('repair'));
         expect(warningCall).toBeDefined();
 
         logSpy.mockRestore();
@@ -1950,19 +1840,15 @@ describe('engine/artifacts', () => {
         await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: prUrl }));
 
         const modes: Array<string | undefined> = [];
-        const repairFinishPr = vi.fn(
-          async (_url: string, opts?: { mode?: 'capture-only' | 'full' }) => {
-            modes.push(opts?.mode);
-          },
-        );
+        const repairFinishPr = vi.fn(async (_url: string, opts?: { mode?: 'capture-only' | 'full' }) => {
+          modes.push(opts?.mode);
+        });
 
         // Placeholder body: engine floor marker present, no /pr prose.
         readFlooredBodySpy.mockImplementation(async (gh, cwd, url) => {
           const { stdout } = await gh(['pr', 'view', url, '--json', 'body'], { cwd });
           const body = String((JSON.parse(stdout || '{}') as { body?: unknown }).body ?? '');
-          return body.includes('<!-- conductor:pr-body-floor -->')
-            ? '<!-- conductor:pr-body-floor -->'
-            : null;
+          return body.includes('<!-- conductor:pr-body-floor -->') ? '<!-- conductor:pr-body-floor -->' : null;
         });
         const fakeGh = async (_args: string[]) => ({
           stdout: JSON.stringify({
@@ -1985,9 +1871,7 @@ describe('engine/artifacts', () => {
         expect(first.reason).toMatch(/run \/pr to author a real templated body/i);
         expect(modes).toEqual(['capture-only']);
         // Durable one-shot marker recorded.
-        const marker = JSON.parse(
-          await readFile(join(dir, PR_BODY_REGEN_ATTEMPT_MARKER), 'utf-8'),
-        );
+        const marker = JSON.parse(await readFile(join(dir, PR_BODY_REGEN_ATTEMPT_MARKER), 'utf-8'));
         expect(marker.pr_url).toBe(prUrl);
 
         // Second pass: budget exhausted → full repair (floor) and convergence.
@@ -2019,14 +1903,11 @@ describe('engine/artifacts', () => {
         expect(result.missing).toBe('presentation');
       });
 
-      it('bounded kickback: a marker recorded for a DIFFERENT pr_url does not spend this PR\'s budget', async () => {
+      it("bounded kickback: a marker recorded for a DIFFERENT pr_url does not spend this PR's budget", async () => {
         const prUrl = 'https://github.com/foo/bar/pull/2';
         await createFile(FINISH_CHOICE_MARKER, 'pr');
         await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: prUrl }));
-        await createFile(
-          PR_BODY_REGEN_ATTEMPT_MARKER,
-          JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
-        );
+        await createFile(PR_BODY_REGEN_ATTEMPT_MARKER, JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }));
 
         readStaleHaltTitleSpy.mockImplementation(async (gh, cwd, url) => {
           const { stdout } = await gh(['pr', 'view', url, '--json', 'title'], { cwd });
@@ -2056,10 +1937,7 @@ describe('engine/artifacts', () => {
       it('legacy mode: absent injectable, repair skipped, phase 2 runs as normal', async () => {
         const prUrl = 'https://github.com/foo/bar/pull/1';
         await createFile(FINISH_CHOICE_MARKER, 'pr');
-        await createFile(
-          '.pipeline/conduct-state.json',
-          JSON.stringify({ pr_url: prUrl }),
-        );
+        await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: prUrl }));
 
         const fakeGh = async (args: string[]) => {
           if (args[0] === 'pr' && args[1] === 'view') {
@@ -2105,16 +1983,9 @@ describe('engine/artifacts', () => {
       expect(result.done).toBe(false);
       expect(result.reason).toContain(HALT_MARKER_RELATIVE);
 
-      const artifactsSource = await readFile(
-        new URL('../../src/engine/artifacts.ts', import.meta.url),
-        'utf8',
-      );
-      expect(artifactsSource).toMatch(
-        /HALT_MARKER_RELATIVE as HALT_MARKER,[\s\S]*from '\.\/task-progress\.js';/,
-      );
-      expect(artifactsSource).not.toContain(
-        "export const HALT_MARKER = '.pipeline/halt-user-input-required'",
-      );
+      const artifactsSource = await readFile(new URL('../../src/engine/artifacts.ts', import.meta.url), 'utf8');
+      expect(artifactsSource).toMatch(/HALT_MARKER_RELATIVE as HALT_MARKER,[\s\S]*from '\.\/task-progress\.js';/);
+      expect(artifactsSource).not.toContain("export const HALT_MARKER = '.pipeline/halt-user-input-required'");
     });
 
     it('passes when no halt marker and all tasks completed', async () => {
@@ -2136,7 +2007,12 @@ describe('engine/artifacts', () => {
 
     it.each([
       ['an absent probe', undefined],
-      ['a throwing probe', async () => { throw new Error('unavailable'); }],
+      [
+        'a throwing probe',
+        async () => {
+          throw new Error('unavailable');
+        },
+      ],
       ['a null probe', async () => null],
     ])('keeps legacy fallback completion fail-open for %s', async (_caseName, worktreeStatus) => {
       await writeAllCompleteTaskStatus();
@@ -2150,15 +2026,18 @@ describe('engine/artifacts', () => {
 
     // NEW TESTS: build predicate recomputes from seeded state + evidence
     describe('reworked build predicate: seed + derive', () => {
+      // These cases exercise task routing, not the whole-feature simplify
+      // floor (covered in feature-simplify.test.ts), so the floor is satisfied.
+      beforeEach(async () => {
+        await createFile('.pipeline/audit-trail/feature-simplification.md', '## Verdict: CLEAN\n');
+      });
+
       async function writePlan(content: string) {
         await createFile('.docs/plans/phase-1.md', content);
       }
 
       async function writeTasks(tasks: Array<{ id: string; name?: string; status: string }>) {
-        await createFile(
-          '.pipeline/task-status.json',
-          JSON.stringify({ tasks }),
-        );
+        await createFile('.pipeline/task-status.json', JSON.stringify({ tasks }));
       }
 
       it('fails when plan is missing (context.planPath not found)', async () => {
@@ -2196,9 +2075,7 @@ describe('engine/artifacts', () => {
         });
 
         it('completes normally when the recorded rem-* heading is present and completed', async () => {
-          await writePlan(
-            '### Task 1: First task\n### Task rem-build-review-1: Deliver the prescription\n',
-          );
+          await writePlan('### Task 1: First task\n### Task rem-build-review-1: Deliver the prescription\n');
           await writeTasks([
             { id: '1', status: 'completed' },
             { id: 'rem-build-review-1', status: 'completed' },
@@ -2278,16 +2155,27 @@ describe('engine/artifacts', () => {
       });
 
       it('names every unresolved task id before pairing each with its plan title', async () => {
-        await writePlan([
-          '### Task 1: First task', '### Task 2: Second task', '### Task 3: Third task',
-          '### Task 4: Fourth task', '### Task 5: Fifth task', '### Task 6: Sixth task',
-        ].join('\n\n'));
-        await writeTasks(Array.from({ length: 6 }, (_, index) => ({
-          id: String(index + 1), name: `Row ${index + 1}`, status: 'pending',
-        })));
+        await writePlan(
+          [
+            '### Task 1: First task',
+            '### Task 2: Second task',
+            '### Task 3: Third task',
+            '### Task 4: Fourth task',
+            '### Task 5: Fifth task',
+            '### Task 6: Sixth task',
+          ].join('\n\n'),
+        );
+        await writeTasks(
+          Array.from({ length: 6 }, (_, index) => ({
+            id: String(index + 1),
+            name: `Row ${index + 1}`,
+            status: 'pending',
+          })),
+        );
 
         const result = await checkStepCompletion(dir, 'build', {
-          projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md'),
+          projectRoot: dir,
+          planPath: join(dir, '.docs/plans/phase-1.md'),
         });
 
         expect(result.reason).toBe(
@@ -2302,10 +2190,7 @@ describe('engine/artifacts', () => {
       });
 
       it('does not hold a completed task open for a superseded same-authority repair obligation', async () => {
-        await writePlan([
-          '### Task 1: First task',
-          '### Task 2: Second task',
-        ].join('\n\n'));
+        await writePlan(['### Task 1: First task', '### Task 2: Second task'].join('\n\n'));
         await writeTasks([
           { id: '1', name: 'First task', status: 'completed' },
           { id: '2', name: 'Second task', status: 'completed' },
@@ -2343,10 +2228,7 @@ describe('engine/artifacts', () => {
       });
 
       it('fails closed with the named reason when an open repair obligation has no current entry', async () => {
-        await writePlan([
-          '### Task 1: First task',
-          '### Task 2: Second task',
-        ].join('\n\n'));
+        await writePlan(['### Task 1: First task', '### Task 2: Second task'].join('\n\n'));
         await writeTasks([
           { id: '1', name: 'First task', status: 'completed' },
           { id: '2', name: 'Second task', status: 'completed' },
@@ -2377,23 +2259,34 @@ describe('engine/artifacts', () => {
       });
 
       it('keeps unresolved plan tasks in the reason when only an appended remediation task is resolved', async () => {
-        await writePlan([
-          '### Task 1: First task', '### Task 2: Second task', '### Task 3: Third task',
-          '### Task 4: Fourth task', '### Task 5: Fifth task', '### Task 6: Sixth task',
-          '### Task rem-1: Repair task',
-        ].join('\n\n'));
+        await writePlan(
+          [
+            '### Task 1: First task',
+            '### Task 2: Second task',
+            '### Task 3: Third task',
+            '### Task 4: Fourth task',
+            '### Task 5: Fifth task',
+            '### Task 6: Sixth task',
+            '### Task rem-1: Repair task',
+          ].join('\n\n'),
+        );
         await writeTasks([
           ...Array.from({ length: 6 }, (_, index) => ({
-            id: String(index + 1), name: `Row ${index + 1}`, status: 'pending',
+            id: String(index + 1),
+            name: `Row ${index + 1}`,
+            status: 'pending',
           })),
           { id: 'rem-1', name: 'Repair task', status: 'completed' },
         ]);
 
         const result = await checkStepCompletion(dir, 'build', {
-          projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md'),
+          projectRoot: dir,
+          planPath: join(dir, '.docs/plans/phase-1.md'),
         });
 
-        expect(result.reason).toContain('1 "First task"; 2 "Second task"; 3 "Third task"; 4 "Fourth task"; 5 "Fifth task"; 6 "Sixth task"');
+        expect(result.reason).toContain(
+          '1 "First task"; 2 "Second task"; 3 "Third task"; 4 "Fourth task"; 5 "Fifth task"; 6 "Sixth task"',
+        );
       });
 
       it('uses the task-status row name when a pending task heading has no title', async () => {
@@ -2401,7 +2294,8 @@ describe('engine/artifacts', () => {
         await writeTasks([{ id: '1', name: 'Status row title', status: 'pending' }]);
 
         const result = await checkStepCompletion(dir, 'build', {
-          projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md'),
+          projectRoot: dir,
+          planPath: join(dir, '.docs/plans/phase-1.md'),
         });
 
         expect(result.reason).toContain('1 "Status row title"');
@@ -2557,9 +2451,11 @@ describe('engine/artifacts', () => {
         // trailers and records the digest baseline that the amendment changes.
         expect(await checkStepCompletion(dir, 'build', ctx)).toEqual({ done: true });
 
-        await writePlan(originalPlan
-          .replace('Implement the original first behavior.', 'Implement the rewritten first behavior.')
-          .replace('Implement the original second behavior.', 'Implement the rewritten second behavior.'));
+        await writePlan(
+          originalPlan
+            .replace('Implement the original first behavior.', 'Implement the rewritten first behavior.')
+            .replace('Implement the original second behavior.', 'Implement the rewritten second behavior.'),
+        );
         await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
         await execa('git', ['commit', '-m', 'docs: rewrite both task descriptions'], { cwd: dir });
         const amendmentHead = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim();
@@ -2572,10 +2468,12 @@ describe('engine/artifacts', () => {
         expect(result.reason).toContain('2 "Second task"');
 
         const status = JSON.parse(await readFile(join(dir, '.pipeline/task-status.json'), 'utf8'));
-        expect(status.tasks).toEqual(expect.arrayContaining([
-          expect.objectContaining({ id: '1', status: 'pending' }),
-          expect.objectContaining({ id: '2', status: 'pending' }),
-        ]));
+        expect(status.tasks).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ id: '1', status: 'pending' }),
+            expect.objectContaining({ id: '2', status: 'pending' }),
+          ]),
+        );
 
         const state = JSON.parse(await readFile(join(dir, '.pipeline/engine-state.json'), 'utf8'));
         const obligations = Object.values(state.repairObligations.records) as Array<{
@@ -2586,12 +2484,14 @@ describe('engine/artifacts', () => {
         }>;
         expect(obligations).toHaveLength(2);
         for (const taskId of ['1', '2']) {
-          expect(obligations).toContainEqual(expect.objectContaining({
-            source: expect.objectContaining({ authority: 'plan_amendment' }),
-            baseline: expect.objectContaining({ head: amendmentHead }),
-            settlement: 'settled',
-            tasks: { [taskId]: { status: 'open' } },
-          }));
+          expect(obligations).toContainEqual(
+            expect.objectContaining({
+              source: expect.objectContaining({ authority: 'plan_amendment' }),
+              baseline: expect.objectContaining({ head: amendmentHead }),
+              settlement: 'settled',
+              tasks: { [taskId]: { status: 'open' } },
+            }),
+          );
         }
 
         // The only trailers remain before each repair boundary, so neither
@@ -2618,8 +2518,8 @@ describe('engine/artifacts', () => {
 
         await writePlan(
           '### Task 1: First task\n**Story:** 1\n\n' +
-          '### Task 2: Second task\n**Story:** 2\n\n' +
-          '### Task 3: Third task\n**Story:** 3\n',
+            '### Task 2: Second task\n**Story:** 2\n\n' +
+            '### Task 3: Third task\n**Story:** 3\n',
         );
         await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
         await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
@@ -2661,10 +2561,7 @@ describe('engine/artifacts', () => {
         await execa('git', ['add', '.gitignore', 'README.md'], { cwd: dir });
         await execa('git', ['commit', '-m', 'chore: initialize fixture'], { cwd: dir });
 
-        await writePlan(
-          '### Task 1: First task\n**Story:** 1\n\n' +
-            '### Task 2: Second task\n**Story:** 2\n',
-        );
+        await writePlan('### Task 1: First task\n**Story:** 1\n\n' + '### Task 2: Second task\n**Story:** 2\n');
         await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
         await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
 
@@ -2684,11 +2581,13 @@ describe('engine/artifacts', () => {
         const worktreeStatus = async () =>
           (await execa('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: dir })).stdout;
 
-        expect(await checkStepCompletion(dir, 'build', {
-          projectRoot: dir,
-          planPath: join(dir, '.docs/plans/phase-1.md'),
-          worktreeStatus,
-        })).toEqual({ done: true });
+        expect(
+          await checkStepCompletion(dir, 'build', {
+            projectRoot: dir,
+            planPath: join(dir, '.docs/plans/phase-1.md'),
+            worktreeStatus,
+          }),
+        ).toEqual({ done: true });
       });
 
       it('withholds build completion when all tasks resolve but the worktree has an uncommitted path', async () => {
@@ -2807,7 +2706,13 @@ describe('engine/artifacts', () => {
 
         it.each([
           ['has no probe', undefined, true],
-          ['has a throwing probe', async () => { throw new Error('unavailable'); }, true],
+          [
+            'has a throwing probe',
+            async () => {
+              throw new Error('unavailable');
+            },
+            true,
+          ],
           ['has a null-returning probe', async () => null, true],
           ['reports a nonempty worktree', async () => ' M src/uncommitted.ts\n', false],
         ])('completes only when the resolved-task context %s', async (_caseName, worktreeStatus, done) => {
@@ -2852,10 +2757,11 @@ describe('engine/artifacts', () => {
         ).join('\n');
         await writePlan(taskHeadings);
         await writeTasks(
-          Array.from(
-            { length: 7 },
-            (_, index) => ({ id: String(index + 1), name: `Task ${index + 1}`, status: 'completed' }),
-          ),
+          Array.from({ length: 7 }, (_, index) => ({
+            id: String(index + 1),
+            name: `Task ${index + 1}`,
+            status: 'completed',
+          })),
         );
 
         const result = await checkStepCompletion(dir, 'build', {
@@ -2883,10 +2789,10 @@ describe('engine/artifacts', () => {
 
         await writePlan(
           '### Task 1: First task\n**Story:** 1\n\n' +
-          '### Task 2: Second task\n**Story:** 2\n\n' +
-          '### Task 3: Third task\n**Story:** 3\n\n' +
-          '### Task 4: Fourth task\n**Story:** 4\n\n' +
-          '### Task 5: Fifth task\n**Story:** 5\n',
+            '### Task 2: Second task\n**Story:** 2\n\n' +
+            '### Task 3: Third task\n**Story:** 3\n\n' +
+            '### Task 4: Fourth task\n**Story:** 4\n\n' +
+            '### Task 5: Fifth task\n**Story:** 5\n',
         );
         await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
         await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
@@ -2939,10 +2845,10 @@ describe('engine/artifacts', () => {
           await initRepo();
           await writePlan(
             '### Task 1: First task\n**Story:** 1\n\n' +
-            '### Task 2: Second task\n**Story:** 2\n\n' +
-            '### Task 3: Third task\n**Story:** 3\n\n' +
-            '### Task 4: Fourth task\n**Story:** 4\n\n' +
-            '### Task 5: Fifth task\n**Story:** 5\n',
+              '### Task 2: Second task\n**Story:** 2\n\n' +
+              '### Task 3: Third task\n**Story:** 3\n\n' +
+              '### Task 4: Fourth task\n**Story:** 4\n\n' +
+              '### Task 5: Fifth task\n**Story:** 5\n',
           );
           await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
           await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
@@ -2983,10 +2889,10 @@ describe('engine/artifacts', () => {
           await initRepo();
           await writePlan(
             '### Task 1: First task\n**Story:** 1\n\n' +
-            '### Task 2: Second task\n**Story:** 2\n\n' +
-            '### Task 3: Third task\n**Story:** 3\n\n' +
-            '### Task 4: Fourth task\n**Story:** 4\n\n' +
-            '### Task 5: Fifth task\n**Story:** 5\n',
+              '### Task 2: Second task\n**Story:** 2\n\n' +
+              '### Task 3: Third task\n**Story:** 3\n\n' +
+              '### Task 4: Fourth task\n**Story:** 4\n\n' +
+              '### Task 5: Fifth task\n**Story:** 5\n',
           );
           await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
           await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
@@ -3005,7 +2911,9 @@ describe('engine/artifacts', () => {
           expect(result.done).toBe(false);
           expect(result.reason).toMatch(/^5\/5 tasks/);
           expect(result.reason).toContain('1, 2, 3, 4, 5');
-          expect(result.reason).toContain('1 "First task"; 2 "Second task"; 3 "Third task"; 4 "Fourth task"; 5 "Fifth task"');
+          expect(result.reason).toContain(
+            '1 "First task"; 2 "Second task"; 3 "Third task"; 4 "Fourth task"; 5 "Fifth task"',
+          );
           expect(result.reason).not.toContain('more)');
         });
 
@@ -3021,10 +2929,7 @@ describe('engine/artifacts', () => {
         // reverting the change does NOT un-resolve the task id.
         it('a reverted commit still counts its Task: trailer id as resolved (revert does not un-resolve)', async () => {
           await initRepo();
-          await writePlan(
-            '### Task 1: First task\n**Story:** 1\n\n' +
-            '### Task 2: Second task\n**Story:** 2\n',
-          );
+          await writePlan('### Task 1: First task\n**Story:** 1\n\n' + '### Task 2: Second task\n**Story:** 2\n');
           await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
           await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
 
@@ -3074,12 +2979,12 @@ describe('engine/artifacts', () => {
           // (not colon separator, which would be ### Task N: Title)
           await writePlan(
             '# Implementation Plan: Em-dash Test\n\n' +
-            '### Task 1 — First em-dash task\n' +
-            '**Story:** 1\n' +
-            'Content mentioning `src/task1.ts`\n\n' +
-            '### Task 2 — Second em-dash task\n' +
-            '**Story:** 2\n' +
-            'Content mentioning `src/task2.ts`\n',
+              '### Task 1 — First em-dash task\n' +
+              '**Story:** 1\n' +
+              'Content mentioning `src/task1.ts`\n\n' +
+              '### Task 2 — Second em-dash task\n' +
+              '**Story:** 2\n' +
+              'Content mentioning `src/task2.ts`\n',
           );
           await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
           await execa('git', ['commit', '-m', 'docs: add em-dash plan'], { cwd: dir });
@@ -3115,9 +3020,9 @@ describe('engine/artifacts', () => {
           // Seed a plan file with NO task headings — just prose
           await writePlan(
             '# Implementation Plan: Task-less Document\n\n' +
-            'This is a prose-only plan with no ### Task N headings.\n' +
-            'It should be treated as an empty plan for gating purposes.\n' +
-            'The PLAN artifact exists on disk but defines zero tasks.\n',
+              'This is a prose-only plan with no ### Task N headings.\n' +
+              'It should be treated as an empty plan for gating purposes.\n' +
+              'The PLAN artifact exists on disk but defines zero tasks.\n',
           );
 
           const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
@@ -3156,12 +3061,12 @@ describe('engine/artifacts', () => {
           // `### T0 — Title` (no "Task" word, starts at T0 not T1).
           await writePlan(
             '# Implementation Plan: T-prefix Test\n\n' +
-            '### T0 — First T-prefix task\n' +
-            '**Story:** 1\n' +
-            '**Files:** `src/t0.ts`\n\n' +
-            '### T1 — Second T-prefix task\n' +
-            '**Story:** 2\n' +
-            '**Files:** `src/t1.ts`\n',
+              '### T0 — First T-prefix task\n' +
+              '**Story:** 1\n' +
+              '**Files:** `src/t0.ts`\n\n' +
+              '### T1 — Second T-prefix task\n' +
+              '**Story:** 2\n' +
+              '**Files:** `src/t1.ts`\n',
           );
           await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
           await execa('git', ['commit', '-m', 'docs: add T-prefix plan'], { cwd: dir });
@@ -3189,10 +3094,7 @@ describe('engine/artifacts', () => {
         it('Story 2: real 2026-07-12-rtk-hook-preservation.md incident fixture is not "no tasks in plan" (presence gate)', async () => {
           // The presence-check gate (artifacts.ts) must recognize the real
           // incident plan as non-empty, independent of evidence/completion.
-          const fixturePath = join(
-            __dirname,
-            '../fixtures/plans/2026-07-12-rtk-hook-preservation.md',
-          );
+          const fixturePath = join(__dirname, '../fixtures/plans/2026-07-12-rtk-hook-preservation.md');
           const fixtureText = await readFile(fixturePath, 'utf-8');
           await writePlan(fixtureText);
 
@@ -3218,11 +3120,7 @@ describe('engine/artifacts', () => {
       // making build completion permanently unsatisfiable.
       describe('regression #620: structural "## Task Graph" / "## Task Dependency Graph" headings are not real task presence', () => {
         it('a plan with ONLY a "## Task Graph" heading (no real ### Task N) is still "empty"', async () => {
-          await writePlan(
-            '# Implementation Plan: Graph-only\n\n' +
-            '## Task Graph\n\n' +
-            'Task 1 -> Task 2\n',
-          );
+          await writePlan('# Implementation Plan: Graph-only\n\n' + '## Task Graph\n\n' + 'Task 1 -> Task 2\n');
 
           const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
           const result = await checkStepCompletion(dir, 'build', ctx);
@@ -3233,9 +3131,7 @@ describe('engine/artifacts', () => {
 
         it('a plan with ONLY a "## Task Dependency Graph" heading (no real ### Task N) is still "empty"', async () => {
           await writePlan(
-            '# Implementation Plan: Dependency-graph-only\n\n' +
-            '## Task Dependency Graph\n\n' +
-            'Task 1 -> Task 2\n',
+            '# Implementation Plan: Dependency-graph-only\n\n' + '## Task Dependency Graph\n\n' + 'Task 1 -> Task 2\n',
           );
 
           const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
@@ -3248,10 +3144,10 @@ describe('engine/artifacts', () => {
         it('a plan with real ### Task N headings PLUS a "## Task Dependency Graph" section still recognizes real task presence', async () => {
           await writePlan(
             '# Implementation Plan: Real-plus-graph\n\n' +
-            '### Task 1: Real work\n' +
-            '**Files:** `src/real.ts`\n\n' +
-            '## Task Dependency Graph\n\n' +
-            'Task 1 -> done\n',
+              '### Task 1: Real work\n' +
+              '**Files:** `src/real.ts`\n\n' +
+              '## Task Dependency Graph\n\n' +
+              'Task 1 -> done\n',
           );
 
           const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
@@ -3270,10 +3166,10 @@ describe('engine/artifacts', () => {
           // title-less shapes whose ids contain a digit.
           await writePlan(
             '# Implementation Plan: Bare digit headers\n\n' +
-            '### Task 1\n' +
-            '**Files:** `src/a.ts`\n\n' +
-            '### Task t2\n' +
-            '**Files:** `src/b.ts`\n',
+              '### Task 1\n' +
+              '**Files:** `src/a.ts`\n\n' +
+              '### Task t2\n' +
+              '**Files:** `src/b.ts`\n',
           );
 
           const ctx = { projectRoot: dir, planPath: join(dir, '.docs/plans/phase-1.md') };
@@ -3329,10 +3225,7 @@ describe('engine/artifacts', () => {
           await execa('git', ['add', 'README.md'], { cwd: dir });
           await execa('git', ['commit', '-m', 'Initial commit'], { cwd: dir });
 
-          await writePlan(
-            '### Task 1: First task\n**Story:** 1\n\n' +
-            '### Task 2: Second task\n**Story:** 2\n',
-          );
+          await writePlan('### Task 1: First task\n**Story:** 1\n\n' + '### Task 2: Second task\n**Story:** 2\n');
           await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
           await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
 
@@ -3375,10 +3268,7 @@ describe('engine/artifacts', () => {
     });
 
     it('fails when manual-test-results.md contains a FAIL row', async () => {
-      await createFile(
-        RESULTS,
-        '# Results\n\n| Story | Result |\n|---|---|\n| Foo | PASS |\n| Bar | FAIL |\n',
-      );
+      await createFile(RESULTS, '# Results\n\n| Story | Result |\n|---|---|\n| Foo | PASS |\n| Bar | FAIL |\n');
       const result = await checkStepCompletion(dir, 'manual_test', {
         sessionStartedAt: 0,
       });
@@ -3408,8 +3298,7 @@ describe('engine/artifacts', () => {
 
   describe('isSkipAttempt', () => {
     it('is true when the section contains the manual-test SKIP sentinel', () => {
-      const section =
-        '<!-- manual-test:skipped -->\n**Result:** SKIPPED — no endpoint/UI stories';
+      const section = '<!-- manual-test:skipped -->\n**Result:** SKIPPED — no endpoint/UI stories';
       expect(isSkipAttempt(section)).toBe(true);
     });
 
@@ -3489,20 +3378,14 @@ describe('engine/artifacts', () => {
     });
 
     it('fails open when no getHeadSha seam is provided (pre-change behavior preserved)', async () => {
-      await createFile(
-        MARKER,
-        JSON.stringify({ observedAt: Date.now(), headSha: 'aaa111', failRows: [] }),
-      );
+      await createFile(MARKER, JSON.stringify({ observedAt: Date.now(), headSha: 'aaa111', failRows: [] }));
       await createFile(RESULTS, PASS_FILE);
       const result = await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0 });
       expect(result).toEqual({ done: true });
     });
 
     it('fails open when getHeadSha returns null (no repo)', async () => {
-      await createFile(
-        MARKER,
-        JSON.stringify({ observedAt: Date.now(), headSha: 'aaa111', failRows: [] }),
-      );
+      await createFile(MARKER, JSON.stringify({ observedAt: Date.now(), headSha: 'aaa111', failRows: [] }));
       await createFile(RESULTS, PASS_FILE);
       const result = await checkStepCompletion(dir, 'manual_test', {
         sessionStartedAt: 0,
@@ -3569,10 +3452,7 @@ describe('engine/artifacts', () => {
     });
 
     it('passes when the latest attempt is a fresh SKIP sentinel (auto mode, no stories to exercise)', async () => {
-      await createFile(
-        RESULTS,
-        `## Attempt 1 — 2026-07-21T00:00:00Z\n${MANUAL_TEST_SKIP_SENTINEL}\n`,
-      );
+      await createFile(RESULTS, `## Attempt 1 — 2026-07-21T00:00:00Z\n${MANUAL_TEST_SKIP_SENTINEL}\n`);
       const result = await checkStepCompletion(dir, 'manual_test', { sessionStartedAt: 0 });
       expect(result).toEqual({ done: true });
     });
@@ -3589,10 +3469,7 @@ describe('engine/artifacts', () => {
     });
 
     it('fails when the latest attempt is a SKIP sentinel but the file is stale (mtime predates sessionStartedAt)', async () => {
-      await createFile(
-        RESULTS,
-        `## Attempt 1 — 2026-07-20T00:00:00Z\n${MANUAL_TEST_SKIP_SENTINEL}\n`,
-      );
+      await createFile(RESULTS, `## Attempt 1 — 2026-07-20T00:00:00Z\n${MANUAL_TEST_SKIP_SENTINEL}\n`);
       const past = new Date(Date.now() - 60_000);
       await utimes(join(dir, RESULTS), past, past);
       const result = await checkStepCompletion(dir, 'manual_test', {
@@ -3625,10 +3502,7 @@ describe('engine/artifacts', () => {
 
       // Attempt 2 is appended as a fresh SKIP section — HEAD has NOT moved
       // (no fix commits), so this must not launder the recorded FAIL.
-      await createFile(
-        RESULTS,
-        FAIL_FILE + `\n## Attempt 2 — 2026-07-21T00:01:00Z\n${MANUAL_TEST_SKIP_SENTINEL}\n`,
-      );
+      await createFile(RESULTS, FAIL_FILE + `\n## Attempt 2 — 2026-07-21T00:01:00Z\n${MANUAL_TEST_SKIP_SENTINEL}\n`);
       const result = await checkStepCompletion(dir, 'manual_test', {
         sessionStartedAt: 0,
         getHeadSha: sha('aaa111'),
@@ -3712,7 +3586,10 @@ describe('engine/artifacts', () => {
     const header = '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|----|----|----|----|----|\n';
 
     it('on true completion, writes a sidecar carrying codeStamp equal to the current head sha', async () => {
-      await createFile('.pipeline/prd-audit.md', '# PRD Audit\n\n' + header + '| FR-1 | ALIGNED | n/a | foo.ts:1 | — |\n');
+      await createFile(
+        '.pipeline/prd-audit.md',
+        '# PRD Audit\n\n' + header + '| FR-1 | ALIGNED | n/a | foo.ts:1 | — |\n',
+      );
       const result = await checkStepCompletion(dir, 'prd_audit', {
         sessionStartedAt: 0,
         getHeadSha: async () => 'ddd444',
@@ -3729,10 +3606,7 @@ describe('engine/artifacts', () => {
       '| --- | --- | --- | --- | --- | --- |\n';
 
     async function writeReport(rows: string): Promise<void> {
-      await createFile(
-        '.pipeline/prd-audit.md',
-        '# PRD Audit\n\n**PRD:** none\n\n' + table + rows,
-      );
+      await createFile('.pipeline/prd-audit.md', '# PRD Audit\n\n**PRD:** none\n\n' + table + rows);
     }
 
     async function accept(...criteria: string[]): Promise<void> {
@@ -3755,35 +3629,70 @@ describe('engine/artifacts', () => {
     async function publishV2AcceptedRelation(criterion: string, evidence: string): Promise<void> {
       const feature = { version: 'v1', repository: 'test/repository', feature: 'artifact-fixture' };
       const sourceId = prdWideningSourceId({ criterion, grade: 'OVER_SCOPE', evidence, prdIds: [] });
-      await createFile('.pipeline/remediation-cases.json', JSON.stringify({
-        version: 'v2', feature, cases: [], suppressions: [],
-        prdWideningCases: [{
-          id: 'case-accepted', domain: 'prd_widening',
-          originalSources: [{
-            sourceId: prdWideningSourceId({
-              criterion: 'NC.1', grade: 'OVER_SCOPE', evidence: 'Original offered behavior.', prdIds: [],
-            }),
-            snapshot: 'Original offered behavior.',
-          }],
-          currentSources: [{ sourceId, snapshot: evidence, recordedAt: '2026-09-09T00:00:00.000Z' }],
-          relationships: [{ currentSourceId: sourceId, kind: 'same-case', caseId: 'case-accepted', reason: 'Published fresh relation.' }],
-          reconciliationDigest: 'fixture-published-relation',
-        }],
-      }));
-      await createFile('.pipeline/accepted-widenings.json', JSON.stringify({
-        version: 2,
-        feature: { version: 1, repository: feature.repository, feature: feature.feature },
-        decisions: [{
-          id: 'decision-accepted', criterion: 'NC.1', authority: 'accept', rationale: 'Approved.', operator: 'test', revision: 1,
-          originalSource: {
-            id: prdWideningSourceId({
-              criterion: 'NC.1', grade: 'OVER_SCOPE', evidence: 'Original offered behavior.', prdIds: [],
-            }),
-            snapshot: 'Original offered behavior.',
-          },
-          originalCaseId: 'case-accepted', offerEntryId: 'offer-accepted',
-        }],
-      }));
+      await createFile(
+        '.pipeline/remediation-cases.json',
+        JSON.stringify({
+          version: 'v2',
+          feature,
+          cases: [],
+          suppressions: [],
+          prdWideningCases: [
+            {
+              id: 'case-accepted',
+              domain: 'prd_widening',
+              originalSources: [
+                {
+                  sourceId: prdWideningSourceId({
+                    criterion: 'NC.1',
+                    grade: 'OVER_SCOPE',
+                    evidence: 'Original offered behavior.',
+                    prdIds: [],
+                  }),
+                  snapshot: 'Original offered behavior.',
+                },
+              ],
+              currentSources: [{ sourceId, snapshot: evidence, recordedAt: '2026-09-09T00:00:00.000Z' }],
+              relationships: [
+                {
+                  currentSourceId: sourceId,
+                  kind: 'same-case',
+                  caseId: 'case-accepted',
+                  reason: 'Published fresh relation.',
+                },
+              ],
+              reconciliationDigest: 'fixture-published-relation',
+            },
+          ],
+        }),
+      );
+      await createFile(
+        '.pipeline/accepted-widenings.json',
+        JSON.stringify({
+          version: 2,
+          feature: { version: 1, repository: feature.repository, feature: feature.feature },
+          decisions: [
+            {
+              id: 'decision-accepted',
+              criterion: 'NC.1',
+              authority: 'accept',
+              rationale: 'Approved.',
+              operator: 'test',
+              revision: 1,
+              originalSource: {
+                id: prdWideningSourceId({
+                  criterion: 'NC.1',
+                  grade: 'OVER_SCOPE',
+                  evidence: 'Original offered behavior.',
+                  prdIds: [],
+                }),
+                snapshot: 'Original offered behavior.',
+              },
+              originalCaseId: 'case-accepted',
+              offerEntryId: 'offer-accepted',
+            },
+          ],
+        }),
+      );
     }
 
     it('an OVER_SCOPE finding the operator accepted no longer blocks the gate', async () => {
@@ -3797,7 +3706,8 @@ describe('engine/artifacts', () => {
       const summary = '  Visible behavior outside the approved plan.  ';
       await createFile(
         '.pipeline/prd-audit.md',
-        '# PRD Audit\n\n**PRD:** none\n\n' + table +
+        '# PRD Audit\n\n**PRD:** none\n\n' +
+          table +
           '| S3.1 | PASS | — | none | within | Covered behavior |\n\n' +
           '## Findings without an owning criterion\n' +
           '| Finding | Grade | Intent relation | Evidence |\n' +
@@ -3808,14 +3718,16 @@ describe('engine/artifacts', () => {
         '.pipeline/accepted-widenings.json',
         JSON.stringify({
           version: 1,
-          decisions: [{
-            criterion: 'NC.1',
-            summary: summary.trim(),
-            decision: 'accept',
-            rationale: 'Approved for this feature.',
-            operator: 'test',
-            decidedAt: '2026-08-26T00:00:00.000Z',
-          }],
+          decisions: [
+            {
+              criterion: 'NC.1',
+              summary: summary.trim(),
+              decision: 'accept',
+              rationale: 'Approved for this feature.',
+              operator: 'test',
+              decidedAt: '2026-08-26T00:00:00.000Z',
+            },
+          ],
         }),
       );
 
@@ -3825,7 +3737,8 @@ describe('engine/artifacts', () => {
 
       await createFile(
         '.pipeline/prd-audit.md',
-        '# PRD Audit\n\n**PRD:** none\n\n' + table +
+        '# PRD Audit\n\n**PRD:** none\n\n' +
+          table +
           '| S3.1 | PASS | — | none | within | Covered behavior |\n\n' +
           '## Findings without an owning criterion\n' +
           '| Finding | Grade | Intent relation | Evidence |\n' +
@@ -3837,7 +3750,8 @@ describe('engine/artifacts', () => {
 
       await createFile(
         '.pipeline/prd-audit.md',
-        '# PRD Audit\n\n**PRD:** none\n\n' + table +
+        '# PRD Audit\n\n**PRD:** none\n\n' +
+          table +
           '| S3.1 | PASS | — | none | within | Covered behavior |\n\n' +
           '## Findings without an owning criterion\n' +
           '| Finding | Grade | Intent relation | Evidence |\n' +
@@ -3853,7 +3767,8 @@ describe('engine/artifacts', () => {
       const evidence = 'Replacement wording for the accepted behavior.';
       await createFile(
         '.pipeline/prd-audit.md',
-        '# PRD Audit\n\n**PRD:** none\n\n' + table +
+        '# PRD Audit\n\n**PRD:** none\n\n' +
+          table +
           '| S3.1 | PASS | — | none | within | Covered behavior |\n\n' +
           '## Findings without an owning criterion\n' +
           '| Finding | Grade | Intent relation | Evidence |\n' +
@@ -3966,7 +3881,6 @@ describe('engine/artifacts', () => {
     });
   });
 
-
   // adr-2026-08-30-shared-plan-task-reference-resolver decision 1 requires a
   // cited reference to be resolved against the id set of the artifact that
   // DEFINES it. The gate scorer used to call the parser with no active plan,
@@ -3974,16 +3888,12 @@ describe('engine/artifacts', () => {
   // judgement — so every grammar-valid id resolved against itself and the gate
   // scored a report the remediation path (which does supply the plan) rejects.
   describe.skip('checkStepCompletion: prd_audit plan-task citation authority', () => {
-    const table =
-      '| Criterion | Grade | Plan task | Evidence |\n' +
-      '| --- | --- | --- | --- |\n';
+    const table = '| Criterion | Grade | Plan task | Evidence |\n' + '| --- | --- | --- | --- |\n';
 
     async function writePlan(...taskIds: string[]): Promise<void> {
       await createFile(
         '.docs/plans/citation-authority.md',
-        taskIds
-          .map((id) => `### Task ${id}: Existing work\n\n**Files:** src/example.ts\n`)
-          .join('\n'),
+        taskIds.map((id) => `### Task ${id}: Existing work\n\n**Files:** src/example.ts\n`).join('\n'),
       );
     }
 
@@ -4019,13 +3929,9 @@ describe('engine/artifacts', () => {
           '- Given input, when exercised, then the second behavior appears.',
         ].join('\n'),
       );
-      await writeReport(
-        '| S1.1 | PASS | 1 | Implemented |\n' +
-        '| S1.2 | PASS | rem-ab1-2 (landed) | Implemented |\n',
-      );
+      await writeReport('| S1.1 | PASS | 1 | Implemented |\n' + '| S1.2 | PASS | rem-ab1-2 (landed) | Implemented |\n');
 
-      expect(await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 }))
-        .toMatchObject({ done: true });
+      expect(await checkStepCompletion(dir, 'prd_audit', { sessionStartedAt: 0 })).toMatchObject({ done: true });
     });
 
     it('refuses fail-closed when the feature plan cannot be resolved at all', async () => {
@@ -4044,10 +3950,12 @@ describe('engine/artifacts', () => {
       await writeApprovedAsBuiltVerdict(dir);
       await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), 'Verdict: BLOCKED\n');
 
-      await expect(checkStepCompletion(dir, 'architecture_review_as_built', {
-        sessionStartedAt: 0,
-        attemptRunId: 'current-run',
-      })).resolves.toMatchObject({ done: true });
+      await expect(
+        checkStepCompletion(dir, 'architecture_review_as_built', {
+          sessionStartedAt: 0,
+          attemptRunId: 'current-run',
+        }),
+      ).resolves.toMatchObject({ done: true });
     });
   });
 
@@ -4158,9 +4066,21 @@ describe('engine/artifacts', () => {
     it.each([
       ['bare approved status', 'Status: APPROVED', 'APPROVED'],
       ['case-insensitive approved status', 'Status: aPpRoVeD', 'aPpRoVeD'],
-      ['bold superseded status', '**Status:** SUPERSEDED by `adr-2026-07-30-finish-only-mergeability-gate`', 'SUPERSEDED by `adr-2026-07-30-finish-only-mergeability-gate`'],
-      ['list-marked approved status with trailing prose', '- **Status:** APPROVED (operator-approved 2026-07-29)', 'APPROVED (operator-approved 2026-07-29)'],
-      ['superseded status with trailing prose', 'Status: SUPERSEDED in part by `adr-2026-07-29-deterministic-build-verification-fanout`', 'SUPERSEDED in part by `adr-2026-07-29-deterministic-build-verification-fanout`'],
+      [
+        'bold superseded status',
+        '**Status:** SUPERSEDED by `adr-2026-07-30-finish-only-mergeability-gate`',
+        'SUPERSEDED by `adr-2026-07-30-finish-only-mergeability-gate`',
+      ],
+      [
+        'list-marked approved status with trailing prose',
+        '- **Status:** APPROVED (operator-approved 2026-07-29)',
+        'APPROVED (operator-approved 2026-07-29)',
+      ],
+      [
+        'superseded status with trailing prose',
+        'Status: SUPERSEDED in part by `adr-2026-07-29-deterministic-build-verification-fanout`',
+        'SUPERSEDED in part by `adr-2026-07-29-deterministic-build-verification-fanout`',
+      ],
       ['bold-wrapped approved value with trailing whitespace', '**Status:** **APPROVED**   ', 'APPROVED'],
       ['whole bold declaration', '**Status: APPROVED**', 'APPROVED'],
     ])('approves a %s declaration', (_description, declaration, found) => {
@@ -4182,9 +4102,10 @@ describe('engine/artifacts', () => {
     });
 
     it('ignores a mid-sentence status mention in an otherwise approved ADR', () => {
-      expect(
-        adrApprovalStatus('# ADR\n\nStatus: APPROVED\n\nThis requires `Status: Accepted`, no DRAFT.\n'),
-      ).toEqual({ approved: true, found: 'APPROVED' });
+      expect(adrApprovalStatus('# ADR\n\nStatus: APPROVED\n\nThis requires `Status: Accepted`, no DRAFT.\n')).toEqual({
+        approved: true,
+        found: 'APPROVED',
+      });
     });
 
     it('honors the first line-anchored status declaration', () => {
@@ -4208,7 +4129,6 @@ describe('engine/artifacts', () => {
         found: status,
       });
     });
-
   });
 
   describe('isCanonicalAdrFilename', () => {
@@ -4236,14 +4156,10 @@ describe('engine/artifacts', () => {
     it('keeps the ADR template status vocabulary and guides authors to citable decisions', async () => {
       const template = await readFile(join(REPOSITORY_ROOT, 'templates', 'adr.md.template'), 'utf8');
       const statusLine = template.split(/\r?\n/).find((line) => line.startsWith('**Status:**'));
-      const statusVocabularyLines = template
-        .split(/\r?\n/)
-        .filter((line) => /\bstatus\b/i.test(line));
+      const statusVocabularyLines = template.split(/\r?\n/).filter((line) => /\bstatus\b/i.test(line));
 
       expect(statusLine).toBe('**Status:** APPROVED | SUPERSEDED by {{superseding-adr-slug}}');
-      expect(statusVocabularyLines).toEqual([
-        '**Status:** APPROVED | SUPERSEDED by {{superseding-adr-slug}}',
-      ]);
+      expect(statusVocabularyLines).toEqual(['**Status:** APPROVED | SUPERSEDED by {{superseding-adr-slug}}']);
       expect(template).toContain('Preferred form: a numbered list');
 
       const parsed = parseAdrDecisions(
@@ -4315,9 +4231,7 @@ describe('engine/artifacts', () => {
     });
 
     it('does not treat decimal sub-points or prose headings as decision ids', () => {
-      const parsed = parseAdrDecisions(
-        '# ADR\n\n## Decision\n\n### 2.1 Sub-point\n\n### Step 1. Prepare\n',
-      );
+      const parsed = parseAdrDecisions('# ADR\n\n## Decision\n\n### 2.1 Sub-point\n\n### Step 1. Prepare\n');
 
       expect(parsed).toMatchObject({ kind: 'decisions' });
       if (parsed.kind === 'decisions') {
@@ -4337,9 +4251,7 @@ describe('engine/artifacts', () => {
     });
 
     it('excludes ATX-numbered headings in code fences and later sections', () => {
-      const fenced = parseAdrDecisions(
-        '# ADR\n\n## Decision\n\n```markdown\n### 5. Fifth\n```\n',
-      );
+      const fenced = parseAdrDecisions('# ADR\n\n## Decision\n\n```markdown\n### 5. Fifth\n```\n');
       const consequence = parseAdrDecisions(
         '# ADR\n\n## Decision\n\nNo numbered decisions.\n\n## Consequences\n\n### 5. Fifth\n',
       );
@@ -4401,10 +4313,12 @@ describe('engine/artifacts', () => {
 
       expect(parsed).toMatchObject({ kind: 'decisions' });
       if (parsed.kind === 'decisions') {
-        expect(parsed.passages).toEqual(new Map([
-          ['4', ['### D4 — Retain the shared parser\nIts grammar remains the sole authority.\n']],
-          ['5', ['5. **Strip quote markers.**\nKeep quoted continuation text.\n']],
-        ]));
+        expect(parsed.passages).toEqual(
+          new Map([
+            ['4', ['### D4 — Retain the shared parser\nIts grammar remains the sole authority.\n']],
+            ['5', ['5. **Strip quote markers.**\nKeep quoted continuation text.\n']],
+          ]),
+        );
         expect(parsed.section).toBe(
           '### D4 — Retain the shared parser\n' +
             'Its grammar remains the sole authority.\n\n' +
@@ -4426,12 +4340,17 @@ describe('engine/artifacts', () => {
       expect(parsed).toMatchObject({ kind: 'decisions' });
       if (parsed.kind === 'decisions') {
         expect(parsed.ids).toEqual(new Set(['4']));
-        expect(parsed.passages).toEqual(new Map([
-          ['4', [
-            '4. **Original obligation.**\nKeep the original clause.\n',
-            '4. **Amended obligation.**\nThe amendment is an additional passage.\n',
-          ]],
-        ]));
+        expect(parsed.passages).toEqual(
+          new Map([
+            [
+              '4',
+              [
+                '4. **Original obligation.**\nKeep the original clause.\n',
+                '4. **Amended obligation.**\nThe amendment is an additional passage.\n',
+              ],
+            ],
+          ]),
+        );
       }
     });
   });
@@ -4442,22 +4361,34 @@ describe('engine/artifacts', () => {
     async function writeAudit(body: string) {
       await createFile('.pipeline/prd-audit.md', '# PRD Audit\n\n' + header + body);
       const rows = [...body.matchAll(/^\|\s*(FR-[^|]+)\s*\|\s*([^|]+)\s*\|\s*([^|]*)/gim)];
-      await persistPrdAuditVerdict(dir, {
-        complete: true,
-        judgment: {
-          version: 'v1',
-          criterionJudgments: rows.map((row, index) => ({
-            criterion: { storyId: 'fixture', ordinal: index + 1 }, criterionId: `Sfixture.${index + 1}`,
-            grade: row[2].trim().toUpperCase() === 'ALIGNED' ? 'PASS' as const
-              : row[3].trim() === 'impl-gap' ? 'FIXABLE' as const : 'PLAN_GAP' as const,
-            evidence: 'typed fixture evidence', rationale: 'typed fixture rationale',
-            requirementAssociations: [{ path: '.docs/fixture.md', requirementId: row[1].trim() }],
-            evidenceTaskIds: [],
-            ...(row[3].trim() === 'impl-gap' ? { ownerTaskId: '1' } : {}),
-          })),
-          noOwnerObservations: [],
-        }, diagnostics: [], recordedDispositions: [],
-      }, { attemptId: 'current-run', codeStamp: null });
+      await persistPrdAuditVerdict(
+        dir,
+        {
+          complete: true,
+          judgment: {
+            version: 'v1',
+            criterionJudgments: rows.map((row, index) => ({
+              criterion: { storyId: 'fixture', ordinal: index + 1 },
+              criterionId: `Sfixture.${index + 1}`,
+              grade:
+                row[2].trim().toUpperCase() === 'ALIGNED'
+                  ? ('PASS' as const)
+                  : row[3].trim() === 'impl-gap'
+                    ? ('FIXABLE' as const)
+                    : ('PLAN_GAP' as const),
+              evidence: 'typed fixture evidence',
+              rationale: 'typed fixture rationale',
+              requirementAssociations: [{ path: '.docs/fixture.md', requirementId: row[1].trim() }],
+              evidenceTaskIds: [],
+              ...(row[3].trim() === 'impl-gap' ? { ownerTaskId: '1' } : {}),
+            })),
+            noOwnerObservations: [],
+          },
+          diagnostics: [],
+          recordedDispositions: [],
+        },
+        { attemptId: 'current-run', codeStamp: null },
+      );
     }
 
     // The classifier parses the report twice — once for rejected rows, once
@@ -4465,10 +4396,7 @@ describe('engine/artifacts', () => {
     // plan. An unauthorized second parse drops every citing row from
     // `findings`, so a blocking report routes as clean.
     it('routes a blocking row that cites a task the active plan declares', async () => {
-      await createFile(
-        '.docs/plans/citation-authority.md',
-        '### Task 1: Existing work\n\n**Files:** src/example.ts\n',
-      );
+      await createFile('.docs/plans/citation-authority.md', '### Task 1: Existing work\n\n**Files:** src/example.ts\n');
       await createFile(
         '.pipeline/prd-audit.md',
         '# PRD Audit\n\n**PRD:** none\n\n' +
@@ -4486,14 +4414,8 @@ describe('engine/artifacts', () => {
       // A multi-plan corpus with no recorded activePlanPath resolves only by
       // the feature slug. Dropping it rejected every citing row as "plan could
       // not be resolved" and routed a valid audit to a needs-decide halt.
-      await createFile(
-        '.docs/plans/other-feature.md',
-        '### Task 1: Unrelated work\n\n**Files:** src/other.ts\n',
-      );
-      await createFile(
-        '.docs/plans/my-feature.md',
-        '### Task 1: Existing work\n\n**Files:** src/example.ts\n',
-      );
+      await createFile('.docs/plans/other-feature.md', '### Task 1: Unrelated work\n\n**Files:** src/other.ts\n');
+      await createFile('.docs/plans/my-feature.md', '### Task 1: Existing work\n\n**Files:** src/example.ts\n');
       await createFile(
         '.pipeline/prd-audit.md',
         '# PRD Audit\n\n**PRD:** none\n\n' +
@@ -4508,10 +4430,7 @@ describe('engine/artifacts', () => {
     });
 
     it('refuses to route a blocking row whose citation names an absent plan task', async () => {
-      await createFile(
-        '.docs/plans/citation-authority.md',
-        '### Task 1: Existing work\n\n**Files:** src/example.ts\n',
-      );
+      await createFile('.docs/plans/citation-authority.md', '### Task 1: Existing work\n\n**Files:** src/example.ts\n');
       await createFile(
         '.pipeline/prd-audit.md',
         '# PRD Audit\n\n**PRD:** none\n\n' +
@@ -4541,14 +4460,16 @@ describe('engine/artifacts', () => {
         '.pipeline/accepted-widenings.json',
         JSON.stringify({
           version: 1,
-          decisions: [{
-            criterion: 'S3.1',
-            summary: 'operator accepted S3.1',
-            decision: 'accept',
-            rationale: 'Approved for this feature.',
-            operator: 'test',
-            decidedAt: '2026-08-24T00:00:00.000Z',
-          }],
+          decisions: [
+            {
+              criterion: 'S3.1',
+              summary: 'operator accepted S3.1',
+              decision: 'accept',
+              rationale: 'Approved for this feature.',
+              operator: 'test',
+              decidedAt: '2026-08-24T00:00:00.000Z',
+            },
+          ],
         }),
       );
       expect((await classifyPrdAuditGaps(dir, undefined)).kind).toBe('invalid-evidence');
@@ -4566,14 +4487,16 @@ describe('engine/artifacts', () => {
         '.pipeline/accepted-widenings.json',
         JSON.stringify({
           version: 1,
-          decisions: [{
-            criterion: 'S3.1',
-            summary: 'operator refused S3.1',
-            decision: 'refuse',
-            rationale: 'Rework it instead.',
-            operator: 'test',
-            decidedAt: '2026-08-24T00:00:00.000Z',
-          }],
+          decisions: [
+            {
+              criterion: 'S3.1',
+              summary: 'operator refused S3.1',
+              decision: 'refuse',
+              rationale: 'Rework it instead.',
+              operator: 'test',
+              decidedAt: '2026-08-24T00:00:00.000Z',
+            },
+          ],
         }),
       );
       expect((await classifyPrdAuditGaps(dir, undefined)).kind).not.toBe('clean');
@@ -4581,7 +4504,10 @@ describe('engine/artifacts', () => {
 
     it('returns named invalid evidence when there is no typed audit verdict', async () => {
       const c = await classifyPrdAuditGaps(dir, undefined);
-      expect(c).toMatchObject({ kind: 'invalid-evidence', summary: expect.stringContaining('.pipeline/prd-audit.json') });
+      expect(c).toMatchObject({
+        kind: 'invalid-evidence',
+        summary: expect.stringContaining('.pipeline/prd-audit.json'),
+      });
     });
 
     it('returns clean when every FR is ALIGNED', async () => {
@@ -4912,10 +4838,7 @@ describe('engine/artifacts', () => {
     it('reruns a typed absent verdict even when its diagnostic text repeats', () => {
       const r = classifyRetryDecision({
         step: 'prd_audit',
-        completion: completion(
-          'absent',
-          'report was produced by run prior-run, not the current run current-run',
-        ),
+        completion: completion('absent', 'report was produced by run prior-run, not the current run current-run'),
         attempt: 2,
         priorReason: 'report was produced by run prior-run, not the current run current-run',
         inputsUnchanged: true,
@@ -5177,7 +5100,8 @@ Task 1 → Task 2
       expect(validateBuildReviewVerdict(securityOnly)).toEqual({ ok: true, ...securityOnly });
       expect(validateBuildReviewVerdict({ ...securityOnly, findings: {} })).toEqual({
         ok: false,
-        reason: '.pipeline/build-review.json "findings.security" must be non-empty when security is named in failedRubrics',
+        reason:
+          '.pipeline/build-review.json "findings.security" must be non-empty when security is named in failedRubrics',
       });
       expect(buildReviewFailureDetails(securityOnly)).toEqual([
         '[security] SQL interpolation allows an injection path.',
@@ -5188,11 +5112,18 @@ Task 1 → Task 2
         snapshotDigest: 'sha256:security',
         results: {
           testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
-          security: { kind: 'infrastructure-failure', rubric: 'security', reason: 'provider-error', detail: 'security provider offline' },
+          security: {
+            kind: 'infrastructure-failure',
+            rubric: 'security',
+            reason: 'provider-error',
+            detail: 'security provider offline',
+          },
         },
       });
       expect(validateBuildReviewVerdict(aggregate)).toMatchObject({
-        ok: true, verdict: 'FAIL', rubric: { testQuality: false, security: true },
+        ok: true,
+        verdict: 'FAIL',
+        rubric: { testQuality: false, security: true },
       });
     });
 
@@ -5237,10 +5168,12 @@ Task 1 → Task 2
     });
 
     it('renders legacy summaries and every structured finding for completion feedback', () => {
-      expect(buildReviewFailureDetails({
-        reasons: ['test-quality has gaps'],
-        findings: { testQuality: ['missing setup output', 'missing teardown output'] },
-      })).toEqual([
+      expect(
+        buildReviewFailureDetails({
+          reasons: ['test-quality has gaps'],
+          findings: { testQuality: ['missing setup output', 'missing teardown output'] },
+        }),
+      ).toEqual([
         'test-quality has gaps',
         '[testQuality] missing setup output',
         '[testQuality] missing teardown output',
@@ -5496,7 +5429,11 @@ Task 1 → Task 2
       const p = join(gdir, '.pipeline/build-review.json');
       await writeFile(
         p,
-        JSON.stringify({ verdict: 'FAIL', reasons: ['nope'], rubric: { testQuality: true, security: false }, codeStamp: baseline }, null, 2),
+        JSON.stringify(
+          { verdict: 'FAIL', reasons: ['nope'], rubric: { testQuality: true, security: false }, codeStamp: baseline },
+          null,
+          2,
+        ),
       );
       // Fresh mtime (not backdated) — never touches the preserve path anyway.
       const result = await checkStepCompletion(gdir, 'build_review', ctxFor(gdir));
@@ -5536,17 +5473,33 @@ Task 1 → Task 2
     const makeAggregate = (lap: string, finding = true) => {
       const lapId = parseBuildReviewLapId(lap)!;
       const judged = {
-        kind: 'judged' as const, rubric: 'testQuality' as const, lapId, snapshotDigest: 'sha256:snapshot',
+        kind: 'judged' as const,
+        rubric: 'testQuality' as const,
+        lapId,
+        snapshotDigest: 'sha256:snapshot',
         contractVersion: 'v2' as never,
-        findings: finding ? [{
-          concernKind: 'test-insensitive', summary: 'old finding', evidenceLocations: ['src/a.ts:1'],
-          anchor: { rubric: 'testQuality' as const, locus: { path: 'src/a.ts', contentHash: 'sha256:test', display: 'src/a.ts:1' } },
-        }] : [],
-        verdict: finding ? 'FAIL' as const : 'PASS' as const,
+        findings: finding
+          ? [
+              {
+                concernKind: 'test-insensitive',
+                summary: 'old finding',
+                evidenceLocations: ['src/a.ts:1'],
+                anchor: {
+                  rubric: 'testQuality' as const,
+                  locus: { path: 'src/a.ts', contentHash: 'sha256:test', display: 'src/a.ts:1' },
+                },
+              },
+            ]
+          : [],
+        verdict: finding ? ('FAIL' as const) : ('PASS' as const),
       };
-      return joinBuildReviewRubricOutcomes({ lapId, snapshotDigest: 'sha256:snapshot', results: {
-        testQuality: judged,
-      } });
+      return joinBuildReviewRubricOutcomes({
+        lapId,
+        snapshotDigest: 'sha256:snapshot',
+        results: {
+          testQuality: judged,
+        },
+      });
     };
 
     it('classifies a session-fresh prior-lap FAIL aggregate as absent without reviving its finding', async () => {
@@ -5556,7 +5509,9 @@ Task 1 → Task 2
         git: async () => ({ exitCode: 0, stdout: 'B\n', stderr: '' }),
       });
       expect(result).toMatchObject({
-        done: false, routeClass: 'absent', staleLap: { storedLapId: 'lap-A', currentLapId: 'lap-B' },
+        done: false,
+        routeClass: 'absent',
+        staleLap: { storedLapId: 'lap-A', currentLapId: 'lap-B' },
       });
       expect(result.reason).toContain('lap-A');
       expect(result.reason).toContain('lap-B');
@@ -5566,10 +5521,13 @@ Task 1 → Task 2
     // Covers: task:9, task:rem-prd-audit-r9-1
     it('passes shared built-in and custom confidence and severity thresholds to the effective verdict', async () => {
       const verdictPath = join(dir, BUILD_REVIEW_VERDICT);
-      await createFile(BUILD_REVIEW_VERDICT, JSON.stringify({
-        ...makeAggregate('lap-A', false),
-        codeStamp: 'A',
-      }));
+      await createFile(
+        BUILD_REVIEW_VERDICT,
+        JSON.stringify({
+          ...makeAggregate('lap-A', false),
+          codeStamp: 'A',
+        }),
+      );
       const stale = new Date(Date.now() - 10_000);
       await utimes(verdictPath, stale, stale);
 
@@ -5609,7 +5567,8 @@ Task 1 → Task 2
           if (args[0] === 'symbolic-ref') return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
           if (args[0] === 'merge-base' && args[1] === '--is-ancestor') return { exitCode: 0, stdout: '', stderr: '' };
           if (args[0] === 'merge-base') return { exitCode: 0, stdout: 'base\n', stderr: '' };
-          if (args[0] === 'diff' && args[2] === 'A..HEAD') return { exitCode: 0, stdout: 'docs/guide.md\n', stderr: '' };
+          if (args[0] === 'diff' && args[2] === 'A..HEAD')
+            return { exitCode: 0, stdout: 'docs/guide.md\n', stderr: '' };
           if (args[0] === 'diff') return { exitCode: 0, stdout: 'src/feature.ts\n', stderr: '' };
           throw new Error(`unexpected git command: ${args.join(' ')}`);
         },
@@ -5691,7 +5650,9 @@ Task 1 → Task 2
       await createFile(BUILD_REVIEW_VERDICT, JSON.stringify(makeAggregate('lap-A')));
       const unavailable = await checkStepCompletion(dir, 'build_review', {
         sessionStartedAt: Date.now() - 1_000,
-        git: async () => { throw new Error('unavailable'); },
+        git: async () => {
+          throw new Error('unavailable');
+        },
       });
       expect(unavailable).toMatchObject({ done: false, routeClass: 'named-route' });
       expect(unavailable.staleLap).toBeUndefined();
@@ -5756,7 +5717,8 @@ Task 1 → Task 2
     describe.skip('prd_audit', () => {
       const PATH = '.pipeline/prd-audit.md';
       const SIDECAR = '.pipeline/prd-audit-code-stamp.json';
-      const ALIGNED = '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|----|----|----|----|----|\n| FR-1 | ALIGNED | n/a | foo.ts:1 | — |\n';
+      const ALIGNED =
+        '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|----|----|----|----|----|\n| FR-1 | ALIGNED | n/a | foo.ts:1 | — |\n';
 
       async function writeReport(d: string): Promise<void> {
         const p = join(d, PATH);
@@ -5764,41 +5726,47 @@ Task 1 → Task 2
         await utimes(p, OLD_MTIME, OLD_MTIME);
       }
 
-      async function writeSidecar(
-        d: string,
-        codeStamp: string | undefined,
-        runId?: string,
-      ): Promise<void> {
+      async function writeSidecar(d: string, codeStamp: string | undefined, runId?: string): Promise<void> {
         if (codeStamp === undefined) return;
         await writeFile(join(d, SIDECAR), JSON.stringify({ codeStamp, runId }, null, 2));
       }
 
       async function writeTypedVerdict(
         d: string,
-        { codeStamp = null, attemptId = 'current-run', grade = 'PASS' }: {
+        {
+          codeStamp = null,
+          attemptId = 'current-run',
+          grade = 'PASS',
+        }: {
           codeStamp?: string | null;
           attemptId?: string;
           grade?: 'PASS' | 'PLAN_GAP';
         } = {},
       ): Promise<void> {
-        await persistPrdAuditVerdict(d, {
-          complete: true,
-          judgment: {
-            version: 'v1',
-            criterionJudgments: [{
-              criterion: { storyId: '1', ordinal: 1 },
-              criterionId: 'S1.1',
-              grade,
-              evidence: 'featureA.ts:1',
-              rationale: 'Fixture evidence is typed authority.',
-              requirementAssociations: [],
-              evidenceTaskIds: [],
-            }],
-            noOwnerObservations: [],
+        await persistPrdAuditVerdict(
+          d,
+          {
+            complete: true,
+            judgment: {
+              version: 'v1',
+              criterionJudgments: [
+                {
+                  criterion: { storyId: '1', ordinal: 1 },
+                  criterionId: 'S1.1',
+                  grade,
+                  evidence: 'featureA.ts:1',
+                  rationale: 'Fixture evidence is typed authority.',
+                  requirementAssociations: [],
+                  evidenceTaskIds: [],
+                },
+              ],
+              noOwnerObservations: [],
+            },
+            diagnostics: [],
+            recordedDispositions: [],
           },
-          diagnostics: [],
-          recordedDispositions: [],
-        }, { attemptId, codeStamp });
+          { attemptId, codeStamp },
+        );
         await utimes(join(d, '.pipeline/prd-audit.json'), OLD_MTIME, OLD_MTIME);
       }
 
@@ -5834,9 +5802,9 @@ Task 1 → Task 2
         await writeFile(
           p,
           '**PRD:** none\n\n' +
-          '| Criterion | Grade | Plan task | Evidence |\n' +
-          '| --- | --- | --- | --- |\n' +
-          '| S1.1 | PASS | 1 | Implemented |\n',
+            '| Criterion | Grade | Plan task | Evidence |\n' +
+            '| --- | --- | --- | --- |\n' +
+            '| S1.1 | PASS | 1 | Implemented |\n',
         );
         await utimes(p, OLD_MTIME, OLD_MTIME);
         await writeSidecar(gdir, baseline);
@@ -5864,9 +5832,9 @@ Task 1 → Task 2
         await writeFile(
           p,
           '**PRD:** none\n\n' +
-          '| Criterion | Grade | Plan task | Evidence |\n' +
-          '| --- | --- | --- | --- |\n' +
-          '| S1.1 | PASS | rem-ab1-9 | Implemented |\n',
+            '| Criterion | Grade | Plan task | Evidence |\n' +
+            '| --- | --- | --- | --- |\n' +
+            '| S1.1 | PASS | rem-ab1-9 | Implemented |\n',
         );
         await utimes(p, OLD_MTIME, OLD_MTIME);
         await writeSidecar(gdir, baseline, 'current-run');
@@ -5925,21 +5893,25 @@ Task 1 → Task 2
         await writeFile(join(gdir, PATH), ALIGNED);
 
         await utimes(join(gdir, PATH), OLD_MTIME, OLD_MTIME);
-        await expect(checkStepCompletion(gdir, 'prd_audit', {
-          ...ctxFor(gdir),
-          attemptRunId: 'current-run',
-        })).resolves.toMatchObject({
+        await expect(
+          checkStepCompletion(gdir, 'prd_audit', {
+            ...ctxFor(gdir),
+            attemptRunId: 'current-run',
+          }),
+        ).resolves.toMatchObject({
           done: false,
           reason: expect.stringMatching(/not rewritten by this judging session/),
         });
 
         await writeFile(join(gdir, PATH), ALIGNED);
-        await expect(checkStepCompletion(gdir, 'prd_audit', {
-          ...ctxFor(gdir),
-          sessionStartedAt: 0,
-          attemptStartedAt: 0,
-          attemptRunId: 'current-run',
-        })).resolves.toMatchObject({ done: true });
+        await expect(
+          checkStepCompletion(gdir, 'prd_audit', {
+            ...ctxFor(gdir),
+            sessionStartedAt: 0,
+            attemptStartedAt: 0,
+            attemptRunId: 'current-run',
+          }),
+        ).resolves.toMatchObject({ done: true });
       });
 
       // Covers: task:13
@@ -5949,13 +5921,15 @@ Task 1 → Task 2
         await writeFile(join(gdir, PATH), ALIGNED);
         await writeFile(join(gdir, SIDECAR), JSON.stringify({ runId: 'prior-run' }));
 
-        await expect(checkStepCompletion(gdir, 'prd_audit', {
-          ...ctxFor(gdir),
-          sessionStartedAt: 0,
-          attemptStartedAt: 0,
-          attemptRunId: 'current-run',
-          config: { gate_code_validity: { enabled: false } },
-        })).resolves.toMatchObject({ done: true });
+        await expect(
+          checkStepCompletion(gdir, 'prd_audit', {
+            ...ctxFor(gdir),
+            sessionStartedAt: 0,
+            attemptStartedAt: 0,
+            attemptRunId: 'current-run',
+            config: { gate_code_validity: { enabled: false } },
+          }),
+        ).resolves.toMatchObject({ done: true });
       });
 
       it('does not preserve a stale report from retired NC-summary authority', async () => {
@@ -5978,12 +5952,22 @@ Task 1 → Task 2
         ].join('\n');
         await writeFile(join(gdir, PATH), report);
         await utimes(join(gdir, PATH), OLD_MTIME, OLD_MTIME);
-        await writeFile(join(gdir, '.pipeline/accepted-widenings.json'), JSON.stringify({
-          version: 1,
-          decisions: [{
-            criterion: 'NC.1', summary, decision: 'accept', rationale: 'Approved.', operator: 'test', decidedAt: '2026-08-26T00:00:00.000Z',
-          }],
-        }));
+        await writeFile(
+          join(gdir, '.pipeline/accepted-widenings.json'),
+          JSON.stringify({
+            version: 1,
+            decisions: [
+              {
+                criterion: 'NC.1',
+                summary,
+                decision: 'accept',
+                rationale: 'Approved.',
+                operator: 'test',
+                decidedAt: '2026-08-26T00:00:00.000Z',
+              },
+            ],
+          }),
+        );
         await writeSidecar(gdir, baseline);
 
         const result = await checkStepCompletion(gdir, 'prd_audit', ctxFor(gdir));
@@ -6013,7 +5997,7 @@ Task 1 → Task 2
         expect(result.reason ?? '').toMatch(/not rewritten by this judging session/);
       });
 
-      it('falls through to mtime rejection when the delta touches the feature\'s own runtime source', async () => {
+      it("falls through to mtime rejection when the delta touches the feature's own runtime source", async () => {
         gdir = await makeGitDir();
         await wireOrigin(gdir);
         const baseline = await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
@@ -6085,9 +6069,12 @@ Task 1 → Task 2
         await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
         await writeFile(join(gdir, PATH), APPROVED);
         await utimes(join(gdir, PATH), OLD_MTIME, OLD_MTIME);
-        await expect(checkStepCompletion(gdir, 'architecture_review_as_built', {
-          ...ctxFor(gdir), attemptRunId: 'current-run',
-        })).resolves.toMatchObject({ done: false, routeClass: 'absent' });
+        await expect(
+          checkStepCompletion(gdir, 'architecture_review_as_built', {
+            ...ctxFor(gdir),
+            attemptRunId: 'current-run',
+          }),
+        ).resolves.toMatchObject({ done: false, routeClass: 'absent' });
       });
 
       it('keeps run identity checking when gate-code-validity is disabled', async () => {
@@ -6095,27 +6082,34 @@ Task 1 → Task 2
         await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
         await writeApprovedAsBuiltVerdict(gdir, { attemptId: 'prior-run' });
 
-        await expect(checkStepCompletion(gdir, 'architecture_review_as_built', {
-          ...ctxFor(gdir),
-          sessionStartedAt: 0,
-          attemptStartedAt: 0,
-          attemptRunId: 'current-run',
-          config: { gate_code_validity: { enabled: false } },
-        })).resolves.toMatchObject({ done: false, retrySignal: 'stale-run-identity' });
+        await expect(
+          checkStepCompletion(gdir, 'architecture_review_as_built', {
+            ...ctxFor(gdir),
+            sessionStartedAt: 0,
+            attemptStartedAt: 0,
+            attemptRunId: 'current-run',
+            config: { gate_code_validity: { enabled: false } },
+          }),
+        ).resolves.toMatchObject({ done: false, retrySignal: 'stale-run-identity' });
       });
 
       it('reads a typed BLOCKED verdict even when its report is hand-edited to APPROVED', async () => {
         gdir = await makeGitDir();
         await commitFile(gdir, 'featureA.ts', 'f1\n', 'feat: add featureA');
-        await persistAsBuiltVerdict(gdir, {
-          version: 'v2', verdict: 'BLOCKED', reachability: [], driftNotes: [],
-          findings: [{ id: 'ARCH-1', class: 'DESIGN', summary: 'A decision is required.' }],
-          violations: 'architecture gap', resolution: 'make a decision',
-        }, { attemptId: 'current-run', codeStamp: null, policy: AS_BUILT_TEST_POLICY });
-        await writeFile(
-          join(gdir, PATH),
-          '# As-Built Review\n\nVerdict: APPROVED\n',
+        await persistAsBuiltVerdict(
+          gdir,
+          {
+            version: 'v2',
+            verdict: 'BLOCKED',
+            reachability: [],
+            driftNotes: [],
+            findings: [{ id: 'ARCH-1', class: 'DESIGN', summary: 'A decision is required.' }],
+            violations: 'architecture gap',
+            resolution: 'make a decision',
+          },
+          { attemptId: 'current-run', codeStamp: null, policy: AS_BUILT_TEST_POLICY },
         );
+        await writeFile(join(gdir, PATH), '# As-Built Review\n\nVerdict: APPROVED\n');
 
         const result = await checkStepCompletion(gdir, 'architecture_review_as_built', ctxFor(gdir));
         expect(result.done).toBe(false);
@@ -6140,10 +6134,7 @@ Task 1 → Task 2
         gdir = await makeGitDir();
         const baseline = await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
         await writeResults(gdir);
-        await writeFile(
-          join(gdir, MARKER),
-          JSON.stringify({ codeStamp: baseline }, null, 2),
-        );
+        await writeFile(join(gdir, MARKER), JSON.stringify({ codeStamp: baseline }, null, 2));
         await writeFile(join(gdir, RUN_ID_SIDECAR), JSON.stringify({ runId: 'current-run' }, null, 2));
 
         const result = await checkStepCompletion(gdir, 'manual_test', {
@@ -6158,10 +6149,7 @@ Task 1 → Task 2
         gdir = await makeGitDir();
         const baseline = await commitFile(gdir, 'src/a.ts', 'a\n', 'init');
         await writeResults(gdir);
-        await writeFile(
-          join(gdir, MARKER),
-          JSON.stringify({ codeStamp: baseline }, null, 2),
-        );
+        await writeFile(join(gdir, MARKER), JSON.stringify({ codeStamp: baseline }, null, 2));
         await writeFile(join(gdir, RUN_ID_SIDECAR), JSON.stringify({ runId: 'prior-run' }, null, 2));
 
         const result = await checkStepCompletion(gdir, 'manual_test', {
@@ -6210,14 +6198,15 @@ Task 1 → Task 2
         await writeFile(join(gdir, RUN_ID_SIDECAR), JSON.stringify({ runId: 'current-run' }));
         await writeFile(
           join(gdir, RESULTS),
-          '## Attempt 1 — 2026-08-25T10:00:00Z\n' +
-            '| Story | Result |\n|---|---|\n| Bar | FAIL |\n',
+          '## Attempt 1 — 2026-08-25T10:00:00Z\n' + '| Story | Result |\n|---|---|\n| Bar | FAIL |\n',
         );
-        await expect(checkStepCompletion(gdir, 'manual_test', {
-          ...ctxFor(gdir),
-          sessionStartedAt: 0,
-          attemptRunId: 'current-run',
-        })).resolves.toMatchObject({ done: false });
+        await expect(
+          checkStepCompletion(gdir, 'manual_test', {
+            ...ctxFor(gdir),
+            sessionStartedAt: 0,
+            attemptRunId: 'current-run',
+          }),
+        ).resolves.toMatchObject({ done: false });
 
         await writeFile(
           join(gdir, RESULTS),
@@ -6267,20 +6256,24 @@ Task 1 → Task 2
         await writeFile(join(gdir, RESULTS), PASS_FILE);
 
         await utimes(join(gdir, RESULTS), OLD_MTIME, OLD_MTIME);
-        await expect(checkStepCompletion(gdir, 'manual_test', {
-          ...ctxFor(gdir),
-          attemptRunId: 'current-run',
-        })).resolves.toMatchObject({
+        await expect(
+          checkStepCompletion(gdir, 'manual_test', {
+            ...ctxFor(gdir),
+            attemptRunId: 'current-run',
+          }),
+        ).resolves.toMatchObject({
           done: false,
           reason: expect.stringMatching(/stale/),
         });
 
         await writeFile(join(gdir, RESULTS), PASS_FILE);
-        await expect(checkStepCompletion(gdir, 'manual_test', {
-          ...ctxFor(gdir),
-          sessionStartedAt: 0,
-          attemptRunId: 'current-run',
-        })).resolves.toMatchObject({ done: true });
+        await expect(
+          checkStepCompletion(gdir, 'manual_test', {
+            ...ctxFor(gdir),
+            sessionStartedAt: 0,
+            attemptRunId: 'current-run',
+          }),
+        ).resolves.toMatchObject({ done: true });
       });
 
       // Covers: task:13
@@ -6290,12 +6283,14 @@ Task 1 → Task 2
         await writeFile(join(gdir, RESULTS), PASS_FILE);
         await writeFile(join(gdir, RUN_ID_SIDECAR), JSON.stringify({ runId: 'prior-run' }));
 
-        await expect(checkStepCompletion(gdir, 'manual_test', {
-          ...ctxFor(gdir),
-          sessionStartedAt: 0,
-          attemptRunId: 'current-run',
-          config: { gate_code_validity: { enabled: false } },
-        })).resolves.toMatchObject({ done: true });
+        await expect(
+          checkStepCompletion(gdir, 'manual_test', {
+            ...ctxFor(gdir),
+            sessionStartedAt: 0,
+            attemptRunId: 'current-run',
+            config: { gate_code_validity: { enabled: false } },
+          }),
+        ).resolves.toMatchObject({ done: true });
       });
 
       it('falls through to mtime rejection when the delta touches a runtime path since the stamp', async () => {
@@ -6409,24 +6404,30 @@ Task 1 → Task 2
         codeStamp: string | null = null,
         attemptId = 'fixture-run',
       ): Promise<void> {
-        await persistPrdAuditVerdict(d, {
-          complete: true,
-          judgment: {
-            version: 'v1',
-            criterionJudgments: [{
-              criterion: { storyId: '1', ordinal: 1 },
-              criterionId: 'S1.1',
-              grade: 'PASS',
-              evidence: 'featureA.ts:1',
-              rationale: 'Fixture evidence is typed authority.',
-              requirementAssociations: [],
-              evidenceTaskIds: [],
-            }],
-            noOwnerObservations: [],
+        await persistPrdAuditVerdict(
+          d,
+          {
+            complete: true,
+            judgment: {
+              version: 'v1',
+              criterionJudgments: [
+                {
+                  criterion: { storyId: '1', ordinal: 1 },
+                  criterionId: 'S1.1',
+                  grade: 'PASS',
+                  evidence: 'featureA.ts:1',
+                  rationale: 'Fixture evidence is typed authority.',
+                  requirementAssociations: [],
+                  evidenceTaskIds: [],
+                },
+              ],
+              noOwnerObservations: [],
+            },
+            diagnostics: [],
+            recordedDispositions: [],
           },
-          diagnostics: [],
-          recordedDispositions: [],
-        }, { attemptId, codeStamp });
+          { attemptId, codeStamp },
+        );
         await utimes(join(d, '.pipeline/prd-audit.json'), OLD_MTIME, OLD_MTIME);
       }
 
@@ -6485,7 +6486,8 @@ Task 1 → Task 2
 
         expect(removed).toEqual([]);
         await expect(classifyPrdAuditGaps(gdir, undefined, 'run-current')).resolves.toEqual({
-          kind: 'clean', summary: 'no blocking FRs',
+          kind: 'clean',
+          summary: 'no blocking FRs',
         });
       });
 
@@ -6579,10 +6581,7 @@ Task 1 → Task 2
 
         const removed = await sweepStaleReviewArtifacts(gdir, 'architecture_review_as_built', Date.now());
 
-        expect(removed).toEqual([
-          join(gdir, '.pipeline/architecture-review-as-built.json'),
-          join(gdir, PATH),
-        ]);
+        expect(removed).toEqual([join(gdir, '.pipeline/architecture-review-as-built.json'), join(gdir, PATH)]);
         await expect(readFile(join(gdir, PATH), 'utf-8')).rejects.toThrow();
         await expect(readFile(join(gdir, '.pipeline/architecture-review-as-built.json'), 'utf-8')).rejects.toThrow();
       });
@@ -6648,10 +6647,7 @@ Task 1 → Task 2
       let artifactsSource: string;
 
       beforeEach(async () => {
-        artifactsSource = await readFile(
-          join(__dirname, '../../src/engine/artifacts.ts'),
-          'utf-8',
-        );
+        artifactsSource = await readFile(join(__dirname, '../../src/engine/artifacts.ts'), 'utf-8');
       });
 
       function extractPredicateBody(name: string): string {
@@ -6765,7 +6761,10 @@ Task 1 → Task 2
 
   describe('removeBuildReviewVerdict (build-review-grades-plan-vs-diff-against-a-stale-o, Task 7)', () => {
     it('deletes an existing build_review verdict artifact', async () => {
-      await createFile(BUILD_REVIEW_VERDICT, JSON.stringify({ verdict: 'FAIL', rubric: { testQuality: false, security: false } }));
+      await createFile(
+        BUILD_REVIEW_VERDICT,
+        JSON.stringify({ verdict: 'FAIL', rubric: { testQuality: false, security: false } }),
+      );
       await removeBuildReviewVerdict(dir);
       await expect(readFile(join(dir, BUILD_REVIEW_VERDICT), 'utf-8')).rejects.toThrow();
     });
@@ -6798,7 +6797,14 @@ Task 1 → Task 2
       ['an absent probe', {}],
       ['an empty probe result', { worktreeStatus: async () => '' }],
       ['a null probe result', { worktreeStatus: async () => null }],
-      ['a throwing probe', { worktreeStatus: async () => { throw new Error('unavailable'); } }],
+      [
+        'a throwing probe',
+        {
+          worktreeStatus: async () => {
+            throw new Error('unavailable');
+          },
+        },
+      ],
     ])('fails open for %s', async (_caseName, ctx) => {
       await expect(uncommittedPathsOrNull(ctx)).resolves.toBeNull();
     });
@@ -6806,15 +6812,10 @@ Task 1 → Task 2
     it('returns ordered paths from porcelain statuses, taking a rename destination', async () => {
       await expect(
         uncommittedPathsOrNull({
-          worktreeStatus: async () => 'MM src/changed.ts\n M docs/a -> b.md\nA  staged.ts\n?? new-file.ts\nR  orig-name.ts -> new-name.ts\n',
+          worktreeStatus: async () =>
+            'MM src/changed.ts\n M docs/a -> b.md\nA  staged.ts\n?? new-file.ts\nR  orig-name.ts -> new-name.ts\n',
         }),
-      ).resolves.toEqual([
-        'src/changed.ts',
-        'docs/a -> b.md',
-        'staged.ts',
-        'new-file.ts',
-        'new-name.ts',
-      ]);
+      ).resolves.toEqual(['src/changed.ts', 'docs/a -> b.md', 'staged.ts', 'new-file.ts', 'new-name.ts']);
     });
   });
 });

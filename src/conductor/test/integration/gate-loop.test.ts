@@ -82,6 +82,9 @@ describe('integration/gate-loop', () => {
     events = new ConductorEventEmitter();
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await mkdir(join(dir, '.docs'), { recursive: true });
+    // BUILD's whole-feature simplify floor (adr-2026-08-03 D9) is not under test here.
+    await mkdir(join(dir, '.pipeline/audit-trail'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/audit-trail/feature-simplification.md'), '## Verdict: CLEAN\n');
   });
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
@@ -135,7 +138,10 @@ describe('integration/gate-loop', () => {
       );
     } else if (step === 'coverage_binding') {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeFile(join(dir, '.pipeline/coverage-binding.json'), JSON.stringify({ version: 1, slug: 'add-foo', runId: 'test-run', status: 'disabled', entries: [] }));
+      await writeFile(
+        join(dir, '.pipeline/coverage-binding.json'),
+        JSON.stringify({ version: 1, slug: 'add-foo', runId: 'test-run', status: 'disabled', entries: [] }),
+      );
     } else if (step === 'build_review') {
       // The build_review judgement gate's completion predicate requires a
       // fresh, valid PASS verdict at .pipeline/build-review.json (see
@@ -151,18 +157,12 @@ describe('integration/gate-loop', () => {
         }),
       );
     } else if (step === 'manual_test') {
-      await writeFile(
-        join(dir, '.pipeline/manual-test-results.md'),
-        '| Story | Result |\n|---|---|\n| foo | PASS |\n',
-      );
+      await writeFile(join(dir, '.pipeline/manual-test-results.md'), '| Story | Result |\n|---|---|\n| foo | PASS |\n');
     } else if (step === 'prd_audit') {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await mkdir(join(dir, '.docs/specs'), { recursive: true });
       await mkdir(join(dir, '.docs/stories'), { recursive: true });
-      await writeFile(
-        join(dir, '.docs/specs/add-foo.md'),
-        '## Functional Requirements\n\nFR-1\n',
-      );
+      await writeFile(join(dir, '.docs/specs/add-foo.md'), '## Functional Requirements\n\nFR-1\n');
       await writeFile(
         join(dir, '.docs/stories/add-foo.md'),
         '## Story 1: add foo\n\n### Happy Path\n- Given input, when it runs, then it succeeds.\n',
@@ -175,13 +175,20 @@ describe('integration/gate-loop', () => {
       // This gate's JSON envelope is its sole authority; the Markdown report
       // is rendered by persistAsBuiltVerdict as a derived view.
       await mkdir(join(dir, '.docs/decisions'), { recursive: true });
-      await persistAsBuiltVerdict(dir, {
-        version: 'v2', verdict: 'APPROVED', reachability: [], driftNotes: [],
-      }, {
-        attemptId: options?.runId ?? 'test-run',
-        codeStamp: null,
-        policy: AS_BUILT_TEST_POLICY,
-      });
+      await persistAsBuiltVerdict(
+        dir,
+        {
+          version: 'v2',
+          verdict: 'APPROVED',
+          reachability: [],
+          driftNotes: [],
+        },
+        {
+          attemptId: options?.runId ?? 'test-run',
+          codeStamp: null,
+          policy: AS_BUILT_TEST_POLICY,
+        },
+      );
     } else if (step === 'finish') {
       await writeFile(join(dir, '.pipeline/finish-choice'), 'keep');
     } else if (step === 'coherence_check') {
@@ -200,7 +207,13 @@ describe('integration/gate-loop', () => {
           independence: 'cross-provider',
           findings: [],
           dispositions: [],
-          reviewedDigest: computeReviewedDigest({ planText: '', storiesText: '', adrTexts: {}, artifactTexts: {}, changedPaths: [] }),
+          reviewedDigest: computeReviewedDigest({
+            planText: '',
+            storiesText: '',
+            adrTexts: {},
+            artifactTexts: {},
+            changedPaths: [],
+          }),
         }),
       );
     }
@@ -292,10 +305,7 @@ describe('integration/gate-loop', () => {
     );
     await mkdir(join(dir, '.docs/plans'), { recursive: true });
     // Plan covers ONLY the happy path → plan verdict stays unsatisfied.
-    await writeFile(
-      join(dir, '.docs/plans/p.md'),
-      '### Task 1\n**Story:** 1-1 (happy path)\n',
-    );
+    await writeFile(join(dir, '.docs/plans/p.md'), '### Task 1\n**Story:** 1-1 (happy path)\n');
     await writeState(statePath, { ...FRONT_DONE });
 
     let buildRuns = 0;
@@ -444,7 +454,9 @@ describe('integration/gate-loop', () => {
         finishRuns: ran.filter((step) => step === 'finish').length,
         halted,
         stepFailure,
-        done: await access(join(root, '.pipeline/DONE')).then(() => true).catch(() => false),
+        done: await access(join(root, '.pipeline/DONE'))
+          .then(() => true)
+          .catch(() => false),
       };
     };
 
@@ -572,9 +584,7 @@ describe('integration/gate-loop', () => {
           failed: 1,
           skipped: 0,
           errors: 0,
-          failingTests: [
-            { name: 'fails until implemented', reason: 'Expected true to be false' },
-          ],
+          failingTests: [{ name: 'fails until implemented', reason: 'Expected true to be false' }],
           ranAt: '2026-08-10T00:00:00.000Z',
           intentRationale: 'The feature acceptance spec executed and failed before implementation.',
         }),
@@ -603,10 +613,7 @@ describe('integration/gate-loop', () => {
           if (step === 'conflict_check') {
             conflictRuns++;
             await mkdir(join(dir, '.docs/conflicts'), { recursive: true });
-            await writeFile(
-              join(dir, '.docs/conflicts/report.md'),
-              '# Conflict Check\n\nNo blocking conflicts.\n',
-            );
+            await writeFile(join(dir, '.docs/conflicts/report.md'), '# Conflict Check\n\nNo blocking conflicts.\n');
             // Only the FIRST run detects the amendment kickback — `fromStep:
             // 'conflict_check'` means this step re-executes every time the
             // (front-half-linear) loop index reaches it again, e.g. right
@@ -631,9 +638,7 @@ describe('integration/gate-loop', () => {
       });
       await conductorFromConflictCheck(runner).run();
 
-      expect(kicks).toEqual([
-        { from: 'conflict_check', to: 'architecture_review', count: 1 },
-      ]);
+      expect(kicks).toEqual([{ from: 'conflict_check', to: 'architecture_review', count: 1 }]);
       // Linear advance unaffected at detection time: plan ran immediately
       // next (no navigateBack jump). The gate-driven tail's own selector
       // — independently of the front-half detection — later re-runs
@@ -708,10 +713,7 @@ describe('integration/gate-loop', () => {
           if (step === 'conflict_check') {
             conflictRuns++;
             await mkdir(join(dir, '.docs/conflicts'), { recursive: true });
-            await writeFile(
-              join(dir, '.docs/conflicts/report.md'),
-              '# Conflict Check\n\nNo blocking conflicts.\n',
-            );
+            await writeFile(join(dir, '.docs/conflicts/report.md'), '# Conflict Check\n\nNo blocking conflicts.\n');
             // Only the FIRST run detects the amendment kickback — see the
             // comment on the earlier "emits a kickback event..." test: a real
             // conflict-check skill wouldn't re-flag a gate it already amended
@@ -756,10 +758,7 @@ describe('integration/gate-loop', () => {
           if (step === 'conflict_check') {
             conflictRuns++;
             await mkdir(join(dir, '.docs/conflicts'), { recursive: true });
-            await writeFile(
-              join(dir, '.docs/conflicts/report.md'),
-              '# Conflict Check\n\nNo blocking conflicts.\n',
-            );
+            await writeFile(join(dir, '.docs/conflicts/report.md'), '# Conflict Check\n\nNo blocking conflicts.\n');
             if (conflictRuns === 1) {
               await writeVerdict(dir, 'architecture_review', {
                 satisfied: false,
@@ -817,10 +816,7 @@ describe('integration/gate-loop', () => {
           if (step === 'conflict_check') {
             conflictRuns++;
             await mkdir(join(dir, '.docs/conflicts'), { recursive: true });
-            await writeFile(
-              join(dir, '.docs/conflicts/report.md'),
-              '# Conflict Check\n\nNo blocking conflicts.\n',
-            );
+            await writeFile(join(dir, '.docs/conflicts/report.md'), '# Conflict Check\n\nNo blocking conflicts.\n');
             if (conflictRuns === 1) {
               await writeVerdict(dir, 'architecture_review', {
                 satisfied: false,
@@ -875,12 +871,8 @@ describe('integration/gate-loop', () => {
       expect(completed).toBe(false);
       expect(haltReason).toContain('architecture_review');
       expect(haltReason).toContain('3');
-      await expect(readFile(join(dir, '.pipeline/HALT'), 'utf-8')).resolves.toContain(
-        'architecture drift found',
-      );
-      await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).resolves.toBe(
-        'needs-human',
-      );
+      await expect(readFile(join(dir, '.pipeline/HALT'), 'utf-8')).resolves.toContain('architecture drift found');
+      await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).resolves.toBe('needs-human');
     });
   });
 
@@ -888,13 +880,8 @@ describe('integration/gate-loop', () => {
     // All front-half steps done; tail steps pending so they run. Start at build.
     const state: Record<string, string> = {};
     for (const s of ALL_STEPS) state[s.name] = 'done';
-    for (const name of [
-      'build',
-      'manual_test',
-      'prd_audit',
-      'architecture_review_as_built',
-      'finish',
-    ]) delete state[name];
+    for (const name of ['build', 'manual_test', 'prd_audit', 'architecture_review_as_built', 'finish'])
+      delete state[name];
     await writeState(statePath, {
       ...(state as unknown as ConductState),
       // Keep the product validation group applicable: its three current
@@ -903,11 +890,7 @@ describe('integration/gate-loop', () => {
       track: 'product',
     });
 
-    const validators: StepName[] = [
-      'manual_test',
-      'prd_audit',
-      'architecture_review_as_built',
-    ];
+    const validators: StepName[] = ['manual_test', 'prd_audit', 'architecture_review_as_built'];
     const resetValidators: StepName[] = [];
     let releaseValidatorResets!: () => void;
     const validatorResetGate = new Promise<void>((resolve) => {
@@ -944,13 +927,7 @@ describe('integration/gate-loop', () => {
 
     // build, the three-member product validation group, rebase, and finish
     // each receive one fresh session.
-    expect(ran).toEqual([
-      'build',
-      'manual_test',
-      'prd_audit',
-      'architecture_review_as_built',
-      'finish',
-    ]);
+    expect(ran).toEqual(['build', 'manual_test', 'prd_audit', 'architecture_review_as_built', 'finish']);
     expect(resetSession.mock.calls.map(([step]) => step)).toEqual([
       'build',
       'manual_test',
@@ -966,11 +943,7 @@ describe('integration/gate-loop', () => {
     const PASS_RESULTS = '| Story | Result |\n|---|---|\n| s1 | PASS |\n';
 
     async function git(...args: string[]): Promise<void> {
-      await execFileP(
-        'git',
-        ['-c', 'user.email=t@test', '-c', 'user.name=t', ...args],
-        { cwd: dir },
-      );
+      await execFileP('git', ['-c', 'user.email=t@test', '-c', 'user.name=t', ...args], { cwd: dir });
     }
 
     async function initRepo(): Promise<void> {
@@ -980,9 +953,7 @@ describe('integration/gate-loop', () => {
 
     function daemonConductor(runner: StepRunner, config?: HarnessConfig): Conductor {
       const fakeGit: GitRunner = async (args) =>
-        args.includes('--symbolic-full-name')
-          ? { stdout: 'refs/remotes/origin/feature/x\n' }
-          : { stdout: '' };
+        args.includes('--symbolic-full-name') ? { stdout: 'refs/remotes/origin/feature/x\n' } : { stdout: '' };
       return new Conductor({
         stateFilePath: statePath,
         stepRunner: runner,
@@ -1026,10 +997,7 @@ describe('integration/gate-loop', () => {
             return { success: true };
           }
           if (step === 'manual_test') {
-            await writeFile(
-              join(dir, '.pipeline/manual-test-results.md'),
-              fixed ? PASS_RESULTS : FAIL_RESULTS,
-            );
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), fixed ? PASS_RESULTS : FAIL_RESULTS);
             return { success: true };
           }
           if (step === 'finish') {
@@ -1073,9 +1041,7 @@ describe('integration/gate-loop', () => {
       // without re-running manual_test. That codeStamp-only shape is
       // unambiguously distinct from the FAIL-laundering shape (no headSha,
       // no failRows) — see the `cleanPass` check in the manual_test gate.
-      const marker = JSON.parse(
-        await readFile(join(dir, '.pipeline/manual-test-fail-evidence.json'), 'utf-8'),
-      );
+      const marker = JSON.parse(await readFile(join(dir, '.pipeline/manual-test-fail-evidence.json'), 'utf-8'));
       expect(marker.headSha).toBeUndefined();
       expect(marker.failRows).toBeUndefined();
       expect(typeof marker.codeStamp).toBe('string');
@@ -1137,9 +1103,7 @@ describe('integration/gate-loop', () => {
       expect(completed).toBe(false);
       expect(haltReason).toMatch(/whitewash|no new commits|no tree or resolved-count movement/i);
       // The FAIL evidence survives for the human who inspects the HALT.
-      await expect(
-        access(join(dir, '.pipeline/manual-test-fail-evidence.json')),
-      ).resolves.toBeUndefined();
+      await expect(access(join(dir, '.pipeline/manual-test-fail-evidence.json'))).resolves.toBeUndefined();
     });
   });
 
@@ -1276,8 +1240,8 @@ describe('integration/gate-loop', () => {
 
     async function runWithGraderVerdicts(
       verdicts: Array<{
-      verdict: 'FAIL' | 'PASS';
-      reasons: string[];
+        verdict: 'FAIL' | 'PASS';
+        reasons: string[];
         findings?: Partial<{ testQuality: string[] }>;
         rubric?: { testQuality: boolean };
       }>,
@@ -1331,9 +1295,7 @@ describe('integration/gate-loop', () => {
                 failed: 1,
                 skipped: 0,
                 errors: 0,
-                failingTests: [
-                  { name: 'fails until implemented', reason: 'Expected true to be false' },
-                ],
+                failingTests: [{ name: 'fails until implemented', reason: 'Expected true to be false' }],
                 ranAt: '2026-08-10T00:00:00.000Z',
                 intentRationale: 'The feature acceptance spec executed and failed before implementation.',
               }),
@@ -1385,9 +1347,7 @@ describe('integration/gate-loop', () => {
       // runner that reports HEAD as pushed lets these fixtures (which never
       // touch a real remote) converge on the recorded pr_url.
       const fakeGit: GitRunner = async (args) =>
-        args.includes('--symbolic-full-name')
-          ? { stdout: 'refs/remotes/origin/feature/x\n' }
-          : { stdout: '' };
+        args.includes('--symbolic-full-name') ? { stdout: 'refs/remotes/origin/feature/x\n' } : { stdout: '' };
       const conductor = new Conductor({
         stateFilePath: statePath,
         stepRunner: runner,
@@ -1432,7 +1392,7 @@ describe('integration/gate-loop', () => {
       expect(result.ran).toContain('build_review');
     });
 
-    it('routes a completeness finding through build_review\'s ordinary FAIL kickback', async () => {
+    it("routes a completeness finding through build_review's ordinary FAIL kickback", async () => {
       const result = await runWithGraderVerdicts([
         {
           verdict: 'FAIL',
@@ -1466,9 +1426,7 @@ describe('integration/gate-loop', () => {
       ]);
 
       expect(result.kicks).toContainEqual({ from: 'build_review', to: 'build' });
-      expect(result.retryReasons.join('\n')).toMatch(
-        /grader returned FAIL without reasons/,
-      );
+      expect(result.retryReasons.join('\n')).toMatch(/grader returned FAIL without reasons/);
     });
 
     it('test-quality FAIL ignores retired remediation dispositions and kicks back to build', async () => {
@@ -1576,10 +1534,7 @@ describe('integration/gate-loop', () => {
       const runner: StepRunner = {
         run: async (step, _state, options) => {
           if (step === 'build_review') {
-            await writeFile(
-              join(dir, '.pipeline/build-review.json'),
-              JSON.stringify({ verdict: 'PASS', reasons: [] }),
-            );
+            await writeFile(join(dir, '.pipeline/build-review.json'), JSON.stringify({ verdict: 'PASS', reasons: [] }));
             return { success: true, ...(repairProvenance ? { repairProvenance } : {}) };
           }
           return satisfy(step, options);
@@ -1607,9 +1562,7 @@ describe('integration/gate-loop', () => {
     }
 
     it('persists each distinguishable grading disposition returned by the build_review runner, and nothing when no provenance was assembled', async () => {
-      expect(
-        await runWithProvenance({ disposition: 'context_available', repairCount: 3 }),
-      ).toEqual([
+      expect(await runWithProvenance({ disposition: 'context_available', repairCount: 3 })).toEqual([
         expect.objectContaining({
           type: 'build_review_repair_context',
           disposition: 'context_available',
@@ -1645,16 +1598,27 @@ describe('integration/gate-loop', () => {
         },
       };
       const conductor = new Conductor({
-        stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
-        verifyArtifacts: true, mode: 'auto', daemon: true, fromStep: 'build', maxRetries: 1,
-        config: { build_review: { enabled: true } }, shipmentEvidence: validShipmentEvidence,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        mode: 'auto',
+        daemon: true,
+        fromStep: 'build',
+        maxRetries: 1,
+        config: { build_review: { enabled: true } },
+        shipmentEvidence: validShipmentEvidence,
       });
 
       await expect(conductor.run()).resolves.toBeUndefined();
       expect(received).toEqual([provenance]);
-      expect(emit).toHaveBeenCalledWith(expect.objectContaining({
-        type: 'build_review_repair_context', ...provenance,
-      }));
+      expect(emit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'build_review_repair_context',
+          ...provenance,
+        }),
+      );
     });
   });
 
@@ -1846,9 +1810,7 @@ describe('integration/gate-loop', () => {
       });
       const config = { build_review: { enabled: true } };
       const fakeGit: GitRunner = async (args) =>
-        args.includes('--symbolic-full-name')
-          ? { stdout: 'refs/remotes/origin/feature/x\n' }
-          : { stdout: '' };
+        args.includes('--symbolic-full-name') ? { stdout: 'refs/remotes/origin/feature/x\n' } : { stdout: '' };
       const conductor = new Conductor({
         stateFilePath: statePath,
         stepRunner: runner,
@@ -1977,11 +1939,7 @@ describe('integration/gate-loop', () => {
     const execFileP = promisify(execFile);
 
     async function git(...args: string[]): Promise<void> {
-      await execFileP(
-        'git',
-        ['-c', 'user.email=t@test', '-c', 'user.name=t', ...args],
-        { cwd: dir },
-      );
+      await execFileP('git', ['-c', 'user.email=t@test', '-c', 'user.name=t', ...args], { cwd: dir });
     }
 
     async function initRepo(): Promise<void> {
@@ -2017,22 +1975,30 @@ describe('integration/gate-loop', () => {
         options?: import('execa').Options,
       ) => Promise<import('execa').Result>;
       const mockExeca = vi.mocked(execa) as unknown as import('vitest').Mock<ExecaInvocation>;
-      mockExeca.mockImplementation(async (_command: string, args: readonly string[] = [], options?: import('execa').Options) => {
-        if (args[0] === 'ls-tree') return { exitCode: 0, stdout: '.docs/plans/p.md\0', stderr: '' } as never;
-        if (args[0] === 'show') return { exitCode: 0, stdout: planText, stderr: '' } as never;
-        if (args[0] === 'cat-file' && args.some((arg) => arg === '--batch' || arg === '--batch-check')) {
-          const requestedPaths = String(options?.input ?? '')
-            .trim()
-            .split('\n')
-            .filter(Boolean);
-          const response = Buffer.concat(requestedPaths.map((request) => {
-            const content = Buffer.from(planText);
-            return Buffer.concat([Buffer.from(`${request.split(':', 1)[0]} blob ${content.length}\n`), content, Buffer.from('\n')]);
-          }));
-          return { exitCode: 0, stdout: response, stderr: '' } as never;
-        }
-        return { exitCode: 0, stdout: '', stderr: '' } as never;
-      });
+      mockExeca.mockImplementation(
+        async (_command: string, args: readonly string[] = [], options?: import('execa').Options) => {
+          if (args[0] === 'ls-tree') return { exitCode: 0, stdout: '.docs/plans/p.md\0', stderr: '' } as never;
+          if (args[0] === 'show') return { exitCode: 0, stdout: planText, stderr: '' } as never;
+          if (args[0] === 'cat-file' && args.some((arg) => arg === '--batch' || arg === '--batch-check')) {
+            const requestedPaths = String(options?.input ?? '')
+              .trim()
+              .split('\n')
+              .filter(Boolean);
+            const response = Buffer.concat(
+              requestedPaths.map((request) => {
+                const content = Buffer.from(planText);
+                return Buffer.concat([
+                  Buffer.from(`${request.split(':', 1)[0]} blob ${content.length}\n`),
+                  content,
+                  Buffer.from('\n'),
+                ]);
+              }),
+            );
+            return { exitCode: 0, stdout: response, stderr: '' } as never;
+          }
+          return { exitCode: 0, stdout: '', stderr: '' } as never;
+        },
+      );
       await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped' } as ConductState);
 
       const config = { build_review: { enabled: true } };
@@ -2114,9 +2080,7 @@ describe('integration/gate-loop', () => {
         completed = true;
       });
       const fakeGit: GitRunner = async (args) =>
-        args.includes('--symbolic-full-name')
-          ? { stdout: 'refs/remotes/origin/feature/x\n' }
-          : { stdout: '' };
+        args.includes('--symbolic-full-name') ? { stdout: 'refs/remotes/origin/feature/x\n' } : { stdout: '' };
 
       const conductor = new Conductor({
         stateFilePath: statePath,
@@ -2178,11 +2142,9 @@ describe('build gate and post-rebase pre-verify share one verdict basis (Task 12
   let repoDir: string;
 
   async function git(...args: string[]): Promise<{ stdout: string }> {
-    const { stdout } = await execFileP(
-      'git',
-      ['-c', 'user.email=t@test', '-c', 'user.name=t', ...args],
-      { cwd: repoDir },
-    );
+    const { stdout } = await execFileP('git', ['-c', 'user.email=t@test', '-c', 'user.name=t', ...args], {
+      cwd: repoDir,
+    });
     return { stdout };
   }
 
@@ -2194,7 +2156,8 @@ describe('build gate and post-rebase pre-verify share one verdict basis (Task 12
     repoDir = await mkdtemp(join(tmpdir(), 'gate-preverify-'));
     await git('init', '-q', '-b', 'main');
     await mkdir(join(repoDir, '.docs/plans'), { recursive: true });
-    await mkdir(join(repoDir, '.pipeline'), { recursive: true });
+    await mkdir(join(repoDir, '.pipeline/audit-trail'), { recursive: true });
+    await writeFile(join(repoDir, '.pipeline/audit-trail/feature-simplification.md'), '## Verdict: CLEAN\n');
   });
 
   afterEach(async () => {
@@ -2288,11 +2251,7 @@ describe('build gate and post-rebase pre-verify share one verdict basis (Task 12
     await git('update-ref', 'refs/remotes/origin/main', newUpstreamHead);
 
     await git('checkout', '-q', 'feature');
-    await execFileP(
-      'git',
-      ['-c', 'user.email=t@test', '-c', 'user.name=t', 'rebase', 'origin-main'],
-      { cwd: repoDir },
-    );
+    await execFileP('git', ['-c', 'user.email=t@test', '-c', 'user.name=t', 'rebase', 'origin-main'], { cwd: repoDir });
 
     // (b) Post-rebase pre-verify: the SAME checkStepCompletion('build', ctx)
     // call the daemon's preVerify closure makes — must still pass. This is
@@ -2310,9 +2269,7 @@ describe('build gate and post-rebase pre-verify share one verdict basis (Task 12
     const planPath = join(repoDir, '.docs/plans/p.md');
     await writeFile(
       planPath,
-      ['# Implementation Plan', '', '### Task 1: add foo', '**Files:**', '- src/foo.ts', ''].join(
-        '\n',
-      ),
+      ['# Implementation Plan', '', '### Task 1: add foo', '**Files:**', '- src/foo.ts', ''].join('\n'),
     );
 
     await writeFile(join(repoDir, 'README.md'), 'init');
@@ -2518,9 +2475,10 @@ describe('prd_audit coverage recheck through a real repository (Task 11)', () =>
       maxRetries: 1,
       baseBranch: 'main',
       config: { steps: { manual_test: { disable: true } } },
-      git: async (args: string[]) => args.includes('--symbolic-full-name')
-        ? { stdout: 'refs/remotes/origin/feature/current-feature\n' }
-        : { stdout: '' },
+      git: async (args: string[]) =>
+        args.includes('--symbolic-full-name')
+          ? { stdout: 'refs/remotes/origin/feature/current-feature\n' }
+          : { stdout: '' },
       shipmentEvidence: validShipmentEvidence,
     };
 

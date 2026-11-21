@@ -40,6 +40,7 @@ import type { ConductState } from '../../src/types/index.js';
 import type { ResolutionContext, ResolutionAttempt, RebaseOutcome } from '../../src/engine/rebase.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
+import { seedCleanFeatureSimplifyRecord } from '../fixtures/feature-simplify-record.js';
 
 const execFile = promisify(execFileCb);
 
@@ -71,8 +72,7 @@ async function buildConflictRepo(): Promise<{
 }> {
   const repo = await mkdtemp(join(tmpdir(), 'rebase-wiring-'));
   const g = (args: string[]) => execFile('git', args, { cwd: repo });
-  const gc = (args: string[]) =>
-    execFile('git', ['-c', 'core.editor=true', ...args], { cwd: repo });
+  const gc = (args: string[]) => execFile('git', ['-c', 'core.editor=true', ...args], { cwd: repo });
 
   await initTestRepo(repo);
   await writeFile(join(repo, 'a.ts'), 'base\n');
@@ -93,16 +93,25 @@ async function buildConflictRepo(): Promise<{
   return { repo, g, gc };
 }
 
-async function buildUntrackedCollisionRepo(): Promise<{ repo: string; g: (args: string[]) => ReturnType<typeof execFile> }> {
+async function buildUntrackedCollisionRepo(): Promise<{
+  repo: string;
+  g: (args: string[]) => ReturnType<typeof execFile>;
+}> {
   const repo = await mkdtemp(join(tmpdir(), 'rebase-wiring-collision-'));
   const g = (args: string[]) => execFile('git', args, { cwd: repo });
   await initTestRepo(repo);
-  await writeFile(join(repo, 'a.ts'), 'initial\n'); await g(['add', '.']); await g(['commit', '-q', '-m', 'initial']);
+  await writeFile(join(repo, 'a.ts'), 'initial\n');
+  await g(['add', '.']);
+  await g(['commit', '-q', '-m', 'initial']);
   await g(['checkout', '-q', '-b', 'feat']);
-  await writeFile(join(repo, 'a.ts'), 'feature\n'); await g(['commit', '-q', '-am', 'feature change']);
+  await writeFile(join(repo, 'a.ts'), 'feature\n');
+  await g(['commit', '-q', '-am', 'feature change']);
   await g(['checkout', '-q', 'main']);
-  await writeFile(join(repo, 'generated.txt'), 'base generated\n'); await g(['add', 'generated.txt']); await g(['commit', '-q', '-m', 'base generated']);
-  await writeFile(join(repo, 'a.ts'), 'base\n'); await g(['commit', '-q', '-am', 'base conflict']);
+  await writeFile(join(repo, 'generated.txt'), 'base generated\n');
+  await g(['add', 'generated.txt']);
+  await g(['commit', '-q', '-m', 'base generated']);
+  await writeFile(join(repo, 'a.ts'), 'base\n');
+  await g(['commit', '-q', '-am', 'base conflict']);
   await g(['checkout', '-q', 'feat']);
   await writeFile(join(repo, 'generated.txt'), 'untracked generated\n');
   return { repo, g };
@@ -111,10 +120,7 @@ async function buildUntrackedCollisionRepo(): Promise<{ repo: string; g: (args: 
 // ── Wiring tests ──────────────────────────────────────────────────────────────
 
 it('daemon rebase resolver carries the selected provider model policy', async () => {
-  const source = await readFile(
-    new URL('../../src/daemon-cli.ts', import.meta.url),
-    'utf8',
-  );
+  const source = await readFile(new URL('../../src/daemon-cli.ts', import.meta.url), 'utf8');
   const marker = source.indexOf('featureDesc: `rebase-resolution-${entry.slug}`');
   const constructorStart = source.lastIndexOf('new DefaultStepRunner(', marker);
   const constructorEnd = source.indexOf('});', marker);
@@ -129,7 +135,8 @@ const flattenRefusal: Extract<RebaseOutcome, { kind: 'flatten_refused' }> = {
   flattenedSha: 'd'.repeat(40),
   conflicts: ['src/conflicted.ts'],
   reason: 'flattened merge aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa tree mismatch',
-  recipe: 'park the feature, then run git -C <worktree> rebase -i --rebase-merges main; at the merge stop, re-apply git diff <first-parent> <merge>; run git rebase --continue; then clear .pipeline/HALT and .pipeline/HALT.class before re-queueing',
+  recipe:
+    'park the feature, then run git -C <worktree> rebase -i --rebase-merges main; at the merge stop, re-apply git diff <first-parent> <merge>; run git rebase --continue; then clear .pipeline/HALT and .pipeline/HALT.class before re-queueing',
 };
 
 describe('flatten_refused callers', () => {
@@ -217,15 +224,17 @@ describe('flatten_refused callers', () => {
     await mkdir(join(repo, '.pipeline'), { recursive: true });
     await writeFile(join(repo, REKICK_SENTINEL), 'rekick\n');
 
-    await expect(resumeRebaseFirst({
-      worktreePath: repo,
-      localBase: 'main',
-      events,
-      ranManualTest: false,
-      resolveAttempts: 3,
-      resolveConflict: resolver,
-      performRebase: vi.fn().mockResolvedValue(flattenRefusal),
-    })).resolves.toBe('halted');
+    await expect(
+      resumeRebaseFirst({
+        worktreePath: repo,
+        localBase: 'main',
+        events,
+        ranManualTest: false,
+        resolveAttempts: 3,
+        resolveConflict: resolver,
+        performRebase: vi.fn().mockResolvedValue(flattenRefusal),
+      }),
+    ).resolves.toBe('halted');
 
     await assertRefusalBoundary(resolver, push);
     await expect(readFile(sealPath, 'utf8')).resolves.toBe(beforeSeal);
@@ -292,7 +301,10 @@ describe('runRebaseStep wiring — gated resolution sub-loop (daemon:true, real 
     // Conflict resolution succeeded, but the fixture intentionally has no
     // completed BUILD evidence. A completed file-changing rebase must stop
     // for recovery instead of blindly reopening the completed task list.
-    const haltExists = await access(join(repo, '.pipeline/HALT')).then(() => true, () => false);
+    const haltExists = await access(join(repo, '.pipeline/HALT')).then(
+      () => true,
+      () => false,
+    );
     expect(haltExists).toBe(true);
     await expect(readFile(join(repo, '.pipeline/HALT'), 'utf8')).resolves.toContain(
       'completed BUILD evidence is unavailable after rebase',
@@ -337,7 +349,10 @@ describe('runRebaseStep wiring — gated resolution sub-loop (daemon:true, real 
     expect(resolverCalled).toBe(false);
 
     // HALT file written (same as pre-resolution behavior)
-    const haltExists = await access(join(repo, '.pipeline/HALT')).then(() => true, () => false);
+    const haltExists = await access(join(repo, '.pipeline/HALT')).then(
+      () => true,
+      () => false,
+    );
     expect(haltExists).toBe(true);
     const halt = await readFile(join(repo, '.pipeline/HALT'), 'utf8');
     expect(halt).toContain('rebase conflict — parked for human resolution');
@@ -351,12 +366,21 @@ describe('runRebaseStep wiring — gated resolution sub-loop (daemon:true, real 
     const baselineCommit = (await collision.g(['rev-parse', 'HEAD'])).stdout.toString().trim();
     await createProtectedArtifactSeal({ projectRoot: collision.repo, baselineCommit });
     const hook = join(collision.repo, '.git/hooks/pre-rebase');
-    await writeFile(hook, `#!/bin/sh\nprintf '%s\\n' 'error: The following untracked working tree files would be overwritten by checkout:' >&2\nprintf '\\tgenerated.txt\\n' >&2\nprintf '%s\\n' 'Please move or remove them before you switch branches.' >&2\nexit 1\n`);
+    await writeFile(
+      hook,
+      `#!/bin/sh\nprintf '%s\\n' 'error: The following untracked working tree files would be overwritten by checkout:' >&2\nprintf '\\tgenerated.txt\\n' >&2\nprintf '%s\\n' 'Please move or remove them before you switch branches.' >&2\nexit 1\n`,
+    );
     await chmod(hook, 0o755);
     const runner: StepRunner = { run: vi.fn().mockResolvedValue({ success: true } satisfies StepRunResult) };
     const conductor = new Conductor({
-      stateFilePath: collisionState, stepRunner: runner, events, projectRoot: collision.repo,
-      daemon: true, mode: 'auto', fromStep: 'rebase', config: { rebase_resolution_attempts: 0 },
+      stateFilePath: collisionState,
+      stepRunner: runner,
+      events,
+      projectRoot: collision.repo,
+      daemon: true,
+      mode: 'auto',
+      fromStep: 'rebase',
+      config: { rebase_resolution_attempts: 0 },
     });
     try {
       await conductor.run();
@@ -364,7 +388,9 @@ describe('runRebaseStep wiring — gated resolution sub-loop (daemon:true, real 
       expect(halt).toContain('rebase conflict — parked for human resolution');
       expect(halt).toContain('a.ts');
       expect(halt).toContain('git rebase --continue');
-    } finally { await rm(collision.repo, { recursive: true, force: true }); }
+    } finally {
+      await rm(collision.repo, { recursive: true, force: true });
+    }
   });
 
   it('finish-time pre-rebase seal refusal bypasses conflict resolution and writes seal recovery', async () => {
@@ -390,11 +416,13 @@ describe('runRebaseStep wiring — gated resolution sub-loop (daemon:true, real 
       runRebaseStep(state: ConductState): Promise<StepRunResult>;
     };
 
-    const result = await runRebaseStep.runRebaseStep(await (async () => {
-      const state = await readState(statePath);
-      if (!state.ok) throw new Error(state.error.message);
-      return state.value;
-    })());
+    const result = await runRebaseStep.runRebaseStep(
+      await (async () => {
+        const state = await readState(statePath);
+        if (!state.ok) throw new Error(state.error.message);
+        return state.value;
+      })(),
+    );
     const halt = await readFile(join(repo, '.pipeline/HALT'), 'utf8');
 
     expect({ result, resolverCalls: resolver.mock.calls.length, halt }).toEqual({
@@ -431,7 +459,10 @@ describe('runRebaseStep wiring — gated resolution sub-loop (daemon:true, real 
     await expect(conductor.run()).resolves.not.toThrow();
 
     // HALT file written
-    const haltExists = await access(join(repo, '.pipeline/HALT')).then(() => true, () => false);
+    const haltExists = await access(join(repo, '.pipeline/HALT')).then(
+      () => true,
+      () => false,
+    );
     expect(haltExists).toBe(true);
   });
 
@@ -515,7 +546,10 @@ describe('runRebaseStep — completed BUILD with an unverified Done-when nudge (
     const g = (args: string[]) => execFile('git', args, { cwd: repo });
     await initTestRepo(repo);
     await mkdir(join(repo, '.docs/plans'), { recursive: true });
-    await writeFile(join(repo, '.docs/plans/foo.md'), '# Implementation Plan: foo\n\n## Tasks\n\n### Task 1 — Do thing 1\n\nBody.\n');
+    await writeFile(
+      join(repo, '.docs/plans/foo.md'),
+      '# Implementation Plan: foo\n\n## Tasks\n\n### Task 1 — Do thing 1\n\nBody.\n',
+    );
     await writeFile(join(repo, 'base.ts'), 'base\n');
     await g(['add', '.']);
     await g(['commit', '-q', '-m', 'init']);
@@ -534,13 +568,27 @@ describe('runRebaseStep — completed BUILD with an unverified Done-when nudge (
     const state = JSON.parse(await readFile(statePath, 'utf8')) as Record<string, unknown>;
     await writeFile(statePath, JSON.stringify({ ...state, feature_desc: 'foo' }, null, 2));
     await mkdir(join(repo, '.pipeline'), { recursive: true });
-    await writeFile(join(repo, '.pipeline/task-status.json'), JSON.stringify({
-      plan_ref: '.docs/plans/foo.md',
-      tasks: [{
-        id: '1', name: 'Do thing 1', status: 'done',
-        doneWhen: [{ source: 'unverified', check: '[test] reviewer writes are refused', reason: 'needs a live provider' }],
-      }],
-    }, null, 2));
+    await writeFile(
+      join(repo, '.pipeline/task-status.json'),
+      JSON.stringify(
+        {
+          plan_ref: '.docs/plans/foo.md',
+          tasks: [
+            {
+              id: '1',
+              name: 'Do thing 1',
+              status: 'done',
+              doneWhen: [
+                { source: 'unverified', check: '[test] reviewer writes are refused', reason: 'needs a live provider' },
+              ],
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+    await seedCleanFeatureSimplifyRecord(repo);
     const baselineCommit = (await g(['rev-parse', 'HEAD'])).stdout.toString().trim();
     await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
 

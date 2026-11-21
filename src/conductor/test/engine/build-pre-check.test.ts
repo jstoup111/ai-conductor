@@ -11,6 +11,7 @@ import { BUILD_PRE_CHECK_FAILED_PREFIX, runBuildPreCheck } from '../../src/engin
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 import { Conductor } from '../test-conductor.js';
+import { seedCleanFeatureSimplifyRecord } from '../fixtures/feature-simplify-record.js';
 
 type PreCheckMethods = { buildPreCheckMissReason(): Promise<string | null> };
 
@@ -21,6 +22,7 @@ describe('BUILD runs the configured test_suite pre-check', () => {
     root = await mkdtemp(join(tmpdir(), 'build-pre-check-'));
     await mkdir(join(root, '.docs', 'plans'), { recursive: true });
     await mkdir(join(root, '.pipeline'), { recursive: true });
+    await seedCleanFeatureSimplifyRecord(root);
     await writeFile(join(root, '.docs', 'plans', 'feature.md'), '### Task T1: First\n### Task T2: Second\n');
   });
 

@@ -638,17 +638,22 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 ### simplify
 
-> Use only at an active pipeline batch boundary after code has changed. Reviews current-batch duplication, complexity, over-engineering, and domain-modelling defects; do not invoke for ordinary refactors, code review, or requests that merely ask for simpler prose or code.
+> Use only at an active pipeline batch boundary after code has changed, or for the required whole-feature pass before BUILD completes. Reviews duplication, complexity, over-engineering, and domain-modelling defects; do not invoke for ordinary refactors, code review, or requests that merely ask for simpler prose or code.
 
 - **Frontmatter** — `enforcement: gating`, `phase: build`, `standalone: false`, `requires: []`,
   `model: sonnet`.
 - **Engine step** — none. It runs inside `pipeline`'s post-batch checks and from `tdd`'s batch-boundary
-  refactor rule.
-- **Inputs** — the batch diff by name; the batch-start commit; existing tests at the same production
-  seam; ADRs that justify an abstraction; linter output; earlier batches' simplification records.
-- **Outputs** — `.pipeline/audit-trail/batch-N-simplification.md`.
+  refactor rule, and once in whole-feature mode before BUILD completes.
+- **Inputs** — the batch diff by name, or the whole feature diff (`<merge-base>...HEAD`) in
+  whole-feature mode; the batch-start commit; existing tests at the same production seam; ADRs that
+  justify an abstraction; linter output; earlier batches' simplification records; the kind
+  definitions in `build-review-implementation-quality`'s Judgement section.
+- **Outputs** — `.pipeline/audit-trail/batch-N-simplification.md`; in whole-feature mode,
+  `.pipeline/audit-trail/feature-simplification.md` (stacked child `k`: `child-<k>-simplification.md`).
 - **Gate role** — blocking within the batch. `CLEAN` proceeds; `SIMPLIFY_REQUIRED` must be fixed before
-  the next batch and counts against pipeline's three-cycle rework budget.
+  the next batch and counts against pipeline's three-cycle rework budget. The `build` completion check
+  does not hand off to `build_review` until the whole-feature record ends `## Verdict: CLEAN`, once per
+  feature or child; the retries-exhausted escape honors the same rule and halts naming the pass.
 - **Declared replication is informed, not silenced** — a declared replication's mapped source/target
   pair alone is not flagged as an extract-with-parameters finding. Undeclared duplication, and
   similarity outside the declared target set, is still flagged, and the skill retains authority to
