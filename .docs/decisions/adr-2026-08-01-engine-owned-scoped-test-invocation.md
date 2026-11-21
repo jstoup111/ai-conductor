@@ -155,6 +155,26 @@ Choose **Option C**, with the validation rule moved onto the new surface where i
    `HARNESS.md` intermediate test execution policy stop describing a hand-assembled command and name
    the interface instead.
 
+> **Amended 2026-11-21 by build-runs-the-test-suite-pre-check-before-complet:** a project may
+> declare one bounded, non-aggregate check that BUILD itself runs before it completes. This narrows
+> no ownership above: the aggregate suite, its evidence, and the gate's PASS stay with `test_suite`.
+> Live evidence: format, typecheck, and test-typecheck failures repeatedly reached `test_suite` and
+> `build_review` laps although they are cheap static checks the builder could have caught.
+>
+> **D11 — `test_suite.pre_check` is a bounded static BUILD completion probe, never aggregate proof.**
+> The optional key is an ordered list of command entries in the `test_suite.commands` shape
+> (`command`, optional `working_directory`, optional `timeout_seconds`), validated fail-closed like
+> that list. When set, the engine runs it through the same command executor as the aggregate suite
+> as the last `build` completion floor, only after every task is resolved and the tree is clean, and
+> also at the retries-exhausted escape, so neither door hands BUILD to `build_review` while it fails.
+> A failure withholds completion with a reason that starts `test_suite pre-check failed:` and carries
+> the failing command and a bounded tail of its output, which the retry hint returns to the builder;
+> an attempt whose only miss is that reason is exempt from the no-task-progress stall breaker. A PASS
+> is held in process memory for the HEAD it ran at, so a re-evaluation at the same HEAD does not
+> re-run it. The pre-check writes no full-suite evidence, never satisfies or replaces the `test_suite`
+> gate, and has no selectors; when the key is absent BUILD behaves exactly as before. Its failure
+> reaches the event spine through the existing `step_retry` reason and the HALT reason.
+
 ## Verify-Claims Ledger
 
 ### Claims
