@@ -1,6 +1,8 @@
 # Halt record
 
-Status: halted
+Status: resolved
+Resolution cause: operator
+Resolved at: 2026-11-21T21:32:07.076Z
 Slug: child-build-halts-needs-human-on-another-child-s-a
 Class: needs-human
 Halting step: unknown
