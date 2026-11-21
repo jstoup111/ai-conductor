@@ -322,6 +322,14 @@ actual first-time BUILD route still increments the cumulative convergence bound.
 >   repeats (`already-attempted`), non-`act` bindings, carry, the refute and defer lanes, unbound
 >   recurrence and `distinctFrom`, and the cumulative kickback cap are unchanged.
 
+> **Amended 2026-11-21 by per-rubric-blocking-lap-limit-for-build-review:** A finding from a rubric that is past its
+> blocking-lap limit is demoted to advisory in the effective reducer, before the D5.1 settled
+> predicate and before any D2 dispatch, as decision 8 of
+> adr-2026-10-19-build-review-finding-severity-advisory-threshold states. It is never a live source,
+> so D5.6 to D5.15 never see it: it opens no case, joins no lineage,
+> and cannot reach the D5.10 recurrence-limit halt or the D5.14 repeat halt. Exact-id settlement and
+> every recurrence rule are unchanged for findings that are still live (D7 below).
+
 ### D6 — Deferred-finding issue filing is opt-in; an unfiled deferral finalizes as recorded
 
 > **Amended 2026-11-21 by #3265:** The predecessor's D6 **Defer** effect filed every deferral as a
@@ -351,6 +359,19 @@ actual first-time BUILD route still increments the cumulative convergence bound.
 >    predecessor's D6 marker-lookup-then-file effect runs as before. If current feature provenance
 >    does not authorize `issue.create`, the effect is recorded `failed` with a diagnostic naming the
 >    missing authority, `remediation_effect_failed` is emitted, and the HALT names that cause.
+
+> **Amended 2026-11-21 by per-rubric-blocking-lap-limit-for-build-review:** Recurrence halts exist to stop a defect
+> that keeps coming back from consuming repair laps without end. A per-rubric blocking-lap limit stops
+> the same spin earlier and without a halt. This amendment adds the decision below.
+>
+> **D7 — Blocking-lap demotion precedes recurrence adjudication.** On a lap whose aggregate names a
+> rubric as lap-limited, that rubric's otherwise-unresolved findings are advisory before the
+> coordinator builds its live source set. The lap is therefore an effective PASS when no other
+> unresolved finding or uncovered infrastructure fault remains, and a mixed lap judges only the other
+> rubrics' content. Demotion never rewrites a case: an open action case whose only sources are
+> lap-limited retires by absence on a mechanically healthy lap and otherwise stays open. Infrastructure
+> failures of a lap-limited rubric remain blocking under D1, because the limit counts judged findings,
+> not coverage.
 
 ## Consequences
 
