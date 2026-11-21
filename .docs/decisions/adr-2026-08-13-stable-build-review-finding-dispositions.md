@@ -88,6 +88,15 @@ result and block as infrastructure failure. A contract version changes only when
 change; that change intentionally prevents an old disposition from silently matching the new
 meaning. Pure wording changes retain the version and identity.
 
+> **Amended 2026-11-21 by #3721:** Two findings in one lap that canonicalize to the same identity
+> no longer block as infrastructure failure. A region hashed as a whole, such as a newly added
+> file's single hunk, gives distinct same-kind concerns one identity, so rejecting the collision
+> charged mechanical faults for correct reviews and halted features `needs-human`. The engine now
+> merges colliding findings into one finding before the result is accepted: every summary and
+> evidence location is kept, with the gravest severity and the highest confidence. Identity
+> semantics and `contractVersion` are unchanged, so dispositions, cases, and acceptances still bind
+> to the same id, and one identity still yields one finding and one unit of remediation work.
+
 > **Amended 2026-10-19 by #3298:** The built-in rubric contract moves from `v3` to `v4` for a
 > required, reviewer-assigned `severity` that is excluded from identity, so identity semantics do
 > not change. Contract version is still an identity input, so every built-in finding id re-keys once

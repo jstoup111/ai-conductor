@@ -319,7 +319,7 @@ canonical id, so that a legible reference produces the same identity a bare id p
 - Given an anchor whose `planTask` is prose with no recoverable task id, when the finding is parsed,
   then it is rejected and the diagnosis names the required form — normalization must not guess.
 - Given two findings whose `planTask` values differ only in title text but share an id, when both
-  are canonicalized, then they collide as one identity and the result is rejected as a duplicate,
+  are canonicalized, then they collide as one identity and the engine merges them into one finding,
   preserving the existing collision rule.
 
 ### Done When

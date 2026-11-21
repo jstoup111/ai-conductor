@@ -218,6 +218,13 @@ reference grammars, so the next tightening cannot ship without its instruction.
 > still engine-stamped from the projection. `contractVersion` stays `v3`: finding identity semantics
 > do not change under this amendment (D3).
 
+> **Amended 2026-11-21 by #3721:** A duplicate identity is no longer in D7.1's list of parser
+> rejections, and identity uniqueness is no longer a D10.1 rejection check. The parser merges
+> findings that share an identity into one finding, keeping every summary and evidence location
+> with the gravest severity and highest confidence, so such a result settles as a judged verdict and
+> charges no mechanical fault. Content-hash membership and vocabulary rejections are unchanged
+> (adr-2026-08-13-stable-build-review-finding-dispositions, amended by #3721).
+
 ## Consequences
 
 ### Positive
