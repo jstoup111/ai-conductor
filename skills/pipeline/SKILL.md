@@ -423,6 +423,15 @@ Append to `.pipeline/progress.log` at every batch boundary — a chronological n
 
 When the rework budget is exhausted, consider reverting to the last clean batch boundary commit (`git revert --no-commit HEAD~N..HEAD`) and re-approaching rather than continuing to patch. Each batch boundary is a merge-ready state, so reverting never loses unrelated work.
 
+### Whole-Feature Simplify (Required Before BUILD Completes)
+
+After the final task commits, run the `simplify` workflow once in whole-feature mode (Claude
+`/simplify`; Codex `$simplify`) over `<merge-base>...HEAD`. If dispatched through a subagent, the
+dispatch prompt's first line MUST be `Task: none`. The engine does not hand BUILD to `build_review`
+until `.pipeline/audit-trail/feature-simplification.md` (stacked child `k`:
+`child-<k>-simplification.md`) ends `## Verdict: CLEAN`; batch records do not satisfy it. A record
+from an earlier lap stays valid, so remediation laps do not repeat it.
+
 ### Pipeline Summary
 
 **At final-task completion, write `.pipeline/summary.json` before marking the pipeline done:**
@@ -437,3 +446,4 @@ from `.pipeline/task-status.json`. The engine reads `tasks_completed` as complet
 - [ ] No `completed` status was hand-written
 - [ ] Rework budget tracked (halt marker at 3 cycles)
 - [ ] `.pipeline/summary.json` written at final-task completion
+- [ ] Whole-feature simplify record ends `## Verdict: CLEAN` before BUILD completes

@@ -328,6 +328,12 @@ Most cycles will NOT trigger a memory write — that is correct. Only persist ge
 Refactoring never happens during GREEN. It runs at batch boundaries through the `simplify` workflow
 (Claude `/simplify`; Codex `$simplify`), in its own commits, and uses simplify's thresholds.
 
+Before BUILD completes, run that workflow once more in whole-feature mode over the whole feature
+diff (`<merge-base>...HEAD`). This pass is required: the engine does not hand BUILD to
+`build_review` until `.pipeline/audit-trail/feature-simplification.md` (stacked child `k`:
+`child-<k>-simplification.md`) ends `## Verdict: CLEAN`. Fix its must-fix findings in their own
+commits first. A record from an earlier lap stays valid, so remediation laps do not repeat it.
+
 ### User-Requested Exit During TDD
 
 If the user explicitly requests to stop, pause, or exit to the harness at any point during

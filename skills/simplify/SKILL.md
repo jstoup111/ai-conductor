@@ -1,7 +1,7 @@
 ---
 name: simplify
 implicit_invocation: required
-description: "Use only at an active pipeline batch boundary after code has changed. Reviews current-batch duplication, complexity, over-engineering, and domain-modelling defects; do not invoke for ordinary refactors, code review, or requests that merely ask for simpler prose or code."
+description: "Use only at an active pipeline batch boundary after code has changed, or for the required whole-feature pass before BUILD completes. Reviews duplication, complexity, over-engineering, and domain-modelling defects; do not invoke for ordinary refactors, code review, or requests that merely ask for simpler prose or code."
 enforcement: gating
 phase: build
 standalone: false
@@ -17,6 +17,30 @@ over-engineering, and domain-modelling defects before they compound across batch
 
 This is NOT a full codebase audit. It is scoped to the current batch's changes, except
 that changed tests must be compared with existing tests at the same production seam.
+
+It also runs once in **whole-feature mode** before BUILD first hands off to `build_review`. The
+engine enforces that pass: BUILD does not complete until its record ends `## Verdict: CLEAN`.
+
+## Whole-feature mode
+
+Run this mode once, after every plan task is committed and before BUILD completes. Batch records
+do not satisfy it.
+
+- **Scope.** The whole feature diff, `git diff $(git merge-base HEAD <base>)...HEAD`, where `<base>`
+  is the branch the feature merges into (for a stacked child, its parent branch). Apply §2–§8 to
+  every changed file, not only the last batch.
+- **Kinds.** Apply every kind the `build-review-implementation-quality` rubric judges, with that
+  skill's definitions and non-finding clauses exactly as its Judgement section states them (§7).
+  This pass is that rubric's first pass over the same diff, so a finding it would raise is fixed
+  here instead of costing a review lap.
+- **Fix, then record.** Fix every must-fix finding in its own commits, re-check the changed hunks,
+  and record advisory findings with their reasons.
+- **Output.** Write `.pipeline/audit-trail/feature-simplification.md`; for an active stacked child
+  `k`, write `.pipeline/audit-trail/child-<k>-simplification.md`. Use the §9 format with the range
+  `<merge-base>...HEAD`. The record must end `## Verdict: CLEAN`; a `SIMPLIFY_REQUIRED` record
+  leaves BUILD incomplete until the findings are fixed and the record is rewritten.
+
+The record persists across remediation laps, so later BUILD laps do not repeat the pass.
 
 ## Practices
 
@@ -122,23 +146,18 @@ decision, or authorized departure that the applicable basis already permits.
 ### 7. Domain-Modelling Check
 
 `build_review`'s `implementationQuality` rubric enforces a closed vocabulary of implementation and
-domain-modelling defects across the whole feature diff (see the `build-review-implementation-quality`
-skill's Judgement section for each kind and its non-finding). That rubric stays the authority. This
-check is the build's good-faith first pass: catch the concrete cases in this batch while the code is
-fresh, so they do not each cost a review lap later. Duplication (§2) and complexity (§3) already
-cover two kinds. Check batch-changed code for the other five:
+domain-modelling defects across the whole feature diff. That rubric stays the authority, and its
+definitions are not restated here: read the `build-review-implementation-quality` skill's Judgement
+section (its `SKILL.md` in the harness `skills/` catalog, installed under `~/.claude/skills/` and
+`~/.agents/skills/`) and apply each kind
+with its non-finding clause as written there. Duplication (§2) and complexity (§3) cover
+`duplication` and `excess-complexity`; check changed code for every other kind that section lists.
+This check is the build's good-faith first pass: catch the concrete cases while the code is fresh, so
+they do not each cost a review lap later.
 
-| Kind | Must-fix when the batch... | Not a finding |
-|------|----------------------------|---------------|
-| `representable-invalid-state` | adds a state shape that can hold a contradictory or meaningless combination (two fields that can disagree, independently optional fields that must appear together) | invalid combinations are impossible at construction, or every writer and reader passes through one validating parser |
-| `non-exhaustive-domain-match` | adds a branch over a closed domain (union, enum, event kind) that silently drops a meaningful case | an exhaustive match, or an explicit default that preserves the remaining cases |
-| `primitive-obsession` | encodes a domain concept with invariants (an identity, a path component, a slug, a count with a unit) as a bare primitive that callers can confuse or misuse | the primitive's range and meaning are enforced where it is used |
-| `obscured-intent` | hides the domain operation it performs (a hidden second return value, a computed value that is discarded and recomputed) | a local detail with a clear name and boundary |
-| `non-semantic-name` | gives a public or domain name a meaning other than its role, or reuses one name for two concepts | a conventional iterator or a private temporary |
-
-Report only concrete defects you can point to in a batch-changed hunk: name the invalid state, the
+Report only concrete defects you can point to in a changed hunk: name the invalid state, the
 dropped case, or the confused value. Do not report style preferences, hypothetical risks, plan or
-acceptance conformance, or defects in code this batch did not change.
+acceptance conformance, or defects in code outside the reviewed range.
 
 **Carry decisions forward.** Before reporting, read the earlier
 `.pipeline/audit-trail/batch-*-simplification.md` files. Do not re-raise a finding an earlier batch
@@ -183,3 +202,5 @@ Rework from simplification counts toward the pipeline rework budget (3 cycles pe
 - [ ] Applicable pattern basis consulted before recommending extraction or inlining
 - [ ] Earlier batches' simplification records read; settled findings not re-raised
 - [ ] Output written to `.pipeline/audit-trail/batch-N-simplification.md` with a verdict
+- [ ] Before BUILD completes, one whole-feature pass over `<merge-base>...HEAD` wrote the feature or
+      child record ending `## Verdict: CLEAN`
