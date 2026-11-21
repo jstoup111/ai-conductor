@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [1.7.0] - 2026-11-20
+## [1.7.0] - 2026-11-21
 
 ### Added
 
@@ -107,6 +107,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - BUILD treats a build-review remediation work order as the retry's job and records disagreement as a stall question, so a kickback can no longer end in a silent no-change halt. ([implementation PR #3609](https://github.com/jstoup111/ai-conductor/pull/3609)).
 - The pipeline, tdd, remediate, prd-audit and as-built skills are 3,346 words shorter (pipeline −32%), with engine-internal narration and contradictory trailer and task-reset instructions removed. ([implementation PR #3614](https://github.com/jstoup111/ai-conductor/pull/3614)).
 - Daemon features now always run in isolated child executors pinned to the engine build available when claimed. ([implementation PR #3665](https://github.com/jstoup111/ai-conductor/pull/3665)).
+- build_review deferrals no longer halt "remediation effect is not finalized". Filing a GitHub issue for each deferred finding is now opt-in via `build_review.fileDeferredFindingIssues` (default false). When the option is off, deferrals are recorded and listed in the PR's "Deferred findings" section. When it is on, they are filed, and missing issue-creation authority fails with a named cause. ([implementation PR #3734](https://github.com/jstoup111/ai-conductor/pull/3734)).
 
 ### Removed
 
