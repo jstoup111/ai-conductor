@@ -903,6 +903,8 @@ async function fixture(options: FixtureOptions = {}) {
               specBranch: 'feature/adjudicated-feature',
               featureMarker: '.docs/intake/adjudicated-feature.md',
               publication: 'initial',
+              // Production-shaped: resolveFeatureRemoteMutation binds the branch (#3265).
+              target: { repository: 'acme/conductor', kind: 'remote-ref', ref: 'refs/heads/feature/adjudicated-feature' },
             },
             dependencies: {
               resolveMachineOwner: async () => ({ resolved: true as const, id: 'alice' }),
@@ -3173,10 +3175,25 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
   });
 
   it('does not file a deferred issue when current feature provenance cannot authorize creation', async () => {
-    const run = await fixture({ judgement: deferralJudgement(), featureCreationAuthorized: false });
+    const run = await fixture({ judgement: deferralJudgement(), featureCreationAuthorized: false, persistEvents: true });
 
     expect(run.ghCalls.some((args) => args[0] === 'issue' && args[1] === 'create')).toBe(false);
-    expect(await run.haltMarker()).toContain('build_review adjudication halted:');
+    // #3265: the deferral must not strand at `reserved`; it fails durably and
+    // the HALT names why it could not be filed.
+    const cases = (await run.readJson('.pipeline/remediation-cases.json')) as {
+      cases: Array<{ effect: { kind: string; status: string; diagnostic?: string } }>;
+    };
+    expect(cases.cases[0]!.effect).toMatchObject({
+      kind: 'deferral',
+      status: 'failed',
+      diagnostic: expect.stringContaining('GitHub issue-creation authority is unavailable'),
+    });
+    expect(await run.events()).toContainEqual(
+      expect.objectContaining({ type: 'remediation_effect_failed', effectKind: 'deferral' }),
+    );
+    const halt = await run.haltMarker();
+    expect(halt).toContain('GitHub issue-creation authority is unavailable');
+    expect(halt).not.toContain('remediation effect is not finalized');
   });
 
   it('runs settled adjudication through the clean-PASS completion tail', async () => {

@@ -56,10 +56,14 @@ export async function authorizeGithubFeatureIssueCreation(input: {
   readonly mutation: GithubMutationExecutionContext;
 }): Promise<GithubFeatureIssueCreationAuthority | undefined> {
   if (!input?.mutation || typeof input.repository !== 'string' || input.repository === '') return undefined;
+  // A feature's provenance is bound to its branch ref; an issue that does not
+  // exist yet can never match that resource, so creation is repository-scoped.
+  // Committed ownership is still required below (#3265).
+  const { target: _branchBinding, ...provenance } = input.mutation.provenance;
   const decision = await authorizeGithubMutation({
     operation: 'issue.create',
     target: { repository: input.repository, kind: 'repository' },
-    provenance: input.mutation.provenance,
+    provenance,
   }, input.mutation.dependencies).catch(() => undefined);
   if (!decision || decision.kind !== 'authorized') return undefined;
 

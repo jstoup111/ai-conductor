@@ -146,6 +146,43 @@ describe('engine/github-creation-context — transaction-scoped creation authori
     expect(runner.run).not.toHaveBeenCalled();
   });
 
+  it('mints feature creation authority from branch-bound feature provenance (#3265)', async () => {
+    const { authorizeGithubFeatureIssueCreation, executeGithubIssueCreationTransaction } = await creationContext();
+    // resolveFeatureRemoteMutation always binds provenance to the feature's
+    // remote ref; a not-yet-existing issue can never match that resource.
+    const authority = await authorizeGithubFeatureIssueCreation({
+      repository: 'acme/intake',
+      mutation: {
+        provenance: {
+          repository: 'acme/intake',
+          defaultBranch: 'origin/main',
+          specBranch: 'feat/daemon-intake',
+          featureMarker: '.docs/intake/intake.md',
+          publication: 'merged',
+          target: { repository: 'acme/intake', kind: 'remote-ref', ref: 'refs/heads/feat/daemon-intake' },
+        },
+        dependencies: {
+          resolveMachineOwner: async () => ({ resolved: true as const, id: 'alice' }),
+          provenanceDiscovery: {
+            readCommittedRecords: async () => [{ path: '.docs/intake/intake.md', content: 'Owner: alice\n' }],
+          },
+        },
+      },
+    });
+    expect(authority).toBeDefined();
+    const runner = {
+      run: vi.fn().mockResolvedValue({ created: { repository: 'acme/intake', kind: 'issue', number: 41 } }),
+    };
+    await expect(executeGithubIssueCreationTransaction({
+      authority,
+      creation: {
+        operation: 'issue.create', access: 'create',
+        target: { repository: 'acme/intake', kind: 'repository' },
+        context: { actor: 'alice' }, payload: { title: 'Deferred', body: 'Filed from a feature.' },
+      },
+    }, runner)).resolves.toMatchObject({ kind: 'executed' });
+  });
+
   it('consumes a provenance-bound feature capability after one creation transaction', async () => {
     const { executeGithubIssueCreationTransaction } = await creationContext();
     const authority = await authorizedFeatureAuthority();

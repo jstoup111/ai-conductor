@@ -15678,8 +15678,16 @@ export class Conductor {
                               : {
                                   repo: trackerRepo,
                                   tracker: createGithubTrackerClient(this.gh, { events: this.events }),
+                                  // Without authority a reserved deferral must still
+                                  // finalize: fail it durably, naming why (#3265).
                                   ...(featureCreationAuthority === undefined
-                                    ? {}
+                                    ? {
+                                        fileIssue: async () => {
+                                          throw new Error(
+                                            'GitHub issue-creation authority is unavailable: current feature provenance did not authorize issue.create',
+                                          );
+                                        },
+                                      }
                                     : {
                                         fileIssue: async (issue: {
                                           title: string;

@@ -223,6 +223,8 @@ is neither silently lost nor duplicated by retries.
 
 - Given issue lookup/create fails because of timeout, authentication, permission, rate limit, or response failure, when the effect runs, then its state remains reserved/failed, the gate cannot PASS or route mixed actionable work, and a retry searches by the same marker before creating.
 - Given the process crashes after GitHub creates the issue but before the local reference is recorded, when the effect resumes, then marker lookup records the existing issue and does not create a second one.
+- Given a daemon feature whose committed intake provenance names the current machine owner and whose mutation context is bound to the feature branch ref, when a deferral effect runs, then feature issue-creation authority is granted and the issue is filed; the branch binding does not refuse a repository-scoped creation (#3265).
+- Given current feature provenance does not authorize issue creation, when a reserved deferral effect runs, then the effect is recorded `failed` with a diagnostic naming the unavailable GitHub issue-creation authority, `remediation_effect_failed` is emitted, and the HALT names that cause rather than "remediation effect is not finalized" (#3265).
 
 ### Done When
 
