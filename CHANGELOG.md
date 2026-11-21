@@ -277,6 +277,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Build review loads Codex plugin-owned review policies again on Codex 0.171+, which requires a marketplace locator for plugin reads. ([implementation PR #3729](https://github.com/jstoup111/ai-conductor/pull/3729)).
 - Self-host builds no longer halt when Codex's background updater writes its hourly log or a Codex session opens a thread. ([implementation PR #3733](https://github.com/jstoup111/ai-conductor/pull/3733)).
 - Pi model fallback now skips rejected upstream model IDs and continues to the next configured candidate. ([implementation PR #3711](https://github.com/jstoup111/ai-conductor/pull/3711)).
+- build_review no longer charges a mechanical fault when a reviewer reports two same-kind concerns in one region, such as a newly added file. The engine merges findings that share an identity into one finding that keeps every summary and evidence location. ([implementation PR #3737](https://github.com/jstoup111/ai-conductor/pull/3737)).
 
 ## Migration
 
