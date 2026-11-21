@@ -218,6 +218,7 @@ import {
   type ChildId,
 } from './child-context.js';
 import { BUILD_PRE_CHECK_FAILED_PREFIX, runBuildPreCheck } from './build-pre-check.js';
+import { FEATURE_SIMPLIFY_REQUIRED_PREFIX } from './feature-simplify.js';
 import { activePublicationRecord } from './stack-publication-record.js';
 import { publishedStackRefusal } from './stack-publication.js';
 import {
@@ -341,6 +342,7 @@ import {
   discardStaleLapBuildReviewFail,
   removeBuildReviewVerdict,
   uncommittedPathsOrNull,
+  featureSimplifyMissingReason,
   stampGateRunIdentity,
   isVerdictRunIdentityStep,
 } from './artifacts.js';
@@ -15036,7 +15038,10 @@ export class Conductor {
                 const escapeTreeClean =
                   step.name === 'build' &&
                   anyAttemptMovedHead &&
-                  (await uncommittedPathsOrNull(await this.completionCtx(state))) === null;
+                  (await uncommittedPathsOrNull(await this.completionCtx(state))) === null &&
+                  // D9 (both doors): the escape never bypasses the
+                  // whole-feature simplify floor the completion gate enforces.
+                  (await featureSimplifyMissingReason(this.projectRoot, this.activeRegionChild)) === null;
                 // D11 (both doors): the escape never bypasses the pre-check, and
                 // its miss becomes the reason the exhausted BUILD halts with.
                 const escapePreCheckMiss = escapeTreeClean ? await this.buildPreCheckMissReason() : null;
@@ -16707,6 +16712,10 @@ export class Conductor {
                     uncommittedPaths.length > 3 ? ` (+${uncommittedPaths.length - 3} more)` : ''
                   }`
                 : undefined;
+              // D9: a BUILD whose last miss was the whole-feature simplify floor
+              // halts naming that pass, as the dirty-tree floor names its paths.
+              const featureSimplifyHaltReason =
+                step.name === 'build' && lastError.includes(FEATURE_SIMPLIFY_REQUIRED_PREFIX) ? lastError : undefined;
               // D11: a BUILD whose last miss was its pre-check halts naming it.
               const buildPreCheckHaltReason =
                 step.name === 'build' && lastError.includes(BUILD_PRE_CHECK_FAILED_PREFIX) ? lastError : undefined;
@@ -16725,8 +16734,10 @@ export class Conductor {
                         `Re-run '${unretryableInputFailure.retryAfterStep}' before retrying '${unretryableInputFailure.failingStep}'.`
                       : uncommittedPathsReason
                         ? uncommittedPathsReason
-                        : buildPreCheckHaltReason
-                          ? buildPreCheckHaltReason
+                        : featureSimplifyHaltReason
+                          ? featureSimplifyHaltReason
+                          : buildPreCheckHaltReason
+                            ? buildPreCheckHaltReason
                           : acceptanceRedHealFailureReason
                             ? acceptanceRedHealFailureReason
                             : lastBuildStallReason
