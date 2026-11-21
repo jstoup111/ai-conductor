@@ -1916,7 +1916,7 @@ on expiry; an already-running provider may finish, but its late judgment is reje
 and its invocation usage is retained. This is an acceptance deadline, not a process kill timeout.
 
 `testQuality`, `security`, and `implementationQuality` accept `enabled`, `max_projection_bytes`, `llm_provider`, `model`, `effort`,
-`model_fallback_ladder`, `max_retries`, `escalate`, `min_confidence`, and `min_severity`. `max_projection_bytes` is a
+`model_fallback_ladder`, `max_retries`, `escalate`, `min_confidence`, `min_severity`, and `max_blocking_laps`. `max_projection_bytes` is a
 positive integer UTF-8 byte limit for the rubric's canonical projection; it defaults to `1048576` and the
 limit itself is admitted. An oversized projection is not dispatched: the gate records
 `projection-oversized` with the measured and allowed byte counts, then halts for an operator without
@@ -1928,7 +1928,15 @@ never suppressed. `min_severity` is one of `critical`, `major`, `minor`, or `nit
 a finding ranked strictly below the rubric's `min_severity` is advisory: it is recorded, listed by
 `build-review findings`, and published in the PR's `## Advisory build-review findings` region, but never
 fails the gate, reaches `remediate`, or charges a kickback. Without `min_severity`, every finding stays
-blocking; `nit` admits nothing as advisory. `testQuality` and `security` are off by default and default to `effort: high`; `implementationQuality` is
+blocking; `nit` admits nothing as advisory. `max_blocking_laps` is a non-negative integer: the number of
+review laps the rubric may block. A lap counts against a rubric when that lap leaves at least one of its
+findings unresolved, counted once per lap id, per feature and per stacked child, in
+`.pipeline/engine-state.json`. Once a rubric has blocked that many other laps, its later findings that would
+otherwise block are advisory: they never fail the gate, reach `remediate`, or charge a kickback, and
+`build_review_outer_verdict`, the daemon log, and `build-review findings` (origin `lap-limit`) report them.
+Confidence suppression and an infrastructure failure are unaffected. Omitted uses the rubric default —
+`2` for `implementationQuality`, unlimited for `testQuality`, `security`, and every custom rubric — and `0`
+means unlimited. Changing it does not invalidate cached judgements or reset delta review scope. `testQuality` and `security` are off by default and default to `effort: high`; `implementationQuality` is
 on by default with `effort: medium` — opt out with `build_review.rubrics.implementationQuality.enabled: false`. When enabled, `testQuality` derives a frozen,
 feature-local typed scope from the graded diff, the active plan and stories, and established `Covers`
 bindings; it does not admit every declaration in a marked file. A production-only refactor, move, or
@@ -1955,7 +1963,7 @@ Each key is a stable custom rubric id: 1-64 ASCII characters, beginning with an 
 lowercase), followed by letters, digits, `_`, or `-`. A built-in rubric id (`testQuality`, `security`,
 `implementationQuality`) is reserved and rejected as a custom id. A build may declare at most 32 custom rubrics. A declaration requires `skill` and `question`;
 it may set `source` (`project`, `global`, or `plugin`), `resources`, `paths`, the normal provider/model/retry
-fields, and the same `min_confidence` and `min_severity` thresholds as a built-in rubric. Custom policies are disabled unless their declaration sets `enabled: true`, and they require
+fields, and the same `min_confidence`, `min_severity`, and `max_blocking_laps` settings as a built-in rubric (a custom rubric's blocking laps are unlimited unless it declares a limit). Custom policies are disabled unless their declaration sets `enabled: true`, and they require
 `build_review.adjudication.enabled` so their findings pass through the shared decision and repair path.
 
 `paths` is an optional non-empty array of non-empty glob strings (Node `path.matchesGlob` syntax) that

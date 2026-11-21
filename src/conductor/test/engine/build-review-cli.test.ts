@@ -4529,3 +4529,88 @@ describe('build-review resolve-case', () => {
     }
   });
 });
+
+// Covers: task:6
+describe('build-review findings CLI lap-limited advisories', () => {
+  it('lists a lap-limited finding with origin lap-limit in human and JSON output', async () => {
+    const caseRead = vi.spyOn(RemediationCaseStore.prototype, 'read').mockResolvedValue({
+      ok: true,
+      state: { ...refutedCaseStore, cases: [] },
+    });
+    const limitedLapId = parseBuildReviewLapId('lap-limited')!;
+    const qualityFinding = {
+      concernKind: 'primitive-obsession',
+      summary: 'Raw string state permits invalid domain values.',
+      severity: 'critical',
+      evidenceLocations: ['src/a.ts:8'],
+      anchor: {
+        rubric: 'implementationQuality' as const,
+        locus: { path: 'src/a.ts', contentHash: `sha256:${'b'.repeat(64)}`, display: 'state model' },
+      },
+    } satisfies BuildReviewFinding;
+    const aggregate = joinBuildReviewRubricOutcomes({
+      lapId: limitedLapId,
+      snapshotDigest: 'sha256:limited',
+      results: {
+        testQuality: { kind: 'skipped', rubric: 'testQuality', reason: 'disabled' },
+        implementationQuality: {
+          kind: 'judged',
+          rubric: 'implementationQuality',
+          lapId: limitedLapId,
+          snapshotDigest: 'sha256:limited',
+          contractVersion: 'v4',
+          findings: [qualityFinding],
+          verdict: 'FAIL',
+        },
+      },
+      blockingLapLimits: [{ rubric: 'implementationQuality', blockingLaps: 2, limit: 2 }],
+    });
+    const id = canonicalizeBuildReviewFindingIdentity({
+      ...qualityFinding,
+      rubric: 'implementationQuality',
+      contractVersion: 'v4',
+    })!.id;
+    const root = await mkdtemp(join(process.env.TMPDIR!, 'build-review-findings-lap-limit-'));
+    const worktree = join(root, '.worktrees', 'review-rubrics');
+    await mkdir(join(worktree, '.pipeline'), { recursive: true });
+    await writeFile(join(worktree, '.pipeline', 'build-review.json'), JSON.stringify(aggregate));
+    const json = vi.fn();
+    const human = vi.fn();
+    const deps = {
+      cwd: root,
+      resolveMainRoot: async () => root,
+      realpath: async (path: string) => path,
+      readFile: async (path: string) => readFile(path, 'utf8'),
+      createStore: () => ({ list: async () => ({ ok: true as const, records: [] }), append: vi.fn() }),
+      readKickbackGateEntry: async () => undefined,
+    };
+
+    try {
+      await expect(
+        dispatchBuildReviewFindings(
+          { kind: 'findings', feature: 'review-rubrics', format: 'json' },
+          { ...deps, print: json },
+        ),
+      ).resolves.toBe(0);
+      await expect(
+        dispatchBuildReviewFindings(
+          { kind: 'findings', feature: 'review-rubrics', format: 'human' },
+          { ...deps, print: human },
+        ),
+      ).resolves.toBe(0);
+
+      expect(JSON.parse(json.mock.calls[0]![0] as string)).toMatchObject({
+        verdict: 'PASS',
+        advisoryFindings: [
+          { id, rubric: 'implementationQuality', severity: 'critical', origin: 'lap-limit', blockingLaps: 2, limit: 2 },
+        ],
+      });
+      expect(human.mock.calls[0]![0]).toContain(
+        `Advisory finding: ${id}; rubric: implementationQuality; severity: critical; origin: lap-limit (blocked 2 of 2 laps)`,
+      );
+    } finally {
+      caseRead.mockRestore();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});

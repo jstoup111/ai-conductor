@@ -922,6 +922,17 @@ engine records each one in the case store's suppression history, emits it on
 `build-review findings`, and in the PR's engine-owned `## Advisory build-review findings` region inside
 the accepted-risk section. A forged copy of that heading elsewhere in the PR body is removed.
 
+A rubric's [`max_blocking_laps`](../reference/configuration.md#build_review) bounds how many review laps it
+may block (default `2` for `implementationQuality`, unlimited for every other rubric, `0` for unlimited).
+When a lap is joined, the engine counts the other laps in which that rubric left a finding unresolved,
+recorded per feature or stacked child in `.pipeline/engine-state.json`. A rubric that has used its limit is
+stamped onto that lap's aggregate as `blockingLapLimits`, and its findings that would otherwise be
+unresolved are classified advisory after the `min_severity` bucket. They follow the advisory rules above,
+so no semantic-repeat or recurrence halt can come from them, but they are not written to the case
+store's suppression history or the PR region. The demotion appears on `build_review_outer_verdict` as
+`blockingLapLimits`, as a `build_review lap-limited` daemon-log line, and in `build-review findings` with
+origin `lap-limit`.
+
 When the context declares a threshold, the judgement may also settle a source with an `advisory` case:
 an `adjudicatedSeverity` strictly below the source rubric's threshold and no higher than the reviewer's
 severity, a rationale, and effect `none`. Any other shape is rejected as `invalid-advisory-threshold`.

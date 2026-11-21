@@ -22,6 +22,7 @@ import {
 import { canonicalizeBuildReviewFindingIdentity } from './build-review-finding-identity.js';
 import {
   deriveBuildReviewScopeIncompleteFault,
+  isBelowSeverityThreshold,
   parseBuildReviewLapId,
   type BuildReviewInfrastructureFailureReason,
 } from './build-review-domain.js';
@@ -237,16 +238,44 @@ type CurrentFinding = {
   readonly identity: NonNullable<ReturnType<typeof rehydrateBuildReviewAcceptedRiskFinding>>;
 };
 
-type AdvisoryFindingProjection = {
-  readonly id: string;
-  readonly rubric: string;
-  readonly severity: import('./build-review-domain.js').BuildReviewSeverity;
-  readonly threshold: import('./build-review-domain.js').BuildReviewSeverity;
-  readonly origin: 'threshold' | 'adjudicated';
-  readonly summary: string;
-  /** The autonomous adjudicator's reasoning is local CLI evidence, never machine output. */
-  readonly adjudicatorRationale?: string;
-};
+type AdvisoryFindingProjection =
+  | {
+      readonly id: string;
+      readonly rubric: string;
+      readonly severity: import('./build-review-domain.js').BuildReviewSeverity;
+      readonly threshold: import('./build-review-domain.js').BuildReviewSeverity;
+      readonly origin: 'threshold' | 'adjudicated';
+      readonly summary: string;
+      /** The autonomous adjudicator's reasoning is local CLI evidence, never machine output. */
+      readonly adjudicatorRationale?: string;
+    }
+  | {
+      readonly id: string;
+      readonly rubric: string;
+      readonly severity?: import('./build-review-domain.js').BuildReviewSeverity;
+      /** The rubric had already blocked its limit of review laps (adr-2026-10-19 D8). */
+      readonly origin: 'lap-limit';
+      readonly blockingLaps: number;
+      readonly limit: number;
+      readonly summary: string;
+    };
+
+/** Machine output omits reviewer prose and adjudicator reasoning. */
+function jsonAdvisory(advisory: AdvisoryFindingProjection): object {
+  if (advisory.origin === 'lap-limit') {
+    const { summary: _summary, ...projected } = advisory;
+    return projected;
+  }
+  const { summary: _summary, adjudicatorRationale: _adjudicatorRationale, ...projected } = advisory;
+  return projected;
+}
+
+function renderAdvisory(advisory: AdvisoryFindingProjection): string {
+  if (advisory.origin === 'lap-limit') {
+    return `Advisory finding: ${advisory.id}; rubric: ${advisory.rubric}; ${advisory.severity === undefined ? '' : `severity: ${advisory.severity}; `}origin: lap-limit (blocked ${advisory.blockingLaps} of ${advisory.limit} laps); summary: ${advisory.summary}`;
+  }
+  return `Advisory finding: ${advisory.id}; rubric: ${advisory.rubric}; severity: ${advisory.severity}; summary: ${advisory.summary}${advisory.adjudicatorRationale === undefined ? '' : `; adjudicator rationale: ${advisory.adjudicatorRationale}`}`;
+}
 
 /**
  * The effective reducer identifies advisory and settled findings by id; this
@@ -281,16 +310,35 @@ function advisoryFindings(
       continue;
     adjudicated.set(sourceId, { severity: record.adjudicatedSeverity, rationale: record.rationale });
   }
+  const lapLimits = new Map((aggregate.blockingLapLimits ?? []).map((entry) => [entry.rubric, entry]));
   const projected: AdvisoryFindingProjection[] = [];
   for (const source of sources) {
     const threshold = thresholds[source.rubric];
-    if (thresholdAdvisories.has(source.findingId) && source.severity !== undefined && threshold !== undefined) {
+    if (
+      thresholdAdvisories.has(source.findingId) &&
+      source.severity !== undefined &&
+      threshold !== undefined &&
+      isBelowSeverityThreshold(source.severity, threshold)
+    ) {
       projected.push({
         id: source.findingId,
         rubric: source.rubric,
         severity: source.severity,
         threshold,
         origin: 'threshold',
+        summary: source.summary,
+      });
+      continue;
+    }
+    const lapLimit = lapLimits.get(source.rubric);
+    if (thresholdAdvisories.has(source.findingId) && lapLimit !== undefined) {
+      projected.push({
+        id: source.findingId,
+        rubric: source.rubric,
+        ...(source.severity === undefined ? {} : { severity: source.severity }),
+        origin: 'lap-limit',
+        blockingLaps: lapLimit.blockingLaps,
+        limit: lapLimit.limit,
         summary: source.summary,
       });
       continue;
@@ -578,10 +626,7 @@ function renderHuman(
     `Unresolved findings: ${effective.unresolvedFindingIds.join(', ') || 'none'}`,
     `Out-of-delta findings: ${effective.outOfDeltaFindingIds?.join(', ') || 'none'}`,
     `Advisory build-review findings: ${advisories.length === 0 ? 'none' : ''}`,
-    ...advisories.map(
-      (advisory) =>
-        `Advisory finding: ${advisory.id}; rubric: ${advisory.rubric}; severity: ${advisory.severity}; summary: ${advisory.summary}${advisory.adjudicatorRationale === undefined ? '' : `; adjudicator rationale: ${advisory.adjudicatorRationale}`}`,
-    ),
+    ...advisories.map(renderAdvisory),
     `Skipped rubrics: ${effective.skippedRubrics.join(', ') || 'none'}`,
     `Infrastructure failures: ${effective.infrastructureFailureRubrics.join(', ') || 'none'}`,
     ...(lastMechanicalFault === undefined
@@ -875,13 +920,7 @@ export async function dispatchBuildReviewFindings(
       ...(carriedSources.length === 0 ? {} : { carriedSources }),
       ...(operatorResolvedCases.length === 0 ? {} : { operatorResolvedCases }),
       ...(pendingOutbox.length === 0 ? {} : { pendingOutbox }),
-      ...(advisories.length === 0
-        ? {}
-        : {
-            advisoryFindings: advisories.map(
-              ({ summary: _summary, adjudicatorRationale: _adjudicatorRationale, ...advisory }) => advisory,
-            ),
-          }),
+      ...(advisories.length === 0 ? {} : { advisoryFindings: advisories.map(jsonAdvisory) }),
       ...(gateEntry?.lastMechanicalFault === undefined ? {} : { lastMechanicalFault: gateEntry.lastMechanicalFault }),
       ...(faults.length > 0 ? { exhaustedMechanicalFaults: faults } : {}),
     };

@@ -3189,6 +3189,12 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
           `${dot} build_review advisory ${finding.rubric}:${finding.findingId} (severity ${finding.severity} < threshold ${finding.threshold})`,
         );
       }
+      for (const limit of event.blockingLapLimits ?? []) {
+        const count = limit.findingIds.length;
+        log(
+          `${dot} build_review lap-limited ${limit.rubric}: ${count} finding${count === 1 ? '' : 's'} advisory (blocked ${limit.blockingLaps} of ${limit.limit} laps)`,
+        );
+      }
       const raw = event.rawVerdict === event.effectiveVerdict ? '' : ` (raw: ${event.rawVerdict})`;
       const reason = event.reason ? ` — ${event.reason}` : '';
       const unresolvedMarkers = event.unresolvedMarkers

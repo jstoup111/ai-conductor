@@ -186,3 +186,26 @@ describe('daemon logger line shape', () => {
     expect(output.every((line) => line.startsWith('·   '))).toBe(true);
   });
 });
+
+// Covers: task:6
+describe('build_review lap-limited daemon line', () => {
+  it('prints one line per lap-limited rubric with its demoted count and budget', () => {
+    chalk.level = 0;
+    const output: string[] = [];
+    renderDaemonEvent(
+      {
+        type: 'build_review_outer_verdict',
+        lapId: 'lap',
+        rawVerdict: 'FAIL',
+        effectiveVerdict: 'PASS',
+        blockingLapLimits: [{ rubric: 'implementationQuality', blockingLaps: 2, limit: 2, findingIds: ['f1'] }],
+      },
+      (line) => output.push(line),
+    );
+    expect(output.filter((line) => line.includes('lap-limited'))).toEqual([
+      expect.stringContaining(
+        'build_review lap-limited implementationQuality: 1 finding advisory (blocked 2 of 2 laps)',
+      ),
+    ]);
+  });
+});
