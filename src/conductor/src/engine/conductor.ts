@@ -15035,7 +15035,7 @@ export class Conductor {
                 // code path) so the run proceeds to `build_review`, and record
                 // which plan task ids were left unresolved so an operator can
                 // still see the gap in `conduct-state.json`.
-                const escapeTreeClean =
+                const escapeFloorsClear =
                   step.name === 'build' &&
                   anyAttemptMovedHead &&
                   (await uncommittedPathsOrNull(await this.completionCtx(state))) === null &&
@@ -15044,11 +15044,11 @@ export class Conductor {
                   (await featureSimplifyMissingReason(this.projectRoot, this.activeRegionChild)) === null;
                 // D11 (both doors): the escape never bypasses the pre-check, and
                 // its miss becomes the reason the exhausted BUILD halts with.
-                const escapePreCheckMiss = escapeTreeClean ? await this.buildPreCheckMissReason() : null;
+                const escapePreCheckMiss = escapeFloorsClear ? await this.buildPreCheckMissReason() : null;
                 if (escapePreCheckMiss) {
                   lastError = `Step '${step.name}' completed but completion check failed: ${escapePreCheckMiss}`;
                 }
-                if (escapeTreeClean && escapePreCheckMiss === null) {
+                if (escapeFloorsClear && escapePreCheckMiss === null) {
                   let routedReason: string | undefined;
                   try {
                     const statusPath = join(this.projectRoot, '.pipeline/task-status.json');
@@ -16738,17 +16738,17 @@ export class Conductor {
                           ? featureSimplifyHaltReason
                           : buildPreCheckHaltReason
                             ? buildPreCheckHaltReason
-                          : acceptanceRedHealFailureReason
-                            ? acceptanceRedHealFailureReason
-                            : lastBuildStallReason
-                              ? lastBuildStallReason
-                              : graderDispatchFailureReason
-                                ? `${graderDispatchFailureReason} (retries exhausted with backoff — this is an infrastructure failure, not a code-quality rejection; the build's completed work is intact)`
-                                : unchangedInputNote
-                                  ? `step '${step.name}' failed in auto mode: ${unchangedInputNote}`
-                                  : buildReviewSchemaFailureReason
-                                    ? buildReviewSchemaFailureReason
-                                    : `step '${step.name}' failed in auto mode (retries exhausted)`;
+                            : acceptanceRedHealFailureReason
+                              ? acceptanceRedHealFailureReason
+                              : lastBuildStallReason
+                                ? lastBuildStallReason
+                                : graderDispatchFailureReason
+                                  ? `${graderDispatchFailureReason} (retries exhausted with backoff — this is an infrastructure failure, not a code-quality rejection; the build's completed work is intact)`
+                                  : unchangedInputNote
+                                    ? `step '${step.name}' failed in auto mode: ${unchangedInputNote}`
+                                    : buildReviewSchemaFailureReason
+                                      ? buildReviewSchemaFailureReason
+                                      : `step '${step.name}' failed in auto mode (retries exhausted)`;
               const terminalReason =
                 finishRemediationPlannerFault === undefined
                   ? reason
