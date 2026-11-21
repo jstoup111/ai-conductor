@@ -31,11 +31,14 @@ export interface GithubExplicitIntakeCreationAuthority {
 // this boundary: only the factory below installs its private slot after current
 // committed provenance has authorized this exact issue creation.
 const featureCreationAuthorityBrand: unique symbol = Symbol('feature-creation-authority');
-const featureCreationAuthoritySlots = new WeakMap<object, {
-  readonly actor: string;
-  readonly repository: string;
-  consumed: boolean;
-}>();
+const featureCreationAuthoritySlots = new WeakMap<
+  object,
+  {
+    readonly actor: string;
+    readonly repository: string;
+    consumed: boolean;
+  }
+>();
 
 /** Opaque, one-shot authority for creation from an already-owned feature. */
 export type GithubFeatureIssueCreationAuthority = {
@@ -43,9 +46,7 @@ export type GithubFeatureIssueCreationAuthority = {
 };
 
 /** The two ADR D3 paths; feature authority is capability, not caller data. */
-export type GithubIssueCreationAuthority =
-  | GithubExplicitIntakeCreationAuthority
-  | GithubFeatureIssueCreationAuthority;
+export type GithubIssueCreationAuthority = GithubExplicitIntakeCreationAuthority | GithubFeatureIssueCreationAuthority;
 
 /**
  * Mint the only feature-creation capability after the normal mutation policy
@@ -56,11 +57,18 @@ export async function authorizeGithubFeatureIssueCreation(input: {
   readonly mutation: GithubMutationExecutionContext;
 }): Promise<GithubFeatureIssueCreationAuthority | undefined> {
   if (!input?.mutation || typeof input.repository !== 'string' || input.repository === '') return undefined;
-  const decision = await authorizeGithubMutation({
-    operation: 'issue.create',
-    target: { repository: input.repository, kind: 'repository' },
-    provenance: input.mutation.provenance,
-  }, input.mutation.dependencies).catch(() => undefined);
+  // A feature's provenance is bound to its branch ref; an issue that does not
+  // exist yet can never match that resource, so creation is repository-scoped.
+  // Committed ownership is still required below (#3265).
+  const { target: _branchBinding, ...provenance } = input.mutation.provenance;
+  const decision = await authorizeGithubMutation(
+    {
+      operation: 'issue.create',
+      target: { repository: input.repository, kind: 'repository' },
+      provenance,
+    },
+    input.mutation.dependencies,
+  ).catch(() => undefined);
   if (!decision || decision.kind !== 'authorized') return undefined;
 
   const authority = Object.freeze({}) as GithubFeatureIssueCreationAuthority;
@@ -76,14 +84,17 @@ export async function authorizeGithubFeatureIssueCreation(input: {
 export async function resolveGithubIssueCreationAuthority(
   authority: GithubIssueCreationAuthority,
 ): Promise<{ readonly actor: string; readonly repository: string } | undefined> {
-  const feature = authority && typeof authority === 'object'
-    ? featureCreationAuthoritySlots.get(authority)
-    : undefined;
+  const feature = authority && typeof authority === 'object' ? featureCreationAuthoritySlots.get(authority) : undefined;
   if (feature && !feature.consumed) return { actor: feature.actor, repository: feature.repository };
-  if (!authority || typeof authority !== 'object' || !('intent' in authority)
-    || authority.intent?.kind !== 'explicit-intake'
-    || typeof authority.intent.repository !== 'string'
-    || typeof authority.resolveActor !== 'function') return undefined;
+  if (
+    !authority ||
+    typeof authority !== 'object' ||
+    !('intent' in authority) ||
+    authority.intent?.kind !== 'explicit-intake' ||
+    typeof authority.intent.repository !== 'string' ||
+    typeof authority.resolveActor !== 'function'
+  )
+    return undefined;
   try {
     const resolution = await authority.resolveActor();
     const actor = resolution.resolved ? normalizeOwnerId(resolution.id) : null;
@@ -108,27 +119,27 @@ type GithubMetadataFailure = {
 
 export type GithubIssueCreationTransactionResult =
   | {
-    readonly kind: 'executed';
-    readonly operation: 'issue.create';
-    readonly created: GithubIssueTarget;
-  }
+      readonly kind: 'executed';
+      readonly operation: 'issue.create';
+      readonly created: GithubIssueTarget;
+    }
   | {
-    readonly kind: 'partial';
-    readonly operation: 'issue.create';
-    /** Omitted when the remote create may have succeeded but identified no one issue. */
-    readonly created?: GithubIssueTarget;
-    readonly metadataFailures: readonly GithubMetadataFailure[];
-  }
+      readonly kind: 'partial';
+      readonly operation: 'issue.create';
+      /** Omitted when the remote create may have succeeded but identified no one issue. */
+      readonly created?: GithubIssueTarget;
+      readonly metadataFailures: readonly GithubMetadataFailure[];
+    }
   | {
-    readonly kind: 'refused';
-    readonly operation: 'issue.create';
-    readonly reason: GithubOperationRefusalReason;
-  }
+      readonly kind: 'refused';
+      readonly operation: 'issue.create';
+      readonly reason: GithubOperationRefusalReason;
+    }
   | {
-    readonly kind: 'failed';
-    readonly operation: 'issue.create';
-    readonly error: string;
-  };
+      readonly kind: 'failed';
+      readonly operation: 'issue.create';
+      readonly error: string;
+    };
 
 interface BoundCreationContext {
   readonly actor: string;
@@ -157,11 +168,11 @@ async function bindContext(
   authority: GithubIssueCreationAuthority,
   creation: GithubCreateOperationRequest,
 ): Promise<BoundCreationContext | GithubIssueCreationTransactionResult> {
-  const feature = authority && typeof authority === 'object'
-    ? featureCreationAuthoritySlots.get(authority)
-    : undefined;
-  const claimedFeature = authority && typeof authority === 'object'
-    && (authority as unknown as { intent?: { kind?: unknown } }).intent?.kind === 'authorized-feature';
+  const feature = authority && typeof authority === 'object' ? featureCreationAuthoritySlots.get(authority) : undefined;
+  const claimedFeature =
+    authority &&
+    typeof authority === 'object' &&
+    (authority as unknown as { intent?: { kind?: unknown } }).intent?.kind === 'authorized-feature';
   const bound = await resolveGithubIssueCreationAuthority(authority);
   if (!bound) return refusal(feature || claimedFeature ? 'explicit-authorization-required' : 'unresolved-actor');
   if (creation.operation !== 'issue.create' || creation.target.kind !== 'repository') {
@@ -175,27 +186,29 @@ async function bindContext(
   return Object.freeze({ actor: bound.actor, repository: creation.target.repository });
 }
 
-function metadataIsPreauthorized(
-  request: GithubFeatureWriteOperationRequest,
-  context: BoundCreationContext,
-): boolean {
-  return request.target.kind === 'issue'
-    && request.target.repository === context.repository
-    && normalizeOwnerId(request.context.actor) === context.actor
-    && (request.operation === 'issue.label.add'
-      || request.operation === 'issue.label.remove'
-      || request.operation === 'issue.dependency.add'
-      || request.operation === 'issue.dependency.remove');
+function metadataIsPreauthorized(request: GithubFeatureWriteOperationRequest, context: BoundCreationContext): boolean {
+  return (
+    request.target.kind === 'issue' &&
+    request.target.repository === context.repository &&
+    normalizeOwnerId(request.context.actor) === context.actor &&
+    (request.operation === 'issue.label.add' ||
+      request.operation === 'issue.label.remove' ||
+      request.operation === 'issue.dependency.add' ||
+      request.operation === 'issue.dependency.remove')
+  );
 }
 
 function canonicalCreatedIssue(
   created: GithubOperationRunnerResponse['created'],
   context: BoundCreationContext,
 ): GithubIssueTarget | undefined {
-  if (created?.kind !== 'issue'
-    || created.repository !== context.repository
-    || !Number.isSafeInteger(created.number)
-    || created.number < 1) return undefined;
+  if (
+    created?.kind !== 'issue' ||
+    created.repository !== context.repository ||
+    !Number.isSafeInteger(created.number) ||
+    created.number < 1
+  )
+    return undefined;
   return Object.freeze({ repository: context.repository, kind: 'issue', number: created.number });
 }
 
@@ -237,10 +250,12 @@ export async function executeGithubIssueCreationTransaction(
     return Object.freeze({
       kind: 'partial',
       operation: 'issue.create',
-      metadataFailures: [{
-        operation: 'issue.create',
-        error: 'GitHub creation response did not identify one canonical issue; no metadata was written.',
-      }] satisfies readonly GithubMetadataFailure[],
+      metadataFailures: [
+        {
+          operation: 'issue.create',
+          error: 'GitHub creation response did not identify one canonical issue; no metadata was written.',
+        },
+      ] satisfies readonly GithubMetadataFailure[],
     });
   }
 

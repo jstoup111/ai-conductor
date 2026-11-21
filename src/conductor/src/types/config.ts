@@ -920,6 +920,12 @@ export interface BuildReviewConfig {
   maxParallel?: number;
   /** Default-on post-join remediation adjudication. */
   adjudication?: BuildReviewAdjudicationConfig;
+  /**
+   * File a GitHub follow-up issue for each deferred build_review finding.
+   * Default: false — a deferral finalizes as a recorded, unfiled case and is
+   * listed in the feature PR's "Deferred findings" section instead.
+   */
+  fileDeferredFindingIssues?: boolean;
   /** Closed per-rubric enablement and execution-policy overrides. */
   rubrics?: BuildReviewRubricsConfig;
   /** Project-defined rubric declarations. */

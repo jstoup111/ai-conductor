@@ -243,14 +243,18 @@
 # Changing it: enabling adds stacked-delivery checks at engineer/land.
 # Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
 # Controls: build_review — the judgement gate that reviews the build before the SHIP-tail steps.
-# Allowed: an object with enabled, scopeContainmentEnforced, maxParallel, adjudication, and rubrics; perTaskFloor is retired and ignored.
-# Default: enabled true, adjudication.enabled true, scopeContainmentEnforced false, maxParallel 4, and the testQuality rubric off.
+# Allowed: an object with enabled, scopeContainmentEnforced, maxParallel, adjudication, fileDeferredFindingIssues, and rubrics; perTaskFloor is retired and ignored.
+# Default: enabled true, adjudication.enabled true, scopeContainmentEnforced false, maxParallel 4, fileDeferredFindingIssues false, and the testQuality rubric off.
 # Changing it: this block is the only off switch for the gate (steps.build_review.disable is rejected); malformed values fall back to enabled.
 # Reference: https://jstoup111.github.io/ai-conductor/reference/configuration — the ai-conductor agent can set the value on request.
 # Controls: build_review.enabled — whether the build_review gate runs at all.
 # Allowed: true or false.
 # Default: true.
 # Changing it: false marks the step skipped and emits a config_skip event, so builds ship without this review.
+# Controls: build_review.fileDeferredFindingIssues — whether a deferred build_review finding is filed as a GitHub follow-up issue.
+# Allowed: true or false.
+# Default: false.
+# Changing it: true files each deferral as an intake issue; false records it unfiled and lists it in the PR's "Deferred findings" section for the operator to decide.
 # Controls: build_review.maxParallel — how many build_review rubric reviewers run at once.
 # Allowed: an integer from 1 through 4.
 # Default: 4.

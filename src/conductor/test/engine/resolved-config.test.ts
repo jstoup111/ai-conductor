@@ -62,14 +62,8 @@ describe('engine/resolved-config', () => {
       llm_providers: {
         pi: {
           model: 'google/gemini-2.5-flash',
-          model_escalation_order: [
-            'google/gemini-2.5-flash',
-            'anthropic/claude-opus-4-5',
-          ],
-          model_fallback_ladder: [
-            'anthropic/claude-opus-4-5',
-            'google/gemini-2.5-flash',
-          ],
+          model_escalation_order: ['google/gemini-2.5-flash', 'anthropic/claude-opus-4-5'],
+          model_fallback_ladder: ['anthropic/claude-opus-4-5', 'google/gemini-2.5-flash'],
         },
       },
     } as HarnessConfig;
@@ -81,24 +75,13 @@ describe('engine/resolved-config', () => {
       }).toMatchObject({
         configured: {
           stepModels: Object.fromEntries(
-            Object.keys(CLAUDE_MODEL_POLICY.stepModels).map((step) => [
-              step,
-              'google/gemini-2.5-flash',
-            ]),
+            Object.keys(CLAUDE_MODEL_POLICY.stepModels).map((step) => [step, 'google/gemini-2.5-flash']),
           ),
-          modelEscalationOrder: [
-            'google/gemini-2.5-flash',
-            'anthropic/claude-opus-4-5',
-          ],
-          modelFallbackLadder: [
-            'anthropic/claude-opus-4-5',
-            'google/gemini-2.5-flash',
-          ],
+          modelEscalationOrder: ['google/gemini-2.5-flash', 'anthropic/claude-opus-4-5'],
+          modelFallbackLadder: ['anthropic/claude-opus-4-5', 'google/gemini-2.5-flash'],
         },
         unconfigured: {
-          stepModels: Object.fromEntries(
-            Object.keys(CLAUDE_MODEL_POLICY.stepModels).map((step) => [step, '']),
-          ),
+          stepModels: Object.fromEntries(Object.keys(CLAUDE_MODEL_POLICY.stepModels).map((step) => [step, ''])),
           modelEscalationOrder: [],
           modelFallbackLadder: [],
         },
@@ -106,27 +89,27 @@ describe('engine/resolved-config', () => {
     });
 
     it('resolves a Pi step model and effort from the step configuration', () => {
-      expect(resolveProviderNativeStepConfig(
-        'plan',
-        'DECIDE',
-        resolveProviderModelPolicy('pi', { config: piConfig }),
-        {
+      expect(
+        resolveProviderNativeStepConfig('plan', 'DECIDE', resolveProviderModelPolicy('pi', { config: piConfig }), {
           steps: {
             plan: { model: 'anthropic/claude-opus-4-5', effort: 'high' },
           },
-        },
-      )).toEqual({ model: 'anthropic/claude-opus-4-5', effort: 'high' });
+        }),
+      ).toEqual({ model: 'anthropic/claude-opus-4-5', effort: 'high' });
     });
 
     it('uses the configured Pi model for every step without a step-level model', () => {
-      expect(Object.keys(CLAUDE_MODEL_POLICY.stepModels).map((step) =>
-        resolveProviderNativeStepConfig(
-          step as keyof typeof CLAUDE_MODEL_POLICY.stepModels,
-          'BUILD',
-          resolveProviderModelPolicy('pi', { config: piConfig }),
-          piConfig,
-        ).model,
-      )).toEqual(Object.keys(CLAUDE_MODEL_POLICY.stepModels).map(() => 'google/gemini-2.5-flash'));
+      expect(
+        Object.keys(CLAUDE_MODEL_POLICY.stepModels).map(
+          (step) =>
+            resolveProviderNativeStepConfig(
+              step as keyof typeof CLAUDE_MODEL_POLICY.stepModels,
+              'BUILD',
+              resolveProviderModelPolicy('pi', { config: piConfig }),
+              piConfig,
+            ).model,
+        ),
+      ).toEqual(Object.keys(CLAUDE_MODEL_POLICY.stepModels).map(() => 'google/gemini-2.5-flash'));
     });
 
     it('uses a tier-L Pi step model and never falls back to another provider alias', () => {
@@ -141,16 +124,15 @@ describe('engine/resolved-config', () => {
       } as HarnessConfig;
 
       expect({
-        tierLPlan: resolveProviderNativeStepConfig(
-          'plan', 'DECIDE', effectivePolicy, tierConfig, { tier: 'L' },
-        ).model,
-        allModels: Object.keys(CLAUDE_MODEL_POLICY.stepModels).map((step) =>
-          resolveProviderNativeStepConfig(
-            step as keyof typeof CLAUDE_MODEL_POLICY.stepModels,
-            'BUILD',
-            effectivePolicy,
-            piConfig,
-          ).model,
+        tierLPlan: resolveProviderNativeStepConfig('plan', 'DECIDE', effectivePolicy, tierConfig, { tier: 'L' }).model,
+        allModels: Object.keys(CLAUDE_MODEL_POLICY.stepModels).map(
+          (step) =>
+            resolveProviderNativeStepConfig(
+              step as keyof typeof CLAUDE_MODEL_POLICY.stepModels,
+              'BUILD',
+              effectivePolicy,
+              piConfig,
+            ).model,
         ),
       }).toEqual({
         tierLPlan: 'anthropic/claude-opus-4-5',
@@ -165,9 +147,9 @@ describe('engine/resolved-config', () => {
         stepModels: {} as typeof effectivePolicy.stepModels,
       };
 
-      expect(() => resolveProviderNativeStepConfig(
-        'plan', 'DECIDE', policyWithoutModel,
-      )).toThrow(/requires a configured model/);
+      expect(() => resolveProviderNativeStepConfig('plan', 'DECIDE', policyWithoutModel)).toThrow(
+        /requires a configured model/,
+      );
     });
   });
 
@@ -185,9 +167,8 @@ describe('engine/resolved-config', () => {
     ])('returns a bounded timeout when dispatch_start_timeout_seconds $name', ({ value, expected, warnings }) => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
       try {
-        const config = value === undefined
-          ? undefined
-          : { dispatch_start_timeout_seconds: value } as DispatchStartTimeoutConfig;
+        const config =
+          value === undefined ? undefined : ({ dispatch_start_timeout_seconds: value } as DispatchStartTimeoutConfig);
         const result = resolveDispatchStartTimeoutSeconds(config);
 
         expect(result).toBe(expected);
@@ -213,9 +194,7 @@ describe('engine/resolved-config', () => {
     ])('returns a bounded timeout when teardown_timeout_seconds $name', ({ value, expected, warnings }) => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
       try {
-        const config = value === undefined
-          ? undefined
-          : { teardown_timeout_seconds: value } as TeardownTimeoutConfig;
+        const config = value === undefined ? undefined : ({ teardown_timeout_seconds: value } as TeardownTimeoutConfig);
         const result = resolveTeardownTimeoutSeconds(config);
 
         expect(result).toBe(expected);
@@ -230,9 +209,7 @@ describe('engine/resolved-config', () => {
   describe('resolveProviderPreparationTimeoutMinutes', () => {
     it.each([0, -1, 20])('defaults to five minutes without reading legacy heartbeat value %s', (heartbeatMinutes) => {
       expect(resolveProviderPreparationTimeoutMinutes()).toBe(5);
-      expect(
-        resolveProviderPreparationTimeoutMinutes({ step_heartbeat_stall_minutes: heartbeatMinutes }),
-      ).toBe(5);
+      expect(resolveProviderPreparationTimeoutMinutes({ step_heartbeat_stall_minutes: heartbeatMinutes })).toBe(5);
     });
 
     it('uses finite overrides and preserves zero or negative opt-outs', () => {
@@ -246,9 +223,11 @@ describe('engine/resolved-config', () => {
       { value: Number.NaN, message: /finite number/i },
       { value: Number.POSITIVE_INFINITY, message: /finite number/i },
     ])('rejects invalid timeout override $value', ({ value, message }) => {
-      expect(() => resolveProviderPreparationTimeoutMinutes({
-        provider_preparation_timeout_minutes: value as number,
-      })).toThrow(message);
+      expect(() =>
+        resolveProviderPreparationTimeoutMinutes({
+          provider_preparation_timeout_minutes: value as number,
+        }),
+      ).toThrow(message);
     });
   });
 
@@ -330,9 +309,9 @@ describe('engine/resolved-config', () => {
     });
 
     it('defaults scope containment enforcement to report-only', () => {
-      const resolved = resolveBuildReviewConfig(undefined) as ReturnType<
-        typeof resolveBuildReviewConfig
-      > & { scopeContainmentEnforced?: boolean };
+      const resolved = resolveBuildReviewConfig(undefined) as ReturnType<typeof resolveBuildReviewConfig> & {
+        scopeContainmentEnforced?: boolean;
+      };
 
       expect(resolved.scopeContainmentEnforced).toBe(false);
     });
@@ -342,9 +321,9 @@ describe('engine/resolved-config', () => {
         build_review: { scopeContainmentEnforced: true },
       } as HarnessConfig;
 
-      const resolved = resolveBuildReviewConfig(config) as ReturnType<
-        typeof resolveBuildReviewConfig
-      > & { scopeContainmentEnforced?: boolean };
+      const resolved = resolveBuildReviewConfig(config) as ReturnType<typeof resolveBuildReviewConfig> & {
+        scopeContainmentEnforced?: boolean;
+      };
 
       expect(resolved.scopeContainmentEnforced).toBe(true);
     });
@@ -354,9 +333,20 @@ describe('engine/resolved-config', () => {
       [{ adjudication: { enabled: false } }, false],
       [{ adjudication: { enabled: true } }, true],
     ] as const)('resolves default-on adjudication from %j', (buildReview, enabled) => {
-      const config = buildReview === undefined ? undefined : { build_review: buildReview } as HarnessConfig;
+      const config = buildReview === undefined ? undefined : ({ build_review: buildReview } as HarnessConfig);
 
       expect(resolveBuildReviewConfig(config).adjudication.enabled).toBe(enabled);
+    });
+
+    it.each([
+      [undefined, false],
+      [{}, false],
+      [{ fileDeferredFindingIssues: false }, false],
+      [{ fileDeferredFindingIssues: true }, true],
+    ] as const)('resolves default-off deferred-finding issue filing from %j', (buildReview, enabled) => {
+      const config = buildReview === undefined ? undefined : ({ build_review: buildReview } as HarnessConfig);
+
+      expect(resolveBuildReviewConfig(config).fileDeferredFindingIssues).toBe(enabled);
     });
 
     it('resolves a closed rubric policy map by inheriting the outer policy, applying independent overrides, and clamping fan-out', () => {
@@ -384,17 +374,20 @@ describe('engine/resolved-config', () => {
       } as HarnessConfig;
       const resolved = resolveBuildReviewConfig(config) as ReturnType<typeof resolveBuildReviewConfig> & {
         maxParallel: number;
-        rubrics: Record<string, {
-          enabled: boolean;
-          max_projection_bytes: number;
-          llm_provider: string[];
-          model: string;
-          effort: string;
-          model_fallback_ladder: string[];
-          max_retries: number;
-          escalate: boolean;
-          min_confidence: number;
-        }>;
+        rubrics: Record<
+          string,
+          {
+            enabled: boolean;
+            max_projection_bytes: number;
+            llm_provider: string[];
+            model: string;
+            effort: string;
+            model_fallback_ladder: string[];
+            max_retries: number;
+            escalate: boolean;
+            min_confidence: number;
+          }
+        >;
       };
 
       expect({
@@ -470,12 +463,15 @@ describe('engine/resolved-config', () => {
     });
 
     it('resolves the provider-only test-quality rubric from its Codex-native policy', () => {
-      const resolved = resolveBuildReviewConfig({
-        llm_provider: 'claude',
-        build_review: {
-          rubrics: { testQuality: { llm_provider: 'codex' } },
-        },
-      } as HarnessConfig, CLAUDE_MODEL_POLICY);
+      const resolved = resolveBuildReviewConfig(
+        {
+          llm_provider: 'claude',
+          build_review: {
+            rubrics: { testQuality: { llm_provider: 'codex' } },
+          },
+        } as HarnessConfig,
+        CLAUDE_MODEL_POLICY,
+      );
 
       expect(resolved.rubrics).toMatchObject({
         testQuality: {
@@ -488,12 +484,15 @@ describe('engine/resolved-config', () => {
     });
 
     it('keeps explicit partial rubric overrides while resolving omitted native settings from Codex', () => {
-      const resolved = resolveBuildReviewConfig({
-        llm_provider: 'claude',
-        build_review: {
-          rubrics: { testQuality: { llm_provider: 'codex', effort: 'max' } },
-        },
-      } as HarnessConfig, CLAUDE_MODEL_POLICY);
+      const resolved = resolveBuildReviewConfig(
+        {
+          llm_provider: 'claude',
+          build_review: {
+            rubrics: { testQuality: { llm_provider: 'codex', effort: 'max' } },
+          },
+        } as HarnessConfig,
+        CLAUDE_MODEL_POLICY,
+      );
 
       expect(resolved.rubrics.testQuality).toMatchObject({
         llm_provider: 'codex',
@@ -531,7 +530,12 @@ describe('engine/resolved-config', () => {
       const kotlinPolicy = resolved.catalog.find(({ id }) => id === 'kotlinPolicy');
       const testQuality = resolved.catalog.find(({ id }) => id === 'testQuality');
 
-      expect(resolved.catalog.map(({ id }) => id)).toEqual(['testQuality', 'security', 'implementationQuality', 'kotlinPolicy']);
+      expect(resolved.catalog.map(({ id }) => id)).toEqual([
+        'testQuality',
+        'security',
+        'implementationQuality',
+        'kotlinPolicy',
+      ]);
       expect(testQuality).toMatchObject({
         id: 'testQuality',
         kind: 'builtin',
@@ -663,11 +667,21 @@ describe('engine/resolved-config', () => {
       expect(disabledCustom.catalog.map(({ id }) => id)).toEqual(['security', 'implementationQuality']);
       expect(disabledGate.catalog).toEqual([]);
 
-      const preflight = vi.fn(async () => { throw new Error('preflight must not run'); });
-      const readCache = vi.fn(async () => { throw new Error('cache read must not run'); });
-      const dispatchModel = vi.fn(async () => { throw new Error('judge must not run'); });
-      const writeArtifact = vi.fn(async () => { throw new Error('artifact write must not run'); });
-      const writeCache = vi.fn(async () => { throw new Error('cache write must not run'); });
+      const preflight = vi.fn(async () => {
+        throw new Error('preflight must not run');
+      });
+      const readCache = vi.fn(async () => {
+        throw new Error('cache read must not run');
+      });
+      const dispatchModel = vi.fn(async () => {
+        throw new Error('judge must not run');
+      });
+      const writeArtifact = vi.fn(async () => {
+        throw new Error('artifact write must not run');
+      });
+      const writeCache = vi.fn(async () => {
+        throw new Error('cache write must not run');
+      });
       const input = {
         config: disabledGate,
         inputs: { sourceSnapshot: {} } as BuildReviewFrozenInputs,
@@ -790,24 +804,34 @@ describe('engine/resolved-config', () => {
 
     it('resolves the complete Claude policy matrix without user config', () => {
       const steps = [
-        ['bootstrap', 'UNDERSTAND'], ['memory', 'UNDERSTAND'], ['assess', 'UNDERSTAND'],
-        ['explore', 'DECIDE'], ['prd', 'DECIDE'], ['complexity', 'DECIDE'],
-        ['stories', 'DECIDE'], ['conflict_check', 'DECIDE'], ['plan', 'DECIDE'],
-        ['architecture_diagram', 'DECIDE'], ['architecture_review', 'DECIDE'],
-        ['worktree', 'SETUP'], ['acceptance_specs', 'BUILD'], ['build', 'BUILD'],
-        ['build_review', 'BUILD'], ['test_suite', 'BUILD'], ['manual_test', 'SHIP'],
-        ['prd_audit', 'SHIP'], ['architecture_review_as_built', 'SHIP'],
-        ['rebase', 'SHIP'], ['finish', 'SHIP'], ['remediate', 'SHIP'],
+        ['bootstrap', 'UNDERSTAND'],
+        ['memory', 'UNDERSTAND'],
+        ['assess', 'UNDERSTAND'],
+        ['explore', 'DECIDE'],
+        ['prd', 'DECIDE'],
+        ['complexity', 'DECIDE'],
+        ['stories', 'DECIDE'],
+        ['conflict_check', 'DECIDE'],
+        ['plan', 'DECIDE'],
+        ['architecture_diagram', 'DECIDE'],
+        ['architecture_review', 'DECIDE'],
+        ['worktree', 'SETUP'],
+        ['acceptance_specs', 'BUILD'],
+        ['build', 'BUILD'],
+        ['build_review', 'BUILD'],
+        ['test_suite', 'BUILD'],
+        ['manual_test', 'SHIP'],
+        ['prd_audit', 'SHIP'],
+        ['architecture_review_as_built', 'SHIP'],
+        ['rebase', 'SHIP'],
+        ['finish', 'SHIP'],
+        ['remediate', 'SHIP'],
         ['attribution_verify', 'SHIP'],
       ] as const;
 
       expect(
         steps.map(([step, phase]) => {
-          const { model, effort } = resolveStepConfig(
-            step,
-            phase,
-            CLAUDE_MODEL_POLICY,
-          );
+          const { model, effort } = resolveStepConfig(step, phase, CLAUDE_MODEL_POLICY);
           return { step, model, effort };
         }),
       ).toEqual([
@@ -885,9 +909,7 @@ describe('engine/resolved-config', () => {
         },
       };
 
-      expect(
-        resolveStepConfig('plan', 'DECIDE', CLAUDE_MODEL_POLICY, config, { tier: 'L' }),
-      ).toEqual({
+      expect(resolveStepConfig('plan', 'DECIDE', CLAUDE_MODEL_POLICY, config, { tier: 'L' })).toEqual({
         step: 'plan',
         model: 'fable',
         effort: 'xhigh',
@@ -917,18 +939,8 @@ describe('engine/resolved-config', () => {
       };
 
       expect({
-        neutral: resolveProviderNeutralStepConfig(
-          'plan',
-          'DECIDE',
-          CLAUDE_MODEL_POLICY,
-          config,
-        ),
-        native: resolveProviderNativeStepConfig(
-          'plan',
-          'DECIDE',
-          CLAUDE_MODEL_POLICY,
-          config,
-        ),
+        neutral: resolveProviderNeutralStepConfig('plan', 'DECIDE', CLAUDE_MODEL_POLICY, config),
+        native: resolveProviderNativeStepConfig('plan', 'DECIDE', CLAUDE_MODEL_POLICY, config),
       }).toEqual({
         neutral: {
           step: 'plan',
@@ -1097,18 +1109,28 @@ describe('engine/resolved-config', () => {
       const claudePolicy = providerDescriptor('claude').modelPolicy;
       const codexPolicy = providerDescriptor('codex').modelPolicy;
 
-      expect(resolveStepConfig('coherence_check', 'DECIDE', claudePolicy, undefined, { tier: 'L' }))
-        .toMatchObject({ model: 'opus', effort: 'medium' });
-      expect(resolveStepConfig('coherence_check', 'DECIDE', codexPolicy, undefined, { tier: 'L' }))
-        .toMatchObject({ model: 'gpt-5.6-sol', effort: 'medium' });
+      expect(resolveStepConfig('coherence_check', 'DECIDE', claudePolicy, undefined, { tier: 'L' })).toMatchObject({
+        model: 'opus',
+        effort: 'medium',
+      });
+      expect(resolveStepConfig('coherence_check', 'DECIDE', codexPolicy, undefined, { tier: 'L' })).toMatchObject({
+        model: 'gpt-5.6-sol',
+        effort: 'medium',
+      });
 
-      for (const [policy, model] of [[claudePolicy, 'sonnet'], [codexPolicy, 'gpt-5.6-terra']] as const) {
-        expect(resolveStepConfig('coherence_check', 'DECIDE', policy, undefined, { tier: 'M' }))
-          .toMatchObject({ model, effort: 'medium' });
-        expect(resolveStepConfig('coherence_check', 'DECIDE', policy, undefined, { tier: 'S' }))
-          .toMatchObject({ model, effort: 'medium' });
-        expect(resolveStepConfig('coherence_check', 'DECIDE', policy))
-          .toMatchObject({ model, effort: 'medium' });
+      for (const [policy, model] of [
+        [claudePolicy, 'sonnet'],
+        [codexPolicy, 'gpt-5.6-terra'],
+      ] as const) {
+        expect(resolveStepConfig('coherence_check', 'DECIDE', policy, undefined, { tier: 'M' })).toMatchObject({
+          model,
+          effort: 'medium',
+        });
+        expect(resolveStepConfig('coherence_check', 'DECIDE', policy, undefined, { tier: 'S' })).toMatchObject({
+          model,
+          effort: 'medium',
+        });
+        expect(resolveStepConfig('coherence_check', 'DECIDE', policy)).toMatchObject({ model, effort: 'medium' });
       }
     });
 
@@ -1117,8 +1139,9 @@ describe('engine/resolved-config', () => {
         steps: { coherence_check: { model: 'sonnet' } },
       };
 
-      expect(resolveStepConfig('coherence_check', 'DECIDE', providerDescriptor('claude').modelPolicy, config, { tier: 'L' }))
-        .toMatchObject({ model: 'sonnet', effort: 'medium' });
+      expect(
+        resolveStepConfig('coherence_check', 'DECIDE', providerDescriptor('claude').modelPolicy, config, { tier: 'L' }),
+      ).toMatchObject({ model: 'sonnet', effort: 'medium' });
     });
 
     it('front-of-funnel discovery steps use reasoning-capable defaults', () => {
@@ -1404,12 +1427,9 @@ describe('engine/resolved-config', () => {
     });
   });
 
-
   describe('resolveSelfHostConfig — build_auth defaults', () => {
     it('absent block → buildAuthMode: daemon-token, buildAuthTokenPath: ~/.ai-conductor/build-auth', async () => {
-      const { resolveSelfHostConfig } = await import(
-        '../../src/engine/resolved-config.js'
-      );
+      const { resolveSelfHostConfig } = await import('../../src/engine/resolved-config.js');
       const os = await import('os');
       const config: HarnessConfig = {
         harness_self_host: {},
@@ -1420,9 +1440,7 @@ describe('engine/resolved-config', () => {
     });
 
     it('explicit api-key mode is honored', async () => {
-      const { resolveSelfHostConfig } = await import(
-        '../../src/engine/resolved-config.js'
-      );
+      const { resolveSelfHostConfig } = await import('../../src/engine/resolved-config.js');
       const config: HarnessConfig = {
         harness_self_host: {
           build_auth: {
@@ -1435,9 +1453,7 @@ describe('engine/resolved-config', () => {
     });
 
     it('custom token_path is honored', async () => {
-      const { resolveSelfHostConfig } = await import(
-        '../../src/engine/resolved-config.js'
-      );
+      const { resolveSelfHostConfig } = await import('../../src/engine/resolved-config.js');
       const config: HarnessConfig = {
         harness_self_host: {
           build_auth: {
@@ -1450,9 +1466,7 @@ describe('engine/resolved-config', () => {
     });
 
     it('~ in token_path is expanded to home directory', async () => {
-      const { resolveSelfHostConfig } = await import(
-        '../../src/engine/resolved-config.js'
-      );
+      const { resolveSelfHostConfig } = await import('../../src/engine/resolved-config.js');
       const os = await import('os');
       const config: HarnessConfig = {
         harness_self_host: {
@@ -1466,9 +1480,7 @@ describe('engine/resolved-config', () => {
     });
 
     it('blank token_path defaults to ~/.ai-conductor/build-auth', async () => {
-      const { resolveSelfHostConfig } = await import(
-        '../../src/engine/resolved-config.js'
-      );
+      const { resolveSelfHostConfig } = await import('../../src/engine/resolved-config.js');
       const os = await import('os');
       const config: HarnessConfig = {
         harness_self_host: {
@@ -1482,9 +1494,7 @@ describe('engine/resolved-config', () => {
     });
 
     it('whitespace-only token_path defaults to ~/.ai-conductor/build-auth', async () => {
-      const { resolveSelfHostConfig } = await import(
-        '../../src/engine/resolved-config.js'
-      );
+      const { resolveSelfHostConfig } = await import('../../src/engine/resolved-config.js');
       const os = await import('os');
       const config: HarnessConfig = {
         harness_self_host: {
@@ -1498,9 +1508,7 @@ describe('engine/resolved-config', () => {
     });
 
     it('happy path: explicit daemon-token with custom path', async () => {
-      const { resolveSelfHostConfig } = await import(
-        '../../src/engine/resolved-config.js'
-      );
+      const { resolveSelfHostConfig } = await import('../../src/engine/resolved-config.js');
       const config: HarnessConfig = {
         harness_self_host: {
           build_auth: {
@@ -1529,9 +1537,7 @@ describe('engine/resolved-config', () => {
         expected: true,
       },
     ])('defaults safely when $name', async ({ config, expected }) => {
-      const { resolveSelfHostConfig } = await import(
-        '../../src/engine/resolved-config.js'
-      );
+      const { resolveSelfHostConfig } = await import('../../src/engine/resolved-config.js');
 
       expect(resolveSelfHostConfig(config).liveContainment).toBe(expected);
     });
@@ -1576,7 +1582,9 @@ describe('build-review rubric ladder for an inherited Pi provider', () => {
 
   it('uses llm_providers.pi ladder, never the top-level Claude ladder, for a run-level Pi rubric', () => {
     const resolved = resolveBuildReviewConfig({
-      llm_provider: 'pi', model_fallback_ladder: ['opus', 'sonnet'], llm_providers: { pi },
+      llm_provider: 'pi',
+      model_fallback_ladder: ['opus', 'sonnet'],
+      llm_providers: { pi },
     });
     expect(resolved.rubrics.testQuality.model_fallback_ladder).toEqual(piLadder);
     expect(resolved.rubrics.security.model_fallback_ladder).toEqual(piLadder);
@@ -1584,7 +1592,9 @@ describe('build-review rubric ladder for an inherited Pi provider', () => {
 
   it('uses llm_providers.pi ladder for a rubric inheriting a Pi build_review step', () => {
     const resolved = resolveBuildReviewConfig({
-      llm_provider: 'claude', model_fallback_ladder: ['opus', 'sonnet'], llm_providers: { pi },
+      llm_provider: 'claude',
+      model_fallback_ladder: ['opus', 'sonnet'],
+      llm_providers: { pi },
       steps: { build_review: { llm_provider: 'pi' } },
     });
     expect(resolved.rubrics.testQuality.model_fallback_ladder).toEqual(piLadder);

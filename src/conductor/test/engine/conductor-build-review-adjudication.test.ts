@@ -622,6 +622,11 @@ interface FixtureOptions {
   readonly customInfrastructure?: boolean;
   /** A feature-owned creation capability is available unless this fake denies it. */
   readonly featureCreationAuthorized?: boolean;
+  /**
+   * `build_review.fileDeferredFindingIssues`. Fixtures opt in by default so the
+   * filing tests keep their production path; `'unset'` exercises the engine default.
+   */
+  readonly fileDeferredFindingIssues?: boolean | 'unset';
   /** Replays incident 1: an action already failed on S and a judgement re-raises it with new work. */
   readonly reRaised?: boolean;
   /** Attach the production event-spine persister when a test observes durable event order. */
@@ -870,6 +875,9 @@ async function fixture(options: FixtureOptions = {}) {
       kickback_escalation: { enabled: false },
       build_review: {
         adjudication: { enabled: options.adjudicationEnabled ?? true },
+        ...(options.fileDeferredFindingIssues === 'unset'
+          ? {}
+          : { fileDeferredFindingIssues: options.fileDeferredFindingIssues ?? true }),
         rubrics: {
           testQuality: {
             enabled: true,
@@ -903,6 +911,12 @@ async function fixture(options: FixtureOptions = {}) {
               specBranch: 'feature/adjudicated-feature',
               featureMarker: '.docs/intake/adjudicated-feature.md',
               publication: 'initial',
+              // Production-shaped: resolveFeatureRemoteMutation binds the branch (#3265).
+              target: {
+                repository: 'acme/conductor',
+                kind: 'remote-ref',
+                ref: 'refs/heads/feature/adjudicated-feature',
+              },
             },
             dependencies: {
               resolveMachineOwner: async () => ({ resolved: true as const, id: 'alice' }),
@@ -3172,11 +3186,76 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
     expect(run.kickbacks).toEqual([]);
   });
 
-  it('does not file a deferred issue when current feature provenance cannot authorize creation', async () => {
-    const run = await fixture({ judgement: deferralJudgement(), featureCreationAuthorized: false });
+  it('records an unfiled deferral without filing or halting when issue filing is not enabled (default)', async () => {
+    const run = await fixture({
+      judgement: deferralJudgement(),
+      fileDeferredFindingIssues: 'unset',
+      featureCreationAuthorized: false,
+      persistEvents: true,
+    });
+
+    // Default-off: no tracker lookup and no create, even without authority.
+    expect(run.ghCalls.some((args) => args[0] === 'issue')).toBe(false);
+    const cases = (await run.readJson('.pipeline/remediation-cases.json')) as {
+      cases: Array<{ effect: Record<string, unknown> }>;
+    };
+    expect(cases.cases[0]!.effect).toEqual({
+      id: expect.any(String),
+      kind: 'deferral',
+      status: 'applied',
+      filing: 'unfiled',
+      title: 'Deferred build-review finding',
+    });
+    expect(await run.events()).toContainEqual(
+      expect.objectContaining({ type: 'remediation_effect_applied', effectKind: 'deferral', filing: 'unfiled' }),
+    );
+    expect((await run.events()).some((event) => event.type === 'remediation_effect_failed')).toBe(false);
+    expect(await run.haltMarker()).toBe('');
+    expect(run.dispatched).not.toContain('build');
+  });
+
+  it('files the deferred issue when issue filing is explicitly enabled', async () => {
+    const run = await fixture({ judgement: deferralJudgement(), fileDeferredFindingIssues: true, persistEvents: true });
+
+    expect(run.ghCalls.some((args) => args[0] === 'issue' && args[1] === 'create')).toBe(true);
+    const cases = (await run.readJson('.pipeline/remediation-cases.json')) as {
+      cases: Array<{ effect: Record<string, unknown> }>;
+    };
+    expect(cases.cases[0]!.effect).toMatchObject({
+      status: 'applied',
+      issueUrl: 'https://github.com/acme/conductor/issues/77',
+    });
+    expect(cases.cases[0]!.effect).not.toHaveProperty('filing');
+    expect(await run.events()).toContainEqual(
+      expect.objectContaining({ type: 'remediation_effect_applied', effectKind: 'deferral', filing: 'filed' }),
+    );
+  });
+
+  it('fails the deferral loudly when filing is enabled but current feature provenance cannot authorize creation', async () => {
+    const run = await fixture({
+      judgement: deferralJudgement(),
+      fileDeferredFindingIssues: true,
+      featureCreationAuthorized: false,
+      persistEvents: true,
+    });
 
     expect(run.ghCalls.some((args) => args[0] === 'issue' && args[1] === 'create')).toBe(false);
-    expect(await run.haltMarker()).toContain('build_review adjudication halted:');
+    // #3265: the deferral must not strand at `reserved`; it fails durably and
+    // the HALT names why it could not be filed.
+    const cases = (await run.readJson('.pipeline/remediation-cases.json')) as {
+      cases: Array<{ effect: { kind: string; status: string; diagnostic?: string } }>;
+    };
+    expect(cases.cases[0]!.effect).toMatchObject({
+      kind: 'deferral',
+      status: 'failed',
+      diagnostic: expect.stringContaining('GitHub issue-creation authority is unavailable'),
+    });
+    expect(await run.events()).toContainEqual(
+      expect.objectContaining({ type: 'remediation_effect_failed', effectKind: 'deferral' }),
+    );
+    const halt = await run.haltMarker();
+    expect(halt).toContain('GitHub issue-creation authority is unavailable');
+    expect(halt).not.toContain('remediation effect is not finalized');
   });
 
   it('runs settled adjudication through the clean-PASS completion tail', async () => {

@@ -322,6 +322,36 @@ actual first-time BUILD route still increments the cumulative convergence bound.
 >   repeats (`already-attempted`), non-`act` bindings, carry, the refute and defer lanes, unbound
 >   recurrence and `distinctFrom`, and the cumulative kickback cap are unchanged.
 
+### D6 — Deferred-finding issue filing is opt-in; an unfiled deferral finalizes as recorded
+
+> **Amended 2026-11-21 by #3265:** The predecessor's D6 **Defer** effect filed every deferral as a
+> GitHub intake issue. When the feature could not obtain issue-creation authority, the deferral stayed
+> `reserved` and the feature halted `needs-human` with "remediation effect is not finalized". Whether
+> a deferred finding deserves a tracker issue is the operator's call, so filing becomes an explicit
+> option. This amendment narrows the predecessor's D6 **Defer** bullet and adds the decisions below.
+>
+> 1. **Filing is opt-in.** The project key `build_review.fileDeferredFindingIssues` (boolean, default
+>    `false`) gates filing. It is a tolerant `build_review` key, so an engine that predates it warns
+>    and ignores it. This repository sets it to `true` in `.ai-conductor/config.yml`.
+> 2. **Off, a deferral finalizes as recorded-unfiled.** The engine makes no tracker lookup or create
+>    and needs no creation authority. It records the effect `applied` in a second applied-deferral
+>    shape, `{ id, kind: deferral, status: applied, filing: unfiled, title }`. The case keeps its
+>    rationale and priority. The store version is unchanged, and the parser accepts both applied
+>    shapes. The finalized effect satisfies D3.3 and the predecessor's D8 like any other applied
+>    effect, so a deferral never halts for want of filing.
+> 3. **The occurrence rides the existing spine.** `remediation_effect_applied` for a deferral gains
+>    an optional `filing` field, `filed` or `unfiled`. No new event type, sink entry or sidecar is
+>    added.
+> 4. **FINISH surfaces unfiled deferrals on the PR.** Retained-PR maintenance upserts an
+>    engine-owned `## Deferred findings` section from the case store. Each row gives the title, case
+>    id, priority, finding ids and rationale, after the title and rationale pass the same intake
+>    sanitizer an issue filing uses. Filed deferrals are omitted, and the section is removed when
+>    none remain. The operator decides at review whether to file each one.
+> 5. **On, filing is unchanged and fails loudly without authority.** With the key `true`, the
+>    predecessor's D6 marker-lookup-then-file effect runs as before. If current feature provenance
+>    does not authorize `issue.create`, the effect is recorded `failed` with a diagnostic naming the
+>    missing authority, `remediation_effect_failed` is emitted, and the HALT names that cause.
+
 ## Consequences
 
 - A mechanical failure cannot erase or postpone valid sibling content merely because reduced

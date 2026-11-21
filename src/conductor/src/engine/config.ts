@@ -228,6 +228,7 @@ export const CONFIG_CONSUMER_KEY_SETS = {
     'scopeContainmentEnforced',
     'maxParallel',
     'adjudication',
+    'fileDeferredFindingIssues',
     'rubrics',
     'custom_rubrics',
   ],
@@ -1769,7 +1770,9 @@ export function validateConfig(raw: unknown, projectRoot?: string, opts: Validat
         CONFIG_CONSUMER_KEY_SETS.build_review.map((key) => ({
           key,
           isValid: (value: unknown) => {
-            if (key === 'enabled' || key === 'scopeContainmentEnforced') return typeof value === 'boolean';
+            if (key === 'enabled' || key === 'scopeContainmentEnforced' || key === 'fileDeferredFindingIssues') {
+              return typeof value === 'boolean';
+            }
             if (key === 'adjudication' || key === 'custom_rubrics') return true;
             return key === 'perTaskFloor' || key === 'maxParallel' || key === 'rubrics';
           },

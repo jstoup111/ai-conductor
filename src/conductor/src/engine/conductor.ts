@@ -15543,13 +15543,17 @@ export class Conductor {
                               .map((record) => `${record.finding.canonicalPayload.rubric}:${record.finding.id}`),
                           );
                         };
-                        const trackerRepo = await this.resolveTrackerRepoSlug();
+                        const resolvedReviewConfig = resolveBuildReviewConfig(this.config);
+                        // Deferred-finding issue filing is opt-in. Off (the
+                        // default), deferrals finalize as recorded-unfiled and no
+                        // tracker or creation authority is consulted.
+                        const fileDeferredFindingIssues = resolvedReviewConfig.fileDeferredFindingIssues;
+                        const trackerRepo = fileDeferredFindingIssues ? await this.resolveTrackerRepoSlug() : undefined;
                         // A deferred issue is creation, not an existing-resource
                         // mutation. Obtain fresh feature provenance now and mint the
                         // opaque, one-shot capability before exposing a filing path
-                        // to the coordinator. Missing state/evidence deliberately
-                        // leaves `fileIssue` absent, so the coordinator can read for
-                        // an existing marker but cannot create a new remote issue.
+                        // to the coordinator. Missing authority yields a `fileIssue`
+                        // that fails the deferral durably, naming the cause.
                         const featureCreationAuthority =
                           trackerRepo === undefined
                             ? undefined
@@ -15568,7 +15572,6 @@ export class Conductor {
                                   ? authorizeGithubFeatureIssueCreation({ repository: trackerRepo, mutation })
                                   : undefined;
                               })();
-                        const resolvedReviewConfig = resolveBuildReviewConfig(this.config);
                         const floors = buildReviewConfidenceFloors(resolvedReviewConfig);
                         const suppressedFindingIds = effective.effective.suppressedFindingIds ?? [];
                         const advisoryFindingIds = effective.effective.advisoryFindingIds ?? [];
@@ -15673,13 +15676,22 @@ export class Conductor {
                             // Omitting them left marker lookup, issue filing, and
                             // deferral completion dead in production while an injected
                             // coordinator fixture kept passing.
+                            ...(!fileDeferredFindingIssues ? { recordDeferralsUnfiled: true } : {}),
                             ...(trackerRepo === undefined
                               ? {}
                               : {
                                   repo: trackerRepo,
                                   tracker: createGithubTrackerClient(this.gh, { events: this.events }),
+                                  // Without authority a reserved deferral must still
+                                  // finalize: fail it durably, naming why (#3265).
                                   ...(featureCreationAuthority === undefined
-                                    ? {}
+                                    ? {
+                                        fileIssue: async () => {
+                                          throw new Error(
+                                            'GitHub issue-creation authority is unavailable: current feature provenance did not authorize issue.create',
+                                          );
+                                        },
+                                      }
                                     : {
                                         fileIssue: async (issue: {
                                           title: string;

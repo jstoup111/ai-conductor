@@ -209,20 +209,25 @@ semantic non-progress stops instead of cycling.
 
 **Requirement:** Incorporated D6
 
-As an operator, I want a genuinely out-of-scope finding filed through intake exactly once so that it
-is neither silently lost nor duplicated by retries.
+As an operator, I want a genuinely out-of-scope finding filed through intake exactly once when I
+opt in to filing, and otherwise recorded and listed on the feature PR, so that it is neither silently
+lost nor duplicated by retries and never halts the feature for want of filing.
 
 ### Acceptance Criteria
 
 #### Happy Path
 
-- Given a valid `defer` case, when its effect is reserved, then the engine searches the configured intake repository for the exact hidden effect marker across open and closed issues, reuses a match, or files one sanitized issue through the existing intake adapter and records its reference.
+- Given `build_review.fileDeferredFindingIssues` is unset or `false` (the default) and a valid `defer` case, when its effect is reserved, then the engine makes no tracker lookup or create, records the effect `applied` as an unfiled deferral carrying its title, emits `remediation_effect_applied` with `filing: unfiled`, and does not halt (#3265).
+- Given recorded-unfiled deferrals exist when FINISH maintains the feature PR, then the PR body carries a `## Deferred findings` section listing each one's title, case id, priority, finding ids, and sanitized rationale, and omits filed deferrals (#3265).
+- Given `build_review.fileDeferredFindingIssues` is `true` and a valid `defer` case, when its effect is reserved, then the engine searches the configured intake repository for the exact hidden effect marker across open and closed issues, reuses a match, or files one sanitized issue through the existing intake adapter and records its reference.
 - Given two distinct deferral cases with different effect ids but similar prose, when effects run, then each receives its own issue; similarity alone does not cause a false deduplication.
 
 #### Negative Paths
 
-- Given issue lookup/create fails because of timeout, authentication, permission, rate limit, or response failure, when the effect runs, then its state remains reserved/failed, the gate cannot PASS or route mixed actionable work, and a retry searches by the same marker before creating.
+- Given `build_review.fileDeferredFindingIssues` is `true` and issue lookup/create fails because of timeout, authentication, permission, rate limit, or response failure, when the effect runs, then its state remains reserved/failed, the gate cannot PASS or route mixed actionable work, and a retry searches by the same marker before creating.
 - Given the process crashes after GitHub creates the issue but before the local reference is recorded, when the effect resumes, then marker lookup records the existing issue and does not create a second one.
+- Given `build_review.fileDeferredFindingIssues` is `true` and a daemon feature whose committed intake provenance names the current machine owner and whose mutation context is bound to the feature branch ref, when a deferral effect runs, then feature issue-creation authority is granted and the issue is filed; the branch binding does not refuse a repository-scoped creation (#3265).
+- Given `build_review.fileDeferredFindingIssues` is `true` and current feature provenance does not authorize issue creation, when a reserved deferral effect runs, then the effect is recorded `failed` with a diagnostic naming the unavailable GitHub issue-creation authority, `remediation_effect_failed` is emitted, and the HALT names that cause rather than "remediation effect is not finalized" (#3265).
 
 ### Done When
 

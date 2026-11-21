@@ -1881,6 +1881,7 @@ block is normalized in place; the resolved value is written back (`config.ts:111
 | `build_review.enabled` | boolean | `true` | Works |
 | `build_review.adjudication.enabled` | boolean | `true` | Strict nested rollout switch for post-join remediation adjudication |
 | `build_review.scopeContainmentEnforced` | boolean | `false` | Works |
+| `build_review.fileDeferredFindingIssues` | boolean | `false` | Opt-in GitHub follow-up issue for each deferred finding. Off, a deferral finalizes as recorded-unfiled without halting and is listed in the feature PR's `## Deferred findings` section |
 | `build_review.maxParallel` | integer | `4` | Must be between 1 and 4 |
 | `build_review.rubrics` | object | `implementationQuality` on; `testQuality`, `security` off | Closed canonical map: `testQuality`, `security`, and `implementationQuality`. Every other id ever accepted — `scope`, `completeness`, `rootCause`, `causalIntegrity`, `tautology`, `wiring` — is retired: it warns and is silently ignored rather than rejecting the config |
 | `build_review.custom_rubrics` | object | disabled | Opt-in installed custom review policies (maximum 32 declarations) |

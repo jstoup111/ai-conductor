@@ -207,6 +207,13 @@ A crash after reservation resumes the same effect. A crash after remote issue cr
 marker before attempting another create. An unavailable intake service leaves the effect pending or
 failed and blocks PASS; it never converts a deferral into a silent drop.
 
+> **Amended 2026-11-21 by #3265:** The **Defer** bullet above now runs only when
+> `build_review.fileDeferredFindingIssues` is `true`. Filing is opt-in and off by default. With it off,
+> a deferral finalizes as a recorded, unfiled `applied` effect with no tracker call, and FINISH lists it
+> in the feature PR. A deferral never halts for want of filing. With it on, the unavailable-intake rule
+> above still holds, and missing issue-creation authority fails the effect loudly
+> (adr-2026-08-29-mixed-build-review-laps-preserve-content-adjudication D6).
+
 ### D7 — Only a new actionable work order consumes the existing kickback
 
 Budget granularity remains a **route/lap**, not one counter increment per finding. If an adjudication
