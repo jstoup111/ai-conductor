@@ -18,6 +18,7 @@ import {
   type DecideEntryFixture,
   writeFixtureState,
 } from './decide-entry-fixture.js';
+import { seedCleanFeatureSimplifyRecord } from '../fixtures/feature-simplify-record.js';
 
 // Story 3 and Story 5. Production call site: both Conductor.run() kickback scans.
 describe('acceptance: unknown persisted kickback targets fail closed', () => {
@@ -43,6 +44,7 @@ describe('acceptance: unknown persisted kickback targets fail closed', () => {
       JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }),
       'utf-8',
     );
+    await seedCleanFeatureSimplifyRecord(fixture.root);
   }
 
   it('persists the shared refusal payload for an unknown target outside gate topology', async () => {

@@ -14,6 +14,7 @@ import * as projectPrelude from '../../src/engine/project-prelude.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 import { readVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
 import { Conductor } from '../test-conductor.js';
+import { seedCleanFeatureSimplifyRecord } from '../fixtures/feature-simplify-record.js';
 
 // RED acceptance coverage for #1270, Stories S3 and S5. These specs drive the
 // real production entry point, Conductor.run()'s BUILD retry loop. The two
@@ -70,6 +71,7 @@ async function writePlanAndStatus(dir: string, status: 'pending' | 'completed'):
   await mkdir(join(dir, '.pipeline'), { recursive: true });
   await writeFile(join(dir, '.docs/plans/2026-08-04-plan.md'), '# Plan\n\n### Task 1: Work\n');
   await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks: [{ id: 1, status }] }));
+  await seedCleanFeatureSimplifyRecord(dir);
   const resolvedBeforeBuild = Object.fromEntries(
     ALL_STEPS.slice(
       0,

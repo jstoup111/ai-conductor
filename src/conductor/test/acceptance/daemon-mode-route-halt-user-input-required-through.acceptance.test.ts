@@ -10,6 +10,7 @@ import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { persistFixtureRemediationPlan } from '../engine/remediation-plan-fixtures.js';
+import { seedCleanFeatureSimplifyRecord } from '../fixtures/feature-simplify-record.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for `.docs/stories/daemon-mode-route-halt-user-input-
@@ -115,6 +116,7 @@ describe('daemon stall remediation — cross-module acceptance flows', () => {
       if (done) stamps[String(i)] = { sha: `${'0'.repeat(38)}${String(i).padStart(2, '0')}`, form: 'trailer' };
     }
     await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
+    await seedCleanFeatureSimplifyRecord(dir);
     await writeFile(
       join(dir, '.pipeline/task-evidence.json'),
       JSON.stringify({ evidenceStamps: stamps, noEvidenceAttempts: 0, migrationGrandfather: [] }),

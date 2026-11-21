@@ -21,6 +21,7 @@ import { createProtectedArtifactSeal, PROTECTED_ARTIFACT_SEAL_PATH } from '../..
 import { readState, writeState } from '../../src/engine/state.js';
 import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { seedCleanFeatureSimplifyRecord } from '../fixtures/feature-simplify-record.js';
 
 const execFileAsync = promisify(execFile);
 const BASE = 'main';
@@ -91,6 +92,7 @@ describe('mergeability-first daemon finish', () => {
       join(repo, '.pipeline', 'task-status.json'),
       JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }),
     );
+    await seedCleanFeatureSimplifyRecord(repo);
 
     return { featureHead, featureCommits };
   }

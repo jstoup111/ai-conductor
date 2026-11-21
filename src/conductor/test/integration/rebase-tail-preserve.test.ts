@@ -15,6 +15,7 @@ import type { GitRunner } from '../../src/engine/pr-labels.js';
 import { persistAsBuiltVerdict } from '../../src/engine/as-built-verdict-store.js';
 import type { AsBuiltPolicy } from '../../src/engine/as-built-policy.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
+import { seedCleanFeatureSimplifyRecord } from '../fixtures/feature-simplify-record.js';
 
 const prospectiveMergeFixture = vi.hoisted(() => ({ forceIndeterminate: false }));
 
@@ -188,6 +189,7 @@ describe('integration/rebase-tail-preserve (Task 11, #2253)', () => {
         join(dir, '.pipeline/task-status.json'),
         JSON.stringify({ tasks: [{ id: 't1', status: 'completed' }] }),
       );
+      await seedCleanFeatureSimplifyRecord(dir);
     } else if (step === 'build_review') {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(

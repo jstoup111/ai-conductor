@@ -64,6 +64,7 @@ import type { ConductState, StepName } from '../../src/types/index.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 import { Conductor } from '../test-conductor.js';
 import { createSweepRepository, sealStack } from './restack/restack-sweepG2-fixture.js';
+import { seedCleanFeatureSimplifyRecord } from '../fixtures/feature-simplify-record.js';
 
 const LAP_ID = parseBuildReviewLapId('lap-adjudication')!;
 const SNAPSHOT = 'sha256:snapshot';
@@ -665,6 +666,7 @@ async function fixture(options: FixtureOptions = {}) {
     }),
     'utf8',
   );
+  await seedCleanFeatureSimplifyRecord(projectRoot);
   await options.seedPipeline?.(projectRoot);
 
   const statePath = join(projectRoot, '.pipeline', 'state.json');
@@ -1071,6 +1073,7 @@ async function seedRestartFromFirstRun(
         }),
         'utf8',
       );
+      await seedCleanFeatureSimplifyRecord(root);
     }
   };
 }
@@ -1905,6 +1908,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
           JSON.stringify({ tasks: [{ id: '16', status: 'in_progress' }] }),
           'utf8',
         );
+        await seedCleanFeatureSimplifyRecord(root);
         await writeFile(
           join(root, '.pipeline', 'remediation-cases.json'),
           JSON.stringify({
@@ -2102,6 +2106,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
           }),
           'utf8',
         );
+        await seedCleanFeatureSimplifyRecord(root);
       },
       remediateJudgements: [customIndexOnlyActionJudgement(buildReviewAdjudicationSourceId(source))],
       remediateResults: [
@@ -2877,6 +2882,7 @@ describe('engine/conductor — build_review post-join adjudication wiring', () =
             }),
             'utf8',
           );
+          await seedCleanFeatureSimplifyRecord(root);
         },
         seedPipeline,
       });

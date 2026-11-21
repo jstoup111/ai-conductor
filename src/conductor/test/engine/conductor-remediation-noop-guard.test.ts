@@ -27,6 +27,7 @@ import { readKickbackLedger, settlePendingRepair } from '../../src/engine/kickba
 import { writeKickbackLedger } from '../kickback-ledger-test-support.js';
 import { persistPrdAuditVerdict } from '../../src/engine/prd-audit-verdict-store.js';
 import { persistFixtureRemediationPlan } from './remediation-plan-fixtures.js';
+import { seedCleanFeatureSimplifyRecord } from '../fixtures/feature-simplify-record.js';
 
 const execFile = promisify(execFileCb);
 
@@ -157,6 +158,7 @@ describe('planRemediation D1: route-into-no-op guard (plan Task 2)', () => {
       join(dir, '.pipeline/task-status.json'),
       JSON.stringify({ tasks: [{ id: remId, status: 'completed' }] }),
     );
+    await seedCleanFeatureSimplifyRecord(dir);
     await writeKickbackLedger(dir, {
       version: 1,
       gates: {
@@ -292,6 +294,7 @@ describe('planRemediation D1: route-into-no-op guard (plan Task 2)', () => {
       join(dir, '.pipeline/task-status.json'),
       JSON.stringify({ tasks: [{ id: remId, status: 'completed' }] }),
     );
+    await seedCleanFeatureSimplifyRecord(dir);
     await writeRemediationJson('build');
 
     const conductor = makeConductor(makeRunner());
@@ -321,6 +324,7 @@ describe('planRemediation D1: route-into-no-op guard (plan Task 2)', () => {
       join(dir, '.pipeline/task-status.json'),
       JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
     );
+    await seedCleanFeatureSimplifyRecord(dir);
     await writeRemediationJson('build');
 
     const conductor = makeConductor(makeRunner());
@@ -347,6 +351,7 @@ describe('planRemediation D1: route-into-no-op guard (plan Task 2)', () => {
       join(dir, '.pipeline/task-status.json'),
       JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
     );
+    await seedCleanFeatureSimplifyRecord(dir);
     await writeRemediationJson('acceptance_specs');
 
     const conductor = makeConductor(makeRunner());
@@ -391,6 +396,7 @@ describe('planRemediation D3: kickback audit discriminator (#647 Story 4)', () =
       join(dir, '.pipeline/task-status.json'),
       JSON.stringify({ tasks: [{ id: remId, status: 'completed' }] }),
     );
+    await seedCleanFeatureSimplifyRecord(dir);
     await writeRemediationJson('build');
     const noop = await (makeConductor(makeRunner()) as unknown as { planRemediation: PlanRemediation }).planRemediation(
       { ...baseState, feature_desc: 'p' } as ConductState,
@@ -406,6 +412,7 @@ describe('planRemediation D3: kickback audit discriminator (#647 Story 4)', () =
       join(dir, '.pipeline/task-status.json'),
       JSON.stringify({ tasks: [{ id: 'task-1', status: 'completed' }] }),
     );
+    await seedCleanFeatureSimplifyRecord(dir);
     await writeRemediationJson('build');
     const route = await (
       makeConductor(makeRunner()) as unknown as { planRemediation: PlanRemediation }

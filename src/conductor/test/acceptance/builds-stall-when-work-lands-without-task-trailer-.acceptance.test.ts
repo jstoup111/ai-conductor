@@ -103,6 +103,8 @@ async function seedAllArtifactsExceptTaskStatus(dir: string): Promise<void> {
     ['.docs/decisions/adr-001.md', 'x'],
     ['.docs/coherence/coherence.md', 'x'],
     ['spec/acceptance/feature_spec.rb', 'x'],
+    // BUILD's whole-feature simplify floor (adr-2026-08-03 D9) is not under test here.
+    ['.pipeline/audit-trail/feature-simplification.md', '## Verdict: CLEAN\n'],
     [
       '.pipeline/acceptance-specs-red.json',
       JSON.stringify({

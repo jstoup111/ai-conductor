@@ -26,6 +26,7 @@ import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { resolveTaskIdsWithDiagnostics } from '../../src/engine/task-progress.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { seedCleanFeatureSimplifyRecord } from '../fixtures/feature-simplify-record.js';
 
 const exec = promisify(execFile);
 const parseJson = (text: string): { type?: string } => JSON.parse(text) as { type?: string };
@@ -36,6 +37,7 @@ describe('BUILD remediation-closure judgement boundary', () => {
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'conductor-remediation-closure-'));
     await mkdir(join(root, '.pipeline'), { recursive: true });
+    await seedCleanFeatureSimplifyRecord(root);
     await mkdir(join(root, '.docs', 'plans'), { recursive: true });
     await writeFile(
       join(root, '.docs', 'plans', 'closure.md'),

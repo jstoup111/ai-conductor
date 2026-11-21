@@ -547,6 +547,8 @@ describe('build-step stall circuit breaker', () => {
       ['.docs/decisions/adr-001.md', 'x'],
       ['spec/acceptance/feature_spec.rb', 'x'],
       ['.pipeline/acceptance-specs-red.json', RED_EVIDENCE_JSON],
+      // The whole-feature simplify floor (adr-2026-08-03 D9) is not under test here.
+      ['.pipeline/audit-trail/feature-simplification.md', '## Verdict: CLEAN\n'],
     ];
     for (const [rel, content] of artifacts) {
       const full = join(dir, rel);

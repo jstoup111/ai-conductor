@@ -40,6 +40,7 @@ import type { ConductState } from '../../src/types/index.js';
 import type { ResolutionContext, ResolutionAttempt, RebaseOutcome } from '../../src/engine/rebase.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
+import { seedCleanFeatureSimplifyRecord } from '../fixtures/feature-simplify-record.js';
 
 const execFile = promisify(execFileCb);
 
@@ -587,6 +588,7 @@ describe('runRebaseStep — completed BUILD with an unverified Done-when nudge (
         2,
       ),
     );
+    await seedCleanFeatureSimplifyRecord(repo);
     const baselineCommit = (await g(['rev-parse', 'HEAD'])).stdout.toString().trim();
     await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
 

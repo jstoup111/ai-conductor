@@ -82,6 +82,9 @@ describe('integration/gate-loop', () => {
     events = new ConductorEventEmitter();
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await mkdir(join(dir, '.docs'), { recursive: true });
+    // BUILD's whole-feature simplify floor (adr-2026-08-03 D9) is not under test here.
+    await mkdir(join(dir, '.pipeline/audit-trail'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/audit-trail/feature-simplification.md'), '## Verdict: CLEAN\n');
   });
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
@@ -2153,7 +2156,8 @@ describe('build gate and post-rebase pre-verify share one verdict basis (Task 12
     repoDir = await mkdtemp(join(tmpdir(), 'gate-preverify-'));
     await git('init', '-q', '-b', 'main');
     await mkdir(join(repoDir, '.docs/plans'), { recursive: true });
-    await mkdir(join(repoDir, '.pipeline'), { recursive: true });
+    await mkdir(join(repoDir, '.pipeline/audit-trail'), { recursive: true });
+    await writeFile(join(repoDir, '.pipeline/audit-trail/feature-simplification.md'), '## Verdict: CLEAN\n');
   });
 
   afterEach(async () => {

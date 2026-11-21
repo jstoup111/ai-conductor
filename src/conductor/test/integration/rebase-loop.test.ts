@@ -23,6 +23,7 @@ import {
   emitGateInvalidationEvents,
   makeGitRunner as makeRebaseGitRunner,
 } from '../../src/engine/rebase.js';
+import { seedCleanFeatureSimplifyRecord } from '../fixtures/feature-simplify-record.js';
 
 const gitCommandSpy = vi.hoisted(() => vi.fn());
 const prospectiveMergeFixture = vi.hoisted(() => ({ forceIndeterminate: false }));
@@ -386,6 +387,7 @@ describe('integration/rebase-loop', () => {
         join(dir, '.pipeline/task-status.json'),
         JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }),
       );
+      await seedCleanFeatureSimplifyRecord(dir);
     } else if (step === 'build_review') {
       // The build_review judgement gate's completion predicate requires a
       // fresh, valid PASS verdict at .pipeline/build-review.json (see

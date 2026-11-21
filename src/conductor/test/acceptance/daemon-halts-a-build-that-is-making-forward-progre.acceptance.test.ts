@@ -12,6 +12,7 @@ import { countResolvedTasks } from '../../src/engine/task-progress.js';
 import { validateConfig } from '../../src/engine/config.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { runDaemon, type BacklogItem, type DaemonDeps } from '../../src/engine/daemon.js';
+import { seedCleanFeatureSimplifyRecord } from '../fixtures/feature-simplify-record.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for issue #280 "Daemon halts a build that is making
@@ -144,6 +145,7 @@ async function writeTaskStatus(dir: string, completed: number, total: number): P
     if (done) stamps[String(i)] = { sha: `${'0'.repeat(38)}${String(i).padStart(2, '0')}`, form: 'trailer' };
   }
   await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
+  await seedCleanFeatureSimplifyRecord(dir);
   let lastResolvedCount: number | undefined;
   try {
     const previous = JSON.parse(await readFile(join(dir, '.pipeline/task-evidence.json'), 'utf8')) as {
@@ -189,6 +191,7 @@ async function seedSidecarProgress(
     status: i < resolvedNow ? 'completed' : 'pending',
   }));
   await writeFile(join(worktreeDir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
+  await seedCleanFeatureSimplifyRecord(worktreeDir);
   await writeFile(
     join(worktreeDir, '.pipeline/task-evidence.json'),
     JSON.stringify({
@@ -727,6 +730,7 @@ describe('S8: corrupt/missing progress inputs never crash the decision (negative
     await mkdir(join(root, '.pipeline'), { recursive: true });
     // Truncated/corrupt JSON — never valid.
     await writeFile(join(root, '.pipeline/task-status.json'), '{"tasks": [ { "id": 1, "status": "comple');
+    await seedCleanFeatureSimplifyRecord(root);
     // Sidecar entirely missing.
 
     // Already-shipped, real primitive: confirms the corrupt status file alone

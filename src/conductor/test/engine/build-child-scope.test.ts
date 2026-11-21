@@ -68,6 +68,8 @@ describe('build child task scope', () => {
   }
 
   it('completes child 1 without waiting for pending child 2 tasks', async () => {
+    await mkdir(join(root, '.pipeline', 'audit-trail'), { recursive: true });
+    await writeFile(join(root, '.pipeline', 'audit-trail', 'child-1-simplification.md'), '## Verdict: CLEAN\n');
     await writeStatus([
       { id: 'T1', status: 'completed' },
       { id: 'T2', status: 'completed' },

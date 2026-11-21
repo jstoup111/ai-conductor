@@ -2026,6 +2026,12 @@ describe('engine/artifacts', () => {
 
     // NEW TESTS: build predicate recomputes from seeded state + evidence
     describe('reworked build predicate: seed + derive', () => {
+      // These cases exercise task routing, not the whole-feature simplify
+      // floor (covered in feature-simplify.test.ts), so the floor is satisfied.
+      beforeEach(async () => {
+        await createFile('.pipeline/audit-trail/feature-simplification.md', '## Verdict: CLEAN\n');
+      });
+
       async function writePlan(content: string) {
         await createFile('.docs/plans/phase-1.md', content);
       }

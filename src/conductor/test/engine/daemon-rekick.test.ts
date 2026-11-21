@@ -3154,6 +3154,7 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
         2,
       ) + '\n',
     );
+    await seedCleanFeatureSimplifyRecord(dir);
     await writeFile(join(dir, REKICK_SENTINEL), 'rekick\n', 'utf-8');
   }
 
@@ -3528,3 +3529,4 @@ describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)
 });
 
 import { writeKickbackLedger } from '../kickback-ledger-test-support.js';
+import { seedCleanFeatureSimplifyRecord } from '../fixtures/feature-simplify-record.js';

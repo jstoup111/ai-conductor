@@ -27,6 +27,7 @@ import type { ConductState } from '../../src/types/index.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 import * as rebaseModule from '../../src/engine/rebase.js';
 import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
+import { seedCleanFeatureSimplifyRecord } from '../fixtures/feature-simplify-record.js';
 
 const execFile = promisify(execFileCb);
 const PR_URL = 'https://github.com/jstoup111/ai-conductor/pull/358';
@@ -58,6 +59,7 @@ async function seedPreRebaseState(
     join(repo, '.pipeline', 'task-status.json'),
     JSON.stringify({ tasks: [{ id: '1', status: 'completed' }] }),
   );
+  await seedCleanFeatureSimplifyRecord(repo);
   const state: ConductState = { feature_desc: 'feat' };
   for (const s of ALL_STEPS) {
     if (s.name === 'rebase') break;

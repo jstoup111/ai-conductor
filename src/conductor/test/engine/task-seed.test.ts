@@ -1878,6 +1878,13 @@ The plan text changed after implementation.
   });
 
   describe('Task 13: resolved matching-digest builds stay closed', () => {
+    // Completion here is about task reopening; the whole-feature simplify
+    // floor (feature-simplify.test.ts) is satisfied.
+    beforeEach(async () => {
+      await fsPromises.mkdir(join(dir, '.pipeline/audit-trail'), { recursive: true });
+      await fsPromises.writeFile(join(dir, '.pipeline/audit-trail/feature-simplification.md'), '## Verdict: CLEAN\n');
+    });
+
     it('completes without an obligation, then remains closed after an unchanged rewind-to-build re-seed', async () => {
       const planPath = join(dir, '.docs/plans/test.md');
       const statusPath = join(dir, '.pipeline/task-status.json');
@@ -1949,6 +1956,13 @@ The plan text changed after implementation.
   });
 
   describe('presentation-only plan edits do not reopen completed tasks', () => {
+    // Completion here is about task reopening; the whole-feature simplify
+    // floor (feature-simplify.test.ts) is satisfied.
+    beforeEach(async () => {
+      await fsPromises.mkdir(join(dir, '.pipeline/audit-trail'), { recursive: true });
+      await fsPromises.writeFile(join(dir, '.pipeline/audit-trail/feature-simplification.md'), '## Verdict: CLEAN\n');
+    });
+
     it.each([
       ['whitespace', (plan: string) => plan.replace('First completed task', '  First   completed task  ')],
       [

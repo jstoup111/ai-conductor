@@ -29,6 +29,7 @@ import {
   REKICK_SENTINEL,
   type RekickSweepDeps,
 } from '../../src/engine/daemon-rekick.js';
+import { seedCleanFeatureSimplifyRecord } from '../fixtures/feature-simplify-record.js';
 
 const AS_BUILT_TEST_POLICY: AsBuiltPolicy = {
   reachability: { enabled: true, reason: 'test fixture' },
@@ -172,6 +173,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
         join(dir, '.pipeline/task-status.json'),
         JSON.stringify({ tasks: taskIds.map((id) => ({ id, status: 'completed' })) }),
       );
+      await seedCleanFeatureSimplifyRecord(dir);
     } else if (step === 'build_review') {
       await writeFile(
         join(dir, '.pipeline/build-review.json'),
@@ -487,6 +489,7 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
               join(dir, '.pipeline/task-status.json'),
               JSON.stringify({ tasks: [{ id: 't1', status: 'completed' }] }),
             );
+            await seedCleanFeatureSimplifyRecord(dir);
             if (opts?.retryReason) {
               // The kickback dispatch must land real commits (whitewash guard).
               await writeFile(join(dir, 'src.txt'), 'fixed');
