@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "slug": "build-runs-the-test-suite-pre-check-before-complet",
+  "artifacts": [
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/build-runs-the-test-suite-pre-check-before-complet.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-08-01-engine-owned-scoped-test-invocation.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/build-runs-the-test-suite-pre-check-before-complet.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/build-runs-the-test-suite-pre-check-before-complet.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/build-runs-the-test-suite-pre-check-before-complet.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/build-runs-the-test-suite-pre-check-before-complet.md"
+    }
+  ]
+}
