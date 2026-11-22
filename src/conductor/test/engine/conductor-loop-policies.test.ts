@@ -2576,7 +2576,7 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
   });
 
   // Covers: task:18
-  it.skip('clears the stale-citation halt marker before a halt-clear re-kick', async () => {
+  it('clears the stale-citation halt marker before a halt-clear re-kick', async () => {
     await seedToBuildStep();
     const seeded = (await readState(statePath)).value as Record<string, unknown>;
     let afterBuild = false;
@@ -2669,7 +2669,7 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
       projectRoot: dir,
       mode: 'auto',
       daemon: true,
-      verifyArtifacts: false,
+      verifyArtifacts: true,
       maxRetries: 1,
       childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'no-child' }) },
     });
@@ -2723,7 +2723,7 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
       projectRoot: dir,
       mode: 'auto',
       daemon: true,
-      verifyArtifacts: false,
+      verifyArtifacts: true,
       maxRetries: 1,
       childRegionLifecycle: { resolveActiveChild: async () => ({ kind: 'no-child' }) },
     });
