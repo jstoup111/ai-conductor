@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "slug": "recover-automatically-when-build-review-needs-fres",
+  "artifacts": [
+    {
+      "kind": "complexity",
+      "path": ".docs/complexity/recover-automatically-when-build-review-needs-fres.md"
+    },
+    {
+      "kind": "decision",
+      "path": ".docs/decisions/adr-2026-08-19-unretryable-step-runner-failures-route-by-kind.md"
+    },
+    {
+      "kind": "intake",
+      "path": ".docs/intake/recover-automatically-when-build-review-needs-fres.md"
+    },
+    {
+      "kind": "plan",
+      "path": ".docs/plans/recover-automatically-when-build-review-needs-fres.md"
+    },
+    {
+      "kind": "prd",
+      "path": ".docs/specs/2026-11-21-recover-automatically-when-build-review-needs-fres.md"
+    },
+    {
+      "kind": "stories",
+      "path": ".docs/stories/recover-automatically-when-build-review-needs-fres.md"
+    },
+    {
+      "kind": "track",
+      "path": ".docs/track/recover-automatically-when-build-review-needs-fres.md"
+    }
+  ]
+}

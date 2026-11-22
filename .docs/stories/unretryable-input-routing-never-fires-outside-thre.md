@@ -9,9 +9,7 @@ Technical track; no PRD. Acceptance criteria derive from issue #2418's desired o
 
 ## Story 1: A non-verdict step with unretryable inputs halts on its first attempt
 
-As the operator of a daemon run, I want any step other than `build` whose runner declares its inputs
-unretryable to stop on its first attempt and tell me which step must re-run, so that no retry budget
-or remediation round is spent on a failure that cannot change.
+As the operator of a daemon run, I want a blocking step with unretryable inputs to name the prerequisite that needs attention. The default route for steps other than `build` halts on the first attempt. With proof verification and retry routing enabled, `build_review` can automatically rerun `test_suite` under the feature-wide two-rerun allowance.
 
 ### Acceptance Criteria
 
