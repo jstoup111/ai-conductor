@@ -574,6 +574,16 @@ describe('Conductor routed final leaf return (real local Git)', () => {
       events: new ConductorEventEmitter(),
       stackPreflight: async () => ({ kind: 'clear' }),
       operatorParkBoundary: async () => stop,
+      fullSuiteVerifier: {
+        inspect: async () => ({ status: 'CURRENT', evidence: { mode: 'aggregate' } }),
+        ensure: async () => {
+          dispatched.push('test_suite');
+          stop = true;
+          return options.failExpectedGate
+            ? { status: 'FAILED', reason: 'nonzero_exit', message: 'injected leaf validation failure' }
+            : { status: 'REUSED', evidence: { mode: 'aggregate' } };
+        },
+      } as never,
       stepRunner: {
         run: async (step) => {
           dispatched.push(step);
@@ -628,7 +638,7 @@ describe('Conductor routed final leaf return (real local Git)', () => {
 
     const childState = await readState(pipelinePathFor(subject.repo, 'conduct-state.json', parseChildId(leaf)!));
     if (!childState.ok) throw new Error('leaf state is unreadable');
-    expect(childState.value.test_suite).toBe('pending');
+    expect(childState.value.test_suite).toBe('stale');
     const rootState = await readState(statePath);
     if (!rootState.ok) throw new Error('root state is unreadable');
     expect(rootState.value).not.toHaveProperty('test_suite');

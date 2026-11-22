@@ -570,6 +570,20 @@ describe('routed round conductor resume', () => {
       repairChildren: [host],
       routedRepair: { child: host, roundId },
     };
+    const leaf = {
+      kind: 'active' as const,
+      child: parseChildId(2)!,
+      position: parseChildId(2)!,
+      isLeaf: true,
+      branch: 'feat/daemon-demo',
+    };
+    await writeState(pipelinePathFor(subject.repo, 'conduct-state.json', leaf.child), {
+      acceptance_specs: 'done',
+      build: 'done',
+      test_suite: 'done',
+      build_review: 'done',
+    });
+    let cursorReads = 0;
     const admission = vi.fn(async () => ({ kind: 'none' as const }));
     mocks.routedExit = async () => ({ kind: 'exited', next: { kind: 'leaf-returned' as const, roundId } });
     mocks.queueAdmission = admission;
@@ -581,7 +595,7 @@ describe('routed round conductor resume', () => {
       verifyArtifacts: false,
       events: new ConductorEventEmitter(),
       stepRunner: { run: vi.fn() },
-      childRegionLifecycle: { resolveActiveChild: async () => routed },
+      childRegionLifecycle: { resolveActiveChild: async () => (++cursorReads === 1 ? routed : leaf) },
     }) as unknown as {
       activeRegionChild: typeof host;
       continueRoutedHostExit: (
@@ -598,7 +612,7 @@ describe('routed round conductor resume', () => {
         (step) => ALL_STEPS.findIndex((candidate) => candidate.name === step),
         true,
       ),
-    ).resolves.toEqual({ index: ALL_STEPS.findIndex((step) => step.name === 'manual_test') });
+    ).resolves.toMatchObject({ index: ALL_STEPS.findIndex((step) => step.name === 'manual_test') });
 
     expect(admission).toHaveBeenCalledOnce();
     expect(admission).toHaveBeenCalledWith(expect.objectContaining({ reconciled: { kind: 'leaf-returned', roundId } }));
@@ -813,7 +827,9 @@ describe('routed round conductor resume', () => {
       conductor.guardOutstandingRoutedWork(state.value, (step) =>
         ALL_STEPS.findIndex((candidate) => candidate.name === step),
       ),
-    ).resolves.toEqual({ index: ALL_STEPS.findIndex((step) => step.name === 'manual_test') });
+    ).resolves.toMatchObject({
+      index: ALL_STEPS.findIndex((step) => step.name === 'acceptance_specs'),
+    });
 
     await expect(access(join(subject.repo, '.pipeline', 'HALT'))).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(readRouteRecord(subject.repo, 'demo', roundId)).resolves.toMatchObject({
@@ -1133,6 +1149,17 @@ describe('routed round conductor resume', () => {
       repairChildren: [host],
       routedRepair: { child: host, roundId },
     };
+    const leaf = {
+      kind: 'active' as const,
+      child: parseChildId(2)!,
+      position: parseChildId(2)!,
+      isLeaf: true,
+      branch: 'feat/daemon-demo',
+    };
+    await writeState(pipelinePathFor(subject.repo, 'conduct-state.json', leaf.child), {
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done',
+    });
+    let cursorReads = 0;
     const exits: string[] = [];
     mocks.routedExit = async () => {
       exits.push('r5');
@@ -1146,7 +1173,7 @@ describe('routed round conductor resume', () => {
       verifyArtifacts: false,
       events: new ConductorEventEmitter(),
       stepRunner: { run: vi.fn() },
-      childRegionLifecycle: { resolveActiveChild: async () => routed },
+      childRegionLifecycle: { resolveActiveChild: async () => (++cursorReads === 1 ? routed : leaf) },
     }) as unknown as {
       activeRegionChild: typeof host;
       continueRoutedHostExit: (
@@ -1199,6 +1226,14 @@ describe('routed round conductor resume', () => {
       repairChildren: [host],
       routedRepair: { child: host, roundId: parseRoundId('r6')! },
     };
+    const leaf = {
+      kind: 'active' as const,
+      child: host,
+      position: host,
+      isLeaf: true,
+      branch: 'feat/daemon-demo',
+    };
+    let cursorReads = 0;
     mocks.routedExit = async () => ({ kind: 'continued', next: { kind: 'none' } });
     const conductor = new Conductor({
       projectRoot: subject.repo,
@@ -1208,7 +1243,7 @@ describe('routed round conductor resume', () => {
       verifyArtifacts: false,
       events: new ConductorEventEmitter(),
       stepRunner: { run: vi.fn() },
-      childRegionLifecycle: { resolveActiveChild: async () => routed },
+      childRegionLifecycle: { resolveActiveChild: async () => (++cursorReads === 1 ? routed : leaf) },
     }) as unknown as {
       activeRegionChild: typeof host;
       continueRoutedHostExit: (

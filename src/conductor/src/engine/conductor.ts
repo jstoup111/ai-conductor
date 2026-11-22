@@ -7038,10 +7038,24 @@ export class Conductor {
       !(await routedRoundOpen(this.projectRoot, slug))
     ) {
       // Reconciliation can close the final markerless round before this
-      // guard selects a host. Restore the same root state that a live routed
-      // exit uses, then let whole-feature validation resume normally.
+      // guard selects a host. Restore the same root state and leaf overlay
+      // that a live routed exit uses. A leaf-owned region gate can still be
+      // pending, so never jump directly to whole-feature validation.
       await this.restoreWholeFeatureState(state);
-      return { index: indexOf('manual_test') };
+      const leafCursor = await this.resolveActiveChild(this.projectRoot, slug);
+      const leaf = resolveExecutionChild(leafCursor, slug);
+      if (leaf.source !== 'cursor' || !leaf.target.isLeaf) {
+        await this.haltChildRegionRefusal(
+          await this.renderChildCursorRefusal(
+            leafCursor as Exclude<ActiveChildResolution, { kind: 'active' | 'no-child' }>,
+          ),
+        );
+        return 'halt';
+      }
+      await this.activateChildRegionState(state, leaf.target.child, leaf.target.isLeaf);
+      const verdicts = await this.readGateVerdictOverlay();
+      const firstUnsatisfied = CHILD_REGION_STEPS.find((step) => !gateSatisfied(step, state, verdicts));
+      return { index: indexOf(firstUnsatisfied ?? 'manual_test'), activeChild: leaf.target };
     }
     if (admission.kind === 'admitted' || admission.kind === 'continue' || admission.kind === 'busy') {
       const cursor = await this.resolveActiveChild(this.projectRoot, slug);
@@ -9365,7 +9379,17 @@ export class Conductor {
         // prior tree. Remember this before BUILD settles so its success path
         // can restage the serial verifier for a fresh evidence check.
         const reverifyDoneTestSuiteAfterBuild = step.name === 'build' && state.test_suite === 'done';
-        const alreadyResolved = currentStatus === 'done' || currentStatus === 'skipped';
+        // Region completion belongs to the active child. A negative child
+        // verdict must reopen an otherwise `done` child status; otherwise a
+        // resumed leaf return can walk through its stale root success and
+        // dispatch whole-feature validation before repairing the leaf gate.
+        const activeRegionVerdicts =
+          isRegionStep(step.name) && this.activeRegionChild !== undefined
+            ? await this.readGateVerdictOverlay()
+            : undefined;
+        const alreadyResolved =
+          (currentStatus === 'done' || currentStatus === 'skipped') &&
+          (activeRegionVerdicts === undefined || gateSatisfied(step.name, state, activeRegionVerdicts));
         const explicitlyTargeted = this.fromStep === step.name;
         if (alreadyResolved && !explicitlyTargeted) {
           // A declared tree-attesting predicate is the authority for a
