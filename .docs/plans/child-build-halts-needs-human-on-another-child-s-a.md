@@ -576,3 +576,21 @@ All engine paths below are under `src/conductor/src/engine/` unless they start a
 - [ ] No task exceeds 5 minutes of work
 - [ ] Every task has a `Done when:` block of falsifiable checks
 - [ ] Dependencies are explicit and acyclic
+
+### Task rem-prd-audit-6: In src/conductor/src/engine/conductor.ts BUILD dispatch (routed-host hint ~6023, ordinary hint ~6149/6312, readable-input injection ~6427), name the admitted flat or child-scoped typed gap plan path (remediationTypedPlanPath(projectRoot, child)) as an input the session may read when a gap plan exists in that region, and omit it when none exists; add tests for child 3 with and without .pipeline/children/3/remediation-plan.json
+**Gate:** prd-audit
+**Rationale:** Verified: remediationTypedPlanPath is referenced only in remediation-plan-store.ts; no BUILD prompt names the typed gap plan. Task 6 admits this. It is a conforming implementation gap, so no architecture decision is needed.
+**Criterion:** S2.3
+**Parent task:** 6
+**Done when:**
+- [test] S2.3 is satisfied by this task.
+- The repair for task rem-prd-audit-6 is committed and its targeted tests pass.
+
+### Task rem-prd-audit-18: In src/conductor/src/engine/build-stall-stale-citation.ts, make the halt detail (and retry hint) name citation.ownerChild for resolved citations as well as foreign ones; add tests asserting that the attempt-3 mechanical HALT names the case and its owning child for a resolved citation
+**Gate:** prd-audit
+**Rationale:** Verified: build-stall-stale-citation.ts:84 prints 'settled' without the owning child when the citation state is resolved, even though citation.ownerChild is populated for every stale citation. Task 18 admits the fix.
+**Criterion:** S6.1
+**Parent task:** 18
+**Done when:**
+- [test] S6.1 is satisfied by this task.
+- The repair for task rem-prd-audit-18 is committed and its targeted tests pass.
