@@ -56,6 +56,26 @@ function depsFor(
 const maintenancePass = ['dashboard', 'rekick', 'resume', 'halt-prs', 'parked', 'scratch', 'mergeable'];
 
 describe('daemon maintenance job wiring', () => {
+  // Covers: task:4
+  it('runs verified-rebase recovery during ordinary maintenance before a later scheduler pass', async () => {
+    const calls: string[] = [];
+    let halted = true;
+    await runDaemon(
+      depsFor(calls, [{ slug: 'recovered' }], {
+        discoverBacklog: async () => [{ slug: 'recovered' }],
+        isHalted: async () => halted,
+        reconcileVerifiedRebaseRecoveries: async () => {
+          calls.push('verified-rebase');
+          halted = false;
+        },
+      }),
+      { concurrency: 1, once: false, maxItems: 1, maxIdlePolls: 2, idlePollMs: 0 },
+    );
+    expect(calls).toContain('verified-rebase');
+    expect(calls).toContain('dispatch:recovered');
+    expect(calls.indexOf('verified-rebase')).toBeLessThan(calls.indexOf('dispatch:recovered'));
+  });
+
   it('shares an in-flight resume authorization consumer with the next width-2 fill pass', async () => {
     const calls: string[] = [];
     const firstFeature = deferred<FeatureOutcome>();
