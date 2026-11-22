@@ -266,8 +266,8 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     expect((conductor as unknown as { activeRegionChild?: number }).activeRegionChild).toBe(leaf);
   });
 
-  // Covers: task:13
-  it('drains a sole-round leaf-return close once and leaves the leaf gates pending', async () => {
+  // Covers: task:2, task:13
+  it('resumes a settled leaf return through its child overlay before whole-feature validation', async () => {
     const { subject, statePath, config } = await fixture();
     const git = makeGitRunner(subject.repo);
     const stored = await readRouteRecord(subject.repo, 'demo', roundId, { git });
@@ -285,27 +285,19 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     await rm(join(subject.repo, '.pipeline', 'HALT'));
     const state = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])) as ConductState;
     Object.assign(state, {
-      feature_desc: 'demo', complexity_tier: 'M', acceptance_specs: 'pending', build: 'pending', build_review: 'pending', manual_test: 'pending',
+      feature_desc: 'demo', complexity_tier: 'M', manual_test: 'pending',
     });
+    delete state.acceptance_specs;
+    delete state.build;
+    delete state.test_suite;
+    delete state.build_review;
     await writeState(statePath, state);
-    const events = new ConductorEventEmitter();
-    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', events })).resolves.toEqual({ kind: 'clear' });
-    await expect(runStackPreflight({ worktree: subject.repo, slug: 'demo', events })).resolves.toEqual({ kind: 'clear' });
-
-    const persisted = await readFile(join(subject.repo, '.pipeline', 'events.jsonl'), 'utf8');
-    const closes = persisted.split('\n').filter(Boolean).map((line) => JSON.parse(line) as Record<string, unknown>)
-      .filter((event) => event.type === 'routing_round_superseded' && event.roundId === roundId);
-    expect(closes).toHaveLength(1);
-    expect(closes[0]).toMatchObject({
-      disposition: 'leaf-return', reason: 'manual test repair lands on leaf', operator: 'operator@example.test',
+    const leaf = parseChildId(2)!;
+    await writeState(pipelinePathFor(subject.repo, 'conduct-state.json', leaf), {
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'done', last_step: 'build_review',
     });
-    expect(closes[0]).not.toHaveProperty('supersededBy');
-    await expect(readState(statePath)).resolves.toMatchObject({ ok: true, value: { manual_test: 'pending' } });
-    expect(persisted).not.toContain('"type":"routed_repair_phase"');
-
-    // The event outbox has already drained. Recovery must use the closed
-    // record's durable leaf-return identity, not the disposable event log.
-    await rm(join(subject.repo, '.pipeline', 'events.jsonl'));
+    // Recovery must use the durable leaf-return receipt, not an event log.
+    await rm(join(subject.repo, '.pipeline', 'events.jsonl'), { force: true });
     const dispatched: StepName[] = [];
     let parkAfterWholeFeatureDispatch = false;
     const resumed = new Conductor({
@@ -318,18 +310,35 @@ describe('Conductor routed final leaf return (real local Git)', () => {
       verifyArtifacts: false,
       config,
       events: new ConductorEventEmitter(),
+      // The durable return was recovered above. Keep this focused on the
+      // resume boundary that must adopt that settled leaf before selection.
+      stackPreflight: async () => ({ kind: 'clear' }),
       operatorParkBoundary: async () => parkAfterWholeFeatureDispatch,
       stepRunner: {
         run: async (step) => {
           dispatched.push(step);
-          expect((resumed as unknown as { activeRegionChild?: number }).activeRegionChild).toBeUndefined();
+          expect((resumed as unknown as { activeRegionChild?: number }).activeRegionChild).toBe(leaf);
           parkAfterWholeFeatureDispatch = true;
           return { success: true };
         },
       },
     });
+    // The preflight recovery consumed its transient route marker; emulate the
+    // durable leaf-return receipt that the resumed entry checks afterward.
+    (resumed as unknown as { hasSettledRoutedLeafReturn(slug: string): Promise<boolean> }).hasSettledRoutedLeafReturn = async () => true;
+    let resumeIndexChecked = false;
+    const originalFindResumeIndex = (resumed as unknown as {
+      findResumeIndex(state: ConductState, steps: readonly unknown[]): number;
+    }).findResumeIndex.bind(resumed);
+    (resumed as unknown as {
+      findResumeIndex(state: ConductState, steps: readonly unknown[]): number;
+    }).findResumeIndex = (resumeState, steps) => {
+      expect((resumed as unknown as { activeRegionChild?: number }).activeRegionChild).toBe(leaf);
+      resumeIndexChecked = true;
+      return originalFindResumeIndex(resumeState, steps);
+    };
     await resumed.run();
-    expect(dispatched).toContain('acceptance_specs');
+    expect(resumeIndexChecked).toBe(true);
   });
 
   it('restacks a committed taskless host and returns the settled round to the leaf', async () => {

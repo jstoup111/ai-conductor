@@ -8277,6 +8277,11 @@ export class Conductor {
         const roundIsOpen = hasChildren ? await routedRoundOpen(this.projectRoot, resumeSlug) : false;
         if (hasChildren && !roundIsOpen && (await this.hasSettledRoutedLeafReturn(resumeSlug))) {
           await this.restoreWholeFeatureState(state);
+          // Resume derives its entry index and prerequisite clamp before the
+          // ordinary loop can bind a child. Restore the settled leaf overlay
+          // now, matching the live routed-return transition, so those readers
+          // cannot mistake absent root region fields for pending BUILD work.
+          if (!(await this.activateChildRegionStateForResume(state))) return;
           resumedAtWholeFeature = true;
         }
         // Receipt recovery is meaningful only for a routed stack.  Resolve
