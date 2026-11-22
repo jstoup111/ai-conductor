@@ -1016,9 +1016,11 @@ succeeded for each completed self-host dispatch. Both render to the terminal and
 persist to this file; see [`live_containment`](configuration.md#harness_self_host) and the
 [live-boundary runbook](../runbooks/stalled-or-stuck-feature.md#live-boundary-violation-self-host-only).
 
-`self_host_boundary_fingerprint` records the live-boundary fingerprint cost before each self-host
-provider candidate starts: one `elapsedMs` and `fileCount` measurement for `live checkout` and one
-for `provider state`. It renders those measurements to the terminal and daemon log and persists to
+`self_host_boundary_fingerprint` records the live-boundary fingerprint cost of each surface a
+self-host dispatch walks: one `elapsedMs` and `fileCount` measurement per surface. Surfaces are
+shared across the dispatch's provider candidates, so the first candidate's event carries `live
+checkout` and its `provider state`; a later candidate emits an event only for a provider home not
+yet walked, carrying only that `provider state`. It renders those measurements to the terminal and daemon log and persists to
 this file; it does not change the boundary's exclusions or enforcement behavior.
 
 `land_gate_rejected` records a failed `engineer land` attempt with its closed gate identifier,
