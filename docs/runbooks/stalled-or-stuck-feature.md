@@ -517,11 +517,42 @@ retry will answer. Its content becomes the stall question:
 
 ```bash
 cat .worktrees/<slug>/.pipeline/halt-user-input-required
-cat .worktrees/<slug>/.pipeline/build-stall-question.md
+cat .worktrees/<slug>/.pipeline/build-stall-question.md   # stacked: .pipeline/children/<k>/
 ```
+
+The engine deletes the captured question once its stall is routed or halted; after a HALT, the
+question is the first block of `.pipeline/HALT`.
 
 The build completion gate returns "not done" while that marker exists, so a surviving marker
 also blocks the build gate directly.
+
+#### Stale case citation
+
+**Symptom:** a stacked child's BUILD halts with its stall question first in `.pipeline/HALT`,
+followed by `Stale citation <case-id> is settled by child <n>` (or `owned by child <n>`) and
+`use ai-conductor halt clear`. The class is `mechanical` on the third consecutive citation, and
+`needs-human` on the fourth or when the citation event could not be recorded.
+
+**Diagnosis:** the session asked about a `build_review` case that is resolved in, or belongs to,
+another child's case store. The engine answers the first two citations itself: it clears the
+stall marker and re-dispatches BUILD with a hint naming the case as not this session's work,
+spending no retry or remediation round. Each citation persists a
+[`build_stall_stale_citation`](../reference/artifacts.md#pipelineeventsjsonl) event; the count
+resets when a task completes or a different case is cited.
+
+```bash
+grep build_stall_stale_citation .worktrees/<slug>/.pipeline/events.jsonl
+```
+
+**Recovery:** confirm the cited case is not this child's work, then clear the halt.
+`build-review resolve-case` refuses an already-resolved case; do not use it here.
+
+```bash
+ai-conductor halt clear --feature <slug> --rationale "<case-id> belongs to child <n>"
+```
+
+**Verification:** the daemon re-dispatches the child's BUILD, and no new
+`build_stall_stale_citation` event for the same case and task count follows it.
 
 #### `ENVIRONMENT_CLAIM_REFUTED`
 

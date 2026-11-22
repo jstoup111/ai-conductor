@@ -469,8 +469,16 @@ child id from 1 to 9. Each child directory holds whole copies of the flat schema
 `conduct-state.json`, `kickback-ledger.json`, and `gates/<step>.json` for the child-region steps
 `acceptance_specs`, `build`, `test_suite`, and `build_review`. It also holds that child's region
 evidence: the acceptance RED marker and `acceptance-specs-run.json`, `test-suite-evidence.json`,
-`build-review.json`, and `remediation-cases.json`. Whole-feature verdicts are never stored
-under a child. Region readers (selector, resume, gates, halt clear, daemon status, dashboard, and the
+`build-review.json`, and `remediation-cases.json`. The child's BUILD remediation inputs live
+there too: `build-review-work-order.json`, `remediation.json` (the engine moves a parsed case
+judgement from the flat path into the active child's region), `remediation-plan.json`, and
+`build-stall-question.md`. BUILD reads only the input paths its dispatch prompt names. The engine
+deletes a region's work order and judgement once its case store holds no open case, the gap plan
+once the BUILD it routed to passes or its stall halts, and the stall question once its stall is
+routed or halted. A failed delete is retried at the next settlement or BUILD dispatch. Before a
+child's BUILD, a flat work order left by an older engine moves to the region whose open case
+records one of its effect ids, or is deleted; a flat judgement, gap plan, or stall question is
+deleted. Whole-feature verdicts are never stored under a child. Region readers (selector, resume, gates, halt clear, daemon status, dashboard, and the
 FINISH checks) see the flat state overlaid with the [active child's](configuration.md#child-by-child-build)
 region keys. `task-status.json` and `current-task` stay flat. Each child file uses its own lease. Flat enumerations never descend into `children/`.
 A fresh feature session removes each existing child's ledger along with the flat one. A feature with no
@@ -579,7 +587,7 @@ Agent-authored, engine-validated. Alphabetized.
 | `build-review/<lap>/<rubric>.json` | One branch artifact per rubric per lap: `{ version, rubric, lapId, snapshotDigest, result, provenance, descriptor?, declaration?, reuse?, reviewScope? }`. `result.kind` is `judged`, `skipped`, `scope-empty`, or a failure kind. `reviewScope` is the durable [lap scope record](../explanation/gates.md#later-laps-judge-only-the-unsettled-delta) the next lap's scope decision reads; an unparseable one forces one `record-unreadable` full lap. | `build-review-artifacts.ts`, `step-runners.ts` |
 | `build-review-rejections/<lap>/<rubric>.<attempt>.json` | `{ version: 1, rubric, rubricKind: 'builtin'\|'custom', lapId, attempt, reason: 'invalid-structured-result', detail, rejection?, provider?, model?, structuredResult, output?, outputBytes?, outputTruncated?, promptPath?, promptSha256?, regionComparison? }`. One write-once record per reviewer response rejected by the rubric's structured-result contract; `attempt` increments per rubric within a lap. `output` keeps the first 1 MiB of raw reviewer output (`outputTruncated` marks a cut). Custom-rubric records add `promptPath`/`promptSha256` for the exact delivered prompt, retained at `build-review/<lap>/<rubric>.prompt.txt`, and `regionComparison` for each cited source region checked against the frozen commit. The `build_review_rubric_infrastructure_failure` event names the record in `retainedResponsePath`. Best-effort diagnostic evidence: a failed write never changes the review outcome, and these writes are excluded from the lap input digest. | `build-review-rejection-retention.ts`, `step-runners.ts` |
 | `build-review-work-order.json` | `{ version: 'v1', domain: 'build_review', feature, effectId, cases[], attemptedCaseIds? }`. The effect-bound, feature-local ordered BUILD work from a post-join adjudication; BUILD records `attemptedCaseIds` before dispatch so restart recovery and repeat detection remain durable. | build-review adjudication coordinator |
-| `build-stall-question.md` | Free-form stall question surfaced to the operator | `task-progress.ts` |
+| `build-stall-question.md` | Free-form stall question surfaced to the operator; deleted once its stall is routed or halted (the HALT body keeps the question). A stacked feature writes it in the [active child's region](#per-child-state) | `task-progress.ts` |
 | `documentation-delivery.json` | `{ version: 1, branch, prUrl, sourceRef }` with strict source-ref and PR-URL regexes and a staleness check | `documentation-delivery.ts` |
 | `fr-coverage.md` | Product-track FR-to-spec coverage table | `writing-system-tests` skill |
 | `intake-outcomes.md` | Staged intake outcomes | `engineer/outcome-staging.ts` |
@@ -920,7 +928,7 @@ engine force push finds the remote tip differs from the recorded pushed tip. `Ev
 `protected_artifact_rebaseline_refused`, `auto_heal`, `remediation_sealed_artifact_redirect`,
 `remediation_disposition_rejected`,
 `verdict_freshness`, `build_review_repair_context`, `mode_skip`, `build_done_when_unverified`,
-`done_when_citation_judged`, `done_when_citation_accepted`, `remediation_closure_judged`, `build_stall`, `build_progress`,
+`done_when_citation_judged`, `done_when_citation_accepted`, `remediation_closure_judged`, `build_stall`, `build_stall_stale_citation`, `build_progress`,
 `step_in_flight`, `build_no_progress`, `build_active_stall`, `renderer_error`, `when_skip`, `parallel_started`, `parallel_completed`,
 `parallel_failure`, `gate_verdict`, `test_suite_verification`, `build_member_evidence_reused`,
 `build_member_evidence_recomputed`, `kickback`, `loop_halt`, `over_scope_decision`,
@@ -1115,6 +1123,13 @@ reached `build_progress.active_stall_minutes` without task or HEAD movement: `mi
 `resolved`, `total`, optional `lastCommitAt`/`lastActivityAt`, and the configured `action`
 (`warn` | `end_attempt`). A `build_stall` event with reason `active_stall` records an attempt the
 `end_attempt` policy ended. See [`build_progress`](configuration.md#build_progress).
+
+`build_stall_stale_citation` records a child BUILD stall question that cites only a case resolved
+in, or owned by, another child's case store: `caseId`, `stalledChild`, `ownerChild`, `state`
+(`resolved` | `foreign`), `resolvedTasks`, and `attempt`. `attempt` counts the uninterrupted run
+of prior events with the same case, child, and resolved-task count in `.pipeline/events.jsonl`, so
+a daemon re-kick keeps the count. It is also written to the audit trail. See
+[stale case citation](../runbooks/stalled-or-stuck-feature.md#stale-case-citation).
 
 `step_in_flight` records a running non-build step: `step`, `elapsedMs` since the step started, and
 optional `featureSlug`. Its cadence is `build_progress.heartbeat_minutes`.
