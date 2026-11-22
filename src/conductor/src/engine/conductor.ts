@@ -6944,7 +6944,12 @@ export class Conductor {
             return 'halt';
           }
           await this.activateChildRegionState(state, leaf.target.child, leaf.target.isLeaf);
-          return { index: indexOf('manual_test') };
+          // A settled return may still leave a leaf-owned region validator
+          // pending.  Re-enter it at its owner before whole-feature gates;
+          // absent root region fields are not a reason to skip that work.
+          const verdicts = await this.readGateVerdictOverlay();
+          const firstUnsatisfied = CHILD_REGION_STEPS.find((step) => !gateSatisfied(step, state, verdicts));
+          return { index: indexOf(firstUnsatisfied ?? 'manual_test') };
         }
         break;
       case 'busy':

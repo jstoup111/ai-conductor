@@ -341,6 +341,68 @@ describe('Conductor routed final leaf return (real local Git)', () => {
     expect(resumeIndexChecked).toBe(true);
   });
 
+  // Covers: task:3
+  async function assertPendingLeafGate(
+    expected: StepName,
+    leafState: Pick<ConductState, 'acceptance_specs' | 'build' | 'test_suite' | 'build_review'>,
+  ): Promise<void> {
+    const { subject, statePath, config } = await fixture();
+    const git = makeGitRunner(subject.repo);
+    const stored = await readRouteRecord(subject.repo, 'demo', roundId, { git });
+    if (stored.kind !== 'record') throw new Error('sole routed round is unavailable');
+    await git(['update-ref', routeRecordRefFor('demo', roundId), await writeBlob(git, {
+      ...stored.record, hosts: { [host]: 'admitted' },
+    })]);
+    const checked = await checkRoundSupersession(subject.repo, 'demo', roundId, { git });
+    if (checked.kind !== 'leaf-return') throw new Error('sole routed round was not eligible for a leaf return');
+    await supersedeRound({
+      worktree: subject.repo, slug: 'demo', checked, reason: 'prepare leaf validation selection', operator: 'operator@example.test', git,
+    });
+
+    const root = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])) as ConductState;
+    Object.assign(root, { feature_desc: 'demo', complexity_tier: 'M', manual_test: 'pending' });
+    delete root.acceptance_specs;
+    delete root.build;
+    delete root.test_suite;
+    delete root.build_review;
+    await writeState(statePath, root);
+    const leaf = parseChildId(2)!;
+    await writeState(pipelinePathFor(subject.repo, 'conduct-state.json', leaf), leafState);
+
+    const dispatched: StepName[] = [];
+    let stop = false;
+    const conductor = new Conductor({
+      projectRoot: subject.repo, stateFilePath: statePath, featureSlug: 'demo', resume: true,
+      mode: 'auto', daemon: true, verifyArtifacts: false, config, events: new ConductorEventEmitter(),
+      stackPreflight: async () => ({ kind: 'clear' }),
+      operatorParkBoundary: async () => stop,
+      stepRunner: { run: async (step) => {
+        dispatched.push(step);
+        expect((conductor as unknown as { activeRegionChild?: number }).activeRegionChild).toBe(leaf);
+        stop = true;
+        return { success: true };
+      } },
+    });
+    (conductor as unknown as { hasSettledRoutedLeafReturn(slug: string): Promise<boolean> }).hasSettledRoutedLeafReturn = async () => true;
+    await conductor.run();
+
+    expect(dispatched).toEqual([expected]);
+    expect(dispatched).not.toContain('manual_test');
+    expect(dispatched).not.toContain('build');
+  }
+
+  it('runs pending leaf test_suite before whole-feature validation on resumed return', async () => {
+    await assertPendingLeafGate('test_suite', {
+      acceptance_specs: 'done', build: 'done', test_suite: 'pending', build_review: 'done',
+    });
+  });
+
+  it('runs pending leaf build_review before whole-feature validation on resumed return', async () => {
+    await assertPendingLeafGate('build_review', {
+      acceptance_specs: 'done', build: 'done', test_suite: 'done', build_review: 'pending',
+    });
+  });
+
   it('restacks a committed taskless host and returns the settled round to the leaf', async () => {
     const { subject, git, host: tasklessHost, repair } = await tasklessExitFixture(true);
     if (repair === undefined) throw new Error('fixture did not create the routed repair commit');
